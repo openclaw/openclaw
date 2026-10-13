@@ -9,6 +9,8 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { createTranscriptCaptureAppends } from "./capture-appends.js";
 import {
+  activeSessions,
+  startingSessions,
   assertTranscriptCaptureEnabled,
   createStartupAbortScope,
   TranscriptStartError,
@@ -18,6 +20,7 @@ import {
   persistTranscriptSummary,
   readSummaryCaptureLiveness,
 } from "./capture-summary.js";
+import type { ActiveTranscriptsSession } from "./capture-types.js";
 import { resolveTranscriptsConfig } from "./config.js";
 import { manualTranscriptSourceProvider } from "./manual-source.js";
 import { getTranscriptSourceProvider } from "./provider-registry.js";
@@ -49,47 +52,12 @@ export type TranscriptsLogger = {
 
 export type TranscriptsRuntimeContext = {
   agentId?: string;
-  agentChannel?: string;
-  agentAccountId?: string;
   caller?: TranscriptToolCaller;
   assertCallerActive?: () => void;
   config?: OpenClawConfig;
   stateDir: string;
   logger: TranscriptsLogger;
 };
-
-type ActiveTranscriptsSession = {
-  appends: ReturnType<typeof createTranscriptCaptureAppends>;
-  directCapture?: { stateDir: string; drain: () => Promise<void> };
-  abortStartup?: () => void;
-  providerStopping?: Promise<string | undefined>;
-  session: TranscriptSessionDescriptor;
-  providerId: string;
-  // Cleanup belongs to the admitted provider, even after registry replacement.
-  stopProvider: NonNullable<TranscriptSourceProvider["stop"]>;
-  releaseProvider: () => Promise<void>;
-  // Diagnostic request identity, never authority. URLs retain presence only, not invitations.
-  configuredSource?: Readonly<
-    Pick<TranscriptSourceLocator, "providerId" | "accountId" | "guildId" | "channelId"> & {
-      meetingUrl: boolean;
-    }
-  >;
-  // Durable timestamps can collide; lifecycle cleanup must match this exact process-owned capture.
-  lifecycleToken?: symbol;
-  // Keep the capture reserved until provider and durable stop work both finish.
-  stopping?: true;
-  // Failed cleanup stays owned and cannot append until a later stop succeeds.
-  cleanupPending?: true;
-  phase: "starting" | "active" | "terminal" | "failed";
-  summaryUpdates?: Awaited<ReturnType<typeof createTranscriptSummaryUpdates>>;
-  finalization?: {
-    persisted: Promise<Awaited<ReturnType<typeof persistTranscriptSummary>>>;
-    released: Promise<Awaited<ReturnType<typeof persistTranscriptSummary>>>;
-  };
-};
-
-// Process-local ownership shared by tool-driven and configured transcript captures.
-export const activeSessions = new Map<string, ActiveTranscriptsSession>();
 
 export type TranscriptCaptureSelection = {
   session: TranscriptSessionDescriptor;
@@ -158,10 +126,6 @@ export function isTranscriptSessionActive(
           capture.sessionId === session.sessionId && capture.startedAt === session.startedAt,
       );
 }
-// Reserve ids across async provider startup so overlapping starts cannot
-// replace the only cleanup owner for an existing or still-starting capture.
-export const startingSessions = new Map<string, ActiveTranscriptsSession>();
-
 export function isTranscriptSessionStarting(sessionId: string): boolean {
   return startingSessions.has(sessionId);
 }
@@ -206,6 +170,7 @@ export function finalizeTranscriptCapture(params: {
       return await persistTranscriptSummary({
         config: resolveTranscriptsConfig(params.ctx.config?.transcripts),
         cfg: params.ctx.config,
+        stateDir: params.ctx.stateDir,
         store: params.store,
         session: entry.session,
         assertCurrent,
@@ -325,7 +290,7 @@ export function resolveTranscriptSourceOwnership(params: {
   const providerSource = ownership
     ? { ...sourceForResolution, accountId: resolvedAccountId }
     : sourceForResolution;
-  if (params.configuredLifecycle && ownership && !providerSource.accountId?.trim()) {
+  if (params.configuredLifecycle && ownership && !resolvedAccountId) {
     throw new Error(
       `transcripts provider ${params.provider.id} could not resolve an account for configured auto-start`,
     );
@@ -549,12 +514,14 @@ export async function startTranscripts(params: {
       throw error;
     }
     admitted = true;
+    let result: TranscriptsStartResult;
     try {
       assertEnabled();
       startupAbort.signal.throwIfAborted();
       entry.summaryUpdates = await createTranscriptSummaryUpdates({
         config: resolveTranscriptsConfig(params.ctx.config?.transcripts),
         cfg: params.ctx.config,
+        stateDir: params.ctx.stateDir,
         store: params.store,
         session,
         logger: params.ctx.logger,
@@ -569,12 +536,6 @@ export async function startTranscripts(params: {
           }
         },
       });
-    } catch (error) {
-      entry.phase = "failed";
-      throw error;
-    }
-    let result: TranscriptsStartResult;
-    try {
       assertEnabled();
       acquired.assertOpen();
       startupAbort.signal.throwIfAborted();

@@ -3,7 +3,7 @@ import { userEvent } from "vitest/browser";
 import "../styles/base.css";
 import "../styles/chat/text.css";
 import "../styles/sidebar-markdown.css";
-import "../styles/chat/grouped.css";
+import "../pages/chat/components/chat-attribution.css";
 
 const title = "A resolved session title long enough to need truncation in a narrow chat bubble";
 

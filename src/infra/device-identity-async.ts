@@ -5,11 +5,11 @@ import {
   readProcessDeviceIdentity,
 } from "./device-identity-process-cache.js";
 import {
+  assertNoPendingLegacyIdentity,
   resolveDeviceIdentityStore,
   type DeviceIdentity,
   type DeviceIdentityStoreOptions,
 } from "./device-identity-store.js";
-import { assertNoPendingLegacyIdentity } from "./device-identity.js";
 
 /** Bootstrap through the identity owner before the shared actor opens a missing database. */
 export async function loadOrCreateDeviceIdentityAsync(

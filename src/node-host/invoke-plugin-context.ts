@@ -16,6 +16,16 @@ export async function withNodeHostPluginInvocation<T>(
   const acquireManagedWorkspace = context?.acquireManagedWorkspace;
   const acquireManagedWorkspaceAsync = context?.acquireManagedWorkspaceAsync;
   let pluginInvocationActive = true;
+  const assertCurrent = (requestedSessionKey: string) => {
+    if (
+      !pluginInvocationActive ||
+      signal?.aborted ||
+      !sessionKey ||
+      requestedSessionKey !== sessionKey
+    ) {
+      throw new Error("node placement workspace invocation authority is closed");
+    }
+  };
   const invokeContext =
     context && (sessionKey || signal || acquireManagedWorkspace || acquireManagedWorkspaceAsync)
       ? {
@@ -28,20 +38,10 @@ export async function withNodeHostPluginInvocation<T>(
                   request: Parameters<typeof acquireManagedWorkspaceAsync>[0],
                 ) => {
                   const captured = { ...request };
-                  const assertCurrent = () => {
-                    if (
-                      !pluginInvocationActive ||
-                      signal?.aborted ||
-                      !sessionKey ||
-                      captured.sessionKey !== sessionKey
-                    ) {
-                      throw new Error("node placement workspace invocation authority is closed");
-                    }
-                  };
-                  assertCurrent();
+                  assertCurrent(captured.sessionKey);
                   const workspace = await acquireManagedWorkspaceAsync(captured);
                   try {
-                    assertCurrent();
+                    assertCurrent(captured.sessionKey);
                     return workspace;
                   } catch (error) {
                     workspace.release();
@@ -55,14 +55,7 @@ export async function withNodeHostPluginInvocation<T>(
                 acquireManagedWorkspace: (
                   request: Parameters<typeof acquireManagedWorkspace>[0],
                 ) => {
-                  if (
-                    !pluginInvocationActive ||
-                    signal?.aborted ||
-                    !sessionKey ||
-                    request.sessionKey !== sessionKey
-                  ) {
-                    throw new Error("node placement workspace invocation authority is closed");
-                  }
+                  assertCurrent(request.sessionKey);
                   return acquireManagedWorkspace(request);
                 },
               }

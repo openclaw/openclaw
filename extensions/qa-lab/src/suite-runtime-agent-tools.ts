@@ -3,12 +3,12 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { extractToolPayload as extractQaToolPayload } from "openclaw/plugin-sdk/tool-payload";
 import {
   appendQaChildOutputTail,
   createQaChildOutputTail,
   formatQaChildOutputTail,
 } from "./child-output.js";
-import { extractQaToolPayload } from "./extract-tool-payload.js";
 import { resolveQaNodeExecPath } from "./node-exec.js";
 import type {
   QaRuntimeActionHandlerEnv,

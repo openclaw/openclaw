@@ -23,12 +23,9 @@ export function agentRosterCards(
   const sessionsByAgent = new Map<string, GatewaySessionRow[]>();
   rows.forEach((row) => {
     const agentId = resolveUiSessionRowAgentId(row, roster.defaultId);
-    const sessions = sessionsByAgent.get(agentId);
-    if (sessions) {
-      sessions.push(row);
-    } else {
-      sessionsByAgent.set(agentId, [row]);
-    }
+    const sessions = sessionsByAgent.get(agentId) ?? [];
+    sessions.push(row);
+    sessionsByAgent.set(agentId, sessions);
   });
   return agents.map((agent) => {
     const identity = identityFor(agent.id);

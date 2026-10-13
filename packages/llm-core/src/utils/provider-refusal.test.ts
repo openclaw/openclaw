@@ -11,21 +11,18 @@ describe("provider refusal review", () => {
     expect(readProviderRefusalReview(review)).toEqual(review);
   });
 
-  it.each([undefined, "", " \n ", "🙂".repeat(16_385)])(
-    "does not offer a review without a substantive bounded explanation",
-    (explanation) => {
-      expect(
-        readProviderRefusalReview({ explanation, continuation: { message: "Continue safely." } }),
-      ).toBeUndefined();
-    },
-  );
-
-  it.each([undefined, "", " \n ", 42, "🙂".repeat(257)])(
-    "keeps findings without manufacturing a usable continuation",
-    (message) => {
-      expect(
-        readProviderRefusalReview({ explanation: "Review the action.", continuation: { message } }),
-      ).toEqual({ explanation: "Review the action." });
-    },
-  );
+  it("rejects unusable explanations and continuations at their respective byte limits", () => {
+    for (const { field, max } of [
+      { field: "explanation", max: 16_384 },
+      { field: "continuation", max: 256 },
+    ]) {
+      for (const invalid of [undefined, " \n ", "🙂".repeat(max + 1)]) {
+        const explanation = field === "explanation" ? invalid : "Review the action.";
+        const message = field === "continuation" ? invalid : "Continue safely.";
+        expect(readProviderRefusalReview({ explanation, continuation: { message } })).toEqual(
+          field === "explanation" ? undefined : { explanation },
+        );
+      }
+    }
+  });
 });

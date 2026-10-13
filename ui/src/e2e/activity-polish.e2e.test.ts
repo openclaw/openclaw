@@ -232,9 +232,7 @@ suite.define(() => {
             "Testing focus behavior",
           );
           expect(
-            await recap(activityPolishKeys.updating)
-              .locator(".activity-feed__recap-feedback")
-              .count(),
+            await recap(activityPolishKeys.updating).locator(".activity-feed__note").count(),
           ).toBe(0);
           expect(await recap(activityPolishKeys.unavailable).textContent()).toContain(
             "Couldn’t refresh recap",

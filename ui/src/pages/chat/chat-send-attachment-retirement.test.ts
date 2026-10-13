@@ -14,7 +14,7 @@ import {
   reloadChatDocumentStorage,
 } from "./chat-delivery-attachments.test-support.ts";
 import { makeChatHost, makeRequestMock } from "./chat-host.test-support.ts";
-import { subscribeChatOutboxProjection } from "./chat-queue.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import * as chatSendSupport from "./chat-send-support.ts";
@@ -22,8 +22,8 @@ import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import {
   listStoredChatOutboxes,
-  loadChatComposerSnapshot,
-  updateStoredChatComposerQueueItem,
+  loadChatComposerState,
+  updateStoredChatComposerQueueItems,
 } from "./composer-persistence.ts";
 import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
 import { adoptStartedChatRun } from "./run-lifecycle.ts";
@@ -115,7 +115,7 @@ describe("chat attachment terminal retirement", () => {
       chatAttachments: presentedAttachments,
     });
     sessionStorage.setItem("openclaw.control.outboxTab.v1", "test-outbox-tab");
-    const stopSource = subscribeChatOutboxProjection(source);
+    const stopSource = chatOutboxOwner(source).subscribe(source);
     let stopVisible = () => {};
     let stopInactive = () => {};
     const hydration = createDeferred();
@@ -126,7 +126,7 @@ describe("chat attachment terminal retirement", () => {
       await handleSendChat(source);
       holdHistory = true;
       const item = expectDefined(
-        loadChatComposerSnapshot(source, sessionKey)?.queue[0],
+        loadChatComposerState(source, sessionKey).snapshot?.queue[0],
         "Blob-backed terminal send",
       );
       expect(item.attachmentPayload).toBeDefined();
@@ -183,13 +183,13 @@ describe("chat attachment terminal retirement", () => {
           return pending;
         });
       if (handoff !== "live") {
-        stopVisible = subscribeChatOutboxProjection(visible);
+        stopVisible = chatOutboxOwner(visible).subscribe(visible);
         expect(visible.chatQueue[0]?.attachments?.map(getChatAttachmentDataUrl)).toEqual([
           null,
           null,
         ]);
       }
-      stopInactive = subscribeChatOutboxProjection(inactive);
+      stopInactive = chatOutboxOwner(inactive).subscribe(inactive);
       const removePayloads = outboxPayloadStore.removeOutboxPayloads;
       const cleanup = vi
         .spyOn(outboxPayloadStore, "removeOutboxPayloads")
@@ -244,15 +244,19 @@ describe("chat attachment terminal retirement", () => {
           : null;
       if (handoff === "new-attempt") {
         expect(
-          updateStoredChatComposerQueueItem(
+          updateStoredChatComposerQueueItems(
             visible,
             sessionKey,
-            item,
-            {
-              ...item,
-              sendRunId: "replacement-attempt",
-              sendAttempts: 2,
-            },
+            [
+              {
+                expected: item,
+                next: {
+                  ...item,
+                  sendRunId: "replacement-attempt",
+                  sendAttempts: 2,
+                },
+              },
+            ],
             item.agentId,
           ),
         ).toBe(true);
@@ -283,7 +287,7 @@ describe("chat attachment terminal retirement", () => {
       }
       if (handoff === "new-credentials" || handoff === "new-attempt") {
         expect(cleanup).not.toHaveBeenCalled();
-        expect(loadChatComposerSnapshot(visible, sessionKey)?.queue[0]).toMatchObject({
+        expect(loadChatComposerState(visible, sessionKey).snapshot?.queue[0]).toMatchObject({
           id: item.id,
           attachmentPayload: item.attachmentPayload,
           sendRunId: handoff === "new-attempt" ? "replacement-attempt" : item.sendRunId,

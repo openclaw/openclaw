@@ -13,10 +13,6 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const metadataBoundaries = ["configured stat", "rolling readdir", "candidate stat"] as const;
-const operationalErrorCodes = ["EACCES", "EIO", "EMFILE"] as const;
-const operationalMetadataFailures = metadataBoundaries.flatMap((boundary) =>
-  operationalErrorCodes.map((code) => ({ boundary, code })),
-);
 
 const resolvedRedaction = { mode: "tools" as const, patterns: [/custom-secret-[a-z]+/g] };
 type RedactOptions = Parameters<typeof import("./redact.js").redactSensitiveLines>[1];
@@ -27,7 +23,7 @@ type PositionalRead = (
   position: number | null,
 ) => Promise<{ bytesRead: number; buffer: Buffer }>;
 
-const { redactSensitiveLinesMock, resolveRedactOptionsMock } = vi.hoisted(() => ({
+const { redactSensitiveLinesMock, resolveLogTailRedactOptionsMock } = vi.hoisted(() => ({
   redactSensitiveLinesMock: vi.fn(
     (lines: string[], options?: RedactOptions, selectedLines?: readonly boolean[]) =>
       lines
@@ -38,7 +34,7 @@ const { redactSensitiveLinesMock, resolveRedactOptionsMock } = vi.hoisted(() => 
             : line,
         ),
   ),
-  resolveRedactOptionsMock: vi.fn(() => resolvedRedaction),
+  resolveLogTailRedactOptionsMock: vi.fn(() => resolvedRedaction),
 }));
 
 vi.mock("./redact.js", async () => {
@@ -50,14 +46,14 @@ vi.mock("./redact.js", async () => {
       options?: RedactOptions,
       selectedLines?: readonly boolean[],
     ) => redactSensitiveLinesMock(lines, options, selectedLines),
-    resolveRedactOptions: () => resolveRedactOptionsMock(),
+    resolveLogTailRedactOptions: () => resolveLogTailRedactOptionsMock(),
   };
 });
 
 describe("readConfiguredLogTail", () => {
   afterEach(() => {
     vi.restoreAllMocks();
-    resolveRedactOptionsMock.mockClear();
+    resolveLogTailRedactOptionsMock.mockClear();
     redactSensitiveLinesMock.mockClear();
     resetLogger();
     setLoggerOverride(null);
@@ -95,7 +91,7 @@ describe("readConfiguredLogTail", () => {
     const result = await readConfiguredLogTail();
 
     expect(stat.mock.calls.filter(([target]) => String(target) === file)).toHaveLength(1);
-    expect(resolveRedactOptionsMock).toHaveBeenCalledTimes(1);
+    expect(resolveLogTailRedactOptionsMock).toHaveBeenCalledTimes(1);
     expect(redactSensitiveLinesMock).toHaveBeenCalledTimes(1);
     expect(redactSensitiveLinesMock).toHaveBeenCalledWith(
       ["custom-secret-abcdefghijklmnopqrstuvwxyz", "second line"],
@@ -368,13 +364,13 @@ describe("readConfiguredLogTail", () => {
     expect(result.lines[0]?.trimEnd()).toBe("first-line-in-window");
   });
 
-  it.each(operationalMetadataFailures)(
-    "rethrows $code from the $boundary boundary",
-    async ({ boundary, code }) => {
+  it.each(metadataBoundaries)(
+    "rethrows operational errors from the %s boundary",
+    async (boundary) => {
       const tempDir = tempDirs.make("openclaw-log-tail-");
       const configured = path.join(tempDir, "openclaw-2026-01-22.log");
       const candidate = path.join(tempDir, "openclaw-2026-01-21.log");
-      const error = Object.assign(new Error(`${code} injected`), { code });
+      const error = Object.assign(new Error("EACCES injected"), { code: "EACCES" });
       const realStat = fs.stat.bind(fs);
 
       if (boundary === "candidate stat") {

@@ -11,13 +11,7 @@ import type {
 } from "../components/session-menu.ts";
 import type { SessionOwnerOption } from "../components/session-owner-chip.ts";
 import { createApplicationContextProvider } from "./application-context.ts";
-type SessionMenuElement = HTMLElement & {
-  anchor: { x: number; y: number };
-  compact: boolean;
-  lastActive: string;
-  session: SessionMenuData;
-  updateComplete: Promise<boolean>;
-};
+type SessionMenuElement = HTMLElementTagNameMap["openclaw-session-menu"];
 export type SessionMenuItem = HTMLElement & { disabled: boolean; updateComplete: Promise<unknown> };
 
 export const containers: HTMLElement[] = [];
@@ -32,12 +26,14 @@ export async function mountMenu(
   options: {
     session?: Partial<SessionMenuData>;
     compact?: boolean;
+    involvingMeContext?: boolean;
     navigationAllowed?: boolean;
     copyMarkdownAllowed?: boolean;
     splitAllowed?: boolean;
     work?: SessionMenuWork | null;
     pluginActions?: readonly PluginSessionMenuAction[];
     archiveAllowed?: boolean;
+    snoozeAllowed?: boolean;
     deleteAllowed?: boolean;
     cloudWorkerStopAllowed?: boolean;
     selectionCount?: number;
@@ -64,6 +60,7 @@ export async function mountMenu(
     pinned: false,
     unread: false,
     archived: false,
+    snoozedUntil: null,
     category: null,
     icon: null,
     color: null,
@@ -74,6 +71,7 @@ export async function mountMenu(
     html`<openclaw-session-menu
       .session=${session}
       .compact=${options.compact ?? false}
+      .involvingMeContext=${options.involvingMeContext ?? false}
       .navigationAllowed=${options.navigationAllowed ?? true}
       .copyMarkdownAllowed=${options.copyMarkdownAllowed ?? true}
       .splitAllowed=${options.splitAllowed ?? false}
@@ -85,6 +83,7 @@ export async function mountMenu(
       .actionDisabledReasons=${options.actionDisabledReasons ?? {}}
       .forkDisabled=${false}
       .forkFromLastCompleted=${options.forkFromLastCompleted ?? false}
+      .snoozeAllowed=${options.snoozeAllowed ?? false}
       .archiveAllowed=${options.archiveAllowed ?? true}
       .deleteAllowed=${
         options.deleteAllowed ?? (session.archived || (options.archiveAllowed ?? true))
@@ -103,8 +102,20 @@ export async function mountMenu(
   if (!element) {
     throw new Error("Expected session menu");
   }
-  await element.updateComplete;
+  await settleSessionMenu(element);
   return element;
+}
+
+export async function settleSessionMenu(menu: SessionMenuElement): Promise<void> {
+  await menu.updateComplete;
+  // The Solid host commits before its retained Web Awesome children and their focus work.
+  await Promise.all(
+    Array.from(
+      menu.querySelectorAll<SessionMenuItem>("wa-dropdown, wa-dropdown-item"),
+      (item) => item.updateComplete,
+    ),
+  );
+  await Promise.resolve();
 }
 
 function itemLabel(item: HTMLElement): string {

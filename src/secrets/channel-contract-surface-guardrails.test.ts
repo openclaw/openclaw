@@ -48,10 +48,6 @@ const CORE_SECRET_SURFACE_GUARDS = [
     ],
   },
   {
-    path: "src/plugin-sdk/command-auth.ts",
-    forbiddenPatterns: [/\bpluginId:\s*"telegram"/],
-  },
-  {
     path: "src/gateway/channel-health-policy.ts",
     forbiddenPatterns: [/\btelegram\b/],
   },

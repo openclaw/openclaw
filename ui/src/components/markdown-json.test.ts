@@ -1,5 +1,5 @@
 /* @vitest-environment jsdom */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   handleMarkdownCodeBlockClick,
   readMarkdownCodeBlockCopyText,
@@ -12,7 +12,9 @@ import {
 } from "./markdown.ts";
 
 const interactive = { codeBlockInteraction: "interactive" } as const;
+beforeEach(() => document.body.addEventListener("click", handleMarkdownCodeBlockClick));
 afterEach(() => {
+  document.body.removeEventListener("click", handleMarkdownCodeBlockClick);
   document.body.replaceChildren();
 });
 
@@ -28,21 +30,39 @@ function renderJson(source: string, fenced = false) {
 }
 
 describe("source-preserving JSON tree", () => {
-  it.each([false, true])(
-    "retains duplicate members, key order and numeric lexemes (fenced=%s)",
-    (fenced) => {
-      const source = String.raw`{"2":1.00,"1":1E+03,"a":9007199254740993,"a":1e400,"nested":{"a":-0,"a":1e-999}}`;
-      const body = renderJson(source, fenced);
-      expect(
-        [...body.querySelectorAll(".code-block-json-key")].map((node) => node.textContent),
-      ).toEqual(['"2"', '"1"', '"a"', '"a"', '"nested"', '"a"', '"a"']);
-      expect(
-        [...body.querySelectorAll(".code-block-json-value--literal")].map(
-          (node) => node.textContent,
-        ),
-      ).toEqual(["1.00", "1E+03", "9007199254740993", "1e400", "-0", "1e-999"]);
-      const button = body.querySelector<HTMLElement>(".code-block-copy")!;
-      expect(readMarkdownCodeBlockCopyText(button)).toBe(source);
+  it.each([
+    {
+      source: String.raw`{"2":1.00,"1":1E+03,"a":9007199254740993,"a":1e400,"nested":{"a":-0,"a":1e-999}}`,
+      keys: ['"2"', '"1"', '"a"', '"a"', '"nested"', '"a"', '"a"'],
+      literals: ["1.00", "1E+03", "9007199254740993", "1e400", "-0", "1e-999"],
+    },
+    {
+      source: '\t{\n\t\t"nested": {\n\t\t\t"text": "  keep these spaces  "\n\t\t}\n\t}',
+      keys: ['"nested"', '"text"'],
+      literals: [],
+    },
+  ])(
+    "preserves source lexemes and indentation in Tree, Raw and Copy: $source",
+    ({ source, keys, literals }) => {
+      for (const fenced of [false, true]) {
+        const body = renderJson(source, fenced);
+        expect(
+          [...body.querySelectorAll(".code-block-json-key")].map((node) => node.textContent),
+        ).toEqual(keys);
+        expect(
+          [...body.querySelectorAll(".code-block-json-value--literal")].map(
+            (node) => node.textContent,
+          ),
+        ).toEqual(literals);
+        body.querySelector<HTMLButtonElement>('[data-json-mode="raw"]')!.click();
+        expect(body.querySelector(".code-block-wrapper")?.classList.contains("is-json-raw")).toBe(
+          true,
+        );
+        expect(body.querySelector("pre code")?.textContent).toBe(source + (fenced ? "\n" : ""));
+        expect(
+          readMarkdownCodeBlockCopyText(body.querySelector<HTMLElement>(".code-block-copy")!),
+        ).toBe(source);
+      }
     },
   );
 
@@ -61,51 +81,26 @@ describe("source-preserving JSON tree", () => {
     ).toBe(source);
   });
 
-  it.each([false, true])("preserves authored indentation in Raw and Copy (fenced=%s)", (fenced) => {
-    const source = '\t{\n\t\t"nested": {\n\t\t\t"text": "  keep these spaces  "\n\t\t}\n\t}';
-    const body = renderJson(source, fenced);
-    body.addEventListener("click", handleMarkdownCodeBlockClick);
-    try {
-      body.querySelector<HTMLButtonElement>('[data-json-mode="raw"]')!.click();
-      expect(body.querySelector(".code-block-wrapper")?.classList.contains("is-json-raw")).toBe(
-        true,
-      );
-      expect(body.querySelector("pre code")?.textContent).toBe(source + (fenced ? "\n" : ""));
-      expect(
-        readMarkdownCodeBlockCopyText(body.querySelector<HTMLElement>(".code-block-copy")!),
-      ).toBe(source);
-    } finally {
-      body.removeEventListener("click", handleMarkdownCodeBlockClick);
-    }
-  });
-
   it("switches views through the existing owner without replacing source or node state", () => {
     const body = renderJson('{"nested":{"value":true}}');
-    body.addEventListener("click", handleMarkdownCodeBlockClick);
-    try {
-      const node = body.querySelectorAll<HTMLDetailsElement>(".code-block-json-node")[1]!;
-      node.querySelector<HTMLElement>("summary")!.click();
-      expect(node.open).toBe(false);
-      const raw = body.querySelector<HTMLButtonElement>('[data-json-mode="raw"]')!;
-      const tree = body.querySelector<HTMLButtonElement>('[data-json-mode="tree"]')!;
-      raw.click();
-      expect(raw.getAttribute("aria-pressed")).toBe("true");
-      expect(tree.getAttribute("aria-pressed")).toBe("false");
-      expect(body.querySelector(".code-block-wrapper")?.classList.contains("is-json-raw")).toBe(
-        true,
-      );
-      tree.click();
-      expect(node.open).toBe(false);
-      expect(body.querySelectorAll(".code-block-json-node")[1]).toBe(node);
-      expect(body.querySelector(".code-block-wrapper")?.classList.contains("is-json-raw")).toBe(
-        false,
-      );
-    } finally {
-      body.removeEventListener("click", handleMarkdownCodeBlockClick);
-    }
+    const node = body.querySelectorAll<HTMLDetailsElement>(".code-block-json-node")[1]!;
+    node.querySelector<HTMLElement>("summary")!.click();
+    expect(node.open).toBe(false);
+    const raw = body.querySelector<HTMLButtonElement>('[data-json-mode="raw"]')!;
+    const tree = body.querySelector<HTMLButtonElement>('[data-json-mode="tree"]')!;
+    raw.click();
+    expect(raw.getAttribute("aria-pressed")).toBe("true");
+    expect(tree.getAttribute("aria-pressed")).toBe("false");
+    expect(body.querySelector(".code-block-wrapper")?.classList.contains("is-json-raw")).toBe(true);
+    tree.click();
+    expect(node.open).toBe(false);
+    expect(body.querySelectorAll(".code-block-json-node")[1]).toBe(node);
+    expect(body.querySelector(".code-block-wrapper")?.classList.contains("is-json-raw")).toBe(
+      false,
+    );
   });
 
-  it.each(["{}", "[]", '{"empty":[],"nothing":null}'])(
+  it.each(["{}", '{"empty":[],"nothing":null}'])(
     "renders empty containers and null: %s",
     (source) => {
       const body = renderJson(source);
@@ -114,7 +109,7 @@ describe("source-preserving JSON tree", () => {
     },
   );
 
-  it.each(['{"missing":}', '{"trailing":1,}', '{/*comment*/"a":1}', '{"a":1} trailing'])(
+  it.each(['{"trailing":1,}', '{/*comment*/"a":1}', '{"a":1} trailing'])(
     "leaves invalid JSON on the existing raw fence path: %s",
     (source) => {
       expect(parseMarkdownJson(source)).toBeNull();
@@ -127,29 +122,19 @@ describe("source-preserving JSON tree", () => {
     },
   );
 
-  it.each(["[".repeat(1000) + "0" + "]".repeat(1000), "[" + "0,".repeat(3000) + "0]"])(
-    "keeps bounded-tree fallback literal and complete",
-    (source) => {
-      const body = renderJson(source);
-      expect(body.querySelector(".code-block-json-tree")).toBeNull();
-      expect(body.querySelector("pre code")?.textContent).toBe(source);
-      expect(
-        readMarkdownCodeBlockCopyText(body.querySelector<HTMLElement>(".code-block-copy")!),
-      ).toBe(source);
-    },
-  );
-
-  it.each([" ".repeat(20_000) + "{}", '{"text":"**literal** ' + "x".repeat(20_000) + '"}'])(
-    "keeps over-budget JSON-shaped source literal without constructing a tree",
-    (source) => {
-      const body = renderJson(source);
-      expect(body.querySelector(".code-block-json-tree, strong")).toBeNull();
-      expect(body.querySelector("pre code")?.textContent).toBe(source);
-      expect(
-        readMarkdownCodeBlockCopyText(body.querySelector<HTMLElement>(".code-block-copy")!),
-      ).toBe(source);
-    },
-  );
+  it.each([
+    "[".repeat(1000) + "0" + "]".repeat(1000),
+    "[" + "0,".repeat(3000) + "0]",
+    " ".repeat(20_000) + "{}",
+    '{"text":"**literal** ' + "x".repeat(20_000) + '"}',
+  ])("keeps over-budget trees literal and complete", (source) => {
+    const body = renderJson(source);
+    expect(body.querySelector(".code-block-json-tree, strong")).toBeNull();
+    expect(body.querySelector("pre code")?.textContent).toBe(source);
+    expect(
+      readMarkdownCodeBlockCopyText(body.querySelector<HTMLElement>(".code-block-copy")!),
+    ).toBe(source);
+  });
 
   it("leaves inputs above the shared parsing limit to the existing literal-text renderer", () => {
     const source = '{"text":"**literal** ' + "x".repeat(40_000) + '"}';

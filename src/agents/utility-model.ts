@@ -8,7 +8,9 @@ import {
 } from "../config/utility-model-separation-migration.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { isDefaultAgentRuntimeId } from "./agent-runtime-id.js";
 import { resolveNativeModelPrimary } from "./agent-scope.js";
+import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import { resolveDefaultModelForAgent } from "./model-selection.js";
 import { readUtilityModelSetting } from "./utility-model-setting.js";
@@ -123,4 +125,56 @@ export function resolveUtilityModelRefForAgent(params: {
       params.primaryModelRef?.trim() || resolveNativeModelPrimary(params.cfg, params.agentId),
     metadataSnapshot: params.metadataSnapshot,
   });
+}
+
+/** Candidate runtime for an automatic utility model; preparation checks auth availability. */
+export function resolveAutomaticUtilityRuntimeOverride(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  /** Provider and model of the already-resolved utility selection. */
+  utilityProvider: string;
+  utilityModelId: string;
+  metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
+}): string | undefined {
+  // An explicit utilityModel owns its own runtime; only automatic routing inherits.
+  if (readUtilityModelSetting(params.cfg, params.agentId).kind !== "auto") {
+    return undefined;
+  }
+  const primary = resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId });
+  const utilityProvider = params.utilityProvider.trim().toLowerCase();
+  if (!primary.provider || !primary.model || primary.provider.toLowerCase() !== utilityProvider) {
+    return undefined;
+  }
+  // The observer passes its derived ref back as modelRef. Match that exact model
+  // so other same-provider selections keep their own runtime and billing route.
+  const automaticRef = resolveAutomaticUtilityModelRef({
+    cfg: params.cfg,
+    primaryProvider: primary.provider,
+    metadataSnapshot: params.metadataSnapshot,
+  });
+  const utilityRef = `${utilityProvider}/${params.utilityModelId.trim().toLowerCase()}`;
+  if (automaticRef?.toLowerCase() !== utilityRef) {
+    return undefined;
+  }
+  const derived = resolveAgentHarnessPolicy({
+    provider: params.utilityProvider,
+    modelId: params.utilityModelId,
+    config: params.cfg,
+    agentId: params.agentId,
+  });
+  if (!isDefaultAgentRuntimeId(derived.runtime)) {
+    return undefined;
+  }
+  const primaryPolicy = resolveAgentHarnessPolicy({
+    provider: primary.provider,
+    modelId: primary.model,
+    config: params.cfg,
+    agentId: params.agentId,
+  });
+  // Provider-wide policy already covers the derived model; implicit policy is
+  // resolved per route and must not be copied from a different model.
+  if (primaryPolicy.runtimeSource !== "model") {
+    return undefined;
+  }
+  return isDefaultAgentRuntimeId(primaryPolicy.runtime) ? undefined : primaryPolicy.runtime;
 }

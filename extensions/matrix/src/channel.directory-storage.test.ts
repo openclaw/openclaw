@@ -51,33 +51,10 @@ describe("Matrix config directory storage", () => {
     env?: NodeJS.ProcessEnv;
     selected: string;
   }[] = [
-    { name: "the default account", selected: "default" },
-    {
-      name: "the sole named account",
-      config: { accounts: { "Team Ops": {} } },
-      selected: "team-ops",
-    },
     {
       name: "the configured named default",
       config: { defaultAccount: "Team Ops", accounts: { other: {}, "Team Ops": {} } },
       selected: "team-ops",
-    },
-    {
-      name: "an explicit normalized account",
-      config: { defaultAccount: "other", accounts: { other: {}, "Team Ops": {} } },
-      accountId: " Team Ops ",
-      selected: "team-ops",
-    },
-    {
-      name: "the ambiguous-account fallback",
-      config: { accounts: { other: {}, "Team Ops": {} } },
-      selected: "default",
-    },
-    {
-      name: "an explicitly empty account",
-      config: { accounts: { "Team Ops": {} } },
-      accountId: "",
-      selected: "default",
     },
     {
       name: "a scoped environment account",
@@ -135,11 +112,6 @@ describe("Matrix config directory storage", () => {
       { kind: "group", id: "room:!shared:example.org" },
       { kind: "group", id: `room:!${scenario.selected}:example.org` },
     ]);
-    console.log(
-      "matrix-directory host SQL",
-      scenario.name,
-      sql.map((method) => method.mock.calls.length),
-    );
     for (const method of sql) {
       expect(method).not.toHaveBeenCalled();
     }

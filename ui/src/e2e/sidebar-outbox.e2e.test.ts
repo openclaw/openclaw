@@ -52,7 +52,7 @@ async function expectCompactRow(incident: Locator) {
 }
 
 suite.define(() => {
-  it("reviews an unconfirmed submission through System without sending or dismissing it", async () => {
+  it("reviews an unconfirmed submission through System without sending or deleting its draft", async () => {
     const artifacts = createControlUiE2eArtifactDir("sidebar-outbox");
     await suite.withPage(
       {
@@ -145,7 +145,8 @@ suite.define(() => {
         await incident.getByRole("link", { name: "Review in chat" }).click();
         await delivery.waitFor();
         expect(await gateway.getRequests("chat.send")).toHaveLength(1);
-        // Review alone leaves custody and the incident intact. Existing Discard owns removal.
+        // Review clears the notification but preserves the draft for explicit recovery.
+        await expect.poll(() => page.locator(".sidebar-issues-button").count()).toBe(0);
         await delivery.getByRole("button", { name: "Discard", exact: true }).click();
         await delivery.waitFor({ state: "detached" });
         await expect.poll(() => page.locator(".sidebar-issues-button").count()).toBe(0);
@@ -166,7 +167,8 @@ suite.define(() => {
       },
     );
   });
-  it.each([390, 320])("keeps long-label recovery rows compact at %ipx", async (width) => {
+  it("keeps long-label recovery rows compact at 320px", async () => {
+    const width = 320;
     const artifacts = createControlUiE2eArtifactDir(`sidebar-outbox-compact-${width}`);
     await suite.withPage(
       {

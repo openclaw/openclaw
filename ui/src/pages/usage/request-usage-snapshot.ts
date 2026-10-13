@@ -22,13 +22,7 @@ export type ProviderUsageSnapshot =
   | { state: "pending" }
   | { state: "settled"; result: ProviderUsageRequestResult };
 
-export type UsageSnapshotResult = Result<UsageSnapshotValue, UsageSnapshotFailure>;
-
-export function providerUsageFromSnapshotResult(
-  result: UsageSnapshotResult,
-): ProviderUsageSnapshot {
-  return result.ok ? result.value.providerUsage : result.error.providerUsage;
-}
+type UsageSnapshotResult = Result<UsageSnapshotValue, UsageSnapshotFailure>;
 
 export async function requestUsageSnapshot(
   client: GatewayBrowserClient,
@@ -41,7 +35,7 @@ export async function requestUsageSnapshot(
   );
   try {
     const [result, providerUsage] = await Promise.all([
-      requestSessionUsage(client, query, { signal }),
+      requestSessionUsage(client, query, { projection: "overview", signal }),
       providerUsagePromise,
     ]);
     const costSummary: CostUsageSummary = {

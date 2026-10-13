@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -16,13 +17,14 @@ import {
   WorkspaceAliasRepointedError,
   type WorkspaceStateIdentity,
 } from "./workspace-state-identity.js";
+import { workspaceStateFactKey, workspaceStatePublication } from "./workspace-state-publication.js";
 
 export const WORKSPACE_SETUP_STATE_VERSION = 1 as const;
-export const WORKSPACE_ATTESTATION_RECENT_MS = 24 * 60 * 60 * 1000;
+const WORKSPACE_ATTESTATION_RECENT_MS = 24 * 60 * 60 * 1000;
 export const WORKSPACE_LEGACY_STATE_MIGRATION_KIND = "legacy-workspace-setup-files";
 export const WORKSPACE_CONTENT_RELOCATION_MIGRATION_KIND = "workspace-content-relocation";
 const MAX_WORKSPACE_ATTESTATION_FILENAME_LENGTH = 255;
-export const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/u;
+const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/u;
 // Attested names are joined onto the workspace dir and read back, so keep the
 // accepted set closed rather than denying unsafe forms one at a time: a plain
 // ASCII markdown basename excludes separators, traversal, colons, NUL, and the
@@ -185,16 +187,24 @@ export function registerWorkspaceStateAliasIdentitiesInTransaction(params: {
       }
       continue;
     }
-    executeSqliteQuerySync(
+    const inserted = executeSqliteQueryTakeFirstSync(
       params.database.db,
-      kysely.insertInto("workspace_path_aliases").values({
-        alias_key: alias.workspaceKey,
-        alias_path: alias.workspacePath,
-        workspace_key: params.identity.workspaceKey,
-        workspace_path: params.identity.workspacePath,
-        updated_at_ms: params.updatedAtMs,
-      }),
+      kysely
+        .insertInto("workspace_path_aliases")
+        .values({
+          alias_key: alias.workspaceKey,
+          alias_path: alias.workspacePath,
+          workspace_key: params.identity.workspaceKey,
+          workspace_path: params.identity.workspacePath,
+          updated_at_ms: params.updatedAtMs,
+        })
+        .returningAll(),
     );
+    if (inserted) {
+      workspaceStatePublication.stagePostimages(params.database.db, [
+        { kind: "alias", row: inserted },
+      ]);
+    }
   }
 }
 
@@ -307,4 +317,209 @@ export function readWorkspaceStateSnapshotForDirectoryInDatabase(params: {
     const { identity } = resolveWorkspaceIdentityFromDatabase(params);
     return readWorkspaceStateSnapshotFromDatabase({ identity, database: params.database });
   });
+}
+
+export type WorkspaceAttestationInput = {
+  workspaceDir: string;
+  attestedAtMs: number;
+  generatedHashes: ReadonlyMap<string, string>;
+  nowMs?: number;
+};
+
+export function replaceWorkspaceAttestationInDatabase(
+  database: WorkspaceStateDatabaseHandle,
+  params: WorkspaceAttestationInput,
+): WorkspaceAttestation {
+  assertCanonicalIntegerTimestamp(params.attestedAtMs, "attestation");
+  if (params.nowMs !== undefined) {
+    assertCanonicalIntegerTimestamp(params.nowMs, "attestation update");
+  }
+  for (const [filename, sha256] of params.generatedHashes) {
+    if (!isSafeWorkspaceAttestationFilename(filename) || !SHA256_HEX_PATTERN.test(sha256)) {
+      throw new Error("workspace attestation hash is invalid");
+    }
+  }
+  const sortedHashes = [...params.generatedHashes.entries()].toSorted(([left], [right]) =>
+    left.localeCompare(right),
+  );
+  // Capture the comparison clock only after BEGIN IMMEDIATE acquires the
+  // writer lock, so a newer committed row cannot look future-dated.
+  const updatedAtMs = params.nowMs ?? Date.now();
+  assertCanonicalIntegerTimestamp(updatedAtMs, "attestation update");
+  const resolution = resolveWorkspaceIdentityFromDatabase({
+    workspaceDir: params.workspaceDir,
+    database,
+  });
+  const identity = resolution.identity;
+  const snapshot = readWorkspaceStateSnapshotFromDatabase({ identity, database });
+  if (
+    snapshot.attestation &&
+    snapshot.attestation.attestedAtMs > params.attestedAtMs &&
+    snapshot.attestation.attestedAtMs <= updatedAtMs
+  ) {
+    registerWorkspaceStateAliasIdentitiesInTransaction({
+      database,
+      identity,
+      aliases: resolution.aliases,
+      updatedAtMs,
+    });
+    return snapshot.attestation;
+  }
+  const kysely = getNodeSqliteKysely<WorkspaceStateDatabase>(database.db);
+  const values = {
+    // Heals the NULL path on adopted legacy orphan attestation rows.
+    workspace_path: identity.workspacePath,
+    attested_at_ms: params.attestedAtMs,
+    attestation_updated_at_ms: updatedAtMs,
+  };
+  const setup = executeSqliteQueryTakeFirstSync(
+    database.db,
+    kysely
+      .insertInto("workspace_setup_state")
+      .values({
+        workspace_key: identity.workspaceKey,
+        ...values,
+      })
+      .onConflict((conflict) => conflict.column("workspace_key").doUpdateSet(values))
+      .returningAll(),
+  );
+  if (setup) {
+    workspaceStatePublication.stagePostimages(database.db, [{ kind: "setup", row: setup }]);
+  }
+  const committedHashes = snapshot.attestation?.generatedHashes;
+  if (
+    committedHashes?.size !== params.generatedHashes.size ||
+    sortedHashes.some(([filename, sha256]) => committedHashes.get(filename) !== sha256)
+  ) {
+    executeSqliteQuerySync(
+      database.db,
+      kysely
+        .deleteFrom("workspace_generated_bootstrap_hashes")
+        .where("workspace_key", "=", identity.workspaceKey),
+    );
+    if (sortedHashes.length > 0) {
+      executeSqliteQuerySync(
+        database.db,
+        kysely.insertInto("workspace_generated_bootstrap_hashes").values(
+          sortedHashes.map(([filename, sha256]) => ({
+            workspace_key: identity.workspaceKey,
+            filename,
+            sha256,
+          })),
+        ),
+      );
+    }
+  }
+  registerWorkspaceStateAliasIdentitiesInTransaction({
+    database,
+    identity,
+    aliases: resolution.aliases,
+    updatedAtMs,
+  });
+  workspaceStatePublication.stagePostimages(database.db, [
+    { kind: "hashes", workspaceKey: identity.workspaceKey, hashes: sortedHashes },
+  ]);
+  return {
+    attestedAtMs: params.attestedAtMs,
+    generatedHashes: new Map(sortedHashes),
+  };
+}
+
+export function deleteWorkspaceStateRowsInDatabase(
+  database: WorkspaceStateDatabaseHandle,
+  { workspaceKey }: WorkspaceStateIdentity,
+): void {
+  const kysely = getNodeSqliteKysely<WorkspaceStateDatabase>(database.db);
+  const receiptRows = executeSqliteQuerySync(
+    database.db,
+    kysely
+      .selectFrom("migration_sources")
+      .select(["source_key", "last_run_id", "report_json"])
+      .where("migration_kind", "in", [
+        WORKSPACE_LEGACY_STATE_MIGRATION_KIND,
+        WORKSPACE_CONTENT_RELOCATION_MIGRATION_KIND,
+      ]),
+  ).rows.filter((row) => {
+    try {
+      const report: unknown = JSON.parse(row.report_json);
+      return isRecord(report) && report.workspaceKey === workspaceKey;
+    } catch {
+      return false;
+    }
+  });
+  if (receiptRows.length > 0) {
+    const receiptKeys = receiptRows.map((row) => row.source_key);
+    executeSqliteQuerySync(
+      database.db,
+      kysely.deleteFrom("migration_sources").where("source_key", "in", receiptKeys),
+    );
+    const runIds = [...new Set(receiptRows.map((row) => row.last_run_id))];
+    executeSqliteQuerySync(
+      database.db,
+      kysely
+        .deleteFrom("migration_runs")
+        .where("id", "in", runIds)
+        .where((eb) =>
+          eb.not(
+            eb.exists(
+              eb
+                .selectFrom("migration_sources")
+                .select("source_key")
+                .whereRef("migration_sources.last_run_id", "=", "migration_runs.id"),
+            ),
+          ),
+        ),
+    );
+  }
+  const aliases = executeSqliteQuerySync(
+    database.db,
+    kysely
+      .deleteFrom("workspace_path_aliases")
+      .where("workspace_key", "=", workspaceKey)
+      .returning("alias_key"),
+  ).rows;
+  workspaceStatePublication.stageDeletions(
+    database.db,
+    aliases.map((row) => workspaceStateFactKey("alias", row.alias_key)),
+  );
+  for (const table of ["workspace_generated_bootstrap_hashes", "workspace_setup_state"] as const) {
+    executeSqliteQuerySync(
+      database.db,
+      kysely.deleteFrom(table).where("workspace_key", "=", workspaceKey),
+    );
+  }
+  workspaceStatePublication.stageDeletions(database.db, [
+    workspaceStateFactKey("setup", workspaceKey),
+    workspaceStateFactKey("hashes", workspaceKey),
+  ]);
+}
+
+export function recentWorkspaceAttestation(
+  attestation: WorkspaceAttestation | undefined,
+  nowMs = Date.now(),
+): WorkspaceAttestation | undefined {
+  if (!attestation) {
+    return undefined;
+  }
+  const ageMs = nowMs - attestation.attestedAtMs;
+  // Clock rollback must not turn disappearance protection into permission to
+  // reseed. A healthy workspace refreshes the future-dated row below.
+  if (ageMs > WORKSPACE_ATTESTATION_RECENT_MS) {
+    return undefined;
+  }
+  return attestation;
+}
+
+export function hasWorkspaceSetupStateMarker(state: WorkspaceSetupState): boolean {
+  return Boolean(state.bootstrapSeededAt || state.setupCompletedAt);
+}
+
+export function hasRecentWorkspaceSetupState(
+  snapshot: WorkspaceStateSnapshot,
+  nowMs = Date.now(),
+): boolean {
+  if (!hasWorkspaceSetupStateMarker(snapshot.setup) || snapshot.setupUpdatedAtMs === undefined) {
+    return false;
+  }
+  return nowMs - snapshot.setupUpdatedAtMs <= WORKSPACE_ATTESTATION_RECENT_MS;
 }

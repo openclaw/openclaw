@@ -11,7 +11,6 @@ import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-l
 import type { SessionActor } from "../config/sessions/session-entry-provenance.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 
-/** Converts a persisted session entry into the shared display row shape. */
 export function toSessionDisplayRow(key: string, entry: SessionEntry) {
   const updatedAt = entry?.updatedAt ?? null;
   return {
@@ -59,10 +58,8 @@ export function toSessionDisplayRow(key: string, entry: SessionEntry) {
   };
 }
 
-/** Display row derived from a persisted session entry. */
 export type SessionDisplayRow = ReturnType<typeof toSessionDisplayRow>;
 
-/** Converts and sorts a session store by most recent activity first. */
 export function toSessionDisplayRows(store: Record<string, SessionEntry>) {
   return Object.entries(store)
     .map(([key, entry]) => toSessionDisplayRow(key, entry))
@@ -79,19 +76,16 @@ function truncateSessionKey(key: string): string {
   return `${graphemes.slice(0, 16).join("")}...${graphemes.slice(-6).join("")}`;
 }
 
-/** Formats a session key cell for table output. */
 export function formatSessionKeyCell(key: string, rich: boolean): string {
   const label = truncateSessionKey(sanitizeTerminalText(key));
   return rich ? theme.accent(label) : label;
 }
 
-/** Formats a relative session age cell for table output. */
 export function formatSessionAgeCell(updatedAt: number | null | undefined, rich: boolean): string {
   const ageLabel = updatedAt ? formatTimeAgo(Date.now() - updatedAt) : "unknown";
   return rich ? theme.muted(ageLabel) : ageLabel;
 }
 
-/** Formats a model cell for table output. */
 export function formatSessionModelCell(model: string | null | undefined, rich: boolean): string {
   const label = sanitizeTerminalText(model ?? "unknown");
   return rich ? theme.info(label) : label;
@@ -101,7 +95,6 @@ function formatSessionActor(actor: SessionActor): string {
   return actor.label?.trim() || actor.id?.trim() || actor.type;
 }
 
-/** Formats compact per-session flags for table output. */
 export function formatSessionFlagsCell(
   row: Pick<
     SessionDisplayRow,

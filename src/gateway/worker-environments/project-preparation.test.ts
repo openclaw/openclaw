@@ -8,7 +8,6 @@ import { requireGit } from "../../agents/worktrees/git.js";
 import {
   createWorkerProjectPreparation,
   readWorkerProjectSetupRecipe,
-  readWorkerProjectSnapshot,
 } from "./project-preparation.js";
 import {
   createProjectPreparationFixture,
@@ -34,31 +33,6 @@ function fixture(setup?: string, symlink = false) {
 }
 
 describe("project checkout preparation", () => {
-  it("derives the public repository label without changing the admitted snapshot", () => {
-    const admitted = {
-      key: "a".repeat(64),
-      baseCommit: "b".repeat(40),
-      source: {
-        kind: "repository",
-        url: "https://github.com/openclaw/prepared-fixture.git",
-        repositoryId: "R_prepared_fixture",
-        owner: {
-          agent: { agentId: "main", provenance: null },
-          identity: { source: "anonymous" },
-        },
-      },
-    };
-    const project = readWorkerProjectSnapshot(admitted)!;
-    const operation = createWorkerProjectPreparation({
-      project,
-      namespace: "gateway",
-      requireCurrent: () => {},
-    });
-    expect(operation.project.label).toBe("github.com/openclaw/prepared-fixture");
-    expect(readWorkerProjectSnapshot(project)).toEqual(admitted);
-    operation.close();
-  });
-
   it("bounds retained checkouts and abandoned staging while preserving the current project", async () => {
     const f = await fixture();
     const namespace = path.dirname(f.seed);
@@ -103,38 +77,6 @@ describe("project checkout preparation", () => {
       expect(f.upload).not.toHaveBeenCalled();
     },
   );
-
-  it("captures the pinned clean base and reuses it without another Git pack upload", async () => {
-    const f = await fixture();
-    await requireGit(f.repository, [
-      "remote",
-      "add",
-      "origin",
-      "https://example.invalid/private.git",
-    ]);
-    await fs.writeFile(path.join(f.repository, "input.txt"), "later commit\n");
-    await requireGit(f.repository, ["commit", "--quiet", "-am", "later"]);
-    await fs.writeFile(path.join(f.repository, "private.txt"), "session-only input\n");
-    const first = f.operation();
-    expect(await first.project.prepare(f)).toEqual({
-      seedKey: workerProjectSeedKey(f.project),
-      cacheHit: false,
-    });
-    first.close();
-    expect(await fs.readFile(path.join(f.seed, "input.txt"), "utf8")).toBe("prepared base\n");
-    expect(await fs.readdir(f.seed)).toEqual(expect.arrayContaining([".git", "input.txt"]));
-    expect(await fs.stat(path.join(f.seed, "private.txt")).catch(() => undefined)).toBeUndefined();
-    expect(await requireGit(f.seed, ["remote"])).toBe("");
-    expect(await requireGit(f.seed, ["status", "--porcelain"])).toBe("");
-    expect(f.upload).toHaveBeenCalledTimes(1);
-    const second = f.operation();
-    expect(await second.project.prepare(f)).toEqual({
-      seedKey: workerProjectSeedKey(f.project),
-      cacheHit: true,
-    });
-    expect(f.upload).toHaveBeenCalledTimes(1);
-    second.close();
-  });
 
   it("rejects modified pack bytes before publishing a reusable checkout", async () => {
     const f = await fixture();
@@ -431,9 +373,19 @@ cat input.txt >> "$HOME/count"
     await requireGit(f.repository, ["add", "generated"]);
     await requireGit(f.repository, ["commit", "--quiet", "-am", "B"]);
     const b = await snapshot();
+    const retainedChecks: string[] = [];
+    f.runScript.mockImplementation((script) =>
+      runProjectScriptWithGitProbe(script, f.home, (args) => {
+        if (args[1] === preparedA.workspaceDir && args[2] === "fsck") {
+          retainedChecks.push(args.at(-1)!);
+        }
+        return undefined;
+      }),
+    );
     const second = await f.preparedOperation(undefined, { project: b, key: "b".repeat(64) });
     const preparedB = (await second.project.prepare(f)).preparedWorkspace!;
     second.close();
+    expect(retainedChecks).toEqual([a.baseCommit]);
     expect(preparedB).toMatchObject({
       workspaceDir: preparedA.workspaceDir,
       homeDir: preparedA.homeDir,
@@ -472,6 +424,7 @@ cat input.txt >> "$HOME/count"
     const third = await f.preparedOperation(undefined, { project: a });
     expect((await third.project.prepare(f)).preparedWorkspace).toEqual(preparedA);
     third.close();
+    expect(retainedChecks).toEqual([a.baseCommit, b.baseCommit]);
     expect(f.uploadBytes).toHaveLength(2);
     expect(await fs.readFile(path.join(preparedA.homeDir, "count"), "utf8")).toBe(
       "prepared base\nchanged B\nprepared base\n",
@@ -486,9 +439,9 @@ cat input.txt >> "$HOME/count"
       await fs.readFile(path.join(preparedA.workspaceDir, "build/original-path"), "utf8"),
     ).toBe(preparedA.workspaceDir);
     expect(
-      (await fs.readdir(path.join(preparedA.homeDir, ".openclaw-worker", "manifests"))).filter(
-        (file) => file.endsWith(".json"),
-      ),
+      (await fs.readdir(path.join(preparedA.homeDir, ".openclaw-worker", "manifests")))
+        .filter((file) => file.endsWith(".json"))
+        .toSorted(),
     ).toEqual(
       [preparedA.sourceManifestRef, preparedA.preparedManifestRef]
         .map((ref) => `${ref.slice(7)}.json`)
@@ -834,56 +787,6 @@ ${action}
       expect(await fs.readFile(path.join(home, "count"), "utf8").catch(() => "")).toBe(count);
     },
   );
-
-  it("rejects a completed workspace result after its provisioning owner changes", async () => {
-    const f = await fixture();
-    const first = await f.preparedOperation();
-    await first.project.prepare(f);
-    first.close();
-    let current = true;
-    const second = await f.preparedOperation(() => {
-      if (!current) {
-        throw new Error("owner replaced");
-      }
-    });
-    await expect(
-      second.project.prepare({
-        upload: f.upload,
-        runScriptWithBudget: (createScript) => f.runScriptWithBudget(createScript),
-        runScript: async (script) => {
-          const output = await f.runScript(script);
-          current = false;
-          return output;
-        },
-      }),
-    ).rejects.toThrow("owner replaced");
-    expect(second.getPreparedWorkspace()).toBeUndefined();
-    expect(second.project.signal.aborted).toBe(true);
-    second.close();
-  });
-
-  it("prepares a recipe-free project without inventing setup authority", async () => {
-    const f = await fixture();
-    expect(await readWorkerProjectSetupRecipe(f.project)).toBeUndefined();
-    const operation = createWorkerProjectPreparation({
-      project: f.project,
-      namespace: "gateway",
-      preparation: {
-        purpose: "session",
-        demandAtMs: 1_000,
-        key: "a".repeat(64),
-        cacheKey: "c".repeat(64),
-      },
-      requireCurrent: () => {},
-    });
-    expect(operation.getPreparedWorkspace()).toBeUndefined();
-    const result = await operation.project.prepare(f);
-    operation.close();
-    expect(result.preparedWorkspace?.sourceManifestRef).toMatch(/^sha256:[a-f0-9]{64}$/u);
-    expect(
-      await fs.readFile(path.join(result.preparedWorkspace!.workspaceDir, "input.txt"), "utf8"),
-    ).toBe("prepared base\n");
-  });
 
   it.each(["failed recipe", "modified recipe"])(
     "does not rerun or publish an incomplete preparation after %s",

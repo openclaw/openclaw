@@ -38,6 +38,7 @@ suite.define(() => {
         seq: 1,
         state: "delta",
         deltaText: progress,
+        message: { role: "assistant", content: [{ type: "text", text: progress }] },
       });
       const reply = page.locator(".chat-bubble").getByText(progress, { exact: true });
       await reply.waitFor();

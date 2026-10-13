@@ -1,6 +1,61 @@
+import fs from "node:fs/promises";
 import path from "node:path";
-import { vi, type Mock } from "vitest";
+import { afterAll, beforeAll, expect, vi, type Mock } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+} from "../../test/helpers/fixture-receipts.js";
+import { withinTest } from "../../test/helpers/promise.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import type { UpdateRepairInferenceResult } from "../infra/update-repair-inference.js";
+
+export function useTriageHeadlessFixture() {
+  let receipts: Awaited<ReturnType<typeof openFixtureReceiptChannel>>;
+  beforeAll(async () => {
+    receipts = await openFixtureReceiptChannel();
+  });
+  afterAll(async () => {
+    await receipts.close();
+  });
+  return async (executablePath: string, pidPath: string) => {
+    await fs.writeFile(
+      executablePath,
+      `#!/usr/bin/env node
+${fixtureReceiptClientSource(receipts.endpoint)}
+import { writeFileSync } from "node:fs";
+writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
+sendReceipt(${JSON.stringify(pidPath)}, "ready");
+setInterval(() => {}, 1000);
+`,
+      { mode: 0o700 },
+    );
+    return async (operation: PromiseLike<unknown>, signal: AbortSignal): Promise<number> => {
+      const readReadyPid = async () =>
+        Number(
+          await fs.readFile(pidPath, "utf8").catch((error: unknown) => {
+            if (hasErrnoCode(error, "ENOENT")) {
+              return "";
+            }
+            throw error;
+          }),
+        );
+      // Receipt and command completion use different pipes. The fixture records its PID
+      // before reporting readiness, so the durable record decides when completion wins.
+      const settled = Promise.resolve(operation).then(
+        async () => {
+          expect(await readReadyPid()).toBeGreaterThan(0);
+        },
+        async (error: unknown) => {
+          if (!((await readReadyPid()) > 0)) {
+            throw error;
+          }
+        },
+      );
+      await withinTest(Promise.race([receipts.waitFor(pidPath, "ready"), settled]), signal);
+      return readReadyPid();
+    };
+  };
+}
 
 export function createTriageInferenceSelection(stateDir: string): UpdateRepairInferenceResult {
   return {

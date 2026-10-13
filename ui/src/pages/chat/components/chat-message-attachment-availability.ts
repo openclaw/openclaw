@@ -1,6 +1,7 @@
 import { fetchControlUiResource, subscribeBrowserAuthRestored } from "../../../app/browser-http.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatUiExternalText } from "../../../lib/format-error.ts";
+import { buildChatMediaFetchHeaders } from "./chat-media-playback.ts";
 import {
   buildAssistantAttachmentUrl,
   isLocalAssistantAttachmentSource,
@@ -10,6 +11,7 @@ import {
   isChatMediaResourceCurrent,
   notifyChatMediaResourceSubscribers,
   observeChatMediaResource,
+  readChatMediaResource,
   scheduleChatMediaResourceRefresh,
   type ChatMediaResource,
   type ImageRenderOptions,
@@ -122,11 +124,8 @@ export function resolveAssistantAttachmentAvailability(
     };
   };
   if (typeof fetch === "function") {
-    const headers = new Headers({ Accept: "application/json" });
-    const normalizedAuthToken = options.authToken?.trim();
-    if (normalizedAuthToken) {
-      headers.set("Authorization", `Bearer ${normalizedAuthToken}`);
-    }
+    const headers = buildChatMediaFetchHeaders(options.authToken);
+    headers.set("Accept", "application/json");
     const controller = new AbortController();
     resource.abortController = controller;
     const timeout = setTimeout(
@@ -296,8 +295,8 @@ function createUnavailableAssistantAttachment(
   };
 }
 
-function observeAssistantAttachment(source: string, options: ImageRenderOptions) {
-  const cacheScope = JSON.stringify([
+function assistantAttachmentCacheScope(source: string, options: ImageRenderOptions) {
+  return JSON.stringify([
     options.connectionEpoch ?? 0,
     options.resourceBasePath ?? "",
     options.authToken?.trim() ?? "",
@@ -305,6 +304,59 @@ function observeAssistantAttachment(source: string, options: ImageRenderOptions)
     options.agentId,
     source,
   ]);
+}
+
+function readRetainedAssistantAttachment(source: string, options: ImageRenderOptions) {
+  const resource = readChatMediaResource<AssistantAttachmentAvailability>(
+    "assistant-attachment",
+    JSON.stringify([assistantAttachmentCacheScope(source, options), options.policyKey]),
+  );
+  return resource &&
+    !resource.discardWhenIdle &&
+    resource.value?.status === "available" &&
+    resource.retainUntil !== undefined &&
+    resource.retainUntil > Date.now()
+    ? resource
+    : undefined;
+}
+
+export function takeRetainedAssistantImage(source: string, options: ImageRenderOptions = {}) {
+  const resource = readRetainedAssistantAttachment(source, options);
+  const image = resource?.retainedImage;
+  if (resource) {
+    resource.retainedImage = undefined;
+  }
+  return image;
+}
+
+export function retainAssistantImage(
+  source: string,
+  image: HTMLImageElement,
+  options: ImageRenderOptions = {},
+  filename?: string,
+) {
+  const resource = readRetainedAssistantAttachment(source, options);
+  const availability = resource?.value;
+  if (
+    resource &&
+    availability?.status === "available" &&
+    image.complete &&
+    image.naturalWidth > 0 &&
+    image.getAttribute("src") ===
+      buildAssistantAttachmentUrl(
+        source,
+        options.resourceBasePath,
+        availability.mediaTicket,
+        options,
+        filename,
+      )
+  ) {
+    resource.retainedImage = image;
+  }
+}
+
+function observeAssistantAttachment(source: string, options: ImageRenderOptions) {
+  const cacheScope = assistantAttachmentCacheScope(source, options);
   const resource = observeChatMediaResource<AssistantAttachmentAvailability>(
     "assistant-attachment",
     JSON.stringify([cacheScope, options.policyKey]),
@@ -331,6 +383,7 @@ function setAssistantAttachmentAvailability(
     return;
   }
   resource.value = availability;
+  resource.retainedImage = undefined;
   resource.retainUntil =
     availability.status === "available"
       ? (availability.mediaTicketExpiresAt ?? Number.POSITIVE_INFINITY)

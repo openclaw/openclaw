@@ -1,7 +1,3 @@
-/**
- * Page inspection helpers for visible text, observed errors, network requests,
- * and console messages from Playwright page state.
- */
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS, DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS } from "./constants.js";
 import type {
@@ -70,7 +66,6 @@ export async function getPageTextViaPlaywright(opts: {
   }
 }
 
-/** Returns captured page errors, optionally clearing the per-page buffer. */
 export async function getPageErrorsViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -85,7 +80,6 @@ export async function getPageErrorsViaPlaywright(opts: {
   return { errors };
 }
 
-/** Returns captured requests, optionally filtering URLs/resource types and clearing. */
 export async function getNetworkRequestsViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -107,23 +101,15 @@ export async function getNetworkRequestsViaPlaywright(opts: {
 }
 
 function consolePriority(level: string) {
-  switch (level) {
-    case "error":
-      return 3;
-    case "warn":
-    case "warning":
-      return 2;
-    case "info":
-    case "log":
-      return 1;
-    case "debug":
-      return 0;
-    default:
-      return 1;
+  if (level === "error") {
+    return 3;
   }
+  if (level === "warn" || level === "warning") {
+    return 2;
+  }
+  return level === "debug" ? 0 : 1;
 }
 
-/** Returns captured console messages at or above the requested priority level. */
 export async function getConsoleMessagesViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;

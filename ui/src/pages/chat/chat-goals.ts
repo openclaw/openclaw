@@ -1,3 +1,4 @@
+import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Value } from "typebox/value";
 import {
@@ -8,7 +9,6 @@ import {
   type SessionsGoalUpdateParams,
 } from "../../../../packages/gateway-protocol/src/schema/sessions-goal.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
-import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatGoalsEnglish } from "../../i18n/locales/en-chat-goals.ts";
 import type { ChatGoalAction, ChatGoalDraft, ChatGoalRecovery } from "../../lib/chat/chat-types.ts";
@@ -29,10 +29,8 @@ import {
   resolveUiConversationIdentity,
 } from "../../lib/sessions/session-key.ts";
 import { generateUUID } from "../../lib/uuid.ts";
-import type { ChatHost } from "./chat-send-contract.ts";
-import { setChatError } from "./chat-send-queue-state.ts";
-import type { ChatSendSubmitOptions } from "./chat-send-submit.ts";
-import { refreshChatSessionListForTarget } from "./chat-session.ts";
+import { isInitialChatHistoryUnavailable, setChatError } from "./chat-history-state.ts";
+import type { ChatHost, ChatSendSubmitOptions } from "./chat-send-contract.ts";
 import { adoptStartedChatRun } from "./run-lifecycle.ts";
 
 registerChatGoalsEnglish();
@@ -62,6 +60,11 @@ const rejectedGoalReasons = new Set([
   "capacity",
   "invalid",
 ]);
+
+function rejectGoalOperation(host: ChatHost, message: string): false {
+  setChatError(host, message, true);
+  return false;
+}
 
 function goalOperationTarget(host: ChatHost) {
   if (!host.client?.recoveryScopeReady || !host.client.recoveryScope) {
@@ -102,11 +105,7 @@ function goalOperationTarget(host: ChatHost) {
               saved.sessionKey === sessionKey &&
               saved.agentId === agentId &&
               saved.sessionId === sessionId
-            ? {
-                // SAFETY: The exact action schema and session ownership fields were checked above.
-                params: saved as GoalParams,
-                pending: false,
-              }
+            ? { params: saved, pending: false }
             : { retired: "invalid", pending: false };
       if (operation.retired) {
         storage?.setItem(storageKey, JSON.stringify(operation.retired));
@@ -137,6 +136,12 @@ export function chatGoalRecovery(host: ChatHost): ChatGoalRecovery | undefined {
     }
     return {
       pending: operation.pending,
+      goalId: operation.params?.goalId,
+      action: operation.params
+        ? "action" in operation.params
+          ? operation.params.action
+          : "clear"
+        : undefined,
       retired: operation.retired,
       onCheck: () => runGoalOperation(host, undefined, operation),
     };
@@ -154,8 +159,7 @@ export async function submitChatGoalDraft(
     return false;
   }
   if (draft.sessionId && draft.sessionId !== host.currentSessionId) {
-    setChatError(host, t("chat.goals.sessionChanged"));
-    return false;
+    return rejectGoalOperation(host, t("chat.goals.sessionChanged"));
   }
   if (draft.action === "edit") {
     return mutateChatGoal(host, {
@@ -196,19 +200,19 @@ async function runGoalOperation(
 ): Promise<boolean> {
   const client = host.client;
   if (!client || !host.connected || !client.recoveryScopeReady) {
-    setChatError(host, t("chat.goals.offline"));
-    return false;
+    return rejectGoalOperation(host, t("chat.goals.offline"));
   }
   if (!client.recoveryScope) {
-    setChatError(host, t("chat.goals.recoveryUnavailable"));
-    return false;
+    return rejectGoalOperation(host, t("chat.goals.recoveryUnavailable"));
   }
   let target: ReturnType<typeof goalOperationTarget>;
   try {
     target = goalOperationTarget(host);
   } catch (error) {
-    setChatError(host, `${t("chat.goals.recoveryUnavailable")} ${formatUiError(error)}`);
-    return false;
+    return rejectGoalOperation(
+      host,
+      `${t("chat.goals.recoveryUnavailable")} ${formatUiError(error)}`,
+    );
   }
   if (!target) {
     return false;
@@ -230,15 +234,9 @@ async function runGoalOperation(
     (host.currentSessionId ?? undefined) === sessionId &&
     visibleSessionMatches(host, sessionKey, agentId);
   if (operation?.pending) {
-    setChatError(host, t("chat.goals.actionPending"));
-    return false;
+    return rejectGoalOperation(host, t("chat.goals.actionPending"));
   }
-  if (operation?.retired) {
-    // Expired/invalid identities cannot be replayed. Refresh before letting the operator
-    // make a new decision; never transform a saved request into a fresh mutation.
-    if (action) {
-      return false;
-    }
+  const reconcileCurrentGoal = async (recoveryOperation: GoalOperation): Promise<boolean> => {
     const sessions = host.sessions;
     const connection = sessions.captureConnectionScope();
     const rowTarget = resolveUiConversationIdentity(host, sessionKey);
@@ -249,12 +247,12 @@ async function runGoalOperation(
       targetIsCurrent() &&
       host.sessions === sessions &&
       sessions.isConnectionScopeCurrent(connection) &&
-      goalOperationTarget(host)?.operation === operation;
-    const marker = JSON.stringify(operation.retired);
+      goalOperationTarget(host)?.operation === recoveryOperation;
     let observation: SessionRowObservation | undefined;
-    operation.pending = true;
-    host.requestUpdate?.();
     try {
+      if (!ownsRecovery()) {
+        return false;
+      }
       const outcome = await sessions.reconcileMutation(agentId);
       if (!ownsRecovery()) {
         return false;
@@ -268,10 +266,9 @@ async function runGoalOperation(
         { onInvalidate: () => {} },
       );
       const reconcile = observation.captureReconcile();
-      const described = await client.request<{ session?: GatewaySessionRow | null }>(
-        "sessions.describe",
+      const described = await sessions.describe(
         { key: sessionKey, ...(agentId ? { agentId } : {}) },
-        { timeoutMs: GOAL_REQUEST_TIMEOUT_MS },
+        { client, refresh: true, timeoutMs: GOAL_REQUEST_TIMEOUT_MS },
       );
       if (!ownsRecovery()) {
         return false;
@@ -299,6 +296,24 @@ async function runGoalOperation(
         }
         return false;
       }
+      return true;
+    } finally {
+      observation?.dispose();
+    }
+  };
+  if (operation?.retired) {
+    // Expired/invalid identities cannot be replayed. Refresh before letting the operator
+    // make a new decision; never transform a saved request into a fresh mutation.
+    if (action) {
+      return false;
+    }
+    const marker = JSON.stringify(operation.retired);
+    operation.pending = true;
+    host.requestUpdate?.();
+    try {
+      if (!(await reconcileCurrentGoal(operation))) {
+        return false;
+      }
       // A different consumer may already have retired this marker and saved a new intent.
       if (storage && storage.getItem(storageKey) !== marker) {
         return false;
@@ -313,7 +328,6 @@ async function runGoalOperation(
       }
       return false;
     } finally {
-      observation?.dispose();
       operation.pending = false;
       host.requestUpdate?.();
     }
@@ -327,18 +341,21 @@ async function runGoalOperation(
       (action.action === "edit" &&
         (!("objective" in params) || params.objective !== action.objective))
     ) {
-      setChatError(host, t("chat.goals.outcomeUnknown"));
-      return false;
+      return rejectGoalOperation(host, t("chat.goals.outcomeUnknown"));
     }
   }
   if (!operation) {
     if (!action) {
       return false;
     }
+    // A descriptor can expose Goal actions before history binds their recovery identity.
+    if (!sessionId || isInitialChatHistoryUnavailable(host)) {
+      return rejectGoalOperation(host, t("chat.thread.loading"));
+    }
     const identity = {
       sessionKey,
       ...(agentId ? { agentId } : {}),
-      ...(sessionId ? { sessionId } : {}),
+      sessionId,
       goalId: action.goalId,
       operationId: generateUUID(),
       issuedAtMs: Date.now(),
@@ -355,15 +372,16 @@ async function runGoalOperation(
     const schema =
       action.action === "clear" ? SessionsGoalClearParamsSchema : SessionsGoalUpdateParamsSchema;
     if (!Value.Check(schema, operation.params)) {
-      setChatError(host, t("chat.goals.invalidRequest"));
-      return false;
+      return rejectGoalOperation(host, t("chat.goals.invalidRequest"));
     }
     try {
       // Persist before sending: a storage failure must not start an unrecoverable Resume.
       storage?.setItem(storageKey, JSON.stringify(operation.params));
     } catch (error) {
-      setChatError(host, `${t("chat.goals.recoveryUnavailable")} ${formatUiError(error)}`);
-      return false;
+      return rejectGoalOperation(
+        host,
+        `${t("chat.goals.recoveryUnavailable")} ${formatUiError(error)}`,
+      );
     }
     operations.set(signature, operation);
   }
@@ -382,14 +400,46 @@ async function runGoalOperation(
     }
   };
   operation.pending = true;
-  setChatError(host, null);
-  host.requestUpdate?.();
+  setChatError(host, null, true);
   try {
-    const result = await client.request<SessionsGoalMutationResult>(
-      "action" in params ? "sessions.goal.update" : "sessions.goal.clear",
-      params,
-      { timeoutMs: GOAL_REQUEST_TIMEOUT_MS },
-    );
+    const request = () =>
+      client.request<SessionsGoalMutationResult>(
+        "action" in params ? "sessions.goal.update" : "sessions.goal.clear",
+        params,
+        { timeoutMs: GOAL_REQUEST_TIMEOUT_MS },
+      );
+    let result: SessionsGoalMutationResult;
+    try {
+      result = await request();
+    } catch (error) {
+      if (
+        !("action" in params && params.action === "resume") ||
+        !targetIsCurrent() ||
+        !(
+          error instanceof GatewayProtocolRequestTimeoutError ||
+          (error instanceof GatewayRequestError && error.code === "UNAVAILABLE")
+        )
+      ) {
+        throw error;
+      }
+      // Reconcile a lost ACK within this explicit Resume, preserving its durable identity.
+      // Rendering or restoring a saved request never starts this retry.
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 1_000);
+      });
+      if (
+        !targetIsCurrent() ||
+        goalOperationTarget(host)?.operation !== operation ||
+        goalOperationExpired(params.issuedAtMs)
+      ) {
+        throw error;
+      }
+      result = await request();
+    }
+    // Receipts describe the original decision. Keep recovery until the current goal is read.
+    if (result.replayed && !(await reconcileCurrentGoal(operation))) {
+      return false;
+    }
     operations.delete(signature);
     // The successful response already settled the operation, even if storage cleanup fails.
     try {
@@ -399,15 +449,6 @@ async function runGoalOperation(
     }
     if (targetIsCurrent()) {
       if (result.replayed) {
-        // Receipt snapshots describe the original decision, not the current goal or run.
-        void refreshChatSessionListForTarget(host, { sessionKey, agentId }).catch(
-          (error: unknown) => {
-            if (targetIsCurrent()) {
-              setChatError(host, formatUiError(error));
-              host.requestUpdate?.();
-            }
-          },
-        );
         return true;
       }
       const row = host.sessionsResult?.sessions.find(
@@ -461,7 +502,12 @@ async function runGoalOperation(
       }
     }
     if (targetIsCurrent()) {
-      setChatError(host, rejected ? formatUiError(error) : null);
+      setChatError(
+        host,
+        rejected
+          ? formatUiError(error)
+          : `${t("chat.goals.outcomeUnknown")} ${formatUiError(error)}`,
+      );
     }
     return false;
   } finally {

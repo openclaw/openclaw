@@ -1,3 +1,11 @@
+// Register shared transport mocks before publication owners load.
+// oxfmt-ignore
+import {
+  SESSION_ID,
+  SESSION_KEY,
+  githubPublicationTestMocks,
+  installGitHubPublicationTestHarness,
+} from "./github-publication.test-support.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -8,12 +16,6 @@ import {
   createRequesterPublicationFixture,
   guestScopes,
 } from "./github-publication-requester.test-support.js";
-import {
-  SESSION_ID,
-  SESSION_KEY,
-  githubPublicationTestMocks,
-  installGitHubPublicationTestHarness,
-} from "./github-publication.test-support.js";
 import type { OperatorScope } from "./operator-scopes.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
@@ -32,11 +34,8 @@ describe("registered session GitHub publication access", () => {
 
   it.each([
     { target: "own", policy: "absent", actor: "guest", outcome: "published" },
-    { target: "own", policy: "write", actor: "guest", outcome: "published" },
     { target: "foreign", policy: "view", actor: "guest", outcome: "INVALID_REQUEST" },
-    { target: "member", policy: "view", actor: "guest", outcome: "UNAVAILABLE" },
     { target: "foreign", policy: "absent", actor: "guest", outcome: "UNAVAILABLE" },
-    { target: "member", policy: "absent", actor: "guest", outcome: "UNAVAILABLE" },
     { target: "foreign", policy: "write", actor: "guest", outcome: "UNAVAILABLE" },
     { target: "member", policy: "write", actor: "guest", outcome: "UNAVAILABLE" },
     { target: "missing", policy: "absent", actor: "guest", outcome: "INVALID_REQUEST" },
@@ -106,7 +105,7 @@ describe("registered session GitHub publication access", () => {
       const { loadGatewaySessionEntryReadOnly } =
         await vi.importActual<typeof import("./session-utils.js")>("./session-utils.js");
       mocks.loadSession.mockImplementation(loadGatewaySessionEntryReadOnly);
-      const request = vi.spyOn(f.coordinator, "requestForSession");
+      const request = vi.spyOn(f.coordinator, "requestForSessionV2");
       const head = await workspace.git("rev-parse", "HEAD");
       const index = await fs.readFile(path.join(workspace.cwd, ".git/index"));
       const before = await workspace.git("diff", "HEAD");

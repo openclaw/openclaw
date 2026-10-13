@@ -2,12 +2,14 @@ import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { generateSecureUuid } from "../infra/secure-random.js";
 import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
+import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
 import { ensureColumn, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
+import { getOpenClawStateFeatureSchemaSql } from "./openclaw-state-feature-schema.js";
 import { stageUserProfileEmailBindingChange } from "./user-profile-events.js";
 import {
   runUserProfileWriteTransaction,
@@ -17,47 +19,39 @@ import type { UserProfilesDatabase, UserProfileOwnerErrorCode } from "./user-pro
 
 // Canonical additive schema for durable user profiles. Kept feature-local so
 // ordinary shared-state opens do not create identity tables until they are used.
-const USER_PROFILES_SCHEMA_SQL = `
-CREATE TABLE IF NOT EXISTS user_profiles (
-  id TEXT NOT NULL PRIMARY KEY,
-  display_name TEXT,
-  primary_github_account_id INTEGER,
-  avatar BLOB,
-  avatar_mime TEXT,
-  avatar_sha256 TEXT,
-  merged_into TEXT,
-  role TEXT,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
-) STRICT;
+const ensureUserProfileTables = createSqliteSchemaEnsurer(
+  () => getOpenClawStateFeatureSchemaSql("user_profiles"),
+  {
+    tables: ["user_profiles", "user_profile_emails", "user_profile_identities"],
+    indexes: ["idx_user_profile_emails_profile_id"],
+  },
+);
 
-CREATE TABLE IF NOT EXISTS user_profile_emails (
-  email TEXT NOT NULL PRIMARY KEY,
-  profile_id TEXT NOT NULL,
-  binding_id TEXT,
-  created_at INTEGER NOT NULL
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_user_profile_emails_profile_id
-  ON user_profile_emails(profile_id);
-
-CREATE TABLE IF NOT EXISTS user_profile_identities (
-  provider TEXT NOT NULL,
-  subject TEXT NOT NULL,
-  profile_id TEXT NOT NULL,
-  canonical_login TEXT,
-  created_at INTEGER NOT NULL,
-  PRIMARY KEY (provider, subject)
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_user_profile_identities_profile_id
-  ON user_profile_identities(profile_id);
-`;
+const ensureUserProfileIdentityIndexes = createSqliteSchemaEnsurer(
+  () =>
+    getOpenClawStateFeatureSchemaSql("user_profile_identities", {
+      endMarker: "ON user_profile_identities(authorization_id);",
+    }),
+  {
+    tables: ["user_profile_identities"],
+    indexes: [
+      "idx_user_profile_identities_profile_id",
+      "idx_user_profile_identities_authorization",
+    ],
+  },
+);
 
 export class UserProfileNotFoundError extends Error {
   constructor(readonly profileId: string) {
     super(`user profile not found: ${profileId}`);
     this.name = "UserProfileNotFoundError";
+  }
+}
+
+export class UserProfileMergeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UserProfileMergeError";
   }
 }
 
@@ -75,7 +69,6 @@ export class UserProfileOwnerError extends Error {
 }
 
 const ensuredDatabases = new WeakSet<DatabaseSync>();
-const roleEnsuredDatabases = new WeakSet<DatabaseSync>();
 
 function rememberEnsuredSchema(database: DatabaseSync, cache: WeakSet<DatabaseSync>): void {
   if (cache.has(database)) {
@@ -105,11 +98,14 @@ export function ensureUserProfilesSchema(
   if (ensuredDatabases.has(database.db)) {
     return;
   }
-  let hasRoleColumn = false;
   runUserProfileWriteTransaction(
     ({ db }) => {
-      db.exec(USER_PROFILES_SCHEMA_SQL); // sqlite-allow-raw -- Canonical feature-local additive DDL.
+      ensureUserProfileTables(db);
       ensureColumn(db, "user_profile_identities", "canonical_login TEXT");
+      ensureColumn(db, "user_profile_identities", "authorization_id TEXT");
+      ensureColumn(db, "user_profile_identities", "authorization_basis_json TEXT");
+      // Legacy identity tables need the authorization column before its index.
+      ensureUserProfileIdentityIndexes(db);
       ensureColumn(db, "user_profiles", "primary_github_account_id INTEGER");
       ensureColumn(db, "user_profile_emails", "binding_id TEXT");
       const kysely = getNodeSqliteKysely<UserProfilesDatabase>(db);
@@ -139,27 +135,23 @@ export function ensureUserProfilesSchema(
         });
       }
       options.mutation?.publish(...profiles);
-      hasRoleColumn = tableHasColumn(db, "user_profiles", "role");
     },
     options,
     { operationLabel: "user-profiles.schema.ensure" },
   );
   // A rolled-back ensure must retry rather than caching a missing table/column.
   rememberEnsuredSchema(database.db, ensuredDatabases);
-  if (hasRoleColumn) {
-    rememberEnsuredSchema(database.db, roleEnsuredDatabases);
-  }
 }
 
 export function ensureUserProfileRoleSchema(
   options: OpenClawStateDatabaseOptions,
   database = openOpenClawStateDatabase(options),
 ): void {
-  if (roleEnsuredDatabases.has(database.db)) {
+  if (tableHasColumn(database.db, "user_profiles", "role")) {
     return;
   }
   ensureUserProfilesSchema(options, database);
-  if (roleEnsuredDatabases.has(database.db)) {
+  if (tableHasColumn(database.db, "user_profiles", "role")) {
     return;
   }
   runOpenClawStateWriteTransaction(
@@ -167,10 +159,4 @@ export function ensureUserProfileRoleSchema(
     options,
     { operationLabel: "user-profiles.role.schema.ensure" },
   );
-  // Keep the cache aligned with both nested rollback and the outer commit.
-  rememberEnsuredSchema(database.db, roleEnsuredDatabases);
-}
-
-export function hasEnsuredUserProfileRoleSchema(database: DatabaseSync): boolean {
-  return roleEnsuredDatabases.has(database);
 }

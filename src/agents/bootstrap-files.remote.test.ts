@@ -27,10 +27,34 @@ vi.mock("../plugins/memory-runtime.js", () => ({
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let testState: OpenClawTestState | undefined;
+let workspaceDir: string;
+let remoteDir: string;
+let release: (() => void) | undefined;
+
+function bindRemote(bridge = createRemoteBridge()) {
+  release = registerAgentWorkspaceAccess(workspaceDir, { bridge });
+  return release;
+}
+
+function createRemoteBridge() {
+  return createRemoteShellSandboxFsBridge({
+    sandbox: createSandboxTestContext({
+      overrides: { workspaceDir, agentWorkspaceDir: workspaceDir },
+    }),
+    runtime: {
+      remoteWorkspaceDir: remoteDir,
+      remoteAgentWorkspaceDir: remoteDir,
+      runRemoteShellScript: createLocalRemoteShellScriptRunner(),
+    },
+  });
+}
 
 describe.runIf(process.platform !== "win32")("remote bootstrap read provenance", () => {
   beforeEach(async () => {
     clearInternalHooks();
+    release = undefined;
+    workspaceDir = tempDirs.make("bootstrap-gateway-");
+    remoteDir = tempDirs.make("bootstrap-remote-");
     resetLegacyWorkspaceStateCheckForTest();
     memoryRuntimeMocks.classifyWorkspacePaths.mockReset();
     testState = await createOpenClawTestState({
@@ -40,6 +64,7 @@ describe.runIf(process.platform !== "win32")("remote bootstrap read provenance",
   });
 
   afterEach(async () => {
+    release?.();
     clearInternalHooks();
     closeOpenClawStateDatabaseForTest();
     resetLegacyWorkspaceStateCheckForTest();
@@ -48,8 +73,6 @@ describe.runIf(process.platform !== "win32")("remote bootstrap read provenance",
   });
 
   it("selects personal files from the bound workspace and rejects remote profile aliases", async () => {
-    const workspaceDir = tempDirs.make("bootstrap-person-gateway-");
-    const remoteDir = tempDirs.make("bootstrap-person-remote-");
     const alice = ensureProfileForEmail("alice@example.test");
     const bob = ensureProfileForEmail("bob@example.test");
     for (const root of [workspaceDir, remoteDir]) {
@@ -64,38 +87,22 @@ describe.runIf(process.platform !== "win32")("remote bootstrap read provenance",
       path.join(remoteDir, "users", bob.id),
       "junction",
     );
-    const bridge = createRemoteShellSandboxFsBridge({
-      sandbox: createSandboxTestContext({
-        overrides: { workspaceDir, agentWorkspaceDir: workspaceDir },
-      }),
-      runtime: {
-        remoteWorkspaceDir: remoteDir,
-        remoteAgentWorkspaceDir: remoteDir,
-        runRemoteShellScript: createLocalRemoteShellScriptRunner(),
-      },
+    bindRemote();
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      bootstrapUserProfileId: alice.id,
     });
-    const release = registerAgentWorkspaceAccess(workspaceDir, { bridge });
-    try {
-      const files = await resolveBootstrapFilesForRun({
-        workspaceDir,
-        bootstrapUserProfileId: alice.id,
-      });
-      expect(files.filter((file) => file.name === "USER.md").map((file) => file.content)).toEqual([
-        "Remote Alice",
-      ]);
-      const aliased = await resolveBootstrapFilesForRun({
-        workspaceDir,
-        bootstrapUserProfileId: bob.id,
-      });
-      expect(aliased.some((file) => file.content === "Remote Alice")).toBe(false);
-    } finally {
-      release();
-    }
+    expect(files.filter((file) => file.name === "USER.md").map((file) => file.content)).toEqual([
+      "Remote Alice",
+    ]);
+    const aliased = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      bootstrapUserProfileId: bob.id,
+    });
+    expect(aliased.some((file) => file.content === "Remote Alice")).toBe(false);
   });
 
   it("finds bootstrap files in large remote directories just as it does locally", async () => {
-    const workspaceDir = tempDirs.make("bootstrap-large-gateway-");
-    const remoteDir = tempDirs.make("bootstrap-large-harness-");
     await fs.writeFile(path.join(remoteDir, "AGENTS.md"), "Harness instructions");
     for (let start = 0; start < 4100; start += 100) {
       await Promise.all(
@@ -106,41 +113,16 @@ describe.runIf(process.platform !== "win32")("remote bootstrap read provenance",
     }
     const local = await loadExtraBootstrapFilesWithDiagnostics(remoteDir, ["*.md"]);
     expect(local.files).toMatchObject([{ name: "AGENTS.md", content: "Harness instructions" }]);
-    const bridge = createRemoteShellSandboxFsBridge({
-      sandbox: createSandboxTestContext({
-        overrides: { workspaceDir, agentWorkspaceDir: workspaceDir },
-      }),
-      runtime: {
-        remoteWorkspaceDir: remoteDir,
-        remoteAgentWorkspaceDir: remoteDir,
-        runRemoteShellScript: createLocalRemoteShellScriptRunner(),
-      },
-    });
-    const release = registerAgentWorkspaceAccess(workspaceDir, { bridge });
-    try {
-      const remote = await loadExtraBootstrapFilesWithDiagnostics(workspaceDir, ["*.md"]);
-      expect(remote.diagnostics).toEqual([]);
-      expect(remote.files).toMatchObject([{ name: "AGENTS.md", content: "Harness instructions" }]);
-    } finally {
-      release();
-    }
+    bindRemote();
+    const remote = await loadExtraBootstrapFilesWithDiagnostics(workspaceDir, ["*.md"]);
+    expect(remote.diagnostics).toEqual([]);
+    expect(remote.files).toMatchObject([{ name: "AGENTS.md", content: "Harness instructions" }]);
   });
 
   it("refreshes remote read provenance even when the cached path and bytes are unchanged", async () => {
-    const workspaceDir = tempDirs.make("bootstrap-source-gateway-");
-    const remoteDir = tempDirs.make("bootstrap-source-harness-");
     await fs.writeFile(path.join(workspaceDir, "USER.md"), "Gateway decoy");
     await fs.writeFile(path.join(remoteDir, "USER.md"), "Harness profile");
-    const bridge = createRemoteShellSandboxFsBridge({
-      sandbox: createSandboxTestContext({
-        overrides: { workspaceDir, agentWorkspaceDir: workspaceDir },
-      }),
-      runtime: {
-        remoteWorkspaceDir: remoteDir,
-        remoteAgentWorkspaceDir: remoteDir,
-        runRemoteShellScript: createLocalRemoteShellScriptRunner(),
-      },
-    });
+    const bridge = createRemoteBridge();
     let workspaceSource = true;
     const read = bridge.readFileWithSource!.bind(bridge);
     bridge.readFileWithSource = async (params) => {
@@ -150,7 +132,7 @@ describe.runIf(process.platform !== "win32")("remote bootstrap read provenance",
         workspaceRelativePath: workspaceSource ? result.workspaceRelativePath : undefined,
       };
     };
-    const release = registerAgentWorkspaceAccess(workspaceDir, { bridge });
+    bindRemote(bridge);
     memoryRuntimeMocks.classifyWorkspacePaths.mockImplementation(
       async ({ readSources }: Parameters<typeof classifyActiveMemoryWorkspacePaths>[0]) => ({
         status: "classified",
@@ -166,36 +148,20 @@ describe.runIf(process.platform !== "win32")("remote bootstrap read provenance",
       config: {},
       agentId: "main",
     };
-    try {
-      const first = await resolveBootstrapFilesForRun(params);
-      expect(first.find((file) => file.name === "USER.md")?.content).toBe("Harness profile");
-      workspaceSource = false;
-      const second = await resolveBootstrapFilesForRun(params);
-      expect(second.some((file) => file.name === "USER.md")).toBe(false);
-      expect(await fs.readFile(path.join(workspaceDir, "USER.md"), "utf8")).toBe("Gateway decoy");
-    } finally {
-      release();
-    }
+    const first = await resolveBootstrapFilesForRun(params);
+    expect(first.find((file) => file.name === "USER.md")?.content).toBe("Harness profile");
+    workspaceSource = false;
+    const second = await resolveBootstrapFilesForRun(params);
+    expect(second.some((file) => file.name === "USER.md")).toBe(false);
+    expect(await fs.readFile(path.join(workspaceDir, "USER.md"), "utf8")).toBe("Gateway decoy");
   });
 
   it.each(["classification", "hook"])("rejects remote context revoked during %s", async (stage) => {
-    const workspaceDir = tempDirs.make("bootstrap-revoked-gateway-");
-    const remoteDir = tempDirs.make("bootstrap-revoked-harness-");
     await fs.writeFile(path.join(remoteDir, "USER.md"), "Harness profile");
-    const bridge = createRemoteShellSandboxFsBridge({
-      sandbox: createSandboxTestContext({
-        overrides: { workspaceDir, agentWorkspaceDir: workspaceDir },
-      }),
-      runtime: {
-        remoteWorkspaceDir: remoteDir,
-        remoteAgentWorkspaceDir: remoteDir,
-        runRemoteShellScript: createLocalRemoteShellScriptRunner(),
-      },
-    });
-    const release = registerAgentWorkspaceAccess(workspaceDir, { bridge });
+    const revoke = bindRemote();
     memoryRuntimeMocks.classifyWorkspacePaths.mockImplementation(async () => {
       if (stage === "classification") {
-        release();
+        revoke();
       }
       return {
         status: "classified",
@@ -205,15 +171,11 @@ describe.runIf(process.platform !== "win32")("remote bootstrap read provenance",
     if (stage === "hook") {
       registerInternalHook("agent:bootstrap", async () => {
         await Promise.resolve();
-        release();
+        revoke();
       });
     }
-    try {
-      await expect(
-        resolveBootstrapFilesForRun({ workspaceDir, config: {}, agentId: "main" }),
-      ).rejects.toThrow(/changed|stopped/);
-    } finally {
-      release();
-    }
+    await expect(
+      resolveBootstrapFilesForRun({ workspaceDir, config: {}, agentId: "main" }),
+    ).rejects.toThrow(/changed|stopped/);
   });
 });

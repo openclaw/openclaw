@@ -1,9 +1,8 @@
 import { UPDATE_POST_CORE_CONVERGENCE_ENV } from "../../commands/doctor/shared/update-phase.js";
 import { resolveStateDir } from "../../config/paths.js";
-import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import type { UpdateDoctorLintFinding } from "../../infra/update-doctor-lint-schema.js";
 import { parseUpdateDoctorLintReport } from "../../infra/update-doctor-lint.js";
-import type { UpdateStepResult } from "../../infra/update-runner-types.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { redactSupportString } from "../../logging/diagnostic-support-redaction.js";
 import { isConfiguredPluginPathDiagnosticCode } from "../../plugins/discovery-availability.js";
 import { formatCommandOutput, formatCommandResult } from "../../process/command-error.js";
@@ -59,26 +58,12 @@ function createPostPluginReadinessExecutionFailure(
 
 export async function applyPostPluginUpdateReadiness(params: {
   root: string;
-  entryPath?: string;
+  entryPath: string;
   pluginUpdate: PostCorePluginUpdateResult;
   timeoutMs: number;
   nodeRunner?: string;
 }): Promise<PostCorePluginUpdateResult> {
-  let entryPath = params.entryPath;
-  if (!entryPath) {
-    try {
-      entryPath = await resolveGatewayInstallEntrypoint(params.root);
-    } catch (error) {
-      return createPostPluginReadinessExecutionFailure(params.pluginUpdate, String(error));
-    }
-  }
-  if (!entryPath) {
-    return createPostPluginReadinessExecutionFailure(
-      params.pluginUpdate,
-      "Updated OpenClaw entrypoint not found for post-plugin readiness checks",
-    );
-  }
-  const args = [entryPath, "doctor", "--lint", "--json", "--severity-min", "error"];
+  const args = [params.entryPath, "doctor", "--lint", "--json", "--severity-min", "error"];
   const baseEnv = stripGatewayServiceMarkerEnv(disableUpdatedPackageCompileCacheEnv(process.env));
   delete baseEnv[UPDATE_POST_CORE_CONVERGENCE_ENV];
   const startedAt = Date.now();

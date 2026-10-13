@@ -1,4 +1,3 @@
-// Deepinfra provider module implements model/runtime integration.
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import {
   detectMime,
@@ -7,7 +6,7 @@ import {
   normalizeMimeType,
 } from "openclaw/plugin-sdk/media-mime";
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "openclaw/plugin-sdk/media-runtime";
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
+import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
@@ -30,14 +29,15 @@ import type {
 } from "openclaw/plugin-sdk/video-generation";
 import {
   DEEPINFRA_BASE_URL,
-  DEEPINFRA_VIDEO_ASPECT_RATIOS,
-  DEEPINFRA_VIDEO_DURATIONS,
   DEEPINFRA_VIDEO_FALLBACK_MODELS,
   normalizeDeepInfraBaseUrl,
   normalizeDeepInfraModelRef,
 } from "./media-models.js";
 import type { DeepInfraSurfaceModel } from "./media-models.js";
-import { resolveDeepInfraVideoModelCapabilities } from "./surface-model-catalogs.js";
+import {
+  buildDeepInfraVideoModelCapabilities,
+  resolveDeepInfraVideoModelCapabilities,
+} from "./surface-model-catalogs.js";
 
 // Per-poll request budget; the total operation budget comes from req.timeoutMs.
 const DEFAULT_HTTP_TIMEOUT_MS = 60_000;
@@ -45,7 +45,7 @@ const POLL_INTERVAL_MS = 5_000;
 const MAX_POLL_ATTEMPTS = 120;
 
 // /v1/openai/videos is async: POST returns a job, GET /{id} polls until the
-// job leaves the queue. Mirrors the OpenAI Sora surface (extensions/openai).
+// job succeeds or fails, then the result contains downloadable video URLs.
 type DeepInfraVideoStatus = "queued" | "processing" | "succeeded" | "failed";
 
 type DeepInfraVideoJob = {
@@ -112,10 +112,6 @@ function resolveDurationSeconds(value: number | undefined): number | undefined {
   return value <= 6.5 ? 5 : 8;
 }
 
-function resolveSeed(value: unknown): number | undefined {
-  return asSafeIntegerInRange(value, { min: 0, max: 4_294_967_295 });
-}
-
 function buildDeepInfraVideoBody(
   req: VideoGenerationRequest,
   model: string,
@@ -134,7 +130,7 @@ function buildDeepInfraVideoBody(
     // /v1/openai/videos names the duration field `seconds` (VideoGenerationIn).
     body.seconds = duration;
   }
-  const seed = resolveSeed(options.seed);
+  const seed = asSafeIntegerInRange(options.seed, { min: 0, max: 4_294_967_295 });
   if (seed != null) {
     body.seed = seed;
   }
@@ -153,7 +149,7 @@ function buildDeepInfraVideoBody(
 
 function firstDeepInfraVideoUrl(job: DeepInfraVideoJob): string | undefined {
   for (const entry of job.data ?? []) {
-    const videoUrl = entry ? normalizeOptionalString((entry as { url?: unknown }).url) : undefined;
+    const videoUrl = entry ? normalizeOptionalString(entry.url) : undefined;
     if (videoUrl) {
       return videoUrl;
     }
@@ -184,9 +180,7 @@ async function extractDeepInfraVideoAsset(
 }
 
 function resolveDeepInfraVideoBaseUrl(req: VideoGenerationRequest): string {
-  const providerConfig = req.cfg?.models?.providers?.deepinfra as
-    | (Record<string, unknown> & { baseUrl?: unknown })
-    | undefined;
+  const providerConfig = req.cfg?.models?.providers?.deepinfra;
   // Canonical `baseUrl` only; legacy `nativeBaseUrl`/`/v1/inference` values are
   // migrated by `openclaw doctor --fix` (doctor-contract-api.ts), never remapped here.
   const baseUrl = normalizeDeepInfraBaseUrl(providerConfig?.baseUrl, DEEPINFRA_BASE_URL);
@@ -211,32 +205,19 @@ export function buildDeepInfraVideoGenerationProvider(options?: {
       ? options.videoGenModels.map((model) => model.id)
       : [...DEEPINFRA_VIDEO_FALLBACK_MODELS];
   const defaultModel = ids[0] ?? DEEPINFRA_VIDEO_FALLBACK_MODELS[0];
+  const { providerOptions, ...capabilities } = buildDeepInfraVideoModelCapabilities();
   return {
     id: "deepinfra",
     label: "DeepInfra",
     defaultModel,
     models: ids,
     resolveModelCapabilities: resolveDeepInfraVideoModelCapabilities,
-    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "deepinfra", ...ctx }),
+    isConfiguredAsync: (ctx) => isProviderApiKeyConfiguredAsync({ provider: "deepinfra", ...ctx }),
     capabilities: {
+      ...capabilities,
       generate: {
-        maxVideos: 1,
-        maxDurationSeconds: 8,
-        supportedDurationSeconds: [...DEEPINFRA_VIDEO_DURATIONS],
-        supportsAspectRatio: true,
-        aspectRatios: [...DEEPINFRA_VIDEO_ASPECT_RATIOS],
-        providerOptions: {
-          seed: "number",
-          negative_prompt: "string",
-          negativePrompt: "string",
-          style: "string",
-        },
-      },
-      imageToVideo: {
-        enabled: false,
-      },
-      videoToVideo: {
-        enabled: false,
+        ...capabilities.generate,
+        providerOptions,
       },
     },
     async generateVideo(req) {

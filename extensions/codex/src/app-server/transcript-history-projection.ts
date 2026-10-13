@@ -2,22 +2,21 @@ import { Buffer } from "node:buffer";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AssistantMessage, Usage } from "openclaw/plugin-sdk/llm";
 import type { SessionTranscriptMessageEntry } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
 import { readCodexAsyncQuestions } from "./async-questions.js";
-import { auditNativeToolName, itemName, itemStatus } from "./event-projector-items.js";
-import { codexProviderRefusalDetails, readCodexProviderRefusal } from "./event-projector-values.js";
+import {
+  codexProviderRefusalDiagnostics,
+  readCodexProviderRefusal,
+} from "./event-projector-values.js";
 import type { CodexThread, CodexTurn, JsonValue } from "./protocol.js";
-import type { CodexHistoryItemEntry } from "./thread-history-page.js";
 import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
 
 const CODEX_HISTORY_IMPORT_MAX_MESSAGES = 200;
 const CODEX_HISTORY_IMPORT_MAX_BYTES = 512 * 1024;
 const CODEX_HISTORY_IMPORT_MAX_MESSAGE_BYTES = 64 * 1024;
 const CODEX_HISTORY_TRUNCATION_SUFFIX = "\n\n[Message truncated during Codex history import.]";
-const CODEX_HISTORY_ASSISTANT_API = "openai-chatgpt-responses" as const;
 const CODEX_HISTORY_ASSISTANT_PROVIDER = "openai";
-const CODEX_HISTORY_ASSISTANT_MODEL = "native-history";
 const CODEX_HISTORY_ZERO_USAGE: Usage = {
   input: 0,
   output: 0,
@@ -71,10 +70,7 @@ function projectCodexHistoryMessage(
 }
 
 function normalizeImportedHistoryText(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const text = value.trim();
+  const text = normalizeOptionalString(value);
   if (!text) {
     return undefined;
   }
@@ -91,11 +87,10 @@ export function projectCodexUserItemText(item: Record<string, unknown>): string 
     return undefined;
   }
   const parts: string[] = [];
-  for (const value of item.content) {
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
+  for (const input of item.content) {
+    if (!isRecord(input)) {
       continue;
     }
-    const input = value as Record<string, unknown>;
     if (input.type === "text") {
       const text = normalizeImportedHistoryText(input.text);
       if (text) {
@@ -148,9 +143,17 @@ function projectCodexThreadHistory(params: {
   turns: CodexTurn[];
   importedAt: number;
   modelProvider?: string;
-  includeErrorOnlyTurns?: boolean;
 }): ProjectedCodexHistoryMessage[] {
   const projected: ProjectedCodexHistoryMessage[] = [];
+  const assistantFields = {
+    api: "openai-chatgpt-responses" as const,
+    provider:
+      normalizeOptionalString(params.modelProvider) ??
+      normalizeOptionalString(params.thread.modelProvider) ??
+      CODEX_HISTORY_ASSISTANT_PROVIDER,
+    model: "native-history",
+    usage: CODEX_HISTORY_ZERO_USAGE,
+  };
   const threadTimestamp =
     typeof params.thread.createdAt === "number" && Number.isFinite(params.thread.createdAt)
       ? params.thread.createdAt * 1000
@@ -166,8 +169,7 @@ function projectCodexThreadHistory(params: {
           })
         : undefined;
     let hasAssistantMessage = false;
-    for (const value of turn.items) {
-      const item = value;
+    for (const item of turn.items) {
       const itemId = normalizeOptionalString(item.id);
       const identity = `${turn.id}:${itemId ?? itemOffset}`;
       const timestampSeconds =
@@ -206,13 +208,7 @@ function projectCodexThreadHistory(params: {
               {
                 role,
                 content: [{ type: "text", text }],
-                api: CODEX_HISTORY_ASSISTANT_API,
-                provider:
-                  normalizeOptionalString(params.modelProvider) ??
-                  normalizeOptionalString(params.thread.modelProvider) ??
-                  CODEX_HISTORY_ASSISTANT_PROVIDER,
-                model: CODEX_HISTORY_ASSISTANT_MODEL,
-                usage: CODEX_HISTORY_ZERO_USAGE,
+                ...assistantFields,
                 stopReason:
                   turn.status === "interrupted"
                     ? "aborted"
@@ -222,17 +218,10 @@ function projectCodexThreadHistory(params: {
                 ...(turn.status === "failed" && turn.error?.message
                   ? { errorMessage: turn.error.message }
                   : {}),
-                ...(refusal && terminalAssistant
-                  ? {
-                      diagnostics: [
-                        {
-                          type: "provider_refusal",
-                          timestamp,
-                          details: codexProviderRefusalDetails(refusal),
-                        },
-                      ],
-                    }
-                  : {}),
+                ...codexProviderRefusalDiagnostics(
+                  terminalAssistant ? refusal : undefined,
+                  timestamp,
+                ),
                 ...(phase ? { phase } : {}),
                 ...(asyncDelivery && itemId
                   ? { openclawAsyncDelivery: { itemId, ...(questions ? { questions } : {}) } }
@@ -244,38 +233,17 @@ function projectCodexThreadHistory(params: {
           : attachCodexMirrorIdentity({ role, content: text, timestamp }, identity);
       projected.push(projectCodexHistoryMessage(message, text));
     }
-    if (
-      params.includeErrorOnlyTurns &&
-      !hasAssistantMessage &&
-      turn.status === "failed" &&
-      turn.error?.message
-    ) {
+    if (!hasAssistantMessage && turn.status === "failed" && turn.error?.message) {
       const timestamp = (turn.completedAt ?? turn.startedAt ?? threadTimestamp / 1000) * 1000;
       const text = normalizeImportedHistoryText(turn.error.message) ?? "Codex turn failed.";
       const message: AssistantMessage = attachCodexMirrorIdentity(
         {
           role: "assistant",
           content: [],
-          api: CODEX_HISTORY_ASSISTANT_API,
-          provider:
-            normalizeOptionalString(params.modelProvider) ??
-            normalizeOptionalString(params.thread.modelProvider) ??
-            CODEX_HISTORY_ASSISTANT_PROVIDER,
-          model: CODEX_HISTORY_ASSISTANT_MODEL,
-          usage: CODEX_HISTORY_ZERO_USAGE,
+          ...assistantFields,
           stopReason: "error",
           errorMessage: text,
-          ...(refusal
-            ? {
-                diagnostics: [
-                  {
-                    type: "provider_refusal",
-                    timestamp,
-                    details: codexProviderRefusalDetails(refusal),
-                  },
-                ],
-              }
-            : {}),
+          ...codexProviderRefusalDiagnostics(refusal, timestamp),
           timestamp,
         },
         `${turn.id}:assistant`,
@@ -319,7 +287,6 @@ export function projectBoundedCodexThreadHistory(params: {
     thread: params.thread,
     turns: selectTurnsThroughBoundary(params.thread, params.throughTurnId),
     importedAt: params.importedAt,
-    includeErrorOnlyTurns: true,
     ...(params.modelProvider ? { modelProvider: params.modelProvider } : {}),
   });
   const selected = selectBoundedCodexHistoryTail(projected);
@@ -378,88 +345,4 @@ export function projectBoundedCodexVisibleSessionHistory(
     projected.push(projectCodexHistoryMessage(message, text));
   }
   return selectBoundedCodexHistoryTail(projected).map(({ responseItem }) => responseItem);
-}
-
-/** Displays native items through the shared transcript roles, including an unfinished turn. */
-export function projectCodexThreadHistoryItem(
-  thread: CodexThread,
-  entry: CodexHistoryItemEntry,
-  // Catalog registration shares this module; only the lazy history reader loads tool runtime.
-  toolItems: Pick<
-    typeof import("./event-projector-tool-items.js"),
-    "itemToolArgs" | "itemTranscriptResultText"
-  >,
-): AgentMessage[] {
-  const { item } = entry;
-  const timestamp = (entry.turn?.startedAt ?? thread.createdAt ?? 0) * 1000;
-  if (item.type === "userMessage" || item.type === "agentMessage") {
-    return projectCodexThreadHistory({
-      thread,
-      turns: [{ ...entry.turn, id: entry.turnId, items: [item] }],
-      importedAt: timestamp,
-    }).map(({ message }) => message);
-  }
-  const identity = `${entry.turnId}:${item.id}`;
-  const assistant = (content: AssistantMessage["content"], toolUse = false): AssistantMessage =>
-    attachCodexMirrorIdentity(
-      {
-        role: "assistant",
-        content,
-        api: CODEX_HISTORY_ASSISTANT_API,
-        provider: normalizeOptionalString(thread.modelProvider) ?? CODEX_HISTORY_ASSISTANT_PROVIDER,
-        model: CODEX_HISTORY_ASSISTANT_MODEL,
-        usage: CODEX_HISTORY_ZERO_USAGE,
-        stopReason: toolUse ? "toolUse" : "stop",
-        timestamp,
-      },
-      identity,
-    );
-  if (item.type === "reasoning") {
-    const parts =
-      Array.isArray(item.summary) && item.summary.length > 0 ? item.summary : item.content;
-    const thinking = normalizeImportedHistoryText(
-      Array.isArray(parts)
-        ? parts.filter((part) => typeof part === "string").join("\n")
-        : item.text,
-    );
-    return thinking ? [assistant([{ type: "thinking", thinking }])] : [];
-  }
-  if (item.type === "contextCompaction") {
-    return [assistant([{ type: "text", text: "Context compacted." }])];
-  }
-  const toolName = itemName(item) ?? auditNativeToolName(item);
-  if (!toolName) {
-    const text = normalizeImportedHistoryText(item.text ?? item.title);
-    return text ? [assistant([{ type: "text", text }])] : [];
-  }
-  const messages: AgentMessage[] = [
-    assistant(
-      [
-        {
-          type: "toolCall",
-          id: item.id,
-          name: toolName,
-          arguments: toolItems.itemToolArgs(item) ?? {},
-        },
-      ],
-      true,
-    ),
-  ];
-  const status = itemStatus(item);
-  if (status !== "running") {
-    messages.push(
-      attachCodexMirrorIdentity(
-        {
-          role: "toolResult",
-          toolCallId: item.id,
-          toolName,
-          content: [{ type: "text", text: toolItems.itemTranscriptResultText(item) ?? status }],
-          isError: status === "failed" || status === "blocked",
-          timestamp,
-        },
-        `${identity}:result`,
-      ),
-    );
-  }
-  return messages;
 }

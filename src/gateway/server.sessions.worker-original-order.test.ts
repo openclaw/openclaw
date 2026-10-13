@@ -15,6 +15,7 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { writeSessionStore } from "./test-helpers.js";
 import {
@@ -38,6 +39,7 @@ import { createWorkerTunnelManager } from "./worker-environments/tunnel.js";
 import { prepareLocalWorkspaceRsyncBoundary } from "./worker-environments/tunnel.test-support.js";
 import { rsyncArgvPort, sshArgvPort } from "./worker-environments/worker-ssh-argv.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./worker-environments/workspace-operation-coordinator.js";
+import { createWorkerWorkspaceRecoveryFixture } from "./worker-environments/workspace-recovery.test-support.js";
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 const PRIMARY_PORT = 2222;
@@ -337,6 +339,7 @@ test("preserves ordered fallback through inventory rehydration, workspace sync, 
   const placements = createWorkerSessionPlacementStore({ database, now: () => 3_000 });
   tunnelManager = createWorkerTunnelManager({ runner });
   const environmentService = createWorkerEnvironmentService({
+    scheduler: createTestGatewayScheduler(),
     store: environmentStore,
     getConfig: () => ({
       cloudWorkers: {
@@ -382,20 +385,14 @@ test("preserves ordered fallback through inventory rehydration, workspace sync, 
     generateWorkerCredential: () => "original-order-credential",
     liveEvents: {
       apply: async () => ({ ok: true, result: { ackedSeq: 1 } }),
-      bindSession: () => true,
       clear: () => {},
       clearEnvironment: () => {},
       rotateCredential: () => true,
-      start: () => {},
     },
-    executeInference: async () => ({
-      type: "error",
-      reason: "cancelled",
-      message: "cancelled by boundary fixture",
-    }),
   });
   workerService = environmentService;
   const dispatch = createWorkerPlacementDispatchService({
+    initialPlacements: await placements.listAsync(),
     placements,
     environments: {
       ...environmentService,
@@ -426,11 +423,11 @@ test("preserves ordered fallback through inventory rehydration, workspace sync, 
     resolveMoveDestination: async () => undefined,
     runReclaimPreparation: async ({ run, authorize }) => await run(authorize),
     runReclaimBarrier: async ({ begin, reclaim }) =>
-      await reclaim({ kind: "local", path: localWorkspace }, begin()),
+      await reclaim({ kind: "local", path: localWorkspace }, await begin()),
     runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
-    resolveWorkspace: async () => ({ kind: "local", path: localWorkspace }),
-    reportWorkspaceResultConflict: async () => {},
-    resolveWorkspaceResultConflict: async () => ({ kind: "absent" }),
+    ...createWorkerWorkspaceRecoveryFixture({
+      resolveWorkspace: async () => ({ kind: "local", path: localWorkspace }),
+    }),
   });
 
   const active = await dispatch.dispatch({
@@ -469,14 +466,14 @@ test("preserves ordered fallback through inventory rehydration, workspace sync, 
     {
       context: {
         workerSessionPlacementService: {
-          getMany: (sessionIds: readonly string[]) => placements.getMany(sessionIds),
-          retireSessionPlacement: (
-            retirement: Parameters<typeof placements.retireSessionPlacement>[0],
+          ...placements,
+          retireSessionPlacementAsync: async (
+            retirement: Parameters<typeof placements.retireSessionPlacementAsync>[0],
           ) => {
             expect(loadSessionEntry(SESSION_KEY).entry).toBeUndefined();
             expect(placements.get(SESSION_ID)?.state).toBe("reclaimed");
             events.push("placement:retire");
-            placements.retireSessionPlacement(retirement);
+            await placements.retireSessionPlacementAsync(retirement);
           },
         },
       },

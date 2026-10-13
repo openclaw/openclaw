@@ -41,3 +41,10 @@ export type ManagedImageRecordEntry = {
   record: ManagedImageRecord;
   cleanupPending: boolean;
 };
+
+export type ManagedImageRecordAttachment = {
+  attachmentId: string;
+  sessionKey: string;
+  messageId: string;
+  updatedAt: string;
+};

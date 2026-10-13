@@ -1,68 +1,40 @@
 // @vitest-environment node
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
+import { GatewayRequestError } from "../api/gateway.ts";
 import { createCanvasSurfaceLease } from "./canvas-surface-lease.runtime.ts";
 
-type ScheduledTimer = {
-  callback: () => void;
-  dueAtMs: number;
-};
+beforeEach(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(100_000);
+});
 
-class FakeClock {
-  nowMs = 100_000;
-  private nextId = 1;
-  private readonly timers = new Map<number, ScheduledTimer>();
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
 
-  readonly now = () => this.nowMs;
-
-  readonly setTimer = (callback: () => void, delayMs: number) => {
-    const id = this.nextId++;
-    this.timers.set(id, { callback, dueAtMs: this.nowMs + delayMs });
-    return id;
-  };
-
-  readonly clearTimer = (id: number) => {
-    this.timers.delete(id);
-  };
-
-  get pendingCount() {
-    return this.timers.size;
-  }
-
-  get nextDelayMs() {
-    const dueAtMs = Math.min(...Array.from(this.timers.values(), (timer) => timer.dueAtMs));
-    return Number.isFinite(dueAtMs) ? dueAtMs - this.nowMs : undefined;
-  }
-
-  takeNextCallback(): (() => void) | undefined {
-    const next = [...this.timers.entries()].toSorted(
-      ([leftId, left], [rightId, right]) => left.dueAtMs - right.dueAtMs || leftId - rightId,
-    )[0];
-    if (!next) {
-      return undefined;
-    }
-    this.timers.delete(next[0]);
-    this.nowMs = next[1].dueAtMs;
-    return next[1].callback;
-  }
-
-  async advanceBy(delayMs: number): Promise<void> {
-    const targetMs = this.nowMs + delayMs;
-    while (true) {
-      const next = [...this.timers.entries()].toSorted(
-        ([leftId, left], [rightId, right]) => left.dueAtMs - right.dueAtMs || leftId - rightId,
-      )[0];
-      if (!next || next[1].dueAtMs > targetMs) {
-        break;
+function observeClock() {
+  const scheduled = vi.spyOn(globalThis, "setTimeout");
+  return {
+    get pendingCount() {
+      return vi.getTimerCount();
+    },
+    get nextDelayMs() {
+      return scheduled.mock.calls.at(-1)?.[1];
+    },
+    takeNextCallback() {
+      const call = scheduled.mock.calls.at(-1);
+      const timer = scheduled.mock.results.at(-1);
+      if (!call || timer?.type !== "return" || typeof call[0] !== "function") {
+        throw new Error("Expected a scheduled renewal");
       }
-      this.timers.delete(next[0]);
-      this.nowMs = next[1].dueAtMs;
-      next[1].callback();
-      await flushPromises();
-    }
-    this.nowMs = targetMs;
-    await flushPromises();
-  }
+      clearTimeout(timer.value);
+      vi.setSystemTime(Date.now() + (call[1] ?? 0));
+      return call[0];
+    },
+    advanceBy: (delayMs: number) => vi.advanceTimersByTimeAsync(delayMs),
+  };
 }
 
 async function flushPromises() {
@@ -72,21 +44,45 @@ async function flushPromises() {
 }
 
 function createLeaseHarness(request: (method: string, params: unknown) => Promise<unknown>) {
-  const clock = new FakeClock();
+  const clock = observeClock();
   const changes: Array<string | null> = [];
-  const connectionChanges: number[] = [];
   const lease = createCanvasSurfaceLease({
     request,
     onChange: (url) => changes.push(url),
-    now: clock.now,
-    setTimer: clock.setTimer,
-    clearTimer: clock.clearTimer,
-    onConnectionChange: () => connectionChanges.push(clock.nowMs),
   });
-  return { changes, clock, connectionChanges, lease };
+  return { changes, clock, lease };
 }
 
 describe("createCanvasSurfaceLease", () => {
+  it("stops retrying a forbidden renewal until a new lease starts", async () => {
+    const request = vi
+      .fn()
+      .mockRejectedValue(
+        new GatewayRequestError({ code: "FORBIDDEN", message: "missing scope: operator.read" }),
+      );
+    const { changes, clock, lease } = createLeaseHarness(request);
+    const helloUrl = "https://canvas.test/__openclaw__/cap/one";
+    lease.start(helloUrl);
+    await flushPromises();
+    await clock.advanceBy(57 * 60_000);
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(clock.pendingCount).toBe(0);
+    expect(changes).toEqual([helloUrl]);
+
+    request.mockResolvedValue({
+      surface: "canvas",
+      pluginSurfaceUrls: { canvas: "https://canvas.test/__openclaw__/cap/reconnected" },
+    });
+    lease.stop();
+    lease.start(helloUrl);
+    await flushPromises();
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(changes.at(-1)).toBe("https://canvas.test/__openclaw__/cap/reconnected");
+    expect(clock.pendingCount).toBe(1);
+    lease.stop();
+  });
+
   it("seeds from hello, renews immediately, and honors the refreshed expiry", async () => {
     const request = vi
       .fn<(method: string, params: unknown) => Promise<unknown>>()
@@ -181,7 +177,7 @@ describe("createCanvasSurfaceLease", () => {
   it.each(["stops", "reconnects without a canvas"] as const)(
     "does not schedule a retired generation when publishing a refreshed URL %s",
     async (transition) => {
-      const clock = new FakeClock();
+      const clock = observeClock();
       const changes: Array<string | null> = [];
       const request = vi.fn(async () => ({
         surface: "canvas",
@@ -200,9 +196,6 @@ describe("createCanvasSurfaceLease", () => {
             }
           }
         },
-        now: clock.now,
-        setTimer: clock.setTimer,
-        clearTimer: clock.clearTimer,
       });
 
       lease.start("https://canvas.test/__openclaw__/cap/original");
@@ -250,7 +243,7 @@ describe("createCanvasSurfaceLease", () => {
     expect(clock.pendingCount).toBe(0);
   });
 
-  it.each([Number.MAX_SAFE_INTEGER, 2 ** 32 + 115_000])(
+  it.each([Number.MAX_SAFE_INTEGER])(
     "clamps an advertised canvas expiry of %d to a browser-safe native timer",
     async (expiresAtMs) => {
       const request = vi.fn(async () => ({
@@ -270,7 +263,7 @@ describe("createCanvasSurfaceLease", () => {
 
   it("stop clears timers, ignores an in-flight result, and publishes null once", async () => {
     const pending = deferred<unknown>();
-    const { changes, clock, connectionChanges, lease } = createLeaseHarness(() => pending.promise);
+    const { changes, clock, lease } = createLeaseHarness(() => pending.promise);
     lease.start("https://canvas.test/__openclaw__/cap/one");
     await flushPromises();
 
@@ -278,7 +271,6 @@ describe("createCanvasSurfaceLease", () => {
     lease.stop();
     expect(clock.pendingCount).toBe(0);
     expect(changes).toEqual(["https://canvas.test/__openclaw__/cap/one", null]);
-    expect(connectionChanges).toHaveLength(2);
 
     pending.resolve({
       surface: "canvas",

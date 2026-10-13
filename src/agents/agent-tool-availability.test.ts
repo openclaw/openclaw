@@ -28,7 +28,7 @@ vi.mock("./subagents/spawn/subagent-spawn.js", () => ({
   SUBAGENT_SPAWN_MODES: ["run", "session"],
   spawnSubagentDirect: spawn,
 }));
-const config = { agents: { entries: { main: { default: true } } } };
+const config = { agents: { entries: { main: {} } } };
 function spawnTool(signal?: AbortSignal) {
   return createSessionsSpawnTool({
     config,

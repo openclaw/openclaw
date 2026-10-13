@@ -1,4 +1,3 @@
-// Resolves plugin enablement state from config and channel context.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { normalizeChatChannelId } from "../channels/ids.js";

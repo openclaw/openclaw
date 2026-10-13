@@ -6,10 +6,6 @@ export { sha256Hex, sha256HexPrefixCore } from "@openclaw/normalization-core/nod
 
 type DigestInput = string | Uint8Array;
 
-export function sha256Base64(input: DigestInput): string {
-  return hash("sha256", input, "base64");
-}
-
 export function sha256Base64Url(input: DigestInput): string {
   return hash("sha256", input, "base64url");
 }

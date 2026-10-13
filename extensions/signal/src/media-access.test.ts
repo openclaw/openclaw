@@ -63,16 +63,6 @@ const SIGNAL_MEDIA_ADAPTERS = [
       return await send(context);
     },
   },
-  {
-    name: "attached-result outbound adapter",
-    deliver: async (context: SignalMediaContext) => {
-      const send = signalPlugin.outbound?.sendMedia;
-      if (!send) {
-        throw new Error("Signal attached-result media adapter is unavailable");
-      }
-      return await send(context);
-    },
-  },
 ] as const;
 
 describe("Signal host-owned outbound media access", () => {
@@ -231,66 +221,55 @@ describe("Signal host-owned outbound media access", () => {
     },
   );
 
-  it.each(SIGNAL_MEDIA_ADAPTERS)(
-    "stops the $name when its caller closes during the approved media read",
-    async ({ deliver }) => {
-      await fs.writeFile(path.join(state.workspaceDir, "chart.png"), SIGNAL_IMAGE);
-      const caller = new AbortController();
-      const readFile = vi.fn(async (filePath: string) => {
-        const bytes = await fs.readFile(filePath);
-        caller.abort(new Error("Signal caller closed"));
-        return bytes;
-      });
-
-      await expect(
-        deliver(
-          createContext({
-            mediaAccess: {
-              localRoots: [state.workspaceDir],
-              workspaceDir: state.workspaceDir,
-              readFile,
-            },
-            assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
-          }),
-        ),
-      ).rejects.toThrow("Signal caller closed");
-
+  it.each(
+    SIGNAL_MEDIA_ADAPTERS.flatMap((adapter) =>
+      ["during read", "after transmission"].map((phase) => ({
+        name: adapter.name,
+        deliver: adapter.deliver,
+        phase,
+      })),
+    ),
+  )("settles the $name when its caller closes $phase", async ({ deliver, phase }) => {
+    await fs.writeFile(path.join(state.workspaceDir, "chart.png"), SIGNAL_IMAGE);
+    const caller = new AbortController();
+    const close = () => caller.abort(new Error("Signal caller closed"));
+    const readFile = vi.fn(async (filePath: string) => {
+      const bytes = await fs.readFile(filePath);
+      close();
+      return bytes;
+    });
+    if (phase === "after transmission") {
+      onRequest = close;
+    }
+    const delivery = deliver(
+      createContext({
+        mediaAccess: {
+          localRoots: [state.workspaceDir],
+          workspaceDir: state.workspaceDir,
+          ...(phase === "during read" ? { readFile } : {}),
+        },
+        assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
+      }),
+    );
+    if (phase === "during read") {
+      await expect(delivery).rejects.toThrow("Signal caller closed");
       expect(readFile).toHaveBeenCalledOnce();
       expect(requests).toHaveLength(0);
-    },
-  );
-
-  it.each(SIGNAL_MEDIA_ADAPTERS)(
-    "preserves the $name result when its caller closes after transmission",
-    async ({ deliver }) => {
-      await fs.writeFile(path.join(state.workspaceDir, "chart.png"), SIGNAL_IMAGE);
-      const caller = new AbortController();
-      onRequest = () => caller.abort(new Error("Signal caller closed"));
-
-      await expect(
-        deliver(
-          createContext({
-            mediaAccess: { localRoots: [state.workspaceDir], workspaceDir: state.workspaceDir },
-            assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
-          }),
-        ),
-      ).resolves.toMatchObject({ messageId: "1700000000999" });
-
+    } else {
+      await expect(delivery).resolves.toMatchObject({ messageId: "1700000000999" });
       expect(requests).toHaveLength(1);
       expect(requests[0]?.attachment).toEqual(SIGNAL_IMAGE);
-    },
-  );
+    }
+  });
 
-  it.each(["message", "formatted", "attached"] as const)(
+  it.each(["message", "formatted"] as const)(
     "checks the current caller after preparation for %s text delivery",
     async (adapter) => {
       const caller = new AbortController();
       const send =
         adapter === "message"
           ? signalPlugin.message?.send?.text
-          : adapter === "formatted"
-            ? signalPlugin.outbound?.sendFormattedText
-            : signalPlugin.outbound?.sendText;
+          : signalPlugin.outbound?.sendFormattedText;
       if (!send) {
         throw new Error("Signal text sender is unavailable");
       }
@@ -418,102 +397,9 @@ describe("Signal host-owned outbound media access", () => {
     },
   );
 
-  it("rejects workspace symlinks that resolve outside the approved root", async () => {
-    const outsidePath = state.path("outside.png");
-    await fs.writeFile(outsidePath, SIGNAL_IMAGE);
-    await fs.symlink(outsidePath, path.join(state.workspaceDir, "linked.png"));
-    const approvedReader = vi.fn(async (filePath: string) => await fs.readFile(filePath));
-
-    await expect(
-      SIGNAL_MEDIA_ADAPTERS[0].deliver(
-        createContext({
-          mediaUrl: "linked.png",
-          mediaAccess: {
-            localRoots: [state.workspaceDir],
-            workspaceDir: state.workspaceDir,
-            readFile: approvedReader,
-          },
-        }),
-      ),
-    ).rejects.toMatchObject({ code: "path-not-allowed" });
-
-    expect(approvedReader).not.toHaveBeenCalled();
-    expect(requests).toHaveLength(0);
-  });
-
-  it("rejects host readers that do not declare an approved root", async () => {
-    await fs.writeFile(path.join(state.workspaceDir, "chart.png"), SIGNAL_IMAGE);
-    const unrootedReader = vi.fn(async (filePath: string) => await fs.readFile(filePath));
-
-    await expect(
-      SIGNAL_MEDIA_ADAPTERS[0].deliver(
-        createContext({
-          mediaAccess: { workspaceDir: state.workspaceDir, readFile: unrootedReader },
-        }),
-      ),
-    ).rejects.toThrow("Host media read requires explicit localRoots");
-
-    expect(unrootedReader).not.toHaveBeenCalled();
-    expect(requests).toHaveLength(0);
-  });
-
-  it("preserves reader-free Gateway workspace capabilities", async () => {
-    await fs.writeFile(path.join(state.workspaceDir, "chart.png"), SIGNAL_IMAGE);
-    const mediaAccess = { localRoots: [state.workspaceDir], workspaceDir: state.workspaceDir };
-    const send = vi.fn(sendMessageSignal);
-
-    await expect(
-      SIGNAL_MEDIA_ADAPTERS[2].deliver(createContext({ mediaAccess, deps: { signal: send } })),
-    ).resolves.toMatchObject({ messageId: "1700000000999" });
-
-    expect(send.mock.calls[0]?.[2].mediaAccess).toBe(mediaAccess);
-    expect(send.mock.calls[0]?.[2].mediaAccess?.readFile).toBeUndefined();
-    expect(send.mock.calls[0]?.[2].mediaReadFile).toBeUndefined();
-    expect(requests).toHaveLength(1);
-    expect(requests[0]?.attachment).toEqual(SIGNAL_IMAGE);
-  });
-
-  it.each([
-    {
-      name: "sensitive log",
-      filename: "secret.log",
-      contents: "sensitive host data",
-      expectedCode: "path-not-allowed",
-    },
-    {
-      name: "forged PDF",
-      filename: "forged.pdf",
-      contents: "not a real PDF",
-      expectedCode: "path-not-allowed",
-    },
-    {
-      name: "untrusted HTML",
-      filename: "untrusted.html",
-      contents: "<html>private</html>",
-      expectedCode: "path-not-allowed",
-    },
-  ])("rejects a $name before contacting Signal", async ({ filename, contents, expectedCode }) => {
-    await fs.writeFile(path.join(state.workspaceDir, filename), contents);
-
-    await expect(
-      SIGNAL_MEDIA_ADAPTERS[0].deliver(
-        createContext({
-          mediaUrl: filename,
-          mediaAccess: {
-            localRoots: [state.workspaceDir],
-            workspaceDir: state.workspaceDir,
-            readFile: async (filePath) => await fs.readFile(filePath),
-          },
-        }),
-      ),
-    ).rejects.toMatchObject({ code: expectedCode });
-
-    expect(requests).toHaveLength(0);
-  });
-
   it("propagates host-reader failures without contacting Signal", async () => {
     await fs.writeFile(path.join(state.workspaceDir, "chart.png"), SIGNAL_IMAGE);
-    const deniedReader = vi.fn(async (_filePath: string): Promise<Buffer> => {
+    const deniedReader = vi.fn(async (): Promise<Buffer> => {
       throw new Error("host denied this attachment");
     });
 

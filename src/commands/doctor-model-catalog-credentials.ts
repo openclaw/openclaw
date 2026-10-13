@@ -33,11 +33,6 @@ import { shortenHomePath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
 type PlaintextCredential = { key: string; provider: string };
-type AgentCatalogs = {
-  agentDir: string;
-  localStore: AuthProfileStore;
-  providers: Record<string, unknown>[];
-};
 
 function emptyStore(): AuthProfileStore {
   return { version: AUTH_STORE_VERSION, profiles: {} };
@@ -244,7 +239,7 @@ async function persistCredentials(params: {
   return { migrated: added, removed: removedProfiles.length };
 }
 
-function collectAgentCatalogs(agentDir: string, warnings: string[]): AgentCatalogs {
+function collectAgentCatalogs(agentDir: string, warnings: string[]) {
   const localStore = loadPersistedAuthProfileStore(agentDir) ?? emptyStore();
   const providers: Record<string, unknown>[] = [];
   const rootPath = path.join(agentDir, "models.json");
@@ -311,9 +306,6 @@ export async function maybeMigrateModelCatalogCredentials(params: {
     .filter((agentDir) => !isRetained(agentDir));
   const mainStore = loadPersistedSharedAuthProfileStore(env) ?? emptyStore();
   const catalogs = agentDirs.map((agentDir) => collectAgentCatalogs(agentDir, warnings));
-  const effectiveStores = catalogs.map(({ localStore }) =>
-    mergeAuthProfileStores(mainStore, localStore),
-  );
   const childStores = catalogs
     .filter((catalog) => catalog.agentDir !== mainAgentDir)
     .map((catalog) => catalog.localStore);
@@ -323,24 +315,24 @@ export async function maybeMigrateModelCatalogCredentials(params: {
     childStores,
     params.cfg,
   );
-  const catalogCredentials = catalogs.map((catalog, index) =>
-    uniqueCredentials(
-      catalog.providers.flatMap((providers) =>
-        collectCredentials(providers, effectiveStores[index] ?? mainStore, [], params.cfg),
+  const catalogImports = catalogs.map(({ agentDir, localStore, providers }) => {
+    const effectiveStore = mergeAuthProfileStores(mainStore, localStore);
+    return {
+      agentDir,
+      credentials: uniqueCredentials(
+        providers.flatMap((entries) => collectCredentials(entries, effectiveStore, [], params.cfg)),
       ),
-    ),
-  );
+      invalidProfiles:
+        agentDir === mainAgentDir ? [] : findProviderSecretRefProfiles(localStore, params.cfg),
+    };
+  });
   const invalidMainProfiles = findProviderSecretRefProfiles(mainStore, params.cfg);
-  const invalidCatalogProfiles = catalogs.map((catalog) =>
-    catalog.agentDir === mainAgentDir
-      ? []
-      : findProviderSecretRefProfiles(catalog.localStore, params.cfg),
-  );
   const detected =
-    configCredentials.length + catalogCredentials.reduce((sum, entries) => sum + entries.length, 0);
+    configCredentials.length +
+    catalogImports.reduce((sum, entry) => sum + entry.credentials.length, 0);
   const removable =
     invalidMainProfiles.length +
-    invalidCatalogProfiles.reduce((sum, profiles) => sum + profiles.length, 0);
+    catalogImports.reduce((sum, entry) => sum + entry.invalidProfiles.length, 0);
 
   for (const warning of warnings) {
     params.runtime.error(warning);
@@ -371,37 +363,33 @@ export async function maybeMigrateModelCatalogCredentials(params: {
     return { detected, migrated: 0, removed: 0, warnings };
   }
 
-  let migrated = 0;
-  let removed = 0;
-  try {
-    const result = await persistCredentials({
+  function* migrationTargets() {
+    yield {
+      description: "configured model credentials",
       blockedStores: childStores,
       credentials: configCredentials,
       invalidProfiles: invalidMainProfiles,
-      stateDir,
-    });
-    migrated += result.migrated;
-    removed += result.removed;
-  } catch (error) {
-    const warning = `Could not migrate configured model credentials: ${error instanceof Error ? error.message : String(error)}`;
-    warnings.push(warning);
-    params.runtime.error(warning);
+    };
+    // Refresh shared credentials only after their migration attempt has settled.
+    const migratedMainStore = loadPersistedSharedAuthProfileStore(env) ?? mainStore;
+    for (const { agentDir, credentials, invalidProfiles } of catalogImports) {
+      yield {
+        description: `model credentials for ${shortenHomePath(agentDir)}`,
+        credentials,
+        invalidProfiles,
+        ...(agentDir === mainAgentDir ? {} : { agentDir, inheritedStore: migratedMainStore }),
+      };
+    }
   }
-
-  const migratedMainStore = loadPersistedSharedAuthProfileStore(env) ?? mainStore;
-  for (const [index, catalog] of catalogs.entries()) {
+  let migrated = 0;
+  let removed = 0;
+  for (const { description, ...target } of migrationTargets()) {
     try {
-      const result = await persistCredentials({
-        ...(catalog.agentDir === mainAgentDir ? {} : { agentDir: catalog.agentDir }),
-        credentials: catalogCredentials[index] ?? [],
-        invalidProfiles: invalidCatalogProfiles[index] ?? [],
-        ...(catalog.agentDir === mainAgentDir ? {} : { inheritedStore: migratedMainStore }),
-        stateDir,
-      });
+      const result = await persistCredentials({ ...target, stateDir });
       migrated += result.migrated;
       removed += result.removed;
     } catch (error) {
-      const warning = `Could not migrate model credentials for ${shortenHomePath(catalog.agentDir)}: ${error instanceof Error ? error.message : String(error)}`;
+      const warning = `Could not migrate ${description}: ${error instanceof Error ? error.message : String(error)}`;
       warnings.push(warning);
       params.runtime.error(warning);
     }

@@ -26,6 +26,8 @@ export type InternalAgentTurnDispatchOptions = {
   /** Internal completion delivery owns its hidden input and durable processing receipt. */
   privateCompletion?: true;
   settleWakeReplay?: RequesterSettleWakeReplay;
+  /** Refresh the source before dispatch; accepted turns own their later execution. */
+  prepareDispatchCurrent?: () => Promise<void>;
   // The source owns admission only; accepted children execute under their own lifetime.
   assertAdmissionCurrent?: () => void;
   cancelOnDeadline?: boolean;
@@ -52,6 +54,7 @@ export type InternalAgentTurnFacade = {
     timeoutMs?: number,
     signal?: AbortSignal,
     onSignalAbort?: () => Promise<void> | void,
+    prepareDispatchCurrent?: () => Promise<void>,
   ) => Promise<T>;
 };
 

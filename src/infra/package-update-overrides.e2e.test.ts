@@ -5,11 +5,9 @@ import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import {
-  runGlobalPackageUpdateSteps,
-  type PackageUpdateTransaction,
-} from "./package-update-steps.js";
-import type { UpdateStepResult } from "./update-runner-types.js";
+import { runGlobalPackageUpdateSteps } from "./package-update-steps.js";
+import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 const exec = promisify(execFile);
 const scenarios = [

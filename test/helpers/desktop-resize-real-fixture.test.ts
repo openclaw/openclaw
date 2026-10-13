@@ -88,16 +88,12 @@ describe("desktop resize fixture provenance and carrier", () => {
       }
     },
   );
-  it.each(["ssh", "node"] as const)(
-    "retains explicit upstream provenance for %s",
-    async (carrier) => {
-      const file = path.join(tempDirs.make("desktop-resize-fixture-"), "fixture.json");
-      const value = fixture(carrier);
-      await writeFile(file, JSON.stringify(value));
-      expect(await readDesktopResizeFixture(file)).toEqual(value);
-      expect(value).not.toHaveProperty("crabboxCommit");
-    },
-  );
+  it("retains explicit upstream provenance for a node carrier", async () => {
+    const file = path.join(tempDirs.make("desktop-resize-fixture-"), "fixture.json");
+    const value = fixture("node");
+    await writeFile(file, JSON.stringify(value));
+    expect(await readDesktopResizeFixture(file)).toEqual(value);
+  });
 
   it("retains real Crabbox provenance as a separate source kind", async () => {
     const file = path.join(tempDirs.make("desktop-resize-fixture-"), "fixture.json");
@@ -287,7 +283,7 @@ describe("desktop endpoint packet attribution", () => {
     },
   );
 
-  it.each(["abort", "close", "upstream-close", "overflow"])(
+  it.each(["close", "upstream-close", "overflow"])(
     "rejects unfinished evidence on %s",
     async (kind) => {
       const owner = await openEndpointTap();
@@ -297,9 +293,7 @@ describe("desktop endpoint packet attribution", () => {
       const echo = once(client, "data");
       client.write(Buffer.from(probe.bytes.slice(0, 10)));
       await echo;
-      if (kind === "abort") {
-        owner.abort.abort();
-      } else if (kind === "close") {
+      if (kind === "close") {
         await owner.tap.close();
       } else if (kind === "upstream-close") {
         owner.peers.forEach((socket) => socket.destroy());

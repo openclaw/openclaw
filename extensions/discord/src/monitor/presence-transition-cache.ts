@@ -1,4 +1,3 @@
-// Discord plugin module tracks recent presence baselines for online transitions.
 const DEFAULT_PRESENCE_BASELINE_MAX_ENTRIES = 75_000;
 
 export class DiscordPresenceBaselineCache {

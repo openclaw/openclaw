@@ -15,40 +15,24 @@ import {
 } from "./sqlite-reliability-process.js";
 import { resolveForwardedNodeCompilerArgs } from "./tsx-cli-shim.mjs";
 
-type WriterReadyMessage = {
-  kind: "ready";
-};
-
-type WriterPartialMessage = {
-  batch: number;
-  batchesCommitted: number;
-  kind: "partial";
-  rows: number;
-  rowsCommitted: number;
-};
-
-type WriterReleasedMessage = {
-  batch: number;
-  kind: "released";
-};
-
 type WriterResultMessage = {
   batchesCommitted: number;
   kind: "result";
   rowsCommitted: number;
 };
 
-type WriterErrorMessage = {
-  error: string;
-  kind: "error";
-};
-
 type WriterMessage =
-  | WriterReadyMessage
-  | WriterPartialMessage
-  | WriterReleasedMessage
+  | { kind: "ready" }
+  | {
+      batch: number;
+      batchesCommitted: number;
+      kind: "partial";
+      rows: number;
+      rowsCommitted: number;
+    }
+  | { batch: number; kind: "released" }
   | WriterResultMessage
-  | WriterErrorMessage;
+  | { error: string; kind: "error" };
 
 export type WriterHandle = {
   child: ChildProcess;
@@ -80,9 +64,7 @@ export function startWriter(databasePath: string, profile: ProfileConfig): Write
   );
   const stderr: string[] = [];
   child.stderr?.setEncoding("utf8");
-  child.stderr?.on("data", (chunk: string) => {
-    stderr.push(chunk);
-  });
+  child.stderr?.on("data", (chunk: string) => stderr.push(chunk));
   return { child, stderr, stopped: false };
 }
 
@@ -145,15 +127,7 @@ export async function terminateWriter(writer: WriterHandle): Promise<void> {
   writer.stopped = true;
 }
 
-function parseWriterChildArgs(argv: string[]): {
-  databasePath: string;
-  payloadBytes: number;
-  retainedBatches: number;
-  rowsPerBatch: number;
-  walAutoCheckpointPages: number;
-  walSizeLimitBytes: number;
-  writerPauseMs: number;
-} {
+function parseWriterChildArgs(argv: string[]) {
   const [
     databasePath,
     rowsRaw,
@@ -173,18 +147,16 @@ function parseWriterChildArgs(argv: string[]): {
   if (
     !databasePath ||
     extra.length > 0 ||
-    !Number.isSafeInteger(rowsPerBatch) ||
-    rowsPerBatch < 2 ||
-    !Number.isSafeInteger(payloadBytes) ||
-    payloadBytes < 1 ||
-    !Number.isSafeInteger(retainedBatches) ||
-    retainedBatches < 1 ||
-    !Number.isSafeInteger(walAutoCheckpointPages) ||
-    walAutoCheckpointPages < 1 ||
-    !Number.isSafeInteger(walSizeLimitBytes) ||
-    walSizeLimitBytes < 1 ||
-    !Number.isSafeInteger(writerPauseMs) ||
-    writerPauseMs < 0
+    (
+      [
+        [rowsPerBatch, 2],
+        [payloadBytes, 1],
+        [retainedBatches, 1],
+        [walAutoCheckpointPages, 1],
+        [walSizeLimitBytes, 1],
+        [writerPauseMs, 0],
+      ] as const
+    ).some(([value, minimum]) => !Number.isSafeInteger(value) || value < minimum)
   ) {
     throw new Error("invalid SQLite reliability writer arguments");
   }
@@ -202,7 +174,6 @@ function parseWriterChildArgs(argv: string[]): {
 async function runWriterChild(argv: string[]): Promise<void> {
   const options = parseWriterChildArgs(argv);
   const database = openNodeSqliteDatabase(options.databasePath);
-  let nextBatch = 0;
   let batchesCommitted = 0;
   let rowsCommitted = 0;
   let stopping = false;
@@ -229,7 +200,7 @@ async function runWriterChild(argv: string[]): Promise<void> {
         "SELECT COALESCE(MAX(batch), -1) + 1 AS next_batch FROM openclaw_reliability_entries",
       )
       .get() as { next_batch?: number | bigint };
-    nextBatch = Number(next.next_batch ?? 0);
+    let nextBatch = Number(next.next_batch ?? 0);
     const insert = database.prepare(
       "INSERT INTO openclaw_reliability_entries (batch, ordinal, payload) VALUES (?, ?, ?)",
     );
@@ -284,7 +255,7 @@ async function runWriterChild(argv: string[]): Promise<void> {
     };
 
     commitBatch(true);
-    sendMessage({ kind: "ready" } satisfies WriterReadyMessage);
+    sendMessage({ kind: "ready" });
     while (!shouldStop()) {
       if (holdPartial) {
         holdPartial = false;
@@ -301,7 +272,7 @@ async function runWriterChild(argv: string[]): Promise<void> {
             kind: "partial",
             rows: heldRows,
             rowsCommitted,
-          } satisfies WriterPartialMessage);
+          });
           while (!shouldReleasePartial()) {
             await delay(1);
           }
@@ -317,7 +288,7 @@ async function runWriterChild(argv: string[]): Promise<void> {
             database.exec("ROLLBACK;");
           }
           releasePartial = undefined;
-          sendMessage({ batch: heldBatch, kind: "released" } satisfies WriterReleasedMessage);
+          sendMessage({ batch: heldBatch, kind: "released" });
         } catch (error) {
           database.exec("ROLLBACK;");
           throw error;
@@ -335,12 +306,12 @@ async function runWriterChild(argv: string[]): Promise<void> {
       batchesCommitted,
       kind: "result",
       rowsCommitted,
-    } satisfies WriterResultMessage);
+    });
   } catch (error) {
     sendMessage({
       error: error instanceof Error ? (error.stack ?? error.message) : String(error),
       kind: "error",
-    } satisfies WriterErrorMessage);
+    });
     process.exitCode = 1;
   } finally {
     database.close();

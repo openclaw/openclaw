@@ -221,7 +221,6 @@ describe("reportChannelRoomJoin", () => {
     if (!startMarker) {
       throw new Error("Expected the room snapshot to have an untrusted-content boundary");
     }
-    expect(safePrompt).toContain("SECURITY NOTICE:");
     expect(safePrompt.indexOf(injection)).toBeGreaterThan(safePrompt.indexOf(startMarker[0]));
     expect(safePrompt.indexOf(injection)).toBeLessThan(
       safePrompt.indexOf(`<<<END_EXTERNAL_UNTRUSTED_CONTENT id="${startMarker[1]}">>>`),

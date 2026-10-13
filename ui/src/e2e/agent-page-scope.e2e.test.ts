@@ -12,6 +12,7 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { openHomeFullPage } from "./sidebar-navigation.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI agent page scope",
@@ -391,8 +392,8 @@ suite.define(() => {
         const sidebar = page.locator("openclaw-app-sidebar");
         await sidebar.getByRole("button", { name: /Switch agent/ }).click();
         const agentMenu = sidebar.locator("wa-dropdown.sidebar-agent-menu");
-        // The card sits at the top of the sidebar: the menu drops below it so the
-        // agent you clicked (and its checkmark row) stays visible.
+        // The compact avatar stays visible above its menu. Viewport padding may
+        // shift the menu's left edge inside the rail without detaching it.
         await expect
           .poll(async () => {
             const [card, menu] = await Promise.all([
@@ -402,9 +403,13 @@ suite.define(() => {
             if (!card || !menu) {
               return null;
             }
-            return { belowCard: menu.y >= card.y + card.height, leftAligned: menu.x <= card.x + 4 };
+            return {
+              belowCard: menu.y >= card.y + card.height,
+              anchoredToCard: menu.x <= card.x + card.width && menu.x + menu.width >= card.x,
+              inViewport: menu.x >= 0 && menu.x + menu.width <= page.viewportSize()!.width,
+            };
           })
-          .toEqual({ belowCard: true, leftAligned: true });
+          .toEqual({ belowCard: true, anchoredToCard: true, inViewport: true });
         await agentMenu.locator('wa-dropdown-item[value="agent:writer"]').click();
         await waitForRequest(gateway, "sessions.list", (params) => params.agentId === "writer");
         await expect
@@ -413,7 +418,7 @@ suite.define(() => {
           )
           .toBe("Writer");
 
-        await sidebar.getByRole("link", { name: "Home" }).click();
+        await openHomeFullPage(page, "writer");
         await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/writer");
         await sidebar.locator(".sidebar-identity-card").click();
         await sidebar

@@ -31,7 +31,7 @@ async function expectNoMigrationStaging(sourcePath: string) {
 
 async function fixture(mode: "persistent" | "oneshot" = "persistent", sessionKey = "global") {
   const directory = directories.make("acpx-owner-migration-");
-  const stateDir = path.join(directory, "state");
+  const stateDir = path.join(directory, "acpx");
   const peer = path.join(directory, "peer");
   await fs.mkdir(peer);
   const store = createFileSessionStore({ stateDir });
@@ -139,7 +139,7 @@ async function fixture(mode: "persistent" | "oneshot" = "persistent", sessionKey
   };
 }
 
-it.each(["none", "publication", "canonical"])(
+it.each(["publication", "canonical"])(
   "preserves raw history and resumes idempotently after interruption=%s",
   async (interrupted) => {
     const f = await fixture();

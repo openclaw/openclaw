@@ -5,7 +5,6 @@ import { createApplicationConfigCapability } from "../../app/config.ts";
 import { createApplicationPlacementStartup } from "../../app/session-placement-startup.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
-import { ControlUiPluginRuntime } from "../../plugins/control-ui-runtime.ts";
 import {
   createTestGatewayClient,
   type GatewayRequestHandler,
@@ -20,7 +19,12 @@ export function createMountedPanes(
   readBarrier?: Promise<void>,
   responses?: Partial<
     Record<
-      "chat.history" | "chat.startup" | "sessions.describe" | "sessions.list" | "sessions.patch",
+      | "chat.history"
+      | "chat.startup"
+      | "models.list"
+      | "sessions.describe"
+      | "sessions.list"
+      | "sessions.patch",
       GatewayRequestHandler
     >
   >,
@@ -29,6 +33,7 @@ export function createMountedPanes(
     if (
       method === "chat.history" ||
       method === "chat.startup" ||
+      method === "models.list" ||
       method === "sessions.describe" ||
       method === "sessions.list" ||
       method === "sessions.patch"
@@ -44,6 +49,9 @@ export function createMountedPanes(
         entry.key === (params?.sessionKey ?? params?.key) &&
         (!params?.agentId || entry.agentId === params.agentId),
     );
+    if (method === "users.list") {
+      return { profiles: [] };
+    }
     if (method === "models.list") {
       return { models: [] };
     }
@@ -78,7 +86,6 @@ export function createMountedPanes(
     config: createApplicationConfigCapability({ resourceBasePath: "" }),
     runtimeConfig,
     placementStartup,
-    plugins: new ControlUiPluginRuntime(() => context),
   });
   const panes: TestChatPane[] = [];
   const mount = (sessionKey: string, paneAgentId = agentId) => {

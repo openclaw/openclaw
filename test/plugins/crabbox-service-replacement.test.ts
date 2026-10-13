@@ -5,10 +5,8 @@ import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import { describe, expect, it, vi } from "vitest";
 import crabboxPlugin from "../../extensions/crabbox/index.js";
 import { createEmptyPluginRegistry } from "../../src/plugins/registry.js";
-import {
-  PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS,
-  startPluginServices,
-} from "../../src/plugins/services.js";
+import { PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS } from "../../src/plugins/services.js";
+import { startPluginServices } from "../../src/plugins/services.test-support.js";
 import { createDeferredCore } from "../../src/shared/deferred.js";
 
 describe("Crabbox service replacement", () => {
@@ -58,7 +56,7 @@ describe("Crabbox service replacement", () => {
         return {
           stdout:
             argv[1] === "--version"
-              ? "0.56.0"
+              ? "999.0.0"
               : JSON.stringify({
                   id: "cbx_replacement",
                   providerMetadata: { instanceProfileAttached: false },

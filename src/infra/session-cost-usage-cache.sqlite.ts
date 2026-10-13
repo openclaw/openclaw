@@ -1,7 +1,9 @@
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
-import { withSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
+import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { isOpenClawAgentDatabasePathCurrent } from "../state/openclaw-agent-db-identity.js";
 import { retainAgentDatabase } from "../state/openclaw-agent-db-lifecycle.js";
@@ -9,19 +11,32 @@ import { withOpenClawAgentDatabaseWrite } from "../state/openclaw-agent-db-write
 import {
   runOpenClawAgentWriteTransaction,
   resolveOpenClawAgentSqlitePath,
-  isIncognitoOpenClawAgentSqlitePath,
   type OpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import type { SessionCostUsageCacheRead } from "./session-cost-usage-cache-read.js";
+import type { AgentDatabaseRequestExecutionSource } from "../state/openclaw-agent-execution-admission-contract.js";
+import type { AgentDatabaseOperations } from "../state/openclaw-agent-execution-contract.js";
 import {
-  acquireSessionCostUsageRefreshLockInDatabase,
-  deleteSessionCostUsageRefreshLockInDatabase,
+  captureOpenClawAgentDatabaseExecution,
+  supportsOpenClawAgentDatabaseExecution,
+} from "../state/openclaw-agent-execution.js";
+import { runOpenClawAgentWorkerWrite } from "../state/openclaw-agent-write-admission.js";
+import {
   pruneSessionCostUsageRollupsInDatabase,
   writeSessionCostUsageRollupInDatabase,
   type SessionCostUsageRollupSnapshot,
 } from "./session-cost-usage-cache.kernel.js";
+import {
+  captureUsageCostIncognitoBinding,
+  type UsageCostIncognitoBinding,
+} from "./session-cost-usage-incognito.js";
+import { isSessionActorUsageRefreshRunning } from "./session-cost-usage-memory.js";
+import { readDatabasePathIdentitySync, resolveDatabasePathKey } from "./sqlite-worker-identity.js";
+import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 
-// Per-agent SQLite storage for rebuildable per-session usage rollups.
+// Durable usage refreshes share one process-owned lease per resolved cache path.
+const activeRefreshes = new Set<string>();
+
+// Incognito refresh status remains with its actor-owned compute scope.
 type SessionCostUsageRefreshLock = {
   pid: number;
   startedAt: number;
@@ -39,60 +54,125 @@ function captureCacheDatabaseOptions(
   return { ...options, path: resolveOpenClawAgentSqlitePath(options) };
 }
 
-function runCacheWriteTransaction<T>(
-  operation: Parameters<typeof runOpenClawAgentWriteTransaction<T>>[0],
-  inputOptions: Parameters<typeof runOpenClawAgentWriteTransaction>[1],
-  transactionOptions: Parameters<typeof runOpenClawAgentWriteTransaction>[2],
-  owner?: {
-    database?: OpenClawAgentDatabase;
-    assertCurrent?: (database: OpenClawAgentDatabase) => void;
-    onAdmitted?: (database: OpenClawAgentDatabase) => void;
-  },
-): Promise<T> {
-  const options = captureCacheDatabaseOptions(inputOptions);
-  return withOpenClawAgentDatabaseWrite(
-    options,
-    (database) =>
-      runOpenClawAgentWriteTransaction(
-        (current) => {
-          if (current !== database || !isOpenClawAgentDatabasePathCurrent(current)) {
-            throw new Error("Usage cache database changed before write admission");
+type CacheWriteAuthority = () => void;
+type CacheWriteKey = Extract<keyof AgentDatabaseOperations, `usageCache.${string}`>;
+
+function createCacheWriteSource(
+  authority?: CacheWriteAuthority,
+  signal?: AbortSignal,
+): AgentDatabaseRequestExecutionSource {
+  return {
+    assertCurrent() {
+      signal?.throwIfAborted();
+      authority?.();
+    },
+    createAdmission(binding) {
+      return () => ({
+        nativeLocations: binding.nativeLocations,
+        admission: createSqliteWorkerOperationAdmission((request, grant) => {
+          binding.authorize(request);
+          if (!grant()) {
+            throw new Error("Usage cache write authority expired");
           }
-          owner?.assertCurrent?.(current);
-          owner?.onAdmitted?.(current);
-          return operation(current);
+        }, binding.attachment),
+      });
+    },
+  };
+}
+
+function createCacheWriter(options: ReturnType<typeof captureCacheDatabaseOptions>) {
+  // Incognito and maintenance scopes retain their process-held native owner.
+  const observed = supportsOpenClawAgentDatabaseExecution(options)
+    ? readDatabasePathIdentitySync(options.path)
+    : undefined;
+  // Retain the selected file before asynchronous refresh work starts.
+  const execution = observed
+    ? captureOpenClawAgentDatabaseExecution(
+        options,
+        observed.key.startsWith("path:") ? { expectedCreationIdentity: observed } : undefined,
+      )
+    : undefined;
+  let database: OpenClawAgentDatabase | undefined;
+  let releaseBorrow: (() => void) | undefined;
+  let prepared = false;
+  return {
+    async prepareExisting(authority: CacheWriteAuthority, signal?: AbortSignal) {
+      if (!execution || !observed?.key.startsWith("file:")) {
+        return;
+      }
+      const source = createCacheWriteSource(authority, signal);
+      await runOpenClawAgentWorkerWrite(
+        options,
+        async () => {
+          if (!prepared) {
+            await execution.prepare(source, signal);
+            prepared = true;
+          }
         },
-        { ...options, path: database.path },
-        transactionOptions,
-      ),
-    owner?.database?.db,
-  );
-}
-
-async function readCacheDatabase(
-  options: ReturnType<typeof captureCacheDatabaseOptions>,
-  request: SessionCostUsageCacheRead,
-) {
-  if (isIncognitoOpenClawAgentSqlitePath(options.path, options)) {
-    const { readSessionCostUsageCache } = await import("./session-cost-usage-cache-read.js");
-    return readSessionCostUsageCache(options, request);
-  }
-  return withSessionHistoryWorkerDatabase(options, (owner) =>
-    owner.readUsageCache({
-      request,
-      env: { ...options.env, OPENCLAW_STATE_DIR: options.env.OPENCLAW_STATE_DIR },
-    }),
-  );
-}
-
-async function readRefreshLock(
-  options: ReturnType<typeof captureCacheDatabaseOptions>,
-): Promise<string | null> {
-  const result = await readCacheDatabase(options, { kind: "usage-refresh-lock" });
-  if (result.kind !== "usage-refresh-lock") {
-    throw new Error("Invalid usage refresh-lock worker result");
-  }
-  return result.value;
+        undefined,
+        signal,
+        "background",
+      );
+    },
+    async write<Key extends CacheWriteKey>(
+      type: Key,
+      input: AgentDatabaseOperations[Key]["input"],
+      native: (database: OpenClawAgentDatabase) => AgentDatabaseOperations[Key]["output"],
+      operationLabel: string,
+      authority?: CacheWriteAuthority,
+      signal?: AbortSignal,
+    ): Promise<AgentDatabaseOperations[Key]["output"]> {
+      if (!execution) {
+        return withOpenClawAgentDatabaseWrite(
+          options,
+          (opened) =>
+            runOpenClawAgentWriteTransaction(
+              (current) => {
+                if (current !== opened || !isOpenClawAgentDatabasePathCurrent(current)) {
+                  throw new Error("Usage cache database changed before write admission");
+                }
+                authority?.();
+                signal?.throwIfAborted();
+                database = current;
+                releaseBorrow ??= retainAgentDatabase(current.db);
+                return native(current);
+              },
+              options,
+              { operationLabel },
+            ),
+          database?.db,
+          signal,
+        );
+      }
+      const captured = structuredClone(input);
+      const source = createCacheWriteSource(authority, signal);
+      return runOpenClawAgentWorkerWrite(
+        options,
+        async () => {
+          if (!prepared) {
+            await execution.prepare(source, signal);
+            prepared = true;
+          }
+          source.assertCurrent();
+          const result = await execution.runExisting(source, async (worker) => {
+            return { value: await worker.execute({ type, input: captured }, { signal }) };
+          });
+          if (!result) {
+            throw new Error("Usage cache database disappeared before write");
+          }
+          return result.value;
+        },
+        undefined,
+        signal,
+        "background",
+      );
+    },
+    async close() {
+      await execution?.release();
+      releaseBorrow?.();
+      releaseBorrow = undefined;
+    },
+  };
 }
 
 export async function deleteSessionCostUsageRollupsExcept(params: {
@@ -103,51 +183,87 @@ export async function deleteSessionCostUsageRollupsExcept(params: {
   rows: readonly SessionCostUsageRollupSnapshot[];
 }): Promise<void> {
   const existing = params.rows.filter((row) => !params.liveKeys.has(row.key));
-  await runCacheWriteTransaction(
-    (database) => pruneSessionCostUsageRollupsInDatabase(database.db, existing),
-    {
+  const writer = createCacheWriter(
+    captureCacheDatabaseOptions({
       agentId: normalizeAgentId(params.agentId),
       env: params.env,
       ...(params.databasePath ? { path: params.databasePath } : {}),
-    },
-    { operationLabel: "session-cost-usage.rollup.prune" },
+    }),
   );
+  try {
+    await writer.write(
+      "usageCache.prune",
+      existing,
+      (database) => pruneSessionCostUsageRollupsInDatabase(database.db, existing),
+      "session-cost-usage.rollup.prune",
+    );
+  } finally {
+    await writer.close();
+  }
 }
 
 function parseRefreshLock(raw: string | null): SessionCostUsageRefreshLock | null {
-  if (!raw) {
+  const value = safeParseJsonRecord(raw ?? "");
+  if (
+    !value ||
+    typeof value.pid !== "number" ||
+    !Number.isInteger(value.pid) ||
+    value.pid <= 0 ||
+    typeof value.startedAt !== "number" ||
+    !Number.isFinite(value.startedAt) ||
+    typeof value.ownerNonce !== "string" ||
+    !value.ownerNonce
+  ) {
     return null;
   }
-  try {
-    const value = JSON.parse(raw) as Partial<SessionCostUsageRefreshLock> | null;
-    if (
-      !value ||
-      typeof value.pid !== "number" ||
-      !Number.isInteger(value.pid) ||
-      value.pid <= 0 ||
-      typeof value.startedAt !== "number" ||
-      !Number.isFinite(value.startedAt) ||
-      typeof value.ownerNonce !== "string" ||
-      !value.ownerNonce
-    ) {
-      return null;
-    }
-    return { pid: value.pid, startedAt: value.startedAt, ownerNonce: value.ownerNonce };
-  } catch {
-    return null;
-  }
+  return { pid: value.pid, startedAt: value.startedAt, ownerNonce: value.ownerNonce };
 }
 
 export async function isSessionCostUsageRefreshRunning(
   agentId?: string,
   databasePath?: string,
+  suppliedIncognito?: UsageCostIncognitoBinding,
 ): Promise<boolean> {
+  const memory = getSessionActorStorageBinding({ agentId, storePath: databasePath });
+  if (memory) {
+    return isSessionActorUsageRefreshRunning(memory);
+  }
   const options = captureCacheDatabaseOptions({
     agentId: normalizeAgentId(agentId),
     path: databasePath,
   });
-  const lock = parseRefreshLock(await readRefreshLock(options));
-  // Status never waits for a writer; acquisition replaces stale locks with its existing CAS.
+  const incognito =
+    suppliedIncognito ??
+    captureUsageCostIncognitoBinding({
+      agentId: options.agentId,
+      databasePath: options.path,
+    });
+  if (
+    incognito &&
+    (options.agentId !== incognito.actor.agentId || options.path !== incognito.actor.path)
+  ) {
+    throw new Error("Usage refresh status belongs to another actor");
+  }
+  if (!incognito) {
+    return activeRefreshes.has(resolveDatabasePathKey(options.path));
+  }
+  const raw = await incognito.actor.sessions.withCompute(
+    incognito.authority,
+    incognito.target,
+    (compute) =>
+      compute.execute({
+        type: incognito.target
+          ? "session.compute.usage.refreshLock"
+          : "session.compute.store.refreshLock",
+        input: { ...incognito.target, request: {} },
+      }),
+    incognito.admissionSignal ?? getAsyncWorkSignal(),
+  );
+  incognito.actor.assertReadable();
+  incognito.authority.assertCurrent();
+  incognito.admissionSignal?.throwIfAborted();
+  getAsyncWorkSignal()?.throwIfAborted();
+  const lock = parseRefreshLock(raw);
   return lock !== null && isPidAlive(lock.pid);
 }
 
@@ -156,7 +272,7 @@ export function prepareSessionCostUsageRefreshLock(
   databasePath?: string,
   owner?: {
     env?: NodeJS.ProcessEnv;
-    assertCurrent?: (database?: OpenClawAgentDatabase) => void;
+    assertCurrent?: CacheWriteAuthority;
   },
 ) {
   const options = captureCacheDatabaseOptions({
@@ -164,110 +280,73 @@ export function prepareSessionCostUsageRefreshLock(
     path: databasePath,
     env: owner?.env,
   });
-  const lock: SessionCostUsageRefreshLock = {
-    pid: process.pid,
-    startedAt: Date.now(),
-    ownerNonce: `${process.pid}:${Date.now()}:${process.hrtime.bigint()}`,
-  };
-  const lockJson = JSON.stringify(lock);
-  let database: OpenClawAgentDatabase | undefined;
-  let releaseBorrow: (() => void) | undefined;
-  let acquiring: Promise<boolean> | undefined;
+  const writer = createCacheWriter(options);
+  const refreshKey = resolveDatabasePathKey(options.path);
   let releasing: Promise<void> | undefined;
   let closed = false;
   let acquired = false;
-  let mayOwnLock = false;
-  const assertCurrent = (current?: OpenClawAgentDatabase) => {
+  const assertCurrent = () => {
     if (closed || !acquired) {
       throw new Error("Usage cache refresh owner is closed");
     }
-    owner?.assertCurrent?.(current);
+    owner?.assertCurrent?.();
   };
   const release = (): Promise<void> => {
     closed = true;
-    releasing ??= (async () => {
-      await acquiring?.catch(() => undefined);
-      if (mayOwnLock) {
-        await runCacheWriteTransaction(
-          (current) => deleteSessionCostUsageRefreshLockInDatabase(current.db, lockJson),
-          options,
-          { operationLabel: "session-cost-usage.refresh-lock.delete" },
-          { database },
-        );
-        mayOwnLock = false;
-      }
-      releaseBorrow?.();
-      releaseBorrow = undefined;
-    })().catch((error: unknown) => {
-      releasing = undefined;
-      throw error;
-    });
+    releasing ??= writer
+      .close()
+      .then(() => {
+        if (acquired) {
+          activeRefreshes.delete(refreshKey);
+          acquired = false;
+        }
+      })
+      .catch((error: unknown) => {
+        releasing = undefined;
+        throw error;
+      });
     return releasing;
   };
   return {
-    acquire(): Promise<boolean> {
+    async acquire(): Promise<boolean> {
       if (closed) {
-        return Promise.reject(new Error("Usage cache refresh owner is closed"));
+        throw new Error("Usage cache refresh owner is closed");
       }
-      acquiring ??= (async () => {
-        owner?.assertCurrent?.();
-        const previousRaw = await readRefreshLock(options);
-        const previousLock = parseRefreshLock(previousRaw);
-        const previousOwnerIsRunning = previousLock ? isPidAlive(previousLock.pid) : false;
-        acquired = await runCacheWriteTransaction(
-          (current) => {
-            mayOwnLock = true;
-            const granted = acquireSessionCostUsageRefreshLockInDatabase(current.db, {
-              previousRaw,
-              previousOwnerIsRunning,
-              lockJson,
-              startedAt: lock.startedAt,
-            });
-            if (!granted) {
-              mayOwnLock = false;
-            }
-            return granted;
-          },
-          options,
-          { operationLabel: "session-cost-usage.refresh-lock.acquire" },
-          {
-            assertCurrent: (current) => {
-              if (closed) {
-                throw new Error("Usage cache refresh owner is closed");
-              }
-              owner?.assertCurrent?.(current);
-            },
-            onAdmitted: (current) => {
-              database = current;
-              releaseBorrow = retainAgentDatabase(current.db);
-            },
-          },
-        );
-        if (!acquired) {
-          releaseBorrow?.();
-          releaseBorrow = undefined;
-        }
-        return acquired;
-      })();
-      return acquiring;
+      owner?.assertCurrent?.();
+      if (!acquired && activeRefreshes.has(refreshKey)) {
+        return false;
+      }
+      activeRefreshes.add(refreshKey);
+      acquired = true;
+      // Finish cold admission before a scan can hold its turn while requesting this writer.
+      // Missing stores remain absent until an actual rollup needs to create them.
+      await writer.prepareExisting(assertCurrent, getAsyncWorkSignal());
+      return true;
     },
     release,
-    writeRollup(params: Parameters<typeof writeSessionCostUsageRollupInDatabase>[1]) {
+    writeRollup(
+      params: Parameters<typeof writeSessionCostUsageRollupInDatabase>[1],
+      signal?: AbortSignal,
+    ) {
       assertCurrent();
-      return runCacheWriteTransaction(
+      return writer.write(
+        "usageCache.writeRollup",
+        params,
         (current) => writeSessionCostUsageRollupInDatabase(current.db, params),
-        options,
-        { operationLabel: "session-cost-usage.rollup.write" },
-        { database, assertCurrent },
+        "session-cost-usage.rollup.write",
+        assertCurrent,
+        signal,
       );
     },
-    pruneRows(rows: readonly SessionCostUsageRollupSnapshot[]) {
+    pruneRows(rows: readonly SessionCostUsageRollupSnapshot[], signal?: AbortSignal) {
       assertCurrent();
-      return runCacheWriteTransaction(
+      return writer.write(
+        "usageCache.prune",
+        rows,
         (current) => pruneSessionCostUsageRollupsInDatabase(current.db, rows),
-        options,
-        { operationLabel: "session-cost-usage.rollup.prune" },
-        { database, assertCurrent },
+        "session-cost-usage.rollup.prune",
+        assertCurrent,
+        signal,
       );
     },
   };

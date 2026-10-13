@@ -4,7 +4,6 @@ import {
   resolveScopeToolsPolicy,
   type ScopeTree,
 } from "openclaw/plugin-sdk/channel-policy";
-// Nextcloud Talk plugin module implements policy behavior.
 import {
   buildChannelKeyCandidates,
   normalizeChannelSlug,

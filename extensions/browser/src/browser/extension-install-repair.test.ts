@@ -1,12 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { chromeProductRoots, installStableChromeExtension } from "./extension-install-layout.js";
-import { installRegistration } from "./extension-install-registration.js";
 import {
+  chromeProductRoots,
+  installStableChromeExtension,
+  installRegistration,
   installChromeExtensionBootstrap,
   repairChromeExtensionNativeHosts,
-} from "./extension-install.js";
+} from "./extension-install-fixture.test-support.js";
 import {
   predictedId,
   useExtensionInstallFixture,
@@ -14,6 +15,15 @@ import {
 } from "./extension-install.test-support.js";
 
 const fixture = useExtensionInstallFixture();
+
+async function prepareUnpacked(value: Awaited<ReturnType<typeof fixture>>, deps = value.deps) {
+  const installed = await installStableChromeExtension(value.bundledDir, deps);
+  await writeChromePreferences({
+    userDataDir: chromeProductRoots(deps)[0]!.userDataDir,
+    profile: "Default",
+    entries: { [await predictedId(installed)]: { location: 4, path: installed } },
+  });
+}
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -67,16 +77,13 @@ describe("native host repair", () => {
     expect(await fs.readFile(replacement.launcherPath!, "utf8")).toContain("other.json");
   });
 
-  it.each([
-    { installedConfig: "custom config's $& path.json", callerConfig: undefined },
-    { installedConfig: "custom config's $& path.json", callerConfig: "different.json" },
-    { installedConfig: undefined, callerConfig: "different.json" },
-  ])(
-    "preserves registered configuration when repairing with $callerConfig",
-    async ({ installedConfig, callerConfig }) => {
+  it.each(["custom config's $& path.json", undefined])(
+    "preserves registered config %s when repairing from a different config",
+    async (installedConfig) => {
       const value = await fixture();
       const deps = {
         ...value.deps,
+        stateDir: path.join(value.homeDir, "claw $& state's dir"),
         env: {
           ...value.deps.env,
           OPENCLAW_CONFIG_PATH: installedConfig
@@ -84,19 +91,14 @@ describe("native host repair", () => {
             : undefined,
         },
       };
-      const installed = await installStableChromeExtension(value.bundledDir, deps);
-      const chrome = chromeProductRoots(deps)[0]!;
-      await writeChromePreferences({
-        userDataDir: chrome.userDataDir,
-        profile: "Default",
-        entries: { [await predictedId(installed)]: { location: 4, path: installed } },
-      });
+      await prepareUnpacked(value, deps);
       const initial = await installChromeExtensionBootstrap({
         ...value,
         deps,
         browserProfile: "work",
       });
       expect(initial.issues).toEqual([]);
+      expect(initial.manualSetupRequired).toBe(false);
       const manifestPath = initial.registrations[0]!.manifestPath;
       const oldManifest = JSON.parse(await fs.readFile(manifestPath, "utf8")) as { path: string };
       const exportedContext = (content: string) =>
@@ -112,35 +114,19 @@ describe("native host repair", () => {
           nativeHostPath,
           env: {
             ...value.deps.env,
-            OPENCLAW_CONFIG_PATH: callerConfig ? path.join(value.root, callerConfig) : undefined,
+            OPENCLAW_CONFIG_PATH: path.join(value.root, "different.json"),
           },
         },
       });
       expect(repaired.warnings).toEqual([]);
       expect(repaired.changes).toHaveLength(1);
+      expect(repaired.retentionSafe).toBe(true);
+      expect(repaired.retainedNativeHostPaths).toEqual([nativeHostPath]);
       const current = JSON.parse(await fs.readFile(manifestPath, "utf8")) as { path: string };
       expect(exportedContext(await fs.readFile(current.path, "utf8"))).toEqual(before);
       expect(repaired.registrations[0]).toMatchObject({ browserProfile: "work" });
     },
   );
-
-  it("preserves literal replacement metacharacters in the installation path", async () => {
-    const value = await fixture();
-    const deps = { ...value.deps, stateDir: path.join(value.homeDir, "claw $& state's dir") };
-    const installed = await installStableChromeExtension(value.bundledDir, deps);
-    const chrome = chromeProductRoots(deps)[0]!;
-    await writeChromePreferences({
-      userDataDir: chrome.userDataDir,
-      profile: "Default",
-      entries: { [await predictedId(installed)]: { location: 4, path: installed } },
-    });
-    const installedStatus = await installChromeExtensionBootstrap({ ...value, deps });
-    expect(installedStatus.issues).toEqual([]);
-    expect(installedStatus.manualSetupRequired).toBe(false);
-    const observed = await repairChromeExtensionNativeHosts({ ...value, deps, dryRun: true });
-    expect(observed.retentionSafe).toBe(true);
-    expect(observed.retainedNativeHostPaths).toEqual([value.nativeHostPath]);
-  });
 
   it("refreshes a retired package target without reading profiles or replacing another installation", async () => {
     const value = await fixture("darwin");
@@ -214,13 +200,7 @@ describe("native host repair", () => {
 
   it("keeps the old registration usable when publishing the replacement manifest fails", async () => {
     const value = await fixture();
-    const installed = await installStableChromeExtension(value.bundledDir, value.deps);
-    const chrome = chromeProductRoots(value.deps)[0]!;
-    await writeChromePreferences({
-      userDataDir: chrome.userDataDir,
-      profile: "Default",
-      entries: { [await predictedId(installed)]: { location: 4, path: installed } },
-    });
+    await prepareUnpacked(value);
     const original = await installChromeExtensionBootstrap({ ...value, deps: value.deps });
     const manifestPath = original.registrations[0]!.manifestPath;
     const before = await fs.readFile(manifestPath, "utf8");

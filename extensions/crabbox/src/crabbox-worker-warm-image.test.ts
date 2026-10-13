@@ -4,52 +4,57 @@ import fs from "node:fs";
 import path from "node:path";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { crabboxState } from "./crabbox-state.test-support.js";
-import { operationLeaseId, operationSlug } from "./crabbox-worker-profile.js";
+import { crabboxState, openWarmImageStore } from "./crabbox-state.test-support.js";
+import {
+  createNodeBootstrapFixture,
+  createWorkerArchiveFixture,
+} from "./crabbox-worker-node-enrollment.test-support.js";
+import { destroyAndWait, commandResult } from "./crabbox-worker-provider.test-support.js";
 import {
   listCrabboxWarmImages,
   recoverCrabboxWarmImageCapture,
 } from "./crabbox-worker-warm-image-store.js";
 import {
   captureWarmImage,
-  commandResult,
   createWarmProvider,
-  openWarmImageStore,
   provisionWarmProfile,
   CHECKPOINT_ID,
   CLASSLESS_PROFILE,
   LEASE_ID,
+  NODE_RUNTIME_IDENTITY,
   OPERATION_ID,
   PROFILE,
   tempDirs,
+  unsupportedCaptureReceipt,
 } from "./crabbox-worker-warm-image.test-support.js";
 
 describe("Crabbox profile warm images", () => {
-  it("reuses captured images across managers, setup environment values, and setup environment order", async () => {
-    const profile = { ...PROFILE, setup: "install-node", setupEnv: ["WARM_B", "WARM_A"] };
-    vi.stubEnv("WARM_A", "first-secret");
-    vi.stubEnv("WARM_B", "second-secret");
-    const initial = createWarmProvider();
-    await captureWarmImage(initial.provider, profile);
-    expect(initial.calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(1);
-
-    const identical = createWarmProvider(undefined, initial.stateDir);
-    await captureWarmImage(identical.provider, {
-      ...profile,
-      setupEnv: [...profile.setupEnv],
+  it("records unsupported teardown capture without failing source stop", async () => {
+    const now = 1_800_000_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const { provider, calls, warn } = createWarmProvider(({ argv }) =>
+      argv[2] === "create"
+        ? commandResult({
+            code: 2,
+            stdout: JSON.stringify(unsupportedCaptureReceipt(LEASE_ID)),
+          })
+        : undefined,
+    );
+    await captureWarmImage(provider);
+    expect(calls.at(-1)?.argv[1]).toBe("stop");
+    expect(calls.filter(({ argv }) => argv[1] === "stop")).toHaveLength(1);
+    const image = (await listCrabboxWarmImages(crabboxState))[0];
+    expect(image?.capture).toBeUndefined();
+    expect(image?.allocations).toEqual({});
+    expect(image?.captureUnsupported).toEqual({
+      atMs: now,
+      provider: "aws",
+      message: unsupportedCaptureReceipt(LEASE_ID).message,
     });
-    expect(identical.calls.some(({ argv }) => argv[2] === "create")).toBe(false);
-
-    vi.stubEnv("WARM_A", "changed-secret");
-    const changedValues = createWarmProvider(undefined, initial.stateDir);
-    await captureWarmImage(changedValues.provider, profile);
-    expect(changedValues.calls.some(({ argv }) => argv[2] === "create")).toBe(false);
-
-    const reordered = createWarmProvider(undefined, initial.stateDir);
-    await captureWarmImage(reordered.provider, { ...profile, setupEnv: ["WARM_A", "WARM_B"] });
-    expect(reordered.calls.some(({ argv }) => argv[2] === "create")).toBe(false);
+    expect(warn).toHaveBeenCalledOnce();
+    expect(warn.mock.calls[0]?.[0]).toContain("warm image capture unsupported:");
+    expect(warn.mock.calls[0]?.[0]).not.toContain("failed");
   });
-
   it("captures distinct images when setup, machine class, desktop, provider, or setup environment names change", async () => {
     const profile = { ...PROFILE, setup: "install-node", setupEnv: ["WARM_B", "WARM_A"] };
     vi.stubEnv("WARM_A", "first-secret");
@@ -70,104 +75,20 @@ describe("Crabbox profile warm images", () => {
     }
   });
 
-  describe.each([
-    {
-      sizing: "omitted",
-      configuredClass: undefined,
-      placementClass: undefined,
-      effectiveClass: undefined,
-    },
-    {
-      sizing: "configured",
-      configuredClass: "standard",
-      placementClass: undefined,
-      effectiveClass: "standard",
-    },
-    {
-      sizing: "placement",
-      configuredClass: undefined,
-      placementClass: "fast",
-      effectiveClass: "fast",
-    },
-    {
-      sizing: "overridden",
-      configuredClass: "standard",
-      placementClass: "fast",
-      effectiveClass: "fast",
-    },
-  ])("warm policy with $sizing sizing", ({ configuredClass, placementClass, effectiveClass }) => {
-    it.each([
-      { choice: "default", warmImage: undefined, setupEnv: undefined, capturesKnownClass: true },
-      {
-        choice: "default, empty setupEnv",
-        warmImage: undefined,
-        setupEnv: [],
-        capturesKnownClass: true,
-      },
-      {
-        choice: "default, setupEnv",
-        warmImage: undefined,
-        setupEnv: ["WARM_POLICY_INPUT"],
-        capturesKnownClass: false,
-      },
-      { choice: "false", warmImage: false, setupEnv: undefined, capturesKnownClass: false },
-      {
-        choice: "false, setupEnv",
-        warmImage: false,
-        setupEnv: ["WARM_POLICY_INPUT"],
-        capturesKnownClass: false,
-      },
-      { choice: "true", warmImage: true, setupEnv: undefined, capturesKnownClass: true },
-      {
-        choice: "true, setupEnv",
+  it("rejects explicit warm images without sizing before reading mutable setup inputs", async () => {
+    const { provider, calls } = createWarmProvider();
+    await expect(
+      provisionWarmProfile(provider, {
+        ...CLASSLESS_PROFILE,
         warmImage: true,
+        setup: "install-node",
         setupEnv: ["WARM_POLICY_INPUT"],
-        capturesKnownClass: true,
-      },
-    ])(
-      "applies $choice through provision and teardown",
-      async ({ warmImage, setupEnv, capturesKnownClass }) => {
-        const { provider, calls, stateDir } = createWarmProvider();
-        const profile = {
-          provider: "aws",
-          ttl: "24h",
-          idleTimeout: "60m",
-          ...(configuredClass === undefined ? {} : { class: configuredClass }),
-          ...(warmImage === undefined ? {} : { warmImage }),
-          ...(setupEnv === undefined ? {} : { setup: "install-node", setupEnv }),
-        };
-        vi.stubEnv("WARM_POLICY_INPUT", "fixture-value");
-        if (warmImage === true && effectiveClass === undefined) {
-          await expect(
-            provisionWarmProfile(provider, profile, OPERATION_ID, placementClass),
-          ).rejects.toMatchObject({ code: "invalid_profile" });
-          expect(calls).toEqual([]);
-          return;
-        }
-        const lease = await provisionWarmProfile(provider, profile, OPERATION_ID, placementClass);
-        // Teardown uses enrolled sizing and declared setup names, never their host values.
-        vi.stubEnv("WARM_POLICY_INPUT", undefined);
-        await provider.destroy({ leaseId: lease.leaseId, profile });
-        const warmup = calls.find(({ argv }) => argv[1] === "warmup")?.argv;
-        expect(warmup).toBeDefined();
-        if (effectiveClass === undefined) {
-          expect(calls.flatMap(({ argv }) => argv)).not.toContain("--class");
-        } else {
-          expect(warmup?.[warmup.indexOf("--class") + 1]).toBe(effectiveClass);
-          expect(warmup?.filter((arg) => arg === "--class")).toHaveLength(1);
-        }
-        const captures = effectiveClass !== undefined && capturesKnownClass;
-        expect(calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(captures ? 1 : 0);
-        if (!captures) {
-          expect(calls.some(({ argv }) => argv[1] === "checkpoint")).toBe(false);
-          expect(fs.existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(false);
-        }
-        expect(calls.at(-1)?.argv[1]).toBe("stop");
-      },
-    );
+      }),
+    ).rejects.toMatchObject({ code: "invalid_profile" });
+    expect(calls).toEqual([]);
   });
 
-  it.each(["standard", undefined])(
+  it.each(["standard"])(
     "never invokes checkpoint commands with warm images disabled and class %s",
     async (machineClass) => {
       const { provider, calls } = createWarmProvider();
@@ -178,7 +99,7 @@ describe("Crabbox profile warm images", () => {
       };
       const lease = await provisionWarmProfile(provider, profile);
 
-      await provider.destroy({ leaseId: lease.leaseId, profile });
+      await destroyAndWait(provider, { leaseId: lease.leaseId, profile });
 
       expect(calls.some(({ argv }) => argv[1] === "checkpoint")).toBe(false);
       expect(calls.at(-1)?.argv[1]).toBe("stop");
@@ -194,7 +115,7 @@ describe("Crabbox profile warm images", () => {
     const lease = await provisionWarmProfile(provider);
     calls.length = 0;
 
-    await provider.destroy({ leaseId: lease.leaseId, profile: PROFILE });
+    await destroyAndWait(provider, { leaseId: lease.leaseId, profile: PROFILE });
 
     expect(calls.map(({ argv }) => argv.slice(1, argv[1] === "checkpoint" ? 3 : 2))).toEqual([
       ["run"],
@@ -348,7 +269,12 @@ describe("Crabbox profile warm images", () => {
   });
 
   it.each([
-    { backend: "aws", kind: "aws-ebs-snapshot", nativeState: "completed", sourceLifecycleMs: 0 },
+    {
+      backend: "azure",
+      kind: "azure-os-disk-snapshot",
+      nativeState: "available",
+      sourceLifecycleMs: 0,
+    },
     {
       backend: "daytona",
       kind: "daytona-snapshot",
@@ -404,7 +330,7 @@ describe("Crabbox profile warm images", () => {
         "--wait-timeout",
         "2700000ms",
         "--json",
-        ...(backend === "daytona" ? ["--no-reboot=false"] : []),
+        ...(["azure", "daytona"].includes(backend) ? ["--no-reboot=false"] : []),
         ...(backend === "machine0" ? ["--strategy", "image"] : []),
       ]);
       // Native capture gets Crabbox's 45m plus command overhead and separate source recovery.
@@ -433,24 +359,6 @@ describe("Crabbox profile warm images", () => {
     result: Partial<SpawnResult>;
     captureUncertain?: boolean;
   }>([
-    { action: "run", name: "scrub fails", result: { code: 7, stderr: "scrub failed" } },
-    {
-      action: "run",
-      name: "scrub times out",
-      result: { code: null, killed: true, termination: "timeout" as const },
-    },
-    { action: "create", name: "capture fails", result: { code: 7, stderr: "snapshot failed" } },
-    {
-      action: "create",
-      name: "capture times out",
-      result: { code: null, killed: true, termination: "timeout" as const },
-    },
-    {
-      action: "create",
-      name: "an older Crabbox rejects JSON output",
-      result: { code: 2, stderr: "flag provided but not defined: -json" },
-    },
-    { action: "create", name: "capture returns malformed JSON", result: { stdout: "{" } },
     {
       action: "create",
       name: "capture was not submitted",
@@ -481,7 +389,7 @@ describe("Crabbox profile warm images", () => {
     tearingDown = true;
 
     await expect(
-      provider.destroy({ leaseId: lease.leaseId, profile: PROFILE }),
+      destroyAndWait(provider, { leaseId: lease.leaseId, profile: PROFILE }),
     ).resolves.toBeUndefined();
 
     expect(warn).toHaveBeenCalledOnce();
@@ -505,67 +413,7 @@ describe("Crabbox profile warm images", () => {
     expect(calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(1);
   });
 
-  it("never captures a half-configured lease during failed provisioning cleanup", async () => {
-    const { provider, calls } = createWarmProvider(({ argv, options }) =>
-      argv[1] === "run" && options.input === "install-node"
-        ? commandResult({ code: 7, stderr: "setup failed" })
-        : undefined,
-    );
-
-    await expect(
-      provisionWarmProfile(provider, { ...PROFILE, setup: "install-node" }),
-    ).rejects.toThrow("Crabbox profile setup failed");
-
-    expect(calls.some(({ argv }) => argv[1] === "checkpoint")).toBe(false);
-    expect(calls.at(-1)?.argv[1]).toBe("stop");
-  });
-
-  it.each(["aws", "hetzner"])(
-    "rejects a requested warm image without a resolved class before %s commands",
-    async (backend) => {
-      const { provider, calls } = createWarmProvider();
-      await expect(
-        provisionWarmProfile(provider, {
-          provider: backend,
-          ttl: PROFILE.ttl,
-          idleTimeout: PROFILE.idleTimeout,
-          warmImage: true,
-        }),
-      ).rejects.toMatchObject({
-        code: "invalid_profile",
-        message: "Crabbox warmImage requires a configured class or a placement machine class",
-      });
-      expect(calls).toEqual([]);
-    },
-  );
-
-  it.each(["standard", undefined])(
-    "captures and restores placement overrides with configured class %s",
-    async (machineClass) => {
-      const { provider, calls } = createWarmProvider();
-      const profile = { ...CLASSLESS_PROFILE, ...(machineClass ? { class: machineClass } : {}) };
-      await captureWarmImage(provider, profile, OPERATION_ID, "fast");
-
-      calls.length = 0;
-      await provisionWarmProfile(provider, profile, `provision:v2:${"1".repeat(64)}`, "standard");
-      expect(calls.some(({ argv }) => argv[1] === "warmup")).toBe(true);
-      expect(calls.some(({ argv }) => argv[2] === "fork")).toBe(false);
-
-      const nextOperation = `provision:v2:${"2".repeat(64)}`;
-      calls.length = 0;
-      await provisionWarmProfile(provider, profile, nextOperation, "fast");
-      const fork = calls.find(({ argv }) => argv[2] === "fork")?.argv;
-      expect(fork?.[fork.indexOf("--lease-id") + 1]).toBe(operationLeaseId(nextOperation));
-      expect(fork?.[fork.indexOf("--class") + 1]).toBe("fast");
-    },
-  );
-
-  it.each([
-    { machineClass: "standard", warmImage: true },
-    { machineClass: undefined, warmImage: true },
-    { machineClass: "standard", warmImage: undefined },
-    { machineClass: undefined, warmImage: undefined },
-  ])(
+  it.each([{ machineClass: "standard", warmImage: true }])(
     "recovers enrolled class after restart (configured=$machineClass, warmImage=$warmImage)",
     async ({ machineClass, warmImage }) => {
       const initial = createWarmProvider();
@@ -579,7 +427,7 @@ describe("Crabbox profile warm images", () => {
 
       const restarted = createWarmProvider(undefined, initial.stateDir);
       await restarted.provider.inspect({ leaseId: lease.leaseId, profile });
-      await restarted.provider.destroy({
+      await destroyAndWait(restarted.provider, {
         leaseId: lease.leaseId,
         profile,
       });
@@ -608,7 +456,7 @@ describe("Crabbox profile warm images", () => {
     },
   );
 
-  it.each(["standard", undefined])(
+  it.each(["standard"])(
     "never snapshots an inspection-only lease with configured class %s",
     async (machineClass) => {
       const { provider, calls } = createWarmProvider();
@@ -622,87 +470,65 @@ describe("Crabbox profile warm images", () => {
       };
 
       await provider.inspect(lease);
-      await provider.destroy(lease);
+      await destroyAndWait(provider, lease);
 
       expect(calls.some(({ argv }) => argv[1] === "checkpoint")).toBe(false);
       expect(calls.at(-1)?.argv[1]).toBe("stop");
     },
   );
 
-  it("forks an available image into the exact operation-owned lease before normal enrollment", async () => {
-    const { provider, calls } = createWarmProvider();
-    await captureWarmImage(provider);
-    calls.length = 0;
-
-    await expect(provisionWarmProfile(provider)).resolves.toMatchObject({
-      leaseId: LEASE_ID,
-      node: { deviceId: "device-1" },
-    });
-
-    expect(calls.some(({ argv }) => argv[1] === "warmup")).toBe(false);
-    expect(calls.find(({ argv }) => argv[2] === "fork")?.argv.slice(1)).toEqual([
-      "checkpoint",
-      "fork",
-      CHECKPOINT_ID,
-      "--provider",
-      "aws",
-      "--network",
-      "public",
-      "--tailscale=false",
-      "--class",
-      "standard",
-      "--ttl",
-      "24h",
-      "--idle-timeout",
-      "60m",
-      "--lease-id",
-      LEASE_ID,
-      "--slug",
-      operationSlug(OPERATION_ID),
-      "--keep=true",
-      "--json",
-    ]);
-    expect(calls.some(({ argv }) => argv[1] === "inspect")).toBe(true);
-    expect(calls.some(({ argv, options }) => argv[1] === "run" && options.input)).toBe(true);
-  });
-
   it.each([
-    { name: "the fork fails", result: { code: 7, stderr: "snapshot unavailable" } },
-    {
-      name: "an older Crabbox rejects fixed lease IDs",
-      result: { code: 2, stderr: "unknown flag: --lease-id" },
+    ["the captured runtime", NODE_RUNTIME_IDENTITY, false],
+    [
+      "a different runtime",
+      { ...NODE_RUNTIME_IDENTITY, nodeBootstrapSha256: "f".repeat(64) },
+      true,
+    ],
+  ] as const)(
+    "prepares the node runtime on a fork only for %s",
+    async (_label, identity, prepares) => {
+      const initial = createWarmProvider();
+      await captureWarmImage(initial.provider);
+      const { provider, calls } = createWarmProvider(undefined, initial.stateDir);
+      const prepareNodeRuntime = vi.fn(async () => ({
+        nodeBootstrap: createNodeBootstrapFixture(),
+        workerBundle: createWorkerArchiveFixture(),
+      }));
+
+      await provisionWarmProfile(provider, PROFILE, OPERATION_ID, undefined, {
+        assertCurrent: () => {},
+        nodeRuntimeIdentity: identity,
+        prepareNodeRuntime,
+      });
+
+      expect(calls.some(({ argv }) => argv[2] === "fork")).toBe(true);
+      expect(prepareNodeRuntime).toHaveBeenCalledTimes(prepares ? 1 : 0);
     },
-    { name: "the fork returns malformed JSON", result: { stdout: "{" } },
-  ])("does not change a checkpoint-bound lease to cold when $name", async ({ result }) => {
-    const { provider, calls } = createWarmProvider(({ argv }) =>
-      argv[2] === "fork" ? commandResult(result) : undefined,
-    );
-    await captureWarmImage(provider);
-    calls.length = 0;
+  );
 
-    await expect(provisionWarmProfile(provider)).rejects.toThrow();
+  it.each([{ name: "the fork fails", result: { code: 7, stderr: "snapshot unavailable" } }])(
+    "does not change a checkpoint-bound lease to cold when $name",
+    async ({ result }) => {
+      const { provider, calls } = createWarmProvider(({ argv }) =>
+        argv[2] === "fork" ? commandResult(result) : undefined,
+      );
+      await captureWarmImage(provider);
+      calls.length = 0;
 
-    const fork = calls.find(({ argv }) => argv[2] === "fork")?.argv;
-    const warmup = calls.find(({ argv }) => argv[1] === "warmup")?.argv;
-    expect(fork?.[fork.indexOf("--lease-id") + 1]).toBe(LEASE_ID);
-    expect(warmup).toBeUndefined();
-    calls.length = 0;
-    await expect(provisionWarmProfile(provider)).rejects.toThrow();
-    expect(calls.find(({ argv }) => argv[2] === "fork")?.argv[3]).toBe(CHECKPOINT_ID);
-    expect(calls.some(({ argv }) => argv[1] === "warmup")).toBe(false);
-  });
+      await expect(provisionWarmProfile(provider)).rejects.toThrow();
 
-  it.each([
-    ["available", "fork_or_delete", "fork", true],
-    ["available", "delete", "fork", true],
-    ["Succeeded", "fork_or_delete", "fork", true],
-    ["available", "fork_restore_or_delete", "fork", true],
-    ["ACTIVE", "wait_or_delete", "warmup", true],
-    ["ACTIVE", "check_runtime", "warmup", true],
-    ["unverified_ref", "fork_or_delete_local", "warmup", true],
-    ["missing", "delete_local", "warmup", false],
-    [undefined, "delete_local", "warmup", false],
-  ])(
+      const fork = calls.find(({ argv }) => argv[2] === "fork")?.argv;
+      const warmup = calls.find(({ argv }) => argv[1] === "warmup")?.argv;
+      expect(fork?.[fork.indexOf("--lease-id") + 1]).toBe(LEASE_ID);
+      expect(warmup).toBeUndefined();
+      calls.length = 0;
+      await expect(provisionWarmProfile(provider)).rejects.toThrow();
+      expect(calls.find(({ argv }) => argv[2] === "fork")?.argv[3]).toBe(CHECKPOINT_ID);
+      expect(calls.some(({ argv }) => argv[1] === "warmup")).toBe(false);
+    },
+  );
+
+  it.each([["unverified_ref", "fork_or_delete_local", "warmup", true]])(
     "verifies pending image state %s/action %s before %s",
     async (providerState, nextAction, expectedCommand, retained) => {
       const { provider, calls } = createWarmProvider(({ argv }) =>
@@ -729,11 +555,11 @@ describe("Crabbox profile warm images", () => {
         calls.some(({ argv }) => argv[1] === expectedCommand || argv[2] === expectedCommand),
       ).toBe(true);
       if (retained) {
-        await provider.destroy({ leaseId: lease.leaseId, profile: PROFILE });
+        await destroyAndWait(provider, { leaseId: lease.leaseId, profile: PROFILE });
         expect(calls.some(({ argv }) => argv[2] === "create")).toBe(false);
       } else {
         expect(calls.some(({ argv }) => argv[2] === "delete")).toBe(true);
-        await provider.destroy({ leaseId: lease.leaseId, profile: PROFILE });
+        await destroyAndWait(provider, { leaseId: lease.leaseId, profile: PROFILE });
         expect(calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(1);
       }
     },

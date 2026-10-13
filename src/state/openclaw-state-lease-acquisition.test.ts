@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -11,12 +12,6 @@ import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.
 import { withRuntimeWorkerGeneration } from "../infra/runtime-worker-generation.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { readSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
-import { tryAcquireExclusiveSqliteCoordinator } from "../infra/sqlite-coordinator.js";
-import {
-  resolveStateDatabaseCoordinatorPath,
-  resolveStateLifecycleRuntimeDirectory,
-} from "../infra/state-database-coordinator.js";
-import { getTrackedWorkerCpuSources } from "../infra/worker-cpu.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
 import {
@@ -37,8 +32,9 @@ import {
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { OpenClawStateLeaseAcquisitionError } from "./openclaw-state-lease-error.js";
-import * as leaseStorage from "./openclaw-state-lease-storage.js";
+import type { OpenClawStateLeaseOptions } from "./openclaw-state-lease-options.js";
 import * as leaseStore from "./openclaw-state-lease-store.js";
+import * as leaseStorage from "./openclaw-state-lease-worker-storage.js";
 import { withOpenClawStateLease, type OpenClawStateLeaseContext } from "./openclaw-state-lease.js";
 import * as workerContext from "./openclaw-state-worker-context.js";
 
@@ -54,6 +50,21 @@ function controlElapsedTime() {
   vi.spyOn(performance, "now").mockImplementation(() => now() + elapsedMs);
   return (milliseconds: number) => {
     elapsedMs += milliseconds;
+  };
+}
+
+function leaseOptions(
+  env: NodeJS.ProcessEnv,
+  key: string,
+  overrides: Partial<OpenClawStateLeaseOptions> = {},
+): OpenClawStateLeaseOptions {
+  return {
+    scope: "core:test",
+    key,
+    database: { scope: "shared", options: { env } },
+    leaseMs: 60_000,
+    waitMs: 5_000,
+    ...overrides,
   };
 }
 
@@ -73,14 +84,7 @@ it.each([false, true])(
       const run = vi.fn(async () => undefined);
       await expect(
         withOpenClawStateLease(
-          {
-            scope: "core:test",
-            key: "native-open-failure",
-            database: { scope: "shared", options: { env: state.env } },
-            leaseMs: 60_000,
-            waitMs: 5_000,
-            prepareDatabase,
-          },
+          leaseOptions(state.env, "native-open-failure", { prepareDatabase }),
           run,
         ),
       ).rejects.toMatchObject({
@@ -94,14 +98,7 @@ it.each([false, true])(
 
 it("rebinds the real shared-state lease worker and joins its retained generation", async () => {
   await withOpenClawTestState({ label: "lease-retained-worker-generation" }, async (state) => {
-    const options = {
-      scope: "core:test",
-      key: "retained-generation",
-      database: { scope: "shared" as const, options: { env: state.env } },
-      leaseMs: 60_000,
-      waitMs: 0,
-    };
-    const initialWorkers = getTrackedWorkerCpuSources().workers.length;
+    const options = leaseOptions(state.env, "retained-generation", { waitMs: 0 });
     await withOpenClawStateLease(options, async (lease) => lease.assertOwned());
     const source = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sharedStateStore);
     const retainedPath = path.join(
@@ -111,54 +108,83 @@ it("rebinds the real shared-state lease worker and joins its retained generation
     await fs.promises.writeFile(retainedPath, `export * from ${JSON.stringify(source.href)};\n`);
     const retained = pathToFileURL(await fs.promises.realpath(retainedPath));
     const dispatch = vi.spyOn(Worker.prototype, "postMessage");
-    await withRuntimeWorkerGeneration(
+    const { worker: retainedWorker, exited } = await withRuntimeWorkerGeneration(
       async (bind) => {
         bind((url) => (url.href === source.href ? retained : url));
         await withOpenClawStateLease(options, async (lease) => lease.assertOwned());
-        expect(
-          dispatch.mock.calls.some(
-            ([request]) =>
-              isRecord(request) && request.type === "open" && request.moduleUrl === retained.href,
-          ),
-        ).toBe(true);
+        const openIndex = dispatch.mock.calls.findIndex(
+          ([request]) =>
+            isRecord(request) && request.type === "open" && request.moduleUrl === retained.href,
+        );
+        const worker = dispatch.mock.contexts[openIndex];
+        if (!(worker instanceof Worker)) {
+          throw new Error("Expected the retained shared-state worker");
+        }
+        return { worker, exited: once(worker, "exit") };
       },
       async () => {},
     );
-    expect(getTrackedWorkerCpuSources().workers).toHaveLength(initialWorkers);
+    expect(retainedWorker.threadId).toBe(-1);
+    await exited;
     await withOpenClawStateLease(options, async (lease) => lease.assertOwned());
   });
 });
 
-it.each([false, true])(
-  "preserves authority refusal before native open (prepare: %s)",
-  async (prepareDatabase) => {
+it.each([
+  { stage: "preparation", prepareDatabase: false },
+  { stage: "preparation", prepareDatabase: true },
+  { stage: "worker", prepareDatabase: false },
+] as const)(
+  "preserves caller authority refusal at $stage (prepare: $prepareDatabase)",
+  async ({ stage, prepareDatabase }) => {
     await withOpenClawTestState({ label: "lease-preparation-refusal" }, async (state) => {
-      const refusal = Object.assign(new Error("caller authority refused"), {
-        code: "SQLITE_IOERR",
-      });
+      const database =
+        stage === "worker" ? openOpenClawStateDatabase({ env: state.env }) : undefined;
+      const refusal =
+        stage === "worker"
+          ? new StateDatabaseReadAdmissionInvalidatedError("original authority refusal")
+          : Object.assign(new Error("caller authority refused"), { code: "SQLITE_IOERR" });
       const scope = createOpenClawDatabaseMaintenanceScope();
       const nativeOpen = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
       const run = vi.fn(async () => undefined);
+      if (stage === "worker") {
+        const capture = workerContext.captureOpenClawStateWorkerContext;
+        vi.spyOn(workerContext, "captureOpenClawStateWorkerContext").mockImplementation(
+          (options) => {
+            const context = capture(options);
+            context.admission = {
+              ...context.admission,
+              assertCurrent() {
+                throw refusal;
+              },
+            };
+            return context;
+          },
+        );
+      }
       try {
-        await expect(
-          scope.run(() => {
+        const acquire = () => {
+          if (stage === "preparation") {
             vi.spyOn(scope, "assertAdmission").mockImplementation(() => {
               throw refusal;
             });
-            return withOpenClawStateLease(
-              {
-                scope: "core:test",
-                key: "preparation-refusal",
-                database: { scope: "shared", options: { env: state.env } },
-                leaseMs: 60_000,
-                waitMs: 5_000,
-                prepareDatabase,
-              },
-              run,
-            );
-          }),
-        ).rejects.toBe(refusal);
-        expect(nativeOpen).not.toHaveBeenCalled();
+          }
+          return withOpenClawStateLease(
+            leaseOptions(state.env, "preparation-refusal", {
+              prepareDatabase,
+              waitMs: stage === "worker" ? 0 : 5_000,
+            }),
+            run,
+          );
+        };
+        await expect(stage === "preparation" ? scope.run(acquire) : acquire()).rejects.toBe(
+          refusal,
+        );
+        if (database) {
+          expect(database.db.prepare("SELECT * FROM state_leases").all()).toEqual([]);
+        } else {
+          expect(nativeOpen).not.toHaveBeenCalled();
+        }
         expect(run).not.toHaveBeenCalled();
       } finally {
         await scope.close();
@@ -167,48 +193,27 @@ it.each([false, true])(
   },
 );
 
-it("preserves the caller's typed admission refusal through lease acquisition", async () => {
-  await withOpenClawTestState({ label: "lease-authority-refusal" }, async (state) => {
-    const database = openOpenClawStateDatabase({ env: state.env });
-    const refusal = new StateDatabaseReadAdmissionInvalidatedError("original authority refusal");
-    const capture = workerContext.captureOpenClawStateWorkerContext;
-    vi.spyOn(workerContext, "captureOpenClawStateWorkerContext").mockImplementation((options) => {
-      const context = capture(options);
-      context.admission.assertCurrent = () => {
-        throw refusal;
-      };
-      return context;
-    });
-    const run = vi.fn(async () => undefined);
-    await expect(
-      withOpenClawStateLease(
-        {
-          scope: "core:test",
-          key: "authority-refusal",
-          database: { scope: "shared", options: { env: state.env } },
-          leaseMs: 60_000,
-          waitMs: 0,
-        },
-        run,
-      ),
-    ).rejects.toBe(refusal);
-    expect(run).not.toHaveBeenCalled();
-    expect(database.db.prepare("SELECT * FROM state_leases").all()).toEqual([]);
-  });
-});
-
-it.each(["maintenance", "generic"] as const)(
-  "admits %s work after slow database preparation",
+it.each(["maintenance", "generic", "cancelled"] as const)(
+  "settles %s work after slow database preparation",
   async (caller) => {
     await withOpenClawTestState({ label: "lease-cold-admission" }, async (state) => {
       const advance = controlElapsedTime();
+      const controller = new AbortController();
+      const clock =
+        caller === "cancelled" ? vi.spyOn(performance, "now").mockReturnValue(1_000) : undefined;
       const open = stateDatabaseOpen.openUnpublishedStateDatabase;
       const physicalOpen = vi
         .spyOn(stateDatabaseOpen, "openUnpublishedStateDatabase")
         .mockImplementation((options) => {
           const database = open(options);
           // Keep initialization and ownership real; only its elapsed cost is simulated.
-          advance(6_000);
+          if (clock) {
+            clock.mockReturnValue(2_500);
+            controller.abort(new Error("cancel preparation"));
+            clock.mockReturnValue(9_000);
+          } else {
+            advance(6_000);
+          }
           return database;
         });
       const run = vi.fn(async (lease: OpenClawStateLeaseContext) => lease.assertOwned());
@@ -216,17 +221,24 @@ it.each(["maintenance", "generic"] as const)(
         caller === "maintenance"
           ? withAgentDatabaseMaintenanceLease({ env: state.env }, run)
           : withOpenClawStateLease(
-              {
-                scope: "core:test",
-                key: "cold-admission",
-                database: { scope: "shared", options: { env: state.env } },
-                leaseMs: 60_000,
-                waitMs: 5_000,
-              },
+              leaseOptions(
+                state.env,
+                "cold-admission",
+                caller === "cancelled" ? { prepareDatabase: true, signal: controller.signal } : {},
+              ),
               run,
             );
-      await operation;
-      expect(run).toHaveBeenCalledOnce();
+      if (caller === "cancelled") {
+        await expect(operation).rejects.toMatchObject({
+          code: "OPENCLAW_STATE_LEASE_ABORTED",
+          outcome: { kind: "aborted", reason: "caller-signal", elapsedMs: 1_500 },
+          cause: controller.signal.reason,
+        });
+        expect(run).not.toHaveBeenCalled();
+      } else {
+        await operation;
+        expect(run).toHaveBeenCalledOnce();
+      }
       expect(physicalOpen).toHaveBeenCalled();
       expect(
         openOpenClawStateDatabase({ env: state.env })
@@ -237,7 +249,7 @@ it.each(["maintenance", "generic"] as const)(
   },
 );
 
-it("records unavailable storage when a lifecycle writer prevents observing a held lease", async () => {
+it("records unavailable storage when a native SQLite writer prevents observing a held lease", async () => {
   await withOpenClawTestState({ label: "lease-preparation-contention" }, async (state) => {
     const database = openOpenClawStateDatabase({ env: state.env });
     const identity = { scope: "core:test", key: "preparation-contention", owner: "other-process" };
@@ -245,81 +257,30 @@ it("records unavailable storage when a lifecycle writer prevents observing a hel
       ({ db }) => leaseStore.acquireOpenClawStateLeaseInTransaction(db, identity, 60_000),
       { env: state.env },
     );
-    const coordinatorPath = resolveStateDatabaseCoordinatorPath({
-      databasePath: database.path,
-      runtimeDirectory: resolveStateLifecycleRuntimeDirectory(),
-      uid: typeof process.getuid === "function" ? process.getuid() : undefined,
-    });
     closeOpenClawStateDatabaseForTest();
-    const writer = tryAcquireExclusiveSqliteCoordinator(coordinatorPath, { busyTimeoutMs: 0 });
-    if (!writer) {
-      throw new Error("independent writer did not acquire its coordinator");
-    }
+    const writer = new DatabaseSync(database.path);
+    writer.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
     const run = vi.fn(async () => undefined);
     try {
       await expect(
         withOpenClawStateLease(
-          {
-            scope: identity.scope,
-            key: identity.key,
-            database: { scope: "shared", options: { env: state.env } },
-            leaseMs: 60_000,
-            waitMs: 5_000,
-            prepareDatabase: true,
-          },
+          leaseOptions(state.env, identity.key, { prepareDatabase: true }),
           run,
         ),
       ).rejects.toMatchObject({
         code: "OPENCLAW_STATE_LEASE_STORAGE_FAILED",
-        outcome: { kind: "store-unavailable", reason: "lifecycle-busy" },
+        outcome: { kind: "store-unavailable", reason: "sqlite-busy" },
       });
       expect(run).not.toHaveBeenCalled();
     } finally {
-      writer.release();
+      writer.exec("ROLLBACK");
+      writer.close();
     }
     expect(
       openOpenClawStateDatabase({ env: state.env })
         .db.prepare("SELECT owner FROM state_leases WHERE scope = ? AND lease_key = ?")
         .get(identity.scope, identity.key),
     ).toMatchObject({ owner: identity.owner });
-  });
-});
-
-it("does not enter maintenance after cancellation during storage preparation", async () => {
-  await withOpenClawTestState({ label: "lease-aborted-preparation" }, async (state) => {
-    const controller = new AbortController();
-    const clock = vi.spyOn(performance, "now").mockReturnValue(1_000);
-    const open = stateDatabaseOpen.openUnpublishedStateDatabase;
-    vi.spyOn(stateDatabaseOpen, "openUnpublishedStateDatabase").mockImplementation((options) => {
-      const database = open(options);
-      clock.mockReturnValue(2_500);
-      controller.abort(new Error("cancel preparation"));
-      clock.mockReturnValue(9_000);
-      return database;
-    });
-    const run = vi.fn(async () => undefined);
-    await expect(
-      withOpenClawStateLease(
-        {
-          scope: "core:test",
-          key: "aborted-preparation",
-          database: { scope: "shared", options: { env: state.env } },
-          leaseMs: 60_000,
-          waitMs: 5_000,
-          prepareDatabase: true,
-          signal: controller.signal,
-        },
-        run,
-      ),
-    ).rejects.toMatchObject({
-      code: "OPENCLAW_STATE_LEASE_ABORTED",
-      outcome: { kind: "aborted", reason: "caller-signal", elapsedMs: 1_500 },
-      cause: controller.signal.reason,
-    });
-    expect(run).not.toHaveBeenCalled();
-    expect(
-      openOpenClawStateDatabase({ env: state.env }).db.prepare("SELECT * FROM state_leases").all(),
-    ).toEqual([]);
   });
 });
 
@@ -356,14 +317,7 @@ it.each(["acquired", "held", "store-unavailable"] as const)(
       const run = vi.fn(async () => undefined);
       try {
         const failure = await withOpenClawStateLease(
-          {
-            scope: identity.scope,
-            key: identity.key,
-            database: { scope: "shared", options: { env: state.env } },
-            leaseMs: 60_000,
-            waitMs: 0,
-            signal: controller.signal,
-          },
+          leaseOptions(state.env, identity.key, { waitMs: 0, signal: controller.signal }),
           run,
         ).catch((error: unknown) => error);
         expect(failure).toMatchObject({
@@ -402,21 +356,14 @@ it("restores the cached connection timeout after preparation fails during schema
       UPDATE schema_meta SET schema_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1}
       WHERE meta_key = 'primary';
     `);
-    const coordinatorPath = resolveStateDatabaseCoordinatorPath({
-      databasePath: database.path,
-      runtimeDirectory: resolveStateLifecycleRuntimeDirectory(),
-      uid: typeof process.getuid === "function" ? process.getuid() : undefined,
-    });
     closeOpenClawStateDatabaseForTest();
-    let writer: ReturnType<typeof tryAcquireExclusiveSqliteCoordinator> | undefined;
+    let writer: DatabaseSync | undefined;
     let preparedBusyTimeoutMs: number | undefined;
     const unregister = registerOpenClawStateDatabaseLifecycleListener((event) => {
       if (event.kind === "opened" && event.database.path === database.path) {
         preparedBusyTimeoutMs = readSqliteBusyTimeout(event.database.db);
-        writer = tryAcquireExclusiveSqliteCoordinator(coordinatorPath, { busyTimeoutMs: 0 });
-        if (!writer) {
-          throw new Error("independent writer did not acquire its coordinator");
-        }
+        writer = new DatabaseSync(database.path);
+        writer.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
       }
     });
     const sleep = vi.spyOn(backoff, "sleepWithAbort");
@@ -427,17 +374,23 @@ it("restores the cached connection timeout after preparation fails during schema
         }),
       ).rejects.toMatchObject({
         code: "OPENCLAW_STATE_LEASE_STORAGE_FAILED",
-        outcome: { kind: "store-unavailable", reason: "lifecycle-busy" },
+        outcome: { kind: "store-unavailable", reason: "sqlite-busy" },
       });
       expect(preparedBusyTimeoutMs).toBe(0);
       expect(sleep).not.toHaveBeenCalled();
-      writer?.release();
+      if (writer?.isOpen) {
+        writer.exec("ROLLBACK");
+        writer.close();
+      }
       expect(readSqliteBusyTimeout(openOpenClawStateDatabase({ env: state.env }).db)).toBe(
         OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
       );
     } finally {
       unregister();
-      writer?.release();
+      if (writer?.isOpen) {
+        writer.exec("ROLLBACK");
+        writer.close();
+      }
     }
   });
 });
@@ -452,15 +405,11 @@ it.each(["invalid", "aborted"] as const)(
       }
       await expect(
         withOpenClawStateLease(
-          {
-            scope: "core:test",
-            key: "refused-preparation",
-            database: { scope: "shared", options: { env: state.env } },
+          leaseOptions(state.env, "refused-preparation", {
             leaseMs: reason === "invalid" ? 0 : 60_000,
-            waitMs: 5_000,
             prepareDatabase: true,
             signal: controller.signal,
-          },
+          }),
           async () => undefined,
         ),
       ).rejects.toMatchObject({
@@ -482,16 +431,13 @@ it.each([false, true])(
   async (supplied) => {
     await withOpenClawTestState({ label: "lease-active-transaction" }, async (state) => {
       const database = openOpenClawStateDatabase({ env: state.env });
-      const options = {
-        scope: "core:test",
-        key: "active-transaction",
+      const options = leaseOptions(state.env, "active-transaction", {
         database: {
-          scope: "shared" as const,
+          scope: "shared",
           options: { env: state.env, ...(supplied ? { database } : {}) },
         },
-        leaseMs: 60_000,
         waitMs: 0,
-      };
+      });
       const run = vi.fn(async (lease: OpenClawStateLeaseContext) => lease.assertOwned());
       database.db.exec("BEGIN");
       database.db.prepare("SELECT owner FROM state_leases").all();

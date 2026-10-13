@@ -1,5 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import { expect, it } from "vitest";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiElementScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -10,7 +11,7 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Control UI composer picker layout" });
 
 suite.define(() => {
-  it("keeps model and effort targets separate when Tasks narrows the composer", async () => {
+  it("keeps model and effort targets separate when Files narrows the composer", async () => {
     const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const artifactDir = artifactRoot
       ? createControlUiE2eArtifactDir("composer-picker-targets", artifactRoot)
@@ -18,7 +19,6 @@ suite.define(() => {
     await suite.withPage({ viewport: { width: 701, height: 729 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         models: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai", reasoning: true }],
-        methodResponses: { "tasks.list": { tasks: [] } },
         sessions: [
           createControlUiSessionRow("agent:main:main", "Main", 1, {
             contextTokens: 200_000,
@@ -37,16 +37,16 @@ suite.define(() => {
       await gateway.waitForRequest("chat.startup");
       const composer = page.locator(".agent-chat__input");
       await composer.locator('[data-chat-thinking-select="true"]').waitFor();
-      await openChatSidePanelType(page, "Tasks");
-      await page.locator(".chat-tasks-rail").waitFor();
+      await openChatSidePanelType(page, "Files");
+      await page.locator(".chat-workspace-rail").waitFor();
       await expect
         .poll(() => composer.evaluate((node) => node.getBoundingClientRect().width))
         .toBeLessThan(360);
 
       for (const width of [701, 1280, 560, 393]) {
         if (width === 560) {
-          await page.locator(".chat-side-panel-toggle").click();
-          await page.locator(".chat-tasks-rail").waitFor({ state: "hidden" });
+          await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
+          await page.locator(".chat-workspace-rail").waitFor({ state: "hidden" });
         }
         await page.setViewportSize({ width, height: 729 });
         await page.mouse.move(0, 0);

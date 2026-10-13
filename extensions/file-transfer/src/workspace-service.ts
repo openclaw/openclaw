@@ -42,7 +42,14 @@ export function registerNodeWorkspaces(api: OpenClawPluginApi): void {
   };
   api.registerService({
     id: "file-transfer-workspaces",
-    reload: { configPrefixes: ["plugins.entries.file-transfer.config.workspaces", "agents"] },
+    reload: {
+      configPrefixes: [
+        "plugins.entries.file-transfer.config.workspaces",
+        "agents.defaults.workspace",
+        "agents.entries.*.workspace",
+        "agents.ownership",
+      ],
+    },
     async start(ctx) {
       stop();
       const controller = new AbortController();
@@ -104,10 +111,6 @@ export function registerNodeWorkspaces(api: OpenClawPluginApi): void {
                       signal: controller.signal,
                       openDuplex: ctx.openNodeDuplex,
                     }),
-                  }
-                : {}),
-              ...(ctx.openNodeDuplex
-                ? {
                     prepareTurnAttachments: createWorkspaceAttachmentPreparer({
                       remoteRoot: entry.remoteRoot,
                       createBridge: (assertCurrent, signal) =>

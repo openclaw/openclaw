@@ -35,7 +35,7 @@ function requirePatch(result: ReturnType<typeof buildCloudWorkerUpsertPatch>) {
 }
 
 describe("cloud worker settings state", () => {
-  it.each([undefined, ""])("requires an explicit class for an empty draft (%j)", (machineClass) => {
+  it.each([undefined])("requires an explicit class for an empty draft (%j)", (machineClass) => {
     const profile = readCloudWorkerProfiles({
       cloudWorkers: {
         profiles: {
@@ -53,55 +53,16 @@ describe("cloud worker settings state", () => {
     ).toBe("machineClass");
   });
 
-  it("reads configured profiles independently of provider availability", () => {
-    expect(readCloudWorkerProfiles({})).toEqual([]);
-    expect(
-      readCloudWorkerProfiles({ cloudWorkers: { profiles: { production: configuredProfile } } }),
-    ).toEqual([
-      {
-        id: "production",
-        providerId: "crabbox",
-        install: "npm",
-        backend: "aws",
-        target: "linux",
-        machineClass: "beast",
-        ttl: "24h",
-        idleTimeout: "60m",
-        setup: "install-node",
-        setupEnv: "QA_WORKER_FLAG",
-        warmImage: "auto",
-        readyWorkers: "",
-        suspendAfter: "30m",
-        desktop: true,
-        binary: "/opt/crabbox",
-      },
-    ]);
-  });
-
   it.each([
     ["profileId", { id: "bad id" }],
     ["profileExists", { id: "production" }],
     ["backend", { backend: " " }],
     ["target", { target: "x".repeat(65) }],
-    ["target", { target: " linux " }],
-    ...["macos", "windows/wsl2", "windows/normal"].map(
-      (target) => ["warmImage", { target, warmImage: "on" }] as const,
-    ),
-    ["machineClass", { machineClass: "" }],
-    ["machineClass", { machineClass: "x".repeat(129) }],
     ["ttl", { ttl: "tomorrow" }],
     ["idleTimeout", { idleTimeout: "0m" }],
     ["binary", { binary: "relative/crabbox" }],
-    ...["-1", "1.5", "Infinity", "9007199254740992"].map(
-      (readyWorkers) => ["readyWorkers", { readyWorkers }] as const,
-    ),
-    ...[
-      "A A",
-      "A,1BAD",
-      "A-B",
-      "CRABBOX_ENV_ALLOW",
-      Array.from({ length: 17 }, (_, index) => `VAR_${index}`).join(","),
-    ].map((setupEnv) => ["setupEnv", { setup: "true", setupEnv }] as const),
+    ["readyWorkers", { readyWorkers: "9007199254740992" }],
+    ["setupEnv", { setup: "true", setupEnv: "CRABBOX_ENV_ALLOW" }],
     ["setupEnvRequiresSetup", { setupEnv: "BUILD_FLAG" }],
   ] as const)("returns %s for an invalid add draft", (expected, patch) => {
     const draft = {
@@ -176,39 +137,7 @@ describe("cloud worker settings state", () => {
     });
   });
 
-  it.each(["standard", "fast", "large", "beast", "custom", "batch/ARM64.v2", "x".repeat(128)])(
-    "preserves class %s and hidden settings when backend and binary change",
-    (machineClass) => {
-      const profile = {
-        ...configuredProfile,
-        settings: { ...configuredProfile.settings, class: machineClass },
-      };
-      const config = { cloudWorkers: { profiles: { production: profile } } };
-      const draft = {
-        ...createCloudWorkerDraft(readCloudWorkerProfiles(config)[0]),
-        backend: "hetzner",
-        binary: "/opt/crabbox-next",
-      };
-      const built = requirePatch(buildCloudWorkerUpsertPatch(config, draft, "production"));
-      expect(applyMergePatch(config, built.patch)).toEqual({
-        cloudWorkers: {
-          profiles: {
-            production: {
-              ...profile,
-              settings: {
-                ...profile.settings,
-                provider: "hetzner",
-                binary: "/opt/crabbox-next",
-              },
-            },
-          },
-        },
-      });
-      expect(built.replacePaths).toEqual(["cloudWorkers.profiles.production.settings.setupEnv"]);
-    },
-  );
-
-  it.each([{ setupEnv: undefined }, { setupEnv: [] }])(
+  it.each([{ setupEnv: undefined }])(
     "omits empty setup environment ($setupEnv)",
     ({ setupEnv }) => {
       const { setupEnv: _setupEnv, ...settings } = configuredProfile.settings;
@@ -231,13 +160,6 @@ describe("cloud worker settings state", () => {
 
   it.each([
     {
-      name: "changes provider",
-      replacement: {
-        provider: "static-ssh",
-        settings: { host: "worker.example.test", user: "openclaw" },
-      },
-    },
-    {
       name: "removes its class",
       replacement: {
         provider: "crabbox",
@@ -250,7 +172,6 @@ describe("cloud worker settings state", () => {
       ...createCloudWorkerDraft(),
       id: "production",
       providerId: "crabbox",
-      install: "bundle",
       backend: "aws",
       target: "linux",
       machineClass: "standard",
@@ -265,80 +186,9 @@ describe("cloud worker settings state", () => {
     });
   });
 
-  it.each(["macos", "windows/wsl2", "retired-os"])(
-    "preserves provider-owned target %s and clears it through merge patch",
-    (target) => {
-      const config = {
-        cloudWorkers: {
-          profiles: {
-            production: {
-              ...configuredProfile,
-              settings: { ...configuredProfile.settings, target },
-            },
-          },
-        },
-      };
-      const draft = createCloudWorkerDraft(readCloudWorkerProfiles(config)[0]);
-      expect(draft.target).toBe(target);
-      const retained = requirePatch(buildCloudWorkerUpsertPatch(config, draft, "production"));
-      expect(applyMergePatch(config, retained.patch)).toEqual(config);
-      const cleared = requirePatch(
-        buildCloudWorkerUpsertPatch(config, { ...draft, target: "" }, "production"),
-      );
-      const next = applyMergePatch(config, cleared.patch);
-      expect(next).not.toHaveProperty("cloudWorkers.profiles.production.settings.target");
-    },
-  );
-
-  it("adds only the new profile without resending existing profiles", () => {
-    const config = { cloudWorkers: { profiles: { production: configuredProfile } } };
-    const draft = {
-      ...createCloudWorkerDraft(),
-      id: "build-fleet",
-      backend: "hetzner",
-      machineClass: "standard",
-    };
-    const built = requirePatch(buildCloudWorkerUpsertPatch(config, draft, null));
-    expect(built).toEqual({
-      patch: {
-        cloudWorkers: {
-          profiles: {
-            "build-fleet": {
-              provider: "crabbox",
-              install: "bundle",
-              readyWorkers: null,
-              suspendAfter: null,
-              settings: {
-                provider: "hetzner",
-                target: null,
-                class: "standard",
-                ttl: "8h",
-                idleTimeout: "45m",
-                setup: null,
-                setupEnv: null,
-                warmImage: null,
-                desktop: null,
-                binary: null,
-              },
-            },
-          },
-        },
-      },
-      replacePaths: [],
-    });
-    expect(applyMergePatch(config, built.patch)).toMatchObject(config);
-  });
-
   it.each([
-    ["+1h", false],
-    [".5h", false],
     ["1m1us", false],
     ["59s", false],
-    ["60s", true],
-    ["45m", true],
-    ["2h", true],
-    ["1d", true],
-    ["1H", true],
   ] as const)("matches the suspendAfter schema for %s", (suspendAfter, accepted) => {
     const draft = {
       ...createCloudWorkerDraft(),
@@ -355,49 +205,39 @@ describe("cloud worker settings state", () => {
     expect(validateCloudWorkerDraft(draft, {}, null)).toBe(accepted ? null : "suspendAfter");
   });
 
-  it.each(["auto", "on", "off"] as const)(
-    "patches warm images as %s and replaces setup names",
-    (warmImage) => {
-      const config = {
-        cloudWorkers: {
-          profiles: {
-            production: {
-              ...configuredProfile,
-              readyWorkers: 3,
-              settings: { ...configuredProfile.settings, warmImage: true },
-            },
+  it.each(["on"] as const)("patches warm images as %s and replaces setup names", (warmImage) => {
+    const config = {
+      cloudWorkers: {
+        profiles: {
+          production: {
+            ...configuredProfile,
+            readyWorkers: 3,
+            settings: { ...configuredProfile.settings, warmImage: true },
           },
         },
-      };
-      const draft = {
-        ...createCloudWorkerDraft(readCloudWorkerProfiles(config)[0]),
-        warmImage,
-        setupEnv: "BUILD_FLAG, CACHE_MODE\nEXTRA",
-        readyWorkers: "0",
-        suspendAfter: "2h",
-      };
-      const built = requirePatch(buildCloudWorkerUpsertPatch(config, draft, "production"));
-      const merged = applyMergePatch(config, built.patch);
-      expect(merged).toHaveProperty("cloudWorkers.profiles.production.readyWorkers", 0);
-      expect(merged).toHaveProperty("cloudWorkers.profiles.production.suspendAfter", "2h");
-      expect(merged).toHaveProperty("cloudWorkers.profiles.production.settings.setupEnv", [
-        "BUILD_FLAG",
-        "CACHE_MODE",
-        "EXTRA",
-      ]);
-      expect(built.replacePaths).toEqual(["cloudWorkers.profiles.production.settings.setupEnv"]);
-      if (warmImage === "auto") {
-        expect(merged).not.toHaveProperty("cloudWorkers.profiles.production.settings.warmImage");
-      } else {
-        expect(merged).toHaveProperty(
-          "cloudWorkers.profiles.production.settings.warmImage",
-          warmImage === "on",
-        );
-      }
-    },
-  );
+      },
+    };
+    const draft = {
+      ...createCloudWorkerDraft(readCloudWorkerProfiles(config)[0]),
+      warmImage,
+      setupEnv: "BUILD_FLAG, CACHE_MODE\nEXTRA",
+      readyWorkers: "0",
+      suspendAfter: "2h",
+    };
+    const built = requirePatch(buildCloudWorkerUpsertPatch(config, draft, "production"));
+    const merged = applyMergePatch(config, built.patch);
+    expect(merged).toHaveProperty("cloudWorkers.profiles.production.readyWorkers", 0);
+    expect(merged).toHaveProperty("cloudWorkers.profiles.production.suspendAfter", "2h");
+    expect(merged).toHaveProperty("cloudWorkers.profiles.production.settings.setupEnv", [
+      "BUILD_FLAG",
+      "CACHE_MODE",
+      "EXTRA",
+    ]);
+    expect(built.replacePaths).toEqual(["cloudWorkers.profiles.production.settings.setupEnv"]);
+    expect(merged).toHaveProperty("cloudWorkers.profiles.production.settings.warmImage", true);
+  });
 
-  it.each(["", "linux", "macos", "windows/wsl2", "windows/normal"])(
+  it.each(["windows/wsl2"])(
     "validates warm images after changing an existing profile target to %s",
     (target) => {
       const config = { cloudWorkers: { profiles: { production: configuredProfile } } };

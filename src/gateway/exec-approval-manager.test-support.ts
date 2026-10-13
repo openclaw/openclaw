@@ -3,11 +3,38 @@ import path from "node:path";
 import { vi, type TestContext } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import type { ExecApprovalRequestPayload } from "../infra/exec-approvals.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
 import type { ExecApprovalManagerOptions } from "./exec-approval-manager.types.js";
 import * as operatorApprovalStore from "./operator-approval-store.js";
+
+export type ApprovalClockWake = ReturnType<typeof createGatewaySchedulerClock>["wakes"][number];
+
+export function createApprovalScheduler() {
+  const clock = createGatewaySchedulerClock();
+  const scheduler = createTestGatewayScheduler({
+    ...clock.clock,
+    now: () => Date.now(),
+    arm: (run, delayMs) => {
+      clock.setTime(Date.now());
+      return clock.clock.arm(run, delayMs);
+    },
+  });
+  return { scheduler, wakes: clock.wakes };
+}
+
+type TestApprovalOptions<TPayload> = Omit<
+  ExecApprovalManagerOptions<TPayload>,
+  "persistence" | "scheduler"
+> & {
+  scheduler?: GatewayScheduler;
+};
 
 /** Vitest clocks are process-local; send controlled time through the store's existing input. */
 export function installTestApprovalClock(): (() => void) | undefined {
@@ -29,7 +56,7 @@ export function installTestApprovalClock(): (() => void) | undefined {
 /** Each manager owns a real store, including when two managers reuse an approval id. */
 export function createTestApprovalManager<TPayload = ExecApprovalRequestPayload>(
   test: TestContext,
-  options: Omit<ExecApprovalManagerOptions<TPayload>, "persistence"> = {},
+  options: TestApprovalOptions<TPayload> = {},
 ): ExecApprovalManager<TPayload> {
   return createTestApprovalFixture(test, options).manager;
 }
@@ -37,7 +64,7 @@ export function createTestApprovalManager<TPayload = ExecApprovalRequestPayload>
 /** Prepare the real worker before a request starts its approval deadline. */
 export async function createPreparedTestApprovalManager<TPayload = ExecApprovalRequestPayload>(
   test: TestContext,
-  options: Omit<ExecApprovalManagerOptions<TPayload>, "persistence"> = {},
+  options: TestApprovalOptions<TPayload> = {},
 ) {
   const fixture = createTestApprovalFixture(test, options);
   await operatorApprovalStore.listPendingOperatorApprovals({
@@ -48,7 +75,7 @@ export async function createPreparedTestApprovalManager<TPayload = ExecApprovalR
 
 export function createTestApprovalFixture<TPayload = ExecApprovalRequestPayload>(
   test: TestContext,
-  options: Omit<ExecApprovalManagerOptions<TPayload>, "persistence"> = {},
+  options: TestApprovalOptions<TPayload> = {},
 ) {
   test.signal.throwIfAborted();
   const restoreClock = installTestApprovalClock();
@@ -89,6 +116,9 @@ export function createTestApprovalFixture<TPayload = ExecApprovalRequestPayload>
     openOpenClawStateDatabase(databaseOptions);
     manager = new ExecApprovalManager<TPayload>({
       ...options,
+      scheduler:
+        options.scheduler ??
+        createTestGatewayScheduler(vi.isFakeTimers() ? "fake-timers" : undefined),
       persistence: { runtimeEpoch: randomUUID(), databaseOptions },
     });
     return {

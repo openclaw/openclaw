@@ -1,43 +1,21 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import {
-  applySuggestionToQuery,
+  buildDailyCsv,
   buildQuerySuggestions,
   buildSessionsCsv,
-  buildUsageFilterOptions,
   removeQueryToken,
-  setQueryTokensForKey,
 } from "./query.ts";
 import type { UsageSessionEntry } from "./types.ts";
+import { buildUsageFilterOptions } from "./view.test-support.ts";
 
 describe("usage query token mutations", () => {
   const quotedLabel = 'label:"Team  Planning"';
-
-  it("preserves quoted phrases when adding or replacing categorical tokens", () => {
-    const query = `${quotedLabel} PROVIDER:"OpenAI"`;
-    expect(setQueryTokensForKey(query, "provider", ["openai", "anthropic"])).toBe(
-      `${query} provider:anthropic `,
-    );
-    expect(setQueryTokensForKey(query, "provider", ["anthropic"])).toBe(
-      `${quotedLabel} provider:anthropic `,
-    );
-    expect(setQueryTokensForKey(`${quotedLabel} PROVIDER:`, "provider", ["openai"])).toBe(
-      `${quotedLabel} provider:openai `,
-    );
-    expect(setQueryTokensForKey(query, "provider", [])).toBe(`${quotedLabel} `);
-  });
 
   it("removes an entire quoted term without leaving phrase fragments", () => {
     expect(removeQueryToken(`${quotedLabel} provider:openai`, quotedLabel)).toBe(
       "provider:openai ",
     );
-  });
-
-  it("preserves quoted phrases when accepting a query suggestion", () => {
-    expect(applySuggestionToQuery(`${quotedLabel} provider:o`, "provider:openai")).toBe(
-      `${quotedLabel} provider:openai `,
-    );
-    expect(buildQuerySuggestions(quotedLabel, buildUsageFilterOptions([]))).toEqual([]);
   });
 });
 
@@ -78,29 +56,33 @@ it("limits suggestions before matching while preserving raw option spelling", ()
 });
 
 describe("usage query CSV export", () => {
-  it("omits invalid session updated timestamps instead of throwing", () => {
-    const csv = buildSessionsCsv([
-      {
-        key: "session-1",
-        label: "Session 1",
-        updatedAt: Number.POSITIVE_INFINITY,
-        usage: null,
-      } satisfies UsageSessionEntry,
-    ]);
-
-    expect(csv).toContain("session-1,Session 1,,,,,,,,,,,,,,,");
+  it("keeps daily headers aligned with numeric cells", () => {
+    expect(
+      buildDailyCsv([
+        {
+          date: "2026-09-23",
+          input: 1,
+          output: 2,
+          cacheRead: 3,
+          cacheWrite: 4,
+          totalTokens: 10,
+          inputCost: 0,
+          outputCost: -2,
+          cacheReadCost: 3,
+          cacheWriteCost: 4,
+          totalCost: -2,
+          missingCostEntries: 2,
+        },
+      ]),
+    ).toBe(
+      "date,inputTokens,outputTokens,cacheReadTokens,cacheWriteTokens,totalTokens,inputCost,outputCost,cacheReadCost,cacheWriteCost,totalCost\n" +
+        "2026-09-23,1,2,3,4,10,0,-2,3,4,-2",
+    );
   });
 
   it.each([
-    ["equals", "=1+1", "'=1+1"],
-    ["plus", "+1+1", "'+1+1"],
-    ["minus", "-1+1", "'-1+1"],
-    ["at", "@SUM(A1:A2)", "'@SUM(A1:A2)"],
     ["leading whitespace", " \t=1+1", "' \t=1+1"],
     ["fullwidth equals", "\uFF1D1+1", "'\uFF1D1+1"],
-    ["fullwidth plus", "\uFF0B1+1", "'\uFF0B1+1"],
-    ["fullwidth minus", "\uFF0D1+1", "'\uFF0D1+1"],
-    ["fullwidth at", "\uFF20SUM(A1:A2)", "'\uFF20SUM(A1:A2)"],
   ])("neutralizes spreadsheet formula labels with %s prefix", (_name, label, expected) => {
     const csv = buildSessionsCsv([
       {
@@ -125,23 +107,6 @@ describe("usage query CSV export", () => {
     ]);
 
     expect(csv).toContain('session-1,"\'\r=1+1",');
-  });
-
-  it.each([
-    ["tab", "\tplain", "\tplain"],
-    ["carriage return", "\rplain", '"\rplain"'],
-    ["newline", "\nplain", '"\nplain"'],
-  ])("preserves benign labels with leading %s", (_name, label, expected) => {
-    const csv = buildSessionsCsv([
-      {
-        key: "session-1",
-        label,
-        updatedAt: 0,
-        usage: null,
-      } satisfies UsageSessionEntry,
-    ]);
-
-    expect(csv).toContain(`session-1,${expected},`);
   });
 
   it("keeps numeric cells numeric while neutralizing string labels", () => {

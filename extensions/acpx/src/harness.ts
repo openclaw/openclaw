@@ -1,5 +1,6 @@
 import { inspectAgentModels } from "acpx/runtime";
 import type { AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createNativeSessionCommitFinalizer } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import { finiteSecondsToTimerSafeMilliseconds } from "openclaw/plugin-sdk/number-runtime";
 import type { OpenClawPluginApi, OpenClawPluginServiceContext } from "../runtime-api.js";
 import { resolveAcpxPluginConfig } from "./config.js";
@@ -165,9 +166,7 @@ export function createAcpAgentHarness(params: {
               : (finiteSecondsToTimerSafeMilliseconds(config.timeoutSeconds) ?? 1),
         });
         generation.signal.throwIfAborted();
-        if (!params.isEnabled()) {
-          return { entries: [] };
-        }
+        // A settings change takes effect on the next catalog request.
         return {
           entries: (models?.availableModels ?? []).map((model) => ({
             provider: id,
@@ -179,9 +178,6 @@ export function createAcpAgentHarness(params: {
         };
       } catch (error) {
         generation.signal.throwIfAborted();
-        if (!params.isEnabled()) {
-          return { entries: [] };
-        }
         // ACP SDK RequestError.authRequired reserves this code/message pair;
         // a generic JSON-RPC server error with the same code is not an auth rejection.
         const authRequired =
@@ -238,14 +234,15 @@ export function createAcpAgentHarness(params: {
     async withSessionDeletion(input, run) {
       let committed = false;
       try {
-        return await run({
+        const mutation = {
           commit: () => {
             committed = true;
           },
           rollback: () => {
             committed = false;
           },
-        });
+        };
+        return await run(createNativeSessionCommitFinalizer(mutation));
       } finally {
         if (committed) {
           await retire(input, input.assertCurrent);

@@ -1,55 +1,21 @@
 /** Locked auth profile writes and attempt-scoped compensation. */
 import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { AUTH_STORE_VERSION } from "./constants.js";
 import { normalizeAuthProfileCredential } from "./credential-normalize.js";
 import { withOAuthProfileLock, withOAuthProfileLocks } from "./oauth-profile-lock.js";
 import { isOAuthRefreshFence, isSameOAuthRefreshGeneration } from "./oauth-refresh-marker.js";
-import {
-  loadPersistedAuthProfileStore,
-  loadPersistedAuthProfileStoreAtDatabasePath,
-  loadPersistedSharedAuthProfileStore,
-} from "./persisted.js";
-import {
-  deletePersistedAuthProfileStoreRaw,
-  inspectPersistedAuthProfileStateRaw,
-  inspectPersistedAuthProfileStoreRaw,
-  runAuthProfileWriteTransaction,
-  writePersistedAuthProfileStateRaw,
-} from "./sqlite.js";
-import { buildPersistedAuthProfileState } from "./state.js";
-import {
-  saveAuthProfileStoreWithPreparedOwner,
-  updateAuthProfileStoreWithLock,
-} from "./store-runtime.js";
-import { findPersistedAuthProfileCredential } from "./store.js";
-import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
+import { loadPersistedAuthProfileStore, loadPersistedSharedAuthProfileStore } from "./persisted.js";
+import { updateAuthProfileStoreWithLock } from "./store-runtime.js";
+import { publishAuthProfileStoreUpdate } from "./store-update-publication.js";
+import { runAuthProfileStoreUpdate } from "./store-update.js";
+import { findPersistedAuthProfileCredential, getScopedAuthProfileEnv } from "./store.js";
+import type {
+  AuthProfileCredential,
+  AuthProfileStore,
+  OAuthCredential,
+  PreparedAuthProfileStoreOwner,
+} from "./types.js";
 import { resetAuthProfileFailureState } from "./usage-state.js";
-
-function throwAuthProfileUpdateError(): never {
-  throw new Error(
-    "Failed to update auth profile store; the auth store lock may be busy. Wait a moment and retry.",
-  );
-}
-
-function restoresFencedOAuthRefreshGeneration(params: {
-  profileId: string;
-  existing: AuthProfileCredential | undefined;
-  incoming: AuthProfileCredential;
-}): boolean {
-  return (
-    params.existing?.type === "oauth" &&
-    params.incoming.type === "oauth" &&
-    params.incoming.copyToAgents !== true &&
-    !isOAuthRefreshFence(params.incoming) &&
-    isOAuthRefreshFence(params.existing) &&
-    isSameOAuthRefreshGeneration({
-      profileId: params.profileId,
-      left: params.existing,
-      right: params.incoming,
-    })
-  );
-}
 
 function loadAuthProfileWriteTarget(params: {
   agentDir?: string;
@@ -66,77 +32,107 @@ function loadAuthProfileWriteTarget(params: {
 }
 
 function resolveAuthProfileWriteEnv(params: { stateDir?: string }): NodeJS.ProcessEnv {
-  return params.stateDir ? { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } : process.env;
+  return params.stateDir
+    ? { ...process.env, OPENCLAW_STATE_DIR: params.stateDir }
+    : (getScopedAuthProfileEnv() ?? process.env);
 }
 
-function loadAuthProfileWriteAuthority(
+function loadAuthProfileWriteAuthorities(
   params: { agentDir?: string; stateDir?: string },
-  profileId: string,
-): AuthProfileCredential | undefined {
-  const target = loadAuthProfileWriteTarget(params)?.profiles[profileId];
-  if (target || !params.agentDir) {
-    return target;
+  profileIds: readonly string[],
+): ReadonlyMap<string, AuthProfileCredential | undefined> {
+  if (profileIds.length === 0) {
+    return new Map();
   }
-  if (params.stateDir) {
-    return loadPersistedSharedAuthProfileStore({
-      ...process.env,
-      OPENCLAW_STATE_DIR: params.stateDir,
-      OPENCLAW_AGENT_DIR: undefined,
-    })?.profiles[profileId];
+  const target = loadAuthProfileWriteTarget(params);
+  const missingIds = profileIds.filter((profileId) => !target?.profiles[profileId]);
+  let inherited: ReadonlyMap<string, AuthProfileCredential | undefined> | undefined;
+  if (params.agentDir && missingIds.length > 0) {
+    if (params.stateDir) {
+      const shared = loadAuthProfileWriteTarget({ stateDir: params.stateDir });
+      inherited = new Map(missingIds.map((profileId) => [profileId, shared?.profiles[profileId]]));
+    } else {
+      inherited = new Map(
+        missingIds.map((profileId) => [
+          profileId,
+          findPersistedAuthProfileCredential({ agentDir: params.agentDir, profileId }),
+        ]),
+      );
+    }
   }
-  return findPersistedAuthProfileCredential({ agentDir: params.agentDir, profileId });
+  return new Map(
+    profileIds.map((profileId) => [
+      profileId,
+      target?.profiles[profileId] ?? inherited?.get(profileId),
+    ]),
+  );
 }
 
-function supersedesOAuthRefreshGenerationObservedAtAdmission(params: {
+function needsOAuthRefreshAuthority(
+  credential: AuthProfileCredential,
+): credential is OAuthCredential {
+  return (
+    credential.type === "oauth" &&
+    credential.copyToAgents !== true &&
+    !isOAuthRefreshFence(credential)
+  );
+}
+
+function rejectsOAuthRefreshGenerationReplacement(params: {
   profileId: string;
   observed: AuthProfileCredential | undefined;
   current: AuthProfileCredential | undefined;
+  local: AuthProfileCredential | undefined;
   incoming: AuthProfileCredential;
   allowOAuthGenerationReplacement: boolean;
 }): boolean {
-  if (
-    params.incoming.type !== "oauth" ||
-    params.incoming.copyToAgents === true ||
-    isOAuthRefreshFence(params.incoming)
-  ) {
+  if (!needsOAuthRefreshAuthority(params.incoming)) {
     return false;
   }
+  let supersedes: boolean;
   if (isDeepStrictEqual(params.current, params.observed)) {
-    if (
-      params.allowOAuthGenerationReplacement ||
-      params.current === undefined ||
-      (params.current.type === "oauth" && isOAuthRefreshFence(params.current))
-    ) {
-      return false;
-    }
-    return (
-      params.current.type !== "oauth" ||
-      !isSameOAuthRefreshGeneration({
+    supersedes =
+      !params.allowOAuthGenerationReplacement &&
+      params.current !== undefined &&
+      !(params.current.type === "oauth" && isOAuthRefreshFence(params.current)) &&
+      (params.current.type !== "oauth" ||
+        !isSameOAuthRefreshGeneration({
+          profileId: params.profileId,
+          left: params.current,
+          right: params.incoming,
+        }));
+  } else if (params.observed === undefined) {
+    supersedes = params.current !== undefined;
+  } else {
+    supersedes =
+      !params.allowOAuthGenerationReplacement ||
+      params.observed.type !== "oauth" ||
+      isSameOAuthRefreshGeneration({
         profileId: params.profileId,
-        left: params.current,
+        left: params.observed,
         right: params.incoming,
-      })
-    );
-  }
-  if (params.observed === undefined) {
-    return params.current !== undefined;
-  }
-  if (!params.allowOAuthGenerationReplacement) {
-    return true;
+      });
   }
   return (
-    params.observed.type !== "oauth" ||
-    isSameOAuthRefreshGeneration({
-      profileId: params.profileId,
-      left: params.observed,
-      right: params.incoming,
-    })
+    supersedes ||
+    (params.local?.type === "oauth" &&
+      isOAuthRefreshFence(params.local) &&
+      isSameOAuthRefreshGeneration({
+        profileId: params.profileId,
+        left: params.local,
+        right: params.incoming,
+      }))
   );
 }
 
 type PersistAuthProfileBatchParams = {
   /** Revalidate the calling operation after lock acquisition, at the write boundary. */
   beforeWrite?: () => void;
+  /** Revalidate a targeted profile identity under the same transaction as the write. */
+  validateCurrentCredential?: (
+    profileId: string,
+    credential: AuthProfileCredential | undefined,
+  ) => void;
   profiles: readonly {
     profileId: string;
     credential: AuthProfileCredential;
@@ -156,7 +152,7 @@ type AuthProfileBatchRollbackResult = {
 /** Atomically persists a batch and returns conditional attempt-scoped compensation. */
 export async function persistAuthProfileBatch(
   params: PersistAuthProfileBatchParams,
-): Promise<{ rollback: () => AuthProfileBatchRollbackResult }> {
+): Promise<{ rollback: () => Promise<AuthProfileBatchRollbackResult> }> {
   const profiles = new Map(
     params.profiles.map(({ profileId, credential, replaceExisting }) => [
       profileId,
@@ -168,58 +164,50 @@ export async function persistAuthProfileBatch(
   );
   if (profiles.size === 0) {
     const result = { unrevertedProfileIds: new Set<string>() };
-    return { rollback: () => result };
+    return { rollback: async () => result };
   }
-  const observedProfiles = new Map(
-    [...profiles.keys()].map((profileId) => [
-      profileId,
-      loadAuthProfileWriteAuthority(params, profileId),
-    ]),
-  );
+  const authorityProfileIds = [...profiles.entries()]
+    .filter(([, entry]) => needsOAuthRefreshAuthority(entry.credential))
+    .map(([profileId]) => profileId);
+  const readAuthorities = () => loadAuthProfileWriteAuthorities(params, authorityProfileIds);
+  // Capture before yielding so a queued batch cannot restore an OAuth generation consumed while waiting.
+  const observedProfiles = readAuthorities();
 
   return await withOAuthProfileLocks(
     [...profiles.entries()].flatMap(([profileId, entry]) =>
       entry.credential.type === "oauth" ? [{ profileId, provider: entry.credential.provider }] : [],
     ),
     async () => {
-      const currentAuthorities = new Map(
-        [...profiles.keys()].map((profileId) => [
-          profileId,
-          loadAuthProfileWriteAuthority(params, profileId),
-        ]),
-      );
       const previousProfiles = new Map<string, AuthProfileCredential | undefined>();
       const previousOrder = new Map<string, readonly string[] | undefined>();
       const appliedProfiles = new Map<string, AuthProfileCredential>();
       let storeWasAbsent = false;
-      let stateWasAbsent = false;
-      const preparedOwner = runAuthProfileWriteTransaction(
-        params.agentDir,
-        (database, owner) => {
+      let preparedOwner: PreparedAuthProfileStoreOwner | undefined;
+      await runAuthProfileStoreUpdate({
+        agentDir: params.agentDir,
+        envOnly: false,
+        options: {
+          sharedStoreWrite: true,
+          stateDir: params.stateDir,
+          env: params.stateDir ? undefined : getScopedAuthProfileEnv(),
+        },
+        update(prepared) {
           params.beforeWrite?.();
-          storeWasAbsent =
-            inspectPersistedAuthProfileStoreRaw(params.agentDir, database).status === "missing";
-          stateWasAbsent =
-            inspectPersistedAuthProfileStateRaw(params.agentDir, database).status === "missing";
-          const next =
-            loadPersistedAuthProfileStore(params.agentDir, { database }) ??
-            ({ version: AUTH_STORE_VERSION, profiles: {} } satisfies AuthProfileStore);
+          storeWasAbsent = !prepared.storePresent;
+          const next = prepared.store;
           for (const [profileId, entry] of profiles) {
+            params.validateCurrentCredential?.(profileId, next.profiles[profileId]);
             if (!entry.replaceExisting && Object.hasOwn(next.profiles, profileId)) {
               continue;
             }
             if (
-              supersedesOAuthRefreshGenerationObservedAtAdmission({
+              rejectsOAuthRefreshGenerationReplacement({
                 profileId,
                 observed: observedProfiles.get(profileId),
-                current: currentAuthorities.get(profileId),
+                current: next.profiles[profileId] ?? prepared.mainStore?.profiles[profileId],
+                local: next.profiles[profileId],
                 incoming: entry.credential,
                 allowOAuthGenerationReplacement: params.allowOAuthGenerationReplacement === true,
-              }) ||
-              restoresFencedOAuthRefreshGeneration({
-                profileId,
-                existing: next.profiles[profileId],
-                incoming: entry.credential,
               })
             ) {
               throw new Error(
@@ -244,98 +232,122 @@ export async function persistAuthProfileBatch(
               next.order = { ...next.order, [provider]: [...existing, ...additions] };
             }
           }
-          if (appliedProfiles.size > 0) {
-            saveAuthProfileStoreWithPreparedOwner(
-              next,
-              params.agentDir,
-              { filterExternalAuthProfiles: false, syncExternalCli: false },
-              database,
+          if (appliedProfiles.size === 0) {
+            return { save: false };
+          }
+          return {
+            save: true,
+            store: next,
+            externalProfiles: [],
+            options: { filterExternalAuthProfiles: false, syncExternalCli: false },
+          };
+        },
+        async publish(committed, owner, assertCurrent, nativeCommits, committedIsCurrent) {
+          preparedOwner = owner;
+          if (committed) {
+            await publishAuthProfileStoreUpdate(
               owner,
+              committed,
+              assertCurrent,
+              nativeCommits,
+              committedIsCurrent,
             );
           }
-          return owner;
         },
-        { sharedStoreWrite: true, stateDir: params.stateDir },
-      );
+      });
 
-      let rollbackResult: AuthProfileBatchRollbackResult | undefined;
+      let rollbackResult: Promise<AuthProfileBatchRollbackResult> | undefined;
       return {
-        rollback: () => {
+        rollback: async () => {
           if (rollbackResult) {
             return rollbackResult;
           }
-          const unrevertedProfileIds = new Set<string>();
-          runAuthProfileWriteTransaction(
-            params.agentDir,
-            (database, owner) => {
-              if (database.path !== preparedOwner.databasePath) {
-                throw new Error("auth profile batch rollback belongs to another owner");
-              }
-              const current = loadPersistedAuthProfileStore(params.agentDir, { database });
-              if (!current) {
-                return;
-              }
-              const ownedProfiles = new Set<string>();
-              for (const [profileId, credential] of appliedProfiles) {
-                if (!isDeepStrictEqual(current.profiles[profileId], credential)) {
-                  unrevertedProfileIds.add(profileId);
-                  continue;
+          if (appliedProfiles.size === 0) {
+            return { unrevertedProfileIds: new Set<string>() };
+          }
+          rollbackResult = (async () => {
+            const unrevertedProfileIds = new Set<string>();
+            await runAuthProfileStoreUpdate({
+              agentDir: params.agentDir,
+              envOnly: false,
+              options: { sharedStoreWrite: true, env: preparedOwner?.env },
+              update(prepared, owner) {
+                if (owner.databasePath !== preparedOwner?.databasePath) {
+                  throw new Error("auth profile batch rollback belongs to another owner");
                 }
-                const previous = previousProfiles.get(profileId);
-                // Nonportable OAuth generations can be consumed after this batch
-                // commits. A delayed rollback must never make one replayable.
-                if (previous?.type === "oauth" && previous.copyToAgents !== true) {
-                  unrevertedProfileIds.add(profileId);
-                  continue;
+                if (!prepared.storePresent) {
+                  return { save: false };
                 }
-                ownedProfiles.add(profileId);
-                if (previous) {
-                  current.profiles[profileId] = previous;
-                } else {
-                  delete current.profiles[profileId];
-                }
-              }
-              for (const [provider, profileIds] of Object.entries(params.order ?? {})) {
-                const existing = current.order?.[provider];
-                if (!existing) {
-                  continue;
-                }
-                const preexisting = new Set(previousOrder.get(provider) ?? []);
-                const introduced = new Set(
-                  profileIds.filter((profileId) => !preexisting.has(profileId)),
-                );
-                const remaining = existing.filter(
-                  (profileId) => !introduced.has(profileId) || !ownedProfiles.has(profileId),
-                );
-                if (remaining.length === existing.length) {
-                  continue;
-                }
-                if (remaining.length > 0) {
-                  current.order = { ...current.order, [provider]: remaining };
-                } else if (current.order) {
-                  delete current.order[provider];
-                  if (Object.keys(current.order).length === 0) {
-                    delete current.order;
+                const current = prepared.store;
+                const ownedProfiles = new Set<string>();
+                for (const [profileId, credential] of appliedProfiles) {
+                  if (!isDeepStrictEqual(current.profiles[profileId], credential)) {
+                    unrevertedProfileIds.add(profileId);
+                    continue;
+                  }
+                  const previous = previousProfiles.get(profileId);
+                  // Nonportable OAuth generations can be consumed after this batch
+                  // commits. A delayed rollback must never make one replayable.
+                  if (previous?.type === "oauth" && previous.copyToAgents !== true) {
+                    unrevertedProfileIds.add(profileId);
+                    continue;
+                  }
+                  ownedProfiles.add(profileId);
+                  if (previous) {
+                    current.profiles[profileId] = previous;
+                  } else {
+                    delete current.profiles[profileId];
                   }
                 }
-              }
-              saveAuthProfileStoreWithPreparedOwner(
-                current,
-                params.agentDir,
-                { filterExternalAuthProfiles: false, syncExternalCli: false },
-                database,
-                owner,
-              );
-              if (storeWasAbsent && Object.keys(current.profiles).length === 0) {
-                deletePersistedAuthProfileStoreRaw(params.agentDir, database);
-              }
-              if (stateWasAbsent && buildPersistedAuthProfileState(current) === null) {
-                writePersistedAuthProfileStateRaw(null, params.agentDir, database);
-              }
-            },
-            { sharedStoreWrite: true, env: preparedOwner.env },
-          );
-          rollbackResult = { unrevertedProfileIds };
+                for (const [provider, profileIds] of Object.entries(params.order ?? {})) {
+                  const existing = current.order?.[provider];
+                  if (!existing) {
+                    continue;
+                  }
+                  const preexisting = new Set(previousOrder.get(provider) ?? []);
+                  const introduced = new Set(
+                    profileIds.filter((profileId) => !preexisting.has(profileId)),
+                  );
+                  const remaining = existing.filter(
+                    (profileId) => !introduced.has(profileId) || !ownedProfiles.has(profileId),
+                  );
+                  if (remaining.length === existing.length) {
+                    continue;
+                  }
+                  if (remaining.length > 0) {
+                    current.order = { ...current.order, [provider]: remaining };
+                  } else if (current.order) {
+                    delete current.order[provider];
+                    if (Object.keys(current.order).length === 0) {
+                      delete current.order;
+                    }
+                  }
+                }
+                return {
+                  save: true,
+                  store: current,
+                  deleteEmptyStore: storeWasAbsent,
+                  externalProfiles: [],
+                  options: { filterExternalAuthProfiles: false, syncExternalCli: false },
+                };
+              },
+              async publish(committed, owner, assertCurrent, nativeCommits, committedIsCurrent) {
+                if (committed) {
+                  await publishAuthProfileStoreUpdate(
+                    owner,
+                    committed,
+                    assertCurrent,
+                    nativeCommits,
+                    committedIsCurrent,
+                  );
+                }
+              },
+            });
+            return { unrevertedProfileIds };
+          })().catch((error: unknown) => {
+            rollbackResult = undefined;
+            throw error;
+          });
           return rollbackResult;
         },
       };
@@ -347,7 +359,9 @@ export async function persistAuthProfileBatch(
 type AuthProfileUpsertParams = {
   profileId: string;
   validateCurrentCredential?: (credential: AuthProfileCredential | undefined) => void;
+  assertCurrent?: () => void;
   preserveApiKeyMetadata?: boolean;
+  resetFailureState?: boolean;
   credential: AuthProfileCredential;
   agentDir?: string;
   stateDir?: string;
@@ -358,40 +372,36 @@ export async function upsertAuthProfileWithLock(
   params: AuthProfileUpsertParams,
 ): Promise<AuthProfileStore | null> {
   const credential = normalizeAuthProfileCredential(params.credential);
-  const observed = loadAuthProfileWriteAuthority(params, params.profileId);
+  const observed = needsOAuthRefreshAuthority(credential)
+    ? loadAuthProfileWriteAuthorities(params, [params.profileId]).get(params.profileId)
+    : undefined;
   let rejectedFencedGeneration = false;
   const update = async () => {
     return await updateAuthProfileStoreWithLock({
       agentDir: params.agentDir,
       sharedStoreWrite: true,
       stateDir: params.stateDir,
+      assertCurrent: params.assertCurrent,
       saveOptions: {
         filterExternalAuthProfiles: false,
         syncExternalCli: false,
       },
-      updater: (store, owner) => {
+      updater: (store, owner, sharedStore) => {
         const currentAuthority =
           store.profiles[params.profileId] ??
           (owner && owner.databasePath !== owner.sharedDatabasePath
-            ? loadPersistedAuthProfileStoreAtDatabasePath(
-                owner.sharedDatabasePath,
-                owner.location === "state-db" ? "shared-state" : "agent",
-              )?.profiles[params.profileId]
+            ? sharedStore?.profiles[params.profileId]
             : undefined);
         // Consumers can reject a changed profile kind under the same lock as the write.
         params.validateCurrentCredential?.(store.profiles[params.profileId]);
         if (
-          supersedesOAuthRefreshGenerationObservedAtAdmission({
+          rejectsOAuthRefreshGenerationReplacement({
             profileId: params.profileId,
             observed,
             current: currentAuthority,
+            local: store.profiles[params.profileId],
             incoming: credential,
             allowOAuthGenerationReplacement: false,
-          }) ||
-          restoresFencedOAuthRefreshGeneration({
-            profileId: params.profileId,
-            existing: store.profiles[params.profileId],
-            incoming: credential,
           })
         ) {
           rejectedFencedGeneration = true;
@@ -408,6 +418,10 @@ export async function upsertAuthProfileWithLock(
           store.profiles[params.profileId] = { ...metadata, ...credential };
         } else {
           store.profiles[params.profileId] = credential;
+        }
+        const existingStats = store.usageStats?.[params.profileId];
+        if (params.resetFailureState && store.usageStats && existingStats) {
+          store.usageStats[params.profileId] = resetAuthProfileFailureState(existingStats);
         }
         return true;
       },
@@ -430,6 +444,8 @@ export async function upsertAuthProfileWithLockOrThrow(
 ): Promise<void> {
   const updated = await upsertAuthProfileWithLock(params);
   if (!updated) {
-    throwAuthProfileUpdateError();
+    throw new Error(
+      "Failed to update auth profile store; the auth store lock may be busy. Wait a moment and retry.",
+    );
   }
 }

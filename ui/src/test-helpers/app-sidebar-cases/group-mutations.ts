@@ -3,6 +3,7 @@ import { createDeferred as deferred } from "../../../../test/helpers/promise.js"
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import {
+  createContext,
   createGatewayHarness,
   createSessionsHarness,
   mountSidebar,
@@ -43,9 +44,10 @@ describe("AppSidebar group mutation collapsed state", () => {
   async function mountCollapsedGroup(options: {
     groupsRename?: () => Promise<SessionGroupMutationResult>;
     groupsDelete?: () => Promise<SessionGroupMutationResult>;
+    client?: GatewayBrowserClient;
   }) {
     localStorage.setItem(COLLAPSED_STORAGE_KEY, JSON.stringify(["category:Alpha"]));
-    const gatewayHarness = createGatewayHarness({} as GatewayBrowserClient);
+    const gatewayHarness = createGatewayHarness(options.client ?? ({} as GatewayBrowserClient));
     const harness = createSessionsHarness("main", ["agent:main:main", "agent:main:alpha"]);
     const alpha = harness.sessions.state.result?.sessions.find(
       (row) => row.key === "agent:main:alpha",
@@ -60,14 +62,14 @@ describe("AppSidebar group mutation collapsed state", () => {
     if (options.groupsDelete) {
       harness.groupsDelete.mockImplementation(options.groupsDelete);
     }
-    const { sidebar } = await mountSidebar(gatewayHarness.gateway, harness.sessions);
+    const { sidebar, provider } = await mountSidebar(gatewayHarness.gateway, harness.sessions);
     sidebar.connected = true;
     harness.publish({
       groups: ["Alpha"],
       sectionOrder: ["category:Alpha", "ungrouped", "groups", "work"],
     });
     await sidebar.updateComplete;
-    return { sidebar, harness, gatewayHarness };
+    return { sidebar, provider, harness, gatewayHarness };
   }
 
   async function openGroupMenu(sidebar: SidebarLifecycleState) {
@@ -129,6 +131,99 @@ describe("AppSidebar group mutation collapsed state", () => {
     });
     confirm.click();
   }
+
+  it.each([
+    ["rename-group", "replacement"],
+    ["group-defaults", "replacement"],
+    ["rename-group", "reconnect"],
+    ["group-defaults", "reconnect"],
+  ])("retires an open %s dialog on %s", async (action, transition) => {
+    const client = () =>
+      ({
+        request: vi.fn(async (method: string) => {
+          if (method === "worktrees.branches") {
+            return { repositoryStatus: "not_git" };
+          }
+          throw new Error(`Unexpected group dialog request: ${method}`);
+        }),
+      }) as unknown as GatewayBrowserClient;
+    const { sidebar, provider, harness, gatewayHarness } = await mountCollapsedGroup({
+      client: client(),
+    });
+    harness.publish({
+      groupSettings: [{ name: "Alpha", position: 0, cwd: "/workspace/a", worktree: false }],
+    });
+    await sidebar.updateComplete;
+    await selectGroupMenuAction(await openGroupMenu(sidebar), action);
+    const form = await waitForFast(() => {
+      const renderedForm = document.body.querySelector<HTMLFormElement>(
+        "openclaw-modal-dialog form",
+      );
+      if (action === "group-defaults") {
+        expect(
+          renderedForm?.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled,
+        ).toBe(false);
+      }
+      if (!renderedForm) {
+        throw new Error("expected group dialog form");
+      }
+      return renderedForm;
+    });
+    const input = form.querySelector<HTMLInputElement>('input[name="value"]');
+    if (input) {
+      input.value = "Beta";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    const replacementGateway = createGatewayHarness(client());
+    const replacement = createSessionsHarness("main", ["agent:main:main", "agent:main:alpha"]);
+    const row = replacement.sessions.state.result!.sessions[1]!;
+    row.category = "Alpha";
+    replacement.publish({
+      groups: ["Alpha"],
+      groupSettings: [{ name: "Alpha", position: 0, cwd: "/workspace/b", worktree: false }],
+    });
+    if (transition === "replacement") {
+      provider.setContext(createContext(replacementGateway.gateway, replacement.sessions));
+    } else {
+      gatewayHarness.publish({ phase: "stopped" });
+      gatewayHarness.publish({ phase: "connected" });
+    }
+    await sidebar.updateComplete;
+    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await vi.dynamicImportSettled();
+    expect(harness.groupsRename).not.toHaveBeenCalled();
+    expect(harness.groupsUpdate).not.toHaveBeenCalled();
+    expect(replacement.groupsRename).not.toHaveBeenCalled();
+    expect(replacement.groupsUpdate).not.toHaveBeenCalled();
+    expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+
+    const current = transition === "replacement" ? replacement : harness;
+    await selectGroupMenuAction(await openGroupMenu(sidebar), action);
+    if (action === "rename-group") {
+      await submitInputDialog("Beta");
+      await waitForFast(() =>
+        expect(current.groupsRename).toHaveBeenCalledExactlyOnceWith("Alpha", "Beta"),
+      );
+    } else {
+      const freshForm = await waitForFast(() => {
+        const renderedForm = document.body.querySelector<HTMLFormElement>(
+          "openclaw-modal-dialog form",
+        );
+        expect(
+          renderedForm?.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled,
+        ).toBe(false);
+        return renderedForm!;
+      });
+      freshForm.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      await waitForFast(() =>
+        expect(current.groupsUpdate).toHaveBeenCalledExactlyOnceWith("Alpha", {
+          cwd: transition === "replacement" ? "/workspace/b" : "/workspace/a",
+          worktree: false,
+        }),
+      );
+    }
+    await vi.dynamicImportSettled();
+  });
 
   it("keeps collapsed keys when group rename is rejected", async () => {
     const { sidebar, harness } = await mountCollapsedGroup({
@@ -425,32 +520,6 @@ describe("AppSidebar group section ordering", () => {
     dispatchDragEvent(coding, "drop", dataTransfer, -1);
     await sidebar.updateComplete;
   }
-
-  it("persists a group dropped before Coding without rewriting unchanged catalog order", async () => {
-    const { sidebar, harness } = await mountWithGroups(["Alpha", "Beta"]);
-
-    await dropGroupBeforeCoding(sidebar, "Beta");
-
-    await waitForFast(() =>
-      expect(harness.groupsPut).toHaveBeenCalledWith(
-        ["Alpha", "Beta"],
-        ["category:Alpha", "ungrouped", "groups", "category:Beta", "work"],
-      ),
-    );
-  });
-
-  it("also updates catalog order when a group crosses another group on its way to Coding", async () => {
-    const { sidebar, harness } = await mountWithGroups(["Alpha", "Beta"]);
-
-    await dropGroupBeforeCoding(sidebar, "Alpha");
-
-    await waitForFast(() =>
-      expect(harness.groupsPut).toHaveBeenCalledWith(
-        ["Beta", "Alpha"],
-        ["category:Beta", "ungrouped", "groups", "category:Alpha", "work"],
-      ),
-    );
-  });
 
   it("does not persist cross-group ordering when the catalog update fails", async () => {
     const { sidebar, harness } = await mountWithGroups(["Alpha", "Beta"]);

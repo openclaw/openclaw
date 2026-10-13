@@ -2,7 +2,7 @@
  * Common trace fields copied into provider/model diagnostic events. Keeping the
  * shape small makes telemetry payloads stable across provider paths.
  */
-type AgentTraceBase = {
+export type AgentTraceBase = {
   runId?: string;
   sessionId?: string;
   sessionKey?: string;

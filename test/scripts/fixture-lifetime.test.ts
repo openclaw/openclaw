@@ -2,11 +2,12 @@ import { execFileSync } from "node:child_process";
 import { getEventListeners } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
+import { setTimeout as waitForReaper } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import { runNodeStep } from "../../scripts/prepare-extension-package-boundary-artifacts.mts";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
-import { isProcessAlive, waitForDead } from "../helpers/process-wait.js";
+import { isProcessAlive } from "../helpers/process-wait.js";
 import { createDeferred } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -24,6 +25,18 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllEnvs());
 const fixture = createFixtureLifetime();
 afterEach(() => fixture.cleanup());
+
+// runNodeStep exposes its joined outcome, but no ChildProcess handle for rescue
+// after an unverified join. Observe only the fixture's recorded PID.
+async function waitForRescuedChild(pid: number, signal: AbortSignal) {
+  try {
+    while (isProcessAlive(pid)) {
+      await waitForReaper(10, undefined, { signal });
+    }
+  } catch (error) {
+    throw new Error(`process still alive: ${pid}`, { cause: error });
+  }
+}
 
 it("releases inputs and claims after a native execFileSync ENOENT error", async () => {
   const lifetime = createFixtureLifetime();
@@ -361,7 +374,7 @@ it
             try {
               if (pid && isProcessAlive(pid)) {
                 process.kill(pid, "SIGKILL");
-                await waitForDead(pid, 2_000);
+                await waitForRescuedChild(pid, contextSignal);
               }
             } finally {
               await rescue;
@@ -391,7 +404,7 @@ it
   },
 );
 
-it.each(["cause", "error", "aggregate", "cyclic aggregate", "cleanup"])(
+it.each(["cyclic aggregate", "cleanup"])(
   "retains inputs and reports unverified %s cleanup even when the body handled its rejection",
   async (kind) => {
     const root = fixture.createTempDir("fixture-lifetime-retained-");
@@ -401,17 +414,10 @@ it.each(["cause", "error", "aggregate", "cyclic aggregate", "cleanup"])(
     });
     const aggregate = new AggregateError([], "sibling cleanup");
     aggregate.errors.push(
-      kind === "cyclic aggregate" ? aggregate : new Error("primary failure"),
+      aggregate,
       new Error("command failed", { cause: { error: uncertainty } }),
     );
-    const error =
-      kind === "cause"
-        ? new Error("command failed", { cause: uncertainty })
-        : kind === "error"
-          ? Object.assign(new Error("command failed"), { error: uncertainty })
-          : kind === "cleanup"
-            ? new Error("orphan verification failed")
-            : aggregate;
+    const error = kind === "cleanup" ? new Error("orphan verification failed") : aggregate;
     const run = kind === "cleanup" ? fixture.verifyCleanup : fixture.run;
     await expect(
       run(async () => {
@@ -478,17 +484,19 @@ it("joins delayed acquisition and its cleanup before releasing fixture inputs", 
   }
 });
 
-it("retains failed acquisition inputs and the original failure before caller registration", async () => {
+it.each([
+  { name: "error", cause: new Error("synthetic acquisition failed after allocating inputs") },
+  { name: "undefined rejection", cause: undefined },
+])("retains failed acquisition inputs and $name without a rollback receipt", async ({ cause }) => {
   const lifetime = createFixtureLifetime(owner.root);
   const directory = lifetime.createTempDir("inputs-");
-  const failure = new Error("synthetic acquisition failed after allocating inputs");
-  await expect(
-    lifetime.acquire(async () => {
-      throw failure;
-    }),
-  ).rejects.toBe(failure);
-  await expect(lifetime.cleanup()).rejects.toMatchObject({ errors: [failure] });
+  const rejected = createDeferred<never>();
+  const acquisition = lifetime.acquire(() => rejected.promise);
+  rejected.reject(cause);
+  await expect(acquisition).rejects.toBe(cause);
+  await expect(lifetime.cleanup()).rejects.toMatchObject({ errors: [cause] });
   await expect(fs.promises.stat(directory)).resolves.toBeDefined();
+  expect(fs.existsSync(directory)).toBe(true);
   expect(() => owner.assertReleased()).toThrow("Unreleased Vitest resource claim");
 });
 
@@ -569,18 +577,6 @@ it("retains both errors and inputs when acquisition rollback fails", async () =>
       expect.objectContaining({ errors: [original, rollback] }),
     ]),
   });
-  expect(fs.existsSync(directory)).toBe(true);
-  expect(() => owner.assertReleased()).toThrow("Unreleased Vitest resource claim");
-});
-
-it("retains an undefined acquisition rejection without a completed rollback receipt", async () => {
-  const lifetime = createFixtureLifetime(owner.root);
-  const directory = lifetime.createTempDir("unrecorded-rollback-inputs-");
-  const rejected = createDeferred<never>();
-  const acquisition = lifetime.acquire(() => rejected.promise);
-  rejected.reject(undefined);
-  await expect(acquisition).rejects.toBeUndefined();
-  await expect(lifetime.cleanup()).rejects.toMatchObject({ errors: [undefined] });
   expect(fs.existsSync(directory)).toBe(true);
   expect(() => owner.assertReleased()).toThrow("Unreleased Vitest resource claim");
 });

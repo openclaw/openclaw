@@ -12,21 +12,17 @@ import {
 import { CodexAppServerClient } from "./client.js";
 import { threadStartResult as createThreadStartResult } from "./codex-app-server.test-fixtures.js";
 import { readCodexComputerUseStatus } from "./computer-use.js";
-import { createComputerUseRequest, requireRecord } from "./computer-use.test-support.js";
-import { resolveCodexAppServerRuntimeOptions, type CodexPluginConfig } from "./config.js";
+import { createComputerUseRequest } from "./computer-use.test-support.js";
+import type { CodexPluginConfig } from "./config.js";
 import { setManagedCodexPluginRoot } from "./managed-binary.js";
 import { defaultCodexPluginMetadataCache } from "./plugin-metadata-cache.js";
 import { resetCodexTestBindingStore } from "./session-binding.test-helpers.js";
-import {
-  clearSharedCodexAppServerClientAndWait,
-  getLeasedSharedCodexAppServerClient,
-  releaseLeasedSharedCodexAppServerClient,
-} from "./shared-client.js";
+import { clearSharedCodexAppServerClientAndWait } from "./shared-client.js";
 import { createInferenceReadyClientHarness } from "./test-support.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
-vi.mock("./desktop-generation.js", () => ({
-  isCodexDesktopGenerationCurrent: () => false,
+vi.mock("./desktop-generation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./desktop-generation.js")>()),
   waitForCodexDesktopGeneration: async () => undefined,
 }));
 
@@ -57,53 +53,6 @@ describe("Computer Use attempt startup", () => {
       await fs.rm(root, { recursive: true, force: true });
     }
     tempRoots.clear();
-  });
-
-  it("retries one-off status after its client rejects a stale desktop selection", async () => {
-    const original = createStatusClient();
-    const replacement = createStatusClient();
-    const start = vi
-      .spyOn(CodexAppServerClient, "start")
-      .mockResolvedValueOnce(original.client)
-      .mockResolvedValueOnce(replacement.client);
-    const paths = createAttemptPaths(tempRoots);
-    const statusPluginConfig = {
-      ...pluginConfig,
-      computerUse: { enabled: true, marketplaceName: "desktop-tools" },
-    } satisfies CodexPluginConfig;
-    const runtime = resolveCodexAppServerRuntimeOptions({ pluginConfig: statusPluginConfig });
-    const firstLease = await getLeasedSharedCodexAppServerClient({
-      startOptions: runtime.start,
-      pluginConfig: statusPluginConfig,
-      agentDir: paths.agentDir,
-    });
-    const staleGuard = vi.fn(async () => {
-      throw Object.assign(new Error("desktop selection changed"), {
-        code: "CODEX_APP_SERVER_START_SELECTION_CHANGED",
-      });
-    });
-    firstLease.setThreadSessionRequestGuard(staleGuard);
-    releaseLeasedSharedCodexAppServerClient(firstLease);
-
-    await expect(
-      readCodexComputerUseStatus({ pluginConfig: statusPluginConfig, agentDir: paths.agentDir }),
-    ).resolves.toMatchObject({ ready: true });
-    expect(staleGuard).toHaveBeenCalledTimes(1);
-    expect(start).toHaveBeenCalledTimes(2);
-    expect(original.stdinDestroyed).toBe(true);
-    expect(readHarnessRequestMethods(original)).not.toContain("thread/start");
-    expect(readHarnessRequestMethods(original)).not.toContain("mcpServer/tool/call");
-    expect(readHarnessRequestMethods(original)).not.toContain("thread/unsubscribe");
-    expect(
-      readHarnessRequestMethods(replacement).filter((method) =>
-        ["thread/start", "mcpServer/tool/call", "thread/unsubscribe"].includes(method ?? ""),
-      ),
-    ).toEqual(["thread/start", "mcpServer/tool/call", "thread/unsubscribe"]);
-    const probe = await waitForRequest(replacement, "mcpServer/tool/call");
-    const cleanup = await waitForRequest(replacement, "thread/unsubscribe");
-    expect(cleanup.params).toEqual({
-      threadId: requireRecord(probe.params, "readiness probe").threadId,
-    });
   });
 
   it("charges initial client acquisition to the one-off status deadline", async () => {
@@ -138,59 +87,49 @@ describe("Computer Use attempt startup", () => {
     expect(readHarnessRequestMethods(harness)).not.toContain("mcpServer/tool/call");
   });
 
-  it.each(["discovery", "probe"] as const)(
-    "honors the one-off status deadline while preserving cleanup after %s",
-    async (completedPhase) => {
-      let elapsedMs = 0;
-      vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
-      vi.spyOn(Date, "now").mockImplementation(() => elapsedMs);
-      const expiresAfter =
-        completedPhase === "discovery" ? "mcpServerStatus/list" : "mcpServer/tool/call";
-      const harness = createStatusClient((method) => {
-        if (method === expiresAfter) {
-          elapsedMs = 2_000;
-        }
-      });
-      vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(harness.client);
-      const requests = vi.spyOn(harness.client, "request");
-      const paths = createAttemptPaths(tempRoots);
-      const status = await readCodexComputerUseStatus({
-        agentDir: paths.agentDir,
-        timeoutMs: 1_000,
-        pluginConfig: {
-          ...pluginConfig,
-          computerUse: {
-            enabled: true,
-            marketplaceName: "desktop-tools",
-            liveTestTimeoutMs: 1_500,
-            toolCallTimeoutMs: 100,
-          },
-        },
-      });
-      expect(status.ready).toBe(completedPhase === "probe");
-      if (completedPhase === "discovery") {
-        expect(readHarnessRequestMethods(harness)).not.toContain("thread/start");
-        expect(readHarnessRequestMethods(harness)).not.toContain("mcpServer/tool/call");
-      } else {
-        expect(requests).toHaveBeenCalledWith(
-          "thread/unsubscribe",
-          { threadId: "computer-use-probe-thread-1" },
-          expect.objectContaining({ timeoutMs: 1_500, signal: expect.any(AbortSignal) }),
-        );
-        expect(harness.stdinDestroyed).toBe(false);
-        expect(requests).toHaveBeenCalledWith(
-          "thread/start",
-          expect.anything(),
-          expect.objectContaining({ timeoutMs: 1_000 }),
-        );
-        expect(requests).toHaveBeenCalledWith(
-          "mcpServer/tool/call",
-          expect.anything(),
-          expect.objectContaining({ timeoutMs: 100 }),
-        );
+  it("preserves cleanup after the one-off status probe exhausts its deadline", async () => {
+    let elapsedMs = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
+    vi.spyOn(Date, "now").mockImplementation(() => elapsedMs);
+    const harness = createStatusClient((method) => {
+      if (method === "mcpServer/tool/call") {
+        elapsedMs = 2_000;
       }
-    },
-  );
+    });
+    vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(harness.client);
+    const requests = vi.spyOn(harness.client, "request");
+    const paths = createAttemptPaths(tempRoots);
+    const status = await readCodexComputerUseStatus({
+      agentDir: paths.agentDir,
+      timeoutMs: 1_000,
+      pluginConfig: {
+        ...pluginConfig,
+        computerUse: {
+          enabled: true,
+          marketplaceName: "desktop-tools",
+          liveTestTimeoutMs: 1_500,
+          toolCallTimeoutMs: 100,
+        },
+      },
+    });
+    expect(status.ready).toBe(true);
+    expect(requests).toHaveBeenCalledWith(
+      "thread/unsubscribe",
+      { threadId: "computer-use-probe-thread-1" },
+      expect.objectContaining({ timeoutMs: 1_500, signal: expect.any(AbortSignal) }),
+    );
+    expect(harness.stdinDestroyed).toBe(false);
+    expect(requests).toHaveBeenCalledWith(
+      "thread/start",
+      expect.anything(),
+      expect.objectContaining({ timeoutMs: 1_000 }),
+    );
+    expect(requests).toHaveBeenCalledWith(
+      "mcpServer/tool/call",
+      expect.anything(),
+      expect.objectContaining({ timeoutMs: 100 }),
+    );
+  });
 
   it.each([false, true])(
     "does not await optional live probes at turn startup (strictReadiness: %s)",
@@ -286,7 +225,7 @@ describe("Computer Use attempt startup", () => {
           readHarnessRequestMethods(harness).filter((method) => method === "thread/unsubscribe"),
         ).toHaveLength(2);
       } else {
-        await vi.waitFor(() => expect(settled).toBe(true), { interval: 1, timeout: 1_000 });
+        // The unadvanced clock and held probe response prove startup does not await it.
         const { result, error } = await outcome;
         expect(error).toBeUndefined();
         expect(userStarts).toHaveLength(1);

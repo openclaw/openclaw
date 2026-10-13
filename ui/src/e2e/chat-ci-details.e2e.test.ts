@@ -1,26 +1,60 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import type { Page } from "playwright";
+import { expect, it } from "vitest";
 import {
   CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
   type ControlUiSessionPullRequest,
   type ControlUiSessionPullRequestCheck,
   type ControlUiSessionPullRequestCheckDetails,
 } from "../../../src/gateway/control-ui-contract.js";
+import type { CronJob } from "../api/types.ts";
+import { ciAutomationJobSpec, type CiAutomationOption } from "../lib/session-pr-automation-spec.ts";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import {
-  installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { cronListResponseFixture } from "../test-helpers/cron.ts";
+import { openDetailsPullRequests } from "./chat-details.test-support.ts";
 import { waitForWatchedSessionKey } from "./chat-github-publication.test-support.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const DETAILS_METHOD = "controlUi.sessionPullRequests.checks";
 const headSha = "a".repeat(40);
+const automationSessionKey = "agent:main:dashboard:ci-proof";
+const automationSessionId = "ci-proof-incarnation";
+function automationInventory(jobs: CronJob[]) {
+  return cronListResponseFixture({
+    jobs,
+    total: jobs.length,
+    limit: 50,
+    offset: 0,
+    hasMore: false,
+    nextOffset: null,
+    snapshotRevision: "ci-automation-inventory",
+  });
+}
+function automationJob(option: CiAutomationOption, enabled = true): CronJob {
+  return {
+    ...ciAutomationJobSpec(
+      {
+        sessionKey: automationSessionKey,
+        sessionId: automationSessionId,
+        agentId: "main",
+        owner: "openclaw",
+        repo: "openclaw",
+        number: 123456,
+      },
+      option,
+    ),
+    id: option,
+    enabled,
+    createdAtMs: 1,
+    updatedAtMs: 1,
+    configRevision: "automation-v1",
+    state: { nextRunAtMs: Date.now() + 300_000 },
+  };
+}
 const pullRequest: ControlUiSessionPullRequest = {
   number: 123456,
   owner: "openclaw",
@@ -37,7 +71,7 @@ const pullRequest: ControlUiSessionPullRequest = {
 };
 
 function detailFixture(
-  mode: "running" | "failed" | "passed" = "running",
+  mode: "running" | "failed" = "running",
 ): ControlUiSessionPullRequestCheckDetails {
   const startedAtMs = Date.now() - (mode === "running" ? 139_000 : 142_000);
   const stamp = (seconds: number) => new Date(startedAtMs + seconds * 1000).toISOString();
@@ -57,9 +91,7 @@ function detailFixture(
     state: mode,
     source: "actions",
     status: completed ? "completed" : "in_progress",
-    ...(completed
-      ? { conclusion: mode === "failed" ? "failure" : "success", completedAt: stamp(142) }
-      : {}),
+    ...(completed ? { conclusion: "failure", completedAt: stamp(142) } : {}),
     startedAt: stamp(0),
     detailsUrl: "https://github.com/openclaw/openclaw/actions/runs/100/job/11",
     steps: steps.map(({ name, start, end }, index) => ({
@@ -127,27 +159,41 @@ function detailFixture(
   };
 }
 
-let browser: Browser;
-let server: ControlUiE2eServer;
-const contexts = new Set<BrowserContext>();
+const suite = createControlUiE2eSuite({
+  name: "chat CI job and step details",
+  trackBrowserContexts: true,
+});
 
 async function setup(
   options: {
     width?: number;
     height?: number;
-    mode?: "running" | "failed" | "passed";
+    mode?: "running" | "failed";
     defer?: boolean;
+    automationJobs?: CronJob[];
+    schedulerEnabled?: boolean;
+    readOnly?: boolean;
   } = {},
 ) {
-  const context = await browser.newContext({
+  const context = await suite.newBrowserContext({
     viewport: { width: options.width ?? 1180, height: options.height ?? 960 },
     colorScheme: "dark",
     locale: "en-US",
     serviceWorkers: "block",
   });
-  contexts.add(context);
   const page = await context.newPage();
   const gateway = await installMockGateway(page, {
+    sessionKey: automationSessionKey,
+    sessions: [
+      {
+        key: automationSessionKey,
+        sessionId: automationSessionId,
+        label: "CI review",
+        kind: "direct",
+        updatedAt: 1,
+      },
+    ],
+    operatorScopes: options.readOnly ? ["operator.read"] : undefined,
     featureMethods: [
       "chat.metadata",
       "chat.startup",
@@ -160,9 +206,16 @@ async function setup(
     methodResponses: {
       [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
       [DETAILS_METHOD]: detailFixture(options.mode),
+      "cron.list": automationInventory(options.automationJobs ?? []),
+      "cron.status": {
+        enabled: options.schedulerEnabled ?? true,
+        triggersEnabled: true,
+        jobs: options.automationJobs?.length ?? 0,
+      },
     },
   });
-  await page.goto(server.baseUrl + "chat");
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, automationSessionKey));
+  await openDetailsPullRequests(page);
   if (options.defer) {
     await gateway.deferNext(DETAILS_METHOD);
   }
@@ -179,13 +232,9 @@ async function setup(
           ...pullRequest,
           checks: { state: "failing", passed: 6, failed: 1, running: 0, skipped: 17 },
         }
-      : options.mode === "passed"
-        ? {
-            ...pullRequest,
-            checks: { state: "passing", passed: 7, failed: 0, running: 0, skipped: 17 },
-          }
-        : pullRequest,
+      : pullRequest,
   );
+  expect(await gateway.getRequests(DETAILS_METHOD)).toHaveLength(0);
   return { page, gateway, sessionKey, publish };
 }
 
@@ -202,55 +251,137 @@ async function expandLinuxJob(page: Page) {
   return job;
 }
 
-describe("chat CI job and step details", () => {
-  beforeAll(async () => {
-    browser = await chromium.launch({
-      executablePath: resolvePlaywrightChromiumExecutablePath(chromium.executablePath()),
+suite.define(() => {
+  it("saves selected-PR automation toggles and reconciles an uncertain write", async () => {
+    const fix = automationJob("autoFix");
+    const merge = automationJob("autoMerge", false);
+    const { page, gateway, publish } = await setup({ automationJobs: [fix, merge] });
+    await page.locator(".chat-pr__checks-pill").click();
+    const autoFix = page.getByRole("checkbox", { name: "Auto-fix CI & address comments" });
+    const autoMerge = page.getByRole("checkbox", { name: "Auto-merge when ready" });
+    const autoArchive = page.getByRole("checkbox", { name: "Auto-archive on merge or close" });
+    await expect.poll(() => autoFix.isChecked()).toBe(true);
+    await expect.poll(() => autoMerge.isEnabled()).toBe(true);
+    expect(await autoMerge.isChecked()).toBe(false);
+    await gateway.deferNext("cron.update");
+    await autoFix.click();
+    const update = await gateway.waitForRequest("cron.update");
+    expect(update.params).toEqual({
+      id: "autoFix",
+      expectedConfigRevision: "automation-v1",
+      patch: { enabled: false },
     });
-    server = await startControlUiE2eServer();
-  });
-  afterEach(async () => {
-    await Promise.all([...contexts].map((context) => context.close()));
-    contexts.clear();
-  });
-  afterAll(async () => {
-    await browser?.close();
-    await server?.close();
+    expect(await autoFix.isChecked()).toBe(false);
+    expect(await autoMerge.isEnabled()).toBe(true);
+    expect(await page.locator(".chat-ci__automation-status").count()).toBe(0);
+    expect(await page.getByRole("link", { name: "Open automation" }).count()).toBe(0);
+    const disabledFix = { ...fix, enabled: false, configRevision: "automation-v2" };
+    await gateway.setMethodResponse("cron.list", automationInventory([disabledFix, merge]));
+    await gateway.resolveDeferred("cron.update", disabledFix);
+    await expect.poll(() => autoArchive.isEnabled()).toBe(true);
+    expect(await autoFix.isChecked()).toBe(false);
+
+    await gateway.deferNext("cron.add");
+    await autoArchive.click();
+    const add = await gateway.waitForRequest("cron.add");
+    expect(add.params).toMatchObject({
+      agentId: "main",
+      sessionKey: automationSessionKey,
+      owner: { agentId: "main", sessionKey: automationSessionKey },
+      sessionTarget: "isolated",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 300_000 },
+      payload: { kind: "agentTurn", message: expect.stringContaining(automationSessionId) },
+    });
+    const archive = automationJob("autoArchive");
+    await gateway.setMethodResponse(
+      "cron.list",
+      automationInventory([disabledFix, merge, archive]),
+    );
+    await gateway.rejectDeferred("cron.add", {
+      code: "UNAVAILABLE",
+      message: "Connection lost after saving",
+    });
+    await page.getByText("Connection lost after saving", { exact: false }).waitFor();
+    expect(await autoMerge.isDisabled()).toBe(true);
+    const retry = page.locator(".chat-ci__automation-retry");
+    expect(await retry.isEnabled()).toBe(true);
+    await retry.click();
+    await expect.poll(() => autoArchive.isEnabled()).toBe(true);
+    expect(await autoArchive.isChecked()).toBe(true);
+    expect(await gateway.getRequests("cron.add")).toHaveLength(1);
+
+    await page.locator(".chat-pr__checks-pill").click();
+    await publish({ ...pullRequest, headSha: "c".repeat(40) });
+    await page.locator(".chat-pr__checks-pill").click();
+    await expect.poll(() => autoArchive.isEnabled()).toBe(true);
+    expect(await autoArchive.isChecked()).toBe(true);
+    expect(await autoFix.isChecked()).toBe(false);
   });
 
-  it("loads steps only after opening and keeps skipped work collapsed", async () => {
-    const { page, gateway, sessionKey } = await setup({ defer: true });
-    expect(await gateway.getRequests(DETAILS_METHOD)).toHaveLength(0);
-    await page.locator(".chat-pr__checks-pill").click();
-    const request = await gateway.waitForRequest(DETAILS_METHOD);
-    expect(request.params).toMatchObject({
-      sessionKey,
-      owner: "openclaw",
-      repo: "openclaw",
-      number: pullRequest.number,
-      headSha,
+  it("creates auto-merge only for the PR whose popup was opened", async () => {
+    const { page, gateway, sessionKey } = await setup();
+    const other = {
+      ...pullRequest,
+      number: 123457,
+      url: "https://github.com/openclaw/openclaw/pull/123457",
+    };
+    await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
+      sessions: {
+        [sessionKey]: { pullRequests: [other, pullRequest], rateLimited: false, status: "ready" },
+      },
     });
-    await gateway.resolveDeferred(DETAILS_METHOD, detailFixture());
-    const job = await expandLinuxJob(page);
-    expect(await job.textContent()).toContain("Run tests");
-    expect(
-      await job
-        .locator('a[href="https://github.com/openclaw/openclaw/actions/runs/100/job/11"]')
-        .count(),
-    ).toBeGreaterThan(0);
-    const skipped = page
-      .locator(".chat-pr__checks-menu details")
-      .filter({ has: page.locator("summary", { hasText: /17.*skipped/i }) })
-      .first();
-    await skipped.waitFor();
-    expect(await skipped.evaluate((node) => (node as HTMLDetailsElement).open)).toBe(false);
-    await skipped.locator("summary").first().click();
-    await page.getByText("Android build", { exact: true }).waitFor();
-    expect(await page.locator(".chat-pr__checks-menu footer").count()).toBe(0);
-    expect(await page.getByText("Auto-refresh while open", { exact: false }).count()).toBe(0);
+    const selected = page
+      .locator(".chat-pr")
+      .filter({ has: page.locator(`a.chat-pr__link[href="${pullRequest.url}"]`) });
+    await selected.locator(".chat-pr__checks-pill").click();
+    const toggle = selected.getByRole("checkbox", { name: "Auto-merge when ready" });
+    await expect.poll(() => toggle.isEnabled()).toBe(true);
+    await gateway.deferNext("cron.add");
+    await toggle.click();
+    const add = await gateway.waitForRequest("cron.add");
+    const merge = automationJob("autoMerge");
+    expect(add.params).toEqual(
+      ciAutomationJobSpec(
+        {
+          agentId: "main",
+          sessionKey,
+          sessionId: automationSessionId,
+          owner: pullRequest.owner,
+          repo: pullRequest.repo,
+          number: pullRequest.number,
+        },
+        "autoMerge",
+      ),
+    );
+    await gateway.setMethodResponse("cron.list", automationInventory([merge]));
+    await gateway.resolveDeferred("cron.add", { job: merge });
+    await expect.poll(() => toggle.isChecked()).toBe(true);
     await page.keyboard.press("Escape");
-    await expect.poll(() => page.locator(".chat-pr__checks[open]").count()).toBe(0);
-    await expect.poll(() => page.locator(".chat-pr__checks-menu").isVisible()).toBe(false);
+    await page.locator('.chat-details[role="dialog"]').waitFor();
+    const unselected = page
+      .locator(".chat-pr")
+      .filter({ has: page.locator(`a.chat-pr__link[href="${other.url}"]`) });
+    await unselected.locator(".chat-pr__checks-pill").click();
+    const otherToggle = unselected.getByRole("checkbox", { name: "Auto-merge when ready" });
+    await expect.poll(() => otherToggle.isEnabled()).toBe(true);
+    expect(await otherToggle.isChecked()).toBe(false);
+    expect(await gateway.getRequests("cron.add")).toHaveLength(1);
+  });
+
+  it("shows stored automation state without checks and enforces read-only access", async () => {
+    const { page, gateway, publish } = await setup({
+      readOnly: true,
+      automationJobs: [automationJob("autoMerge")],
+    });
+    await publish({ ...pullRequest, checks: undefined });
+    await page.locator(".chat-pr__checks-pill").click();
+    const autoMerge = page.getByRole("checkbox", { name: "Auto-merge when ready" });
+    await expect.poll(() => autoMerge.isChecked()).toBe(true);
+    expect(await autoMerge.isDisabled()).toBe(true);
+    expect(await gateway.getRequests("cron.add")).toHaveLength(0);
+    expect(await gateway.getRequests("cron.update")).toHaveLength(0);
+    expect(await gateway.getRequests(DETAILS_METHOD)).toHaveLength(0);
   });
 
   it("does not display a pending response for the previous commit", async () => {
@@ -280,26 +411,40 @@ describe("chat CI job and step details", () => {
 
   it.each([
     { label: "desktop", width: 1180, height: 960, mode: "running" as const },
-    { label: "desktop-passed", width: 1180, height: 960, mode: "passed" as const },
     { label: "mobile", width: 393, height: 960, mode: "failed" as const },
     { label: "landscape", width: 844, height: 390, mode: "failed" as const },
   ])("keeps expanded steps usable on $label", async ({ label, width, height, mode }) => {
-    const { page } = await setup({ width, height, mode });
+    const { page } = await setup({
+      width,
+      height,
+      mode,
+      automationJobs: [automationJob("autoFix"), automationJob("autoMerge")],
+    });
     await page.locator(".chat-pr__checks-pill").click();
     await expandLinuxJob(page);
     const menu = page.locator(".chat-pr__checks-menu");
-    const bounds = await menu.boundingBox();
-    expect(bounds).not.toBeNull();
-    expect(bounds!.x).toBeGreaterThanOrEqual(0);
-    expect(bounds!.y).toBeGreaterThanOrEqual(0);
-    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
-    expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(height);
+    // Step text can appear before Floating UI finishes positioning the expanded popup.
+    await expect
+      .poll(() =>
+        menu.evaluate((element) => {
+          const bounds = element.getBoundingClientRect();
+          return (
+            bounds.width > 0 &&
+            bounds.x >= 0 &&
+            bounds.y >= 0 &&
+            bounds.right <= innerWidth &&
+            bounds.bottom <= innerHeight
+          );
+        }),
+      )
+      .toBe(true);
     expect(await menu.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(
       true,
     );
     await menu.getByRole("link", { name: "Open checks on GitHub" }).click({ trial: true });
     const linuxJob = menu.locator('.chat-ci__job[data-check-id="11"]');
-    await linuxJob.locator(".chat-ci__job-link").click({ trial: true });
+    const jobLink = linuxJob.locator(".chat-ci__job-link");
+    await jobLink.click({ trial: true });
     if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
       const output = createControlUiE2eArtifactDir("ci-details-" + label);
       await writeFile(
@@ -309,9 +454,10 @@ describe("chat CI job and step details", () => {
         ]),
       );
       const row = await page.locator(".chat-pr").first().boundingBox();
+      const bounds = await menu.boundingBox();
       if (bounds && row) {
         const x = Math.max(0, Math.floor(Math.min(bounds.x, row.x) - 14));
-        const y = Math.max(0, Math.floor(bounds.y - 14));
+        const y = Math.max(0, Math.floor(Math.min(bounds.y, row.y) - 14));
         await page.screenshot({
           path: path.join(output, "after-" + label + "-crop.png"),
           animations: "disabled",
@@ -322,10 +468,20 @@ describe("chat CI job and step details", () => {
               width - x,
               Math.ceil(Math.max(bounds.x + bounds.width, row.x + row.width) - x + 14),
             ),
-            height: Math.min(height - y, Math.ceil(row.y + row.height - y + 14)),
+            height: Math.min(
+              height - y,
+              Math.ceil(Math.max(bounds.y + bounds.height, row.y + row.height) - y + 14),
+            ),
           },
         });
       }
     }
+    // Trial clicks leave focus on the CI pill, whose title hint can own the first Escape.
+    await jobLink.focus();
+    await expect.poll(() => page.locator("openclaw-tooltip[open]").count()).toBe(0);
+    await page.keyboard.press("Escape");
+    await expect.poll(() => page.locator(".chat-pr__checks[open]").count()).toBe(0);
+    await expect.poll(() => menu.isVisible()).toBe(false);
+    expect(await page.locator('.chat-details[role="dialog"]').isVisible()).toBe(true);
   });
 });

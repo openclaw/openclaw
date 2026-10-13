@@ -1,9 +1,9 @@
 import { fileURLToPath } from "node:url";
 import {
-  captureCodexSessionTranscriptReadAdmission,
+  captureCodexSessionContextReader,
+  readCodexSessionContextProjection,
   SessionTranscriptReadFenceError,
-  validateCodexSessionTranscriptReadAdmission,
-  validateCodexSessionTranscriptContextVersion,
+  type CodexSessionContextReader,
 } from "openclaw/plugin-sdk/codex-session-transcript-runtime";
 import {
   resolveRuntimeWorkerArgv,
@@ -21,11 +21,13 @@ import {
   type CodexHistoryReadResult,
 } from "./src/app-server/history-rejection.js";
 import type { JsonValue } from "./src/app-server/protocol.js";
+import { consumeCodexHistory } from "./src/app-server/session-history-read.js";
 import {
   resolveCodexHistoryTarget,
   type CodexMirroredSessionHistoryTarget,
 } from "./src/app-server/session-history.js";
 import type { SettledTurnMessages } from "./src/app-server/settled-turn-evidence.js";
+import { projectVerifiedSettledCodexMessages } from "./src/app-server/settled-turn-evidence.js";
 
 const codexHistoryWorkerEntrypoint = {
   currentModuleUrl: import.meta.url,
@@ -37,61 +39,93 @@ const codexHistoryWorkerEntrypoint = {
   },
 } as const;
 
-function resolveCodexHistoryWorkerUrl(): URL {
-  const sourceUrl = resolveRuntimeWorkerUrl(codexHistoryWorkerEntrypoint);
-  const sourceNeedsBuiltFallback =
-    /\.[cm]?ts$/u.test(sourceUrl.pathname) &&
-    (typeof process.versions.bun === "string" || resolveRuntimeWorkerArgv(sourceUrl).length === 1);
-  if (!sourceNeedsBuiltFallback) {
-    return sourceUrl;
-  }
-  // oxlint-disable-next-line no-warning-comments -- removal awaits Bun Worker preload resolver support.
-  // TODO: Remove this fallback once Bun Workers apply resolver hooks from execArgv --import preloads.
-  return resolveRuntimeWorkerUrl({
-    ...codexHistoryWorkerEntrypoint,
-    root: fileURLToPath(new URL("../..", import.meta.url)),
-  });
-}
-
+const sourceWorkerUrl = resolveRuntimeWorkerUrl(codexHistoryWorkerEntrypoint);
+const sourceNeedsBuiltFallback =
+  /\.[cm]?ts$/u.test(sourceWorkerUrl.pathname) &&
+  (typeof process.versions.bun === "string" ||
+    resolveRuntimeWorkerArgv(sourceWorkerUrl).length === 1);
+// oxlint-disable-next-line no-warning-comments -- removal awaits Bun Worker preload resolver support.
+// TODO: Remove this fallback once Bun Workers apply resolver hooks from execArgv --import preloads.
 const historyReads = new WorkerTaskPool<CodexHistoryWorkerInput, CodexHistoryWorkerResult>({
-  workerUrl: resolveCodexHistoryWorkerUrl(),
+  workerUrl: sourceNeedsBuiltFallback
+    ? resolveRuntimeWorkerUrl({
+        ...codexHistoryWorkerEntrypoint,
+        root: fileURLToPath(new URL("../..", import.meta.url)),
+      })
+    : sourceWorkerUrl,
+  workerClass: "reader",
+  // Published plugin supports older hosts that only understand numeric sizing.
   maxWorkers: 1,
 });
 
 export async function projectCodexSettledHistoryInWorker(
   target: CodexMirroredSessionHistoryTarget & SettledTurnMessages,
   signal?: AbortSignal,
+  contextReader?: CodexSessionContextReader,
 ): Promise<CodexHistoryReadResult<JsonValue[]>> {
   signal?.throwIfAborted();
-  const resolved = resolveCodexHistoryTarget(target);
-  const receipt =
-    resolved.kind === "sqlite"
-      ? captureCodexSessionTranscriptReadAdmission(resolved.target)
-      : undefined;
-  const input: CodexHistoryWorkerInput = {
-    target: resolved,
-    sessionId: target.sessionId,
-    ...(receipt ? { admission: { ...receipt } } : {}),
-    evidence: {
-      mirroredMessages: target.mirroredMessages,
-      settledMessages: target.settledMessages,
-      turnId: target.turnId,
-    },
+  const resolved = await resolveCodexHistoryTarget(target);
+  const reader =
+    contextReader ??
+    (resolved.kind === "sqlite"
+      ? captureCodexSessionContextReader({ ...target.sessionTarget, ...resolved.target }, signal)
+      : undefined);
+  if (reader) {
+    if (resolved.kind !== "sqlite") {
+      throw new Error("Actor history requires a complete matching sessionTarget");
+    }
+    let result: CodexHistoryReadResult<JsonValue[]>;
+    try {
+      result = await reader(resolved.target, (messages, header) => {
+        signal?.throwIfAborted();
+        try {
+          return {
+            status: "ok",
+            value: consumeCodexHistory(messages, header, target.sessionId, (history) =>
+              projectVerifiedSettledCodexMessages(history, target),
+            ),
+          };
+        } catch (error) {
+          return { status: "rejected", reason: codexHistoryRejectionReason(error) };
+        }
+      });
+    } catch (error) {
+      if (error instanceof SessionTranscriptReadFenceError) {
+        result = { status: "rejected", reason: "snapshot_invalidated" };
+      } else {
+        throw error;
+      }
+    }
+    signal?.throwIfAborted();
+    return result;
+  }
+  const evidence = {
+    mirroredMessages: target.mirroredMessages,
+    settledMessages: target.settledMessages,
+    turnId: target.turnId,
   };
-  // Incognito SQLite is held by this process; run the same lazy operation here.
-  const result =
-    resolved.kind === "sqlite" && isIncognitoSessionKey(resolved.target.sessionKey)
-      ? await runCodexHistoryWorkerInput(input)
-      : await historyReads.run(input, { timeoutMs: 60_000, signal });
-  signal?.throwIfAborted();
   if (resolved.kind === "sqlite") {
     try {
-      if (input.admission) {
-        validateCodexSessionTranscriptReadAdmission(resolved.target, input.admission);
-      } else {
-        validateCodexSessionTranscriptContextVersion(resolved.target, result.version);
-      }
+      return await readCodexSessionContextProjection(
+        resolved.target,
+        async ({ target: captured, admission, physicalSource }) => {
+          const input: CodexHistoryWorkerInput = {
+            target: { kind: "sqlite", target: captured },
+            sessionId: target.sessionId,
+            admission,
+            physicalSource,
+            evidence,
+          };
+          // Legacy process-held incognito cannot be reopened in another worker.
+          const result = isIncognitoSessionKey(captured.sessionKey)
+            ? await runCodexHistoryWorkerInput(input)
+            : await historyReads.run(input, { timeoutMs: 60_000, signal });
+          return { value: result.result, version: result.version };
+        },
+        signal,
+      );
     } catch (error) {
+      signal?.throwIfAborted();
       return {
         status: "rejected",
         reason:
@@ -101,5 +135,12 @@ export async function projectCodexSettledHistoryInWorker(
       };
     }
   }
+  const input: CodexHistoryWorkerInput = {
+    target: resolved,
+    sessionId: target.sessionId,
+    evidence,
+  };
+  const result = await historyReads.run(input, { timeoutMs: 60_000, signal });
+  signal?.throwIfAborted();
   return result.result;
 }

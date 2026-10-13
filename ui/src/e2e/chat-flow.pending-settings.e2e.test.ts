@@ -66,7 +66,7 @@ suite.define(() => {
       expect(requireRecord(firstPatch.params).thinkingLevel).toBe("medium");
 
       await gateway.deferNext("sessions.patch");
-      await main.locator('[data-chat-speed-toggle="on"]').click();
+      await main.locator('[data-chat-speed-option="on"]').click();
       await expectRequestCountStable(gateway, "sessions.patch", 1);
       await page.keyboard.press("Escape");
 
@@ -119,7 +119,7 @@ suite.define(() => {
       const listsBefore = (await gateway.getRequests("sessions.list", rosterMatch)).length;
       await gateway.deferNext("sessions.list", rosterMatch);
       await gateway.deferNext("sessions.list", rosterMatch);
-      await main.locator('[data-chat-speed-toggle="on"]').click();
+      await main.locator('[data-chat-speed-option="on"]').click();
       await gateway.waitForRequest("sessions.patch");
       await waitForRequests(gateway, "sessions.list", listsBefore + 1, rosterMatch);
       await page.keyboard.press("Escape");

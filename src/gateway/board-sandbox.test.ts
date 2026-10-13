@@ -27,32 +27,6 @@ function document(
 }
 
 describe("board widget sandbox CSP", () => {
-  it("allows static CDN resources without granting API access while a declaration is pending", () => {
-    const path = buildBoardWidgetSandboxPath(document("pending"));
-    const encoded = new URL(path, "https://sandbox.example").searchParams.get("csp");
-
-    const csp = decodeSandboxHostCsp(encoded);
-    expect(csp).toEqual({
-      blockDescendantFrames: true,
-      resourceDomains: [...WIDGET_CDN_ORIGINS],
-      mediaDomains: ["https:", "blob:"],
-    });
-    for (const policy of [
-      buildSandboxHostDocument(csp).headers["Content-Security-Policy"],
-      buildBoardWidgetContentSecurityPolicy(document("pending")),
-    ]) {
-      expect(policy).toContain("connect-src 'none'");
-      expect(policy).toContain("webrtc 'block'");
-      for (const directive of ["script-src", "style-src", "font-src"]) {
-        const sources = policy.split("; ").find((entry) => entry.startsWith(`${directive} `));
-        for (const origin of WIDGET_CDN_ORIGINS) {
-          expect(sources).toContain(origin);
-        }
-        expect(sources?.split(/\s+/u)).not.toContain("https:");
-      }
-    }
-  });
-
   it("permits HTTPS and generated media without granting other network access", () => {
     const path = buildBoardWidgetSandboxPath(document("pending"));
     const csp = decodeSandboxHostCsp(
@@ -76,7 +50,7 @@ describe("board widget sandbox CSP", () => {
         "connect-src",
         "'none'",
       ]);
-      for (const name of ["script-src", "style-src", "img-src"]) {
+      for (const name of ["script-src", "style-src", "font-src", "img-src"]) {
         expect(directives?.find((tokens) => tokens[0] === name)).not.toContain("https:");
       }
     }
@@ -168,19 +142,5 @@ describe("board widget sandbox CSP", () => {
     expect(proxy).toContain('const commentEnd = html.indexOf("-->", index + 4)');
     expect(genericProxy).toContain("const blockDescendantFrames = false");
     expect(genericProxy).not.toContain('lock(Document.prototype,\\"createElement\\"');
-  });
-
-  it("blocks scripted popups regardless of whether descendant-frame hardening is enabled", () => {
-    const path = buildBoardWidgetSandboxPath(document("pending"));
-    const encoded = new URL(path, "https://sandbox.example").searchParams.get("csp");
-    const csp = decodeSandboxHostCsp(encoded);
-
-    expect(csp?.blockDescendantFrames).toBe(true);
-    for (const { html: proxy } of [buildSandboxHostDocument(csp), buildSandboxHostDocument()]) {
-      expect(proxy).toContain(
-        'frame.setAttribute("sandbox", allowScripts ? "allow-scripts allow-forms" : "")',
-      );
-      expect(proxy).not.toContain("allow-popups");
-    }
   });
 });

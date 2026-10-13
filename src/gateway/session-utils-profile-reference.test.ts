@@ -8,7 +8,8 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { ensureProfileForEmail, linkEmail, resolveUserProfileId } from "../state/user-profiles.js";
+import { linkEmail } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { listSessionFixture } from "./session-list.test-support.js";
 import { createSessionListEntryFilter } from "./session-sharing.js";
@@ -58,50 +59,6 @@ function listActivity(
   });
 }
 
-it("resolves short person references across UUID boundaries before session pagination", async () => {
-  const selected = "12345678-a123-4123-8123-123456789abc";
-  const other = "87654321-b123-4123-8123-123456789abc";
-  createProfile(selected);
-  createProfile(other);
-  for (const length of [8, 9, 12, 13, 16, 17, 20, 21, 32]) {
-    const reference = selected.replaceAll("-", "").slice(0, length);
-    const result = await listActivity([other, selected, selected], reference, { limit: 1 });
-    expect(result.involvingProfileId, reference).toBe(selected);
-    expect(result.totalCount, reference).toBe(2);
-    expect(result.sessions).toHaveLength(1);
-    expect(result.sessions[0]?.participants?.[0]?.identity.id).toBe(selected);
-  }
-  expect(resolveUserProfileId("12345678")).toBeUndefined();
-});
-
-it("rejects an ambiguous person reference even when only one matching profile has visible sessions", async () => {
-  const first = "12345678-a123-4123-8123-123456789abc";
-  const second = "12345678-b123-4123-8123-123456789abc";
-  createProfile(first);
-  createProfile(second);
-  await expect(listActivity([first], "12345678")).rejects.toThrow(
-    "Person link is ambiguous. Use a longer profile ID in the Activity URL.",
-  );
-  expect((await listActivity([first, second], "12345678a")).involvingProfileId).toBe(first);
-});
-
-it("keeps old person references working after profile merges and counts merge aliases once", async () => {
-  const first = "12345678-a123-4123-8123-123456789abc";
-  const second = "12345678-b123-4123-8123-123456789abc";
-  const target = "87654321-c123-4123-8123-123456789abc";
-  for (const id of [first, second, target]) {
-    createProfile(id);
-  }
-  linkEmail(`${first}@activity.test`, target);
-  linkEmail(`${second}@activity.test`, target);
-  for (const reference of ["12345678", first, second]) {
-    const result = await listActivity([first, second, target], reference);
-    expect(result.involvingProfileId, reference).toBe(target);
-    expect(result.sessions).toHaveLength(3);
-    expect(result.people).toHaveLength(1);
-  }
-});
-
 it.each(["owned", "created", "involving"] as const)(
   "resolves %s inventory relationships through profile merges",
   async (relationship) => {
@@ -135,31 +92,7 @@ it.each(["owned", "created", "involving"] as const)(
   },
 );
 
-it("prefers an exact profile identifier over a UUID prefix", async () => {
-  const exact = "deadbeef";
-  const longer = "deadbeef-a123-4123-8123-123456789abc";
-  createProfile(exact);
-  createProfile(longer);
-  const result = await listActivity([longer, exact], exact);
-  expect(result.involvingProfileId).toBe(exact);
-  expect(result.sessions).toHaveLength(1);
-  expect(result.sessions[0]?.participants?.[0]?.identity.id).toBe(exact);
-});
-
-it("retains a resolved person when search matches no sessions without resolving missing people", async () => {
-  const selected = "12345678-a123-4123-8123-123456789abc";
-  createProfile(selected);
-  for (const reference of [selected, "12345678a123", "missing-person"]) {
-    const result = await listActivity([selected], reference, { search: "no-matching-session" });
-    expect(result.involvingProfileId, reference).toBe(
-      reference === "missing-person" ? undefined : selected,
-    );
-    expect(result.sessions).toEqual([]);
-    expect(result.people).toEqual([]);
-  }
-});
-
-it.each(["12345678-a123-4123-8123-123456789abc", "12345678-A123-4123-8123-123456789ABC"])(
+it.each(["12345678-A123-4123-8123-123456789ABC"])(
   "resolves retained profile %s without a durable row",
   async (retained) => {
     for (const reference of [

@@ -18,7 +18,7 @@ title: "Configuration — community chat channels"
       enabled: true,
       token: "your-bot-token",
       mediaMaxMb: 100,
-      allowBots: false,
+      allowBots: true,
       actions: {
         reactions: true,
         stickers: true,
@@ -118,7 +118,7 @@ title: "Configuration — community chat channels"
 - Use `user:<id>` (DM) or `channel:<id>` (guild channel) for delivery targets; bare numeric IDs are rejected.
 - `actions.reactions` controls `react`, `reactions`, and `emoji-list`; emoji discovery defaults to the current server unless `guildId` is provided.
 - Guild slugs are lowercase with spaces replaced by `-`; channel keys use the slugged name (no `#`). Prefer guild IDs.
-- Bot-authored messages are ignored by default. `allowBots: true` enables them; use `allowBots: "mentions"` to only accept bot messages that mention the bot (own messages still filtered).
+- Bot-authored messages are accepted by default under the normal mention and access rules. Set `allowBots: false` to disable bot-triggered turns, or `allowBots: "mentions"` to require an active bot mention (own messages are still filtered). This setting does not hide accessible bot messages from history or a human-selected reply target; `contextVisibility` controls supplemental context.
 - Channels that support bot-authored inbound messages can use shared [bot loop protection](/channels/bot-loop-protection). Set `channels.defaults.botLoopProtection` for baseline pair budgets, then override the channel or account only when one surface needs different limits.
 - `channels.discord.guilds.<id>.ignoreOtherMentions` (and channel overrides) drops messages addressed to another identity but not the bot. This covers explicit user/role mentions (excluding @everyone/@here) and replies to another non-webhook bot; an explicit mention of the current bot still wins.
 - `channels.discord.mentionAliases` maps stable outbound `@handle` text to Discord user IDs before sending, so known teammates can be mentioned deterministically even when the transient directory cache is empty. Per-account overrides live under `channels.discord.accounts.<accountId>.mentionAliases`.
@@ -201,7 +201,7 @@ Matrix is plugin-backed and configured under `channels.matrix`.
   - `target`: where to send approval prompts. `"dm"` (default), `"channel"` (originating room), or `"both"`.
   - Per-account overrides: `channels.matrix.accounts.<id>.execApprovals`.
 - `channels.matrix.dm.sessionScope` controls how Matrix DMs group into sessions: `per-user` (default) shares by routed peer, while `per-room` isolates each DM room.
-- Matrix status probes and live directory lookups use the same proxy policy as runtime traffic.
+- Matrix status checks and live directory lookups use the same proxy policy as runtime traffic.
 - Full Matrix configuration, targeting rules, and setup examples are documented in [Matrix](/channels/matrix).
 
 ## IRC

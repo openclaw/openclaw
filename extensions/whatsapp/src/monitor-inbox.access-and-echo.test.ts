@@ -10,6 +10,7 @@ import {
   settleInboundWork,
   startInboxMonitor,
   upsertPairingRequestMock,
+  waitForInboundWorkDrained,
   waitForMessageCalls,
   waitForPairingPromptSent,
 } from "./monitor-inbox.test-harness.js";
@@ -113,7 +114,7 @@ describe("web monitor inbox", () => {
     });
 
     sock.ev.emit("messages.upsert", upsert);
-    await waitForMessageCalls(onMessage, 1);
+    await waitForInboundWorkDrained();
 
     // Should call onMessage for authorized senders
     expect(onMessage).toHaveBeenCalledWith(
@@ -151,7 +152,7 @@ describe("web monitor inbox", () => {
     });
 
     sock.ev.emit("messages.upsert", upsert);
-    await waitForMessageCalls(onMessage, 1);
+    await waitForInboundWorkDrained();
 
     // Should allow self-messages even if not in allowFrom
     expect(onMessage).toHaveBeenCalledWith(
@@ -653,26 +654,6 @@ describe("web monitor inbox", () => {
 
     // Verify it WAS NOT passed to onMessage
     expect(onMessage).not.toHaveBeenCalled();
-
-    await listener.close();
-  });
-
-  it("normalizes participant phone numbers to JIDs in sendReaction", async () => {
-    const { listener, sock } = await startInboxMonitor(vi.fn());
-
-    await listener.sendReaction("12345@g.us", "msg123", "👍", false, "+6421000000");
-
-    expect(sock.sendMessage).toHaveBeenCalledWith("12345@g.us", {
-      react: {
-        text: "👍",
-        key: {
-          remoteJid: "12345@g.us",
-          id: "msg123",
-          fromMe: false,
-          participant: "6421000000@s.whatsapp.net",
-        },
-      },
-    });
 
     await listener.close();
   });

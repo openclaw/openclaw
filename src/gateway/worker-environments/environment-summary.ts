@@ -21,32 +21,63 @@ const WORKER_STATUS: Record<WorkerEnvironmentState, EnvironmentSummary["status"]
 export function summarizeWorkerEnvironment(
   record: WorkerEnvironmentServiceRecord,
   now = Date.now(),
+  options: { includePreparedDetails?: boolean } = {},
 ): EnvironmentSummary {
+  const cleanupPending = record.destroyRequestedAtMs !== null && record.state !== "destroyed";
+  const error =
+    record.state === "failed" || record.state === "orphaned" || cleanupPending
+      ? record.error
+      : undefined;
   return {
     id: record.environmentId,
     type: "worker",
-    status: WORKER_STATUS[record.state],
+    status: error ? "error" : WORKER_STATUS[record.state],
     ...(record.sharedHost === null
       ? {}
       : { trust: record.sharedHost ? "persistent" : "disposable" }),
     ...(record.desktopAvailable ? { desktop: true } : {}),
     ...(record.preparation
-      ? { preparation: { purpose: record.preparation.purpose, key: record.preparation.key } }
+      ? {
+          preparation: {
+            purpose: record.preparation.purpose,
+            key: record.preparation.key,
+            ...(options.includePreparedDetails
+              ? {
+                  details: {
+                    demandAtMs: record.preparation.demandAtMs,
+                    expiresAtMs: record.preparation.expiresAtMs,
+                    consumedAtMs: record.preparation.consumedAtMs,
+                    ...(record.preparation.project
+                      ? {
+                          project: {
+                            ...(record.preparation.project.label
+                              ? { label: record.preparation.project.label }
+                              : {}),
+                            baseCommit: record.preparation.project.baseCommit,
+                          },
+                        }
+                      : {}),
+                  },
+                }
+              : {}),
+          },
+        }
       : {}),
     worker: {
       profileId: record.profileId,
       providerId: record.providerId,
       ...(record.leaseId ? { leaseId: record.leaseId } : {}),
       state: record.state,
+      ...(options.includePreparedDetails && record.destroyRequestedAtMs !== null
+        ? { destroyRequestedAtMs: record.destroyRequestedAtMs }
+        : {}),
       ageMs: Math.max(0, Math.trunc(now - record.createdAtMs)),
       ...(record.state === "idle" && record.idleSinceAtMs !== null
         ? { idleMs: Math.max(0, Math.trunc(now - record.idleSinceAtMs)) }
         : {}),
       attachedSessionIds: normalizeSortedUniqueTrimmedStringList(record.attachedSessionIds),
       tunnelStatus: record.tunnelStatus,
-      ...((record.state === "failed" || record.state === "orphaned") && record.error
-        ? { error: record.error }
-        : {}),
+      ...(error ? { error } : {}),
       ...(record.desktopAvailable ? { desktop: true } : {}),
       ...(record.desktopApps.length > 0 ? { desktopApps: [...record.desktopApps] } : {}),
     },

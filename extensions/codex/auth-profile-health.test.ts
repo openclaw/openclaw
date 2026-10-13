@@ -2,12 +2,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import {
   loadAuthProfileStoreWithoutExternalProfiles,
-  saveAuthProfileStore,
   type AuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { HealthCheck, OpenClawConfig } from "openclaw/plugin-sdk/health";
-import type { OpenClawPluginService } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { assert, describe, expect, it, vi } from "vitest";
 import { registerCodexManagedAppServerDoctorChecks } from "./api.js";
@@ -56,7 +57,9 @@ function doctorContext(state: OpenClawTestState, cfg = config) {
 describe("native profile recovery", () => {
   it("reports the retired native profile in Doctor and startup without importing credentials", async () => {
     const state = await createOpenClawTestState({ label: "codex-native-profile-recovery" });
+    const scheduler = createTestPluginServiceScheduler();
     try {
+      setRuntimeConfigSnapshot(config);
       const nativeHome = path.join(state.home, ".codex");
       await fs.mkdir(nativeHome, { recursive: true });
       const nativeAuth = JSON.stringify({
@@ -75,13 +78,13 @@ describe("native profile recovery", () => {
       expect(findings[0]?.message).toContain("native Codex login");
       expect(findings[0]?.message).not.toMatch(/HTTP 401|re-authenticate/);
       const captured = createCapturedPluginRegistration({ config });
-      const services: OpenClawPluginService[] = [];
+      const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
       captured.api.registerService = (service) => services.push(service);
       plugin.register(captured.api);
       const recovery = services.find((service) => service.id === CHECK_ID);
       assert(recovery, "Gateway startup must register the same recovery check");
       const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
-      await recovery.start({ config, stateDir: state.stateDir, logger });
+      await recovery.start({ config, stateDir: state.stateDir, logger, scheduler });
       expect(logger.warn).toHaveBeenCalledExactlyOnceWith(findings[0]?.message);
       expect(await fs.readFile(path.join(nativeHome, "auth.json"), "utf8")).toBe(nativeAuth);
       expect(loadAuthProfileStoreWithoutExternalProfiles(state.agentDir()).profiles).toEqual({});
@@ -89,15 +92,19 @@ describe("native profile recovery", () => {
       await state.writeAuthProfiles(managedStore);
       await expect(check.detect(doctorContext(state))).resolves.toEqual([]);
       logger.warn.mockClear();
-      await recovery.start({ config, stateDir: state.stateDir, logger });
+      await recovery.start({ config, stateDir: state.stateDir, logger, scheduler });
       expect(logger.warn).not.toHaveBeenCalled();
     } finally {
+      await scheduler.stop();
       await state.cleanup();
     }
   });
 
   it("honors shared state ownership and agent-local profiles without warning on unpinned native login", async () => {
-    const state = await createOpenClawTestState({ label: "codex-persisted-profile-recovery" });
+    const state = await createOpenClawTestState({
+      label: "codex-persisted-profile-recovery",
+      applyEnv: false,
+    });
     try {
       const check = recoveryCheck();
       await expect(check.detect(doctorContext(state, {}))).resolves.toEqual([]);
@@ -106,7 +113,7 @@ describe("native profile recovery", () => {
       expect(localFindings).toHaveLength(1);
       expect(localFindings[0]?.message).toContain("Affected agents: main.");
 
-      saveAuthProfileStore(managedStore);
+      await state.writeAuthProfiles(managedStore);
       await expect(check.detect(doctorContext(state))).resolves.toEqual([]);
     } finally {
       await state.cleanup();

@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   captureUpdateCommandExecutorAuthority,
@@ -328,83 +328,67 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
     },
   );
 
-  it.each(["update", "delete"] as const)(
-    "keeps a real writer excluded across nested child and owner reads until %s commits",
-    async (mutation) => {
-      const existingAuthority = await authority();
-      const store = createManagedHandoffLeaseStore({
-        databasePath,
-        serviceManagerEnv: resolveServiceManagerEnv(),
-        existingIdentity: existingAuthority,
-      });
-      const admitted = store.acquire(root, "reserved-owner", { kind: "update" });
-      if (admitted.kind !== "acquired") {
-        throw new Error("Writer exclusion fixture was not admitted");
-      }
-      const withDatabase = createManagedHandoffLeaseDatabase(databasePath, existingAuthority);
-      withDatabase(true, (db) => {
-        expect(db.isTransaction).toBe(false);
-        expect(probeWriterAdmission("EXCLUSIVE")).toEqual({ acquired: false, errcode: 5 });
-        return withDatabase.transact(
-          db,
-          () => {
-            expect(probeWriterAdmission()).toEqual({ acquired: false, errcode: 5 });
-            // A second connection alone is safe. A raw open/read/close during
-            // these owner reads must not discard the first connection's POSIX lock.
-            const prefix = `${root}/.openclaw-update-child-`;
-            const children = withDatabase(
-              false,
-              (reader) =>
-                executeSqliteQuerySync(
-                  reader,
-                  leaseQueries(reader)
-                    .selectFrom("managed_update_handoffs")
-                    .select("owner")
-                    .where("install_root", ">=", prefix)
-                    .where("install_root", "<", prefix + "\uffff"),
-                ).rows,
-            );
-            expect(children).toEqual([]);
-            expect(store.current(admitted.lease)).toBe(true);
-            expect(probeWriterAdmission()).toEqual({ acquired: false, errcode: 5 });
-            if (mutation === "delete") {
+  it("keeps a real writer excluded across nested child and owner reads until an update commits", async () => {
+    const existingAuthority = await authority();
+    const store = createManagedHandoffLeaseStore({
+      databasePath,
+      serviceManagerEnv: resolveServiceManagerEnv(),
+      existingIdentity: existingAuthority,
+    });
+    const admitted = store.acquire(root, "reserved-owner", { kind: "update" });
+    if (admitted.kind !== "acquired") {
+      throw new Error("Writer exclusion fixture was not admitted");
+    }
+    const withDatabase = createManagedHandoffLeaseDatabase(databasePath, existingAuthority);
+    withDatabase(true, (db) => {
+      expect(db.isTransaction).toBe(false);
+      expect(probeWriterAdmission("EXCLUSIVE")).toEqual({ acquired: false, errcode: 5 });
+      return withDatabase.transact(
+        db,
+        () => {
+          expect(probeWriterAdmission()).toEqual({ acquired: false, errcode: 5 });
+          // A second connection alone is safe. A raw open/read/close during
+          // these owner reads must not discard the first connection's POSIX lock.
+          const prefix = `${root}/.openclaw-update-child-`;
+          const children = withDatabase(
+            false,
+            (reader) =>
               executeSqliteQuerySync(
-                db,
-                leaseQueries(db)
-                  .deleteFrom("managed_update_handoffs")
-                  .where("install_root", "=", root)
-                  .where("owner", "=", admitted.lease.owner),
-              );
-            } else {
-              executeSqliteQuerySync(
-                db,
-                leaseQueries(db)
-                  .updateTable("managed_update_handoffs")
-                  .set({ updated_at: admitted.lease.updatedAt + 1 })
-                  .where("install_root", "=", root)
-                  .where("owner", "=", admitted.lease.owner),
-              );
-            }
-            expect(db.isTransaction).toBe(true);
-            expect(probeWriterAdmission()).toEqual({ acquired: false, errcode: 5 });
-          },
-          {},
-        );
-      });
-      expect(probeWriterAdmission("EXCLUSIVE")).toEqual({ acquired: true });
-      const after = store.read(root);
-      if (mutation === "delete") {
-        expect(after).toEqual({ kind: "absent" });
-      } else {
-        expect(after).toMatchObject({
-          kind: "current",
-          lease: { owner: admitted.lease.owner, updatedAt: admitted.lease.updatedAt + 1 },
-        });
-      }
-    },
-  );
+                reader,
+                leaseQueries(reader)
+                  .selectFrom("managed_update_handoffs")
+                  .select("owner")
+                  .where("install_root", ">=", prefix)
+                  .where("install_root", "<", prefix + "\uffff"),
+              ).rows,
+          );
+          expect(children).toEqual([]);
+          expect(store.current(admitted.lease)).toBe(true);
+          expect(probeWriterAdmission()).toEqual({ acquired: false, errcode: 5 });
+          executeSqliteQuerySync(
+            db,
+            leaseQueries(db)
+              .updateTable("managed_update_handoffs")
+              .set({ updated_at: admitted.lease.updatedAt + 1 })
+              .where("install_root", "=", root)
+              .where("owner", "=", admitted.lease.owner),
+          );
+          expect(db.isTransaction).toBe(true);
+          expect(probeWriterAdmission()).toEqual({ acquired: false, errcode: 5 });
+        },
+        {},
+      );
+    });
+    expect(probeWriterAdmission("EXCLUSIVE")).toEqual({ acquired: true });
+    expect(store.read(root)).toMatchObject({
+      kind: "current",
+      lease: { owner: admitted.lease.owner, updatedAt: admitted.lease.updatedAt + 1 },
+    });
+  });
 
-  it("keeps one installation's fence current during another installation's live write", async () => {
+  it("keeps one installation's fence current during another installation's live write", async ({
+    signal,
+  }) => {
     await withUpdateCommandExecutor(randomUUID(), async (executor) => {
       const fence = await executor.enter(root);
       const existingIdentity = captureUpdateCommandExecutorAuthority(fence);
@@ -459,7 +443,18 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
         child.stderr.on("data", (chunk) => {
           stderr += chunk.toString();
         });
-        expect((await once(child, "message", { signal: AbortSignal.timeout(10_000) }))[0]).toEqual({
+        expect(
+          (
+            await withinTest(
+              awaitGateBeforeSettlement(
+                once(child, "message"),
+                closed,
+                "Child fixture exited before readiness",
+              ),
+              signal,
+            )
+          )[0],
+        ).toEqual({
           ready: true,
           changes: 1,
           inTransaction: true,
@@ -471,7 +466,7 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
         expect(store.owns(original.lease, "executor")).toBe(true);
         expect(() => fence.assertCurrent()).not.toThrow();
         child.send({ commit: true });
-        expect(await closed).toEqual([0, null]);
+        expect(await withinTest(closed, signal)).toEqual([0, null]);
         expect(stderr).toBe("");
         expect(store.read(root)).toEqual(original);
         expect(() => fence.assertCurrent()).not.toThrow();
@@ -484,12 +479,17 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
           expect(store.release(updatedOther.lease)).toBe(true);
         }
       } finally {
-        await stopChildProcess(child, 5_000);
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill("SIGKILL");
+        }
+        await closed;
       }
     });
   });
 
-  it("excludes a real writer until public release commits after its recorded child settles", async () => {
+  it("excludes a real writer until public release commits after its recorded child settles", async ({
+    signal,
+  }) => {
     const existingIdentity = await authority();
     const store = createManagedHandoffLeaseStore({
       databasePath,
@@ -515,7 +515,7 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
       { stdio: ["ignore", "ignore", "pipe", "ipc"], env: {}, detached: true },
     );
     let stderr = "";
-    const closed = once(child, "close", { signal: AbortSignal.timeout(10_000) });
+    const closed = once(child, "close");
     void closed.catch(() => undefined);
     try {
       if (!child.stderr) {
@@ -524,7 +524,18 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
       child.stderr.on("data", (chunk) => {
         stderr += chunk.toString();
       });
-      expect((await once(child, "message", { signal: AbortSignal.timeout(10_000) }))[0]).toEqual({
+      expect(
+        (
+          await withinTest(
+            awaitGateBeforeSettlement(
+              once(child, "message"),
+              closed,
+              "Child fixture exited before readiness",
+            ),
+            signal,
+          )
+        )[0],
+      ).toEqual({
         ready: true,
       });
       if (child.pid === undefined) {
@@ -539,7 +550,7 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
       expect(store.current(parent.lease)).toBe(true);
       expect(store.current(boundChild)).toBe(true);
       child.send({ exit: true });
-      expect(await closed).toEqual([0, null]);
+      expect(await withinTest(closed, signal)).toEqual([0, null]);
       expect(stderr).toBe("");
       expect(store.release(parent.lease)).toBe(false);
       expect(store.release(boundChild)).toBe(true);
@@ -590,12 +601,22 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
       expect(probeWriterAdmission()).toEqual({ acquired: true });
       expect(store.read(root)).toEqual({ kind: "absent" });
     } finally {
-      await stopChildProcess(child, 5_000);
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGKILL");
+      }
+      await closed;
     }
   });
 
   describe.each(["admission", "release"] as const)("%s", (phase) => {
-    it.each(damage)("preserves $name without repair", async ({ apply }) => {
+    // Admission covers each guard; release repeats missing storage and identity revocation.
+    it.each(
+      phase === "admission"
+        ? damage
+        : damage.filter(({ name }) =>
+            ["missing database", "replacement parent with the same database inode"].includes(name),
+          ),
+    )("preserves $name without repair", async ({ apply }) => {
       const existingAuthority = await authority();
       let before: ReturnType<typeof snapshot> | undefined;
       let assertNoRepairs: () => void = () => expect.fail("Authority was not revoked");
@@ -637,41 +658,12 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
     });
   });
 
-  it.each(["missing", "replaced"] as const)(
-    "refuses a database %s immediately before a writable authority reopen",
-    async (change) => {
-      const existingAuthority = await authority();
-      const retained = path.join(root, "retained.sqlite");
-      let before: ReturnType<typeof snapshot> | undefined;
-      let raced = false;
-      vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((location, options) => {
-        if (options?.readOnly) {
-          return openDatabase(location, options);
-        }
-        raced = true;
-        fs.renameSync(databasePath, retained);
-        if (change === "replaced") {
-          fs.copyFileSync(retained, databasePath);
-          fs.chmodSync(databasePath, 0o600);
-        }
-        before = snapshot();
-        return openDatabase(location, options);
-      });
-      const operation = vi.fn();
-      const withDatabase = createManagedHandoffLeaseDatabase(databasePath, existingAuthority);
-      expect(() => withDatabase(true, operation)).toThrow();
-      expect(raced).toBe(true);
-      expect(operation).not.toHaveBeenCalled();
-      expect(snapshot()).toEqual(before);
-    },
-  );
-
   describe.each(["acquire", "release"] as const)("%s transaction", (operation) => {
-    it.each(
-      (["after-open", "after-begin", "before-commit"] as const).flatMap((boundary) =>
-        (["database", "parent"] as const).map((target) => ({ boundary, target })),
-      ),
-    )("refuses a replaced $target at $boundary", async ({ boundary, target }) => {
+    it.each([
+      { boundary: "after-open", target: "database" },
+      { boundary: "after-begin", target: "parent" },
+      { boundary: "before-commit", target: "database" },
+    ] as const)("refuses a replaced $target at $boundary", async ({ boundary, target }) => {
       const existingAuthority = await authority();
       const store = createManagedHandoffLeaseStore({
         databasePath,

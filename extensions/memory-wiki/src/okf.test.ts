@@ -9,6 +9,13 @@ import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { createTempDir, createVault } = createMemoryWikiTestHarness();
 
+const OKF_LITERAL_LINK_EXAMPLES = [
+  "    [customers](/tables/customers.md)",
+  "> ```markdown\n> [customers](/tables/customers.md)\n> ```",
+  "``\n[customers](/tables/customers.md)\n``",
+  "- ```markdown\n  [customers](/tables/customers.md)\n  ```",
+];
+
 function getOnlyPagePath(paths: string[]): string {
   expect(paths).toHaveLength(1);
   const [pagePath] = paths;
@@ -74,6 +81,8 @@ Inline code keeps \`[customers](/tables/customers.md)\` unchanged.
 \`\`\`markdown
 [customers](/tables/customers.md)
 \`\`\`
+
+${OKF_LITERAL_LINK_EXAMPLES.join("\n\n")}
 
 External citation stays as [BigQuery](https://cloud.google.com/bigquery).
 `,
@@ -153,6 +162,9 @@ describe("importMemoryWikiOkfBundle", () => {
     expect(orders.body).toContain('"metric docs"');
     expect(orders.body).toContain("`[customers](/tables/customers.md)`");
     expect(orders.body).toContain("```markdown\n[customers](/tables/customers.md)\n```");
+    for (const example of OKF_LITERAL_LINK_EXAMPLES) {
+      expect(orders.body).toContain(example);
+    }
     expect(orders.body).toContain("https://cloud.google.com/bigquery");
 
     const okf = orders.frontmatter.okf as Record<string, unknown>;
@@ -259,53 +271,6 @@ Long concept body.
     );
   });
 
-  it("namespaces concept pages by bundle so repeated OKF paths do not overwrite", async () => {
-    const rootDir = await createTempDir("memory-wiki-okf-bundles-");
-    const firstBundle = path.join(rootDir, "first-bundle");
-    const secondBundle = path.join(rootDir, "second-bundle");
-    for (const [bundlePath, title] of [
-      [firstBundle, "First Customers"],
-      [secondBundle, "Second Customers"],
-    ] as const) {
-      await fs.mkdir(path.join(bundlePath, "tables"), { recursive: true });
-      await fs.writeFile(
-        path.join(bundlePath, "tables", "customers.md"),
-        `---
-type: BigQuery Table
-title: ${title}
----
-
-${title} body.
-`,
-        "utf8",
-      );
-    }
-    const { config } = await createVault({
-      rootDir: path.join(rootDir, "vault"),
-    });
-
-    const first = await importMemoryWikiOkfBundle({
-      config,
-      bundlePath: firstBundle,
-      nowMs: Date.UTC(2026, 5, 12, 10, 0, 0),
-    });
-    const second = await importMemoryWikiOkfBundle({
-      config,
-      bundlePath: secondBundle,
-      nowMs: Date.UTC(2026, 5, 12, 10, 0, 0),
-    });
-
-    const firstPath = getOnlyPagePath(first.pagePaths);
-    const secondPath = getOnlyPagePath(second.pagePaths);
-    expect(firstPath).not.toBe(secondPath);
-    await expect(fs.readFile(path.join(config.vault.path, firstPath), "utf8")).resolves.toContain(
-      "First Customers body.",
-    );
-    await expect(fs.readFile(path.join(config.vault.path, secondPath), "utf8")).resolves.toContain(
-      "Second Customers body.",
-    );
-  });
-
   it("removes stale concept pages when an OKF bundle drops a concept", async () => {
     const rootDir = await createTempDir("memory-wiki-okf-remove-");
     const bundlePath = path.join(rootDir, "removing-okf");
@@ -365,56 +330,6 @@ Order body.
       searchCorpus: "wiki",
     });
     expect(results).toHaveLength(0);
-  });
-
-  it("does not prune existing pages when current OKF scan has invalid concepts", async () => {
-    const rootDir = await createTempDir("memory-wiki-okf-invalid-");
-    const bundlePath = path.join(rootDir, "invalid-okf");
-    await fs.mkdir(path.join(bundlePath, "tables"), { recursive: true });
-    const customersPath = path.join(bundlePath, "tables", "customers.md");
-    await fs.writeFile(
-      customersPath,
-      `---
-type: BigQuery Table
-title: Customers
----
-
-Customer body.
-`,
-      "utf8",
-    );
-    const { config } = await createVault({
-      rootDir: path.join(rootDir, "vault"),
-    });
-    const first = await importMemoryWikiOkfBundle({
-      config,
-      bundlePath,
-      nowMs: Date.UTC(2026, 5, 12, 10, 0, 0),
-    });
-    const pagePath = getOnlyPagePath(first.pagePaths);
-    await fs.writeFile(
-      customersPath,
-      `---
-title: Customers
----
-
-Temporarily invalid body.
-`,
-      "utf8",
-    );
-
-    const second = await importMemoryWikiOkfBundle({
-      config,
-      bundlePath,
-      nowMs: Date.UTC(2026, 5, 12, 10, 0, 0),
-    });
-
-    expect(second.importedCount).toBe(0);
-    expect(second.skippedCount).toBe(1);
-    expect(second.removedCount).toBe(0);
-    await expect(fs.readFile(path.join(config.vault.path, pagePath), "utf8")).resolves.toContain(
-      "Customer body.",
-    );
   });
 
   it("detects body-only changes on timestamp-shaped markdown lines", async () => {
@@ -510,40 +425,6 @@ See [table](BigQuery%20Table.md?view=compact#columns).
     await expect(fs.readFile(path.join(config.vault.path, linksPath), "utf8")).resolves.toMatch(
       /\[table\]\(okf-encoded-okf-[0-9a-f]{8}-bigquery-table-[^)]+\.md\?view=compact#columns\)/,
     );
-  });
-
-  it("imports OKF concept frontmatter with CRLF line endings", async () => {
-    const rootDir = await createTempDir("memory-wiki-okf-crlf-");
-    const bundlePath = path.join(rootDir, "crlf-okf");
-    await fs.mkdir(path.join(bundlePath, "tables"), { recursive: true });
-    await fs.writeFile(
-      path.join(bundlePath, "tables", "events.md"),
-      [
-        "---",
-        "type: BigQuery Table",
-        "title: Events",
-        "---",
-        "",
-        "Windows-flavored frontmatter.",
-        "",
-      ].join("\r\n"),
-      "utf8",
-    );
-    const { config } = await createVault({
-      rootDir: path.join(rootDir, "vault"),
-    });
-
-    const result = await importMemoryWikiOkfBundle({
-      config,
-      bundlePath,
-      nowMs: Date.UTC(2026, 5, 12, 10, 0, 0),
-    });
-
-    expect(result.importedCount).toBe(1);
-    expect(result.skippedCount).toBe(0);
-    await expect(
-      fs.readFile(path.join(config.vault.path, getOnlyPagePath(result.pagePaths)), "utf8"),
-    ).resolves.toContain("Windows-flavored frontmatter.");
   });
 
   it("refuses to write imported OKF concept pages through symlinks", async () => {

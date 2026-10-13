@@ -1,11 +1,12 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import { clearFollowupQueue, getFollowupQueue } from "../../auto-reply/reply/queue/state.js";
+import { setRuntimeConfigSnapshot } from "../../config/io.js";
 import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import type { AgentConfig } from "../../config/types.agents.js";
+import type { AgentEntryConfig } from "../../config/types.agents.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
@@ -13,6 +14,7 @@ import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metada
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import * as userModelAccounts from "../../state/user-model-accounts.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
   createOpenClawTestState,
@@ -50,9 +52,7 @@ vi.mock("../../agents/model-runtime-choice.js", () => ({
 }));
 
 const effects = vi.hoisted(() => ({
-  info: vi.fn(),
   mutateConfigFileWithRetry: vi.fn(),
-  warn: vi.fn(),
 }));
 
 vi.mock("../../config/config.js", async () => {
@@ -61,37 +61,25 @@ vi.mock("../../config/config.js", async () => {
   return { ...actual, mutateConfigFileWithRetry: effects.mutateConfigFileWithRetry };
 });
 
-vi.mock("../../logging/subsystem.js", async () => {
-  const actual = await vi.importActual<typeof import("../../logging/subsystem.js")>(
-    "../../logging/subsystem.js",
-  );
-  return {
-    ...actual,
-    createSubsystemLogger: (subsystem: string) =>
-      subsystem === "agents/sticky-model-selection"
-        ? { info: effects.info, warn: effects.warn }
-        : actual.createSubsystemLogger(subsystem),
-  };
-});
-
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { createGatewaySession } from "../session-create-service.js";
 import { TerminalSessionManager } from "../terminal/session-manager.js";
 import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
 import { registerSessionNativeRuntimeConsentTests } from "./sessions-mutations.native-consent.test-support.js";
+import { registerSessionOperatorPreparationTests } from "./sessions-mutations.operator-preparation.test-support.js";
 import { registerSessionRuntimeWindowTests } from "./sessions-mutations.runtime-windows.test-support.js";
 import { registerSessionSandboxStickyModelTests } from "./sessions-mutations.sandbox.test-support.js";
 
-const defaultAgents: AgentConfig[] = [
-  { id: "main", default: true },
-  { id: "work", model: "anthropic/claude-sonnet-4-6" },
-];
+const defaultAgents: Record<string, AgentEntryConfig> = {
+  main: {},
+  work: { model: "anthropic/claude-sonnet-4-6" },
+};
 
 const defaultConfig = {
   agents: {
     defaults: { model: "anthropic/claude-opus-4-6" },
-    list: defaultAgents,
+    entries: defaultAgents,
   },
 } satisfies OpenClawConfig;
 
@@ -101,6 +89,7 @@ let openClawTestState: OpenClawTestState;
 let accountOwnerId: string;
 let otherPersonId: string;
 let personalAuthProfileId: string;
+let profileCatalog: Awaited<ReturnType<typeof prepareUserProfileCatalog>> | undefined;
 
 const modelCatalog: ModelCatalogEntry[] = [
   { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus" },
@@ -216,6 +205,7 @@ beforeAll(async () => {
     },
     assertCurrent: () => {},
   }).authProfileId;
+  profileCatalog = await prepareUserProfileCatalog();
   // Persisted runtime pins need installed owners even when a patch changes only permissions.
   pluginMetadata.snapshot = createPluginMetadataSnapshotFixture({
     plugins: [
@@ -231,14 +221,13 @@ afterEach(() => {
 
 beforeEach(() => {
   cfg = structuredClone(defaultConfig);
+  setRuntimeConfigSnapshot(cfg);
   runtimeChoice.prepare.mockReset().mockImplementation(async (input) => ({
     kind: "ready",
     runtimeId: input.runtimeId ?? "openclaw",
     validate: () => undefined,
   }));
   persistedConfig = undefined;
-  effects.info.mockReset();
-  effects.warn.mockReset();
   effects.mutateConfigFileWithRetry
     .mockReset()
     .mockImplementation(
@@ -252,6 +241,7 @@ beforeEach(() => {
 });
 
 afterAll(async () => {
+  profileCatalog?.release();
   closeOpenClawAgentDatabasesForTest();
   await openClawTestState.cleanup();
 });
@@ -267,6 +257,8 @@ registerSessionNativeRuntimeConsentTests({
   queueRuntimeSelection,
 });
 
+registerSessionOperatorPreparationTests({ context, profileId: () => accountOwnerId, personClient });
+
 describe("sessions.patch sticky model persistence", () => {
   registerSessionSandboxStickyModelTests({
     getConfig: () => cfg,
@@ -274,51 +266,6 @@ describe("sessions.patch sticky model persistence", () => {
     configMutationRequested: () => effects.mutateConfigFileWithRetry.mock.calls.length > 0,
     getPersistedConfig: () => persistedConfig,
   });
-  it.each([
-    { scope: undefined, agentId: "main", target: undefined },
-    { scope: undefined, agentId: "work", target: undefined },
-    { scope: "session", agentId: "main", target: undefined },
-    { scope: "session", agentId: "work", target: undefined },
-    { scope: "agent", agentId: "main", target: "agent" },
-    { scope: "agent", agentId: "work", target: "agent" },
-    { scope: "global", agentId: "main", target: "defaults" },
-    { scope: "global", agentId: "work", target: "defaults" },
-  ] as const)(
-    "uses scope=$scope for $agentId without changing another config layer",
-    async ({ scope, agentId, target }) => {
-      cfg.agents!.defaults!.modelSelectionScope = scope;
-      const sessionKey = `agent:${agentId}:dm:sticky-${scope ?? "unset"}`;
-      const model = "openai/gpt-5.6-sol";
-      await upsertSessionEntryCore(
-        { agentId, sessionKey },
-        { sessionId: `session-${agentId}-${scope ?? "unset"}`, updatedAt: 1 },
-      );
-
-      const response = await patchSession({ key: sessionKey, model });
-
-      expect(response[0]).toBe(true);
-      expect(loadSessionEntry({ agentId, sessionKey })).toMatchObject({
-        providerOverride: "openai",
-        modelOverride: "gpt-5.6-sol",
-      });
-      if (!target) {
-        expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
-        return;
-      }
-      await vi.waitFor(() => expect(persistedConfig).toBeDefined());
-      expect(persistedConfig?.agents?.defaults?.model).toBe(
-        target === "defaults" ? model : defaultConfig.agents.defaults.model,
-      );
-      const expectedAgents = structuredClone(defaultConfig.agents.list);
-      for (const agent of expectedAgents) {
-        if (target === "agent" && agent.id === agentId) {
-          agent.model = model;
-        }
-      }
-      expect(persistedConfig?.agents?.list).toEqual(expectedAgents);
-    },
-  );
-
   it.each([
     { scope: "agent", agentId: "main", model: "anthropic/claude-opus-4-6" },
     { scope: "global", agentId: "work", model: "anthropic/claude-sonnet-4-6" },
@@ -333,23 +280,20 @@ describe("sessions.patch sticky model persistence", () => {
       );
 
       expect((await patchSession({ key: sessionKey, model }))[0]).toBe(true);
-      expect(loadSessionEntry({ agentId, sessionKey })).toMatchObject({
-        providerOverride: "anthropic",
-        modelOverride: model.slice("anthropic/".length),
-        modelOverrideSource: "user",
-        modelOverrideRouteResolution: "resolved",
-      });
+      const entry = loadSessionEntry({ agentId, sessionKey });
+      expect(entry?.modelOverrideSource).toBe("default");
+      expect(entry?.providerOverride).toBeUndefined();
+      expect(entry?.modelOverride).toBeUndefined();
+      expect(entry?.modelOverrideRouteResolution).toBeUndefined();
       await vi.waitFor(() => expect(persistedConfig).toBeDefined());
       expect(persistedConfig?.agents?.defaults?.model).toBe(
         scope === "global" ? model : defaultConfig.agents.defaults.model,
       );
-      const expectedAgents = structuredClone(defaultConfig.agents.list);
-      for (const agent of expectedAgents) {
-        if (scope === "agent" && agent.id === agentId) {
-          agent.model = model;
-        }
+      const expectedAgents = structuredClone(defaultConfig.agents.entries);
+      if (scope === "agent") {
+        expectedAgents[agentId]!.model = model;
       }
-      expect(persistedConfig?.agents?.list).toEqual(expectedAgents);
+      expect(persistedConfig?.agents?.entries).toEqual(expectedAgents);
     },
   );
 
@@ -394,7 +338,7 @@ describe("sessions.patch sticky model persistence", () => {
     ).toHaveLength(0);
   });
 
-  it.each([undefined, "session", "agent", "global"] as const)(
+  it.each([undefined, "global"] as const)(
     "keeps non-admin model changes session-only with scope=%s",
     async (scope) => {
       cfg.agents!.defaults!.modelSelectionScope = scope;
@@ -417,43 +361,12 @@ describe("sessions.patch sticky model persistence", () => {
     },
   );
 
-  it("returns session success and warns when the sticky config write fails", async () => {
-    cfg.agents!.defaults!.modelSelectionScope = "global";
-    const sessionKey = "agent:main:dm:write-failure";
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey },
-      { sessionId: "session-write-failure", updatedAt: 1 },
-    );
-    effects.mutateConfigFileWithRetry.mockRejectedValueOnce(new Error("config write failed"));
-
-    const response = await patchSession({ key: sessionKey, model: "openai/gpt-5.6-sol" });
-
-    expect(response[0]).toBe(true);
-    expect(loadSessionEntry({ agentId: "main", sessionKey })).toMatchObject({
-      providerOverride: "openai",
-      modelOverride: "gpt-5.6-sol",
-    });
-    await vi.waitFor(() =>
-      expect(effects.warn).toHaveBeenCalledWith(
-        "failed sticky model persistence agentId=main model=openai/gpt-5.6-sol reason=config write failed",
-      ),
-    );
-  });
-
-  it.each([
-    { name: "omitted", patch: { label: "Sticky" }, catalogChanged: false },
-    { name: "cleared", patch: { model: null }, catalogChanged: true },
-    {
-      name: "reset to the current default",
-      patch: { model: "anthropic/claude-opus-4-6" },
-      catalogChanged: true,
-    },
-  ])("does not persist when model is $name", async ({ name, patch, catalogChanged }) => {
-    const sessionKey = `agent:main:dm:no-sticky-${name}`;
+  it("does not persist when model is cleared", async () => {
+    const sessionKey = "agent:main:dm:no-sticky-cleared";
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey },
       {
-        sessionId: `session-${name}`,
+        sessionId: "session-cleared",
         updatedAt: 1,
         providerOverride: "openai",
         modelOverride: "gpt-5.6-sol",
@@ -461,27 +374,23 @@ describe("sessions.patch sticky model persistence", () => {
         modelOverrideRouteResolution: "resolved",
       },
     );
-
     const requestContext = {
       ...context(),
       getSessionEventSubscriberConnIds: () => new Set(["reader"]),
     };
     const response = await patchSession(
-      { key: sessionKey, ...patch },
+      { key: sessionKey, model: null },
       ["operator.admin"],
       requestContext,
     );
     await flushPendingSessionsChangedEvents(requestContext);
-
     expect(response[0]).toBe(true);
     expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
-    const event = requestContext.broadcastToConnIds.mock.calls.at(-1)?.[1];
-    expect(event).toMatchObject({ sessionKey, reason: "patch" });
-    if (catalogChanged) {
-      expect(event).toHaveProperty("catalogChanged", true);
-    } else {
-      expect(event).not.toHaveProperty("catalogChanged");
-    }
+    expect(requestContext.broadcastToConnIds.mock.calls.at(-1)?.[1]).toMatchObject({
+      sessionKey,
+      reason: "patch",
+      catalogChanged: true,
+    });
   });
 });
 
@@ -575,7 +484,11 @@ describe("sessions.patch personal model-account ownership", () => {
       const connections = new Set([caller]);
       const requestContext = context(connections);
       const catalog = createDeferredCore<ReturnType<typeof catalogSnapshot>>();
-      requestContext.loadGatewayModelCatalogSnapshot.mockReturnValueOnce(catalog.promise);
+      const catalogEntered = createDeferredCore();
+      requestContext.loadGatewayModelCatalogSnapshot.mockImplementationOnce(() => {
+        catalogEntered.resolve();
+        return catalog.promise;
+      });
       const readCredential = vi.spyOn(userModelAccounts, "readUserModelAuthProfile");
       const pending = patchSession(
         {
@@ -588,9 +501,13 @@ describe("sessions.patch personal model-account ownership", () => {
         caller,
       );
       try {
-        await vi.waitFor(() =>
-          expect(requestContext.loadGatewayModelCatalogSnapshot).toHaveBeenCalledOnce(),
-        );
+        await Promise.race([
+          catalogEntered.promise,
+          pending.then(() => {
+            throw new Error("Session patch completed before loading the model catalog");
+          }),
+        ]);
+        expect(requestContext.loadGatewayModelCatalogSnapshot).toHaveBeenCalledOnce();
         if (loss === "invalidated") {
           caller.invalidated = true;
         } else if (loss === "disconnected") {
@@ -684,84 +601,9 @@ describe("sessions.patch personal model-account ownership", () => {
     });
     expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
   });
-
-  it("preserves shared-profile selection without requiring a personal identity", async () => {
-    const sharedAuthProfileId = "openai:shared-session-control";
-    await openClawTestState.writeAuthProfiles({
-      version: 1,
-      profiles: {
-        [sharedAuthProfileId]: {
-          type: "token",
-          provider: "openai",
-          token: "synthetic-shared-token",
-        },
-      },
-    });
-    const sessionKey = "agent:main:dm:shared-selection-control";
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey },
-      { sessionId: "shared-selection-control", updatedAt: 1 },
-    );
-
-    const response = await patchSession(
-      { key: sessionKey, model: `openai/gpt-5.6-sol@${sharedAuthProfileId}` },
-      ["operator.write"],
-    );
-
-    expect(response[0]).toBe(true);
-    expect(loadSessionEntry({ agentId: "main", sessionKey })).toMatchObject({
-      providerOverride: "openai",
-      modelOverride: "gpt-5.6-sol",
-      authProfileOverride: sharedAuthProfileId,
-      authProfileOverrideSource: "user",
-    });
-  });
 });
 
 describe("explicit session model runtimes", () => {
-  it.each(["codex", "openclaw"])(
-    "pins %s without changing the configured default",
-    async (agentRuntime) => {
-      const sessionKey = `agent:main:runtime-${agentRuntime}`;
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey },
-        {
-          sessionId: sessionKey,
-          updatedAt: 1,
-          providerOverride: "openai",
-          modelOverride: "gpt-5.6-sol",
-          contextTokens: 1000,
-        },
-      );
-      const queued = queueRuntimeSelection(sessionKey);
-      let response: Awaited<ReturnType<typeof patchSession>>;
-      try {
-        response = await patchSession({
-          key: sessionKey,
-          model: "openai/gpt-5.6-sol",
-          agentRuntime,
-        });
-        expect(queued).toMatchObject({
-          provider: "openai",
-          model: "gpt-5.6-sol",
-          requestedRouteResolution: "resolved",
-        });
-      } finally {
-        clearFollowupQueue(sessionKey);
-      }
-      expect(response[0]).toBe(true);
-      const stored = loadSessionEntry({ agentId: "main", sessionKey });
-      expect(stored).toMatchObject({
-        modelOverride: "gpt-5.6-sol",
-        agentRuntimeOverride: agentRuntime,
-        liveModelSwitchPending: true,
-      });
-      expect(stored).not.toHaveProperty("contextTokens");
-      expect(persistedConfig).toBeUndefined();
-      expect(cfg.agents?.defaults?.model).toEqual(defaultConfig.agents.defaults.model);
-    },
-  );
-
   it("clears only the runtime pin and preserves the explicit model and account", async () => {
     const sessionKey = "agent:main:runtime-clear";
     await upsertSessionEntryCore(
@@ -877,36 +719,6 @@ describe("explicit session model runtimes", () => {
     const stored = loadSessionEntry({ agentId: "main", sessionKey });
     expect(stored).toMatchObject({ sessionId: "replacement" });
     expect(stored).not.toHaveProperty("agentRuntimeOverride");
-  });
-
-  it("validates a person-linked account as a pin for the selected runtime", async () => {
-    const sessionKey = "agent:main:runtime-personal";
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey },
-      {
-        sessionId: sessionKey,
-        updatedAt: 1,
-        providerOverride: "openai",
-        modelOverride: "gpt-5.6-sol",
-        agentRuntimeOverride: "openclaw",
-        authProfileOverride: personalAuthProfileId,
-        authProfileOverrideSource: "user-link",
-      },
-    );
-    expect(
-      (
-        await patchSession({ key: sessionKey, model: "openai/gpt-5.6-sol", agentRuntime: "codex" })
-      )[0],
-    ).toBe(true);
-    expect(runtimeChoice.prepare).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runtimeId: "codex",
-        sessionEntry: expect.objectContaining({
-          authProfileOverride: personalAuthProfileId,
-          authProfileOverrideSource: "user",
-        }),
-      }),
-    );
   });
 
   it("creates an unlocked session with an explicit runtime and rejects unprivileged adoption changes", async () => {

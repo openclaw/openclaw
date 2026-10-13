@@ -1,4 +1,3 @@
-// Check Memory Fd Repro tests cover check memory fd repro script behavior.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { createServer, type Server } from "node:http";
@@ -171,6 +170,9 @@ function runGatewayOwnershipFixture(scenario: OwnershipScenario) {
         "    pid: ownedPid, exitCode: null, signalCode: null,",
         "    stdout: new PassThrough(), stderr: new PassThrough(),",
         "    kill: (signal) => process.kill(ownedPid, signal),",
+        "  });",
+        "  Object.defineProperty(child, 'stdio', {",
+        "    get: () => [null, child.stdout, child.stderr, null],",
         "  });",
         "  queueMicrotask(() => {",
         "    child.stdout.write('[gateway] ready\\n');",
@@ -477,25 +479,6 @@ describe("check-memory-fd-repro", () => {
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
-  });
-
-  it("accepts an available memory_search tool payload", () => {
-    const result = classifyMemorySearchInvokeResponse({
-      httpOk: true,
-      status: 200,
-      bodyText: JSON.stringify({
-        ok: true,
-        result: {
-          content: [{ type: "text", text: JSON.stringify({ results: [] }) }],
-        },
-      }),
-    });
-
-    expect(result).toMatchObject({
-      ok: true,
-      gatewayOk: true,
-      resultCount: 0,
-    });
   });
 
   it("rejects disabled memory_search tool payloads", () => {

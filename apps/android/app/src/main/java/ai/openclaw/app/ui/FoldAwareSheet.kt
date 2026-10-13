@@ -25,7 +25,6 @@ import androidx.compose.ui.platform.InspectorInfo
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.Constraints
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
@@ -139,11 +138,7 @@ internal class FoldAwareSheetState(
         }
     val pane =
       selectedPane?.takeIf { it in candidates }
-        ?: candidates.minWithOrNull(
-          compareByDescending<IntRect> { it.width.toLong() * it.height }
-            .thenBy { it.top }
-            .thenBy { if (direction == LayoutDirection.Ltr) it.left else -it.right },
-        )
+        ?: candidates.preferredFoldSafeRegion(direction)
     if (pane == null) {
       reject()
       return false

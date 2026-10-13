@@ -8,7 +8,7 @@ export function createTestControlUiSessionPrSubscriptions(
   deps: Omit<SubscriptionDeps, "prepareRead"> & Partial<Pick<SubscriptionDeps, "prepareRead">>,
 ) {
   return createControlUiSessionPullRequestSubscriptions({
-    prepareRead: (_connId, session) => {
+    prepareRead: async (_connId, session) => {
       const parsed = parseAgentSessionKey(session.sessionKey);
       const target = {
         params: {
@@ -19,7 +19,7 @@ export function createTestControlUiSessionPrSubscriptions(
         readSource: { agentId: session.agentId ?? parsed?.agentId ?? "main", path: "unused" },
         source: null,
       };
-      return () => target;
+      return async () => target;
     },
     ...deps,
   });

@@ -24,6 +24,7 @@ import { NodeWorkerPreparedWorkspaceStore } from "../node-host/node-worker-prepa
 import { NodeWorkerWorkspaceRuntime } from "../node-host/node-worker-workspace.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { parseNodeWorkerPreparedWorkspaceResult } from "../worker/node-workspace-prepared-protocol.js";
 import { NODE_WORKSPACE_DRAIN_COMMAND } from "../worker/node-workspace-protocol.js";
 import { createDesktopSessionRegistry } from "./desktop/session-registry.js";
@@ -101,12 +102,13 @@ async function createPreparedNodeAcknowledgement(root: string) {
   };
   try {
     const runtime = await createGatewayWorkerEnvironmentRuntime({
+      scheduler: createTestGatewayScheduler(),
       getPluginRegistry: () => registry,
       getPortalRuntime: () => undefined,
       resolveGatewayContext: () => undefined,
       desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
       startup,
-      log: { child: () => ({ warn: () => {} }) },
+      log: { child: () => ({ info: () => {}, warn: () => {} }) },
     });
     owned.runtime = runtime;
     const options = factory.mock.calls.at(-1)?.[0];
@@ -377,13 +379,13 @@ async function createPreparedNodeAcknowledgement(root: string) {
         },
       });
       binding.ownerEpoch = attached.ownerEpoch;
-      let placement = startup.placementStore.startDispatch({
+      let placement = await startup.placementStore.startDispatch({
         sessionId: binding.sessionId,
         sessionKey: binding.sessionKey,
         agentId: "main",
       });
       for (const to of ["provisioning", "syncing"] as const) {
-        placement = startup.placementStore.transition({
+        placement = await startup.placementStore.transition({
           sessionId: binding.sessionId,
           from: placement.state,
           to,

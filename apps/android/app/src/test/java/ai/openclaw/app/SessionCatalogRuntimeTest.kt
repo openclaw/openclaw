@@ -165,10 +165,8 @@ class SessionCatalogRuntimeTest {
                   hosts =
                     listOf(
                       SessionCatalogHost(
-                        catalogId = "codex",
                         hostId = "desktop",
                         label = "Desktop",
-                        kind = "node",
                         connected = true,
                         sessions = emptyList(),
                         nextCursor = "cursor-2",

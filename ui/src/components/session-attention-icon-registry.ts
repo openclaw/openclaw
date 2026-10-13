@@ -2,7 +2,7 @@ import type { TemplateResult } from "lit";
 import type { SessionAgentAttentionIconId } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import { icons } from "./icons.ts";
 
-const SESSION_ATTENTION_ICON_REGISTRY = {
+export const SESSION_ATTENTION_ICONS = {
   hand: icons.hand,
   key: icons.key,
   alert: icons.alertTriangle,
@@ -10,7 +10,3 @@ const SESSION_ATTENTION_ICON_REGISTRY = {
   lock: icons.lock,
   hourglass: icons.circle,
 } as const satisfies Record<SessionAgentAttentionIconId, TemplateResult>;
-
-export function resolveSessionAttentionIcon(icon: SessionAgentAttentionIconId): TemplateResult {
-  return SESSION_ATTENTION_ICON_REGISTRY[icon];
-}

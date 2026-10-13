@@ -1,6 +1,10 @@
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  rethrowIncognitoSessionError,
+  type SessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeActiveMemoryFastMode } from "./config.js";
 import { getModelRef } from "./query.js";
 import { runRecallSubagent } from "./recall-run.js";
@@ -22,7 +26,6 @@ import {
   buildPersistedDebugSummary,
   buildPluginStatusLine,
   persistPluginStatusLines,
-  resolveCanonicalSessionKeyFromSessionId,
 } from "./session.js";
 import {
   buildSubagentRecallResult,
@@ -67,48 +70,6 @@ function formatActiveMemoryFastMode(fastMode: ActiveMemoryFastMode | undefined):
         : "auto";
 }
 
-function prepareRecallRunContext(params: {
-  api: OpenClawPluginApi;
-  runtimeConfig: OpenClawConfig;
-  config: ResolvedActiveRecallPluginConfig;
-  agentId: string;
-  sessionKey?: string;
-  sessionId?: string;
-}): {
-  parentSessionKey?: string;
-  storePath: string;
-  fastMode?: ActiveMemoryFastMode;
-} {
-  const parentSessionKey =
-    params.sessionKey ??
-    resolveCanonicalSessionKeyFromSessionId({
-      api: params.api,
-      agentId: params.agentId,
-      sessionId: params.sessionId,
-    });
-  const storePath = params.api.runtime.agent.session.resolveStorePath(
-    params.runtimeConfig.session?.store,
-    { agentId: params.agentId },
-  );
-  if (params.config.fastMode !== undefined) {
-    return { parentSessionKey, storePath, fastMode: params.config.fastMode };
-  }
-  const sessionFastMode = parentSessionKey
-    ? params.api.runtime.agent.session.getSessionEntry({
-        agentId: params.agentId,
-        sessionKey: parentSessionKey,
-        storePath,
-        readConsistency: "latest",
-      })?.fastMode
-    : undefined;
-  const fastMode =
-    normalizeActiveMemoryFastMode(sessionFastMode) ??
-    normalizeActiveMemoryFastMode(
-      resolveAgentConfig(params.runtimeConfig, params.agentId)?.fastModeDefault,
-    );
-  return { parentSessionKey, storePath, fastMode };
-}
-
 type ActiveRecallParams = {
   api: OpenClawPluginApi;
   runtimeConfig: OpenClawConfig;
@@ -116,6 +77,8 @@ type ActiveRecallParams = {
   agentId: string;
   sessionKey?: string;
   sessionId?: string;
+  sessionEntry: SessionEntry | undefined;
+  storePath: string;
   messageProvider?: string;
   channelId?: string;
   query: string;
@@ -130,10 +93,18 @@ type ActiveRecallParams = {
   authorityFingerprint: string;
   memorySlot?: string;
   activeProjectKeys?: string[];
+  memoryAudience?: Parameters<
+    OpenClawPluginApi["runtime"]["agent"]["runEmbeddedAgent"]
+  >[0]["memoryAudience"];
+  /** Host check for the parent turn's audience; recall state is never retained once it lapses. */
+  assertMemoryAudienceCurrent?: () => void;
 };
 
 async function recordRecallResult(
-  params: Pick<ActiveRecallParams, "abortSignal" | "agentId" | "api" | "config" | "sessionKey"> & {
+  params: Pick<
+    ActiveRecallParams,
+    "abortSignal" | "agentId" | "api" | "assertMemoryAudienceCurrent" | "config" | "sessionKey"
+  > & {
     logPrefix: string;
     result: ActiveRecallResult;
   },
@@ -142,6 +113,7 @@ async function recordRecallResult(
     params.api.logger.info?.(buildRecallDoneLogLine(params.logPrefix, params.result));
   }
   params.abortSignal?.throwIfAborted();
+  params.assertMemoryAudienceCurrent?.();
   await persistPluginStatusLines({
     api: params.api,
     agentId: params.agentId,
@@ -151,6 +123,7 @@ async function recordRecallResult(
     searchDebug: params.result.searchDebug,
   });
   params.abortSignal?.throwIfAborted();
+  params.assertMemoryAudienceCurrent?.();
 }
 
 async function resolveActiveRecall(
@@ -174,6 +147,7 @@ async function resolveActiveRecall(
         sessionId: params.sessionId,
         query: params.query,
         authorityFingerprint: params.authorityFingerprint,
+        memoryAudience: params.memoryAudience,
         memorySlot: params.memorySlot,
         activeProjectKeys: params.activeProjectKeys,
         modelProviderId: resolvedModelRef?.provider,
@@ -197,6 +171,7 @@ async function resolveActiveRecall(
   let logPrefix = buildLogPrefix(params.config.fastMode);
   if (cached) {
     params.abortSignal?.throwIfAborted();
+    params.assertMemoryAudienceCurrent?.();
     await persistPluginStatusLines({
       api: params.api,
       agentId: params.agentId,
@@ -265,8 +240,15 @@ async function resolveActiveRecall(
     return result;
   }
 
-  const runContext = prepareRecallRunContext(params);
-  logPrefix = buildLogPrefix(runContext.fastMode);
+  const fastMode =
+    params.config.fastMode ??
+    normalizeActiveMemoryFastMode(params.sessionEntry?.fastMode) ??
+    normalizeActiveMemoryFastMode(
+      resolveAgentConfig(params.runtimeConfig, params.agentId)?.fastModeDefault,
+    );
+  params.abortSignal?.throwIfAborted();
+  params.assertMemoryAudienceCurrent?.();
+  logPrefix = buildLogPrefix(fastMode);
 
   if (params.config.logging) {
     params.api.logger.info?.(
@@ -312,9 +294,9 @@ async function resolveActiveRecall(
     const subagentPromise = runRecallSubagent({
       ...params,
       modelRef: resolvedModelRef,
-      parentSessionKey: runContext.parentSessionKey,
-      storePath: runContext.storePath,
-      fastMode: runContext.fastMode,
+      parentSessionKey: params.sessionKey,
+      parentSessionEntry: params.sessionEntry,
+      fastMode,
       abortSignal: controller.signal,
       onTranscriptSources: (sources) => {
         transcriptSources = sources;
@@ -402,10 +384,12 @@ async function resolveActiveRecall(
     resetCircuitBreaker(cbKey);
     await recordRecallResult({ ...params, logPrefix, result });
     if (cacheKey && shouldCacheResult(result)) {
+      params.assertMemoryAudienceCurrent?.();
       setCachedResult(cacheKey, result, params.config.cacheTtlMs);
     }
     return result;
   } catch (error) {
+    rethrowIncognitoSessionError(error);
     if (params.abortSignal?.aborted) {
       if (recallTimedOut) {
         recordRecallTimeout();
@@ -447,7 +431,9 @@ async function resolveActiveRecall(
   }
 }
 
-async function maybeResolveActiveRecall(params: ActiveRecallParams): Promise<ActiveRecallResult> {
+export async function maybeResolveActiveRecall(
+  params: ActiveRecallParams,
+): Promise<ActiveRecallResult> {
   const { runId, ...recallParams } = params;
   if (!runId || params.requestKey === null) {
     return await resolveActiveRecall(recallParams);
@@ -463,6 +449,7 @@ async function maybeResolveActiveRecall(params: ActiveRecallParams): Promise<Act
     // Run-local reuse follows request identity; the cross-turn content cache stays query-based.
     query: params.requestKey ?? params.query,
     authorityFingerprint: params.authorityFingerprint,
+    memoryAudience: params.memoryAudience,
     memorySlot: params.memorySlot,
     activeProjectKeys: params.activeProjectKeys,
     modelProviderId: model?.provider,
@@ -474,5 +461,3 @@ async function maybeResolveActiveRecall(params: ActiveRecallParams): Promise<Act
     resolveActiveRecall({ ...recallParams, onTimeoutCleanup }),
   );
 }
-
-export { maybeResolveActiveRecall };

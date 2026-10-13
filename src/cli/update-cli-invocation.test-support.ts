@@ -156,7 +156,7 @@ export async function invokeUpdateCli(opts: UpdateCommandOptions) {
   if (opts.restart === false) {
     args.push("--no-restart");
   }
-  for (const key of ["channel", "tag", "timeout"] as const) {
+  for (const key of ["channel", "tag", "timeout", "admission"] as const) {
     if (opts[key] !== undefined) {
       args.push(`--${key}`, opts[key]);
     }

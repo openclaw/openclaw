@@ -15,10 +15,17 @@
 
 .side-panel__header .tabstrip {
   --track-width: 0;
-  display: block;
+
+  display: flex;
   min-width: 0;
   flex: 0 1 auto;
-  overflow: hidden;
+  align-items: center;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-inline-start: 6px;
+  scrollbar-width: none;
+  scroll-snap-type: inline proximity;
+  scroll-padding-inline: 6px;
 }
 
 /* Overflow indicator: the edge that still hides tabs fades out, so a partially
@@ -43,33 +50,6 @@
   );
 }
 
-.side-panel__header .tabstrip::part(nav) {
-  display: flex;
-  width: 100%;
-  min-width: 0;
-  height: 100%;
-  align-items: center;
-}
-
-/* Third regime: once every tab is at its floor the row must scroll, not clip.
-   Clipping cuts a tab mid-pill, which reads as an icon-only tab and as a hard
-   label cut past the fade mask that lives inside the pill. */
-.side-panel__header .tabstrip::part(tabs) {
-  width: 100%;
-  min-width: 0;
-  align-items: center;
-  overflow-x: auto;
-  overflow-y: hidden;
-  padding-inline-start: 6px;
-  scrollbar-width: none;
-  scroll-snap-type: inline proximity;
-  scroll-padding-inline: 6px;
-}
-
-.side-panel__header .tabstrip::part(body) {
-  display: none;
-}
-
 .side-panel__header .tabstrip-tab {
   position: relative;
   width: max-content;
@@ -78,6 +58,22 @@
   flex: 0 1 auto;
   scroll-margin-inline-end: 16px;
   scroll-snap-align: start;
+  display: flex;
+  height: 28px;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 7px;
+  padding-block: 0;
+  padding-inline: 8px 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  white-space: nowrap;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
 }
 
 .side-panel__header .tabstrip-tab:not(:first-of-type) {
@@ -121,55 +117,39 @@
   inset-inline-end: 0;
 }
 
-.side-panel__header .tabstrip-tab::part(base) {
-  display: flex;
-  width: 100%;
-  min-width: 0;
-  height: 28px;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 7px;
-  padding-block: 0;
-  padding-inline: 8px 0;
-  border: 0;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-  white-space: nowrap;
-  transition:
-    background-color 120ms ease,
-    color 120ms ease;
-}
-
-.side-panel__header
-  .tabstrip-tab:not([active]):is(:hover, :has(+ .tabstrip-tab__close:hover))::part(base),
-.side-panel__header .tabstrip-tab[active]::part(base) {
+.side-panel__header .tabstrip-tab:not([active]):is(:hover, :has(+ .tabstrip-tab__close:hover)),
+.side-panel__header .tabstrip-tab[active] {
   border-start-start-radius: var(--radius-md);
   border-end-start-radius: var(--radius-md);
   border-start-end-radius: 0;
   border-end-end-radius: 0;
 }
 
-.side-panel__header
-  .tabstrip-tab:not([active]):is(:hover, :has(+ .tabstrip-tab__close:hover))::part(base) {
+.side-panel__header .tabstrip-tab:not([active]):is(:hover, :has(+ .tabstrip-tab__close:hover)),
+.side-panel__header .tabstrip-tab:not([active]):hover + .tabstrip-tab__close,
+.side-panel__header .tabstrip-tab:not([active]) + .tabstrip-tab__close:hover,
+.side-panel__header .tabstrip-tab:not([active]) + .tabstrip-tab__close:focus-visible {
   background: color-mix(in srgb, var(--text) 5%, transparent);
   color: var(--text);
 }
 
-.side-panel__header .tabstrip-tab[active]::part(base) {
+.side-panel__header .tabstrip-tab[active] {
   background: var(--bg-hover);
   color: var(--text);
 }
 
-.side-panel__header .tabstrip-tab__icon {
+.side-panel__header .tabstrip-tab__icon,
+.side-panel-type-option__icon {
   display: inline-flex;
   width: 16px;
   height: 16px;
-  flex: 0 0 auto;
   align-items: center;
   justify-content: center;
   color: var(--muted);
+}
+
+.side-panel__header .tabstrip-tab__icon {
+  flex: 0 0 auto;
 }
 
 .side-panel__header .tabstrip-tab__favicon {
@@ -251,13 +231,6 @@
   opacity: 1;
 }
 
-.side-panel__header .tabstrip-tab:not([active]):hover + .tabstrip-tab__close,
-.side-panel__header .tabstrip-tab:not([active]) + .tabstrip-tab__close:hover,
-.side-panel__header .tabstrip-tab:not([active]) + .tabstrip-tab__close:focus-visible {
-  background: color-mix(in srgb, var(--text) 5%, transparent);
-  color: var(--text);
-}
-
 .side-panel__header .tabstrip-tab[active] + .tabstrip-tab__close {
   background: var(--bg-hover);
 }
@@ -290,7 +263,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .side-panel__header .tabstrip-tab::part(base),
+  .side-panel__header .tabstrip-tab,
   .side-panel__header .tabstrip-tab__close,
   .side-panel__header .tabstrip-separator {
     transition: none;
@@ -319,8 +292,6 @@ openclaw-chat-detail-panel,
   > :is(
     .chat,
     .chat-workspace-rail,
-    .chat-tasks-rail,
-    .chat-task-detail,
     openclaw-chat-session-rail,
     openclaw-session-discussion,
     openclaw-terminal-panel,
@@ -357,13 +328,7 @@ openclaw-chat-detail-panel,
 }
 
 .side-panel-type-option__icon {
-  display: inline-flex;
-  width: 16px;
-  height: 16px;
-  align-items: center;
-  justify-content: center;
   flex: 0 0 16px;
-  color: var(--muted);
 }
 
 .side-panel-type-option__label {
@@ -426,6 +391,8 @@ openclaw-chat-detail-panel,
   border: 0;
   border-radius: var(--menu-item-radius);
   background: color-mix(in srgb, var(--text) 3%, transparent);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
   color: var(--text);
   font-size: var(--control-ui-text-sm);
   text-align: left;

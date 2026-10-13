@@ -1,11 +1,11 @@
 ---
-summary: "Recovering from a rejected config and reading gateway probe warnings"
-title: "Config validation and probes"
-sidebarTitle: "Config validation and probes"
+summary: "Recovering from a rejected config and reading gateway check warnings"
+title: "Config validation and checks"
+sidebarTitle: "Config validation and checks"
 read_when:
   - The Gateway rejected an invalid config and you need the recovery path
   - You need to know what the `.rejected`, `.bak`, and last-known-good copies hold
-  - Gateway probe warnings appear in status or doctor output
+  - Gateway check warnings appear in status or doctor output
 ---
 
 ## Gateway rejected invalid config
@@ -37,10 +37,10 @@ Look for:
 <AccordionGroup>
   <Accordion title="What happened">
     - The config did not validate during startup, hot reload, or an OpenClaw-owned write.
-    - Gateway startup leaves `openclaw.json` unchanged and fails closed when safe legacy-key migration cannot produce a fully valid config.
+    - Gateway startup leaves legacy keys unchanged and refuses config that needs their repair, with an `openclaw doctor --fix` hint.
     - Hot reload skips invalid external edits and keeps the current runtime config active.
     - OpenClaw-owned writes reject invalid/destructive payloads before commit and save `.rejected.*`.
-    - `openclaw doctor --fix` owns repairs beyond automatic legacy-key migration. It can remove non-JSON prefixes or restore the last-known-good copy while preserving the rejected payload as `.clobbered.*`.
+    - `openclaw doctor --fix` owns legacy-key repair. It can also remove non-JSON prefixes or restore the last-known-good copy while preserving the rejected payload as `.clobbered.*`.
     - When many repairs happen for one config path, OpenClaw rotates older `.clobbered.*` files so the newest repaired payload is still available.
 
   </Accordion>
@@ -81,7 +81,9 @@ Related:
 - [Configuration: strict validation](/gateway/configuration#strict-validation)
 - [Doctor](/gateway/doctor)
 
-## Gateway probe warnings
+<a id="gateway-probe-warnings" />
+
+## Gateway check warnings
 
 Use when `openclaw gateway probe` reaches something, but still prints a warning block.
 
@@ -96,11 +98,11 @@ Look for:
 - `warnings[].code` and `primaryTargetId` in JSON output.
 - Whether the warning is about SSH fallback, multiple gateways, missing scopes, or unresolved auth refs.
 
-Common signatures:
+Warning meanings:
 
-- `SSH tunnel failed to start; falling back to direct probes.` → SSH setup failed, but the command still tried direct configured/loopback targets.
+- `ssh_tunnel_failed` → SSH setup failed, but the command still tried direct configured/loopback targets.
 - `multiple reachable gateway identities detected` → distinct gateways answered, or OpenClaw could not prove reachable targets are the same gateway. An SSH tunnel, proxy URL, or configured remote URL to the same gateway is treated as one gateway with multiple transports, even when transport ports differ.
-- `Read-probe diagnostics are limited by gateway scopes (missing operator.read)` → connect worked, but detail RPC is scope-limited; pair device identity or use credentials with `operator.read`.
+- `probe_scope_limited` → connect worked, but detail RPC is scope-limited; pair device identity or use credentials with `operator.read`.
 - `Gateway accepted the WebSocket connection, but follow-up read diagnostics failed` → connect worked, but the full diagnostic RPC set timed out or failed. Treat this as a reachable Gateway with degraded diagnostics; compare `connect.ok` and `connect.rpcOk` in `--json` output.
 - `Capability: pairing-pending` or `gateway closed (1008): pairing required` → the gateway answered, but this client still needs pairing/approval before normal operator access.
 - Unresolved `gateway.auth.*` / `gateway.remote.*` SecretRef warning text → auth material was unavailable in this command path for the failed target.

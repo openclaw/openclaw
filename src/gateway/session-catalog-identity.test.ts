@@ -1,13 +1,68 @@
-import { expect, it } from "vitest";
-import { linkEmail, syncGitHubIdentity } from "../state/user-profiles.js";
+import { afterEach, expect, it, vi } from "vitest";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import * as stateReads from "../state/openclaw-state-db-readonly.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import * as nativeProfiles from "../state/user-profile-list.native.js";
+import { linkEmail, syncGitHubIdentity } from "../state/user-profile-writes.worker.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   createSessionCatalogGitHubLinker,
-  createSessionCatalogSourceParticipantProjector,
+  createSessionCatalogSourceActorProjector,
+  prepareSessionCatalogGitHubLinker,
+  prepareSessionCatalogSourceActorProjector,
+  prepareSessionCatalogSourceParticipantProjector,
 } from "./session-catalog-identity.js";
+
+afterEach(() => vi.restoreAllMocks());
+
+it("keeps legacy creator reads lazy and resolves actors outside the prepared cohort", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const known = syncGitHubIdentity({
+      identity: { accountId: 201, login: "known" },
+      authenticationAlias: { kind: "email", email: "known@example.test" },
+    });
+    const unknown = syncGitHubIdentity({
+      identity: { accountId: 202, login: "unknown" },
+      authenticationAlias: { kind: "email", email: "unknown@example.test" },
+    });
+    const actor = { type: "human", source: "profile", id: known.id } as const;
+    const reads = vi.spyOn(nativeProfiles, "getUserProfileDisplaysNative");
+    const project = createSessionCatalogSourceActorProjector({
+      pluginId: "fixture",
+      sourceDomain: "fixture",
+      actors: [actor],
+    });
+    expect(project(undefined)).toBeUndefined();
+    expect(project({ type: "system" })).toEqual({ type: "system" });
+    expect(reads).not.toHaveBeenCalled();
+    expect(project(actor)?.identity).toMatchObject({ idKind: "github-account", id: "201" });
+    expect(project(actor)?.identity).toMatchObject({ idKind: "github-account", id: "201" });
+    expect(reads).toHaveBeenCalledTimes(1);
+    expect(project({ ...actor, id: unknown.id })?.identity).toMatchObject({
+      idKind: "github-account",
+      id: "202",
+    });
+    expect(reads).toHaveBeenCalledTimes(2);
+  });
+});
 
 it("links every verified account to one person while exporting only the primary account", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+    const remote = {
+      identity: {
+        type: "remote",
+        pluginId: "fixture",
+        domain: "fixture",
+        idKind: "profile",
+        id: "remote",
+      },
+    } as const;
+    const unlinked = await prepareSessionCatalogGitHubLinker({ participants: [remote] });
+    expect(unlinked.linkParticipant(remote)).toBe(remote);
+    expect(unlinked.resolveOwner("profile:missing")).toBeUndefined();
+    expect(reads).not.toHaveBeenCalled();
+    reads.mockRestore();
     const primary = syncGitHubIdentity({
       identity: { accountId: 101, login: "primary", name: "One Person" },
       authenticationAlias: { kind: "email", email: "primary@example.test" },
@@ -32,12 +87,70 @@ it("links every verified account to one person while exporting only the primary 
       ).toEqual({ type: "profile", id: primary.id });
     }
     expect(linker.resolveOwner("github:secondary")?.id).toBe(primary.id);
+    const database = openOpenClawStateDatabase();
+    const prepare = database.db.prepare.bind(database.db);
+    const hostSql = vi.spyOn(database.db, "prepare").mockImplementation((sql) => {
+      if (/user_profiles|user_profile_identities/.test(sql)) {
+        throw new Error("Profile catalog projection executed SQL on the host");
+      }
+      return prepare(sql);
+    });
+    const actor = { type: "human", source: "profile", id: secondary.id } as const;
+    const source = { pluginId: "fixture", sourceDomain: "fixture", actors: [actor] };
+    const portable = await prepareSessionCatalogSourceActorProjector(source);
+    expect(portable(actor)?.identity).toMatchObject({ idKind: "github-account", id: "101" });
+    const senderIdentity = { type: "profile", id: secondary.id } as const;
+    const sender = await prepareSessionCatalogSourceParticipantProjector([senderIdentity]);
     expect(
-      createSessionCatalogSourceParticipantProjector()({
+      sender.project({
         pluginId: "fixture",
         sourceDomain: "fixture",
-        identity: { type: "profile", id: secondary.id },
+        identity: senderIdentity,
       }).identity,
     ).toMatchObject({ idKind: "github-account", id: "101" });
+    const participants = ["101", "102"].map((id) => ({
+      identity: {
+        type: "remote",
+        pluginId: "fixture",
+        domain: "fixture",
+        idKind: "github-account",
+        id,
+      } as const,
+    }));
+    const prepared = await prepareSessionCatalogGitHubLinker({
+      participants,
+      owners: ["github:SECONDARY", "profile:missing"],
+    });
+    expect(
+      participants.map((participant) => prepared.linkParticipant(participant).identity),
+    ).toEqual([
+      { type: "profile", id: primary.id },
+      { type: "profile", id: primary.id },
+    ]);
+    expect(prepared.resolveOwner("github:SECONDARY")?.id).toBe(primary.id);
+    expect(prepared.resolveOwner("profile:missing")).toBeUndefined();
+    hostSql.mockRestore();
+
+    const foreign = openNodeSqliteDatabase(database.path);
+    try {
+      foreign
+        .prepare("UPDATE user_profiles SET display_name = ? WHERE id = ?")
+        .run("Changed Person", primary.id);
+      foreign
+        .prepare(
+          "UPDATE user_profile_identities SET canonical_login = ? WHERE provider = 'github' AND subject = '102'",
+        )
+        .run("renamed-secondary");
+    } finally {
+      foreign.close();
+    }
+    const next = await prepareSessionCatalogSourceActorProjector(source);
+    expect(next(actor)?.label).toBe("Changed Person");
+    const changed = await prepareSessionCatalogGitHubLinker({
+      participants,
+      owners: ["github:SECONDARY", "github:RENAMED-SECONDARY"],
+    });
+    expect(changed.resolveOwner("github:SECONDARY")).toBeUndefined();
+    expect(changed.resolveOwner("github:RENAMED-SECONDARY")?.label).toBe("Changed Person");
   });
 });

@@ -1,3 +1,6 @@
+import { deserialize } from "node:v8";
+import { Worker } from "node:worker_threads";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -57,9 +60,87 @@ function fixture(
 }
 
 describe("plugin state data-only comparison", () => {
+  it("observes native and worker writes with independent returned values", async () => {
+    const { store, legacy } = fixture("receipt-cache");
+    legacy.register("counter", { count: 1 });
+    const first = await store.observe("counter");
+    first.value!.count = 99;
+    expect((await store.observe("counter")).value).toEqual({ count: 1 });
+
+    legacy.register("counter", { count: 2 });
+    expect((await store.observe("counter")).value).toEqual({ count: 2 });
+    await store.register("counter", { count: 3 });
+    expect((await store.observe("counter")).value).toEqual({ count: 3 });
+    legacy.delete("counter");
+    expect((await store.observe("counter")).value).toBeUndefined();
+  });
+
+  it.each([{ action: "set" }, { action: "keep" }] as const)(
+    "converges after an unannounced native deletion ($action)",
+    async ({ action }) => {
+      const { store, legacy, native } = fixture(`native-deletion-${action}`);
+      legacy.register("counter", { count: 1 });
+      const before = await store.observe("counter");
+      const { db } = native();
+      // Native binding transactions carry their own receipt, without plugin-state postimages.
+      executeSqliteQuerySync(db, getPluginStateKysely(db).deleteFrom("plugin_state_entries"));
+      const change =
+        action === "set"
+          ? ({ operation: "update", action, value: { count: 2 } } as const)
+          : ({ operation: "update", action } as const);
+      const conflict = await store.compareAndApply("counter", before.comparison, change);
+      expect(conflict).toMatchObject({ status: "conflict", current: { value: undefined } });
+      if (conflict.status !== "conflict") {
+        throw new Error("Expected the deleted row to conflict");
+      }
+      expect(await store.compareAndApply("counter", conflict.current.comparison, change)).toEqual({
+        status: action === "set" ? "applied" : "unchanged",
+      });
+    },
+  );
+
+  it.each([
+    { operation: "update", present: true },
+    { operation: "delete", present: true },
+    { operation: "update", present: false },
+  ] as const)(
+    "does not lose a native write before comparing $operation (present=$present)",
+    async ({ operation, present }) => {
+      const { store, legacy } = fixture(`comparison-race-${operation}-${present}`);
+      legacy.register("counter", { count: 1 });
+      if (!present) {
+        legacy.delete("counter");
+      }
+      const before = await store.observe("counter");
+      const dispatch = vi.spyOn(Worker.prototype, "postMessage");
+      Worker.prototype.postMessage = function (this: Worker, message, transferList) {
+        const request = asOptionalRecord(message);
+        if (request?.type === "execute" && request.input instanceof Uint8Array) {
+          const command = asOptionalRecord(deserialize(request.input));
+          if (
+            command?.type === `pluginState.compare${operation === "update" ? "Update" : "Delete"}`
+          ) {
+            legacy.register("counter", { count: 2 });
+          }
+        }
+        return dispatch.call(this, message, transferList);
+      };
+      const result = await store.compareAndApply(
+        "counter",
+        before.comparison,
+        operation === "update"
+          ? { operation, action: "set", value: { count: 3 } }
+          : { operation, action: "delete" },
+      );
+      dispatch.mockRestore();
+      expect(result).toMatchObject({ status: "conflict", current: { value: { count: 2 } } });
+      expect(await store.lookup("counter")).toEqual({ count: 2 });
+    },
+  );
+
   it("observes and applies through the real worker without parent SQL", async () => {
-    const { store, env } = fixture("cold");
-    const observation = observeHostDataSql(env);
+    const { store } = fixture("cold");
+    const observation = observeHostDataSql();
     const calls = observation.calls;
     try {
       const observed = await store.observe("counter");
@@ -249,7 +330,7 @@ describe("plugin state data-only comparison", () => {
 
   it("retains writable admission for both keep intents", async () => {
     const f = fixture("keep-ownership");
-    f.legacy.register("counter", { count: 1 });
+    await f.store.register("counter", { count: 1 });
     const observed = await f.store.observe("counter");
     claimOpenClawStateOwnership("comparison-owner", {
       env: { ...f.env, OPENCLAW_SUPERVISOR_MODE: "external" },

@@ -31,39 +31,29 @@ afterEach(() => vi.restoreAllMocks());
 
 describe("running systemd unit stop timeout", () => {
   it.each([
-    { path: "/system.slice/custom-gateway.service", scope: "system" },
-    {
-      path: "/user.slice/user-1000.slice/user@1000.service/app.slice/custom-gateway.service",
-      scope: "user",
-    },
-  ])("finds a custom $scope unit from invocation membership", async ({ path, scope }) => {
-    readFile.mockResolvedValue(`0::${path}\n`);
-    execUser.mockResolvedValue(loaded("1min 30s"));
-    const result = await readSystemdStopTimeout({ INVOCATION_ID: "own" });
-    expect(result).toEqual({
-      timeoutMs: 90_000,
-      source: `systemd ${scope} custom-gateway.service TimeoutStopUSec`,
-    });
-    const queried = scope === "user" ? execUser : execSystem;
-    expect(queried.mock.calls.flat(2)).toContain("custom-gateway.service");
-    expect(scope === "user" ? execSystem : execUser).not.toHaveBeenCalled();
-  });
-
-  it.each(["0::", "1:name=systemd:"])(
-    "uses %s membership instead of resource-controller parents",
-    async (hierarchy) => {
+    { scope: "system", hierarchy: "0::", timeout: "1min 30s", timeoutMs: 90_000 },
+    { scope: "user", hierarchy: "0::", timeout: "5min 30s", timeoutMs: 330_000 },
+    { scope: "user", hierarchy: "1:name=systemd:", timeout: "5min 30s", timeoutMs: 330_000 },
+  ])(
+    "finds the custom $scope unit from $hierarchy membership, ignoring resource parents",
+    async ({ scope, hierarchy, timeout, timeoutMs }) => {
+      const path =
+        scope === "user"
+          ? "/user.slice/user-1000.slice/user@1000.service/app.slice/custom-gateway.service"
+          : "/system.slice/custom-gateway.service";
       readFile.mockResolvedValue(
-        [
-          "2:cpu,cpuacct:/user.slice/user-1000.slice/user@1000.service",
-          `${hierarchy}/user.slice/user-1000.slice/user@1000.service/app.slice/custom-gateway.service`,
-        ].join("\n"),
+        ["2:cpu,cpuacct:/user.slice/user-1000.slice/user@1000.service", `${hierarchy}${path}`].join(
+          "\n",
+        ),
       );
-      execUser.mockResolvedValue(loaded("5min 30s"));
+      execUser.mockResolvedValue(loaded(timeout));
       expect(await readSystemdStopTimeout({ INVOCATION_ID: "own" })).toEqual({
-        timeoutMs: 330_000,
-        source: "systemd user custom-gateway.service TimeoutStopUSec",
+        timeoutMs,
+        source: `systemd ${scope} custom-gateway.service TimeoutStopUSec`,
       });
-      expect(execSystem).not.toHaveBeenCalled();
+      const queried = scope === "user" ? execUser : execSystem;
+      expect(queried.mock.calls.flat(2)).toContain("custom-gateway.service");
+      expect(scope === "user" ? execSystem : execUser).not.toHaveBeenCalled();
     },
   );
 
@@ -87,22 +77,25 @@ describe("running systemd unit stop timeout", () => {
     expect(execUser.mock.calls.flat(2)).toContain("openclaw-gateway-work.service");
   });
 
-  it("keeps startup available when the manager transport throws", async () => {
-    execUser.mockRejectedValue(new Error("transport lookup failed"));
-    execSystem.mockRejectedValue(new Error("systemctl unavailable"));
-    expect((await readSystemdStopTimeout({ INVOCATION_ID: "own" }))?.timeoutMs).toBe(90_000);
-  });
-
   it.each([
     { code: 1, stdout: "", stderr: "permission denied" },
     { code: 0, stdout: "LoadState=not-found\nTimeoutStopUSec=1h", stderr: "" },
     loaded("garbage"),
+    new Error("systemctl unavailable"),
   ])("uses a visible conservative default when inspection fails", async (result) => {
-    execSystem.mockResolvedValue(result);
-    expect(await readSystemdStopTimeout({ OPENCLAW_SYSTEMD_UNIT: "custom" })).toEqual({
+    const threw = result instanceof Error;
+    if (threw) {
+      execUser.mockRejectedValue(new Error("transport lookup failed"));
+      execSystem.mockRejectedValue(result);
+    } else {
+      execSystem.mockResolvedValue(result);
+    }
+    const env = threw ? { INVOCATION_ID: "own" } : { OPENCLAW_SYSTEMD_UNIT: "custom" };
+    const unit = threw ? "openclaw-gateway.service" : "custom.service";
+    expect(await readSystemdStopTimeout(env)).toEqual({
       timeoutMs: 90_000,
-      source: "systemd custom.service timeout unavailable; default TimeoutStopUSec",
-      warning: expect.stringContaining("system manager custom.service:"),
+      source: `systemd ${unit} timeout unavailable; default TimeoutStopUSec`,
+      warning: expect.stringContaining(`system manager ${unit}:`),
     });
   });
 });

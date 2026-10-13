@@ -1,14 +1,11 @@
-// Memory Wiki doctor contract owns legacy state cleanup and migrations.
+// Memory Wiki Doctor owns compiled-cache cleanup and unsupported state detection.
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  archiveLegacyStateSource,
-  legacyStateFileExists,
-  type PluginDoctorStateMigration,
-} from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { walkMemoryWikiDirectory } from "./src/bounded-walk.js";
 import {
   resolveMemoryWikiAgentConfig,
   resolveMemoryWikiConfig,
@@ -16,25 +13,10 @@ import {
   type MemoryWikiPluginConfig,
 } from "./src/config.js";
 import {
-  countMemoryWikiImportRunStateRows,
   createMemoryWikiImportRunStateStore,
-  listMemoryWikiImportRunRecords,
-  MEMORY_WIKI_IMPORT_RUN_STATE_MAX_ENTRIES,
-  MEMORY_WIKI_IMPORT_RUN_STATE_NAMESPACE,
-  readLegacyMemoryWikiImportRunRecords,
   resolveMemoryWikiImportRunsDir,
-  type ChatGptImportRunRecord,
-  writeMemoryWikiImportRunRecord,
 } from "./src/import-runs-state.js";
-import {
-  createMemoryWikiSourceSyncStateStore,
-  MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES,
-  MEMORY_WIKI_SOURCE_SYNC_STATE_NAMESPACE,
-  readLegacyMemoryWikiSourceSyncState,
-  resolveMemoryWikiSourceSyncStatePath,
-  writeMemoryWikiSourceSyncState,
-} from "./src/source-sync-state.js";
-export { legacyConfigRules, normalizeCompatibilityConfig } from "./src/config-compat.js";
+import { createMemoryWikiSourceSyncStateStore } from "./src/source-sync-state.js";
 
 const LEGACY_MEMORY_WIKI_COMPILED_CACHE_PATHS = [
   ".openclaw-wiki/cache/agent-digest.json",
@@ -109,52 +91,80 @@ function resolveConfiguredVaultRoots(params: {
   );
 }
 
-async function archiveLegacyImportRunRecords(params: {
-  vaultRoot: string;
-  changes: string[];
-  warnings: string[];
-}): Promise<void> {
-  const importRunsDir = resolveMemoryWikiImportRunsDir(params.vaultRoot);
-  const entries = await fs
-    .readdir(importRunsDir, { withFileTypes: true })
-    .catch((error: unknown) => {
-      if (isRecord(error) && error.code === "ENOENT") {
+type WikiStateMigrationParams = Parameters<PluginDoctorStateMigration["detectLegacyState"]>[0];
+
+function unsupportedJsonWarning(filePath: string, emptySourceSync = false): string {
+  return `Memory Wiki: upgrades from pre-July-2026 JSON state are no longer migrated (${filePath}). ${emptySourceSync ? "No canonical SQLite source-sync state was found; an empty store cannot be distinguished from unmigrated state. " : "No canonical SQLite import-run record was found. "}Restore a backup produced by a July 2026 or newer release, or back up and move this retired file aside after verifying the SQLite state, then rerun openclaw doctor --fix. The file was left unchanged.`;
+}
+
+async function unsupportedSourceSyncFiles(params: WikiStateMigrationParams): Promise<string[]> {
+  const warnings: string[] = [];
+  const store = createMemoryWikiSourceSyncStateStore(params.context.openPluginStateKeyedStore);
+  for (const vaultRoot of resolveConfiguredVaultRoots(params)) {
+    const filePath = path.join(vaultRoot, ".openclaw-wiki", "source-sync.json");
+    try {
+      await fs.lstat(filePath);
+    } catch (error) {
+      if (isMissingPathError(error)) {
+        continue;
+      }
+      throw error;
+    }
+    const state = await store.read(vaultRoot);
+    if (Object.keys(state.entries).length === 0) {
+      warnings.push(unsupportedJsonWarning(filePath, true));
+    }
+  }
+  return warnings;
+}
+
+async function unsupportedImportRunFiles(params: WikiStateMigrationParams): Promise<string[]> {
+  const warnings: string[] = [];
+  const store = createMemoryWikiImportRunStateStore(params.context.openPluginStateKeyedStore);
+  for (const vaultRoot of resolveConfiguredVaultRoots(params)) {
+    const importRunsDir = resolveMemoryWikiImportRunsDir(vaultRoot);
+    const files = await walkMemoryWikiDirectory(importRunsDir, "", {
+      maxDepth: 1,
+      entryFilter: (entry) =>
+        entry.kind === "directory"
+          ? "skip-subtree"
+          : entry.kind === "file" && entry.relativePath.endsWith(".json")
+            ? "include"
+            : "skip",
+    }).catch((error: unknown) => {
+      if (isMissingPathError(error)) {
         return [];
       }
       throw error;
     });
-  for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith(".json")) {
+    if (files.length === 0) {
       continue;
     }
-    await archiveLegacyStateSource({
-      filePath: path.join(importRunsDir, entry.name),
-      label: "Memory Wiki import-run",
-      changes: params.changes,
-      warnings: params.warnings,
-    });
+    const runIds = new Set((await store.list(vaultRoot)).map((record) => record.runId));
+    for (const file of files) {
+      if (!runIds.has(file.relativePath.slice(0, -".json".length))) {
+        warnings.push(unsupportedJsonWarning(path.join(importRunsDir, file.relativePath)));
+      }
+    }
   }
-}
-
-function countImportRunStateRows(
-  records: Array<Pick<ChatGptImportRunRecord, "createdPaths" | "updatedPaths">>,
-): number {
-  return records.reduce(
-    (total, record) => total + 1 + record.createdPaths.length + record.updatedPaths.length,
-    0,
-  );
+  return warnings;
 }
 
 export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "memory-wiki-compiled-cache-file-cleanup",
     label: "Memory Wiki compiled cache files",
+    collectBackupResources(params) {
+      return resolveConfiguredVaultRoots(params).flatMap((vaultRoot) =>
+        LEGACY_MEMORY_WIKI_COMPILED_CACHE_PATHS.map((relativePath) => ({
+          path: path.join(vaultRoot, relativePath),
+          kind: "file" as const,
+        })),
+      );
+    },
     async detectLegacyState(params) {
       const previews: string[] = [];
-      for (const vaultRoot of resolveConfiguredVaultRoots({
-        config: params.config,
-        env: params.env,
-      })) {
+      for (const vaultRoot of resolveConfiguredVaultRoots(params)) {
         const root = await openExistingVaultRoot(vaultRoot);
         if (!root) {
           continue;
@@ -176,10 +186,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     async migrateLegacyState(params) {
       const changes: string[] = [];
       const warnings: string[] = [];
-      for (const vaultRoot of resolveConfiguredVaultRoots({
-        config: params.config,
-        env: params.env,
-      })) {
+      for (const vaultRoot of resolveConfiguredVaultRoots(params)) {
         const root = await openExistingVaultRoot(vaultRoot);
         if (!root) {
           continue;
@@ -210,128 +217,26 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   },
   {
     id: "memory-wiki-source-sync-json-to-plugin-state",
-    label: "Memory Wiki source sync state",
+    label: "Memory Wiki unsupported source-sync JSON",
+    collectBackupResources: () => [],
     async detectLegacyState(params) {
-      const previews: string[] = [];
-      for (const vaultRoot of resolveConfiguredVaultRoots({
-        config: params.config,
-        env: params.env,
-      })) {
-        const filePath = resolveMemoryWikiSourceSyncStatePath(vaultRoot);
-        const state = await readLegacyMemoryWikiSourceSyncState(vaultRoot);
-        const count = Object.keys(state.entries).length;
-        if (count === 0 || !(await legacyStateFileExists(filePath))) {
-          continue;
-        }
-        previews.push(
-          `- Memory Wiki source sync: ${filePath} -> plugin state (${MEMORY_WIKI_SOURCE_SYNC_STATE_NAMESPACE}, ${count} entries)`,
-        );
-      }
-      return previews.length > 0 ? { preview: previews } : null;
+      const warnings = await unsupportedSourceSyncFiles(params);
+      return warnings.length > 0 ? { preview: warnings.map((warning) => `- ${warning}`) } : null;
     },
     async migrateLegacyState(params) {
-      const changes: string[] = [];
-      const warnings: string[] = [];
-      const store = createMemoryWikiSourceSyncStateStore(params.context.openPluginStateKeyedStore);
-      for (const vaultRoot of resolveConfiguredVaultRoots({
-        config: params.config,
-        env: params.env,
-      })) {
-        const filePath = resolveMemoryWikiSourceSyncStatePath(vaultRoot);
-        if (!(await legacyStateFileExists(filePath))) {
-          continue;
-        }
-        const state = await readLegacyMemoryWikiSourceSyncState(vaultRoot);
-        const count = Object.keys(state.entries).length;
-        if (count === 0) {
-          continue;
-        }
-        const existingState = await store.read(vaultRoot);
-        const mergedEntries = {
-          ...state.entries,
-          ...existingState.entries,
-        };
-        const mergedCount = Object.keys(mergedEntries).length;
-        if (mergedCount > MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES) {
-          warnings.push(
-            `Skipped Memory Wiki source-sync import for ${vaultRoot}: ${mergedCount} entries exceeds ${MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES}`,
-          );
-          continue;
-        }
-        await writeMemoryWikiSourceSyncState(
-          vaultRoot,
-          { version: 1, entries: mergedEntries },
-          store,
-        );
-        const existingCount = Object.keys(existingState.entries).length;
-        const importedCount = mergedCount - existingCount;
-        changes.push(
-          `Migrated Memory Wiki source sync -> plugin state (${importedCount} imported, ${existingCount} existing)`,
-        );
-        await archiveLegacyStateSource({
-          filePath,
-          label: "Memory Wiki source-sync",
-          changes,
-          warnings,
-        });
-      }
-      return { changes, warnings };
+      return { changes: [], warnings: await unsupportedSourceSyncFiles(params) };
     },
   },
   {
     id: "memory-wiki-import-runs-json-to-plugin-state",
-    label: "Memory Wiki import run records",
+    label: "Memory Wiki unsupported import-run JSON",
+    collectBackupResources: () => [],
     async detectLegacyState(params) {
-      const previews: string[] = [];
-      for (const vaultRoot of resolveConfiguredVaultRoots({
-        config: params.config,
-        env: params.env,
-      })) {
-        const records = await readLegacyMemoryWikiImportRunRecords(vaultRoot);
-        if (records.length === 0) {
-          continue;
-        }
-        previews.push(
-          `- Memory Wiki import runs: ${resolveMemoryWikiImportRunsDir(vaultRoot)}/*.json -> plugin state (${MEMORY_WIKI_IMPORT_RUN_STATE_NAMESPACE}, ${records.length} records)`,
-        );
-      }
-      return previews.length > 0 ? { preview: previews } : null;
+      const warnings = await unsupportedImportRunFiles(params);
+      return warnings.length > 0 ? { preview: warnings.map((warning) => `- ${warning}`) } : null;
     },
     async migrateLegacyState(params) {
-      const changes: string[] = [];
-      const warnings: string[] = [];
-      const store = createMemoryWikiImportRunStateStore(params.context.openPluginStateKeyedStore);
-      for (const vaultRoot of resolveConfiguredVaultRoots({
-        config: params.config,
-        env: params.env,
-      })) {
-        const records = await readLegacyMemoryWikiImportRunRecords(vaultRoot);
-        if (records.length === 0) {
-          continue;
-        }
-        const existingRecords = await listMemoryWikiImportRunRecords(vaultRoot, store);
-        const existingRunIds = new Set(existingRecords.map((record) => record.runId));
-        const importedRecords = records.filter((record) => !existingRunIds.has(record.runId));
-        const nextRowCount =
-          (await countMemoryWikiImportRunStateRows(store)) +
-          countImportRunStateRows(importedRecords);
-        if (nextRowCount > MEMORY_WIKI_IMPORT_RUN_STATE_MAX_ENTRIES) {
-          warnings.push(
-            `Skipped Memory Wiki import-run import for ${vaultRoot}: ${nextRowCount} state rows exceeds ${MEMORY_WIKI_IMPORT_RUN_STATE_MAX_ENTRIES}`,
-          );
-          continue;
-        }
-        let importedCount = 0;
-        for (const record of importedRecords) {
-          await writeMemoryWikiImportRunRecord(vaultRoot, record, store);
-          importedCount += 1;
-        }
-        changes.push(
-          `Migrated Memory Wiki import runs -> plugin state (${importedCount} imported, ${existingRunIds.size} existing)`,
-        );
-        await archiveLegacyImportRunRecords({ vaultRoot, changes, warnings });
-      }
-      return { changes, warnings };
+      return { changes: [], warnings: await unsupportedImportRunFiles(params) };
     },
   },
 ];

@@ -6,6 +6,11 @@ import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { stripInlineDirectiveTagsForDelivery } from "../../utils/directive-tags.js";
 
 type PromptMessage = Record<string, unknown>;
+type TranscriptMessage = {
+  entry: HistoryEntry;
+  role: "assistant" | "user";
+  transcriptId?: string;
+};
 
 function messageKeys(message: PromptMessage): string[] {
   const id = typeof message.message_id === "string" ? message.message_id.trim() : "";
@@ -34,11 +39,7 @@ function compareMessages(left: PromptMessage, right: PromptMessage): number {
 
 function mergeMessages(params: {
   existing: PromptMessage[];
-  transcript: Array<{
-    entry: HistoryEntry;
-    role: "assistant" | "user";
-    transcriptId?: string;
-  }>;
+  transcript: TranscriptMessage[];
   dedupeAssistantTextKeys: Set<string>;
   dedupeTranscriptIds: Set<string>;
   limit: number;
@@ -137,11 +138,7 @@ export async function mergeSessionTranscriptContext(params: {
   });
   const labels = options?.senderLabels ?? { assistant: "Assistant", user: "User" };
   const transcript = turns.map((turn) => {
-    const item: {
-      entry: HistoryEntry;
-      role: "assistant" | "user";
-      transcriptId?: string;
-    } = {
+    const item: TranscriptMessage = {
       entry: {
         sender: `${labels[turn.role]}${turn.sourceChannel ? ` (${turn.sourceChannel})` : ""}`,
         body: turn.text,

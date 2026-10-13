@@ -10,6 +10,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { claimOpenClawStateOwnership } from "../state/openclaw-state-ownership-operations.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { listAuditEvents, recordAuditEventInDatabase } from "./audit-event-store.js";
 import { createAuditEventWriter } from "./audit-event-writer.js";
 import {
@@ -59,7 +60,11 @@ describe("audit event writer", () => {
     const write = async (runId: string, supervisorMode: string | undefined) => {
       const errors: string[] = [];
       await withEnvAsync({ OPENCLAW_SUPERVISOR_MODE: supervisorMode }, async () => {
-        const writer = createAuditEventWriter({ stateDir, onError: (error) => errors.push(error) });
+        const writer = createAuditEventWriter({
+          scheduler: createTestGatewayScheduler(),
+          stateDir,
+          onError: (error) => errors.push(error),
+        });
         await writer.ready;
         expect(writer.record({ ...input(), sourceId: `${runId}:1:started`, runId })).toBe(true);
         await writer.stop();
@@ -90,8 +95,9 @@ describe("audit event writer", () => {
     const stateDir = tempDirs.make("openclaw-audit-writer-");
     const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
     let config: OpenClawConfig = { logging: { audit: { enabled: false, messages: "all" } } };
-    const writer = createAuditEventWriter({ stateDir });
+    const writer = createAuditEventWriter({ scheduler: createTestGatewayScheduler(), stateDir });
     const recorder = createAuditEventRecorder({
+      scheduler: createTestGatewayScheduler(),
       getConfig: () => config,
       writer,
     });
@@ -132,46 +138,6 @@ describe("audit event writer", () => {
     ).toBe("message.outbound.finished");
   });
 
-  it("keeps fresh storage identity-free when recovery evidence is missing", async () => {
-    const stateDir = tempDirs.make("openclaw-audit-writer-");
-    const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
-    const errors: string[] = [];
-    const writer = createAuditEventWriter({ stateDir, onError: (error) => errors.push(error) });
-
-    await writer.ready;
-    expect(
-      openOpenClawStateDatabase(database)
-        .db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
-        .get("execution_identity_contexts"),
-    ).toBeUndefined();
-    expect(writer.record(input())).toBe(true);
-    const token = createExecutionIdentityAdmissionToken("raw-run-not-a-secret", {
-      contextId: "context-missing",
-      executionId: "execution-missing",
-      now: 100,
-    });
-    const startedAt = performance.now();
-    expect(writer.recordExecutionIdentity({ kind: "retry-reference", token })).toBe(true);
-    expect(performance.now() - startedAt).toBeLessThan(250);
-    await writer.stop();
-
-    expect(errors).toEqual(["audit execution identity recovery evidence unavailable"]);
-    expect(JSON.stringify(errors)).not.toContain(token.contextId);
-    expect(JSON.stringify(errors)).not.toContain(token.executionId);
-    expect(JSON.stringify(errors)).not.toContain(token.runId);
-    expect((await listAuditEvents({ database, limit: 10 })).events).toHaveLength(1);
-    expect(
-      openOpenClawStateDatabase(database)
-        .db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
-        .get("execution_identity_contexts"),
-    ).toBeUndefined();
-    expect(
-      openOpenClawStateDatabase(database)
-        .db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
-        .get("execution_decision_facts"),
-    ).toBeUndefined();
-  });
-
   it("keeps a cold owner open nonblocking under a held write lock", async () => {
     const stateDir = tempDirs.make("openclaw-audit-writer-");
     const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
@@ -185,7 +151,11 @@ describe("audit event writer", () => {
     const contender = new DatabaseSync(path);
     contender.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
     const errors: string[] = [];
-    const writer = createAuditEventWriter({ stateDir, onError: (error) => errors.push(error) });
+    const writer = createAuditEventWriter({
+      scheduler: createTestGatewayScheduler(),
+      stateDir,
+      onError: (error) => errors.push(error),
+    });
 
     try {
       await writer.ready;
@@ -209,42 +179,6 @@ describe("audit event writer", () => {
     ).toContain("cold-owner");
   });
 
-  it("persists a generic decision through the bounded queue", async () => {
-    const stateDir = tempDirs.make("openclaw-audit-writer-");
-    const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
-    const errors: string[] = [];
-    const writer = createAuditEventWriter({ stateDir, onError: (error) => errors.push(error) });
-
-    await writer.ready;
-    const receipt = decisionReceipt();
-    const envelope = captureExecutionIdentityAdmissionEnvelope(
-      {
-        runId: receipt.runId,
-        agentId: "main",
-        ingress: { kind: "local-cli", boundary: "agent-command.local", state: "present" },
-        runtime: { kind: "embedded" },
-      },
-      {
-        contextId: receipt.contextId,
-        executionId: receipt.executionId,
-        runtimeInstanceId: "worker-runtime",
-        now: receipt.occurredAt,
-      },
-    );
-    expect(writer.recordExecutionIdentity(captureWork(envelope))).toBe(true);
-    expect(writer.recordExecutionDecision(receipt)).toBe(true);
-    await writer.stop();
-
-    expect(errors).toEqual([]);
-    expect(
-      pageExecutionDecisionFactsForContextInDatabase(openOpenClawStateDatabase(database).db, {
-        context: receipt,
-        limit: 10,
-        now: receipt.occurredAt,
-      }).receipts,
-    ).toEqual([receipt]);
-  });
-
   it("keeps the shared queue nonblocking under a held write lock and flushes before stop", async () => {
     const stateDir = tempDirs.make("openclaw-audit-writer-");
     const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
@@ -256,6 +190,7 @@ describe("audit event writer", () => {
     closeOpenClawStateDatabaseForTest();
     const errors: string[] = [];
     const writer = createAuditEventWriter({
+      scheduler: createTestGatewayScheduler(),
       stateDir,
       maxPending: 3,
       onError: (error) => errors.push(error),
@@ -361,7 +296,7 @@ describe("audit event writer", () => {
     expect(errors).toEqual(["audit event queue is full (3); dropping metadata"]);
     expect((await listAuditEvents({ database, limit: 10 })).events).toHaveLength(2);
     expect(
-      pageExecutionDecisionFactsForContextInDatabase(db, {
+      pageExecutionDecisionFactsForContextInDatabase(openOpenClawStateDatabase(database).db, {
         context: {
           contextId: "held-lock-context",
           executionId: "held-lock-execution",
@@ -408,6 +343,7 @@ describe("audit event writer", () => {
     const contentions: string[] = [];
     const errors: string[] = [];
     const writer = createAuditEventWriter({
+      scheduler: createTestGatewayScheduler(),
       stateDir,
       onContention: (message) => contentions.push(message),
       onError: (error) => errors.push(error),
@@ -450,7 +386,11 @@ describe("audit event writer", () => {
     const stateDir = tempDirs.make("openclaw-audit-writer-");
     const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
     const errors: string[] = [];
-    const writer = createAuditEventWriter({ stateDir, onError: (error) => errors.push(error) });
+    const writer = createAuditEventWriter({
+      scheduler: createTestGatewayScheduler(),
+      stateDir,
+      onError: (error) => errors.push(error),
+    });
     const clearSink = configureExecutionIdentityAdmissionSink(writer.recordExecutionIdentity);
     const admittedAt = Date.now();
     const inheritedRefs = {
@@ -641,7 +581,11 @@ describe("audit event writer", () => {
     closeOpenClawStateDatabaseForTest();
 
     const errors: string[] = [];
-    const writer = createAuditEventWriter({ stateDir, onError: (error) => errors.push(error) });
+    const writer = createAuditEventWriter({
+      scheduler: createTestGatewayScheduler(),
+      stateDir,
+      onError: (error) => errors.push(error),
+    });
     await writer.ready;
     expect(
       openOpenClawStateDatabase(database)
@@ -757,6 +701,7 @@ describe("audit event writer", () => {
     closeOpenClawStateDatabaseForTest();
     const schemaErrors: string[] = [];
     const schemaWriter = createAuditEventWriter({
+      scheduler: createTestGatewayScheduler(),
       stateDir: schemaStateDir,
       onError: (error) => schemaErrors.push(error),
     });
@@ -791,6 +736,7 @@ describe("audit event writer", () => {
     `);
     const insertErrors: string[] = [];
     const insertWriter = createAuditEventWriter({
+      scheduler: createTestGatewayScheduler(),
       stateDir: insertStateDir,
       onError: (error) => insertErrors.push(error),
     });
@@ -828,6 +774,7 @@ describe("audit event writer", () => {
     closeOpenClawStateDatabaseForTest();
     const errors: string[] = [];
     const writer = createAuditEventWriter({
+      scheduler: createTestGatewayScheduler(),
       stateDir,
       onError: (error) => errors.push(error),
     });

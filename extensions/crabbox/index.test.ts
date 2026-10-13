@@ -1,17 +1,15 @@
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type {
-  OpenClawPluginApi,
-  OpenClawPluginService,
-  OpenClawPluginServiceContext,
-  WorkerProvider,
-} from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginApi, WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
 import {
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import {
+  createTestPluginApi,
+  createTestPluginServiceScheduler,
+} from "openclaw/plugin-sdk/plugin-test-api";
 import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -63,7 +61,7 @@ function inspectResult(leaseId: string): SpawnResult {
 
 function registerCrabboxGeneration() {
   const providers: WorkerProvider[] = [];
-  const services: OpenClawPluginService[] = [];
+  const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
   plugin.register(
     createTestPluginApi({
       runtime: { state: crabboxState } as OpenClawPluginApi["runtime"],
@@ -76,15 +74,21 @@ function registerCrabboxGeneration() {
   return { provider: providers[0]!, services };
 }
 
-function stopGeneration(services: OpenClawPluginService[]): void | Promise<void> {
-  return services[0]?.stop?.({} as OpenClawPluginServiceContext);
+async function stopGeneration(services: Parameters<OpenClawPluginApi["registerService"]>[0][]) {
+  const scheduler = createTestPluginServiceScheduler();
+  scheduler.beginClose();
+  try {
+    await services[0]?.stop?.({ config: {}, stateDir: ".", logger: console, scheduler });
+  } finally {
+    await scheduler.stop();
+  }
 }
 
 describe("Crabbox plugin generation lifecycle", () => {
   beforeEach(() => {
     vi.spyOn(managedBinary, "ensureManagedCrabboxBinary").mockImplementation(async (params) => ({
       binary: params?.binary ?? "crabbox",
-      version: "0.55.0",
+      version: "999.0.0",
     }));
   });
   afterEach(async () => {
@@ -158,7 +162,7 @@ describe("Crabbox plugin generation lifecycle", () => {
         // complete diagnostics, Stop and child-settlement cleanup envelope. Native
         // capture adds 45m plus seven 10s command settlements to the former budgets.
         expect(generation.provider.resolveProvisionTimeoutMs?.(profile)).toBe(
-          216 * 60_000 + 25_000,
+          217 * 60_000 + 25_000,
         );
         expect(generation.provider.resolveDestroyTimeoutMs?.(profile)).toBe(74 * 60_000 + 15_000);
         expect(await generation.provider.listMachineOptions?.(profile)).toEqual([]);
@@ -184,7 +188,7 @@ describe("Crabbox plugin generation lifecycle", () => {
         expect(waitForDeviceId).toHaveBeenCalledOnce();
         await expect(
           generation.provider.inspect({ leaseId: lease.leaseId, profile }),
-        ).resolves.toEqual({ status: "active" });
+        ).resolves.toEqual({ status: "active", sharedHost: false });
         await expect(
           generation.provider.destroy({ leaseId: lease.leaseId, profile }),
         ).resolves.toBeUndefined();
@@ -355,7 +359,7 @@ describe("Crabbox plugin generation lifecycle", () => {
           started.resolve(params.signal);
           await finish.promise;
           params.signal.throwIfAborted();
-          return { binary: params.binary ?? "crabbox", version: "0.55.0" };
+          return { binary: params.binary ?? "crabbox", version: "999.0.0" };
         });
       }
       const generation = registerCrabboxGeneration();

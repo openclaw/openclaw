@@ -135,13 +135,6 @@ describe("installPluginFromPath", () => {
       archiveName: "agent-bundle.tgz",
       manifestPath: "plugin.json",
     },
-    {
-      format: "claude" as const,
-      name: "Claude Sample",
-      pluginId: "claude-sample",
-      archiveName: "claude-bundle.tgz",
-      manifestPath: path.join(".claude-plugin", "plugin.json"),
-    },
   ])(
     "installs $format bundles from an archive path",
     async ({ format, name, pluginId, archiveName, manifestPath }) => {

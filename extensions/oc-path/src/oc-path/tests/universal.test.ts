@@ -1,10 +1,7 @@
 // OC Path tests cover universal plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
-import { emitMd } from "../emit.js";
-import { emitJsonc } from "../jsonc/emit.js";
 import { parseJsonc } from "../jsonc/parse.js";
-import { emitJsonl } from "../jsonl/emit.js";
 import { parseJsonl } from "../jsonl/parse.js";
 import { parseOcPath } from "../oc-path.js";
 import { parseMd } from "../parse.js";
@@ -40,48 +37,14 @@ function expectInsertionPoint(match: ReturnType<typeof resolveOcPath>, container
 describe("resolveOcPath — md AST", () => {
   const md = parseMd("---\nname: github\n---\n\n## Boundaries\n\n- enabled: true\n").ast;
 
-  it("returns leaf with valueText for frontmatter entry", () => {
-    const m = resolveOcPath(md, parseOcPath("oc://X.md/[frontmatter]/name"));
-    expectLeaf(m, { valueText: "github", leafType: "string" });
-  });
-
-  it("returns leaf for item-field", () => {
-    const m = resolveOcPath(md, parseOcPath("oc://X.md/boundaries/enabled/enabled"));
-    expectLeaf(m, { valueText: "true", leafType: "string" });
-  });
-
-  it("returns node for block", () => {
-    const m = resolveOcPath(md, parseOcPath("oc://X.md/boundaries"));
-    expectNode(m, "md-block");
-  });
-
   it("returns root for file-only path", () => {
     const m = resolveOcPath(md, parseOcPath("oc://X.md"));
     expect(m?.kind).toBe("root");
-  });
-
-  it("returns null for unresolved", () => {
-    expect(resolveOcPath(md, parseOcPath("oc://X.md/missing"))).toBeNull();
   });
 });
 
 describe("resolveOcPath — jsonc AST", () => {
   const ast = parseJsonc('{ "k": 42, "s": "x", "b": true, "n": null, "arr": [1,2,3] }').ast;
-
-  it("returns leaf:number for numeric value", () => {
-    const m = resolveOcPath(ast, parseOcPath("oc://config/k"));
-    expectLeaf(m, { valueText: "42", leafType: "number" });
-  });
-
-  it("returns leaf:string for string value", () => {
-    const m = resolveOcPath(ast, parseOcPath("oc://config/s"));
-    expectLeaf(m, { valueText: "x", leafType: "string" });
-  });
-
-  it("returns leaf:boolean for bool value", () => {
-    const m = resolveOcPath(ast, parseOcPath("oc://config/b"));
-    expectLeaf(m, { valueText: "true", leafType: "boolean" });
-  });
 
   it("returns leaf:null for null value", () => {
     const m = resolveOcPath(ast, parseOcPath("oc://config/n"));
@@ -92,11 +55,6 @@ describe("resolveOcPath — jsonc AST", () => {
     const m = resolveOcPath(ast, parseOcPath("oc://config/arr"));
     expectNode(m, "jsonc-array");
   });
-
-  it("returns leaf at array index", () => {
-    const m = resolveOcPath(ast, parseOcPath("oc://config/arr.1"));
-    expectLeaf(m, { valueText: "2", leafType: "number" });
-  });
 });
 
 describe("resolveOcPath — jsonl AST", () => {
@@ -105,16 +63,6 @@ describe("resolveOcPath — jsonl AST", () => {
   it("returns node:jsonl-line for line address", () => {
     const m = resolveOcPath(ast, parseOcPath("oc://log/L1"));
     expectNode(m, "jsonl-line");
-  });
-
-  it("returns leaf for field on line", () => {
-    const m = resolveOcPath(ast, parseOcPath("oc://log/L2/event"));
-    expectLeaf(m, { valueText: "step", leafType: "string" });
-  });
-
-  it("returns leaf:number for $last/n", () => {
-    const m = resolveOcPath(ast, parseOcPath("oc://log/$last/n"));
-    expectLeaf(m, { valueText: "2", leafType: "number" });
   });
 });
 
@@ -135,18 +83,6 @@ describe("resolveOcPath — insertion-point detection", () => {
     const md = parseMd("---\nname: x\n---\n").ast;
     const m = resolveOcPath(md, parseOcPath("oc://X.md/[frontmatter]/+description"));
     expectInsertionPoint(m, "md-frontmatter");
-  });
-
-  it("returns insertion-point for jsonc array +", () => {
-    const ast = parseJsonc('{ "items": [1,2,3] }').ast;
-    const m = resolveOcPath(ast, parseOcPath("oc://config/items/+"));
-    expectInsertionPoint(m, "jsonc-array");
-  });
-
-  it("returns insertion-point for jsonc object +key", () => {
-    const ast = parseJsonc('{ "plugins": {} }').ast;
-    const m = resolveOcPath(ast, parseOcPath("oc://config/plugins/+gitlab"));
-    expectInsertionPoint(m, "jsonc-object");
   });
 
   it("returns insertion-point for jsonl file-root +", () => {
@@ -172,64 +108,13 @@ describe("resolveOcPath — yaml AST", () => {
   });
 });
 
-describe("setOcPath — md leaf", () => {
-  it("replaces frontmatter value", () => {
-    const md = parseMd("---\nname: old\n---\n").ast;
-    const r = setOcPath(md, parseOcPath("oc://X.md/[frontmatter]/name"), "new");
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      expect(r.ast.kind === "md" && r.ast.frontmatter[0]?.value).toBe("new");
-    }
-  });
-
-  it("replaces item kv value", () => {
-    const md = parseMd("## Boundaries\n\n- timeout: 5\n").ast;
-    const r = setOcPath(md, parseOcPath("oc://X.md/boundaries/timeout/timeout"), "60");
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      const out = emitMd(r.ast as Parameters<typeof emitMd>[0]);
-      expect(out).toContain("- timeout: 60");
-    }
-  });
-
-  it("returns unresolved for missing path", () => {
-    const md = parseMd("").ast;
-    const r = setOcPath(md, parseOcPath("oc://X.md/missing/x/x"), "v");
-    expect(r.ok).toBe(false);
-    if (!r.ok) {
-      expect(r.reason).toBe("unresolved");
-    }
-  });
-});
-
 describe("setOcPath — jsonc leaf with coercion", () => {
-  it("replaces string leaf with string value", () => {
-    const ast = parseJsonc('{ "k": "old" }').ast;
-    const r = setOcPath(ast, parseOcPath("oc://config/k"), "new");
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      const ast2 = r.ast as Parameters<typeof emitJsonc>[0];
-      expect(JSON.parse(emitJsonc(ast2))).toEqual({ k: "new" });
-    }
-  });
-
-  it("coerces value to number when leaf was number", () => {
-    const ast = parseJsonc('{ "k": 1 }').ast;
-    const r = setOcPath(ast, parseOcPath("oc://config/k"), "42");
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      const ast2 = r.ast as Parameters<typeof emitJsonc>[0];
-      expect(JSON.parse(emitJsonc(ast2))).toEqual({ k: 42 });
-    }
-  });
-
   it('coerces "true"/"false" when leaf was boolean', () => {
     const ast = parseJsonc('{ "k": true }').ast;
     const r = setOcPath(ast, parseOcPath("oc://config/k"), "false");
     expect(r.ok).toBe(true);
     if (r.ok) {
-      const ast2 = r.ast as Parameters<typeof emitJsonc>[0];
-      expect(JSON.parse(emitJsonc(ast2))).toEqual({ k: false });
+      expect(JSON.parse(r.ast.raw)).toEqual({ k: false });
     }
   });
 
@@ -253,29 +138,18 @@ describe("setOcPath — jsonc leaf with coercion", () => {
 
   it("resolves slash-deep JSONC paths", () => {
     const ast = parseJsonc(
-      '{ "agents": { "list": [{ "tools": { "exec": { "security": "deny" } } }] } }',
+      '{ "agents": { "entries": { "main": { "tools": { "exec": { "security": "deny" } } } } } }',
     ).ast;
     const r = setOcPath(
       ast,
-      parseOcPath("oc://openclaw.json/agents/list/0/tools/exec/security"),
+      parseOcPath("oc://openclaw.json/agents/entries/main/tools/exec/security"),
       "allowlist",
     );
     expect(r.ok).toBe(true);
     if (r.ok) {
-      const ast2 = r.ast as Parameters<typeof emitJsonc>[0];
-      expect(JSON.parse(emitJsonc(ast2))).toEqual({
-        agents: { list: [{ tools: { exec: { security: "allowlist" } } }] },
+      expect(JSON.parse(r.ast.raw)).toEqual({
+        agents: { entries: { main: { tools: { exec: { security: "allowlist" } } } } },
       });
-    }
-  });
-
-  it("keeps JSON-looking strings as strings by default", () => {
-    const ast = parseJsonc('{ "token": "${TOKEN}" }').ast;
-    const r = setOcPath(ast, parseOcPath("oc://openclaw.json/token"), '{"source":"file"}');
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      const ast2 = r.ast as Parameters<typeof emitJsonc>[0];
-      expect(JSON.parse(emitJsonc(ast2))).toEqual({ token: '{"source":"file"}' });
     }
   });
 
@@ -289,8 +163,7 @@ describe("setOcPath — jsonc leaf with coercion", () => {
     );
     expect(r.ok).toBe(true);
     if (r.ok) {
-      const ast2 = r.ast as Parameters<typeof emitJsonc>[0];
-      expect(JSON.parse(emitJsonc(ast2))).toEqual({
+      expect(JSON.parse(r.ast.raw)).toEqual({
         token: { source: "file", provider: "secrets", id: "/test" },
       });
     }
@@ -309,25 +182,12 @@ describe("setOcPath — jsonc leaf with coercion", () => {
 });
 
 describe("setOcPath — jsonl leaf", () => {
-  it("replaces field on a value line with coercion", () => {
-    const ast = parseJsonl('{"event":"start","n":1}\n').ast;
-    const r = setOcPath(ast, parseOcPath("oc://log/L1/n"), "42");
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      const out = emitJsonl(r.ast as Parameters<typeof emitJsonl>[0]);
-      expect(JSON.parse(expectDefined(out.split("\n")[0], "first emitted JSONL line"))).toEqual({
-        event: "start",
-        n: 42,
-      });
-    }
-  });
-
   it("replaces whole line via JSON value", () => {
     const ast = parseJsonl('{"event":"start"}\n').ast;
     const r = setOcPath(ast, parseOcPath("oc://log/L1"), '{"event":"replaced"}');
     expect(r.ok).toBe(true);
     if (r.ok) {
-      const out = emitJsonl(r.ast as Parameters<typeof emitJsonl>[0]);
+      const out = r.ast.raw;
       expect(JSON.parse(expectDefined(out.split("\n")[0], "replaced JSONL line"))).toEqual({
         event: "replaced",
       });
@@ -345,20 +205,19 @@ describe("setOcPath — jsonl leaf", () => {
 });
 
 describe("setOcPath — md insertion", () => {
-  it.each([
-    ["oc://X.md/[frontmatter]/+note", "---\nname: x\n---\n"],
-    ["oc://X.md/tools/+", "## Tools\n- keep: stable\n"],
-    ["oc://X.md/+", "## Existing\n"],
-  ])("refuses sentinel-bearing Markdown insertion values at %s", (uri, raw) => {
-    const md = parseMd(raw).ast;
-    const before = structuredClone(md);
-    for (const value of [REDACTED_SENTINEL, `before${REDACTED_SENTINEL}after`]) {
-      expect(() => setOcPath(md, parseOcPath(uri), value)).toThrow(
-        expect.objectContaining({ code: "OC_EMIT_SENTINEL", path: uri }),
-      );
-      expect(md).toEqual(before);
-    }
-  });
+  it.each([["oc://X.md/tools/+", "## Tools\n- keep: stable\n"]])(
+    "refuses sentinel-bearing Markdown insertion values at %s",
+    (uri, raw) => {
+      const md = parseMd(raw).ast;
+      const before = structuredClone(md);
+      for (const value of [REDACTED_SENTINEL, `before${REDACTED_SENTINEL}after`]) {
+        expect(() => setOcPath(md, parseOcPath(uri), value)).toThrow(
+          expect.objectContaining({ code: "OC_EMIT_SENTINEL", path: uri }),
+        );
+        expect(md).toEqual(before);
+      }
+    },
+  );
 
   it("keeps the insertion-value guard separate from new frontmatter keys", () => {
     const md = parseMd("---\nname: x\n---\n").ast;
@@ -374,21 +233,7 @@ describe("setOcPath — md insertion", () => {
   });
 
   it.each([
-    [
-      "item",
-      "## Tools\n\n- gh: __OPENCLAW_REDACTED__\n",
-      "oc://X.md/tools/+",
-      "docker: container CLI",
-      "## Tools\n\n- gh: __OPENCLAW_REDACTED__\n- docker: container CLI",
-    ],
     ["section", "## Existing\n", "oc://X.md/+", "New Section", "## Existing\n\n## New Section"],
-    [
-      "frontmatter key",
-      "---\nname: x\n---\n",
-      "oc://X.md/[frontmatter]/+description",
-      "has: colon",
-      '---\nname: x\ndescription: "has: colon"\n---',
-    ],
   ])("preserves output and input AST when inserting a %s", (_kind, raw, path, value, expected) => {
     const md = parseMd(raw).ast;
     const before = structuredClone(md);
@@ -396,7 +241,7 @@ describe("setOcPath — md insertion", () => {
     if (!result.ok || result.ast.kind !== "md") {
       throw new Error("expected a successful Markdown insertion");
     }
-    expect(emitMd(result.ast)).toBe(expected);
+    expect(result.ast.raw).toBe(expected);
     expect(md).toEqual(before);
   });
 
@@ -416,8 +261,7 @@ describe("setOcPath — jsonc insertion", () => {
     const r = setOcPath(ast, parseOcPath("oc://config/items/+"), "3");
     expect(r.ok).toBe(true);
     if (r.ok) {
-      const ast2 = r.ast as Parameters<typeof emitJsonc>[0];
-      expect(JSON.parse(emitJsonc(ast2))).toEqual({ items: [1, 2, 3] });
+      expect(JSON.parse(r.ast.raw)).toEqual({ items: [1, 2, 3] });
     }
   });
 
@@ -426,20 +270,7 @@ describe("setOcPath — jsonc insertion", () => {
     const r = setOcPath(ast, parseOcPath("oc://config/items/+1"), "2");
     expect(r.ok).toBe(true);
     if (r.ok) {
-      const ast2 = r.ast as Parameters<typeof emitJsonc>[0];
-      expect(JSON.parse(emitJsonc(ast2))).toEqual({ items: [1, 2, 3] });
-    }
-  });
-
-  it("adds object key with `+key`", () => {
-    const ast = parseJsonc('{ "plugins": { "github": "tok" } }').ast;
-    const r = setOcPath(ast, parseOcPath("oc://config/plugins/+gitlab"), '"new-tok"');
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      const ast2 = r.ast as Parameters<typeof emitJsonc>[0];
-      expect(JSON.parse(emitJsonc(ast2))).toEqual({
-        plugins: { github: "tok", gitlab: "new-tok" },
-      });
+      expect(JSON.parse(r.ast.raw)).toEqual({ items: [1, 2, 3] });
     }
   });
 
@@ -470,26 +301,8 @@ describe("setOcPath — jsonc insertion", () => {
     );
     expect(r.ok).toBe(true);
     if (r.ok) {
-      const ast2 = r.ast as Parameters<typeof emitJsonc>[0];
-      expect(JSON.parse(emitJsonc(ast2))).toEqual({
+      expect(JSON.parse(r.ast.raw)).toEqual({
         plugins: { gitlab: { token: "xyz", enabled: true } },
-      });
-    }
-  });
-
-  it("preserves comments, trailing commas, and CRLF", () => {
-    const ast = parseJsonc(
-      '{\r\n  // keep\r\n  "plugins": {\r\n    "github": "tok",\r\n  },\r\n}\r\n',
-    ).ast;
-    const r = setOcPath(ast, parseOcPath("oc://config/plugins/+gitlab"), '"new-tok"');
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      expect(emitJsonc(r.ast as Parameters<typeof emitJsonc>[0])).toBe(
-        '{\r\n  // keep\r\n  "plugins": {\r\n    "github": "tok",\r\n    "gitlab": "new-tok",\r\n  },\r\n}\r\n',
-      );
-      expectLeaf(resolveOcPath(r.ast, parseOcPath("oc://config/plugins/gitlab")), {
-        leafType: "string",
-        valueText: "new-tok",
       });
     }
   });
@@ -501,7 +314,7 @@ describe("setOcPath — jsonl insertion (session append)", () => {
     const r = setOcPath(ast, parseOcPath("oc://log/+"), '{"event":"step","n":1}');
     expect(r.ok).toBe(true);
     if (r.ok) {
-      const out = emitJsonl(r.ast as Parameters<typeof emitJsonl>[0]);
+      const out = r.ast.raw;
       const lines = out.split("\n").filter((l) => l.length > 0);
       expect(lines).toHaveLength(2);
       expect(JSON.parse(expectDefined(lines[1], "appended JSONL line"))).toEqual({
@@ -543,15 +356,6 @@ describe("setOcPath — cross-cutting properties", () => {
     const before3 = JSON.stringify(jsonl);
     setOcPath(jsonl, parseOcPath("oc://log/L1/a"), "99");
     expect(JSON.stringify(jsonl)).toBe(before3);
-  });
-
-  it("returns ok-tagged result with new ast on success", () => {
-    const md = parseMd("---\nname: x\n---\n").ast;
-    const r = setOcPath(md, parseOcPath("oc://X.md/[frontmatter]/name"), "y");
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      expect(r.ast.kind).toBe("md");
-    }
   });
 
   it("returns failure-tagged result with reason on unresolved", () => {

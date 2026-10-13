@@ -1,4 +1,3 @@
-// Mattermost plugin module implements group mentions behavior.
 import {
   buildChannelGroupsScopeTree,
   resolveScopeRequireMention,

@@ -44,6 +44,10 @@ Received stickers expose their reusable `file_key` to the agent as
 `<sticker key="..."/>`. Feishu/Lark does not support downloading sticker
 resources, so OpenClaw preserves the key without fetching an attachment.
 
+A file sent with a caption, or multiple files in one message, arrives as a
+rich-text `post` with a top-level `files[]` array. OpenClaw downloads those
+files through the same inbound attachment path as a standalone `file` message.
+
 Inbound Feishu/Lark audio messages are normalized as media placeholders instead
 of raw `file_key` JSON. When `tools.media.audio` is configured, OpenClaw
 downloads the voice-note resource and runs shared audio transcription before the
@@ -158,7 +162,7 @@ by the result limit or output budget. Narrow the query to find other matches.
 
 Limits: 32 bot sets, 256 stickers per set, and 1–8 keywords per sticker.
 Store keywords without leading or trailing whitespace; each must be nonempty
-and at most 64 Unicode characters. File keys must be canonical received keys,
+and at most 64 Unicode characters. File keys must be the exact keys received from Feishu,
 at most 512 Unicode characters. Each key appears only once in its bot's map.
 Queries are nonempty and at most 128 Unicode characters. `limit` defaults to 5
 and accepts integers from 1 through 10; search results are also capped at

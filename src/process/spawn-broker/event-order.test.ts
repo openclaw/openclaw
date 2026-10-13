@@ -2,16 +2,18 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { withTestTimeout } from "../../../test/helpers/promise.js";
+import { withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createSpawnBrokerHost } from "./host.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-const skipBrokerTests = process.platform === "win32" || Boolean(process.versions.bun);
+const skipBrokerTests = process.platform === "win32";
 
 describe.skipIf(skipBrokerTests)("spawn broker event order", () => {
-  it("keeps startup IPC ahead of messages arriving while its first write drains", async () => {
+  it("keeps startup IPC ahead of messages arriving while its first write drains", async ({
+    signal,
+  }) => {
     const preload = path.join(tempDirs.make("openclaw-broker-event-order-"), "backpressure.mjs");
     await writeFile(
       preload,
@@ -88,11 +90,7 @@ describe.skipIf(skipBrokerTests)("spawn broker event order", () => {
         }
       });
       await child.ready();
-      await withTestTimeout(
-        child.waitForClose(),
-        5_000,
-        "IPC backpressure handshake did not finish",
-      );
+      await withinTest(child.waitForClose(), signal);
       await continueDelivery;
       expect(messages).toEqual(["A", "B", "C"]);
       expect(child.exitCode).toBe(0);

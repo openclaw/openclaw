@@ -1,18 +1,23 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  defaultRuntime,
+  shortenHomePath,
+  theme,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
 import { resolveMemoryRemDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { resolveMemoryPluginConfig, withMemoryCommand } from "./cli-runtime-common.js";
-import { defaultRuntime, shortenHomePath, theme } from "./cli.host.runtime.js";
 import type { MemoryRemBackfillOptions, MemoryRemHarnessOptions } from "./cli.types.js";
 import { removeBackfillDiaryEntries, writeBackfillDiaryEntries } from "./dreaming-dreams-file.js";
+import { DAILY_MEMORY_FILENAME_RE } from "./dreaming-ingestion-state.js";
 import { seedHistoricalDailyMemorySignals } from "./dreaming-phases.js";
 import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
 import { previewGroundedRemMarkdown } from "./rem-evidence.js";
 import { previewRemHarness } from "./rem-harness.js";
 import { runSessionBackfill, type MemorySessionBackfillOptions } from "./session-backfill.js";
 import {
-  recordGroundedShortTermCandidates,
+  recordShortTermRecalls,
   removeGroundedShortTermCandidates,
 } from "./short-term-promotion.js";
 const { heading, muted, warn } = theme;
@@ -23,9 +28,7 @@ export async function runMemorySessionBackfill(
 ) {
   await withMemoryCommand({
     commandName: "memory session-backfill",
-    agent: opts.agent,
-    diagnosticsToStderr: Boolean(opts.json),
-    onUnavailable: opts.json ? defaultRuntime.writeJson : undefined,
+    options: opts,
     purpose: "status",
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {
@@ -46,66 +49,68 @@ export async function runMemorySessionBackfill(
         pluginConfig,
         cfg,
       });
-      let result;
-      try {
-        result = await runSessionBackfill({
-          agentId,
-          workspaceDir,
-          pluginConfig,
-          ...(opts.from !== undefined ? { from: opts.from } : {}),
-          ...(opts.to !== undefined ? { to: opts.to } : {}),
-          ...(opts.limitDays !== undefined ? { limitDays: opts.limitDays } : {}),
-          ...(opts.rem !== undefined ? { rem: opts.rem } : {}),
-          ...(opts.apply !== undefined ? { apply: opts.apply } : {}),
-          ...(opts.rollback !== undefined ? { rollback: opts.rollback } : {}),
-          ...(opts.archiveFiles !== undefined ? { archiveFiles: opts.archiveFiles } : {}),
-          ...(remConfig.timezone !== undefined ? { timezone: remConfig.timezone } : {}),
-        });
-      } catch (error) {
-        throw new Error(error instanceof Error ? error.message : String(error), { cause: error });
-      }
-      if (opts.json) {
-        defaultRuntime.writeJson(result);
-        return;
-      }
-      if (result.rollback) {
-        defaultRuntime.log(
-          [
-            `${heading("Session Backfill")} ${muted("(rollback)")}`,
-            muted(`workspace=${shortenHomePath(workspaceDir)}`),
-            muted(`removedDiaryEntries=${result.rollback.removedDiaryEntries}`),
-            muted(`removedStagedEntries=${result.rollback.removedStagedEntries}`),
-          ].join("\n"),
-        );
-        return;
-      }
-      const lines = [
-        `${heading("Session Backfill")} ${muted(`(${agentId})`)}`,
-        muted(`workspace=${shortenHomePath(workspaceDir)}`),
-        muted(
-          `batches=${result.batchCount ?? 1} days=${result.days.length} candidates=${result.candidateCount} staged=${result.stagedEntries}`,
-        ),
-      ];
-      for (const batch of result.batches ?? []) {
-        lines.push(
-          muted(
-            `batch=${batch.batch} days=${batch.days} candidates=${batch.candidates} staged=${batch.stagedEntries}`,
-          ),
-        );
-      }
-      for (const day of result.days) {
-        lines.push("", heading(day.day), muted(`candidates=${day.candidateCount}`));
-        lines.push(...day.topCandidates.map((candidate) => `- ${candidate}`));
-      }
-      if (result.days.length === 0) {
-        lines.push("", "No new hash-untracked trusted session candidates.");
-      }
-      if (!result.applied && !result.rem) {
-        lines.push("", muted("Dry run; use --apply to stage candidates."));
-      }
-      defaultRuntime.log(lines.join("\n"));
+      const result = await runSessionBackfill({
+        agentId,
+        workspaceDir,
+        pluginConfig,
+        from: opts.from,
+        to: opts.to,
+        limitDays: opts.limitDays,
+        rem: opts.rem,
+        apply: opts.apply,
+        rollback: opts.rollback,
+        archiveFiles: opts.archiveFiles,
+        timezone: remConfig.timezone,
+      });
+      printSessionBackfillResult(result, opts);
     },
   });
+}
+
+export function printSessionBackfillResult(
+  result: import("./session-backfill-contract.js").SessionBackfillResult,
+  opts: Pick<MemorySessionBackfillOptions, "json">,
+) {
+  if (opts.json) {
+    defaultRuntime.writeJson(result);
+    return;
+  }
+  if (result.rollback) {
+    defaultRuntime.log(
+      [
+        `${heading("Session Backfill")} ${muted("(rollback)")}`,
+        muted(`workspace=${shortenHomePath(result.workspaceDir)}`),
+        muted(`removedDiaryEntries=${result.rollback.removedDiaryEntries}`),
+        muted(`removedStagedEntries=${result.rollback.removedStagedEntries}`),
+      ].join("\n"),
+    );
+    return;
+  }
+  const lines = [
+    `${heading("Session Backfill")} ${muted(`(${result.agentId})`)}`,
+    muted(`workspace=${shortenHomePath(result.workspaceDir)}`),
+    muted(
+      `batches=${result.batchCount ?? 1} days=${result.days.length} candidates=${result.candidateCount} staged=${result.stagedEntries}`,
+    ),
+  ];
+  for (const batch of result.batches ?? []) {
+    lines.push(
+      muted(
+        `batch=${batch.batch} days=${batch.days} candidates=${batch.candidates} staged=${batch.stagedEntries}`,
+      ),
+    );
+  }
+  for (const day of result.days) {
+    lines.push("", heading(day.day), muted(`candidates=${day.candidateCount}`));
+    lines.push(...day.topCandidates.map((candidate) => `- ${candidate}`));
+  }
+  if (result.days.length === 0) {
+    lines.push("", "No new hash-untracked trusted session candidates.");
+  }
+  if (!result.applied && !result.rem) {
+    lines.push("", muted("Dry run; use --apply to stage candidates."));
+  }
+  defaultRuntime.log(lines.join("\n"));
 }
 
 export async function runMemoryRemHarness(
@@ -114,9 +119,7 @@ export async function runMemoryRemHarness(
 ) {
   await withMemoryCommand({
     commandName: "memory rem-harness",
-    agent: opts.agent,
-    diagnosticsToStderr: Boolean(opts.json),
-    onUnavailable: opts.json ? defaultRuntime.writeJson : undefined,
+    options: opts,
     purpose: "status",
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {
@@ -256,9 +259,7 @@ export async function runMemoryRemBackfill(
 ) {
   await withMemoryCommand({
     commandName: "memory rem-backfill",
-    agent: opts.agent,
-    diagnosticsToStderr: Boolean(opts.json),
-    onUnavailable: opts.json ? defaultRuntime.writeJson : undefined,
+    options: opts,
     purpose: "status",
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {
@@ -336,7 +337,7 @@ export async function runMemoryRemBackfill(
             workspaceSourceFiles.map(
               (scratchPath, index) =>
                 [
-                  normalizeRelativePath(scratchDir, scratchPath),
+                  path.relative(scratchDir, scratchPath).replace(/\\/g, "/"),
                   sourceFiles[index] ?? scratchPath,
                 ] as const,
             ),
@@ -366,10 +367,11 @@ export async function runMemoryRemBackfill(
             replacedShortTermEntries = cleared.removed;
             const shortTermSeedItems = collectGroundedShortTermSeedItems(grounded.files);
             if (shortTermSeedItems.length > 0) {
-              await recordGroundedShortTermCandidates({
+              await recordShortTermRecalls({
                 workspaceDir,
                 query: "__dreaming_grounded_backfill__",
-                items: shortTermSeedItems,
+                signalType: "grounded",
+                results: shortTermSeedItems,
                 dedupeByQueryPerDay: true,
                 nowMs: Date.now(),
                 timezone: remConfig.timezone,
@@ -432,7 +434,6 @@ export async function runMemoryRemBackfill(
     },
   });
 }
-const DAILY_MEMORY_FILE_NAME_RE = /^(\d{4}-\d{2}-\d{2})(?:-[^/]+)?\.md$/i;
 async function listHistoricalDailyFiles(inputPath: string): Promise<string[]> {
   const resolvedPath = path.resolve(inputPath);
   let stat;
@@ -445,14 +446,14 @@ async function listHistoricalDailyFiles(inputPath: string): Promise<string[]> {
     throw err;
   }
   if (stat.isFile()) {
-    return DAILY_MEMORY_FILE_NAME_RE.test(path.basename(resolvedPath)) ? [resolvedPath] : [];
+    return DAILY_MEMORY_FILENAME_RE.test(path.basename(resolvedPath)) ? [resolvedPath] : [];
   }
   if (!stat.isDirectory()) {
     return [];
   }
   const entries = await fs.readdir(resolvedPath, { withFileTypes: true });
   return entries
-    .filter((entry) => entry.isFile() && DAILY_MEMORY_FILE_NAME_RE.test(entry.name))
+    .filter((entry) => entry.isFile() && DAILY_MEMORY_FILENAME_RE.test(entry.name))
     .map((entry) => path.join(resolvedPath, entry.name))
     .toSorted((a, b) => path.basename(a).localeCompare(path.basename(b)));
 }
@@ -493,11 +494,8 @@ async function withHistoricalMemoryWorkspace<T>(
   }
 }
 function extractIsoDayFromPath(filePath: string): string | null {
-  const match = path.basename(filePath).match(DAILY_MEMORY_FILE_NAME_RE);
+  const match = path.basename(filePath).match(DAILY_MEMORY_FILENAME_RE);
   return match?.[1] ?? null;
-}
-function normalizeRelativePath(baseDir: string, filePath: string): string {
-  return path.relative(baseDir, filePath).replace(/\\/g, "/");
 }
 function groundedMarkdownToDiaryLines(markdown: string): string[] {
   return markdown
@@ -525,71 +523,46 @@ function parseGroundedRef(
 }
 function collectGroundedShortTermSeedItems(
   previews: Awaited<ReturnType<typeof previewGroundedRemMarkdown>>["files"],
-): Array<{
-  path: string;
-  startLine: number;
-  endLine: number;
-  snippet: string;
-  score: number;
-  query: string;
-  signalCount: number;
-  dayBucket?: string;
-}> {
-  const items: Array<{
-    path: string;
-    startLine: number;
-    endLine: number;
-    snippet: string;
-    score: number;
-    query: string;
-    signalCount: number;
-    dayBucket?: string;
-  }> = [];
+): Parameters<typeof recordShortTermRecalls>[0]["results"] {
+  const items: Parameters<typeof recordShortTermRecalls>[0]["results"] = [];
   const seen = new Set<string>();
   for (const file of previews) {
     const dayBucket = extractIsoDayFromPath(file.path) ?? undefined;
-    const signals = [
-      ...file.memoryImplications.map((item) => ({
-        text: item.text,
-        refs: item.refs,
-        score: 0.92,
-        query: "__dreaming_grounded_backfill__:lasting-update",
-        signalCount: 2,
-      })),
-      ...file.candidates
-        .filter((candidate) => candidate.lean === "likely_durable")
-        .map((candidate) => ({
-          text: candidate.text,
-          refs: candidate.refs,
-          score: 0.82,
-          query: "__dreaming_grounded_backfill__:candidate",
-          signalCount: 1,
-        })),
-    ];
-    for (const signal of signals) {
-      if (!signal.text.trim()) {
-        continue;
+    for (const [signals, score, query, signalCount] of [
+      [file.memoryImplications, 0.92, "__dreaming_grounded_backfill__:lasting-update", 2],
+      [
+        file.candidates.filter((candidate) => candidate.lean === "likely_durable"),
+        0.82,
+        "__dreaming_grounded_backfill__:candidate",
+        1,
+      ],
+    ] as const) {
+      for (const signal of signals) {
+        if (!signal.text.trim()) {
+          continue;
+        }
+        const firstRef = signal.refs.find((ref) => ref.trim().length > 0);
+        const parsedRef = firstRef ? parseGroundedRef(file.path, firstRef) : null;
+        if (!parsedRef) {
+          continue;
+        }
+        const key = `${parsedRef.path}:${parsedRef.startLine}:${parsedRef.endLine}:${query}:${signal.text.toLowerCase()}`;
+        if (seen.has(key)) {
+          continue;
+        }
+        seen.add(key);
+        items.push({
+          source: "memory",
+          path: parsedRef.path,
+          startLine: parsedRef.startLine,
+          endLine: parsedRef.endLine,
+          snippet: signal.text,
+          score,
+          query,
+          signalCount,
+          ...(dayBucket ? { dayBucket } : {}),
+        });
       }
-      const firstRef = signal.refs.find((ref) => ref.trim().length > 0);
-      const parsedRef = firstRef ? parseGroundedRef(file.path, firstRef) : null;
-      if (!parsedRef) {
-        continue;
-      }
-      const key = `${parsedRef.path}:${parsedRef.startLine}:${parsedRef.endLine}:${signal.query}:${signal.text.toLowerCase()}`;
-      if (seen.has(key)) {
-        continue;
-      }
-      seen.add(key);
-      items.push({
-        path: parsedRef.path,
-        startLine: parsedRef.startLine,
-        endLine: parsedRef.endLine,
-        snippet: signal.text,
-        score: signal.score,
-        query: signal.query,
-        signalCount: signal.signalCount,
-        ...(dayBucket ? { dayBucket } : {}),
-      });
     }
   }
   return items;

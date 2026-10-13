@@ -5,6 +5,9 @@ import { fileURLToPath } from "node:url";
 import type { AcpRuntime } from "@openclaw/acp-core/runtime/types";
 import type { AcpxRuntime } from "acpx/runtime";
 import { afterEach, beforeEach, vi } from "vitest";
+import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
+import { fixtureReceiptClientSource } from "../../../test/helpers/fixture-receipts.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createTestPluginApi } from "../../plugin-sdk/plugin-test-api.js";
 import { createPluginRuntimeMock } from "../../plugin-sdk/plugin-test-runtime.js";
@@ -47,14 +50,20 @@ type ServiceModule = {
 };
 export function useNativeProcessFixture() {
   let snapshot: ReturnType<typeof captureActivePluginRegistrySnapshot>;
+  let lifetime: ReturnType<typeof createFixtureLifetime>;
   beforeEach(() => {
+    lifetime = createFixtureLifetime();
     snapshot = captureActivePluginRegistrySnapshot();
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
-  afterEach(() => {
+  afterEach(async () => {
+    await lifetime.cleanup();
     restoreActivePluginRegistrySnapshot(snapshot);
     vi.restoreAllMocks();
   });
+  return {
+    track: <T>(completion: Promise<T>): Promise<T> => lifetime.track(completion),
+  };
 }
 
 export async function registerNative(
@@ -66,8 +75,11 @@ export async function registerNative(
     holdNewSession?: boolean;
     holdPromptReply?: boolean;
     allowAlwaysOnly?: boolean;
+    receiptEndpoint?: string;
   } = {},
 ) {
+  // Transcript writes read the Gateway-published runtime config; the test state resets it on exit.
+  setRuntimeConfigSnapshot(config);
   const peer = fileURLToPath(
     {
       "owner-agent.mjs": new URL("../../../test/fixtures/acp/owner-agent.mjs", import.meta.url),
@@ -80,6 +92,13 @@ export async function registerNative(
   const peerDirectory = state.path("peer");
   await fs.mkdir(peerDirectory);
   await fs.mkdir(path.join(peerDirectory, "effects"));
+  const receiptModule = path.join(peerDirectory, "receipts.mjs");
+  if (peerOptions.receiptEndpoint) {
+    await fs.writeFile(
+      receiptModule,
+      `${fixtureReceiptClientSource(peerOptions.receiptEndpoint)}\nexport { sendReceipt };\n`,
+    );
+  }
   const module = await loadBundledPluginFacade<ServiceModule>({
     pluginId: "acpx",
     artifactBasename: "register.runtime.js",
@@ -109,6 +128,7 @@ export async function registerNative(
               ...(peerOptions.holdNewSession ? ["--hold-new-session"] : []),
               ...(peerOptions.holdPromptReply ? ["--hold-prompt-reply"] : []),
               ...(peerOptions.allowAlwaysOnly ? ["--allow-always-only"] : []),
+              ...(peerOptions.receiptEndpoint ? [`--receipt-module=${receiptModule}`] : []),
             ],
           },
         ]),

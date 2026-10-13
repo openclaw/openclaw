@@ -2,12 +2,16 @@ import { readFileSync } from "node:fs";
 import { setTimeout as realDelay } from "node:timers/promises";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { afterAll, aroundEach, beforeAll, describe } from "vitest";
+import { resolveRuntimeProcessEntrypointUrl } from "../../../infra/runtime-process-url.js";
 import { getSpawnBroker, runWithSpawnBroker } from "../../spawn-broker/context.js";
 import { createSpawnBrokerHost } from "../../spawn-broker/host.js";
 
 /** Run the existing process-owner contracts through each supported POSIX transport. */
-export function describeSpawnTransports(name: string, register: () => void): void {
-  const transports = process.versions.bun ? ["native"] : ["native", "broker"];
+export function describeSpawnTransports(
+  name: string,
+  register: (transport: string) => void,
+  transports = process.versions.bun ? ["native"] : ["native", "broker"],
+): void {
   describe.skipIf(process.platform === "win32").each(transports)(
     `${name} (%s transport)`,
     (transport) => {
@@ -22,23 +26,32 @@ export function describeSpawnTransports(name: string, register: () => void): voi
           await broker.close();
         });
       }
-      register();
+      register(transport);
     },
   );
 }
 
 /** Separate host fixtures must establish their own process-local broker context. */
 export function serviceChildHostTransportPrelude(): string {
+  // A source-loaded host must still launch the canonical built native owner.
+  // Loader compiler children cannot share its exclusive kernel wait ownership.
+  const nativeOwner = `
+    const { registerSealedRuntimeProcessEntrypoint } = await import(${JSON.stringify(new URL("../../../infra/runtime-process-url.ts", import.meta.url).href)});
+    registerSealedRuntimeProcessEntrypoint("serviceChildGroupAnchor", new URL(${JSON.stringify(resolveRuntimeProcessEntrypointUrl("serviceChildGroupAnchor").href)}));
+  `;
   if (!getSpawnBroker()) {
-    return "const withTransport = (run) => run();";
+    return nativeOwner + "const withTransport = (run) => run();";
   }
-  return `
+  return (
+    nativeOwner +
+    `
     const { createSpawnBrokerHost } = await import(${JSON.stringify(new URL("../../spawn-broker/host.ts", import.meta.url).href)});
     const { runWithSpawnBroker } = await import(${JSON.stringify(new URL("../../spawn-broker/context.ts", import.meta.url).href)});
     const broker = createSpawnBrokerHost();
     await broker.ready();
     const withTransport = (run) => runWithSpawnBroker(broker, run);
-  `;
+  `
+  );
 }
 
 export function isAlive(pid: number): boolean {

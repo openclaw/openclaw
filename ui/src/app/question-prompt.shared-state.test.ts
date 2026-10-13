@@ -245,20 +245,17 @@ describe("Gateway-client question outcome ownership", () => {
     },
   );
 
-  it.each(resolutionCases)(
-    "does not leak a same-id $action into another Gateway client",
-    async ({ resolve }) => {
-      const submitter = connectQuestionState(createQuestionClient());
-      const otherGateway = connectQuestionState(createQuestionClient());
+  it("does not leak a same-id answer into another Gateway client", async () => {
+    const submitter = connectQuestionState(createQuestionClient());
+    const otherGateway = connectQuestionState(createQuestionClient());
 
-      await resolve(submitter);
+    await submitQuestionPrompt(submitter, "question-1", { format: ["Compact"] });
 
-      expect(otherGateway.prompts.get("question-1")).toMatchObject({
-        status: "pending",
-        localResolutionConfirmed: false,
-      });
-    },
-  );
+    expect(otherGateway.prompts.get("question-1")).toMatchObject({
+      status: "pending",
+      localResolutionConfirmed: false,
+    });
+  });
 
   it("does not settle an unrelated same-client session question", async () => {
     const client = createQuestionClient();
@@ -352,33 +349,28 @@ describe("Gateway-client question outcome ownership", () => {
     expect(migrated.prompts.get("question-1")?.status).toBe("pending");
   });
 
-  it.each(["pending", "answered"] as const)(
-    "purges a disposed $status question and unmatched private outcome before attaching another Gateway",
-    (status) => {
-      const firstClient = createQuestionClient();
-      const reused = connectQuestionState(firstClient);
-      if (status === "answered") {
-        handleQuestionPromptEvent(reused, {
-          event: "question.resolved",
-          payload: {
-            id: "question-1",
-            status,
-            answers: { answers: { format: ["Private account answer"] } },
-          },
-        });
-      }
-      handleQuestionPromptEvent(reused, {
-        event: "question.resolved",
-        payload: { id: "private-unmatched-question", status: "cancelled" },
-      });
-      disposeQuestionPromptState(reused);
+  it("purges a disposed answer and unmatched private outcome before attaching another Gateway", () => {
+    const firstClient = createQuestionClient();
+    const reused = connectQuestionState(firstClient);
+    handleQuestionPromptEvent(reused, {
+      event: "question.resolved",
+      payload: {
+        id: "question-1",
+        status: "answered",
+        answers: { answers: { format: ["Private account answer"] } },
+      },
+    });
+    handleQuestionPromptEvent(reused, {
+      event: "question.resolved",
+      payload: { id: "private-unmatched-question", status: "cancelled" },
+    });
+    disposeQuestionPromptState(reused);
 
-      setQuestionPromptClient(reused, createQuestionClient());
+    setQuestionPromptClient(reused, createQuestionClient());
 
-      expect(reused.prompts.size).toBe(0);
-      expect(reused.unmatchedResolutions.size).toBe(0);
-    },
-  );
+    expect(reused.prompts.size).toBe(0);
+    expect(reused.unmatchedResolutions.size).toBe(0);
+  });
 
   it("keeps and reconnects a disposed question projection on its original Gateway", async () => {
     const client = createQuestionClient();

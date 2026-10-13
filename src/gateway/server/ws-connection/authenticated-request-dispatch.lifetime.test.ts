@@ -1,3 +1,4 @@
+import "../../../test-utils/prepare-compiled-subprocesses.js";
 import { EventEmitter } from "node:events";
 import os from "node:os";
 import path from "node:path";
@@ -11,12 +12,54 @@ afterEach(() => {
   vi.doUnmock("./authenticated-request-dispatch.server-methods.runtime.js");
   vi.doUnmock("./request-start.js");
   vi.doUnmock("../../session-sharing.js");
+  vi.doUnmock("../../session-sharing-authorization-async.js");
   vi.doUnmock("../../session-sharing-target-input.js");
   vi.doUnmock("../../server-methods/gateway-personal-caller.js");
   vi.resetModules();
 });
 
 describe("authenticated request completion", { concurrent: false }, () => {
+  it.each(["throw"])(
+    "holds reconnect capacity through handler settlement (%s)",
+    async (outcome) => {
+      const held = createDeferredCore();
+      const full = createDeferredCore();
+      const starts: string[] = [];
+      vi.resetModules();
+      vi.doMock("./authenticated-request-dispatch.server-methods.runtime.js", () => ({
+        handleGatewayRequest: async ({ req, respond }: GatewayRequestOptions) => {
+          starts.push(req.id);
+          respond(true);
+          if (starts.length === 4) {
+            void nextTurn().then(full.resolve);
+          }
+          await held.promise;
+          if (outcome === "throw") {
+            throw new Error("synthetic preparation failure");
+          }
+        },
+      }));
+      const { createDispatchTestHarness, createOperatorWsClient } =
+        await import("./authenticated-request-dispatch.test-support.js");
+      const harness = createDispatchTestHarness();
+      const client = createOperatorWsClient();
+      const calls = Array.from({ length: 8 }, (_, index) =>
+        harness.dispatcher.dispatch(
+          { type: "req", id: String(index), method: "sessions.subscribe", params: {} },
+          client,
+        ),
+      );
+      try {
+        await full.promise;
+        expect(starts).toEqual(["0", "1", "2", "3"]);
+      } finally {
+        held.resolve();
+        await Promise.all(calls);
+      }
+      expect(starts).toEqual(["0", "1", "2", "3", "4", "5", "6", "7"]);
+    },
+  );
+
   it.for(["lazy import", "start scheduler"] as const)(
     "rejects access revoked during %s before entering the handler",
     async (stage, { signal }) => {
@@ -38,7 +81,10 @@ describe("authenticated request completion", { concurrent: false }, () => {
         return { handleGatewayRequest };
       });
       if (stage === "start scheduler") {
-        vi.doMock("./request-start.js", () => ({ scheduleGatewayRequestStart: hold }));
+        vi.doMock("./request-start.js", async (importOriginal) => ({
+          ...(await importOriginal<typeof import("./request-start.js")>()),
+          scheduleGatewayRequestStart: hold,
+        }));
       }
       const { createDispatchTestHarness, createOperatorWsClient } =
         await import("./authenticated-request-dispatch.test-support.js");
@@ -129,15 +175,23 @@ describe("authenticated request completion", { concurrent: false }, () => {
             resolveSessionMutationAuthorization: () => ({ error: null }),
           };
         });
+        // mock-isolation: This admin auxiliary request has no session target or sharing storage.
+        vi.doMock("../../session-sharing-authorization-async.js", () => ({
+          resolveSessionMutationAuthorizationAsync: async () => ({ error: null }),
+        }));
         vi.doMock("../../session-sharing-target-input.js", () => ({
           resolveDirectIncognitoTargets: () => [],
+          resolveDirectSessionTargets: () => [],
         }));
         vi.doMock("../../server-methods/gateway-personal-caller.js", () => ({
           isSyntheticGatewayCaller: () => false,
         }));
       }
       if (stage === "start scheduler") {
-        vi.doMock("./request-start.js", () => ({ scheduleGatewayRequestStart: hold }));
+        vi.doMock("./request-start.js", async (importOriginal) => ({
+          ...(await importOriginal<typeof import("./request-start.js")>()),
+          scheduleGatewayRequestStart: hold,
+        }));
       }
       const { createDispatchTestHarness, createOperatorWsClient } =
         await import("./authenticated-request-dispatch.test-support.js");

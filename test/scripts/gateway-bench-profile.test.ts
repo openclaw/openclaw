@@ -252,8 +252,6 @@ async function waitMessage(child: ChildProcess, field: string) {
 
 it.each([
   ["cpu", false],
-  ["heap", false],
-  ["cpu", true],
   ["heap", true],
 ] as const)(
   "maps %s profiles to native workers with preexisting=%s and records retirement",

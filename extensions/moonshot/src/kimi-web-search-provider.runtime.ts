@@ -1,6 +1,6 @@
-// Moonshot provider module implements model/runtime integration.
 import {
   createProviderHttpError,
+  normalizeBaseUrl,
   readProviderJsonObjectResponse,
 } from "openclaw/plugin-sdk/provider-http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
@@ -24,7 +24,11 @@ import {
   wrapWebContent,
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
-import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asNonArrayRecord,
+  isRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   isNativeMoonshotBaseUrl,
   MOONSHOT_BASE_URL,
@@ -85,11 +89,6 @@ function throwMalformedKimiResponse(): never {
   throw new Error("Kimi API error: malformed JSON response");
 }
 
-function resolveKimiConfig(searchConfig?: SearchConfigRecord): KimiConfig {
-  const kimi = searchConfig?.kimi;
-  return kimi && typeof kimi === "object" && !Array.isArray(kimi) ? (kimi as KimiConfig) : {};
-}
-
 function resolveKimiApiKey(kimi?: KimiConfig): string | undefined {
   return (
     readConfiguredSecretString(kimi?.apiKey, "plugins.entries.moonshot.config.webSearch.apiKey") ??
@@ -97,24 +96,15 @@ function resolveKimiApiKey(kimi?: KimiConfig): string | undefined {
   );
 }
 
-function resolveKimiModel(kimi?: KimiConfig): string {
-  const model = normalizeOptionalString(kimi?.model) ?? "";
-  return model || DEFAULT_KIMI_SEARCH_MODEL;
-}
-
-function trimTrailingSlashes(url: string): string {
-  return url.replace(/\/+$/, "");
-}
-
 function resolveKimiBaseUrl(kimi?: KimiConfig, openClawConfig?: OpenClawConfig): string {
-  const explicitBaseUrl = normalizeOptionalString(kimi?.baseUrl) ?? "";
+  const explicitBaseUrl = normalizeOptionalString(kimi?.baseUrl);
   if (explicitBaseUrl) {
-    return trimTrailingSlashes(explicitBaseUrl) || DEFAULT_KIMI_BASE_URL;
+    return normalizeBaseUrl(explicitBaseUrl) || DEFAULT_KIMI_BASE_URL;
   }
 
   const moonshotBaseUrl = openClawConfig?.models?.providers?.moonshot?.baseUrl;
   if (typeof moonshotBaseUrl === "string") {
-    const normalizedMoonshotBaseUrl = trimTrailingSlashes(moonshotBaseUrl.trim());
+    const normalizedMoonshotBaseUrl = normalizeBaseUrl(moonshotBaseUrl);
     if (normalizedMoonshotBaseUrl && isNativeMoonshotBaseUrl(normalizedMoonshotBaseUrl)) {
       return normalizedMoonshotBaseUrl;
     }
@@ -132,11 +122,11 @@ function extractKimiMessageText(message: KimiMessage | undefined): string | unde
   return reasoning || undefined;
 }
 
-function collectKimiCitations(data: KimiSearchResponse, citations: Set<string>): void {
-  const searchResults = data.search_results ?? [];
-  if (!Array.isArray(searchResults)) {
-    throwMalformedKimiResponse();
-  }
+function collectKimiCitations(
+  searchResults: NonNullable<KimiSearchResponse["search_results"]>,
+  toolCalls: KimiToolCall[],
+  citations: Set<string>,
+): void {
   for (const entry of searchResults) {
     const url = isRecord(entry) && typeof entry.url === "string" ? entry.url.trim() : "";
     if (url) {
@@ -144,16 +134,6 @@ function collectKimiCitations(data: KimiSearchResponse, citations: Set<string>):
     }
   }
 
-  const choices = data.choices ?? [];
-  if (!Array.isArray(choices)) {
-    throwMalformedKimiResponse();
-  }
-  const firstChoice = choices[0];
-  const message = firstChoice && isRecord(firstChoice.message) ? firstChoice.message : undefined;
-  const toolCalls = message?.tool_calls ?? [];
-  if (!Array.isArray(toolCalls)) {
-    throwMalformedKimiResponse();
-  }
   for (const toolCall of toolCalls) {
     if (!isRecord(toolCall) || !isRecord(toolCall.function)) {
       continue;
@@ -183,11 +163,9 @@ function collectKimiCitations(data: KimiSearchResponse, citations: Set<string>):
   }
 }
 
-function hasKimiSearchResults(data: KimiSearchResponse): boolean {
-  const searchResults = data.search_results ?? [];
-  if (!Array.isArray(searchResults)) {
-    throwMalformedKimiResponse();
-  }
+function hasKimiSearchResults(
+  searchResults: NonNullable<KimiSearchResponse["search_results"]>,
+): boolean {
   return searchResults.some(
     (entry) =>
       isRecord(entry) &&
@@ -252,72 +230,58 @@ async function runKimiSearch(params: {
         if (!Array.isArray(data.choices)) {
           throwMalformedKimiResponse();
         }
-        if (hasKimiSearchResults(data)) {
-          hasGroundingEvidence = true;
+        const searchResults = data.search_results ?? [];
+        if (!Array.isArray(searchResults)) {
+          throwMalformedKimiResponse();
         }
-        collectKimiCitations(data, collectedCitations);
-        if (collectedCitations.size > 0) {
-          hasGroundingEvidence = true;
-        }
-        const choice = data.choices?.[0];
+        const choice = data.choices[0];
         if (!isRecord(choice) || !isRecord(choice.message)) {
           throwMalformedKimiResponse();
         }
-        const message = choice?.message;
-        const text = extractKimiMessageText(message);
-        const toolCalls = message?.tool_calls ?? [];
+        const message = choice.message;
+        const toolCalls = message.tool_calls ?? [];
         if (!Array.isArray(toolCalls)) {
           throwMalformedKimiResponse();
         }
+        collectKimiCitations(searchResults, toolCalls, collectedCitations);
+        hasGroundingEvidence ||= hasKimiSearchResults(searchResults) || collectedCitations.size > 0;
 
-        if (choice?.finish_reason !== "tool_calls" || toolCalls.length === 0) {
-          if (!text) {
-            throwMalformedKimiResponse();
-          }
-          return {
-            done: true,
-            content: text,
-            citations: [...collectedCitations],
-          };
-        }
-
-        messages.push({
-          role: "assistant",
-          content: message?.content ?? "",
-          ...(message?.reasoning_content ? { reasoning_content: message.reasoning_content } : {}),
-          tool_calls: toolCalls,
-        });
-
-        let pushed = false;
-        for (const toolCall of toolCalls) {
-          const toolCallId = toolCall.id?.trim();
-          const toolCallName = toolCall.function?.name?.trim();
-          const toolContent = extractKimiToolResultContent(toolCall);
-          if (!toolCallId || !toolCallName || !toolContent) {
-            continue;
-          }
-          if (toolCallName === KIMI_WEB_SEARCH_TOOL.function.name) {
-            hasGroundingEvidence = true;
-          }
-          pushed = true;
+        const text = extractKimiMessageText(message);
+        if (choice.finish_reason === "tool_calls" && toolCalls.length > 0) {
           messages.push({
-            role: "tool",
-            tool_call_id: toolCallId,
-            name: toolCallName,
-            content: toolContent,
+            role: "assistant",
+            content: message.content ?? "",
+            ...(message.reasoning_content ? { reasoning_content: message.reasoning_content } : {}),
+            tool_calls: toolCalls,
           });
-        }
-        if (!pushed) {
-          if (!text) {
-            throwMalformedKimiResponse();
+
+          let pushed = false;
+          for (const toolCall of toolCalls) {
+            const toolCallId = toolCall.id?.trim();
+            const toolCallName = toolCall.function?.name?.trim();
+            const toolContent = extractKimiToolResultContent(toolCall);
+            if (!toolCallId || !toolCallName || !toolContent) {
+              continue;
+            }
+            if (toolCallName === KIMI_WEB_SEARCH_TOOL.function.name) {
+              hasGroundingEvidence = true;
+            }
+            pushed = true;
+            messages.push({
+              role: "tool",
+              tool_call_id: toolCallId,
+              name: toolCallName,
+              content: toolContent,
+            });
           }
-          return {
-            done: true,
-            content: text,
-            citations: [...collectedCitations],
-          };
+          if (pushed) {
+            return { done: false };
+          }
         }
-        return { done: false };
+        if (!text) {
+          throwMalformedKimiResponse();
+        }
+        return { done: true, content: text, citations: [...collectedCitations] };
       },
     );
 
@@ -347,7 +311,7 @@ export async function executeKimiWebSearchProviderTool(
     return unsupportedResponse;
   }
 
-  const kimiConfig = resolveKimiConfig(searchConfig);
+  const kimiConfig: KimiConfig = asNonArrayRecord(searchConfig?.kimi);
   const apiKey = resolveKimiApiKey(kimiConfig);
   if (!apiKey) {
     return {
@@ -363,7 +327,7 @@ export async function executeKimiWebSearchProviderTool(
     max: MAX_SEARCH_COUNT,
     message: `count must be an integer from 1 to ${MAX_SEARCH_COUNT}.`,
   });
-  const model = resolveKimiModel(kimiConfig);
+  const model = normalizeOptionalString(kimiConfig.model) ?? DEFAULT_KIMI_SEARCH_MODEL;
   const baseUrl = resolveKimiBaseUrl(kimiConfig, ctx.config);
   const cacheKey = buildSearchCacheKey(["kimi", query, baseUrl, model]);
   const cacheTtlMs = resolveSearchCacheTtlMs(searchConfig);
@@ -416,12 +380,12 @@ export async function runKimiSearchProviderSetup(
   ctx: WebSearchProviderSetupContext,
 ): Promise<WebSearchProviderSetupContext["config"]> {
   const existingPluginConfig = resolveProviderWebSearchPluginConfig(ctx.config, "moonshot");
-  const existingBaseUrl = normalizeOptionalString(existingPluginConfig?.baseUrl) ?? "";
   // Normalize trailing slashes so initialValue matches canonical option values.
-  const normalizedBaseUrl = existingBaseUrl.replace(/\/+$/, "");
+  const normalizedBaseUrl = normalizeBaseUrl(
+    normalizeOptionalString(existingPluginConfig?.baseUrl),
+  );
   const existingModel = normalizeOptionalString(existingPluginConfig?.model) ?? "";
 
-  // Region selection (baseUrl)
   const isCustomBaseUrl = normalizedBaseUrl && !isNativeMoonshotBaseUrl(normalizedBaseUrl);
   const regionOptions: Array<{ value: string; label: string; hint?: string }> = [];
   if (isCustomBaseUrl) {
@@ -444,14 +408,11 @@ export async function runKimiSearchProviderSetup(
     },
   );
 
-  const regionChoice = await ctx.prompter.select<string>({
+  const baseUrl = await ctx.prompter.select<string>({
     message: "Kimi API region",
     options: regionOptions,
     initialValue: normalizedBaseUrl || MOONSHOT_BASE_URL,
   });
-  const baseUrl = regionChoice;
-
-  // Model selection
   const currentModelLabel = existingModel
     ? `Keep current (moonshot/${existingModel})`
     : `Use default (moonshot/${DEFAULT_KIMI_SEARCH_MODEL})`;
@@ -488,7 +449,6 @@ export async function runKimiSearchProviderSetup(
     model = modelChoice;
   }
 
-  // Write baseUrl and model into plugins.entries.moonshot.config.webSearch
   const next = { ...ctx.config };
   setProviderWebSearchPluginConfigValue(next, "moonshot", "baseUrl", baseUrl);
   setProviderWebSearchPluginConfigValue(next, "moonshot", "model", model);

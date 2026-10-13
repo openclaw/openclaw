@@ -1,22 +1,26 @@
 import { createHash } from "node:crypto";
+import {
+  parseDateFirstTimestampMs,
+  timestampMsToIsoString,
+} from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { z } from "zod";
 import type { SessionCatalogTranscriptItem } from "../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
-import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.sqlite-contract.js";
 import { readSessionTranscriptHistoryEventPage } from "../config/sessions/session-accessor.sqlite-history-events.js";
 import { SessionTranscriptColdError } from "../config/sessions/session-cold-storage-state.js";
+import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { readSessionHistoryPageInWorker } from "../config/sessions/session-history-worker-runtime.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { redactToolPayloadText } from "../logging/redact.js";
 import { isAssistantTextContentType } from "./chat-display-projection.helpers.js";
 import { projectChatDisplayMessages } from "./chat-display-projection.js";
 import { isSuppressedControlReplyText } from "./control-reply-text.js";
-import { createSessionCatalogSourceParticipantProjector } from "./session-catalog-identity.js";
+import { prepareSessionCatalogSourceParticipantProjector } from "./session-catalog-identity.js";
 import { projectSessionDisplayMessage } from "./session-display-projection.js";
-import { projectTranscriptEntryMessage } from "./session-transcript-entry-message.js";
+import { sqliteMessageEventWithSeq } from "./session-transcript-entry-message.js";
 import { deriveSessionTitle } from "./session-utils-core.js";
 
 export type SessionTranscriptCatalogPage = {
@@ -51,14 +55,16 @@ const CursorSchema = z.strictObject({
 });
 type CatalogCursor = z.infer<typeof CursorSchema>;
 
-function readCatalogHistoryPage(
+async function readCatalogHistoryPage(
   scope: SessionTranscriptReadScope,
   options: { offset: number; maxMessages: number },
 ) {
-  const page = readSessionTranscriptHistoryEventPage(scope, {
-    ...options,
-    maxBytes: MAX_CATALOG_READ_BYTES,
-    readOnly: true,
+  const page = await readSessionHistoryPageInWorker({
+    kind: "history-event-page",
+    params: {
+      target: scope,
+      options: { ...options, maxBytes: MAX_CATALOG_READ_BYTES },
+    },
   });
   if (page.omittedOversized) {
     throw new Error(
@@ -87,7 +93,7 @@ function decodeCursor(cursor: string | undefined): CatalogCursor | undefined {
 }
 
 function boundedText(text: string): Pick<SessionCatalogTranscriptItem, "text" | "truncated"> {
-  const redacted = redactToolPayloadText(text);
+  const redacted = text;
   return redacted.length > MAX_CATALOG_TEXT_CHARS
     ? { text: truncateUtf16Safe(redacted, MAX_CATALOG_TEXT_CHARS), truncated: true }
     : { text: redacted };
@@ -118,7 +124,9 @@ function projectContentItem(
 function projectMessageItems(
   message: Record<string, unknown>,
   params: CatalogReadParams,
-  projectSender: ReturnType<typeof createSessionCatalogSourceParticipantProjector>,
+  projectSender: Awaited<
+    ReturnType<typeof prepareSessionCatalogSourceParticipantProjector>
+  >["project"],
 ): SessionCatalogTranscriptItem[] {
   const metadata = asOptionalRecord(message["__openclaw"]);
   const identity =
@@ -131,15 +139,9 @@ function projectMessageItems(
         label: typeof senderName === "string" ? senderName : undefined,
       })
     : undefined;
-  const timestamp = message.timestamp ?? metadata?.recordTimestampMs;
-  const milliseconds =
-    typeof timestamp === "number"
-      ? timestamp
-      : typeof timestamp === "string"
-        ? Date.parse(timestamp)
-        : Number.NaN;
-  const date = Number.isFinite(milliseconds) ? new Date(milliseconds) : undefined;
-  const timestampText = date && Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
+  const timestampText = timestampMsToIsoString(
+    parseDateFirstTimestampMs(message.timestamp ?? metadata?.recordTimestampMs),
+  );
   const content = Array.isArray(message.content)
     ? message.content
     : [message.content ?? message.text];
@@ -154,9 +156,7 @@ function projectMessageItems(
           ...(metadata?.truncated === true ? { truncated: true } : {}),
           ...(typeof metadata?.id === "string" ? { id: `${metadata.id}:${index}` } : {}),
           ...(timestampText ? { timestamp: timestampText } : {}),
-          ...(typeof message.model === "string"
-            ? { model: redactToolPayloadText(message.model).slice(0, 200) }
-            : {}),
+          ...(typeof message.model === "string" ? { model: message.model.slice(0, 200) } : {}),
           ...(sender ? { sender } : {}),
         }),
       ];
@@ -173,10 +173,33 @@ export async function readSessionTranscriptCatalogPage(
     throw new Error(`Session transcript limit must be an integer from 1 to ${MAX_CATALOG_ITEMS}.`);
   }
   const storePath = resolveSessionStorePathForScope(params);
-  const entry = loadSessionEntryReadOnly({ ...params, storePath });
-  if (!entry) {
-    throw new Error("Session not found; refresh the session catalog.");
-  }
+  return withSessionEntryReadOnlyInWorker(
+    { ...params, storePath },
+    () => {},
+    async (read, owner) => {
+      if (!read.ok) {
+        throw read.error;
+      }
+      if (!read.value) {
+        throw new Error("Session not found; refresh the session catalog.");
+      }
+      return readCatalogPageFromEntry(
+        { ...params, storePath },
+        read.value,
+        cursor,
+        owner.assertCurrent,
+      );
+    },
+  );
+}
+
+async function readCatalogPageFromEntry(
+  params: CatalogReadParams & { storePath: string },
+  entry: SessionEntry,
+  cursor: CatalogCursor | undefined,
+  assertSourceCurrent: () => void,
+): Promise<SessionTranscriptCatalogPage> {
+  const storePath = params.storePath;
   const scope = {
     agentId: params.agentId,
     sessionKey: params.sessionKey,
@@ -196,7 +219,7 @@ export async function readSessionTranscriptCatalogPage(
       ]),
     )
     .digest("base64url");
-  const snapshot = readCatalogHistoryPage(scope, {
+  const snapshot = await readCatalogHistoryPage(scope, {
     offset: 0,
     maxMessages: 1,
   });
@@ -216,7 +239,7 @@ export async function readSessionTranscriptCatalogPage(
   // Appends retain this active-path anchor; leaf rewinds can preserve the rewrite
   // generation, so source hashes alone cannot fence a cursor onto its original branch.
   if (cursor) {
-    const anchoredPage = readCatalogHistoryPage(scope, {
+    const anchoredPage = await readCatalogHistoryPage(scope, {
       offset: snapshot.totalMessages - cursor.anchor.seq,
       maxMessages: 1,
     });
@@ -231,26 +254,40 @@ export async function readSessionTranscriptCatalogPage(
   let skip = cursor?.skip ?? 0;
   let scanned = 0;
   const items: SessionCatalogTranscriptItem[] = [];
-  const projectSender = createSessionCatalogSourceParticipantProjector();
+  const senderProjectors = new Map<
+    string,
+    Awaited<ReturnType<typeof prepareSessionCatalogSourceParticipantProjector>>
+  >();
   while (before > 0 && items.length < limit && scanned < MAX_CATALOG_SCAN_MESSAGES) {
-    const page = readCatalogHistoryPage(scope, {
+    const page = await readCatalogHistoryPage(scope, {
       offset: snapshot.totalMessages - before,
       maxMessages: Math.min(before, limit + 1),
     });
-    // A source append preserves positions; a rewrite rotates displaySource and invalidates cursors.
-    if (
-      page.displaySource !== snapshot.displaySource ||
-      page.activeLeafEntryId !== snapshot.activeLeafEntryId ||
-      page.totalMessages !== snapshot.totalMessages
-    ) {
-      throw new Error("Session transcript changed during this read; retry the page.");
+    const projected = projectChatDisplayMessages(page.events.map(sqliteMessageEventWithSeq), {
+      maxChars: MAX_CATALOG_TEXT_CHARS,
+      // Catalog assistant items contain text/model facts, not forwarded sender labels.
+      resolveCronJobName: () => undefined,
+    });
+    const identities = projected.flatMap((message) => {
+      const metadata = asOptionalRecord(message["__openclaw"]);
+      const identity =
+        message.role === "user"
+          ? readTranscriptSenderIdentity(metadata?.senderIdentity)
+          : undefined;
+      return identity && (identity.type !== "profile" || !senderProjectors.has(identity.id))
+        ? [identity]
+        : [];
+    });
+    const preparedSender = await prepareSessionCatalogSourceParticipantProjector(identities);
+    for (const identity of identities) {
+      if (identity.type === "profile") {
+        senderProjectors.set(identity.id, preparedSender);
+      }
     }
-    const projected = projectChatDisplayMessages(
-      page.events.map(({ event, seq, displayPosition }) =>
-        projectTranscriptEntryMessage(event, seq, displayPosition),
-      ),
-      { maxChars: MAX_CATALOG_TEXT_CHARS },
-    );
+    const projectSender: typeof preparedSender.project = (sender) =>
+      sender.identity.type === "profile"
+        ? senderProjectors.get(sender.identity.id)!.project(sender)
+        : preparedSender.project(sender);
     const bySequence = new Map<unknown, SessionCatalogTranscriptItem[]>();
     for (const message of projected.toReversed()) {
       const seq = asOptionalRecord(message["__openclaw"])?.seq;
@@ -280,6 +317,7 @@ export async function readSessionTranscriptCatalogPage(
       break;
     }
   }
+  assertSourceCurrent();
   const nextCursor =
     before > 0 && anchor
       ? Buffer.from(
@@ -296,8 +334,8 @@ export async function readSessionTranscriptCatalogPage(
   return { items, ...(nextCursor ? { nextCursor } : {}) };
 }
 
-/** Matches local session-title precedence, with a bounded read-only first-message probe. */
-export function readSessionTranscriptCatalogTitle(params: {
+/** Legacy SDK title contract; bundled callers use the worker-backed async replacement. */
+export function readLegacySessionTranscriptCatalogTitle(params: {
   agentId: string;
   sessionKey: string;
   storePath?: string;
@@ -314,29 +352,75 @@ export function readSessionTranscriptCatalogTitle(params: {
     sessionEntry: params.entry,
   };
   try {
-    const snapshot = readCatalogHistoryPage(scope, { offset: 0, maxMessages: 0 });
+    const snapshot = readSessionTranscriptHistoryEventPage(scope, {
+      offset: 0,
+      maxMessages: 0,
+      readOnly: true,
+    });
     const page = readSessionTranscriptHistoryEventPage(scope, {
       offset: Math.max(0, snapshot.totalMessages - 100),
       maxMessages: 100,
       maxBytes: MAX_CATALOG_READ_BYTES,
       readOnly: true,
     });
-    // A clipped prefix cannot establish the first user message's title.
-    if (page.olderOffset !== undefined || page.omittedOversized) {
-      return undefined;
-    }
-    for (const { event, seq, displayPosition } of page.events) {
-      const message = projectSessionDisplayMessage(
-        projectTranscriptEntryMessage(event, seq, displayPosition),
-      );
-      if (message?.role === "user") {
-        const derived = deriveSessionTitle(params.entry, message.text);
-        return derived ? boundedText(derived).text : undefined;
-      }
-    }
+    return deriveCatalogHistoryTitle(params.entry, page);
   } catch (error) {
     if (!(error instanceof SessionTranscriptColdError)) {
       throw error;
+    }
+  }
+  return undefined;
+}
+
+/** Matches title precedence without opening SQLite on the Gateway thread. */
+export async function readSessionTranscriptCatalogTitleAsync(
+  params: Parameters<typeof readLegacySessionTranscriptCatalogTitle>[0],
+): Promise<string | undefined> {
+  const title = deriveSessionTitle(params.entry);
+  if (title) {
+    return boundedText(title).text;
+  }
+  const scope = {
+    ...params,
+    storePath: resolveSessionStorePathForScope(params),
+    sessionId: params.entry.sessionId,
+    sessionEntry: params.entry,
+  };
+  try {
+    const page = await readSessionHistoryPageInWorker({
+      kind: "history-event-page",
+      params: {
+        target: scope,
+        options: {
+          offset: 0,
+          beforeSeq: 101,
+          maxMessages: 100,
+          maxBytes: MAX_CATALOG_READ_BYTES,
+        },
+      },
+    });
+    return deriveCatalogHistoryTitle(params.entry, page);
+  } catch (error) {
+    if (!(error instanceof SessionTranscriptColdError)) {
+      throw error;
+    }
+  }
+  return undefined;
+}
+
+function deriveCatalogHistoryTitle(
+  entry: SessionEntry,
+  page: Awaited<ReturnType<typeof readCatalogHistoryPage>>,
+): string | undefined {
+  // A clipped prefix cannot establish the first user message's title.
+  if (page.olderOffset !== undefined || page.omittedOversized) {
+    return undefined;
+  }
+  for (const event of page.events) {
+    const message = projectSessionDisplayMessage(sqliteMessageEventWithSeq(event));
+    if (message?.role === "user") {
+      const derived = deriveSessionTitle(entry, message.text);
+      return derived ? boundedText(derived).text : undefined;
     }
   }
   return undefined;

@@ -19,12 +19,7 @@ const DEFAULT_SWEEP_ROWS = [32, 128, 512];
 const WORKER_TIMEOUT_MS = 300_000;
 export const WORKER_RESULT_SENTINEL = "[bench-agent-concurrency-result] ";
 
-export type WorkerScenario =
-  | "spawnPipelineInMemory"
-  | "spawnPipelineDurable"
-  | "admission"
-  | "recoverySweep"
-  | "duplicateSuppression";
+export type WorkerScenario = (typeof SCENARIO_SPECS)[number]["scenario"];
 
 export type WorkerResult = {
   scenario: WorkerScenario;
@@ -48,52 +43,31 @@ type Options = {
   help: boolean;
 };
 
-const SCENARIO_SPECS: ReadonlyArray<{
-  scenario: WorkerScenario;
-  sizes: "fanout" | "sweepRows";
-}> = [
+const SCENARIO_SPECS = [
   { scenario: "spawnPipelineInMemory", sizes: "fanout" },
   { scenario: "spawnPipelineDurable", sizes: "fanout" },
   { scenario: "admission", sizes: "fanout" },
   { scenario: "recoverySweep", sizes: "sweepRows" },
   { scenario: "duplicateSuppression", sizes: "sweepRows" },
-];
+] as const;
+
+const SPAWN_INVARIANT_FIELDS = [
+  "ok",
+  "registeredRuns",
+  "reservationsReleased",
+  "blockedWaits",
+  "settledRuns",
+  "outstandingWaits",
+  "durableSubagentRows",
+  "durableStateFile",
+  "postTeardownRegistryRows",
+  "postTeardownDurableSubagentRows",
+  "postTeardownActiveRootWork",
+] as const;
 
 const REQUIRED_INVARIANT_FIELDS: Record<WorkerScenario, readonly string[]> = {
-  spawnPipelineInMemory: [
-    "ok",
-    "registeredRuns",
-    "reservationsReleased",
-    "blockedWaits",
-    "settledRuns",
-    "settledTasks",
-    "outstandingWaits",
-    "durableSubagentRows",
-    "durableTaskRows",
-    "durableStateFile",
-    "postTeardownRegistryRows",
-    "postTeardownTaskRows",
-    "postTeardownDurableSubagentRows",
-    "postTeardownDurableTaskRows",
-    "postTeardownActiveRootWork",
-  ],
-  spawnPipelineDurable: [
-    "ok",
-    "registeredRuns",
-    "reservationsReleased",
-    "blockedWaits",
-    "settledRuns",
-    "settledTasks",
-    "outstandingWaits",
-    "durableSubagentRows",
-    "durableTaskRows",
-    "durableStateFile",
-    "postTeardownRegistryRows",
-    "postTeardownTaskRows",
-    "postTeardownDurableSubagentRows",
-    "postTeardownDurableTaskRows",
-    "postTeardownActiveRootWork",
-  ],
+  spawnPipelineInMemory: SPAWN_INVARIANT_FIELDS,
+  spawnPipelineDurable: SPAWN_INVARIANT_FIELDS,
   admission: ["ok", "admissionCap", "overflowRejected", "released"],
   recoverySweep: [
     "ok",

@@ -94,6 +94,14 @@ function textRatios(text: string, includeWordish: boolean): [printable: number, 
   return total === 0 ? [0, 0] : [printable / total, wordish / total];
 }
 
+function isCleanText(buffer: Buffer, charset: AttachmentCharset): boolean {
+  try {
+    return textRatios(new TextDecoder(charset, { fatal: true }).decode(buffer), false)[0] === 1;
+  } catch {
+    return false;
+  }
+}
+
 function sniffTextCharset(buffer: Buffer): "utf-8" | "windows-1252" | undefined {
   const sample = buffer.subarray(0, 4096);
   // Finish the last sampled UTF-8 sequence without starting a new one outside the window.
@@ -134,7 +142,17 @@ export async function classifyAttachmentBytes(params: {
     mime?.startsWith("application/vnd.") ||
     (detectedClass !== "binary" && !hasUtf16Bom)
   ) {
-    const charset = detectedClass === "text" ? resolveUtf16Charset(params.buffer) : undefined;
+    let charset = detectedClass === "text" ? resolveUtf16Charset(params.buffer) : undefined;
+    if (
+      detectedClass === "text" &&
+      !charset &&
+      ![params.declaredMime, ...(params.additionalMimeHints ?? [])].some(normalizeMimeType) &&
+      sniffTextCharset(params.buffer) === "windows-1252"
+    ) {
+      // A text filename identifies the MIME, not its encoding. Preserve the same
+      // byte-inferred decoder as unnamed text without overriding declared charsets.
+      charset = "windows-1252";
+    }
     // Text resolved by extension can still be BOM-less UTF-16; dropping the
     // detected charset here would decode it downstream as UTF-8 mojibake.
     return charset ? { mime, class: detectedClass, charset } : { mime, class: detectedClass };
@@ -142,6 +160,10 @@ export async function classifyAttachmentBytes(params: {
   const signature = params.buffer.length >= 4 ? params.buffer.readUInt32BE(0) : 0;
   if (signature === 0x504b0304 || signature === 0x504b0102 || signature === 0x504b0506) {
     return { mime, class: "archive" };
+  }
+  const bomCharset = hasUtf16Bom ? resolveUtf16Charset(params.buffer) : undefined;
+  if (detectedClass === "text" && bomCharset && isCleanText(params.buffer, bomCharset)) {
+    return { mime, class: "text", charset: bomCharset };
   }
   const charset = resolveUtf16Charset(params.buffer) ?? sniffTextCharset(params.buffer);
   if (!charset) {

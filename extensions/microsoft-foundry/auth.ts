@@ -1,15 +1,14 @@
-// Microsoft Foundry plugin module implements auth behavior.
 import type {
   ProviderAuthContext,
   ProviderAuthMethod,
   ProviderAuthResult,
 } from "openclaw/plugin-sdk/core";
 import {
-  ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
   normalizeOptionalSecretInput,
 } from "openclaw/plugin-sdk/provider-auth";
 import { captureProviderApiKey } from "openclaw/plugin-sdk/provider-auth-api-key";
-import { getLoggedInAccount, isAzCliInstalled } from "./cli.js";
+import { getLoggedInAccount, isAzCliInstalled, listSubscriptions } from "./cli.js";
 import {
   loginWithTenantFallback,
   listResourceDeployments,
@@ -18,7 +17,6 @@ import {
   promptTenantId,
   selectFoundryDeployment,
   selectFoundryResource,
-  listSubscriptions,
   testFoundryConnection,
 } from "./onboard.js";
 import {
@@ -31,15 +29,6 @@ import {
   resolveConfiguredModelNameHint,
   resolveFoundryApi,
 } from "./shared.js";
-
-function shouldTestFoundryTextConnection(params: {
-  modelId: string;
-  modelNameHint?: string | null;
-}): boolean {
-  return !isFoundryMaiImageModel(
-    resolveConfiguredModelNameHint(params.modelId, params.modelNameHint),
-  );
-}
 
 export const entraIdAuthMethod: ProviderAuthMethod = {
   id: "entra-id",
@@ -125,47 +114,45 @@ export const entraIdAuthMethod: ProviderAuthMethod = {
           api?: FoundryProviderApi;
         }>
       | undefined;
-    if (selectedSub) {
-      const useDiscoveredResource = await ctx.prompter.confirm({
+    if (
+      selectedSub &&
+      (await ctx.prompter.confirm({
         message: "Discover Microsoft Foundry resources from this subscription?",
         initialValue: true,
-      });
-      if (useDiscoveredResource) {
-        const selectedResource = await selectFoundryResource(ctx, selectedSub);
-        const resourceDeployments = listResourceDeployments(selectedResource, selectedSub.id);
-        const { selected: selectedDeployment, supported: supportedDeployments } =
-          await selectFoundryDeployment(ctx, selectedResource, resourceDeployments);
-        discoveredDeployments = supportedDeployments.map((deployment) =>
-          Object.assign(
-            { name: deployment.name },
-            deployment.modelName ? { modelName: deployment.modelName } : {},
-            { api: resolveFoundryApi(deployment.name, deployment.modelName) },
-          ),
-        );
-        endpoint = selectedResource.endpoint;
-        modelId = selectedDeployment.name;
-        modelNameHint = resolveConfiguredModelNameHint(modelId, selectedDeployment.modelName);
-        api = resolveFoundryApi(modelId, modelNameHint);
-        await ctx.prompter.note(
-          [
-            `Resource: ${selectedResource.accountName}`,
-            `Endpoint: ${endpoint}`,
-            `Deployment: ${modelId}`,
-            selectedDeployment.modelName ? `Model: ${selectedDeployment.modelName}` : undefined,
-            `API: ${formatFoundryApiLabel(api)}`,
-          ]
-            .filter(Boolean)
-            .join("\n"),
-          "Microsoft Foundry",
-        );
-      } else {
-        ({ endpoint, modelId, modelNameHint, api } = await promptEndpointAndModelManually(ctx));
-      }
+      }))
+    ) {
+      const selectedResource = await selectFoundryResource(ctx, selectedSub);
+      const resourceDeployments = listResourceDeployments(selectedResource, selectedSub.id);
+      const { selected: selectedDeployment, supported: supportedDeployments } =
+        await selectFoundryDeployment(ctx, selectedResource, resourceDeployments);
+      discoveredDeployments = supportedDeployments.map((deployment) =>
+        Object.assign(
+          { name: deployment.name },
+          deployment.modelName ? { modelName: deployment.modelName } : {},
+          { api: resolveFoundryApi(deployment.name, deployment.modelName) },
+        ),
+      );
+      endpoint = selectedResource.endpoint;
+      modelId = selectedDeployment.name;
+      modelNameHint = resolveConfiguredModelNameHint(modelId, selectedDeployment.modelName);
+      api = resolveFoundryApi(modelId, modelNameHint);
+      await ctx.prompter.note(
+        [
+          `Resource: ${selectedResource.accountName}`,
+          `Endpoint: ${endpoint}`,
+          `Deployment: ${modelId}`,
+          selectedDeployment.modelName ? `Model: ${selectedDeployment.modelName}` : undefined,
+          `API: ${formatFoundryApiLabel(api)}`,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        "Microsoft Foundry",
+      );
     } else {
       ({ endpoint, modelId, modelNameHint, api } = await promptEndpointAndModelManually(ctx));
     }
 
-    if (shouldTestFoundryTextConnection({ modelId, modelNameHint })) {
+    if (!isFoundryMaiImageModel(resolveConfiguredModelNameHint(modelId, modelNameHint))) {
       await testFoundryConnection({
         ctx,
         endpoint,
@@ -216,7 +203,7 @@ export const apiKeyAuthMethod: ProviderAuthMethod = {
     groupHint: "Entra ID + API key",
   },
   run: async (ctx) => {
-    const authStore = ensureAuthProfileStore(ctx.agentDir, {
+    const authStore = await ensureAuthProfileStoreAsync(ctx.agentDir, {
       allowKeychainPrompt: false,
     });
     const existing = authStore.profiles[`${PROVIDER_ID}:default`];

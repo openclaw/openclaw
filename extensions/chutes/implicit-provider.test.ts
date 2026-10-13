@@ -1,7 +1,6 @@
-// Chutes tests cover implicit provider plugin behavior.
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resolveOAuthApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import { CHUTES_BASE_URL } from "./models.js";
 import { refreshChutesOAuthCredential } from "./oauth.js";
@@ -28,21 +27,15 @@ async function runChutesCatalogProvider(params: { apiKey: string; discoveryApiKe
   return result.provider;
 }
 
-async function withRealChutesDiscovery<T>(
-  run: (fetchMock: ReturnType<typeof vi.fn>) => Promise<T>,
-) {
-  const originalFetch = globalThis.fetch;
+function stubDiscoveryFetch() {
   const fetchMock = vi
-    .fn()
+    .fn<typeof fetch>()
     .mockResolvedValue(Response.json({ data: [{ id: "chutes/private-model" }] }));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
-
-  try {
-    return await run(fetchMock);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
 }
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe("chutes implicit provider auth mode", () => {
   it("publishes the env vars used by core api-key auto-detection", async () => {
@@ -62,40 +55,30 @@ describe("chutes implicit provider auth mode", () => {
   });
 
   it("keeps api-key resolved Chutes profiles on the API-key loader path", async () => {
-    await withRealChutesDiscovery(async () => {
-      const provider = await runChutesCatalogProvider({ apiKey: "chutes-live-api-key" });
+    stubDiscoveryFetch();
+    const provider = await runChutesCatalogProvider({ apiKey: "chutes-live-api-key" });
 
-      expect(provider.baseUrl).toBe(CHUTES_BASE_URL);
-      expect(provider.apiKey).toBe("chutes-live-api-key");
-      expect(provider.apiKey).not.toBe(CHUTES_OAUTH_MARKER);
-    });
-  });
-
-  it("uses the OAuth marker only for oauth-backed Chutes profiles", async () => {
-    await withRealChutesDiscovery(async () => {
-      const provider = await runChutesCatalogProvider({
-        apiKey: CHUTES_OAUTH_MARKER,
-        discoveryApiKey: "oauth-access-token",
-      });
-
-      expect(provider.baseUrl).toBe(CHUTES_BASE_URL);
-      expect(provider.apiKey).toBe(CHUTES_OAUTH_MARKER);
-    });
+    expect(provider.baseUrl).toBe(CHUTES_BASE_URL);
+    expect(provider.apiKey).toBe("chutes-live-api-key");
+    expect(provider.apiKey).not.toBe(CHUTES_OAUTH_MARKER);
   });
 
   it("forwards oauth access token to Chutes model discovery", async () => {
-    await withRealChutesDiscovery(async (fetchMock) => {
-      await runChutesCatalogProvider({
-        apiKey: CHUTES_OAUTH_MARKER,
-        discoveryApiKey: "my-chutes-access-token",
-      });
-
-      const chutesCalls = fetchMock.mock.calls.filter(([url]) => String(url).includes("chutes.ai"));
-      expect(chutesCalls.length).toBeGreaterThan(0);
-      const request = chutesCalls[0]?.[1] as { headers?: HeadersInit } | undefined;
-      expect(new Headers(request?.headers).get("authorization")).toBe(
-        "Bearer my-chutes-access-token",
-      );
+    const fetchMock = stubDiscoveryFetch();
+    const provider = await runChutesCatalogProvider({
+      apiKey: CHUTES_OAUTH_MARKER,
+      discoveryApiKey: "my-chutes-access-token",
     });
+    expect(provider.baseUrl).toBe(CHUTES_BASE_URL);
+    expect(provider.apiKey).toBe(CHUTES_OAUTH_MARKER);
+
+    const chutesCalls = fetchMock.mock.calls.filter(([url]) =>
+      (url instanceof Request ? url.url : url.toString()).includes("chutes.ai"),
+    );
+    expect(chutesCalls.length).toBeGreaterThan(0);
+    const request = chutesCalls[0]?.[1];
+    expect(new Headers(request?.headers).get("authorization")).toBe(
+      "Bearer my-chutes-access-token",
+    );
   });
 });

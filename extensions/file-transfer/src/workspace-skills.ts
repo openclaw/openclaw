@@ -1,11 +1,18 @@
 import path from "node:path";
 import type { AgentWorkspaceAccess } from "openclaw/plugin-sdk/agent-workspace-runtime";
+import { createNodeSkillLifecycle } from "./workspace-skill-lifecycle.js";
 import { runNodeWorkspaceWorker, type NodeWorkspaceWorkerOptions } from "./workspace-worker.js";
 
 type SkillsAccess = Required<
   Pick<
     AgentWorkspaceAccess,
-    "loadSkills" | "watchSkills" | "skillResources" | "installSkillDependencies"
+    | "loadSkills"
+    | "watchSkills"
+    | "skillResources"
+    | "installSkillDependencies"
+    | "applySkillRoot"
+    | "recordSkillSourceInstall"
+    | "clawHubSkills"
   >
 >;
 
@@ -58,7 +65,8 @@ export function createNodeWorkspaceSkills(options: NodeWorkspaceWorkerOptions): 
     );
   }
   return {
-    loadSkills: (request) => call("discovery", { ...request, ...mapSources(request) }),
+    ...createNodeSkillLifecycle(options),
+    loadSkills: (request) => call("discovery", mapSources(request)),
     async watchSkills(request, onChange, signal) {
       await runNodeWorkspaceWorker(
         options,
@@ -71,7 +79,7 @@ export function createNodeWorkspaceSkills(options: NodeWorkspaceWorkerOptions): 
         AbortSignal.any([options.signal, signal]),
         (line) => {
           const event: unknown = JSON.parse(line);
-          if (event !== "change" && event !== "unavailable") {
+          if (event !== "change" && event !== "unavailable" && event !== "available") {
             throw new Error("Invalid Skill change notification");
           }
           onChange(event);

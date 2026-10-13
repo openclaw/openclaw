@@ -46,7 +46,7 @@ vi.mock("../cli/deps.js", () => ({
 
 const acpManagerMock = vi.hoisted(() => ({
   current: {
-    resolveSession: vi.fn(() => null),
+    resolveSessionAsync: vi.fn(async () => null),
   } as unknown,
 }));
 
@@ -54,7 +54,7 @@ vi.mock("../acp/control-plane/manager.js", () => ({
   testing: {
     resetAcpSessionManagerForTests: vi.fn(() => {
       acpManagerMock.current = {
-        resolveSession: vi.fn(() => null),
+        resolveSessionAsync: vi.fn(async () => null),
       };
     }),
     setAcpSessionManagerForTests: vi.fn((manager: unknown) => {
@@ -279,7 +279,6 @@ vi.mock("../skills/loading/workspace-skill-loader.js", () => {
     typeof import("../skills/loading/workspace-skill-loader.js").loadVisibleSkills
   >(() => []);
   return {
-    filterWorkspaceSkills: (entries: unknown[]) => entries,
     loadVisibleSkills,
     prepareWorkspaceSkills: async (...args: Parameters<typeof loadVisibleSkills>) =>
       loadVisibleSkills(...args),
@@ -315,6 +314,7 @@ vi.mock("../skills/runtime/session-snapshot.js", () => ({
   ),
 }));
 
+// mock-isolation: Command fixtures supply skill eligibility without reading the host approval store.
 vi.mock("../agents/exec-defaults.js", () => ({
-  resolveNodeExecEligibility: vi.fn(() => ({ canExec: false })),
+  resolveNodeExecEligibilityAsync: vi.fn(() => ({ canExec: false })),
 }));

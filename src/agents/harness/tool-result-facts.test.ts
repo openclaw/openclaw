@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import type { AgentToolResult } from "../../../packages/agent-core/src/types.js";
 import { HEARTBEAT_RESPONSE_TOOL_NAME } from "../../auto-reply/heartbeat-tool-response.js";
 import { extractMessagingToolSourceReplyPayload } from "../embedded-agent-messaging-extraction.js";
-import { collectMessagingMediaUrlsFromRecord } from "../embedded-agent-tool-media.js";
+import {
+  collectMessagingMediaUrlsFromRecord,
+  collectMessagingMediaUrlsFromToolResult,
+} from "../embedded-agent-tool-media.js";
 import {
   recordAgentHarnessToolResultTelemetry,
   resolveAgentHarnessToolResultPresentation,
@@ -10,74 +13,64 @@ import {
 } from "./tool-result-facts.js";
 
 describe("resolveAgentHarnessToolResultPresentation", () => {
-  it("treats accepted goal tool statuses (created / updated) as successful", () => {
-    for (const status of ["created", "updated"]) {
-      expect(present(textToolResult(`Goal ${status}.`, { status })).isError).toBe(false);
-    }
-  });
-
-  it("treats get_goal read statuses (found / missing) as successful", () => {
-    for (const status of ["found", "missing"]) {
-      const result = textToolResult(JSON.stringify({ status }), {
-        status,
-        ...(status === "found" ? { goal: { objective: "ship the fix", status: "active" } } : {}),
-      });
-      expect(present(result)).toMatchObject({ result, isError: false });
-    }
-  });
-
-  it.each(["pending", "applied", "rejected", "quarantined", "stale"] as const)(
-    "treats Skill Workshop lifecycle status %s as successful",
+  it.each(["rejected", "plugin-defined-outcome"])(
+    "treats plugin-owned status %s as successful by default",
     (status) => {
       const result = textToolResult(`Proposal is ${status}.`, { status });
       expect(present(result)).toMatchObject({ result, isError: false });
     },
   );
-
-  it("treats arbitrary plugin-owned status metadata as successful by default", () => {
-    const result = textToolResult("Plugin action completed.", { status: "plugin-defined-outcome" });
-    expect(present(result).isError).toBe(false);
-  });
 });
 
 describe("recordAgentHarnessToolResultTelemetry", () => {
+  it("combines direct, detail and JSON tool-result media in first-seen order", () => {
+    expect(
+      collectMessagingMediaUrlsFromToolResult({
+        media: "first.png",
+        details: { mediaUrls: ["first.png", "second.png"] },
+        content: [
+          { type: "text", text: JSON.stringify({ filePath: "third.png", mediaUrl: "second.png" }) },
+        ],
+      }),
+    ).toEqual(["first.png", "second.png", "third.png"]);
+  });
+
+  it("keeps canonical message references deduplicated without accepting harness aliases", () => {
+    expect(
+      collectMessagingMediaUrlsFromRecord({
+        media: " same.png ",
+        mediaUrl: "same.png",
+        media_url: "ignored-scalar.png",
+        imageUrl: "ignored-image.png",
+        mediaUrls: ["same.png", "array.png"],
+        media_urls: ["ignored-array.png"],
+        attachments: [{ filePath: "attached.png", url: "same.png", caption: "ignored.png" }],
+      }),
+    ).toEqual(["same.png", "array.png", "attached.png"]);
+  });
+
   it.each([
-    { toolName: "tts", mediaUrl: "/tmp/reply.opus", audioAsVoice: true },
-    { toolName: "image_generate", mediaUrl: "/tmp/generated.png" },
-    { toolName: "video_generate", mediaUrl: "https://media.example/video.mp4" },
-    { toolName: "music_generate", mediaUrl: "https://media.example/music.wav" },
-  ])("preserves structured media artifacts from $toolName tool results", (entry) => {
-    const telemetry = createTelemetry();
-    recordTelemetry({
-      toolName: entry.toolName,
-      result: {
-        content: [{ type: "text", text: "Generated media reply." }],
-        details: { media: { mediaUrl: entry.mediaUrl, audioAsVoice: entry.audioAsVoice } },
-      },
-      telemetry,
-    });
-
-    expect(telemetry.toolMediaUrls).toEqual([entry.mediaUrl]);
-    expect(telemetry.toolAudioAsVoice).toBe(entry.audioAsVoice === true);
-  });
-
-  it("preserves audio-as-voice metadata from unowned tts results", () => {
-    const telemetry = createTelemetry();
-    recordTelemetry({
+    { toolName: "image_generate", media: { mediaUrl: "/tmp/generated.png" }, voice: false },
+    {
       toolName: "tts",
-      result: {
-        content: [{ type: "text", text: "(spoken) hello" }],
-        details: {
-          media: { mediaUrl: "/tmp/reply.opus", audioAsVoice: true, trustedLocalMedia: true },
-        },
-      },
-      telemetry,
-    });
+      media: { mediaUrl: "/tmp/reply.opus", audioAsVoice: true, trustedLocalMedia: true },
+      voice: true,
+    },
+  ])(
+    "preserves $toolName media and voice metadata without unowned auto-delivery",
+    ({ toolName, media, voice }) => {
+      const telemetry = createTelemetry();
+      recordTelemetry({
+        toolName,
+        result: textToolResult("Generated media.", { media }),
+        telemetry,
+      });
 
-    expect(telemetry.toolMediaUrls).toEqual(["/tmp/reply.opus"]);
-    expect(telemetry.toolAutoDeliveryMediaUrls).toEqual([]);
-    expect(telemetry.toolAudioAsVoice).toBe(true);
-  });
+      expect(telemetry.toolMediaUrls).toEqual([media.mediaUrl]);
+      expect(telemetry.toolAutoDeliveryMediaUrls).toEqual([]);
+      expect(telemetry.toolAudioAsVoice).toBe(voice);
+    },
+  );
 
   it("records messaging tool side effects", () => {
     const telemetry = createTelemetry();

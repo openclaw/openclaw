@@ -78,11 +78,6 @@ function resolveBindingConversation(params: {
   });
 }
 
-type PluginCommandRuntimeLlm = NonNullable<PluginCommandContext["runtimeContext"]>["llm"];
-type PluginCommandLlmCompleteParams = Parameters<
-  NonNullable<PluginCommandRuntimeLlm>["complete"]
->[0];
-
 function buildRuntimeContext(
   command: RegisteredPluginCommand,
   params: PluginCommandDispatchContext,
@@ -101,7 +96,7 @@ function buildRuntimeContext(
   }
   return {
     llm: {
-      complete: async (request: PluginCommandLlmCompleteParams) => {
+      complete: async (request) => {
         const { createRuntimeLlm } = await import("./runtime/runtime-llm.runtime.js");
         return await createRuntimeLlm({
           getConfig: () => params.config,
@@ -158,12 +153,11 @@ export async function executeRegisteredPluginCommand(
     return { text: "⚠️ This command has invalid gateway scope configuration." };
   }
   const requiredScopes = command.requiredScopes ?? [];
-  const unknownScope = (requiredScopes as readonly unknown[]).find(
-    (scope) => !isOperatorScope(scope),
-  );
-  if (unknownScope) {
-    logVerbose(`Plugin command /${command.name} blocked: unknown gateway scope`);
-    return { text: "⚠️ This command has invalid gateway scope configuration." };
+  for (const scope of requiredScopes) {
+    if (!isOperatorScope(scope)) {
+      logVerbose(`Plugin command /${command.name} blocked: unknown gateway scope`);
+      return { text: "⚠️ This command has invalid gateway scope configuration." };
+    }
   }
   if (requiredScopes.length > 0) {
     const scopes = Array.isArray(params.gatewayClientScopes)

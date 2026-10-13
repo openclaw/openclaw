@@ -4,7 +4,6 @@ import { PassThrough } from "node:stream";
 import type {
   CliBackendExecuteContext,
   CliBackendLiveSessionCapability,
-  CliBackendLiveSessionCloseReason,
   CliBackendLiveSessionHandle,
   CliBackendToolPermissionResult,
 } from "openclaw/plugin-sdk/cli-backend";
@@ -17,12 +16,6 @@ import { createClaudeCliTransport } from "./cli-transport.js";
 import { createClaudeCliUserInputAuthorizer } from "./cli-user-input.js";
 
 const IDLE_TIMEOUT_MS = 10 * 60 * 1_000;
-// Claude Code emits interim results while these run, then delivers their answers
-// in later results under the same admitted turn.
-const RESULT_HOLDING_TASK_TYPES = new Set(["local_agent", "local_workflow"]);
-// Explicit background commands may never finish. Only Bash tasks that started
-// in the foreground and later entered the background list hold their turn.
-const TIMEOUT_BACKGROUNDED_TASK_TYPE = "local_bash";
 
 function readReplayedTaskId(
   message: Record<string, unknown>,
@@ -57,11 +50,6 @@ function readReplayedTaskId(
   return /^<task-notification>\s*<task-id>([^<]+)<\/task-id>/u.exec(text)?.[1];
 }
 
-/** Background work whose final answer Claude Code delivers in a later result. */
-function hasResultHoldingBackgroundTasks(session: ClaudeCliSession, turn: ClaudeCliTurn): boolean {
-  return session.hasBackgroundTasks || turn.pendingBackgroundTaskIds.size > 0;
-}
-
 type ClaudeCliTurn = {
   context: CliBackendExecuteContext;
   controller: AbortController;
@@ -71,7 +59,10 @@ type ClaudeCliTurn = {
   inputStarted: boolean;
   sawTerminalResult: boolean;
   foregroundTaskIds: Set<string>;
+  foregroundBashToolUseIds: Set<string>;
   pendingBackgroundTaskIds: Set<string>;
+  subagentTaskIds: Set<string>;
+  taskNotifications: Map<string, "queued" | "replayed">;
   error?: Error;
 };
 type ClaudeCliSession = {
@@ -80,7 +71,6 @@ type ClaudeCliSession = {
   transport?: ReturnType<typeof createClaudeCliTransport>;
   currentTurn?: ClaudeCliTurn;
   idleTimer?: ReturnType<typeof setTimeout>;
-  hasBackgroundTasks: boolean;
   hasInputLifecycle: boolean;
   closed: boolean;
 };
@@ -109,8 +99,7 @@ async function authorizeTool(
   signal: AbortSignal,
 ): Promise<CliBackendToolPermissionResult> {
   const turn = activeTurn(session);
-  const input = request.input;
-  const toolName = request.tool_name;
+  const { input, tool_name: toolName } = request;
   if (!turn || signal.aborted || typeof toolName !== "string" || !isRecord(input)) {
     return {
       behavior: "deny",
@@ -133,6 +122,16 @@ async function authorizeTool(
     // An operator decision can outlive its turn. Revalidate immediately before granting it.
     if (activeTurn(session) !== turn || abortSignal.aborted) {
       return { behavior: "deny", message: "The OpenClaw run is no longer active." };
+    }
+    if (
+      decision.behavior === "allow" &&
+      toolName === "Bash" &&
+      toolUseId &&
+      decision.updatedInput.run_in_background !== true
+    ) {
+      // Native may first announce an automatic timeout as already backgrounded.
+      // The authorized input distinguishes it from explicit run_in_background work.
+      turn.foregroundBashToolUseIds.add(toolUseId);
     }
     return decision;
   } catch {
@@ -201,11 +200,7 @@ async function handleRequest(
   throw new Error("Unknown Claude CLI hook callback.");
 }
 
-function closeSession(
-  session: ClaudeCliSession,
-  _reason: CliBackendLiveSessionCloseReason,
-  error?: unknown,
-) {
+function closeSession(session: ClaudeCliSession, error?: unknown) {
   if (session.closed) {
     return;
   }
@@ -223,7 +218,7 @@ function closeSession(
 }
 
 function completeTurn(session: ClaudeCliSession, turn: ClaudeCliTurn) {
-  const holdsBackgroundTasks = hasResultHoldingBackgroundTasks(session, turn);
+  const holdsBackgroundTasks = turn.pendingBackgroundTaskIds.size > 0;
   session.currentTurn = undefined;
   turn.controller.abort();
   turn.events.end();
@@ -260,58 +255,94 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
     return;
   }
   if (message.type === "system" && message.subtype === "task_started") {
-    // task_type is optional here; the background task list names it later.
-    if (
-      typeof message.task_id === "string" &&
-      message.task_id &&
-      message.is_backgrounded === false
-    ) {
-      turn.foregroundTaskIds.add(message.task_id);
+    if (message.owned_by_subagent === true) {
+      if (typeof message.task_id === "string" && message.task_id) {
+        turn.subagentTaskIds.add(message.task_id);
+      }
+    } else if (typeof message.task_id === "string" && message.task_id) {
+      // task_type is optional here; the background task list names it later.
+      if (message.is_backgrounded === false) {
+        turn.foregroundTaskIds.add(message.task_id);
+      }
+      const foregroundBash =
+        typeof message.tool_use_id === "string" &&
+        turn.foregroundBashToolUseIds.delete(message.tool_use_id);
+      if (foregroundBash && message.is_backgrounded === true) {
+        turn.pendingBackgroundTaskIds.add(message.task_id);
+      }
     }
   }
   if (message.type === "system" && message.subtype === "background_tasks_changed") {
-    session.hasBackgroundTasks = false;
     for (const task of Array.isArray(message.tasks) ? message.tasks : []) {
       if (!isRecord(task) || typeof task.task_id !== "string" || !task.task_id) {
         continue;
       }
-      if (typeof task.task_type === "string" && RESULT_HOLDING_TASK_TYPES.has(task.task_type)) {
-        session.hasBackgroundTasks = true;
-      } else if (
-        task.task_type === TIMEOUT_BACKGROUNDED_TASK_TYPE &&
-        turn.foregroundTaskIds.has(task.task_id)
+      if (
+        task.task_type === "local_agent" ||
+        task.task_type === "local_workflow" ||
+        (task.task_type === "local_bash" && turn.foregroundTaskIds.has(task.task_id))
       ) {
+        // Leaving the live task list is not acknowledgement of its queued answer.
         turn.pendingBackgroundTaskIds.add(task.task_id);
       }
     }
   }
-  // Completion events precede notification delivery. Its replay receipt means
-  // Claude consumed it, either in the running query or in a later query.
-  if (turn.pendingBackgroundTaskIds.size > 0) {
-    const taskId = readReplayedTaskId(message, turn.inputUuid);
-    if (taskId && turn.pendingBackgroundTaskIds.delete(taskId)) {
-      turn.foregroundTaskIds.delete(taskId);
-    }
+  // A replay receipt acknowledges consumption within the current query. Keep its
+  // queue slot until that query's result so it cannot acknowledge the next task twice.
+  const replayedTaskId = readReplayedTaskId(message, turn.inputUuid);
+  if (replayedTaskId) {
+    turn.pendingBackgroundTaskIds.delete(replayedTaskId);
+    turn.foregroundTaskIds.delete(replayedTaskId);
+    turn.taskNotifications.set(replayedTaskId, "replayed");
+  }
+  if (
+    message.type === "system" &&
+    message.subtype === "task_notification" &&
+    typeof message.task_id === "string" &&
+    message.task_id &&
+    // Subagent completions have no parent result and must not consume its queue slots.
+    !turn.subagentTaskIds.delete(message.task_id)
+  ) {
+    // Include non-held tasks: each queued notification has its own ordered result.
+    turn.taskNotifications.set(message.task_id, "queued");
   }
   let completesTurn = false;
   if (message.type === "result") {
+    const failed =
+      message.is_error === true ||
+      (typeof message.subtype === "string" && message.subtype.startsWith("error")) ||
+      (typeof message.result === "string" && hasClaudeRawToolInvocation(message.result));
+    const taskNotification =
+      isRecord(message.origin) &&
+      message.origin.kind === "task-notification" &&
+      message.origin.subkind === undefined;
+    if (taskNotification && message.subtype === "success" && !failed) {
+      // A later task can finish during this query. Consume one notification, not all
+      // completed tasks; retain pending work on failure so completeTurn retires it.
+      const taskId = turn.taskNotifications.keys().next().value;
+      if (taskId) {
+        turn.taskNotifications.delete(taskId);
+        turn.pendingBackgroundTaskIds.delete(taskId);
+        turn.foregroundTaskIds.delete(taskId);
+      }
+    }
+    // Inline receipts have no separate result. The query just answered them too.
+    for (const [taskId, state] of turn.taskNotifications) {
+      if (state === "replayed") {
+        turn.taskNotifications.delete(taskId);
+      }
+    }
     // A batched notification can acknowledge input without running the model.
     const queuedContinuation =
       turn.sawTerminalResult &&
-      isRecord(message.origin) &&
-      message.origin.kind === "task-notification" &&
-      message.origin.subkind === undefined &&
+      taskNotification &&
       message.num_turns === 0 &&
       message.result === "" &&
       message.stop_reason === null &&
       message.terminal_reason === undefined;
     turn.sawTerminalResult = true;
     // Background work holds successful interim results, never terminal failures.
-    completesTurn =
-      (!hasResultHoldingBackgroundTasks(session, turn) && !queuedContinuation) ||
-      message.is_error === true ||
-      (typeof message.subtype === "string" && message.subtype.startsWith("error")) ||
-      (typeof message.result === "string" && hasClaudeRawToolInvocation(message.result));
+    completesTurn = (turn.pendingBackgroundTaskIds.size === 0 && !queuedContinuation) || failed;
   }
   // The transport owns continuation lifetime; the completed answer can be
   // delivered through normal reply hooks without waiting for the children.
@@ -330,14 +361,13 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
 function createSession(capability?: CliBackendLiveSessionCapability): ClaudeCliSession {
   const session: ClaudeCliSession = {
     capability,
-    hasBackgroundTasks: false,
     hasInputLifecycle: false,
     closed: false,
     handle: {
       generation: randomUUID(),
       fingerprint: capability?.fingerprint ?? randomUUID(),
       isIdle: () => !session.closed && !session.currentTurn,
-      close: (reason, error) => closeSession(session, reason, error),
+      close: (_reason, error) => closeSession(session, error),
       waitForExit: () => session.transport?.waitForExit() ?? Promise.resolve(),
     },
   };
@@ -377,7 +407,10 @@ export async function* executeClaudeCli(
     inputStarted: false,
     sawTerminalResult: false,
     foregroundTaskIds: new Set(),
+    foregroundBashToolUseIds: new Set(),
     pendingBackgroundTaskIds: new Set(),
+    subagentTaskIds: new Set(),
+    taskNotifications: new Map(),
   };
   session.currentTurn = turn;
   const abort = () => session.handle.close("abort", context.abortSignal?.reason);
@@ -395,6 +428,8 @@ export async function* executeClaudeCli(
         currentContext: () => session.currentTurn?.context,
         initialize: {
           appendSystemPrompt: context.systemPrompt,
+          // Native snapshots must not override the host's refreshed prompt on resume.
+          systemPromptSnapshot: false,
           excludeDynamicSections,
           hooks: {
             UserPromptSubmit: [{ hookCallbackIds: ["UserPromptSubmit"] }],

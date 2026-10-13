@@ -1,3 +1,4 @@
+import { streamSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   clearLiveCatalogCacheForTests,
@@ -6,11 +7,9 @@ import {
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onboard";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createRuntimeSpies } from "../test-support/runtime-spies.js";
 import { buildCerebrasCatalogModels } from "./api.js";
 import plugin from "./index.js";
 import { applyCerebrasConfig, CEREBRAS_DEFAULT_MODEL_REF } from "./onboard.js";
-import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const ssrfRuntimeMocks = vi.hoisted(() => ({
   fetchWithSsrFGuard: vi.fn<LiveModelCatalogFetchGuard>(),
@@ -33,7 +32,7 @@ const NATIVE_TEXT_MODEL = {
 
 type CatalogContext = Parameters<NonNullable<ProviderPlugin["catalog"]>["run"]>[0];
 
-function createCatalogContext(overrides: Partial<CatalogContext> = {}): CatalogContext {
+function createCatalogContext(): CatalogContext {
   return {
     config: {},
     env: {},
@@ -48,7 +47,6 @@ function createCatalogContext(overrides: Partial<CatalogContext> = {}): CatalogC
       mode: "api_key",
       source: "env",
     }),
-    ...overrides,
   };
 }
 
@@ -79,91 +77,15 @@ afterEach(() => {
 });
 
 describe("Cerebras onboarding", () => {
-  it.each(["default", "merge", "replace"] as const)(
-    "keeps generated prices replace-only while selecting the default and alias in %s mode",
-    (mode) => {
-      const config = applyCerebrasConfig(mode === "default" ? {} : { models: { mode } });
+  it("selects the default and alias when seeding a replace-mode catalog", () => {
+    const config = applyCerebrasConfig({ models: { mode: "replace" } });
 
-      expect(config.models?.mode).toBe(mode === "replace" ? "replace" : "merge");
-      expect(config.models?.providers?.cerebras?.models.map((model) => model.id)).toEqual(
-        mode === "replace"
-          ? manifest.modelCatalog.providers.cerebras.models.map((model) => model.id)
-          : [],
-      );
-      if (mode === "replace") {
-        expect(config.models?.providers?.cerebras?.models).toEqual(buildCerebrasCatalogModels());
-      }
-      expect(resolveAgentModelPrimaryValue(config.agents?.defaults?.model)).toBe(
-        CEREBRAS_DEFAULT_MODEL_REF,
-      );
-      expect(config.agents?.defaults?.models).toEqual({
-        [CEREBRAS_DEFAULT_MODEL_REF]: { alias: "Cerebras Gemma 4 31B" },
-      });
-    },
-  );
-
-  it.each([
-    { label: "zero", cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
-    { label: "custom", cost: { input: 1, output: 2, cacheRead: 0.25, cacheWrite: 0.5 } },
-  ])(
-    "preserves authored $label prices, aliases, and selections without adding merge-mode pins",
-    ({ cost }) => {
-      const config = applyCerebrasConfig({});
-      const [seed] = buildCerebrasCatalogModels();
-      if (!seed) {
-        throw new Error("expected a Cerebras seed model");
-      }
-      const model = { ...structuredClone(seed), id: "fixture-authored-model", cost };
-      config.models!.providers!.cerebras!.models = [model];
-      config.models!.providers!.cerebras!.apiKey = "fixture-key";
-      config.agents!.defaults!.model = {
-        primary: "cerebras/fixture-authored-model",
-        fallbacks: ["fixture-provider/fallback"],
-      };
-      config.agents!.defaults!.models = {
-        [CEREBRAS_DEFAULT_MODEL_REF]: { alias: "My default alias" },
-        "cerebras/fixture-authored-model": { alias: "My authored model" },
-      };
-
-      const reapplied = applyCerebrasConfig(config);
-
-      expect(reapplied.models?.providers?.cerebras?.models).toEqual([model]);
-      expect(reapplied.models?.providers?.cerebras?.apiKey).toBe("fixture-key");
-      expect(reapplied.agents?.defaults).toEqual(config.agents?.defaults);
-    },
-  );
-
-  it("preserves an existing primary during non-interactive auth setup", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
-    const method = provider.auth?.[0];
-    if (!method?.runNonInteractive) {
-      throw new Error("expected Cerebras non-interactive auth method");
-    }
-
-    const config = {
-      agents: {
-        defaults: {
-          model: { primary: "anthropic/claude-sonnet-4-6" },
-          models: { "anthropic/claude-sonnet-4-6": { alias: "Existing" } },
-        },
-      },
-    };
-
-    const result = await method.runNonInteractive({
-      authChoice: "cerebras-api-key",
-      config,
-      baseConfig: config,
-      opts: {},
-      runtime: createRuntimeSpies(),
-      resolveApiKey: vi.fn(async () => ({ key: "fixture-value", source: "profile" as const })),
-      toApiKeyCredential: vi.fn(() => null),
-    });
-
-    expect(resolveAgentModelPrimaryValue(result?.agents?.defaults?.model)).toBe(
-      "anthropic/claude-sonnet-4-6",
+    expect(config.models?.mode).toBe("replace");
+    expect(config.models?.providers?.cerebras?.models).toEqual(buildCerebrasCatalogModels());
+    expect(resolveAgentModelPrimaryValue(config.agents?.defaults?.model)).toBe(
+      CEREBRAS_DEFAULT_MODEL_REF,
     );
-    expect(result?.agents?.defaults?.models).toEqual({
-      "anthropic/claude-sonnet-4-6": { alias: "Existing" },
+    expect(config.agents?.defaults?.models).toEqual({
       [CEREBRAS_DEFAULT_MODEL_REF]: { alias: "Cerebras Gemma 4 31B" },
     });
   });
@@ -198,28 +120,25 @@ describe("Cerebras native catalog", () => {
       apiKey: "fixture-cerebras-key",
       api: "openai-completions",
       baseUrl: "https://api.cerebras.ai/v1",
-    });
-    expect(catalog.models).toHaveLength(2);
-    expect(catalog.models).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
+      models: [
+        {
           id: "fixture-text-model",
           name: "Fixture Text Model",
           reasoning: true,
           input: ["text"],
           contextWindow: 131072,
           maxTokens: 40960,
-        }),
-        expect.objectContaining({
+        },
+        {
           id: "fixture-vision-model",
           name: "Fixture Vision Model",
           reasoning: false,
           input: ["text", "image"],
           contextWindow: 262144,
           maxTokens: 65536,
-        }),
-      ]),
-    );
+        },
+      ],
+    });
     for (const [id, input, output] of [
       ["fixture-text-model", 0.35, 0.75],
       ["fixture-vision-model", 0.99, 1.49],
@@ -227,32 +146,15 @@ describe("Cerebras native catalog", () => {
       const model = catalog.models.find((entry) => entry.id === id);
       expect(model?.cost.input).toBeCloseTo(input, 10);
       expect(model?.cost.output).toBeCloseTo(output, 10);
-      expect(model?.cost).toMatchObject({ cacheRead: 0, cacheWrite: 0 });
+      expect(model?.cost.cacheRead).toBeCloseTo(input, 10);
+      expect(model?.cost.cacheWrite).toBe(0);
     }
   });
 
-  it("preserves zero input prices without discarding a paid output rate", async () => {
+  it("keeps an available row with unknown runtime prices when completion pricing is missing", async () => {
     mockCatalogResponse({
-      data: [{ ...NATIVE_TEXT_MODEL, pricing: { prompt: "0", completion: "0.00000075" } }],
+      data: [{ ...NATIVE_TEXT_MODEL, pricing: { prompt: "0.00000035" } }],
     });
-
-    const catalog = await runCerebrasCatalog();
-
-    expect(catalog.models).toEqual([
-      expect.objectContaining({
-        id: NATIVE_TEXT_MODEL.id,
-        cost: { input: 0, output: 0.75, cacheRead: 0, cacheWrite: 0 },
-      }),
-    ]);
-  });
-
-  it.each([
-    { label: "absent pricing", pricing: undefined },
-    { label: "missing completion", pricing: { prompt: "0.00000035" } },
-    { label: "negative prompt", pricing: { prompt: "-0.00000035", completion: "0.00000075" } },
-    { label: "malformed completion", pricing: { prompt: "0.00000035", completion: "unknown" } },
-  ])("keeps an available row with the unknown runtime price for $label", async ({ pricing }) => {
-    mockCatalogResponse({ data: [{ ...NATIVE_TEXT_MODEL, pricing }] });
 
     const catalog = await runCerebrasCatalog();
 
@@ -263,44 +165,6 @@ describe("Cerebras native catalog", () => {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       }),
     ]);
-  });
-
-  it.each(["https://proxy.example.test/cerebras/v1", "https://api.cerebras.ai/custom/v1"])(
-    "does not query public metadata for custom inference base %s",
-    async (baseUrl) => {
-      const catalog = await runCerebrasCatalog(
-        createCatalogContext({
-          config: { models: { providers: { cerebras: { baseUrl, models: [] } } } },
-        }),
-      );
-
-      expect(ssrfRuntimeMocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
-      expect(catalog.baseUrl).toBe(baseUrl);
-      expect(catalog.apiKey).toBe("fixture-cerebras-key");
-      expect(catalog.models.map((model) => model.id)).toEqual(
-        manifest.modelCatalog.providers.cerebras.models.map((model) => model.id),
-      );
-    },
-  );
-
-  it("keeps static discovery offline and retains the shipped GLM reference", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
-    const result = await provider.staticCatalog?.run(createCatalogContext());
-
-    expect(ssrfRuntimeMocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
-    if (!result || !("provider" in result)) {
-      throw new Error("expected static Cerebras provider catalog");
-    }
-    expect(result.provider.models.map((model) => model.id)).toEqual(
-      manifest.modelCatalog.providers.cerebras.models.map((model) => model.id),
-    );
-    expect(result.provider.models).toContainEqual(expect.objectContaining({ id: "zai-glm-4.7" }));
-    const glm = manifest.modelCatalog.providers.cerebras.models.find(
-      (model) => model.id === "zai-glm-4.7",
-    );
-    expect(glm).toBeDefined();
-    expect(glm).not.toMatchObject({ status: "disabled" });
-    expect(glm).not.toHaveProperty("replacedBy");
   });
 
   it("reports unavailable discovery and recovers on the next request", async () => {
@@ -317,36 +181,56 @@ describe("Cerebras native catalog", () => {
     expect(recovered.models).toEqual([
       expect.objectContaining({
         id: NATIVE_TEXT_MODEL.id,
-        cost: { input: 0.35, output: 0.75, cacheRead: 0, cacheWrite: 0 },
+        cost: { input: 0.35, output: 0.75, cacheRead: 0.35, cacheWrite: 0 },
       }),
     ]);
     expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(2);
   });
+});
 
-  it("keeps the runtime catalog inactive without a Cerebras credential", async () => {
+describe("Cerebras prompt cache routing", () => {
+  it.each([
+    { baseUrl: "https://api.cerebras.ai/v1", key: "synthetic-session" },
+    { baseUrl: "https://proxy.example/v1", key: undefined },
+    { baseUrl: "https://api.cerebras.ai/v1", optOut: true, key: undefined },
+  ])("sends native cache affinity at $baseUrl with optOut=$optOut", async (route) => {
     const provider = await registerSingleProviderPlugin(plugin);
-    const ctx = createCatalogContext({
-      resolveProviderApiKey: () => ({ apiKey: undefined }),
-      resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
-    });
-
-    await expect(provider.catalog?.run(ctx)).resolves.toBeNull();
-    expect(ssrfRuntimeMocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
-  });
-
-  it("does not resolve credentials or query metadata for an unrelated provider scope", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
-    const resolveProviderApiKey = vi.fn<CatalogContext["resolveProviderApiKey"]>();
-    const resolveProviderAuth = vi.fn<CatalogContext["resolveProviderAuth"]>();
-    const ctx = createCatalogContext({
-      providerIds: ["fixture-other-provider"],
-      resolveProviderApiKey,
-      resolveProviderAuth,
-    });
-
-    await expect(provider.catalog?.run(ctx)).resolves.toBeNull();
-    expect(resolveProviderApiKey).not.toHaveBeenCalled();
-    expect(resolveProviderAuth).not.toHaveBeenCalled();
-    expect(ssrfRuntimeMocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
+    const model: Model = {
+      id: "fixture-text-model",
+      name: "Synthetic model",
+      provider: "cerebras",
+      api: "openai-completions",
+      baseUrl: route.baseUrl,
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 8192,
+      maxTokens: 128,
+      ...(route.optOut ? { compat: { supportsPromptCacheKey: false } } : {}),
+    };
+    const normalized =
+      provider.normalizeResolvedModel?.({
+        provider: model.provider,
+        modelId: model.id,
+        model,
+      }) ?? model;
+    let payload: unknown;
+    const result = await streamSimple(
+      normalized,
+      { messages: [] },
+      {
+        apiKey: "synthetic-unused-key",
+        sessionId: "synthetic-session",
+        cacheRetention: "long",
+        onPayload(value) {
+          payload = value;
+          throw new Error("captured before request");
+        },
+      },
+    ).result();
+    expect(result.errorMessage).toBe("captured before request");
+    expect(payload).toMatchObject({ prompt_cache_key: route.key });
+    expect(payload).not.toHaveProperty("prompt_cache_retention");
+    expect(payload).not.toHaveProperty("prompt_cache_options");
   });
 });

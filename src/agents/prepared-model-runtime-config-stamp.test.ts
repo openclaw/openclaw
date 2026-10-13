@@ -12,7 +12,7 @@ import {
   getPreparedModelRuntimeAuthMaterializations,
   getPreparedModelRuntimeAuthStore,
   loadPreparedModelRuntimeAuth,
-  setPreparedModelRuntimeAuthMaterializations,
+  bindPreparedModelRuntimeAuth,
 } from "./prepared-model-runtime-auth.js";
 import {
   advancePreparedModelRuntimeConfig,
@@ -46,7 +46,7 @@ describe("prepared model runtime config stamps", () => {
         runtimeOwnerId: "test-owner",
       },
     ];
-    setPreparedModelRuntimeAuthMaterializations(existingReader, materializations);
+    bindPreparedModelRuntimeAuth(existingReader, { materializations });
     const authStore = getPreparedModelRuntimeAuthStore(existingReader);
     const loadedAuth = await loadPreparedModelRuntimeAuth(existingReader, { providerIds: [] });
     mocks.configuredAgentDirs.set("default", "/tmp/later-agent");

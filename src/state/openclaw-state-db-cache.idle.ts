@@ -40,17 +40,15 @@ export function createStateDatabaseIdleRetirement(
       setTimeout(() => {
         idleTimers.delete(database.db);
         try {
-          if (
-            database.db.isOpen &&
-            (database.db.isTransaction ||
-              borrowers.get(database.db)?.references.size ||
-              idleReferences.get(database.db)?.size)
-          ) {
+          if (database.db.isOpen && database.db.isTransaction) {
             touch(database);
-            return;
+          } else if (
+            !borrowers.get(database.db)?.references.size &&
+            !idleReferences.get(database.db)?.size
+          ) {
+            // Pins restart idleness on release; expiry preserves independent worker admission.
+            retire(database, false, { busyTimeoutMs: 0, checkpointMode: "PASSIVE" });
           }
-          // Native expiry does not revoke independently active worker admission.
-          retire(database, false, { busyTimeoutMs: 0, checkpointMode: "PASSIVE" });
         } catch (error) {
           log.warn("Idle shared-state database cleanup failed", { path: database.path, error });
           touch(database);

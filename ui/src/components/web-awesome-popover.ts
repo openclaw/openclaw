@@ -3,6 +3,15 @@ import WaPopover from "@awesome.me/webawesome/dist/components/popover/popover.js
 
 const labeledPopovers = new WeakSet<WaPopover>();
 
+export function syncPopoverExpanded(event: Event) {
+  if (event.currentTarget instanceof Element) {
+    event.currentTarget.previousElementSibling?.setAttribute(
+      "aria-expanded",
+      String(event.type === "wa-show"),
+    );
+  }
+}
+
 /** Web Awesome does not forward the host name to its native shadow dialog. */
 export function syncPopoverLabel(element: Element | undefined) {
   if (!(element instanceof WaPopover) || labeledPopovers.has(element)) {

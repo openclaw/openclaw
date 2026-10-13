@@ -8,28 +8,22 @@ source scripts/lib/openclaw-e2e-instance.sh
 source scripts/e2e/lib/onboard/first-agent-flow.sh
 source scripts/e2e/lib/prepublish-plugin-registry.sh
 
-openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}"
-openclaw_e2e_install_trash_shim
-
-export NPM_CONFIG_PREFIX="$HOME/.npm-global"
-export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
-export npm_config_loglevel=error
-export npm_config_fund=false
-export npm_config_audit=false
+source scripts/e2e/lib/release-scenarios/setup.sh
 export OPENAI_API_KEY="sk-openclaw-release-typed-onboarding"
 
 PORT="18789"
-MOCK_PORT="44190"
+MOCK_PORT="0"
 SUCCESS_MARKER="OPENCLAW_E2E_OK_TYPED_ONBOARDING"
 scenario_tmp="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-release-typed-onboarding.XXXXXX")"
 LOG_DIR="$scenario_tmp/logs"
 mkdir -p "$LOG_DIR"
-INSTALL_LOG="$LOG_DIR/install.log"
-ONBOARD_LOG="$LOG_DIR/onboard.log"
-CODEX_INSTALL_LOG="$LOG_DIR/codex-install.log"
-OPENAI_LOG="$LOG_DIR/openai.log"
-AGENT_LOG="$LOG_DIR/agent.log"
-MOCK_REQUEST_LOG="$scenario_tmp/openai-requests.jsonl"
+openclaw_release_scenario_logs \
+  INSTALL_LOG "$LOG_DIR/install.log" \
+  ONBOARD_LOG "$LOG_DIR/onboard.log" \
+  CODEX_INSTALL_LOG "$LOG_DIR/codex-install.log" \
+  OPENAI_LOG "$LOG_DIR/openai.log" \
+  MOCK_REQUEST_LOG "$scenario_tmp/openai-requests.jsonl" \
+  AGENT_LOG "$LOG_DIR/agent.log"
 export SUCCESS_MARKER MOCK_REQUEST_LOG
 
 plugin_registry_pid=""
@@ -51,13 +45,7 @@ trap cleanup EXIT
 dump_debug_logs() {
   local status="$1"
   echo "release typed onboarding failed with exit code $status" >&2
-  openclaw_e2e_dump_logs \
-    "$INSTALL_LOG" \
-    "$ONBOARD_LOG" \
-    "$CODEX_INSTALL_LOG" \
-    "$OPENAI_LOG" \
-    "$MOCK_REQUEST_LOG" \
-    "$AGENT_LOG"
+  openclaw_e2e_dump_logs "${OPENCLAW_RELEASE_DIAGNOSTIC_LOGS[@]}"
 }
 openclaw_e2e_enable_failure_diagnostics
 
@@ -94,24 +82,14 @@ onboarding_log_contains() {
 }
 
 drive_typed_onboarding() {
-  local hook_mode="${OPENCLAW_FROZEN_TARGET_ONBOARD_SESSION_MEMORY_HOOK_MODE:-}"
   wait_for_log "Continue?" 60
   send $'y\r' 0.4
-  if [[ "$hook_mode" != "interactive" ]]; then
-    wait_for_log "Help make OpenClaw better?" 60
-    send $'\r' 0.4
-    wait_for_first_agent_prompt onboarding_log_contains 60 0.4
-    send $'\r' 0.4
-    wait_for_log "to search" 60
-    send $'ollama\r' 0.4
-    return
-  fi
-
+  wait_for_log "Help make OpenClaw better?" 60
+  send $'\r' 0.4
+  wait_for_first_agent_prompt onboarding_log_contains 60 0.4
+  send $'\r' 0.4
   wait_for_log "to search" 60
   send $'ollama\r' 0.4
-  wait_for_log "Enable hooks?" 60
-  send $' \r' 0.4
-  send $'\r' 0.4
 }
 
 openclaw_e2e_install_package "$INSTALL_LOG"
@@ -122,7 +100,7 @@ entry="$(openclaw_e2e_package_entrypoint "$package_root")"
 openclaw_e2e_enable_openclaw_cli_timeout
 
 mock_pid="$(openclaw_e2e_start_mock_openai "$MOCK_PORT" "$OPENAI_LOG")"
-openclaw_e2e_wait_mock_openai "$MOCK_PORT"
+MOCK_PORT="$(openclaw_e2e_wait_mock_openai "$MOCK_PORT" 80 400 "" "$mock_pid" "$OPENAI_LOG")"
 echo "Mock OpenAI provider is ready."
 
 input_fifo_dir="$(mktemp -d "$scenario_tmp/input.XXXXXX")"

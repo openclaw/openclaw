@@ -1,6 +1,8 @@
 import { createServer } from "node:http";
-import { expect, it, vi } from "vitest";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { expect, it, onTestFailed, vi } from "vitest";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
+import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import {
   appendTranscriptMessage,
   loadSessionEntry,
@@ -32,6 +34,24 @@ it("chat.send recovers failed and statusless work for new messages and retained 
   const priorMessage = "Finish the interrupted recovery task.";
   const nextMessage = "Then verify the new request.";
   const targetRequests: string[] = [];
+  const requestPresence: Array<{ prior: boolean; next: boolean }> = [];
+  const diagnostics: {
+    caseId?: string;
+    phase: string;
+    agentWaitStatus?: string;
+    entry?: {
+      status?: string;
+      abortedLastRun?: boolean;
+      mainRestartRecovery: boolean;
+      restartRecoveryDeliveryRunId: boolean;
+    };
+  } = { phase: "setup" };
+  onTestFailed(() => {
+    console.error(
+      "orphaned recovery diagnostics",
+      JSON.stringify({ ...diagnostics, requestPresence }),
+    );
+  });
   let responseCount = 0;
   const providerServer = createServer((request, response) => {
     void (async () => {
@@ -44,6 +64,10 @@ it("chat.send recovers failed and statusless work for new messages and retained 
         return;
       }
       const body = Buffer.concat(chunks).toString("utf8");
+      requestPresence.push({
+        prior: body.includes(priorMessage),
+        next: body.includes(nextMessage),
+      });
       if (body.includes(priorMessage)) {
         targetRequests.push(body);
       }
@@ -56,7 +80,7 @@ it("chat.send recovers failed and statusless work for new messages and retained 
     })().catch((error: unknown) => response.writeHead(500).end(String(error)));
   });
   let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
-  try {
+  const runProof = async () => {
     await new Promise<void>((resolve, reject) => {
       providerServer.once("error", reject);
       providerServer.listen(0, "127.0.0.1", resolve);
@@ -80,7 +104,7 @@ it("chat.send recovers failed and statusless work for new messages and retained 
             [provider.modelRef]: { params: { transport: "sse", openaiWsWarmup: false } },
           },
         },
-        entries: { main: { default: true } },
+        entries: { main: {} },
       },
       messages: { queue: { mode: "followup", debounceMsByChannel: { webchat: 0 } } },
       models: { mode: "replace", providers: { [provider.providerId]: provider.config } },
@@ -112,6 +136,11 @@ it("chat.send recovers failed and statusless work for new messages and retained 
       const sessionId = `orphaned-chat-session-${caseId}`;
       const sourceRunId = `rejected-input-${caseId}`;
       targetRequests.length = 0;
+      requestPresence.length = 0;
+      diagnostics.caseId = caseId;
+      diagnostics.phase = "seed";
+      diagnostics.agentWaitStatus = undefined;
+      diagnostics.entry = undefined;
       const target = {
         agentId: "main",
         sessionKey,
@@ -132,12 +161,14 @@ it("chat.send recovers failed and statusless work for new messages and retained 
         ],
         restartRecoveryDeliveryRunId: sourceRunId,
         restartRecoveryDeliverySourceRunId: sourceRunId,
-        restartRecoveryDeliveryRequestFingerprint: createRestartSafeChatRequest({
-          cfg,
-          eligible: true,
-          message: priorMessage,
-          senderIsOwner: true,
-        })?.fingerprint,
+        restartRecoveryDeliveryRequestFingerprint: (
+          await createRestartSafeChatRequest({
+            cfg,
+            eligible: true,
+            message: priorMessage,
+            senderIsOwner: true,
+          })
+        )?.fingerprint,
         restartRecoverySourceIngress: "control-ui",
       });
       await appendTranscriptMessage(
@@ -162,7 +193,6 @@ it("chat.send recovers failed and statusless work for new messages and retained 
       }
       for (const [reason, stale] of [
         ["session", { sessionId: "replaced-session" }],
-        ["branch", { expectedLeafEntryId: null }],
         ["permissions", { expectedPermissionMode: "guarded" }],
         ["tools", { expectedToolOverrides: { webSearch: false } }],
       ] as const) {
@@ -179,6 +209,7 @@ it("chat.send recovers failed and statusless work for new messages and retained 
         expect(loadSessionEntry(target)).toEqual(stranded);
       }
       const runId = retry ? sourceRunId : `new-input-after-stranded-recovery-${caseId}`;
+      diagnostics.phase = "chat.send";
       await expect(
         client.request("chat.send", {
           sessionKey,
@@ -189,20 +220,32 @@ it("chat.send recovers failed and statusless work for new messages and retained 
         }),
       ).resolves.toMatchObject({ runId, status: retry ? "ok" : "started" });
       if (!retry) {
+        diagnostics.phase = "agent.wait";
         await vi.waitFor(
           async () => {
             const outcome = await client.request("agent.wait", { runId, timeoutMs: 30_000 });
+            diagnostics.agentWaitStatus =
+              isRecord(outcome) && typeof outcome.status === "string" ? outcome.status : undefined;
             expect(outcome, JSON.stringify(outcome)).toMatchObject({ status: "ok" });
           },
           { timeout: 30_000 },
         );
       }
+      diagnostics.phase = "session.done";
       await vi.waitFor(
         () => {
-          expect(loadSessionEntry(target)?.status).toBe("done");
+          const entry = loadSessionEntry(target);
+          diagnostics.entry = {
+            status: entry?.status,
+            abortedLastRun: entry?.abortedLastRun,
+            mainRestartRecovery: Boolean(entry?.mainRestartRecovery),
+            restartRecoveryDeliveryRunId: Boolean(entry?.restartRecoveryDeliveryRunId),
+          };
+          expect(entry?.status).toBe("done");
         },
         { timeout: 30_000 },
       );
+      diagnostics.phase = "provider-count";
       expect(targetRequests).toHaveLength(retry ? 1 : 2);
       expect(targetRequests[0]).not.toContain(nextMessage);
       if (!retry) {
@@ -213,21 +256,38 @@ it("chat.send recovers failed and statusless work for new messages and retained 
       expect(recovered?.archivedAt).toBeUndefined();
       expect(recovered?.mainRestartRecovery).toBeUndefined();
       expect(recovered?.restartRecoveryRuns).toBeUndefined();
-      const transcript = JSON.stringify(await loadTranscriptEvents({ ...target, sessionId }));
+      diagnostics.phase = "transcript";
+      // Captured model-prompt metadata can repeat text without creating another user turn.
+      const transcript = JSON.stringify(
+        (await loadTranscriptEvents({ ...target, sessionId })).flatMap((event) =>
+          isRecord(event) && event.type === "message" && isRecord(event.message)
+            ? [event.message.content]
+            : [],
+        ),
+      );
       expect(transcript.split(priorMessage)).toHaveLength(2);
       expect(transcript.split(nextMessage)).toHaveLength(retry ? 1 : 2);
+      diagnostics.phase = "complete";
     }
-  } finally {
-    if (gateway) {
-      await disconnectGatewayClient(gateway.client).catch(() => undefined);
-      await gateway.server.close().catch(() => undefined);
-    }
-    if (providerServer.listening) {
-      providerServer.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        providerServer.close(() => resolve());
-      });
-    }
-    await state.cleanup();
-  }
+  };
+  await runQaGatewayFixture(
+    runProof,
+    async () => {
+      if (gateway) {
+        await disconnectGatewayClient(gateway.client);
+      }
+    },
+    async () => {
+      await gateway?.server.close();
+    },
+    async () => {
+      if (providerServer.listening) {
+        providerServer.closeAllConnections();
+        await new Promise<void>((resolve) => {
+          providerServer.close(() => resolve());
+        });
+      }
+    },
+    () => state.cleanup(),
+  );
 }, 90_000);

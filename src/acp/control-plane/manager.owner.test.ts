@@ -1,19 +1,20 @@
 import path from "node:path";
 import type { AcpRuntime } from "@openclaw/acp-core/runtime/types";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   loadSessionEntryReadOnly,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { AcpRuntimeError } from "../runtime/errors.js";
 import { buildAcpDatabaseSessionKey } from "../runtime/session-meta-keys.js";
 import { readAcpSessionMetaForEntry } from "../runtime/session-meta-readonly.js";
 import {
   readAcpSessionEntry,
+  readAcpSessionEntryAsync,
   writeAcpSessionMetaForMigration,
   upsertAcpSessionMeta,
 } from "../runtime/session-meta.js";
@@ -21,126 +22,132 @@ import { AcpSessionManager } from "./manager.core.js";
 import { disposeAcpSessionManagerInstance } from "./manager.lifecycle.js";
 import { DEFAULT_DEPS } from "./manager.types.js";
 
-describe("ACP manager with real owner-scoped metadata", () => {
-  afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
+async function withManagerTestDir(prefix: string, run: (dir: string) => Promise<void>) {
+  await withTestDir({ prefix }, async (dir) => {
+    try {
+      await run(dir);
+    } finally {
+      // Worker leases must settle before the fixture removes their database files.
+      await closeOpenClawAgentDatabasesAsync();
+      await closeOpenClawStateDatabaseAsync();
+    }
   });
+}
 
-  it.each(["global", "shared-project"])(
-    "isolates two owners of %s and retains the harness",
-    async (sessionKey) => {
-      await withTestDir({ prefix: "acp-manager-owner-" }, async (dir) => {
-        const cfg = {
-          agents: { ownership: "explicit", entries: { main: {}, work: {} } },
-          session: { scope: "global", store: path.join(dir, "{agentId}", "sessions.json") },
-        } satisfies OpenClawConfig;
-        const databasePath = path.join(dir, "state", "openclaw.sqlite");
-        const ensureSession = vi.fn(async (input: { sessionKey: string; agentId?: string }) => ({
-          ...input,
-          backend: "synthetic",
-          runtimeSessionName: `${input.agentId}/${input.sessionKey}`,
-        }));
-        const runtime = {
-          ownerAwareSessions: 1 as const,
-          ensureSession,
-          async *runTurn() {
-            yield { type: "done" as const };
-          },
-          async prepareFreshSession() {},
-          async cancel() {},
-          async close() {},
-        } satisfies AcpRuntime;
-        const manager = new AcpSessionManager({
-          ...DEFAULT_DEPS,
-          loadSessionEntry: (input) => readAcpSessionEntry({ ...input, databasePath }),
-          upsertSessionMeta: (input) => upsertAcpSessionMeta({ ...input, databasePath }),
-          requireRuntimeBackend: () => ({ id: "synthetic", runtime }),
-        });
-        try {
-          for (const agentId of ["main", "work"]) {
-            const input = {
-              cfg,
-              sessionKey,
-              agentId,
-              agent: "fixture-harness",
-              mode: "persistent" as const,
-            };
-            const scope = {
-              agentId,
-              sessionKey,
-              storePath: path.join(dir, agentId, "sessions.json"),
-            };
-            const entry = {
-              sessionId: `${agentId}-existing`,
-              lifecycleRevision: `${agentId}-revision`,
-              updatedAt: 1,
-            };
-            replaceSessionEntrySync(scope, entry);
-            const meta = {
-              backend: "synthetic",
+describe("ACP manager with real owner-scoped metadata", () => {
+  it("isolates two owners of global and retains the harness", async () => {
+    const sessionKey = "global";
+    await withManagerTestDir("acp-manager-owner-", async (dir) => {
+      const cfg = {
+        agents: { ownership: "explicit", entries: { main: {}, work: {} } },
+        session: { scope: "global", store: path.join(dir, "{agentId}", "sessions.json") },
+      } satisfies OpenClawConfig;
+      const databasePath = path.join(dir, "state", "openclaw.sqlite");
+      const ensureSession = vi.fn(async (input: { sessionKey: string; agentId?: string }) => ({
+        ...input,
+        backend: "synthetic",
+        runtimeSessionName: `${input.agentId}/${input.sessionKey}`,
+      }));
+      const runtime = {
+        ownerAwareSessions: 1 as const,
+        ensureSession,
+        async *runTurn() {
+          yield { type: "done" as const };
+        },
+        async prepareFreshSession() {},
+        async cancel() {},
+        async close() {},
+      } satisfies AcpRuntime;
+      const manager = new AcpSessionManager({
+        ...DEFAULT_DEPS,
+        loadSessionEntry: (input) => readAcpSessionEntry({ ...input, databasePath }),
+        loadSessionEntryAsync: (input) => readAcpSessionEntryAsync({ ...input, databasePath }),
+        upsertSessionMeta: (input) => upsertAcpSessionMeta({ ...input, databasePath }),
+        requireRuntimeBackend: () => ({ id: "synthetic", runtime }),
+      });
+      try {
+        for (const agentId of ["main", "work"]) {
+          const input = {
+            cfg,
+            sessionKey,
+            agentId,
+            agent: "fixture-harness",
+            mode: "persistent" as const,
+          };
+          const scope = {
+            agentId,
+            sessionKey,
+            storePath: path.join(dir, agentId, "sessions.json"),
+          };
+          const entry = {
+            sessionId: `${agentId}-existing`,
+            lifecycleRevision: `${agentId}-revision`,
+            updatedAt: 1,
+          };
+          replaceSessionEntrySync(scope, entry);
+          const meta = {
+            backend: "synthetic",
+            agent: "fixture-harness",
+            runtimeSessionName: `${agentId}/${sessionKey}`,
+            mode: "persistent" as const,
+            state: "idle" as const,
+            lastActivityAt: 1,
+          };
+          writeAcpSessionMetaForMigration({
+            sessionKey: buildAcpDatabaseSessionKey(sessionKey, agentId),
+            lifecycleRevision: entry.lifecycleRevision,
+            meta,
+            databasePath,
+          });
+          expect(readAcpSessionEntry({ ...input, databasePath })?.acp).toEqual(
+            readAcpSessionMetaForEntry({ ...input, entry, databasePath }),
+          );
+          expect(manager.resolveSession(input)).toMatchObject({
+            kind: "ready",
+            agentId,
+            sessionKey,
+            entry,
+          });
+          await manager.initializeSession(input);
+          expect(loadSessionEntryReadOnly(scope)?.sessionId).toBe(entry.sessionId);
+        }
+        for (const agentId of ["main", "work"]) {
+          const target = { cfg, sessionKey, agentId };
+          expect(manager.resolveSession(target)).toMatchObject({
+            kind: "ready",
+            agentId,
+            sessionKey,
+            meta: {
               agent: "fixture-harness",
               runtimeSessionName: `${agentId}/${sessionKey}`,
-              mode: "persistent" as const,
-              state: "idle" as const,
-              lastActivityAt: 1,
-            };
-            writeAcpSessionMetaForMigration({
-              sessionKey: buildAcpDatabaseSessionKey(sessionKey, agentId),
-              lifecycleRevision: entry.lifecycleRevision,
-              meta,
-              databasePath,
-            });
-            expect(readAcpSessionEntry({ ...input, databasePath })?.acp).toEqual(
-              readAcpSessionMetaForEntry({ ...input, entry, databasePath }),
-            );
-            expect(manager.resolveSession(input)).toMatchObject({
-              kind: "ready",
-              agentId,
-              sessionKey,
-              entry,
-            });
-            await manager.initializeSession(input);
-            expect(loadSessionEntryReadOnly(scope)?.sessionId).toBe(entry.sessionId);
-          }
-          for (const agentId of ["main", "work"]) {
-            const target = { cfg, sessionKey, agentId };
-            expect(manager.resolveSession(target)).toMatchObject({
-              kind: "ready",
-              agentId,
-              sessionKey,
-              meta: {
-                agent: "fixture-harness",
-                runtimeSessionName: `${agentId}/${sessionKey}`,
-              },
-            });
-            await manager.updateSessionRuntimeOptions({ ...target, patch: { model: agentId } });
-            expect(
-              readAcpSessionEntry({ ...target, databasePath })?.acp?.runtimeOptions?.model,
-            ).toBe(agentId);
-          }
-          if (sessionKey === "global") {
-            expect(manager.resolveSession({ cfg, sessionKey: "agent:work:main" })).toMatchObject({
-              kind: "ready",
-              agentId: "work",
-              sessionKey: "global",
-            });
-            const mismatch = { cfg, sessionKey: "agent:work:main", agentId: "main" };
-            expect(() => manager.resolveSession(mismatch)).toThrowError(
-              expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }),
-            );
-          }
-          expect(ensureSession).toHaveBeenCalledTimes(2);
-        } finally {
-          await disposeAcpSessionManagerInstance(manager, "test-complete");
+            },
+          });
+          await manager.updateSessionRuntimeOptions({ ...target, patch: { model: agentId } });
+          expect(readAcpSessionEntry({ ...target, databasePath })?.acp?.runtimeOptions?.model).toBe(
+            agentId,
+          );
         }
-      });
-    },
-  );
+        if (sessionKey === "global") {
+          expect(manager.resolveSession({ cfg, sessionKey: "agent:work:main" })).toMatchObject({
+            kind: "ready",
+            agentId: "work",
+            sessionKey: "global",
+          });
+          const mismatch = { cfg, sessionKey: "agent:work:main", agentId: "main" };
+          expect(() => manager.resolveSession(mismatch)).toThrowError(
+            expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }),
+          );
+        }
+        expect(ensureSession).toHaveBeenCalledTimes(2);
+      } finally {
+        await disposeAcpSessionManagerInstance(manager, "test-complete");
+      }
+    });
+  });
 });
 
 it("keeps legacy runtime implementations assignable and rejects unisolated bare targets before effects", async () => {
-  await withTestDir({ prefix: "acp-legacy-owner-" }, async (dir) => {
+  await withManagerTestDir("acp-legacy-owner-", async (dir) => {
     const cfg = {
       agents: { ownership: "explicit" as const, entries: { main: {}, work: {} } },
       session: { store: path.join(dir, "{agentId}", "sessions.json") },
@@ -192,7 +199,7 @@ it("keeps legacy runtime implementations assignable and rejects unisolated bare 
 });
 
 it("retains canonical metadata when an unmigrated backend locator blocks status or reset", async () => {
-  await withTestDir({ prefix: "acp-owner-repair-" }, async (dir) => {
+  await withManagerTestDir("acp-owner-repair-", async (dir) => {
     const cfg = {
       agents: { ownership: "explicit" as const, entries: { work: {} } },
       session: { store: path.join(dir, "{agentId}", "sessions.json") },
@@ -217,6 +224,8 @@ it("retains canonical metadata when an unmigrated backend locator blocks status 
       ...DEFAULT_DEPS,
       loadSessionEntry: (input: Parameters<typeof readAcpSessionEntry>[0]) =>
         readAcpSessionEntry({ ...input, databasePath }),
+      loadSessionEntryAsync: (input: Parameters<typeof readAcpSessionEntryAsync>[0]) =>
+        readAcpSessionEntryAsync({ ...input, databasePath }),
       upsertSessionMeta: (input: Parameters<typeof upsertAcpSessionMeta>[0]) =>
         upsertAcpSessionMeta({ ...input, databasePath }),
       requireRuntimeBackend: () => ({ id: "synthetic", runtime }),

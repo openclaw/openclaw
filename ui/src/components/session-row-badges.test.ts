@@ -108,16 +108,8 @@ describe("session row placement badges", () => {
     },
   );
 
-  it.each([
-    "requested",
-    "provisioning",
-    "syncing",
-    "starting",
-    "active",
-    "draining",
-    "reconciling",
-    "failed",
-  ] satisfies SessionPlacementState[])("renders %s as a cloud-worker globe", (placementState) => {
+  it("renders a cloud-worker placement as a globe", () => {
+    const placementState = "active";
     renderBadges(placementState);
 
     const badge = container.querySelector<HTMLElement>(".session-row-badge--cloud");

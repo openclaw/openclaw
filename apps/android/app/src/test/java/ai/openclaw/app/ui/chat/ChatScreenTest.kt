@@ -168,7 +168,7 @@ class ChatScreenTest {
       resolveChatComposerPrimaryAction(talkActive = false, runActive = true, hasContent = false),
     )
     assertEquals(
-      ChatComposerPrimaryAction.None,
+      ChatComposerPrimaryAction.Talk,
       resolveChatComposerPrimaryAction(talkActive = false, runActive = false, hasContent = false),
     )
   }
@@ -271,10 +271,8 @@ class ChatScreenTest {
         hosts =
           listOf(
             SessionCatalogHost(
-              catalogId = "codex",
               hostId = "local",
               label = "Local",
-              kind = "local",
               connected = true,
               sessions = listOf(matching),
             ),

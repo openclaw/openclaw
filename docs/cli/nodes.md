@@ -38,7 +38,7 @@ Unavailable load or disk readings are omitted. Offline nodes show the saved
 snapshot with an age such as `(last known 27d ago)`, measured from the snapshot's
 original timestamp. See [Node host stats](/gateway/protocol/presence#node-host-stats).
 
-`--node` accepts an exact ID, IP address, display name, or ID prefix of at least six characters. Exact ID and IP matches take precedence over names and prefixes. Within the strongest match, connected nodes take precedence. If current clients share a name, use an exact ID to disambiguate. Client type does not choose the target. The legacy migration exception prefers a unique OpenClaw client only when every other tied entry is a known Clawdbot or Moldbot client.
+`--node` accepts an exact ID, IP address, display name, or ID prefix of at least six characters. Exact ID and IP matches take precedence over names and prefixes. Within the strongest match, connected nodes take precedence. If clients share a name, use an exact ID to disambiguate. Client type does not choose the target.
 
 ## Pairing
 
@@ -82,7 +82,7 @@ Flags:
 - `--params <json>`: JSON object string (default `{}`).
 - `--invoke-timeout <ms>`: node invoke timeout as a positive integer (default `15000`).
 - `--timeout <ms>`: Gateway transport timeout (default `30000`). For a positive invoke timeout, the effective transport timeout is `max(timeout, invokeTimeout + 10000)`, allowing transport grace beyond the node's invoke deadline.
-- `--idempotency-key <key>`: optional nonempty idempotency key. An explicit empty value fails before node lookup or Gateway requests. Supplied keys retain their exact bytes, including whitespace; omitting the flag generates a key.
+- `--idempotency-key <key>`: optional nonempty request key that prevents duplicate runs. An explicit empty value fails before node lookup or Gateway requests. Supplied keys retain their exact bytes, including whitespace; omitting the flag generates a key.
 
 The invocation timeout covers Gateway checks, node wake-up, readiness retries, and the node response. Clock adjustments do not reset or extend this elapsed-time budget.
 

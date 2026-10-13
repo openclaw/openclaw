@@ -3,10 +3,13 @@ import { getRuntimeConfig } from "../config/io.js";
 import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
 import { addSessionMember } from "../config/sessions/session-sharing-store.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import {
   captureGatewayDeviceRevocation,
   invalidateGatewayDeviceRevocation,
 } from "./device-revocation.js";
+import { prepareGatewayRecipientProfile } from "./expected-profile.js";
+import type { retainGatewayOperatorRun } from "./operator-run-cancellation.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
@@ -19,7 +22,9 @@ import {
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
-const operatorRunCaptures = vi.hoisted(() => new Map<string, unknown>());
+const operatorRunCaptures = vi.hoisted(
+  () => new Map<string, Awaited<ReturnType<typeof retainGatewayOperatorRun>>>(),
+);
 
 vi.mock("./operator-run-cancellation.js", async () => {
   const actual = await vi.importActual<typeof import("./operator-run-cancellation.js")>(
@@ -27,8 +32,10 @@ vi.mock("./operator-run-cancellation.js", async () => {
   );
   return {
     ...actual,
-    retainGatewayOperatorRun: (params: Parameters<typeof actual.retainGatewayOperatorRun>[0]) => {
-      const retained = actual.retainGatewayOperatorRun(params);
+    retainGatewayOperatorRun: async (
+      params: Parameters<typeof actual.retainGatewayOperatorRun>[0],
+    ) => {
+      const retained = await actual.retainGatewayOperatorRun(params);
       operatorRunCaptures.set(params.runId, retained);
       return retained;
     },
@@ -49,19 +56,6 @@ function isRecoverPayload(value: unknown): value is RecoverPayload {
     (!("sessionId" in value) || typeof value.sessionId === "string") &&
     (!("continuation" in value) ||
       (typeof value.continuation === "object" && value.continuation !== null))
-  );
-}
-
-function isRetainedOperatorRun(
-  value: unknown,
-): value is { armCancellation: () => void; release: () => void } {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "armCancellation" in value &&
-    typeof value.armCancellation === "function" &&
-    "release" in value &&
-    typeof value.release === "function"
   );
 }
 
@@ -175,6 +169,9 @@ test("sessions.recover denies a narrow continuation into a linked foreign succes
     storePath,
     ownerProfileId: sourceOwner.authenticatedUserProfile!.profileId,
   });
+  using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+  prepareGatewayRecipientProfile(sourceOwner);
+  prepareGatewayRecipientProfile(broadWriter);
   const context = createDirectChatContext({
     getRuntimeConfig: () =>
       loadSessionEntry({ agentId: "main", sessionKey: sourceKey, storePath })?.mainRestartRecovery
@@ -270,6 +267,8 @@ test("sessions.recover retains source revocation for its accepted own successor"
     storePath,
     ownerProfileId: owner.authenticatedUserProfile!.profileId,
   });
+  using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+  prepareGatewayRecipientProfile(owner);
   const context = createDirectChatContext({ getRuntimeConfig: () => recoveryConfig(storePath) });
   const requestAuthority = captureGatewayDeviceRevocation(
     context,
@@ -297,7 +296,7 @@ test("sessions.recover retains source revocation for its accepted own successor"
     throw new Error("recovery did not register its active run");
   }
   const retainedRun = operatorRunCaptures.get(runId);
-  if (!isRetainedOperatorRun(retainedRun)) {
+  if (!retainedRun) {
     throw new Error("recovery did not retain its operator run authority");
   }
   const cancellationWork: Promise<unknown>[] = [];

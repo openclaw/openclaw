@@ -10,6 +10,9 @@ import {
 import "../components/modal-dialog.ts";
 import { TEST_LINK_READER } from "../test-helpers/link-reader.ts";
 import { postNativeUpdate, startNativeLinkRouting } from "./native-link-routing.ts";
+import { client, flushMicrotasks, type RequestFn } from "./overlays-access.test-support.ts";
+import { createApplicationOverlays } from "./overlays.ts";
+import { updateRunHarness } from "./update-run.test-support.ts";
 
 const NATIVE_UPDATE_DECLINED_EVENT = "openclaw:native-update-declined";
 
@@ -111,6 +114,36 @@ function menuItem(label: string): HTMLButtonElement {
   return item;
 }
 
+async function focusGitHubLink() {
+  const provider = document.createElement(
+    "openclaw-link-reader-hovercard-provider",
+  ) as LinkReaderHovercardProvider;
+  provider.readers = [TEST_LINK_READER];
+  provider.client = {
+    request: vi.fn().mockResolvedValue({
+      url: "https://github.com/openclaw/openclaw/issues/102691",
+      comments: 1,
+      createdAt: "2026-07-09T10:00:00Z",
+      kind: "issue",
+      login: "octocat",
+      number: 102691,
+      owner: "openclaw",
+      repo: "openclaw",
+      state: "open",
+      title: "Open links in a sidebar browser",
+      updatedAt: "2026-07-09T10:00:00Z",
+    }),
+  } as unknown as GatewayBrowserClient;
+  const anchor = document.createElement("a");
+  anchor.href = "https://github.com/openclaw/openclaw/issues/102691";
+  anchor.textContent = "#102691";
+  provider.append(anchor);
+  document.body.append(provider);
+  anchor.focus();
+  await vi.waitFor(() => expect(document.querySelector(".link-reader-hovercard")).not.toBeNull());
+  return anchor;
+}
+
 describe("native link routing", () => {
   it.each(["abort", "dispose"] as const)(
     "cancels a pending context menu on %s and removes link handlers",
@@ -135,21 +168,42 @@ describe("native link routing", () => {
     },
   );
 
-  it("delivers each native update decline once across route changes", async () => {
-    const onNativeUpdateDeclined = vi.fn();
+  it("keeps native decline fallback on its posted Gateway and consumes it once", async () => {
+    const requestA = vi.fn<RequestFn>(async () => ({}));
+    const requestB = vi.fn<RequestFn>(async () => ({}));
+    const harness = updateRunHarness(requestA);
+    const overlays = createApplicationOverlays(harness.gateway);
     const postMessage = vi.fn();
     vi.stubGlobal("webkit", { messageHandlers: { openclawUpdate: { postMessage } } });
-    routing = startNativeLinkRouting({ onNativeUpdateDeclined });
+    routing = startNativeLinkRouting({
+      prepareNativeUpdateFallback: () => ({
+        isCurrent: overlays.captureUpdateTarget(),
+        run: () => void overlays.runUpdate(),
+      }),
+    });
+    const updateCalls = (request: typeof requestA) =>
+      request.mock.calls.filter(([method]) => method === "update.run");
+    try {
+      await flushMicrotasks();
+      expect(postNativeUpdate()).toBe(true);
+      harness.gateway.connection.gatewayUrl = "ws://other-gateway.test";
+      harness.update({ client: client(requestB) });
+      window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
+      await flushMicrotasks();
+      expect(updateCalls(requestA)).toEqual([]);
+      expect(updateCalls(requestB)).toEqual([]);
 
-    expect(postNativeUpdate()).toBe(true);
-    window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
-    window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
-    expect(onNativeUpdateDeclined).toHaveBeenCalledOnce();
-
-    expect(postNativeUpdate()).toBe(true);
-    window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
-    expect(onNativeUpdateDeclined).toHaveBeenCalledTimes(2);
-    expect(postMessage).toHaveBeenCalledTimes(2);
+      expect(postNativeUpdate()).toBe(true);
+      window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
+      await flushMicrotasks();
+      window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
+      await flushMicrotasks();
+      expect(updateCalls(requestA)).toEqual([]);
+      expect(updateCalls(requestB)).toHaveLength(1);
+      expect(postMessage).toHaveBeenCalledTimes(2);
+    } finally {
+      overlays.dispose();
+    }
   });
 
   it("does not install native behavior without the WebKit bridge", async () => {
@@ -162,91 +216,18 @@ describe("native link routing", () => {
     expect(document.querySelector("openclaw-native-link-menu")).toBeNull();
   });
 
-  it("routes an unmodified external click to the native panel and preserves page-level cleanup", async () => {
-    const bridge = installBridge();
-    routing = startNativeLinkRouting({ canPresentBrowserPanel: () => true });
-    const anchor = appendLink("https://example.com/report");
-    const bubbleHandler = vi.fn();
-    anchor.addEventListener("click", bubbleHandler);
-
-    const event = click(anchor);
-
-    expect(event.defaultPrevented).toBe(true);
-    expect(bubbleHandler).toHaveBeenCalledOnce();
-    expect(bridge.messages).toEqual([]);
-    expect(bridge.browserRequests).toEqual([
-      { open: true, url: "https://example.com/report", native: true },
-    ]);
-  });
-
-  it("opens links externally during a Settings takeover and restores panel routing when it closes", async () => {
-    const bridge = installBridge();
-    let canPresentBrowserPanel = false;
-    routing = startNativeLinkRouting({
-      canPresentBrowserPanel: () => canPresentBrowserPanel,
-    });
-    const anchor = appendLink("https://example.com/report");
-
-    expect(click(anchor).defaultPrevented).toBe(true);
-    expect(bridge.messages).toEqual([
-      { type: "open-link", url: "https://example.com/report", target: "external" },
-    ]);
-    expect(bridge.browserRequests).toEqual([]);
-
-    canPresentBrowserPanel = true;
-    expect(click(anchor).defaultPrevented).toBe(true);
-    expect(bridge.messages).toHaveLength(1);
-    expect(bridge.browserRequests).toEqual([
-      { open: true, url: "https://example.com/report", native: true },
-    ]);
-  });
-
-  it("preserves link handlers that cancel an external click", async () => {
-    const bridge = installBridge();
-    routing = startNativeLinkRouting();
-    const anchor = appendLink("https://example.com/handled");
-    anchor.addEventListener("click", (event) => event.preventDefault());
-
-    const event = click(anchor);
-
-    expect(event.defaultPrevented).toBe(true);
-    expect(bridge.messages).toEqual([]);
-  });
-
   it("defines the hovercard once across duplicate bootstrap module instances", async () => {
     // Regression: the non-isolated jsdom lane evaluates the registration
     // module once per sibling file against one persistent document, so stale
     // bootstrap listeners fire alongside this file's own. Reproduce that order
     // and require a single registry definition.
-    vi.resetModules();
-    await import("../components/link-reader-hovercard-registration.ts");
+    // Reevaluate only the bootstrap; resetting all modules splits Solid's scheduler
+    // and tries to register unrelated custom elements twice.
+    const duplicateBootstrap =
+      "../components/link-reader-hovercard-registration.ts?duplicate-bootstrap";
+    await import(duplicateBootstrap);
     const define = vi.spyOn(customElements, "define");
-    const provider = document.createElement(
-      "openclaw-link-reader-hovercard-provider",
-    ) as LinkReaderHovercardProvider;
-    provider.readers = [TEST_LINK_READER];
-    provider.client = {
-      request: vi.fn().mockResolvedValue({
-        url: "https://github.com/openclaw/openclaw/issues/102691",
-        comments: 1,
-        createdAt: "2026-07-09T10:00:00Z",
-        kind: "issue",
-        login: "octocat",
-        number: 102691,
-        owner: "openclaw",
-        repo: "openclaw",
-        state: "open",
-        title: "Open links in a sidebar browser",
-        updatedAt: "2026-07-09T10:00:00Z",
-      }),
-    } as unknown as GatewayBrowserClient;
-    const anchor = document.createElement("a");
-    anchor.href = "https://github.com/openclaw/openclaw/issues/102691";
-    anchor.textContent = "#102691";
-    provider.append(anchor);
-    document.body.append(provider);
-    anchor.focus();
-    await vi.waitFor(() => expect(document.querySelector(".link-reader-hovercard")).not.toBeNull());
+    await focusGitHubLink();
     const hovercardDefines = define.mock.calls.filter(
       ([tag]) => tag === "openclaw-link-reader-hovercard-provider",
     );
@@ -257,32 +238,7 @@ describe("native link routing", () => {
   it("closes an active GitHub hovercard after routing its link", async () => {
     const bridge = installBridge();
     routing = startNativeLinkRouting();
-    const provider = document.createElement(
-      "openclaw-link-reader-hovercard-provider",
-    ) as LinkReaderHovercardProvider;
-    provider.readers = [TEST_LINK_READER];
-    provider.client = {
-      request: vi.fn().mockResolvedValue({
-        url: "https://github.com/openclaw/openclaw/issues/102691",
-        comments: 1,
-        createdAt: "2026-07-09T10:00:00Z",
-        kind: "issue",
-        login: "octocat",
-        number: 102691,
-        owner: "openclaw",
-        repo: "openclaw",
-        state: "open",
-        title: "Open links in a sidebar browser",
-        updatedAt: "2026-07-09T10:00:00Z",
-      }),
-    } as unknown as GatewayBrowserClient;
-    const anchor = document.createElement("a");
-    anchor.href = "https://github.com/openclaw/openclaw/issues/102691";
-    anchor.textContent = "#102691";
-    provider.append(anchor);
-    document.body.append(provider);
-    anchor.focus();
-    await vi.waitFor(() => expect(document.querySelector(".link-reader-hovercard")).not.toBeNull());
+    const anchor = await focusGitHubLink();
 
     click(anchor);
 

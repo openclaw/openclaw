@@ -50,7 +50,7 @@ vi.mock("../state/openclaw-state-lease.js", () => ({
 vi.mock("../state/openclaw-state-worker-store.js", () => ({
   executeOpenClawStateWorker: mocks.execute,
 }));
-vi.mock("../state/openclaw-state-lease-worker-storage.js", () => ({
+vi.mock("../state/openclaw-state-lease-worker-operation.js", () => ({
   runWithOpenClawStateLeaseWorker: async (
     _lease: unknown,
     context: unknown,
@@ -72,12 +72,6 @@ vi.mock("../state/openclaw-state-db-cache.js", () => ({
 }));
 vi.mock("../state/openclaw-state-db-async-lifecycle.js", () => ({
   getOpenClawDatabaseMaintenanceScope: () => undefined,
-}));
-vi.mock("../infra/state-database-coordinator.js", () => ({
-  captureStateDatabaseCoordinatorRuntime: () => ({
-    directory: "/synthetic-coordinator",
-    keepAlive: false,
-  }),
 }));
 vi.mock("./project-checkout.js", () => ({
   ProjectCheckoutError: class extends Error {},
@@ -104,9 +98,8 @@ import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-
 import type { OpenClawStateWorkerOperations } from "../state/openclaw-state-worker-contract.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { materializeProjectClone, refreshProjectClone } from "./project-clone.js";
-import { registerResolvedProject } from "./project-registration.js";
-import { removeProjectRegistry } from "./project-registry.js";
-import type { ProjectRegistryRecord } from "./project-registry.kernel.js";
+import { registerProjectRegistry, removeProjectRegistry } from "./project-registry.js";
+import type { ProjectRegistryRecord } from "./project-registry.types.js";
 
 type ProjectOperation = "remove" | "register" | "materialize" | "refresh";
 type ProjectCommandName =
@@ -196,8 +189,7 @@ it.each(
       );
       const start: Record<ProjectOperation, () => Promise<unknown>> = {
         remove: () => removeProjectRegistry(project, options),
-        register: () =>
-          registerResolvedProject({ path: project.repoRoot, source: "registered" }, options),
+        register: () => registerProjectRegistry({ path: project.repoRoot }, options),
         materialize: () =>
           materializeProjectClone({ cfg: {}, gitUrl: originUrl, name: "Project" }, options),
         refresh: () => refreshProjectClone(project, options),

@@ -10,10 +10,6 @@ describe("device pairing dialog", () => {
       href: "https://docs.openclaw.ai/channels/pairing#pair-from-the-control-ui-recommended",
     },
     {
-      access: "limited" as const,
-      href: "https://docs.openclaw.ai/channels/pairing#pair-from-the-control-ui-recommended",
-    },
-    {
       access: "node" as const,
       href: "https://docs.openclaw.ai/gateway/pairing#one-paste-node-pairing",
     },

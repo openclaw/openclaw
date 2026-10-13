@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -20,6 +21,24 @@ const utility = {
   ...candidate("provider-auto:local", "local/setup", true),
   modelTarget: "utility" as const,
 };
+const activatedUtility = {
+  done: true,
+  status: "done",
+  modelActivation: { modelRef: utility.modelRef, modelTarget: utility.modelTarget },
+};
+
+function createUtilityContext() {
+  const fixture = createFirstRunContext();
+  return {
+    ...fixture,
+    mount: (result: Partial<SystemAgentSetupDetectResult>, firstRun = true) =>
+      mountPage(fixture.context, {
+        client: fixture.client,
+        firstRun,
+        state: { phase: "ready", result: { ...detection, ...result } },
+      }),
+  };
+}
 
 describe("ModelSetupPage utility roles", () => {
   beforeEach(async () => {
@@ -37,70 +56,43 @@ describe("ModelSetupPage utility roles", () => {
     vi.unstubAllGlobals();
   });
 
-  it.each([true, false])(
-    "opens the setup assistant after explicit utility activation (first run: %s)",
-    async (firstRun) => {
-      const { context, client, request } = createFirstRunContext();
-      request.mockResolvedValue({
-        done: true,
-        status: "done",
-        modelActivation: { modelRef: utility.modelRef, modelTarget: "utility" },
-      });
-      const { page } = await mountPage(context, {
-        state: { phase: "ready", result: { ...detection, candidates: [utility] } },
-        client,
-        firstRun,
-      });
-
-      expect(page.textContent).toContain("Setup & utility");
-      expect(page.textContent).toContain("Use for setup");
-      expect(request).not.toHaveBeenCalled();
-      await clickCandidate(page, utility.kind);
-      if (!firstRun) {
-        await waitForFast(() => expect(page.textContent).toContain("Setup & utility model ready"));
-        const success = page.querySelector(".model-setup-success")!;
-        expect(success.textContent).not.toContain("start chatting");
-        expect(success.textContent).not.toContain("Active model");
-        [...success.querySelectorAll<HTMLButtonElement>("button")]
-          .find((button) => button.textContent?.includes("Open setup assistant"))!
-          .click();
-      }
-
-      await waitForFast(() =>
-        expect(context.navigate).toHaveBeenCalledWith("custodian", { search: "?onboarding=1" }),
-      );
-      expect(request.mock.calls[0]?.[1]).toMatchObject({
-        kind: utility.kind,
-        modelRef: utility.modelRef,
-        modelTarget: "utility",
-      });
-      expect(context.navigate).not.toHaveBeenCalledWith("chat");
-    },
-  );
+  it("opens the setup assistant after explicit utility activation outside first run", async () => {
+    const { context, request, mount } = createUtilityContext();
+    request.mockResolvedValue(activatedUtility);
+    const { page } = await mount({ candidates: [utility] }, false);
+    expect(page.textContent).toContain("Setup & utility");
+    expect(page.textContent).toContain("Use for setup");
+    expect(request).not.toHaveBeenCalled();
+    await clickCandidate(page, utility.kind);
+    await waitForFast(() => expect(page.textContent).toContain("Setup & utility model ready"));
+    const success = page.querySelector(".model-setup-success")!;
+    expect(success.textContent).not.toContain("start chatting");
+    expect(success.textContent).not.toContain("Active model");
+    [...success.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.includes("Open setup assistant"))!
+      .click();
+    await waitForFast(() =>
+      expect(context.navigate).toHaveBeenCalledWith("custodian", { search: "?onboarding=1" }),
+    );
+    expect(request.mock.calls[0]?.[1]).toMatchObject({
+      kind: utility.kind,
+      modelRef: utility.modelRef,
+      modelTarget: "utility",
+    });
+    expect(context.navigate).not.toHaveBeenCalledWith("chat");
+  });
 
   it.each([false, true])(
     "keeps the configured utility available for reopening and repair (primary: %s)",
     async (primary) => {
-      const { context, client, request } = createFirstRunContext();
-      request.mockResolvedValue({
-        done: true,
-        status: "done",
-        modelActivation: { modelRef: utility.modelRef, modelTarget: "utility" },
-      });
-      const { page } = await mountPage(context, {
-        state: {
-          phase: "ready",
-          result: {
-            ...detection,
-            candidates: [utility],
-            utilityModel: utility.modelRef,
-            ...(primary
-              ? { configuredModel: "cloud/primary", setupComplete: true }
-              : { setupModel: utility.modelRef }),
-          },
-        },
-        client,
-        firstRun: true,
+      const { context, request, mount } = createUtilityContext();
+      request.mockResolvedValue(activatedUtility);
+      const { page } = await mount({
+        candidates: [utility],
+        utilityModel: utility.modelRef,
+        ...(primary
+          ? { configuredModel: "cloud/primary", setupComplete: true }
+          : { setupModel: utility.modelRef }),
       });
 
       expect(page.querySelector(".model-setup__current") !== null).toBe(primary);
@@ -132,165 +124,102 @@ describe("ModelSetupPage utility roles", () => {
     },
   );
 
-  it("acknowledges a manual provider's utility role in the actual activation request", async () => {
-    const { context, client, request } = createFirstRunContext();
-    request.mockResolvedValue({
-      done: true,
-      status: "done",
-      modelActivation: { modelRef: utility.modelRef, modelTarget: "utility" },
-    });
-    const { page } = await mountPage(context, {
-      state: {
-        phase: "ready",
-        result: {
-          ...detection,
-          manualProviders: [
-            { id: "manual-utility", label: "Utility API key", modelTarget: "utility" },
-          ],
-        },
-      },
-      client,
-      firstRun: true,
-    });
-    await selectManualProvider(page, "manual-utility");
-    const key = page.querySelector<HTMLInputElement>('input[type="password"]')!;
-    key.value = "synthetic-utility-key";
-    key.dispatchEvent(new Event("input", { bubbles: true }));
-    await page.updateComplete;
-    page.querySelector<HTMLButtonElement>(".model-setup__manual .btn.primary")!.click();
-    await waitForFast(() =>
-      expect(request).toHaveBeenCalledWith(
-        "openclaw.setup.activate.start",
-        expect.objectContaining({
-          kind: "api-key",
-          authChoice: "manual-utility",
-          apiKey: "synthetic-utility-key",
-          modelTarget: "utility",
-        }),
-        expect.anything(),
-      ),
-    );
-    await waitForFast(() =>
-      expect(context.navigate).toHaveBeenCalledWith("custodian", { search: "?onboarding=1" }),
-    );
-  });
-
-  it.each(["oauth", "install"] as const)(
-    "preserves utility acknowledgement and pending intent for %s setup",
+  it.each(["api-key", "oauth"] as const)(
+    "preserves utility acknowledgement through %s setup",
     async (kind) => {
-      const { context, client, request } = createFirstRunContext();
-      vi.spyOn(window, "open").mockReturnValue(null);
-      request.mockImplementation(async (method, params) => {
-        if (method === "openclaw.setup.auth.start") {
-          expect(params).toMatchObject({ authChoice: "utility-login", modelTarget: "utility" });
-          return { done: false, status: "running" };
+      const { context, request, mount } = createUtilityContext();
+      const oauth = kind === "oauth";
+      const method = oauth ? "openclaw.setup.auth.start" : "openclaw.setup.activate.start";
+      const params = oauth
+        ? { authChoice: "utility-login", modelTarget: "utility" }
+        : {
+            kind,
+            authChoice: "manual-utility",
+            apiKey: "synthetic-utility-key",
+            modelTarget: "utility",
+          };
+      if (oauth) {
+        vi.spyOn(window, "open").mockReturnValue(null);
+      }
+      request.mockImplementation(async (called, actual) => {
+        if (called === method) {
+          expect(actual).toMatchObject(params);
+          return oauth ? { done: false, status: "running" } : activatedUtility;
         }
-        if (method === "wizard.next") {
+        if (oauth && called === "wizard.next") {
           expect(readFirstRunActivationReceipt(context)).toMatchObject({
             kind: "provider-auth",
             modelTarget: "utility",
             modelRef: null,
           });
-          return {
-            done: true,
-            status: "done",
-            modelActivation: { modelRef: utility.modelRef, modelTarget: "utility" },
-          };
+          return activatedUtility;
         }
-        throw new Error(`Unexpected method ${method}`);
+        throw new Error(`Unexpected method ${called}`);
       });
-      const { page } = await mountPage(context, {
-        state: {
-          phase: "ready",
-          result: {
-            ...detection,
-            authOptions: [
-              {
-                id: "utility-login",
-                label: "Utility account",
-                kind,
-                featured: true,
-                modelTarget: "utility",
-              },
-            ],
-          },
-        },
-        client,
-        firstRun: true,
-      });
-      page.querySelector<HTMLButtonElement>('[data-auth-choice="utility-login"] button')!.click();
+      const { page } = await mount(
+        oauth
+          ? {
+              authOptions: [
+                {
+                  id: "utility-login",
+                  label: "Utility account",
+                  kind: "oauth",
+                  featured: true,
+                  modelTarget: "utility",
+                },
+              ],
+            }
+          : {
+              manualProviders: [
+                { id: "manual-utility", label: "Utility API key", modelTarget: "utility" },
+              ],
+            },
+      );
+      if (oauth) {
+        page.querySelector<HTMLButtonElement>('[data-auth-choice="utility-login"] button')!.click();
+      } else {
+        await selectManualProvider(page, "manual-utility");
+        const key = page.querySelector<HTMLInputElement>('input[type="password"]')!;
+        key.value = "synthetic-utility-key";
+        key.dispatchEvent(new Event("input", { bubbles: true }));
+        await page.updateComplete;
+        page.querySelector<HTMLButtonElement>(".model-setup__manual .btn.primary")!.click();
+      }
       await waitForFast(() =>
         expect(context.navigate).toHaveBeenCalledWith("custodian", { search: "?onboarding=1" }),
       );
-      expect(request.mock.calls.map(([method]) => method)).toEqual([
-        "openclaw.setup.auth.start",
-        "wizard.next",
+      expect(request).toHaveBeenCalledWith(
+        method,
+        expect.objectContaining(params),
+        expect.anything(),
+      );
+      expect(request.mock.calls.map(([called]) => called)).toEqual([
+        method,
+        ...(oauth ? ["wizard.next"] : []),
       ]);
     },
   );
 
-  it("retains the advertised utility role when preparation directly returns its model", async () => {
-    const { context, client, request } = createFirstRunContext();
-    request.mockImplementation(async (method, params) => {
-      if (method === "openclaw.setup.prepare.start") {
-        return { done: true, status: "done", preparedModelRef: utility.modelRef };
-      }
-      if (method === "openclaw.setup.activate.start") {
-        expect(params).toMatchObject({
-          kind: utility.kind,
-          modelRef: utility.modelRef,
-          modelTarget: "utility",
-        });
-        return {
-          done: true,
-          status: "done",
-          modelActivation: { modelRef: utility.modelRef, modelTarget: "utility" },
-        };
-      }
-      throw new Error(`Unexpected method ${method}`);
-    });
-    const { page } = await mountPage(context, {
-      state: {
-        phase: "ready",
-        result: {
-          ...detection,
-          prepareOptions: [
-            {
-              id: "local",
-              label: "Utility model",
-              modelTarget: "utility",
-            },
-          ],
-        },
-      },
-      client,
-      firstRun: true,
-    });
-    page.querySelector<HTMLButtonElement>('[data-prepare-choice="local"] button')!.click();
-    await waitForFast(() =>
-      expect(context.navigate).toHaveBeenCalledWith("custodian", { search: "?onboarding=1" }),
-    );
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "openclaw.setup.prepare.start",
-      "openclaw.setup.activate.start",
-    ]);
-  });
-
-  it.each([true, false])(
-    "keeps the primary while utility preparation redetects its model (usable: %s)",
-    async (usable) => {
-      const { context, client, request } = createFirstRunContext();
+  it.each(["direct", "detected", "missing"] as const)(
+    "retains the utility role when preparation returns a %s model",
+    async (outcome) => {
+      const { context, request, mount } = createUtilityContext();
+      const direct = outcome === "direct";
+      const usable = outcome !== "missing";
       const prepared = {
         ...detection,
-        configuredModel: "cloud/primary",
-        setupComplete: true,
+        ...(direct ? {} : { configuredModel: "cloud/primary", setupComplete: true }),
         prepareOptions: [{ id: "local", label: "Local utility", modelTarget: "utility" as const }],
       };
       request.mockImplementation(async (method) => {
         if (method === "openclaw.setup.prepare.start") {
-          return { done: true, status: "done" };
+          return {
+            done: true,
+            status: "done",
+            ...(direct ? { preparedModelRef: utility.modelRef } : {}),
+          };
         }
-        if (method === "openclaw.setup.detect") {
+        if (!direct && method === "openclaw.setup.detect") {
           return {
             ...prepared,
             utilityModel: utility.modelRef,
@@ -298,32 +227,30 @@ describe("ModelSetupPage utility roles", () => {
           };
         }
         if (method === "openclaw.setup.activate.start") {
-          return {
-            done: true,
-            status: "done",
-            modelActivation: { modelRef: utility.modelRef, modelTarget: "utility" },
-          };
+          return activatedUtility;
         }
-        throw new Error("Unexpected method " + method);
+        throw new Error(`Unexpected method ${method}`);
       });
-      const { page } = await mountPage(context, {
-        state: { phase: "ready", result: prepared },
-        client,
-        firstRun: false,
-      });
+      const { page } = await mount(prepared, direct);
       page.querySelector<HTMLButtonElement>('[data-prepare-choice="local"] button')!.click();
-      await waitForFast(() =>
-        expect(page.textContent).toContain(
-          usable
-            ? "Setup & utility model ready"
-            : "Local utility did not expose a usable local model",
-        ),
-      );
-      expect(page.querySelector(".model-setup__current")?.textContent).toContain("primary");
-      expect(page.querySelector(".model-setup__utility")).toBeNull();
+      if (direct) {
+        await waitForFast(() =>
+          expect(context.navigate).toHaveBeenCalledWith("custodian", { search: "?onboarding=1" }),
+        );
+      } else {
+        await waitForFast(() =>
+          expect(page.textContent).toContain(
+            usable
+              ? "Setup & utility model ready"
+              : "Local utility did not expose a usable local model",
+          ),
+        );
+        expect(page.querySelector(".model-setup__current")?.textContent).toContain("primary");
+        expect(page.querySelector(".model-setup__utility")).toBeNull();
+      }
       expect(request.mock.calls.map(([method]) => method)).toEqual([
         "openclaw.setup.prepare.start",
-        "openclaw.setup.detect",
+        ...(direct ? [] : ["openclaw.setup.detect"]),
         ...(usable ? ["openclaw.setup.activate.start"] : []),
       ]);
       if (usable) {
@@ -342,33 +269,23 @@ describe("ModelSetupPage utility roles", () => {
   );
 
   it.each([
-    { primary: false, replyTarget: "utility" as const, expected: true },
-    { primary: true, replyTarget: "utility" as const, expected: true },
-    { primary: true, replyTarget: undefined, expected: false },
+    { replyTarget: "utility" as const, expected: true },
+    { replyTarget: undefined, expected: false },
   ])(
-    "recovers only the owned utility verification with primary=$primary and reply=$replyTarget",
-    async ({ primary, replyTarget, expected }) => {
-      const { context, client, request } = createFirstRunContext();
+    "recovers only the owned utility verification alongside a primary with reply=$replyTarget",
+    async ({ replyTarget, expected }) => {
+      const { context, request, mount } = createUtilityContext();
       persistFirstRunActivationReceipt(context, utility);
       request.mockResolvedValue({
         ok: true,
         modelRef: utility.modelRef,
         ...(replyTarget ? { modelTarget: replyTarget } : {}),
       });
-      const { page } = await mountPage(context, {
-        state: {
-          phase: "ready",
-          result: {
-            ...detection,
-            candidates: [utility],
-            utilityModel: utility.modelRef,
-            ...(primary
-              ? { configuredModel: "cloud/primary", setupComplete: true }
-              : { setupModel: utility.modelRef }),
-          },
-        },
-        client,
-        firstRun: true,
+      const { page } = await mount({
+        candidates: [utility],
+        utilityModel: utility.modelRef,
+        configuredModel: "cloud/primary",
+        setupComplete: true,
       });
       await waitForFast(() => expect(request).toHaveResolved());
       await page.updateComplete;

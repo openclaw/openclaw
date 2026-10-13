@@ -1,4 +1,3 @@
-// Matches elevated-command allowlists against normalized sender identities.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -31,15 +30,6 @@ const SENDER_PREFIX_RE = new RegExp(`^(${SENDER_PREFIXES.join("|")}):`, "i");
 /** Channel-specific formatter for allowFrom identity values. */
 export type AllowFromFormatter = (values: string[]) => string[];
 
-/** Removes known channel/user prefixes before identity comparisons. */
-export function stripSenderPrefix(value?: string): string {
-  if (!value) {
-    return "";
-  }
-  const trimmed = value.trim();
-  return trimmed.replace(SENDER_PREFIX_RE, "");
-}
-
 /** Parses explicit elevated allowlist entries such as `id:telegram:123`. */
 export function parseExplicitElevatedAllowEntry(
   entry: string,
@@ -62,10 +52,6 @@ export function parseExplicitElevatedAllowEntry(
   };
 }
 
-function slugAllowToken(value?: string): string {
-  return normalizeAtHashSlug(value);
-}
-
 function addTokenVariants(tokens: Set<string>, value: string): void {
   if (!value) {
     return;
@@ -77,16 +63,20 @@ function addTokenVariants(tokens: Set<string>, value: string): void {
   }
 }
 
-/** Adds formatted identity token variants into a matcher set. */
-export function addFormattedTokens(params: {
+/** Builds the channel-formatted identity variants used on both sides of matching. */
+export function buildFormattedTokens(params: {
   formatAllowFrom: AllowFromFormatter;
-  values: string[];
-  tokens: Set<string>;
-}): void {
-  const formatted = params.formatAllowFrom(params.values);
-  for (const entry of formatted) {
-    addTokenVariants(params.tokens, entry);
+  value: string;
+  includeStripped?: boolean;
+}): Set<string> {
+  const tokens = new Set<string>();
+  const values = params.includeStripped
+    ? [params.value, params.value.trim().replace(SENDER_PREFIX_RE, "")].filter(Boolean)
+    : [params.value];
+  for (const entry of params.formatAllowFrom(values)) {
+    addTokenVariants(tokens, entry);
   }
+  return tokens;
 }
 
 /** Checks a value against formatted identity tokens. */
@@ -96,16 +86,7 @@ export function matchesFormattedTokens(params: {
   includeStripped?: boolean;
   tokens: Set<string>;
 }): boolean {
-  const probeTokens = new Set<string>();
-  const values = params.includeStripped
-    ? [params.value, stripSenderPrefix(params.value)].filter(Boolean)
-    : [params.value];
-  addFormattedTokens({
-    formatAllowFrom: params.formatAllowFrom,
-    values,
-    tokens: probeTokens,
-  });
-  for (const token of probeTokens) {
+  for (const token of buildFormattedTokens(params)) {
     if (params.tokens.has(token)) {
       return true;
     }
@@ -113,19 +94,16 @@ export function matchesFormattedTokens(params: {
   return false;
 }
 
+function buildMutableTokenVariants(value: string): Set<string> {
+  const tokens = new Set<string>();
+  addTokenVariants(tokens, value);
+  addTokenVariants(tokens, normalizeAtHashSlug(value));
+  return tokens;
+}
+
 /** Builds normalized variants for mutable labels such as names and tags. */
 export function buildMutableTokens(value?: string): Set<string> {
-  const tokens = new Set<string>();
-  const trimmed = normalizeOptionalString(value);
-  if (!trimmed) {
-    return tokens;
-  }
-  addTokenVariants(tokens, trimmed);
-  const slugged = slugAllowToken(trimmed);
-  if (slugged) {
-    addTokenVariants(tokens, slugged);
-  }
-  return tokens;
+  return buildMutableTokenVariants(normalizeOptionalString(value) ?? "");
 }
 
 /** Checks mutable label text against normalized token variants. */
@@ -133,13 +111,7 @@ export function matchesMutableTokens(value: string, tokens: Set<string>): boolea
   if (!value || tokens.size === 0) {
     return false;
   }
-  const probes = new Set<string>();
-  addTokenVariants(probes, value);
-  const slugged = slugAllowToken(value);
-  if (slugged) {
-    addTokenVariants(probes, slugged);
-  }
-  for (const probe of probes) {
+  for (const probe of buildMutableTokenVariants(value)) {
     if (tokens.has(probe)) {
       return true;
     }

@@ -1,38 +1,63 @@
 import { existsSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { PreservedSessionWorktree } from "../../packages/gateway-protocol/src/index.js";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
+import {
+  SessionWorktreeLifecycleError,
+  WorktreeRemovalContentionError,
+} from "../agents/worktrees/errors.js";
+import { assertManagedWorktreeRemovalComplete } from "../agents/worktrees/git-lock.js";
 import { runGit } from "../agents/worktrees/git.js";
-import { getRegistryWorktree } from "../agents/worktrees/registry.js";
+import {
+  captureWorktreeRegistryReadGuard,
+  readRegistryWorktree,
+} from "../agents/worktrees/registry-read.js";
+import { assertWorktreeRemovalAvailable } from "../agents/worktrees/registry.js";
+import { captureWorktreeRunEndContext } from "../agents/worktrees/run-end-lifecycle.js";
 import {
   classifyWorktreeRemovalError,
-  managedWorktrees,
   ManagedWorktreeService,
 } from "../agents/worktrees/service.js";
-import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
-import { loadSessionEntry, type SessionAccessScope } from "../config/sessions/session-accessor.js";
-import { collectActiveSessionWorkAdmissionKeys } from "../config/sessions/store-maintenance-preserve.js";
+import type { ManagedWorktreeRecord, WorktreeWorkerAuthority } from "../agents/worktrees/types.js";
+import type { SessionAccessScope } from "../config/sessions/session-accessor.js";
+import {
+  captureSessionEntryMetadataRead,
+  captureSessionEntrySourceAssertion,
+} from "../config/sessions/session-entry-source-authority.js";
+import {
+  composeSessionSourceAssertion,
+  prepareSessionSourceAuthority,
+  type SessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
+import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { createWorkerSessionPlacementStore } from "../gateway/worker-environments/placement-store.js";
-import { prepareSessionWorkerPlacementMutationCheck } from "../gateway/worker-environments/session-placement-lifecycle.js";
 import { getChildLogger } from "../logging/logger.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { runExclusiveSessionLifecycleMutation } from "./session-lifecycle-admission.js";
-
-export class SessionWorktreeLifecycleError extends Error {
-  constructor(
-    message: string,
-    readonly reason: PreservedSessionWorktree["reason"] | "restore-failed" | "session-changed",
-  ) {
-    super(message);
-  }
-}
-
-function serviceFor(env?: NodeJS.ProcessEnv) {
-  return env ? new ManagedWorktreeService({ env }) : managedWorktrees;
-}
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 
 function belongsToSession(record: ManagedWorktreeRecord, sessionKey: string) {
   return record.ownerKind === "session" && record.ownerId === sessionKey;
+}
+
+/** Settle the detached checkout before the session fence admits same-key successors. */
+export async function finalizeDetachedSessionWorktree(params: {
+  id: string;
+  env: NodeJS.ProcessEnv;
+  context: OpenClawStateWorkerContext;
+}): Promise<void> {
+  params.context.admission.assertCurrent();
+  const worktrees = new ManagedWorktreeService({ env: params.env });
+  if (await worktrees.removeIfLossless(params.id)) {
+    return;
+  }
+  const retained = await readRegistryWorktree(params.context, params.id);
+  if (retained && retained.removedAt === undefined) {
+    const safePath = truncateUtf16Safe(sanitizeForLog(retained.path), 256);
+    throw new Error(
+      `worktree retained: branch=${retained.branch} path=${safePath} outcome=${retained.runEndCleanup?.outcome}`,
+    );
+  }
 }
 
 /** The session lifecycle fence remains held until this exact bound checkout finishes cleanup. */
@@ -41,29 +66,26 @@ export async function removeSessionWorktree(params: {
   sessionKey: string;
   reason: string;
   commitGuard?: () => void;
+  workerAuthority?: WorktreeWorkerAuthority;
   env?: NodeJS.ProcessEnv;
 }): Promise<PreservedSessionWorktree | undefined> {
   if (!params.id) {
     return undefined;
   }
   const env = params.env ?? process.env;
-  const record = getRegistryWorktree(env, params.id);
+  const context = captureWorktreeRunEndContext(env);
+  const service = new ManagedWorktreeService({ env: { ...env, ...context.environment } });
+  const accept = captureWorktreeRegistryReadGuard(context, "session-owner");
+  const record = await readRegistryWorktree(context, params.id);
+  const assertWorktreeCurrent = accept(record);
+  params.commitGuard?.();
   if (!record || record.removedAt !== undefined) {
     return undefined;
   }
-  const preserved = (
-    current: ManagedWorktreeRecord,
-    reason: PreservedSessionWorktree["reason"],
-  ) => ({
-    id: current.id,
-    branch: current.branch,
-    path: current.path,
-    reason,
-  });
   const assertCurrent = () => {
     params.commitGuard?.();
-    const current = getRegistryWorktree(env, record.id);
-    if (current && !belongsToSession(current, params.sessionKey)) {
+    assertWorktreeCurrent();
+    if (!belongsToSession(record, params.sessionKey)) {
       throw new SessionWorktreeLifecycleError(
         "Session worktree ownership changed; retry cleanup.",
         "owner-mismatch",
@@ -72,15 +94,26 @@ export async function removeSessionWorktree(params: {
   };
   try {
     assertCurrent();
-    await serviceFor(params.env).remove({
+    await service.remove({
       id: record.id,
       reason: params.reason,
       commitGuard: assertCurrent,
+      workerAuthority: {
+        ...params.workerAuthority,
+        assertCurrent: params.workerAuthority
+          ? params.workerAuthority.assertCurrent
+          : params.commitGuard,
+        predicates: [
+          ...(params.workerAuthority?.predicates ?? []),
+          { kind: "session-owner", id: record.id, sessionKey: params.sessionKey },
+        ],
+      },
     });
   } catch (error) {
     // Authorization loss is a failed lifecycle action, not successful best-effort cleanup.
     params.commitGuard?.();
-    const current = getRegistryWorktree(env, record.id);
+    const current = await readRegistryWorktree(context, record.id);
+    params.commitGuard?.();
     if (current && current.removedAt === undefined) {
       const reason =
         error instanceof SessionWorktreeLifecycleError && error.reason === "owner-mismatch"
@@ -91,28 +124,38 @@ export async function removeSessionWorktree(params: {
         sessionKey: params.sessionKey,
         reason,
       });
-      return preserved(current, reason);
+      return { id: current.id, branch: current.branch, path: current.path, reason };
     }
   }
   return undefined;
 }
 
-/** Snapshot removal and restore never change conversation or session metadata themselves. */
-export async function synchronizeSessionWorktreeArchive(params: {
-  archived: boolean;
+/** Restore preparation preserves conversation metadata until its caller commits unarchive. */
+export async function restoreSessionWorktree(params: {
   entry: SessionEntry;
   scope: SessionAccessScope;
-  commitGuard?: () => void;
+  commitGuard?: SessionSourceAssertion;
   assertRestoreAllowed?: () => void;
-}): Promise<() => void> {
-  const { entry, scope } = params;
+}): Promise<SessionSourceAssertion> {
+  const { entry, scope: requestedScope } = params;
   const id = entry.worktree?.id;
   if (!id) {
-    return () => params.commitGuard?.();
+    return composeSessionSourceAssertion([params.commitGuard]);
   }
-  const assertCurrent = () => {
-    params.commitGuard?.();
-    const current = loadSessionEntry(scope);
+  const context = captureWorktreeRunEndContext(requestedScope.env ?? process.env);
+  const scope = {
+    ...requestedScope,
+    env: { ...(requestedScope.env ?? process.env), ...context.environment },
+  };
+  const metadata = captureSessionEntryMetadataRead(scope);
+  const accept = captureWorktreeRegistryReadGuard(context, "session-owner");
+  const record = await readRegistryWorktree(context, id);
+  const assertWorktreeCurrent = accept(record);
+  const assertSessionMatches = (
+    current:
+      | Pick<SessionEntry, "sessionId" | "lifecycleRevision" | "archivedAt" | "worktree">
+      | undefined,
+  ) => {
     if (
       current?.sessionId !== entry.sessionId ||
       current?.lifecycleRevision !== entry.lifecycleRevision ||
@@ -124,31 +167,76 @@ export async function synchronizeSessionWorktreeArchive(params: {
         "session-changed",
       );
     }
-    const record = getRegistryWorktree(scope.env ?? process.env, id);
-    if (record && !belongsToSession(record, scope.sessionKey)) {
-      throw new SessionWorktreeLifecycleError(
-        "Session worktree has a different owner; restore the correct binding before retrying.",
-        "owner-mismatch",
-      );
+  };
+  const assertSessionCurrent = () => {
+    if (metadata) {
+      assertSessionMatches(metadata.readCurrent());
     }
   };
-  assertCurrent();
-  if (params.archived) {
-    const preserved = await removeSessionWorktree({
-      id,
+  const sourceParams = {
+    scope: {
+      agentId: scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey),
       sessionKey: scope.sessionKey,
-      reason: "session-archive",
+      storePath: resolveSessionStorePathForScope(scope),
       env: scope.env,
-      commitGuard: assertCurrent,
-    });
-    if (preserved) {
+    },
+    expected: entry,
+    assertCurrent: assertSessionCurrent,
+    refuse: () => {
       throw new SessionWorktreeLifecycleError(
-        `Session worktree was preserved (${preserved.reason}); resolve the cleanup condition and retry the archive.`,
-        preserved.reason,
+        "Session changed while preparing its worktree; retry the request.",
+        "session-changed",
       );
-    }
-  } else {
-    const record = getRegistryWorktree(scope.env ?? process.env, id);
+    },
+  };
+  const source = captureSessionEntrySourceAssertion({
+    ...sourceParams,
+    // The destination's patch snapshot owns archivedAt; successful unarchive changes it.
+    fields: ["sessionId", "lifecycleRevision", "worktree"],
+  });
+  const assertCurrent = composeSessionSourceAssertion(
+    [params.commitGuard, source],
+    (assertSources) => {
+      assertSources();
+      assertWorktreeCurrent();
+      try {
+        assertWorktreeRemovalAvailable(scope.env ?? process.env, id);
+      } catch (error) {
+        if (error instanceof WorktreeRemovalContentionError) {
+          throw new SessionWorktreeLifecycleError(error.message, "busy");
+        }
+        throw error;
+      }
+      if (record && !belongsToSession(record, scope.sessionKey)) {
+        throw new SessionWorktreeLifecycleError(
+          "Session worktree has a different owner; restore the correct binding before retrying.",
+          "owner-mismatch",
+        );
+      }
+    },
+  );
+  const retained = metadata
+    ? undefined
+    : await prepareSessionSourceAuthority(
+        captureSessionEntrySourceAssertion({
+          ...sourceParams,
+          fields: ["sessionId", "lifecycleRevision", "archivedAt", "worktree"],
+        }),
+      );
+  try {
+    const assertRestoreCurrent = composeSessionSourceAssertion([
+      assertCurrent,
+      retained?.assertCurrent,
+    ]);
+    const workerAuthority: WorktreeWorkerAuthority = {
+      assertCurrent: composeSessionSourceAssertion([
+        params.commitGuard,
+        source,
+        retained?.assertCurrent,
+      ]),
+      predicates: [{ kind: "session-owner", id, sessionKey: scope.sessionKey }],
+    };
+    assertRestoreCurrent();
     if (!record || (record.removedAt !== undefined && !record.snapshotRef)) {
       throw new SessionWorktreeLifecycleError(
         "Session worktree snapshot is missing or expired. The conversation is preserved; start a new worktree task from the source repository to continue.",
@@ -158,9 +246,13 @@ export async function synchronizeSessionWorktreeArchive(params: {
     if (record.removedAt !== undefined) {
       params.assertRestoreAllowed?.();
       try {
-        await serviceFor(scope.env).restore({ id, commitGuard: assertCurrent });
+        await new ManagedWorktreeService({ env: scope.env }).restore({
+          id,
+          commitGuard: assertRestoreCurrent,
+          workerAuthority,
+        });
       } catch (error) {
-        assertCurrent();
+        assertRestoreCurrent();
         if (error instanceof SessionWorktreeLifecycleError) {
           throw error;
         }
@@ -176,7 +268,7 @@ export async function synchronizeSessionWorktreeArchive(params: {
           "--end-of-options",
           `${record.snapshotRef}^{commit}`,
         ]);
-        assertCurrent();
+        assertRestoreCurrent();
         if (snapshot.code !== 0) {
           throw new SessionWorktreeLifecycleError(
             "Session worktree snapshot is missing or unavailable. Restore the original repository snapshot, or start a new worktree task. The conversation is preserved.",
@@ -188,59 +280,20 @@ export async function synchronizeSessionWorktreeArchive(params: {
           "restore-failed",
         );
       }
+    } else {
+      try {
+        await assertManagedWorktreeRemovalComplete(record, { beforeRun: assertRestoreCurrent });
+      } catch (error) {
+        assertRestoreCurrent();
+        if (error instanceof WorktreeRemovalContentionError) {
+          throw new SessionWorktreeLifecycleError(error.message, "restore-failed");
+        }
+        throw error;
+      }
     }
-  }
-  assertCurrent();
-  return assertCurrent;
-}
-
-/** Maintenance commits archive metadata first; its released writer lane must never retain Git work. */
-export async function cleanUpAutomaticallyArchivedWorktrees(
-  scope: Pick<SessionAccessScope, "agentId" | "env">,
-  targets: readonly { entry: SessionEntry; sessionKey: string; storePath: string }[],
-): Promise<void> {
-  for (const target of targets) {
-    try {
-      await runExclusiveSessionLifecycleMutation({
-        scope: target.storePath,
-        identities: [target.sessionKey, target.entry.sessionId],
-        run: async () => {
-          const placements = createWorkerSessionPlacementStore({
-            database: openOpenClawStateDatabase({ env: scope.env }),
-          });
-          const assertPlacementCurrent = prepareSessionWorkerPlacementMutationCheck({
-            context: { workerSessionPlacementService: placements },
-            sessionId: target.entry.sessionId,
-          });
-          await synchronizeSessionWorktreeArchive({
-            archived: true,
-            entry: target.entry,
-            scope: { ...scope, sessionKey: target.sessionKey, storePath: target.storePath },
-            commitGuard: () => {
-              assertPlacementCurrent();
-              if (
-                collectActiveSessionWorkAdmissionKeys({
-                  storePath: target.storePath,
-                  store: { [target.sessionKey]: target.entry },
-                })?.has(target.sessionKey)
-              ) {
-                throw new SessionWorktreeLifecycleError(
-                  "Session worktree is still active; cleanup is deferred.",
-                  "busy",
-                );
-              }
-            },
-          });
-        },
-      });
-    } catch (error) {
-      getChildLogger({ subsystem: "session-worktree" }).warn(
-        "Automatic archive worktree cleanup deferred",
-        {
-          worktreeId: target.entry.worktree?.id,
-          reason: error instanceof SessionWorktreeLifecycleError ? error.reason : "cleanup-failed",
-        },
-      );
-    }
+    assertRestoreCurrent();
+    return assertCurrent;
+  } finally {
+    await retained?.release?.();
   }
 }

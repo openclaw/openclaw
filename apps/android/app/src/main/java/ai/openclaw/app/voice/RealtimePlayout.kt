@@ -27,7 +27,7 @@ internal class RealtimePlayout(
   private val sampleRate: Int,
 ) {
   class Session(
-    val onState: (Boolean, Float?, Any?) -> Unit,
+    val onState: (Boolean, Any?) -> Unit,
     val onMark: (String) -> Unit,
     val onFailure: (String) -> Unit,
   ) {
@@ -89,7 +89,6 @@ internal class RealtimePlayout(
   private var lastHeadPosition = 0L
   private var stalledMs = 0L
   private val marks = mutableListOf<Mark>()
-  private var level = 0f
 
   @Volatile var isPlaying = false
     private set
@@ -154,9 +153,9 @@ internal class RealtimePlayout(
                   if (owner === command.session) {
                     statusOwner = command.statusOwner
                     poll()
-                    if (isPlaying) command.session.onState(true, level, command.statusOwner)
+                    if (isPlaying) command.session.onState(true, command.statusOwner)
                   } else {
-                    command.session.onState(false, null, command.statusOwner)
+                    command.session.onState(false, command.statusOwner)
                   }
                 }
               }
@@ -280,7 +279,7 @@ internal class RealtimePlayout(
     // A timestamp from before an empty buffer cannot predict newly submitted audio after an idle gap.
     if (output.playbackHeadPosition.toLong().and(0xffff_ffffL) >= writtenFrames) timestampOriginNs = System.nanoTime()
     isPlaying = true
-    command.session.onState(true, level, statusOwner)
+    command.session.onState(true, statusOwner)
     if (output.playState != AudioTrack.PLAYSTATE_PLAYING) output.play()
     val bufferMs = output.bufferSizeInFrames.toLong() * 1000 / sampleRate
     withTimeout((bufferMs * 4).coerceAtLeast(400) + bytes.size.toLong() * 1000 / (sampleRate * 2)) {
@@ -300,8 +299,7 @@ internal class RealtimePlayout(
       }
     }
     if (!command.session.active || command.epoch != command.session.epoch) return
-    level = TalkAudioLevel.smoothed(level, TalkAudioLevel.pcm16Level(bytes, bytes.size))
-    command.session.onState(true, level, statusOwner)
+    command.session.onState(true, statusOwner)
   }
 
   private fun poll(periodic: Boolean = false) {
@@ -335,7 +333,7 @@ internal class RealtimePlayout(
     if (presented >= writtenFrames && !waitingForPresentation) {
       stalledMs = 0
       isPlaying = false
-      session.onState(false, null, statusOwner)
+      session.onState(false, statusOwner)
     } else if (stalledMs >= (output.bufferSizeInFrames.toLong() * 4_000 / sampleRate).coerceAtLeast(400)) {
       fail(session, "audio playback stalled")
     }
@@ -371,8 +369,7 @@ internal class RealtimePlayout(
       lastHeadPosition = 0
       stalledMs = 0
       isPlaying = false
-      level = 0f
-      session?.onState(false, null, statusOwner)
+      session?.onState(false, statusOwner)
       statusOwner = null
       val discarded = marks.toList()
       marks.clear()

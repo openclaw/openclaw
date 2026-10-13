@@ -94,7 +94,7 @@ export class DiscordInteractionListener extends InteractionCreateListener {
     // Hand off immediately so slash/component handling can wait on session locks
     // or compaction without blocking later gateway events.
     void Promise.resolve()
-      .then(() => client.handleInteraction(data as Parameters<Client["handleInteraction"]>[0], {}))
+      .then(() => client.handleInteraction(data))
       .catch((err: unknown) => {
         const logger = this.logger ?? discordEventQueueLog;
         logger.error(danger(`discord interaction handler failed: ${String(err)}`));
@@ -211,12 +211,7 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
       if (!userId || (config.users !== undefined && !config.users.includes(userId))) {
         continue;
       }
-      const key = `${keyPrefix}${userId}`;
-      if (isDiscordOfflineStatus(presence.status)) {
-        this.recordPresenceBaseline(data.id, key, "offline");
-      } else if (isDiscordOnlineStatus(presence.status)) {
-        this.recordPresenceBaseline(data.id, key, "online");
-      }
+      this.recordPresenceBaseline(data.id, `${keyPrefix}${userId}`, presence.status);
     }
   }
 
@@ -237,12 +232,9 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
     const gatewayGeneration = this.gatewayGeneration;
     const guildGeneration = this.guildPresenceState.get(data.guild_id)?.generation ?? 0;
     const previousRun = this.pendingByGuildUser.get(presenceKey) ?? Promise.resolve();
-    const run = previousRun.then(
-      () =>
-        this.handleSerial(data, client, userId, presenceKey, gatewayGeneration, guildGeneration),
-      () =>
-        this.handleSerial(data, client, userId, presenceKey, gatewayGeneration, guildGeneration),
-    );
+    const handle = () =>
+      this.handleSerial(data, client, userId, presenceKey, gatewayGeneration, guildGeneration);
+    const run = previousRun.then(handle, handle);
     this.pendingByGuildUser.set(presenceKey, run);
     this.activeRuns.add(run);
     try {
@@ -309,10 +301,10 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
     }
     const policy = await this.params.readPolicy?.();
     const cfg = policy?.cfg ?? this.params.cfg;
-    if (
-      !this.isCurrentGeneration(data.guild_id, gatewayGeneration, guildGeneration) ||
-      policy?.isCurrent() === false
-    ) {
+    const isCurrent = () =>
+      this.isCurrentGeneration(data.guild_id, gatewayGeneration, guildGeneration) &&
+      policy?.isCurrent() !== false;
+    if (!isCurrent()) {
       return;
     }
     const config = resolveDiscordGuildEntry({
@@ -328,10 +320,7 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
     }
 
     const lastEmittedAtMs = await this.cooldownStore.lookup(presenceKey);
-    if (
-      !this.isCurrentGeneration(data.guild_id, gatewayGeneration, guildGeneration) ||
-      policy?.isCurrent() === false
-    ) {
+    if (!isCurrent()) {
       return;
     }
     const nowMs = this.params.nowMs?.() ?? Date.now();
@@ -353,25 +342,23 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
       lastEmittedAtMs,
     });
     if (!presenceEvent) {
-      if (isDiscordOfflineStatus(data.status)) {
-        this.recordPresenceBaseline(data.guild_id, presenceKey, "offline");
-      } else if (isDiscordOnlineStatus(data.status)) {
-        this.recordPresenceBaseline(data.guild_id, presenceKey, "online");
-      }
+      this.recordPresenceBaseline(data.guild_id, presenceKey, data.status);
       return;
     }
 
     const gateOptions = resolveDiscordPresenceGateOptions(config);
-    const reconnectGate = this.emissionGate.evaluateReconnectWindow(nowMs, gateOptions);
-    if (!reconnectGate.allowed) {
-      if (reconnectGate.shouldLog) {
-        const logger = this.params.logger ?? discordEventQueueLog;
-        logger.info("Discord presence events suppressed", {
-          reason: reconnectGate.reason,
+    const logSuppression = (gate: { shouldLog: boolean; reason: string }) => {
+      if (gate.shouldLog) {
+        (this.params.logger ?? discordEventQueueLog).info("Discord presence events suppressed", {
+          reason: gate.reason,
           accountId: this.params.accountId,
           guildId: data.guild_id,
         });
       }
+    };
+    const reconnectGate = this.emissionGate.evaluateReconnectWindow(nowMs, gateOptions);
+    if (!reconnectGate.allowed) {
+      logSuppression(reconnectGate);
       // Mark online so the member is not re-greeted at window end; a later observed
       // offline-to-online transition still emits normally.
       this.recordPresenceBaseline(data.guild_id, presenceKey, "online");
@@ -383,14 +370,7 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
     const burstNowMs = this.params.nowMs?.() ?? Date.now();
     const burstGate = this.emissionGate.reserveBurst(data.guild_id, burstNowMs, gateOptions);
     if (!burstGate.allowed) {
-      if (burstGate.shouldLog) {
-        const logger = this.params.logger ?? discordEventQueueLog;
-        logger.info("Discord presence events suppressed", {
-          reason: burstGate.reason,
-          accountId: this.params.accountId,
-          guildId: data.guild_id,
-        });
-      }
+      logSuppression(burstGate);
       if (burstGate.reason === "burst-pending") {
         // Pending permission checks cap REST concurrency, but they are not emitted greetings.
         // Keep this member retryable after a lookup settles instead of advancing its baseline.
@@ -423,10 +403,7 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
         },
       );
       // Permission lookup cannot authorize an event under a replaced account policy.
-      if (
-        !this.isCurrentGeneration(data.guild_id, gatewayGeneration, guildGeneration) ||
-        policy?.isCurrent() === false
-      ) {
+      if (!isCurrent()) {
         return;
       }
       if (!canViewTargetChannel) {
@@ -447,10 +424,7 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
         cooldownReserved = await this.cooldownStore.registerIfAbsent(presenceKey, nowMs, {
           ttlMs: DISCORD_PRESENCE_GREETING_COOLDOWN_MS,
         });
-        if (
-          !this.isCurrentGeneration(data.guild_id, gatewayGeneration, guildGeneration) ||
-          policy?.isCurrent() === false
-        ) {
+        if (!isCurrent()) {
           return;
         }
         if (!cooldownReserved) {
@@ -517,11 +491,12 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
     );
   }
 
-  private recordPresenceBaseline(guildId: string, key: string, status: "offline" | "online"): void {
-    const evictedGuildId =
-      status === "offline"
-        ? this.presenceBaseline.observeOffline(guildId, key)
-        : this.presenceBaseline.observeOnline(guildId, key);
+  private recordPresenceBaseline(guildId: string, key: string, status: string | undefined): void {
+    const evictedGuildId = isDiscordOfflineStatus(status)
+      ? this.presenceBaseline.observeOffline(guildId, key)
+      : isDiscordOnlineStatus(status)
+        ? this.presenceBaseline.observeOnline(guildId, key)
+        : undefined;
     if (!evictedGuildId) {
       return;
     }
@@ -553,15 +528,18 @@ export class DiscordPresenceGuildDeleteListener extends GuildDeleteListener {
   }
 }
 
-export class DiscordPresenceReadyListener extends ReadyListener {
-  constructor(private readonly presenceListener: DiscordPresenceListener) {
+class DiscordSessionResetListener extends ReadyListener {
+  constructor(private readonly owner: { resetGatewaySession(): void }) {
     super();
   }
 
   handle(): void {
-    this.presenceListener.resetGatewaySession();
+    this.owner.resetGatewaySession();
   }
 }
+
+export class DiscordPresenceReadyListener extends DiscordSessionResetListener {}
+export class DiscordThreadReadyListener extends DiscordSessionResetListener {}
 
 type ThreadUpdateEvent = Parameters<ThreadUpdateListener["handle"]>[0];
 const DISCORD_THREAD_REJOIN_CLAIM_MAX_ENTRIES = 10_000;
@@ -630,16 +608,6 @@ export class DiscordThreadUpdateListener extends ThreadUpdateListener {
   }
 }
 
-export class DiscordThreadReadyListener extends ReadyListener {
-  constructor(private readonly threadUpdateListener: DiscordThreadUpdateListener) {
-    super();
-  }
-
-  handle(): void {
-    this.threadUpdateListener.resetGatewaySession();
-  }
-}
-
 type ThreadDeleteEvent = Parameters<ThreadDeleteListener["handle"]>[0];
 
 export class DiscordThreadDeleteListener extends ThreadDeleteListener {
@@ -658,7 +626,7 @@ export class DiscordThreadDeleteListener extends ThreadDeleteListener {
       event: this.type,
       run: async () => {
         const threadId = data.id;
-        getThreadBindingManager(this.accountId)?.unbindThread({
+        await getThreadBindingManager(this.accountId)?.unbindThread({
           threadId,
           reason: "thread-delete",
           sendFarewell: false,

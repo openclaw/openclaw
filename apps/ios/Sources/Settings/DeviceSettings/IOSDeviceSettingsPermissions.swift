@@ -25,14 +25,13 @@ final class IOSDeviceSettingsPermissions {
             .init(id: .location, status: locationServicesEnabled.map {
                 self.location(locationAuthorization, servicesEnabled: $0)
             } ?? .unavailable),
-            .init(id: .contacts, status: self.permissionGrant(DevicePermissionStatusMap.contacts(
-                CNContactStore.authorizationStatus(for: .contacts)))),
-            .init(id: .calendars, status: self.permissionGrant(DevicePermissionStatusMap.eventKitRead(
-                EKEventStore.authorizationStatus(for: .event)))),
-            .init(id: .reminders, status: self.permissionGrant(DevicePermissionStatusMap.eventKitRead(
-                EKEventStore.authorizationStatus(for: .reminder)))),
-            .init(id: .photos, status: self.permissionGrant(DevicePermissionStatusMap.photos(
-                photosAuthorization))),
+            .init(id: .contacts, status: DevicePermissionStatusMap.contacts(
+                CNContactStore.authorizationStatus(for: .contacts))),
+            .init(id: .calendars, status: DevicePermissionStatusMap.eventKitRead(
+                EKEventStore.authorizationStatus(for: .event))),
+            .init(id: .reminders, status: DevicePermissionStatusMap.eventKitRead(
+                EKEventStore.authorizationStatus(for: .reminder))),
+            .init(id: .photos, status: DevicePermissionStatusMap.photos(photosAuthorization)),
         ]
     }
 
@@ -43,13 +42,10 @@ final class IOSDeviceSettingsPermissions {
         try Task.checkCancellation()
         guard isCurrent() else { throw CancellationError() }
         switch permission {
-        case .camera:
+        case .camera, .microphone:
+            let mediaType: AVMediaType = permission == .camera ? .video : .audio
             _ = await PermissionRequestBridge.awaitRequest(isCurrent: isCurrent) { completion in
-                AVCaptureDevice.requestAccess(for: .video, completionHandler: completion)
-            }
-        case .microphone:
-            _ = await PermissionRequestBridge.awaitRequest(isCurrent: isCurrent) { completion in
-                AVCaptureDevice.requestAccess(for: .audio, completionHandler: completion)
+                AVCaptureDevice.requestAccess(for: mediaType, completionHandler: completion)
             }
         case .speechRecognition:
             _ = await PermissionRequestBridge.awaitRequest(isCurrent: isCurrent) { completion in
@@ -112,15 +108,6 @@ final class IOSDeviceSettingsPermissions {
         case .notDetermined: return .notDetermined
         case .denied, .restricted: return .denied
         @unknown default: return .unavailable
-        }
-    }
-
-    static func permissionGrant(_ grant: DevicePermissionGrant) -> DeviceSettingsPermissionStatus {
-        switch grant {
-        case .granted: .granted
-        case .limited: .limited
-        case .notRequested: .notDetermined
-        case .denied: .denied
         }
     }
 }

@@ -16,8 +16,7 @@ import {
 import { LogService } from "./logger.js";
 import { isRepairableSecretStorageAccessError } from "./recovery-key-store.js";
 import type { MatrixCryptoBootstrapApi, MatrixDeviceVerificationStatusLike } from "./types.js";
-
-const normalizeNullableVerificationString = normalizeNullableString;
+import { trustMatrixOwnIdentity } from "./verification-status.js";
 
 export abstract class MatrixClientVerification extends MatrixClientCore {
   async refreshOwnDeviceKeys(): Promise<void> {
@@ -26,28 +25,15 @@ export abstract class MatrixClientVerification extends MatrixClientCore {
 
   async getRoomKeyBackupStatus(): Promise<MatrixRoomKeyBackupStatus> {
     if (!this.encryptionEnabled) {
-      return {
-        serverVersion: null,
-        activeVersion: null,
-        trusted: null,
-        matchesDecryptionKey: null,
-        decryptionKeyCached: null,
-        keyLoadAttempted: false,
-        keyLoadError: null,
-      };
+      return unresolvedMatrixRoomKeyBackupStatus();
     }
 
     const crypto = this.client.getCrypto() as MatrixCryptoBootstrapApi | undefined;
     const serverVersionFallback = await this.resolveRoomKeyBackupVersion();
     if (!crypto) {
       return {
+        ...unresolvedMatrixRoomKeyBackupStatus(),
         serverVersion: serverVersionFallback,
-        activeVersion: null,
-        trusted: null,
-        matchesDecryptionKey: null,
-        decryptionKeyCached: null,
-        keyLoadAttempted: false,
-        keyLoadError: null,
       };
     }
 
@@ -61,23 +47,15 @@ export abstract class MatrixClientVerification extends MatrixClientCore {
     let keyLoadError: string | null = null;
     if (serverVersion && (shouldLoadBackupKey || shouldActivateBackup)) {
       if (shouldLoadBackupKey) {
-        if (
-          typeof crypto.loadSessionBackupPrivateKeyFromSecretStorage ===
-          "function" /* pragma: allowlist secret */
-        ) {
-          keyLoadAttempted = true;
-          try {
-            await crypto.loadSessionBackupPrivateKeyFromSecretStorage(); // pragma: allowlist secret
-          } catch (err) {
-            keyLoadError = formatErrorMessage(err);
-          }
-        } else {
-          keyLoadError =
-            "Matrix crypto backend does not support loading backup keys from secret storage";
+        keyLoadAttempted = true;
+        try {
+          await crypto.loadSessionBackupPrivateKeyFromSecretStorage(); // pragma: allowlist secret
+        } catch (err) {
+          keyLoadError = formatErrorMessage(err);
         }
       }
       if (!keyLoadError) {
-        await this.enableTrustedRoomKeyBackupIfPossible(crypto);
+        await crypto.checkKeyBackupAndEnable();
       }
       ({ activeVersion, decryptionKeyCached } = await this.resolveRoomKeyBackupLocalState(crypto));
       ({ serverVersion, trusted, matchesDecryptionKey } = await this.resolveRoomKeyBackupTrustState(
@@ -105,24 +83,17 @@ export abstract class MatrixClientVerification extends MatrixClientCore {
     const normalizedDeviceId = deviceId?.trim() || null;
     if (!this.encryptionEnabled) {
       return {
+        ...unresolvedMatrixDeviceVerificationStatus({
+          userId: normalizedUserId,
+          deviceId: normalizedDeviceId,
+        }),
         encryptionEnabled: false,
-        userId: normalizedUserId,
-        deviceId: normalizedDeviceId,
-        verified: false,
-        localVerified: false,
-        crossSigningVerified: false,
-        signedByOwner: false,
       };
     }
 
     const crypto = this.client.getCrypto() as MatrixCryptoBootstrapApi | undefined;
     let deviceStatus: MatrixDeviceVerificationStatusLike | null = null;
-    if (
-      crypto &&
-      normalizedUserId &&
-      normalizedDeviceId &&
-      typeof crypto.getDeviceVerificationStatus === "function"
-    ) {
+    if (crypto && normalizedUserId && normalizedDeviceId) {
       deviceStatus = await crypto
         .getDeviceVerificationStatus(normalizedUserId, normalizedDeviceId)
         .catch(() => null);
@@ -176,16 +147,6 @@ export abstract class MatrixClientVerification extends MatrixClientCore {
     };
   }
 
-  async getOwnDeviceIdentityVerificationStatus(): Promise<MatrixDeviceVerificationStatus> {
-    const userId = this.client.getUserId() ?? this.selfUserId ?? null;
-    const deviceId = this.client.getDeviceId()?.trim() || null;
-    const deviceVerification = await this.getDeviceVerificationStatus(userId, deviceId);
-    return {
-      ...deviceVerification,
-      verified: deviceVerification.crossSigningVerified,
-    };
-  }
-
   async trustOwnIdentityAfterSelfVerification(): Promise<void> {
     if (!this.encryptionEnabled) {
       return;
@@ -194,45 +155,15 @@ export abstract class MatrixClientVerification extends MatrixClientCore {
     await this.ensureStartedForCryptoControlPlane();
     await this.ensureCryptoSupportInitialized();
     const crypto = this.client.getCrypto() as MatrixCryptoBootstrapApi | undefined;
-    const ownIdentity =
-      crypto && typeof crypto.getOwnIdentity === "function"
-        ? await crypto.getOwnIdentity().catch(() => undefined)
-        : undefined;
-    if (!ownIdentity) {
-      return;
+    if (crypto) {
+      await trustMatrixOwnIdentity(crypto);
     }
-
-    try {
-      if (typeof ownIdentity.isVerified === "function" && ownIdentity.isVerified()) {
-        return;
-      }
-      if (typeof ownIdentity.verify !== "function") {
-        return;
-      }
-      await ownIdentity.verify();
-    } finally {
-      ownIdentity.free?.();
-    }
-  }
-
-  protected async resolveActiveRoomKeyBackupVersion(
-    crypto: MatrixCryptoBootstrapApi,
-  ): Promise<string | null> {
-    if (typeof crypto.getActiveSessionBackupVersion !== "function") {
-      return null;
-    }
-    const version = await crypto.getActiveSessionBackupVersion().catch(() => null);
-    return normalizeNullableVerificationString(version);
   }
 
   protected async resolveCachedRoomKeyBackupDecryptionKey(
     crypto: MatrixCryptoBootstrapApi,
   ): Promise<boolean | null> {
-    const read = Reflect.get(crypto, "getSessionBackupPrivateKey"); // pragma: allowlist secret
-    if (typeof read !== "function") {
-      return null;
-    }
-    const key = await read.call(crypto).catch(() => null); // pragma: allowlist secret
+    const key = await crypto.getSessionBackupPrivateKey().catch(() => null); // pragma: allowlist secret
     return key ? key.length > 0 : false;
   }
 
@@ -240,7 +171,7 @@ export abstract class MatrixClientVerification extends MatrixClientCore {
     crypto: MatrixCryptoBootstrapApi,
   ): Promise<{ activeVersion: string | null; decryptionKeyCached: boolean | null }> {
     const [activeVersion, decryptionKeyCached] = await Promise.all([
-      this.resolveActiveRoomKeyBackupVersion(crypto),
+      crypto.getActiveSessionBackupVersion().then(normalizeNullableString, () => null),
       this.resolveCachedRoomKeyBackupDecryptionKey(crypto),
     ]);
     return { activeVersion, decryptionKeyCached };
@@ -253,13 +184,8 @@ export abstract class MatrixClientVerification extends MatrixClientCore {
     if (decryptionKeyCached !== false) {
       return false;
     }
-    const loadSessionBackupPrivateKeyFromSecretStorage =
-      crypto.loadSessionBackupPrivateKeyFromSecretStorage; // pragma: allowlist secret
-    if (typeof loadSessionBackupPrivateKeyFromSecretStorage !== "function") {
-      return false;
-    }
     try {
-      await loadSessionBackupPrivateKeyFromSecretStorage.call(crypto); // pragma: allowlist secret
+      await crypto.loadSessionBackupPrivateKeyFromSecretStorage(); // pragma: allowlist secret
       return false;
     } catch (err) {
       return isRepairableSecretStorageAccessError(err);
@@ -274,32 +200,20 @@ export abstract class MatrixClientVerification extends MatrixClientCore {
     trusted: boolean | null;
     matchesDecryptionKey: boolean | null;
   }> {
-    let serverVersion = fallbackVersion;
-    let trusted: boolean | null = null;
-    let matchesDecryptionKey: boolean | null = null;
-    if (typeof crypto.getKeyBackupInfo === "function") {
-      const info = await crypto.getKeyBackupInfo().catch(() => null);
-      serverVersion = normalizeNullableVerificationString(info?.version) ?? serverVersion;
-      if (info && typeof crypto.isKeyBackupTrusted === "function") {
-        const trustInfo = await crypto.isKeyBackupTrusted(info).catch(() => null);
-        trusted = typeof trustInfo?.trusted === "boolean" ? trustInfo.trusted : null;
-        matchesDecryptionKey =
-          typeof trustInfo?.matchesDecryptionKey === "boolean"
-            ? trustInfo.matchesDecryptionKey
-            : null;
-      }
-    }
-    return { serverVersion, trusted, matchesDecryptionKey };
+    const info = await crypto.getKeyBackupInfo().catch(() => null);
+    const serverVersion = normalizeNullableString(info?.version) ?? fallbackVersion;
+    const trustInfo = info ? await crypto.isKeyBackupTrusted(info).catch(() => null) : null;
+    return {
+      serverVersion,
+      trusted: trustInfo?.trusted ?? null,
+      matchesDecryptionKey: trustInfo?.matchesDecryptionKey ?? null,
+    };
   }
 
   protected async resolveDefaultSecretStorageKeyId(
     crypto: MatrixCryptoBootstrapApi | undefined,
   ): Promise<string | null | undefined> {
-    const getSecretStorageStatus = crypto?.getSecretStorageStatus; // pragma: allowlist secret
-    if (typeof getSecretStorageStatus !== "function") {
-      return undefined;
-    }
-    const status = await getSecretStorageStatus.call(crypto).catch(() => null); // pragma: allowlist secret
+    const status = await crypto?.getSecretStorageStatus().catch(() => null); // pragma: allowlist secret
     return status?.defaultKeyId;
   }
 
@@ -308,19 +222,10 @@ export abstract class MatrixClientVerification extends MatrixClientCore {
       const response = (await this.doRequest("GET", "/_matrix/client/v3/room_keys/version")) as {
         version?: string;
       };
-      return normalizeNullableVerificationString(response.version);
+      return normalizeNullableString(response.version);
     } catch {
       return null;
     }
-  }
-
-  protected async enableTrustedRoomKeyBackupIfPossible(
-    crypto: MatrixCryptoBootstrapApi,
-  ): Promise<void> {
-    if (typeof crypto.checkKeyBackupAndEnable !== "function") {
-      return;
-    }
-    await crypto.checkKeyBackupAndEnable();
   }
 
   protected async ensureRoomKeyBackupEnabled(crypto: MatrixCryptoBootstrapApi): Promise<void> {

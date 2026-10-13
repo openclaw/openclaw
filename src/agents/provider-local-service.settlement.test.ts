@@ -7,7 +7,10 @@ import {
   ensureProviderLocalService,
   stopManagedProviderLocalServices,
 } from "./provider-local-service.js";
-import { hasManagedProviderLocalServices } from "./provider-runtime-lifecycle.js";
+import {
+  hasManagedProviderLocalServices,
+  stopActiveManagedProviderLocalServices,
+} from "./provider-runtime-lifecycle.js";
 
 const mocks = vi.hoisted(() => ({ spawn: vi.fn(), alive: vi.fn(), signal: vi.fn() }));
 vi.mock("node:child_process", async (original) => ({
@@ -76,7 +79,7 @@ it.each(["child close", "tree signal completion", "already-exited child close"])
       signaled.resolve();
     }
     let settled = false;
-    const stopped = stopManagedProviderLocalServices().finally(() => {
+    const stopped = stopActiveManagedProviderLocalServices().finally(() => {
       settled = true;
     });
     try {

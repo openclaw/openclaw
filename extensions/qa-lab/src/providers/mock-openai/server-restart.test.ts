@@ -1,8 +1,10 @@
 import { runInNewContext } from "node:vm";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { validateToolArguments } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import {
   createMockServerTestHarness,
+  guestCodeModeExecTool,
   expectOpenAiNonStreamingResponsesJson,
   outputItems,
   outputToolArgsFromItem,
@@ -20,14 +22,7 @@ describe("mock provider restart checkpoints", () => {
     {
       type: "function",
       name: "exec",
-      parameters: {
-        type: "object",
-        properties: {
-          code: { type: "string" },
-          restartSafe: { type: "boolean" },
-        },
-        required: ["code"],
-      },
+      parameters: guestCodeModeExecTool.parameters,
     },
     {
       type: "function",
@@ -46,7 +41,17 @@ describe("mock provider restart checkpoints", () => {
     execArgs: Record<string, unknown>,
     checkpoint: number,
   ) {
-    expect(execArgs).toEqual({ code: expect.any(String), restartSafe: true });
+    validateToolArguments(guestCodeModeExecTool, {
+      type: "toolCall",
+      id: "restart-checkpoint",
+      name: "exec",
+      arguments: execArgs,
+    });
+    expect(execArgs).toEqual({
+      title: expect.any(String),
+      code: expect.any(String),
+      restartSafe: true,
+    });
 
     const started = createDeferred<void>();
     const released = createDeferred<void>();
@@ -126,89 +131,74 @@ describe("mock provider restart checkpoints", () => {
     expect(outputToolArgsFromItem(outputToolCall(freshPayload, "exec"))).toEqual(execArgs);
   });
 
-  it.each([
-    {
-      label: "direct body tools",
-      surface: "direct",
-    },
-    {
-      label: "developer additional tools",
-      surface: "developer",
-    },
-  ])(
-    "derives three restart checkpoints from request history without server counters via $label",
-    async ({ surface }) => {
-      const server = await startMockServer();
-      const prompt =
-        "Code Mode restart wait QA check. Original prompt marker: RESTART-CODE-MODE-PROMPT.";
-      const withDeclarationSurface = (
-        tools: Array<Record<string, unknown>>,
-        input: Array<Record<string, unknown>>,
-      ) =>
-        surface === "direct"
-          ? { tools, input }
-          : { input: [{ type: "additional_tools", role: "developer", tools }, ...input] };
-      const input: Array<Record<string, unknown>> = [makeUserInput(prompt)];
+  it("derives three restart checkpoints from request history with developer additional tools", async () => {
+    const server = await startMockServer();
+    const prompt =
+      "Code Mode restart wait QA check. Original prompt marker: RESTART-CODE-MODE-PROMPT.";
+    const withDeclarationSurface = (
+      tools: Array<Record<string, unknown>>,
+      input: Array<Record<string, unknown>>,
+    ) => ({ input: [{ type: "additional_tools", role: "developer", tools }, ...input] });
+    const input: Array<Record<string, unknown>> = [makeUserInput(prompt)];
 
-      for (const checkpoint of [1, 2, 3]) {
-        const execPayload = await expectOpenAiNonStreamingResponsesJson(
-          server,
-          withDeclarationSurface(restartCheckpointTools, input),
-        );
-        const execCall = outputToolCall(execPayload, "exec");
-        const execArgs = outputToolArgsFromItem(execCall);
-        await expectRestartCheckpointExecution(execArgs, checkpoint);
-
-        const runId = `restart-checkpoint-${checkpoint}`;
-        input.push(
-          execCall,
-          makeToolOutputWithCallId(
-            outputToolCallId(execCall, `checkpoint-exec-${checkpoint}`),
-            JSON.stringify({ status: "waiting", runId }),
-          ),
-        );
-        const waitPayload = await expectOpenAiNonStreamingResponsesJson(
-          server,
-          withDeclarationSurface(restartCheckpointTools, input),
-        );
-        const waitCall = outputToolCall(waitPayload, "wait");
-        expect(outputToolArgsFromItem(waitCall)).toEqual({ runId });
-        input.push(waitCall, makeUserInput(restartRecoveryPrompt));
-      }
-
-      const finalPayload = await expectOpenAiNonStreamingResponsesJson(
+    for (const checkpoint of [1, 2, 3]) {
+      const execPayload = await expectOpenAiNonStreamingResponsesJson(
         server,
         withDeclarationSurface(restartCheckpointTools, input),
       );
-      expect(outputText(finalPayload)).toBe("unsafeVisible=false\nRESTART-CODE-MODE-WAIT-OK");
+      const execCall = outputToolCall(execPayload, "exec");
+      const execArgs = outputToolArgsFromItem(execCall);
+      await expectRestartCheckpointExecution(execArgs, checkpoint);
 
-      const unsafePayload = await expectOpenAiNonStreamingResponsesJson(
-        server,
-        withDeclarationSurface(
-          [
-            ...restartCheckpointTools,
-            {
-              type: "function",
-              name: "qa_restart_unsafe_probe",
-              parameters: { type: "object" },
-            },
-          ],
-          input,
+      const runId = `restart-checkpoint-${checkpoint}`;
+      input.push(
+        execCall,
+        makeToolOutputWithCallId(
+          outputToolCallId(execCall, `checkpoint-exec-${checkpoint}`),
+          JSON.stringify({ status: "waiting", runId }),
         ),
       );
-      expect(
-        outputToolArgsFromItem(outputToolCall(unsafePayload, "qa_restart_unsafe_probe")),
-      ).toEqual({});
-      expect(outputItems(unsafePayload).map((item) => item.type)).toEqual(["function_call"]);
-
-      const freshPayload = await expectOpenAiNonStreamingResponsesJson(
+      const waitPayload = await expectOpenAiNonStreamingResponsesJson(
         server,
-        withDeclarationSurface(restartCheckpointTools, [makeUserInput(prompt)]),
+        withDeclarationSurface(restartCheckpointTools, input),
       );
-      await expectRestartCheckpointExecution(
-        outputToolArgsFromItem(outputToolCall(freshPayload, "exec")),
-        1,
-      );
-    },
-  );
+      const waitCall = outputToolCall(waitPayload, "wait");
+      expect(outputToolArgsFromItem(waitCall)).toEqual({ runId });
+      input.push(waitCall, makeUserInput(restartRecoveryPrompt));
+    }
+
+    const finalPayload = await expectOpenAiNonStreamingResponsesJson(
+      server,
+      withDeclarationSurface(restartCheckpointTools, input),
+    );
+    expect(outputText(finalPayload)).toBe("unsafeVisible=false\nRESTART-CODE-MODE-WAIT-OK");
+
+    const unsafePayload = await expectOpenAiNonStreamingResponsesJson(
+      server,
+      withDeclarationSurface(
+        [
+          ...restartCheckpointTools,
+          {
+            type: "function",
+            name: "qa_restart_unsafe_probe",
+            parameters: { type: "object" },
+          },
+        ],
+        input,
+      ),
+    );
+    expect(
+      outputToolArgsFromItem(outputToolCall(unsafePayload, "qa_restart_unsafe_probe")),
+    ).toEqual({});
+    expect(outputItems(unsafePayload).map((item) => item.type)).toEqual(["function_call"]);
+
+    const freshPayload = await expectOpenAiNonStreamingResponsesJson(
+      server,
+      withDeclarationSurface(restartCheckpointTools, [makeUserInput(prompt)]),
+    );
+    await expectRestartCheckpointExecution(
+      outputToolArgsFromItem(outputToolCall(freshPayload, "exec")),
+      1,
+    );
+  });
 });

@@ -42,10 +42,6 @@ extension OpenClawChatViewModel {
         self.sourcePreviewState.refresh(transport: self.transport)
     }
 
-    func invalidateSourceContext() {
-        self.sourcePreviewState.invalidate()
-    }
-
     func sourcePreviews(for message: OpenClawChatMessage) -> [ChatSourcePreview] {
         guard let runID = message.transcriptRunID,
               !self.liveLocalRunIDs.contains(runID), !self.liveAdvertisedRunIDs.contains(runID)

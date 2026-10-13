@@ -1,4 +1,3 @@
-// Adapts node:sqlite sync database calls for Kysely-style query execution.
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { toUSVString } from "node:util";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
@@ -17,6 +16,12 @@ import {
   kyselyByDatabase,
   queryErrorHandlerByDatabase,
 } from "./kysely-sync-cache-state.js";
+import { isPostgresSqlConnection, type PostgresSqlConnection } from "./sql-connection.js";
+import {
+  OpenClawPostgresDialect,
+  sqliteStringSetEntriesFragments,
+  sqliteStringSetFragments,
+} from "./sql-query-compiler.js";
 import { captureSqliteReaderOwner, retainSqliteReader } from "./sqlite-reader-lifecycle.js";
 
 // Node 24.20 and 26.6 fixed all() column counts after statement reprepare (nodejs/node#64219).
@@ -26,9 +31,6 @@ const supportsRepreparedAll =
   ((nodeVersion?.major === 24 &&
     isNodeVersionAtLeast(nodeVersion, { major: 24, minor: 20, patch: 0 })) ||
     isNodeVersionAtLeast(nodeVersion, { major: 26, minor: 6, patch: 0 }));
-
-// Sync query helpers execute compiled Kysely SQL against node:sqlite without
-// going through Kysely's async driver path.
 
 export {
   clearNodeSqliteKyselyCacheForDatabase,
@@ -44,7 +46,30 @@ const compileOnlySqliteDialect = new SqliteDialect({
   },
 });
 
-export function getNodeSqliteKysely<Database>(db: DatabaseSync): Kysely<Database> {
+const postgresKyselyByDatabase = new WeakMap<PostgresSqlConnection, Kysely<unknown>>();
+const compileOnlyPostgresDialect = new OpenClawPostgresDialect({
+  pool: async () => {
+    throw new Error("getNodeSqliteKysely() returns a compile-only Kysely facade.");
+  },
+});
+
+export function getNodeSqliteKysely<Database>(
+  db: DatabaseSync | PostgresSqlConnection,
+): Kysely<Database>;
+// Keep the native signature last for existing callers deriving their handle type with Parameters.
+export function getNodeSqliteKysely<Database>(db: DatabaseSync): Kysely<Database>;
+export function getNodeSqliteKysely<Database>(
+  db: DatabaseSync | PostgresSqlConnection,
+): Kysely<Database> {
+  if (isPostgresSqlConnection(db)) {
+    let kysely = postgresKyselyByDatabase.get(db);
+    if (!kysely) {
+      kysely = new KyselyInstance({ dialect: compileOnlyPostgresDialect });
+      postgresKyselyByDatabase.set(db, kysely);
+    }
+    // SAFETY: this compile-only facade stores no rows; Database supplies the caller's schema types.
+    return kysely as Kysely<Database>;
+  }
   const existing = kyselyByDatabase.get(db) as Kysely<unknown> | undefined;
   if (existing) {
     return existing as Kysely<Database>;
@@ -57,14 +82,24 @@ export function getNodeSqliteKysely<Database>(db: DatabaseSync): Kysely<Database
 }
 
 /** A single bound set avoids SQLite parameter and JS variadic-call limits. */
-export function sqliteStringSet(values: readonly string[]): RawBuilder<string> {
+export function encodeSqliteStringSet(values: readonly (string | null)[]): string {
   // Keep node:sqlite's USV binding. SQLite 3.44 needs JSON5 \x00 to retain NUL;
   // consuming escaped backslashes first preserves literal "\\u0000" keys.
-  const encoded = JSON.stringify(values.map(toUSVString)).replace(/\\(?:\\|u0000)/g, (escape) =>
-    escape === "\\u0000" ? "\\x00" : escape,
-  );
+  return JSON.stringify(
+    values.map((value) => (value === null ? null : toUSVString(value))),
+  ).replace(/\\(?:\\|u0000)/g, (escape) => (escape === "\\u0000" ? "\\x00" : escape));
+}
+
+export function sqliteStringSet(values: readonly string[]): RawBuilder<string> {
   /* kysely-allow-raw: JSON table-valued selection keeps one read snapshot and outer query ordering. */
-  return kyselySql<string>`(SELECT value FROM json_each(${encoded}))`;
+  return kyselySql<string>(sqliteStringSetFragments, encodeSqliteStringSet(values));
+}
+
+/** Expands encoded string tuples without adding one SQLite parameter per field. */
+export function sqliteStringSetEntries(
+  encoded: string | RawBuilder<string>,
+): RawBuilder<{ key: number; value: string | null }> {
+  return kyselySql<{ key: number; value: string | null }>(sqliteStringSetEntriesFragments, encoded);
 }
 
 function reportNodeSqliteKyselyQueryError(db: DatabaseSync, error: unknown): void {
@@ -75,17 +110,40 @@ function reportNodeSqliteKyselyQueryError(db: DatabaseSync, error: unknown): voi
   }
 }
 
-function throwSqliteIteratorCleanupError(error: unknown): never {
-  throw toErrorObject(error, "SQLite iterator cleanup failed");
+function releaseSqliteIterator(
+  iterator: Iterator<unknown>,
+  reader: ReturnType<typeof retainSqliteReader>,
+  failed: boolean,
+  cleanupErrorMessage: string,
+): void {
+  let cleanupError: unknown;
+  try {
+    iterator.return?.();
+  } catch (error) {
+    cleanupError = error;
+  }
+  reader.release();
+  if (!failed && cleanupError !== undefined) {
+    throw toErrorObject(cleanupError, cleanupErrorMessage);
+  }
 }
 
 /** Execute a compiled Kysely query synchronously against node:sqlite. */
 function executeCompiledSqliteQuerySync<Row>(
-  db: DatabaseSync,
+  db: DatabaseSync | PostgresSqlConnection,
   compiledQuery: CompiledQuery<Row>,
   firstRowOnly = false,
   parameters = compiledQuery.parameters as SQLInputValue[],
 ): QueryResult<Row> {
+  if (isPostgresSqlConnection(db)) {
+    const result = db.query(compiledQuery.sql, parameters);
+    // SAFETY: the compiled Kysely query defines Row; the bridge preserves its selected column names.
+    const rows = (firstRowOnly ? result.rows.slice(0, 1) : result.rows) as Row[];
+    // Unlike SQLite rowids, PostgreSQL insert identities must be requested with RETURNING.
+    return result.columns.length > 0
+      ? { rows }
+      : { rows: [], numAffectedRows: BigInt(result.rowCount) };
+  }
   try {
     const sql = compiledQuery.sql;
     installStatementInvalidation(db);
@@ -108,7 +166,6 @@ function executeCompiledSqliteQuerySync<Row>(
         // an expired statement. Eagerly consuming iterate() reads it after step.
         const iterator = statement.iterate(...parameters);
         const reader = retainSqliteReader(db, "kysely eager query");
-        let cleanupError: unknown;
         let failed = false;
         let failure: unknown;
         const rows: Row[] = [];
@@ -121,17 +178,9 @@ function executeCompiledSqliteQuerySync<Row>(
           failed = true;
           failure = error;
         }
-        try {
-          iterator.return?.();
-        } catch (error) {
-          cleanupError = error;
-        }
-        reader.release();
+        releaseSqliteIterator(iterator, reader, failed, "SQLite query cleanup failed");
         if (failed) {
           throw toErrorObject(failure, "SQLite query failed");
-        }
-        if (cleanupError !== undefined) {
-          throw toErrorObject(cleanupError, "SQLite query cleanup failed");
         }
         return { rows };
       }
@@ -167,7 +216,7 @@ function executeCompiledSqliteQuerySync<Row>(
 
 /** Compile and execute a Kysely query synchronously. */
 export function executeSqliteQuerySync<Row>(
-  db: DatabaseSync,
+  db: DatabaseSync | PostgresSqlConnection,
   query: Compilable<Row>,
 ): QueryResult<Row> {
   return executeCompiledSqliteQuerySync<Row>(db, query.compile());
@@ -176,6 +225,22 @@ export function executeSqliteQuerySync<Row>(
 type SqliteQueryBindingBuilder<Params, Row> = (
   parameter: <Value extends SQLInputValue>(read: (params: Params) => Value) => RawBuilder<Value>,
 ) => Compilable<Row>;
+
+/** Cache compiled query functions or bundles by native connection. */
+export function createSqliteQueryCache<
+  Queries extends object,
+  Connection extends DatabaseSync | PostgresSqlConnection = DatabaseSync,
+>(create: (database: Connection) => Queries): (database: Connection) => Queries {
+  const queriesByDatabase = new WeakMap<Connection, Queries>();
+  return (database) => {
+    let queries = queriesByDatabase.get(database);
+    if (queries === undefined) {
+      queries = create(database);
+      queriesByDatabase.set(database, queries);
+    }
+    return queries;
+  };
+}
 
 /** Compile fixed SQL and fresh bindings without taking ownership of a native statement. */
 export function compileSqliteQueryBindings<Params, Row = unknown>(
@@ -201,7 +266,7 @@ export function compileSqliteQueryBindings<Params, Row = unknown>(
 
 /** Compile a fixed query once; bind fresh values through the normal sync executor on each call. */
 export function prepareSqliteQuerySync<Params, Row = unknown>(
-  db: DatabaseSync,
+  db: DatabaseSync | PostgresSqlConnection,
   build: SqliteQueryBindingBuilder<Params, Row>,
 ): (params: Params) => QueryResult<Row> {
   const { compiled, bind } = compileSqliteQueryBindings(build);
@@ -210,7 +275,7 @@ export function prepareSqliteQuerySync<Params, Row = unknown>(
 
 /** Compile a fixed first-row read once and bind fresh values on every execution. */
 export function prepareSqliteQueryTakeFirstSync<Params, Row = unknown>(
-  db: DatabaseSync,
+  db: DatabaseSync | PostgresSqlConnection,
   build: SqliteQueryBindingBuilder<Params, Row>,
 ): (params: Params) => Row | undefined {
   const { compiled, bind } = compileSqliteQueryBindings(build);
@@ -219,7 +284,7 @@ export function prepareSqliteQueryTakeFirstSync<Params, Row = unknown>(
 
 /** Compile once and capture fresh bindings before lazily opening each private iterator. */
 export function prepareSqliteQueryIterator<Params, Row = unknown>(
-  db: DatabaseSync,
+  db: DatabaseSync | PostgresSqlConnection,
   build: SqliteQueryBindingBuilder<Params, Row>,
 ): (params: Params) => IterableIterator<Row> {
   const { compiled, bind } = compileSqliteQueryBindings(build);
@@ -233,9 +298,15 @@ export function prepareSqliteQueryIterator<Params, Row = unknown>(
 
 /** Compile and lazily iterate a Kysely query synchronously against node:sqlite. */
 export function iterateSqliteQuerySync<Row>(
-  db: DatabaseSync,
+  db: DatabaseSync | PostgresSqlConnection,
   query: Compilable<Row>,
 ): IterableIterator<Row> {
+  if (isPostgresSqlConnection(db)) {
+    // The pilot buffers one result; server-side cursor ownership is outside its scope.
+    return (function* () {
+      yield* executeCompiledSqliteQuerySync(db, query.compile()).rows;
+    })();
+  }
   const owner = captureSqliteReaderOwner();
   return (function* () {
     const compiledQuery = query.compile();
@@ -249,7 +320,6 @@ export function iterateSqliteQuerySync<Row>(
       const parameters = compiledQuery.parameters as SQLInputValue[];
       const iterator = statement.iterate(...parameters);
       const reader = retainSqliteReader(db, "kysely iterator", owner);
-      let cleanupError: unknown;
       let failed = false;
       try {
         for (const row of iterator) {
@@ -260,15 +330,7 @@ export function iterateSqliteQuerySync<Row>(
         failed = true;
         throw toErrorObject(error, "SQLite iterator failed");
       } finally {
-        try {
-          iterator.return?.();
-        } catch (error) {
-          cleanupError = error;
-        }
-        reader.release();
-        if (!failed && cleanupError !== undefined) {
-          throwSqliteIteratorCleanupError(cleanupError);
-        }
+        releaseSqliteIterator(iterator, reader, failed, "SQLite iterator cleanup failed");
       }
     } catch (error) {
       reportNodeSqliteKyselyQueryError(db, error);
@@ -279,7 +341,7 @@ export function iterateSqliteQuerySync<Row>(
 
 /** Execute a Kysely query synchronously and return its first row. */
 export function executeSqliteQueryTakeFirstSync<Row>(
-  db: DatabaseSync,
+  db: DatabaseSync | PostgresSqlConnection,
   query: Compilable<Row>,
 ): Row | undefined {
   return executeCompiledSqliteQuerySync(db, query.compile(), true).rows[0];

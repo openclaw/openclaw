@@ -29,112 +29,71 @@ async function requestModels(port: number, secret: string): Promise<Response> {
 }
 
 export function registerAuthModesSuite(): void {
-  describe("password auth", () => {
-    let server: Awaited<ReturnType<typeof startTestGatewayServer>>;
-    let port: number;
-
-    beforeAll(async () => {
-      testState.gatewayAuth = { mode: "password", password: "secret" }; // pragma: allowlist secret
-      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
-      port = portClaim.port;
-      server = await startTestGatewayServer(portClaim, { openAiChatCompletionsEnabled: true });
-    });
-
-    beforeEach(() => {
-      testState.gatewayAuth = { mode: "password", password: "secret" }; // pragma: allowlist secret
-    });
-
-    afterAll(async () => {
-      await server.close();
-    });
-
-    test("accepts password auth when configured", async () => {
-      const ws = await openWs(port);
-      const res = await connectReq(ws, { password: "secret" }); // pragma: allowlist secret
-      expect(res.ok).toBe(true);
-      ws.close();
-    });
-
-    test("rejects invalid password", async () => {
-      const ws = await openWs(port);
-      const res = await connectReq(ws, { password: "wrong" }); // pragma: allowlist secret
-      expect(res.ok).toBe(false);
-      expect(res.error?.message ?? "").toContain("unauthorized");
-      ws.close();
-    });
-
-    test("accepts the configured password in the token field", async () => {
-      const ws = await openWs(port);
-      const res = await connectReq(ws, {
-        skipDefaultAuth: true,
-        token: "secret",
-      });
-      expect(res.ok).toBe(true);
-      ws.close();
-    });
-
-    test("authorizes the models HTTP endpoint with only the configured password", async () => {
-      const authorized = await requestModels(port, "secret");
-      expect(authorized.status).toBe(200);
-      await authorized.body?.cancel();
-
-      const unauthorized = await requestModels(port, "wrong");
-      expect(unauthorized.status).toBe(401);
-      await unauthorized.body?.cancel();
-    });
-  });
-
-  describe("token auth", () => {
+  describe.each(["password", "token"] as const)("%s auth", (mode) => {
     let server: Awaited<ReturnType<typeof startTestGatewayServer>>;
     let port: number;
     let prevToken: string | undefined;
 
+    function configureAuth() {
+      if (mode === "token") {
+        process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
+      }
+      testState.gatewayAuth =
+        mode === "token" ? { mode, token: "secret" } : { mode, password: "secret" }; // pragma: allowlist secret
+    }
+
     beforeAll(async () => {
       prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
-      process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
-      testState.gatewayAuth = { mode: "token", token: "secret" };
+      configureAuth();
       const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
       port = portClaim.port;
       server = await startTestGatewayServer(portClaim, { openAiChatCompletionsEnabled: true });
     });
 
-    beforeEach(() => {
-      process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
-      testState.gatewayAuth = { mode: "token", token: "secret" };
-    });
+    beforeEach(configureAuth);
 
     afterAll(async () => {
       await server.close();
-      restoreGatewayToken(prevToken);
+      if (mode === "token") {
+        restoreGatewayToken(prevToken);
+      }
     });
 
-    test("accepts token auth when configured", async () => {
+    test(`accepts ${mode} auth when configured`, async () => {
       const ws = await openWs(port);
-      const res = await connectReq(ws, { token: "secret" });
+      const res = await connectReq(
+        ws,
+        mode === "token" ? { token: "secret" } : { password: "secret" }, // pragma: allowlist secret
+      );
       expect(res.ok).toBe(true);
-      expect(res.payload).toMatchObject({ auth: { method: "token" } });
+      if (mode === "token") {
+        expect(res.payload).toMatchObject({ auth: { method: "token" } });
+      }
       ws.close();
     });
 
-    test("rejects invalid token", async () => {
+    test(`rejects invalid ${mode}`, async () => {
       const ws = await openWs(port);
-      const res = await connectReq(ws, { token: "wrong" });
+      const res = await connectReq(
+        ws,
+        mode === "token" ? { token: "wrong" } : { password: "wrong" }, // pragma: allowlist secret
+      );
       expect(res.ok).toBe(false);
       expect(res.error?.message ?? "").toContain("unauthorized");
       ws.close();
     });
 
-    test("accepts the configured token in the password field", async () => {
+    test(`accepts the configured ${mode} in the alternate credential field`, async () => {
       const ws = await openWs(port);
       const res = await connectReq(ws, {
         skipDefaultAuth: true,
-        password: "secret", // pragma: allowlist secret
+        ...(mode === "token" ? { password: "secret" } : { token: "secret" }), // pragma: allowlist secret
       });
       expect(res.ok).toBe(true);
       ws.close();
     });
 
-    test("authorizes the models HTTP endpoint with only the configured token", async () => {
+    test(`authorizes the models HTTP endpoint with only the configured ${mode}`, async () => {
       const authorized = await requestModels(port, "secret");
       expect(authorized.status).toBe(200);
       await authorized.body?.cancel();
@@ -144,35 +103,37 @@ export function registerAuthModesSuite(): void {
       await unauthorized.body?.cancel();
     });
 
-    test("returns control ui hint when token is missing", async () => {
-      const ws = await openWs(port, { origin: originForPort(port) });
-      const res = await connectReq(ws, {
-        skipDefaultAuth: true,
-        client: {
-          ...CONTROL_UI_CLIENT,
-        },
+    if (mode === "token") {
+      test("returns control ui hint when token is missing", async () => {
+        const ws = await openWs(port, { origin: originForPort(port) });
+        const res = await connectReq(ws, {
+          skipDefaultAuth: true,
+          client: {
+            ...CONTROL_UI_CLIENT,
+          },
+        });
+        expect(res.ok).toBe(false);
+        expect(res.error?.message ?? "").toContain("Control UI settings");
+        ws.close();
       });
-      expect(res.ok).toBe(false);
-      expect(res.error?.message ?? "").toContain("Control UI settings");
-      ws.close();
-    });
 
-    test("rejects control ui without device identity by default", async () => {
-      const ws = await openWs(port, { origin: originForPort(port) });
-      const res = await connectReq(ws, {
-        token: "secret",
-        device: null,
-        client: {
-          ...CONTROL_UI_CLIENT,
-        },
+      test("rejects control ui without device identity by default", async () => {
+        const ws = await openWs(port, { origin: originForPort(port) });
+        const res = await connectReq(ws, {
+          token: "secret",
+          device: null,
+          client: {
+            ...CONTROL_UI_CLIENT,
+          },
+        });
+        expect(res.ok).toBe(false);
+        expect(res.error?.message ?? "").toContain("secure context");
+        expect((res.error?.details as { code?: string } | undefined)?.code).toBe(
+          ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED,
+        );
+        ws.close();
       });
-      expect(res.ok).toBe(false);
-      expect(res.error?.message ?? "").toContain("secure context");
-      expect((res.error?.details as { code?: string } | undefined)?.code).toBe(
-        ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED,
-      );
-      ws.close();
-    });
+    }
   });
 
   describe("explicit none auth", () => {

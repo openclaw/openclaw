@@ -2,8 +2,10 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import * as managedCommands from "../../scripts/lib/managed-child-process.mts";
 import { buildPluginNpmRuntime } from "../../scripts/lib/plugin-npm-runtime-build.mts";
+import { awaitGateBeforeSettlement, createDeferred } from "../helpers/promise.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -82,6 +84,56 @@ function createAssetFixture(
 }
 
 describe("selected plugin runtime assets", () => {
+  it("awaits bounded asset execution before publishing package assets", async () => {
+    const fixture = createAssetFixture({ generated: true });
+    fs.writeFileSync(path.join(fixture.packageDir, fixture.source), "previous source asset");
+    const started = createDeferred<Parameters<typeof managedCommands.runManagedCommand>[0]>();
+    const command = createDeferred<number>();
+    const runner = vi
+      .spyOn(managedCommands, "runManagedCommand")
+      .mockImplementationOnce((options) => {
+        started.resolve(options);
+        return command.promise;
+      });
+    const building = buildPluginNpmRuntime({ ...fixture, logLevel: "silent" });
+    const built = building.then(
+      () => ({ kind: "completed" as const }),
+      (error: unknown) => ({ kind: "failed" as const, error }),
+    );
+    try {
+      const options = await awaitGateBeforeSettlement(
+        started.promise,
+        building,
+        "Package builder completed without bounded asset execution",
+      );
+      expect(options.timeoutMs).toBe(600_000);
+      expect(options.requireProcessTreeExit).toBe(process.platform !== "win32");
+      const output = path.join(fixture.packageDir, "dist/assets/message.txt");
+      expect(fs.existsSync(output)).toBe(false);
+      const failure = Object.assign(new Error("joined asset timeout"), {
+        code: "ETIMEDOUT",
+        processTreeState: "terminated",
+      });
+      command.reject(failure);
+      expect(await built).toMatchObject({
+        kind: "failed",
+        error: {
+          code: "ETIMEDOUT",
+          message: "Plugin asset build hook timed out after 600000ms: demo",
+          cause: failure,
+        },
+      });
+      expect(fs.existsSync(output)).toBe(false);
+      expect(fs.readFileSync(path.join(fixture.packageDir, fixture.source), "utf8")).toBe(
+        "previous source asset",
+      );
+    } finally {
+      command.resolve(0);
+      await built;
+      runner.mockRestore();
+    }
+  });
+
   it.each([
     { name: "untracked package", options: {} },
     { name: "tracked package with a malformed unrelated manifest", options: { tracked: true } },
@@ -101,7 +153,30 @@ describe("selected plugin runtime assets", () => {
       execFileSync("git", ["add", "extensions/other/package.json"], { cwd: fixture.repoRoot });
     }
 
+    fs.writeFileSync(
+      path.join(fixture.packageDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "demo",
+        themes: [
+          {
+            id: "mission",
+            name: "Mission",
+            description: "Mission theme",
+            source: "theme.json",
+            icons: { rocket: "assets/rocket.svg" },
+          },
+        ],
+      }),
+    );
+    fs.writeFileSync(path.join(fixture.packageDir, "theme.json"), "{}");
+    fs.writeFileSync(
+      path.join(fixture.packageDir, "assets/rocket.svg"),
+      '<svg xmlns="http://www.w3.org/2000/svg"/>',
+    );
     const result = await buildPluginNpmRuntime({ ...fixture, logLevel: "silent" });
+    expect(result?.packageFiles).toEqual(
+      expect.arrayContaining(["theme.json", "assets/rocket.svg"]),
+    );
     expect(result?.copiedStaticAssets).toEqual(["dist/assets/message.txt"]);
     const entry = pathToFileURL(path.join(fixture.packageDir, "dist", "index.js")).href;
     expect(

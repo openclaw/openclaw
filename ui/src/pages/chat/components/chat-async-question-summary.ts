@@ -4,67 +4,43 @@ import { t } from "../../../i18n/index.ts";
 import type { AsyncQuestionPresentation, AsyncQuestions } from "./chat-async-question.types.ts";
 import { questionDraftValues } from "./chat-question-answer-controls.ts";
 
-function draftForAnswer(
-  question: AsyncQuestions["questions"][number],
-  answer: string,
-): QuestionDraft {
-  const values = answer ? answer.split(", ") : [];
-  const selected =
-    values.length > 0 &&
-    values.every((value) => question.options?.includes(value)) &&
-    values.join(", ") === answer
-      ? new Set(values)
-      : new Set<string>();
-  return { selected, freeText: selected.size > 0 ? "" : answer };
-}
-
 export function parseGeneratedAsyncAnswer(
   question: AsyncQuestions,
   message: string,
 ): Map<string, QuestionDraft> | null {
+  if (!message.startsWith("> ")) {
+    return null;
+  }
   let offset = 0;
-  const answers: string[] = [];
-  for (let index = 0; index < question.questions.length; index += 1) {
-    const current = question.questions[index];
-    if (!current) {
-      return null;
-    }
+  const answers = new Map<string, QuestionDraft>();
+  for (const [index, current] of question.questions.entries()) {
     const prefix = `${quoteQuestion(current.title)}\n\n`;
     if (!message.startsWith(prefix, offset)) {
       return null;
     }
     offset += prefix.length;
-    if (index === question.questions.length - 1) {
-      answers.push(message.slice(offset));
-      offset = message.length;
-      break;
-    }
     const next = question.questions[index + 1];
-    if (!next) {
-      return null;
-    }
-    const separator = `\n\n${quoteQuestion(next.title)}\n\n`;
-    const answerEnd = message.indexOf(separator, offset);
+    const separator = next ? `\n\n${quoteQuestion(next.title)}\n\n` : undefined;
+    const answerEnd = separator ? message.indexOf(separator, offset) : message.length;
     // Free text can contain quoted headings. Do not guess a section boundary.
-    if (answerEnd < offset || message.includes(separator, answerEnd + separator.length)) {
+    if (
+      answerEnd < offset ||
+      (separator && message.includes(separator, answerEnd + separator.length))
+    ) {
       return null;
     }
-    answers.push(message.slice(offset, answerEnd));
-    offset = answerEnd + 2;
+    const answer = message.slice(offset, answerEnd);
+    if (!answer.trim()) {
+      return null;
+    }
+    const values = answer.split(", ");
+    const selected = values.every((value) => current.options?.includes(value))
+      ? new Set(values)
+      : new Set<string>();
+    answers.set(String(index), { selected, freeText: selected.size > 0 ? "" : answer });
+    offset = answerEnd + (separator ? 2 : 0);
   }
-  if (
-    offset !== message.length ||
-    answers.length !== question.questions.length ||
-    answers.some((answer) => !answer.trim())
-  ) {
-    return null;
-  }
-  return new Map(
-    question.questions.map((entry, index) => [
-      String(index),
-      draftForAnswer(entry, answers[index] ?? ""),
-    ]),
-  );
+  return offset === message.length ? answers : null;
 }
 
 export function quoteQuestion(title: string): string {
@@ -125,7 +101,7 @@ export function renderAsyncQuestionSummary(
               <div>
                 ${
                   answers
-                    ? questionDraftValues(answers.get(String(index))).join(", ")
+                    ? questionDraftValues(answers.get(String(index)), {}).join(", ")
                     : t(
                         reopening
                           ? "chat.asyncQuestions.reopening"

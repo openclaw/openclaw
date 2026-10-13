@@ -61,7 +61,7 @@ Available stream families today:
 <Accordion title="SDK seams powering the family builders">
   Each family builder is composed from lower-level public helpers exported from the same package, which you can reach for when a provider needs to go off the common pattern:
 
-- `openclaw/plugin-sdk/provider-model-shared` - `ProviderReplayFamily`, `buildProviderReplayFamilyHooks(...)`, and the raw replay builders (`buildOpenAICompatibleReplayPolicy`, `buildAnthropicReplayPolicyForModel`, `buildGoogleGeminiReplayPolicy`, `buildHybridAnthropicOrOpenAIReplayPolicy`). Also exports Gemini replay helpers (`sanitizeGoogleGeminiReplayHistory`, `resolveTaggedReasoningOutputMode`) and endpoint/model helpers (`resolveProviderEndpoint`, `normalizeProviderId`, `normalizeGooglePreviewModelId`).
+- `openclaw/plugin-sdk/provider-model-shared` - `ProviderReplayFamily`, `buildProviderReplayFamilyHooks(...)`, and the raw replay builders (`buildOpenAICompatibleReplayPolicy`, `buildAnthropicReplayPolicyForModel`, `buildGoogleGeminiReplayPolicy`, `buildHybridAnthropicOrOpenAIReplayPolicy`). Also exports Gemini replay helpers (`sanitizeGoogleGeminiReplayHistoryAsync`, `resolveTaggedReasoningOutputMode`) and endpoint/model helpers (`resolveProviderEndpoint`, `normalizeProviderId`, `normalizeGooglePreviewModelId`). The synchronous Gemini helper remains a deprecated third-party compatibility adapter; see [provider replay migration](/plugins/sdk-migration/how-to-migrate#await-provider-replay-metadata).
 - `openclaw/plugin-sdk/provider-stream` - `ProviderStreamFamily`, `buildProviderStreamFamilyHooks(...)`, `composeProviderStreamWrappers(...)`, plus the shared OpenAI/Codex wrappers (`createOpenAIAttributionHeadersWrapper`, `createOpenAIFastModeWrapper`, `createOpenAIServiceTierWrapper`, `createOpenAIResponsesContextManagementWrapper`, `createCodexNativeWebSearchWrapper`), DeepSeek V4 OpenAI-compatible wrapper (`createDeepSeekV4OpenAICompatibleThinkingWrapper`), Anthropic Messages thinking prefill cleanup (`createAnthropicThinkingPrefillPayloadWrapper`), plain-text tool-call compat (`createPlainTextToolCallCompatWrapper`), and shared proxy/provider wrappers (`createOpenRouterWrapper`, `createToolStreamWrapper`, `createMinimaxFastModeWrapper`).
 - `openclaw/plugin-sdk/provider-stream-shared` - lightweight payload and event wrappers for hot provider paths, including `applyCompletionsAnthropicCacheControl` (the shared Chat Completions cache-marker layout; native Anthropic Messages uses its own policy), `createOpenAICompatibleCompletionsThinkingOffWrapper`, `createPayloadPatchStreamWrapper`, `createPlainTextToolCallCompatWrapper`, `normalizeOpenAICompatibleReasoningPayload(...)`, and `setQwenChatTemplateThinking(...)`.
 - Copilot transports can use `projectCopilotRequestFacts(messages, contentMode, hasImages?)` from `provider-stream-shared` to derive `{ initiator, hasImages }`. Use `"direct"` for normalized direct image blocks or `"nested"` for nested provider content, including user-carried `tool_result` continuations. An explicit `hasImages` reuses a caller's computed vision fact. Runtime identity, header casing, and caller overrides remain with the plugin.
@@ -74,6 +74,17 @@ reasoning output so OpenClaw consumes native thought parts without adding
 `<think>` / `<final>` prompt directives. Text-only Gemini CLI-style
 backends that parse a final JSON/text response can keep the shared
 `google-gemini` tagged contract.
+
+`transformProviderStreamMessages(stream, transformMessage)` from
+`provider-stream-shared` applies a provider-owned mutation to streamed partial
+messages, terminal messages, and `result()`. It preserves the stream and event
+objects, event order, and iterator cancellation and error forwarding; the
+callback must tolerate absent message fields and repeated visits.
+`buildAssistantMessage` from `provider-transport-runtime` constructs native stream
+assistant envelopes with caller-supplied content and usage.
+`stripTrailingAssistantPrefillMessages(payload)` removes trailing assistant
+prefill messages while preserving terminal tool calls. Providers retain their
+own thinking and route predicates.
 
 Some stream helpers stay provider-local on purpose. `@openclaw/anthropic-provider` keeps `wrapAnthropicProviderStream`, `resolveAnthropicBetas`, `resolveAnthropicFastMode`, `resolveAnthropicServiceTier`, and the lower-level Anthropic wrapper builders in its own public `api.ts` / `contract-api.ts` seam because they encode Claude OAuth beta handling and `context1m` gating. The xAI plugin similarly keeps native xAI Responses shaping in its own `wrapStreamFn` (`/fast` aliases, default `tool_stream`, unsupported strict-tool cleanup, xAI-specific reasoning-payload removal).
 

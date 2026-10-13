@@ -1,4 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../src/config/runtime-snapshot.js";
 import { makeIsolatedAgentParamsFixture } from "../src/cron/isolated-agent/job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "../src/cron/isolated-agent/run.suite-helpers.js";
 import {
@@ -13,21 +17,25 @@ const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 
 describe("Codex conversation delivery and cron retry", () => {
   setupRunCronIsolatedAgentTurnSuite();
+  afterEach(() => {
+    vi.restoreAllMocks();
+    clearRuntimeConfigSnapshot();
+  });
 
   it.each(["sent", "queued"] as const)(
     "preserves the retry decision for a %s core conversation receipt",
     async (status) => {
+      const params = makeIsolatedAgentParamsFixture();
+      setRuntimeConfigSnapshot(params.cfg);
       const { createCodexDynamicToolBridge } = await import("../extensions/codex/test-api.js");
       const { createConversationsSendTool } =
         await import("../src/agents/tools/conversation-tools.js");
-      const { callAgentToolGatewayRequest } =
-        await import("../src/agents/tools/in-process-gateway.js");
+      const gateway = await import("../src/agents/tools/in-process-gateway.js");
       pickLastNonEmptyTextFromPayloadsMock.mockImplementation(
         (payloads?: Array<{ text?: string }>) => payloads?.at(-1)?.text ?? "",
       );
       const conversationRef = "conv_0123456789abcdef0123456789abcdef";
-      const deps = { callGateway: callAgentToolGatewayRequest };
-      const callGateway = vi.spyOn(deps, "callGateway").mockResolvedValue({
+      const callGateway = vi.spyOn(gateway, "callAgentToolGatewayRequest").mockResolvedValue({
         status,
         conversationRef,
         channel: "qa-channel",
@@ -35,7 +43,7 @@ describe("Codex conversation delivery and cron retry", () => {
       });
       runEmbeddedAgentMock
         .mockImplementationOnce(async () => {
-          const tool = createConversationsSendTool({ agentId: "main" }, deps);
+          const tool = createConversationsSendTool({ agentId: "main" });
           const bridge = createCodexDynamicToolBridge({
             tools: [tool],
             signal: new AbortController().signal,
@@ -62,7 +70,7 @@ describe("Codex conversation delivery and cron retry", () => {
       mockRunCronFallbackPassthrough();
 
       const attempts = status === "sent" ? 1 : 2;
-      const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
+      const result = await runCronIsolatedAgentTurn(params);
       expect(result.error).toBeUndefined();
       expect(result).toMatchObject({ status: "ok" });
       expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(attempts);

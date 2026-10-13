@@ -2,7 +2,6 @@
 import {
   isRuntimeParityResultPass,
   runtimeParityCellStatus,
-  type RuntimeId,
   type RuntimeParityCell,
   type RuntimeParityResult,
 } from "./runtime-parity.js";
@@ -25,25 +24,14 @@ function formatRuntimeParityCellDetails(cell: RuntimeParityCell) {
   ].join(" ");
 }
 
-function formatRuntimeParityScenarioCellDetails(cell: RuntimeParityResult["cells"][RuntimeId]) {
-  return [cell.details, formatRuntimeParityCellDetails(cell)].filter(Boolean).join("\n");
-}
-
 function runtimeParityScenarioResultStatus(result: RuntimeParityResult) {
-  const cellStatuses = new Set([
-    runtimeParityCellStatus(result.cells.openclaw),
-    runtimeParityCellStatus(result.cells.codex),
-  ]);
   if (isRuntimeParityResultPass(result)) {
     return "pass";
   }
-  if (cellStatuses.has("fail")) {
-    return "fail";
-  }
-  if (cellStatuses.has("skip")) {
-    return "skip";
-  }
-  return "fail";
+  const statuses = new Set(
+    [result.cells.openclaw, result.cells.codex].map(runtimeParityCellStatus),
+  );
+  return !statuses.has("fail") && statuses.has("skip") ? "skip" : "fail";
 }
 
 export function buildRuntimeParityScenarioResult(params: {
@@ -51,23 +39,16 @@ export function buildRuntimeParityScenarioResult(params: {
   result: RuntimeParityResult;
 }): QaSuiteScenarioResult {
   const driftStepStatus = runtimeParityScenarioResultStatus(params.result);
-  const openclawCell = params.result.cells.openclaw;
-  const codexCell = params.result.cells.codex;
   return {
     name: params.scenarioName,
     status: driftStepStatus,
     details: params.result.driftDetails ?? `runtime drift classified as ${params.result.drift}`,
     steps: [
-      {
-        name: openclawCell.runtime,
-        status: runtimeParityCellStatus(openclawCell),
-        details: formatRuntimeParityScenarioCellDetails(openclawCell),
-      },
-      {
-        name: codexCell.runtime,
-        status: runtimeParityCellStatus(codexCell),
-        details: formatRuntimeParityScenarioCellDetails(codexCell),
-      },
+      ...[params.result.cells.openclaw, params.result.cells.codex].map((cell) => ({
+        name: cell.runtime,
+        status: runtimeParityCellStatus(cell),
+        details: [cell.details, formatRuntimeParityCellDetails(cell)].filter(Boolean).join("\n"),
+      })),
       {
         name: "runtime drift",
         status: driftStepStatus,

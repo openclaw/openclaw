@@ -1,15 +1,9 @@
-// Telegram helper module supports bot.media utils behavior.
 import type { PhotoSize } from "grammy/types";
+import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import * as ssrf from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterEach, beforeAll, beforeEach, expect, vi, type Mock } from "vitest";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import * as harness from "./bot.media.e2e.test-harness.js";
-
-type StickerSpy = Mock<(...args: unknown[]) => unknown>;
-
-export const cacheStickerSpy: StickerSpy = vi.fn();
-export const getCachedStickerSpy: StickerSpy = vi.fn();
-export const describeStickerImageSpy: StickerSpy = vi.fn();
 
 const resolvePinnedHostname = ssrf.resolvePinnedHostname;
 const lookupMock = vi.fn();
@@ -66,12 +60,14 @@ export async function createBotHandlerWithOptions(options: {
   const runtimeError = options.runtimeError ?? vi.fn();
   const runtimeLog = options.runtimeLog ?? vi.fn();
   const effectiveProxyFetch = options.proxyFetch ?? (undiciFetchSpyRef as unknown as typeof fetch);
-  createTelegramBotRef({
+  const config = harness.telegramBotDepsForTest.getRuntimeConfig();
+  setRuntimeConfigSnapshot(config);
+  await createTelegramBotRef({
     token: "tok",
     // Production always constructs the bot from getMe(), so inbound handlers may
     // resolve the bot user id from botInfo when a test ctx carries only a username.
     botInfo: telegramBotInfoForTest,
-    config: harness.telegramBotDepsForTest.getRuntimeConfig(),
+    config,
     testTimings: TELEGRAM_TEST_TIMINGS,
     ...(effectiveProxyFetch ? { proxyFetch: effectiveProxyFetch } : {}),
     runtime: {
@@ -83,29 +79,11 @@ export async function createBotHandlerWithOptions(options: {
       },
     } as Parameters<typeof createTelegramBotRef>[0]["runtime"],
   });
-  const handler = onSpyRef.mock.calls.find((call) => call[0] === "message")?.[1] as (
-    ctx: Record<string, unknown>,
-  ) => Promise<void>;
+  const handler = onSpyRef.mock.calls.find(([filter]) =>
+    Array.isArray(filter) ? filter.includes("message") : filter === "message",
+  )?.[1] as (ctx: Record<string, unknown>) => Promise<void>;
   expect(handler).toBeDefined();
   return { handler, replySpy: replySpyRef, runtimeError };
-}
-
-export function mockTelegramFileDownload(params: {
-  contentType: string;
-  bytes: Uint8Array;
-}): FetchMockHandle {
-  undiciFetchSpyRef.mockResolvedValueOnce(
-    new Response(Buffer.from(params.bytes), {
-      status: 200,
-      headers: { "content-type": params.contentType },
-    }),
-  );
-  readRemoteMediaBufferSpyRef.mockResolvedValueOnce({
-    buffer: Buffer.from(params.bytes),
-    contentType: params.contentType,
-    fileName: "mock-file",
-  });
-  return createFetchMockHandle();
 }
 
 export function mockTelegramPngDownload(): FetchMockHandle {
@@ -120,10 +98,6 @@ export function mockTelegramPngDownload(): FetchMockHandle {
     contentType: "image/png",
     fileName: "mock-file.png",
   });
-  return createFetchMockHandle();
-}
-
-export function watchTelegramFetch(): FetchMockHandle {
   return createFetchMockHandle();
 }
 
@@ -162,12 +136,3 @@ afterEach(() => {
   resolvePinnedHostnameSpy?.mockRestore();
   resolvePinnedHostnameSpy = null;
 });
-
-vi.mock("./sticker-cache.js", () => ({
-  cacheSticker: (...args: unknown[]) => cacheStickerSpy(...args),
-  getCachedSticker: (...args: unknown[]) => getCachedStickerSpy(...args),
-  describeStickerImage: (...args: unknown[]) => describeStickerImageSpy(...args),
-  getAllCachedStickers: vi.fn(() => []),
-  getCacheStats: vi.fn(() => ({ count: 0 })),
-  searchStickers: vi.fn(() => []),
-}));

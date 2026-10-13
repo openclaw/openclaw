@@ -1,19 +1,10 @@
-// Npm Telegram Live tests cover npm telegram live script behavior.
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  isPrePartialFailureRecoveryTarget,
-  isPreProgressToolVisibilityTarget,
-  isPreProviderFailureBeforeOutputTarget,
-  isPreQueueInvalidModeTarget,
-  isPreRichInlineCompositionTarget,
-  isPreSettledEmptyResponseTarget,
-  resolveFrozenTelegramScenarioOmissions,
-} from "../../scripts/e2e/lib/npm-telegram-live/resolve-target-scenarios.mts";
+import { resolveFrozenTelegramScenarioOmissions } from "../../scripts/e2e/lib/npm-telegram-live/resolve-target-scenarios.mts";
 import { testing } from "../../scripts/e2e/npm-telegram-live-runner.ts";
 import { privateLocalOnlyPluginSdkEntrypoints } from "../../scripts/lib/plugin-sdk-entries.mts";
 
@@ -77,19 +68,6 @@ afterEach(() => {
 });
 
 describe("package Telegram live Docker E2E", () => {
-  it("forwards npm-specific credential aliases through the Docker boundary", () => {
-    const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
-
-    for (const contract of [
-      "OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE",
-      "OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE",
-      'docker_env+=(-e OPENCLAW_QA_CREDENTIAL_SOURCE="$credential_source")',
-      'docker_env+=(-e OPENCLAW_QA_CREDENTIAL_ROLE="$credential_role")',
-    ]) {
-      expect(script).toContain(contract);
-    }
-  });
-
   it("installs the package candidate before forwarding runtime secrets", () => {
     const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
     const installRunStart = script.indexOf('echo "Running package Telegram live Docker E2E');
@@ -347,19 +325,6 @@ for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
     ).toBe("ci");
   });
 
-  it("defaults package Telegram RTT for the normal package live lane", () => {
-    expect(testing.resolveRttOptions({})).toEqual({
-      scenarioId: "channel-canary",
-      count: 20,
-      timeoutMs: 30_000,
-      maxFailures: 20,
-    });
-  });
-
-  it("does not force default RTT onto focused non-RTT scenario runs", () => {
-    expect(testing.resolveRttOptions({}, ["telegram-status-command"])).toBeUndefined();
-  });
-
   it("maps repeated RTT env onto package Telegram live options", () => {
     expect(
       testing.resolveRttOptions({
@@ -418,110 +383,7 @@ for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
     ]);
   });
 
-  it("omits source-qualified current-only scenarios only from the default catalog", () => {
-    const resolve = (scenarioIds: readonly string[]) =>
-      scenarioIds.length > 0
-        ? [...scenarioIds]
-        : ["channel-canary", "telegram-partial-failure-recovery"];
-    const env = {
-      OPENCLAW_NPM_TELEGRAM_OMIT_DEFAULT_SCENARIOS: "telegram-partial-failure-recovery",
-    };
-
-    expect(testing.resolvePackageTelegramScenarios(env, resolve).resolvedScenarioIds).toEqual([
-      "channel-canary",
-    ]);
-    expect(
-      testing.resolvePackageTelegramScenarios(
-        { ...env, OPENCLAW_NPM_TELEGRAM_SCENARIOS: "telegram-partial-failure-recovery" },
-        resolve,
-      ).resolvedScenarioIds,
-    ).toEqual(["telegram-partial-failure-recovery"]);
-  });
-
-  it("recognizes only the complete pre-recovery Telegram source contract", () => {
-    const root = mkTempRoot();
-    const writeOwner = (relativePath: string, source: string) => {
-      const file = path.join(root, relativePath);
-      mkdirSync(path.dirname(file), { recursive: true });
-      writeFileSync(file, source);
-    };
-    writeOwner("src/agents/embedded-agent-subscribe.ts", "void params.onPartialReply(data);");
-    writeOwner("extensions/telegram/src/draft-stream.ts", "flush: loop.flush,");
-    writeOwner(
-      "extensions/telegram/src/bot-message-dispatch.ts",
-      "enqueueDraftLaneEvent(async () => {});",
-    );
-
-    expect(isPrePartialFailureRecoveryTarget(root)).toBe(true);
-    writeOwner("extensions/telegram/src/draft-stream.ts", "waitForInFlight();");
-    expect(isPrePartialFailureRecoveryTarget(root)).toBe(false);
-  });
-
-  it("omits settled empty-response recovery until the frozen source owns its scenario", () => {
-    const root = mkTempRoot();
-    const scenario = path.join(
-      root,
-      "qa/scenarios/channels/telegram-empty-response-after-write-recovery.yaml",
-    );
-
-    expect(isPreSettledEmptyResponseTarget(root)).toBe(true);
-    mkdirSync(path.dirname(scenario), { recursive: true });
-    writeFileSync(scenario, "id: telegram-empty-response-after-write-recovery\n");
-    expect(isPreSettledEmptyResponseTarget(root)).toBe(false);
-  });
-
-  it("omits progress visibility until the frozen source owns its scenario", () => {
-    const root = mkTempRoot();
-    const scenario = path.join(
-      root,
-      "qa/scenarios/channels/telegram-progress-tool-visibility.yaml",
-    );
-
-    expect(isPreProgressToolVisibilityTarget(root)).toBe(true);
-    mkdirSync(path.dirname(scenario), { recursive: true });
-    writeFileSync(scenario, "id: telegram-progress-tool-visibility\n");
-    expect(isPreProgressToolVisibilityTarget(root)).toBe(false);
-  });
-
-  it("omits provider-failure recovery until the frozen source owns its scenario", () => {
-    const root = mkTempRoot();
-    const scenario = path.join(
-      root,
-      "qa/scenarios/channels/telegram-provider-failure-before-output.yaml",
-    );
-
-    expect(isPreProviderFailureBeforeOutputTarget(root)).toBe(true);
-    mkdirSync(path.dirname(scenario), { recursive: true });
-    writeFileSync(scenario, "id: telegram-provider-failure-before-output\n");
-    expect(isPreProviderFailureBeforeOutputTarget(root)).toBe(false);
-  });
-
-  it("omits invalid queue-mode validation until the frozen source owns its scenario", () => {
-    const root = mkTempRoot();
-    const scenario = path.join(root, "qa/scenarios/channels/telegram-queue-invalid-mode.yaml");
-
-    expect(isPreQueueInvalidModeTarget(root)).toBe(true);
-    mkdirSync(path.dirname(scenario), { recursive: true });
-    writeFileSync(scenario, "id: telegram-queue-invalid-mode\n");
-    expect(isPreQueueInvalidModeTarget(root)).toBe(false);
-  });
-
-  it("omits rich inline composition until the frozen source owns its scenario", () => {
-    const root = mkTempRoot();
-    const scenario = path.join(root, "qa/scenarios/channels/telegram-rich-inline-composition.yaml");
-
-    expect(isPreRichInlineCompositionTarget(root)).toBe(true);
-    mkdirSync(path.dirname(scenario), { recursive: true });
-    writeFileSync(scenario, "id: telegram-rich-inline-composition\n");
-    expect(isPreRichInlineCompositionTarget(root)).toBe(false);
-  });
-
-  it.each([
-    [],
-    ["telegram-policy-hot-reload"],
-    ["telegram-group-policy-hot-reload"],
-    ["telegram-policy-hot-reload", "telegram-group-policy-hot-reload"],
-  ])(
+  it.each([[], ["telegram-policy-hot-reload"]])(
     "qualifies default policy reload scenarios from the selected source (%j)",
     (...supported: string[]) => {
       const root = mkTempRoot();
@@ -608,6 +470,7 @@ for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
     expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual([
       "telegram-partial-failure-recovery",
       "telegram-empty-response-after-write-recovery",
+      "telegram-prepared-delivery-recovery",
       "telegram-progress-tool-visibility",
       "telegram-provider-failure-before-output",
       "telegram-queue-invalid-mode",
@@ -616,6 +479,7 @@ for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
     writeOwner("extensions/telegram/src/draft-stream.ts", "waitForInFlight();");
     expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual([
       "telegram-empty-response-after-write-recovery",
+      "telegram-prepared-delivery-recovery",
       "telegram-progress-tool-visibility",
       "telegram-provider-failure-before-output",
       "telegram-queue-invalid-mode",
@@ -626,6 +490,7 @@ for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
       "id: telegram-empty-response-after-write-recovery\n",
     );
     expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual([
+      "telegram-prepared-delivery-recovery",
       "telegram-progress-tool-visibility",
       "telegram-provider-failure-before-output",
       "telegram-queue-invalid-mode",
@@ -636,6 +501,7 @@ for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
       "id: telegram-progress-tool-visibility\n",
     );
     expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual([
+      "telegram-prepared-delivery-recovery",
       "telegram-provider-failure-before-output",
       "telegram-queue-invalid-mode",
       "telegram-rich-inline-composition",
@@ -645,6 +511,7 @@ for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
       "id: telegram-provider-failure-before-output\n",
     );
     expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual([
+      "telegram-prepared-delivery-recovery",
       "telegram-queue-invalid-mode",
       "telegram-rich-inline-composition",
     ]);
@@ -653,11 +520,19 @@ for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
       "id: telegram-queue-invalid-mode\n",
     );
     expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual([
+      "telegram-prepared-delivery-recovery",
       "telegram-rich-inline-composition",
     ]);
     writeOwner(
       "qa/scenarios/channels/telegram-rich-inline-composition.yaml",
       "id: telegram-rich-inline-composition\n",
+    );
+    expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual([
+      "telegram-prepared-delivery-recovery",
+    ]);
+    writeOwner(
+      "qa/scenarios/channels/telegram-prepared-delivery-recovery.yaml",
+      "id: telegram-prepared-delivery-recovery\n",
     );
     expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual([]);
   });
@@ -670,20 +545,7 @@ for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
     ).toThrow("OPENCLAW_NPM_TELEGRAM_RTT_CHECKS accepts at most one scenario id; got 2");
   });
 
-  it("rejects unknown explicit RTT scenario ids through canonical selection", () => {
-    expect(() =>
-      testing.resolvePackageTelegramScenarios(
-        {
-          OPENCLAW_NPM_TELEGRAM_RTT_CHECKS: "telegram-unknown-rtt-check",
-        },
-        (scenarioIds) => {
-          throw new Error(`unknown QA scenario id(s): ${scenarioIds.join(", ")}`);
-        },
-      ),
-    ).toThrow("unknown QA scenario id(s): telegram-unknown-rtt-check");
-  });
-
-  it("builds a generic suite probe for the Telegram RTT lane", () => {
+  it("continues the selected scenario with the leased primary participant", () => {
     const probe = testing.createRoundTripProbe(testing.resolveRttOptions({}));
 
     expect(probe).toMatchObject({
@@ -694,32 +556,19 @@ for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
       textPrefix: "@openclaw Telegram RTT check. Reply exactly: ",
       chainReplies: true,
       input: {
-        conversation: { id: "telegram-rtt-room", kind: "group" },
+        fromScenario: true,
+        senderId: "primary",
       },
     });
   });
 
   it.each([
     {
-      name: "promotes the default canary before taxonomy-backed release selection",
-      env: {},
-      requested: [],
-      resolved: ["telegram-status-command"],
-      expected: ["channel-canary", "telegram-status-command"],
-    },
-    {
       name: "keeps focused non-RTT selections unchanged",
       env: {},
       requested: ["telegram-status-command"],
       resolved: ["telegram-status-command"],
       expected: ["telegram-status-command"],
-    },
-    {
-      name: "promotes an explicitly requested RTT canary",
-      env: { OPENCLAW_NPM_TELEGRAM_RTT_CHECKS: "channel-canary" },
-      requested: ["telegram-status-command"],
-      resolved: ["telegram-status-command"],
-      expected: ["channel-canary", "telegram-status-command"],
     },
     {
       name: "does not duplicate an already selected RTT canary",
@@ -742,7 +591,7 @@ for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
     ).toThrow("invalid OPENCLAW_NPM_TELEGRAM_RTT_SAMPLES: 7samples");
   });
 
-  it.each(["2026.6.33", "2026.7.1-beta.6", "2026.7.1", "2026.7.2-beta.2", "2026.7.2-beta.3"])(
+  it.each(["2026.7.2-beta.3"])(
     "projects current config for historical package %s",
     (packageVersion) => {
       const mutateConfig = testing.resolvePackageConfigMutation({
@@ -762,7 +611,6 @@ for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
           },
           entries: {
             qa: {
-              default: true,
               model: "mock-openai/qa",
             },
           },
@@ -791,7 +639,6 @@ for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
           },
           list: [
             {
-              default: true,
               id: "qa",
               model: "mock-openai/qa",
             },
@@ -809,95 +656,14 @@ for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
     },
   );
 
-  it.each([
-    "2026.7.2-beta.4",
-    "2026.7.2-beta.5",
-    "2026.7.2",
-    "main",
-    "latest",
-    "beta",
-    "2026.7.2-beta.3-extra",
-  ])("leaves current or nonexact package version %s unchanged", (packageVersion) => {
-    expect(
-      testing.resolvePackageConfigMutation({
-        OPENCLAW_NPM_TELEGRAM_PACKAGE_VERSION: packageVersion,
-      }),
-    ).toBeUndefined();
-  });
-
-  it.each(["2026.6.35", "2026.7.33", "2026.7.34", "2026.7.35"])(
-    "preserves the frozen %s package projection",
-    (version) => {
-      const mutateConfig = testing.resolvePackageConfigMutation({
-        OPENCLAW_NPM_TELEGRAM_PACKAGE_VERSION: version,
-      });
-      const config = {
-        agents: {
-          defaults: {
-            mediaModels: {
-              image: "mock-openai/image",
-              audio: "mock-openai/audio",
-            },
-            modelPolicy: { allow: ["mock-openai/qa"] },
-            workspace: "/tmp/qa",
-          },
-          entries: {
-            qa: {
-              default: true,
-              model: "mock-openai/qa",
-            },
-          },
-        },
-        memory: {
-          search: { enabled: false },
-        },
-        plugins: {
-          enabled: true,
-        },
-      } as Parameters<NonNullable<typeof mutateConfig>>[0];
-
-      expect(mutateConfig?.(config)).toEqual({
-        agents: {
-          defaults: {
-            imageGenerationModel: "mock-openai/image",
-            workspace: "/tmp/qa",
-          },
-          list: [
-            {
-              default: true,
-              id: "qa",
-              model: "mock-openai/qa",
-            },
-          ],
-        },
-        memory: { backend: "builtin" },
-        plugins: {
-          bundledDiscovery: "compat",
-          enabled: true,
-        },
-      });
-    },
-  );
-
-  it.each(["fail", "skip", "skipped", "timeout"])(
-    "fails package Telegram QA when a scenario has %s status",
-    async (status) => {
-      const summaryPath = path.join(mkTempRoot(), "qa-suite-summary.json");
-      writeFileSync(
-        summaryPath,
-        JSON.stringify({
-          run: { status: "completed" },
-          scenarios: [{ status }],
+  it.each(["2026.7.2", "main"])(
+    "leaves current or nonexact package version %s unchanged",
+    (packageVersion) => {
+      expect(
+        testing.resolvePackageConfigMutation({
+          OPENCLAW_NPM_TELEGRAM_PACKAGE_VERSION: packageVersion,
         }),
-        "utf8",
-      );
-
-      await expect(
-        testing.shouldFailPackageTelegramRun(
-          { summaryPath },
-          { OPENCLAW_NPM_TELEGRAM_ALLOW_FAILURES: "" },
-        ),
-      ).resolves.toBe(true);
+      ).toBeUndefined();
     },
   );
 

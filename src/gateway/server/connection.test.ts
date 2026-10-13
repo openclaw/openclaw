@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/server-capabilities.js";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { HealthSummary } from "../health/types.js";
 import { GatewayConnectionWork } from "../server-connection-work.js";
@@ -22,6 +23,7 @@ describe("Gateway connection transport", () => {
       await withOpenClawTestState(
         { label: "gateway-connection-transport", layout: "state-only" },
         async () => {
+          setRuntimeConfigSnapshot({});
           const incoming = new EventEmitter();
           const frames: Array<{
             event?: string;
@@ -46,8 +48,13 @@ describe("Gateway connection transport", () => {
               return readyState;
             },
             bufferedAmount: 0,
-            send: (encoded, callback) => {
-              const frame = JSON.parse(encoded);
+            send: (
+              encoded: string | Buffer,
+              options?: { binary: false } | ((error?: Error) => void),
+              onSent?: (error?: Error) => void,
+            ) => {
+              const callback = typeof options === "function" ? options : onSent;
+              const frame = JSON.parse(encoded.toString());
               frames.push(frame);
               if (frame.payload?.type === "hello-ok") {
                 finishHello = callback;

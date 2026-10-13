@@ -3,10 +3,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { CodexAppServerClient } from "./app-server/client.js";
-import { createCodexNativeTestState } from "./app-server/native-app-server.test-support.js";
 import type { CodexThreadListResponse } from "./app-server/protocol.js";
-import { CODEX_APP_SERVER_VERSION } from "./app-server/version.js";
 import { observeCodexCatalogClient } from "./session-catalog-events.js";
+import { createNativeCatalogPerformanceFixture } from "./session-catalog-native-performance.test-support.js";
 import {
   commandRpcMocks,
   createCodexSessionCatalogControlFactory,
@@ -14,41 +13,14 @@ import {
 
 it("keeps exact-millisecond ties resident and applies real native title notifications", async () => {
   const root = await fs.realpath(process.env.OPENCLAW_STATE_DIR!);
-  const state = await createCodexNativeTestState(root);
+  const state = await createNativeCatalogPerformanceFixture(root, { count: 81, previewBytes: 64 });
   const directory = path.join(state.codexHome, "sessions", "2025", "01", "01");
-  await fs.mkdir(directory, { recursive: true });
-  const timestamp = "2025-01-01T00:00:00.000Z";
   const ids = Array.from(
     { length: 81 },
     (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`,
   );
   for (const [i, id] of ids.entries()) {
     const file = path.join(directory, `rollout-2025-01-01T00-00-00-${id}.jsonl`);
-    await fs.writeFile(
-      file,
-      [
-        {
-          timestamp,
-          type: "session_meta",
-          payload: {
-            id,
-            timestamp,
-            cwd: state.cwd,
-            originator: "codex_cli_rs",
-            source: "cli",
-            cli_version: CODEX_APP_SERVER_VERSION,
-            model_provider: "openai",
-          },
-        },
-        {
-          timestamp,
-          type: "event_msg",
-          payload: { type: "user_message", message: `Synthetic tie ${i}`, kind: "plain" },
-        },
-      ]
-        .map((row) => JSON.stringify(row))
-        .join("\n") + "\n",
-    );
     // One newer row precedes the otherwise tied native inventory.
     const mtime = i === 0 ? 1_789_520_400 : 1_735_689_600;
     await fs.utimes(file, mtime, mtime);

@@ -1,14 +1,38 @@
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
 import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 
-export type SearchRowResult = {
+export type MemorySearchRow = {
   id: string;
   path: string;
-  startLine: number;
-  endLine: number;
-  score: number;
-  snippet: string;
+  start_line: number;
+  end_line: number;
+  text: string;
   source: MemorySource;
 };
+
+export type SearchRowResult = ReturnType<typeof projectMemorySearchRow>;
+
+export function projectMemorySearchRow(
+  row: MemorySearchRow,
+  snippetMaxChars: number,
+  score: number,
+) {
+  return {
+    id: row.id,
+    path: row.path,
+    startLine: row.start_line,
+    endLine: row.end_line,
+    score,
+    snippet: truncateUtf16Safe(row.text, snippetMaxChars),
+    source: row.source,
+  };
+}
+
+export function buildMemoryModelFilter(column: string, models: string[]): string {
+  return models.length === 1
+    ? `${column} = ?`
+    : `${column} IN (${models.map(() => "?").join(", ")})`;
+}
 
 export function resolveSnippetProjection(column: "text" | "c.text", snippetMaxChars: number) {
   const snippetByteLimit =

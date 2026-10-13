@@ -1,18 +1,13 @@
-/**
- * Meta onboarding config helpers.
- */
 import { readManifestProviderDefaultModelRef } from "openclaw/plugin-sdk/provider-catalog-shared";
 import {
   createModelCatalogPresetAppliers,
   createProviderConnectionPresetAppliers,
 } from "openclaw/plugin-sdk/provider-onboard";
-import { buildMetaCatalogModels, META_BASE_URL } from "./models.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
+import { buildMetaCatalogModels, META_BASE_URL } from "./provider-catalog.js";
 
-/** Default Meta model reference used after onboarding. */
 export const META_DEFAULT_MODEL_REF = readManifestProviderDefaultModelRef(manifest, "meta")!;
 
-/** Applies Meta provider/catalog config and default model aliases. */
 const metaPreset = {
   primaryModelRef: META_DEFAULT_MODEL_REF,
   resolveParams: () => ({

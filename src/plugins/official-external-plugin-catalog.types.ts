@@ -1,3 +1,4 @@
+import type { PluginUiCapability } from "../../packages/gateway-protocol/src/plugin-ui-capabilities.js";
 import type { MANIFEST_KEY } from "../compat/legacy-names.js";
 import type {
   PluginManifestCatalog,
@@ -5,6 +6,7 @@ import type {
   PluginManifestContracts,
   PluginManifestProviderEndpoint,
   PluginManifestNativeSessionCatalogSetup,
+  PluginManifestOnboardingScope,
 } from "./manifest-types.js";
 import type {
   OpenClawPackageManifest,
@@ -31,7 +33,7 @@ export type OfficialExternalProviderAuthChoice = {
   cliFlag?: string;
   cliOption?: string;
   cliDescription?: string;
-  onboardingScopes?: readonly ("text-inference" | "image-generation" | "music-generation")[];
+  onboardingScopes?: readonly PluginManifestOnboardingScope[];
 };
 
 type OfficialExternalProviderCatalogProvider = {
@@ -110,6 +112,7 @@ export type OfficialExternalPluginCatalogManifest = {
   webSearchProviders?: readonly OfficialExternalWebSearchProvider[];
   install?: PluginPackageInstall & { sourceRef?: string };
   contracts?: PluginManifestContracts;
+  uiCapabilities?: PluginUiCapability[];
   channelConfigs?: Record<string, PluginManifestChannelConfig>;
 };
 

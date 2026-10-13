@@ -7,6 +7,7 @@ import {
   markSessionObserverRunSuperseded,
   rememberSessionObserverRevisionFloor,
   resolveSessionObserverDigestForLifecycle,
+  snapshotSessionObserverRevisionFloor,
 } from "./session-observer-model.js";
 import type {
   DormantSessionObserverRun,
@@ -22,6 +23,11 @@ type ReadSession = NonNullable<SessionObserverDeps["readSession"]>;
 export function createSessionObserverLifecycle(params: {
   getConfig: SessionObserverDeps["getConfig"];
   readSession: ReadSession;
+  refreshAfterReset: (
+    sessionKey: string,
+    agentId: string,
+    consume: (session: ReturnType<ReadSession>) => void,
+  ) => void;
   now: () => number;
   isTerminal: (runId: string) => boolean;
   clearPendingTerminalError: (runId: string) => void;
@@ -46,12 +52,11 @@ export function createSessionObserverLifecycle(params: {
         !supersededRuns.has(state.runId) &&
         state.previousDigest
       ) {
-        rememberSessionObserverRevisionFloor(revisionFloors, scopeKey, {
-          sessionId: state.sessionId,
-          lifecycleRevision: state.lifecycleRevision,
-          revision: state.revision,
-          previousDigest: state.previousDigest,
-        });
+        rememberSessionObserverRevisionFloor(
+          revisionFloors,
+          scopeKey,
+          snapshotSessionObserverRevisionFloor(state),
+        );
       }
       states.delete(scopeKey);
     }
@@ -65,21 +70,29 @@ export function createSessionObserverLifecycle(params: {
   };
 
   const retireObsolete = (scopeKey: string, session: ReturnType<ReadSession>): void => {
+    const matches = (owner: SessionObserverRevisionFloor) => {
+      try {
+        owner.reader?.assertCurrent();
+        return isSameSessionObserverLifecycle(owner, session);
+      } catch {
+        return false;
+      }
+    };
     const state = states.get(scopeKey);
-    if (state && !isSameSessionObserverLifecycle(state, session)) {
+    if (state && !matches(state)) {
       retireRun(state.runId);
       dropState(state);
     }
     for (const run of dormantRuns.values()) {
       if (
         resolveSessionSubscriptionKey(run.sessionKey, run.agentId) === scopeKey &&
-        !isSameSessionObserverLifecycle(run, session)
+        !matches(run)
       ) {
         retireRun(run.runId);
       }
     }
     const floor = revisionFloors.get(scopeKey);
-    if (floor && !isSameSessionObserverLifecycle(floor, session)) {
+    if (floor && !matches(floor)) {
       if (floor.previousDigest?.runId) {
         retireRun(floor.previousDigest.runId);
       }
@@ -87,8 +100,13 @@ export function createSessionObserverLifecycle(params: {
     }
   };
 
-  const acceptPublication = (state: SessionObserverState): boolean => {
-    const session = params.readSession(state.sessionKey, state.agentId);
+  const acceptPublication = (
+    state: SessionObserverState,
+    session: ReturnType<ReadSession>,
+  ): boolean => {
+    if (!isTracked(state)) {
+      return false;
+    }
     if (isSameSessionObserverLifecycle(state, session)) {
       return true;
     }
@@ -158,9 +176,8 @@ export function createSessionObserverLifecycle(params: {
     const agentId =
       suppliedAgentId ?? resolveSessionAgentId({ sessionKey, config: params.getConfig() });
     // Reset notification can follow awaited cleanup. Preserve a newer admitted owner.
-    retireObsolete(
-      resolveSessionSubscriptionKey(sessionKey, agentId),
-      params.readSession(sessionKey, agentId),
+    params.refreshAfterReset(sessionKey, agentId, (session) =>
+      retireObsolete(resolveSessionSubscriptionKey(sessionKey, agentId), session),
     );
   });
 

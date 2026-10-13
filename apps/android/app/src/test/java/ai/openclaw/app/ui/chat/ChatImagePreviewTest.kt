@@ -20,6 +20,7 @@ import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.captureToImage
@@ -39,6 +40,8 @@ import androidx.compose.ui.test.pinch
 import androidx.compose.ui.test.swipe
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.Density
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestCoroutineScheduler
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -62,6 +65,7 @@ import java.io.File
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class ChatImagePreviewTest {
   @get:Rule val composeRule = createComposeRule()
+  private val imageDecodeDispatcher = StandardTestDispatcher(TestCoroutineScheduler())
   private var previousFontScale = 1f
 
   @Before fun saveFontScale() {
@@ -161,11 +165,11 @@ class ChatImagePreviewTest {
     composeRule.onNodeWithContentDescription("Close image preview").assertIsDisplayed()
     composeRule.onNode(isDialog()).performTouchInput { click(Offset(4f, 30f)) }
     composeRule.onNode(isDialog()).assertDoesNotExist()
-    composeRule.onNodeWithContentDescription("Open image preview").performClick()
+    composeRule.onNodeWithContentDescription("Sample image", useUnmergedTree = true).performTouchInput { click(center) }
     repeat(4) { composeRule.onNodeWithContentDescription("Zoom in").performClick() }
     composeRule.onNode(isDialog()).performTouchInput { click(Offset(180f, 30f)) }
     composeRule.onNode(isDialog()).assertDoesNotExist()
-    composeRule.onNodeWithContentDescription("Open image preview").performClick()
+    composeRule.onNodeWithContentDescription("Sample image", useUnmergedTree = true).performTouchInput { click(center) }
     composeRule.onNodeWithContentDescription("Close image preview").performClick()
     composeRule.onNode(isDialog()).assertDoesNotExist()
   }
@@ -196,7 +200,7 @@ class ChatImagePreviewTest {
       checkNotNull(owner).onBackPressedDispatcher.onBackPressed()
     }
     composeRule.onNode(isDialog()).assertDoesNotExist()
-    composeRule.onNodeWithContentDescription("Open image preview").performClick()
+    composeRule.onNodeWithContentDescription("Sample image", useUnmergedTree = true).performTouchInput { click(center) }
     composeRule.onNodeWithText("100%").assertIsDisplayed()
   }
 
@@ -224,7 +228,8 @@ class ChatImagePreviewTest {
     composeRule.onNodeWithContentDescription("Zoom in").performClick()
     composeRule.onNodeWithText("150%").assertIsDisplayed()
     restoration.emulateSavedInstanceStateRestore()
-    composeRule.waitUntil { composeRule.onAllNodesWithContentDescription("Close image preview").fetchSemanticsNodes().isNotEmpty() }
+    drainImageDecode()
+    composeRule.onNodeWithContentDescription("Close image preview").assertIsDisplayed()
     composeRule.onNodeWithText("100%").assertIsDisplayed()
   }
 
@@ -260,7 +265,10 @@ class ChatImagePreviewTest {
         info.configChanges = ActivityInfo.CONFIG_ORIENTATION or ActivityInfo.CONFIG_SCREEN_SIZE or ActivityInfo.CONFIG_SMALLEST_SCREEN_SIZE or ActivityInfo.CONFIG_SCREEN_LAYOUT
         shadowOf(manager).addOrUpdateActivity(info)
       }
-      CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, appFontScale)) {
+      CompositionLocalProvider(
+        LocalDensity provides Density(LocalDensity.current.density, appFontScale),
+        LocalChatImageDecodeDispatcher provides imageDecodeDispatcher,
+      ) {
         ClawDesignTheme {
           Box(Modifier.fillMaxSize()) {
             ChatManagedImage("fixture-image", "Sample image", true) { GatewayLoadedImage(bytes, "image/png") }
@@ -269,9 +277,19 @@ class ChatImagePreviewTest {
       }
     }
     if (restoration == null) composeRule.setContent(content) else restoration.setContent(content)
-    composeRule.waitUntil { composeRule.onAllNodesWithContentDescription("Sample image").fetchSemanticsNodes().isNotEmpty() }
-    composeRule.onNodeWithContentDescription("Open image preview").performClick()
+    drainImageDecode()
+    composeRule.onNodeWithContentDescription("Sample image", useUnmergedTree = true).performTouchInput { click(center) }
     composeRule.onNodeWithContentDescription("Close image preview").assertIsDisplayed()
+  }
+
+  // Compose idleness does not include the decoder's background work. Drain it
+  // separately so image readiness never depends on wall time.
+  private fun drainImageDecode() {
+    composeRule.waitForIdle()
+    composeRule.onAllNodesWithContentDescription("Sample image").assertCountEquals(0)
+    imageDecodeDispatcher.scheduler.advanceUntilIdle()
+    composeRule.waitForIdle()
+    composeRule.onAllNodesWithContentDescription("Sample image").assertCountEquals(1)
   }
 
   private fun capture(name: String) {

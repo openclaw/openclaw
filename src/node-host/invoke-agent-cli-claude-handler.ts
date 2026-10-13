@@ -11,11 +11,8 @@ import {
   type ClaudeCliNodeRunResult,
 } from "./invoke-agent-cli-claude-params.js";
 import { runClaudeCliNodeCommand } from "./invoke-agent-cli-claude.js";
-import {
-  buildSystemRunApprovalPlan,
-  handleSystemRunInvoke,
-  resolveEffectiveSystemRunExecPolicy,
-} from "./invoke-system-run.js";
+import { buildSystemRunApprovalPlan } from "./invoke-system-run-plan.js";
+import { handleSystemRunInvoke, resolveEffectiveSystemRunExecPolicy } from "./invoke-system-run.js";
 import type { NodeInvokeRequestPayload, RunResult, SkillBinsProvider } from "./invoke-types.js";
 
 export type NodeHostInvokeRuntime = {
@@ -33,16 +30,6 @@ export type NodeHostInvokeRuntime = {
   desktopHostConfig?: DesktopHostConfig;
   emitProgress?: (text: string) => Promise<void>;
 };
-
-type ClaudeCliNodeInvokeDeps = Pick<
-  Parameters<typeof handleSystemRunInvoke>[0],
-  | "resolveExecSecurity"
-  | "resolveExecAsk"
-  | "isCmdExeInvocation"
-  | "sanitizeEnv"
-  | "runViaMacAppExecHost"
-  | "buildExecEventPayload"
->;
 
 const CLAUDE_NODE_AUTH_INPUTS = [
   {
@@ -94,7 +81,6 @@ export async function handleClaudeCliNodeInvoke(params: {
   response: NodeInvokeResponder;
   skillBins: SkillBinsProvider;
   runtime: NodeHostInvokeRuntime;
-  deps: ClaudeCliNodeInvokeDeps;
 }): Promise<void> {
   if (!params.runtime.claudePath) {
     await params.response.error("UNAVAILABLE", "Claude CLI agent runs are unavailable");
@@ -123,8 +109,6 @@ export async function handleClaudeCliNodeInvoke(params: {
   const execPolicy = await resolveEffectiveSystemRunExecPolicy({
     cfg: getNodeRuntimeConfig(),
     agentId: request.agentId,
-    defaultSecurity: params.deps.resolveExecSecurity(undefined),
-    defaultAsk: params.deps.resolveExecAsk(undefined),
     requireSocket: false,
   });
   const approvalPlan = {
@@ -136,7 +120,6 @@ export async function handleClaudeCliNodeInvoke(params: {
   };
   let runResult: RunResult | undefined;
   await (params.runtime.handleSystemRun ?? handleSystemRunInvoke)({
-    client: params.client,
     // The command-specific validator is the execution boundary. Approval sees
     // every caller-supplied executable argument. The node adds its own prompt,
     // verified resources, and invocation-only MCP proxy after approval.
@@ -151,12 +134,6 @@ export async function handleClaudeCliNodeInvoke(params: {
       timeoutMs: request.timeoutMs,
     },
     skillBins: params.skillBins,
-    execHostEnforced: false,
-    execHostFallbackAllowed: true,
-    resolveExecSecurity: params.deps.resolveExecSecurity,
-    resolveExecAsk: params.deps.resolveExecAsk,
-    isCmdExeInvocation: params.deps.isCmdExeInvocation,
-    sanitizeEnv: params.deps.sanitizeEnv,
     runCommand: async (approvalArgv, cwd, env, timeoutMs, _signal, assertCurrent) => {
       const childEnv = { ...env };
       for (const key of request.clearEnv ?? []) {
@@ -187,26 +164,17 @@ export async function handleClaudeCliNodeInvoke(params: {
       }
       return runResult;
     },
-    runViaMacAppExecHost: params.deps.runViaMacAppExecHost,
-    // Agent runs already report through the agent-run stream. Suppress the
-    // system.run lifecycle side-channel, whose Gateway provenance is scoped
-    // exclusively to system.run invokes.
-    sendNodeEvent: async () => {},
-    buildExecEventPayload: params.deps.buildExecEventPayload,
     sendInvokeResult: async (result) => {
       if (
         !result.ok &&
         !request.approvalDecision &&
         result.error?.message?.includes("approval required")
       ) {
-        await params.response.send({
-          ok: true,
-          payloadJSON: JSON.stringify({
-            approvalRequired: true,
-            systemRunPlan: approvalPlan,
-            security: execPolicy.security,
-            ask: execPolicy.ask,
-          }),
+        await params.response.json({
+          approvalRequired: true,
+          systemRunPlan: approvalPlan,
+          security: execPolicy.security,
+          ask: execPolicy.ask,
         });
         return;
       }
@@ -222,12 +190,8 @@ export async function handleClaudeCliNodeInvoke(params: {
           ? { timeoutKind: runResult.noOutputTimedOut ? ("idle" as const) : ("hard" as const) }
           : {}),
       };
-      await params.response.send({
-        ok: true,
-        payloadJSON: JSON.stringify(payload),
-      });
+      await params.response.json(payload);
     },
-    sendExecFinishedEvent: async () => {},
     preferMacAppExecHost: false,
   });
 }

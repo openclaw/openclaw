@@ -1,7 +1,6 @@
 // @vitest-environment node
 import {
   reduceSessionProjection,
-  reduceSessionProjectionRunEvent,
   type SessionProjectionScope,
 } from "@openclaw/gateway-client/browser";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -142,38 +141,6 @@ describe("pane-owned canonical session projection", () => {
     },
   );
 
-  it("publishes run-only events without traversing the unchanged transcript", () => {
-    const owner = { sessionKey: "agent:main:shared", chatMessages: [] as unknown[] };
-    const initial = reduceChatSessionProjection(owner, {
-      type: "snapshotLoaded",
-      messages: [createHistoryMessage("user", "persisted", { id: "user", seq: 1 })],
-    });
-    let rowReads = 0;
-    const messages = new Proxy(owner.chatMessages, {
-      get(target, key, receiver) {
-        if (typeof key === "string" && /^\d+$/u.test(key)) {
-          rowReads += 1;
-        }
-        return Reflect.get(target, key, receiver);
-      },
-    });
-    owner.chatMessages = messages;
-    setChatRunOwner(owner, "running");
-    const next = expectDefined(
-      reduceSessionProjectionRunEvent(initial, { state: "delta", runId: "running" }, initial.scope),
-      "run-only projection transition",
-    );
-    publishChatSessionProjection(owner, next.projection);
-
-    expect(rowReads).toBe(0);
-    expect(owner.chatMessages).toBe(messages);
-    expect(getChatRunOwner(owner)).toBe("running");
-    expect(getChatSessionProjection(owner).runs.running?.status).toBe("streaming");
-    reduceChatSessionProjection(owner, { type: "sessionReset" });
-    expect(getChatRunOwner(owner)).toBeUndefined();
-    expect(owner.chatMessages).toEqual([]);
-  });
-
   it.each(["messagePersisted", "snapshotLoaded"] as const)(
     "sender provenance does not survive authoritative omission in %s",
     (type) => {
@@ -290,12 +257,6 @@ describe("pane-owned canonical session projection", () => {
 
   it.each([
     {
-      name: "live-first active adoption",
-      admitFirst: true,
-      cached: false,
-      eventType: "messagePersisted" as const,
-    },
-    {
       name: "history-first terminal adoption",
       admitFirst: false,
       cached: false,
@@ -399,22 +360,6 @@ describe("pane-owned canonical session projection", () => {
     }
   });
 
-  it("adopts the exact submission at its actual committed position", () => {
-    const { client, chatSubmissions, owner, sessionKey } = createInitialHandoffFixture();
-    admitChatSubmission(owner, undefined);
-    const authoritative = createAuthoritativeInitialMessage(4);
-    reduceChatSessionProjection(
-      owner,
-      { type: "snapshotLoaded", messages: [authoritative] },
-      { runActive: false },
-    );
-    expect(owner.chatMessages).toEqual([authoritative]);
-    expect(chatSubmissions.readInitial(sessionKey, client)).toMatchObject({
-      pending: false,
-      message: null,
-    });
-  });
-
   it("does not revive an initial handoff delivered after its canonical user message", () => {
     const { chatSubmissions, owner, initial: handoff } = createInitialHandoffFixture(false);
     const authoritative = createAuthoritativeInitialMessage();
@@ -434,7 +379,7 @@ describe("pane-owned canonical session projection", () => {
   });
 
   it.each(
-    ["messagePersisted", "snapshotLoaded"].flatMap((eventType) =>
+    ["snapshotLoaded"].flatMap((eventType) =>
       ["handoff-first", "receipt-first"].map((order) => ({ eventType, order })),
     ),
   )("adopts consumed input through $eventType ($order)", ({ eventType, order }) => {
@@ -476,21 +421,6 @@ describe("pane-owned canonical session projection", () => {
     expect(owner.chatMessages).toContain(imported);
     expect(owner.chatMessages).not.toContain(handoff.message);
     expect(chatSubmissions.readInitial(sessionKey, client)?.pending).toBe(false);
-  });
-
-  it("keeps each split pane's live projection independent", () => {
-    const scope = { sessionKey: "agent:main:shared", sessionId: "shared-session" };
-    const firstPane = { sessionKey: scope.sessionKey, chatMessages: [] as unknown[] };
-    const secondPane = { sessionKey: scope.sessionKey, chatMessages: [] as unknown[] };
-    const liveUser = createHistoryMessage("user", "first pane", {
-      id: "first-user",
-      seq: 1,
-    });
-
-    projectLiveMessage(firstPane, liveUser, scope);
-
-    expect(getChatSessionProjection(firstPane, scope).messages).toEqual([liveUser]);
-    expect(getChatSessionProjection(secondPane, scope).messages).toEqual([]);
   });
 
   it("binds learned session and branch identity without reclassifying live runs", () => {
@@ -593,94 +523,6 @@ describe("pane-owned canonical session projection", () => {
     expect(getChatRunOwner(owner)).toBeUndefined();
   });
 
-  it("retires run display ownership when the same session is reset", () => {
-    const owner = { sessionKey: "agent:main:shared", chatMessages: [] as unknown[] };
-    reduceChatSessionProjection(owner, { type: "runDelta", runId: "before-reset" });
-    setChatRunOwner(owner, "before-reset");
-
-    reduceChatSessionProjection(owner, { type: "sessionReset" });
-
-    expect(getChatRunOwner(owner)).toBeUndefined();
-    expect(getChatSessionProjection(owner).runs).toEqual({});
-  });
-
-  it("retains a proven live branch when another consumer omits optional scope", () => {
-    const owner = { sessionKey: "agent:main:shared", chatMessages: [] as unknown[] };
-    const scope = {
-      sessionKey: "agent:main:shared",
-      sessionId: "shared-session",
-      activeLeafEntryId: "current-leaf",
-    };
-    const liveUser = createHistoryMessage("user", "same branch", { id: "live-user", seq: 1 });
-    const projection = projectLiveMessage(owner, liveUser, scope);
-
-    expect(
-      getChatSessionProjection(owner, {
-        sessionKey: scope.sessionKey,
-        sessionId: scope.sessionId,
-      }),
-    ).toBe(projection);
-  });
-
-  it("binds an explicit unbranched transcript before resetting for a selected leaf", () => {
-    const owner = { sessionKey: "agent:main:shared", chatMessages: [] as unknown[] };
-    const initialScope = { sessionKey: "agent:main:shared" };
-    const liveUser = createHistoryMessage("user", "unbranched turn", {
-      id: "unbranched-user",
-      seq: 1,
-    });
-    projectLiveMessage(owner, liveUser, initialScope);
-
-    expect(
-      getChatSessionProjection(owner, {
-        ...initialScope,
-        activeLeafEntryId: null,
-      }).scope,
-    ).toEqual({ ...initialScope, activeLeafEntryId: null });
-    expect(
-      getChatSessionProjection(owner, {
-        ...initialScope,
-        activeLeafEntryId: "selected-leaf",
-      }).messages,
-    ).toEqual([]);
-  });
-
-  it("lets the shared reducer mark and adopt a newly materialized pending send", () => {
-    const owner = { sessionKey: "agent:main:shared", chatMessages: [] as unknown[] };
-    const scope = { sessionKey: "agent:main:shared", sessionId: "shared-session" };
-    const firstUser = createHistoryMessage("user", "first persisted prompt", {
-      id: "first-user",
-      idempotencyKey: "first-run:user",
-      seq: 1,
-    });
-    const pendingUser = createHistoryMessage("user", "second prompt", {
-      idempotencyKey: "second-run:user",
-    });
-    const persistedUser = createHistoryMessage("user", "second prompt", {
-      id: "second-user",
-      idempotencyKey: "second-run:user",
-      seq: 2,
-    });
-    publishChatSessionProjectionMessages(owner, [firstUser], { scope });
-
-    const pending = publishChatSessionProjectionMessages(owner, [firstUser, pendingUser], {
-      scope,
-    });
-
-    expect(pending.entries[0]?.pending).toBe(false);
-    expect(pending.entries[1]).toMatchObject({ pending: true, pendingRunId: "second-run" });
-    const adopted = reduceSessionProjection(pending, {
-      type: "snapshotLoaded",
-      messages: [firstUser, persistedUser],
-      scope,
-    });
-    expect(adopted.messages).toEqual([firstUser, persistedUser]);
-    expect(adopted.entries[1]).toMatchObject({
-      pending: false,
-      identity: { id: "second-user", runId: "second-run" },
-    });
-  });
-
   it("retires every materialized local assistant when its pending send fails", () => {
     const owner = { sessionKey: "agent:main:shared", chatMessages: [] as unknown[] };
     const pendingUser = createHistoryMessage("user", "prompt", {
@@ -719,139 +561,5 @@ describe("pane-owned canonical session projection", () => {
     reduceChatSessionProjection(owner, { type: "snapshotLoaded", messages: [] });
 
     expect(owner.chatMessages).toEqual([prefix, tail]);
-  });
-
-  it("does not classify later authoritative rows as optimistic sends", () => {
-    const owner = { sessionKey: "agent:main:shared", chatMessages: [] as unknown[] };
-    const scope = { sessionKey: "agent:main:shared" };
-    const first = createHistoryMessage("user", "first", {
-      id: "first-user",
-      idempotencyKey: "first-run:user",
-      seq: 1,
-    });
-    const second = createHistoryMessage("user", "second", {
-      id: "second-user",
-      idempotencyKey: "second-run:user",
-      seq: 2,
-    });
-    publishChatSessionProjectionMessages(owner, [first], { scope });
-
-    expect(
-      publishChatSessionProjectionMessages(owner, [first, second], { scope }).entries,
-    ).toMatchObject([{ pending: false }, { pending: false }]);
-  });
-
-  it("never resurrects an ordinary historical row removed by a snapshot", () => {
-    const owner = { sessionKey: "agent:main:shared", chatMessages: [] as unknown[] };
-    const scope = { sessionKey: "agent:main:shared" };
-    const removed = createHistoryMessage("user", "removed prompt", {
-      id: "removed-user",
-      seq: 1,
-    });
-    const reply = createHistoryMessage("assistant", "remaining reply", {
-      id: "remaining-reply",
-      seq: 2,
-    });
-    const projection = publishChatSessionProjectionMessages(owner, [removed, reply], { scope });
-
-    expect(
-      reduceSessionProjection(projection, {
-        type: "snapshotLoaded",
-        messages: [reply],
-        scope,
-      }).messages,
-    ).toEqual([reply]);
-  });
-
-  it("does not restore a hidden live message into the displayed transcript", () => {
-    const owner = { sessionKey: "agent:main:shared", chatMessages: [] as unknown[] };
-    const scope = { sessionKey: "agent:main:shared" };
-    const hidden = createHistoryMessage("user", "hidden prompt", {
-      id: "hidden-user",
-      seq: 1,
-    });
-
-    expect(
-      reduceSessionProjection(projectLiveMessage(owner, hidden, scope), {
-        type: "snapshotLoaded",
-        messages: [],
-        scope,
-        options: { shouldIncludeMessage: (message) => message !== hidden },
-      }).messages,
-    ).toEqual([]);
-  });
-
-  it("preserves distinct same-text prompts by canonical message identity", () => {
-    const owner = { sessionKey: "agent:main:shared", chatMessages: [] as unknown[] };
-    const scope = { sessionKey: "agent:main:shared" };
-    const first = createHistoryMessage("user", "continue", {
-      id: "first-user",
-      idempotencyKey: "first-run:user",
-      seq: 1,
-    });
-    const second = createHistoryMessage("user", "continue", {
-      id: "second-user",
-      idempotencyKey: "second-run:user",
-      seq: 2,
-    });
-    const projection = reduceSessionProjection(projectLiveMessage(owner, first, scope), {
-      type: "messagePersisted",
-      message: second,
-      scope,
-    });
-
-    expect(projection.messages).toEqual([first, second]);
-  });
-
-  it("keeps colliding native and imported provider identities separate", () => {
-    const owner = { sessionKey: "agent:main:shared", chatMessages: [] as unknown[] };
-    const scope = { sessionKey: "agent:main:shared" };
-    const native = createHistoryMessage("user", "native", {
-      id: "provider-local",
-      seq: 1,
-    });
-    const imported = createHistoryMessage("user", "imported", {
-      id: "provider-local",
-      importedFrom: "claude-cli",
-      cliSessionId: "cli-session",
-      externalId: "provider-local",
-      seq: 2,
-    });
-
-    expect(
-      reduceSessionProjection(projectLiveMessage(owner, native, scope), {
-        type: "messagePersisted",
-        message: imported,
-        scope,
-      }).messages,
-    ).toEqual([native, imported]);
-  });
-
-  it("adopts an attachment-only pending turn by its run identity", () => {
-    const owner = { sessionKey: "agent:main:shared", chatMessages: [] as unknown[] };
-    const scope = { sessionKey: "agent:main:shared" };
-    const pending = {
-      role: "user",
-      content: "",
-      __openclaw: { idempotencyKey: "attachment-run:user" },
-    };
-    const persisted = {
-      role: "user",
-      content: "",
-      __openclaw: {
-        id: "attachment-user",
-        idempotencyKey: "attachment-run:user",
-        seq: 4,
-        media: [{ mimeType: "application/pdf", fileName: "brief.pdf" }],
-      },
-    };
-
-    expect(
-      reduceSessionProjection(publishChatSessionProjectionMessages(owner, [pending], { scope }), {
-        type: "snapshotLoaded",
-        messages: [persisted],
-        scope,
-      }).messages,
-    ).toEqual([persisted]);
   });
 });

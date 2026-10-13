@@ -30,7 +30,7 @@ export function matchCronStreamLines(
   }
   const pool = (state.pool ??= new WorkerTaskPool({
     workerUrl: resolveRuntimeProcessEntrypointUrl("cronStreamMatcher"),
-    maxWorkers: 2,
+    workerClass: "compute",
     sharedCompute: true,
     maxPendingTasks: 32,
     maxPendingBytes: 8 * 1024 * 1024,

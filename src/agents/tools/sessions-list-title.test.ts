@@ -15,6 +15,7 @@ import {
   requestContext,
 } from "../../gateway/server-methods/sessions-read-cache.test-support.js";
 import { withOperatorToolGatewayAuthority } from "../../gateway/server-plugin-in-process-dispatch.js";
+import { getSessionRowProjection } from "../../gateway/session-row-projection-access.js";
 import * as transcriptTitles from "../../gateway/session-transcript-title-reader.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
@@ -45,7 +46,7 @@ async function withInventory(
     const viewer = ensureProfileForEmail("inventory-title-reader@example.test");
     const cfg: OpenClawConfig = {
       ...VALID_CONFIG,
-      agents: { entries: { main: { default: true }, other: {} } },
+      agents: { entries: { main: {}, other: {} } },
       gateway: {
         roles: {
           default: "reader",
@@ -120,28 +121,27 @@ async function withInventory(
         ),
       );
     const overrides = new Map(rows.map((row, index) => [row.key, definitions[index]!.row]));
+    const projection = expectDefined(getSessionRowProjection(context), "inventory projection");
+    const presentRow = projection.present.bind(projection);
+    const presentation = vi.spyOn(projection, "present").mockImplementation((...args) => {
+      const row = presentRow(...args);
+      // Inject wire-field edge cases before publication freezes and binds the recipient row.
+      Object.assign(row, overrides.get(row.key));
+      // Keep title admission below the separately tested response byte budget.
+      delete row.createdActor;
+      delete row.owner;
+      return row;
+    });
     const callGateway: AgentToolGatewayRequestCaller = async <T>(
       request: Parameters<AgentToolGatewayRequestCaller>[0],
     ): Promise<T> => {
-      if (request.method !== "sessions.list") {
-        return await callAgentToolGatewayRequest<T>(request);
+      if (request.method === "sessions.list") {
+        expect(request.params).toMatchObject({
+          includeDerivedTitles: false,
+          includeLastMessage: false,
+        });
       }
-      expect(request.params).toMatchObject({
-        includeDerivedTitles: false,
-        includeLastMessage: false,
-      });
-      const response = await callAgentToolGatewayRequest<{ sessions: GatewaySessionListRow[] }>(
-        request,
-      );
-      for (const row of response.sessions) {
-        // Preserve the producer's row binding while exercising optional wire-field edge cases.
-        Object.assign(row, overrides.get(row.key));
-        // Keep the title-admission fixture below the separately tested byte budget.
-        delete row.createdActor;
-        delete row.owner;
-      }
-      // SAFETY: the registered method produced this response; only its row metadata was overlaid.
-      return response as T;
+      return await callAgentToolGatewayRequest<T>(request);
     };
     const tool = createSessionsListTool({
       config: cfg,
@@ -169,6 +169,7 @@ async function withInventory(
       expect(persisted()).toEqual(before);
     } finally {
       reads.mockRestore();
+      presentation.mockRestore();
       await disposeSessionReadContexts();
     }
   });

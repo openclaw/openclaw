@@ -1,6 +1,3 @@
-/**
- * Shared run helpers for retry limits, model reporting, and final text.
- */
 import { generateSecureToken } from "../../../infra/secure-random.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import { extractAssistantTextForPhase } from "../../../shared/chat-message-content.js";
@@ -9,20 +6,11 @@ import {
   deriveContextPromptTokens,
   hasNonzeroUsage,
   normalizeUsage,
-  type ContextUsage,
   type NormalizedUsage,
+  type UsageLike,
 } from "../../usage.js";
 import type { EmbeddedAgentMeta } from "../types.js";
 import { toNormalizedUsage, type UsageAccumulator } from "../usage-accumulator.js";
-
-type UsageSnapshot = {
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  contextUsage?: ContextUsage;
-  total?: number;
-};
 
 export type RuntimeAuthState = {
   generation: number;
@@ -41,17 +29,6 @@ export const RUNTIME_AUTH_REFRESH_MIN_DELAY_MS = 5 * 1000;
 const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
 const ANTHROPIC_MAGIC_STRING_REPLACEMENT = "[redacted]";
 
-// Keep the replacement neutral: naming the refusal trigger can itself prompt a refusal.
-function scrubAnthropicRefusalMagic(prompt: string): string {
-  if (!prompt.includes(ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL)) {
-    return prompt;
-  }
-  return prompt.replaceAll(
-    ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL,
-    ANTHROPIC_MAGIC_STRING_REPLACEMENT,
-  );
-}
-
 /** Anthropic's transport interprets this marker even for native-owned attempts. */
 export function resolveEmbeddedAttemptBasePrompt(params: {
   provider: string;
@@ -60,7 +37,11 @@ export function resolveEmbeddedAttemptBasePrompt(params: {
   if (params.provider !== "anthropic") {
     return params.prompt;
   }
-  return scrubAnthropicRefusalMagic(params.prompt);
+  // Naming the refusal trigger in its replacement can itself prompt a refusal.
+  return params.prompt.replaceAll(
+    ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL,
+    ANTHROPIC_MAGIC_STRING_REPLACEMENT,
+  );
 }
 
 export function createRunRecoveryDiagId(): string {
@@ -80,21 +61,6 @@ export function resolveMaxRunRetryIterations(profileCandidateCount: number): num
   return Math.min(MAX_RUN_RETRY_ITERATIONS, Math.max(MIN_RUN_RETRY_ITERATIONS, scaled));
 }
 
-export function resolveActiveErrorContext(params: {
-  provider: string;
-  model: string;
-  assistant?: { provider?: string; model?: string };
-}): {
-  provider: string;
-  model: string;
-} {
-  return resolveReportedModelRef(params);
-}
-
-function isEmbeddedHarnessProvider(provider: string): boolean {
-  return provider.trim().toLowerCase() === "openclaw";
-}
-
 export function resolveReportedModelRef(params: {
   provider: string;
   model: string;
@@ -105,20 +71,14 @@ export function resolveReportedModelRef(params: {
 } {
   const assistantProvider = params.assistant?.provider?.trim();
   const assistantModel = params.assistant?.model?.trim();
-  if (!assistantProvider) {
-    return {
-      provider: params.provider,
-      model: assistantModel || params.model,
-    };
-  }
-  if (isEmbeddedHarnessProvider(assistantProvider)) {
+  if (assistantProvider?.toLowerCase() === "openclaw") {
     return {
       provider: params.provider,
       model: params.model,
     };
   }
   return {
-    provider: assistantProvider,
+    provider: assistantProvider || params.provider,
     model: assistantModel || params.model,
   };
 }
@@ -132,13 +92,9 @@ export function resolveLatestCallUsage(params: {
   latest: NormalizedUsage | undefined;
 } {
   const currentAttempt = params.currentAttemptCandidates.find(hasNonzeroUsage);
-  const carriedUsage = hasNonzeroUsage(params.carriedUsage) ? params.carriedUsage : undefined;
-  const transcriptFallback = hasNonzeroUsage(params.transcriptFallback)
-    ? params.transcriptFallback
-    : undefined;
   return {
     currentAttempt,
-    latest: currentAttempt ?? carriedUsage ?? transcriptFallback,
+    latest: [currentAttempt, params.carriedUsage, params.transcriptFallback].find(hasNonzeroUsage),
   };
 }
 
@@ -154,21 +110,17 @@ export function normalizeAssistantUsageForContext(
   ) {
     return { contextUsage: { state: "unavailable" } };
   }
-  return normalizeUsage(assistant?.usage as UsageSnapshot | undefined);
+  return normalizeUsage(assistant?.usage as UsageLike | undefined);
 }
 
 export function buildUsageAgentMetaFields(params: {
   usageAccumulator: UsageAccumulator;
-  latestUsage?: UsageSnapshot | null;
-  lastRunPromptUsage: UsageSnapshot | undefined;
+  latestUsage?: UsageLike | null;
+  lastRunPromptUsage: NormalizedUsage | undefined;
 }): Pick<EmbeddedAgentMeta, "usage" | "lastCallUsage" | "promptTokens" | "costUsd"> {
   const usage = toNormalizedUsage(params.usageAccumulator);
-  const latestUsage = normalizeUsage(params.latestUsage as never);
-  const lastCallUsage = hasNonzeroUsage(latestUsage)
-    ? latestUsage
-    : hasNonzeroUsage(params.lastRunPromptUsage)
-      ? params.lastRunPromptUsage
-      : undefined;
+  const latestUsage = normalizeUsage(params.latestUsage);
+  const lastCallUsage = [latestUsage, params.lastRunPromptUsage].find(hasNonzeroUsage);
   const promptTokens = deriveContextPromptTokens({
     lastCallUsage,
   });
@@ -180,12 +132,7 @@ export function buildUsageAgentMetaFields(params: {
   };
 }
 
-/**
- * Build agentMeta for error return paths, preserving accumulated usage so that
- * session totalTokens reflects the actual context size rather than going stale.
- * Without this, error returns omit usage and the session keeps whatever
- * totalTokens was set by the previous successful run.
- */
+/** Error returns retain usage so the session does not keep an older context total. */
 export function buildErrorAgentMeta(params: {
   sessionId: string;
   sessionFile?: string;
@@ -193,8 +140,9 @@ export function buildErrorAgentMeta(params: {
   model: string;
   credentialSource?: EmbeddedAgentMeta["credentialSource"];
   contextTokens?: number;
+  contextTokensSource?: "resolved-v1";
   usageAccumulator: UsageAccumulator;
-  lastRunPromptUsage: UsageSnapshot | undefined;
+  lastRunPromptUsage: NormalizedUsage | undefined;
   currentAttemptAssistant?: { api?: string; usage?: unknown } | null;
 }): EmbeddedAgentMeta {
   const usageMeta = buildUsageAgentMetaFields({
@@ -209,7 +157,9 @@ export function buildErrorAgentMeta(params: {
     model: params.model,
     ...(params.credentialSource ? { credentialSource: params.credentialSource } : {}),
     ...(params.contextTokens ? { contextTokens: params.contextTokens } : {}),
-    ...(params.contextTokens ? { contextTokensSource: "resolved" as const } : {}),
+    ...(params.contextTokens
+      ? { contextTokensSource: params.contextTokensSource ?? ("resolved" as const) }
+      : {}),
     ...(usageMeta.usage ? { usage: usageMeta.usage } : {}),
     ...(usageMeta.lastCallUsage ? { lastCallUsage: usageMeta.lastCallUsage } : {}),
     ...(usageMeta.promptTokens ? { promptTokens: usageMeta.promptTokens } : {}),

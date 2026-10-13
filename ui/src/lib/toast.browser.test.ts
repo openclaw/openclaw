@@ -68,28 +68,48 @@ describe.skipIf(!hasBrowserLayout)("toast browser layout", () => {
     );
   });
   it("keeps settings feedback at the safe lower edge without moving anchored notices", async () => {
-    for (const width of [1280, 390]) {
-      await useViewport(width, 844);
-      const host = await showArchiveToast({ placement: "bottom" });
-      host.style.setProperty("--safe-area-bottom", "24px");
-      const toast = host.querySelector<HTMLElement>(".app-toast")!;
-      await Promise.all(toast.getAnimations().map((animation) => animation.finished));
-      const bounds = toast.getBoundingClientRect();
-      expect(bounds.bottom).toBeCloseTo(800, 0);
-      expect(bounds.right).toBeCloseTo(width - (width === 390 ? 12 : 20), 0);
-      expect(host.querySelector(".app-toast__dismiss")!.getBoundingClientRect().height).toBe(
-        width === 390 ? 44 : 32,
-      );
-      host.remove();
-    }
+    const root = document.documentElement;
+    const previousStyle = root.getAttribute("style");
+    // Physical insets belong to the app root; a toast-local override cannot
+    // change the shared canvas facts inherited from that owner.
+    root.style.setProperty("--safe-area-bottom", "24px");
+    try {
+      for (const width of [1280, 390]) {
+        await useViewport(width, 844);
+        const host = await showArchiveToast({ placement: "bottom" });
+        const toast = host.querySelector<HTMLElement>(".app-toast")!;
+        await Promise.all(toast.getAnimations().map((animation) => animation.finished));
+        const bounds = toast.getBoundingClientRect();
+        expect(bounds.bottom).toBeCloseTo(800, 0);
+        expect(bounds.right).toBeCloseTo(width - (width === 390 ? 12 : 20), 0);
+        expect(host.querySelector(".app-toast__dismiss")!.getBoundingClientRect().height).toBe(
+          width === 390 ? 44 : 32,
+        );
+        // The viewport owner publishes a shorter canvas and no extra home-bar
+        // inset while the keyboard occupies the bottom of the viewport.
+        root.style.setProperty("--shell-viewport-height", "600px");
+        root.style.setProperty("--shell-safe-area-bottom", "0px");
+        expect(toast.getBoundingClientRect().bottom).toBeCloseTo(580, 0);
+        root.style.removeProperty("--shell-viewport-height");
+        root.style.removeProperty("--shell-safe-area-bottom");
+        expect(toast.getBoundingClientRect().bottom).toBeCloseTo(800, 0);
+        host.remove();
+      }
 
-    const anchor = document.createElement("div");
-    anchor.style.cssText = "position: fixed; top: 100px; left: 20px; width: 350px; height: 100px";
-    document.body.append(anchor);
-    const host = await showArchiveToast({ anchor, placement: "bottom" });
-    const toast = host.querySelector<HTMLElement>(".app-toast")!;
-    expect(toast.classList.contains("app-toast--bottom")).toBe(false);
-    expect(getComputedStyle(toast).top).toBe("100px");
+      const anchor = document.createElement("div");
+      anchor.style.cssText = "position: fixed; top: 100px; left: 20px; width: 350px; height: 100px";
+      document.body.append(anchor);
+      const host = await showArchiveToast({ anchor, placement: "bottom" });
+      const toast = host.querySelector<HTMLElement>(".app-toast")!;
+      expect(toast.classList.contains("app-toast--bottom")).toBe(false);
+      expect(getComputedStyle(toast).top).toBe("100px");
+    } finally {
+      if (previousStyle === null) {
+        root.removeAttribute("style");
+      } else {
+        root.setAttribute("style", previousStyle);
+      }
+    }
   });
 
   it("keeps oversized errors scrollable with actions inside a short phone viewport", async () => {

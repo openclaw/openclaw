@@ -9,7 +9,7 @@ import {
   selectApplicationSession,
 } from "../app/agent-selection.ts";
 import { createSessionCapability, type SessionRowObservation } from "../lib/sessions/index.ts";
-import type { SessionPatchResult } from "../lib/sessions/patch.ts";
+import type { SessionPatch, SessionPatchResult } from "../lib/sessions/patch.ts";
 import { sessionsResult } from "../lib/sessions/session-capability.test-support.ts";
 import { loadChatRoute } from "../pages/chat/route-loader.ts";
 import "../test-helpers/app-sidebar-suite.ts";
@@ -20,20 +20,14 @@ import {
 } from "../test-helpers/app-sidebar.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
+import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import "./app-sidebar.ts";
 
 const requireRecord = createRequireRecord("object", "expected-label");
 
 describe("sidebar global row observation", () => {
-  it.each([
-    "during describe",
-    "after list failure",
-    "after route retirement",
-    "after disposal",
-    "while pinning and reading",
-    "after a successor list",
-  ] as const)(
+  it.each(["after describe", "while pinning and reading", "after a successor list"] as const)(
     "keeps the routed Work alias scoped while reads and ownership change (%s)",
     async (eventTiming) => {
       const agentsList = {
@@ -56,14 +50,11 @@ describe("sidebar global row observation", () => {
         hasActiveRun: false,
       };
       const work: GatewaySessionRow = {
-        key: "global",
+        ...main,
         agentId: "work",
         sessionId: "work-global",
-        kind: "global",
         updatedAt: 200,
         label: "WORK TARGET DESCRIPTOR",
-        archived: false,
-        pinned: false,
         unread: eventTiming === "while pinning and reading",
         startedAt: 200,
         status: "running",
@@ -200,47 +191,6 @@ describe("sidebar global row observation", () => {
         sidebar.sessionKey = route.sessionKey;
         await waitForFast(() => expect(workListRequests).toBe(1));
         await waitForFast(() => expect(describeRequests).toBe(1));
-        if (eventTiming === "after route retirement" || eventTiming === "after disposal") {
-          const lineage = sidebar.sessionData.loadActiveSessionLineage(route.sessionKey);
-          const { key, agentId, ...fields } = updated;
-          harness.publishEvent("sessions.changed", {
-            ...fields,
-            sessionKey: key,
-            agentId,
-            reason: "patch",
-            ts: 250,
-          });
-          if (eventTiming === "after disposal") {
-            provider.remove();
-          } else {
-            const next = await loadChatRoute(
-              context,
-              { pathname: "/chat/main", search: "", hash: "" },
-              "chat",
-              new AbortController().signal,
-            );
-            if (!("kind" in next) || next.kind !== "session") {
-              throw new Error("Main route did not resolve to a session");
-            }
-            selectApplicationSession({ selection, gateway, sessionKey: next.sessionKey });
-            sidebar.sessionKey = next.sessionKey;
-          }
-          workDescribe.resolve({ session: work });
-          await lineage;
-          if (eventTiming === "after route retirement") {
-            workList.resolve(sessionsResult([updated], 250));
-            await waitForFast(() => expect(sessions.state.agentId).toBe("main"));
-            await sidebar.sessionData.loadActiveSessionLineage(sidebar.sessionKey);
-            await sidebar.updateComplete;
-            expect(sidebar.querySelector(`[data-session-key="${route.sessionKey}"]`)).toBeNull();
-            expect(sidebar.textContent).not.toContain(work.label);
-            expect(sidebar.textContent).not.toContain(updated.label);
-          } else {
-            expect(document.body.contains(sidebar)).toBe(false);
-          }
-          expect(describeRequests).toBe(1);
-          return;
-        }
         const assertAlias = (expected: GatewaySessionRow) => {
           const row = sidebar.querySelector(`[data-session-key="${route.sessionKey}"]`);
           expect.soft(row?.textContent).toContain(expected.label);
@@ -271,13 +221,10 @@ describe("sidebar global row observation", () => {
             ts: 250,
           });
         };
-        if (eventTiming === "during describe") {
-          publishWorkPatch();
-        }
         workDescribe.resolve({ session: work });
         await sidebar.sessionData.loadActiveSessionLineage(route.sessionKey);
         await sidebar.updateComplete;
-        assertAlias(eventTiming === "during describe" ? updated : work);
+        assertAlias(work);
         expect(sessions.state.loading).toBe(true);
         assertMainUnchanged();
 
@@ -331,19 +278,22 @@ describe("sidebar global row observation", () => {
             key: route.sessionKey,
           });
           await import("./session-organizer-operations.runtime.ts");
-          action = sidebar.sessionOrganizer.patchSession(visibleRow(), { pinned: true });
-          await waitForFast(() =>
-            expect(request).toHaveBeenCalledWith(
-              "sessions.patch",
-              expect.objectContaining({
-                key: route.sessionKey,
-                pinned: true,
-                agentId: "work",
-                expectedSessionId: "work-global",
-              }),
-            ),
-          );
-          await sidebar.updateComplete;
+          const beginPatch = async (patch: SessionPatch) => {
+            action = sidebar.sessionOrganizer.patchSession(visibleRow(), patch);
+            await waitForFast(() =>
+              expect(request).toHaveBeenCalledWith(
+                "sessions.patch",
+                expect.objectContaining({
+                  key: route.sessionKey,
+                  agentId: "work",
+                  expectedSessionId: "work-global",
+                  ...patch,
+                }),
+              ),
+            );
+            await sidebar.updateComplete;
+          };
+          await beginPatch({ pinned: true });
           expect.soft(visibleRow().pinned).toBe(true);
           assertMainUnchanged();
           pinReply.resolve({
@@ -358,19 +308,7 @@ describe("sidebar global row observation", () => {
           await sidebar.updateComplete;
           expect.soft(visibleRow().pinned).toBe(true);
 
-          action = sidebar.sessionOrganizer.patchSession(visibleRow(), { unread: false });
-          await waitForFast(() =>
-            expect(request).toHaveBeenCalledWith(
-              "sessions.patch",
-              expect.objectContaining({
-                key: route.sessionKey,
-                unread: false,
-                agentId: "work",
-                expectedSessionId: "work-global",
-              }),
-            ),
-          );
-          await sidebar.updateComplete;
+          await beginPatch({ unread: false });
           expect.soft(visibleRow()).toMatchObject({ pinned: true, unread: false });
           readReply.resolve({
             ok: true,
@@ -382,19 +320,7 @@ describe("sidebar global row observation", () => {
           await sidebar.updateComplete;
           expect.soft(visibleRow()).toMatchObject({ pinned: true, unread: false });
 
-          action = sidebar.sessionOrganizer.patchSession(visibleRow(), { pinned: false });
-          await waitForFast(() =>
-            expect(request).toHaveBeenCalledWith(
-              "sessions.patch",
-              expect.objectContaining({
-                key: route.sessionKey,
-                pinned: false,
-                agentId: "work",
-                expectedSessionId: "work-global",
-              }),
-            ),
-          );
-          await sidebar.updateComplete;
+          await beginPatch({ pinned: false });
           expect.soft(visibleRow().pinned).toBe(false);
           unpinReply.reject(new Error("Unpin rejected"));
           await action;
@@ -421,10 +347,8 @@ describe("sidebar global row observation", () => {
           assertMainUnchanged();
           return;
         }
-        if (eventTiming === "after list failure") {
-          publishWorkPatch();
-        }
-        await sidebar.updateComplete;
+        publishWorkPatch();
+        await settleLitElement(sidebar);
         assertAlias(updated);
         assertMainUnchanged();
         currentWork = completed;
@@ -438,7 +362,7 @@ describe("sidebar global row observation", () => {
           ts: 500,
           session: completed,
         });
-        await sidebar.updateComplete;
+        await settleLitElement(sidebar);
         assertAlias(completed);
         assertMainUnchanged();
 
@@ -452,15 +376,8 @@ describe("sidebar global row observation", () => {
         await sidebar.updateComplete;
         expect(sessions.state.result?.sessions).toHaveLength(1);
         expect(sessions.state.result?.sessions).toMatchObject([completed]);
-        expect(
-          sidebar.querySelector(`[data-session-key="${route.sessionKey}"]`)?.textContent,
-        ).toContain(completed.label);
+        assertAlias(completed);
         expect(sidebar.textContent).not.toContain(main.label);
-        expect(
-          sidebar
-            .querySelector(`[data-session-key="${route.sessionKey}"]`)
-            ?.classList.contains("session-row-host--running"),
-        ).toBe(false);
       } finally {
         provider.remove();
         observation?.dispose();

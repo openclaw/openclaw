@@ -13,10 +13,7 @@ const timestamp = Date.parse("2026-09-16T12:00:00.000Z");
 const scenarios = [
   { surface: "worktrees", activation: "click", collision: true },
   { surface: "worktrees", activation: "href", collision: true },
-  { surface: "tasks", activation: "click", collision: true },
-  { surface: "tasks", activation: "href", collision: true },
   { surface: "worktrees", activation: "click", collision: false },
-  { surface: "tasks", activation: "click", collision: false },
 ];
 
 suite.define(() => {
@@ -40,7 +37,7 @@ suite.define(() => {
             sessionId: "other-generation",
           };
           const gateway = await installMockGateway(page, {
-            featureMethods: ["chat.metadata", "chat.startup", "worktrees.list", "tasks.list"],
+            featureMethods: ["chat.metadata", "chat.startup", "worktrees.list"],
             sessions: [target, other],
             sessionKey: "agent:main:main",
             sessionTranscripts: {
@@ -83,34 +80,12 @@ suite.define(() => {
                   },
                 ],
               },
-              "tasks.list": {
-                tasks: [
-                  {
-                    id: "synthetic-owner-task",
-                    taskId: "synthetic-owner-task",
-                    status: "completed",
-                    title: "Synthetic owner task",
-                    agentId: "main",
-                    runtime: "subagent",
-                    sessionKey: "agent:main:main",
-                    childSessionKey: targetKey,
-                    createdAt: timestamp,
-                    updatedAt: timestamp,
-                    endedAt: timestamp,
-                  },
-                ],
-              },
             },
           });
-          await page.goto(
-            `${suite.server.baseUrl}${scenario.surface === "worktrees" ? "settings/worktrees" : "tasks"}`,
-          );
-          const link =
-            scenario.surface === "worktrees"
-              ? page
-                  .locator("openclaw-worktrees-page")
-                  .getByRole("link", { name: "Session", exact: true })
-              : page.locator('[data-task-id="synthetic-owner-task"] .session-link');
+          await page.goto(`${suite.server.baseUrl}settings/worktrees`);
+          const link = page
+            .locator("openclaw-worktrees-page")
+            .getByRole("link", { name: "Session", exact: true });
           await link.waitFor({ state: "visible" });
           const primaryKeys = () =>
             page.evaluate(() => {

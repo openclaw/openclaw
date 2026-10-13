@@ -5,6 +5,16 @@ export type SessionMutationOperatorScope = "operator.write" | "operator.admin";
 export type SessionOperatorScope = "operator.sessions.read" | "operator.sessions.write";
 
 const SESSION_READ_METHODS: ReadonlySet<string> = new Set([
+  "agent.identity.get",
+  "agents.list",
+  "canvas.document.preview",
+  "models.list",
+  "progressCard.get",
+  "projects.list",
+  "session.suggestions.list",
+  "session.reactions.list",
+  "sessions.groups.list",
+  "sessions.processes.list",
   "sessions.list",
   "sessions.subscribe",
   "sessions.messages.subscribe",
@@ -14,10 +24,13 @@ const SESSION_READ_METHODS: ReadonlySet<string> = new Set([
   "sessions.describe",
   "sessions.branches.list",
   "sessions.get",
+  "sessions.github.options",
+  "sessions.github.status",
   "sessions.resolve",
   "sessions.search",
   "sessions.files.list",
   "sessions.files.get",
+  "sessions.files.assets",
   "sessions.setInvolvement",
   "chat.history",
   "chat.startup",
@@ -25,6 +38,10 @@ const SESSION_READ_METHODS: ReadonlySet<string> = new Set([
   "chat.message.get",
   "session.members.list",
   "session.members.listEvidence",
+  "themes.get",
+  "themes.list",
+  "users.prefs.get",
+  "users.self",
 ]);
 
 const SESSION_WRITE_METHODS: ReadonlySet<string> = new Set([
@@ -38,11 +55,11 @@ const SESSION_WRITE_METHODS: ReadonlySet<string> = new Set([
   "sessions.create",
   "sessions.patch",
   "sessions.patchMany",
-  "sessions.delete",
   "sessions.fork",
   "sessions.recover",
   "sessions.send",
   "sessions.steer",
+  "sessions.processes.stop",
   "sessions.abort",
   "sessions.goal.update",
   "sessions.goal.clear",
@@ -74,13 +91,16 @@ const SESSIONS_PATCH_WRITE_SCOPE_MUTATIONS: ReadonlySet<string> = new Set([
   "boardFace",
   "boardPresentation",
   "pinned",
+  "sidebarRoot",
   "archived",
+  "snoozedUntil",
   "unread",
   "model",
   "agentRuntime",
   "thinkingLevel",
   "fastMode",
   "permissionMode",
+  "communication",
 ]);
 
 const SESSIONS_PATCH_WRITE_SCOPE_ENVELOPE_FIELDS: ReadonlySet<string> = new Set([
@@ -90,6 +110,10 @@ const SESSIONS_PATCH_WRITE_SCOPE_ENVELOPE_FIELDS: ReadonlySet<string> = new Set(
   "expectedLifecycleRevision",
   "expectedPermissionMode",
   "expectedMarkedUnreadAt",
+  "expectedSidebarRoot",
+  "expectedCategory",
+  "expectedArchived",
+  "expectedSidebarAncestors",
 ]);
 
 const SESSIONS_DELETE_WRITE_SCOPE_FIELDS: ReadonlySet<string> = new Set([

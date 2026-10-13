@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS } from "../../src/infra/windows-powershell-spawn.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -320,7 +321,7 @@ foreach ($case in $cases) {
         fixture,
         path.resolve("scripts/windows-testbox-openssh.ps1"),
       ],
-      { encoding: "utf8", timeout: 10000 },
+      { encoding: "utf8", timeout: WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS },
     );
     const redact = (text: string | null | undefined) => {
       let value = text ?? "";

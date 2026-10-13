@@ -53,9 +53,6 @@ export function normalizePluginToolMatcher(matcher: unknown): PluginToolMatcher 
     normalized.add(canonicalToolName);
   }
   const toolNames = Array.from(normalized).toSorted();
-  if (toolNames.length === 0) {
-    throw new TypeError("tool hook matcher entries must be non-empty strings");
-  }
   const [firstToolName, ...remainingToolNames] = toolNames;
   if (!firstToolName) {
     throw new TypeError("tool hook matcher entries must be non-empty strings");

@@ -1,4 +1,3 @@
-/** Session lifecycle event broadcast to observers when a session is created or linked. */
 import { resolveGlobalSet } from "../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 export type SessionLifecycleEvent = {
@@ -7,8 +6,8 @@ export type SessionLifecycleEvent = {
   parentSessionKey?: string;
   label?: string;
   displayName?: string;
-  /** Internal producer classification; runtime events do not change stored session-row facts. */
-  scope?: "runtime";
+  /** Runtime events preserve stored rows; entry events preserve worker placement facts. */
+  scope?: "runtime" | "session-entry";
   /** The committed change affects model, account, or runtime catalog projection. */
   catalogChanged?: true;
 } & (
@@ -22,6 +21,8 @@ export type SessionIdentityMutationTarget = {
 };
 
 export type SessionIdentityMutation = {
+  /** Physical source captured by the committing database owner. */
+  databaseIdentity: string | symbol;
   /** Resolved operation scope for bare keys; qualified keys retain their own agent. */
   agentId: string;
 } & (
@@ -48,12 +49,10 @@ const SESSION_IDENTITY_MUTATION_LISTENERS = resolveGlobalSet<SessionIdentityMuta
   Symbol.for("openclaw.sessionIdentityMutationListeners"),
   "close-and-restart",
 );
-/** Registers a session lifecycle listener. */
 export function onSessionLifecycleEvent(listener: SessionLifecycleListener): () => void {
   return registerListener(SESSION_LIFECYCLE_LISTENERS, listener);
 }
 
-/** Emits a best-effort session lifecycle event to all listeners. */
 export function emitSessionLifecycleEvent(event: SessionLifecycleEvent): void {
   notifyListeners(SESSION_LIFECYCLE_LISTENERS, event);
 }

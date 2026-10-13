@@ -4,16 +4,18 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { NodeWorkerJournalWorker } from "../../node-host/node-worker-journal-worker.js";
 import { NodeWorkerLaunchStore } from "../../node-host/node-worker-launch-store.js";
 import { requireNodeWorkerProcessIdentity } from "../../node-host/node-worker-process-identity.js";
+import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { killPidIfAlive } from "../../test-utils/process-tree.js";
 import { createServiceChildRelayAdapter } from "./service-child-relay-host.js";
 import type { ProcessExtinctionResult } from "./types.js";
 
@@ -27,15 +29,17 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 
 it
   .runIf(process.platform === "linux" || process.platform === "darwin")
-  .each([
+  .for([
     "open",
     "close-before-open",
     "stdin-closed",
     "delayed-output",
     "journal-write-failed",
+    "force-descendant",
   ] as const)(
   "runs a real owned worker through its IPC start gate and output drain (%s)",
-  async (action) => {
+  { timeout: 20_000 },
+  async (action, { signal }) => {
     const home = tempDirs.make("openclaw-owned-worker-gate-");
     const env = {
       HOME: home,
@@ -58,7 +62,13 @@ it
     expect((await store.claim(claim, supervisor, 1)).action).toBe("start");
     const cleanupBinding = await store.cleanupBinding({ ...claim, supervisor });
     const marker = path.join(home, "started.txt");
-    const onWorkerMessage = vi.fn<(message: unknown) => void>();
+    const descendantReady = createDeferred<number>();
+    const onWorkerMessage = vi.fn<(message: unknown) => void>((message) => {
+      if (isRecord(message) && message.phase === "descendant" && typeof message.pid === "number") {
+        descendantReady.resolve(message.pid);
+      }
+    });
+    let descendantPid: number | undefined;
     let adapter: Awaited<ReturnType<typeof createServiceChildRelayAdapter>>["adapter"] | undefined;
     let cleanup: Promise<ProcessExtinctionResult> | undefined;
     const expectedOutput =
@@ -67,6 +77,12 @@ it
     let output = "";
     let stderr = "";
     try {
+      const descendantSource = `
+        process.on("SIGTERM", () => {});
+        globalThis.keepAlive = new (require("node:worker_threads").MessageChannel)();
+        globalThis.keepAlive.port1.on("message", () => {});
+        process.send(process.pid);
+      `;
       const workerArgs = [
         "-e",
         `
@@ -80,7 +96,16 @@ it
               for (const fd of message.lineageFds) fs.fstatSync(fd);
               fs.appendFileSync(${JSON.stringify(marker)}, "started\\n");
               process.send({ phase: "started", message }, () => {
-                process.stdout.write(${action === "delayed-output" ? '"x".repeat(256 * 1024)' : JSON.stringify(expectedOutput)}, () => process.disconnect());
+                process.stdout.write(${action === "delayed-output" ? '"x".repeat(256 * 1024)' : JSON.stringify(expectedOutput)}, () => {
+                  ${
+                    action === "force-descendant"
+                      ? `const descendant = require("node:child_process").spawn(process.execPath, ["-e", ${JSON.stringify(descendantSource)}], {
+                          stdio: ["ignore", "ignore", "ignore", ...message.lineageFds, "ipc"],
+                        });
+                        descendant.once("message", pid => process.send({ phase: "descendant", pid }));`
+                      : "process.disconnect();"
+                  }
+                });
               });
             });
             process.send({ phase: "waiting", pid: process.pid, parentPid: process.ppid });
@@ -98,6 +123,7 @@ it
         stdinMode: "pipe-open",
         oomScoreWrapperSelected: false,
         ownedWorker: true,
+        ...(action === "force-descendant" ? {} : { nativeProcessOwnerSupported: true as const }),
         cleanupBinding,
         onWorkerMessage,
         onSpawnCleanup: (pending) => {
@@ -122,12 +148,12 @@ it
         ...claim,
         supervisor,
         worker: requireNodeWorkerProcessIdentity(ownerPid!),
-        cleanupMode: "owned-anchor",
+        cleanupMode: adapter.treeOwnership ?? "owned-anchor",
       });
       if (action === "journal-write-failed") {
         openOpenClawStateDatabase({ env }).db.exec(`
           CREATE TRIGGER abort_lineage_settlement
-          BEFORE UPDATE OF lineage_settled ON node_worker_launch_cleanup
+          BEFORE UPDATE OF ${adapter.treeOwnership ? "descendants_reaped ON node_worker_launch_process_scopes" : "lineage_settled ON node_worker_launch_cleanup"}
           BEGIN SELECT RAISE(ABORT, 'synthetic journal write failure'); END;
         `);
       }
@@ -154,21 +180,34 @@ it
         }
         await Promise.all([adapter.openStartGate!(), adapter.openStartGate!()]);
         if (action === "delayed-output") {
-          await withTestTimeout(
-            rootExited.promise,
-            5_000,
-            "worker did not exit with buffered output",
-          );
+          await withinTest(rootExited.promise, signal);
           // Leave the host pipe backpressured while the anchor processes root exit.
           await delay(100);
           adapter.onStdout(collectOutput);
         }
-        await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
+        if (action === "force-descendant") {
+          descendantPid = await withinTest(descendantReady.promise, signal);
+          expect(isPidDefinitelyDead(descendantPid)).toBe(false);
+          adapter.kill("SIGKILL");
+          await withinTest(adapter.waitForExtinction(), signal);
+          expect(isPidDefinitelyDead(descendantPid)).toBe(true);
+        }
+        await expect(adapter.wait()).resolves.toEqual(
+          action === "force-descendant"
+            ? { code: null, signal: "SIGKILL" }
+            : { code: 0, signal: null },
+        );
         expect(onWorkerMessage).toHaveBeenCalledWith({
           phase: "started",
-          message: { type: "openclaw-worker-start-v1", lineageFds: expect.any(Array) },
+          message: {
+            type: "openclaw-worker-start-v1",
+            lineageFds: expect.any(Array),
+            ...(adapter.treeOwnership
+              ? { nativeProcessOwner: expect.stringMatching(/^file:/u) }
+              : {}),
+          },
         });
-        expect(onWorkerMessage).toHaveBeenCalledTimes(2);
+        expect(onWorkerMessage).toHaveBeenCalledTimes(action === "force-descendant" ? 3 : 2);
         expect(await readFile(marker, "utf8")).toBe("started\n");
         expect(output.length).toBe(expectedOutput.length);
         expect(output).toBe(expectedOutput);
@@ -182,15 +221,21 @@ it
       }
       await adapter.waitForExtinction();
       expect(await store.get(claim.launchId)).toMatchObject({
-        workerCleanupMode: "owned-anchor",
-        workerLineageSettled: action !== "journal-write-failed",
+        workerCleanupMode: adapter.treeOwnership ?? "owned-anchor",
+        workerLineageSettled: !adapter.treeOwnership && action !== "journal-write-failed",
+        ...(adapter.treeOwnership
+          ? { workerDescendantsReaped: action !== "journal-write-failed" }
+          : {}),
       });
       if (action === "journal-write-failed") {
         expect(stderr).toContain(
-          "node worker lineage completion was not recorded; restart recovery will retain capacity until cleanup can be verified\n",
+          adapter.treeOwnership
+            ? "node worker descendant extinction was not recorded; restart recovery retains capacity\n"
+            : "node worker lineage completion was not recorded; restart recovery will retain capacity until cleanup can be verified\n",
         );
       }
     } finally {
+      killPidIfAlive(descendantPid);
       adapter?.kill("SIGKILL");
       await adapter?.wait().catch(() => undefined);
       await cleanup?.catch((error: unknown) => {
@@ -199,5 +244,4 @@ it
       adapter?.dispose();
     }
   },
-  20_000,
 );

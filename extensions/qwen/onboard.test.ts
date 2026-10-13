@@ -8,27 +8,30 @@ import {
   applyQwenTokenPlanConfig,
 } from "./onboard.js";
 
-describe.each([
-  { name: "coding global", provider: "qwen", apply: applyQwenConfig, rows: 10 },
-  { name: "coding China", provider: "qwen", apply: applyQwenConfigCn, rows: 10 },
-  { name: "standard global", provider: "qwen", apply: applyQwenStandardConfig, rows: 14 },
-  { name: "standard China", provider: "qwen", apply: applyQwenStandardConfigCn, rows: 14 },
-  {
-    name: "Token Plan global",
-    provider: "qwen-token-plan",
-    apply: (cfg: OpenClawConfig) => applyQwenTokenPlanConfig(cfg, "global"),
-    rows: 8,
-  },
-  {
-    name: "Token Plan China",
-    provider: "qwen-token-plan",
-    apply: (cfg: OpenClawConfig) => applyQwenTokenPlanConfig(cfg, "cn"),
-    rows: 8,
-  },
-])("Qwen $name setup", ({ provider, apply, rows }) => {
-  it.each([undefined, "merge"] as const)(
-    "leaves ordinary %s rows runtime-owned and retains aliases",
-    (mode) => {
+const applyTokenPlanGlobal = (cfg: OpenClawConfig) => applyQwenTokenPlanConfig(cfg, "global");
+const applyTokenPlanCn = (cfg: OpenClawConfig) => applyQwenTokenPlanConfig(cfg, "cn");
+
+describe("Qwen setup", () => {
+  it.each([
+    { name: "coding global", provider: "qwen", apply: applyQwenConfig, mode: undefined },
+    { name: "coding China", provider: "qwen", apply: applyQwenConfigCn, mode: "merge" },
+    { name: "standard global", provider: "qwen", apply: applyQwenStandardConfig, mode: undefined },
+    { name: "standard China", provider: "qwen", apply: applyQwenStandardConfigCn, mode: "merge" },
+    {
+      name: "Token Plan global",
+      provider: "qwen-token-plan",
+      apply: applyTokenPlanGlobal,
+      mode: undefined,
+    },
+    {
+      name: "Token Plan China",
+      provider: "qwen-token-plan",
+      apply: applyTokenPlanCn,
+      mode: "merge",
+    },
+  ] as const)(
+    "leaves $name $mode rows runtime-owned and retains aliases",
+    ({ provider, apply, mode }) => {
       const input: OpenClawConfig = {
         models: { mode },
         agents: {
@@ -51,7 +54,11 @@ describe.each([
     },
   );
 
-  it("retains the shipped replace catalog", () => {
+  it.each([
+    { name: "coding", provider: "qwen", apply: applyQwenConfig, rows: 10 },
+    { name: "standard", provider: "qwen", apply: applyQwenStandardConfig, rows: 14 },
+    { name: "Token Plan", provider: "qwen-token-plan", apply: applyTokenPlanGlobal, rows: 8 },
+  ])("retains the shipped $name replace catalog", ({ provider, apply, rows }) => {
     const config = apply({ models: { mode: "replace" } });
     expect(config.models?.providers?.[provider]?.models).toHaveLength(rows);
   });

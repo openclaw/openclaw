@@ -28,6 +28,12 @@ const UiPanelCommandFields = {
 export const UiPanelCommandSchema = Type.Union([
   closedObject({
     ...UiPanelCommandFields,
+    panel: Type.Literal("plugin"),
+    pluginId: NonEmptyString,
+    panelId: NonEmptyString,
+  }),
+  closedObject({
+    ...UiPanelCommandFields,
     panel: Type.Literal("terminal"),
     terminalSessionId: Type.Optional(NonEmptyString),
   }),

@@ -1,8 +1,8 @@
 import {
   assertHttpUrlTargetsPrivateNetwork,
+  isPrivateOrLoopbackHost,
   type LookupFn,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import { isPrivateOrLoopbackHost } from "./private-network-host.js";
 
 const MATRIX_HTTP_HOMESERVER_ERROR =
   "Matrix homeserver must use https:// unless it targets a private or loopback host";

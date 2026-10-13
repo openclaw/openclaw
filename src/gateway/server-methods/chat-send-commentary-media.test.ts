@@ -11,7 +11,8 @@ import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook
 import { buildAssistantMessage, buildUsageWithNoCost } from "../../agents/stream-message-shared.js";
 import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
-import * as sessionAccessor from "../../config/sessions/session-accessor.js";
+import { getRuntimeConfig } from "../../config/io.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   appendTranscriptMessageSync,
   loadTranscriptEventsSync,
@@ -20,11 +21,13 @@ import {
   replaceSessionEntry,
   rewriteTranscriptMessageAtAnchor,
 } from "../../config/sessions/session-accessor.js";
+import * as messageRewrite from "../../config/sessions/session-message-rewrite.js";
 import {
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWrites,
 } from "../../config/sessions/transcript-write-context.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import * as mediaFetch from "../../media/fetch.js";
 import {
   disposeStoreRemoteFixtures,
@@ -39,6 +42,7 @@ import {
   onInternalSessionTranscriptUpdate,
   type InternalSessionTranscriptUpdate,
 } from "../../sessions/transcript-events.js";
+import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { projectChatDisplayMessages } from "../chat-display-projection.js";
 import { cleanupManagedOutgoingMediaRecords } from "../managed-image-attachments.js";
@@ -96,6 +100,7 @@ describe("webchat commentary media", () => {
     "gc-during-preparation",
     "gc-with-publication-failure",
     "gc-with-revocation-after-commit",
+    "gc-with-unknown-commit",
   ] as const)("materializes authored progress media with %s semantics", async (scenario, test) => {
     const fixture = createFixtureLifetime();
     test.onTestFinished(() => fixture.cleanup());
@@ -110,7 +115,8 @@ describe("webchat commentary media", () => {
       const gcDuringPreparation =
         scenario === "gc-during-preparation" ||
         scenario === "gc-with-publication-failure" ||
-        scenario === "gc-with-revocation-after-commit";
+        scenario === "gc-with-revocation-after-commit" ||
+        scenario === "gc-with-unknown-commit";
       const upstream = http.createServer((_request, response) => {
         requestCount += 1;
         if (requestCount === mediaUrls.length) {
@@ -168,6 +174,20 @@ describe("webchat commentary media", () => {
       for (const url of authoredUrls) {
         remoteFixtures.set(url, fixtureUrl);
       }
+      const cfg = {
+        agents: { entries: { main: { workspace: state.workspaceDir } } },
+        ...(localMedia
+          ? {
+              tools: {
+                fs: { workspaceOnly: true },
+                ...(scenario === "sender-denied"
+                  ? { toolsBySender: { "id:cli": { deny: ["read"] } } }
+                  : {}),
+              },
+            }
+          : {}),
+      };
+      setRuntimeConfigSnapshot(cfg);
       const scope = {
         agentId: "main",
         sessionId: "commentary-session",
@@ -217,6 +237,7 @@ describe("webchat commentary media", () => {
           transcriptLifecycle.withTranscriptWrite(operation),
       };
       const dispatch = createChatSendReplyDispatch({
+        getRuntimeConfig,
         accountId: undefined,
         requesterContext: { SenderId: "cli" },
         isAgentRunStarted: () => true,
@@ -225,20 +246,9 @@ describe("webchat commentary media", () => {
         logGateway: { warn } as never,
         session: {
           ...scope,
+          storePath: transcriptContext.sessionTarget.storePath,
           backingSessionId: scope.sessionId,
-          cfg: {
-            agents: { list: [{ id: "main", workspace: state.workspaceDir }] },
-            ...(localMedia
-              ? {
-                  tools: {
-                    fs: { workspaceOnly: true },
-                    ...(scenario === "sender-denied"
-                      ? { toolsBySender: { "id:cli": { deny: ["read"] } } }
-                      : {}),
-                  },
-                }
-              : {}),
-          },
+          cfg,
           clientRunId: runId,
           sessionLoadOptions: { agentId: "main" },
         },
@@ -335,13 +345,19 @@ describe("webchat commentary media", () => {
       });
       let run: Promise<void> | undefined;
       let expectedContent: unknown;
-      const rewrite = sessionAccessor.rewriteTranscriptMessageAtAnchor;
+      const rewrite = messageRewrite.rewritePreparedTranscriptMessageAtAnchor;
       const rewriteSpy =
-        scenario === "gc-with-revocation-after-commit"
+        scenario === "gc-with-revocation-after-commit" || scenario === "gc-with-unknown-commit"
           ? vi
-              .spyOn(sessionAccessor, "rewriteTranscriptMessageAtAnchor")
+              .spyOn(messageRewrite, "rewritePreparedTranscriptMessageAtAnchor")
               .mockImplementation(async (...args) => {
                 const result = await rewrite(...args);
+                if (scenario === "gc-with-unknown-commit") {
+                  throw new SqliteWorkerError(
+                    "Synthetic uncertain commentary rewrite",
+                    "outcome-unknown",
+                  );
+                }
                 current = false;
                 return result;
               })
@@ -678,7 +694,12 @@ describe("webchat commentary media", () => {
             ]);
           }
         }
-        if (publicationSpy) {
+        if (scenario === "gc-with-unknown-commit") {
+          expect(rewriteUpdate).toBeUndefined();
+          expect(warn).toHaveBeenCalledExactlyOnceWith(
+            expect.stringContaining("Synthetic uncertain commentary rewrite"),
+          );
+        } else if (publicationSpy) {
           expect(warn).toHaveBeenCalledExactlyOnceWith(
             expect.stringContaining("Synthetic commentary publication failure"),
           );
@@ -699,6 +720,7 @@ describe("webchat commentary media", () => {
         hookSpy?.mockRestore();
         publicationSpy?.mockRestore();
         rewriteSpy?.mockRestore();
+        await drainGlobalSingletonLifecycleState();
       }
     });
     await fixture.track(body);

@@ -1,7 +1,9 @@
+import type { ChildProcess } from "node:child_process";
 import { constants as osConstants } from "node:os";
 import process from "node:process";
 import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
+import { sleep } from "../utils/sleep.js";
 import { isChildProcessTreeAlive } from "./child-process-tree.js";
 import {
   COMMAND_PROCESS_TREE_KILL_GRACE_MS,
@@ -9,14 +11,11 @@ import {
   spawnCommand,
 } from "./exec-spawn.js";
 import { killProcessTree as terminateProcessTree } from "./kill-tree.js";
+import { scheduleAdoptedChildZombieReapAfterExit } from "./scoped-child-reaper.js";
 
 const WINDOWS_TASKKILL_TIMEOUT_MS = 5_000;
 
-type TerminationChild = {
-  pid?: number;
-  exitCode: number | null;
-  signalCode: NodeJS.Signals | null;
-};
+type TerminationChild = Pick<ChildProcess, "pid" | "exitCode" | "signalCode" | "once">;
 
 export function createCommandTerminationController(params: {
   child: TerminationChild;
@@ -68,10 +67,8 @@ export function createCommandTerminationController(params: {
     windowsTerminationPromise = (async () => {
       if (graceful) {
         taskkills.push(spawnTaskkill(["/PID", String(childPid), "/T"]));
-        await new Promise<void>((resolve) => {
-          const timer = setTimeout(resolve, params.killGraceMs);
-          timer.unref();
-        });
+        // Awaited cleanup stays live after both the child and taskkill handles close.
+        await sleep(params.killGraceMs);
         if (isDirectChildAlive()) {
           taskkills.push(spawnTaskkill(["/PID", String(childPid), "/T", "/F"]));
         }
@@ -123,6 +120,7 @@ export function createCommandTerminationController(params: {
         }
         cleanup = "forced";
         terminateProcessTree(childPid, { force: true, detached: true });
+        scheduleAdoptedChildZombieReapAfterExit(params.child, true);
         const deadline = Date.now() + COMMAND_PROCESS_TREE_KILL_GRACE_MS;
         // Signal delivery is not exit. Observe only this group; never re-signal a retired PID.
         while (groupAlive()) {
@@ -136,9 +134,7 @@ export function createCommandTerminationController(params: {
             cleanup = groupAlive() ? "uncertain" : "forced";
             return;
           }
-          await new Promise<void>((resolve) => {
-            setTimeout(resolve, Math.min(25, remaining));
-          });
+          await sleep(Math.min(25, remaining));
         }
       };
       // A timeout signal is policy, not evidence of forced cleanup. Once the
@@ -159,6 +155,12 @@ export function createCommandTerminationController(params: {
           cleanup = "uncertain";
         }
       }
+      // The first registration must outlive graceful cleanup and its force fallback.
+      scheduleAdoptedChildZombieReapAfterExit(
+        params.child,
+        true,
+        params.killGraceMs + COMMAND_PROCESS_TREE_KILL_GRACE_MS,
+      );
       processTreeSettlement = new Promise<void>((resolve) => {
         const deadline = Date.now() + params.killGraceMs;
         const check = () => {

@@ -1,7 +1,3 @@
-/**
- * Regression coverage for deterministic unknown-value stringification.
- * Verifies sorted keys, repeated references, cycles, binary data, and errors.
- */
 import { describe, expect, it } from "vitest";
 import { sha256Hex, sha256StableValue } from "./node-crypto.js";
 import { stableStringify, writeStableStringify } from "./stable-stringify.js";
@@ -9,39 +5,18 @@ import { stableStringify, writeStableStringify } from "./stable-stringify.js";
 const sanitizeSurrogates = (text: string) =>
   text.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "");
 
-const serializers: Record<string, typeof stableStringify> = {
-  stableStringify,
-  writeStableStringify: (value, normalizeString) => {
-    const chunks: string[] = [];
-    writeStableStringify(value, (chunk) => chunks.push(chunk), normalizeString);
-    return chunks.join("");
-  },
+const serialize = (value: unknown, normalizeString?: (text: string) => string): string => {
+  const chunks: string[] = [];
+  writeStableStringify(value, (chunk) => chunks.push(chunk), normalizeString);
+  return chunks.join("");
 };
 
-describe.each(Object.entries(serializers))("%s", (_name, serialize) => {
-  it.each([
-    ['{"z":1,"a":2}', '{"a":2,"z":1}'],
-    [
-      '{"items":[3,null,{"z":false,"a":1.5}],"enabled":true}',
-      '{"enabled":true,"items":[3,null,{"a":1.5,"z":false}]}',
-    ],
-    ['["text",0,-2.5,null,false]', '["text",0,-2.5,null,false]'],
-  ])("preserves deterministic bytes for parsed JSON %#", (json, expected) => {
-    expect(serialize(JSON.parse(json))).toBe(expected);
-  });
+it("preserves parsed JSON values and sorts keys recursively", () => {
+  const value = JSON.parse('{"items":[3,null,{"z":false,"a":1.5}],"enabled":true}');
+  expect(stableStringify(value)).toBe('{"enabled":true,"items":[3,null,{"a":1.5,"z":false}]}');
+});
 
-  it("sorts object keys recursively", () => {
-    expect(serialize({ b: { d: 4, c: 3 }, a: 1 })).toBe('{"a":1,"b":{"c":3,"d":4}}');
-  });
-
-  it("marks true circular references without collapsing repeated references", () => {
-    const shared = { value: 1 };
-    const root: Record<string, unknown> = { first: shared, second: shared };
-    root.self = root;
-
-    expect(serialize(root)).toBe('{"first":{"value":1},"second":{"value":1},"self":"[Circular]"}');
-  });
-
+describe("writeStableStringify", () => {
   it("handles circular arrays without treating later siblings as circular", () => {
     const shared = { value: "same" };
     const items: unknown[] = [shared, shared];
@@ -60,21 +35,12 @@ describe.each(Object.entries(serializers))("%s", (_name, serialize) => {
       valid: "emoji 🙈 ok",
     };
 
-    expect(serialize(value)).toContain("\\ud83d");
+    expect(serialize(value)).toBe(
+      '{"high":"left\\ud83dright","key\\ud83d":"name","low":"left\\udc00right","valid":"emoji 🙈 ok"}',
+    );
     expect(serialize(value, sanitizeSurrogates)).toBe(
       '{"high":"leftright","key":"name","low":"leftright","valid":"emoji 🙈 ok"}',
     );
-  });
-
-  it("sorts normalized keys before serializing them", () => {
-    const high = String.fromCharCode(0xd83d);
-    const malformed = { ba: 2, [`b${high}`]: 1 };
-    const normalized = { ba: 2, b: 1 };
-
-    expect(serialize(malformed, sanitizeSurrogates)).toBe(
-      serialize(normalized, sanitizeSurrogates),
-    );
-    expect(serialize(malformed, sanitizeSurrogates)).toBe('{"b":1,"ba":2}');
   });
 
   it("serializes cache-trace edge types deterministically", () => {

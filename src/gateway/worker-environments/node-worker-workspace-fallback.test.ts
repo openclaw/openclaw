@@ -53,6 +53,50 @@ function cleanWorkspace(): string {
 }
 
 describe("node worker workspace origin fallback", () => {
+  it.each(["apply", "store"] as const)(
+    "does not hide source revocation as a recoverable seed %s failure",
+    async (boundary) => {
+      const localPath = cleanWorkspace();
+      let current = true;
+      const closed = new Error("initiating source closed");
+      const exec = vi.fn<WorkspaceExec>(async ({ argv, seed }) => {
+        if (seed?.action === boundary) {
+          current = false;
+          throw closed;
+        }
+        return {
+          ...spawnResult(
+            seed?.action === "apply"
+              ? "absent\n"
+              : argv.includes("rev-parse")
+                ? COMMIT
+                : MANIFEST_REF,
+          ),
+          workspaceDir: REMOTE_WORKSPACE,
+        };
+      });
+      await expect(
+        createNodeWorkerWorkspaceFallback(exec).trySyncWorkspace(
+          {
+            localPath,
+            sessionId: "session-1",
+            generation: 1,
+            authorize: () => {
+              if (!current) {
+                throw closed;
+              }
+            },
+          },
+          MANIFEST_REF,
+        ),
+      ).rejects.toBe(closed);
+      expect(exec.mock.calls.at(-1)?.[0].seed?.action).toBe(boundary);
+      if (boundary === "apply") {
+        expect(exec).toHaveBeenCalledOnce();
+      }
+    },
+  );
+
   it("clones a clean commit without requiring it to be an advertised ref tip", async () => {
     const localPath = cleanWorkspace();
     const exec = vi.fn<WorkspaceExec>(async ({ argv, seed }) => ({
@@ -282,13 +326,57 @@ describe("node worker workspace origin fallback", () => {
           result,
         ),
       ).resolves.toEqual(result);
-      expect(exec.mock.calls.map(([command]) => command.argv.slice(-2))).toEqual([
+      expect(
+        exec.mock.calls
+          .filter(([command]) => command.argv.includes("config"))
+          .map(([command]) => command.argv.slice(-2)),
+      ).toEqual([
         ["user.name", expected[0]],
         ["user.email", expected[1]],
+        ["remote.origin.url", ORIGIN],
+        ["remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"],
       ]);
-      expect(runCommandWithTimeout.mock.calls.map(([argv]) => argv.at(-1))).toEqual(lookups);
+      expect(runCommandWithTimeout.mock.calls.map(([argv]) => argv.at(-1))).toEqual([
+        ...lookups,
+        "origin",
+      ]);
     },
   );
+
+  it.each([
+    ["http://example.invalid/repo.git", "http://example.invalid/repo.git"],
+    ["https://example.invalid/repo.git", "https://example.invalid/repo.git"],
+    ["git://127.0.0.1:19418/origin.git", "git://127.0.0.1:19418/origin.git"],
+    ["https://user:synthetic@example.invalid/repo.git", undefined],
+    ["https://example.invalid/repo.git?token=synthetic", undefined],
+    ["https://example.invalid/repo.git#synthetic", undefined],
+    ["file:///gateway/repo.git", undefined],
+    ["ext::unsupported-helper", undefined],
+    ["", undefined],
+  ])("forwards only credential-free supported source origins (%s)", async (source, expected) => {
+    const localPath = cleanWorkspace();
+    runCommandWithTimeout.mockResolvedValue(spawnResult(source));
+    const exec = vi.fn<WorkspaceExec>(async () => ({
+      ...spawnResult(),
+      workspaceDir: REMOTE_WORKSPACE,
+    }));
+
+    await createNodeWorkerWorkspaceFallback(exec).finalizeSync(
+      {
+        localPath,
+        sessionId: "session-1",
+        generation: 1,
+        gitAuthor: { name: "Fixture", email: "fixture@example.invalid" },
+      },
+      { mode: "git", remoteWorkspaceDir: REMOTE_WORKSPACE, manifestRef: MANIFEST_REF },
+    );
+
+    expect(
+      exec.mock.calls
+        .find(([command]) => command.argv.includes("remote.origin.url"))?.[0]
+        .argv.at(-1),
+    ).toBe(expected);
+  });
 
   it("fails closed when a node rejects its Gateway Git author", async () => {
     const localPath = cleanWorkspace();

@@ -4,18 +4,15 @@ export type WorkerWorkspaceResultConflict = {
   totalCount?: number;
 };
 
+export type WorkerWorkspaceConflictReport =
+  | Required<WorkerWorkspaceResultConflict>
+  | { cleared: true };
+
 export type WorkspaceResultConflictLookup =
   | { kind: "absent" }
   | { kind: "conflict"; conflict: Required<WorkerWorkspaceResultConflict> }
   | { kind: "unknown"; reason: WorkspaceResultConflictUnknownReason };
 type WorkspaceResultConflictUnknownReason = "malformed-report" | "session-unavailable";
-
-export type WorkerWorkspaceRecoveryFailureReport = {
-  sessionId: string;
-  sessionKey: string;
-  agentId: string;
-  error: string;
-};
 
 export const WORKSPACE_CONFLICT_TRANSCRIPT_TYPE = "cloud-workspace-conflict";
 export const WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE = "cloud-workspace-conflict-cleared";

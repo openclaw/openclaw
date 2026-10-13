@@ -1,7 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { executeSqliteQuerySync, sqliteStringSet } from "../../infra/kysely-sync.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { isInternalSessionEffectsKey } from "./internal-session-key.js";
@@ -24,11 +24,24 @@ export function readSessionMembershipFactsInDatabase(
   if (typeof identity !== "string") {
     throw new Error("Durable session membership requires a physical database");
   }
+  return {
+    kind: "session-membership-facts",
+    identity,
+    birthtime,
+    facts: readSessionMembershipRowsInDatabase(database, sessionKeys),
+  };
+}
+
+/** Connection-bound catalog rows; the transport supplies its own store identity. */
+export function readSessionMembershipRowsInDatabase(
+  database: Pick<OpenClawAgentDatabase, "agentId" | "db">,
+  sessionKeys?: readonly string[],
+): SessionMembershipFact[] {
   if (sessionKeys?.length === 0) {
-    return { kind: "session-membership-facts", identity, birthtime, facts: [] };
+    return [];
   }
   return withSqlitePostCommitPublications(database.db, () =>
-    runSqliteDeferredTransactionSync(database.db, () => {
+    runSqliteReadSnapshotSync(database.db, () => {
       assertCanonicalSqliteSessionKeysCurrent(database);
       let entries = selectSessionEntryRows(database, "list")
         .select("updated_at")
@@ -96,12 +109,7 @@ export function readSessionMembershipFactsInDatabase(
           current?.[4] ?? null,
         ]);
       }
-      return {
-        kind: "session-membership-facts" as const,
-        identity,
-        birthtime,
-        facts: [...facts.values()],
-      };
+      return [...facts.values()];
     }),
   );
 }

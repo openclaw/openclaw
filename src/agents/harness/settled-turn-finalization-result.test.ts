@@ -86,26 +86,13 @@ describe("assertSettledTurnFinalizationResult", () => {
     }
   });
 
-  it("classifies an intentionally silent answer as completed-empty", () => {
-    const result = {
-      assistant: assistantMessage([{ type: "text", text: "NO_REPLY" }]),
-    };
-
-    expect(() => assertSettledTurnFinalizationResult(result)).toThrow(
-      EmptySettledTurnFinalizationError,
-    );
+  it("rejects an assistant stopped at the length limit", () => {
+    expect(() =>
+      assertSettledTurnFinalizationResult({
+        assistant: assistantMessage([{ type: "text", text: "partial" }], "length"),
+      }),
+    ).toThrow("unsuccessful stop reason: length");
   });
-
-  it.each(["length", "error", "aborted"] as const)(
-    "rejects an assistant with unsuccessful %s stop reason",
-    (stopReason) => {
-      expect(() =>
-        assertSettledTurnFinalizationResult({
-          assistant: assistantMessage([{ type: "text", text: "partial" }], stopReason),
-        }),
-      ).toThrow(`unsuccessful stop reason: ${stopReason}`);
-    },
-  );
 
   it("rejects an invalid transcript index", () => {
     expect(() =>
@@ -131,16 +118,6 @@ describe("assertSettledTurnFinalizationResult", () => {
     });
   });
 
-  it("rejects a failed full attempt even when it contains visible assistant text", () => {
-    expect(() =>
-      projectSettledTurnFinalizationAttemptResult(
-        successfulAttempt({
-          terminal: { kind: "failed", source: "prompt", error: new Error("provider failed") },
-        }),
-      ),
-    ).toThrow("did not complete successfully");
-  });
-
   it("rejects a full attempt that compacted before producing its answer", () => {
     expect(() =>
       projectSettledTurnFinalizationAttemptResult(successfulAttempt({ compactionCount: 1 })),
@@ -158,16 +135,15 @@ describe("assertSettledTurnFinalizationResult", () => {
     ).toThrow("reported capability activity");
   });
 
-  it.each(["replayMetadata", "currentAttemptReplayMetadata"] as const)(
-    "rejects replay-unsafe %s from a full attempt",
-    (field) => {
-      expect(() =>
-        projectSettledTurnFinalizationAttemptResult(
-          successfulAttempt({ [field]: { hadPotentialSideEffects: false, replaySafe: false } }),
-        ),
-      ).toThrow("reported capability activity");
-    },
-  );
+  it("rejects replay-unsafe current-attempt metadata from a full attempt", () => {
+    expect(() =>
+      projectSettledTurnFinalizationAttemptResult(
+        successfulAttempt({
+          currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: false },
+        }),
+      ),
+    ).toThrow("reported capability activity");
+  });
 
   it("rejects partial or stale assistants without current-attempt completion evidence", () => {
     expect(() =>

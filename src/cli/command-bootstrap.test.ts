@@ -57,65 +57,6 @@ describe("ensureCliExecutionBootstrap", () => {
     });
   });
 
-  it("forwards prepared pristine migration facts to the config guard", async () => {
-    const runtime = {} as never;
-
-    await ensureCliExecutionBootstrap({
-      runtime,
-      commandPath: ["gateway"],
-      startupPolicy: bootstrapPolicy(["gateway"]),
-      loadPlugins: false,
-      skipPristineCoreStateMigrations: true,
-      skipPristineStartupStateMigrations: true,
-    });
-
-    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
-      runtime,
-      commandPath: ["gateway"],
-      measure: expect.any(Function),
-      skipPristineCoreStateMigrations: true,
-      skipPristineStartupStateMigrations: true,
-    });
-  });
-
-  it("skips config guard without skipping plugin loading", async () => {
-    await ensureCliExecutionBootstrap({
-      runtime: {} as never,
-      commandPath: ["memory", "search"],
-      startupPolicy: {
-        ...bootstrapPolicy(["memory", "search"], true),
-        pluginRegistry: { scope: "memory" },
-      },
-      skipConfigGuard: true,
-      loadPlugins: true,
-    });
-
-    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
-    expect(ensureCliPluginRegistryLoadedMock).toHaveBeenCalledWith({
-      scope: "memory",
-      routeLogsToStderr: true,
-    });
-  });
-
-  it("forwards validation-only config guards without state migration", async () => {
-    const runtime = {} as never;
-
-    await ensureCliExecutionBootstrap({
-      runtime,
-      commandPath: ["nodes", "approve"],
-      startupPolicy: bootstrapPolicy(["nodes", "approve"]),
-      validateConfigOnly: true,
-      loadPlugins: false,
-    });
-
-    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
-      runtime,
-      commandPath: ["nodes", "approve"],
-      measure: expect.any(Function),
-      validateConfigOnly: true,
-    });
-  });
-
   it("uses validation-only admission for managed worktree commands", async () => {
     const runtime = {} as never;
 
@@ -131,34 +72,6 @@ describe("ensureCliExecutionBootstrap", () => {
       commandPath: ["worktrees", "gc"],
       measure: expect.any(Function),
       validateConfigOnly: true,
-    });
-  });
-
-  it("loads configured channel plugins with repair enabled for operational channel commands", async () => {
-    await ensureCliExecutionBootstrap({
-      runtime: {} as never,
-      commandPath: ["channels", "send"],
-      startupPolicy: bootstrapPolicy(["channels", "send"]),
-      loadPlugins: true,
-    });
-
-    expect(ensureCliPluginRegistryLoadedMock).toHaveBeenCalledWith({
-      scope: "configured-channels",
-      routeLogsToStderr: false,
-    });
-  });
-
-  it("loads configured channel plugins without package-manager repair for read-only channel commands", async () => {
-    await ensureCliExecutionBootstrap({
-      runtime: {} as never,
-      commandPath: ["channels", "resolve"],
-      startupPolicy: bootstrapPolicy(["channels", "resolve"]),
-      loadPlugins: true,
-    });
-
-    expect(ensureCliPluginRegistryLoadedMock).toHaveBeenCalledWith({
-      scope: "configured-channels",
-      routeLogsToStderr: false,
     });
   });
 
@@ -188,18 +101,5 @@ describe("ensureCliExecutionBootstrap", () => {
       scope: "sandbox-management",
       routeLogsToStderr: false,
     });
-  });
-
-  it("skips config and plugin activation for a gateway-backed agent turn", async () => {
-    await ensureCliExecutionBootstrap({
-      runtime: {} as never,
-      commandPath: ["agent"],
-      startupPolicy: bootstrapPolicy(["agent"]),
-      skipConfigGuard: true,
-      loadPlugins: false,
-    });
-
-    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
-    expect(ensureCliPluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 });

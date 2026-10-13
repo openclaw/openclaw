@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { TRANSCRIPT_NOT_CONTINUABLE_ERROR_CODE } from "../../packages/agent-core/src/errors.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isCronTerminalAbortReasonText } from "../cron/service/execution-errors.js";
+import { renewAgentRunDeadline } from "../infra/agent-run-deadline.js";
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { isCommandLaneTaskTimeoutError } from "../process/command-queue.js";
 import { findAgentRunTerminalOutcome } from "./agent-run-terminal-error.js";
@@ -51,6 +52,7 @@ import {
 } from "./session-suspension.js";
 
 type FailoverAttribution = {
+  runId?: string;
   sessionId?: string;
   lane?: string;
 };
@@ -99,13 +101,13 @@ export type ModelFallbackRunFn<T> = (
   options?: ModelFallbackRunOptions,
 ) => Promise<T>;
 
-export type ModelFallbackErrorHandler = (attempt: {
-  provider: string;
-  model: string;
-  error: unknown;
-  attempt: number;
-  total: number;
-}) => void | Promise<void>;
+export type ModelFallbackErrorHandler = (
+  attempt: ModelCandidate & {
+    error: unknown;
+    attempt: number;
+    total: number;
+  },
+) => void | Promise<void>;
 
 export type ModelFallbackStepHandler = (step: ModelFallbackStepFields) => void | Promise<void>;
 
@@ -303,6 +305,8 @@ export async function runFallbackAttempt<T>(
   // Only the initial attempt may own a result after caller cancellation.
   if (params.attempt > 1) {
     params.abortSignal?.throwIfAborted();
+    // Give the next candidate its own budget without replacing parent cancellation.
+    renewAgentRunDeadline(params.attribution?.runId);
   }
   const runResult = await runFallbackCandidate(params);
   const classification = runResult.ok
@@ -327,6 +331,11 @@ export async function runFallbackAttempt<T>(
   if (!runResult.ok) {
     return { error: runResult.error };
   }
+  const buildClassifiedResult = () => ({
+    result: runResult.result,
+    provider: params.provider,
+    model: params.model,
+  });
   if (!attemptError) {
     const stopReason =
       classification && "stopReason" in classification ? classification.stopReason : undefined;
@@ -342,9 +351,7 @@ export async function runFallbackAttempt<T>(
       ...(stopReason ? { stopped: true as const } : {}),
       success: {
         outcome: "completed",
-        result: runResult.result,
-        provider: params.provider,
-        model: params.model,
+        ...buildClassifiedResult(),
         attempts: params.attempts,
       },
     };
@@ -355,17 +362,11 @@ export async function runFallbackAttempt<T>(
     classification.preserveResultOnExhaustion === true;
   return {
     error: attemptError,
-    classifiedResult: {
-      result: runResult.result,
-      provider: params.provider,
-      model: params.model,
-    },
+    classifiedResult: buildClassifiedResult(),
     ...(preserveResultOnExhaustion
       ? {
           exhaustionResult: {
-            result: runResult.result,
-            provider: params.provider,
-            model: params.model,
+            ...buildClassifiedResult(),
             priority:
               typeof classification.preserveResultPriority === "number" &&
               Number.isFinite(classification.preserveResultPriority)
@@ -534,27 +535,19 @@ export function recordFailedCandidateAttempt(params: {
   requestedModelMatched: boolean;
   fallbackConfigured: boolean;
 }): ModelFallbackStepFields | undefined {
-  const described = describeFailoverError(params.error);
+  const { attempts, error, ...observation } = params;
+  const described = describeFailoverError(error);
   const attempt = buildFailedCandidateAttempt(params.candidate, described);
-  params.attempts.push(attempt);
+  attempts.push(attempt);
   return logModelFallbackDecision({
+    ...observation,
     decision: "candidate_failed",
-    runId: params.runId,
-    sessionId: params.sessionId,
-    lane: params.lane,
     requestedProvider: params.requestedProvider ?? params.candidate.provider,
     requestedModel: params.requestedModel ?? params.candidate.model,
-    candidate: params.candidate,
-    attempt: params.attempt,
-    total: params.total,
     reason: described.reason,
     status: described.status,
     code: described.code,
     error: attempt.error,
-    nextCandidate: params.nextCandidate,
-    isPrimary: params.isPrimary,
-    requestedModelMatched: params.requestedModelMatched,
-    fallbackConfigured: params.fallbackConfigured,
   });
 }
 
@@ -647,25 +640,28 @@ export function throwFallbackFailureSummary(params: {
   });
 }
 
-export function resolveFallbackSoonestCooldownExpiry(params: {
+export async function resolveFallbackSoonestCooldownExpiry(params: {
   authRuntime: ModelFallbackAuthRuntime | null;
   userLockedAuthProfileId?: string;
   agentDir?: string;
   cfg: OpenClawConfig | undefined;
   profileIdsByCandidate: ReadonlyMap<ModelCandidate, string[]>;
-}): number | null {
+}): Promise<number | null> {
   if (!params.authRuntime || params.profileIdsByCandidate.size === 0) {
     return null;
   }
   // Reload attempt-written cooldowns without losing the admitted profile scope.
-  const refreshedStore = params.authRuntime.loadAuthProfileStoreForRuntime(params.agentDir, {
-    readOnly: true,
-    profileId: params.userLockedAuthProfileId,
-    externalCli: externalCliDiscoveryForProviders({
-      cfg: params.cfg,
-      providers: [...params.profileIdsByCandidate.keys()].map((candidate) => candidate.provider),
-    }),
-  });
+  const refreshedStore = await params.authRuntime.loadAuthProfileStoreForRuntimeAsync(
+    params.agentDir,
+    {
+      readOnly: true,
+      profileId: params.userLockedAuthProfileId,
+      externalCli: externalCliDiscoveryForProviders({
+        cfg: params.cfg,
+        providers: [...params.profileIdsByCandidate.keys()].map((candidate) => candidate.provider),
+      }),
+    },
+  );
   let soonest: number | null = null;
   for (const [candidate, ids] of params.profileIdsByCandidate) {
     const candidateSoonest = params.authRuntime.getSoonestCooldownExpiry(refreshedStore, ids, {

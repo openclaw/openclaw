@@ -42,19 +42,11 @@ export function collectKnownLongFlags(
   allowedBooleanFlags: ReadonlySet<string> = NO_FLAGS,
 ): string[] {
   const known = new Set<string>();
-  for (const flag of allowedValueFlags) {
-    if (flag.startsWith("--")) {
-      known.add(flag);
-    }
-  }
-  for (const flag of allowedBooleanFlags) {
-    if (flag.startsWith("--")) {
-      known.add(flag);
-    }
-  }
-  for (const flag of deniedFlags) {
-    if (flag.startsWith("--")) {
-      known.add(flag);
+  for (const flags of [allowedValueFlags, allowedBooleanFlags, deniedFlags]) {
+    for (const flag of flags) {
+      if (flag.startsWith("--")) {
+        known.add(flag);
+      }
     }
   }
   return Array.from(known);
@@ -105,8 +97,13 @@ function compileSafeBinProfiles(
 ): Record<string, SafeBinProfile> {
   return Object.fromEntries(
     Object.entries(fixtures).map(([name, fixture]) => [name, compileSafeBinProfile(fixture)]),
-  ) as Record<string, SafeBinProfile>;
+  );
 }
+
+const HEAD_TAIL_PROFILE = {
+  maxPositional: 0,
+  allowedBooleanFlags: ["--quiet", "--silent", "--verbose", "--zero-terminated", "-q", "-v", "-z"],
+};
 
 const SAFE_BIN_PROFILE_FIXTURES: Record<string, BuiltinSafeBinProfileFixture> = {
   jq: {
@@ -228,20 +225,11 @@ const SAFE_BIN_PROFILE_FIXTURES: Record<string, BuiltinSafeBinProfileFixture> = 
     ],
   },
   head: {
-    maxPositional: 0,
+    ...HEAD_TAIL_PROFILE,
     allowedValueFlags: ["--lines", "--bytes", "-n", "-c"],
-    allowedBooleanFlags: [
-      "--quiet",
-      "--silent",
-      "--verbose",
-      "--zero-terminated",
-      "-q",
-      "-v",
-      "-z",
-    ],
   },
   tail: {
-    maxPositional: 0,
+    ...HEAD_TAIL_PROFILE,
     allowedValueFlags: [
       "--lines",
       "--bytes",
@@ -250,15 +238,6 @@ const SAFE_BIN_PROFILE_FIXTURES: Record<string, BuiltinSafeBinProfileFixture> = 
       "--pid",
       "-n",
       "-c",
-    ],
-    allowedBooleanFlags: [
-      "--quiet",
-      "--silent",
-      "--verbose",
-      "--zero-terminated",
-      "-q",
-      "-v",
-      "-z",
     ],
     // Follow/retry modes are unbounded and do not belong in auto-approved safe-bin use.
     deniedFlags: ["--follow", "--retry", "-F", "-f"],

@@ -5,7 +5,7 @@ import {
   type TalkEvent,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { vi } from "vitest";
-import { createDiscordAudioTransport } from "./audio-transport.js";
+import { DiscordAudioTransport } from "./audio-transport.js";
 import { getDiscordAudioTestWorker } from "./audio-worker.test-support.js";
 import * as sdkRuntime from "./sdk-runtime.js";
 
@@ -17,10 +17,8 @@ vi.mock("./audio-worker-thread.js", async () => {
     ) => new InProcessDiscordAudioWorker(undefined, { workerData: options }),
   };
 });
-import { createVoiceCaptureState } from "./capture-state.js";
 import { DiscordRealtimePlayback } from "./realtime-playback.js";
 import { DiscordRealtimePlayer } from "./realtime-player.js";
-import { createVoiceReceiveRecoveryState } from "./receive-recovery.js";
 import { loadDiscordVoiceSdk } from "./sdk-runtime.js";
 import type { VoiceSessionEntry } from "./session.js";
 import { DiscordVoiceConversationQueue } from "./voice-conversation-input.js";
@@ -50,7 +48,7 @@ export function createRealtimePlaybackFixture(
     joinVoiceChannel: () => connection,
     entersState: voiceSdk.entersState,
   });
-  const audio = createDiscordAudioTransport(
+  const audio = new DiscordAudioTransport(
     {
       guildId: "guild",
       channelId: "voice",
@@ -90,9 +88,13 @@ export function createRealtimePlaybackFixture(
     conversations: new DiscordVoiceConversationQueue(),
     audioInputBudget: { enabled: false },
     ttsStreamFallbackWarned: false,
-    capture: createVoiceCaptureState(),
+    capture: new Map(),
     realtimeLifecycle: { status: "inactive", generation: 0 },
-    receiveRecovery: createVoiceReceiveRecoveryState(),
+    receiveRecovery: {
+      decryptFailureCount: 0,
+      lastDecryptFailureAt: 0,
+      decryptRecoveryInFlight: false,
+    },
     stop: vi.fn(),
   };
   const roomPlayer = new DiscordRealtimePlayer(audio);

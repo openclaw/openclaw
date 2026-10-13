@@ -3,7 +3,10 @@ import {
   loadSessionEntry as loadStoredSessionEntry,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import { resetAgentEventsForTest } from "../infra/agent-events.js";
+import {
+  getAgentEventLifecycleGeneration,
+  resetAgentEventsForTest,
+} from "../infra/agent-events.js";
 import { registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { emitAgentEvents } from "./server-chat.agent-events.test-helpers.js";
@@ -21,6 +24,10 @@ vi.mock("./session-utils.js", () => {
   const load = vi.fn();
   return { loadSessionEntry: load, loadGatewaySessionEntryReadOnly: load };
 });
+vi.mock("./session-utils-store-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-utils-store-worker.js")>()),
+  loadGatewaySessionEntryReadOnlyInWorker: async () => loadSessionEntry("session-terminal-error"),
+}));
 
 const persistGatewaySessionLifecycleEventMock = vi.fn();
 const loadGatewaySessionRow = vi.fn();
@@ -83,14 +90,13 @@ describe("agent event goal lifecycle", () => {
     },
   ])("persists $name without waiting for retry grace", ({ terminal, status }) =>
     withOpenClawTestState({ label: "terminal-projection" }, async (state) => {
-      const sessionKey = "session-terminal-error";
+      const sessionKey = "agent:main:session-terminal-error";
       const storePath = state.statePath("agents", "main", "sessions", "sessions.json");
       const target = { storePath, sessionKey };
       const read = () => loadStoredSessionEntry({ ...target, readConsistency: "latest" });
       await replaceSessionEntry(target, {
         sessionId: "session-terminal",
         updatedAt: 1_000,
-        status: "running",
         startedAt: 1_000,
         goal: {
           schemaVersion: 1,
@@ -131,7 +137,7 @@ describe("agent event goal lifecycle", () => {
         sessionEventSubscribers.subscribe("conn-session");
         registerAgentRunContext("run-terminal-final-failure", { sessionKey });
 
-        emitAgentEvents(handler, "run-terminal-final-failure", [
+        await emitAgentEvents(handler, "run-terminal-final-failure", [
           ["lifecycle", { phase: "error", error: "Retryable provider failure." }],
           [
             "tool",
@@ -140,7 +146,7 @@ describe("agent event goal lifecycle", () => {
         ]);
         expect(read()?.goal?.status).toBe("active");
         expect(persistGatewaySessionLifecycleEventMock).not.toHaveBeenCalled();
-        emitAgentEvents(handler, "run-terminal-final-failure", [
+        await emitAgentEvents(handler, "run-terminal-final-failure", [
           ["lifecycle", { phase: "error", startedAt: 1_000, endedAt: 2_000, ...terminal }],
         ]);
         await Promise.all(
@@ -164,9 +170,14 @@ describe("agent event goal lifecycle", () => {
         ).toMatchObject({ status, lastRunError: terminal.error, session: { goal: stoppedGoal } });
 
         vi.setSystemTime(3_000);
-        emitAgentEvents(handler, "run-recovered", [
-          ["lifecycle", { phase: "start", startedAt: 3_000 }],
-          ["lifecycle", { phase: "end", startedAt: 3_000, endedAt: 4_000 }],
+        const lifecycleGeneration = getAgentEventLifecycleGeneration();
+        await emitAgentEvents(handler, "run-recovered", [
+          ["lifecycle", { phase: "start", startedAt: 3_000 }, { lifecycleGeneration }],
+          [
+            "lifecycle",
+            { phase: "end", startedAt: 3_000, endedAt: 4_000 },
+            { lifecycleGeneration },
+          ],
         ]);
         await Promise.all(
           persistGatewaySessionLifecycleEventMock.mock.results.map((result) => result.value),
@@ -181,7 +192,7 @@ describe("agent event goal lifecycle", () => {
             .map(([, payload]) => payload.state),
         ).toEqual(["error", "final"]);
       } finally {
-        handler.dispose();
+        await handler.dispose();
         vi.useRealTimers();
       }
     }),

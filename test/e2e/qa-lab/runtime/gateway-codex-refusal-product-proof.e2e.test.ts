@@ -97,6 +97,8 @@ describe("Gateway Codex failure recovery with automatic cyber failover off", () 
           OPENCLAW_QA_CODEX_APP_SERVER_VERSION: CODEX_APP_SERVER_VERSION,
           OPENCLAW_QA_CODEX_FAILURE_KIND: scenario.failureKind,
           OPENCLAW_SKIP_PROVIDERS: undefined,
+          // Native task admission needs the configured owner published by full Gateway startup.
+          OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
         },
         config: {
           plugins: {

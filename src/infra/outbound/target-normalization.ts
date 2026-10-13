@@ -1,23 +1,14 @@
-// Outbound target normalization trims user input, applies plugin normalizers,
-// and optionally resolves directory-backed destinations.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelDirectoryEntryKind, ChannelId } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getActivePluginChannelRegistryVersion } from "../../plugins/runtime.js";
 import { captureChannelReadAuthority } from "../../shared/channel-read-authority.js";
-
-/**
- * Normalizes raw user/channel target input before provider-specific parsing.
- */
-export function normalizeChannelTargetInput(raw: string): string {
-  return raw.trim();
-}
 
 type TargetNormalizer = ((raw: string) => string | undefined) | undefined;
 type TargetNormalizerCacheEntry = {
@@ -33,17 +24,13 @@ function resolveChannelPluginForTargetRead(channelId: ChannelId): ChannelPlugin 
   return getLoadedChannelPluginForRead(channelId) ?? getChannelPlugin(channelId);
 }
 
-function normalizeTargetLiteral(value: string): string | undefined {
-  return normalizeOptionalLowercaseString(value);
-}
-
-function stripPluginTargetPrefix(raw: string, plugin: ChannelPlugin): string {
+export function stripNormalizedTargetProviderPrefixes(
+  raw: string,
+  prefixes: readonly string[],
+): string {
   let target = raw.trim();
-  const prefixes = [plugin.id, ...(plugin.messaging?.targetPrefixes ?? [])]
-    .map((prefix) => normalizeTargetLiteral(String(prefix)))
-    .filter((prefix): prefix is string => Boolean(prefix));
   while (target) {
-    const lowered = normalizeTargetLiteral(target) ?? "";
+    const lowered = target.toLowerCase();
     const prefix = prefixes.find((candidate) => lowered.startsWith(`${candidate}:`));
     if (!prefix) {
       return target;
@@ -63,20 +50,21 @@ export function resolveReservedTargetLiteral(params: {
   if (!raw || !plugin || !reservedLiterals?.length) {
     return undefined;
   }
-  const stripped = stripPluginTargetPrefix(raw, plugin);
+  const stripped = stripNormalizedTargetProviderPrefixes(
+    raw,
+    [plugin.id, ...(plugin.messaging?.targetPrefixes ?? [])]
+      .map((prefix) => normalizeOptionalLowercaseString(String(prefix)))
+      .filter((prefix): prefix is string => Boolean(prefix)),
+  );
   if (!stripped || /^[@#]/.test(stripped) || /^(channel|group|user):/i.test(stripped)) {
     return undefined;
   }
-  const normalized = normalizeTargetLiteral(stripped);
-  if (!normalized) {
-    return undefined;
-  }
-  const reserved = new Set(
-    reservedLiterals
-      .map(normalizeTargetLiteral)
-      .filter((literal): literal is string => Boolean(literal)),
-  );
-  return reserved.has(normalized) ? normalized : undefined;
+  const normalized = stripped.toLowerCase();
+  return reservedLiterals.some(
+    (literal) => normalizeOptionalLowercaseString(literal) === normalized,
+  )
+    ? normalized
+    : undefined;
 }
 
 function resolveTargetNormalizer(
@@ -101,28 +89,11 @@ function resolveTargetNormalizer(
   return normalizer;
 }
 
-function resolvePreparedPluginSignatureId(plugin: ChannelPlugin): number {
-  const existing = preparedPluginSignatureIds.get(plugin);
-  if (existing) {
-    return existing;
-  }
-  const id = nextPreparedPluginSignatureId;
-  nextPreparedPluginSignatureId += 1;
-  preparedPluginSignatureIds.set(plugin, id);
-  return id;
-}
-
-/**
- * Applies a channel plugin normalizer and falls back to trimmed input.
- */
 export function normalizeTargetForProvider(
   provider: string,
-  raw?: string,
+  raw = "",
   plugin?: ChannelPlugin,
 ): string | undefined {
-  if (!raw) {
-    return undefined;
-  }
   const fallback = normalizeOptionalString(raw);
   if (!fallback) {
     return undefined;
@@ -132,31 +103,20 @@ export function normalizeTargetForProvider(
   return normalizeOptionalString(normalizer?.(raw) ?? fallback);
 }
 
-/**
- * Directory target kinds accepted by plugin-backed target resolution.
- */
-type TargetResolveKindLike = ChannelDirectoryEntryKind | "channel";
-
-/**
- * Resolved outbound target returned by a channel plugin target resolver.
- */
-type ResolvedPluginMessagingTarget = {
+export type ResolvedPluginMessagingTarget = {
   to: string;
-  kind: TargetResolveKindLike;
+  kind: ChannelDirectoryEntryKind;
   display?: string;
   source: "normalized" | "directory";
   resolutionSource: "plugin";
 };
 
-/**
- * Produces raw and provider-normalized forms of a nonblank target input.
- */
 export function resolveNormalizedTargetInput(
   provider: string,
   raw?: string,
   plugin?: ChannelPlugin,
 ): { raw: string; normalized: string } | undefined {
-  const trimmed = normalizeChannelTargetInput(raw ?? "");
+  const trimmed = raw?.trim();
   if (!trimmed) {
     return undefined;
   }
@@ -166,9 +126,6 @@ export function resolveNormalizedTargetInput(
   };
 }
 
-/**
- * Detects whether input is specific enough to invoke plugin target resolution.
- */
 export function looksLikeTargetId(params: {
   channel: ChannelId;
   raw: string;
@@ -184,30 +141,20 @@ export function looksLikeTargetId(params: {
     // generic phone/mention checks.
     return lookup(params.raw, normalizedInput ?? params.raw);
   }
-  if (/^(channel|group|user):/i.test(params.raw)) {
-    return true;
-  }
-  if (/^[@#]/.test(params.raw)) {
-    return true;
-  }
-  if (/^\+?\d{6,}$/.test(params.raw)) {
-    return true;
-  }
-  if (params.raw.includes("@thread")) {
-    return true;
-  }
-  return /^(conversation|user):/i.test(params.raw);
+  return (
+    /^(channel|group|user|conversation):/i.test(params.raw) ||
+    /^[@#]/.test(params.raw) ||
+    /^\+?\d{6,}$/.test(params.raw) ||
+    params.raw.includes("@thread")
+  );
 }
 
-/**
- * Resolves a normalized target through the channel plugin when a resolver is available.
- */
 export async function maybeResolvePluginMessagingTarget(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
   input: string;
   accountId?: string | null;
-  preferredKind?: TargetResolveKindLike;
+  preferredKind?: ChannelDirectoryEntryKind;
   requireIdLike?: boolean;
   plugin?: ChannelPlugin;
 }): Promise<ResolvedPluginMessagingTarget | undefined> {
@@ -251,31 +198,31 @@ export async function maybeResolvePluginMessagingTarget(params: {
   };
 }
 
-/**
- * Builds a cache signature for target-resolution behavior exposed by a channel plugin.
- */
 export function buildTargetResolverSignature(
   channel: ChannelId,
   preparedPlugin?: ChannelPlugin,
 ): string {
   const plugin = preparedPlugin ?? resolveChannelPluginForTargetRead(channel);
-  const registryScope = preparedPlugin
-    ? `prepared:${resolvePreparedPluginSignatureId(preparedPlugin)}`
-    : "pinned";
+  let registryScope = "pinned";
+  if (preparedPlugin) {
+    let id = preparedPluginSignatureIds.get(preparedPlugin);
+    if (!id) {
+      id = nextPreparedPluginSignatureId++;
+      preparedPluginSignatureIds.set(preparedPlugin, id);
+    }
+    registryScope = `prepared:${id}`;
+  }
   const resolver = plugin?.messaging?.targetResolver;
   const hint = resolver?.hint ?? "";
   const reserved = (resolver?.reservedLiterals ?? [])
-    .map(normalizeTargetLiteral)
+    .map(normalizeOptionalLowercaseString)
     .filter((literal): literal is string => Boolean(literal))
     .toSorted()
     .join(",");
   const looksLike = resolver?.looksLikeId;
   // Function source is only a cheap invalidation hint; resolver behavior still belongs to the plugin.
   const source = looksLike ? looksLike.toString() : "";
-  return hashSignature(`${registryScope}|${hint}|${reserved}|${source}`);
-}
-
-function hashSignature(value: string): string {
+  const value = `${registryScope}|${hint}|${reserved}|${source}`;
   let hash = 5381;
   for (let i = 0; i < value.length; i += 1) {
     hash = ((hash << 5) + hash) ^ value.charCodeAt(i);

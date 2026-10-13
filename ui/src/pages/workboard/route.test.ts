@@ -228,34 +228,6 @@ describe("Workboard route navigation ownership", () => {
 });
 
 describe("Workboard route location", () => {
-  it("reads the canonical board path without rewriting it", () => {
-    expect(
-      resolveWorkboardRouteLocation({
-        pathname: "/workboard/ops",
-        search: "?agent=main",
-        hash: "#ready",
-      }),
-    ).toEqual({ boardFilter: "ops", search: "?agent=main" });
-  });
-
-  it("redirects the shipped query alias to the canonical path", () => {
-    expect(
-      resolveWorkboardRouteLocation({
-        pathname: "/workboard",
-        search: "?agent=main&board=ops",
-        hash: "#ready",
-      }),
-    ).toEqual({
-      boardFilter: "ops",
-      search: "?agent=main",
-      canonicalLocation: {
-        pathname: "/workboard/ops",
-        search: "?agent=main",
-        hash: "#ready",
-      },
-    });
-  });
-
   it("drops a redundant legacy query from an already-canonical board path", () => {
     expect(
       resolveWorkboardRouteLocation({

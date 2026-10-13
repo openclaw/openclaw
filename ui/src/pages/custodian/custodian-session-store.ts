@@ -4,25 +4,22 @@ import type { ApplicationContext } from "../../app/context.ts";
 import type { CustodianTurnAdmission } from "../../components/custodian-alert-contract.ts";
 import { t } from "../../i18n/index.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { initialWizardValue } from "../model-setup/state.ts";
+import { CustodianAutoSetup } from "./custodian-auto-setup.ts";
 import { CustodianInputDrafts } from "./custodian-input-drafts.ts";
 import {
   navigateFromCustodianSetup,
   performCustodianAgentHandoff,
 } from "./custodian-navigation.ts";
-import * as nudgeActions from "./custodian-nudge-actions.ts";
 import {
   createCustodianSessionId,
   loadCustodianSessionId,
   persistCustodianSessionId,
 } from "./custodian-session-identity.ts";
 import { CustodianSessionOwner } from "./custodian-session-owner.ts";
-import {
-  resolveCustodianConfiguredInferenceState,
-  type CustodianConfiguredInferenceState,
-} from "./custodian-session-variant.ts";
+import type { CustodianConfiguredInferenceState } from "./custodian-session-variant.ts";
 import {
   custodianWizardSubmission,
-  initialCustodianWizardValue,
   isCustodianWizardCancelAvailable,
 } from "./custodian-wizard-step.ts";
 import * as eventNudgeState from "./event-nudge.ts";
@@ -43,8 +40,6 @@ import {
 } from "./transcript.ts";
 
 const SYSTEM_AGENT_CHAT_TIMEOUT_MS = 190_000;
-
-type StoreListener = () => void;
 
 /** One process-local conversation owner shared by the full page and dock surface. */
 export class CustodianSessionStore {
@@ -71,6 +66,11 @@ export class CustodianSessionStore {
   earlierBoundaryAfterId: number | null = null;
   abandonedTurnOutcomeUnknown = false;
 
+  readonly autoSetup = new CustodianAutoSetup(() => {
+    this.synchronizeClient();
+    this.emit();
+  });
+
   private inferenceState: "unverified" | "ready" = "unverified";
   private inputDrafts = new CustodianInputDrafts();
   private context: ApplicationContext | null = null;
@@ -94,9 +94,9 @@ export class CustodianSessionStore {
   private gatewayCleanup: (() => void) | null = null;
   private agentCleanup: (() => void) | null = null;
   private eventCleanup: (() => void) | null = null;
-  private readonly listeners = new Set<StoreListener>();
+  private readonly listeners = new Set<() => void>();
 
-  subscribe(listener: StoreListener): () => void {
+  subscribe(listener: () => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
@@ -106,6 +106,8 @@ export class CustodianSessionStore {
     if (!contextChanged && this.variant === variant) {
       return;
     }
+    // Subscriptions may publish synchronously, so install the requested mode first.
+    this.variant = variant;
     if (contextChanged) {
       this.gatewayCleanup?.();
       this.agentCleanup?.();
@@ -123,11 +125,16 @@ export class CustodianSessionStore {
         this.synchronizeClient();
         this.emit();
       });
-      this.eventCleanup = context.gateway.subscribeEvents((event) =>
-        nudgeActions.receiveEventNudge(this, event),
-      );
+      this.eventCleanup = context.gateway.subscribeEvents((event) => {
+        if (this.variant !== "caretaker" || this.eventNudgeClosed) {
+          return;
+        }
+        if (event.event === "health") {
+          this.eventNudge = eventNudgeState.classifyCustodianHealthNudge(event.payload);
+        }
+        this.emit();
+      });
     }
-    this.variant = variant;
     this.synchronizeClient();
     this.emit();
   }
@@ -298,28 +305,26 @@ export class CustodianSessionStore {
     return outcome;
   }
 
-  requestNudgeUpdate(): void {
-    this.emit();
-  }
-
   sendEventNudge(): Promise<void> {
-    return nudgeActions.sendEventNudge(this);
+    return eventNudgeState.sendCustodianEventNudge(this, () => this.emit());
   }
 
   dismissEventNudge(): void {
-    nudgeActions.dismissEventNudge(this);
+    [this.eventNudge, this.eventNudgeClosed] = [null, true];
+    this.emit();
   }
 
   dismissChannelOnboardingNudge(): void {
-    nudgeActions.dismissChannelOnboardingNudge(this, () => this.context?.replace("custodian"));
+    this.channelOnboardingNudgeClosed = true;
+    this.emit();
+    this.context?.replace("custodian");
   }
 
   openChannelsFromOnboarding(): void {
-    nudgeActions.openChannelsFromOnboarding(
-      this,
-      () => this.revokeNavigationAuthority(),
-      () => this.context?.navigate("channels"),
-    );
+    this.channelOnboardingNudgeClosed = true;
+    this.revokeNavigationAuthority();
+    this.emit();
+    this.context?.navigate("channels");
   }
 
   async dismissQuestion(message: CustodianMessage): Promise<void> {
@@ -432,11 +437,11 @@ export class CustodianSessionStore {
     this.sessionClient = client;
     this.sessionOwnershipKey = this.sessionOwner.key(this.context?.gateway ?? null);
     this.sessionStarted = true;
-    void this.initializeSession(
-      client,
-      { sessionId: this.sessionId, ...custodianChatParams(this.variant) },
-      loadTranscript,
-    );
+    void this.initializeSession(client, this.initialChatParams(), loadTranscript);
+  }
+
+  private initialChatParams(): SystemAgentChatParams {
+    return { sessionId: this.sessionId, ...custodianChatParams(this.variant) };
   }
 
   private replaceSessionId(sessionId?: string): void {
@@ -476,17 +481,14 @@ export class CustodianSessionStore {
     const chatSupported =
       client !== null && canCallGatewayMethod(snapshot, "openclaw.chat", "operator.admin");
     const chatUnsupported = isGatewayMethodAdvertised(snapshot, "openclaw.chat") === false;
-    const configuredInferenceState = resolveCustodianConfiguredInferenceState(this.context);
+    const ownershipKey = this.sessionOwner.key(context.gateway);
+    this.autoSetup.synchronize(context, this.variant === "onboarding", ownershipKey);
+    const configuredInferenceState = this.autoSetup.configuredInferenceState;
     const inferenceStateChanged = configuredInferenceState !== this.configuredInferenceState;
     this.configuredInferenceState = configuredInferenceState;
     const variantChanged = this.sessionStarted && this.sessionVariant !== this.variant;
-    const ownershipKey = this.sessionOwner.key(context.gateway);
     const reconnected = this.sessionStarted && client !== null && this.activeClient === null;
-    const clientReplaced =
-      this.sessionStarted &&
-      client !== null &&
-      this.sessionClient !== null &&
-      client !== this.sessionClient;
+    const clientReplaced = this.sessionStarted && client !== null && client !== this.sessionClient;
     const ownershipChanged =
       this.sessionOwnershipKey !== null && ownershipKey !== this.sessionOwnershipKey;
     if (
@@ -544,10 +546,7 @@ export class CustodianSessionStore {
         // The reconnect rejoin races the interrupted turn the same way a
         // reload does; arm one barrier refresh behind it.
         this.rejoinBarrierPending = true;
-        void this.initializeSession(client, {
-          sessionId: this.sessionId,
-          ...custodianChatParams(this.variant),
-        });
+        void this.initializeSession(client, this.initialChatParams());
       } else {
         void this.refreshTranscriptIfIdle();
       }
@@ -608,11 +607,7 @@ export class CustodianSessionStore {
     client: GatewayBrowserClient,
     epoch: number,
   ): Promise<boolean> {
-    const context = this.context;
-    if (
-      !context ||
-      isGatewayMethodAdvertised(context.gateway.snapshot, "openclaw.chat.history") !== true
-    ) {
+    if (!this.transcript.available) {
       return false;
     }
     const isCurrent = () => epoch === this.requestEpoch && client === this.activeClient;
@@ -712,7 +707,7 @@ export class CustodianSessionStore {
           return "sent";
         }
       }
-      this.wizardValue = result.step ? initialCustodianWizardValue(result.step) : undefined;
+      this.wizardValue = result.step ? initialWizardValue(result.step) : undefined;
       const message = createCustodianReplyMessage(this.nextMessageId, result);
       if (message) {
         this.nextMessageId += 1;
@@ -746,7 +741,7 @@ export class CustodianSessionStore {
         if (inferenceUnavailable) {
           this.inferenceState = "unverified";
           // Recheck the runtime without replaying a user turn that may have reached the Gateway.
-          this.retryParams = { sessionId: this.sessionId, ...custodianChatParams(this.variant) };
+          this.retryParams = this.initialChatParams();
         }
         if (sessionInvalidated && hasCustodianUserInput(params)) {
           // Retained transcript rows are display context only; the next turn needs a fresh id.

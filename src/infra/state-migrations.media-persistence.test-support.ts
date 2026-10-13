@@ -9,7 +9,10 @@ import {
 } from "../config/sessions/archive-compression.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "../config/sessions/session-transcript-index.js";
 import { prepareMemorySessionTranscriptProjection } from "../config/sessions/session-transcript-projection-rebuild.js";
-import { transcriptEventJsonSql } from "../config/sessions/transcript-payload.js";
+import {
+  createTranscriptEventInserter,
+  transcriptEventJsonSql,
+} from "../config/sessions/transcript-payload.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import type { DB } from "../state/openclaw-agent-db.generated.js";
 import {
@@ -20,9 +23,13 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { removeCanonicalValidationFromHistoricalAgentFixture } from "../state/openclaw-agent-db.test-support.js";
 import { seedOpenClawAgentSchemaV21 } from "../state/openclaw-agent-schema-v21.test-support.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
-import { requireNodeSqlite } from "./node-sqlite.js";
+import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
+import { admitSqliteSchema } from "./sqlite-schema-facts.js";
 
 export const PREVIOUS_VERSION = 16;
 
@@ -50,6 +57,8 @@ export function createLegacyDatabaseFixture(params: {
   path?: string;
   schemaVersion?: number;
 }): string {
+  // Establish known deletion history before writing this active legacy store.
+  openOpenClawStateDatabase({ env: params.env });
   const agentId = params.agentId ?? "main";
   const schemaVersion = params.schemaVersion ?? PREVIOUS_VERSION;
   const legacy = schemaVersion < OPENCLAW_AGENT_SCHEMA_VERSION;
@@ -59,8 +68,7 @@ export function createLegacyDatabaseFixture(params: {
     : openOpenClawAgentDatabase(options).path;
   closeOpenClawAgentDatabasesForTest();
   fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-  const { DatabaseSync } = requireNodeSqlite();
-  const database = new DatabaseSync(databasePath);
+  const database = openNodeSqliteDatabase(databasePath);
   try {
     if (legacy) {
       seedOpenClawAgentSchemaV21(database, agentId);
@@ -78,6 +86,9 @@ export function createLegacyDatabaseFixture(params: {
         "UPDATE schema_meta SET schema_version = ?, app_version = ? WHERE meta_key = 'primary'",
       )
       .run(schemaVersion, "legacy-test");
+    if (!legacy) {
+      admitSqliteSchema(database);
+    }
     for (const [sessionId, events] of Object.entries(params.eventsBySession)) {
       const sessionKey = `agent:${agentId}:${sessionId}`;
       const firstTimestamp = Number(events[0]?.timestamp ?? 1);
@@ -96,13 +107,18 @@ export function createLegacyDatabaseFixture(params: {
           "INSERT INTO transcript_rewrite_watermarks(session_id,generation,updated_at) VALUES(?,?,?)",
         )
         .run(sessionId, `generation-${sessionId}`, firstTimestamp);
+      const insertEvent = legacy ? undefined : createTranscriptEventInserter(database, sessionId);
       events.forEach((event, seq) => {
         const createdAt = Number(event.timestamp ?? firstTimestamp) + 100;
-        database
-          .prepare(
-            "INSERT INTO transcript_events(session_id,seq,event_json,created_at) VALUES(?,?,?,?)",
-          )
-          .run(sessionId, seq, JSON.stringify(event), createdAt);
+        if (insertEvent) {
+          insertEvent({ seq, eventJson: JSON.stringify(event), createdAt });
+        } else {
+          database
+            .prepare(
+              "INSERT INTO transcript_events(session_id,seq,event_json,created_at) VALUES(?,?,?,?)",
+            )
+            .run(sessionId, seq, JSON.stringify(event), createdAt);
+        }
         database
           .prepare(
             "INSERT INTO transcript_event_identities(session_id,event_id,seq,event_type,parent_id,message_idempotency_key,created_at) VALUES(?,?,?,?,?,?,?)",

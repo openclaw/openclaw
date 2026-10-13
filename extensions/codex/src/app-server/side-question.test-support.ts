@@ -28,17 +28,16 @@ const createOpenClawCodingToolsMock = vi.fn();
 const toolExecuteMock = vi.fn();
 const handleCodexAppServerApprovalRequestMock = vi.fn();
 const resolveCodexProviderWebSearchSupportForClientMock = vi.fn();
-type SelectionRetryParams = {
+type RequestScopeParams = {
   lease: { client?: unknown };
   options: { timeoutMs?: number; abandonSignal?: AbortSignal };
   run: (
     client: unknown,
     requestOptions: () => { timeoutMs: number; signal?: AbortSignal; assertCurrent: () => void },
   ) => Promise<unknown>;
-  onClientChange: (client: unknown) => void;
 };
-const withLeasedCodexAppServerClientStartSelectionRetryMock = vi.fn(
-  async (params: SelectionRetryParams) =>
+const withCodexAppServerClientRequestScopeMock = vi.fn(
+  async (params: RequestScopeParams) =>
     await params.run(params.lease.client, () => ({
       timeoutMs: params.options.timeoutMs ?? 60_000,
       signal: params.options.abandonSignal,
@@ -52,7 +51,8 @@ vi.mock("./auth-profile.js", async (importOriginal) => ({
     isCodexAppServerNativeAuthProfileMock(...args),
 }));
 
-vi.mock("./shared-client.js", () => ({
+vi.mock("./shared-client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./shared-client.js")>()),
   getSharedCodexAppServerClient: (...args: unknown[]) => getSharedCodexAppServerClientMock(...args),
   getLeasedSharedCodexAppServerClient: (...args: unknown[]) =>
     getSharedCodexAppServerClientMock(...args),
@@ -62,8 +62,8 @@ vi.mock("./shared-client.js", () => ({
   }),
   retireSharedCodexAppServerClientIfCurrent: (...args: unknown[]) =>
     retireSharedCodexAppServerClientIfCurrentMock(...args),
-  withLeasedCodexAppServerClientStartSelectionRetry: (params: SelectionRetryParams) =>
-    withLeasedCodexAppServerClientStartSelectionRetryMock(params),
+  withCodexAppServerClientRequestScope: (params: RequestScopeParams) =>
+    withCodexAppServerClientRequestScopeMock(params),
 }));
 
 vi.mock("./approval-bridge.js", () => ({
@@ -82,6 +82,7 @@ const baseBindingStore = createCodexTestBindingStore();
 const bindingStore: CodexAppServerBindingStore = {
   ...baseBindingStore,
   read: (...args) => readCodexAppServerBindingMock(...args),
+  readAsync: async (...args) => readCodexAppServerBindingMock(...args),
 };
 
 async function runCodexAppServerSideQuestion(
@@ -274,7 +275,7 @@ export function platformPreparedRuntimeAuth(resolvedApiKey?: string) {
 
 function sideParams(overrides: Partial<SideQuestionParams> = {}): SideQuestionParams {
   let hostCapabilities = overrides.hostCapabilities ?? TEST_HOST_CAPABILITIES;
-  if (!hostCapabilities.createToolSurface) {
+  if (!hostCapabilities.createToolSurfaceAsync) {
     hostCapabilities = createCodexTestHostCapabilities(hostCapabilities);
     setCodexTestToolFactory({ hostCapabilities }, createOpenClawCodingToolsMock);
   }
@@ -354,9 +355,9 @@ export function useSideQuestionTestSetup() {
     toolExecuteMock.mockReset();
     handleCodexAppServerApprovalRequestMock.mockReset();
     resolveCodexProviderWebSearchSupportForClientMock.mockReset();
-    withLeasedCodexAppServerClientStartSelectionRetryMock.mockReset();
-    withLeasedCodexAppServerClientStartSelectionRetryMock.mockImplementation(
-      async (params: SelectionRetryParams) =>
+    withCodexAppServerClientRequestScopeMock.mockReset();
+    withCodexAppServerClientRequestScopeMock.mockImplementation(
+      async (params: RequestScopeParams) =>
         await params.run(params.lease.client, () => ({
           timeoutMs: params.options.timeoutMs ?? 60_000,
           signal: params.options.abandonSignal,
@@ -384,16 +385,12 @@ export function useSideQuestionTestSetup() {
     ]);
 
     readCodexAppServerBindingMock.mockReturnValue({
-      schemaVersion: 1,
       threadId: "parent-thread",
-      sessionFile: "/tmp/session-1.jsonl",
       cwd: "/tmp/workspace",
       authProfileId: "openai:work",
       model: "gpt-5.5",
       approvalPolicy: "on-request",
       sandbox: "workspace-write",
-      createdAt: new Date(0).toISOString(),
-      updatedAt: new Date(0).toISOString(),
     });
     isCodexAppServerNativeAuthProfileMock.mockReturnValue(true);
     getSharedCodexAppServerClientMock.mockResolvedValue(createFakeClient());
@@ -417,7 +414,6 @@ export {
   toolExecuteMock,
   handleCodexAppServerApprovalRequestMock,
   resolveCodexProviderWebSearchSupportForClientMock,
-  withLeasedCodexAppServerClientStartSelectionRetryMock,
   runCodexAppServerSideQuestion,
   runCodexAppServerSideQuestionImpl,
   createFakeClient,
@@ -427,7 +423,6 @@ export {
   turnCompleted,
   sideParams,
   TEST_HOST_CAPABILITIES,
-  type SelectionRetryParams,
 };
 
 export async function runSideQuestionWithManagedWebSearchCall(
@@ -489,4 +484,25 @@ export async function runSideQuestionWithManagedWebSearchCall(
   const forkCall = client.request.mock.calls.find(([method]) => method === "thread/fork");
   const forkConfig = (forkCall?.[1] as { config?: Record<string, unknown> } | undefined)?.config;
   return { forkConfig, result, toolResponse };
+}
+
+export function createPendingClient({ interrupt = true } = {}) {
+  const client = createFakeClient({ completeTurn: false });
+  client.request.mockImplementation(async (method: string) => {
+    if (method === "thread/fork") {
+      return threadResult("side-thread");
+    }
+    if (method === "turn/start") {
+      return turnStartResult("turn-1");
+    }
+    if (
+      method === "thread/inject_items" ||
+      method === "thread/unsubscribe" ||
+      (interrupt && method === "turn/interrupt")
+    ) {
+      return {};
+    }
+    throw new Error(`unexpected request: ${method}`);
+  });
+  return client;
 }

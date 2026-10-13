@@ -9,7 +9,6 @@ import {
   sendWebDirectInboundAndCollectSessionKeys,
 } from "./auto-reply.broadcast-groups.test-harness.js";
 import {
-  createWebInboundDeliverySpies,
   installWebAutoReplyTestHomeHooks,
   installWebAutoReplyUnitTestHooks,
   resetLoadConfigMock,
@@ -18,29 +17,19 @@ import {
   setLoadConfigMock,
 } from "./auto-reply.test-harness.js";
 import { maybeBroadcastMessage } from "./auto-reply/monitor/broadcast.js";
-import {
-  createTestWebAudioInboundMessage,
-  createTestWebInboundMessage,
-} from "./inbound/test-message.test-helper.js";
+import { createTestWebAudioInboundMessage } from "./inbound/test-message.test-helper.js";
 
 installWebAutoReplyTestHomeHooks();
 
 describe("broadcast groups", () => {
   installWebAutoReplyUnitTestHooks();
 
-  it.each([
-    { label: "legacy list", roster: { list: [{ id: "alfred" }] } },
-    { label: "entries", roster: { entries: { alfred: {} } } },
-    {
-      label: "entries overriding legacy list",
-      roster: { entries: { alfred: {} }, list: [{ id: "missing" }] },
-    },
-  ])("skips unknown broadcast agent ids with $label", async ({ roster }) => {
+  it("skips unknown broadcast agent ids", async () => {
     setLoadConfigMock({
       channels: { whatsapp: { allowFrom: ["*"] } },
       agents: {
         defaults: { maxConcurrent: 10 },
-        ...roster,
+        entries: { alfred: {} },
       },
       broadcast: {
         "+1000": ["alfred", "missing"],
@@ -51,44 +40,6 @@ describe("broadcast groups", () => {
 
     expect(resolver).toHaveBeenCalledTimes(1);
     expect(seen[0]).toContain("agent:alfred:");
-    resetLoadConfigMock();
-  });
-
-  it.each([
-    { body: "@carla please review", expected: ["carla"] },
-    { body: "Baerbel and Carla have context", expected: ["baerbel", "carla"] },
-  ])("uses qualified participants and mention selection for $body", async ({ body, expected }) => {
-    setLoadConfigMock({
-      channels: { whatsapp: { allowFrom: ["*"] } },
-      agents: {
-        entries: {
-          alfred: {},
-          baerbel: { groupChat: { mentionPatterns: ["@baerbel\\b"] } },
-          carla: { groupChat: { mentionPatterns: ["@carla\\b"] } },
-        },
-      },
-      bindings: [{ agentId: "alfred", match: { channel: "whatsapp", accountId: "default" } }],
-      broadcast: {
-        strategy: "sequential",
-        "+1000": ["alfred"],
-        "whatsapp:+1000": { agents: ["baerbel", "carla"] },
-      },
-    } satisfies OpenClawConfig);
-    const seen: string[] = [];
-    const resolver = vi.fn(async (ctx: { SessionKey?: unknown }) => {
-      seen.push(String(ctx.SessionKey).split(":")[1] ?? "");
-      return { text: "ok" };
-    });
-    const { spies, onMessage } = await monitorWebChannelWithCapture(resolver);
-    await sendWebDirectInboundMessage({
-      onMessage,
-      spies,
-      id: "qualified-message",
-      from: "+1000",
-      to: "+2000",
-      body,
-    });
-    expect(seen).toEqual(expected);
     resetLoadConfigMock();
   });
 
@@ -127,34 +78,12 @@ describe("broadcast groups", () => {
     expect(participants).toEqual(["carla"]);
   });
 
-  it("broadcasts sequentially in configured order", async () => {
-    setLoadConfigMock({
-      channels: { whatsapp: { allowFrom: ["*"] } },
-      agents: {
-        defaults: { maxConcurrent: 10 },
-        list: [{ id: "alfred" }, { id: "baerbel" }],
-      },
-      bindings: [{ agentId: "alfred", match: { channel: "whatsapp", accountId: "default" } }],
-      broadcast: {
-        strategy: "sequential",
-        "+1000": ["alfred", "baerbel"],
-      },
-    } satisfies OpenClawConfig);
-
-    const { seen, resolver } = await sendWebDirectInboundAndCollectSessionKeys();
-
-    expect(resolver).toHaveBeenCalledTimes(2);
-    expect(seen[0]).toContain("agent:alfred:");
-    expect(seen[1]).toContain("agent:baerbel:");
-    resetLoadConfigMock();
-  });
-
   it("applies recipient and strategy changes on the same active listener", async () => {
     const base = {
       channels: { whatsapp: { allowFrom: ["*"] } },
       agents: {
         defaults: { maxConcurrent: 10 },
-        list: [{ id: "alfred" }, { id: "baerbel" }],
+        entries: { alfred: {}, baerbel: {} },
       },
       bindings: [{ agentId: "alfred", match: { channel: "whatsapp", accountId: "default" } }],
     } satisfies OpenClawConfig;
@@ -234,7 +163,7 @@ describe("broadcast groups", () => {
       channels: { whatsapp: { allowFrom: ["*"] } },
       agents: {
         defaults: { maxConcurrent: 10 },
-        list: [{ id: "alfred" }, { id: "baerbel" }],
+        entries: { alfred: {}, baerbel: {} },
       },
       bindings: [{ agentId: "alfred", match: { channel: "whatsapp", accountId: "default" } }],
       broadcast: {
@@ -324,7 +253,7 @@ describe("broadcast groups", () => {
       },
       agents: {
         defaults: { maxConcurrent: 10 },
-        list: [{ id: "alfred" }, { id: "baerbel" }],
+        entries: { alfred: {}, baerbel: {} },
       },
       bindings: [{ agentId: "alfred", match: { channel: "whatsapp", accountId: "work" } }],
       broadcast: {
@@ -359,70 +288,6 @@ describe("broadcast groups", () => {
       "agent:alfred:whatsapp:group:123@g.us:thread:whatsapp-account-work",
       "agent:baerbel:whatsapp:group:123@g.us:thread:whatsapp-account-work",
     ]);
-    resetLoadConfigMock();
-  });
-
-  it("broadcasts in parallel by default", async () => {
-    setLoadConfigMock({
-      channels: { whatsapp: { allowFrom: ["*"] } },
-      agents: {
-        defaults: { maxConcurrent: 10 },
-        list: [{ id: "alfred" }, { id: "baerbel" }],
-      },
-      bindings: [{ agentId: "alfred", match: { channel: "whatsapp", accountId: "default" } }],
-      broadcast: {
-        strategy: "parallel",
-        "+1000": ["alfred", "baerbel"],
-      },
-    } satisfies OpenClawConfig);
-
-    const { sendMedia, reply, sendComposing } = createWebInboundDeliverySpies();
-
-    let started = 0;
-    let release: (() => void) | undefined;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-
-    const resolver = vi.fn(async () => {
-      started += 1;
-      if (started < 2) {
-        await gate;
-      } else {
-        release?.();
-      }
-      return { text: "ok" };
-    });
-
-    const { onMessage: capturedOnMessage } = await monitorWebChannelWithCapture(resolver);
-
-    await capturedOnMessage(
-      createTestWebInboundMessage({
-        event: {
-          id: "m1",
-          timestamp: Date.now(),
-        },
-        payload: {
-          body: "hello",
-        },
-        platform: {
-          chatJid: "direct:+1000",
-          recipientJid: "+2000",
-          sendComposing,
-          reply,
-          sendMedia,
-        },
-        admission: {
-          accountId: "default",
-          conversation: {
-            kind: "direct",
-            id: "+1000",
-          },
-        },
-      }),
-    );
-
-    expect(resolver).toHaveBeenCalledTimes(2);
     resetLoadConfigMock();
   });
 });

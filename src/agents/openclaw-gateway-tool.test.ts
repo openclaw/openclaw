@@ -181,14 +181,14 @@ describe("gateway tool", () => {
     callGatewayToolMock.mockResolvedValueOnce({
       config: {
         agents: {
-          list: [{ id: "ops" }],
+          entries: { ops: { skills: ["deploy"] } },
         },
       },
     });
 
     const result = await createGatewayTool().execute("call-indexed-config-path", {
       action: "config.get",
-      path: "agents.list[0].id",
+      path: "agents.entries.ops.skills[0]",
     });
 
     expect(result.content).toEqual([
@@ -198,8 +198,8 @@ describe("gateway tool", () => {
           {
             ok: true,
             result: {
-              path: "agents.list[0].id",
-              config: "ops",
+              path: "agents.entries.ops.skills[0]",
+              config: "deploy",
             },
           },
           null,

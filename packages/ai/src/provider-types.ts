@@ -32,7 +32,7 @@ export async function resolveProviderContext(
   context: Llm.Context | ProviderContext,
   options?: ProviderStreamOptions,
 ): Promise<ProviderContext> {
-  return options?.[PROVIDER_CONTEXT_HANDOFF]?.() ?? (context as ProviderContext);
+  return options?.[PROVIDER_CONTEXT_HANDOFF]?.() ?? context;
 }
 export type {
   ProviderContext as Context,

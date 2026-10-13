@@ -7,6 +7,7 @@ import { UpdateFinalizationLifecycle } from "../cli/update-cli/update-finalizati
 import * as temporaryState from "../infra/tmp-openclaw-dir.js";
 import type { CommandOptions } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
+import { npmCommandArgs } from "../test-utils/npm-command.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { loadInstalledPluginIndexInstallRecords } from "./installed-plugin-index-records.js";
 import { seedInstalledPluginIndex } from "./test-helpers/installed-plugin-index.js";
@@ -19,20 +20,20 @@ const path = require('node:path');
 const argv = JSON.parse(process.argv[2]);
 const proof = process.argv[3];
 const delay = Number(process.argv[4]);
-const event = (kind) => fs.appendFileSync(proof, JSON.stringify({kind, pid: process.pid, command: argv[1], planning: argv.includes('--package-lock-only'), at: Date.now()}) + '\n');
+const event = (kind) => fs.appendFileSync(proof, JSON.stringify({kind, pid: process.pid, command: argv[0], planning: argv.includes('--package-lock-only'), at: Date.now()}) + '\n');
 event('start');
 process.on('SIGTERM', () => { event('terminated'); process.exit(143); });
 const pkg = { name: 'budget-fixture', version: '2.0.0', openclaw: { extensions: ['./index.js'] } };
-if (argv[1] === 'view' && process.argv[5] === 'stall-metadata') {
+if (argv[0] === 'view' && process.argv[5] === 'stall-metadata') {
   setInterval(() => {}, 1000);
-} else if (argv[1] === 'view' && process.argv[5] === 'first-metadata-miss' && fs.readFileSync(proof, 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(e => e.kind === 'start' && e.command === 'view').length === 1) {
+} else if (argv[0] === 'view' && process.argv[5] === 'first-metadata-miss' && fs.readFileSync(proof, 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(e => e.kind === 'start' && e.command === 'view').length === 1) {
   event('unavailable');
   process.stderr.write('E404 fixture metadata unavailable');
   process.exitCode = 1;
-} else if (argv[1] === 'view') {
+} else if (argv[0] === 'view') {
   process.stdout.write(JSON.stringify(pkg));
   event('complete');
-} else if (argv[1] === 'install') {
+} else if (argv[0] === 'install') {
   const complete = () => {
     const dir = path.join(process.cwd(), 'node_modules', 'budget-fixture');
     fs.mkdirSync(dir, {recursive:true});
@@ -74,7 +75,8 @@ vi.mock("../process/exec.js", async (original) => {
       if (argv[0] === "git") {
         return actual.runCommandWithTimeout(argv, options);
       }
-      if (argv[0] !== "npm") {
+      const npmArgs = npmCommandArgs(argv);
+      if (!npmArgs) {
         throw new Error(`Unexpected fixture command ${argv[0]}`);
       }
       fixture.calls.push({ argv, timeoutMs: options.timeoutMs });
@@ -82,7 +84,7 @@ vi.mock("../process/exec.js", async (original) => {
         [
           process.execPath,
           fixture.child,
-          JSON.stringify(argv),
+          JSON.stringify(npmArgs),
           fixture.events,
           String(fixture.delay),
           fixture.mode,
@@ -183,13 +185,14 @@ event('complete');\n`,
           );
           // oxlint-disable-next-line typescript/unbound-method -- Capture before spying; every call supplies the lifecycle instance via .call.
           const budget = UpdateFinalizationLifecycle.prototype.budget;
-          vi.spyOn(UpdateFinalizationLifecycle.prototype, "budget").mockImplementation(
-            function (this: UpdateFinalizationLifecycle, phase) {
-              return phase === "plugins" && explicit === undefined
-                ? allowance
-                : budget.call(this, phase);
-            },
-          );
+          vi.spyOn(UpdateFinalizationLifecycle.prototype, "budget").mockImplementation(function (
+            this: UpdateFinalizationLifecycle,
+            phase,
+          ) {
+            return phase === "plugins" && explicit === undefined
+              ? allowance
+              : budget.call(this, phase);
+          });
           await updateFinalizeCommand({
             json: true,
             yes: true,
@@ -278,11 +281,15 @@ event('complete');\n`,
             events.some((e) => e.kind === "complete" && e.command === "install" && !e.planning),
           ).toBe(true);
         }
-        const metadataCalls = fixture.calls.filter((call) => call.argv[1] === "view");
+        const metadataCalls = fixture.calls.filter(
+          (call) => npmCommandArgs(call.argv)?.[0] === "view",
+        );
         expect(metadataCalls.length).toBeGreaterThan(0);
         expect(metadataCalls.every((call) => Number.isFinite(call.timeoutMs))).toBe(true);
         const workCalls = fixture.calls.filter(
-          (call) => call.argv[1] === "install" && !call.argv.includes("--package-lock-only"),
+          (call) =>
+            npmCommandArgs(call.argv)?.[0] === "install" &&
+            !call.argv.includes("--package-lock-only"),
         );
         expect(workCalls.length).toBeGreaterThan(0);
         expect(

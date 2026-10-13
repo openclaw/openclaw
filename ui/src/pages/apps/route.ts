@@ -4,9 +4,12 @@ import { routePageSpec } from "../../app-route-paths.ts";
 
 export const page = definePage({
   ...routePageSpec("apps"),
+  loaderDeps: (_context, location) => location.search,
+  loader: (_context, { location }) => location.search,
   component: () =>
-    import("./apps-page.ts").then(() => ({
+    import("./apps-page.tsx").then(() => ({
       header: true,
-      render: () => html`<openclaw-apps-page></openclaw-apps-page>`,
+      render: (search: string | undefined) =>
+        html`<openclaw-apps-page .appSearch=${search ?? ""}></openclaw-apps-page>`,
     })),
 });

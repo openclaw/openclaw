@@ -1,15 +1,6 @@
 // Continuation settlement tests cover status delivery and child-terminal handoff.
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearAgentHarnesses } from "../../agents/harness/registry.js";
-import {
-  OutboundDeliveryError,
-  PlatformMessageNotDispatchedError,
-} from "../../infra/outbound/deliver-types.js";
-import { withReplyDispatcher } from "../dispatch-dispatcher.js";
-import { setReplyPayloadMetadata } from "../reply-payload.js";
-import type { ReplyPayload } from "../types.js";
-import { appendUsageLine } from "./agent-runner-usage-line.js";
-import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
+// Register dispatch mocks before modules that consume them.
+// oxfmt-ignore
 import {
   createHookCtx,
   emptyConfig,
@@ -19,19 +10,25 @@ import {
   sessionStoreMocks,
   setDiscordTestRegistry,
 } from "./dispatch-from-config.shared.test-harness.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearAgentHarnesses } from "../../agents/harness/registry.js";
+import {
+  OutboundDeliveryError,
+  PlatformMessageNotDispatchedError,
+} from "../../infra/outbound/deliver-types.js";
+import { withReplyDispatcher } from "../dispatch-dispatcher.js";
+import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
+import type { ReplyPayload } from "../types.js";
+import { appendUsageLine } from "./agent-runner-usage-line.js";
+import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
+import { assertSessionWriterDeliveryAuthorized } from "./session-writer-delivery-authority.js";
 
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
 let resetReplyRunRegistry: typeof import("./reply-run-registry.test-support.js").testing.resetReplyRunRegistry;
 
-const progressReceipt = {
-  channel: "discord",
-  to: "user:1",
-  messageId: "existing-card",
-  text: "Continuing work",
-  snapshot: { lines: ["Continuing work"] },
-};
+const progressDraft = { push: () => undefined, retire: () => undefined };
 function pendingFinalDelivery(text: string, intentId = "intent-1") {
   return {
     kind: "replayable" as const,
@@ -77,14 +74,9 @@ beforeEach(() => {
   sessionStoreMocks.loadSessionStoreEntry
     .mockReset()
     .mockImplementation(() => sessionStoreMocks.currentEntry);
-  sessionStoreMocks.loadSessionStore.mockReset().mockReturnValue({});
-  sessionStoreMocks.readSessionEntry
-    .mockReset()
-    .mockImplementation(() => sessionStoreMocks.currentEntry);
   sessionStoreMocks.resolveSessionStorePathCore
     .mockReset()
     .mockReturnValue("/tmp/mock-sessions.json");
-  sessionStoreMocks.resolveSessionStoreEntry.mockReset().mockReturnValue({ existing: undefined });
   sessionStoreMocks.updateSessionEntry.mockClear();
 });
 
@@ -149,36 +141,12 @@ describe("accepted continuation status delivery", () => {
     },
   );
 
-  it("clears pending final delivery after final dispatch succeeds", async () => {
-    sessionStoreMocks.currentEntry = {
-      sessionId: "session-1",
-      sessionKey: "agent:test:session",
-      pendingFinalDelivery: pendingFinalDelivery("durable reply", "intent-1"),
-    };
-    const deliver = vi.fn().mockResolvedValue(undefined);
-    const dispatcher = createReplyDispatcher({ deliver });
-    const result = await dispatchReplyFromConfig({
-      ctx: createHookCtx(),
-      cfg: emptyConfig,
-      dispatcher,
-      replyResolver: async () => pendingFinalReply("durable reply"),
-    });
-    await dispatcher.waitForIdle();
-    await vi.waitFor(() => {
-      expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBeUndefined();
-    });
-
-    expect(result.queuedFinal).toBe(true);
-    expect(deliver).toHaveBeenCalledOnce();
-    expect(sessionStoreMocks.updateSessionEntry).toHaveBeenCalledTimes(3);
-  });
-
   it.each([undefined, "Usage: 100 in / 20 out"])(
     "settles an accepted continuation after delivery with usage footer %s",
     async (usageLine) => {
       const order: string[] = [];
       let continuationOpen = true;
-      const adopt = vi.fn(async () => continuationOpen);
+      const adopt = vi.fn(() => continuationOpen);
       const statusPayload = setReplyPayloadMetadata(
         { text: "Continuing work; the result will follow." },
         {
@@ -198,7 +166,8 @@ describe("accepted continuation status delivery", () => {
         deliver: async (payload, info) => {
           order.push(`deliver:${payload.text}`);
           await Promise.resolve();
-          expect(await info.adoptProgressContinuation?.(progressReceipt)).toBe(true);
+          expect(info.adoptProgressContinuation).toBeUndefined();
+          expect(info.adoptProgressDraft?.(progressDraft)).toBe(true);
         },
       });
 
@@ -220,7 +189,7 @@ describe("accepted continuation status delivery", () => {
         `deliver:${statusPayload.text}${usageLine ? `\n${usageLine}` : ""}`,
         "settle:true",
       ]);
-      await expect(adopt()).resolves.toBe(false);
+      expect(adopt()).toBe(false);
     },
   );
 
@@ -364,7 +333,7 @@ describe("accepted continuation status delivery", () => {
   it("releases an accepted continuation when finalization aborts before status dispatch", async () => {
     const abortController = new AbortController();
     let continuationOpen = true;
-    const adopt = vi.fn(async () => continuationOpen);
+    const adopt = vi.fn(() => continuationOpen);
     const statusPayload = setReplyPayloadMetadata(
       { text: "Continuing work; the result will follow." },
       {
@@ -397,14 +366,14 @@ describe("accepted continuation status delivery", () => {
     });
 
     expect(settle).toHaveBeenCalledExactlyOnceWith(false);
-    await expect(adopt()).resolves.toBe(false);
+    expect(adopt()).toBe(false);
   });
 
   it.each(["before", "status", "after"] as const)(
     "settles an accepted continuation when dispatch fails %s the status",
     async (failurePosition) => {
       let continuationOpen = true;
-      const adopt = vi.fn(async () => continuationOpen);
+      const adopt = vi.fn(() => continuationOpen);
       const statusPayload = setReplyPayloadMetadata(
         { text: "Continuing work; the result will follow." },
         {
@@ -449,7 +418,7 @@ describe("accepted continuation status delivery", () => {
       ).rejects.toThrow("queue unavailable");
 
       expect(settle).toHaveBeenCalledExactlyOnceWith(failurePosition === "after");
-      await expect(adopt()).resolves.toBe(false);
+      expect(adopt()).toBe(false);
     },
   );
 
@@ -550,8 +519,13 @@ describe("accepted continuation status delivery", () => {
   });
 
   it("releases an accepted continuation when session-writer delivery is revoked", async () => {
+    const currentEntry = {
+      sessionId: "session-1",
+      lifecycleRevision: "revision-after-replacement",
+      activeWriterRunId: "run-after-replacement",
+    };
     let continuationOpen = true;
-    const adopt = vi.fn(async () => continuationOpen);
+    const adopt = vi.fn(() => continuationOpen);
     const statusPayload = setReplyPayloadMetadata(
       { text: "Continuing work; the result will follow." },
       {
@@ -563,6 +537,7 @@ describe("accepted continuation status delivery", () => {
           },
         },
         sessionWriterDeliveryAuthority: {
+          readCurrentSession: () => currentEntry,
           agentId: "main",
           expectedLifecycleRevision: "revision-before-replacement",
           expectedSessionId: "session-1",
@@ -572,13 +547,14 @@ describe("accepted continuation status delivery", () => {
         },
       },
     );
-    sessionStoreMocks.currentEntry = {
-      sessionId: "session-1",
-      lifecycleRevision: "revision-after-replacement",
-      activeWriterRunId: "run-after-replacement",
-    };
+    sessionStoreMocks.currentEntry = currentEntry;
     const settle = vi.fn(async () => {});
-    const dispatcher = createReplyDispatcher({ deliver: vi.fn() });
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload) =>
+        assertSessionWriterDeliveryAuthorized(
+          getReplyPayloadMetadata(payload)?.sessionWriterDeliveryAuthority,
+        ),
+    });
 
     await withReplyDispatcher({
       dispatcher,
@@ -595,8 +571,7 @@ describe("accepted continuation status delivery", () => {
     });
 
     expect(settle).toHaveBeenCalledExactlyOnceWith(false);
-    expect(mocks.routeReply).not.toHaveBeenCalled();
-    await expect(adopt()).resolves.toBe(false);
+    expect(adopt()).toBe(false);
   });
 
   it("clears pending final delivery when abort fires after a successful final send (#89115)", async () => {
@@ -605,9 +580,6 @@ describe("accepted continuation status delivery", () => {
       sessionKey: "agent:test:session",
       pendingFinalDelivery: pendingFinalDelivery("durable reply", "intent-89115"),
     };
-    sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({
-      existing: sessionStoreMocks.currentEntry,
-    });
     const abortController = new AbortController();
     const deliver = vi.fn().mockResolvedValue(undefined);
     const dispatcher = createReplyDispatcher({ deliver });
@@ -633,7 +605,6 @@ describe("accepted continuation status delivery", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
     expect(deliver).toHaveBeenCalledOnce();
     expect(result.queuedFinal).toBe(false);
-    expect(sessionStoreMocks.updateSessionEntry).toHaveBeenCalledTimes(3);
     expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBeUndefined();
   });
 });

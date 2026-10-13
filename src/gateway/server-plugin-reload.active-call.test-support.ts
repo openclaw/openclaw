@@ -12,7 +12,6 @@ import {
 import { createDeferredCore } from "../shared/deferred.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
-import { PluginAdmittedWorkTimeoutError } from "./server-plugin-reload-cleanup.js";
 import {
   createRecoveryChannelManager,
   type RecoveryFixtureFactory,
@@ -54,7 +53,7 @@ export async function verifyLateActiveCallDrainObservation(
     await vi.advanceTimersByTimeAsync(deadlineAtMs - Date.now());
     expect(await reloading).toMatchObject({
       details: { phase: "drain", committed: false, pluginIds: [first.id, sibling.id] },
-      cause: expect.any(PluginAdmittedWorkTimeoutError),
+      cause: { message: expect.stringContaining("admitted work did not settle within 60s") },
     });
     expect(fixture.registryOwner.registry).toBe(fixture.previousRegistry);
     expect(fixture.owner.getReloadStatus()).toBeUndefined();
@@ -162,11 +161,13 @@ export async function verifyActiveCallDrainLease(
   const instance = getPluginInstance(record);
   assert(instance);
   const drainStarted = createDeferredCore();
-  const drain = instance.drain.bind(instance);
-  const drainObservation = vi.spyOn(instance, "drain").mockImplementation((options) => {
-    drainStarted.resolve();
-    return drain(options);
-  });
+  const drain = instance.waitForRetainedWork.bind(instance);
+  const drainObservation = vi
+    .spyOn(instance, "waitForRetainedWork")
+    .mockImplementation((...options) => {
+      drainStarted.resolve();
+      return drain(...options);
+    });
   const handler = fixture.previousRegistry.gatewayHandlers["first.call"];
   assert(handler);
   const invoke = (hold: boolean, respond: GatewayRequestHandlerOptions["respond"]) =>
@@ -225,7 +226,7 @@ export async function verifyActiveCallDrainLease(
     expect(fixture.owner.getReloadStatus()).toMatchObject({
       phase: "reloading",
       deadlineAtMs: expect.any(Number),
-      reason: expect.stringMatching(/admitted work.*first/),
+      reason: expect.stringContaining("plugin first"),
     });
     const deadlineAtMs = fixture.owner.getReloadStatus()?.deadlineAtMs;
     assert(deadlineAtMs);
@@ -243,7 +244,7 @@ export async function verifyActiveCallDrainLease(
       pluginReload: {
         phase: "reloading",
         deadlineAtMs,
-        reason: expect.stringMatching(/admitted work.*first/),
+        reason: expect.stringContaining("plugin first"),
       },
     });
     expect(fixture.candidates).toHaveLength(0);
@@ -257,7 +258,6 @@ export async function verifyActiveCallDrainLease(
       expect(failure).toBeInstanceOf(PluginRuntimeApplicationError);
       expect(failure).toMatchObject({
         details: { phase: "drain", committed: false, pluginIds: ["first"] },
-        cause: expect.any(PluginAdmittedWorkTimeoutError),
         message: expect.stringMatching(
           /plugin first admitted work.*previous plugin generation stays active/,
         ),

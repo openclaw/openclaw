@@ -1,15 +1,11 @@
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import {
-  createTelegramNonIdempotentRequestWithDiag,
-  createTelegramRequestWithDiag,
-  normalizeMessageId,
-  resolveAndPersistChatId,
-  withTelegramApiContext,
-  type TelegramApiContext,
-} from "./send-context.js";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { withTelegramApiContext, type TelegramApiContext } from "./send-context.js";
 import type { TelegramApiCallOpts, TelegramMessageActionOpts } from "./send-message-types.js";
-import { parseTelegramTarget } from "./targets.js";
+import { prepareTelegramOutbound, withTelegramMessageAction } from "./send-outbound.js";
+import { resolveTelegramBotUserIdFromToken } from "./token-fingerprint.js";
+import { recordTopicCreation } from "./topic-name-cache.js";
 
 type TelegramCreateForumTopicParams = NonNullable<
   Parameters<TelegramApiContext["api"]["createForumTopic"]>[2]
@@ -31,63 +27,34 @@ export async function editForumTopicTelegram(
   name?: string;
   iconCustomEmojiId?: string;
 }> {
-  const nameProvided = opts.name !== undefined;
   const trimmedName = opts.name?.trim();
-  if (nameProvided && !trimmedName) {
+  if (opts.name !== undefined && !trimmedName) {
     throw new Error("Telegram forum topic name is required");
   }
   if (trimmedName && Array.from(trimmedName).length > 128) {
     throw new Error("Telegram forum topic name must be 128 characters or fewer");
   }
-  const iconProvided = opts.iconCustomEmojiId !== undefined;
   const trimmedIconCustomEmojiId = opts.iconCustomEmojiId?.trim();
-  if (iconProvided && !trimmedIconCustomEmojiId) {
+  if (opts.iconCustomEmojiId !== undefined && !trimmedIconCustomEmojiId) {
     throw new Error("Telegram forum topic icon custom emoji ID is required");
   }
   if (!trimmedName && !trimmedIconCustomEmojiId) {
     throw new Error("Telegram forum topic update requires a name or iconCustomEmojiId");
   }
 
-  return withTelegramApiContext(
+  return withTelegramMessageAction(
+    chatIdInput,
+    messageThreadIdInput,
     opts,
-    async (
-      context,
-    ): Promise<{
-      ok: true;
-      chatId: string;
-      messageThreadId: number;
-      name?: string;
-      iconCustomEmojiId?: string;
-    }> => {
-      const { cfg, account, api } = context;
-      const rawTarget = String(chatIdInput);
-      const target = parseTelegramTarget(rawTarget);
-      const chatId = await resolveAndPersistChatId({
-        cfg,
-        api,
-        lookupTarget: target.chatId,
-        persistTarget: rawTarget,
-        verbose: opts.verbose,
-        gatewayClientScopes: opts.gatewayClientScopes,
-      });
-      const messageThreadId = normalizeMessageId(messageThreadIdInput);
-      const requestWithDiag = createTelegramRequestWithDiag({
-        cfg,
-        account,
-        retry: opts.retry,
-        verbose: opts.verbose,
-      });
+    async ({ api, chatId, messageId: messageThreadId, request }) => {
       const payload = {
         ...(trimmedName ? { name: trimmedName } : {}),
         ...(trimmedIconCustomEmojiId ? { icon_custom_emoji_id: trimmedIconCustomEmojiId } : {}),
       };
-      await requestWithDiag(
-        () => api.editForumTopic(chatId, messageThreadId, payload),
-        "editForumTopic",
-      );
+      await request(() => api.editForumTopic(chatId, messageThreadId, payload), "editForumTopic");
       logVerbose(`[telegram] Edited forum topic ${messageThreadId} in chat ${chatId}`);
       return {
-        ok: true,
+        ok: true as const,
         chatId,
         messageThreadId,
         ...(trimmedName ? { name: trimmedName } : {}),
@@ -115,10 +82,6 @@ export async function renameForumTopicTelegram(
   };
 }
 
-// ---------------------------------------------------------------------------
-// Forum topic creation
-// ---------------------------------------------------------------------------
-
 type TelegramCreateForumTopicOpts = TelegramApiCallOpts &
   Pick<TelegramMessageActionOpts, "assertPlatformSendAuthorized"> & {
     /** Icon color for the topic (must be one of 0x6FB9F0, 0xFFD67E, 0xCB86DB, 0x8EEE98, 0xFF93B2, 0xFB6F5F). */
@@ -133,14 +96,7 @@ type TelegramCreateForumTopicResult = {
   chatId: string;
 };
 
-/**
- * Create a forum topic in a Telegram supergroup.
- * Requires the bot to have `can_manage_topics` permission.
- *
- * @param chatId - Supergroup chat ID
- * @param name - Topic name (1-128 characters)
- * @param opts - Optional configuration
- */
+/** Requires the bot's can_manage_topics permission. */
 export async function createForumTopicTelegram(
   chatId: string,
   name: string,
@@ -158,24 +114,13 @@ export async function createForumTopicTelegram(
   return withTelegramApiContext(
     { ...opts, assertPlatformSendAuthorized },
     async (context): Promise<TelegramCreateForumTopicResult> => {
-      const { cfg, account, api } = context;
-      // Accept topic-qualified targets (e.g. telegram:group:<id>:topic:<thread>)
-      // but createForumTopic must always target the base supergroup chat id.
-      const target = parseTelegramTarget(chatId);
-      const normalizedChatId = await resolveAndPersistChatId({
-        cfg,
-        api,
-        lookupTarget: target.chatId,
-        persistTarget: chatId,
-        verbose: opts.verbose,
-        gatewayClientScopes: opts.gatewayClientScopes,
-      });
-
-      const requestWithDiag = createTelegramNonIdempotentRequestWithDiag({
-        cfg,
-        account,
-        retry: opts.retry,
-        verbose: opts.verbose,
+      const { cfg, account, api, ownerAgentId } = context;
+      // Creating a topic always targets the base chat and retains raw Bot API errors.
+      const { chatId: normalizedChatId, request: requestWithDiag } = await prepareTelegramOutbound({
+        to: chatId,
+        context,
+        opts,
+        wrapChatNotFound: false,
       });
 
       const extra: TelegramCreateForumTopicParams = {};
@@ -193,6 +138,20 @@ export async function createForumTopicTelegram(
       }, "createForumTopic");
 
       const topicId = result.message_thread_id;
+
+      await recordTopicCreation(
+        normalizedChatId,
+        topicId,
+        {
+          name: result.name ?? trimmedName,
+          creatorUserId: resolveTelegramBotUserIdFromToken(opts.token || account.token),
+          iconColor: result.icon_color ?? opts.iconColor,
+          iconCustomEmojiId: result.icon_custom_emoji_id ?? opts.iconCustomEmojiId,
+        },
+        resolveStorePath(cfg.session?.store, { agentId: ownerAgentId }),
+      ).catch((err: unknown) => {
+        logVerbose(`telegram: topic metadata persistence failed after creation: ${String(err)}`);
+      });
 
       recordChannelActivity({
         channel: "telegram",

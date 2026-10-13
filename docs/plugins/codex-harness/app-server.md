@@ -42,6 +42,18 @@ already running elsewhere:
 }
 ```
 
+Ask OpenClaw can verify an already configured model through an explicitly
+configured WebSocket or Unix socket app-server. The initial Codex setup and
+sign-in flow still requires local stdio; finish sign-in on the remote host and
+configure the remote endpoint before using this verification path.
+Remote verification binds the selected endpoint,
+connection credentials, and initialized Codex identity. It trusts that configured
+service; it does not attest the remote executable's bytes. OpenClaw rechecks the
+connection selection before reuse and compares the initialized identity on a
+new connection before starting a thread. Endpoint, credential, version, or
+reported Codex home/platform changes require fresh inference verification.
+Model, authentication, managed requirements, and tool-policy checks still apply.
+
 WebSocket transport proactively establishes the app-server connection at
 gateway startup and limits the opening handshake to 10 seconds. An idle
 connection sends a WebSocket ping every 20 seconds and allows 20 seconds for its
@@ -52,6 +64,13 @@ failures and unsupported app-server versions stop reconnecting and report that
 operator action is required. Ping and pong frames are transport-level health
 checks: they do not start a Codex turn or invoke a model. Local stdio and Unix
 transports do not perform these remote connection checks.
+
+When a caller needs a connection during remote replacement, acquisition makes up
+to three connection attempts within the caller's timeout and
+cancellation scope. This applies only when the WebSocket never opened, so no
+buffered initialization frame reached the server. Authentication and certificate
+errors fail immediately. Requests on an opened connection, including model turns
+and tool execution, are not replayed by this recovery.
 
 WebSocket and Unix socket shutdown settles when the connection closes, including
 when the server disconnected first. If the peer cannot complete the closing
@@ -157,6 +176,12 @@ child-process env. WebSocket app-server connections do not receive Gateway
 env API-key fallback; use an explicit auth profile or the remote
 app-server's own account.
 
+Model discovery uses the same local stdio environment-key fallback when no
+OpenAI profile is selected in the isolated agent home. Refreshing discovery
+after changing the environment key acquires a client for the new key. Native
+user homes and remote app-servers keep their own authentication. Discovery does
+not import API keys from the operator’s native Codex auth file.
+
 If a subscription profile hits a Codex usage limit, OpenClaw records the
 reset time when Codex reports one and tries the next ordered auth profile
 for the same Codex run. When the reset time passes, the subscription
@@ -207,12 +232,12 @@ authenticates the plugin.
 OpenClaw does not install unknown apps or let the model authorize new plugin
 installs. Owner-approved plugin installation refreshes the target runtime
 inventory. Missing inventory methods, authentication errors, transport
-failures, and connector refresh failures fail closed.
+failures, and connector refresh failures block the request.
 
 ## Scheduled app authority
 
-Automations inherit the creator turn's callable tools and app policy without an
-explicit `toolsAllow` list. With a prepared ChatGPT profile, scheduled app access
+When a Codex creator turn captures scheduled app authority, an automation without an explicit
+`toolsAllow` list saves that turn's callable tools and app policy. With a prepared ChatGPT profile, scheduled app access
 remains bound to that exact profile and account. Without a prepared profile, an
 agent-scoped configured WebSocket app-server owns the schedule through its
 connection fingerprint. Reauthenticating that same endpoint to another account
@@ -251,6 +276,12 @@ Codex may discover shared `$HOME/.agents/skills` and
 `$HOME/.agents/plugins/marketplace.json` entries. With
 `appServer.homeScope: "user"`, OpenClaw instead uses the native user Codex
 home and its existing account without injecting an OpenClaw auth profile.
+Standard `openai/*` chats on a user-home stdio or Unix connection also retain
+the native configured model provider; select the model with the standard
+OpenClaw model ref. Explicit non-OpenAI providers remain explicit. Prepared
+route compatibility and subscription/API-key account checks still apply.
+
+Owned local stdio processes use the [agent Git maintenance defaults](/concepts/managed-worktrees). OpenClaw preserves unrelated native Git parameters and shell-environment policy. Inherited Git parameters stay in the private process environment rather than being copied into native thread configuration. Clearing them removes the inherited values while retaining the host's maintenance defaults. External app-server peers and remote execution retain their own environment policy.
 
 If a deployment needs additional environment isolation, add those
 variables to `appServer.clearEnv`:
@@ -284,7 +315,7 @@ network-family autoselection, environment-proxy, and CA-source options because
 those settings cannot preload code or change module resolution. For example,
 `--dns-result-order=ipv4first --no-network-family-autoselection` is allowed.
 Malformed or unknown options and code-loading options such as `--require` or
-`--import` fail closed. If an inherited option is not needed by Codex, remove
+`--import` are rejected. If an inherited option is not needed by Codex, remove
 `NODE_OPTIONS` with `appServer.clearEnv`.
 
 ## Local testing env overrides

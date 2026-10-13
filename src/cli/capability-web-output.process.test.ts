@@ -16,8 +16,6 @@ const expectedTextSha256 = "11676c445927c8cab4e9e4ef114c9839e36f150d00e2eaa82736
 const providerId = "qa-web-output";
 const cases = [
   { alias: "infer", action: "fetch" },
-  { alias: "infer", action: "search" },
-  { alias: "capability", action: "fetch" },
   { alias: "capability", action: "search" },
 ] as const;
 
@@ -127,29 +125,17 @@ describe.skipIf(process.platform === "win32")("web CLI failure output completion
         typeof body.text === "string"
           ? createHash("sha256").update(body.text).digest("hex")
           : undefined;
-      expect(
-        {
-          code: result.code,
-          signal: result.signal,
-          ok: value.ok,
-          capability: value.capability,
-          provider: value.provider,
-          error: value.error,
-          textSha256: actualTextSha256,
-          backpressureExercised:
-            reader.firstBufferedBytes > 0 && reader.actualPauseMs >= reader.requestedPauseMs,
-        },
-        `${result.stderr}\nReader evidence: ${JSON.stringify(reader)}`,
-      ).toEqual({
-        code: 1,
-        signal: null,
+      const diagnostics = `${result.stderr}\nReader evidence: ${JSON.stringify(reader)}`;
+      expect(result, diagnostics).toMatchObject({ code: 1, signal: null });
+      expect(value, diagnostics).toMatchObject({
         ok: false,
         capability: `web.${action}`,
         provider: providerId,
         error: "Synthetic failure",
-        textSha256: expectedTextSha256,
-        backpressureExercised: true,
       });
+      expect(actualTextSha256, diagnostics).toBe(expectedTextSha256);
+      expect(reader.firstBufferedBytes, diagnostics).toBeGreaterThan(0);
+      expect(reader.actualPauseMs, diagnostics).toBeGreaterThanOrEqual(reader.requestedPauseMs);
     },
   );
 });

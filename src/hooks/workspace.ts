@@ -1,4 +1,3 @@
-// Hook workspace helpers resolve hook roots and workspace-local hook files.
 import path from "node:path";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

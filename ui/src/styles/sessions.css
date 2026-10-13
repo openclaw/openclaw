@@ -1,11 +1,7 @@
-/* ===========================================
-   Sessions page
-   Structure comes from the settings design language (settings.css). This file
+/* Structure comes from the settings design language (settings.css). This file
    keeps the sessions-specific escape hatches: overview facts, roster toolbar,
-   table cells, and the row drawer's flat interior.
-   =========================================== */
+   table cells, and the row drawer's flat interior. */
 
-/* Load error surfaced above the sections. */
 .sessions-error {
   color: var(--danger);
   font-size: var(--control-ui-text-sm);
@@ -22,7 +18,6 @@
   gap: var(--space-2);
 }
 
-/* --- Compact overview facts stay attached to the Sessions heading. --- */
 .settings-section__heading:has(.sessions-heading-facts) {
   display: flex;
   flex-wrap: wrap;
@@ -172,7 +167,6 @@
   white-space: nowrap;
 }
 
-/* --- Toolbar: search + filters + grouping in one strip inside the group --- */
 .sessions-toolbar {
   display: flex;
   flex-wrap: wrap;
@@ -188,21 +182,69 @@
   min-width: 180px;
 }
 
-.sessions-toolbar__search svg {
+.sessions-toolbar__search > svg {
   position: absolute;
   top: 50%;
-  left: 9px;
+  inset-inline-start: 9px;
   width: 14px;
   height: 14px;
   translate: 0 -50%;
   stroke: var(--muted);
-  fill: none;
   stroke-width: 1.8px;
   pointer-events: none;
 }
 
 .sessions-toolbar__search input {
-  padding-left: 30px;
+  padding-inline: 30px 34px;
+}
+
+.sessions-toolbar__clear {
+  position: absolute;
+  inset-inline-end: 1px;
+  top: 50%;
+  translate: 0 -50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  background: transparent;
+}
+
+.sessions-toolbar__clear[hidden] {
+  display: none;
+}
+
+.sessions-toolbar__clear:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.sessions-toolbar__clear:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.sessions-toolbar__clear svg {
+  width: 14px;
+  height: 14px;
+  pointer-events: none;
+}
+
+@media (max-width: 768px), (pointer: coarse) {
+  .sessions-toolbar__search input {
+    min-height: 44px;
+    padding-inline-end: 48px;
+  }
+
+  .sessions-toolbar__clear {
+    width: 44px;
+    height: 44px;
+  }
 }
 
 .session-filter-toggle-group {
@@ -212,20 +254,25 @@
   gap: var(--space-1);
 }
 
-.session-filter-field {
+.session-filter-field,
+.session-filter-check {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
   height: 30px;
   box-sizing: border-box;
-  padding: 0 4px 0 8px;
   background: transparent;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
+}
+
+.session-filter-field {
+  padding: 0 4px 0 8px;
   transition: border-color var(--duration-fast) ease;
 }
 
-.session-filter-field:focus-within {
+.session-filter-field:focus-within,
+.session-filter-check:hover {
   border-color: var(--border-strong);
   background: var(--bg-hover);
 }
@@ -266,25 +313,12 @@
 
 .session-filter-check {
   position: relative;
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  height: 30px;
-  box-sizing: border-box;
   padding: 0 8px;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
   user-select: none;
   transition:
     border-color var(--duration-fast) ease,
     background-color var(--duration-fast) ease,
     color var(--duration-fast) ease;
-}
-
-.session-filter-check:hover {
-  border-color: var(--border-strong);
-  background: var(--bg-hover);
 }
 
 .session-filter-check--active {
@@ -425,7 +459,6 @@
   font-size: var(--control-ui-text-sm);
 }
 
-/* --- Table --- */
 .sessions-table {
   min-width: 760px;
 }
@@ -479,7 +512,6 @@
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
-/* Session identity cell */
 .session-key-cell {
   display: flex;
   align-items: center;
@@ -502,14 +534,12 @@
   border-radius: var(--radius-sm);
 }
 
-.session-avatar svg {
+.session-avatar svg,
+.session-actions .icon-btn svg,
+.session-details-toggle svg {
   width: 14px;
   height: 14px;
-  stroke: currentColor;
-  fill: none;
   stroke-width: 2px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .session-avatar--cron {
@@ -565,7 +595,8 @@
   white-space: nowrap;
 }
 
-.session-key-display-name {
+.session-key-display-name,
+.session-detail-stat__value {
   min-width: 0;
   overflow: hidden;
   font-size: var(--control-ui-text-sm);
@@ -609,7 +640,6 @@
   color: var(--warn);
 }
 
-/* Status cell */
 .session-status-col {
   width: 118px;
   min-width: 108px;
@@ -632,7 +662,6 @@
   text-overflow: ellipsis;
 }
 
-/* --- Initial-load skeleton --- */
 .session-skeleton-row td {
   border-bottom: 1px solid var(--border);
 }
@@ -669,7 +698,6 @@
   }
 }
 
-/* --- Empty states --- */
 .sessions-table .data-table-empty-state {
   display: flex;
   flex-direction: column;
@@ -686,18 +714,19 @@
 .data-table-empty-state__message svg {
   width: 26px;
   height: 26px;
-  stroke: currentColor;
-  fill: none;
   stroke-width: 1.6px;
   opacity: 0.45;
 }
 
-/* Activity cells */
-.session-token-cell {
-  min-width: 96px;
+.session-token-cell,
+.session-tokens__value {
   font-family: var(--mono);
   font-size: var(--control-ui-text-sm);
   white-space: nowrap;
+}
+
+.session-token-cell {
+  min-width: 96px;
 }
 
 .session-tokens {
@@ -706,13 +735,6 @@
   cursor: default;
 }
 
-.session-tokens__value {
-  font-family: var(--mono);
-  font-size: var(--control-ui-text-sm);
-  white-space: nowrap;
-}
-
-/* Actions cell: details disclosure + row tools */
 .session-actions-col {
   width: 76px;
 }
@@ -727,19 +749,21 @@
   gap: 2px;
 }
 
-/* icons.ts SVGs carry no stroke/fill attributes; without these rules the
-   glyphs paint solid black and read as blank squares on dark surfaces. */
-.session-actions .icon-btn {
+.session-actions .icon-btn,
+.session-details-toggle {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  width: 28px;
   height: 28px;
-  padding: 0;
   color: var(--muted);
   background: transparent;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
+}
+
+.session-actions .icon-btn {
+  justify-content: center;
+  width: 28px;
+  padding: 0;
   opacity: 0.65;
   transition:
     color var(--duration-fast) ease,
@@ -748,28 +772,20 @@
     opacity var(--duration-fast) ease;
 }
 
-.session-actions .icon-btn svg {
-  width: 14px;
-  height: 14px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 2px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
 .sessions-table tr:hover .session-actions .icon-btn,
 .session-actions .icon-btn:focus-visible {
   opacity: 1;
 }
 
-.session-actions .icon-btn:hover:not(:disabled) {
+.session-actions .icon-btn:hover:not(:disabled),
+.session-details-toggle:hover {
   color: var(--text);
   background: var(--bg-hover);
   border-color: var(--border);
 }
 
-.session-actions .icon-btn:focus-visible {
+.session-actions .icon-btn:focus-visible,
+.session-details-toggle:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }
@@ -780,38 +796,15 @@
 }
 
 .session-details-toggle {
-  display: inline-flex;
-  align-items: center;
   gap: 5px;
-  height: 28px;
   padding: 0 7px;
-  color: var(--muted);
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
   transition:
     color var(--duration-fast) ease,
     background-color var(--duration-fast) ease,
     border-color var(--duration-fast) ease;
 }
 
-.session-details-toggle:hover {
-  color: var(--text);
-  background: var(--bg-hover);
-  border-color: var(--border);
-}
-
-.session-details-toggle:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
 .session-details-toggle svg {
-  width: 14px;
-  height: 14px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 2px;
   transition: transform var(--duration-normal) var(--ease-out);
 }
 
@@ -823,7 +816,6 @@
   transform: rotate(180deg);
 }
 
-/* Group rows (grouped mode) */
 .session-group-row td {
   padding: 6px 12px;
   background: var(--bg-elevated);
@@ -865,7 +857,6 @@
   font-weight: 500;
 }
 
-/* --- Row drawer: overrides, stats, compaction history (flat interior) --- */
 .session-details-row td {
   padding: 0;
   background: var(--bg-accent);
@@ -924,18 +915,6 @@
   border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
 
-.session-details-section__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-}
-
-.session-details-section__title {
-  font-size: 13px;
-  font-weight: 700;
-}
-
 .session-overrides-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
@@ -978,16 +957,10 @@
 }
 
 .session-detail-stat__value {
-  min-width: 0;
-  overflow: hidden;
-  font-size: var(--control-ui-text-sm);
   font-weight: 600;
   line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-/* --- Narrow layouts --- */
 @media (max-width: 768px) {
   .sessions-toolbar {
     align-items: stretch;

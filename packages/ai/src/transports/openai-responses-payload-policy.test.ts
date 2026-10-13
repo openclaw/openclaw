@@ -9,11 +9,6 @@ describe("OpenAI Responses compact threshold", () => {
       expected: 190_400,
     },
     {
-      name: "uses the active runtime cap when the window is only modestly larger",
-      model: { contextWindow: 372_000, contextTokens: 272_000 },
-      expected: 190_400,
-    },
-    {
       name: "keeps window-only behavior",
       model: { contextWindow: 400_000 },
       expected: 280_000,

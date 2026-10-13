@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createAgentToolsSandboxContext } from "../../agents/test-helpers/agent-tools-sandbox-context.js";
 import {
@@ -83,62 +84,53 @@ describe("one-shot tool-generation process cleanup", () => {
     vi.restoreAllMocks();
   });
 
-  it.each([false, true])(
-    "joins one-shot tool-generation backend and host cleanup (hostFails=%s)",
-    async (hostFails) => {
-      const supervisor = createProcessSupervisor();
-      getProcessSupervisorMock.mockReturnValue(supervisor);
-      const scopeKey = "scope:mixed-owned-lifetimes";
-      const generationCleanups: Array<(reason: string) => Promise<void>> = [];
-      const external = createStubChildAdapter();
-      const extinction = createDeferred();
-      const host = Object.assign(createStubChildAdapter(), {
-        waitForExtinction: () => extinction.promise,
+  it("joins one-shot backend cleanup before reporting host cleanup failure", async () => {
+    const supervisor = createProcessSupervisor();
+    getProcessSupervisorMock.mockReturnValue(supervisor);
+    const scopeKey = "scope:mixed-owned-lifetimes";
+    const generationCleanups: Array<(reason: string) => Promise<void>> = [];
+    const external = createStubChildAdapter();
+    const extinction = createDeferred();
+    const host = Object.assign(createStubChildAdapter(), {
+      waitForExtinction: () => extinction.promise,
+    });
+    createChildAdapterMock.mockResolvedValueOnce(external).mockResolvedValueOnce(host);
+    try {
+      const cleanup = prepareOneShotTools(scopeKey, generationCleanups);
+      const externalRun = await supervisor.spawn({
+        mode: "child",
+        argv: createSilentIdleArgv(),
+        scopeKey,
+        cleanupOwnership: "external",
       });
-      createChildAdapterMock.mockResolvedValueOnce(external).mockResolvedValueOnce(host);
-      try {
-        const cleanup = prepareOneShotTools(scopeKey, generationCleanups);
-        const externalRun = await supervisor.spawn({
-          mode: "child",
-          argv: createSilentIdleArgv(),
-          scopeKey,
-          cleanupOwnership: "external",
-        });
-        const hostRun = await spawnChild(supervisor, {
-          scopeKey,
-          argv: createSilentIdleArgv(),
-        });
-        expect(createChildAdapterMock.mock.calls[0]?.[0].ownProcessTree).toBeUndefined();
-        expect(createChildAdapterMock.mock.calls[1]?.[0].ownProcessTree).toBe(true);
-        external.settle(0);
-        host.settle(0);
-        await Promise.all([externalRun.wait(), hostRun.wait()]);
-        const joined = vi.fn();
-        const closing = cleanup("completed");
-        void closing.then(joined, joined);
-        await Promise.resolve();
-        expect(joined).not.toHaveBeenCalled();
-        expect(host.killMock).toHaveBeenCalledExactlyOnceWith("SIGTERM");
-        if (hostFails) {
-          extinction.reject(new Error("owned host cleanup failed"));
-          await expect(closing).rejects.toThrow("owned host cleanup failed");
-          await expect(supervisor.shutdown()).rejects.toThrow("owned host cleanup failed");
-        } else {
-          extinction.resolve();
-          await expect(closing).resolves.toBeUndefined();
-          await expect(supervisor.shutdown()).resolves.toBeUndefined();
-        }
-      } finally {
-        external.settle(0);
-        host.settle(0);
-        extinction.resolve();
-        await Promise.allSettled([
-          ...generationCleanups.map((cleanup) => cleanup("test cleanup")),
-          supervisor.shutdown(),
-        ]);
-      }
-    },
-  );
+      const hostRun = await spawnChild(supervisor, {
+        scopeKey,
+        argv: createSilentIdleArgv(),
+      });
+      expect(createChildAdapterMock.mock.calls[0]?.[0].ownProcessTree).toBeUndefined();
+      expect(createChildAdapterMock.mock.calls[1]?.[0].ownProcessTree).toBe(true);
+      external.settle(0);
+      host.settle(0);
+      await Promise.all([externalRun.wait(), hostRun.wait()]);
+      const joined = vi.fn();
+      const closing = cleanup("completed");
+      void closing.then(joined, joined);
+      await Promise.resolve();
+      expect(joined).not.toHaveBeenCalled();
+      expect(host.killMock).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+      extinction.reject(new Error("owned host cleanup failed"));
+      await expect(closing).rejects.toThrow("owned host cleanup failed");
+      await expect(supervisor.shutdown()).rejects.toThrow("owned host cleanup failed");
+    } finally {
+      external.settle(0);
+      host.settle(0);
+      extinction.resolve();
+      await Promise.allSettled([
+        ...generationCleanups.map((cleanup) => cleanup("test cleanup")),
+        supervisor.shutdown(),
+      ]);
+    }
+  });
 
   it("runs a one-shot host PTY request once through the owned child fallback", async () => {
     const supervisor = createProcessSupervisor();

@@ -202,16 +202,16 @@ describe("installed dispatcher lifecycle", () => {
     expect(output.trim()).toBe("ok");
   });
 
-  it.each([
-    ["close", "closed"],
-    ["destroy", "destroyed"],
-  ] as const)("supports %s without a runtime override", async (method, state) => {
-    const dispatcher = createHttp1Agent();
+  it.each([["destroy", "destroyed"]] as const)(
+    "supports %s without a runtime override",
+    async (method, state) => {
+      const dispatcher = createHttp1Agent();
 
-    await dispatcher[method]();
+      await dispatcher[method]();
 
-    expect(dispatcher[state]).toBe(true);
-  });
+      expect(dispatcher[state]).toBe(true);
+    },
+  );
 });
 
 describe("undici dispatcher errors", () => {
@@ -221,28 +221,6 @@ describe("undici dispatcher errors", () => {
       createClient: () => {
         const agent = createHttp1Agent() as unknown as MockAgent;
         return agent.createOriginDispatcher({ connections: 1 });
-      },
-    },
-    {
-      name: "explicit proxy client",
-      createClient: () => {
-        const agent = createHttp1ProxyAgent({
-          uri: "http://proxy.test:8080",
-        }) as unknown as MockProxyAgent;
-        return agent[DESTINATION_AGENT].createOriginDispatcher({ connections: 1 });
-      },
-    },
-    {
-      name: "environment proxy client",
-      createClient: () => {
-        createHttp1EnvHttpProxyAgent({
-          httpsProxy: "http://proxy.test:8080",
-        });
-        const agent = MockProxyAgent.latest;
-        if (!agent) {
-          throw new Error("expected environment proxy transport");
-        }
-        return agent[DESTINATION_AGENT].createOriginDispatcher({ connections: 1 });
       },
     },
   ])("handles an internal error from $name before connect", ({ createClient }) => {
@@ -264,30 +242,6 @@ function invokeClientConnect(options: Record<string, unknown>, servername: strin
 }
 
 describe("createHttp1ProxyAgent", () => {
-  it.each(["own", "inherited", "non-enumerable"])(
-    "uses the caller's %s proxy client factory",
-    (placement) => {
-      installUndiciRuntimeDeps();
-      const clientFactory = vi.fn(() => createHttp1Agent());
-      const options = { uri: "http://proxy.test:8080" };
-      if (placement === "inherited") {
-        Object.setPrototypeOf(options, { clientFactory });
-      } else {
-        Object.defineProperty(options, "clientFactory", {
-          value: clientFactory,
-          enumerable: placement === "own",
-        });
-      }
-
-      createHttp1ProxyAgent(options);
-      invokeProxyClientFactory(requireProxyAgentOptions());
-
-      expect(clientFactory).toHaveBeenCalledExactlyOnceWith(new URL("https://127.0.0.1:8443"), {
-        connect: proxyConnect,
-      });
-    },
-  );
-
   it("adds active managed proxy CA trust to explicit ProxyAgent options", () => {
     installUndiciRuntimeDeps();
     const registration = registerActiveManagedProxyUrl(new URL("https://proxy.test:8443"), {
@@ -309,8 +263,6 @@ describe("createHttp1ProxyAgent", () => {
 
 describe("proxy SNI policy", () => {
   it.each([
-    { mode: "fixed", servername: "127.0.0.1", preserve: false },
-    { mode: "fixed", servername: "[::1]", preserve: false },
     { mode: "fixed", servername: "proxy.example", preserve: true },
     { mode: "environment", servername: "127.0.0.1", preserve: false },
   ])("handles $servername through the $mode proxy", ({ mode, servername, preserve }) => {

@@ -26,7 +26,7 @@ const CodexPluginsParamsSchema = Type.Object(
 );
 
 type CodexPluginsToolOptions = {
-  bindingStore: Pick<CodexAppServerBindingStore, "read">;
+  bindingStore: Pick<CodexAppServerBindingStore, "read" | "readAsync">;
   context: OpenClawPluginToolContext;
   getPluginConfig: () => unknown;
   request?: typeof codexControlRequest;
@@ -68,7 +68,7 @@ export function createCodexPluginsTool(options: CodexPluginsToolOptions): AnyAge
           })
         : undefined;
       const readBinding = () => (identity ? options.bindingStore.read(identity) : undefined);
-      const binding = readBinding();
+      const binding = identity ? await options.bindingStore.readAsync(identity) : undefined;
       const selection = codexBindingConnectionSelection(binding);
       const assertCurrent = () => {
         options.context.assertInvocationCurrent?.();
@@ -120,21 +120,8 @@ export function createCodexPluginsTool(options: CodexPluginsToolOptions): AnyAge
   };
 }
 
-function projectAvailablePlugin(plugin: CodexAvailablePlugin): {
-  id: string;
-  pluginName: string;
-  marketplaceName: string;
-  untrustedDisplayName?: string;
-  untrustedDeveloperName?: string;
-  untrustedDescription?: string;
-  installed: boolean;
-  enabled: boolean;
-  available: boolean;
-  installPolicy?: string;
-  authPolicy?: string;
-  mustShowInstallationInterstitial?: boolean | null;
-} {
-  const projected: ReturnType<typeof projectAvailablePlugin> = {
+function projectAvailablePlugin(plugin: CodexAvailablePlugin) {
+  return {
     id: plugin.id,
     pluginName: plugin.pluginName,
     marketplaceName: plugin.marketplaceName,
@@ -143,18 +130,11 @@ function projectAvailablePlugin(plugin: CodexAvailablePlugin): {
     installed: plugin.installed,
     enabled: plugin.enabled,
     available: plugin.available,
+    ...(plugin.description ? { untrustedDescription: plugin.description } : {}),
+    ...(plugin.installPolicy ? { installPolicy: plugin.installPolicy } : {}),
+    ...(plugin.authPolicy ? { authPolicy: plugin.authPolicy } : {}),
+    ...(plugin.mustShowInstallationInterstitial !== undefined
+      ? { mustShowInstallationInterstitial: plugin.mustShowInstallationInterstitial }
+      : {}),
   };
-  if (plugin.description) {
-    projected.untrustedDescription = plugin.description;
-  }
-  if (plugin.installPolicy) {
-    projected.installPolicy = plugin.installPolicy;
-  }
-  if (plugin.authPolicy) {
-    projected.authPolicy = plugin.authPolicy;
-  }
-  if (plugin.mustShowInstallationInterstitial !== undefined) {
-    projected.mustShowInstallationInterstitial = plugin.mustShowInstallationInterstitial;
-  }
-  return projected;
 }

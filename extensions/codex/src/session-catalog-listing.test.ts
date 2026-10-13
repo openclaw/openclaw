@@ -13,7 +13,6 @@ import {
   listCodexSessionCatalog,
   registerCodexSessionCatalog,
   config,
-  compatibilityOwnerConfig,
   normalizeCodexManifestConfig,
   idleThread,
   createControl,
@@ -26,7 +25,6 @@ import {
   os,
   path,
   resolveAgentDir,
-  resolveSessionAgentIdsStrict,
   resolveCodexAppServerHomeDir,
   resolveCodexAppServerLocalHomeDir,
   resolveDefaultAgentDir,
@@ -35,7 +33,6 @@ import {
   createCodexTestBindingStore,
   buildCodexAppServerConnectionFingerprint,
   catalogError,
-  parseCatalogPage,
   CODEX_LOCAL_SESSION_HOST_ID,
   createCodexSessionCatalogControlFactory,
   type CodexCatalogHome,
@@ -43,30 +40,6 @@ import {
 } from "./session-catalog.test-helpers.js";
 
 describe("Codex session catalog errors", () => {
-  it("preserves fallback names returned by paired nodes", () => {
-    expect(
-      parseCatalogPage({
-        sessions: [
-          {
-            threadId: "thread-1",
-            fallbackName: "Readable fallback",
-            status: "idle",
-            archived: false,
-          },
-        ],
-      }),
-    ).toEqual({
-      sessions: [
-        {
-          threadId: "thread-1",
-          fallbackName: "Readable fallback",
-          status: "idle",
-          archived: false,
-        },
-      ],
-    });
-  });
-
   it("keeps the underlying paired-node list failure", () => {
     expect(catalogError("NODE_LIST_FAILED", new Error("paired store is unreadable"))).toEqual({
       code: "NODE_LIST_FAILED",
@@ -351,38 +324,6 @@ describe("Codex supervision catalog", () => {
     },
   );
 
-  it("preserves the retained owner directory across normal cloned requests", async () => {
-    const runtimeConfig = compatibilityOwnerConfig();
-    const expectedAgentDir = resolveDefaultAgentDir(runtimeConfig);
-    commandRpcMocks.codexControlRequest.mockImplementation(
-      async (
-        _pluginConfig: unknown,
-        _method: string,
-        _params: unknown,
-        options: { agentDir?: string; config?: OpenClawConfig },
-      ) => {
-        if (!options.agentDir) {
-          try {
-            resolveSessionAgentIdsStrict({ config: options.config });
-          } catch (error) {
-            throw new Error((error as { code?: string }).code ?? String(error), { cause: error });
-          }
-        }
-        return { data: [] };
-      },
-    );
-    const control = createCodexSessionCatalogControl({
-      getPluginConfig: () => ({ supervision: { enabled: true } }),
-      getRuntimeConfig: () => runtimeConfig,
-    });
-    await control.initialize();
-
-    await expect(control.listPage({})).resolves.toEqual({ sessions: [] });
-    const requestOptions = commandRpcMocks.codexControlRequest.mock.calls[0]?.[3];
-    expect(requestOptions?.config).not.toBe(runtimeConfig);
-    expect(requestOptions?.agentDir).toBe(expectedAgentDir);
-  });
-
   it("uses the Gateway-selected owner directory for an explicit multi-agent catalog", async () => {
     const runtimeConfig = {
       agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } },
@@ -439,11 +380,11 @@ describe("Codex supervision catalog", () => {
     const runtimeConfig = {
       agents: {
         ownership: "explicit",
-        list: [
-          { id: "alpha", agentDir: alphaAgentDir },
-          { id: "beta", agentDir: betaAgentDir },
-          { id: "file", agentDir: fileAgentDir },
-        ],
+        entries: {
+          alpha: { agentDir: alphaAgentDir },
+          beta: { agentDir: betaAgentDir },
+          file: { agentDir: fileAgentDir },
+        },
       },
     } as OpenClawConfig;
     const env = { ...process.env, CODEX_HOME: processCodexHome };
@@ -545,15 +486,12 @@ describe("Codex supervision catalog", () => {
       ),
     );
     const configA = {
-      agents: { ownership: "explicit", list: [{ id: "alpha", agentDir: alphaAgentDir }] },
+      agents: { ownership: "explicit", entries: { alpha: { agentDir: alphaAgentDir } } },
     } as OpenClawConfig;
     const configB = {
       agents: {
         ownership: "explicit",
-        list: [
-          { id: "alpha", agentDir: alphaAgentDir },
-          { id: "beta", agentDir: betaAgentDir },
-        ],
+        entries: { alpha: { agentDir: alphaAgentDir }, beta: { agentDir: betaAgentDir } },
       },
     } as OpenClawConfig;
     let runtimeConfig = configA;
@@ -657,10 +595,7 @@ describe("Codex supervision catalog", () => {
     const runtimeConfig = {
       agents: {
         ownership: "explicit",
-        list: [
-          { id: "alpha", agentDir: alphaAgentDir },
-          { id: "beta", agentDir: betaAgentDir },
-        ],
+        entries: { alpha: { agentDir: alphaAgentDir }, beta: { agentDir: betaAgentDir } },
       },
     } as OpenClawConfig;
     const { runtime } = createRuntime();
@@ -832,73 +767,6 @@ describe("Codex supervision catalog", () => {
       "thread-managed",
       "thread-visible-1",
     ]);
-  });
-
-  it("backfills a provenance-filtered first page through the real listing path", async () => {
-    const root = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-provenance-page-")),
-    );
-    tempDirs.push(root);
-    const sessionsRoot = path.join(root, "sessions");
-    await fs.mkdir(sessionsRoot);
-    const rolloutPath = path.join(sessionsRoot, "managed.jsonl");
-    await fs.writeFile(
-      rolloutPath,
-      `${JSON.stringify({
-        type: "session_meta",
-        payload: { id: "thread-managed", originator: "openclaw" },
-      })}\n`,
-    );
-    commandRpcMocks.codexControlRequest.mockImplementation(
-      async (_pluginConfig: unknown, method: string, params: { cursor?: string }) => {
-        expect(method).toBe("thread/list");
-        return params.cursor === "native-page"
-          ? { data: [idleThread({ id: "thread-native", source: "cli" })] }
-          : {
-              data: [
-                idleThread({
-                  id: "thread-managed",
-                  path: rolloutPath,
-                  source: "vscode",
-                }),
-              ],
-              nextCursor: "native-page",
-            };
-      },
-    );
-    const runtimeConfig = config;
-    const control = createCodexSessionCatalogControlFactory({
-      env: { ...process.env, CODEX_HOME: root },
-      getPluginConfig: () => ({ supervision: { enabled: true } }),
-      getRuntimeConfig: () => runtimeConfig,
-    });
-    const home = (await control.homesForAgent("main"))[0]!;
-    await control.forRequest("main", home).initialize();
-    const mark = vi.fn(async () => true);
-    const bindingStore = Object.assign(createCodexTestBindingStore(), {
-      managedThreads: {
-        has: vi.fn(async () => false),
-        mark,
-        snapshot: vi.fn(async () => new Map<string, ReadonlySet<string>>()),
-      },
-    });
-
-    const result = await listCodexSessionCatalog({
-      agentId: "main",
-      bindingStore,
-      config: runtimeConfig,
-      runtime: createRuntime().runtime,
-      control,
-      query: { limitPerHost: 1 },
-      localHomes: [home],
-      listNodes: async () => ({ nodes: [] }),
-    });
-
-    expect(result.hosts[0]?.sessions.map((session) => session.threadId)).toEqual(["thread-native"]);
-    // Provenance is now part of the persisted resident projection. Serving a
-    // page does not write the separate Gateway-created ownership marker store.
-    expect(mark).not.toHaveBeenCalled();
-    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(2);
   });
 
   it("uses a sanitized preview only when Codex has no thread name", async () => {

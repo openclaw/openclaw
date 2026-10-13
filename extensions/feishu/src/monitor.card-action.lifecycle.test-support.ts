@@ -227,44 +227,6 @@ describe("Feishu card-action lifecycle", () => {
     expect(sendCardFeishuMock).not.toHaveBeenCalled();
   });
 
-  it("routes v2 callbacks that report open_chat_id instead of chat_id", async () => {
-    const onCardAction = await setupLifecycleMonitor();
-    const chatId = "oc_group_v2";
-
-    await onCardAction({
-      operator: {
-        open_id: "ou_user1",
-      },
-      token: "tok-card-v2-context",
-      action: {
-        tag: "button",
-        value: createFeishuCardInteractionEnvelope({
-          k: "quick",
-          a: "feishu.quick_actions.help",
-          q: "/help",
-          c: {
-            u: "ou_user1",
-            h: chatId,
-            t: "group",
-            e: Date.now() + 60_000,
-          },
-        }),
-      },
-      context: {
-        open_message_id: "om_card_v2",
-        open_chat_id: chatId,
-      },
-    });
-
-    expect(lastRuntime?.error).not.toHaveBeenCalled();
-    expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
-    const dispatcherParams = latestReplyDispatcherParams();
-    expect(dispatcherParams.accountId).toBe("acct-card");
-    expect(dispatcherParams.chatId).toBe(chatId);
-    expect(dispatcherParams.replyToMessageId).toBe("om_card_v2");
-    expect(latestFinalizedContext().MessageSid).toBe("card-action-tok-card-v2-context");
-  });
-
   it("routes authenticated group callbacks when the group requires a mention", async () => {
     const onCardAction = await setupLifecycleMonitor();
 
@@ -385,36 +347,6 @@ describe("Feishu card-action lifecycle", () => {
     expect(dispatcherParams.chatId).toBe("ou_user1");
     expect(dispatcherParams.replyToMessageId).toBe("om_sdk_card");
     expect(latestFinalizedContext().MessageSid).toBe("card-action-tok-card-sdk-flat");
-  });
-
-  it("plain-sends card action replies when Feishu provides no real message id", async () => {
-    const onCardAction = await setupLifecycleMonitor();
-
-    await onCardAction({
-      open_id: "ou_user1",
-      token: "tok-card-no-reply-target",
-      action: {
-        tag: "button",
-        value: createFeishuCardInteractionEnvelope({
-          k: "quick",
-          a: "feishu.quick_actions.help",
-          q: "/help",
-          c: {
-            u: "ou_user1",
-            t: "p2p",
-            e: Date.now() + 60_000,
-          },
-        }),
-      },
-    });
-
-    expect(lastRuntime?.error).not.toHaveBeenCalled();
-    expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
-    const dispatcherParams = latestReplyDispatcherParams();
-    expect(dispatcherParams.accountId).toBe("acct-card");
-    expect(dispatcherParams.chatId).toBe("ou_user1");
-    expect(dispatcherParams.replyToMessageId).toBeUndefined();
-    expect(latestFinalizedContext().MessageSid).toBe("card-action-tok-card-no-reply-target");
   });
 
   it("plain-sends card action replies when only a temporary callback id is available", async () => {

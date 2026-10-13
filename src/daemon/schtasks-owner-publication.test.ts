@@ -2,11 +2,8 @@ import type { SpawnSyncOptions } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { GatewayOwnerLeaseIdentity } from "../infra/gateway-owner-lease.js";
-import {
-  acquireGatewayLifecycleCoordinator,
-  withStateDatabaseCoordinatorRuntimeDirectory,
-} from "../infra/state-database-coordinator.js";
+import type { GatewayOwnerLeaseIdentity } from "../infra/gateway-owner-lease.types.js";
+import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveTaskScriptPath } from "./schtasks-layout.js";
 import "./test-helpers/schtasks-base-mocks.js";
@@ -18,13 +15,11 @@ import {
 } from "./test-helpers/schtasks-fixtures.js";
 
 const timeState = vi.hoisted(() => ({ now: 0 }));
+const readWindowsProcessStartTime = vi.hoisted(() =>
+  vi.fn<typeof import("../infra/windows-process-start.js").readWindowsProcessStartTimeSync>(),
+);
 const readGatewayOwnerLease = vi.hoisted(() =>
   vi.fn<typeof import("../infra/gateway-owner-lease.js").readGatewayOwnerLease>(),
-);
-const sleepMock = vi.hoisted(() =>
-  vi.fn(async (ms: number) => {
-    timeState.now += ms;
-  }),
 );
 const spawnSync = vi.hoisted(() =>
   vi.fn<
@@ -47,9 +42,15 @@ vi.mock("node:child_process", async (original) => ({
   spawnSync,
 }));
 vi.mock("../infra/gateway-owner-lease.js", () => ({ readGatewayOwnerLease }));
+vi.mock("../infra/windows-process-start.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/windows-process-start.js")>()),
+  readWindowsProcessStartTimeSync: readWindowsProcessStartTime,
+}));
 vi.mock("../utils.js", async (original) => ({
   ...(await original<typeof import("../utils.js")>()),
-  sleep: sleepMock,
+  sleep: async (ms: number) => {
+    timeState.now += ms;
+  },
 }));
 const { terminateScheduledTaskGatewayListeners } = await import("./schtasks-process.js");
 const INSTALLED_GATEWAY_COMMAND_LINE =
@@ -69,7 +70,7 @@ const GATEWAY_OWNER: GatewayOwnerLeaseIdentity = {
 async function withPreparedGatewayTask(
   run: (params: { env: Record<string, string> }) => Promise<void>,
 ) {
-  await withWindowsEnv("openclaw-owner-publication-", async ({ env, tmpDir }) => {
+  await withWindowsEnv("openclaw-owner-publication-", async ({ env }) => {
     const scriptPath = resolveTaskScriptPath(env);
     await fs.mkdir(path.dirname(scriptPath), { recursive: true });
     await fs.writeFile(
@@ -77,9 +78,7 @@ async function withPreparedGatewayTask(
       ["@echo off", INSTALLED_GATEWAY_COMMAND_LINE, ""].join("\r\n"),
       "utf8",
     );
-    await withStateDatabaseCoordinatorRuntimeDirectory(path.join(tmpDir, "coordinators"), () =>
-      run({ env }),
-    );
+    await run({ env });
   });
 }
 function mockWindowsTaskkillSuccess() {
@@ -100,10 +99,8 @@ function taskkillPids() {
 beforeEach(() => {
   resetSchtasksBaseMocks();
   readGatewayOwnerLease.mockReset();
+  readWindowsProcessStartTime.mockReset().mockReturnValue(null);
   spawnSync.mockReset();
-  sleepMock.mockReset().mockImplementation(async (ms) => {
-    timeState.now += ms;
-  });
   timeState.now = 0;
   vi.spyOn(Date, "now").mockImplementation(() => timeState.now);
 });
@@ -117,11 +114,11 @@ it.each(["snapshot", "port-only"])(
   async (discovery) => {
     await withPreparedGatewayTask(async ({ env }) => {
       vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-      const foreground = acquireGatewayLifecycleCoordinator({
+      mockWindowsTaskkillSuccess();
+      const foreground = acquireGatewayStateOwner({
         databasePath: resolveOpenClawStateSqlitePath(env),
       });
       try {
-        mockWindowsTaskkillSuccess();
         const foregroundCommand = INSTALLED_GATEWAY_COMMAND_LINE.replace(
           " gateway ",
           " gateway run ",
@@ -152,7 +149,7 @@ it.each(["snapshot", "port-only"])(
 
         expect(taskkillPids()).toEqual([]);
         expect(killProcessTreeMock).not.toHaveBeenCalled();
-        expect(foreground.closed).toBe(false);
+        expect(() => foreground.assertCurrent()).not.toThrow();
         readGatewayOwnerLease.mockReturnValue({ ...GATEWAY_OWNER, mode: "foreground" });
         await expect(terminateScheduledTaskGatewayListeners(env)).resolves.toEqual([]);
       } finally {
@@ -167,9 +164,13 @@ it.each(["snapshot", "per-pid"])(
   async (discovery) => {
     await withPreparedGatewayTask(async ({ env }) => {
       vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      mockWindowsTaskkillSuccess();
       const databasePath = resolveOpenClawStateSqlitePath(env);
-      const legacy = acquireGatewayLifecycleCoordinator({ databasePath });
+      const legacy = acquireGatewayStateOwner({ databasePath });
       let forced = false;
+      readWindowsProcessStartTime.mockImplementation(() =>
+        forced ? null : Date.parse("2026-09-27T00:00:00.000Z"),
+      );
       let firstSnapshot = true;
       inspectPortUsageMock.mockResolvedValue({
         port: 18789,
@@ -233,7 +234,7 @@ it.each(["snapshot", "per-pid"])(
       try {
         await expect(terminateScheduledTaskGatewayListeners(env)).resolves.toEqual([4242]);
         expect(taskkillPids()).toEqual([4242, 4242]);
-        const successor = acquireGatewayLifecycleCoordinator({ databasePath });
+        const successor = acquireGatewayStateOwner({ databasePath });
         successor.release();
       } finally {
         legacy.release();

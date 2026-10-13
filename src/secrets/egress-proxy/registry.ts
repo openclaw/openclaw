@@ -1,7 +1,9 @@
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { SecretEgressProxyHandle, SecretEgressSentinelBinding } from "./proxy-server.js";
+import type { SecretEgressProxyWorkerHandle } from "./proxy-worker.js";
 
-type SecretEgressProxyRegistryState = { activeProxy?: SecretEgressProxyHandle };
+type RegisteredProxy = SecretEgressProxyHandle | SecretEgressProxyWorkerHandle;
+type SecretEgressProxyRegistryState = { activeProxy?: RegisteredProxy };
 const SECRET_EGRESS_PROXY_REGISTRY_KEY = Symbol.for("openclaw.secretEgressProxy.registry");
 
 function getSecretEgressProxyRegistry(): SecretEgressProxyRegistryState {
@@ -11,7 +13,7 @@ function getSecretEgressProxyRegistry(): SecretEgressProxyRegistryState {
   );
 }
 
-export function publishSecretEgressProxy(proxy: SecretEgressProxyHandle): void {
+export function publishSecretEgressProxy(proxy: RegisteredProxy): void {
   const registry = getSecretEgressProxyRegistry();
   if (registry.activeProxy) {
     throw new Error("Secret egress proxy is already active in this process");
@@ -19,7 +21,7 @@ export function publishSecretEgressProxy(proxy: SecretEgressProxyHandle): void {
   registry.activeProxy = proxy;
 }
 
-export function clearSecretEgressProxy(proxy: SecretEgressProxyHandle): void {
+export function clearSecretEgressProxy(proxy: RegisteredProxy): void {
   const registry = getSecretEgressProxyRegistry();
   if (registry.activeProxy === proxy) {
     registry.activeProxy = undefined;

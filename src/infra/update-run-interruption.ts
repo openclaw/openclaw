@@ -23,7 +23,7 @@ import { hasStoredUpdateRecovery, readUpdateRunRecord } from "./update-run-read.
 import type { UpdateRunRecord } from "./update-run-record.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 import { persistRun, updateRunLedgerSchema, upsertStep } from "./update-run-write.js";
-import type { UpdateStepResult } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 export { readInstalledUpdateCandidate } from "./update-run-interruption-store.js";
 
 const CANDIDATE_STEP = "finalize:installed-candidate";
@@ -79,17 +79,24 @@ export function recordPostCoreUpdateEvidence(
 
 /** Correct only a proven interrupted completion; all other terminal outcomes remain immutable. */
 export async function reconcileInterruptedUpdateRuns(
-  input: { env?: NodeJS.ProcessEnv; signal?: AbortSignal } = {},
+  input: { env?: NodeJS.ProcessEnv; signal?: AbortSignal; candidate?: UpdateRunRecord } = {},
+  onCandidate?: (runId: string) => void,
 ): Promise<UpdateRunRecord[]> {
   const env = { ...(input.env ?? process.env) };
   const options = { env, path: resolveOpenClawStateSqlitePath(env) };
+  const context = captureOpenClawStateWorkerContext(options);
   // A later invocation may have installed the same build. Never attribute its
   // serving result to an older occurrence merely because the versions agree.
-  const expected = await readInterruptedUpdateCandidateAsync(options);
+  const expected =
+    "candidate" in input
+      ? input.candidate
+      : await readInterruptedUpdateCandidateAsync(options, context);
   const candidate = expected ? readInstalledUpdateCandidate(expected) : undefined;
   if (!expected || !candidate || !canSettleInterruptedUpdate(expected)) {
     return [];
   }
+  input.signal?.throwIfAborted();
+  onCandidate?.(expected.runId);
   const managed = expected.steps.some(
     (step) => step.step === "restarting" && step.status === "completed",
   );
@@ -131,13 +138,12 @@ export async function reconcileInterruptedUpdateRuns(
     }
   }
   input.signal?.throwIfAborted();
-  const context = captureOpenClawStateWorkerContext(options);
   const record = async (
     captured: UpdateRunRecord,
     observed: InterruptedUpdateGatewayObservation,
   ) => {
     const detail =
-      `Interrupted update settle probe: ${observed.outcome} after ${observed.elapsedMs} ms during ${observed.phase}.` +
+      `Interrupted update settle check: ${observed.outcome} after ${observed.elapsedMs} ms during ${observed.phase}.` +
       (observed.waitOutcome ? ` Health wait: ${observed.waitOutcome}.` : "") +
       (observed.timeout
         ? ` Deadline timed-out after ${observed.timeout.elapsedMs} ms during ${observed.timeout.phase}.`
@@ -150,7 +156,7 @@ export async function reconcileInterruptedUpdateRuns(
             ? " Installed and serving candidate verified."
             : managed
               ? " Continuing without verified completion; will retry. Check openclaw update status."
-              : " No completed managed-service restart was recorded; probing skipped.");
+              : " No completed managed-service restart was recorded; checking skipped.");
     const result = await persistInterruptedUpdateObservationAsync(
       context,
       {

@@ -1,14 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
+import type { QaTestFileScenario } from "./scenario-catalog.js";
 import { readJsonFileIfExists } from "./test-file-scenario-script-evidence.js";
 
-type NativeTestFileScenario = Pick<QaSeedScenarioWithSource, "id"> & {
-  execution: Extract<
-    QaSeedScenarioWithSource["execution"],
-    { kind: "script" | "vitest" | "playwright" }
-  >;
-};
+type NativeTestFileScenario = Pick<QaTestFileScenario, "id" | "execution">;
 
 export function resolveNativeVitestReportPath(
   scenario: Pick<NativeTestFileScenario, "id">,

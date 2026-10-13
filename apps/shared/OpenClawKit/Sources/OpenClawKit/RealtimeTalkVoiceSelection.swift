@@ -55,8 +55,7 @@ public final class RealtimeTalkVoiceSelection {
     public func handle(_ event: EventFrame) {
         guard self.active, self.isCurrent(self), event.event == "talk.voice.change",
               let payload = event.payload,
-              let data = try? JSONEncoder().encode(payload),
-              let change = try? JSONDecoder().decode(TalkVoiceChangeEvent.self, from: data),
+              let change = try? GatewayPayloadDecoding.decode(payload, as: TalkVoiceChangeEvent.self),
               change.sessionkey == self.sessionKey,
               !change.changeid.isEmpty, !change.voicesessionid.isEmpty, !change.voice.isEmpty,
               let phase = change.phase.value as? String

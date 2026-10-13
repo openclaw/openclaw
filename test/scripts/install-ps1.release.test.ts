@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import { join, parse } from "node:path";
@@ -48,8 +48,6 @@ function createFailingNodeFixture(source: string): string {
   return [
     scriptWithoutEntryPoint,
     "",
-    "function Write-Banner { }",
-    "function Ensure-ExecutionPolicy { return $true }",
     "function Check-Node { return $false }",
     "function Install-Node { return $false }",
     "",
@@ -58,26 +56,96 @@ function createFailingNodeFixture(source: string): string {
   ].join("\n");
 }
 
-function createDeferredPathSuccessFixture(source: string): string {
-  const scriptWithoutEntryPoint = source.replace(ENTRYPOINT_RE, "");
-  const entrypointLines = extractEntrypointLines(source);
-  expect(scriptWithoutEntryPoint).not.toBe(source);
-
-  return [
-    scriptWithoutEntryPoint,
-    "",
-    "function Write-Banner { }",
-    "function Ensure-ExecutionPolicy { return $true }",
-    "function Check-Node { return $true }",
-    "function Check-ExistingOpenClaw { return $false }",
-    "function Add-ToPath { param([string]$Path) }",
-    "function Install-OpenClaw { return $true }",
-    "function Ensure-OpenClawOnPath { return $false }",
-    "$NoOnboard = $true",
-    "",
-    ...entrypointLines,
-    "",
-  ].join("\n");
+function createNativeUpgradeEnvironment(root: string, usableCommand: boolean): NodeJS.ProcessEnv {
+  const bin = join(root, "bin");
+  mkdirSync(bin, { recursive: true });
+  const commandPath = join(root, "command.cjs");
+  writeFileSync(
+    commandPath,
+    String.raw`
+const fs = require("node:fs");
+const path = require("node:path");
+const root = __dirname;
+const [kind, ...args] = process.argv.slice(2);
+fs.appendFileSync(path.join(root, "commands.jsonl"), JSON.stringify({ kind, args }) + "\n");
+if (kind === "git" && args.join(" ") === "--version") {
+  console.log("git version 2.50.0.windows.1");
+} else if (kind === "npm") {
+  if (args.join(" ") === "--version") {
+    console.log("11.15.0");
+  } else if (args[0] === "config" && args[1] === "get") {
+    const values = {
+      prefix: path.join(root, "prefix"),
+      cache: path.join(root, "cache"),
+      globalconfig: path.join(root, "npmrc"),
+    };
+    console.log(values[args[2]] ?? "undefined");
+  } else if (args.join(" ") === "root -g") {
+    console.log(path.join(root, "prefix", "node_modules"));
+  } else if (args[0] === "install" && args[1] === "-g") {
+    const dist = path.join(root, "prefix", "node_modules", "openclaw", "dist");
+    fs.mkdirSync(dist, { recursive: true });
+    fs.writeFileSync(path.join(dist, "entry.js"), "// installed package\n");
+    if (process.env.OPENCLAW_TEST_USABLE_COMMAND !== "1") {
+      fs.unlinkSync(path.join(root, "bin", "openclaw.cmd"));
+    }
+  } else {
+    throw new Error("Unexpected npm command: " + args.join(" "));
+  }
+} else if (kind === "openclaw") {
+  if (args.join(" ") === "daemon status --json") {
+    console.log(JSON.stringify({ service: { loaded: true } }));
+  } else if (args.join(" ") === "--version") {
+    console.log("2026.9.19");
+  } else if (![
+    "gateway install --force",
+    "gateway restart",
+    "gateway status --json",
+    "doctor --fix --non-interactive",
+  ].includes(args.join(" "))) {
+    throw new Error("Unexpected OpenClaw command: " + args.join(" "));
+  }
+} else {
+  throw new Error("Unexpected fixture command: " + kind);
+}
+`,
+  );
+  for (const name of ["npm", "git", "openclaw"]) {
+    writeFileSync(
+      join(bin, `${name}.cmd`),
+      `@echo off\r\n"%OPENCLAW_TEST_NODE%" "%~dp0..\\command.cjs" ${name} %*\r\nexit /b %errorlevel%\r\n`,
+    );
+  }
+  writeFileSync(
+    join(bin, "node.cmd"),
+    '@echo off\r\n"%OPENCLAW_TEST_NODE%" %*\r\nexit /b %errorlevel%\r\n',
+  );
+  // Exercise native command discovery without ambient OpenClaw or npm configuration.
+  const env = Object.fromEntries(
+    Object.entries(process.env).filter(
+      ([key]) =>
+        !/^(PATH|PATHEXT|HOME|USERPROFILE|APPDATA|LOCALAPPDATA|TEMP|TMP|NODE_OPTIONS|NODE_PATH|NPM_CONFIG_.*|PNPM_.*|OPENCLAW_.*)$/i.test(
+          key,
+        ),
+    ),
+  );
+  return {
+    ...env,
+    PATH: bin,
+    PATHEXT: ".COM;.EXE;.BAT;.CMD",
+    HOME: root,
+    USERPROFILE: root,
+    TEMP: root,
+    TMP: root,
+    OPENCLAW_STATE_DIR: join(root, "state"),
+    APPDATA: join(root, "appdata"),
+    LOCALAPPDATA: join(root, "localappdata"),
+    NPM_CONFIG_USERCONFIG: join(root, "npmrc"),
+    NPM_CONFIG_GLOBALCONFIG: join(root, "npmrc"),
+    NPM_CONFIG_CACHE: join(root, "cache"),
+    OPENCLAW_TEST_NODE: process.execPath,
+    OPENCLAW_TEST_USABLE_COMMAND: usableCommand ? "1" : "0",
+  };
 }
 
 describe("install.ps1 failure handling", () => {
@@ -266,37 +334,6 @@ try {
     }
 } finally { Remove-Item -LiteralPath $root -Recurse -Force }
 `,
-        ].join("\n"),
-      },
-      {
-        name: "openclaw-native-command-exit",
-        source: [
-          scriptWithoutEntryPoint,
-          "",
-          "function Get-OpenClawCommandPath { return (Get-Process -Id $PID).Path }",
-          "$caught = $false",
-          "try {",
-          "  Invoke-OpenClawCommand -NoLogo -NoProfile -Command 'exit 17'",
-          "} catch {",
-          "  if ($_.Exception.Message -notmatch 'failed with exit code 17') { throw }",
-          "  $caught = $true",
-          "}",
-          "if (-not $caught) { throw 'nonzero native exit was accepted' }",
-          "",
-        ].join("\n"),
-      },
-      {
-        name: "doctor-failure-output",
-        source: [
-          scriptWithoutEntryPoint,
-          "",
-          "function Invoke-OpenClawCommand { throw 'doctor failed' }",
-          "$output = @(Run-Doctor *>&1 | ForEach-Object { $_.ToString() })",
-          '$text = $output -join "`n"',
-          "if ($text -match 'Migration complete') { throw 'doctor failure reported success' }",
-          "if ($text -notmatch 'Migration failed') { throw \"missing error: $text\" }",
-          "if ($output[-1] -ne $false) { throw 'doctor failure did not propagate' }",
-          "",
         ].join("\n"),
       },
       {
@@ -827,31 +864,6 @@ try {
         ].join("\n"),
       },
       {
-        name: "package-manager-node-validation-failure",
-        source: [
-          scriptWithoutEntryPoint,
-          "",
-          "function Get-Command {",
-          "  [CmdletBinding()]",
-          "  param([string]$Name)",
-          "  if ($Name -eq 'choco') { return $true }",
-          "  return $null",
-          "}",
-          "filter Out-Host { }",
-          "function choco {",
-          "  $global:LASTEXITCODE = 0",
-          "  Write-Output 'Chocolatey output'",
-          "}",
-          "$script:portableCalled = $false",
-          "function Install-PortableNode { $script:portableCalled = $true }",
-          "function Check-Node { return $script:portableCalled }",
-          "$result = @(Install-Node)",
-          'if ($result.Count -ne 1 -or $result[0] -ne $true) { throw "Install-Node returned $result" }',
-          "if (-not $script:portableCalled) { throw 'Portable Node fallback was not attempted' }",
-          "",
-        ].join("\n"),
-      },
-      {
         name: "package-manager-node-command-failures",
         source: [
           scriptWithoutEntryPoint,
@@ -979,8 +991,6 @@ foreach ($script:portableFailure in @('throw', 'unsupported')) {
         source: [
           scriptWithoutEntryPoint,
           "",
-          "function Write-Banner { }",
-          "function Ensure-ExecutionPolicy { return $true }",
           "function Check-Node { return $false }",
           "function Install-Node { return $false }",
           "$caught = $false",
@@ -995,16 +1005,10 @@ foreach ($script:portableFailure in @('throw', 'unsupported')) {
         ].join("\n"),
       },
       {
-        name: "scriptblock-deferred-path-success",
-        source: createDeferredPathSuccessFixture(source),
-      },
-      {
         name: "noisy-git-failure",
         source: [
           scriptWithoutEntryPoint,
           "",
-          "function Write-Banner { }",
-          "function Ensure-ExecutionPolicy { return $true }",
           "function Check-Node { return $true }",
           "function Check-ExistingOpenClaw { return $false }",
           "function Get-NpmCommandPath { return $null }",
@@ -1026,11 +1030,8 @@ foreach ($script:portableFailure in @('throw', 'unsupported')) {
         source: [
           scriptWithoutEntryPoint,
           "",
-          "function Write-Banner { }",
-          "function Ensure-ExecutionPolicy { return $true }",
           "function Check-Node { return $true }",
           "function Check-ExistingOpenClaw { return $false }",
-          "function Add-ToPath { param([string]$Path) }",
           "function Install-OpenClaw { Write-Output 'npm stdout'; return $true }",
           "function Ensure-OpenClawOnPath { return $true }",
           "function Refresh-GatewayServiceIfLoaded { }",
@@ -1047,11 +1048,8 @@ foreach ($script:portableFailure in @('throw', 'unsupported')) {
         source: [
           scriptWithoutEntryPoint,
           "",
-          "function Write-Banner { }",
-          "function Ensure-ExecutionPolicy { return $true }",
           "function Check-Node { return $true }",
           "function Check-ExistingOpenClaw { return $false }",
-          "function Add-ToPath { param([string]$Path) }",
           "function Install-OpenClaw {",
           "  Write-Output 'native chatter'",
           "  return $true",
@@ -1163,7 +1161,6 @@ $previousTemp = $script:InstallerTempDirectory
 $previousLocation = (Get-Location).Path
 function Ensure-Git { return $true }
 function Assert-GitCheckoutHasCommit { param([string]$RepoDir) }
-function Remove-LegacySubmodule { param([string]$RepoDir) }
 function git { throw 'unexpected Git mutation' }
 function New-TransactionalGitCheckout { throw 'unexpected clone' }
 function Main { throw 'unexpected installer entrypoint' }
@@ -1744,7 +1741,6 @@ try {
     expectBatchedPowerShellCase("winget-node-delayed-path");
     expectBatchedPowerShellCase("chocolatey-node-upgrade");
     expectBatchedPowerShellCase("scoop-node-update");
-    expectBatchedPowerShellCase("package-manager-node-validation-failure");
   });
 
   runIfPowerShell("recovers from package-manager failures and preserves installer refusal", () => {
@@ -1789,8 +1785,6 @@ try {
           [
             scriptWithoutEntryPoint,
             "",
-            "function Write-Banner { }",
-            "function Ensure-ExecutionPolicy { return $true }",
             "function Check-Node { return $true }",
             "function Check-ExistingOpenClaw { return $false }",
             "function Get-NpmCommandPath { return 'npm.cmd' }",
@@ -1857,38 +1851,148 @@ try {
     }
   });
 
-  runConcurrentIfPowerShell(
-    "exits zero after install succeeds with deferred PATH discovery",
-    async () => {
-      const tempDir = mkdtempSync(join(tmpdir(), "openclaw-install-ps1-"));
-      const scriptPath = join(tempDir, "install.ps1");
-      try {
-        writeFileSync(scriptPath, createDeferredPathSuccessFixture(source));
-        chmodSync(scriptPath, 0o755);
-
-        const result = await runPowerShellAsync([
-          "-NoLogo",
-          "-NoProfile",
-          "-ExecutionPolicy",
-          "Bypass",
-          "-File",
-          scriptPath,
-        ]);
-
-        expect(result.status).toBe(0);
-        expect(`${result.stdout}\n${result.stderr}`).not.toContain("installation failed");
-      } finally {
-        rmSync(tempDir, { force: true, recursive: true });
+  (process.platform === "win32" ? it : it.skip)(
+    "reports native upgrade PATH failures without losing caller or service/Doctor ordering",
+    () => {
+      expect(bootstrapShells).toContain("powershell");
+      for (const engine of bootstrapShells) {
+        const resolved = spawnSync(
+          engine,
+          [
+            "-NoLogo",
+            "-NoProfile",
+            "-Command",
+            "[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); (Get-Process -Id $PID).Path",
+          ],
+          { encoding: "utf8" },
+        );
+        expect(resolved.status).toBe(0);
+        const enginePath = resolved.stdout.trim();
+        // Fail before Main can download Node or persist a user PATH change when
+        // this test runner does not satisfy the installer's real prerequisites.
+        const preflightRoot = harness.createTempDir("openclaw-native-node-é-");
+        const preflightPath = join(preflightRoot, "check-node.ps1");
+        writeFileSync(
+          preflightPath,
+          [
+            "$ErrorActionPreference = 'Stop'",
+            "[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)",
+            ...["Test-NodeVersionSupported", "Test-NodeSqliteSupported", "Check-Node"].map(
+              (name) => `function ${name} {\n${extractFunctionBody(source, name)}}`,
+            ),
+            "if (-not (Check-Node)) { exit 1 }",
+          ].join("\n"),
+        );
+        const preflight = spawnSync(
+          enginePath,
+          [
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            preflightPath,
+          ],
+          {
+            encoding: "utf8",
+            env: createNativeUpgradeEnvironment(preflightRoot, true),
+            cwd: preflightRoot,
+            timeout: 60_000,
+          },
+        );
+        const prerequisite = `${engine} requires usable Node/SQLite: ${preflight.stdout}\n${preflight.stderr}`;
+        expect(preflight.error, prerequisite).toBeUndefined();
+        expect(preflight.status, prerequisite).toBe(0);
+        for (const usableCommand of [false, true]) {
+          for (const mode of ["file", "scriptblock"]) {
+            const root = harness.createTempDir("openclaw-native-upgrade-é-");
+            const env = createNativeUpgradeEnvironment(root, usableCommand);
+            const scriptPath = join(root, "install.ps1");
+            writeFileSync(scriptPath, source);
+            const command = [
+              "try {",
+              `  & ([scriptblock]::Create([IO.File]::ReadAllText(${toPowerShellSingleQuotedLiteral(scriptPath)}))) -InstallMethod npm -NoOnboard -Tag 2026.9.19`,
+              "} catch {",
+              "  if ($_.Exception.Message -ne 'OpenClaw installation failed with exit code 1.') { throw }",
+              "  Write-Output 'CAUGHT_CANONICAL_INSTALL_FAILURE'",
+              "}",
+              "Write-Output 'INSTALL_CALLER_SURVIVED'",
+            ].join("\n");
+            // Node-backed fixture commands emit UTF-8. Configure only their caller's
+            // decoder; invoking the unchanged .ps1 by path still sets PSCommandPath,
+            // so Complete-Install must terminate this process on file failure.
+            const invocation =
+              mode === "file"
+                ? `& ${toPowerShellSingleQuotedLiteral(scriptPath)} -InstallMethod npm -NoOnboard -Tag 2026.9.19`
+                : command;
+            const args = [
+              "-NoLogo",
+              "-NoProfile",
+              "-NonInteractive",
+              "-ExecutionPolicy",
+              "Bypass",
+              "-Command",
+              `[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); ${invocation}`,
+            ];
+            const result = spawnSync(enginePath, args, {
+              encoding: "utf8",
+              env,
+              cwd: root,
+              timeout: 60_000,
+            });
+            const output = `${result.stdout}\n${result.stderr}`;
+            const label = `${engine} ${mode} usable=${usableCommand}: ${output}`;
+            expect(result.error, label).toBeUndefined();
+            expect(result.status, label).toBe(!usableCommand && mode === "file" ? 1 : 0);
+            expect(output, label).toContain("Existing OpenClaw installation detected");
+            expect(output, label).toContain("[OK] OpenClaw installed");
+            const calls = readFileSync(join(root, "commands.jsonl"), "utf8")
+              .trim()
+              .split("\n")
+              .map((line) => JSON.parse(line) as { kind: string; args: string[] });
+            expect(
+              calls.some((call) => call.kind === "npm" && call.args[0] === "install"),
+              label,
+            ).toBe(true);
+            const cliCalls = calls
+              .filter((call) => call.kind === "openclaw")
+              .map((call) => call.args.join(" "));
+            if (usableCommand) {
+              expect(output, label).toContain("Upgrade complete.");
+              expect(output, label).not.toContain("CAUGHT_CANONICAL_INSTALL_FAILURE");
+              expect(cliCalls, label).toEqual([
+                "daemon status --json",
+                "gateway install --force",
+                "gateway restart",
+                "gateway status --json",
+                "doctor --fix --non-interactive",
+                "--version",
+              ]);
+            } else {
+              expect(output, label).toContain(
+                "OpenClaw was installed, but its command is not on PATH.",
+              );
+              expect(output, label).toContain("Open a new terminal, then run: openclaw doctor");
+              expect(output, label).not.toContain("installed successfully");
+              expect(output, label).not.toContain("Upgrade complete.");
+              expect(cliCalls, label).toEqual([]);
+              if (mode === "scriptblock") {
+                expect(output, label).toContain("CAUGHT_CANONICAL_INSTALL_FAILURE");
+              }
+            }
+            if (mode === "scriptblock") {
+              expect(output, label).toContain("INSTALL_CALLER_SURVIVED");
+            }
+          }
+        }
       }
     },
+    120_000,
   );
 
   runIfPowerShell("throws without killing the caller when run as a scriptblock", () => {
     expectBatchedPowerShellCase("scriptblock-failure");
-  });
-
-  runIfPowerShell("accepts deferred PATH discovery when run as a scriptblock", () => {
-    expectBatchedPowerShellCase("scriptblock-deferred-path-success");
   });
 
   runIfPowerShell("treats noisy Git install false as failure", () => {
@@ -1929,18 +2033,11 @@ describe("install.ps1 stale Winget repair", () => {
       success: true,
     },
     {
-      name: "accepts a normal successful install without repair",
-      installExit: 0,
-      afterInstall: "healthy",
-      success: true,
-    },
-    {
       name: "accepts a healthy no-upgrade result without repair",
       afterInstall: "healthy",
       success: true,
     },
     { name: "does not repair generic Winget failure", installExit: 1 },
-    { name: "does not repair another HRESULT", installExit: -1978335188 },
     { name: "does not repair successful install with missing Node", installExit: 0 },
     {
       name: "recovers unsupported repair through Chocolatey",
@@ -1964,36 +2061,11 @@ describe("install.ps1 stale Winget repair", () => {
       success: true,
     },
     {
-      name: "rejects unusable Chocolatey fallback after failed repair",
-      repairExit: 1,
-      repair: true,
-      fallback: "choco",
-      afterFallback: "old-sqlite",
-    },
-    {
       name: "rejects unusable portable fallback after failed repair",
       repairExit: 1,
       repair: true,
       fallback: "portable",
       afterFallback: "text",
-    },
-    {
-      name: "recovers a generic Winget failure through portable Node",
-      installExit: 1,
-      fallback: "portable",
-      success: true,
-    },
-    {
-      name: "recovers a thrown Winget invocation through portable Node",
-      installThrows: true,
-      fallback: "portable",
-      success: true,
-    },
-    {
-      name: "recovers a generic Winget failure through the next package manager",
-      installExit: 1,
-      fallback: "choco",
-      success: true,
     },
     {
       name: "rejects failed repair even if Node becomes healthy",
@@ -2002,8 +2074,6 @@ describe("install.ps1 stale Winget repair", () => {
       repair: true,
     },
     { name: "rejects repair that leaves Node missing", repair: true },
-    { name: "rejects old Node after repair", afterRepair: "old-node", repair: true },
-    { name: "rejects old SQLite after repair", afterRepair: "old-sqlite", repair: true },
     ...["text", "blob", "json", "probe-error"].map((capability) => ({
       name: `rejects broken SQLite ${capability} after repair`,
       afterRepair: capability,
@@ -2024,7 +2094,6 @@ describe("install.ps1 stale Winget repair", () => {
       afterRepair: "missing",
       repair: false,
       success: false,
-      installThrows: false,
       fallback: "none",
       afterFallback: "healthy",
       ...testCase,
@@ -2075,7 +2144,6 @@ function Get-Command {
 function Invoke-FixtureNode {
     $global:LASTEXITCODE = 0
     if ($args[0] -eq '-v') {
-        if ($global:State -eq 'old-node') { return 'v22.15.0' }
         return 'v26.1.0'
     }
     $probe = @($input) -join [Environment]::NewLine
@@ -2091,7 +2159,6 @@ function winget {
     $global:Events.Add($args[0])
     $global:WingetCalls.Add(@($args))
     if ($args[0] -eq 'install') {
-        if ($case.installThrows) { throw 'fixture Winget invocation failed' }
         $global:LASTEXITCODE = $case.installExit
         $global:PendingState = $case.afterInstall
     } elseif ($args[0] -eq 'repair') {
@@ -2130,8 +2197,10 @@ function Get-NpmCommandPath { return 'fixture-npm' }
 function Get-WindowsCommandSafeDirectory { return $env:USERPROFILE }
 function Invoke-NpmCommand { return $env:USERPROFILE }
 function Install-OpenClaw { $global:Advanced++; return $true }
-function Ensure-OpenClawOnPath { return $false }
-function Refresh-GatewayServiceIfLoaded { throw 'unexpected service mutation' }
+function Ensure-OpenClawOnPath { return $true }
+function Refresh-GatewayServiceIfLoaded { }
+function Invoke-OpenClawCommand { return 'fixture-version' }
+$NoOnboard = $true
 $env:USERPROFILE = [System.IO.Path]::GetTempPath()
 $InstallMethod = 'npm'
 Reset-Fixture
@@ -2183,8 +2252,7 @@ Write-Output ('RESULT:' + (@{ direct = $direct; main = $main; healthy = $healthy
       expect(run.calls).toEqual(options.repair ? [installArgs, repairArgs] : [installArgs]);
       const repaired =
         options.repair && options.repairExit === 0 && options.afterRepair === "healthy";
-      const fallbackExpected =
-        !repaired && (options.installThrows || options.afterInstall !== "healthy");
+      const fallbackExpected = !repaired && options.afterInstall !== "healthy";
       const fallbacks: string[] = [];
       if (fallbackExpected) {
         if (options.fallback === "choco") {

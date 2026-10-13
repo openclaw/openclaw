@@ -1,7 +1,11 @@
 import { setImmediate } from "node:timers/promises";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import {
   NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
   NODE_WORKER_WORKSPACE_EXEC_COMMAND,
@@ -16,27 +20,27 @@ import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import * as support from "./service.test-support.js";
 
+afterEach(() => clearRuntimeConfigSnapshot());
+
 describe("offline device abandonment with retained physical cleanup", () => {
   support.setupWorkerEnvironmentServiceSuite();
+  beforeEach(() => setRuntimeConfigSnapshot(support.testState.config));
 
-  it.each(
-    (
-      [
-        "complete",
-        "held",
-        "failed",
-        "restarted",
-        "replacement-restarted",
-        "authorization-closed",
-        "retired-siblings",
-        "retired-mixed",
-      ] as const
-    ).flatMap((cleanup) => [true, null].map((sharedHost) => ({ cleanup, sharedHost }))),
-  )(
+  it.each([
+    { cleanup: "complete", sharedHost: true },
+    { cleanup: "held", sharedHost: true },
+    { cleanup: "failed", sharedHost: true },
+    { cleanup: "restarted", sharedHost: true },
+    { cleanup: "replacement-restarted", sharedHost: true },
+    { cleanup: "authorization-closed", sharedHost: true },
+    { cleanup: "retired-siblings", sharedHost: true },
+    { cleanup: "retired-mixed", sharedHost: true },
+    { cleanup: "replacement-restarted", sharedHost: null },
+  ] as const)(
     "fences the old claim and retains exact cleanup ownership with $cleanup sibling cleanup and sharedHost=$sharedHost",
     async ({ cleanup, sharedHost }) => {
       let placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
-      const harness = createHarness(support.testState.stateDb, placements, {
+      const harness = await createHarness(support.testState.stateDb, placements, {
         workspacePath: support.testState.root,
       });
       const environmentId = harness.ready.environmentId;
@@ -82,17 +86,17 @@ describe("offline device abandonment with retained physical cleanup", () => {
         patch: support.attachedPatch(environmentId, REQUEST.sessionId),
       });
       expect(attached.sharedHost).toBe(sharedHost);
-      const active = harness.placements.seedActive(attached.ownerEpoch);
+      const active = await harness.placements.seedActive(attached.ownerEpoch);
       if (active.state !== "active") {
         throw new Error("expected active placement");
       }
-      const claim = placements.claimTurn({
+      const claim = await placements.claimTurn({
         ...REQUEST,
         claimId: "abandoned-claim",
         runId: "abandoned-run",
         owner: { kind: "worker", environmentId, ownerEpoch: attached.ownerEpoch },
       });
-      placements.authorizeWorkerTurnTools(claim, ["sessions_send"]);
+      await placements.authorizeWorkerTurnTools(claim, ["sessions_send"]);
       const replacementId = "worker-replacement";
       await seedDevice(replacementId);
       const attachReplacement = () =>
@@ -157,7 +161,8 @@ describe("offline device abandonment with retained physical cleanup", () => {
         );
       let service = createService();
       const restartDisconnectedService = async () => {
-        await expect(service.stop()).rejects.toThrow("not connected");
+        // Shutdown defers the unreachable node's stop; durable ownership keeps the cleanup.
+        await service.stop();
         support.testState.service = undefined;
         await support.reopenWorkerEnvironmentStore();
         placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
@@ -288,7 +293,7 @@ describe("offline device abandonment with retained physical cleanup", () => {
         let replacementClaim;
         if (replacement) {
           expect(replacement.ownerEpoch).toBeGreaterThan(attached.ownerEpoch);
-          seedActivePlacement(placements, {
+          await seedActivePlacement(placements, {
             environmentId: replacementId,
             ownerEpoch: replacement.ownerEpoch,
           });
@@ -297,7 +302,7 @@ describe("offline device abandonment with retained physical cleanup", () => {
             await restartDisconnectedService();
             listNodes.mockResolvedValue(connectedNodes);
           }
-          replacementClaim = placements.claimTurn({
+          replacementClaim = await placements.claimTurn({
             ...REQUEST,
             claimId: "replacement-claim",
             runId: "replacement-run",
@@ -307,7 +312,7 @@ describe("offline device abandonment with retained physical cleanup", () => {
               ownerEpoch: replacement.ownerEpoch,
             },
           });
-          placements.authorizeWorkerTurnTools(replacementClaim, ["sessions_send"]);
+          await placements.authorizeWorkerTurnTools(replacementClaim, ["sessions_send"]);
           const grant = await service.acquireTurnCredential(replacementClaim);
           expect(await service.acknowledgeCredentialDelivery(grant)).toBe(true);
           await tunnels.start({

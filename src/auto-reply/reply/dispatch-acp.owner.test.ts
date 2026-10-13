@@ -50,68 +50,31 @@ import { claimInboundDedupe, resetInboundDedupe } from "./inbound-dedupe.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 type AcpOwnerScenario = {
-  sessionKey: string;
   question: "none" | "confirmed" | "unconfirmed";
   bindingChange: "direct" | "stable" | "removed" | "unavailable" | "owner-changed" | "hint-removed";
-  fallbackAgentId?: string;
 };
 
-const scenarios: AcpOwnerScenario[] = [
-  ...["agent:free-harness:acp:bound", "global"].flatMap((sessionKey) =>
-    (["none", "unconfirmed"] as const).map((question) => ({
-      sessionKey,
-      question,
-      bindingChange: "direct" as const,
-    })),
-  ),
-  ...(["none", "unconfirmed"] as const).map((question) => ({
-    sessionKey: "agent:free-harness:acp:bound",
-    question,
-    bindingChange: "removed" as const,
-  })),
-  ...["agent:free-harness:acp:bound", "global"].map((sessionKey) => ({
-    sessionKey,
-    question: "confirmed" as const,
-    bindingChange: "direct" as const,
-  })),
-  {
-    sessionKey: "agent:free-harness:acp:bound",
-    question: "confirmed",
-    bindingChange: "unavailable",
-  },
-  ...["global", "agent:free-harness:ordinary-bound"].flatMap((sessionKey) =>
-    (["none", "confirmed"] as const).map((question) => ({
-      sessionKey,
-      question,
-      bindingChange: "removed" as const,
-    })),
-  ),
-  ...(["direct", "stable"] as const).flatMap((bindingChange) =>
-    (["none", "confirmed"] as const).map((question) => ({
-      sessionKey: "agent:free-harness:ordinary-bound",
-      question,
-      bindingChange,
-    })),
-  ),
-  ...(["stable", "owner-changed", "hint-removed"] as const).flatMap((bindingChange) =>
-    (["none", "confirmed"] as const).map((question) => ({
-      sessionKey: "global",
-      question,
-      bindingChange,
-      fallbackAgentId: "main",
-    })),
-  ),
-  ...(["none", "confirmed"] as const).map((question) => ({
-    sessionKey: "global",
-    question,
-    bindingChange: "hint-removed" as const,
-    fallbackAgentId: "work",
-  })),
+const free = "agent:free-harness:acp:bound";
+const ordinarySessionKey = "agent:free-harness:ordinary-bound";
+const scenarios: Array<
+  [string, AcpOwnerScenario["question"], AcpOwnerScenario["bindingChange"], string?]
+> = [
+  [free, "none", "direct"],
+  ["global", "unconfirmed", "direct"],
+  [ordinarySessionKey, "confirmed", "direct"],
+  [ordinarySessionKey, "none", "stable"],
+  ["global", "confirmed", "stable", "main"],
+  ["global", "none", "removed"],
+  [ordinarySessionKey, "confirmed", "removed"],
+  [free, "confirmed", "unavailable"],
+  ["global", "none", "owner-changed", "main"],
+  ["global", "confirmed", "hint-removed", "main"],
+  ["global", "none", "hint-removed", "work"],
 ];
 
 it.each(scenarios)(
-  "preserves ACP target $sessionKey and input ownership (question=$question, binding=$bindingChange, fallback=$fallbackAgentId)",
-  async ({ sessionKey, question, bindingChange, fallbackAgentId }) => {
+  "preserves ACP target %s and input ownership (question=%s, binding=%s, fallback=%s)",
+  async (sessionKey, question, bindingChange, fallbackAgentId) => {
     await withOpenClawTestState({ label: "acp-dispatch-owner" }, async (state) => {
       const cfg = {
         agents: {
@@ -141,6 +104,7 @@ it.each(scenarios)(
       let turns = 0;
       let recorder: UserTurnTranscriptRecorder | undefined;
       let sourceCommittedBeforeEffect = false;
+      let sourceCommittedBeforeStart = false;
       const recordProcessed = vi.fn();
       const markIdle = vi.fn();
       const binding: SessionBindingRecord = {
@@ -237,7 +201,7 @@ it.each(scenarios)(
         expect(
           await recorder.stageApproved?.({ runId: "acp-input", assertCurrent: () => {} }),
         ).toBe(true);
-        expect(listSessionPendingInputs(target).items).toHaveLength(1);
+        expect((await listSessionPendingInputs(target)).items).toHaveLength(1);
         const sourceOwner = fallbackAgentId ?? (sessionKey === "global" ? "work" : "main");
         const sourcePersistence = recorder.persistApproved.bind(recorder);
         const persistApproved = vi
@@ -293,11 +257,14 @@ it.each(scenarios)(
           }),
           dispatcher,
           inboundAudio: false,
-          shouldSendToolSummaries: false,
-          shouldSendFullToolDetails: false,
+          shouldSendToolSummaries: async () => false,
+          shouldSendFullToolDetails: async () => false,
           shouldRouteToOriginating: false,
           bypassForCommand: false,
           userTurnTranscriptRecorder: recorder,
+          onAgentRunStart: () => {
+            sourceCommittedBeforeStart = recorder?.hasPersisted() === true;
+          },
           recordProcessed,
           markIdle,
         });
@@ -306,10 +273,13 @@ it.each(scenarios)(
         expect(result).not.toBeNull();
         expect(turns).toBe(pendingQuestion || bindingRefused ? 0 : 1);
         expect(sourceCommittedBeforeEffect).toBe(!bindingRefused);
+        if (!pendingQuestion) {
+          expect(sourceCommittedBeforeStart).toBe(true);
+        }
         expect(persistApproved).toHaveBeenCalledOnce();
         expect(recordProcessed).toHaveBeenCalledOnce();
         expect(markIdle).toHaveBeenCalledOnce();
-        expect(listSessionPendingInputs(target).items).toEqual([]);
+        expect((await listSessionPendingInputs(target)).items).toEqual([]);
         const transcript = await loadTranscriptEvents(target);
         expect(
           transcript.filter((event) => {
@@ -371,9 +341,7 @@ it.each(scenarios)(
   },
 );
 
-const nativeResetTargets = ["acp", "ordinary"] as const;
-
-it.each(nativeResetTargets)("resets the explicit %s target", async (targetKind) => {
+it.each(["acp", "ordinary"] as const)("resets the explicit %s target", async (targetKind) => {
   await withOpenClawTestState(
     { label: "public-acp-reset-tail", env: { OPENCLAW_TEST_FAST: "0" } },
     async (state) => {

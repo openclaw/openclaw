@@ -1,4 +1,3 @@
-// Bound account read helpers extract account bindings from channel records.
 import { normalizeChatType, type ChatType } from "../channels/chat-type.js";
 import { isRouteBinding, listConfiguredBindings } from "../config/bindings.js";
 import type { AgentRouteBinding } from "../config/types.agents.js";
@@ -13,19 +12,10 @@ import {
 import { peerKindMatches } from "./peer-kind-match.js";
 import { normalizeAgentId } from "./session-key.js";
 
-function resolveNormalizedBoundAccountMatch(binding: AgentRouteBinding): {
-  agentId: string;
-  accountId: string;
-  channelId: string;
-  peerId?: string;
-  peerKind?: ChatType;
-  guildId?: string | null;
-  teamId?: string | null;
-  roles?: string[] | null;
-} | null {
+function resolveNormalizedBoundAccountMatch(binding: AgentRouteBinding) {
   const baseMatch = resolveNormalizedRouteBindingMatch(binding);
   const match = binding.match;
-  if (!baseMatch || !match || typeof match !== "object") {
+  if (!baseMatch) {
     return null;
   }
   const peerId = match.peer && typeof match.peer.id === "string" ? match.peer.id.trim() : undefined;
@@ -38,24 +28,6 @@ function resolveNormalizedBoundAccountMatch(binding: AgentRouteBinding): {
     teamId: normalizeRouteBindingId(match.teamId) || null,
     roles: normalizeRouteBindingRoles(match.roles),
   };
-}
-
-function buildExactPeerIdSet(params: {
-  peerId?: string;
-  exactPeerIdAliases?: string[];
-}): Set<string> {
-  const exactPeerIds = new Set<string>();
-  const peerId = params.peerId?.trim();
-  if (peerId) {
-    exactPeerIds.add(peerId);
-  }
-  for (const alias of params.exactPeerIdAliases ?? []) {
-    const trimmed = alias.trim();
-    if (trimmed) {
-      exactPeerIds.add(trimmed);
-    }
-  }
-  return exactPeerIds;
 }
 
 export function resolveFirstBoundAccountId(params: {
@@ -73,11 +45,11 @@ export function resolveFirstBoundAccountId(params: {
     return undefined;
   }
   const normalizedAgentId = normalizeAgentId(params.agentId);
-  const normalizedPeerId = params.peerId?.trim() || undefined;
-  const exactPeerIds = buildExactPeerIdSet({
-    peerId: normalizedPeerId,
-    exactPeerIdAliases: params.exactPeerIdAliases,
-  });
+  const exactPeerIds = new Set(
+    [params.peerId ?? "", ...(params.exactPeerIdAliases ?? [])]
+      .map((peerId) => peerId.trim())
+      .filter(Boolean),
+  );
   const hasPeerContext = exactPeerIds.size > 0;
   const normalizedPeerKind = normalizeChatType(params.peerKind) ?? undefined;
   let memberRoleIds: Set<string> | undefined;
@@ -112,11 +84,7 @@ export function resolveFirstBoundAccountId(params: {
       return resolved.accountId;
     }
     if (resolved.peerId === "*") {
-      // Caller has a peer. Wildcard bindings are only safe when both sides
-      // declare a peer kind AND the kinds agree — a direct/* binding must
-      // never win for a channel caller (or vice versa), and we'd rather fall
-      // through to channel-only or the caller account than actively route to
-      // the wrong identity.
+      // Wildcards require both kinds; otherwise direct/* could select a channel identity.
       if (
         !resolved.peerKind ||
         !normalizedPeerKind ||
@@ -126,11 +94,7 @@ export function resolveFirstBoundAccountId(params: {
       }
       wildcardPeerMatch ??= resolved.accountId;
     } else if (resolved.peerId) {
-      // Exact peer id match: peer ids are channel-unique so id alone is
-      // sufficient, but when both sides declare a kind they must still agree
-      // (avoids a direct-kind binding matching a channel caller that happens
-      // to share an id, which can occur on channels where ids are reused
-      // across kinds).
+      // Exact ids suffice unless both kinds are present and disagree.
       if (
         resolved.peerKind &&
         normalizedPeerKind &&

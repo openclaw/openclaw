@@ -1,21 +1,24 @@
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   resolveChannelMediaMaxBytes,
   type MSTeamsConfig,
   type OpenClawConfig,
-  type PluginRuntime,
 } from "../runtime-api.js";
+import {
+  resolveDefaultMSTeamsAccountId,
+  resolveMSTeamsAccount,
+  resolveMSTeamsAccountConfigPath,
+} from "./accounts.js";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import {
   describeBotFrameworkServiceUrlHost,
   isAllowedBotFrameworkServiceUrl,
   normalizeBotFrameworkServiceUrl,
 } from "./bot-framework-service-url.js";
-import { resolveMSTeamsAccount } from "./channel-config.js";
 import {
   resolveMSTeamsSdkCloudOptions,
   validateMSTeamsProactiveServiceUrlBoundary,
-  type MSTeamsSdkCloudOptions,
 } from "./cloud.js";
 import { createMSTeamsConversationStoreState } from "./conversation-store-state.js";
 import type {
@@ -26,9 +29,8 @@ import { formatUnknownError } from "./errors.js";
 import { extractMSTeamsConversationMessageId, normalizeMSTeamsConversationId } from "./inbound.js";
 import { resolveMSTeamsReplyPolicy, resolveMSTeamsRouteConfig } from "./policy.js";
 import { getMSTeamsRuntime } from "./runtime.js";
-import type { MSTeamsApp } from "./sdk.js";
 import { createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
-import { resolveMSTeamsCredentials } from "./token.js";
+import { resolveMSTeamsCredentials } from "./token-config.js";
 
 type MSTeamsConversationType = "personal" | "groupChat" | "channel";
 
@@ -38,23 +40,7 @@ type MSTeamsProactiveReplyTarget =
   | { replyStyle: "thread"; threadActivityId: string }
   | { replyStyle: "top-level"; threadActivityId?: never };
 
-export type MSTeamsProactiveContext = {
-  appId: string;
-  conversationId: string;
-  ref: StoredConversationReference;
-  app: MSTeamsApp;
-  log: ReturnType<PluginRuntime["logging"]["getChildLogger"]>;
-  /** The type of conversation: personal (1:1), groupChat, or channel */
-  conversationType: MSTeamsConversationType;
-  /** Teams SDK cloud/service endpoint used to validate proactive sends. */
-  sdkCloudOptions: MSTeamsSdkCloudOptions;
-  /** Token provider for Graph API / SharePoint operations */
-  tokenProvider: MSTeamsAccessTokenProvider;
-  /** SharePoint site ID for file uploads in group chats/channels */
-  sharePointSiteId?: string;
-  /** Resolved media max bytes from config (default: 100MB) */
-  mediaMaxBytes?: number;
-} & MSTeamsProactiveReplyTarget;
+export type MSTeamsProactiveContext = Awaited<ReturnType<typeof resolveMSTeamsSendContext>>;
 
 function resolveMSTeamsProactiveReplyTarget(params: {
   cfg?: MSTeamsConfig;
@@ -124,17 +110,12 @@ function parseRecipient(to: string): {
   if (trimmed.startsWith("user:")) {
     return finalize("user", trimmed.slice("user:".length));
   }
-  // Assume it's a conversation ID if it looks like one
   if (trimmed.startsWith("19:") || trimmed.includes("@thread")) {
     return finalize("conversation", trimmed);
   }
-  // Otherwise treat as user ID
   return finalize("user", trimmed);
 }
 
-/**
- * Find a stored conversation reference for the given recipient.
- */
 async function findConversationReference(recipient: {
   type: "conversation" | "user";
   id: string;
@@ -145,44 +126,45 @@ async function findConversationReference(recipient: {
 } | null> {
   if (recipient.type === "conversation") {
     const ref = await recipient.store.get(recipient.id);
-    if (ref) {
-      return { conversationId: recipient.id, ref };
-    }
-    return null;
+    return ref ? { conversationId: recipient.id, ref } : null;
   }
 
   const found = await recipient.store.findPreferredDmByUserId(recipient.id);
-  if (!found) {
-    return null;
-  }
-  return { conversationId: found.conversationId, ref: found.reference };
+  return found ? { conversationId: found.conversationId, ref: found.reference } : null;
 }
 
 export async function resolveMSTeamsSendContext(params: {
   cfg: OpenClawConfig;
+  accountId?: string | null;
   to: string;
-}): Promise<MSTeamsProactiveContext> {
-  const msteamsCfg = params.cfg.channels?.msteams;
+}) {
+  const accountId = normalizeAccountId(
+    params.accountId ?? resolveDefaultMSTeamsAccountId(params.cfg),
+  );
+  const account = resolveMSTeamsAccount({ cfg: params.cfg, accountId });
+  const msteamsCfg = account.config;
 
-  if (!msteamsCfg?.enabled) {
+  if (!account.enabled) {
     throw new Error("msteams provider is not enabled");
   }
 
-  const account = resolveMSTeamsAccount(params.cfg);
   if (account.tokenStatus === "configured_unavailable") {
     throw new Error("msteams credential file is configured but unavailable");
   }
   if (!account.configured) {
     throw new Error("msteams credentials not configured");
   }
-  const creds = resolveMSTeamsCredentials(msteamsCfg);
+
+  const creds = resolveMSTeamsCredentials(msteamsCfg, {
+    allowEnvFallback: accountId === DEFAULT_ACCOUNT_ID,
+    pathPrefix: resolveMSTeamsAccountConfigPath(params.cfg, accountId),
+  });
   if (!creds) {
     throw new Error("msteams credentials not configured");
   }
 
-  const store = createMSTeamsConversationStoreState();
+  const store = createMSTeamsConversationStoreState({ accountId });
 
-  // Parse recipient and find conversation reference
   const recipient = parseRecipient(params.to);
   const found = await findConversationReference({ ...recipient, store });
 
@@ -241,22 +223,15 @@ export async function resolveMSTeamsSendContext(params: {
     configuredServiceUrl: sdkCloudOptions.serviceUrl,
   });
 
-  // Create token provider adapter for Graph API / SharePoint operations
   const tokenProvider: MSTeamsAccessTokenProvider = createMSTeamsTokenProvider(app);
 
-  // Determine conversation type from stored reference
   const storedConversationType = normalizeLowercaseStringOrEmpty(
     safeRef.conversation?.conversationType ?? "",
   );
-  let conversationType: MSTeamsConversationType;
-  if (storedConversationType === "personal") {
-    conversationType = "personal";
-  } else if (storedConversationType === "channel") {
-    conversationType = "channel";
-  } else {
-    // groupChat, or unknown defaults to groupChat behavior
-    conversationType = "groupChat";
-  }
+  const conversationType: MSTeamsConversationType =
+    storedConversationType === "personal" || storedConversationType === "channel"
+      ? storedConversationType
+      : "groupChat";
   // An explicit messageid is a caller-owned destination. Ambient and stored
   // roots still obey route policy, but explicit channel roots must not be
   // flattened by a top-level default.
@@ -270,17 +245,13 @@ export async function resolveMSTeamsSendContext(params: {
           conversationType,
         });
 
-  // Get SharePoint site ID from config (required for file uploads in group chats/channels)
-  const sharePointSiteId = msteamsCfg.sharePointSiteId;
-
-  // Resolve media max bytes from config
   const mediaMaxBytes = resolveChannelMediaMaxBytes({
     cfg: params.cfg,
-    resolveChannelLimitMb: ({ cfg }) => cfg.channels?.msteams?.mediaMaxMb,
+    resolveChannelLimitMb: () => msteamsCfg.mediaMaxMb,
   });
 
   return {
-    appId: creds.appId,
+    accountId,
     conversationId,
     ref: safeRef,
     app,
@@ -289,7 +260,7 @@ export async function resolveMSTeamsSendContext(params: {
     ...replyTarget,
     sdkCloudOptions,
     tokenProvider,
-    sharePointSiteId,
+    sharePointSiteId: msteamsCfg.sharePointSiteId,
     mediaMaxBytes,
   };
 }

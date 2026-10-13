@@ -9,32 +9,15 @@ import {
   resolvePersistedSelectedModelRef,
 } from "../../model-selection.js";
 import { resolveThinkingDefault } from "../../model-thinking-default.js";
-import { loadSessionEntry, resolveGatewaySessionStoreTarget } from "./subagent-spawn.runtime.js";
 
 type RequesterPreferencesContext = {
   cfg: OpenClawConfig;
-  requesterInternalKey: string;
   requesterAgentId?: string;
+  requesterEntry: SessionEntry | undefined;
 };
 
-function readRequesterSession(params: RequesterPreferencesContext): SessionEntry | undefined {
-  try {
-    const target = resolveGatewaySessionStoreTarget({
-      cfg: params.cfg,
-      key: params.requesterInternalKey,
-      agentId: params.requesterAgentId,
-    });
-    return loadSessionEntry({
-      storePath: target.storePath,
-      sessionKey: target.canonicalKey,
-      clone: false,
-    });
-  } catch {
-    return undefined;
-  }
-}
-
-function resolveRequesterModel(params: RequesterPreferencesContext, entry?: SessionEntry) {
+function resolveRequesterModel(params: RequesterPreferencesContext) {
+  const entry = params.requesterEntry;
   const defaultModel = resolveDefaultModelForAgent({
     cfg: params.cfg,
     agentId: params.requesterAgentId,
@@ -58,35 +41,30 @@ function resolveRequesterModel(params: RequesterPreferencesContext, entry?: Sess
   return { defaultModel, selectedModel };
 }
 
-export function readRequesterModel(params: RequesterPreferencesContext) {
-  const entry = readRequesterSession(params);
-  return entry ? (resolveRequesterModel(params, entry).selectedModel ?? undefined) : undefined;
-}
-
-export function readRequesterThinkingLevel(
-  params: RequesterPreferencesContext,
-): string | undefined {
-  const entry = readRequesterSession(params);
-  if (typeof entry?.thinkingLevel === "string" && entry.thinkingLevel.trim()) {
-    return entry.thinkingLevel.trim();
-  }
-  const { defaultModel, selectedModel } = resolveRequesterModel(params, entry);
+export function resolveRequesterPreferences(params: RequesterPreferencesContext) {
+  const entry = params.requesterEntry;
+  const { defaultModel, selectedModel } = resolveRequesterModel(params);
   const model = selectedModel ?? defaultModel;
-  return resolveThinkingDefault({
-    cfg: params.cfg,
-    agentId: params.requesterAgentId,
-    provider: model.provider,
-    model: model.model,
-  });
+  return {
+    model: selectedModel ?? undefined,
+    thinkingLevel:
+      (typeof entry?.thinkingLevel === "string" && entry.thinkingLevel.trim()) ||
+      resolveThinkingDefault({
+        cfg: params.cfg,
+        agentId: params.requesterAgentId,
+        provider: model.provider,
+        model: model.model,
+      }),
+  };
 }
 
-export function readRequesterFastMode(
+export function resolveRequesterFastMode(
   params: RequesterPreferencesContext & { requesterModel?: ModelRef; childModel: string },
 ): FastMode | undefined {
-  const entry = readRequesterSession(params);
+  const entry = params.requesterEntry;
   let model = params.requesterModel;
   if (!model) {
-    const { defaultModel, selectedModel } = resolveRequesterModel(params, entry);
+    const { defaultModel, selectedModel } = resolveRequesterModel(params);
     model = selectedModel ?? defaultModel;
   }
   if (params.childModel !== `${model.provider}/${model.model}`) {

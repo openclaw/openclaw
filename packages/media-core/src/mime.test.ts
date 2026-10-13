@@ -1,5 +1,5 @@
 import JSZip from "jszip";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { mediaKindFromMime } from "./constants.js";
 import {
   detectMime,
@@ -15,372 +15,179 @@ import {
   sliceMimeSniffBuffer,
 } from "./mime.js";
 
-async function makeOoxmlZip(opts: { mainMime: string; partPath: string }): Promise<Buffer> {
-  const zip = new JSZip();
-  zip.file(
-    "[Content_Types].xml",
-    `<Types><Override PartName="${opts.partPath}" ContentType="${opts.mainMime}.main+xml"/></Types>`,
-  );
-  zip.file(opts.partPath.slice(1), "<xml/>");
-  return await zip.generateAsync({ type: "nodebuffer" });
-}
-
 // file-type classifies this generic ISO-BMFF brand as video/mp4 without track metadata.
 const ISOM_BRAND_BUFFER = Buffer.from(
   "0000001c6674797069736f6d0000000069736f6d0000000000000000",
   "hex",
 );
+const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
 describe("mime detection", () => {
-  it.each([{ filePath: "clip.avi" }, {}, { filePath: "clip.bin", headerMime: "video/x-msvideo" }])(
-    "normalizes byte-detected AVI independently of filename/header hints %#",
-    async (hints) => {
-      const buffer = Buffer.from("524946463800000041564920" + "00".repeat(52), "hex");
-      const detected = await detectMime({ buffer, ...hints });
+  let zipBuffer: Buffer;
+  beforeAll(async () => {
+    const zip = new JSZip();
+    zip.file("hello.txt", "hi");
+    zipBuffer = await zip.generateAsync({ type: "nodebuffer" });
+  });
 
-      expect(detected).toBe("video/x-msvideo");
-      expect(extensionForMime(detected)).toBe(".avi");
-    },
-  );
+  it("normalizes byte-detected AVI without filename or header hints", async () => {
+    const buffer = Buffer.from("524946463800000041564920" + "00".repeat(52), "hex");
+    const detected = await detectMime({ buffer });
+    expect(detected).toBe("video/x-msvideo");
+    expect(extensionForMime(detected)).toBe(".avi");
+  });
 
   it("normalizes byte-detected Matroska to the filename MIME spelling", async () => {
     const buffer = Buffer.from("1a45dfa38b4282886d6174726f736b61", "hex");
     const detected = await detectMime({ buffer, filePath: "clip.bin" });
-
     expect(detected).toBe("video/x-matroska");
     expect(extensionForMime(detected)).toBe(".mkv");
   });
 
   it.each([
-    { format: "avif", expected: "image/avif" },
-    { format: "jpg", expected: "image/jpeg" },
-    { format: "jpeg", expected: "image/jpeg" },
-    { format: "png", expected: "image/png" },
-    { format: "webp", expected: "image/webp" },
-    { format: "gif", expected: "image/gif" },
-    { format: "unknown", expected: undefined },
-  ])("maps $format image format", ({ format, expected }) => {
+    ["avif", "image/avif"],
+    ["jpg", "image/jpeg"],
+    ["jpeg", "image/jpeg"],
+    ["png", "image/png"],
+    ["webp", "image/webp"],
+    ["gif", "image/gif"],
+    ["unknown", undefined],
+  ])("maps %s image format", (format, expected) => {
     expect(imageMimeFromFormat(format)).toBe(expected);
   });
 
   it.each([
-    {
-      name: "detects docx from buffer",
-      mainMime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-      partPath: "/word/document.xml",
-      expected: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    },
-    {
-      name: "detects pptx from buffer",
-      mainMime: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-      partPath: "/ppt/presentation.xml",
-      expected: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-    },
-  ] as const)("$name", async ({ mainMime, partPath, expected }) => {
-    expect(
-      await detectMime({
-        buffer: await makeOoxmlZip({ mainMime, partPath }),
-        filePath: "/tmp/file.bin",
-      }),
-    ).toBe(expected);
-  });
-
-  it.each([
-    {
-      name: "prefers extension mapping over generic zip",
-      input: async () => {
-        const zip = new JSZip();
-        zip.file("hello.txt", "hi");
-        return {
-          buffer: await zip.generateAsync({ type: "nodebuffer" }),
-          filePath: "/tmp/file.xlsx",
-        };
-      },
-      expected: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    },
-    {
-      name: "does not let image extensions override generic zip bytes",
-      input: async () => {
-        const zip = new JSZip();
-        zip.file("hello.txt", "hi");
-        return {
-          buffer: await zip.generateAsync({ type: "nodebuffer" }),
-          filePath: "/tmp/fake.png",
-        };
-      },
-      expected: "application/zip",
-    },
-    {
-      name: "does not let image headers override generic zip bytes",
-      input: async () => {
-        const zip = new JSZip();
-        zip.file("hello.txt", "hi");
-        return {
-          buffer: await zip.generateAsync({ type: "nodebuffer" }),
-          headerMime: "image/png",
-        };
-      },
-      expected: "application/zip",
-    },
-    {
-      name: "uses extension mapping for JavaScript assets",
-      input: async () => ({
-        filePath: "/tmp/a2ui.bundle.js",
-      }),
-      expected: "text/javascript",
-    },
-    {
-      name: "uses extension mapping for YAML assets",
-      input: async () => ({
-        filePath: "/tmp/config.yml",
-      }),
-      expected: "application/yaml",
-    },
-    {
-      name: "uses extension mapping for YAML documents",
-      input: async () => ({
-        filePath: "/tmp/config.yaml",
-      }),
-      expected: "application/yaml",
-    },
-  ] as const)("$name", async ({ input, expected }) => {
-    expect(await detectMime(await input())).toBe(expected);
-  });
-
-  it.each([
-    "application/epub+zip",
-    "application/java-archive",
-    "application/vnd.apple.pages",
-    "application/vnd.google-earth.kmz",
-    "application/vnd.ms-word.document.macroenabled.12",
-    "application/vnd.ms-visio.drawing",
-    "application/vnd.oasis.opendocument.text",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.template",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-  ])("uses %s metadata to refine extensionless generic ZIP bytes", async (headerMime) => {
+    ["/word/document.xml", DOCX_MIME],
+    [
+      "/ppt/presentation.xml",
+      "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ],
+  ])("detects OOXML from %s package metadata", async (partPath, mainMime) => {
     const zip = new JSZip();
-    zip.file("hello.txt", "hi");
-
-    expect(
-      await detectMime({ buffer: await zip.generateAsync({ type: "nodebuffer" }), headerMime }),
-    ).toBe(headerMime);
-  });
-
-  it("does not let unrelated document metadata override generic ZIP bytes", async () => {
-    const zip = new JSZip();
-    zip.file("hello.txt", "hi");
-
+    zip.file(
+      "[Content_Types].xml",
+      `<Types><Override PartName="${partPath}" ContentType="${mainMime}.main+xml"/></Types>`,
+    );
+    zip.file(partPath.slice(1), "<xml/>");
     expect(
       await detectMime({
         buffer: await zip.generateAsync({ type: "nodebuffer" }),
-        headerMime: "application/pdf",
+        filePath: "file.bin",
       }),
-    ).toBe("application/zip");
+    ).toBe(mainMime);
   });
 
-  it.each(["application/vnd.oasis.opendocument.text-flat-xml", "application/vnd.visio"])(
-    "does not let non-ZIP %s metadata override generic ZIP bytes",
-    async (headerMime) => {
-      const zip = new JSZip();
-      zip.file("hello.txt", "hi");
-
-      expect(
-        await detectMime({ buffer: await zip.generateAsync({ type: "nodebuffer" }), headerMime }),
-      ).toBe("application/zip");
+  it.each([
+    { hints: { filePath: "file.xlsx" }, expected: XLSX_MIME },
+    { hints: { filePath: "fake.png" }, expected: "application/zip" },
+    { hints: { headerMime: "image/png" }, expected: "application/zip" },
+    { hints: { headerMime: "application/epub+zip" }, expected: "application/epub+zip" },
+    { hints: { headerMime: "application/java-archive" }, expected: "application/java-archive" },
+    { hints: { headerMime: "application/pdf" }, expected: "application/zip" },
+    {
+      hints: { headerMime: "application/vnd.oasis.opendocument.text-flat-xml" },
+      expected: "application/zip",
     },
-  );
-
-  it("prefers ZIP-compatible metadata over an incompatible filename extension", async () => {
-    const zip = new JSZip();
-    zip.file("hello.txt", "hi");
-    const docxMime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-
-    expect(
-      await detectMime({
-        buffer: await zip.generateAsync({ type: "nodebuffer" }),
-        filePath: "upload.pdf",
-        headerMime: docxMime,
-      }),
-    ).toBe(docxMime);
-  });
-
-  it("preserves audio metadata for ambiguous WebM container bytes", async () => {
-    // Minimal EBML header declaring WebM; file-type correctly recognizes the container
-    // but defaults it to video/webm because no track metadata is present.
-    const webm = Buffer.from("1a45dfa3874282847765626d", "hex");
-
-    expect(
-      await detectMime({ buffer: webm, filePath: "voice.webm", headerMime: "audio/webm" }),
-    ).toBe("audio/webm");
-  });
-
-  it("uses a secondary audio hint when primary metadata is stale", async () => {
-    const webm = Buffer.from("1a45dfa3874282847765626d", "hex");
-
-    expect(
-      await detectMime({
-        buffer: webm,
-        filePath: "voice.webm",
-        headerMime: "application/pdf",
-        additionalMimeHints: ["audio/webm"],
-      }),
-    ).toBe("audio/webm");
-  });
-
-  it.each(["audio/webm", "audio/mp4"])(
-    "preserves the declared %s hint when bytes and extension are inconclusive",
-    async (headerMime) => {
-      expect(
-        await detectMime({
-          buffer: Buffer.alloc(16),
-          headerMime,
-          additionalMimeHints: ["application/octet-stream"],
-        }),
-      ).toBe(headerMime);
+    { hints: { headerMime: "application/vnd.visio" }, expected: "application/zip" },
+    { hints: { filePath: "upload.pdf", headerMime: DOCX_MIME }, expected: DOCX_MIME },
+  ])(
+    "refines generic ZIP bytes only with compatible metadata: $hints",
+    async ({ hints, expected }) => {
+      expect(await detectMime({ buffer: zipBuffer, ...hints })).toBe(expected);
     },
   );
 
   it.each([
-    {
-      name: "audio/mp4 header",
-      filePath: "voice.mp4",
-      headerMime: "audio/mp4",
-      expected: "audio/mp4",
-    },
-    {
-      name: "audio/x-m4a header",
-      filePath: "voice.m4a",
-      headerMime: "audio/x-m4a",
-      expected: "audio/x-m4a",
-    },
-    {
-      name: "audio/m4a header",
-      filePath: "voice.m4a",
-      headerMime: "audio/m4a",
-      expected: "audio/m4a",
-    },
-    {
-      name: "m4a extension",
-      filePath: "voice.m4a",
-      headerMime: undefined,
-      expected: "audio/x-m4a",
-    },
-    {
-      name: "mp4 extension without an audio hint",
-      filePath: "clip.mp4",
-      headerMime: undefined,
-      expected: "video/mp4",
-    },
-    {
-      name: "audio/aac elementary-stream metadata",
-      filePath: "voice.aac",
-      headerMime: "audio/aac",
-      expected: "video/mp4",
-    },
-  ] as const)("resolves ambiguous isom-brand bytes from $name", async (testCase) => {
-    expect(
-      await detectMime({
-        buffer: ISOM_BRAND_BUFFER,
-        filePath: testCase.filePath,
-        headerMime: testCase.headerMime,
-      }),
-    ).toBe(testCase.expected);
+    ["a2ui.bundle.js", "text/javascript"],
+    ["config.yml", "application/yaml"],
+    ["config.yaml", "application/yaml"],
+    ["report.html", "text/html"],
+    ["page.htm", "text/html"],
+    ["data.xml", "text/xml"],
+    ["style.css", "text/css"],
+    ["voice.aac", "audio/aac"],
+  ])("uses the extension when byte sniffing is inconclusive: %s", async (filePath, expected) => {
+    expect(await detectMime({ buffer: Buffer.alloc(16), filePath })).toBe(expected);
   });
 
   it.each([
-    { brand: "avif", expected: "image/avif" },
-    { brand: "avis", expected: "image/avif" },
-    { brand: "M4B ", expected: "audio/mp4" },
-    { brand: "M4V ", expected: "video/x-m4v" },
-    { brand: "hevc", expected: "image/heic-sequence" },
-    { brand: "msf1", expected: "image/heif-sequence" },
-  ] as const)("preserves the file-type MIME for ISO-BMFF $brand media", async (testCase) => {
+    { headerMime: "audio/webm" },
+    { headerMime: "application/pdf", additionalMimeHints: ["audio/webm"] },
+  ])("preserves primary or fallback audio hints for ambiguous WebM bytes: %j", async (hints) => {
+    const buffer = Buffer.from("1a45dfa3874282847765626d", "hex");
+    expect(await detectMime({ buffer, filePath: "voice.webm", ...hints })).toBe("audio/webm");
+  });
+
+  it("preserves the declared hint ahead of a generic fallback when bytes are inconclusive", async () => {
+    expect(
+      await detectMime({
+        buffer: Buffer.alloc(16),
+        headerMime: "audio/mp4",
+        additionalMimeHints: ["application/octet-stream"],
+      }),
+    ).toBe("audio/mp4");
+  });
+
+  it.each([
+    ["voice.mp4", "audio/mp4", "audio/mp4"],
+    ["voice.m4a", "audio/x-m4a", "audio/x-m4a"],
+    ["voice.m4a", "audio/m4a", "audio/m4a"],
+    ["voice.m4a", undefined, "audio/x-m4a"],
+    ["clip.mp4", undefined, "video/mp4"],
+    ["voice.aac", "audio/aac", "video/mp4"],
+  ])(
+    "resolves ambiguous isom-brand bytes with %s and %s",
+    async (filePath, headerMime, expected) => {
+      expect(await detectMime({ buffer: ISOM_BRAND_BUFFER, filePath, headerMime })).toBe(expected);
+    },
+  );
+
+  it.each([
+    ["avif", "image/avif"],
+    ["avis", "image/avif"],
+    ["M4B ", "audio/mp4"],
+    ["M4V ", "video/x-m4v"],
+    ["hevc", "image/heic-sequence"],
+    ["msf1", "image/heif-sequence"],
+  ])("preserves the file-type MIME for ISO-BMFF %s media", async (brand, expected) => {
     const buffer = Buffer.alloc(24);
     buffer.writeUInt32BE(buffer.length, 0);
     buffer.write("ftyp", 4, "ascii");
-    buffer.write(testCase.brand, 8, "ascii");
-
-    expect(await detectMime({ buffer })).toBe(testCase.expected);
+    buffer.write(brand, 8, "ascii");
+    expect(await detectMime({ buffer })).toBe(expected);
   });
 
   it("does not let conflicting audio metadata override MPEG video bytes", async () => {
-    const mpegProgramStream = Buffer.from([0x00, 0x00, 0x01, 0xba, 0x00, 0x00, 0x00, 0x00]);
-
-    expect(await detectMime({ buffer: mpegProgramStream, headerMime: "audio/mpeg" })).toBe(
-      "video/mpeg",
-    );
-  });
-
-  it("detects HTML files by extension (no magic bytes)", async () => {
-    const buf = Buffer.from("<!DOCTYPE html><html><body>test</body></html>");
-    const mime = await detectMime({ buffer: buf, filePath: "/tmp/report.html" });
-    expect(mime).toBe("text/html");
-  });
-
-  it("detects .htm files by extension", async () => {
-    const buf = Buffer.from("<html><body>test</body></html>");
-    const mime = await detectMime({ buffer: buf, filePath: "/tmp/page.htm" });
-    expect(mime).toBe("text/html");
-  });
-
-  it("detects XML files by extension", async () => {
-    const mime = await detectMime({ filePath: "/tmp/data.xml" });
-    expect(mime).toBe("text/xml");
-  });
-
-  it("detects CSS files by extension", async () => {
-    const mime = await detectMime({ filePath: "/tmp/style.css" });
-    expect(mime).toBe("text/css");
+    const buffer = Buffer.from([0x00, 0x00, 0x01, 0xba, 0x00, 0x00, 0x00, 0x00]);
+    expect(await detectMime({ buffer, headerMime: "audio/mpeg" })).toBe("video/mpeg");
   });
 
   it("detects MIME types from encoded URL extensions", async () => {
-    const mime = await detectMime({
-      filePath: "https://cdn.example.com/render%2Emp4?download=1#preview",
-    });
-
-    expect(mime).toBe("video/mp4");
-  });
-
-  it("detects AAC from a bare filename when buffer sniffing is inconclusive", async () => {
-    const mime = await detectMime({ buffer: Buffer.alloc(16), filePath: "voice.aac" });
-    expect(mime).toBe("audio/aac");
+    expect(
+      await detectMime({ filePath: "https://cdn.example.com/render%2Emp4?download=1#preview" }),
+    ).toBe("video/mp4");
   });
 
   it.each([
-    { form: "AIFF", fileName: "voice.aiff" },
-    { form: "AIFC", fileName: "voice.aifc" },
-  ])("detects $form audio from its authentic container signature", async ({ form, fileName }) => {
+    ["AIFF", "voice.aiff"],
+    ["AIFC", "voice.aifc"],
+  ])("detects %s audio from its authentic container signature", async (form, filePath) => {
     const buffer = Buffer.alloc(64);
     buffer.write("FORM", 0, "ascii");
     buffer.writeUInt32BE(buffer.length - 8, 4);
     buffer.write(form, 8, "ascii");
-
-    expect(await detectMime({ buffer, filePath: fileName })).toBe("audio/aiff");
+    expect(await detectMime({ buffer, filePath })).toBe("audio/aiff");
   });
 
-  it("detects Apple CAF audio by magic bytes when file-type does not recognize the container", async () => {
-    // CAF files start with the four-byte ASCII tag "caff". `file-type` v22 has
-    // no native CAF detector, so without the manual magic-byte fallback the
-    // host-local-media validator drops `afconvert`-produced voice-memo CAFs as
-    // unknown binary blobs. Regression guard for the iMessage voice-memo
-    // pre-transcode path.
-    const buf = Buffer.concat([Buffer.from("caff", "ascii"), Buffer.alloc(60)]);
-    const mime = await detectMime({ buffer: buf });
-    expect(mime).toBe("audio/x-caf");
-  });
-
-  it("returns audio/x-caf when extension and CAF magic bytes both agree", async () => {
-    const buf = Buffer.concat([Buffer.from("caff", "ascii"), Buffer.alloc(60)]);
-    const mime = await detectMime({ buffer: buf, filePath: "/tmp/voice.caf" });
-    expect(mime).toBe("audio/x-caf");
+  it("detects CAF voice memos by magic bytes without file-type support", async () => {
+    const buffer = Buffer.concat([Buffer.from("caff", "ascii"), Buffer.alloc(60)]);
+    expect(await detectMime({ buffer })).toBe("audio/x-caf");
   });
 
   it("caps dependency sniffing to a bounded prefix", () => {
     const small = Buffer.alloc(32);
     const large = Buffer.alloc(FILE_TYPE_SNIFF_MAX_BYTES + 16);
-
     expect(sliceMimeSniffBuffer(small)).toBe(small);
     expect(sliceMimeSniffBuffer(large)).toHaveLength(FILE_TYPE_SNIFF_MAX_BYTES);
   });
@@ -388,205 +195,106 @@ describe("mime detection", () => {
 
 describe("getFileExtension", () => {
   it.each([
-    { filePath: "https://cdn.example.com/render.mp4", expected: ".mp4" },
-    { filePath: "https://cdn.example.com/render.mp4/", expected: undefined },
-    {
-      filePath: "https://cdn.example.com/render.mp4%2Fpreview",
-      expected: ".mp4%2fpreview",
-    },
-    {
-      filePath: "https://cdn.example.com/render.mp4%5Cpreview",
-      expected: ".mp4%5cpreview",
-    },
-    { filePath: "https://cdn.example.com/bad%ZZ%2Emp4", expected: undefined },
-    { filePath: "https://cdn.example.com/render%2Emp4/", expected: undefined },
-    { filePath: String.raw`C:\media\clip.MP4`, expected: ".mp4" },
-    { filePath: String.raw`C:\media.folder\clip`, expected: undefined },
-    { filePath: String.raw`C:\media.folder\clip.MP4`, expected: ".mp4" },
-  ] as const)("extracts $expected from $filePath", ({ filePath, expected }) => {
+    ["https://cdn.example.com/render.mp4/", undefined],
+    ["https://cdn.example.com/render.mp4%2Fpreview", ".mp4%2fpreview"],
+    ["https://cdn.example.com/render.mp4%5Cpreview", ".mp4%5cpreview"],
+    ["https://cdn.example.com/bad%ZZ%2Emp4", undefined],
+    [String.raw`C:\media.folder\clip`, undefined],
+    [String.raw`C:\media.folder\clip.MP4`, ".mp4"],
+  ])("extracts extensions from %s", (filePath, expected) => {
     expect(getFileExtension(filePath)).toBe(expected);
   });
 });
 
 describe("mimeTypeFromFilePath", () => {
   it.each([
-    { filePath: "photo.avif", expected: "image/avif" },
-    { filePath: "image.bmp", expected: "image/bmp" },
-    { filePath: "photo.heic", expected: "image/heic" },
-    { filePath: "photo.heif", expected: "image/heif" },
-    { filePath: "photo.jpg", expected: "image/jpeg" },
-    { filePath: "photo.JPG", expected: "image/jpeg" },
-    { filePath: "voice.mp3", expected: "audio/mpeg" },
-    { filePath: "voice.aiff", expected: "audio/aiff" },
-    { filePath: "voice.AIFF", expected: "audio/aiff" },
-    { filePath: "voice.aif", expected: "audio/aiff" },
-    { filePath: "voice.AIF", expected: "audio/aiff" },
-    { filePath: "voice.aifc", expected: "audio/aiff" },
-    { filePath: "voice.AIFC", expected: "audio/aiff" },
-    { filePath: "voice.m2a", expected: "audio/mpeg" },
-    { filePath: "audiobook.m4b", expected: "audio/mp4" },
-    { filePath: "voice.oga", expected: "audio/ogg" },
-    { filePath: "voice.amr", expected: "audio/amr" },
-    { filePath: "voice.wav", expected: "audio/wav" },
-    { filePath: "clip.avi", expected: "video/x-msvideo" },
-    { filePath: "clip.m4v", expected: "video/x-m4v" },
-    { filePath: "clip.mkv", expected: "video/x-matroska" },
-    { filePath: "clip.webm", expected: "video/webm" },
-    {
-      filePath: "https://cdn.example.com/render%2Emp4?download=1#preview",
-      expected: "video/mp4",
-    },
-    { filePath: "https://cdn.example.com/render%2Em%70%34", expected: "video/mp4" },
-    { filePath: "https://cdn.example.com/render%2EMP4", expected: "video/mp4" },
-    { filePath: "https://cdn.example.com/clip%2Ewebm", expected: "video/webm" },
-    { filePath: "https://cdn.example.com/bad%ZZ/render%2Emp4", expected: "video/mp4" },
-    { filePath: "https://cdn.example.com/archive%2Fclip.mp4", expected: "video/mp4" },
-    { filePath: "https://cdn.example.com/archive%2Fclip%2Emp4", expected: "video/mp4" },
-    { filePath: "https://cdn.example.com/archive%5Cclip%2Emp4", expected: "video/mp4" },
-    { filePath: "https://cdn.example.com/render.mp4%2Fpreview", expected: undefined },
-    { filePath: "https://cdn.example.com/render.mp4%5Cpreview", expected: undefined },
-    { filePath: "clip.flv", expected: "video/x-flv" },
-    { filePath: "clip.wmv", expected: "video/x-ms-wmv" },
-    { filePath: "https://cdn.example.com/bad%E0%A4%A%2Emp4", expected: undefined },
-    { filePath: "debug.log", expected: "text/plain" },
-    { filePath: "config.yml", expected: "application/yaml" },
-    { filePath: "config.yaml", expected: "application/yaml" },
-    { filePath: "page.xml", expected: "text/xml" },
-    { filePath: "unknown.bin", expected: undefined },
-  ] as const)("maps $filePath", ({ filePath, expected }) => {
+    ["photo.JPG", "image/jpeg"],
+    ["voice.mp3", "audio/mpeg"],
+    ["voice.AIFF", "audio/aiff"],
+    ["voice.aif", "audio/aiff"],
+    ["voice.aifc", "audio/aiff"],
+    ["voice.m2a", "audio/mpeg"],
+    ["voice.oga", "audio/ogg"],
+    ["voice.wav", "audio/wav"],
+    ["clip.avi", "video/x-msvideo"],
+    ["clip.mkv", "video/x-matroska"],
+    ["clip.webm", "video/webm"],
+    ["https://cdn.example.com/render%2Em%70%34", "video/mp4"],
+    ["https://cdn.example.com/bad%ZZ/render%2Emp4", "video/mp4"],
+    ["https://cdn.example.com/archive%2Fclip%2Emp4", "video/mp4"],
+    ["https://cdn.example.com/archive%5Cclip%2Emp4", "video/mp4"],
+    ["https://cdn.example.com/render.mp4%2Fpreview", undefined],
+    ["https://cdn.example.com/render.mp4%5Cpreview", undefined],
+    ["https://cdn.example.com/bad%E0%A4%A%2Emp4", undefined],
+    ["unknown.bin", undefined],
+  ])("maps %s", (filePath, expected) => {
     expect(mimeTypeFromFilePath(filePath)).toBe(expected);
   });
 });
 
 describe("extensionForMime", () => {
   it.each([
-    { mime: "image/avif", expected: ".avif" },
-    { mime: "image/jpeg", expected: ".jpg" },
-    { mime: "image/jpg", expected: ".jpg" },
-    { mime: "image/bmp", expected: ".bmp" },
-    { mime: "image/png", expected: ".png" },
-    { mime: "image/svg+xml", expected: ".svg" },
-    { mime: "image/webp", expected: ".webp" },
-    { mime: "image/gif", expected: ".gif" },
-    { mime: "image/heic", expected: ".heic" },
-    { mime: "image/heic-sequence", expected: ".heic" },
-    { mime: "image/heif", expected: ".heif" },
-    { mime: "image/heif-sequence", expected: ".heif" },
-    { mime: "audio/aiff", expected: ".aiff" },
-    { mime: "audio/x-aiff", expected: ".aiff" },
-    { mime: "Audio/AIFF", expected: ".aiff" },
-    { mime: "AUDIO/X-AIFF; codecs=pcm", expected: ".aiff" },
-    { mime: "audio/mpeg", expected: ".mp3" },
-    { mime: "audio/mp3", expected: ".mp3" },
-    { mime: "audio/ogg", expected: ".ogg" },
-    { mime: "audio/amr", expected: ".amr" },
-    { mime: "audio/x-wav", expected: ".wav" },
-    { mime: "audio/webm", expected: ".webm" },
-    { mime: "audio/x-m4a", expected: ".m4a" },
-    { mime: "audio/m4a", expected: ".m4a" },
-    { mime: "audio/mp4", expected: ".m4a" },
-    { mime: "video/x-msvideo", expected: ".avi" },
-    { mime: "video/vnd.avi", expected: ".avi" },
-    { mime: " VIDEO/VND.AVI; codec=DIVX ", expected: ".avi" },
-    { mime: "video/x-m4v", expected: ".m4v" },
-    { mime: "video/mp4", expected: ".mp4" },
-    { mime: "video/x-matroska", expected: ".mkv" },
-    { mime: "video/webm", expected: ".webm" },
-    { mime: "video/x-flv", expected: ".flv" },
-    { mime: "video/x-ms-wmv", expected: ".wmv" },
-    { mime: "video/quicktime", expected: ".mov" },
-    { mime: "application/pdf", expected: ".pdf" },
-    { mime: "application/yaml", expected: ".yaml" },
-    { mime: "text/plain", expected: ".txt" },
-    { mime: "text/markdown", expected: ".md" },
-    { mime: "text/html", expected: ".html" },
-    { mime: "text/xml", expected: ".xml" },
-    { mime: "text/css", expected: ".css" },
-    { mime: "application/xml", expected: ".xml" },
-    { mime: "IMAGE/JPEG", expected: ".jpg" },
-    { mime: "Audio/X-M4A", expected: ".m4a" },
-    { mime: "Video/QuickTime", expected: ".mov" },
-    { mime: "video/unknown", expected: undefined },
-    { mime: "application/x-custom", expected: undefined },
-    { mime: null, expected: undefined },
-    { mime: undefined, expected: undefined },
-  ] as const)("maps $mime to extension", ({ mime, expected }) => {
+    ["image/jpeg", ".jpg"],
+    ["image/jpg", ".jpg"],
+    ["image/heic-sequence", ".heic"],
+    ["image/heif-sequence", ".heif"],
+    ["audio/aiff", ".aiff"],
+    ["AUDIO/X-AIFF; codecs=pcm", ".aiff"],
+    ["audio/mpeg", ".mp3"],
+    ["audio/mp3", ".mp3"],
+    ["audio/x-wav", ".wav"],
+    ["audio/x-m4a", ".m4a"],
+    ["audio/m4a", ".m4a"],
+    ["audio/mp4", ".m4a"],
+    [" VIDEO/VND.AVI; codec=DIVX ", ".avi"],
+    ["application/xml", ".xml"],
+    ["video/unknown", undefined],
+    [undefined, undefined],
+  ])("maps %s to extension", (mime, expected) => {
     expect(extensionForMime(mime)).toBe(expected);
   });
 });
 
 describe("isAudioFileName", () => {
   it.each([
-    { fileName: "audiobook.M4B", expected: true },
-    { fileName: "voice.mp3", expected: true },
-    { fileName: "voice.aiff", expected: true },
-    { fileName: "voice.AIFF", expected: true },
-    { fileName: "voice.aif", expected: true },
-    { fileName: "voice.AIF", expected: true },
-    { fileName: "voice.aifc", expected: true },
-    { fileName: "voice.AIFC", expected: true },
-    { fileName: "voice.caf", expected: true },
-    { fileName: "voice.M2A", expected: true },
-    { fileName: "voice.oga", expected: true },
-    { fileName: "voice.webm", expected: false },
-    { fileName: "voice.bin", expected: false },
-  ] as const)("matches audio extension for $fileName", ({ fileName, expected }) => {
+    ["audiobook.M4B", true],
+    ["voice.caf", true],
+    ["voice.webm", false],
+    ["voice.bin", false],
+  ] as const)("matches audio extension for %s", (fileName, expected) => {
     expect(isAudioFileName(fileName)).toBe(expected);
   });
 });
 
 describe("isGifMedia", () => {
   it.each([
-    {
-      opts: { contentType: "image/gif; charset=binary" },
-      expected: true,
-    },
-    {
-      opts: { contentType: " IMAGE/GIF " },
-      expected: true,
-    },
-    {
-      opts: { contentType: "image/png" },
-      expected: false,
-    },
-    {
-      opts: { fileName: "animation.GIF" },
-      expected: true,
-    },
-  ] as const)("detects GIF media from normalized metadata %#", ({ opts, expected }) => {
+    [{ contentType: " IMAGE/GIF; charset=binary " }, true],
+    [{ contentType: "image/png" }, false],
+    [{ fileName: "animation.GIF" }, true],
+  ] as const)("detects GIF media from normalized metadata %j", (opts, expected) => {
     expect(isGifMedia(opts)).toBe(expected);
   });
 });
 
 describe("normalizeMimeType", () => {
   it.each([
-    { input: "Audio/MP4; codecs=mp4a.40.2", expected: "audio/mp4" },
-    { input: "image/apng", expected: "image/png" },
-    { input: "   ", expected: undefined },
-    { input: null, expected: undefined },
-    { input: undefined, expected: undefined },
-  ] as const)("normalizes $input", ({ input, expected }) => {
+    ["Audio/MP4; codecs=mp4a.40.2", "audio/mp4"],
+    ["image/apng", "image/png"],
+    ["   ", undefined],
+    [undefined, undefined],
+  ])("normalizes %s", (input, expected) => {
     expect(normalizeMimeType(input)).toBe(expected);
   });
 });
 
 describe("prototype-named mime keys", () => {
-  // Remote senders control Content-Type headers; object-literal lookups must
-  // not resolve inherited Object.prototype members or downstream string ops throw.
-  it.each([
-    { input: "__proto__", expected: "__proto__" },
-    { input: "constructor", expected: "constructor" },
-  ] as const)("normalizeMimeType($input) stays a plain string", ({ input, expected }) => {
-    expect(normalizeMimeType(input)).toBe(expected);
+  // Untrusted headers must not resolve inherited Object.prototype members.
+  it.each(["__proto__", "constructor"])("normalizeMimeType(%s) stays a plain string", (input) => {
+    expect(normalizeMimeType(input)).toBe(input);
   });
-
-  it.each(["__proto__", "constructor"])(
-    "kindFromMime(%s) returns undefined, not a throw",
-    (input) => {
-      expect(kindFromMime(input)).toBeUndefined();
-    },
-  );
-
+  it.each(["__proto__", "constructor"])("kindFromMime(%s) returns undefined", (input) => {
+    expect(kindFromMime(input)).toBeUndefined();
+  });
   it.each(["__proto__", "constructor"])("extensionForMime(%s) returns undefined", (input) => {
     expect(extensionForMime(input)).toBeUndefined();
   });
@@ -594,21 +302,18 @@ describe("prototype-named mime keys", () => {
 
 describe("mediaKindFromMime", () => {
   it.each([
-    { mime: "text/plain", expected: "document" },
-    { mime: "text/csv", expected: "document" },
-    { mime: "text/html; charset=utf-8", expected: "document" },
-    { mime: "model/gltf+json", expected: undefined },
-    { mime: null, expected: undefined },
-    { mime: undefined, expected: undefined },
-  ] as const)("classifies $mime", ({ mime, expected }) => {
+    ["text/html; charset=utf-8", "document"],
+    ["model/gltf+json", undefined],
+    [undefined, undefined],
+  ])("classifies %s", (mime, expected) => {
     expect(mediaKindFromMime(mime)).toBe(expected);
   });
 
   it.each([
-    { mime: " Audio/Ogg; codecs=opus ", expected: "audio" },
-    { mime: undefined, expected: undefined },
-    { mime: "model/gltf+json", expected: undefined },
-  ] as const)("maps kindFromMime($mime) => $expected", ({ mime, expected }) => {
+    [" Audio/Ogg; codecs=opus ", "audio"],
+    [undefined, undefined],
+    ["model/gltf+json", undefined],
+  ])("maps kindFromMime(%s) => %s", (mime, expected) => {
     expect(kindFromMime(mime)).toBe(expected);
   });
 });

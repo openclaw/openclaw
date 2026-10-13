@@ -63,21 +63,31 @@ beforeEach(() => {
   storage.toast.mockClear();
 });
 
+function foundDraft(...questionDrafts: DurableQuestionDraft[]) {
+  return { status: "found", draft: { revision: 10, writeId: "saved", questionDrafts } };
+}
+
+function present(
+  current: ReturnType<typeof state>,
+  overrides: Partial<Parameters<typeof createAsyncQuestionPresentation>[1]> = {},
+) {
+  return createAsyncQuestionPresentation(current, { ...props, ...overrides });
+}
+
 it("preserves an edited draft across reconnect and session navigation without retargeting old callbacks", async () => {
   const current = state();
-  const initial = createAsyncQuestionPresentation(current, props);
+  const initial = present(current);
   edit(initial, "My team");
   await settled(current);
-  const reconnected = createAsyncQuestionPresentation(current, { ...props, connectionEpoch: 2 });
+  const reconnected = present(current, { connectionEpoch: 2 });
   expect(reconnected.drafts.get(question.itemId)?.answers.get("0")?.freeText).toBe("My team");
   expect(await initial.submit?.("stale answer")).toBe(false);
-  const other = createAsyncQuestionPresentation(current, {
-    ...props,
+  const other = present(current, {
     sessionKey: "agent:main:two",
     asyncQuestionStorage: { ...owner, scopeKey: "chat:v3:agent:main:two\u0000agent:main" },
   });
   expect(other.drafts.get(question.itemId)?.answers.get("0")?.freeText).toBe("");
-  const returned = createAsyncQuestionPresentation(current, { ...props, connectionEpoch: 3 });
+  const returned = present(current, { connectionEpoch: 3 });
   expect(returned.drafts.get(question.itemId)?.answers.get("0")?.freeText).toBe("My team");
   expect(await initial.submit?.("old scope returned")).toBe(false);
   expect(storage.write).toHaveBeenCalledWith(
@@ -91,105 +101,89 @@ it("preserves an edited draft across reconnect and session navigation without re
   );
 });
 
-it("restores a remounted draft only for the authenticated owner and matching question content", async () => {
-  storage.read.mockImplementation(async (scope) =>
-    scope.recoveryScope === owner.recoveryScope
-      ? { status: "found", draft: { revision: 10, writeId: "saved", questionDrafts: [saved] } }
-      : { status: "not-found" },
-  );
-  const current = state();
-  createAsyncQuestionPresentation(current, props);
-  await settled(current);
-  expect(current.asyncQuestionDrafts.get(question.itemId)?.answers.get("0")?.freeText).toBe(
-    "Saved answer",
-  );
-  createAsyncQuestionPresentation(current, {
-    ...props,
-    asyncQuestionStorage: { ...owner, recoveryScope: "person-b" },
-  });
-  await settled(current);
-  expect(current.asyncQuestionDrafts.get(question.itemId)?.answers.get("0")?.freeText).toBe("");
-  const reused = state();
-  createAsyncQuestionPresentation(reused, {
-    ...props,
-    messages: [
-      {
-        role: "assistant",
-        openclawAsyncDelivery: { ...question, questions: [{ title: "Different question?" }] },
-      },
-    ],
-  });
-  await settled(reused);
-  expect(reused.asyncQuestionDrafts.get(question.itemId)?.answers.get("0")?.freeText).toBe("");
-});
-
-it("never overwrites a new edit with late hydration and writes against the observed revision", async () => {
-  const pending = createDeferred<unknown>();
-  storage.read.mockReturnValue(pending.promise);
-  const current = state();
-  const presentation = createAsyncQuestionPresentation(current, props);
-  edit(presentation, "Newer answer");
-  pending.resolve({
-    status: "found",
-    draft: { revision: 12, writeId: "previous", questionDrafts: [saved] },
-  });
-  await settled(current);
-  expect(current.asyncQuestionDrafts.get(question.itemId)?.answers.get("0")?.freeText).toBe(
-    "Newer answer",
-  );
-  expect(storage.write).toHaveBeenCalledWith(
-    expect.anything(),
-    expect.objectContaining({
-      questionDrafts: [
-        expect.objectContaining({ answers: [{ selected: [], freeText: "Newer answer" }] }),
+it.each([saved, { ...saved, edited: false, reopenedAfterBoundary: "earlier-completion" }])(
+  "restores edited=$edited only for the authenticated owner and matching question content",
+  async (draft) => {
+    storage.read.mockImplementation(async (scope) =>
+      scope.recoveryScope === owner.recoveryScope ? foundDraft(draft) : { status: "not-found" },
+    );
+    const current = state();
+    present(current);
+    await settled(current);
+    expect(current.asyncQuestionDrafts.get(question.itemId)?.answers.get("0")?.freeText).toBe(
+      "Saved answer",
+    );
+    expect(current.asyncQuestionDrafts.get(question.itemId)?.edited).toBe(draft.edited);
+    present(current, {
+      asyncQuestionStorage: { ...owner, recoveryScope: "person-b" },
+    });
+    await settled(current);
+    expect(current.asyncQuestionDrafts.get(question.itemId)?.answers.get("0")?.freeText).toBe("");
+    const reused = state();
+    createAsyncQuestionPresentation(reused, {
+      ...props,
+      messages: [
+        {
+          role: "assistant",
+          openclawAsyncDelivery: { ...question, questions: [{ title: "Different question?" }] },
+        },
       ],
-    }),
-    expect.objectContaining({ expectedRevision: 12, expectedWriteId: "previous" }),
-  );
-});
+    });
+    await settled(reused);
+    expect(reused.asyncQuestionDrafts.get(question.itemId)?.answers.get("0")?.freeText).toBe("");
+  },
+);
+
+it.each(["saved draft", "deletion tombstone"])(
+  "fences edits against a delayed %s",
+  async (result) => {
+    const pending = createDeferred<unknown>();
+    storage.read.mockReturnValue(pending.promise);
+    const current = state();
+    edit(present(current), result === "saved draft" ? "Newer answer" : "Older than deletion");
+    const session = [...current.asyncQuestionSessions!.values()][0]!;
+    pending.resolve(
+      result === "saved draft"
+        ? { status: "found", draft: { revision: 12, writeId: "previous", questionDrafts: [saved] } }
+        : {
+            status: "not-found",
+            revision: session.intentRevision! + 1,
+            writeId: "retired:session",
+          },
+    );
+    await session.load;
+    await session.write;
+    if (result === "saved draft") {
+      expect(current.asyncQuestionDrafts.get(question.itemId)?.answers.get("0")?.freeText).toBe(
+        "Newer answer",
+      );
+      expect(storage.write).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          questionDrafts: [
+            expect.objectContaining({ answers: [{ selected: [], freeText: "Newer answer" }] }),
+          ],
+        }),
+        expect.objectContaining({ expectedRevision: 12, expectedWriteId: "previous" }),
+      );
+    } else {
+      expect(storage.write).not.toHaveBeenCalled();
+      expect(session.drafts.size).toBe(0);
+    }
+  },
+);
 
 it("keeps a draft usable and explains unavailable persistence without claiming it was saved", async () => {
   storage.read.mockResolvedValue({ status: "storage-failed" });
   const current = state();
-  edit(createAsyncQuestionPresentation(current, props), "Keep my answer");
+  edit(present(current), "Keep my answer");
   await settled(current);
-  const presentation = createAsyncQuestionPresentation(current, props);
+  const presentation = present(current);
   expect(presentation.storageError).toContain("not saved");
   expect(presentation.drafts.get(question.itemId)?.answers.get("0")?.freeText).toBe(
     "Keep my answer",
   );
   expect(storage.write).not.toHaveBeenCalled();
-});
-
-it("does not resurrect a private draft when hydration finishes after persistence is disabled", async () => {
-  const pending = createDeferred<unknown>();
-  storage.read.mockReturnValue(pending.promise);
-  const current = state();
-  edit(createAsyncQuestionPresentation(current, props), "Do not persist");
-  const session = [...current.asyncQuestionSessions!.values()][0]!;
-  createAsyncQuestionPresentation(current, { ...props, asyncQuestionStorage: null });
-  pending.resolve({ status: "not-found", revision: 100, writeId: "retired" });
-  await session.load;
-  await session.write;
-  expect(storage.write).not.toHaveBeenCalled();
-  expect(current.asyncQuestionDrafts.get(question.itemId)?.answers.get("0")?.freeText).not.toBe(
-    "Do not persist",
-  );
-});
-
-it("does not turn a reopened but untouched question into an edited draft on reload", async () => {
-  storage.read.mockResolvedValue({
-    status: "found",
-    draft: {
-      revision: 10,
-      writeId: "saved",
-      questionDrafts: [{ ...saved, edited: false, reopenedAfterBoundary: "earlier-completion" }],
-    },
-  });
-  const current = state();
-  createAsyncQuestionPresentation(current, props);
-  await settled(current);
-  expect(current.asyncQuestionDrafts.get(question.itemId)?.edited).toBe(false);
 });
 
 it("keeps a dismissed answer out of pending questions after reload and later completion", async () => {
@@ -200,7 +194,7 @@ it("keeps a dismissed answer out of pending questions after reload and later com
     return { status: "persisted" };
   });
   const current = state();
-  const presentation = createAsyncQuestionPresentation(current, props);
+  const presentation = present(current);
   await settled(current);
 
   await createAsyncQuestionPanelProps(question, presentation, {}).onSkip?.();
@@ -229,10 +223,7 @@ it("keeps a dismissed answer out of pending questions after reload and later com
 it.each(["storage-failed", "conflict"])(
   "does not retry identical failed retirement on each render (%s)",
   async (status) => {
-    storage.read.mockResolvedValue({
-      status: "found",
-      draft: { revision: 10, writeId: "saved", questionDrafts: [saved] },
-    });
+    storage.read.mockResolvedValue(foundDraft(saved));
     storage.write.mockResolvedValue({ status });
     const current = state();
     const answeredProps = {
@@ -257,30 +248,13 @@ it.each(["storage-failed", "conflict"])(
   },
 );
 
-it("fences edits made before a deletion tombstone arrives in a delayed first read", async () => {
-  const pending = createDeferred<unknown>();
-  storage.read.mockReturnValue(pending.promise);
-  const current = state();
-  edit(createAsyncQuestionPresentation(current, props), "Older than deletion");
-  const session = [...current.asyncQuestionSessions!.values()][0]!;
-  pending.resolve({
-    status: "not-found",
-    revision: session.intentRevision! + 1,
-    writeId: "retired:session",
-  });
-  await session.load;
-  await session.write;
-  expect(storage.write).not.toHaveBeenCalled();
-  expect(session.drafts.size).toBe(0);
-});
-
 it("retires disposed-pane callbacks without renewing pre-deletion draft intent", async () => {
   const pendingRead = createDeferred<unknown>();
   const pendingSend = createDeferred<boolean>();
   storage.read.mockReturnValue(pendingRead.promise);
   const current = getTranscriptState("disposed-question");
   current.transcriptRenderContext.onAsyncQuestionSubmit = () => pendingSend.promise;
-  const presentation = createAsyncQuestionPresentation(current, props);
+  const presentation = present(current);
   edit(presentation, "Before pane disposal");
   const panel = createAsyncQuestionPanelProps(question, presentation, {});
   const sending = Promise.resolve(panel.onSubmit?.({ "0": ["Before pane disposal"] })).catch(
@@ -302,65 +276,17 @@ it("retires disposed-pane callbacks without renewing pre-deletion draft intent",
   expect(storage.write).not.toHaveBeenCalled();
 });
 
-it("durably dismisses only the optional question and offers Undo without sending or cancelling work", async () => {
-  const current = state();
-  const presentation = createAsyncQuestionPresentation(current, props);
-  edit(presentation, "Keep this answer for later");
-  await presentation.dismiss(question.itemId);
-  expect(createAsyncQuestionPresentation(current, props).pending).toHaveLength(0);
-  const stored = storage.write.mock.calls.at(-1)?.[1];
-  expect(stored.questionDrafts).toEqual([
-    expect.objectContaining({
-      dismissed: true,
-      answers: [{ selected: [], freeText: "Keep this answer for later" }],
-    }),
-  ]);
-  expect(props.onAsyncQuestionSubmit).not.toHaveBeenCalled();
-  const undo = storage.toast.mock.calls.at(-1)?.[0];
-  expect(undo.actionLabel).toBe("Undo");
-  undo.onAction();
-  await settled(current);
-  expect(createAsyncQuestionPresentation(current, props).pending).toHaveLength(1);
-  expect(current.asyncQuestionDrafts.get(question.itemId)?.answers.get("0")?.freeText).toBe(
-    "Keep this answer for later",
-  );
-  expect(storage.write.mock.calls.at(-1)?.[1].questionDrafts[0].dismissed).toBeUndefined();
-
-  storage.read.mockResolvedValue({
-    status: "found",
-    draft: {
-      revision: stored.revision,
-      writeId: "dismissed",
-      questionDrafts: stored.questionDrafts,
-    },
-  });
-  const remounted = state();
-  createAsyncQuestionPresentation(remounted, { ...props, connectionEpoch: 2 });
-  await settled(remounted);
-  const restored = createAsyncQuestionPresentation(remounted, { ...props, connectionEpoch: 2 });
-  expect(restored.pending).toHaveLength(0);
-  void restored.reopen(question.itemId);
-  await settled(remounted);
-  expect(
-    createAsyncQuestionPresentation(remounted, { ...props, connectionEpoch: 2 }).pending,
-  ).toHaveLength(1);
-  expect(remounted.asyncQuestionDrafts.get(question.itemId)?.answers.get("0")?.freeText).toBe(
-    "Keep this answer for later",
-  );
-  expect(props.onAsyncQuestionSubmit).not.toHaveBeenCalled();
-});
-
 it("makes a failed dismissal save visible and keeps Undo available", async () => {
   storage.write.mockResolvedValue({ status: "storage-failed" });
   const current = state();
-  const presentation = createAsyncQuestionPresentation(current, props);
+  const presentation = present(current);
   await presentation.dismiss(question.itemId);
   const toast = storage.toast.mock.calls.at(-1)?.[0];
   expect(toast.message).toContain("not saved");
   expect(toast.actionLabel).toBe("Undo");
   toast.onAction();
   await settled(current);
-  expect(createAsyncQuestionPresentation(current, props).pending).toHaveLength(1);
+  expect(present(current).pending).toHaveLength(1);
 });
 
 it("reopens from Undo against the latest completion boundary, not the dismissed render", async () => {
@@ -400,7 +326,7 @@ it.each(["reopened", "answered"])(
     const pendingWrite = createDeferred<unknown>();
     storage.write.mockReturnValue(pendingWrite.promise);
     const current = state();
-    const presentation = createAsyncQuestionPresentation(current, props);
+    const presentation = present(current);
     await settled(current);
     const dismissal = presentation.dismiss(question.itemId);
     await vi.waitFor(() => expect(storage.write).toHaveBeenCalledOnce());
@@ -437,45 +363,61 @@ it.each(["gatewayOwner", "recoveryScope"] as const)(
       .mockResolvedValueOnce({ status: "not-found" })
       .mockResolvedValueOnce({ status: "not-found", revision: 20, writeId: "retired-a" });
     const current = state();
-    createAsyncQuestionPresentation(current, props);
+    present(current);
     await settled(current);
     expect(current.asyncQuestionDrafts.get(question.itemId)?.answers.get("0")?.freeText).toBe(
       "Saved answer",
     );
-    createAsyncQuestionPresentation(current, {
-      ...props,
+    present(current, {
       asyncQuestionStorage: { ...owner, [ownerField]: "different-owner" },
     });
     await settled(current);
     // The first identity is retired while another authenticated owner is active.
     // Returning to it must read current storage, not revive a cached loaded map.
-    createAsyncQuestionPresentation(current, props);
+    present(current);
     await settled(current);
-    const restored = createAsyncQuestionPresentation(current, props);
+    const restored = present(current);
     expect(restored.drafts.get(question.itemId)?.answers.get("0")?.freeText).toBe("");
     expect(storage.read).toHaveBeenCalledTimes(3);
     expect(storage.write).not.toHaveBeenCalled();
   },
 );
 
-it.each(["gatewayOwner", "recoveryScope"] as const)(
-  "fences pending hydration writes after a direct authenticated owner switch (%s)",
+it.each(["disabled", "gatewayOwner", "recoveryScope"] as const)(
+  "fences pending hydration writes after storage ownership changes (%s)",
   async (ownerField) => {
     const pending = createDeferred<unknown>();
-    storage.read.mockReturnValueOnce(pending.promise).mockResolvedValue({ status: "not-found" });
+    if (ownerField === "disabled") {
+      storage.read.mockReturnValue(pending.promise);
+    } else {
+      storage.read.mockReturnValueOnce(pending.promise).mockResolvedValue({ status: "not-found" });
+    }
     const current = state();
-    edit(createAsyncQuestionPresentation(current, props), "Previous owner's unfinished answer");
+    edit(
+      present(current),
+      ownerField === "disabled" ? "Do not persist" : "Previous owner's unfinished answer",
+    );
     const previousSession = [...current.asyncQuestionSessions!.values()][0]!;
-    createAsyncQuestionPresentation(current, {
-      ...props,
-      asyncQuestionStorage: { ...owner, [ownerField]: "different-owner" },
+    present(current, {
+      asyncQuestionStorage:
+        ownerField === "disabled" ? null : { ...owner, [ownerField]: "different-owner" },
     });
-    pending.resolve({ status: "not-found" });
+    pending.resolve(
+      ownerField === "disabled"
+        ? { status: "not-found", revision: 100, writeId: "retired" }
+        : { status: "not-found" },
+    );
     await previousSession.load;
     await previousSession.write;
     expect(storage.write).not.toHaveBeenCalled();
-    expect(previousSession.invalidated).toBe(true);
-    expect(current.asyncQuestionDrafts.get(question.itemId)?.answers.get("0")?.freeText).toBe("");
+    if (ownerField === "disabled") {
+      expect(current.asyncQuestionDrafts.get(question.itemId)?.answers.get("0")?.freeText).not.toBe(
+        "Do not persist",
+      );
+    } else {
+      expect(previousSession.invalidated).toBe(true);
+      expect(current.asyncQuestionDrafts.get(question.itemId)?.answers.get("0")?.freeText).toBe("");
+    }
   },
 );
 
@@ -538,61 +480,50 @@ it.each(["Undo", "Answer"])(
   },
 );
 
-it("does not reopen a canonically answered question when its restoration save finishes", async () => {
-  storage.read.mockResolvedValue({
-    status: "found",
-    draft: { revision: 10, writeId: "dismissed", questionDrafts: [{ ...saved, dismissed: true }] },
-  });
-  const onReopen = vi.fn();
-  const activeProps = { ...props, onReopen };
-  const current = state();
-  createAsyncQuestionPresentation(current, activeProps);
-  await settled(current);
-  const pendingWrite = createDeferred<unknown>();
-  storage.write.mockReturnValue(pendingWrite.promise);
-  const reopening = createAsyncQuestionPresentation(current, activeProps).reopen(question.itemId);
-  await vi.waitFor(() => expect(storage.write).toHaveBeenCalledOnce());
-  const answeredProps = {
-    ...activeProps,
-    messages: [
-      ...props.messages,
-      {
-        role: "user",
-        content: "> Which audience?\n\nEveryone",
-        __openclaw: { id: "canonical-answer", seq: 2 },
-      },
-    ],
-  };
-  createAsyncQuestionPresentation(current, answeredProps);
-  pendingWrite.resolve({ status: "persisted" });
-  await reopening;
-  expect(onReopen).not.toHaveBeenCalled();
-  expect(createAsyncQuestionPresentation(current, answeredProps).pending).toHaveLength(0);
-});
-
-it("does not expand a replacement owner after a delayed restoration save", async () => {
-  storage.read.mockResolvedValueOnce({
-    status: "found",
-    draft: { revision: 10, writeId: "dismissed", questionDrafts: [{ ...saved, dismissed: true }] },
-  });
-  const onReopen = vi.fn();
-  const activeProps = { ...props, onReopen };
-  const current = state();
-  createAsyncQuestionPresentation(current, activeProps);
-  await settled(current);
-  const pendingWrite = createDeferred<unknown>();
-  storage.write.mockReturnValue(pendingWrite.promise);
-  const reopening = createAsyncQuestionPresentation(current, activeProps).reopen(question.itemId);
-  await vi.waitFor(() => expect(storage.write).toHaveBeenCalledOnce());
-  createAsyncQuestionPresentation(current, {
-    ...activeProps,
-    asyncQuestionStorage: { ...owner, recoveryScope: "person-b" },
-  });
-  pendingWrite.resolve({ status: "persisted" });
-  await reopening;
-  expect(onReopen).not.toHaveBeenCalled();
-  expect(current.asyncQuestionDrafts.get(question.itemId)?.answers.get("0")?.freeText).toBe("");
-});
+it.each(["answered", "owner replaced"])(
+  "does not reopen after delayed restoration when %s",
+  async (change) => {
+    const stored = foundDraft({ ...saved, dismissed: true });
+    if (change === "answered") {
+      storage.read.mockResolvedValue(stored);
+    } else {
+      storage.read.mockResolvedValueOnce(stored);
+    }
+    const onReopen = vi.fn();
+    const activeProps = { ...props, onReopen };
+    const current = state();
+    createAsyncQuestionPresentation(current, activeProps);
+    await settled(current);
+    const pendingWrite = createDeferred<unknown>();
+    storage.write.mockReturnValue(pendingWrite.promise);
+    const reopening = createAsyncQuestionPresentation(current, activeProps).reopen(question.itemId);
+    await vi.waitFor(() => expect(storage.write).toHaveBeenCalledOnce());
+    const latestProps = {
+      ...activeProps,
+      ...(change === "answered"
+        ? {
+            messages: [
+              ...props.messages,
+              {
+                role: "user",
+                content: "> Which audience?\n\nEveryone",
+                __openclaw: { id: "canonical-answer", seq: 2 },
+              },
+            ],
+          }
+        : { asyncQuestionStorage: { ...owner, recoveryScope: "person-b" } }),
+    };
+    createAsyncQuestionPresentation(current, latestProps);
+    pendingWrite.resolve({ status: "persisted" });
+    await reopening;
+    expect(onReopen).not.toHaveBeenCalled();
+    if (change === "answered") {
+      expect(createAsyncQuestionPresentation(current, latestProps).pending).toHaveLength(0);
+    } else {
+      expect(current.asyncQuestionDrafts.get(question.itemId)?.answers.get("0")?.freeText).toBe("");
+    }
+  },
+);
 
 it("saves the latest completion boundary before completing a delayed Undo", async () => {
   const onReopen = vi.fn();
@@ -646,16 +577,13 @@ it("saves the latest completion boundary before completing a delayed Undo", asyn
 });
 
 it("keeps answering available with an unsaved warning when restoring a dismissal cannot persist", async () => {
-  storage.read.mockResolvedValue({
-    status: "found",
-    draft: { revision: 10, writeId: "dismissed", questionDrafts: [{ ...saved, dismissed: true }] },
-  });
+  storage.read.mockResolvedValue(foundDraft({ ...saved, dismissed: true }));
   const current = state();
-  createAsyncQuestionPresentation(current, props);
+  present(current);
   await settled(current);
   storage.write.mockResolvedValue({ status: "storage-failed" });
-  await createAsyncQuestionPresentation(current, props).reopen(question.itemId);
-  const reopened = createAsyncQuestionPresentation(current, props);
+  await present(current).reopen(question.itemId);
+  const reopened = present(current);
   expect(reopened.pending).toHaveLength(1);
   expect(reopened.storageError).toContain("not saved");
   expect(reopened.drafts.get(question.itemId)?.answers.get("0")?.freeText).toBe("Saved answer");

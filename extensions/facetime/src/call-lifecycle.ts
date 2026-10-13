@@ -6,11 +6,6 @@ type FaceTimeModelMediaMode = "starting" | "ready" | "active" | "suspended" | "c
 
 type FaceTimeCallPhase = "ringing" | "answering" | "active" | "closing" | "closed";
 
-type FaceTimeCallIdentity = {
-  canonical: string;
-  aliases: ReadonlySet<string>;
-};
-
 function normalizeCallIdentity(value: string): string {
   return value.trim().toLowerCase();
 }
@@ -26,17 +21,10 @@ export class FaceTimeCallInstance {
   readonly carrierClosure = this.#carrierClosure.promise;
   #commandTail: Promise<void> = Promise.resolve();
 
-  constructor(
-    readonly canonicalId: string,
-    phase: "ringing" | "active",
-  ) {
+  constructor(canonicalId: string, phase: "ringing" | "active") {
     this.phase = phase;
     this.carrierMode = phase === "ringing" ? "ringing" : "muted";
     this.aliases.add(normalizeCallIdentity(canonicalId));
-  }
-
-  get identity(): FaceTimeCallIdentity {
-    return { canonical: this.canonicalId, aliases: this.aliases };
   }
 
   captureGeneration(): number {
@@ -62,10 +50,8 @@ export class FaceTimeCallInstance {
     action: () => Promise<T>;
   }): Promise<T> {
     const previous = this.#commandTail;
-    let release = () => {};
-    this.#commandTail = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+    const { promise, resolve: release } = createDeferred<void>();
+    this.#commandTail = promise;
     await previous;
     try {
       this.assertCurrent(params.generation, params.allowClosing);
@@ -155,11 +141,11 @@ export class FaceTimeCallRegistry<T extends FaceTimeCallInstance> {
   }
 
   get(identity: string): T | undefined {
-    return this.resolve(identity);
+    return this.#aliases.get(normalizeCallIdentity(identity));
   }
 
   has(identity: string): boolean {
-    return this.resolve(identity) !== undefined;
+    return this.get(identity) !== undefined;
   }
 
   create(call: T): void {
@@ -170,10 +156,6 @@ export class FaceTimeCallRegistry<T extends FaceTimeCallInstance> {
     for (const alias of call.aliases) {
       this.#aliases.set(alias, call);
     }
-  }
-
-  resolve(identity: string): T | undefined {
-    return this.#aliases.get(normalizeCallIdentity(identity));
   }
 
   retainAlias(call: T, identity: string): void {

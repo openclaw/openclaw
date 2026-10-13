@@ -14,6 +14,8 @@ export async function postJson<T>(params: {
   body: unknown;
   errorPrefix: string;
   maxResponseBytes?: number;
+  onResponse?: (response: Response) => void;
+  mapResponseError?: (error: unknown) => unknown;
   parse: (payload: unknown) => T | Promise<T>;
 }): Promise<T> {
   return await withRemoteHttpResponse({
@@ -27,19 +29,27 @@ export async function postJson<T>(params: {
       body: JSON.stringify(params.body),
     },
     onResponse: async (res) => {
-      if (!res.ok) {
-        throw await createProviderHttpError(res, params.errorPrefix, {
-          requestHeaders: params.headers,
+      params.onResponse?.(res);
+      try {
+        if (!res.ok) {
+          throw await createProviderHttpError(res, params.errorPrefix, {
+            requestHeaders: params.headers,
+            signal: params.signal,
+            maxBodyBytes: 8 * 1024,
+          });
+        }
+        const payload = await readResponseJsonWithLimit(res, {
+          errorPrefix: params.errorPrefix,
+          maxBytes: params.maxResponseBytes,
           signal: params.signal,
-          maxBodyBytes: 8 * 1024,
         });
+        return await params.parse(payload);
+      } catch (error) {
+        if (params.signal?.aborted) {
+          throw error;
+        }
+        throw params.mapResponseError ? params.mapResponseError(error) : error;
       }
-      const payload = await readResponseJsonWithLimit(res, {
-        errorPrefix: params.errorPrefix,
-        maxBytes: params.maxResponseBytes,
-        signal: params.signal,
-      });
-      return await params.parse(payload);
     },
   });
 }

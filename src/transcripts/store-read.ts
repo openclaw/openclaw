@@ -17,14 +17,21 @@ import {
   type TranscriptsListParams,
   type TranscriptsGetParams,
 } from "../../packages/gateway-protocol/src/schema/transcripts.js";
+import {
+  jsonExtractText,
+  jsonOrderedTextArray,
+  jsonRemoveKey,
+} from "../infra/database-engine/json-values.js";
 import { executeSqliteQueryTakeFirstSync, iterateSqliteQuerySync } from "../infra/kysely-sync.js";
 import type { TranscriptSessionDescriptor } from "./provider-types.js";
+import { projectTranscriptSession } from "./read.js";
 import {
   meetingTranscriptDb,
   type meetingTranscriptSessionQuery,
   meetingTranscriptUtteranceQuery,
   sessionFromRow,
 } from "./store-sqlite.js";
+import type { TranscriptReadEntry, TranscriptReadNotes } from "./store-types.js";
 import type { TranscriptsSummary } from "./summary.js";
 
 export class TranscriptLibraryError extends Error {
@@ -156,28 +163,19 @@ function readQuery(
     .selectFrom("meeting_transcript_summaries as notes")
     .whereRef("notes.session_id", "=", "meeting_transcript_sessions.session_id")
     .whereRef("notes.session_started_at", "=", "meeting_transcript_sessions.started_at");
-  const overview = notes
-    .select((n) =>
-      n
-        .fn<string | null>("json_extract", [n.ref("notes.summary_json"), n.val("$.overview")])
-        .as("overview"),
-    )
-    .$asScalar();
+  const overview = notes.select("notes.overview").$asScalar();
   const summarySource = notes
-    .select((n) =>
-      n
-        .fn<string | null>("json_extract", [n.ref("notes.summary_json"), n.val("$.source")])
-        .as("source"),
-    )
+    .select((n) => jsonExtractText(database, n.ref("notes.summary_json"), "source").as("source"))
     .$asScalar();
   const utterances = eb
     .selectFrom("meeting_transcript_utterances as u")
     .whereRef("u.session_id", "=", "meeting_transcript_sessions.session_id")
     .whereRef("u.session_started_at", "=", "meeting_transcript_sessions.started_at");
-  // Group and order in SQLite. The aggregate is byte-checked in this statement
+  // Group and order in SQL. The aggregate is byte-checked in this statement
   // before any participant strings cross into JavaScript.
   const speakers = utterances
     .select("u.speaker_label")
+    .select((u) => u.fn.min<number>("u.sequence").as("first_sequence"))
     .where("u.speaker_label", "is not", null)
     .where("u.speaker_label", "!=", "")
     .groupBy("u.speaker_label")
@@ -185,7 +183,11 @@ function readQuery(
   const participants = eb
     .selectFrom(speakers.as("speakers"))
     .select((s) =>
-      s.fn<string>("json_group_array", [s.ref("speakers.speaker_label")]).as("participants"),
+      jsonOrderedTextArray(
+        database,
+        s.ref("speakers.speaker_label"),
+        s.ref("speakers.first_sequence"),
+      ).as("participants"),
     )
     .$asScalar();
   const lastAt = utterances
@@ -260,7 +262,7 @@ type TranscriptReadRow = Awaited<
 function transcriptReadEntryFromRow(
   row: TranscriptReadRow,
   purpose: TranscriptReadPurpose = "page",
-) {
+): TranscriptReadEntry {
   assertReadBytes(row.payload_bytes, purpose);
   const session = sessionFromRow(row);
   const summarySource: TranscriptsSummary["source"] | undefined =
@@ -282,7 +284,6 @@ function transcriptReadEntryFromRow(
   };
 }
 
-export type TranscriptReadEntry = ReturnType<typeof transcriptReadEntryFromRow>;
 export type TranscriptReadOptions = Omit<TranscriptsListParams, "cursor"> & {
   after?: { startedAt: string; sessionId: string };
   offset?: number;
@@ -317,10 +318,11 @@ function transcriptStartTime(startedAt: Expression<string>) {
 }
 
 /** Chronological key selection scans candidates; filters never turn into ownership. */
-export function* iterateTranscriptReadEntries(
+function readTranscriptPage<Entry>(
   database: DatabaseSync,
   options: TranscriptReadOptions,
-): Generator<TranscriptReadEntry, boolean> {
+  project: (entry: TranscriptReadEntry) => Entry,
+): TranscriptReadPage<Entry> {
   const limit = transcriptPageLimit(options.limit, TRANSCRIPTS_LIST_MAX);
   registerTranscriptDateReader(database);
   let query = meetingTranscriptDb(database).selectFrom("meeting_transcript_sessions");
@@ -336,24 +338,10 @@ export function* iterateTranscriptReadEntries(
     query = query.where("provider_id", "=", options.providerId);
   }
   if (options.accountId) {
-    const accountId = options.accountId;
-    query = query.where((eb) =>
-      eb(
-        eb.fn<string>("json_extract", [eb.ref("source_json"), eb.val("$.accountId")]),
-        "=",
-        accountId,
-      ),
-    );
+    query = query.where("source_account_id", "=", options.accountId);
   }
   if (options.agentId) {
-    const agentId = options.agentId;
-    query = query.where((eb) =>
-      eb(
-        eb.fn<string>("json_extract", [eb.ref("metadata_json"), eb.val("$.agentId")]),
-        "=",
-        agentId,
-      ),
-    );
+    query = query.where("metadata_agent_id", "=", options.agentId);
   }
   if (options.startedAfter) {
     const startedAfter = parseTranscriptDate(options.startedAfter) ?? null;
@@ -397,9 +385,11 @@ export function* iterateTranscriptReadEntries(
         eb.ref("provider_id"),
         // Raw meeting URLs can contain credentials or tokens hidden by the public
         // projection. Search must not expose those values through result membership.
-        ...["accountId", "guildId", "channelId", "threadTs", "fileId"].map((key) =>
-          eb.fn<string>("json_extract", [eb.ref("source_json"), eb.val(`$.${key}`)]),
-        ),
+        eb.ref("source_account_id"),
+        eb.ref("source_guild_id"),
+        eb.ref("source_channel_id"),
+        eb.ref("source_thread_ts"),
+        eb.ref("source_file_id"),
       ];
       return eb.or([
         ...fields.map(matches),
@@ -412,12 +402,7 @@ export function* iterateTranscriptReadEntries(
             .where((notes) =>
               notes.or([
                 matches(notes.ref("notes.markdown")),
-                matches(
-                  notes.fn<string | null>("json_extract", [
-                    notes.ref("notes.summary_json"),
-                    notes.val("$.overview"),
-                  ]),
-                ),
+                matches(notes.ref("notes.overview")),
               ]),
             ),
         ),
@@ -461,15 +446,19 @@ export function* iterateTranscriptReadEntries(
       .orderBy("meeting_transcript_sessions.session_id", "asc")
       .orderBy("meeting_transcript_sessions.started_at", "asc"),
   );
-  let count = 0;
+  const entries: Entry[] = [];
+  let bytes = 0;
   for (const row of rows) {
     // Lookahead establishes presence only, even when its payload exceeds the cap.
-    if (count++ === limit) {
-      return true;
+    if (entries.length === limit) {
+      return { entries, hasMore: true };
     }
-    yield transcriptReadEntryFromRow(row);
+    const entry = project(transcriptReadEntryFromRow(row));
+    bytes += Buffer.byteLength(JSON.stringify(entry), "utf8");
+    assertTranscriptByteCount(bytes);
+    entries.push(entry);
   }
-  return false;
+  return { entries, hasMore: false };
 }
 
 /** Selectors are unique; identity and payload bounds remain in the same SQLite statement. */
@@ -512,26 +501,24 @@ export function readLatestTranscriptEntry(database: DatabaseSync) {
   return row ? transcriptReadEntryFromRow(row) : undefined;
 }
 
+export type TranscriptReadPage<Entry> = { entries: Entry[]; hasMore: boolean };
+export type TranscriptLibraryPage = TranscriptReadPage<ReturnType<typeof projectTranscriptSession>>;
+
 export function queryTranscriptReadEntries(
   database: DatabaseSync,
-  options: TranscriptReadOptions,
+  options: TranscriptReadOptions & { projection?: "public" },
   parseDate = parseDateStringTimestampMs,
 ) {
-  return dateParser.run(parseDate, () => collectTranscriptReadEntries(database, options));
-}
-
-function collectTranscriptReadEntries(database: DatabaseSync, options: TranscriptReadOptions) {
-  const entries: TranscriptReadEntry[] = [];
-  let bytes = 0;
-  for (const entry of iterateTranscriptReadEntries(database, options)) {
-    // Reads need attribution, while provider authorization uses the unchanged source.
-    const agentId = entry.session.metadata?.agentId;
-    entry.session.metadata = typeof agentId === "string" ? { agentId } : undefined;
-    bytes += Buffer.byteLength(JSON.stringify(entry), "utf8");
-    assertTranscriptByteCount(bytes);
-    entries.push(entry);
-  }
-  return entries;
+  return dateParser.run(parseDate, () =>
+    options.projection === "public"
+      ? readTranscriptPage(database, options, projectTranscriptSession)
+      : readTranscriptPage(database, options, (entry) => {
+          // Reads need attribution, while provider authorization uses the unchanged source.
+          const agentId = entry.session.metadata?.agentId;
+          entry.session.metadata = typeof agentId === "string" ? { agentId } : undefined;
+          return entry;
+        }),
+  );
 }
 
 function utteranceQuery(
@@ -621,21 +608,18 @@ function readTranscriptUtterancePage(
   return { utterances: recent ? utterances.toReversed() : utterances, hasMore: false };
 }
 
-/** Omit the duplicated transcript inside SQLite before materializing the stored summary. */
+/** Omit the duplicated transcript in SQL before materializing the stored summary. */
 export function readStoredTranscriptNotes(
   database: DatabaseSync,
   session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
   purpose: TranscriptReadPurpose = "page",
-): { summary?: Omit<TranscriptsSummary, "transcript">; markdown?: string } {
+): TranscriptReadNotes {
   const row = executeSqliteQueryTakeFirstSync(
     database,
     meetingTranscriptDb(database)
       .selectFrom("meeting_transcript_summaries")
       .select((eb) => {
-        const summary = eb.fn<string | null>("json_remove", [
-          eb.ref("summary_json"),
-          eb.val("$.transcript"),
-        ]);
+        const summary = jsonRemoveKey(database, eb.ref("summary_json"), "transcript");
         const bytes = textBytes(summary, eb.ref("markdown"));
         return [
           boundedText(summary, bytes, byteLimit(purpose)).as("summary"),

@@ -8,7 +8,6 @@ import {
   createNativeCatalogPerformanceFixture,
   startNativeCatalogPerformanceClient,
 } from "./session-catalog-native-performance.test-support.js";
-import type { CodexSessionCatalogPage } from "./session-catalog-types.js";
 import {
   commandRpcMocks,
   createCodexSessionCatalogControlFactory,
@@ -16,16 +15,14 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-it("measures first availability, durable hydration, and restart for 490 cold native rollouts", async () => {
+it("hydrates 490 cold native rollouts and restores them without native reads", async () => {
   const root = await fs.realpath(tempDirs.make("openclaw-cold-native-490-"));
   const fixture = await createNativeCatalogPerformanceFixture(root, {
     count: 490,
     previewBytes: 32 * 1024,
     assistantBytes: 500 * 1024,
   });
-  const nativeStarted = performance.now();
   const client = await startNativeCatalogPerformanceClient(fixture);
-  const nativeInitializeMs = performance.now() - nativeStarted;
   const nativeCalls: Array<{ databaseOnly: boolean }> = [];
   commandRpcMocks.codexControlRequest.mockImplementation(
     async (_plugin, method, params, options) => {
@@ -59,49 +56,19 @@ it("measures first availability, durable hydration, and restart for 490 cold nat
     const source = (await factory.homesForAgent("main"))[0]!;
     const control = factory.forRequest("main", source);
     expect(nativeCalls).toHaveLength(0);
-    const started = performance.now();
-    let first: CodexSessionCatalogPage | undefined;
-    let firstError: unknown;
-    try {
-      first = await control.listPage({ limit: 64 });
-    } catch (error) {
-      firstError = error;
-    }
-    const firstCall = {
-      outcome: firstError ? "error" : first?.sessions.length ? "data" : "empty",
-      elapsedMs: performance.now() - started,
-      sinceNativeLaunchMs: performance.now() - nativeStarted,
-      rows: first?.sessions.length ?? 0,
-      hasCursor: Boolean(first?.nextCursor),
-      nativeCalls: nativeCalls.length,
-    };
-    console.info(
-      "cold native first catalog list",
-      JSON.stringify({
-        fixtureRows: 490,
-        rolloutBytes: fixture.rolloutBytes,
-        firstCall,
-      }),
+    await control.listPage({ limit: 64 }).then(
+      (first) => expect(first.sessions.length).toBeGreaterThan(0),
+      (error: unknown) =>
+        expect(error).toMatchObject({
+          code: "APP_SERVER_UNAVAILABLE",
+          message: "Codex session catalog is still loading. Retry shortly.",
+        }),
     );
-    if (firstError) {
-      expect(firstError).toMatchObject({
-        code: "APP_SERVER_UNAVAILABLE",
-        message: "Codex session catalog is still loading. Retry shortly.",
-      });
-      firstCall.outcome = "retry";
-    } else {
-      expect(first?.sessions.length).toBeGreaterThan(0);
-    }
     await control.initialize();
     const entries = (await openState().entries()).map((entry) => entry.value);
     expect(entries.filter((entry) => entry.kind === "row")).toHaveLength(490);
     expect(entries).toContainEqual({ version: 1, kind: "complete" });
-    const completeHydrationMs = performance.now() - started;
-    const durableSinceNativeLaunchMs = performance.now() - nativeStarted;
     const completedFirst = await control.listPage({ limit: 64 });
-    const firstObservedDataMs = first?.sessions.length
-      ? firstCall.elapsedMs
-      : performance.now() - started;
     expect(completedFirst.sessions).toHaveLength(64);
     const ids = completedFirst.sessions.map((session) => session.threadId);
     let cursor = completedFirst.nextCursor;
@@ -120,34 +87,11 @@ it("measures first availability, durable hydration, and restart for 490 cold nat
     const restartSource = (await restarted.homesForAgent("main"))[0]!;
     const restartControl = restarted.forRequest("main", restartSource);
     const beforeRestart = nativeCalls.length;
-    const restartStarted = performance.now();
     const restored = await restartControl.listPage({ limit: 64 });
-    const restartFirstListMs = performance.now() - restartStarted;
-    const restartNativeCalls = nativeCalls.length - beforeRestart;
     expect(restored.sessions.map((session) => session.threadId)).toEqual(
       completedFirst.sessions.map((session) => session.threadId),
     );
-    expect(restartNativeCalls).toBe(0);
-    console.info(
-      "cold native catalog measurements",
-      JSON.stringify({
-        fixtureRows: 490,
-        previewBytesPerRollout: 32 * 1024,
-        assistantBytesPerRollout: 500 * 1024,
-        rolloutBytes: fixture.rolloutBytes,
-        nativeInitializeMs,
-        firstCall,
-        firstObservedDataMs,
-        firstDataObservedAt: first?.sessions.length ? "first list" : "list after full hydration",
-        completeHydrationMs,
-        durableSinceNativeLaunchMs,
-        completeNativePages: beforeRestart,
-        durableRows: entries.filter((entry) => entry.kind === "row").length,
-        restartFirstListMs,
-        restartRows: restored.sessions.length,
-        restartNativeCalls,
-      }),
-    );
+    expect(nativeCalls).toHaveLength(beforeRestart);
   } finally {
     await factory.stop();
     await restarted?.stop();

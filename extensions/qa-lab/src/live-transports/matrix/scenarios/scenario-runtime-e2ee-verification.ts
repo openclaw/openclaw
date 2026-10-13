@@ -1,5 +1,5 @@
-// Qa Matrix plugin module implements verification scenario runtime E2EE behavior.
 import { createMatrixQaClient } from "../substrate/client.js";
+import type { MatrixQaE2eeScenarioClient } from "../substrate/e2ee-client.js";
 import {
   MATRIX_QA_E2EE_VERIFICATION_DM_ROOM_KEY,
   resolveMatrixQaScenarioRoomId,
@@ -16,6 +16,17 @@ import {
 } from "./scenario-runtime-e2ee-shared.js";
 import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
 import type { MatrixQaScenarioExecution } from "./scenario-types.js";
+
+async function verifyMatrixQaParticipants(
+  driver: MatrixQaE2eeScenarioClient,
+  observer: MatrixQaE2eeScenarioClient,
+) {
+  await Promise.all(
+    Object.entries({ driver, observer }).map(([label, client]) =>
+      ensureMatrixQaE2eeOwnDeviceVerified({ client, label }),
+    ),
+  );
+}
 
 export async function runMatrixQaE2eeDeviceSasVerificationScenario(
   context: MatrixQaScenarioContext,
@@ -34,16 +45,7 @@ export async function runMatrixQaE2eeDeviceSasVerificationScenario(
     context,
     "matrix-e2ee-device-sas-verification",
     async ({ driver, observer }) => {
-      await Promise.all([
-        ensureMatrixQaE2eeOwnDeviceVerified({
-          client: driver,
-          label: "driver",
-        }),
-        ensureMatrixQaE2eeOwnDeviceVerified({
-          client: observer,
-          label: "observer",
-        }),
-      ]);
+      await verifyMatrixQaParticipants(driver, observer);
       const result = await completeMatrixQaSasVerification({
         initiator: driver,
         recipient: observer,
@@ -107,16 +109,7 @@ export async function runMatrixQaE2eeQrVerificationScenario(
     context,
     "matrix-e2ee-qr-verification",
     async ({ driver, observer }) => {
-      await Promise.all([
-        ensureMatrixQaE2eeOwnDeviceVerified({
-          client: driver,
-          label: "driver",
-        }),
-        ensureMatrixQaE2eeOwnDeviceVerified({
-          client: observer,
-          label: "observer",
-        }),
-      ]);
+      await verifyMatrixQaParticipants(driver, observer);
       const initiated = await driver.requestVerification({
         deviceId: observerDeviceId,
         userId: context.observerUserId,
@@ -266,16 +259,7 @@ export async function runMatrixQaE2eeDmSasVerificationScenario(
     context,
     "matrix-e2ee-dm-sas-verification",
     async ({ driver, observer }) => {
-      await Promise.all([
-        ensureMatrixQaE2eeOwnDeviceVerified({
-          client: driver,
-          label: "driver",
-        }),
-        ensureMatrixQaE2eeOwnDeviceVerified({
-          client: observer,
-          label: "observer",
-        }),
-      ]);
+      await verifyMatrixQaParticipants(driver, observer);
       const result = await completeMatrixQaSasVerification({
         initiator: driver,
         recipient: observer,

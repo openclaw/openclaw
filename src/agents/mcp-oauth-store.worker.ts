@@ -1,44 +1,27 @@
 import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
-import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { getSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
-import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
 import { ensureMcpOAuthPendingSchema } from "../state/openclaw-state-db-schema-additive.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { assertOpenClawStateLeaseWorkerOwnedInTransaction } from "../state/openclaw-state-lease-worker.js";
+import type { OpenClawStateLeaseIdentity } from "../state/openclaw-state-lease.types.js";
+import type {
+  WorkerOperationContext,
+  WorkerOperationHandlers,
+  WorkerOperations,
+} from "../state/worker-operation-registry.js";
 import {
   readMcpOAuthStoreInDatabase,
   replaceMcpOAuthStoreInDatabase,
   MCP_OAUTH_PENDING_STATE_TTL_MS,
   type McpOAuthDatabase,
-  type McpOAuthReadOperations,
 } from "./mcp-oauth-store.kernel.js";
 import { applyMcpOAuthMutation } from "./mcp-oauth-store.mutations.js";
-import type { McpOAuthWriteOperations } from "./mcp-oauth-store.types.js";
+import type { McpOAuthMutation } from "./mcp-oauth-store.types.js";
 
-type McpOAuthOwnedStore = McpOAuthWriteOperations["mcpOAuth.clear"]["input"];
-type McpOAuthWorkerOperations = McpOAuthReadOperations & McpOAuthWriteOperations;
-
-/** Select this feature's commands from the typed shared-state wire contract. */
-export function isMcpOAuthWorkerCommand(command: {
-  type: string;
-  input: unknown;
-}): command is SqliteWorkerCommand<McpOAuthWorkerOperations> {
-  switch (command.type) {
-    case "mcpOAuth.read":
-    case "mcpOAuth.mutate":
-    case "mcpOAuth.consumePending":
-    case "mcpOAuth.writePending":
-    case "mcpOAuth.deletePending":
-    case "mcpOAuth.clear":
-    case "mcpOAuth.clearPendingPrefix":
-      return true;
-    default:
-      return false;
-  }
-}
+type McpOAuthOwnedStore = { storeKey: string; identity: OpenClawStateLeaseIdentity };
 
 function assertStoreLease(
   database: DatabaseSync,
@@ -62,80 +45,70 @@ function ensurePendingSchema(database: DatabaseSync): void {
   deferSqlitePostCommitPublication(database, () => pendingSchemaDatabases.add(database));
 }
 
-/** Keep feature reads and writes on the shared-state worker's retained database. */
-export function executeMcpOAuthWorkerCommand(
-  database: OpenClawStateDatabase,
-  command: SqliteWorkerCommand<McpOAuthWorkerOperations>,
-): McpOAuthWorkerOperations[keyof McpOAuthWorkerOperations]["output"] {
-  if (command.type === "mcpOAuth.read") {
-    return readMcpOAuthStoreInDatabase(database.db, command.input);
-  }
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const result = executeMcpOAuthWriteInTransaction(db, command);
-      // The final grant can refuse a mutation and roll back the whole transaction.
-      if (command.type === "mcpOAuth.clearPendingPrefix") {
-        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
-      } else {
-        assertStoreLease(db, command.input, "commit");
-      }
-      return result;
-    },
-    { database, path: database.path, env: getSqliteWorkerStateContext().environment },
+function ownedWrite<Input extends McpOAuthOwnedStore, Result>(
+  operation: (database: DatabaseSync, input: Input, assertOwned: () => void) => Result,
+  pending = false,
+) {
+  return (input: Input, { open }: WorkerOperationContext): Result => {
+    const database = open();
+    return runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        const assertOwned = () => assertStoreLease(db, input);
+        if (pending) {
+          assertOwned();
+          ensurePendingSchema(db);
+        }
+        const result = operation(db, input, assertOwned);
+        // The final grant can refuse a mutation and roll back the whole transaction.
+        assertStoreLease(db, input, "commit");
+        return result;
+      },
+      { database, path: database.path, env: getSqliteWorkerStateContext().environment },
+    );
+  };
+}
+
+function deletePending(database: DatabaseSync, storeKey: string, assertOwned: () => void): void {
+  assertOwned();
+  executeSqliteQuerySync(
+    database,
+    getNodeSqliteKysely<McpOAuthDatabase>(database)
+      .deleteFrom("mcp_oauth_pending_authorizations")
+      .where("store_key", "=", storeKey),
   );
 }
 
-function executeMcpOAuthWriteInTransaction(
-  database: DatabaseSync,
-  command: SqliteWorkerCommand<McpOAuthWriteOperations>,
-): McpOAuthWriteOperations[keyof McpOAuthWriteOperations]["output"] {
-  const kysely = getNodeSqliteKysely<McpOAuthDatabase>(database);
-  if (command.type === "mcpOAuth.clearPendingPrefix") {
-    // Requester key grammar excludes SQL wildcards. This existing cleanup also removes
-    // orphaned callback rows without inventing a per-store lease.
-    requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-    ensurePendingSchema(database);
-    executeSqliteQuerySync(
-      database,
-      kysely
-        .deleteFrom("mcp_oauth_pending_authorizations")
-        .where("store_key", "like", `${command.input}%`),
-    );
-    return undefined;
-  }
-  const { storeKey } = command.input;
-  const assertOwned = () => assertStoreLease(database, command.input);
-  if (command.type === "mcpOAuth.mutate") {
-    const result = applyMcpOAuthMutation(
-      readMcpOAuthStoreInDatabase(database, storeKey),
-      command.input.mutation,
-    );
-    replaceMcpOAuthStoreInDatabase(database, storeKey, result.store, assertOwned);
-    return result;
-  }
-  assertOwned();
-  ensurePendingSchema(database);
-  const deletePending = () => {
-    assertOwned();
-    executeSqliteQuerySync(
-      database,
-      kysely.deleteFrom("mcp_oauth_pending_authorizations").where("store_key", "=", storeKey),
-    );
-  };
-  switch (command.type) {
-    case "mcpOAuth.consumePending":
+export const mcpOAuthOperations = {
+  "mcpOAuth.read": (input: string, { open }) => readMcpOAuthStoreInDatabase(open().db, input),
+  "mcpOAuth.mutate": ownedWrite(
+    (database, input: McpOAuthOwnedStore & { mutation: McpOAuthMutation }, assertOwned) => {
+      const result = applyMcpOAuthMutation(
+        readMcpOAuthStoreInDatabase(database, input.storeKey),
+        input.mutation,
+      );
+      replaceMcpOAuthStoreInDatabase(database, input.storeKey, result.store, assertOwned);
+      return result;
+    },
+  ),
+  "mcpOAuth.consumePending": ownedWrite(
+    (database, input: McpOAuthOwnedStore & { state: string }, assertOwned) => {
       assertOwned();
       return (
         executeSqliteQuerySync(
           database,
-          kysely
+          getNodeSqliteKysely<McpOAuthDatabase>(database)
             .deleteFrom("mcp_oauth_pending_authorizations")
-            .where("store_key", "=", storeKey)
-            .where("state", "=", command.input.state)
+            .where("store_key", "=", input.storeKey)
+            .where("state", "=", input.state)
             .where("create_time", ">", Date.now() - MCP_OAUTH_PENDING_STATE_TTL_MS),
         ).numAffectedRows === 1n
       );
-    case "mcpOAuth.writePending": {
+    },
+    true,
+  ),
+  "mcpOAuth.writePending": ownedWrite(
+    (database, input: McpOAuthOwnedStore & { state: string }, assertOwned): void => {
+      const kysely = getNodeSqliteKysely<McpOAuthDatabase>(database);
       const now = Date.now();
       assertOwned();
       executeSqliteQuerySync(
@@ -144,30 +117,50 @@ function executeMcpOAuthWriteInTransaction(
           .deleteFrom("mcp_oauth_pending_authorizations")
           .where("create_time", "<=", now - MCP_OAUTH_PENDING_STATE_TTL_MS),
       );
-      deletePending();
+      deletePending(database, input.storeKey, assertOwned);
       assertOwned();
       executeSqliteQuerySync(
         database,
         kysely
           .insertInto("mcp_oauth_pending_authorizations")
-          .values({ state: command.input.state, store_key: storeKey, create_time: now }),
+          .values({ state: input.state, store_key: input.storeKey, create_time: now }),
       );
-      return undefined;
-    }
-    case "mcpOAuth.deletePending":
-      deletePending();
-      return undefined;
-    case "mcpOAuth.clear":
-      // Doctor imports retired credentials only into an explicitly uninitialized row.
-      replaceMcpOAuthStoreInDatabase(
-        database,
-        storeKey,
-        { credentialState: "cleared" },
-        assertOwned,
-      );
-      deletePending();
-      return undefined;
-  }
-  void (command satisfies never);
-  throw new Error("Unknown MCP OAuth write command");
-}
+    },
+    true,
+  ),
+  "mcpOAuth.deletePending": ownedWrite(
+    (database, input: McpOAuthOwnedStore, assertOwned) =>
+      deletePending(database, input.storeKey, assertOwned),
+    true,
+  ),
+  "mcpOAuth.clear": ownedWrite((database, input: McpOAuthOwnedStore, assertOwned): void => {
+    // Doctor imports retired credentials only into an explicitly uninitialized row.
+    replaceMcpOAuthStoreInDatabase(
+      database,
+      input.storeKey,
+      { credentialState: "cleared" },
+      assertOwned,
+    );
+    deletePending(database, input.storeKey, assertOwned);
+  }, true),
+  "mcpOAuth.clearPendingPrefix": (input: string, { open }): void => {
+    const database = open();
+    runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        // Requester key grammar excludes SQL wildcards; cleanup includes orphaned callbacks.
+        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+        ensurePendingSchema(db);
+        executeSqliteQuerySync(
+          db,
+          getNodeSqliteKysely<McpOAuthDatabase>(db)
+            .deleteFrom("mcp_oauth_pending_authorizations")
+            .where("store_key", "like", `${input}%`),
+        );
+        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+      },
+      { database, path: database.path, env: getSqliteWorkerStateContext().environment },
+    );
+  },
+} satisfies WorkerOperationHandlers;
+
+export type McpOAuthWorkerOperations = WorkerOperations<typeof mcpOAuthOperations>;

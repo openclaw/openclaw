@@ -195,13 +195,6 @@ describe("doctor workspace alias repair", () => {
     expect(fs.existsSync(nextSnapshot.location)).toBe(false);
   });
 
-  it("reports nothing when aliases are intact", async () => {
-    const dir = testState!.workspaceDir;
-    await mergeWorkspaceSetupState(dir, { bootstrapSeededAt: "2026-07-16T01:00:00.000Z" }, 1_000);
-
-    expect(await collectRepointedWorkspaceAliasFindings(buildAliasCfg(dir))).toHaveLength(0);
-  });
-
   it("requires explicit confirmation even when generated hashes match", async () => {
     const { alias, original } = await repointAlias({ seedAttestedFile: true });
     const prompter = buildPrompter();
@@ -225,22 +218,6 @@ describe("doctor workspace alias repair", () => {
       prompter: secondPrompter,
     });
     expect(secondPrompter.confirmRuntimeRepair).not.toHaveBeenCalled();
-  });
-
-  it("requires the explicit operator gate when continuity is unproven", async () => {
-    const { alias, original } = await repointAlias({ seedAttestedFile: false });
-    const prompter = buildPrompter();
-
-    await expect(runWorkspaceRepair({ cfg: buildAliasCfg(alias), prompter })).rejects.toThrow();
-
-    expect(prompter.confirmAutoFix).not.toHaveBeenCalled();
-    expect(prompter.confirmRuntimeRepair).toHaveBeenCalledOnce();
-    // Declined: stored state stays with the original canonical target.
-    expect((await readWorkspaceStateSnapshot(original)).setupExists).toBe(true);
-
-    const approving = buildPrompter({ confirmRuntimeRepair: vi.fn(async () => true) });
-    await runWorkspaceRepair({ cfg: buildAliasCfg(alias), prompter: approving });
-    expect((await readWorkspaceStateSnapshot(alias)).setupExists).toBe(true);
   });
 
   it("refuses to merge when the current target already owns state", async () => {

@@ -1,4 +1,4 @@
-// Control UI chat module owns bounded camera-frame capture for realtime Talk transports.
+import { raceWithTimeout } from "@openclaw/retry";
 
 export type RealtimeTalkVideoFrame = {
   data: string;
@@ -52,30 +52,24 @@ export async function captureRealtimeTalkVideoFrame(
   throw new Error("Camera frame is too large for the Realtime connection");
 }
 
-function waitForRealtimeTalkVideoData(video: HTMLVideoElement): Promise<void> {
-  return new Promise((resolve, reject) => {
-    let timeout: ReturnType<typeof globalThis.setTimeout> | undefined;
-    const finish = (error?: Error) => {
-      if (timeout === undefined) {
-        return;
-      }
-      globalThis.clearTimeout(timeout);
-      timeout = undefined;
-      video.removeEventListener("loadeddata", onData);
-      if (error) {
-        reject(error);
-      } else {
-        resolve();
-      }
-    };
-    const onData = () => finish();
-    timeout = globalThis.setTimeout(
-      () => finish(new Error("Camera preview did not become ready")),
+async function waitForRealtimeTalkVideoData(video: HTMLVideoElement): Promise<void> {
+  const ready = Promise.withResolvers<void>();
+  const onData = () => ready.resolve();
+  try {
+    await raceWithTimeout(
+      () => {
+        video.addEventListener("loadeddata", onData);
+        if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+          ready.resolve();
+        }
+        return ready.promise;
+      },
       5_000,
+      () => {
+        throw new Error("Camera preview did not become ready");
+      },
     );
-    video.addEventListener("loadeddata", onData);
-    if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
-      finish();
-    }
-  });
+  } finally {
+    video.removeEventListener("loadeddata", onData);
+  }
 }

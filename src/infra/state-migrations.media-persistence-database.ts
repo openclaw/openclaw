@@ -1,10 +1,9 @@
-// Bounded media scans and source-drift evidence inside the Doctor migration owner's transaction.
+// Bounded media scans inside the Doctor migration owner's transaction.
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sql } from "kysely";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.sqlite-contract.js";
 import { rewriteSqliteTranscriptEventRowsInTransaction } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
-import { transcriptEventReadBytesSql } from "../config/sessions/session-transcript-read-bytes.js";
 import { transcriptEventJsonSql } from "../config/sessions/transcript-payload.js";
 import {
   canonicalizePersistedUserMessageMedia,
@@ -12,14 +11,8 @@ import {
 } from "../media/media-facts.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "./kysely-sync.js";
-import { readSqliteDataVersion } from "./node-sqlite.js";
-import {
-  eventIdentity,
   parseTranscriptEvent,
   transformTranscriptEvent,
 } from "./state-migrations.media-persistence-transform.js";
@@ -35,7 +28,7 @@ function forEachMediaEventBatch(params: {
   database: DatabaseSync;
   table: "trajectory_runtime_events" | "transcript_events";
   legacyTextStorage?: boolean;
-  visit: (rows: Array<{ event_json: string; seq: number; session_id: string }>) => void;
+  visit: (rows: Array<{ event_json: string; seq: number; session_id: string }>) => "stop" | void;
 }): void {
   const db = getNodeSqliteKysely<MediaMigrationDatabase>(params.database);
   const eventJson =
@@ -68,7 +61,9 @@ function forEachMediaEventBatch(params: {
     if (!last) {
       return;
     }
-    params.visit(rows);
+    if (params.visit(rows) === "stop") {
+      return;
+    }
     cursor = { seq: last.seq, sessionId: last.session_id };
   }
 }
@@ -88,7 +83,7 @@ export function scanTranscriptRows(params: {
     database,
     table: "transcript_events",
     legacyTextStorage: params.legacyTextStorage,
-    visit: (rows) => {
+    visit: (rows): "stop" | void => {
       const sessionIds = [...new Set(rows.map((row) => row.session_id))];
       const sessionKeys = new Map(
         executeSqliteQuerySync(
@@ -115,13 +110,14 @@ export function scanTranscriptRows(params: {
         if (!transformed.changed) {
           continue;
         }
-        if (eventIdentity(event) !== eventIdentity(transformed.event)) {
-          throw new Error(`${owner} event identity changed during media migration`);
-        }
         if (lastChangedSessionId !== row.session_id) {
           lastChangedSessionId = row.session_id;
           changedSessions += 1;
           params.onChangedSession?.(row.session_id);
+        }
+        // Detection only selects the repair path; that transaction validates every row.
+        if (!writer) {
+          return "stop";
         }
         const rewrites = rewritesBySession.get(row.session_id) ?? [];
         rewrites.push({
@@ -189,7 +185,7 @@ export function scanTrajectoryRows(params: {
   forEachMediaEventBatch({
     database,
     table: "trajectory_runtime_events",
-    visit: (rows) => {
+    visit: (rows): "stop" | void => {
       for (const row of rows) {
         const rewrittenEventJson = rewriteTrajectoryEventJson(
           row.event_json,
@@ -199,101 +195,19 @@ export function scanTrajectoryRows(params: {
           continue;
         }
         changedRows += 1;
-        if (rewrite) {
-          executeSqliteQuerySync(
-            database,
-            db
-              .updateTable("trajectory_runtime_events")
-              .set({ event_json: rewrittenEventJson })
-              .where("session_id", "=", row.session_id)
-              .where("seq", "=", row.seq),
-          );
+        if (!rewrite) {
+          return "stop";
         }
+        executeSqliteQuerySync(
+          database,
+          db
+            .updateTable("trajectory_runtime_events")
+            .set({ event_json: rewrittenEventJson })
+            .where("session_id", "=", row.session_id)
+            .where("seq", "=", row.seq),
+        );
       }
     },
   });
   return changedRows;
-}
-
-export function readMediaSourceVersion(database: DatabaseSync, legacyTextStorage: boolean) {
-  const dataVersion = readSqliteDataVersion(database);
-  const db = getNodeSqliteKysely<MediaMigrationDatabase>(database);
-  const counts = executeSqliteQueryTakeFirstSync(
-    database,
-    db.selectNoFrom((eb) => [
-      eb
-        .selectFrom("transcript_events")
-        .select((row) => row.fn.countAll<number>().as("count"))
-        .as("transcript_rows"),
-      eb
-        .selectFrom("transcript_events")
-        .select((row) =>
-          row.fn
-            .coalesce(
-              row.fn.sum<number>(
-                legacyTextStorage
-                  ? row.fn<number>("octet_length", ["event_json"])
-                  : transcriptEventReadBytesSql(),
-              ),
-              row.val(0),
-            )
-            .as("bytes"),
-        )
-        .as("transcript_bytes"),
-      eb
-        .selectFrom("transcript_events")
-        .select((row) =>
-          row
-            .cast<string>(row.fn.coalesce(row.fn.sum<number>("created_at"), row.val(0)), "text")
-            .as("created_at"),
-        )
-        .as("transcript_created_at"),
-      eb
-        .selectFrom("trajectory_runtime_events")
-        .select((row) => row.fn.countAll<number>().as("count"))
-        .as("trajectory_rows"),
-      eb
-        .selectFrom("trajectory_runtime_events")
-        .select((row) =>
-          row.fn
-            .coalesce(row.fn.sum<number>(row.fn<number>("length", ["event_json"])), row.val(0))
-            .as("bytes"),
-        )
-        .as("trajectory_bytes"),
-    ]),
-  );
-  const number = (value: unknown): number =>
-    typeof value === "bigint" ? Number(value) : typeof value === "number" ? value : 0;
-  const count = (key: keyof NonNullable<typeof counts>): number => number(counts?.[key]);
-  return {
-    dataVersion,
-    trajectoryBytes: count("trajectory_bytes"),
-    trajectoryRows: count("trajectory_rows"),
-    transcriptBytes: count("transcript_bytes"),
-    transcriptCreatedAt: counts?.transcript_created_at ?? "0",
-    transcriptRows: count("transcript_rows"),
-  };
-}
-
-type MediaSourceVersion = ReturnType<typeof readMediaSourceVersion>;
-
-export function mediaSourceDriftMessage(
-  pathname: string,
-  expected: MediaSourceVersion,
-  current: MediaSourceVersion,
-): string {
-  if (
-    expected.transcriptRows !== current.transcriptRows ||
-    expected.transcriptBytes !== current.transcriptBytes ||
-    expected.transcriptCreatedAt !== current.transcriptCreatedAt
-  ) {
-    return `${pathname} transcript source changed before migration commit`;
-  }
-  if (
-    expected.trajectoryRows !== current.trajectoryRows ||
-    expected.trajectoryBytes !== current.trajectoryBytes
-  ) {
-    return `${pathname} trajectory source changed before migration commit`;
-  }
-  return `${pathname} source changed before migration transaction`;
 }

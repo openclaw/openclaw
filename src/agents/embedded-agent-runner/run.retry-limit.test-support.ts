@@ -22,6 +22,8 @@ describe("runEmbeddedAgent retry-limit metadata", () => {
     resetSharedRunIntegrationHarnessMocks();
     const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
     state = await createOpenClawTestState({ label: "run.retry-limit" });
+    const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+    setRuntimeConfigSnapshot({});
     useOpenAIPlatformAuthFixture();
   });
 

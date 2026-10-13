@@ -3,11 +3,9 @@ import type { SqliteWorkerStateContext } from "./sqlite-worker-state-context.js"
 
 const firstContext: SqliteWorkerStateContext = {
   environment: { OPENCLAW_STATE_DIR: "/fixture/first" },
-  coordinatorRuntime: { directory: "/fixture/first/coordinator", keepAlive: false },
 };
 const secondContext: SqliteWorkerStateContext = {
   environment: { OPENCLAW_STATE_DIR: "/fixture/second" },
-  coordinatorRuntime: { directory: "/fixture/second/coordinator", keepAlive: false },
 };
 
 async function loadModuleCopies() {

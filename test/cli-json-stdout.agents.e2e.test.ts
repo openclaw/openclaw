@@ -1,3 +1,4 @@
+import "../src/test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
@@ -186,10 +187,10 @@ describe("cli json stdout contract", () => {
         const existingConfig = `${JSON.stringify({
           agents: {
             ownership: "explicit",
-            list: [
-              { id: "main", workspace: path.join(tempHome, "main") },
-              { id: "ops", workspace: path.join(tempHome, "ops") },
-            ],
+            entries: {
+              main: { workspace: path.join(tempHome, "main") },
+              ops: { workspace: path.join(tempHome, "ops") },
+            },
           },
           bindings: [
             { type: "route", agentId: "ops", match: { channel: "telegram", accountId: "work" } },

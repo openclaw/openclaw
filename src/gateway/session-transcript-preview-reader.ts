@@ -8,6 +8,7 @@ import {
   SessionTranscriptStorageUnavailableError,
 } from "../config/sessions/session-transcript-projection-error.js";
 import type { SessionPreviewWorkerInput } from "../config/sessions/session-transcript-worker.types.js";
+import type { OpenClawAgentReadOnlyDatabase } from "../state/openclaw-agent-db-readonly-open.js";
 import { withScopedOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly-scope.js";
 import { buildSessionPreviewItems } from "./session-display-projection.js";
 import type { SessionPreviewItem } from "./session-utils.types.js";
@@ -26,22 +27,6 @@ function previewReadLimits(maxItems: number) {
   ];
 }
 
-/** Share the same bounded widening for display and canonical model-context previews. */
-export function readBoundedSessionPreviewItems(
-  maxItems: number,
-  readPage: (maxEvents: number, maxBytes: number) => PreviewPage,
-): SessionPreviewItem[] {
-  let items: SessionPreviewItem[] = [];
-  for (const { maxEvents, maxBytes } of previewReadLimits(maxItems)) {
-    const page = readPage(maxEvents, maxBytes);
-    items = page.items;
-    if (items.length >= maxItems || !page.hasOlderEvents) {
-      break;
-    }
-  }
-  return items;
-}
-
 export async function readBoundedSessionPreviewItemsAsync(
   maxItems: number,
   readPage: (maxEvents: number, maxBytes: number) => Promise<PreviewPage>,
@@ -57,53 +42,66 @@ export async function readBoundedSessionPreviewItemsAsync(
   return items;
 }
 
+/** Native and worker display reads share widening, projection, and the older-page boundary. */
+export function readSessionDisplayPreviewItems(
+  maxItems: number,
+  maxChars: number,
+  readPage: (
+    options: Parameters<typeof readRecentSessionTranscriptHistoryEventsFromProjection>[1],
+  ) => ReturnType<typeof readRecentSessionTranscriptHistoryEventsFromProjection>,
+): SessionPreviewItem[] {
+  let items: SessionPreviewItem[] = [];
+  for (const { maxEvents, maxBytes } of previewReadLimits(maxItems)) {
+    const page = readPage({ maxBytes, maxLines: maxEvents, maxMessages: maxEvents });
+    items = buildSessionPreviewItems(
+      page.events.map((entry) => asOptionalRecord(entry.event)?.message),
+      maxItems,
+      maxChars,
+    );
+    const hasOlderEvents = page.totalMessages > page.events.length;
+    if (items.length >= maxItems || !hasOlderEvents) {
+      break;
+    }
+  }
+  return items;
+}
+
 /** Read the host-prepared target without importing transcript writers or model context. */
-export function readSessionPreviewItemsReadOnly({
-  database: databaseTarget,
-  target,
-  env,
-  maxItems,
-  maxChars,
-}: SessionPreviewWorkerInput): SessionPreviewItem[] {
-  const result = withScopedOpenClawAgentDatabaseReadOnly(
-    (database) =>
-      readWithCanonicalSessionAdmission(database, () => {
-        if (target.entryValidationKey !== undefined) {
-          readSessionEntryRow(database, target.entryValidationKey);
+export function readSessionPreviewItemsReadOnly(
+  { database: databaseTarget, target, env, maxItems, maxChars }: SessionPreviewWorkerInput,
+  retainedDatabase?: OpenClawAgentReadOnlyDatabase,
+): SessionPreviewItem[] {
+  const read = (database: OpenClawAgentReadOnlyDatabase) =>
+    readWithCanonicalSessionAdmission(database, () => {
+      if (target.entryValidationKey !== undefined) {
+        readSessionEntryRow(database, target.entryValidationKey);
+      }
+      return readSessionDisplayPreviewItems(maxItems, maxChars, (options) => {
+        const snapshot = readCurrentProjectionSnapshot(
+          database,
+          {
+            agentId: target.agentId,
+            sessionId: target.sessionId,
+            sessionKey: target.sessionKey,
+            databaseAgentId: databaseTarget.agentId,
+            path: databaseTarget.path,
+          },
+          (projection) =>
+            readRecentSessionTranscriptHistoryEventsFromProjection(projection, options),
+        );
+        if (snapshot.kind === "unavailable") {
+          throw new SessionTranscriptProjectionUnavailableError(target.sessionId);
         }
-        return readBoundedSessionPreviewItems(maxItems, (maxEvents, maxBytes) => {
-          const snapshot = readCurrentProjectionSnapshot(
-            database,
-            {
-              agentId: target.agentId,
-              sessionId: target.sessionId,
-              sessionKey: target.sessionKey,
-              databaseAgentId: databaseTarget.agentId,
-              path: databaseTarget.path,
-            },
-            (projection) =>
-              readRecentSessionTranscriptHistoryEventsFromProjection(projection, {
-                maxBytes,
-                maxLines: maxEvents,
-                maxMessages: maxEvents,
-              }),
-          );
-          if (snapshot.kind === "unavailable") {
-            throw new SessionTranscriptProjectionUnavailableError(target.sessionId);
-          }
-          const page = snapshot.value;
-          return {
-            items: buildSessionPreviewItems(
-              page.events.map((entry) => asOptionalRecord(entry.event)?.message),
-              maxItems,
-              maxChars,
-            ),
-            hasOlderEvents: page.totalMessages > page.events.length,
-          };
-        });
-      }),
-    { ...databaseTarget, ...(env ? { env } : {}) },
-  );
+        return snapshot.value;
+      });
+    });
+  if (retainedDatabase) {
+    return read(retainedDatabase);
+  }
+  const result = withScopedOpenClawAgentDatabaseReadOnly(read, {
+    ...databaseTarget,
+    ...(env ? { env } : {}),
+  });
   if (!result.found) {
     throw new SessionTranscriptStorageUnavailableError();
   }

@@ -10,6 +10,7 @@ import { prepareUpdateFailureReport } from "../../infra/update-failure-report-pr
 import * as updateGlobal from "../../infra/update-global.js";
 import * as ledger from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import * as exec from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { expectGitMetadataPreview } from "../update-cli-invocation.test-support.js";
@@ -19,9 +20,125 @@ import { updateStatusCommand } from "./status.js";
 import { installFreshUpdateFixture, targetMetadata } from "./update-command-fresh.test-support.js";
 import * as packageUpdate from "./update-command-package.js";
 import * as commandRun from "./update-command-run.js";
+import { resolveUpdateCommandTarget } from "./update-command-target.js";
 import { updateCommand } from "./update-command.js";
 
+vi.mock("../../version.js", () => ({ VERSION: "2026.9.7" }));
+
 const { fixture } = installFreshUpdateFixture();
+
+it.each([
+  { manager: "pnpm", name: "default", requests: ["latest"] },
+  { manager: "npm", name: "tag", tag: "preview", requests: ["preview"] },
+  { manager: "npm", name: "beta", channel: "beta", requests: ["beta", "latest"] },
+  { manager: "pnpm", name: "beta fallback", channel: "beta", requests: ["beta", "latest"] },
+  { manager: "npm", name: "numeric", tag: "2026.9.4", requests: ["2026.9.4"] },
+  { manager: "pnpm", name: "tarball", tag: "./candidate.tgz", requests: [] },
+  { manager: "pnpm", name: "moving override", requests: ["latest", "2026.9.4"] },
+])("resolves $manager $name with paired metadata and bounded requests", async (entry) => {
+  vi.mocked(shared.resolveTargetVersion).mockRestore();
+  vi.mocked(updateCheck.resolveNpmChannelTag).mockRestore();
+  vi.mocked(packageMetadata.fetchNpmPackageTargetStatus).mockRestore();
+  const manager = entry.manager === "npm" ? "npm" : "pnpm";
+  vi.mocked(shared.resolveGlobalManager).mockResolvedValue(manager);
+  vi.mocked(updateGlobal.resolveGlobalInstallTarget).mockResolvedValue({
+    manager,
+    command: "/selected/npm",
+    globalRoot: path.dirname(fixture.root),
+    packageRoot: fixture.root,
+    ...(manager === "npm"
+      ? { npmOwner: { version: "11.10.0", lifecyclePolicy: "unflagged" as const } }
+      : {}),
+  });
+  const env = { ...process.env, NPM_CONFIG_REGISTRY: "https://registry.example.test/" };
+  const override = entry.name.includes("override");
+  if (override) {
+    vi.stubEnv("OPENCLAW_UPDATE_PACKAGE_SPEC", "openclaw@latest");
+  }
+  vi.mocked(updateGlobal.createGlobalInstallEnv).mockResolvedValue(env);
+  const requests: string[] = [];
+  const respond = (tag: string) => {
+    requests.push(tag);
+    const version =
+      tag === "beta"
+        ? entry.name === "beta fallback"
+          ? "2026.9.3-beta.1"
+          : "2026.9.5-beta.1"
+        : /^\d/.test(tag)
+          ? tag
+          : "2026.9.4";
+    return {
+      // A mutable package override can move after target selection.
+      version: override && requests.length > 1 ? "2026.9.6" : version,
+      engines: { node: tag === "beta" ? ">=24.0.0" : ">=22.0.0" },
+      openclaw: { schemaVersions: { state: tag === "beta" ? 18 : 17, agent: 19 } },
+    };
+  };
+  const spawn = vi
+    .spyOn(exec, "runCommandWithTimeout")
+    .mockImplementation(async (argv, options) => {
+      expect(argv.slice(0, 2)).toEqual(["/selected/npm", "view"]);
+      expect(typeof options === "number" ? undefined : options.env?.NPM_CONFIG_REGISTRY).toBe(
+        env.NPM_CONFIG_REGISTRY,
+      );
+      return {
+        code: 0,
+        stdout: JSON.stringify(respond(argv[2]!.split("@").at(-1)!)),
+        stderr: "",
+        signal: null,
+        killed: false,
+        termination: "exit",
+      };
+    });
+  const fetch = vi.fn<typeof globalThis.fetch>(async (input) => {
+    const url = new URL(input instanceof Request ? input.url : input);
+    return Response.json(respond(url.pathname.split("/").at(-1)!));
+  });
+  vi.stubGlobal("fetch", fetch);
+  try {
+    const opts = { tag: entry.tag, channel: entry.channel, dryRun: true, json: true };
+    const prepared = await commandRun.prepareUpdateCommand(opts);
+    if (!prepared) {
+      throw new Error("fixture preparation failed");
+    }
+    const pending = resolveUpdateCommandTarget(
+      opts,
+      { triageTarget: { root: fixture.root, env } },
+      process.cwd(),
+      {
+        ...prepared,
+        requestedChannel: entry.channel === "beta" ? "beta" : null,
+      },
+      { enter: vi.fn() },
+      5000,
+    );
+    if (override) {
+      await expect(pending).rejects.toMatchObject({
+        result: { reason: "target-metadata-preflight" },
+      });
+    }
+    const result = override ? undefined : await pending;
+    expect(requests).toEqual(entry.requests);
+    expect(spawn).toHaveBeenCalledTimes(manager === "npm" ? entry.requests.length : 0);
+    expect(fetch).toHaveBeenCalledTimes(manager === "pnpm" ? entry.requests.length : 0);
+    if (override) {
+      expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
+    } else if (entry.name === "tarball") {
+      expect(result).toMatchObject({ targetVersion: null, packageInstallSpec: "./candidate.tgz" });
+    } else {
+      const beta = entry.name === "beta";
+      const version = beta ? "2026.9.5-beta.1" : "2026.9.4";
+      expect(result).toMatchObject({
+        targetVersion: version,
+        packageInstallSpec: `openclaw@${version}`,
+        packageRuntimeTarget: { version, nodeEngine: beta ? ">=24.0.0" : ">=22.0.0" },
+        packageTargetSchemaVersions: { state: beta ? 18 : 17, agent: 19 },
+      });
+    }
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
 
 function readPrintedFailureReport() {
   expect(defaultRuntime.writeJson).toHaveBeenCalledOnce();
@@ -32,25 +149,33 @@ function readPrintedFailureReport() {
   return { result, markdown: fs.readFileSync(result.reportPath, "utf8") };
 }
 
-it.each(["cause", "aggregate", "suppressed", "structured"] as const)(
-  "keeps private exception identities out of reports across %s edges",
-  async (edge) => {
-    openOpenClawStateDatabase();
+it.each([
+  { kind: "graph", edge: "cause" },
+  { kind: "graph", edge: "aggregate" },
+  { kind: "graph", edge: "suppressed" },
+  { kind: "graph", edge: "structured" },
+  { kind: "metadata", diagnosticWriteFails: false, metadata: null },
+  { kind: "metadata", diagnosticWriteFails: true, metadata: null },
+  { kind: "metadata", diagnosticWriteFails: false, metadata: "constructor" },
+  { kind: "metadata", diagnosticWriteFails: false, metadata: "stack" },
+  { kind: "metadata", diagnosticWriteFails: false, metadata: "message" },
+] as const)("reports sanitized unexpected exceptions: %j", async (entry) => {
+  openOpenClawStateDatabase();
+  let error: Error;
+  let privateValues: string[];
+  if (entry.kind === "graph") {
     const detail =
       "Connection refused token=synthetic-nested-secret at /home/operator/private/npmrc on registry.private.example";
     const leaf = Object.assign(
       new Error(detail, {
         cause: Object.assign(new Error("Socket closed"), { code: "ECONNRESET" }),
       }),
-      {
-        name: "PrivateLeafError",
-        code: "PRIVATE_LEAF_CODE",
-      },
+      { name: "PrivateLeafError", code: "PRIVATE_LEAF_CODE" },
     );
     const cause =
-      edge === "aggregate"
+      entry.edge === "aggregate"
         ? new AggregateError([leaf], "Transport failed")
-        : edge === "suppressed"
+        : entry.edge === "suppressed"
           ? Object.assign(new Error("Transport failed"), {
               name: "SuppressedError",
               error: leaf,
@@ -58,94 +183,40 @@ it.each(["cause", "aggregate", "suppressed", "structured"] as const)(
                 code: "PRIVATE_CLEANUP_CODE",
               }),
             })
-          : edge === "structured"
+          : entry.edge === "structured"
             ? { message: "Transport failed", name: "PrivateObjectError", cause: leaf }
             : new Error("Transport failed", { cause: leaf });
     Object.assign(cause, { code: "PRIVATE_NESTED_CODE" });
-    const error = Object.assign(new TypeError("Lookup failed", { cause }), {
+    error = Object.assign(new TypeError("Lookup failed", { cause }), {
       name: "PrivateRootError",
       code: "EACCES",
       error: "PRIVATE_NON_CAUSE",
       errors: ["PRIVATE_NON_AGGREGATE"],
       suppressed: "PRIVATE_NOT_SUPPRESSED",
     });
-    vi.spyOn(shared, "resolveTargetVersion").mockRejectedValueOnce(error);
-
-    await expect(
-      updateCommand({ tag: "2026.9.2", dryRun: true, json: true, restart: false }),
-    ).rejects.toMatchObject({ name: "ExitError", code: 1 });
-    const printed = readPrintedFailureReport();
-    expect(printed.result).toMatchObject({
-      status: "error",
-      reason: "update-failed",
-      steps: expect.arrayContaining([
-        expect.objectContaining({
-          failureFacts: [
-            expect.objectContaining({
-              code: "EACCES",
-              message: expect.stringContaining("Lookup failed"),
-            }),
-          ],
-        }),
-      ]),
-    });
-    expect(printed.markdown).toContain("Lookup failed");
-    expect(printed.markdown).toContain("OpenClaw update failed");
-    const recordedRun = ledger.listUpdateRuns()[0];
-    const report = await prepareUpdateFailureReport({
-      attemptId: recordedRun!.runId,
-      recordedRun,
-      result: { status: "error", mode: "unknown", steps: [], durationMs: 0 },
-    });
-    expect(report.body).toContain("EACCES");
-    expect(report.body).toContain("ECONNRESET");
-    expect(report.body).toContain("Transport failed");
-    expect(report.body).toContain("Connection refused");
-    for (const output of [
-      report.body,
-      JSON.stringify(recordedRun),
-      JSON.stringify(printed.result),
-      printed.markdown,
-    ]) {
-      for (const privateText of [
-        "PRIVATE_",
-        "PrivateLeafError",
-        "PrivateObjectError",
-        "PrivateRootError",
-        "synthetic-nested-secret",
-        "/home/operator",
-        "registry.private.example",
-      ]) {
-        expect(output).not.toContain(privateText);
-      }
-    }
-  },
-);
-
-it.each([
-  { diagnosticWriteFails: false, metadata: null },
-  { diagnosticWriteFails: true, metadata: null },
-  { diagnosticWriteFails: false, metadata: "constructor" },
-  { diagnosticWriteFails: false, metadata: "stack" },
-  { diagnosticWriteFails: false, metadata: "message" },
-] as const)(
-  "reports an unexpected exception with diagnostic write failure=$diagnosticWriteFails, metadata=$metadata",
-  async ({ diagnosticWriteFails, metadata }) => {
-    openOpenClawStateDatabase();
+    privateValues = [
+      "PRIVATE_",
+      "PrivateLeafError",
+      "PrivateObjectError",
+      "PrivateRootError",
+      "synthetic-nested-secret",
+      "/home/operator",
+      "registry.private.example",
+    ];
+  } else {
     const detail =
       "Target response was invalid for alice@example.com host=private-gateway on 10.20.30.40 registry.private.example token=synthetic-secret at '/home/operator/private/npmrc'";
-    const error = new TypeError(diagnosticWriteFails ? "" : detail, { cause: new Error(detail) });
+    error = new TypeError(entry.diagnosticWriteFails ? "" : detail, { cause: new Error(detail) });
     error.name = "PrivateTenantError";
     error.stack = `${error.name}: ${error.message}\n    at lookup (/home/operator/node_modules/dependency/index.js:2:3)\n    at privatePlugin (/home/operator/private-project/src/private-plugin.ts:4:3)\n    at resolveTargetVersion (${path.resolve("src/cli/update-cli/shared.ts")}:101:9)`;
-    if (metadata) {
-      Object.defineProperty(error, metadata, {
+    if (entry.metadata) {
+      Object.defineProperty(error, entry.metadata, {
         get() {
           throw new Error("exception metadata is unavailable");
         },
       });
     }
-    vi.spyOn(shared, "resolveTargetVersion").mockRejectedValueOnce(error);
-    if (diagnosticWriteFails) {
+    if (entry.diagnosticWriteFails) {
       vi.spyOn(
         await import("../../infra/update-run-verification.js"),
         "recordUpdateRunVerificationRecord",
@@ -155,52 +226,7 @@ it.each([
         });
       });
     }
-
-    await expect(
-      updateCommand({ tag: "2026.9.2", dryRun: true, json: true, restart: false }),
-    ).rejects.toMatchObject({ name: "ExitError", code: 1 });
-    const printed = readPrintedFailureReport();
-    expect(printed.result).toMatchObject({
-      status: "error",
-      reason: "update-failed",
-      steps: expect.arrayContaining([
-        expect.objectContaining({
-          failureFacts: [
-            expect.objectContaining({
-              check: "target-resolution",
-              errorName: metadata === "constructor" ? "Error" : "TypeError",
-              message: expect.stringContaining("Target response was invalid"),
-            }),
-          ],
-        }),
-      ]),
-    });
-    expect(printed.markdown).toContain("Target response was invalid");
-    const recordedRun = ledger.listUpdateRuns()[0];
-    expect(recordedRun).toBeDefined();
-    const report = await prepareUpdateFailureReport({
-      attemptId: recordedRun!.runId,
-      recordedRun,
-      result: { status: "error", mode: "unknown", steps: [], durationMs: 0 },
-    });
-    expect(report.body).toContain("Failed phase: target-resolution");
-    expect(report.body).toContain("Update mode: package");
-    expect(report.body).toContain("Update target: 2026.9.2");
-    expect(report.body).toContain("Update action: CLI command: openclaw update");
-    expect(report.body).toContain("Installation method: npm-global");
-    expect(report.body).toContain(metadata === "constructor" ? "(Error)" : "TypeError");
-    expect(report.body).toContain("Target response was invalid");
-    if (!metadata) {
-      expect(report.body).toContain("src/cli/update-cli/shared.ts:101:9");
-    }
-    if (diagnosticWriteFails) {
-      expect(defaultRuntime.error).toHaveBeenCalledWith(
-        expect.stringContaining("Update diagnostics could not be recorded"),
-      );
-    } else {
-      expect(report.body).toContain("Rollback outcome: not needed");
-    }
-    for (const value of [
+    privateValues = [
       "synthetic-secret",
       "/home/operator",
       "registry.private.example",
@@ -209,14 +235,80 @@ it.each([
       "10.20.30.40",
       "private-plugin",
       "PrivateTenantError",
-    ]) {
-      expect(report.body).not.toContain(value);
-      expect(JSON.stringify(recordedRun)).not.toContain(value);
-      expect(JSON.stringify(printed.result)).not.toContain(value);
-      expect(printed.markdown).not.toContain(value);
+    ];
+  }
+  vi.spyOn(shared, "resolveTargetVersion").mockRejectedValueOnce(error);
+  await expect(
+    updateCommand({ tag: "2026.9.2", dryRun: true, json: true, restart: false }),
+  ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+  const printed = readPrintedFailureReport();
+  const message = entry.kind === "graph" ? "Lookup failed" : "Target response was invalid";
+  expect(printed.result).toMatchObject({
+    status: "error",
+    reason: "update-failed",
+    steps: expect.arrayContaining([
+      expect.objectContaining({
+        failureFacts: [
+          expect.objectContaining({
+            ...(entry.kind === "graph"
+              ? { code: "EACCES" }
+              : {
+                  check: "target-resolution",
+                  errorName: entry.metadata === "constructor" ? "Error" : "TypeError",
+                }),
+            message: expect.stringContaining(message),
+          }),
+        ],
+      }),
+    ]),
+  });
+  expect(printed.markdown).toContain(message);
+  const recordedRun = ledger.listUpdateRuns()[0];
+  expect(recordedRun).toBeDefined();
+  const report = await prepareUpdateFailureReport({
+    attemptId: recordedRun!.runId,
+    recordedRun,
+    result: { status: "error", mode: "unknown", steps: [], durationMs: 0 },
+  });
+  if (entry.kind === "graph") {
+    expect(printed.markdown).toContain("OpenClaw update failed");
+    for (const text of ["EACCES", "ECONNRESET", "Transport failed", "Connection refused"]) {
+      expect(report.body).toContain(text);
     }
-  },
-);
+  } else {
+    for (const text of [
+      "Failed phase: target-resolution",
+      "Update mode: package",
+      "Update target: 2026.9.2",
+      "Update action: CLI command: openclaw update",
+      "Installation method: npm-global",
+      entry.metadata === "constructor" ? "(Error)" : "TypeError",
+      "Target response was invalid",
+    ]) {
+      expect(report.body).toContain(text);
+    }
+    if (!entry.metadata) {
+      expect(report.body).toContain("src/cli/update-cli/shared.ts:101:9");
+    }
+    if (entry.diagnosticWriteFails) {
+      expect(defaultRuntime.error).toHaveBeenCalledWith(
+        expect.stringContaining("Update diagnostics could not be recorded"),
+      );
+    } else {
+      expect(report.body).toContain("Rollback outcome: not needed");
+    }
+  }
+  for (const output of [
+    report.body,
+    JSON.stringify(recordedRun),
+    JSON.stringify(printed.result),
+    printed.markdown,
+  ]) {
+    for (const privateText of privateValues) {
+      expect(output).not.toContain(privateText);
+    }
+  }
+});
 
 const privateDiagnostic = "registry.internal.example /private/operator/npmrc";
 const cases = [
@@ -273,17 +365,19 @@ it.each(cases)(
     ).rejects.toMatchObject({ code: 1 });
 
     const result = vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0] as UpdateRunResult;
+    const metadataFailure = expect.objectContaining({
+      name: "target-metadata-preflight",
+      exitCode: 1,
+      failureFacts: [expect.objectContaining({ code, message: expect.stringMatching(detail) })],
+    });
     expect(result).toMatchObject({
       status: "error",
       mode: "npm",
       reason: "target-metadata-preflight",
-      steps: [
-        expect.objectContaining({
-          failureFacts: [expect.objectContaining({ code, message: expect.stringMatching(detail) })],
-        }),
-      ],
+      failedStep: metadataFailure,
+      steps: expect.arrayContaining([metadataFailure]),
     });
-    const message = result.steps[0]?.failureFacts?.[0]?.message;
+    const message = result.failedStep?.failureFacts?.[0]?.message;
     expect(message).toMatch(/openclaw update/);
     const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
     await printResult(result, {});
@@ -301,83 +395,79 @@ it.each(cases)(
   },
 );
 
-it("keeps metadata failure details in update status JSON for an existing profile", async () => {
-  openOpenClawStateDatabase();
-  vi.mocked(packageMetadata.fetchNpmPackageTargetStatus).mockResolvedValue({
-    ...targetMetadata,
-    version: null,
-    error: privateDiagnostic,
-  });
-  await expect(
-    updateCommand({ tag: "2026.9.2", yes: true, json: true, restart: false }),
-  ).rejects.toMatchObject({ code: 1 });
-
-  vi.spyOn(shared, "resolveUpdateRoot").mockResolvedValue(fixture.root);
-  vi.spyOn(nodeRuntimeDiagnostics, "collectNodeRuntimeFindings").mockResolvedValue([]);
-  vi.spyOn(updateCheck, "checkUpdateStatus").mockResolvedValue({
-    root: fixture.root,
-    installKind: "package",
-    packageManager: "npm",
-    registry: { latestVersion: "2026.9.2" },
-  });
-  await updateStatusCommand({ json: true });
-  expect(defaultRuntime.writeJson).toHaveBeenLastCalledWith(
-    expect.objectContaining({
-      lastRun: expect.objectContaining({
-        status: "failed",
-        reason: "target-metadata-preflight",
-        origin: expect.objectContaining({ nextAction: expect.stringContaining("openclaw update") }),
-        steps: expect.arrayContaining([
-          expect.objectContaining({
-            failureFacts: [
-              expect.objectContaining({
-                code: "target-registry-metadata",
-                message: expect.stringMatching(/registry[\s\S]*openclaw update/i),
-              }),
-            ],
-          }),
-        ]),
-      }),
-    }),
-  );
-  expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
-});
-
-it.each(["npm", "pnpm", "bun"] as const)(
-  "keeps the %s owner visible when target policy refuses before version lookup",
-  async (manager) => {
+it.each(["metadata", "target policy"] as const)(
+  "preserves update status after %s admission failure for an existing profile",
+  async (failure) => {
+    const manager = failure === "metadata" ? "npm" : "bun";
+    const tag = failure === "metadata" ? "2026.9.2" : "main";
     openOpenClawStateDatabase();
-    vi.spyOn(updateGlobal, "detectGlobalInstallManagerForRoot").mockResolvedValue(manager);
+    if (failure === "metadata") {
+      vi.mocked(packageMetadata.fetchNpmPackageTargetStatus).mockResolvedValue({
+        ...targetMetadata,
+        version: null,
+        error: privateDiagnostic,
+      });
+    } else {
+      vi.spyOn(updateGlobal, "detectGlobalInstallManagerForRoot").mockResolvedValue(manager);
+    }
     await expect(
-      updateCommand({ tag: "main", json: true, yes: true, restart: false }),
+      updateCommand({ tag, yes: true, json: true, restart: false }),
     ).rejects.toMatchObject({ code: 1 });
-    const result = vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0] as UpdateRunResult;
-    expect(result).toMatchObject({
-      status: "error",
-      mode: manager,
-      reason: "unsupported-package-target",
-    });
-    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
-    await printResult(result, {});
-    expect(log.mock.calls.flat().join("\n")).toContain(`Update mode: ${manager}`);
-    const report = await prepareUpdateFailureReport({ attemptId: "target-policy", result });
-    expect(report.body).toContain(`Update mode: ${manager}`);
-
+    if (failure === "target policy") {
+      const result = vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0] as UpdateRunResult;
+      expect(result).toMatchObject({
+        status: "error",
+        mode: manager,
+        reason: "unsupported-package-target",
+      });
+      const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
+      await printResult(result, {});
+      expect(log.mock.calls.flat().join("\n")).toContain(`Update mode: ${manager}`);
+      const report = await prepareUpdateFailureReport({ attemptId: "target-policy", result });
+      expect(report.body).toContain(`Update mode: ${manager}`);
+    }
     vi.spyOn(shared, "resolveUpdateRoot").mockResolvedValue(fixture.root);
     vi.spyOn(nodeRuntimeDiagnostics, "collectNodeRuntimeFindings").mockResolvedValue([]);
     vi.spyOn(updateCheck, "checkUpdateStatus").mockResolvedValue({
       root: fixture.root,
       installKind: "package",
       packageManager: manager,
+      ...(failure === "metadata" ? { registry: { latestVersion: "2026.9.2" } } : {}),
     });
     await updateStatusCommand({ json: true });
     expect(defaultRuntime.writeJson).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        update: expect.objectContaining({ packageManager: manager }),
-        lastRun: expect.objectContaining({ target: expect.objectContaining({ kind: "package" }) }),
-      }),
+      expect.objectContaining(
+        failure === "metadata"
+          ? {
+              lastRun: expect.objectContaining({
+                status: "failed",
+                reason: "target-metadata-preflight",
+                origin: expect.objectContaining({
+                  nextAction: expect.stringContaining("openclaw update"),
+                }),
+                steps: expect.arrayContaining([
+                  expect.objectContaining({
+                    failureFacts: [
+                      expect.objectContaining({
+                        code: "target-registry-metadata",
+                        message: expect.stringMatching(/registry[\s\S]*openclaw update/i),
+                      }),
+                    ],
+                  }),
+                ]),
+              }),
+            }
+          : {
+              update: expect.objectContaining({ packageManager: manager }),
+              lastRun: expect.objectContaining({
+                target: expect.objectContaining({ kind: "package" }),
+              }),
+            },
+      ),
     );
-    expect(packageMetadata.fetchNpmPackageTargetStatus).not.toHaveBeenCalled();
+    if (failure === "target policy") {
+      expect(packageMetadata.fetchNpmPackageTargetStatus).not.toHaveBeenCalled();
+    }
     expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
   },
 );

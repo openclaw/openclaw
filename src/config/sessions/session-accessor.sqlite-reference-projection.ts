@@ -55,6 +55,9 @@ export const usableSessionReferenceProjection =
         OR coalesce(json_type(value, '$.sessionId'), 'null') NOT IN ('text', 'null')
         OR coalesce(json_type(value, '$.preCompaction.sessionId'), 'null') NOT IN ('text', 'null')
         OR coalesce(json_type(value, '$.postCompaction.sessionId'), 'null') NOT IN ('text', 'null')
+        OR coalesce(json_type(value, '$.preCompaction.sessionFile'), 'null') NOT IN ('text', 'null')
+        OR coalesce(json_type(value, '$.postCompaction.sessionFile'), 'null') NOT IN ('text', 'null')
+        OR coalesce(json_type(value, '$.postCompaction.entryId'), 'null') NOT IN ('text', 'null')
         ELSE 1 END
     )
     AND NOT EXISTS (

@@ -1,13 +1,9 @@
 import type { AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveCodexAppServerPreparedAuthHandoff } from "./auth-bridge.js";
+import { resolveCodexBoundedTurnIsolation } from "./bounded-turn-isolation.js";
 import { runBoundedCodexAppServerTurn, type CodexBoundedTurnOptions } from "./bounded-turn.js";
-import {
-  readCodexPluginConfig,
-  resolveCodexAppServerHomeScope,
-  resolveCodexAppServerRuntimeOptions,
-} from "./config.js";
+import { readCodexPluginConfig, resolveCodexAppServerHomeScope } from "./config.js";
 import { createAttributedCodexAssistantMessage } from "./event-projector-assistant-message.js";
-import { isCodexAppServerProxyLaunch } from "./launch-args.js";
 import { assertCodexPassiveTurnItems } from "./protocol-validators.js";
 
 type CodexIsolatedCompletionParams = Parameters<
@@ -29,11 +25,6 @@ export async function runCodexIsolatedCompletion(
   }
   const pluginConfig = readCodexPluginConfig(options.pluginConfig);
   const homeScope = resolveCodexAppServerHomeScope({ appServer: pluginConfig.appServer });
-  const { start } = resolveCodexAppServerRuntimeOptions({ pluginConfig: options.pluginConfig });
-  const privateStdio =
-    start.transport === "stdio" &&
-    homeScope === "agent" &&
-    !isCodexAppServerProxyLaunch(start.args);
   const authRequirement = authorization.plan.modelRoute?.authRequirement;
   const authHandoff = await resolveCodexAppServerPreparedAuthHandoff({
     authRequirement,
@@ -69,7 +60,7 @@ export async function runCodexIsolatedCompletion(
     developerInstructions: params.systemPrompt,
     input: [{ type: "text", text: params.prompt, text_elements: [] }],
     requiredModalities: ["text"],
-    isolation: privateStdio ? "private-stdio" : "configured-transport",
+    isolation: resolveCodexBoundedTurnIsolation(options),
     requireNoExternalCapabilities: true,
     allowEmptyText: params.outputTextPolicy === "strict-visible",
   });

@@ -139,7 +139,7 @@ it(
               skipBootstrap: true,
               model: { primary: "stream-fixture/stream-fixture" },
             },
-            entries: { main: { default: true } },
+            entries: { main: {} },
           },
           models: {
             mode: "replace",

@@ -17,20 +17,6 @@ describe("loadVitestPerformanceConfig", () => {
     });
   });
 
-  it("enables the filesystem module cache explicitly", () => {
-    expect(
-      loadVitestPerformanceConfig(
-        {
-          OPENCLAW_VITEST_FS_MODULE_CACHE: "1",
-        },
-        "linux",
-      ),
-    ).toEqual({
-      fsModuleCache: true,
-      fsModuleCachePath: path.join(process.cwd(), ".cache", "vitest", "default"),
-    });
-  });
-
   it("passes through the filesystem module cache path when provided", () => {
     expect(
       loadVitestPerformanceConfig(

@@ -1,9 +1,5 @@
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import {
-  renderMessagePresentationFallbackText,
-  type MessagePresentation,
-} from "openclaw/plugin-sdk/interactive-runtime";
-// Codex plugin module implements command plugins management behavior.
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "./app-server/config.js";
@@ -11,7 +7,10 @@ import { isOpenAiCuratedMarketplaceName } from "./app-server/plugin-inventory.js
 import type { v2 } from "./app-server/protocol.js";
 import { assertCodexHostOwnerCurrent, canMutateCodexHost } from "./command-authorization.js";
 import { formatCodexDisplayText } from "./command-formatters.js";
-import { buildCodexPluginAppLinks } from "./command-plugin-app-links.js";
+import {
+  buildCodexPluginAppLinks,
+  buildCodexPluginStatusButtons,
+} from "./command-plugin-app-links.js";
 import {
   describeConfiguredPluginIdentityConflict,
   marketplaceNamesRepresentSameCatalog,
@@ -33,6 +32,7 @@ import {
 import type { CodexPluginCommandContext } from "./command-plugins-runtime.js";
 import {
   buildCodexCommandPickerPresentation,
+  buildCodexPresentationReply,
   type CodexCommandPickerButton,
 } from "./command-presentation.js";
 import {
@@ -67,27 +67,21 @@ export async function handleCodexPluginsSubcommand(
   const [verb = "list", ...args] = rest;
   const normalized = verb.toLowerCase();
 
+  if (["menu", "help", "list"].includes(normalized) && args.length > 0) {
+    return { text: `Usage: /codex plugins ${normalized}` };
+  }
   if (normalized === "menu") {
-    if (args.length > 0) {
-      return { text: "Usage: /codex plugins menu" };
-    }
     return buildPluginsMenuReply();
   }
 
   if (normalized === "help") {
-    if (args.length > 0) {
-      return { text: "Usage: /codex plugins help" };
-    }
     return { text: buildPluginsHelp() };
   }
 
   if (normalized === "list") {
-    if (args.length > 0) {
-      return { text: "Usage: /codex plugins list" };
-    }
     const current = await io.readConfig();
     return {
-      text: formatPluginList(current.plugins ?? {}, { globalEnabled: current.enabled === true }),
+      text: formatPluginList(current.plugins ?? {}, current.enabled === true),
     };
   }
 
@@ -130,7 +124,7 @@ export async function handleCodexPluginsSubcommand(
       return formatCodexAvailablePlugins(discovered.plugins, discovered.warnings, query, page);
     } catch (error) {
       return {
-        text: `Could not list Codex plugins: ${formatCodexDisplayText(errorMessage(error))}`,
+        text: `Could not list Codex plugins: ${formatCodexDisplayText(coerceErrorMessage(error))}`,
       };
     }
   }
@@ -398,7 +392,7 @@ async function installCodexPlugin(
     }
   } catch (error) {
     return {
-      text: `Could not verify the requested Codex plugin: ${formatCodexDisplayText(errorMessage(error))}`,
+      text: `Could not verify the requested Codex plugin: ${formatCodexDisplayText(coerceErrorMessage(error))}`,
     };
   }
 
@@ -435,7 +429,7 @@ async function installCodexPlugin(
     }
   } catch (error) {
     return {
-      text: `Could not verify existing Codex plugin authorization: ${formatCodexDisplayText(errorMessage(error))}`,
+      text: `Could not verify existing Codex plugin authorization: ${formatCodexDisplayText(coerceErrorMessage(error))}`,
     };
   }
 
@@ -459,7 +453,7 @@ async function installCodexPlugin(
       result = await runtime.install(requestParams);
     } catch (error) {
       return {
-        text: `Could not install ${formatCodexDisplayText(requestedId)}: ${formatCodexDisplayText(errorMessage(error))}`,
+        text: `Could not install ${formatCodexDisplayText(requestedId)}: ${formatCodexDisplayText(coerceErrorMessage(error))}`,
       };
     }
   }
@@ -499,7 +493,7 @@ async function installCodexPlugin(
     );
   } catch (error) {
     return {
-      text: `${formatCodexDisplayText(requestedId)} was installed in Codex but could not be authorized in OpenClaw and will not be exposed: ${formatCodexDisplayText(errorMessage(error))}`,
+      text: `${formatCodexDisplayText(requestedId)} was installed in Codex but could not be authorized in OpenClaw and will not be exposed: ${formatCodexDisplayText(coerceErrorMessage(error))}`,
     };
   }
 
@@ -511,7 +505,7 @@ async function installCodexPlugin(
         .map((diagnostic) => ` ${formatCodexDisplayText(diagnostic.message)}`)
         .join("");
     } catch (error) {
-      refreshWarning = ` Runtime refresh requires a new conversation: ${formatCodexDisplayText(errorMessage(error))}`;
+      refreshWarning = ` Runtime refresh requires a new conversation: ${formatCodexDisplayText(coerceErrorMessage(error))}`;
     }
   }
 
@@ -542,7 +536,7 @@ async function installCodexPlugin(
       appsNeedingAuth.length === 1
         ? "1 app still requires"
         : `${appsNeedingAuth.length} apps still require`;
-    const presentation: MessagePresentation = {
+    return buildCodexPresentationReply({
       title: "Codex plugin app setup",
       tone: "warning",
       blocks: [
@@ -559,34 +553,10 @@ async function installCodexPlugin(
               },
             ]
           : []),
-        {
-          type: "buttons",
-          buttons: [
-            ...(appLinks.length > 0
-              ? [
-                  {
-                    label: "Refresh hosted apps",
-                    action: { type: "command" as const, command: "/codex plugins refresh" },
-                  },
-                ]
-              : []),
-            {
-              label: "Check status",
-              action: {
-                type: "command",
-                command: `/codex plugins status ${requestedId}`,
-              },
-            },
-          ],
-        },
+        buildCodexPluginStatusButtons(requestedId, appLinks.length > 0),
         { type: "context", text: `${refreshWarning.trim()} ${POLICY_REFRESH_HINT}`.trim() },
       ],
-    };
-    return {
-      text: renderMessagePresentationFallbackText({ presentation }),
-      presentation,
-      presentationTextMode: "fallback",
-    };
+    });
   }
 
   const status = alreadyInstalled
@@ -597,15 +567,10 @@ async function installCodexPlugin(
   };
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 function formatPluginList(
   plugins: Record<string, CodexPluginConfigEntry>,
-  options: { globalEnabled?: boolean } = {},
+  globalEnabled: boolean,
 ): string {
-  const globalEnabled = options.globalEnabled === true;
   const keys = Object.keys(plugins).toSorted();
   if (keys.length === 0) {
     return "No Codex sub-plugins configured under plugins.entries.codex.config.codexPlugins.plugins";

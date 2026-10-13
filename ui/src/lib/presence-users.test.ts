@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import {
   hasSessionPresenceViewers,
   presenceUserLabel,
+  presenceViewerActivity,
   projectOnlinePresenceViewers,
   projectPresencePayload,
   projectPresenceViewers,
@@ -75,7 +76,7 @@ it("isolates namespaces while merging renamed tabs and excluding disconnected fa
 });
 
 it.each([true, false])(
-  "excludes only self's current namespace for an unchanged payload (profile: %s)",
+  "excludes self only from session viewers, not the online roster (profile: %s)",
   (qualified) => {
     const id = "synthetic-shared-id";
     const profile = { id, identity: { type: "profile" as const, id }, name: "Same label" };
@@ -91,13 +92,13 @@ it.each([true, false])(
     const instance = qualified ? "profile-tab" : "raw-tab";
     const otherSession = qualified ? "raw-session" : "profile-session";
     // An unchanged payload must still exclude the current self qualification.
-    projectOnlinePresenceViewers(payload, other);
+    projectPresenceViewers(payload, other);
     for (const [explicitSelf, fallbackInstance] of [
       [self, undefined],
       [undefined, instance],
       [self, qualified ? "raw-tab" : "profile-tab"],
     ] as const) {
-      const viewers = projectOnlinePresenceViewers(payload, explicitSelf, fallbackInstance);
+      const viewers = projectPresenceViewers(payload, explicitSelf, fallbackInstance);
       expect(viewers).toHaveLength(1);
       expect(viewers[0]?.identity).toEqual(other.identity);
       expect(hasSessionPresenceViewers(payload, explicitSelf, fallbackInstance, otherSession)).toBe(
@@ -113,6 +114,10 @@ it.each([true, false])(
       ).toBe(false);
     }
     expect(projectOnlinePresenceViewers(payload).map((user) => user.identity)).toEqual([
+      profile.identity,
+      undefined,
+    ]);
+    expect(projectPresenceViewers(payload, null, instance).map((user) => user.identity)).toEqual([
       profile.identity,
       undefined,
     ]);
@@ -144,4 +149,39 @@ it.each([
   expect(viewers.map((user) => user.identity)).toEqual(
     identity?.type === "profile" ? [undefined] : [payload.presence[0]!.user.identity, undefined],
   );
+});
+
+it("ages person interaction independently of connection beacons and native input recency", () => {
+  const now = 1_000_000;
+  const viewer = (entries: Parameters<typeof presenceViewerActivity>[0]["entries"]) => ({
+    id: "person",
+    watchedSessions: [],
+    entries,
+  });
+  expect(presenceViewerActivity(viewer([{ ts: now, lastInputSeconds: 0 }]), now)).toBe("unknown");
+  expect(presenceViewerActivity(viewer([{ ts: now, lastActivityAt: now - 120_000 }]), now)).toBe(
+    "idle",
+  );
+  expect(presenceViewerActivity(viewer([{ ts: now, lastActivityAt: now - 119_999 }]), now)).toBe(
+    "active",
+  );
+  expect(
+    presenceViewerActivity(
+      viewer([
+        { ts: now, lastActivityAt: now - 600_000 },
+        { ts: now, lastActivityAt: now - 5_000 },
+        { ts: now },
+      ]),
+      now,
+    ),
+  ).toBe("active");
+  expect(
+    presenceViewerActivity(
+      viewer([
+        { ts: now, lastActivityAt: now - 600_000 },
+        { ts: now, lastActivityAt: now, reason: "disconnect" },
+      ]),
+      now,
+    ),
+  ).toBe("idle");
 });

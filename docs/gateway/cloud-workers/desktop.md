@@ -29,7 +29,11 @@ and enable the **Cloud Worker Desktop** lab. The agent launches the application 
 the Desktop panel. When its model supports vision and tool policy permits
 `computer`, it can observe and control the same desktop using the attachment's
 `environmentId`. Taking manual control pauses agent input; observations remain
-available. Release manual control before asking the agent to interact again.
+available. When asked to resume, the agent can use `computer` with
+`action: "take_control"` under its existing computer-control authority. Your
+viewer returns to view-only, and the agent receives a fresh screenshot. No
+separate viewer-issued handoff token is required. You can reclaim control at any
+time or release it yourself; ordinary agent input never takes over automatically.
 
 For a web app, the agent starts a server and opens a [portal](/gateway/portals)
 in the side panel. A browser on the attached desktop can test that server with
@@ -51,6 +55,17 @@ Ask to stop a particular app or stop the entire Crabbox when finished. The
 machine is disposable: save required outputs before stopping it. Attaching a
 machine does not automatically synchronize the primary workspace; the agent
 must copy the required files or prepare the project on the machine.
+
+If stopping a conversation environment fails, cleanup retries with exponential
+backoff from 30 seconds to five minutes, on the next reconciliation sweep.
+After ten attempts or one hour, whichever comes first, cleanup is parked for
+the rest of that Gateway process. Environment status reports an error with the
+lease ID, last failure, and recovery instructions; the lease stays owned and
+blocks replacement until cleanup is confirmed. For Crabbox, inspect it with
+`crabbox leases list` and run `crabbox stop <lease>` as needed, then retry Stop
+in the conversation. An explicit Stop or Gateway restart starts a fresh retry
+budget. A text-only 404 from Crabbox is an unknown cleanup outcome, not proof
+that the lease was released.
 
 Stop attached machines before downgrading to a build without conversation
 attachments. Older builds can read the database, but they treat these machines
@@ -76,7 +91,7 @@ Linux uses Crabbox's XFCE session on display `:99`. Native Windows uses Crabbox'
 
 A vision-capable agent whose tool policy permits `computer` controls this desktop through the session's exact placement; it cannot select another node. This works for both OpenClaw workers and Codex remote execution. See [Desktop and computer control](/gateway/cloud-sessions#desktop-and-computer-control) for tool enablement and manual-control guidance.
 
-The desktop never gains public ingress. The node reads the lease's password file locally, inspects the loopback RFB security offer, and keeps that same connection for the viewer. Linux and Windows use VNC password authentication. macOS uses Apple Remote Desktop account authentication with the inspected worker username and a private copy of Crabbox's managed password. These credentials pass transiently through the authenticated node connection for preauthentication; the viewer does not enter the worker password. The node redeems a single-use Gateway broker ticket over its already-connected origin. Opening viewers therefore creates no extra unauthenticated probe connections. TLS deployments pin the same Gateway certificate used by the node connection. The Gateway revalidates the durable environment, lease, node, owner epoch, desktop descriptor, connection, and pairing both before dispatch and after attach; drain, replacement, or teardown aborts the stream and any pending app launch. The shared desktop session owner performs RFB preauthentication, view-only input filtering, and single-controller arbitration. Browser protocol negotiation overlaps worker authentication, but authentication success and desktop traffic wait for both sides to finish.
+The desktop never gains public ingress. The node reads the lease's password file locally, inspects the loopback RFB security offer, and keeps that same connection for the viewer. Linux and Windows use VNC password authentication. macOS uses Apple Remote Desktop account authentication with the inspected worker username and a private copy of Crabbox's managed password. These credentials pass transiently through the authenticated node connection for preauthentication; the viewer does not enter the worker password. The node redeems a single-use Gateway broker ticket over its already-connected origin. Opening viewers therefore creates no extra unauthenticated check connections. TLS deployments pin the same Gateway certificate used by the node connection. The Gateway revalidates the durable environment, lease, node, owner epoch, desktop descriptor, connection, and pairing both before dispatch and after attach; drain, replacement, or teardown aborts the stream and any pending app launch. The shared desktop session owner performs RFB preauthentication, view-only input filtering, and single-controller arbitration. Browser protocol negotiation overlaps worker authentication, but authentication success and desktop traffic wait for both sides to finish.
 
 An open chat updates its desktop target when committed session placement events arrive, including worker replacement and teardown, without waiting for a sidebar refresh.
 

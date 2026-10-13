@@ -13,6 +13,10 @@ import {
   initialModelFallbackAttemptOptions,
   type TestModelFallbackRunnerParams,
 } from "../../agents/test-helpers/model-fallback-runner.test-support.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import {
   createUserTurnTranscriptRecorder,
@@ -38,7 +42,7 @@ type RunCliAgent = typeof import("../../agents/cli-runner.js").runCliAgent;
 export const PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE = `⚠️ ${AUTH_INVALID_TOKEN_USER_TEXT}`;
 export { createMockReplyOperation } from "./test-helpers.js";
 export const PROVIDER_RATE_LIMIT_OR_QUOTA_ERROR_USER_MESSAGE =
-  "⚠️ The model provider returned HTTP 429 before replying. This can mean rate limiting, exhausted quota, or an account balance/billing issue. Check the selected provider/model, API key, and provider billing/quota dashboard, then try again.";
+  "⚠️ The AI service can't accept more requests right now. Wait a few minutes, then try again. If it continues, check your account's usage and billing limits.";
 export const PROVIDER_INTERNAL_ERROR_USER_MESSAGE =
   "⚠️ The model provider returned a temporary internal error before replying. Try again in a moment, or switch to another model if it keeps happening.";
 
@@ -83,7 +87,7 @@ const state = vi.hoisted(() => ({
 }));
 
 export const GENERIC_RUN_FAILURE_TEXT =
-  "⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.";
+  "⚠️ OpenClaw couldn't finish this request. Check the conversation before trying again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.";
 export function makeTestModel(id: string, contextTokens: number): ModelDefinitionConfig {
   return {
     id,
@@ -114,6 +118,9 @@ vi.mock("../../agents/embedded-agent-runner/run-entry.js", async () => {
 
 vi.mock("../../agents/agent-bundle-mcp-manager-api.js", () => ({
   peekSessionMcpRuntime: (params: unknown) => state.peekSessionMcpRuntimeMock(params),
+}));
+vi.mock("../../agents/agent-bundle-mcp-manager-cleanup.js", () => ({
+  completeDeferredSessionMcpRuntimeRetirement: async () => false,
 }));
 
 vi.mock("../../agents/cli-runner.js", () => ({
@@ -281,30 +288,25 @@ vi.mock("./agent-runner-utils.js", async () => ({
     state.productionBuildEmbeddedRunExecutionParams
       ? state.productionBuildEmbeddedRunExecutionParams(params)
       : {
-          embeddedContext: {
-            ...params.run,
-            messageProvider: params.replyRoute?.originatingChannel,
-            messageTo: params.replyRoute?.originatingTo,
-            agentAccountId:
-              params.replyRoute?.originatingAccountId ??
-              params.sessionCtx.AccountId ??
-              params.run.agentAccountId,
-            chatType:
-              params.replyRoute?.originatingChatType ??
-              params.sessionCtx.ChatType ??
-              params.run.chatType,
-          },
-          senderContext: {},
-          runBaseParams: {
-            runId: params.runId,
-            provider: params.provider,
-            model: params.model,
-            thinkLevel: params.run.thinkLevel,
-            authProfileId:
-              params.provider === params.run.provider ? params.run.authProfileId : undefined,
-            authProfileIdSource:
-              params.provider === params.run.provider ? params.run.authProfileIdSource : undefined,
-          },
+          ...params.run,
+          messageProvider: params.replyRoute?.originatingChannel,
+          messageTo: params.replyRoute?.originatingTo,
+          agentAccountId:
+            params.replyRoute?.originatingAccountId ??
+            params.sessionCtx.AccountId ??
+            params.run.agentAccountId,
+          chatType:
+            params.replyRoute?.originatingChatType ??
+            params.sessionCtx.ChatType ??
+            params.run.chatType,
+          runId: params.runId,
+          provider: params.provider,
+          model: params.model,
+          thinkLevel: params.run.thinkLevel,
+          authProfileId:
+            params.provider === params.run.provider ? params.run.authProfileId : undefined,
+          authProfileIdSource:
+            params.provider === params.run.provider ? params.run.authProfileIdSource : undefined,
         },
   resolveQueuedReplyRuntimeConfig: <T>(config: T) => config,
   resolveModelFallbackOptions: vi.fn(
@@ -323,20 +325,30 @@ vi.mock("./agent-runner-utils.js", async () => ({
   }),
 }));
 
-vi.mock("./reply-delivery.js", () => ({
+vi.mock("./reply-delivery.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./reply-delivery.js")>()),
   createBlockReplyDeliveryHandler: (params: unknown) =>
     state.createBlockReplyDeliveryHandlerMock(params),
 }));
 
-vi.mock("./reply-media-paths.runtime.js", () => ({
+vi.mock("./reply-media-paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./reply-media-paths.js")>()),
   createReplyMediaContext: () => ({
     normalizePayload: (payload: unknown) => payload,
   }),
   createReplyMediaPathNormalizer: () => (payload: unknown) => payload,
 }));
 
-export async function getExecuteAgentTurnForTest() {
+export async function getRawExecuteAgentTurnForTest() {
   const execute = (await import("./agent-runner-execution.js")).executeAgentTurn;
+  return async (...args: Parameters<typeof execute>) => {
+    setRuntimeConfigSnapshot(args[0].followupRun.run.config);
+    return execute(...args);
+  };
+}
+
+export async function getExecuteAgentTurnForTest() {
+  const execute = await getRawExecuteAgentTurnForTest();
   return async (...args: Parameters<typeof execute>) => {
     const execution = await execute(...args);
     const outcome = execution.outcome;
@@ -409,7 +421,7 @@ export type EmbeddedAgentParams = {
   lifecycleGeneration?: string;
   onDeferredLifecycleOwner?: (owner: DeferredEmbeddedRunLifecycleOwner) => void;
   onCompactionAccounting?: RunEmbeddedAgentInternalParams["onCompactionAccounting"];
-  onExecutionStarted?: (info?: { lifecycleGeneration?: string }) => void;
+  onExecutionStarted?: RunEmbeddedAgentInternalParams["onExecutionStarted"];
   onExecutionPhase?: (info: {
     phase:
       | "runner_entered"
@@ -460,11 +472,7 @@ export type EmbeddedAgentParams = {
     approvalId?: string;
     approvalSlug?: string;
   }) => Promise<void> | void;
-  onAgentEvent?: (payload: {
-    stream: string;
-    data: Record<string, unknown>;
-    sessionKey?: string;
-  }) => Promise<void> | void;
+  onAgentEvent?: RunEmbeddedAgentInternalParams["onAgentEvent"];
 };
 
 export function createMockTypingSignaler(): TypingSignaler {
@@ -498,7 +506,7 @@ export function createFollowupRun(): FollowupRun {
       sessionFile: path.join(rootDir, "session.jsonl"),
       workspaceDir: rootDir,
       config: {},
-      skillsSnapshot: {},
+      skillsSnapshot: { prompt: "", skills: [] },
       provider: "anthropic",
       model: "claude",
       // Missing fixture modalities trigger real provider catalog discovery during execution.
@@ -610,7 +618,6 @@ export function createAgentTurnExecutionDefaults() {
     shouldEmitToolResult: () => true,
     shouldEmitToolOutput: () => false,
     pendingToolTasks: new Set<Promise<void>>(),
-    resetSessionAfterRoleOrderingConflict: async () => false,
     isHeartbeat: false,
     sessionKey: "main",
     getActiveSessionEntry: () => undefined,
@@ -727,6 +734,7 @@ export async function setupAgentRunnerExecutionTestState() {
     // Fake-timer tests must not leak into --isolate=false peers.
     vi.useRealTimers();
     cliBackendsTesting.resetDepsForTest();
+    clearRuntimeConfigSnapshot();
     vi.clearAllMocks();
   });
 

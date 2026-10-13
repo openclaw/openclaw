@@ -66,6 +66,45 @@ setting a long-lived default:
 openclaw models list --provider novita
 ```
 
+## Video generation
+
+The same plugin and `NOVITA_API_KEY` support the [video generation tool](/tools/video-generation)
+through Novita's native asynchronous API at `https://api.novita.ai`.
+
+| Model                         | Modes                      | Duration | Resolution  |
+| ----------------------------- | -------------------------- | -------- | ----------- |
+| `wan2.6-t2v` (default)        | Text or one image to video | 5/10/15s | 720P, 1080P |
+| `wan2.6-i2v`                  | One image to video         | 5/10/15s | 720P, 1080P |
+| `minimax-hailuo-2.3-t2v`      | Text or one image to video | 6/10s    | 768P, 1080P |
+| `minimax-hailuo-2.3-i2v`      | One image to video         | 6/10s    | 768P, 1080P |
+| `minimax-hailuo-2.3-fast-i2v` | One image to video         | 6/10s    | 768P, 1080P |
+
+Supplying one image with a `-t2v` model selects the same family's `-i2v` route.
+Both families accept remote image URLs and local image files, sent as data URIs.
+Hailuo supports 1080P only for 6-second videos; use 768P for 10 seconds. Video
+reference inputs are unsupported.
+
+Wan defaults to silent output; set `audio: true` to generate audio. It also accepts
+one remote HTTP(S) audio reference. Text-to-video supports `16:9`, `9:16`, `1:1`,
+`4:3`, and `3:4`; image-to-video inherits the source aspect ratio. Wan options are
+`negative_prompt`, `prompt_extend`, `shot_type` (`single` or `multi`), and `seed`.
+Hailuo options are `enable_prompt_expansion` and `fast_pretreatment` (the latter
+is unavailable on the Fast model).
+
+```json5
+{
+  agents: {
+    defaults: {
+      mediaModels: {
+        video: {
+          primary: "novita/wan2.6-t2v",
+        },
+      },
+    },
+  },
+}
+```
+
 ## When to choose Novita
 
 - Hosted open-weight model access with an OpenAI-compatible API.

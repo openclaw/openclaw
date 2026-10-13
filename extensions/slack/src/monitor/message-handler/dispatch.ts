@@ -3,7 +3,6 @@ import {
   dispatchChannelInboundTurn,
   resolveInboundReplyDispatchCounts,
   readAgentRunTerminalOutcome,
-  type InboundReplyRecordOptions,
   hasVisibleInboundReplyDispatch,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
@@ -90,21 +89,18 @@ async function dispatchSlackMessageWithSetup(
   turnAdoptionLifecycle: PreparedSlackMessage["turnAdoptionLifecycle"],
 ) {
   const { prepared } = setup;
+  const { account, ctx, message, route } = prepared;
   const {
-    account,
     cfg,
-    ctx,
     disableBlockStreaming,
     hasSlackCustomIdentity,
     hasRepliedRef,
-    message,
     messageSentHookContext,
     messageSentHookTarget,
     onModelSelected,
     previewStreamingEnabled,
     replyPipeline,
     replyPlan,
-    route,
     runtime,
     slackClient,
     slackStreaming,
@@ -118,6 +114,8 @@ async function dispatchSlackMessageWithSetup(
   let dispatchError: unknown;
   const delivery = createSlackStreamingDeliveryRuntime(setup);
   const progress = createSlackProgressRuntime({ setup, delivery });
+  let shouldYieldDraftProgress = async () => false;
+  let turnCommentaryVisible = false;
   const { draftStream, previewLifecycle } = progress;
   // A posted draft/progress message counts as visible output even before it is
   // committed as the reply, so the status keepalive stops at the same moment
@@ -241,15 +239,11 @@ async function dispatchSlackMessageWithSetup(
       return result.deliveryResult ?? { visibleReplySent: false };
     }
     if (progress.useNativeProgressStreaming) {
-      if (info.kind !== "final" && payload.isError !== true) {
-        if (!delivery.isStreamingEligible(payload)) {
-          return await delivery.deliverNormally({
-            payload,
-            kind: info.kind,
-            forcedThreadTs:
-              delivery.streamSession?.threadTs ?? delivery.nativeProgressStreamThreadTs,
-          });
-        }
+      if (
+        info.kind !== "final" &&
+        payload.isError !== true &&
+        delivery.isStreamingEligible(payload)
+      ) {
         return await progress.appendNativeNarration(payload, info.kind);
       }
       return await delivery.deliverNormally({
@@ -273,11 +267,10 @@ async function dispatchSlackMessageWithSetup(
     const ttsSupplement = getReplyPayloadTtsSupplement(payload);
     const replySourceText = payload.text ?? ttsSupplement?.spokenText;
     const replyRenderPlan = resolveSlackReplyRenderPlan(payload, replySourceText);
-    const plannedBlocks =
+    const slackBlocks =
       replyRenderPlan.mode === "single"
         ? replyRenderPlan.blocks
         : replyRenderPlan.blockPart?.blocks;
-    const slackBlocks = plannedBlocks;
     const requiresSeparateFallbackDelivery =
       replyRenderPlan.mode === "split" || replyRenderPlan.textIsSlackPlainText === true;
     const trimmedFinalText =
@@ -450,9 +443,10 @@ async function dispatchSlackMessageWithSetup(
           replyPipeline.typingCallbacks?.onIdle?.();
         },
       },
-      record: prepared.turn.record as InboundReplyRecordOptions,
+      record: prepared.turn.record,
       botLoopProtection: resolveSlackBotLoopProtection(prepared),
       replyOptions: {
+        onVisibleWorkSessions: progress.onVisibleWorkSessions,
         groupThreadReplyFormatter: formatSlackGroupThreadReply,
         // Followups can outlive this dispatch and retain their own source address.
         queuedDeliveryCorrelations: [{ begin: beginSessionRun }],
@@ -473,11 +467,12 @@ async function dispatchSlackMessageWithSetup(
           progress.progressDraftActive && slackStreaming.mode === "progress" ? true : undefined,
         commentaryPayloadsEnabled: progress.commentaryProgressEnabled ? true : undefined,
         shouldDeliverCommentaryPayloads: progress.commentaryProgressEnabled
-          ? progress.shouldYieldDraftProgress
+          ? () => turnCommentaryVisible
           : undefined,
-        onVerboseProgressVisibility: progress.commentaryProgressEnabled
-          ? (isActive) => {
-              progress.setShouldYieldDraftProgress(isActive);
+        onVerboseProgressVisibilityAsync: progress.commentaryProgressEnabled
+          ? async (isActive) => {
+              shouldYieldDraftProgress = isActive;
+              turnCommentaryVisible = await isActive();
             }
           : undefined,
         allowProgressCallbacksWhenSourceDeliverySuppressed:
@@ -485,13 +480,10 @@ async function dispatchSlackMessageWithSetup(
             ? true
             : undefined,
         allowToolLifecycleWhenProgressHidden: statusReactionsEnabled ? true : undefined,
-        onPartialReply: useStreaming
-          ? undefined
-          : !previewStreamingEnabled
-            ? undefined
-            : async (payload) => {
-                return progress.updateDraftFromPartial(payload.text);
-              },
+        onPartialReply:
+          !useStreaming && previewStreamingEnabled
+            ? async (payload) => progress.updateDraftFromPartial(payload.text)
+            : undefined,
         onAssistantMessageStart: progress.onDraftBoundary
           ? async () => {
               await progress.onDraftBoundary?.();
@@ -523,7 +515,10 @@ async function dispatchSlackMessageWithSetup(
               ? false
               : progress.progressDraft.pushItemEvent(payload);
           }
-          if (payload.kind === "preamble" && progress.shouldYieldDraftProgress()) {
+          if (payload.kind === "preamble" && (await shouldYieldDraftProgress())) {
+            return false;
+          }
+          if (prepared.turnAdoptionLifecycle?.abortSignal?.aborted) {
             return false;
           }
           progress.progressWorkCounter.noteItem(payload);
@@ -600,7 +595,8 @@ async function dispatchSlackMessageWithSetup(
   }
 
   if (dispatchError || agentRunFailed) {
-    await progress.finalizeDraftProgressCard("error");
+    // A failed turn without a reply has no other visible outcome.
+    await progress.finalizeDraftProgressCard("error", { postIfMissing: !anyReplyDelivered });
   }
   await progress.dropDetachedProgressCards();
 
@@ -645,7 +641,7 @@ async function dispatchSlackMessageWithSetup(
   if (shouldLogVerbose()) {
     const finalCount = resolveInboundReplyDispatchCounts(settledDispatchResult).final;
     logVerbose(
-      `slack: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${prepared.replyTarget}`,
+      `slack: delivered ${finalCount} repl${finalCount === 1 ? "y" : "ies"} to ${prepared.replyTarget}`,
     );
   }
 }

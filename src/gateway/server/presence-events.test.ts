@@ -1,50 +1,131 @@
-/**
- * Presence broadcast tests for versioned gateway state updates.
- */
-import { describe, expect, it, vi } from "vitest";
-import { broadcastPresenceSnapshot } from "./presence-events.js";
+import { expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { listSystemPresence, upsertPresence } from "../../infra/system-presence.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../../test-utils/gateway-scheduler-clock.js";
+import { createPresencePublisher } from "./presence-events.js";
 
-describe("broadcastPresenceSnapshot", () => {
-  it("increments version and broadcasts presence with state versions", () => {
-    const broadcast = vi.fn();
-    let nextPresenceVersion = 6;
-    const incrementPresenceVersion = vi.fn(() => ++nextPresenceVersion);
-    const getHealthVersion = vi.fn(() => 11);
-
-    const context = {
-      broadcast,
-      incrementPresenceVersion,
-      getHealthVersion,
-    };
-    const presenceVersion = broadcastPresenceSnapshot(context);
-
-    expect(presenceVersion).toBe(7);
-    expect(incrementPresenceVersion).toHaveBeenCalledTimes(1);
-    expect(getHealthVersion).toHaveBeenCalledTimes(1);
-    expect(broadcast).toHaveBeenCalledTimes(1);
-
-    const [event, payload, opts] = broadcast.mock.calls.at(0) as [
-      string,
-      unknown,
-      { dropIfSlow?: boolean; stateVersion?: { presence?: number; health?: number } } | undefined,
-    ];
-
-    expect(event).toBe("presence");
-    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-      throw new Error("expected object payload");
-    }
-    expect(Array.isArray((payload as { presence?: unknown }).presence)).toBe(true);
-    expect(opts?.dropIfSlow).toBe(true);
-    expect(opts?.stateVersion).toEqual({ presence: 7, health: 11 });
-
-    // Explicit recovery and beacon snapshots bypass activity publication coalescing.
-    getHealthVersion.mockReturnValue(12);
-    expect(broadcastPresenceSnapshot(context)).toBe(8);
-    expect(broadcastPresenceSnapshot(context)).toBe(9);
-    expect(broadcast.mock.calls.map((call) => call[2].stateVersion)).toEqual([
-      { presence: 7, health: 11 },
-      { presence: 8, health: 12 },
-      { presence: 9, health: 12 },
-    ]);
+it("combines cross-turn changes in a fixed window while authoritative reads stay current", async () => {
+  const clock = createGatewaySchedulerClock();
+  const scheduler = createTestGatewayScheduler(clock.clock);
+  const broadcast = vi.fn();
+  let version = 6;
+  const publisher = createPresencePublisher({
+    scheduler,
+    broadcast,
+    incrementPresenceVersion: () => ++version,
+    getHealthVersion: () => 11,
+    prepare: () => undefined,
   });
+  try {
+    upsertPresence("coalesced-person", { watchedSessions: ["agent:main:first"] });
+    publisher.publish();
+    await clock.advanceBy(10);
+    expect(broadcast).not.toHaveBeenCalled();
+    upsertPresence("coalesced-person", { watchedSessions: ["agent:main:middle"] });
+    publisher.publish();
+    await clock.advanceBy(189);
+    expect(broadcast).not.toHaveBeenCalled();
+    upsertPresence("coalesced-person", { watchedSessions: ["agent:main:latest"] });
+    publisher.publish();
+    expect(broadcast).not.toHaveBeenCalled();
+    expect(
+      listSystemPresence().some((row) => row.watchedSessions?.includes("agent:main:latest")),
+    ).toBe(true);
+    await clock.advanceBy(1);
+    expect(broadcast).toHaveBeenCalledExactlyOnceWith(
+      "presence",
+      {
+        presence: expect.arrayContaining([
+          expect.objectContaining({ watchedSessions: ["agent:main:latest"] }),
+        ]),
+      },
+      { dropIfSlow: true, stateVersion: { presence: 9, health: 11 } },
+    );
+    upsertPresence("coalesced-person", { reason: "disconnect", watchedSessions: undefined });
+    publisher.publish();
+    await clock.advanceBy(200);
+    expect(broadcast).toHaveBeenCalledTimes(2);
+    expect(
+      broadcast.mock.lastCall?.[1].presence.every(
+        (row: { watchedSessions?: string[] }) =>
+          !row.watchedSessions?.includes("agent:main:latest"),
+      ),
+    ).toBe(true);
+    broadcast.mockImplementationOnce(() => {
+      throw new Error("synthetic publication failure");
+    });
+    publisher.publish();
+    await clock.advanceBy(200);
+    publisher.publish();
+    await clock.advanceBy(200);
+    expect(broadcast).toHaveBeenCalledTimes(4);
+    broadcast.mockImplementationOnce(() => publisher.publish());
+    publisher.publish();
+    await clock.advanceBy(200);
+    expect(broadcast).toHaveBeenCalledTimes(5);
+    await clock.advanceBy(199);
+    expect(broadcast).toHaveBeenCalledTimes(5);
+    await clock.advanceBy(1);
+    expect(broadcast).toHaveBeenCalledTimes(6);
+    expect(broadcast.mock.lastCall?.[2].stateVersion).toEqual({ presence: 14, health: 11 });
+    publisher.publish();
+    publisher.stop();
+    publisher.publish();
+    await clock.advanceBy(200);
+    expect(broadcast).toHaveBeenCalledTimes(6);
+  } finally {
+    publisher.stop();
+    await scheduler.stop();
+    upsertPresence("coalesced-person", { watchedSessions: undefined });
+  }
 });
+
+it.each([false, true])(
+  "coalesces while sharing facts prepare and respects stop=%s",
+  async (stop) => {
+    const clock = createGatewaySchedulerClock();
+    const scheduler = createTestGatewayScheduler(clock.clock);
+    const preparation = createDeferred();
+    let ready = false;
+    let version = 0;
+    const broadcast = vi.fn();
+    const publisher = createPresencePublisher({
+      scheduler,
+      broadcast,
+      incrementPresenceVersion: () => ++version,
+      getHealthVersion: () => 1,
+      prepare: () => (ready ? undefined : preparation.promise),
+    });
+    try {
+      publisher.publish();
+      const publication = clock.advanceBy(200);
+      publisher.publish();
+      expect(broadcast).not.toHaveBeenCalled();
+      const joined = vi.fn();
+      let closing: Promise<void> | undefined;
+      if (stop) {
+        publisher.stop();
+        closing = scheduler.stop().then(joined);
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(joined).not.toHaveBeenCalled();
+      }
+      ready = true;
+      preparation.resolve();
+      await Promise.all([publication, closing]);
+      expect(joined).toHaveBeenCalledTimes(stop ? 1 : 0);
+      expect(broadcast).toHaveBeenCalledTimes(stop ? 0 : 1);
+      if (!stop) {
+        expect(broadcast.mock.lastCall?.[2].stateVersion).toEqual({ presence: 2, health: 1 });
+      }
+    } finally {
+      ready = true;
+      preparation.resolve();
+      publisher.stop();
+      await scheduler.stop();
+    }
+  },
+);

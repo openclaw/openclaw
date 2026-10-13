@@ -130,10 +130,9 @@ describeControlUiE2e("Control UI Models help mocked Gateway E2E", () => {
           "0px",
         );
         const tooltip = helpButton.locator("..");
-        const tooltipPopup = tooltip.locator("wa-tooltip");
+        const tooltipPopup = tooltip.locator(".tooltip-surface[popover]");
         const tooltipBody = tooltip.locator(".tooltip-rich-content");
-        const tooltipIsOpen = () =>
-          tooltipPopup.evaluate((node) => Boolean(Reflect.get(node, "open")));
+        const tooltipIsOpen = () => tooltipPopup.evaluate((node) => node.matches(":popover-open"));
 
         const defaultColor = await helpButton.evaluate((node) => getComputedStyle(node).color);
         await helpButton.hover();
@@ -224,11 +223,11 @@ describeControlUiE2e("Control UI Models help mocked Gateway E2E", () => {
             exact: true,
           });
           const behaviorTooltip = behaviorButton.locator("..");
-          const group = behaviorRow.locator("wa-radio-group");
+          const group = behaviorRow.getByRole("radiogroup");
           const behaviorTooltipIsOpen = () =>
             behaviorTooltip
-              .locator("wa-tooltip")
-              .evaluate((node) => Boolean(Reflect.get(node, "open")));
+              .locator(".tooltip-surface[popover]")
+              .evaluate((node) => node.matches(":popover-open"));
           await behaviorButton.hover();
           expect(await behaviorButton.evaluate((node) => getComputedStyle(node).color)).toBe(
             helpHoverColor,
@@ -237,7 +236,9 @@ describeControlUiE2e("Control UI Models help mocked Gateway E2E", () => {
           await expect.poll(() => behaviorTooltip.textContent()).toContain(help.text);
           await behaviorButton.click();
           await expect.poll(behaviorTooltipIsOpen).toBe(true);
-          await expect.poll(() => group.evaluate((node) => Reflect.get(node, "value"))).toBe("");
+          await expect
+            .poll(() => group.locator('input[type="radio"]:checked').inputValue())
+            .toBe("");
           await expect.poll(() => behaviorTooltip.textContent()).toContain(help.defaultText);
           await page.locator(".page-title", { hasText: "Models" }).first().click();
         }

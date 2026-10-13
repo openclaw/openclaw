@@ -3,7 +3,10 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import type { SessionCreateParams } from "../../lib/sessions/create.ts";
-import type { SessionPlacementRecovery } from "../../lib/sessions/session-placement-recovery.ts";
+import {
+  pauseSessionPlacementRecovery,
+  type SessionPlacementRecovery,
+} from "../../lib/sessions/session-placement-recovery.ts";
 import { deleteSessionPlacementDraft } from "../../lib/sessions/session-placement-startup.ts";
 import { restoreChatApiAttachments } from "../chat/attachment-restoration.ts";
 import type { NewSessionVisibility } from "./create-params.ts";
@@ -27,18 +30,20 @@ export function resolveDraftSessionPlacement(
   pending: Pick<PendingSessionPlacementRecoveryState, "sessionKey" | "target">,
   place: {
     autoDevice: boolean;
+    requiredPlacement?: boolean;
     cloudProfileId: string;
     deviceId: string;
     cloudSelection: Readonly<{ os: string; machineClass: string }>;
   },
 ) {
   const { os, machineClass } = place.cloudSelection;
-  const target = pending.sessionKey
+  return pending.sessionKey
     ? pending.target
     : place.cloudProfileId
       ? {
           kind: "profile" as const,
           profileId: place.cloudProfileId,
+          ...(place.requiredPlacement ? { required: true as const } : {}),
           ...(os ? { os } : {}),
           ...(machineClass ? { machineClass } : {}),
         }
@@ -47,7 +52,6 @@ export function resolveDraftSessionPlacement(
         : place.autoDevice
           ? { kind: "auto-device" as const }
           : null;
-  return { target };
 }
 
 export function projectDraftSessionPlacementRecovery(recovery: SessionPlacementRecovery) {
@@ -94,6 +98,7 @@ export async function completeDraftSessionPlacement(params: {
   submittedRecovery: SessionPlacementRecovery;
   sessionKey: string;
   createdAt: number;
+  startupError?: string;
   isRequestCurrent: () => boolean;
   isLifecycleCurrent: () => boolean;
   clearRecovery: () => void;
@@ -119,7 +124,7 @@ export async function completeDraftSessionPlacement(params: {
       return;
     }
     const cleanupError = await deleteSessionPlacementDraft(
-      params.client,
+      { client: params.client, describe: params.context.sessions.describe },
       sessionKey,
       params.agentId,
     );
@@ -143,14 +148,17 @@ export async function completeDraftSessionPlacement(params: {
     params.onRecoveryUnavailable();
     return;
   }
-  const recovery = pending.capture();
-  if (!recovery || recovery.phase === "creating") {
+  const captured = pending.capture();
+  if (!captured || captured.phase === "creating") {
     params.onRecoveryUnavailable();
     return;
   }
   if (!params.isRequestCurrent()) {
     return;
   }
+  const recovery = params.startupError
+    ? pauseSessionPlacementRecovery(captured, params.startupError, pending.persistent).recovery
+    : captured;
   params.context.placementStartup.start({
     recovery,
     persistRecovery: pending.persistent,

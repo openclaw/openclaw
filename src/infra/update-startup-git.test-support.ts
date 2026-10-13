@@ -10,7 +10,7 @@ export function createDevGitStatus(params?: {
   commitAtMs?: number | null;
   ahead?: number | null;
   behind?: number | null;
-  fetchOk?: boolean;
+  fetchOk?: boolean | null;
 }) {
   const upstream = params?.upstream === undefined ? "origin/main" : params.upstream;
   const status = {
@@ -34,7 +34,7 @@ export function createDevGitStatus(params?: {
       dirty: false,
       ahead: params?.ahead === undefined ? 0 : params.ahead,
       behind: params?.behind === undefined ? 2 : params.behind,
-      fetchOk: params?.fetchOk ?? true,
+      fetchOk: params?.fetchOk === undefined ? true : params.fetchOk,
     },
   } satisfies UpdateCheckResult;
   return status;

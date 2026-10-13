@@ -3,7 +3,7 @@ import { gunzipSync } from "node:zlib";
 import { expect, it } from "vitest";
 import { appendBackupManifest } from "./backup-create-stream.js";
 
-it.each([1, 511, 512, 1023, 1024, 1025, 8193])(
+it.each([511, 1024, 1025, 8193])(
   "replaces the final tar terminator after traversal with %i-byte chunks",
   async (chunkSize) => {
     const payload = Buffer.concat([

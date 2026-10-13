@@ -1,4 +1,3 @@
-// Implements config inspection and mutation commands for reply sessions.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveConfigWriteTargetFromPath } from "../../channels/plugins/config-writes.js";
 import { normalizeChatChannelId } from "../../channels/registry.js";
@@ -21,16 +20,13 @@ import { resolveChannelAccountId } from "./channel-context.js";
 import {
   commandReply,
   defineAuthorizedTextCommand,
+  renderCommandJsonBlock,
   requireCommandFlagEnabled,
   requireGatewayClientScope,
 } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 import { parseConfigCommand } from "./config-commands.js";
-import {
-  formatAutoReplyConfigMutationError,
-  setConfigPath,
-  unsetConfigPath,
-} from "./config-mutations.js";
+import { AutoReplyConfigMutationError, mutateConfigPath } from "./config-mutations.js";
 import { resolveConfigWriteDeniedText } from "./config-write-authorization.js";
 import { parseDebugCommand } from "./debug-commands.js";
 
@@ -116,50 +112,37 @@ export const handleConfigCommand: CommandHandler = defineAuthorizedTextCommand(
           return commandReply(`⚠️ ${parsedPath.error}`);
         }
         const value = getConfigValueAtPath(parsedBase, parsedPath.path);
-        const rendered = JSON.stringify(value ?? null, null, 2);
-        return commandReply(`⚙️ Config ${pathRaw}:\n\`\`\`json\n${rendered}\n\`\`\``);
+        return commandReply(renderCommandJsonBlock(`⚙️ Config ${pathRaw}:`, value ?? null));
       }
-      const json = JSON.stringify(parsedBase, null, 2);
-      return commandReply(`⚙️ Config (raw):\n\`\`\`json\n${json}\n\`\`\``);
+      return commandReply(renderCommandJsonBlock("⚙️ Config (raw):", parsedBase));
     }
 
-    if (configCommand.action === "unset") {
-      const path = parsedWritePath ?? [];
-      try {
-        const removed = await unsetConfigPath(path, params.command.assertOwnerCurrent);
-        if (!removed) {
-          return commandReply(`⚙️ No config value found for ${configCommand.path}.`);
-        }
-      } catch (error) {
-        const message = formatAutoReplyConfigMutationError(error);
-        if (message) {
-          return commandReply(`⚠️ ${message}`);
-        }
-        throw error;
-      }
-      return commandReply(`⚙️ Config updated: ${configCommand.path} removed.`);
-    }
-
-    if (configCommand.action === "set") {
-      const path = parsedWritePath ?? [];
-      try {
-        await setConfigPath(path, configCommand.value, params.command.assertOwnerCurrent);
-      } catch (error) {
-        const message = formatAutoReplyConfigMutationError(error);
-        if (message) {
-          return commandReply(`⚠️ ${message}`);
-        }
-        throw error;
-      }
-      const valueLabel = formatConfigSetValueLabel({
+    const path = parsedWritePath ?? [];
+    try {
+      const changed = await mutateConfigPath(
         path,
-        value: configCommand.value,
-        uiHints: schema.uiHints,
-      });
-      return commandReply(`⚙️ Config updated: ${configCommand.path}=${valueLabel ?? "null"}`);
+        configCommand,
+        params.command.assertOwnerCurrent,
+      );
+      if (configCommand.action === "unset") {
+        return commandReply(
+          changed
+            ? `⚙️ Config updated: ${configCommand.path} removed.`
+            : `⚙️ No config value found for ${configCommand.path}.`,
+        );
+      }
+    } catch (error) {
+      if (error instanceof AutoReplyConfigMutationError && error.message) {
+        return commandReply(`⚠️ ${error.message}`);
+      }
+      throw error;
     }
-
-    return null;
+    const valueLabel = formatConfigSetValueLabel({
+      path,
+      value: configCommand.value,
+      uiHints: schema.uiHints,
+    });
+    return commandReply(`⚙️ Config updated: ${configCommand.path}=${valueLabel}`);
   },
 );
 
@@ -184,8 +167,9 @@ export const handleDebugCommand: CommandHandler = defineAuthorizedTextCommand(
       }
       const schema = loadGatewayRuntimeConfigSchema();
       const redactedOverrides = redactConfigObject(overrides, schema.uiHints);
-      const json = JSON.stringify(redactedOverrides, null, 2);
-      return commandReply(`⚙️ Debug overrides (memory-only):\n\`\`\`json\n${json}\n\`\`\``);
+      return commandReply(
+        renderCommandJsonBlock("⚙️ Debug overrides (memory-only):", redactedOverrides),
+      );
     }
     if (debugCommand.action === "reset") {
       resetConfigOverrides();
@@ -211,7 +195,7 @@ export const handleDebugCommand: CommandHandler = defineAuthorizedTextCommand(
         value: debugCommand.value,
         uiHints: loadGatewayRuntimeConfigSchema().uiHints,
       });
-      return commandReply(`⚙️ Debug override set: ${debugCommand.path}=${valueLabel ?? "null"}`);
+      return commandReply(`⚙️ Debug override set: ${debugCommand.path}=${valueLabel}`);
     }
 
     return null;

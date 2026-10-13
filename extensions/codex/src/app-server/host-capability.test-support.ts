@@ -26,14 +26,20 @@ export function getCodexTestToolFactory(
 
 /** Minimal host authority for tests that do not exercise host policy or approvals. */
 export function createCodexTestHostCapabilities(
-  overrides: Partial<Omit<HostCapabilities, "createToolSurface">> = {},
+  overrides: Partial<Omit<HostCapabilities, "createToolSurfaceAsync">> = {},
 ): HostCapabilities {
   const host: HostCapabilities = Object.freeze({
     kind: "agent-harness-host-capability",
     version: 1,
     assertActive: () => {},
+    retainSourceAuthority: () => undefined,
+    bindModelExecution: () => ({
+      signal: new AbortController().signal,
+      assertCurrent: () => host.assertActive(),
+      release: () => {},
+    }),
     bindToolSurface: (tools) => tools,
-    createToolSurface: (options, bindingOptions) =>
+    createToolSurfaceAsync: async (options, bindingOptions) =>
       host.bindToolSurface(
         (toolFactories.get(host) ?? createOpenClawCodingTools)(options),
         bindingOptions,

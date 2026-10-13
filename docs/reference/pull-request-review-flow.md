@@ -108,6 +108,9 @@ For proof files, prefer linking CI artifacts, GitHub-uploaded screenshots or
 recordings, or a short redacted log excerpt. Do not commit generated proof files
 unless they are part of the actual docs, tests, or product change.
 
+For behavioral changes, use the [boundary-proof guide](/help/testing/writing-tests#prove-behavior-at-the-owning-boundary)
+to review production-path, provider-request, and failure/reconstruction evidence.
+
 Redacting sensitive data is the contributor's responsibility. Remove secrets,
 tokens, private URLs, user data, and unrelated logs before posting proof.
 
@@ -150,6 +153,20 @@ summary. Required issue and behavior summaries must also be non-empty, and each
 finding needs a severity. Structural validity does not authorize preparation:
 `READY FOR /prepare-pr` still requires completed issue and behavior review,
 resolved substantive findings, and the applicable runtime proof.
+
+When a bounded investigation cannot establish or complete a safe fix for a local
+test failure, preserve `tests.result: "fail"` and record
+`tests.investigatedLocalFailures`. Its `head` must be the exact reviewed commit.
+Its nonempty `failures` array records each original `failure`, nonempty string
+arrays of `reproductionAttempts` and `evidence`, and a nonempty
+`remainingUncertainty`. Describe the commands and observed outcomes, and reference
+the evidence recorded in the PR. A passing replay does not prove a fix.
+
+This completed investigation can accompany a READY recommendation without
+turning the failed proof into a pass. Substantive findings, behavioral review,
+required CI, security checks, and enforced reviews remain independent gates.
+Use `tests.preExistingCi` only for its separate, attributed CI-failure workflow;
+local investigation does not authorize a CI exception.
 
 ## When automation stays quiet
 

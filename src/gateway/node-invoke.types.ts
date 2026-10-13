@@ -1,3 +1,5 @@
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
+
 export type NodeInvokeParams = {
   nodeId: string;
   expectedConnId?: string;
@@ -13,8 +15,12 @@ export type NodeInvokeParams = {
   signal?: AbortSignal;
   idempotencyKey?: string;
   sessionKey?: string;
+  /** Host-bound source conversation, independent of the model session or node payload. */
+  turnSource?: DeliveryContext;
   /** Receives the id and armed hard deadline after a successful dispatch. */
   onDispatchReady?: (invokeId: string, deadlineAtMs?: number) => void;
+  /** Prepares durable approval authority after transport preparation, before the final guard. */
+  authorizeDispatch?: () => Promise<boolean>;
   /** Revalidates caller authority at the registry-owned transport handoff. */
   isDispatchAuthorized?: () => boolean;
 };

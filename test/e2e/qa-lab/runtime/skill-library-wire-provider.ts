@@ -25,7 +25,12 @@ export type SkillLibraryTurnObservation = {
   readOutput?: string;
   execOutput?: string;
 };
-type AuthorObservation = { created?: string; read?: string; updated?: string };
+type AuthorObservation = {
+  created?: string;
+  read?: string;
+  updated?: string;
+  describedId?: string;
+};
 
 export function executableSkillLibraryBundle(
   reference = "ALICE-RESOURCE-1\n",
@@ -258,19 +263,67 @@ export async function startSkillLibraryWireProvider() {
           throw new Error(`No synthetic authoring draft registered for ${authorMarker}`);
         }
         const { draft, updatedContent } = scenario;
-        const workshop = body.tools?.find((tool) => tool.name === "skill_workshop");
-        const invoke = (callId: string, args: unknown) => {
-          if (!workshop?.parameters || !Value.Check(workshop.parameters, args)) {
-            throw new Error(
-              "Ordinary chat did not advertise a Workshop schema accepting the requested action",
-            );
-          }
-          emitTool(callId, "skill_workshop", args);
-        };
         const observation = authorOutputs.get(authorMarker) ?? {};
         authorOutputs.set(authorMarker, observation);
+        let workshop = body.tools?.find((tool) => tool.name === "skill_workshop");
+        let catalogId: string | undefined;
+        const advertisedCall = (callId: string, name: string, args: unknown) => {
+          const tool = body.tools?.find((candidate) => candidate.name === name);
+          if (!tool?.parameters || !Value.Check(tool.parameters, args)) {
+            throw new Error(
+              `Ordinary chat did not advertise ${name} accepting the requested action`,
+            );
+          }
+          emitTool(callId, name, args);
+        };
+        if (!workshop) {
+          // Placed turns retain the shared compact surface: discover the real schema,
+          // then invoke its returned identity through the advertised dispatcher.
+          const describeId = `${authorMarker}_describe_workshop`;
+          const described = output(describeId);
+          if (described === undefined) {
+            advertisedCall(describeId, "tool_describe", { id: "skill_workshop" });
+            return;
+          }
+          const descriptor = JSON.parse(described) as {
+            id: string;
+            name: string;
+            parameters: TSchema;
+          };
+          if (descriptor.name !== "skill_workshop" || !descriptor.id || !descriptor.parameters) {
+            throw new Error("Tool discovery did not return the personal Workshop schema");
+          }
+          workshop = descriptor;
+          catalogId = descriptor.id;
+          observation.describedId = catalogId;
+        }
+        const invoke = (callId: string, args: unknown) => {
+          if (!workshop.parameters || !Value.Check(workshop.parameters, args)) {
+            throw new Error("Workshop schema does not accept the requested action");
+          }
+          advertisedCall(
+            callId,
+            catalogId ? "tool_call" : "skill_workshop",
+            catalogId ? { id: catalogId, args } : args,
+          );
+        };
+        const authorResult = (callId: string) => {
+          const returned = output(callId);
+          if (returned === undefined || !catalogId) {
+            return returned;
+          }
+          const envelope = JSON.parse(returned) as {
+            tool?: { id?: string };
+            result?: { content?: unknown };
+          };
+          const text = contentText(envelope.result?.content);
+          if (envelope.tool?.id !== catalogId || !text) {
+            throw new Error("Workshop dispatcher did not return the requested tool result");
+          }
+          return text;
+        };
         const createId = `${authorMarker}_create`;
-        const created = output(createId);
+        const created = authorResult(createId);
         if (created === undefined) {
           invoke(createId, {
             action: "create",
@@ -287,7 +340,7 @@ export async function startSkillLibraryWireProvider() {
           throw new Error(`Workshop did not return a publication receipt: ${created}`);
         }
         const readId = `${authorMarker}_read`;
-        const read = output(readId);
+        const read = authorResult(readId);
         if (read === undefined) {
           invoke(readId, { action: "read", target: "personal", skill_id: receipt.entry.skillId });
           return;
@@ -308,7 +361,7 @@ export async function startSkillLibraryWireProvider() {
           throw new Error(`Workshop read did not expose the authored revision: ${read}`);
         }
         const updateId = `${authorMarker}_update`;
-        const updated = output(updateId);
+        const updated = authorResult(updateId);
         if (updated === undefined) {
           // Consume the real read's revision and omit files; the Gateway must preserve supporting bytes.
           invoke(updateId, {

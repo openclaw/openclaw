@@ -10,9 +10,12 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
+  getSqliteDatabaseAdmission,
   openNodeSqliteDatabase,
   prepareSqliteQuerySync,
+  publishSqliteDatabaseAdmission,
   runSqliteImmediateTransactionSync,
+  type SqliteDatabaseAdmissionKey,
   type SqliteWorkerBackend,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { pickKeyframeId } from "./analyze.js";
@@ -47,10 +50,16 @@ type Database = import("node:sqlite").DatabaseSync;
 
 const LOGBOOK_SQLITE_BUSY_TIMEOUT_MS = 5_000;
 const FRAME_PRUNE_BATCH_SIZE = 64;
+const schemaAdmission: SqliteDatabaseAdmissionKey<true> = {
+  name: "logbook.schema",
+  schemaDependent: true,
+  read: (value) => (value === true ? true : undefined),
+};
 class LogbookDatabaseStore {
   private readonly db: Database;
   private readonly query;
   private readonly framesQuery;
+  private readonly frameMetadataQuery;
   private readonly batchesQuery;
   private readonly cardsQuery;
   private readonly statements;
@@ -77,23 +86,30 @@ class LogbookDatabaseStore {
         foreignKeys: true,
         synchronous: "NORMAL",
       });
-      const versionRow = db.prepare("PRAGMA user_version").get();
-      const schemaVersion = Number(versionRow?.user_version ?? 0);
-      if (schemaVersion > LOGBOOK_SCHEMA_VERSION) {
-        throw new Error(
-          `Logbook database uses newer schema version ${schemaVersion}; this build supports ${LOGBOOK_SCHEMA_VERSION}`,
-        );
-      }
-      db.exec(SCHEMA);
-      if (schemaVersion < LOGBOOK_SCHEMA_VERSION) {
-        migrateSqliteSchemaToStrict(db, SCHEMA, { databaseLabel: dbPath });
-        db.exec(`PRAGMA user_version = ${LOGBOOK_SCHEMA_VERSION};`);
+      if (!getSqliteDatabaseAdmission(db, schemaAdmission)) {
+        const versionRow = db.prepare("PRAGMA user_version").get();
+        const schemaVersion = Number(versionRow?.user_version ?? 0);
+        if (schemaVersion > LOGBOOK_SCHEMA_VERSION) {
+          throw new Error(
+            `Logbook database uses newer schema version ${schemaVersion}; this build supports ${LOGBOOK_SCHEMA_VERSION}`,
+          );
+        }
+        db.exec(SCHEMA);
+        if (schemaVersion < LOGBOOK_SCHEMA_VERSION) {
+          migrateSqliteSchemaToStrict(db, SCHEMA, { databaseLabel: dbPath });
+          db.exec(`PRAGMA user_version = ${LOGBOOK_SCHEMA_VERSION};`);
+        }
+        publishSqliteDatabaseAdmission(db, schemaAdmission, true);
       }
       this.db = db;
       this.walMaintenance = walMaintenance;
       this.query = getNodeSqliteKysely<LogbookDatabase>(db);
       const { framesQuery, sampledBatchFrames } = createLogbookFrameQueries(db, this.query);
       this.framesQuery = framesQuery;
+      // Keep native integer overflow rejection while omitting unused frame strings.
+      this.frameMetadataQuery = framesQuery
+        .clearSelect()
+        .select(["id", "captured_at_ms", "screen_index", "width", "height", "byte_size", "idle"]);
       this.batchesQuery = this.query
         .selectFrom("batches")
         .select(["id", "day", "start_ms", "end_ms", "status", "error", "frame_count", "model"]);
@@ -250,7 +266,8 @@ class LogbookDatabaseStore {
     }
   }
 
-  close(): void {
+  async close(): Promise<void> {
+    await this.walMaintenance.stop();
     try {
       this.walMaintenance.close();
     } finally {
@@ -279,13 +296,7 @@ class LogbookDatabaseStore {
   unbatchedActiveFrames(limit: number): Pick<LogbookFrame, "id" | "capturedAtMs">[] {
     return executeSqliteQuerySync(
       this.db,
-      this.framesQuery
-        .clearSelect()
-        // Preserve native integer overflow rejection while omitting unused frame strings.
-        .select(["id", "captured_at_ms", "screen_index", "width", "height", "byte_size", "idle"])
-        .where("batch_id", "is", null)
-        .where("idle", "=", 0)
-        .limit(limit),
+      this.frameMetadataQuery.where("batch_id", "is", null).where("idle", "=", 0).limit(limit),
     ).rows.map((row) => ({ id: row.id, capturedAtMs: row.captured_at_ms }));
   }
 
@@ -312,10 +323,7 @@ class LogbookDatabaseStore {
   ): Pick<LogbookFrame, "id" | "capturedAtMs" | "idle">[] {
     return executeSqliteQuerySync(
       this.db,
-      this.framesQuery
-        .clearSelect()
-        // Keep native integer decoding and overflow errors for unused numeric fields.
-        .select(["id", "captured_at_ms", "screen_index", "width", "height", "byte_size", "idle"])
+      this.frameMetadataQuery
         .where("captured_at_ms", ">=", startMs)
         .where("captured_at_ms", "<", endMs),
     ).rows.map((row) => ({
@@ -389,13 +397,6 @@ class LogbookDatabaseStore {
         .limit(1),
     );
     return row ? toBatch(row) : null;
-  }
-
-  batchFrames(batchId: number): LogbookFrame[] {
-    return executeSqliteQuerySync(
-      this.db,
-      this.framesQuery.where("batch_id", "=", batchId),
-    ).rows.map(toFrame);
   }
 
   sampledBatchFrames(batchId: number): LogbookFrame[] {
@@ -489,18 +490,7 @@ class LogbookDatabaseStore {
         const frames = selectKeyframes
           ? executeSqliteQuerySync(
               this.db,
-              this.framesQuery
-                .clearSelect()
-                // Keep every numeric field so native overflow still rejects before deletion.
-                .select([
-                  "id",
-                  "captured_at_ms",
-                  "screen_index",
-                  "width",
-                  "height",
-                  "byte_size",
-                  "idle",
-                ])
+              this.frameMetadataQuery
                 .where("captured_at_ms", ">=", startMs)
                 .where("captured_at_ms", "<", endMs),
             ).rows.map((row) => ({ id: row.id, capturedAtMs: row.captured_at_ms }))
@@ -680,8 +670,6 @@ export function createSqliteWorkerBackend(
           return store.resetErrorBatches();
         case "nextPendingBatch":
           return store.nextPendingBatch();
-        case "batchFrames":
-          return store.batchFrames(command.input.batchId);
         case "sampledBatchFrames":
           return store.sampledBatchFrames(command.input.batchId);
         case "replaceObservations":

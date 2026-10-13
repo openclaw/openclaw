@@ -10,7 +10,7 @@ import {
   closeCodexStartupClientBestEffort,
   interruptCodexTurnAndWaitBestEffort,
 } from "./attempt-client-cleanup.js";
-import type { CodexAppServerAuthRequirement, CodexAppServerPreparedAuth } from "./auth-bridge.js";
+import type { CodexAppServerAuthRequirement, CodexAppServerPreparedAuth } from "./auth-types.js";
 import { assertCodexPrivateHookIsolation } from "./bounded-hook-policy.js";
 import type { CodexAppServerClient } from "./client.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
@@ -34,14 +34,12 @@ import type {
   JsonValue,
 } from "./protocol.js";
 import { resolveCodexAppServerReasoningEffort } from "./reasoning-effort.js";
-import {
-  isCodexAppServerStartSelectionChangedError,
-  type createIsolatedCodexAppServerClient,
-} from "./shared-client.js";
-import { buildCodexRuntimeThreadConfig } from "./thread-lifecycle.js";
+import { codexPrewriteRejectionCause } from "./rpc-error.js";
+import type { createIsolatedCodexAppServerClient } from "./shared-client.js";
 import {
   assertCodexManagedRequirementsDoNotOverrideToolPolicy,
   attestCodexRestrictedToolSurfaceMcpServersDisabled,
+  buildCodexRuntimeThreadConfig,
   buildCodexRingZeroThreadConfigPatch,
   readCodexInheritedMcpServerNames,
 } from "./thread-requests.js";
@@ -156,13 +154,10 @@ async function runBoundedCodexAppServerTurnInWorkspace(
   params: CodexBoundedTurnParams,
   appServer: ReturnType<typeof resolveCodexAppServerRuntimeOptions>,
   workspace: { codexHome?: string; cwd: string },
-  selectionAttempt = 0,
-  timing?: { deadline: number; timeoutMs: number },
 ): Promise<CodexBoundedTurnResult> {
-  const totalTimeoutMs = timing?.timeoutMs ?? resolveTimerTimeoutMs(params.timeoutMs, 100, 100);
+  const totalTimeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 100, 100);
   const timeoutError = new CodexBoundedTurnTimeoutError(params.taskLabel, totalTimeoutMs);
-  // Startup and selection retries share an elapsed budget, not a wall-clock deadline.
-  const deadline = timing?.deadline ?? performance.now() + totalTimeoutMs;
+  const deadline = performance.now() + totalTimeoutMs;
   const timeoutMs = deadline - performance.now();
   if (timeoutMs <= 0) {
     throw timeoutError;
@@ -234,7 +229,6 @@ async function runBoundedCodexAppServerTurnInWorkspace(
   }
   const timeout = setTimeout(() => abortRun(timeoutError), Math.max(1, remainingRunMs));
   timeout.unref?.();
-  let retrySelection = false;
   const requestOptions = {
     timeoutMs,
     signal: abortController.signal,
@@ -410,11 +404,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
         timeoutError,
       );
     }
-    if (ownsClient && isCodexAppServerStartSelectionChangedError(error) && selectionAttempt === 0) {
-      retrySelection = true;
-    } else {
-      throw error;
-    }
+    throw codexPrewriteRejectionCause(error);
   } finally {
     clearTimeout(timeout);
     params.signal?.removeEventListener("abort", abortFromCaller);
@@ -423,16 +413,6 @@ async function runBoundedCodexAppServerTurnInWorkspace(
       await closeCodexStartupClientBestEffort(client);
     }
   }
-  if (retrySelection) {
-    return await runBoundedCodexAppServerTurnInWorkspace(
-      params,
-      appServer,
-      workspace,
-      selectionAttempt + 1,
-      { deadline, timeoutMs: totalTimeoutMs },
-    );
-  }
-  throw new Error("Codex bounded turn selection retry exited unexpectedly");
 }
 
 function resolveBoundedThreadConfig(
@@ -441,18 +421,13 @@ function resolveBoundedThreadConfig(
   inheritedMcpServerNames: readonly string[],
   enableManagedHooks: boolean,
 ): JsonObject {
-  const boundedConfig =
-    mergeCodexThreadConfigs(CODEX_BOUNDED_THREAD_CONFIG, params.threadConfig) ??
-    CODEX_BOUNDED_THREAD_CONFIG;
-  const privateConfig = workspace.codexHome
-    ? (mergeCodexThreadConfigs(boundedConfig, CODEX_PRIVATE_BOUNDED_THREAD_CONFIG) ?? boundedConfig)
-    : boundedConfig;
-  if (!params.requireNoExternalCapabilities) {
-    return privateConfig;
-  }
-  return (
-    mergeCodexThreadConfigs(
-      privateConfig,
+  const configs = [
+    CODEX_BOUNDED_THREAD_CONFIG,
+    params.threadConfig,
+    workspace.codexHome ? CODEX_PRIVATE_BOUNDED_THREAD_CONFIG : undefined,
+  ];
+  if (params.requireNoExternalCapabilities) {
+    configs.push(
       CODEX_SETTLED_FINALIZER_THREAD_CONFIG,
       buildCodexRingZeroThreadConfigPatch(
         { toolsAllow: ["openclaw"] },
@@ -462,8 +437,9 @@ function resolveBoundedThreadConfig(
       // Native administrator hooks remain active; the private process has no
       // operator/project hook sources or model-callable tools to inherit.
       enableManagedHooks ? { "features.hooks": true } : undefined,
-    ) ?? privateConfig
-  );
+    );
+  }
+  return mergeCodexThreadConfigs(...configs) ?? CODEX_BOUNDED_THREAD_CONFIG;
 }
 
 function buildPrivateCodexAppServerStartOptions(

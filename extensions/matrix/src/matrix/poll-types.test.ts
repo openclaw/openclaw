@@ -6,13 +6,12 @@ import {
   buildPollStartContent,
   formatPollResultsAsText,
   parsePollStart,
-  parsePollStartContent,
   resolvePollReferenceEventId,
 } from "./poll-types.js";
 
-describe("parsePollStartContent", () => {
+describe("parsePollStart", () => {
   it("parses legacy m.poll payloads", () => {
-    const summary = parsePollStartContent({
+    const summary = parsePollStart({
       "m.poll": {
         question: { "m.text": "Lunch?" },
         kind: "m.poll.disclosed",
@@ -25,31 +24,10 @@ describe("parsePollStartContent", () => {
     });
 
     expect(summary?.question).toBe("Lunch?");
-    expect(summary?.answers).toEqual(["Yes", "No"]);
-  });
-
-  it("preserves answer ids when parsing poll start content", () => {
-    const parsed = parsePollStart({
-      "m.poll.start": {
-        question: { "m.text": "Lunch?" },
-        kind: "m.poll.disclosed",
-        max_selections: 1,
-        answers: [
-          { id: "a1", "m.text": "Yes" },
-          { id: "a2", "m.text": "No" },
-        ],
-      },
-    });
-
-    expect(parsed).toEqual({
-      question: "Lunch?",
-      answers: [
-        { id: "a1", text: "Yes" },
-        { id: "a2", text: "No" },
-      ],
-      kind: "m.poll.disclosed",
-      maxSelections: 1,
-    });
+    expect(summary?.answers).toEqual([
+      { id: "answer1", text: "Yes" },
+      { id: "answer2", text: "No" },
+    ]);
   });
 
   it("caps invalid remote max selections to the available answer count", () => {
@@ -116,23 +94,6 @@ describe("buildPollStartContent", () => {
   });
 });
 
-describe("buildPollResponseContent", () => {
-  it("builds a poll response payload with a reference relation", () => {
-    expect(buildPollResponseContent("$poll", ["a2"])).toEqual({
-      "m.poll.response": {
-        answers: ["a2"],
-      },
-      "org.matrix.msc3381.poll.response": {
-        answers: ["a2"],
-      },
-      "m.relates_to": {
-        rel_type: "m.reference",
-        event_id: "$poll",
-      },
-    });
-  });
-});
-
 describe("poll relation parsing", () => {
   it("extracts poll relation targets", () => {
     expect(
@@ -146,20 +107,15 @@ describe("poll relation parsing", () => {
 describe("buildPollResultsSummary", () => {
   it("counts only the latest valid response from each sender", () => {
     const summary = buildPollResultsSummary({
-      pollEventId: "$poll",
-      roomId: "!room:example.org",
       sender: "@alice:example.org",
-      senderName: "Alice",
-      content: {
-        "m.poll.start": {
-          question: { "m.text": "Lunch?" },
-          kind: "m.poll.disclosed",
-          max_selections: 1,
-          answers: [
-            { id: "a1", "m.text": "Pizza" },
-            { id: "a2", "m.text": "Sushi" },
-          ],
-        },
+      poll: {
+        question: "Lunch?",
+        kind: "m.poll.disclosed",
+        maxSelections: 1,
+        answers: [
+          { id: "a1", text: "Pizza" },
+          { id: "a2", text: "Sushi" },
+        ],
       },
       relationEvents: [
         {
@@ -224,11 +180,16 @@ describe("buildPollResultsSummary", () => {
       ["$before", -0.5, "answer1"],
     ];
     const summary = buildPollResultsSummary({
-      pollEventId: "$poll",
-      roomId: "!room:example.org",
       sender: "@alice:example.org",
-      senderName: "Alice",
-      content: buildPollStartContent({ question: "Lunch?", options: ["Pizza", "Sushi"] }),
+      poll: {
+        question: "Lunch?",
+        kind: "m.poll.disclosed",
+        maxSelections: 1,
+        answers: [
+          { id: "answer1", text: "Pizza" },
+          { id: "answer2", text: "Sushi" },
+        ],
+      },
       relationEvents: [
         ...endTimes.map((origin_server_ts, index) => ({
           event_id: "$end" + index,
@@ -252,14 +213,8 @@ describe("buildPollResultsSummary", () => {
 
   it("formats disclosed poll results with vote totals", () => {
     const text = formatPollResultsAsText({
-      eventId: "$poll",
-      roomId: "!room:example.org",
-      sender: "@alice:example.org",
-      senderName: "Alice",
       question: "Lunch?",
-      answers: ["Pizza", "Sushi"],
       kind: "m.poll.disclosed",
-      maxSelections: 1,
       entries: [
         { id: "a1", text: "Pizza", votes: 1 },
         { id: "a2", text: "Sushi", votes: 0 },

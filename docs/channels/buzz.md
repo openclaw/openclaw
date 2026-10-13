@@ -282,10 +282,10 @@ four of Buzz's 1,024 connection subscriptions for membership notifications and
 concurrent profile, membership, and metadata queries, so one account can
 configure up to 1,020 rooms. Near that limit, optional member profile
 subscriptions are reduced first. Directory entries continue to work with stable
-public keys and deterministic fallback labels.
+public keys and stable fallback labels.
 
 Unique current room names can resolve as outbound targets through OpenClaw's
-shared directory lookup. The canonical `buzz:<ROOM_UUID>` target remains the
+shared directory lookup. The explicit `buzz:<ROOM_UUID>` target remains the
 safest choice for automation and for rooms with duplicate names.
 
 ### Route rooms to different agents
@@ -296,8 +296,14 @@ workspace, or model while one Gateway and Buzz bot serve all of them:
 ```json5
 {
   agents: {
+    ownership: "explicit",
+    defaults: {
+      authInheritance: { agentId: "support" },
+      heartbeat: { agentId: "support" },
+      systemAgent: { agentId: "support" },
+    },
     entries: {
-      support: { default: true, workspace: "~/.openclaw/workspace-support" },
+      support: { workspace: "~/.openclaw/workspace-support" },
       engineering: { workspace: "~/.openclaw/workspace-engineering" },
     },
   },
@@ -316,12 +322,14 @@ workspace, or model while one Gateway and Buzz bot serve all of them:
         peer: { kind: "group", id: "buzz:<ENGINEERING_ROOM_UUID>" },
       },
     },
+    { agentId: "support", match: { channel: "buzz", accountId: "*" } },
   ],
+  talk: { agentId: "support" },
 }
 ```
 
-Without a room-specific binding, normal OpenClaw routing selects the default
-agent. See [Channel routing](/channels/channel-routing) for matching precedence.
+The channel-wide binding sends other admitted Buzz rooms to `support`.
+See [Channel routing](/channels/channel-routing) for matching precedence.
 
 ## Access control
 
@@ -338,7 +346,7 @@ checks membership before queuing and again after asynchronous admission, and
 follows live relay-signed roster updates, including role changes. A removal
 invalidates queued messages immediately. Cancelled admission is not committed as
 processed. Bounded snapshot refreshes confirm membership-change notifications.
-There is no per-message relay query or Gateway polling.
+Membership does not require per-message relay queries or Gateway polling.
 Removing a sender does not cancel a room turn already admitted for that sender.
 Losing the bot's own Bot role or stopping its connection still fences output.
 
@@ -354,6 +362,36 @@ setting inherits the account-wide value. An explicitly empty room allowlist
 denies every sender when its effective policy is `"allowlist"`.
 Set `requireMention: true` only when the Buzz client used by those members can
 address the bot identity.
+
+Set `requireMentionInBotThreads: false` in a room to accept unmentioned replies
+in threads started by that Buzz bot while keeping mentions required elsewhere:
+
+```json5
+{
+  channels: {
+    buzz: {
+      groups: {
+        "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c": {
+          requireMention: true,
+          requireMentionInBotThreads: false,
+        },
+      },
+    },
+  },
+}
+```
+
+For a named account, use `channels.buzz.accounts.<id>.groups.<roomId>`.
+Setting the option to `true` requires mentions in bot-started threads even if
+the room otherwise accepts unmentioned messages. Omitting it preserves the
+room's current mention policy. Sender restrictions and command authorization
+remain unchanged.
+
+OpenClaw verifies the root message's signature, author, room, and lack of a
+parent thread. A bot reply inside someone else's thread does not make that
+thread bot-owned. Missing roots are queried through the existing authenticated
+relay; verified roots are cached for the connection. If ownership cannot be
+verified, the room's normal mention policy applies.
 
 These controls decide who can start an agent run. They do not limit what the
 routed agent can do after a message is accepted. Treat room messages as
@@ -464,7 +502,7 @@ To restrict one room while keeping other configured rooms open:
 }
 ```
 
-Room UUIDs are the canonical targets. Use the UUID shown during discovery or ask
+Room UUIDs identify the targets directly. Use the UUID shown during discovery or ask
 a room admin for it. A unique current room name can resolve through the live
 directory, but automation should use `buzz:<ROOM_UUID>` to avoid ambiguity.
 
@@ -581,13 +619,13 @@ buzz-admin generate-key
 
 ## Verify the connection
 
-Run the authenticated channel probe:
+Run the authenticated channel check:
 
 ```bash
 openclaw channels status --channel buzz --probe
 ```
 
-A successful probe confirms that the bot can authenticate and that Buzz reports
+A successful check confirms that the bot can authenticate and that Buzz reports
 the selected room with the **Bot** role.
 
 Then send a real message:
@@ -614,7 +652,7 @@ pnpm openclaw qa buzz \
 ```
 
 The command runs a real relay canary and mention-gating check while using the
-deterministic mock model. The private JSON credential
+fixed-response mock model. The private JSON credential
 file contains `relayUrl`, `roomId`, `driverPrivateKey`, and `sutPrivateKey`, plus
 optional `driverAuthTag` and `sutAuthTag` values for closed relays. Both test
 public keys must be room members, and the SUT public key must have the **Bot**

@@ -3,9 +3,13 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PreparedAgentDatabaseMigrationDiscovery } from "../infra/state-migrations.media-persistence-targets.js";
 import { DoctorUnreadableStateDatabaseError } from "../infra/state-repair-message.js";
 import type { OpenClawDatabaseSchemaPreflight } from "../state/openclaw-database-preflight.js";
+import type { BackupSqliteSnapshotFact } from "./backup-resource-inventory.js";
 
 export type DoctorDatabasePreflight = OpenClawDatabaseSchemaPreflight & {
+  /** The native updater already captured these files while holding stopped-state custody. */
+  verifiedSnapshots?: readonly BackupSqliteSnapshotFact[];
   agentDatabaseMigrationDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
+  agentDatabaseRecoveryConfigValid?: boolean;
   updateSchemaRehearsal?: { runId: string; updaterVersion: string };
 };
 
@@ -74,6 +78,12 @@ export async function prepareDoctorDatabasePreflight(
   }
   return {
     ...databaseSchemas,
-    ...(agentDatabaseMigrationDiscovery ? { agentDatabaseMigrationDiscovery } : {}),
+    ...(agentDatabaseMigrationDiscovery
+      ? {
+          agentDatabaseMigrationDiscovery,
+          // Supplied configs do not validate a captured ownership inventory.
+          agentDatabaseRecoveryConfigValid: snapshot?.valid === true,
+        }
+      : {}),
   };
 }

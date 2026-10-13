@@ -297,15 +297,14 @@ export function recordChannelIngressResolution(params: {
   if (!owner || owner.channelId !== params.channelId || !owner.isLive()) {
     return params.result;
   }
-  const activeOwner = owner;
   const binding = Object.freeze({
     channelId: params.channelId,
     accountId: params.accountId,
     rawPrincipalRef: params.rawPrincipalRef,
     participantOutcomeAffecting: params.participantOutcomeAffecting,
     identifierAuthentication: params.identifierAuthentication,
-    owner: activeOwner,
-    gatewayContext: activeOwner.resolveGatewayContext?.(),
+    owner,
+    gatewayContext: owner.resolveGatewayContext?.(),
     scope: Object.freeze({ conversation: Object.freeze({ ...params.scope.conversation }) }),
     contextBinding: snapshotContextBinding(params.scope.contextBinding),
     publicScopeKey: publicResultScopeKey(params.result),
@@ -512,19 +511,40 @@ export function combineChannelAdmissionEvidence(
   });
 }
 
-function inspectContributions(params: {
+function readContributions(params: {
   evidence: ChannelAdmissionEvidence | undefined;
   now: number;
   seen: Set<object>;
+  consume: boolean;
 }): ChannelAdmissionContribution[] {
   const payload = activePayload(params.evidence, params.now);
   if (!payload || !params.evidence || params.seen.has(params.evidence)) {
     return [{ participant: { state: "unknown" } }];
   }
   params.seen.add(params.evidence);
-  return payload.kind === "leaf"
-    ? [payload.contribution]
-    : payload.sources.flatMap((source) => inspectContributions({ ...params, evidence: source }));
+  if (params.consume) {
+    AdmissionEvidence.consume(params.evidence);
+  }
+  if (payload.kind === "leaf") {
+    return [payload.contribution];
+  }
+  const contributions = payload.sources.flatMap((source) =>
+    readContributions({ ...params, evidence: source }),
+  );
+  return !params.consume || contributions.length <= CHANNEL_ADMISSION_EVIDENCE_MAX_CONTRIBUTIONS
+    ? contributions
+    : [{ participant: { state: "unknown" } }];
+}
+
+function sharedParticipantRef(contributions: readonly ChannelAdmissionContribution[]) {
+  const first = contributions[0]?.participant;
+  return first?.state === "present" &&
+    contributions.every(
+      ({ participant }) =>
+        participant.state === "present" && participant.rawPrincipalRef === first.rawPrincipalRef,
+    )
+    ? first.rawPrincipalRef
+    : undefined;
 }
 
 /** Compare opaque participants without exposing or consuming their raw references. */
@@ -532,7 +552,7 @@ export function compareChannelAdmissionParticipants(
   evidence: readonly (ChannelAdmissionEvidence | undefined)[],
 ): "same" | "mixed-or-unknown" {
   const contributions = evidence.flatMap((candidate) =>
-    inspectContributions({ evidence: candidate, now: Date.now(), seen: new Set() }),
+    readContributions({ evidence: candidate, now: Date.now(), seen: new Set(), consume: false }),
   );
   if (
     contributions.length === 0 ||
@@ -540,43 +560,10 @@ export function compareChannelAdmissionParticipants(
   ) {
     return "mixed-or-unknown";
   }
-  const participants = contributions.map((item) => item.participant);
-  const first = participants[0];
-  return first?.state === "present" &&
-    participants.every(
-      (item) => item.state === "present" && item.rawPrincipalRef === first.rawPrincipalRef,
-    )
-    ? "same"
-    : "mixed-or-unknown";
+  return sharedParticipantRef(contributions) !== undefined ? "same" : "mixed-or-unknown";
 }
 
-function consumeContributions(params: {
-  evidence: ChannelAdmissionEvidence | undefined;
-  now: number;
-  seen: Set<object>;
-}): ChannelAdmissionContribution[] {
-  const payload = activePayload(params.evidence, params.now);
-  if (!payload || !params.evidence || params.seen.has(params.evidence)) {
-    return [{ participant: { state: "unknown" } }];
-  }
-  params.seen.add(params.evidence);
-  AdmissionEvidence.consume(params.evidence);
-  if (payload.kind === "leaf") {
-    return [payload.contribution];
-  }
-  const contributions = payload.sources.flatMap((source) =>
-    consumeContributions({ ...params, evidence: source }),
-  );
-  return contributions.length <= CHANNEL_ADMISSION_EVIDENCE_MAX_CONTRIBUTIONS
-    ? contributions
-    : [{ participant: { state: "unknown" } }];
-}
-
-function freezeConsumed(
-  value: Omit<ConsumedChannelAdmissionEvidence, "invoker"> & {
-    invoker: ConsumedChannelAdmissionEvidence["invoker"];
-  },
-): ConsumedChannelAdmissionEvidence {
+function freezeConsumed(value: ConsumedChannelAdmissionEvidence): ConsumedChannelAdmissionEvidence {
   return Object.freeze({
     ...value,
     invoker: Object.freeze(value.invoker),
@@ -587,31 +574,22 @@ function freezeConsumed(
 export function consumeChannelAdmissionEvidence(
   evidence: ChannelAdmissionEvidence | undefined,
 ): ConsumedChannelAdmissionEvidence {
-  const contributions = consumeContributions({ evidence, now: Date.now(), seen: new Set() });
-  const participants = contributions.map((item) => item.participant);
+  const contributions = readContributions({
+    evidence,
+    now: Date.now(),
+    seen: new Set(),
+    consume: true,
+  });
   const allUnsupported =
-    participants.length > 0 && participants.every((item) => item.state === "unsupported");
-  if (allUnsupported) {
+    contributions.length > 0 &&
+    contributions.every(({ participant }) => participant.state === "unsupported");
+  const rawPrincipalRef = allUnsupported ? undefined : sharedParticipantRef(contributions);
+  if (rawPrincipalRef === undefined) {
+    const ingressState = allUnsupported ? "unsupported" : "unknown";
     return freezeConsumed({
-      ingressState: "unsupported",
+      ingressState,
       invoker: { state: "unknown" },
-      decisionCoverage: "unsupported",
-      identifierAuthentication: "unknown",
-    });
-  }
-
-  const present = participants.filter(
-    (item): item is Extract<(typeof participants)[number], { state: "present" }> =>
-      item.state === "present",
-  );
-  const sameParticipant =
-    present.length === participants.length &&
-    present.every((item) => item.rawPrincipalRef === present[0]?.rawPrincipalRef);
-  if (!sameParticipant || !present[0]) {
-    return freezeConsumed({
-      ingressState: "unknown",
-      invoker: { state: "unknown" },
-      decisionCoverage: "unknown",
+      decisionCoverage: ingressState,
       identifierAuthentication: "unknown",
     });
   }
@@ -633,7 +611,7 @@ export function consumeChannelAdmissionEvidence(
     invoker: {
       state: "present",
       kind: "person",
-      rawPrincipalRef: present[0].rawPrincipalRef,
+      rawPrincipalRef,
     },
     assuranceRef: "channel-admission",
     decisionCoverage: everyDecisionEnforced ? "enforced" : "attribution-only",
@@ -644,14 +622,7 @@ export function consumeChannelAdmissionEvidence(
 /** Queue the channel decision after its exact identity tuple on the shared audit FIFO. */
 export function recordChannelAdmissionDecision(
   evidence: ChannelAdmissionEvidence | undefined,
-  params: {
-    contextId: ChannelAdmissionDecisionReceiptInput["contextId"];
-    executionId: ChannelAdmissionDecisionReceiptInput["executionId"];
-    runId: ChannelAdmissionDecisionReceiptInput["runId"];
-    occurredAt: ChannelAdmissionDecisionReceiptInput["occurredAt"];
-    coverageState: ChannelAdmissionDecisionReceiptInput["coverageState"];
-    identifierAuthentication: ChannelAdmissionDecisionReceiptInput["identifierAuthentication"];
-  },
+  params: ChannelAdmissionDecisionReceiptInput,
 ): boolean {
   const stored = AdmissionEvidence.read(evidence);
   return stored?.audit

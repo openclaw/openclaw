@@ -35,8 +35,10 @@ chooses the provider for explicit evaluation and supported consumers. The core
 Selection does not start background work or replace the chat model.
 Automatic experimental consumers additionally require explicit
 [Decision assistance opt-in](/concepts/experimental-features#decision-assistance).
-That Labs entry currently provides the gate foundation only, with no automatic
-consumers connected; explicit `decision_evaluate` remains independent of Labs.
+The built-in OpenClaw runtime uses that opt-in for conversational tool filtering
+with bounded recent conversation. The selected Decision provider receives that
+secondary evidence; see the [privacy and fallback contract](/concepts/experimental-features#conversational-tool-filtering).
+Explicit `decision_evaluate` remains independent of Labs.
 
 ## Choose a provider and model
 
@@ -308,6 +310,20 @@ authority, and contract errors reject; do not turn cancellation into fallback wo
 See the [SDK contract](/plugins/sdk-overview/capabilities#decision-models-contract-version-1)
 for the complete lifecycle and error behavior.
 
+Consumers should build bounded useful evidence, evaluate it once, and retain their
+normal behavior when the provider returns `unsupported-input`, including context
+overflow. The runtime does not estimate model tokens, truncate evidence, retry,
+or choose another provider/model. Input rejection does not open the provider
+circuit; cancellation and closed authority remain terminal.
+
+The `decisions` logger records DEBUG outcomes, dispatch status, elapsed time,
+question count, supplied JSON byte count, and actual provider usage when available.
+JSON bytes are not model tokens. Purpose/provider/model identifiers are hashed;
+existing ambient trace correlation is preserved. It logs no submitted text,
+rubrics, credentials, or provider error bodies, and does no extra input serialization
+when DEBUG is disabled. Generic input-rejection warnings are rate limited. Logs
+distinguish the provider result from the caller effect, which remains unobserved here.
+
 For ONNX, cold-loading a large model can exceed the deadline on slower machines.
 Keep active models warm when memory permits, or choose a smaller model. See
 [ONNX lifecycle and runtime](/plugins/onnx#lifecycle-and-runtime) for cache settings
@@ -321,7 +337,10 @@ A provider plugin implements `DecisionProviderV1` from
 `api.registerDecisionProvider(provider)`. Its `id` and `contractVersion: 1`
 identify the contract; `evaluate(batch, context)` returns validated typed answers
 or a supported unavailable reason. The context includes the selected model,
-optional agent ID, composed cancellation signal, and monotonic deadline.
+optional agent ID, composed cancellation signal, monotonic deadline, and an optional
+host-owned `isAdmissible()` predicate for automatic consumers. External transports
+check that predicate at final synchronous I/O, after awaited preparation; see the
+[provider contract](/plugins/sdk-overview/capabilities#decision-models-contract-version-1).
 
 Declare provider ownership and static model metadata in the plugin manifest:
 

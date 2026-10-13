@@ -1,4 +1,3 @@
-// Xai helper module supports x search config behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 

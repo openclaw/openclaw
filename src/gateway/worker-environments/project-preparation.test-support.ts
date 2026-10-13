@@ -32,11 +32,16 @@ export async function runProjectScriptWithGitProbe(
     umask: () => {},
     exitCode: 0,
     stdout: { write: (text: string) => (stdout += text) },
+    once: process.once.bind(process),
+    removeListener: process.removeListener.bind(process),
+    kill: process.kill.bind(process),
   };
   // Both provider scripts wrap their Node program in a shell heredoc.
   await runInNewContext(script.split("\n").slice(2, -1).join("\n"), {
     Buffer,
     performance,
+    setTimeout,
+    clearTimeout,
     process: guestProcess,
     console: { error: (text: string) => (stderr += text) },
     require: (id: string) => {

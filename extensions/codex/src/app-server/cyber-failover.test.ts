@@ -29,6 +29,16 @@ function config(overrides: Partial<CodexCyberFailoverConfig> = {}): CodexCyberFa
   return { mode: "auto", model: DAYBREAK, cooloffMs: 600_000, ...overrides };
 }
 
+function planEscalation(overrides: Partial<Parameters<typeof planCodexCyberEscalation>[0]> = {}) {
+  return planCodexCyberEscalation({
+    config: config(),
+    currentModel: PRIMARY,
+    replaySafe: true,
+    workspace: nextWorkspace(),
+    ...overrides,
+  });
+}
+
 function outcome(overrides: Partial<CodexCyberAttemptOutcome> = {}): CodexCyberAttemptOutcome {
   return {
     terminal: { kind: "ok" },
@@ -69,26 +79,22 @@ describe("config", () => {
 
 describe("attempt verdict", () => {
   it("escalates only OpenAI's own cyber refusal on this attempt", () => {
-    expect(readCodexCyberAttemptVerdict(refusal("cyber")).cyberRefused).toBe(true);
+    expect(readCodexCyberAttemptVerdict(refusal("cyber"))).toMatchObject({
+      cyberRefused: true,
+      replaySafe: true,
+    });
     expect(readCodexCyberAttemptVerdict(refusal("bio")).cyberRefused).toBe(false);
     expect(readCodexCyberAttemptVerdict(refusal("misalignment")).cyberRefused).toBe(false);
     expect(readCodexCyberAttemptVerdict(refusal("cyber", "other")).cyberRefused).toBe(false);
     expect(
       readCodexCyberAttemptVerdict(
         outcome({ lastAssistant: refusal("cyber").currentAttemptAssistant }),
-      ).cyberRefused,
-    ).toBe(false);
-    expect(readCodexCyberAttemptVerdict(undefined).cyberRefused).toBe(false);
-  });
-
-  it("requires an affirmative replay verdict", () => {
-    expect(
-      readCodexCyberAttemptVerdict(
-        outcome({ replayMetadata: { replaySafe: true, hadPotentialSideEffects: false } }),
-      ).replaySafe,
-    ).toBe(true);
-    expect(readCodexCyberAttemptVerdict(outcome()).replaySafe).toBe(false);
-    expect(readCodexCyberAttemptVerdict(undefined).replaySafe).toBe(false);
+      ),
+    ).toMatchObject({ cyberRefused: false, replaySafe: false });
+    expect(readCodexCyberAttemptVerdict(undefined)).toMatchObject({
+      cyberRefused: false,
+      replaySafe: false,
+    });
   });
 
   it("counts only a real reply as answered", () => {
@@ -104,8 +110,8 @@ describe("attempt verdict", () => {
     expect(
       readCodexCyberAttemptVerdict(
         outcome({ terminal: { kind: "failed", source: "prompt", error: "stream disconnected" } }),
-      ).answered,
-    ).toBe(false);
+      ),
+    ).toMatchObject({ answered: false, unavailable: false });
     expect(
       readCodexCyberAttemptVerdict(
         outcome({
@@ -121,66 +127,40 @@ describe("attempt verdict", () => {
     expect(readCodexCyberAttemptVerdict(outcome()).answered).toBe(false);
   });
 
-  it.each([
-    "unexpected status 403 Forbidden: target is not authorized",
-    new Error("unexpected status 401 Unauthorized: not authorized to access this model."),
-  ])("reads an unauthorized target from the canonical terminal", (error) => {
-    expect(
-      readCodexCyberAttemptVerdict(
-        outcome({ terminal: { kind: "failed", source: "prompt", error } }),
-      ).unavailable,
-    ).toBe(true);
-  });
-
-  it("does not record other terminal failures as target denials", () => {
-    expect(
-      readCodexCyberAttemptVerdict(
-        outcome({ terminal: { kind: "failed", source: "prompt", error: "stream disconnected" } }),
-      ).unavailable,
-    ).toBe(false);
-  });
+  it.each([new Error("unexpected status 401 Unauthorized: not authorized to access this model.")])(
+    "reads an unauthorized target from the canonical terminal",
+    (error) => {
+      expect(
+        readCodexCyberAttemptVerdict(
+          outcome({ terminal: { kind: "failed", source: "prompt", error } }),
+        ).unavailable,
+      ).toBe(true);
+    },
+  );
 });
 
 describe("escalation planning", () => {
-  it("escalates a refused turn to the configured Daybreak model", () => {
-    expect(
-      planCodexCyberEscalation({
-        config: config(),
-        currentModel: PRIMARY,
-        replaySafe: true,
-        workspace: nextWorkspace(),
-      }),
-    ).toEqual({ kind: "escalate", model: DAYBREAK });
-  });
-
   it("refuses to replay a turn that already acted", () => {
-    expect(
-      planCodexCyberEscalation({
-        config: config(),
-        currentModel: PRIMARY,
-        replaySafe: false,
-        workspace: nextWorkspace(),
-      }),
-    ).toEqual({ kind: "skip", reason: "not_replay_safe" });
+    expect(planEscalation({ replaySafe: false })).toEqual({
+      kind: "skip",
+      reason: "not_replay_safe",
+    });
   });
 
   it("does not escalate when the operator disabled it", () => {
-    expect(
-      planCodexCyberEscalation({
-        config: config({ mode: "off" }),
-        currentModel: PRIMARY,
-        replaySafe: true,
-        workspace: nextWorkspace(),
-      }),
-    ).toEqual({ kind: "skip", reason: "disabled" });
+    expect(planEscalation({ config: config({ mode: "off" }) })).toEqual({
+      kind: "skip",
+      reason: "disabled",
+    });
   });
 
   it("does not escalate a turn already running on Daybreak", () => {
     const workspace = nextWorkspace();
     for (const currentModel of [DAYBREAK, `openai/${DAYBREAK}`]) {
-      expect(
-        planCodexCyberEscalation({ config: config(), currentModel, replaySafe: true, workspace }),
-      ).toEqual({ kind: "skip", reason: "already_daybreak" });
+      expect(planEscalation({ currentModel, workspace })).toEqual({
+        kind: "skip",
+        reason: "already_daybreak",
+      });
     }
   });
 });
@@ -196,24 +176,14 @@ describe("unauthorized targets", () => {
       now,
     });
     // A session that never saw the failure still must not pay for it.
-    expect(
-      planCodexCyberEscalation({
-        config: config(),
-        currentModel: PRIMARY,
-        replaySafe: true,
-        workspace,
-        now: now + 1,
-      }),
-    ).toEqual({ kind: "skip", reason: "target_unavailable" });
-    expect(
-      planCodexCyberEscalation({
-        config: config(),
-        currentModel: PRIMARY,
-        replaySafe: true,
-        workspace,
-        now: now + 600_001,
-      }),
-    ).toEqual({ kind: "escalate", model: DAYBREAK });
+    expect(planEscalation({ workspace, now: now + 1 })).toEqual({
+      kind: "skip",
+      reason: "target_unavailable",
+    });
+    expect(planEscalation({ workspace, now: now + 600_001 })).toEqual({
+      kind: "escalate",
+      model: DAYBREAK,
+    });
   });
 
   it("keeps one workspace's denial out of another's way", () => {
@@ -226,15 +196,10 @@ describe("unauthorized targets", () => {
       cooloffMs: 600_000,
       now,
     });
-    expect(
-      planCodexCyberEscalation({
-        config: config(),
-        currentModel: PRIMARY,
-        replaySafe: true,
-        workspace: entitled,
-        now: now + 1,
-      }),
-    ).toEqual({ kind: "escalate", model: DAYBREAK });
+    expect(planEscalation({ workspace: entitled, now: now + 1 })).toEqual({
+      kind: "escalate",
+      model: DAYBREAK,
+    });
   });
 
   it("stays bounded as workspaces churn", () => {
@@ -248,10 +213,7 @@ describe("unauthorized targets", () => {
       });
     }
     const live = Array.from({ length: 400 }, (_, index) =>
-      planCodexCyberEscalation({
-        config: config(),
-        currentModel: PRIMARY,
-        replaySafe: true,
+      planEscalation({
         workspace: { agentId: `churn-${index}`, authProfileId: "p" },
         now: now + 1,
       }),
@@ -263,22 +225,8 @@ describe("unauthorized targets", () => {
   it("holds siblings while one probe is in flight", () => {
     const workspace = nextWorkspace();
     const release = reserveCodexCyberProbe({ model: DAYBREAK, workspace });
-    expect(
-      planCodexCyberEscalation({
-        config: config(),
-        currentModel: PRIMARY,
-        replaySafe: true,
-        workspace,
-      }),
-    ).toEqual({ kind: "skip", reason: "probe_in_flight" });
+    expect(planEscalation({ workspace })).toEqual({ kind: "skip", reason: "probe_in_flight" });
     release();
-    expect(
-      planCodexCyberEscalation({
-        config: config(),
-        currentModel: PRIMARY,
-        replaySafe: true,
-        workspace,
-      }),
-    ).toEqual({ kind: "escalate", model: DAYBREAK });
+    expect(planEscalation({ workspace })).toEqual({ kind: "escalate", model: DAYBREAK });
   });
 });

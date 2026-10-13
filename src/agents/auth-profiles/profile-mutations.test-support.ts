@@ -1,5 +1,6 @@
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import * as publication from "./runtime-snapshot-publication.js";
 
 type ExpectedOAuthCredentialFields = {
   provider: string;
@@ -58,4 +59,14 @@ export function expectOAuthCredentialFields(
     }
   }
   return credential;
+}
+
+export function failNextRuntimeAuthSnapshotPublication() {
+  const publish = publication.publishPreparedRuntimeAuthProfileStoreSnapshot;
+  return vi
+    .spyOn(publication, "publishPreparedRuntimeAuthProfileStoreSnapshot")
+    .mockImplementationOnce((...args) => {
+      publish(...args);
+      throw new Error("injected postcommit publication failure");
+    });
 }

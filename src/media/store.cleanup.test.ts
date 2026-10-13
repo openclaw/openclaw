@@ -44,7 +44,7 @@ describe("cleanOldMedia managed-subtree retention", () => {
       MANAGED_OUTGOING_ORIGINALS_SUBDIR,
     );
     const attachmentId = "11111111-1111-4111-8111-111111111111";
-    insertManagedImageRecord(
+    await insertManagedImageRecord(
       {
         attachmentId,
         sessionKey: "agent:main:main",

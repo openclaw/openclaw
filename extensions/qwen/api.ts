@@ -1,4 +1,3 @@
-// Qwen API module exposes the plugin public contract.
 export {
   applyQwenNativeStreamingUsageCompat,
   buildQwenDefaultModelDefinition,

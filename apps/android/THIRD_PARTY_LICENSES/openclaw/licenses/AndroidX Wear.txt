@@ -1,13 +1,14 @@
 AndroidX Wear
 Artifacts:
-- androidx.wear.compose:compose-foundation:1.6.2
-- androidx.wear.compose:compose-material3:1.6.2
+- androidx.core:core-splashscreen:1.2.0
+- androidx.wear.compose:compose-foundation:1.7.0
+- androidx.wear.compose:compose-material3:1.7.0
 - androidx.wear:wear-input:1.2.0
 - androidx.wear.tiles:tiles:1.6.2
 - androidx.wear.protolayout:protolayout:1.4.2
 - androidx.wear.protolayout:protolayout-material3:1.4.2
 
-Copyright 2020 The Android Open Source Project
+Copyright 2020-2021 The Android Open Source Project
 
 Licensed under the Apache License, Version 2.0.
 You may obtain a copy of the License at:

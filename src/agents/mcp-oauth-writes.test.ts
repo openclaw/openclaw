@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { operatorMcpOAuthIdentity, requesterMcpOAuthStoreKeyPrefix } from "./mcp-oauth-identity.js";
 import { createMcpOAuthClientProvider } from "./mcp-oauth-provider.js";
@@ -17,7 +18,7 @@ import { withMcpOAuthTestLease } from "./mcp-oauth.test-support.js";
 
 it("persists SDK callbacks and pending state across close without parent SQL or waits", async () => {
   await withOpenClawTestState({ label: "mcp-oauth-worker-writes" }, async () => {
-    const { DatabaseSync, StatementSync } = requireNodeSqlite();
+    requireNodeSqlite();
     const identity = operatorMcpOAuthIdentity("worker-writes", "https://mcp.example.test/rpc");
     const tokens = {
       access_token: "fixture-access",
@@ -28,16 +29,8 @@ it("persists SDK callbacks and pending state across close without parent SQL or 
     const discovery = { authorizationServerUrl: "https://issuer.example.test" };
     const redirectUrl = "https://gateway.example.test/oauth/mcp/callback";
     const authorizationUrl = new URL("https://issuer.example.test/authorize?state=fixture-state");
-    const parentCalls = {
-      prepare: vi.spyOn(DatabaseSync.prototype, "prepare"),
-      exec: vi.spyOn(DatabaseSync.prototype, "exec"),
-      close: vi.spyOn(DatabaseSync.prototype, "close"),
-      get: vi.spyOn(StatementSync.prototype, "get"),
-      all: vi.spyOn(StatementSync.prototype, "all"),
-      run: vi.spyOn(StatementSync.prototype, "run"),
-      iterate: vi.spyOn(StatementSync.prototype, "iterate"),
-      wait: vi.spyOn(Atomics, "wait"),
-    };
+    const sql = observeMainThreadSql({ includeClose: true });
+    const wait = vi.spyOn(Atomics, "wait");
     try {
       await withMcpOAuthTestLease(identity.storeKey, async (lease, context) => {
         const provider = await createMcpOAuthClientProvider({
@@ -102,18 +95,14 @@ it("persists SDK callbacks and pending state across close without parent SQL or 
         );
       });
       await closeOpenClawStateDatabaseAsync();
-      expect(
-        Object.fromEntries(
-          Object.entries(parentCalls).map(([name, spy]) => [name, spy.mock.calls.length]),
-        ),
-      ).toEqual({ prepare: 0, exec: 0, close: 0, get: 0, all: 0, run: 0, iterate: 0, wait: 0 });
+      sql.expectIdle();
+      expect(wait).not.toHaveBeenCalled();
     } finally {
       try {
         await closeOpenClawStateDatabaseAsync();
       } finally {
-        for (const spy of Object.values(parentCalls)) {
-          spy.mockRestore();
-        }
+        sql.restore();
+        wait.mockRestore();
       }
     }
   });

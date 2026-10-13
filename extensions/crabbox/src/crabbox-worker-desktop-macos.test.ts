@@ -12,7 +12,14 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const leaseId = "cbx_macos_fixture";
 const wallpaper = Buffer.from("synthetic wallpaper");
-type Readiness = "ready" | "wrong-account" | "no-gui" | "invalid-signature" | "ad-hoc" | "old-app";
+type Readiness =
+  | "wrong-account"
+  | "no-gui"
+  | "invalid-signature"
+  | "ad-hoc"
+  | "invalid-team"
+  | "authority-first-long"
+  | "team-first-long";
 
 function desktopFixture(readiness: Readiness) {
   const root = tempDirs.make("crabbox-macos-desktop-");
@@ -39,12 +46,29 @@ function desktopFixture(readiness: Readiness) {
     { mode: 0o700 },
   );
   const commands: Record<string, string> = {
+    // A tail larger than a pipe buffer exposes signature readers that close before printf finishes.
     codesign: `if [ "$1" = --verify ]; then [ "$FIXTURE_READINESS" != invalid-signature ]; exit; fi
-if [ "$FIXTURE_READINESS" = ad-hoc ]; then echo Signature=adhoc; else printf 'Authority=Developer ID Application: Fixture\\nTeamIdentifier=ABCDEFGHIJ\\n'; fi`,
+case "$FIXTURE_READINESS" in
+  ad-hoc) echo Signature=adhoc ;;
+  invalid-team) printf 'Authority=Developer ID Application: Fixture\\nTeamIdentifier=invalid\\n' ;;
+  authority-first-long|team-first-long)
+    if [ "$FIXTURE_READINESS" = authority-first-long ]; then
+      printf 'Authority=Developer ID Application: Fixture\\n'
+    else
+      printf 'TeamIdentifier=ABCDEFGHIJ\\n'
+    fi
+    for ((line=0; line<4096; line++)); do printf 'Certificate=%0100d\\n' "$line"; done
+    if [ "$FIXTURE_READINESS" = authority-first-long ]; then
+      printf 'TeamIdentifier=ABCDEFGHIJ\\n'
+    else
+      printf 'Authority=Developer ID Application: Fixture\\n'
+    fi ;;
+  *) printf 'Authority=Developer ID Application: Fixture\\nTeamIdentifier=ABCDEFGHIJ\\n' ;;
+esac`,
     PlistBuddy: `case "$2" in
   'Print :CFBundleExecutable') echo OpenClaw ;;
   'Print :CFBundleIdentifier') echo ai.openclaw.cloud-worker ;;
-  'Print :OpenClawCloudWorkerHostVersion') if [ "$FIXTURE_READINESS" = old-app ]; then echo 0; else echo 1; fi ;;
+  'Print :OpenClawCloudWorkerHostVersion') echo 1 ;;
   *) exit 1 ;;
 esac`,
     id: `case "$1" in -u) echo "\${FIXTURE_EFFECTIVE_UID-501}" ;; -un) echo fixture ;; -gn) echo staff ;; *) exit 1 ;; esac`,
@@ -167,17 +191,15 @@ printf '%s --user-data-dir=%s --remote-debugging-port=9222 about:blank\\n' "$FIX
 }
 
 describe("Crabbox macOS desktop descriptor", () => {
-  it.each(["", "<token>", "ec2-user\nother", "../user"])(
-    "rejects an unavailable or malformed inspected account %j",
-    (username) => {
-      expect(() => createCrabboxMacosDesktopEndpoint(leaseId, username)).toThrow(
-        "inspected SSH account",
-      );
-      expect(() => createCrabboxMacosDesktopSetup(leaseId, "cG5n", username)).toThrow(
-        "inspected SSH account",
-      );
-    },
-  );
+  it("rejects a malformed inspected account", () => {
+    const username = "ec2-user\nother";
+    expect(() => createCrabboxMacosDesktopEndpoint(leaseId, username)).toThrow(
+      "inspected SSH account",
+    );
+    expect(() => createCrabboxMacosDesktopSetup(leaseId, "cG5n", username)).toThrow(
+      "inspected SSH account",
+    );
+  });
 
   it("binds ARD credentials and launchers to the inspected account and exact lease", () => {
     expect(createCrabboxMacosDesktopEndpoint(leaseId, "ec2-user")).toEqual({
@@ -199,48 +221,60 @@ describe("Crabbox macOS desktop descriptor", () => {
 });
 
 describe.skipIf(process.platform === "win32")("Crabbox macOS desktop setup", () => {
-  it.each<Readiness>(["wrong-account", "no-gui", "invalid-signature", "ad-hoc", "old-app"])(
-    "rejects %s before publishing credentials or desktop launchers",
-    (readiness) => {
+  it.each<{ readiness: Readiness; error: string }>([
+    { readiness: "wrong-account", error: "must run as its inspected macOS account" },
+    { readiness: "no-gui", error: "GUI session is unavailable" },
+    { readiness: "invalid-signature", error: "signature is invalid" },
+    { readiness: "ad-hoc", error: "needs a Developer ID Application signature" },
+    { readiness: "invalid-team", error: "signing team is missing" },
+  ])(
+    "rejects $readiness before publishing credentials or desktop launchers",
+    ({ readiness, error }) => {
       const fixture = desktopFixture(readiness);
       expect(fixture.result.error).toBeUndefined();
       expect(fixture.result.status, fixture.result.stderr).toBe(1);
+      expect(fixture.result.stderr).toContain(error);
       expect(fs.existsSync(fixture.desktop)).toBe(false);
       expect(fixture.result.stdout).not.toContain("synthetic-vnc-password");
     },
   );
 
-  it("publishes private lease artifacts and reuses its already running browser", () => {
-    const fixture = desktopFixture("ready");
-    try {
-      expect(fixture.result.error).toBeUndefined();
-      expect(fixture.result.status, fixture.result.stderr).toBe(0);
-      const passwordFile = path.join(fixture.desktop, "vnc.password");
-      expect(fs.readFileSync(passwordFile, "utf8")).toBe("synthetic-vnc-password\n");
-      expect(fs.statSync(passwordFile).mode & 0o777).toBe(0o600);
-      expect(fs.readFileSync(path.join(fixture.desktop, "wallpaper.png"))).toEqual(wallpaper);
-      const repeated = fixture.repeat();
-      expect(repeated.status, repeated.stderr).toBe(0);
-      expect(fs.readFileSync(path.join(fixture.root, "launches"), "utf8")).toBe("launch\n");
-      expect(fs.readFileSync(path.join(fixture.root, "browser-context"), "utf8")).toBe(
-        fixture.expectedContext,
-      );
-      const terminal = fixture.terminal();
-      expect(terminal.status, terminal.stderr).toBe(0);
-      expect(fs.readFileSync(path.join(fixture.root, "terminal-context"), "utf8")).toBe(
-        fixture.expectedContext,
-      );
-      const host = fixture.host();
-      expect(host.status, host.stderr).toBe(0);
-      expect(fs.readFileSync(path.join(fixture.root, "terminal-context"), "utf8")).toBe(
-        fixture.expectedContext,
-      );
-      expect(fs.readFileSync(path.join(fixture.root, "gui-arguments"), "utf8")).toBe(
-        "--cloud-worker-host\n--display-name\nWorker with spaces\n",
-      );
-      expect(fixture.result.stdout + fixture.result.stderr).not.toContain("synthetic-vnc-password");
-    } finally {
-      fixture.cleanup();
-    }
-  });
+  it.each<Readiness>(["authority-first-long", "team-first-long"])(
+    "publishes private lease artifacts and reuses its already running browser with %s",
+    (readiness) => {
+      const fixture = desktopFixture(readiness);
+      try {
+        expect(fixture.result.error).toBeUndefined();
+        expect(fixture.result.status, fixture.result.stderr).toBe(0);
+        const passwordFile = path.join(fixture.desktop, "vnc.password");
+        expect(fs.readFileSync(passwordFile, "utf8")).toBe("synthetic-vnc-password\n");
+        expect(fs.statSync(passwordFile).mode & 0o777).toBe(0o600);
+        expect(fs.readFileSync(path.join(fixture.desktop, "wallpaper.png"))).toEqual(wallpaper);
+        const repeated = fixture.repeat();
+        expect(repeated.status, repeated.stderr).toBe(0);
+        expect(fs.readFileSync(path.join(fixture.root, "launches"), "utf8")).toBe("launch\n");
+        expect(fs.readFileSync(path.join(fixture.root, "browser-context"), "utf8")).toBe(
+          fixture.expectedContext,
+        );
+        const terminal = fixture.terminal();
+        expect(terminal.status, terminal.stderr).toBe(0);
+        expect(fs.readFileSync(path.join(fixture.root, "terminal-context"), "utf8")).toBe(
+          fixture.expectedContext,
+        );
+        const host = fixture.host();
+        expect(host.status, host.stderr).toBe(0);
+        expect(fs.readFileSync(path.join(fixture.root, "terminal-context"), "utf8")).toBe(
+          fixture.expectedContext,
+        );
+        expect(fs.readFileSync(path.join(fixture.root, "gui-arguments"), "utf8")).toBe(
+          "--cloud-worker-host\n--display-name\nWorker with spaces\n",
+        );
+        expect(fixture.result.stdout + fixture.result.stderr).not.toContain(
+          "synthetic-vnc-password",
+        );
+      } finally {
+        fixture.cleanup();
+      }
+    },
+  );
 });

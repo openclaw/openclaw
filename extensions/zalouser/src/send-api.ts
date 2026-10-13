@@ -2,67 +2,21 @@ import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { fetchMediaWithZaloSendContext } from "./send-context.js";
 import { createZalouserSendReceipt } from "./send-receipt.js";
+import { sliceTextStyles } from "./text-styles-ranges.js";
 import type { ZaloSendOptions, ZaloSendResult } from "./types.js";
 import type { API } from "./zca-client.js";
-import { TextStyle, ThreadType } from "./zca-constants.js";
-
-function clampTextStyles(
-  text: string,
-  styles?: ZaloSendOptions["textStyles"],
-): ZaloSendOptions["textStyles"] {
-  if (!styles || styles.length === 0) {
-    return undefined;
-  }
-  const maxLength = text.length;
-  const clamped = styles
-    .map((style) => {
-      const start = Math.max(0, Math.min(style.start, maxLength));
-      const end = Math.min(style.start + style.len, maxLength);
-      if (end <= start) {
-        return null;
-      }
-      if (style.st === TextStyle.Indent) {
-        return {
-          start,
-          len: end - start,
-          st: style.st,
-          indentSize: style.indentSize,
-        };
-      }
-      return {
-        start,
-        len: end - start,
-        st: style.st,
-      };
-    })
-    .filter((style): style is NonNullable<typeof style> => style !== null);
-  return clamped.length > 0 ? clamped : undefined;
-}
+import { ThreadType } from "./zca-constants.js";
 
 function extractSendMessageId(result: Awaited<ReturnType<API["sendMessage"]>>): string | undefined {
   if (!result || typeof result !== "object") {
     return undefined;
   }
-  const direct = result.msgId;
-  if (direct !== undefined && direct !== null) {
-    return String(direct);
-  }
-  const primary = result.message?.msgId;
-  if (primary !== undefined && primary !== null) {
-    return String(primary);
-  }
-  const attachmentId = result.attachment?.[0]?.msgId;
-  if (attachmentId !== undefined && attachmentId !== null) {
-    return String(attachmentId);
-  }
-  return undefined;
+  const messageId = result.msgId ?? result.message?.msgId ?? result.attachment?.[0]?.msgId;
+  return messageId == null ? undefined : String(messageId);
 }
 
 function resolveMediaFileName(params: {
@@ -103,13 +57,12 @@ function hasAttachmentExtension(fileName: string): fileName is `${string}.${stri
   return fileName.includes(".");
 }
 
-function resolveUploadedVoiceAsset(
+function resolveUploadedVoiceUrl(
   uploaded: Array<{
     fileType?: string;
     fileUrl?: string;
-    fileName?: string;
   }>,
-): { fileUrl: string; fileName?: string } | undefined {
+): string | undefined {
   for (const item of uploaded) {
     if (!item || typeof item !== "object") {
       continue;
@@ -120,20 +73,10 @@ function resolveUploadedVoiceAsset(
       continue;
     }
     if (fileType === "others" || fileType === "video") {
-      return { fileUrl, fileName: normalizeOptionalString(item.fileName) };
+      return fileUrl;
     }
   }
   return undefined;
-}
-
-function buildZaloVoicePlaybackUrl(asset: { fileUrl: string; fileName?: string }): string {
-  // zca-js uses uploadAttachment(...).fileUrl directly for sendVoice.
-  // Appending filename can produce URLs that play only in the local session.
-  return asset.fileUrl.trim();
-}
-
-function truncatePayloadText(text: string): string {
-  return truncateUtf16Safe(text, 2000);
 }
 
 export async function sendZaloTextWithApi(
@@ -147,108 +90,76 @@ export async function sendZaloTextWithApi(
   let textMessageId: string | undefined;
 
   try {
-    if (options.mediaUrl?.trim()) {
-      const media = await loadOutboundMediaFromUrl(options.mediaUrl.trim(), {
-        maxBytes: options.mediaMaxBytes,
-        mediaLocalRoots: options.mediaLocalRoots,
-        mediaReadFile: options.mediaReadFile,
-        fetchImpl: fetchMediaWithZaloSendContext,
-      });
+    const mediaUrl = options.mediaUrl?.trim();
+    const media = mediaUrl
+      ? await loadOutboundMediaFromUrl(mediaUrl, {
+          maxBytes: options.mediaMaxBytes,
+          mediaLocalRoots: options.mediaLocalRoots,
+          mediaReadFile: options.mediaReadFile,
+          fetchImpl: fetchMediaWithZaloSendContext,
+        })
+      : undefined;
+    const attachments: Parameters<API["uploadAttachment"]>[0] = [];
+    if (media && mediaUrl) {
       const fileName = resolveMediaFileName({
-        mediaUrl: options.mediaUrl,
+        mediaUrl: options.mediaUrl ?? mediaUrl,
         fileName: media.fileName,
         contentType: media.contentType,
         kind: media.kind,
       });
-      const payloadText = truncatePayloadText(text || options.caption || "");
-      const textStyles = clampTextStyles(payloadText, options.textStyles);
+      attachments.push({
+        data: media.buffer,
+        filename: hasAttachmentExtension(fileName) ? fileName : `${fileName}.bin`,
+        metadata: { totalSize: media.buffer.length },
+      });
+    }
+    const payloadText = truncateUtf16Safe(media ? text || options.caption || "" : text, 2000);
+    const textStyles = sliceTextStyles(options.textStyles, 0, payloadText.length);
 
-      if (media.kind === "audio") {
-        if (payloadText) {
-          const textResponse = await api.sendMessage(
-            textStyles ? { msg: payloadText, styles: textStyles } : payloadText,
-            trimmedThreadId,
-            type,
-          );
-          textMessageId = extractSendMessageId(textResponse);
-          await onDeliveryResult?.({
-            ok: true,
-            messageId: textMessageId,
-            receipt: createZalouserSendReceipt({
-              messageId: textMessageId,
-              threadId: trimmedThreadId,
-              kind: "text",
-            }),
-          });
-        }
-
-        const attachmentFileName: `${string}.${string}` = hasAttachmentExtension(fileName)
-          ? fileName
-          : `${fileName}.bin`;
-        const uploaded = await api.uploadAttachment(
-          [
-            {
-              data: media.buffer,
-              filename: attachmentFileName,
-              metadata: {
-                totalSize: media.buffer.length,
-              },
-            },
-          ],
+    if (media?.kind === "audio") {
+      if (payloadText) {
+        const textResponse = await api.sendMessage(
+          textStyles ? { msg: payloadText, styles: textStyles } : payloadText,
           trimmedThreadId,
           type,
         );
-        const voiceAsset = resolveUploadedVoiceAsset(uploaded);
-        if (!voiceAsset) {
-          throw new Error("Failed to resolve uploaded audio URL for voice message");
-        }
-        const voiceUrl = buildZaloVoicePlaybackUrl(voiceAsset);
-        const response = await api.sendVoice({ voiceUrl }, trimmedThreadId, type);
-        const voiceMessageId = extractSendMessageId(response);
-        return {
+        textMessageId = extractSendMessageId(textResponse);
+        await onDeliveryResult?.({
           ok: true,
-          messageId: voiceMessageId ?? textMessageId,
+          messageId: textMessageId,
           receipt: createZalouserSendReceipt({
-            platformMessageIds: [textMessageId, voiceMessageId],
+            messageId: textMessageId,
             threadId: trimmedThreadId,
-            kind: "voice",
+            kind: "text",
           }),
-        };
+        });
       }
 
-      const response = await api.sendMessage(
-        {
-          msg: payloadText,
-          ...(textStyles ? { styles: textStyles } : {}),
-          attachments: [
-            {
-              data: media.buffer,
-              filename: hasAttachmentExtension(fileName) ? fileName : `${fileName}.bin`,
-              metadata: {
-                totalSize: media.buffer.length,
-              },
-            },
-          ],
-        },
-        trimmedThreadId,
-        type,
-      );
-      const messageId = extractSendMessageId(response);
+      const uploaded = await api.uploadAttachment(attachments, trimmedThreadId, type);
+      const voiceUrl = resolveUploadedVoiceUrl(uploaded);
+      if (!voiceUrl) {
+        throw new Error("Failed to resolve uploaded audio URL for voice message");
+      }
+      // zca-js expects the uploaded URL itself, without an appended filename.
+      const response = await api.sendVoice({ voiceUrl }, trimmedThreadId, type);
+      const voiceMessageId = extractSendMessageId(response);
       return {
         ok: true,
-        messageId,
+        messageId: voiceMessageId ?? textMessageId,
         receipt: createZalouserSendReceipt({
-          messageId,
+          platformMessageIds: [textMessageId, voiceMessageId],
           threadId: trimmedThreadId,
-          kind: "media",
+          kind: "voice",
         }),
       };
     }
 
-    const payloadText = truncatePayloadText(text);
-    const textStyles = clampTextStyles(payloadText, options.textStyles);
     const response = await api.sendMessage(
-      textStyles ? { msg: payloadText, styles: textStyles } : payloadText,
+      media
+        ? { msg: payloadText, ...(textStyles ? { styles: textStyles } : {}), attachments }
+        : textStyles
+          ? { msg: payloadText, styles: textStyles }
+          : payloadText,
       trimmedThreadId,
       type,
     );
@@ -259,7 +170,7 @@ export async function sendZaloTextWithApi(
       receipt: createZalouserSendReceipt({
         messageId,
         threadId: trimmedThreadId,
-        kind: "text",
+        kind: media ? "media" : "text",
       }),
     };
   } catch (error) {

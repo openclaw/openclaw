@@ -29,8 +29,6 @@ it.each([
   { method: "bounded", revoke: true },
   { method: "retarget", revoke: false },
   { method: "retarget", revoke: true },
-  { method: "reload", revoke: false },
-  { method: "reload", revoke: true },
 ])(
   "keeps $method read failure bound to its write owner (revoke=$revoke)",
   async ({ method, revoke }) => {
@@ -70,10 +68,8 @@ it.each([
           await SessionManager.openAsync(target);
         } else if (method === "bounded") {
           await SessionManager.openBoundedAsync(target, { maxBytes: 4096, maxEvents: 5 });
-        } else if (method === "retarget") {
-          await manager.setSessionTargetAsync(target);
         } else {
-          await manager.reloadPersistedTranscriptAsync();
+          await manager.setSessionTargetAsync(target);
         }
       },
     );

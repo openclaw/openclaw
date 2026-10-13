@@ -248,7 +248,7 @@ export function validateTuiPtyScenario(scenario: QaSeedScenarioWithSource): {
   return { cases, cliMode };
 }
 
-export function buildTuiPtyVitestCommand(params: {
+function buildTuiPtyVitestCommand(params: {
   cases: readonly TuiPtyCase[];
   cliMode: TuiPtyCliMode;
   repoRoot: string;

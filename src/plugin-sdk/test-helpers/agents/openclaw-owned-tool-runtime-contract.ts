@@ -9,6 +9,7 @@ import {
   recordNotifyOnExitRemoval,
 } from "../../../agents/bash-process-registry.js";
 import { createProcessSessionFixture } from "../../../agents/bash-process-registry.test-helpers.js";
+import { createExecTool } from "../../../agents/bash-tools.exec-run.js";
 import { createProcessTool } from "../../../agents/bash-tools.process.js";
 import { resolveCurrentAttemptAssistant } from "../../../agents/embedded-agent-runner/run/attempt-terminal-evidence.js";
 import { createEmbeddedRunContextRecoveryState } from "../../../agents/embedded-agent-runner/run/context-recovery-state.js";
@@ -46,6 +47,9 @@ import {
   setActivePluginRegistry,
 } from "../../../plugins/runtime.js";
 import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
+import { getProcessSupervisor } from "../../../process/supervisor/index.js";
+import type { RunExit, SpawnInput } from "../../../process/supervisor/types.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import * as ttsRuntime from "../../../tts/tts.js";
 
 /** Real process poll producer and notification queue, with a synthetic completed process. */
@@ -69,6 +73,66 @@ export function createProcessPollDeliveryContract(sessionId: string) {
     close: () => {
       deleteSession(sessionId);
       drainSystemEventEntries(sessionKey);
+    },
+  };
+}
+
+/** Real exec producer; only OS execution is controlled for native adapter proof. */
+export function createRequiredExecRuntimeContract() {
+  const started = createDeferredCore();
+  const exit = createDeferredCore<RunExit>();
+  let input: SpawnInput | undefined;
+  let settled = false;
+  const finish = (reason: RunExit["reason"] = "exit") => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    input?.onStdout?.("REQUIRED_NATIVE_RESULT");
+    exit.resolve({
+      reason,
+      exitCode: reason === "exit" ? 0 : null,
+      exitSignal: null,
+      durationMs: 1,
+      stdout: "REQUIRED_NATIVE_RESULT",
+      stderr: "",
+      timedOut: false,
+      noOutputTimedOut: false,
+    });
+  };
+  const spawn = vi.spyOn(getProcessSupervisor(), "spawn").mockImplementation(async (next) => {
+    input = next;
+    return {
+      runId: next.runId ?? "required-native-command",
+      startedAtMs: Date.now(),
+      activity: {
+        get resultSettled() {
+          return settled;
+        },
+        lastOutputAtMs: Date.now(),
+      },
+      wait: () => {
+        started.resolve();
+        return exit.promise;
+      },
+      cancel: () => finish("manual-cancel"),
+    };
+  });
+  return {
+    tool: createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      bypassHostApprovalFloors: true,
+      allowBackground: true,
+      notifyOnExit: false,
+    }),
+    started: started.promise,
+    finish,
+    spawn,
+    close: () => {
+      finish();
+      spawn.mockRestore();
     },
   };
 }
@@ -245,8 +309,9 @@ export function resetOpenClawOwnedToolHooks(): void {
 export async function createHostTtsRuntimeContract(
   attempt: Parameters<typeof createAdmittedHostCapabilityTestFixture>[0],
   audioPath: string,
+  options: { nativeModelPolicySupport?: "exact" } = {},
 ) {
-  const host = await createAdmittedHostCapabilityTestFixture(attempt);
+  const host = await createAdmittedHostCapabilityTestFixture(attempt, options);
   const synthesis = vi.spyOn(ttsRuntime, "textToSpeech").mockResolvedValue({
     success: true,
     audioPath,

@@ -36,9 +36,17 @@ export function registerSlackHttpHandler(params: RegisterSlackHttpHandlerArgs): 
     params.log?.(`slack: webhook path ${normalizedPath} already registered${suffix}`);
     return () => {};
   }
-  routes.set(normalizedPath, params.handler);
+  const handler = params.handler;
+  routes.set(normalizedPath, handler);
+  let registered = true;
   return () => {
-    getSlackHttpRoutes().delete(normalizedPath);
+    if (!registered) {
+      return;
+    }
+    registered = false;
+    if (routes.get(normalizedPath) === handler) {
+      routes.delete(normalizedPath);
+    }
   };
 }
 

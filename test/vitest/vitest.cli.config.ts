@@ -1,14 +1,13 @@
-import { cliProcessTestFiles } from "./vitest.cli-process-paths.mjs";
-import { databaseWorkerCoreTestFiles } from "./vitest.database-worker-core-paths.mjs";
+import { getCliVitestProjectOwner } from "./vitest.cli-paths.mjs";
 // Vitest cli config wires the cli test shard.
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
-import { toolingIsolatedTestFiles } from "./vitest.tooling-isolated-paths.mjs";
 
 export function createCliVitestConfig(env?: Record<string, string | undefined>) {
-  return createScopedVitestConfig(["src/cli/**/*.test.ts"], {
-    dir: "src/cli",
+  const owner = getCliVitestProjectOwner();
+  return createScopedVitestConfig(owner.include, {
+    dir: owner.root,
     env,
-    exclude: [...cliProcessTestFiles, ...databaseWorkerCoreTestFiles, ...toolingIsolatedTestFiles],
+    exclude: owner.exclude,
     name: "cli",
     passWithNoTests: true,
   });

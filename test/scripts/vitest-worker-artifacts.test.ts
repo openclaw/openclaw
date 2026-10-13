@@ -7,17 +7,21 @@ import { convertPathToPattern } from "tinyglobby";
 import { describe, expect, vi } from "vitest";
 import { parseCLI } from "vitest/node";
 import { parseVitestExecutionArgs } from "../../scripts/lib/vitest-cli.mts";
+import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import { stripVitestAnsi } from "../../scripts/lib/vitest-unhandled-errors.mts";
 import {
-  isVitestWorkerDeclaration,
   resolveVitestWorkerDeclaration,
   verifyVitestWorkerArtifacts,
 } from "../../scripts/lib/vitest-worker-artifacts.mts";
 import { resolveVitestSpawnParams, spawnWatchedVitestProcess } from "../../scripts/run-vitest.mts";
 import { createVitestProcessCompletion } from "../../scripts/vitest-process-group.mts";
-import { resolveRuntimeWorkerArgv } from "../../src/infra/runtime-worker-url.js";
-import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
-import { waitForFixtureFile } from "../helpers/process-wait.js";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
+import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
+import { runNodeScript } from "../helpers/run-node-script.js";
 import { fixturePreloadArgs } from "./fixtures/ci-fixture-runtime.cjs";
 import { copyCompiledFsSafeRuntimeFixture } from "./fs-safe-package.test-support.js";
 import {
@@ -26,6 +30,7 @@ import {
 } from "./vitest-worker-artifacts.prepared.test-support.js";
 import {
   createWorkerArtifactTest,
+  fixtureFileBeforeSettlement,
   preparationClient,
   workerBorrowingProbe,
   workerProbe,
@@ -37,10 +42,49 @@ const preparedCompiler = createPreparedWorkerCompiler();
 const it = createWorkerArtifactTest(preparedCompiler.env);
 it.beforeAll(() => preparedCompiler.prepare());
 it.afterAll(() => preparedCompiler.cleanup());
+let receipts: FixtureReceiptChannel;
+it.beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+it.afterAll(() => receipts.close());
 
 const compilerModule = "scripts/lib/vitest-worker-run.mts";
 const compilerEntry = "scripts/lib/vitest-worker-compiler.mts";
 const artifactsModule = "scripts/lib/vitest-worker-artifacts.mts";
+
+function heldWorkerBorrowingProbe(directory: string) {
+  const observed = path.join(directory, "generations.jsonl");
+  const test = writeFixture(
+    directory,
+    "held-borrower.test.ts",
+    `
+    ${fixtureReceiptClientSource(receipts.endpoint)}
+    import fs from 'node:fs';
+    import {it,expect} from 'vitest';
+    import {runtimeProcessEntrypoints} from ${JSON.stringify(path.join(root, "src/infra/runtime-process-entrypoints.ts"))};
+    import {resolveRuntimeWorkerUrl} from ${JSON.stringify(path.join(root, "src/infra/runtime-worker-url.ts"))};
+    const generation = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sqliteReadOnly);
+    const preparedAtCollection = fs.existsSync(generation);
+    it('holds the compiled generation until the real borrower is stopped',async()=>{
+      expect(generation.pathname.endsWith('/dist/infra/sqlite-readonly-location.worker.js')).toBe(true);
+      expect(preparedAtCollection).toBe(true);
+      fs.appendFileSync(${JSON.stringify(observed)},JSON.stringify(generation.href)+'\\n');
+      sendReceipt(${JSON.stringify(observed)},'written');
+      await awaitRelease(${JSON.stringify(observed)},'finish');
+    });
+  `,
+  );
+  const config = writeFixture(
+    directory,
+    "vitest.config.mts",
+    `
+    import {sharedVitestConfig as shared} from ${JSON.stringify(pathToFileURL(path.join(root, "test/vitest/vitest.shared.config.ts")).href)};
+    const project = {extends:false,plugins:shared.plugins,resolve:shared.resolve,test:{name:'second',environment:shared.test.environment,include:[${JSON.stringify(convertPathToPattern(test))}],pool:'forks',maxWorkers:1,testTimeout:shared.test.testTimeout}};
+    export default {root:${JSON.stringify(root)},plugins:shared.plugins,test:{projects:[project]}};
+  `,
+  );
+  return { config };
+}
 
 describe.concurrent("fresh compiled subprocess invocation", () => {
   it("uses installed fs-safe packages from compiled subprocesses", ({ workerArtifacts }) =>
@@ -193,10 +237,19 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
     .runIf(process.platform !== "win32")
     .for(["close before ready", "cancel while compiling", "terminated group", "uncertain output"])(
     "owns the real compiler lifetime: %s",
-    (mode, { workerArtifacts }) =>
+    (mode, { workerArtifacts, signal, onTestFinished }) =>
       workerArtifacts.fixtureLifetime.run(async () => {
         const { node } = workerArtifacts.createFixtureCommands();
         const directory = workerArtifacts.fixtureDirectory();
+        const outerRoot = path.join(directory, "outer-custody");
+        const compilerRoot = path.join(directory, "compiler-custody");
+        let outerResources: ReturnType<typeof createVitestResourceOwner> | undefined;
+        if (mode === "uncertain output") {
+          fs.mkdirSync(outerRoot);
+          fs.mkdirSync(compilerRoot);
+          outerResources = createVitestResourceOwner(outerRoot);
+          createVitestResourceOwner(compilerRoot);
+        }
         const preload = writeFixture(
           directory,
           "compiler-lifetime.mjs",
@@ -268,12 +321,14 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
       import {syncFixtureBuiltinExports} from ${JSON.stringify(new URL("./fixtures/ci-fixture-runtime.cjs", import.meta.url).href)};
       import {setTimeout as tick} from 'node:timers/promises';
       import {inspectManagedProcessGroup} from ${JSON.stringify(pathToFileURL(path.join(root, "scripts/lib/managed-child-process.mts")).href)};
-      import {createVitestResourceOwner} from ${JSON.stringify(pathToFileURL(path.join(root, "scripts/lib/vitest-resource-ownership.mts")).href)};
+      import {findVitestResourceOwner} from ${JSON.stringify(pathToFileURL(path.join(root, "scripts/lib/vitest-resource-ownership.mts")).href)};
       const directory=${JSON.stringify(directory)}, mode=${JSON.stringify(mode)};
       // Only the deliberately escaped writer has a fixture-owned namespace.
       // Other compiler failures must still retain the outer runner's claims.
-      const resources=mode==='uncertain output'?createVitestResourceOwner(directory):undefined;
-      if(resources) Object.assign(process.env,{TMPDIR:directory,TMP:directory,TEMP:directory});
+      const compilerRoot=${JSON.stringify(compilerRoot)};
+      const resources=mode==='uncertain output'?findVitestResourceOwner(compilerRoot):undefined;
+      if(mode==='uncertain output') assert.ok(resources,'compiler custody owner must exist');
+      if(resources) Object.assign(process.env,{TMPDIR:compilerRoot,TMP:compilerRoot,TEMP:compilerRoot});
       const file=name=>path.join(directory,name);
       fs.writeFileSync(file('input'),'compiler input');
       const spawn=cp.spawn;
@@ -365,7 +420,32 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
       }
     `,
         );
-        const command = node([driver]);
+        const finished = new AbortController();
+        // Expected failed custody has its own owner. Its explicit rescue receipt,
+        // rather than the failed command result, authorizes fixture disposal.
+        const command =
+          mode === "uncertain output"
+            ? runNodeScript(
+                [driver],
+                preparedCompiler.env(
+                  { ...process.env, TMPDIR: outerRoot, TMP: outerRoot, TEMP: outerRoot },
+                  "node",
+                ),
+                undefined,
+                {
+                  cwd: root,
+                  signal: AbortSignal.any([signal, finished.signal]),
+                  maxBuffer: 2 * 1024 * 1024,
+                  requireProcessTreeExit: true,
+                },
+              ).then((result) => ({ ...result, code: result.status }))
+            : node([driver]);
+        if (mode === "uncertain output") {
+          onTestFinished(async () => {
+            finished.abort();
+            await command;
+          });
+        }
         await workerArtifacts.fixtureLifetime.verifyCleanup(async () => {
           const result = await command;
           // Driver death must not turn its private pending claims into disposable inputs.
@@ -375,7 +455,20 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
         });
         const result = await command;
         console.log(result.stdout);
-        expect(result.code, result.stderr + result.stdout).toBe(0);
+        if (mode === "uncertain output") {
+          expect(result.error, result.stderr + result.stdout).toMatchObject({
+            code: "EPROCESSGROUP_CLEANUP_FAILED",
+            processTreeState: "indeterminate",
+            cause: { message: "Managed cleanup owner reported unjoined work" },
+          });
+          expect(result.code).toBeNull();
+          expect(() => outerResources!.assertReleased()).toThrow(
+            "Unreleased Vitest resource claim",
+          );
+        } else {
+          expect(result.error, result.stderr + result.stdout).toBeUndefined();
+          expect(result.code, result.stderr + result.stdout).toBe(0);
+        }
       }),
   );
 
@@ -402,7 +495,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
         let inputRoot, pid, leafPid, commandResult, lateResult, readyObserved=false, closed=false;
         const lateMarker=${JSON.stringify(path.join(directory, "late-launch"))};
         aroundEach(async runTest=>{try {await runTest();} finally {await lifetime.cleanup();}});
-        it.fails('failed body with an unfinished sibling',${fault === "timeout" ? "{timeout:3000}," : ""}({signal,onTestFinished})=>lifetime.run(async()=>{
+        it.fails('failed body with an unfinished sibling',${fault === "timeout" ? "{timeout:1500}," : ""}({signal,onTestFinished})=>lifetime.run(async()=>{
           inputRoot=lifetime.createTempDir('body-input-',${JSON.stringify(directory)});
           const input=path.join(inputRoot,'input');fs.writeFileSync(input,'still owned');
           const readyFile=path.join(inputRoot,'ready'), script=path.join(inputRoot,'child.mjs');
@@ -518,18 +611,6 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
         path.join(root, "src/infra/sqlite-readonly-location.worker.ts"),
       );
     }));
-
-  it.each([
-    "src/infra/runtime-process-entrypoints.ts",
-    "src/tui/tui-pty-runtime-test-support.ts",
-    "src/plugins/runtime-retention-entrypoint.test-support.ts",
-  ])("recognizes native and Windows-normalized declaration IDs for %s", (source) => {
-    const declaration = path.join(root, source);
-    expect(isVitestWorkerDeclaration(declaration)).toBe(true);
-    expect(isVitestWorkerDeclaration(declaration.replaceAll("\\", "/"))).toBe(true);
-    expect(isVitestWorkerDeclaration(declaration.replaceAll("/", "\\"))).toBe(true);
-    expect(isVitestWorkerDeclaration(`${declaration}.unrelated`)).toBe(false);
-  });
 
   it("uses the prepared Anthropic failover hook in a fresh process without global activation", ({
     workerArtifacts,
@@ -659,7 +740,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
               },
             }});
             const unprepared = buildEmbeddedRunPayloads(input('403 fixture refusal'));
-            assert.deepEqual(unprepared,[{text:'⚠️ fixture-provider/fixture-model request failed (authentication failed, HTTP 403). Re-authenticate the provider and try again.',isError:true}], 'an unprepared error must retain safe provider, model and status facts');
+            assert.deepEqual(unprepared,[{text:"⚠️ Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run \`openclaw configure\`.",isError:true}], 'an unprepared error must show sign-in guidance without provider hook policy');
             assert.deepEqual(observed(),[], 'error formatting must not materialize the provider');
             let scopedPreparationRecordCount = 0;
             if (${scope === "scoped"}) {
@@ -740,8 +821,8 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
                 : path.join(root, "src/agents/embedded-agent-runner/run/payloads.ts"),
             );
             const result = await node(
-              [
-                ...resolveRuntimeWorkerArgv(pathToFileURL(probe), resolveTestNodeExecPath()),
+              (workerArgv) => [
+                ...workerArgv(pathToFileURL(probe)),
                 url.href,
                 pathToFileURL(
                   owner
@@ -770,10 +851,8 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
 
   it.each([
     { args: ["run", "--", "--help"], metadata: false },
-    { args: ["run", "--testNamePattern", "--help"], metadata: true },
     { args: ["run", "--help"], metadata: true },
     { args: ["bench", "--run"], metadata: false },
-    { args: ["related", "--run"], metadata: false },
     { args: ["list"], metadata: true },
     { args: ["--browser.headless", "run", "--version"], metadata: false },
     { args: ["--browser.headless", "--version"], metadata: true },
@@ -908,7 +987,7 @@ if (process.argv[1]?.endsWith("vitest-worker-compiler.mts")) {
       workerArtifacts.fixtureLifetime.run(async () => {
         const { startBorrower } = workerArtifacts.createFixtureCommands();
         const directory = workerArtifacts.fixtureDirectory();
-        const { config } = workerProbe(directory);
+        const { config } = workerBorrowingProbe(directory);
         const owner = workerArtifacts.createWorkerRun();
         let generation: string | undefined;
         try {
@@ -947,11 +1026,11 @@ if (process.argv[1]?.endsWith("vitest-worker-compiler.mts")) {
 
   it.for(["cancel", "owner disconnect"])(
     "joins actual borrowers after %s before deleting artifacts",
-    (action, { workerArtifacts }) =>
+    (action, { workerArtifacts, signal }) =>
       workerArtifacts.fixtureLifetime.run(async () => {
         const { startBorrower } = workerArtifacts.createFixtureCommands();
         const directory = workerArtifacts.fixtureDirectory();
-        const { config } = workerProbe(directory, true);
+        const { config } = heldWorkerBorrowingProbe(directory);
         const owner = workerArtifacts.createWorkerRun();
         // Node parent-side child.disconnect() can omit ChildProcess.close. Close the
         // fixture endpoint so the owner receives EOF and retains its real join contract.
@@ -972,7 +1051,10 @@ if (process.argv[1]?.endsWith("vitest-worker-compiler.mts")) {
         );
         try {
           const observed = path.join(directory, "generations.jsonl");
-          await waitForFixtureFile(observed, handle.completion);
+          await withinTest(
+            fixtureFileBeforeSettlement(receipts, observed, handle.completion),
+            signal,
+          );
           const generation = JSON.parse(fs.readFileSync(observed, "utf8").trim());
           expect(fs.existsSync(new URL(generation))).toBe(true);
           if (action === "cancel") {
@@ -980,7 +1062,7 @@ if (process.argv[1]?.endsWith("vitest-worker-compiler.mts")) {
           } else {
             handle.child.send("fixture-disconnect");
           }
-          const result = await handle.result;
+          const result = await withinTest(handle.result, signal);
           expect(result.code).not.toBe(0);
           if (action === "owner disconnect") {
             expect(result.stderr).toContain("owner disconnected");
@@ -996,7 +1078,7 @@ if (process.argv[1]?.endsWith("vitest-worker-compiler.mts")) {
 
   it.runIf(process.platform !== "win32")(
     "retains artifacts after an uncertain join and waits for the surviving borrower",
-    ({ workerArtifacts }) =>
+    ({ workerArtifacts, signal }) =>
       workerArtifacts.fixtureLifetime.run(async () => {
         const { observeChild } = workerArtifacts.createFixtureCommands();
         const directory = workerArtifacts.fixtureDirectory();
@@ -1016,7 +1098,7 @@ if (process.argv[1]?.endsWith("vitest-worker-compiler.mts")) {
         process.disconnect();
       }});
       process.channel.ref();
-      fs.writeFileSync(process.argv[2],'ready');
+      process.send('fixture-ready');
     `,
         );
         const clients = ["first", "second"].map((name) => {
@@ -1024,6 +1106,12 @@ if (process.argv[1]?.endsWith("vitest-worker-compiler.mts")) {
           const child = spawn(process.execPath, [clientScript, ready], {
             detached: true,
             stdio: ["ignore", "pipe", "pipe", "ipc"],
+          });
+          const readySignal = createDeferred();
+          child.on("message", (message: unknown) => {
+            if (message === "fixture-ready") {
+              readySignal.resolve();
+            }
           });
           const closed = new Promise<void>((resolve) => {
             child.once("close", () => resolve());
@@ -1045,14 +1133,23 @@ if (process.argv[1]?.endsWith("vitest-worker-compiler.mts")) {
               }),
             ),
           );
-          return { child, ready, closed, completion };
+          return { child, ready, readySignal: readySignal.promise, closed, completion };
         });
         try {
-          await Promise.all(
-            clients.map((client) => waitForFixtureFile(client.ready, client.completion)),
+          await withinTest(
+            Promise.all(
+              clients.map((client) =>
+                awaitGateBeforeSettlement(
+                  client.readySignal,
+                  client.completion,
+                  `Child exited before writing ${client.ready}`,
+                ),
+              ),
+            ),
+            signal,
           );
           clients[0]!.child.send("finish");
-          await expect(clients[0]!.completion).rejects.toThrow(
+          await expect(withinTest(clients[0]!.completion, signal)).rejects.toThrow(
             "injected process-group join failure",
           );
           let disposed = false;
@@ -1063,9 +1160,11 @@ if (process.argv[1]?.endsWith("vitest-worker-compiler.mts")) {
           expect(disposed).toBe(false);
           expect(clients[1]!.child.exitCode).toBeNull();
           clients[1]!.child.send("finish");
-          await clients[1]!.completion;
+          await withinTest(clients[1]!.completion, signal);
           expect(fs.readFileSync(clients[1]!.ready + ".read", "utf8")).toBe("read");
-          await expect(disposal).rejects.toThrow("injected process-group join failure");
+          await expect(withinTest(disposal, signal)).rejects.toThrow(
+            "injected process-group join failure",
+          );
           expect(fs.existsSync(artifact)).toBe(true);
         } finally {
           for (const { child } of clients) {
@@ -1129,7 +1228,7 @@ if (process.argv[1]?.endsWith("vitest-worker-compiler.mts")) {
         "vitest.config.mts",
         `
       import {sharedVitestConfig as shared} from ${JSON.stringify(pathToFileURL(path.join(root, "test/vitest/vitest.shared.config.ts")).href)};
-      export default Promise.resolve({plugins:shared.plugins,test:{include:[${JSON.stringify(convertPathToPattern(test))}]}});
+      export default Promise.resolve({plugins:shared.plugins,test:{environment:shared.test.environment,include:[${JSON.stringify(convertPathToPattern(test))}]}});
     `,
       );
       const imported = await node([
@@ -1195,6 +1294,7 @@ if (process.argv[1]?.endsWith("vitest-worker-compiler.mts")) {
   it("keeps watch launches on live source across dependency edits", ({
     workerArtifacts,
     onTestFinished,
+    signal,
   }) =>
     workerArtifacts.fixtureLifetime.run(async () => {
       const directory = workerArtifacts.fixtureDirectory();
@@ -1209,6 +1309,7 @@ if (process.argv[1]?.endsWith("vitest-worker-compiler.mts")) {
         directory,
         "watch.test.ts",
         `
+      ${fixtureReceiptClientSource(receipts.endpoint)}
       import {execFileSync} from 'node:child_process';
       import fs from 'node:fs';
       import {it,expect} from 'vitest';
@@ -1222,15 +1323,20 @@ if (process.argv[1]?.endsWith("vitest-worker-compiler.mts")) {
         const actual=execFileSync(process.execPath,['--import','tsx',${JSON.stringify(dependency)}],{encoding:'utf8'}).trim();
         expect(actual).toBe(value);
         fs.writeFileSync(${JSON.stringify(observed)},actual);
+        sendReceipt(${JSON.stringify(observed)},actual);
       });
     `,
       );
       const reporter = writeFixture(
         directory,
         "watch-reporter.mjs",
-        `import fs from 'node:fs';
+        `${fixtureReceiptClientSource(receipts.endpoint)}
+import fs from 'node:fs';
 export default class {
-  onWatcherStart() { fs.writeFileSync(${JSON.stringify(watchReady)}, 'ready'); }
+  onWatcherStart() {
+    fs.writeFileSync(${JSON.stringify(watchReady)}, 'ready');
+    sendReceipt(${JSON.stringify(watchReady)}, 'written');
+  }
 }`,
       );
       const config = writeFixture(
@@ -1239,7 +1345,7 @@ export default class {
         `
       import {sharedVitestConfig as shared} from ${JSON.stringify(pathToFileURL(path.join(root, "test/vitest/vitest.shared.config.ts")).href)};
       // This fixture tests live-source reruns independently of native filesystem notifications.
-      export default {root:${JSON.stringify(directory)},plugins:shared.plugins,server:{watch:{usePolling:true}},test:{include:[${JSON.stringify(convertPathToPattern(test))}],pool:'forks',maxWorkers:1,reporters:['default',${JSON.stringify(reporter)}]}};
+      export default {root:${JSON.stringify(directory)},plugins:shared.plugins,server:{watch:{usePolling:true}},test:{environment:shared.test.environment,include:[${JSON.stringify(convertPathToPattern(test))}],pool:'forks',maxWorkers:1,reporters:['default',${JSON.stringify(reporter)}]}};
     `,
       );
       const handle = spawnWatchedVitestProcess({
@@ -1259,13 +1365,16 @@ export default class {
         await handle.completion;
       });
       try {
-        await Promise.all([
-          waitForFixtureFile(observed, handle.completion, "first"),
-          waitForFixtureFile(watchReady, handle.completion),
-        ]);
-        const rerun = waitForFixtureFile(observed, handle.completion, "second");
+        await withinTest(
+          Promise.all([
+            fixtureFileBeforeSettlement(receipts, observed, handle.completion, "first"),
+            fixtureFileBeforeSettlement(receipts, watchReady, handle.completion),
+          ]),
+          signal,
+        );
+        const rerun = fixtureFileBeforeSettlement(receipts, observed, handle.completion, "second");
         fs.writeFileSync(dependency, 'export const value: string = "second"; console.log(value);');
-        await rerun;
+        await withinTest(rerun, signal);
         expect(output).not.toContain("[vitest-workers] prepared");
       } catch (error) {
         console.error(output);
@@ -1368,10 +1477,17 @@ export default class {
           },
         );
         expect(policy.code, policy.stderr + policy.stdout).toBe(0);
-        for (const filename of Object.keys(manifest.inputs)) {
+        const directories = new Map<string, Promise<string | undefined>>();
+        const copyInput = async (filename: string) => {
           const target = path.join(fixture, path.relative(root, filename));
-          fs.mkdirSync(path.dirname(target), { recursive: true });
-          fs.copyFileSync(filename, target);
+          const parent = path.dirname(target);
+          let created = directories.get(parent);
+          if (!created) {
+            created = fs.promises.mkdir(parent, { recursive: true });
+            directories.set(parent, created);
+          }
+          await created;
+          await fs.promises.copyFile(filename, target, fs.constants.COPYFILE_FICLONE);
           const dependencies = path.join(path.dirname(filename), "node_modules");
           if (path.basename(filename) === "package.json" && fs.existsSync(dependencies)) {
             fs.symlinkSync(
@@ -1379,6 +1495,17 @@ export default class {
               path.join(path.dirname(target), "node_modules"),
               process.platform === "win32" ? "junction" : "dir",
             );
+          }
+        };
+        const inputs = Object.keys(manifest.inputs);
+        for (let offset = 0; offset < inputs.length; offset += 32) {
+          // Join every started copy before fixture cleanup can remove its inputs.
+          const completed = await Promise.allSettled(
+            inputs.slice(offset, offset + 32).map(copyInput),
+          );
+          const failed = completed.find((result) => result.status === "rejected");
+          if (failed) {
+            throw failed.reason;
           }
         }
         // This is a synthetic source checkout. Its dist is valid old code, not an

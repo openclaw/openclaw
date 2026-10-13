@@ -65,7 +65,7 @@ export type SubagentCompletionDeliveryState = {
   suspendedReason?: "expiry" | "permanent_failure";
   dismissedAt?: number;
   discardedAt?: number;
-  discardReason?: "expired";
+  discardReason?: "expired" | "task-missing";
   discardedPayloadSummary?: {
     requesterSessionKey?: string;
     childSessionKey?: string;
@@ -93,12 +93,18 @@ export type SubagentRunReadRecord = {
   taskRunId?: string;
   /** Stable public collector id; gateway execution ids can change across dispatch/recovery. */
   swarmRunId?: string;
+  /** Stable scheduler slot identity across Gateway run replacements. */
+  schedulerSlotId?: string;
+  /** Replay identity selects one collector payload before hydration. */
+  swarmLaunchReplayKey?: string;
   /** Collector-mode runs remain waitable and never announce to the requester. */
   collect?: boolean;
   groupId?: string;
   /** Stable spawning-session owner for caps, scheduling, and wait authorization. */
   swarmRequesterSessionKey?: string;
   childSessionKey: string;
+  /** Selected child agent; historical qualified keys may carry ownership without this field. */
+  childAgentId?: string;
   controllerSessionKey?: string;
   requesterSessionKey: string;
   /** Effective requester agent, including cron/hook overrides not encoded in the session key. */
@@ -119,6 +125,8 @@ export type SubagentRunReadRecord = {
   delivery?: SubagentCompletionDeliveryState;
   execution: {
     status: "queued" | "running" | "interrupted" | "terminal";
+    /** Retained after restart settlement; an interrupted execution is not a task failure. */
+    interruptionReason?: "gateway-restart";
     startedAt?: number;
     endedAt?: number;
     outcome?: SubagentRunOutcome;

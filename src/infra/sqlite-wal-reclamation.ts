@@ -62,9 +62,18 @@ export function reclaimSqliteWalFreePages(
     options.beforeMutation?.();
     const startedAt = performance.now();
     try {
-      const completed = runCheckpoint(options.checkpointMode ?? "TRUNCATE");
-      result.checkpointCompleted = completed;
+      const mode = options.checkpointMode ?? "TRUNCATE";
+      let completed = runCheckpoint(mode);
       result.checkpointCalls++;
+      if (!completed && mode === "TRUNCATE") {
+        // Readers can prevent WAL reset after every frame has been copied.
+        // Require a fresh complete checkpoint, not an empty WAL file, before
+        // adding vacuum frames or letting disk-budget eviction proceed.
+        options.beforeMutation?.();
+        completed = runCheckpoint("PASSIVE");
+        result.checkpointCalls++;
+      }
+      result.checkpointCompleted = completed;
       result.checkpointIncomplete += Number(!completed);
       return completed;
     } finally {
@@ -84,8 +93,14 @@ export function reclaimSqliteWalFreePages(
       result.queryMs += performance.now() - startedAt;
     }
   };
+  // PASSIVE never invokes SQLite's busy handler; checkpoint-only ticks need no policy change.
+  if (options.maxPages === 0 && options.checkpointMode === "PASSIVE") {
+    checkpoint();
+    return result;
+  }
   return runWithSqliteBusyTimeout(database, 0, () => {
-    if (!checkpoint()) {
+    // A zero page budget is a checkpoint-only pass; vacuum keeps its own cadence.
+    if (!checkpoint() || options.maxPages === 0) {
       return result;
     }
     const before = freePages();

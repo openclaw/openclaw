@@ -1873,7 +1873,7 @@ class ChatControllerOutboxTest {
       val send =
         launch {
           accepted =
-            chat.sendMessageForOwnerAwaitAcceptance(
+            chat.sendMessageAwaitAcceptance(
               message = "captured main turn",
               thinkingLevel = "off",
               attachments = emptyList(),
@@ -1913,7 +1913,7 @@ class ChatControllerOutboxTest {
 
       val send =
         async {
-          chat.sendMessageForOwnerAwaitAcceptance(
+          chat.sendMessageAwaitAcceptance(
             message = "already projected turn",
             thinkingLevel = "off",
             attachments = emptyList(),
@@ -1949,7 +1949,7 @@ class ChatControllerOutboxTest {
 
       val send =
         async {
-          chat.sendMessageForOwnerAwaitAcceptance(
+          chat.sendMessageAwaitAcceptance(
             message = "return after ack",
             thinkingLevel = "off",
             attachments = emptyList(),
@@ -1984,7 +1984,7 @@ class ChatControllerOutboxTest {
 
       val send =
         async {
-          chat.sendMessageForOwnerAwaitAcceptance(
+          chat.sendMessageAwaitAcceptance(
             message = "hidden accepted turn",
             thinkingLevel = "off",
             attachments = emptyList(),
@@ -2016,7 +2016,7 @@ class ChatControllerOutboxTest {
       advanceUntilIdle()
 
       assertTrue(
-        chat.sendMessageForOwnerAwaitAcceptance(
+        chat.sendMessageAwaitAcceptance(
           message = "visible then hidden turn",
           thinkingLevel = "off",
           attachments = emptyList(),
@@ -2231,7 +2231,7 @@ class ChatControllerOutboxTest {
       val send =
         launch {
           accepted =
-            chat.sendMessageForOwnerAwaitAcceptance(
+            chat.sendMessageAwaitAcceptance(
               message = "same owner turn",
               thinkingLevel = "off",
               attachments = emptyList(),
@@ -2286,7 +2286,7 @@ class ChatControllerOutboxTest {
         val attachment = OutgoingAttachment(type = "image", mimeType = "image/png", fileName = "reply.png", base64 = "AQIDBA==")
         val send =
           async(start = CoroutineStart.LAZY) {
-            chat.sendMessageForOwnerAwaitAcceptance(
+            chat.sendMessageAwaitAcceptance(
               message = "reply after settings",
               thinkingLevel = "off",
               attachments = listOf(attachment),
@@ -2377,7 +2377,7 @@ class ChatControllerOutboxTest {
         val attachment = OutgoingAttachment(type = "image", mimeType = "image/png", fileName = "reply.png", base64 = "AQIDBA==")
         val send =
           async(start = CoroutineStart.LAZY) {
-            chat.sendMessageForOwnerAwaitAcceptance(
+            chat.sendMessageAwaitAcceptance(
               message = "reply after history",
               thinkingLevel = "off",
               attachments = listOf(attachment),
@@ -2458,7 +2458,7 @@ class ChatControllerOutboxTest {
       val send =
         launch {
           accepted =
-            chat.sendMessageForOwnerAwaitAcceptance(
+            chat.sendMessageAwaitAcceptance(
               message = "old agent turn",
               thinkingLevel = "off",
               attachments = emptyList(),
@@ -2500,7 +2500,7 @@ class ChatControllerOutboxTest {
       val send =
         launch {
           accepted =
-            chat.sendMessageForOwnerAwaitAcceptance(
+            chat.sendMessageAwaitAcceptance(
               message = "flush-owned turn",
               thinkingLevel = "off",
               attachments = emptyList(),
@@ -2539,7 +2539,7 @@ class ChatControllerOutboxTest {
 
       val send =
         async {
-          chat.sendMessageForOwnerAwaitAcceptance(
+          chat.sendMessageAwaitAcceptance(
             message = "captured owner",
             thinkingLevel = "off",
             attachments = emptyList(),
@@ -3001,7 +3001,7 @@ class ChatControllerOutboxTest {
       runCurrent()
       chat.setThinkingLevel("off")
 
-      chat.sendMessage(message = "waits for recovery", thinkingLevel = "off", attachments = emptyList())
+      val send = async { chat.sendMessageAwaitAcceptance(message = "waits for recovery", thinkingLevel = "off", attachments = emptyList()) }
       runCurrent()
       try {
         // The row is journaled but must not be claimed 'sending' while the unscoped recovery
@@ -3012,6 +3012,7 @@ class ChatControllerOutboxTest {
       } finally {
         recoveryGate.complete(Unit)
       }
+      assertTrue(send.await())
       advanceUntilIdle()
       assertEquals(listOf("waits for recovery"), gateway.sentMessages)
       assertTrue(outbox.rows().isEmpty())

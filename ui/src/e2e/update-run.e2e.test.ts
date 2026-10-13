@@ -21,6 +21,18 @@ suite.define(() => {
       },
       async ({ context, page }) => {
         let run = createUpdateRunFixture();
+        run.steps.push(
+          ...Array.from({ length: 24 }, (_, index) => ({
+            step: `verify-plugin-example-${index + 1}`,
+            status: "completed" as const,
+          })),
+          { step: "snapshot-space-preflight", status: "completed" },
+          {
+            step: "diagnostic:snapshot-space-preflight:8",
+            status: "completed",
+            detail: "Recovery backup needs 18 GiB; 32 GiB is available.",
+          },
+        );
         const config = { update: { auto: { enabled: false }, channel: "stable" } };
         const configResponse = {
           config,
@@ -66,9 +78,34 @@ suite.define(() => {
         await runView
           .getByText("⬆️ OpenClaw update in progress: staging.", { exact: true })
           .waitFor();
-        await runView.getByText("Downloading the update package.", { exact: false }).waitFor();
+        await runView
+          .locator(".update-run-view__details")
+          .getByText("Downloading the update package.", { exact: false })
+          .waitFor();
         expect(await runView.locator('[data-step="repairing"]').count()).toBe(0);
+        const installationSteps = runView.locator(".update-run-view__step-list");
+        await installationSteps.locator(":scope > summary").click();
         await page.screenshot({ path: path.join(proofDir, "02-staging.png") });
+        const stepList = installationSteps.locator("ol");
+        await page.waitForFunction(
+          (list) => list && list.scrollHeight - list.scrollTop - list.clientHeight < 2,
+          await stepList.elementHandle(),
+        );
+        expect(await stepList.textContent()).not.toContain("diagnostic:snapshot-space-preflight:8");
+        expect(await stepList.textContent()).toContain("Checking space for the recovery backup");
+        const summaryBox = await installationSteps.locator(":scope > summary").boundingBox();
+        const listBox = await stepList.boundingBox();
+        expect(summaryBox!.y + summaryBox!.height).toBeLessThanOrEqual(listBox!.y + 1);
+        await installationSteps.locator(":scope > summary").click();
+        expect(await installationSteps.getAttribute("open")).toBeNull();
+        await installationSteps.locator(":scope > summary").press("Enter");
+        expect(await installationSteps.getAttribute("open")).not.toBeNull();
+        const details = runView.locator(".update-run-view__diagnostics");
+        await details.locator("summary").click();
+        expect(await details.getAttribute("open")).toBeNull();
+        await details.locator("summary").press("Enter");
+        expect(await details.getAttribute("open")).not.toBeNull();
+        await page.screenshot({ path: path.join(proofDir, "02-expanded-details.png") });
 
         const advance = async (phase: UpdateRunPhase, detail: string) => {
           run = {
@@ -91,9 +128,20 @@ suite.define(() => {
             updatedAtMs: run.updatedAtMs,
           });
           await gateway.waitForRequest("update.runs.get", { after: reads });
-          await runView.getByText(detail, { exact: false }).waitFor();
+          await runView
+            .locator(".update-run-view__details")
+            .getByText(detail, { exact: false })
+            .waitFor();
         };
         await advance("validating", "Package integrity and startup checks passed.");
+        const snapshotDetails = runView.locator('[data-step="snapshot-space-preflight"] details');
+        await snapshotDetails.locator("summary").click();
+        await snapshotDetails
+          .getByText("Recovery backup needs 18 GiB; 32 GiB is available.", { exact: true })
+          .waitFor();
+        expect(await snapshotDetails.getAttribute("open")).not.toBeNull();
+        await snapshotDetails.locator("summary").click();
+        expect(await snapshotDetails.getAttribute("open")).toBeNull();
         await advance("activating", "Activating the verified package.");
         await advance("restarting", "Waiting for the Gateway to reconnect.");
         await gateway.setOnline(false);
@@ -124,7 +172,10 @@ suite.define(() => {
         expect(
           (await gateway.waitForRequest("update.runs.get", { after: readsBeforeReconnect })).params,
         ).toEqual({ runId: run.runId });
-        await runView.getByText("Checking channels and readiness.", { exact: false }).waitFor();
+        await runView
+          .locator(".update-run-view__details")
+          .getByText("Checking channels and readiness.", { exact: false })
+          .waitFor();
         expect(await runView.locator('[data-step="repairing"]').count()).toBe(0);
         await page.screenshot({ path: path.join(proofDir, "04-verifying.png") });
 
@@ -144,7 +195,17 @@ suite.define(() => {
           finishedAtMs,
           confirmedAtMs: finishedAtMs,
           downtimeMs: 1000,
-          steps: run.steps.map((step) => Object.assign({}, step, { status: "completed" as const })),
+          steps: [
+            ...run.steps.map((step) => Object.assign({}, step, { status: "completed" as const })),
+            ...Array.from({ length: 3 }, (_, index) => ({
+              step: `warning:doctor:${index + 1}`,
+              status: "completed" as const,
+              detail:
+                "An optional integration needs attention. Review its configuration in Settings. ".repeat(
+                  6,
+                ),
+            })),
+          ],
           verification: {
             ...run.verification,
             versionMatch: true,
@@ -168,6 +229,20 @@ suite.define(() => {
           "completed",
         );
         await page.screenshot({ path: path.join(proofDir, "05-after-success.png") });
+        const reportBody = runView.locator(".update-run-view__report-body");
+        const reportMetrics = await reportBody.evaluate((element) => ({
+          height: element.clientHeight,
+          contentHeight: element.scrollHeight,
+          lineHeight: Number.parseFloat(getComputedStyle(element).lineHeight),
+        }));
+        expect(reportMetrics.height).toBeCloseTo(reportMetrics.lineHeight * 6, 0);
+        expect(reportMetrics.contentHeight).toBeGreaterThan(reportMetrics.height);
+        await reportBody.focus();
+        await reportBody.press("End");
+        await page.waitForFunction(
+          (report) => report && report.scrollTop > 0,
+          await reportBody.elementHandle(),
+        );
         expect(await gateway.getRequests("update.run")).toHaveLength(1);
 
         await dialog.getByRole("button", { name: "Close", exact: true }).click();

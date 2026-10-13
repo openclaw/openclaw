@@ -1,4 +1,3 @@
-// File Transfer plugin module implements file write behavior.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -42,18 +41,6 @@ type FileWriteParams = {
   expectedCanonicalPath?: unknown;
   expectedBinding?: unknown;
 };
-
-type FileWriteSuccess = {
-  ok: true;
-  path: string;
-  size: number;
-  sha256: string;
-  overwritten: boolean;
-  binding: PathBinding;
-  rejectHardlinks?: true;
-};
-
-type FileWriteResult = FileWriteSuccess | FileWriteError;
 
 function sha256Hex(buf: Buffer): string {
   return crypto.createHash("sha256").update(buf).digest("hex");
@@ -117,18 +104,14 @@ async function writeBoundTarget(input: {
   const { anchorRoot, relativeTarget } = anchor;
   try {
     await anchorRoot.create(relativeTarget, input.buffer, { mkdir: true });
-    const opened = await anchorRoot.open(relativeTarget);
-    try {
-      const stats = await opened.handle.stat({ bigint: true });
-      return {
-        ok: true,
-        path: opened.realPath,
-        overwritten: false,
-        identity: fileIdentity(stats),
-      };
-    } finally {
-      await opened.handle.close().catch(() => undefined);
-    }
+    await using opened = await anchorRoot.open(relativeTarget);
+    const stats = await opened.handle.stat({ bigint: true });
+    return {
+      ok: true,
+      path: opened.realPath,
+      overwritten: false,
+      identity: fileIdentity(stats),
+    };
   } catch (error) {
     if (error instanceof FsSafeError && error.code === "already-exists") {
       return err(
@@ -144,9 +127,7 @@ async function writeBoundTarget(input: {
   }
 }
 
-export async function handleFileWrite(
-  params: Partial<FileWriteParams> & Record<string, unknown>,
-): Promise<FileWriteResult> {
+export async function handleFileWrite(params: Partial<FileWriteParams> & Record<string, unknown>) {
   const rawPath = typeof params?.path === "string" ? params.path : "";
   const hasContentBase64 = typeof params?.contentBase64 === "string";
   const contentBase64 = hasContentBase64 ? (params.contentBase64 as string) : "";
@@ -158,7 +139,6 @@ export async function handleFileWrite(
   const preflightOnly = params?.preflightOnly === true;
   const rejectHardlinks = params?.rejectHardlinks === true;
 
-  // 1. Validate path: must be absolute, non-empty, no NUL byte
   if (!rawPath) {
     return err("INVALID_PATH", "path is required");
   }
@@ -172,7 +152,7 @@ export async function handleFileWrite(
     return err("INVALID_BASE64", "contentBase64 is required");
   }
 
-  // 2. Validate the payload and cap its decoded size before allocating a Buffer.
+  // Cap the decoded size before allocating a Buffer.
   const decodedBytes = inspectStrictBase64(contentBase64);
   if (decodedBytes === undefined) {
     return err("INVALID_BASE64", "contentBase64 is not valid base64");
@@ -184,17 +164,9 @@ export async function handleFileWrite(
     );
   }
 
-  // Decode base64 → Buffer.
-  //    Buffer.from(s, "base64") in Node never throws — it silently drops
-  //    non-base64 characters and returns whatever it could decode. That
-  //    means a typo or truncated input would land garbage on disk if we
-  //    accepted whatever decoded. Defense: round-trip the decoded buffer
-  //    back to base64 and compare against the input modulo padding/url
-  //    variants. A mismatch means characters were silently dropped.
+  // Buffer decoding is permissive; verify the round trip, including padding bits.
   const buf = Buffer.from(contentBase64, "base64");
   const reEncoded = buf.toString("base64");
-  // Normalize: drop padding and convert base64url chars to standard so the
-  // comparison tolerates both "=" / no-"=" inputs and "-_" base64url.
   const normalize = (s: string): string =>
     s.replace(/=+$/u, "").replace(/-/gu, "+").replace(/_/gu, "/");
   if (normalize(reEncoded) !== normalize(contentBase64)) {
@@ -252,7 +224,7 @@ export async function handleFileWrite(
         );
       }
       return {
-        ok: true,
+        ok: true as const,
         path: canonicalTargetPath,
         size: buf.length,
         sha256: computedSha256,
@@ -322,11 +294,7 @@ export async function handleFileWrite(
     }
   }
 
-  // 5. Hash the decoded buffer BEFORE touching disk. If the caller
-  //    supplied expectedSha256 and it doesn't match, refuse outright so
-  //    a bad caller hash with overwrite=true can't replace + delete the
-  //    original. Computing from the buffer (not a re-read) is the right
-  //    source of truth — the caller asked us to write THESE bytes.
+  // Reject an incorrect caller hash before overwriting the original bytes.
   const computedSha256 = sha256Hex(buf);
   if (expectedSha256 && expectedSha256.toLowerCase() !== computedSha256) {
     return err(
@@ -338,7 +306,7 @@ export async function handleFileWrite(
 
   if (preflightOnly) {
     return {
-      ok: true,
+      ok: true as const,
       path: canonicalTargetPath,
       size: buf.length,
       sha256: computedSha256,
@@ -359,12 +327,12 @@ export async function handleFileWrite(
       return writeResult;
     }
     return {
-      ok: true,
+      ok: true as const,
       path: writeResult.path,
       size: buf.length,
       sha256: computedSha256,
       overwritten: writeResult.overwritten,
-      binding: { kind: "existing", ...writeResult.identity },
+      binding: { kind: "existing", ...writeResult.identity } satisfies PathBinding,
     };
   }
 
@@ -390,10 +358,9 @@ export async function handleFileWrite(
   let canonicalPath = targetPath;
   let finalIdentity: FileIdentity | undefined;
   try {
-    const opened = await parentRoot.open(targetFileName);
+    await using opened = await parentRoot.open(targetFileName);
     canonicalPath = opened.realPath;
     finalIdentity = fileIdentity(await opened.handle.stat({ bigint: true }));
-    await opened.handle.close().catch(() => undefined);
   } catch (openErr) {
     if (openErr instanceof FsSafeError) {
       return writeFsSafeError(openErr, targetPath);
@@ -401,7 +368,7 @@ export async function handleFileWrite(
   }
 
   return {
-    ok: true,
+    ok: true as const,
     path: canonicalPath,
     size: buf.length,
     sha256: computedSha256,
@@ -409,6 +376,6 @@ export async function handleFileWrite(
     binding: {
       kind: "existing",
       ...(finalIdentity ?? fileIdentity(await fs.stat(canonicalPath, { bigint: true }))),
-    },
+    } satisfies PathBinding,
   };
 }

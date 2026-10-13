@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { readVisibleSessionTranscriptMessageEntries } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { toGenericTranscriptItem } from "../session-catalog-transcript-item.js";
 import type { CodexSessionCatalogControl } from "../session-catalog-types.js";
@@ -16,14 +17,15 @@ import { createForkTestRuntime, forkResponse } from "./upstream-session-fork.tes
 
 vi.mock("openclaw/plugin-sdk/session-catalog", async (importOriginal) => ({
   ...(await importOriginal()),
-  deleteSessionUpstreamLink: vi.fn(),
-  upsertSessionUpstreamLink: vi.fn(() => true),
+  deleteSessionUpstreamLinkAsync: vi.fn(),
+  upsertSessionUpstreamLinkAsync: vi.fn(() => true),
 }));
 
 const roots: string[] = [];
 
 afterEach(async () => {
   for (const root of roots.splice(0)) {
+    await closeOpenClawAgentDatabasesAsync(root);
     await fs.rm(root, { recursive: true, force: true });
   }
 });

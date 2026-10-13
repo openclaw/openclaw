@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import zlib from "node:zlib";
 
 // Release proofs decode the persisted contract independently of candidate runtime code.
@@ -59,4 +60,28 @@ export function readSqliteTranscriptPayload(row) {
     throw new Error("Persisted transcript payload differs from its recorded UTF-8 size");
   }
   return utf8Decoder.decode(decoded);
+}
+
+export function transcriptIdentity(event) {
+  // Doctor repairs metadata; the fixture's text-only turn must retain event IDs and messages.
+  return {
+    type: event.type,
+    id: event.id,
+    ...(event.type === "message"
+      ? {
+          role: event.message.role,
+          textHash: createHash("sha256")
+            .update(
+              JSON.stringify(
+                typeof event.message.content === "string"
+                  ? [event.message.content]
+                  : event.message.content
+                      .filter((part) => part.type === "text")
+                      .map((part) => part.text),
+              ),
+            )
+            .digest("hex"),
+        }
+      : {}),
+  };
 }

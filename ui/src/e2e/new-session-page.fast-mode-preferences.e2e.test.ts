@@ -67,7 +67,7 @@ suite.define(() => {
       const openEffort = async () => {
         const effort = page.locator('[data-chat-thinking-select="true"]');
         await effort.click();
-        await page.locator("[data-chat-speed-toggle]").waitFor({ state: "visible" });
+        await page.locator('[data-chat-speed-option="on"]').waitFor({ state: "visible" });
         return effort;
       };
       const confirmPreferenceWrite = async (selection: Record<string, unknown>) => {
@@ -106,9 +106,9 @@ suite.define(() => {
         await expect.poll(() => effort.getAttribute("data-chat-thinking-value")).toBe("high");
         await confirmPreferenceWrite({ thinkingLevel: "high" });
 
-        await page.locator("[data-chat-speed-toggle]").click();
+        await page.locator('[data-chat-speed-option="on"]').click();
         await expect
-          .poll(() => page.locator("[data-chat-speed-toggle]").getAttribute("aria-checked"))
+          .poll(() => page.locator('[data-chat-speed-option="on"]').getAttribute("aria-checked"))
           .toBe("true");
         await capture("01-fast-mode-selected.png");
         await confirmPreferenceWrite({ fastMode: true });
@@ -135,13 +135,13 @@ suite.define(() => {
           .toBe("high");
         await capture("02-next-session-restored.png");
         await expect
-          .poll(() => page.locator("[data-chat-speed-toggle]").getAttribute("aria-checked"))
+          .poll(() => page.locator('[data-chat-speed-option="on"]').getAttribute("aria-checked"))
           .toBe("true");
 
-        await page.locator("[data-chat-speed-toggle]").click();
+        await page.locator('[data-chat-speed-option="off"]').click();
         await expect
-          .poll(() => page.locator("[data-chat-speed-toggle]").getAttribute("aria-checked"))
-          .toBe("false");
+          .poll(() => page.locator('[data-chat-speed-option="off"]').getAttribute("aria-checked"))
+          .toBe("true");
         await confirmPreferenceWrite({ fastMode: false });
         if (source === "identity") {
           await page.evaluate((key) => localStorage.removeItem(key), storageKey);
@@ -153,7 +153,7 @@ suite.define(() => {
           .poll(() => disabledEffort.getAttribute("data-chat-thinking-value"))
           .toBe("high");
         await expect
-          .poll(() => page.locator("[data-chat-speed-toggle]").getAttribute("aria-checked"))
+          .poll(() => page.locator('[data-chat-speed-option="on"]').getAttribute("aria-checked"))
           .toBe("false");
         await capture("03-disabled-mode-restored.png");
         await page.keyboard.press("Escape");

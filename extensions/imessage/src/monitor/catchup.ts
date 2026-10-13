@@ -1,9 +1,7 @@
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
-import type {
-  PluginStateCompareIntent,
-  PluginStateKeyedStore,
-} from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { IMessageAccountConfig } from "../account-types.js";
 import { getIMessageRuntime } from "../runtime.js";
 import {
   IMESSAGE_CATCHUP_CURSOR_NAMESPACE,
@@ -13,17 +11,8 @@ import {
   type IMessageCatchupCursor,
 } from "../state-contract.js";
 
-// iMessage inbound catchup. When the gateway is offline (crash, restart, mac
-// sleep, machine off), `imsg watch` resumes from current state and ignores
-// anything that landed in chat.db while the bridge was disconnected.
-// Without a recovery pass, those messages are permanently lost.
-//
-// This module keeps catchup on the same inbound evaluation and dispatch path
-// as live `imsg watch` notifications. The replay loop is pluggable via the
-// `dispatch` callback so `evaluateIMessageInbound` + `runChannelInboundEvent`
-// runs unchanged on replayed rows.
-//
-// See https://github.com/openclaw/openclaw/issues/78649 for design discussion.
+// Legacy opt-in catchup replays missed chat.db rows through the live inbound
+// evaluation and dispatch path (openclaw/openclaw#78649).
 
 const DEFAULT_MAX_AGE_MINUTES = 120;
 const MAX_MAX_AGE_MINUTES = 12 * 60;
@@ -34,13 +23,7 @@ const DEFAULT_MAX_FAILURE_RETRIES = 10;
 const MAX_MAX_FAILURE_RETRIES = 1_000;
 const cursorWriteQueue = new KeyedAsyncQueue();
 
-type IMessageCatchupConfig = {
-  enabled?: boolean;
-  maxAgeMinutes?: number;
-  perRunLimit?: number;
-  firstRunLookbackMinutes?: number;
-  maxFailureRetries?: number;
-};
+type IMessageCatchupConfig = NonNullable<IMessageAccountConfig["catchup"]>;
 
 export type IMessageCatchupRow = {
   guid: string;
@@ -50,42 +33,13 @@ export type IMessageCatchupRow = {
   isFromMe?: boolean;
 };
 
-export type IMessageCatchupSummary = {
-  querySucceeded: boolean;
-  fullyCaughtUp: boolean;
-  fetchedCount: number;
-  replayed: number;
-  skippedFromMe: number;
-  skippedPreCursor: number;
-  /**
-   * Messages whose GUID was already recorded as "given up" from a prior
-   * run (count >= `maxFailureRetries`). Skipped without a dispatch attempt
-   * so the cursor can advance past them.
-   */
-  skippedGivenUp: number;
-  failed: number;
-  /**
-   * Messages that crossed the `maxFailureRetries` ceiling on this run. Each
-   * transition triggers a `warn` log line. Already-given-up messages in
-   * subsequent runs count under `skippedGivenUp`, not here.
-   */
-  givenUp: number;
-  cursorBefore: { lastSeenMs: number; lastSeenRowid: number } | null;
-  cursorAfter: { lastSeenMs: number; lastSeenRowid: number };
-  windowStartMs: number;
-  windowEndMs: number;
-};
+export type IMessageCatchupSummary = Awaited<ReturnType<typeof performIMessageCatchup>>;
 
-function openCatchupCursorStore(): PluginStateKeyedStore<IMessageCatchupCursor> {
-  return getIMessageRuntime().state.openKeyedStore<IMessageCatchupCursor>({
+function openCatchupCursorStore(): PluginStateKeyedStore<IMessageCatchupCursor, 2> {
+  return getIMessageRuntime().state.openKeyedStoreV2<IMessageCatchupCursor>({
     namespace: IMESSAGE_CATCHUP_CURSOR_NAMESPACE,
     maxEntries: IMESSAGE_CATCHUP_CURSOR_MAX_ENTRIES,
   });
-}
-
-function enqueueCursorWrite<T>(accountId: string, fn: () => Promise<T>): Promise<T> {
-  const key = resolveIMessageCatchupCursorKey(accountId);
-  return cursorWriteQueue.enqueue(key, fn);
 }
 
 function sanitizeFailureRetriesInput(raw: unknown): Record<string, number> {
@@ -94,7 +48,7 @@ function sanitizeFailureRetriesInput(raw: unknown): Record<string, number> {
   }
   const out: Record<string, number> = {};
   for (const [guid, count] of Object.entries(raw as Record<string, unknown>)) {
-    if (!guid || typeof guid !== "string") {
+    if (!guid) {
       continue;
     }
     if (typeof count !== "number" || !Number.isFinite(count) || count <= 0) {
@@ -116,14 +70,14 @@ function normalizeIMessageCatchupCursor(value: unknown): IMessageCatchupCursor |
   if (typeof raw.lastSeenRowid !== "number" || !Number.isFinite(raw.lastSeenRowid)) {
     return null;
   }
-  const failureRetries = sanitizeFailureRetriesInput(raw.failureRetries);
-  const hasRetries = Object.keys(failureRetries).length > 0;
-  return {
-    lastSeenMs: raw.lastSeenMs,
-    lastSeenRowid: raw.lastSeenRowid,
-    updatedAt: typeof raw.updatedAt === "number" ? raw.updatedAt : 0,
-    ...(hasRetries ? { failureRetries } : {}),
-  };
+  return buildIMessageCatchupCursor(
+    {
+      lastSeenMs: raw.lastSeenMs,
+      lastSeenRowid: raw.lastSeenRowid,
+      failureRetries: raw.failureRetries,
+    },
+    typeof raw.updatedAt === "number" ? raw.updatedAt : 0,
+  );
 }
 
 async function loadIMessageCatchupCursor(accountId: string): Promise<IMessageCatchupCursor | null> {
@@ -154,60 +108,41 @@ function decideCatchupCursorSave(
   existingValue: IMessageCatchupCursor | undefined,
   cursor: IMessageCatchupCursor,
   allowCursorRewindForRetries: boolean,
-): PluginStateCompareIntent<IMessageCatchupCursor> {
+): IMessageCatchupCursor | undefined {
   const existing = normalizeIMessageCatchupCursor(existingValue);
   if (existing && cursor.lastSeenRowid < existing.lastSeenRowid) {
     if (!allowCursorRewindForRetries) {
-      return { operation: "update", action: "keep" };
+      return undefined;
     }
-    return {
-      operation: "update",
-      action: "set",
-      value: buildIMessageCatchupCursor(
-        {
-          lastSeenMs: cursor.lastSeenMs,
-          lastSeenRowid: cursor.lastSeenRowid,
-          failureRetries: { ...existing.failureRetries, ...cursor.failureRetries },
-        },
-        cursor.updatedAt,
-      ),
-    };
-  }
-  return { operation: "update", action: "set", value: cursor };
-}
-
-async function saveIMessageCatchupCursor(
-  accountId: string,
-  next: { lastSeenMs: number; lastSeenRowid: number; failureRetries?: Record<string, number> },
-  options: { allowCursorRewindForRetries?: boolean } = {},
-): Promise<void> {
-  const cursor = buildIMessageCatchupCursor(next, Date.now());
-  const allowCursorRewindForRetries = options.allowCursorRewindForRetries === true;
-  const store = openCatchupCursorStore();
-  if (!store.observe || !store.compareAndApply) {
-    throw new Error(
-      "iMessage catchup cursor persistence requires plugin-state comparison support.",
+    return buildIMessageCatchupCursor(
+      {
+        lastSeenMs: cursor.lastSeenMs,
+        lastSeenRowid: cursor.lastSeenRowid,
+        failureRetries: { ...existing.failureRetries, ...cursor.failureRetries },
+      },
+      cursor.updatedAt,
     );
   }
-  const key = resolveIMessageCatchupCursorKey(accountId);
-  let observation = await store.observe(key);
-  for (;;) {
-    const intent = decideCatchupCursorSave(observation.value, cursor, allowCursorRewindForRetries);
-    const result = await store.compareAndApply(key, observation.comparison, intent);
-    if (result.status !== "conflict") {
-      return;
-    }
-    observation = result.current;
-  }
+  return cursor;
 }
 
-export type ResolvedCatchupConfig = {
-  enabled: boolean;
-  maxAgeMinutes: number;
-  perRunLimit: number;
-  firstRunLookbackMinutes: number;
-  maxFailureRetries: number;
-};
+async function updateIMessageCatchupCursor(
+  accountId: string,
+  decide: (existing: IMessageCatchupCursor | undefined) => IMessageCatchupCursor | undefined,
+): Promise<boolean> {
+  const key = resolveIMessageCatchupCursorKey(accountId);
+  return await cursorWriteQueue.enqueue(key, async () => {
+    const store = openCatchupCursorStore();
+    const next = decide(await store.lookup(key));
+    if (!next) {
+      return false;
+    }
+    await store.register(key, next);
+    return true;
+  });
+}
+
+export type ResolvedCatchupConfig = Required<IMessageCatchupConfig>;
 
 function clampInt(value: number | undefined, min: number, max: number, fallback: number): number {
   return resolveIntegerOption(value, fallback, { min, max });
@@ -242,16 +177,7 @@ export type CatchupFetchFn = (params: {
 }) => Promise<{
   resolved: boolean;
   rows: IMessageCatchupRow[];
-  /**
-   * Highest `rowid` the fetcher saw in the raw response, including rows it
-   * dropped (parser failure, schema drift, missing fields). The replay loop
-   * uses this as a floor for the cursor advance so a single unparseable row
-   * cannot stall catchup forever — without this, the bridge silently
-   * dropping a row would mean the next pass re-fetches the same broken row
-   * indefinitely. Optional so test fetchers that only emit fully-valid rows
-   * can omit it; when omitted, the cursor advance falls back to the rows
-   * the loop actually processed.
-   */
+  /** Raw response watermark, including unparseable rows, to prevent replay stalls. */
   highWatermarkRowid?: number;
   /** Companion to `highWatermarkRowid` — highest `date` seen in the raw response. */
   highWatermarkMs?: number;
@@ -280,29 +206,25 @@ function decideLiveCatchupCursorAdvance(
   existingValue: IMessageCatchupCursor | undefined,
   next: IMessageCatchupCursor,
   maxFailureRetries: number,
-): PluginStateCompareIntent<IMessageCatchupCursor> {
+): IMessageCatchupCursor | undefined {
   const cursor = normalizeIMessageCatchupCursor(existingValue);
   if (cursor && next.lastSeenRowid <= cursor.lastSeenRowid) {
-    return { operation: "update", action: "keep" };
+    return undefined;
   }
   const blockingFailure = Object.values(cursor?.failureRetries ?? {}).some(
     (count) => count < maxFailureRetries,
   );
   if (blockingFailure) {
-    return { operation: "update", action: "keep" };
+    return undefined;
   }
-  return {
-    operation: "update",
-    action: "set",
-    value: buildIMessageCatchupCursor(
-      {
-        lastSeenMs: Math.max(cursor?.lastSeenMs ?? next.lastSeenMs, next.lastSeenMs),
-        lastSeenRowid: next.lastSeenRowid,
-        failureRetries: cursor?.failureRetries,
-      },
-      next.updatedAt,
-    ),
-  };
+  return buildIMessageCatchupCursor(
+    {
+      lastSeenMs: Math.max(cursor?.lastSeenMs ?? next.lastSeenMs, next.lastSeenMs),
+      lastSeenRowid: next.lastSeenRowid,
+      failureRetries: cursor?.failureRetries,
+    },
+    next.updatedAt,
+  );
 }
 
 export async function advanceIMessageCatchupCursor(
@@ -314,42 +236,13 @@ export async function advanceIMessageCatchupCursor(
     return false;
   }
 
-  return await enqueueCursorWrite(accountId, async () => {
-    const cursor = buildIMessageCatchupCursor(next, Date.now());
-    const maxFailureRetries = config.maxFailureRetries;
-    const store = openCatchupCursorStore();
-    if (!store.observe || !store.compareAndApply) {
-      throw new Error(
-        "iMessage catchup cursor persistence requires plugin-state comparison support.",
-      );
-    }
-    const key = resolveIMessageCatchupCursorKey(accountId);
-    let observation = await store.observe(key);
-    for (;;) {
-      const intent = decideLiveCatchupCursorAdvance(observation.value, cursor, maxFailureRetries);
-      const result = await store.compareAndApply(key, observation.comparison, intent);
-      if (result.status !== "conflict") {
-        return result.status === "applied";
-      }
-      observation = result.current;
-    }
-  });
+  const cursor = buildIMessageCatchupCursor(next, Date.now());
+  return await updateIMessageCatchupCursor(accountId, (existing) =>
+    decideLiveCatchupCursorAdvance(existing, cursor, config.maxFailureRetries),
+  );
 }
 
-/**
- * One catchup pass. Loads the cursor, fetches `messages.history`, replays
- * each row through `dispatch`, advances the cursor on success / give-up,
- * persists the cursor, returns a summary.
- *
- * The fetch and dispatch functions are injected so this loop is unit-testable
- * without standing up an `imsg` daemon. The wiring in `monitor-provider.ts`
- * passes the live `client.request("messages.history", ...)` adapter as
- * `fetch` and the `evaluateIMessageInbound` + `runChannelInboundEvent`
- * pipeline as `dispatch`.
- */
-export async function performIMessageCatchup(
-  params: PerformCatchupParams,
-): Promise<IMessageCatchupSummary> {
+export async function performIMessageCatchup(params: PerformCatchupParams) {
   const now = params.now ?? Date.now();
   const cfg = params.config;
   const cursor = await loadIMessageCatchupCursor(params.accountId);
@@ -360,15 +253,17 @@ export async function performIMessageCatchup(
   const windowEndMs = now;
   const sinceRowid = cursor?.lastSeenRowid ?? 0;
 
-  const summary: IMessageCatchupSummary = {
+  const summary = {
     querySucceeded: false,
     fullyCaughtUp: false,
     fetchedCount: 0,
     replayed: 0,
     skippedFromMe: 0,
     skippedPreCursor: 0,
+    // GUIDs already at the retry ceiling before this pass.
     skippedGivenUp: 0,
     failed: 0,
+    // GUIDs that reached the retry ceiling during this pass.
     givenUp: 0,
     cursorBefore: cursor
       ? { lastSeenMs: cursor.lastSeenMs, lastSeenRowid: cursor.lastSeenRowid }
@@ -405,14 +300,8 @@ export async function performIMessageCatchup(
   const rows = fetchResult.rows.toSorted((a, b) => a.rowid - b.rowid);
   const failureRetries = { ...cursor?.failureRetries };
 
-  // Two distinct watermarks: `highWatermark*` is the high point we reached on
-  // any row we processed cleanly (success / skipFromMe / skipPreCursor /
-  // skipGivenUp / give-up), and `earliestHeldFailureRow` is the smallest-rowid
-  // row whose dispatch failed below the retry ceiling on this pass. When a
-  // failure is held, the persisted cursor must NOT leapfrog it — otherwise
-  // the next pass would filter the failed row out via `row.rowid <= sinceRowid`
-  // and never retry. Already-successful rows above the held failure get
-  // re-replayed on the next pass and rejected by durable ingress tombstones.
+  // Held failures cap the persisted cursor below their rowid so the next pass
+  // retries them. Durable ingress tombstones reject replayed successes above it.
   const cursorBeforeMs = cursor?.lastSeenMs ?? windowStartMs;
   const cursorBeforeRowid = cursor?.lastSeenRowid ?? 0;
   let highWatermarkMs = cursorBeforeMs;
@@ -424,12 +313,13 @@ export async function performIMessageCatchup(
       summary.skippedPreCursor += 1;
       continue;
     }
+    // A held failure clamps the final cursor below this watermark.
+    highWatermarkMs = Math.max(highWatermarkMs, row.date);
+    highWatermarkRowid = Math.max(highWatermarkRowid, row.rowid);
     if (row.date < ageBoundMs) {
       // Row predates the recency ceiling. Skip but advance the cursor so we
       // don't re-fetch it next pass.
       summary.skippedPreCursor += 1;
-      highWatermarkMs = Math.max(highWatermarkMs, row.date);
-      highWatermarkRowid = Math.max(highWatermarkRowid, row.rowid);
       continue;
     }
     if (row.isFromMe) {
@@ -441,15 +331,11 @@ export async function performIMessageCatchup(
         );
       }
       summary.skippedFromMe += 1;
-      highWatermarkMs = Math.max(highWatermarkMs, row.date);
-      highWatermarkRowid = Math.max(highWatermarkRowid, row.rowid);
       continue;
     }
     const priorCount = failureRetries[row.guid] ?? 0;
     if (priorCount >= cfg.maxFailureRetries) {
       summary.skippedGivenUp += 1;
-      highWatermarkMs = Math.max(highWatermarkMs, row.date);
-      highWatermarkRowid = Math.max(highWatermarkRowid, row.rowid);
       continue;
     }
 
@@ -464,8 +350,6 @@ export async function performIMessageCatchup(
     if (dispatched.ok) {
       summary.replayed += 1;
       delete failureRetries[row.guid];
-      highWatermarkMs = Math.max(highWatermarkMs, row.date);
-      highWatermarkRowid = Math.max(highWatermarkRowid, row.rowid);
       continue;
     }
 
@@ -477,11 +361,6 @@ export async function performIMessageCatchup(
       params.warn?.(
         `imessage catchup: giving up on guid=${row.guid} after ${nextCount} failures; advancing cursor past it`,
       );
-      // Cursor advances past the wedged guid so subsequent passes can make
-      // progress. Already-given-up entries in future runs count under
-      // skippedGivenUp.
-      highWatermarkMs = Math.max(highWatermarkMs, row.date);
-      highWatermarkRowid = Math.max(highWatermarkRowid, row.rowid);
       continue;
     }
     // Below the retry ceiling: hold the cursor BEFORE this row so the next
@@ -492,13 +371,7 @@ export async function performIMessageCatchup(
     }
   }
 
-  // Apply the bridge's high-watermark floor. The bridge tracks the highest
-  // rowid in the raw `messages.history` response, including rows it had to
-  // drop (parser failure, schema drift). Without this, an unparseable row
-  // could permanently stall the cursor: it never reaches the loop, the loop
-  // never advances past it, the next pass re-fetches the same broken row.
-  // The floor only applies when no failure is held — a held failure has
-  // tighter cursor-cap semantics that must win.
+  // Advance past unparseable source rows unless a held failure requires a retry.
   if (earliestHeldFailureRow === null) {
     if (typeof fetchResult.highWatermarkMs === "number") {
       highWatermarkMs = Math.max(highWatermarkMs, fetchResult.highWatermarkMs);
@@ -511,9 +384,6 @@ export async function performIMessageCatchup(
   let lastSeenMs: number;
   let lastSeenRowid: number;
   if (earliestHeldFailureRow !== null) {
-    // Hold cursor strictly below the failed row. Already-successful rows
-    // above it get re-replayed next pass; durable ingress tombstones reject
-    // the duplicate GUID before dispatch.
     lastSeenMs = Math.max(cursorBeforeMs, earliestHeldFailureRow.date - 1);
     lastSeenRowid = Math.max(cursorBeforeRowid, earliestHeldFailureRow.rowid - 1);
   } else {
@@ -523,16 +393,12 @@ export async function performIMessageCatchup(
 
   const capped = capFailureRetriesMap(failureRetries);
   summary.cursorAfter = { lastSeenMs, lastSeenRowid };
-  await saveIMessageCatchupCursor(
-    params.accountId,
-    {
-      lastSeenMs,
-      lastSeenRowid,
-      failureRetries: capped,
-    },
-    {
-      allowCursorRewindForRetries: earliestHeldFailureRow !== null,
-    },
+  const next = buildIMessageCatchupCursor(
+    { lastSeenMs, lastSeenRowid, failureRetries: capped },
+    Date.now(),
+  );
+  await updateIMessageCatchupCursor(params.accountId, (existing) =>
+    decideCatchupCursorSave(existing, next, earliestHeldFailureRow !== null),
   );
 
   if (summary.replayed > 0 || summary.failed > 0 || summary.givenUp > 0) {

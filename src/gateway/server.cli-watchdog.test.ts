@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { watch } from "node:fs";
 import fs from "node:fs/promises";
+import { createServer, type Socket } from "node:net";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
@@ -14,6 +14,8 @@ import type {
   CliBackendExecuteContext,
   CliBackendPrepareExecutionContext,
 } from "../plugins/cli-backend.types.js";
+import { reserveTestPortListener } from "../test-utils/port-claims.js";
+import { observeGatewayRunExecution } from "./agent-command.test-helpers.js";
 import * as agentJobs from "./agent-turn/agent-job.js";
 import type { GatewayClient } from "./client.js";
 import {
@@ -109,8 +111,8 @@ describe.skipIf(process.platform === "win32")(
       "registered chat.send $name",
       { timeout: 180_000 },
       (testCase, { signal, onTestFinished }) => {
-        if (!fixture || fixture.cleanupFailed) {
-          throw new Error("The shared watchdog Gateway is not available for another case.");
+        if (!fixture) {
+          throw new Error("The shared watchdog Gateway did not start.");
         }
         const work = runWatchdogCase(fixture, testCase, signal);
         onTestFinished(() => work);
@@ -126,6 +128,7 @@ async function runWatchdogCase(
   signal: AbortSignal,
 ) {
   const { state, gateway, backends, token, controllerScript } = fixture;
+  const requestExecution = await observeGatewayRunExecution();
   const proof = state.path("proof", testCase.behavior);
   const nativeRoot = state.path("receipts", testCase.behavior);
   const sessionKey = `agent:main:freeze-${randomUUID()}`;
@@ -179,14 +182,19 @@ async function runWatchdogCase(
   let pendingCompletion: Promise<WatchdogCompletion> | undefined;
   let controller: ReturnType<typeof spawn> | undefined;
   let controllerExit: Promise<void> | undefined;
-  let receipts: ReturnType<typeof watch> | undefined;
+  let receipts: Awaited<ReturnType<typeof reserveTestPortListener>> | undefined;
+  const receiptSockets = new Set<Socket>();
+  let closingReceipts = false;
   const readyReceipt = createDeferred();
   const resumedReceipt = createDeferred();
   void readyReceipt.promise.catch(() => {});
   void resumedReceipt.promise.catch(() => {});
+  const rejectReceipts = (error: unknown) => {
+    readyReceipt.reject(error);
+    resumedReceipt.reject(error);
+  };
   const abortWaits = () => {
-    readyReceipt.reject(signal.reason);
-    resumedReceipt.reject(signal.reason);
+    rejectReceipts(signal.reason);
     outputChanged.resolve();
     completionObserved.resolve();
   };
@@ -198,18 +206,36 @@ async function runWatchdogCase(
         fs.mkdir(proof, { recursive: true }),
         fs.mkdir(nativeRoot, { recursive: true }),
       ]);
-      receipts = watch(nativeRoot, (_event, filename) => {
-        if (filename === "ready.json") {
-          readyReceipt.resolve();
-        }
-        if (filename === "resumed.json") {
-          resumedReceipt.resolve();
-        }
+      receipts = await reserveTestPortListener({
+        offsets: [0],
+        signal,
+        createListener: () =>
+          createServer((socket) => {
+            if (closingReceipts) {
+              socket.destroy();
+              return;
+            }
+            receiptSockets.add(socket);
+            let receipt = "";
+            socket.setEncoding("utf8");
+            socket.on("data", (chunk: string) => {
+              receipt += chunk;
+            });
+            socket.on("error", rejectReceipts);
+            socket.once("close", () => receiptSockets.delete(socket));
+            socket.once("end", () => {
+              if (receipt === "ready.json") {
+                readyReceipt.resolve();
+              } else if (receipt === "resumed.json") {
+                resumedReceipt.resolve();
+              } else {
+                rejectReceipts(new Error(`Unexpected CLI receipt: ${receipt}`));
+              }
+            });
+          }),
       });
-      receipts.on("error", (error) => {
-        readyReceipt.reject(error);
-        resumedReceipt.reject(error);
-      });
+      receipts.listener.on("error", rejectReceipts);
+      const receiptPort = receipts.claim.port;
       signal.throwIfAborted();
       testing.setDepsForTest({
         resolveRuntimeCliBackends: () =>
@@ -227,6 +253,7 @@ async function runWatchdogCase(
                     ...prepared.env,
                     OPENCLAW_TEST_CLI_BEHAVIOR: testCase.behavior,
                     OPENCLAW_TEST_CLI_RECEIPTS: nativeRoot,
+                    OPENCLAW_TEST_CLI_RECEIPT_PORT: String(receiptPort),
                   },
                   async *execute(execution: CliBackendExecuteContext) {
                     execution.abortSignal?.addEventListener(
@@ -236,23 +263,28 @@ async function runWatchdogCase(
                       },
                       { once: true },
                     );
-                    for await (const event of execute(execution)) {
-                      if (
-                        event.type === "assistant" &&
-                        testCase.behavior === "ordered" &&
-                        orderedOutputAt === undefined
-                      ) {
-                        orderedOutputAt = clock.now();
-                        clock.jump(60_000);
+                    try {
+                      for await (const event of execute(execution)) {
+                        if (
+                          event.type === "assistant" &&
+                          testCase.behavior === "ordered" &&
+                          orderedOutputAt === undefined
+                        ) {
+                          orderedOutputAt = clock.now();
+                          clock.jump(60_000);
+                        }
+                        yield event;
+                        // The consumer has called noteOutput before requesting the next event.
+                        if (event.type === "assistant") {
+                          outputs++;
+                          const observed = outputChanged;
+                          outputChanged = createDeferred();
+                          observed.resolve();
+                        }
                       }
-                      yield event;
-                      // The consumer has called noteOutput before requesting the next event.
-                      if (event.type === "assistant") {
-                        outputs++;
-                        const observed = outputChanged;
-                        outputChanged = createDeferred();
-                        observed.resolve();
-                      }
+                    } catch (error) {
+                      rejectReceipts(error);
+                      throw error;
                     }
                   },
                 };
@@ -486,9 +518,9 @@ async function runWatchdogCase(
             controller?.kill("SIGTERM");
             await controllerExit?.catch(() => {});
           },
-          () => receipts?.close(),
           async () => {
-            await gateway.client.request("sessions.delete", { key: sessionKey });
+            // agent.wait can observe a terminal attempt while detached chat work settles.
+            await gateway.client.request("chat.abort", { sessionKey });
           },
           async () => {
             const results = await Promise.allSettled(
@@ -506,11 +538,21 @@ async function runWatchdogCase(
           },
           async () => {
             await pendingCompletion?.catch(() => {});
+            await requestExecution.waitForCompletion();
           },
+          async () => {
+            await gateway.client.request("sessions.delete", { key: sessionKey });
+          },
+          async () => {
+            closingReceipts = true;
+            const closed = receipts?.releaseListener();
+            for (const socket of receiptSockets) {
+              socket.destroy();
+            }
+            await closed;
+          },
+          () => receipts?.claim.release(),
         );
-      } catch (error) {
-        fixture.cleanupFailed = true;
-        throw error;
       } finally {
         // Restore observation hooks after every owner has had its cleanup attempt.
         signal.removeEventListener("abort", abortWaits);
@@ -519,6 +561,7 @@ async function runWatchdogCase(
         capability.mockRestore();
         log.mockRestore();
         waitForAgentJob?.mockRestore();
+        await requestExecution.restore();
       }
     },
     async () => {

@@ -14,10 +14,6 @@ type QaCronRunsPage = {
   entries?: QaCronRunLogEntry[];
 };
 
-function resolveCronRunPollIntervalMs(intervalMs: number | undefined): number {
-  return resolveTimerTimeoutMs(intervalMs ?? 1_000, 1_000, 0);
-}
-
 export async function waitForCronRunCompletion(params: {
   callGateway: (
     method: string,
@@ -31,7 +27,7 @@ export async function waitForCronRunCompletion(params: {
   gatewayCallTimeoutMs?: number;
 }) {
   const timeoutMs = params.timeoutMs ?? 90_000;
-  const intervalMs = resolveCronRunPollIntervalMs(params.intervalMs);
+  const intervalMs = resolveTimerTimeoutMs(params.intervalMs ?? 1_000, 1_000, 0);
   const gatewayCallTimeoutMs = resolveTimerTimeoutMs(
     params.gatewayCallTimeoutMs ?? 30_000,
     30_000,

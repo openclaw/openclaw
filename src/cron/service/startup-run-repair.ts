@@ -3,11 +3,11 @@ import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion"
 import { resolveCronCompletionStatus } from "../completion-status.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import type { CronRunLogEntry } from "../run-log-types.js";
-import type { CronJob, CronRunStatus } from "../types.js";
+import type { InterruptedStartupRun } from "../store/run-recovery.types.js";
+import type { CronJob, CronRunStatus, CronTriggerEvalOutcome } from "../types.js";
 import { maybeAutoDisableCronJobAfterRunFailure } from "./auto-disable.js";
 import { finalizeCronFailureNotifications, resolveFailureAlert } from "./failure-alerts.js";
 import type { CronJobPolicyContext, DeferredCronNotifications } from "./state.js";
-import type { CronTriggerEvalOutcome } from "./timer-execution-timeout.js";
 import {
   applyJobResult,
   applyScriptRunResult,
@@ -16,14 +16,6 @@ import {
 import { applyTriggerRunResult } from "./timer-trigger.js";
 
 export const STARTUP_INTERRUPTED_ERROR = "cron: job interrupted by gateway restart";
-
-export type InterruptedStartupRun = {
-  jobId: string;
-  taskRunId?: string;
-  runAtMs: number;
-  durationMs: number;
-  replacementAtMs?: number;
-};
 
 function resolveOneShotReplacementAtMs(job: CronJob, runningAtMs: number): number | undefined {
   if (job.schedule.kind !== "at" || !job.enabled) {
@@ -41,10 +33,8 @@ function resolveOneShotReplacementAtMs(job: CronJob, runningAtMs: number): numbe
 export function markInterruptedStartupRun(params: {
   state: CronJobPolicyContext;
   job: CronJob;
-  taskRunId?: string;
   runningAtMs: number;
   nowMs: number;
-  recoverInterruptedOneShot?: boolean;
   deferredNotifications: DeferredCronNotifications;
 }): InterruptedStartupRun {
   const { job, runningAtMs, nowMs } = params;
@@ -94,12 +84,17 @@ export function markInterruptedStartupRun(params: {
       "cron: auto-disabled interrupted job after consecutive run failures",
     );
   }
+  // An uncertain started one-shot is never replayed; a distinct replacement keeps its slot.
+  if (job.schedule.kind === "at" && replacementAtMs === undefined) {
+    job.enabled = false;
+  }
   finalizeCronFailureNotifications(params.state, {
     job,
     alertConfig,
     result: {
       status: "error",
       error: STARTUP_INTERRUPTED_ERROR,
+      errorClassification: { kind: "aborted" },
       startedAt: runningAtMs,
     },
     completionStatus: "failed",
@@ -107,19 +102,8 @@ export function markInterruptedStartupRun(params: {
     deferredNotifications: params.deferredNotifications,
   });
 
-  // Live owner reclamation consumes an already-started one-shot. Only startup
-  // recovery may replay it; an operator's distinct replacement stays scheduled.
-  if (
-    job.schedule.kind === "at" &&
-    replacementAtMs === undefined &&
-    !params.recoverInterruptedOneShot
-  ) {
-    job.enabled = false;
-  }
-
   return {
     jobId: job.id,
-    ...(params.taskRunId ? { taskRunId: params.taskRunId } : {}),
     ...(replacementAtMs === undefined ? {} : { replacementAtMs }),
     runAtMs: runningAtMs,
     durationMs: job.state.lastDurationMs,
@@ -150,7 +134,7 @@ export function restoreFinalizedStartupRun(params: {
   const replacementAtMs = resolveOneShotReplacementAtMs(job, startedAt);
   const persistedNextRunAtMs = asDateTimestampMs(job.state.nextRunAtMs);
   // Committed edits own scheduling even if the clock repeats or moves back.
-  // Keep the existing one-shot protection for older pending runs without a nonce.
+  // Older pending one-shots still retain a later replacement deadline.
   const scheduleOwnership =
     typeof job.state.runningScheduleChangeId === "string" ||
     (job.schedule.kind === "at" &&
@@ -255,7 +239,7 @@ export function restoreFinalizedStartupRun(params: {
   }
   state.deps.log.info(
     { jobId: job.id, runningAtMs, status: entry.status },
-    "cron: restored finalized task-ledger run on startup",
+    "cron: restored finalized run history on startup",
   );
   return {
     shouldDelete,

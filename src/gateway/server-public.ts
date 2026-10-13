@@ -9,9 +9,13 @@ import type { ChannelAutostartSuppression } from "./server-channels.js";
 import type { GatewaySidecarStartupMode } from "./server-sidecar-startup-mode.js";
 
 export type GatewayCloseOptions = {
+  /** Run-loop host retains the writer until its final boot outcome is durable. */
+  retainSharedState?: boolean;
   reason?: string;
   restartExpectedMs?: number | null;
   drainTimeoutMs?: number | null;
+  /** Process-owning host only: the process exits after close, releasing native watchers. */
+  exitAfterClose?: boolean;
 };
 
 type GatewayShutdownBudget = {
@@ -56,6 +60,11 @@ export type GatewayServer = {
 };
 
 export type GatewayServerOptions = {
+  /** Retained run-loop ownership; direct servers acquire and release their own owner. */
+  gatewayStateOwner?: Pick<
+    import("../infra/gateway-lock.js").GatewayLockHandle,
+    "assertDatabaseAccess"
+  >;
   /** Internal native-host operation; direct readers retain their own execution owner. */
   prepareConfigSnapshot?: ConfigSnapshotPreparation;
   /** Internal, closure-bound host authority. Direct servers have no native lifecycle owner. */
@@ -105,7 +114,7 @@ export type GatewayServerOptions = {
   updateCanary?: boolean;
   channelAutostartSuppression?: ChannelAutostartSuppression;
   /** Internal lifecycle callback that re-proves and records crash-loop recovery. */
-  tryRecoverChannelAutostartSuppression?: () => boolean;
+  tryRecoverChannelAutostartSuppression?: (signal: AbortSignal) => Promise<number | undefined>;
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
   /** Internal Node process-origin timestamp used only for initial startup tracing. */
   processStartedAt?: number;

@@ -1,5 +1,8 @@
 import { expect, it } from "vitest";
-import { snapshotListFixture } from "../pages/cloud-workers/cloud-worker-snapshots.test-support.ts";
+import {
+  buildEnvironmentFixture,
+  snapshotListFixture,
+} from "../pages/cloud-workers/cloud-worker-snapshots.test-support.ts";
 import { installMockGateway, waitForConfirmModal } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -8,25 +11,6 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
-
-function buildEnvironmentFixture(state = "provisioning", error?: string) {
-  return {
-    id: "build-app",
-    type: "worker",
-    status: "starting",
-    preparation: { purpose: "build", key: "build-key" },
-    worker: {
-      profileId: "linux-build",
-      providerId: "crabbox",
-      leaseId: "lease-app",
-      state,
-      ageMs: 60_000,
-      attachedSessionIds: [],
-      tunnelStatus: "stopped",
-      ...(error ? { error } : {}),
-    },
-  };
-}
 
 suite.define(() => {
   it("builds a snapshot for the selected profile and local repository", async () => {

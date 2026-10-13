@@ -1,3 +1,5 @@
+import type { ProviderModelRouteAuthRequirement } from "../plugin-sdk/provider-model-types.js";
+
 type ProviderModelAuthReadiness = "ready" | "unknown" | "unavailable";
 
 export type ProviderModelAuthEvidence =
@@ -14,6 +16,9 @@ export type ProviderModelAuthProfileSource = {
   profileId: string;
   provider?: string;
   mode?: string;
+  authFlow?: string;
+  /** Provider-owned route classification; null explicitly excludes inference. */
+  authRequirement?: ProviderModelRouteAuthRequirement | null;
   readiness: ProviderModelAuthReadiness;
   cooldown: "active" | "clear";
 };
@@ -174,16 +179,14 @@ export function buildProviderModelAuthSourcePlan(params: {
   }
   const explicitOrder = params.explicitOrder === true;
   const ordered = reorderPreferredProfile(params.profiles, params.preferredProfileId);
-  let profiles: ProviderModelAuthAutomaticProfiles;
-  if (ordered.length === 0) {
-    profiles = { kind: "empty", explicitOrder };
-  } else {
+  let profiles: ProviderModelAuthAutomaticProfiles = { kind: "empty", explicitOrder };
+  if (ordered.length > 0) {
     const available = ordered.filter((profile) => profile.readiness !== "unavailable");
     if (available.length === 0) {
       const [firstOrdered] = ordered;
-      profiles = firstOrdered
-        ? { kind: "all-unavailable", explicitOrder, first: firstOrdered }
-        : { kind: "empty", explicitOrder };
+      if (firstOrdered) {
+        profiles = { kind: "all-unavailable", explicitOrder, first: firstOrdered };
+      }
     } else {
       const outsideCooldown = available.filter((profile) => profile.cooldown === "clear");
       if (outsideCooldown.length > 0) {
@@ -192,9 +195,9 @@ export function buildProviderModelAuthSourcePlan(params: {
         profiles = { kind: "usable", explicitOrder, profiles: available.slice(0, 1) };
       } else {
         const [firstAvailable] = available;
-        profiles = firstAvailable
-          ? { kind: "all-cooldown", explicitOrder, first: firstAvailable }
-          : { kind: "empty", explicitOrder };
+        if (firstAvailable) {
+          profiles = { kind: "all-cooldown", explicitOrder, first: firstAvailable };
+        }
       }
     }
   }

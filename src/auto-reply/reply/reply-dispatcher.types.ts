@@ -1,5 +1,7 @@
-// Shared reply dispatcher type contracts for visible and message-tool delivery.
-import type { ProgressContinuationCapability } from "../../channels/progress-continuation.js";
+import type {
+  ProgressContinuationCapability,
+  ProgressContinuationReceipt,
+} from "../../channels/progress-continuation.js";
 import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
 import type { ReplyPayload } from "../types.js";
 import type { NormalizeReplyOutcome } from "./normalize-reply-skip-reason.js";
@@ -25,10 +27,10 @@ export type ReplyDispatchReceipt = {
   hasPendingDelivery?: true;
 };
 
-export function mapReplyDispatchCounts<T>(
+export function mapReplyDispatchCounts<T, R>(
   counts: Record<ReplyDispatchKind, T>,
-  select: (counts: T) => number,
-): Record<ReplyDispatchKind, number> {
+  select: (counts: T) => R,
+): Record<ReplyDispatchKind, R> {
   return { tool: select(counts.tool), block: select(counts.block), final: select(counts.final) };
 }
 
@@ -50,8 +52,17 @@ export type ReplyDispatchRuntimeInfo = {
   assertPlatformSendAuthorized?: () => void;
   /** @internal Bind this delivery's host-owned completion to a transformed payload. */
   bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T;
-  /** @internal Transfer this waiting reply's existing progress card to its current task owner. */
-  adoptProgressContinuation?: ProgressContinuationCapability["adopt"];
+  /** @internal Hand this waiting reply's live progress draft to the children it waits on. */
+  adoptProgressDraft?: ProgressContinuationCapability["adopt"];
+  /**
+   * @deprecated The 2026.9.8 receipt handoff. The host never offers it, so adapters
+   * that check for it keep ordinary waiting-reply delivery. Use `adoptProgressDraft`;
+   * removal waits for the next Plugin SDK major.
+   */
+  adoptProgressContinuation?: (
+    this: void,
+    receipt: ProgressContinuationReceipt,
+  ) => Promise<boolean>;
 };
 
 export type ReplyDispatchBeforeDeliver = (

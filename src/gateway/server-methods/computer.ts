@@ -73,7 +73,7 @@ export const computerHandlers: GatewayRequestHandlers = {
       const caller = resolveComputerCaller(options, "status");
       caller.assertCurrent();
       const result = context.gatewayComputerService
-        ? await context.gatewayComputerService.status()
+        ? await context.gatewayComputerService.status(params)
         : { available: false, configured: false };
       caller.assertCurrent();
       respond(true, result);

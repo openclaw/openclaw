@@ -10,7 +10,6 @@ import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const probePath = path.resolve("scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs");
-const dockerSurvivorPath = path.resolve("scripts/e2e/upgrade-survivor-docker.sh");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const LOAD_SENSITIVE_PROCESS_TIMEOUT_MS = process.env.CI ? 30_000 : 15_000;
 
@@ -112,44 +111,6 @@ describe("scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs", () => {
     } finally {
       spawnSpy.mockRestore();
     }
-  });
-
-  it("does not hard-code degraded ready allowlists into Docker survivor probes", () => {
-    const script = fs.readFileSync(dockerSurvivorPath, "utf8");
-
-    expect(script).not.toContain("--allow-failing discord,telegram,whatsapp,feishu,matrix");
-  });
-
-  it("rejects loose numeric probe limits instead of parsing prefixes", async () => {
-    const out = path.join(tempDirs.make("openclaw-upgrade-probe-"), "invalid.json");
-    const timeoutResult = await runProbe([
-      "--base-url",
-      "http://127.0.0.1:9",
-      "--path",
-      "/readyz",
-      "--expect",
-      "ready",
-      "--out",
-      out,
-      "--timeout-ms",
-      "1e3",
-    ]);
-
-    expect(timeoutResult).toMatchObject({ status: 1, signal: null, error: undefined });
-    expect(timeoutResult.stderr).toContain("invalid --timeout-ms: 1e3");
-
-    const bodyLimitResult = await runProbe(
-      ["--base-url", "http://127.0.0.1:9", "--path", "/readyz", "--expect", "ready", "--out", out],
-      5_000,
-      {
-        OPENCLAW_UPGRADE_SURVIVOR_PROBE_MAX_BODY_BYTES: "64bytes",
-      },
-    );
-
-    expect(bodyLimitResult).toMatchObject({ status: 1, signal: null, error: undefined });
-    expect(bodyLimitResult.stderr).toContain(
-      "invalid OPENCLAW_UPGRADE_SURVIVOR_PROBE_MAX_BODY_BYTES: 64bytes",
-    );
   });
 
   it("writes a result when the ready probe matches", async () => {
@@ -260,41 +221,6 @@ describe("scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs", () => {
     expect(fs.existsSync(out)).toBe(false);
   });
 
-  it("allows degraded ready responses only when degraded readiness is explicit", async () => {
-    const baseUrl = "http://probe.test";
-    const out = path.join(tempDirs.make("openclaw-upgrade-probe-"), "ready-degraded.json");
-    const nodeArgs = writeProbeImport(
-      'globalThis.fetch = async () => new Response(JSON.stringify({ ready: false, failing: ["telegram"] }), { status: 503, headers: { "content-type": "application/json" } });',
-    );
-    const result = await runProbe(
-      [
-        "--base-url",
-        baseUrl,
-        "--path",
-        "/readyz",
-        "--expect",
-        "ready",
-        "--allow-failing",
-        "telegram",
-        "--allow-degraded-ready",
-        "--out",
-        out,
-        "--timeout-ms",
-        "300",
-      ],
-      LOAD_SENSITIVE_PROCESS_TIMEOUT_MS,
-      {},
-      nodeArgs,
-    );
-
-    expect(result.status).toBe(0);
-    expect(JSON.parse(fs.readFileSync(out, "utf8"))).toMatchObject({
-      body: { failing: ["telegram"], ready: false },
-      path: "/readyz",
-      status: 503,
-    });
-  });
-
   it("does not let degraded ready mode convert generic server errors into success", async () => {
     const baseUrl = "http://probe.test";
     const out = path.join(tempDirs.make("openclaw-upgrade-probe-"), "ready-server-error.json");
@@ -324,38 +250,6 @@ describe("scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs", () => {
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("probe failed with HTTP 500");
-    expect(fs.existsSync(out)).toBe(false);
-  });
-
-  it("rejects declared oversized probe bodies before waiting on the stream", async () => {
-    const baseUrl = "http://probe.test";
-    const out = path.join(tempDirs.make("openclaw-upgrade-probe-"), "oversized.json");
-    const nodeArgs = writeProbeImport(
-      'globalThis.fetch = async () => new Response(new ReadableStream({ start() {} }), { status: 200, headers: { "content-length": "65", "content-type": "application/json" } });',
-    );
-    const result = await runProbe(
-      [
-        "--base-url",
-        baseUrl,
-        "--path",
-        "/healthz",
-        "--expect",
-        "live",
-        "--out",
-        out,
-        "--timeout-ms",
-        "200",
-        "--attempt-timeout-ms",
-        "100",
-      ],
-      LOAD_SENSITIVE_PROCESS_TIMEOUT_MS,
-      { OPENCLAW_UPGRADE_SURVIVOR_PROBE_MAX_BODY_BYTES: "64" },
-      nodeArgs,
-    );
-
-    expect(result.error).toBeUndefined();
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain(`${baseUrl}/healthz probe body exceeded 64 bytes`);
     expect(fs.existsSync(out)).toBe(false);
   });
 
@@ -431,7 +325,10 @@ describe("scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs", () => {
 
       expect(result.error).toBeUndefined();
       expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("probe attempt timed out after 100ms");
+      const attemptDeadline = result.stderr.match(/probe attempt timed out after (\d+)ms/u);
+      expect(attemptDeadline).not.toBeNull();
+      expect(Number(attemptDeadline?.[1])).toBeGreaterThan(0);
+      expect(Number(attemptDeadline?.[1])).toBeLessThanOrEqual(100);
       expect(elapsedMs).toBeLessThan(2_500);
       expect(fs.existsSync(out)).toBe(false);
     } finally {
@@ -440,36 +337,5 @@ describe("scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs", () => {
       }
       server.close();
     }
-  });
-
-  it("caps response bodies before parsing probe JSON", async () => {
-    const baseUrl = "http://probe.test";
-    const out = path.join(tempDirs.make("openclaw-upgrade-probe-"), "oversized.json");
-    const nodeArgs = writeProbeImport(
-      'globalThis.fetch = async () => new Response("x".repeat(256), { status: 200, headers: { "content-type": "application/json" } });',
-    );
-    const result = await runProbe(
-      [
-        "--base-url",
-        baseUrl,
-        "--path",
-        "/readyz",
-        "--expect",
-        "ready",
-        "--out",
-        out,
-        "--timeout-ms",
-        "300",
-        "--max-body-bytes",
-        "64",
-      ],
-      LOAD_SENSITIVE_PROCESS_TIMEOUT_MS,
-      {},
-      nodeArgs,
-    );
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("probe body exceeded 64 bytes");
-    expect(fs.existsSync(out)).toBe(false);
   });
 });

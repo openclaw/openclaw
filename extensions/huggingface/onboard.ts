@@ -1,4 +1,3 @@
-// Huggingface setup module handles plugin onboarding behavior.
 import {
   createModelCatalogPresetAppliers,
   createProviderConnectionPresetAppliers,

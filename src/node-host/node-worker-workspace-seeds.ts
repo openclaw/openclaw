@@ -61,7 +61,7 @@ export async function copyNodeWorkerProjectSeedObjects(params: {
           return false;
         }
         const stat = await fsp.lstat(source);
-        if (stat.isSymbolicLink() || (!stat.isFile() && !stat.isDirectory())) {
+        if (!stat.isFile() && !stat.isDirectory()) {
           throw new Error("Prepared project seed contains an unsafe Git object");
         }
         bytes += stat.isFile() ? stat.size : 0;
@@ -89,11 +89,7 @@ async function readSeedDirectory(parent: string, target: string): Promise<fs.Sta
     }
     throw error;
   }
-  if (
-    stats.isSymbolicLink() ||
-    !stats.isDirectory() ||
-    path.dirname(await fsp.realpath(target)) !== parent
-  ) {
+  if (!stats.isDirectory() || path.dirname(await fsp.realpath(target)) !== parent) {
     throw new Error("INVALID_REQUEST: workspace seed path escaped its owner root");
   }
   return stats;

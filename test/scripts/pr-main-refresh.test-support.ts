@@ -11,6 +11,7 @@ import {
 import { delimiter, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll } from "vitest";
+import { copyTreeCloseOnExec } from "../helpers/close-on-exec-copy.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createPrivateHandoffStoreFixture } from "./pr-private-handoff.test-support.js";
 import { copyPrWrapperSources, linkPrWrapperDependencies } from "./pr-wrapper.test-support.js";
@@ -151,7 +152,8 @@ export function createMainRefreshFixture(
   } else {
     // Copy complete object stores (including sameTreeHead), never shared refs or
     // hardlinks. Create worktrees afterward so their absolute back-links stay local.
-    cpSync(template.canonical, canonical, copyOptions);
+    // The wrapper's process-group runner executes canonical scripts/pr directly.
+    copyTreeCloseOnExec(template.canonical, canonical);
   }
   git(canonical, "remote", "set-url", "origin", origin);
   git(canonical, "config", `url.${origin}.insteadOf`, "https://github.com/fixture/repo");
@@ -252,8 +254,9 @@ export function createMainRefreshFixture(
     authorPermission: "write",
     failFetch: false,
     failPrFetch: false,
-    prIdentityDriftAfterFetch: "" as "" | "oid" | "branch" | "repository",
-    wrongPrFetch: false,
+    unsupportedNoLazy: false,
+    prIdentityDriftAfterAcquisition: "" as "" | "oid" | "branch" | "repository",
+    wrongPrAcquisition: false,
     failDetach: false,
     failFetchAt: 0,
     pauseFetchAt: 0,
@@ -280,21 +283,13 @@ export function createMainRefreshFixture(
     requiredCheckRows: undefined as
       | Array<{ name: string; bucket: string; state: string }>
       | undefined,
-    reviewComments: [
-      {
-        id: 1,
-        body: `<!-- clawsweeper-review-version item=42 reviewed_at=${new Date().toISOString()} sha=${head} source_revision=${"b".repeat(64)} lease_owner=github-run-1 lease_comment_id=1 v=1 -->
-
-<!-- clawsweeper-review item=42 -->`,
-        user: { id: 274271284, login: "clawsweeper[bot]", type: "Bot" },
-      },
-    ],
   };
   writeFileSync(controlFile, JSON.stringify(control));
   writeFileSync(eventsFile, "");
   const prelude = `#!${process.execPath}
 import { spawnSync } from 'node:child_process';
-import { readFileSync, writeFileSync, appendFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, appendFileSync, statSync } from 'node:fs';
+import { isAbsolute } from 'node:path';
 
 const controlFile = ${JSON.stringify(controlFile)};
 const eventsFile = ${JSON.stringify(eventsFile)};
@@ -321,10 +316,13 @@ function runGit(args, input) {
     prelude +
       `
 event({ kind: 'git-runtime', args });
+if (control.unsupportedNoLazy && args[0] === '--no-lazy-fetch') process.exit(129);
 const prFetch = args.includes('fetch') && args.some(arg =>
   arg.startsWith('pull/42/head') ||
   arg.replace(/^\\+/, '').split(':')[0] === control.metadata.headRefOid
 );
+const reusedPrHead = args[0] === 'branch' && args[1] === '--force' &&
+  args[2] === '--no-track' && args.at(-1) === control.metadata.headRefOid;
 if ((control.failPrFetch && prFetch) ||
     (control.failDetach && args[0] === 'checkout' && args[1] === '--detach')) {
   console.error('fatal: injected prepare handoff failure');
@@ -359,21 +357,21 @@ if (args.includes('push')) {
   event({ kind: 'leased-cleanup', args });
 }
 const result = spawnSync(git, args, { stdio: 'inherit' });
-if (prFetch && result.status === 0) {
-  const prefix = args.slice(0, args.indexOf('fetch'));
-  const destination = args.at(-1).split(':')[1];
-  if (control.wrongPrFetch && destination) {
+if ((prFetch || reusedPrHead) && result.status === 0) {
+  const prefix = prFetch ? args.slice(0, args.indexOf('fetch')) : [];
+  const destination = prFetch ? args.at(-1).split(':')[1] : 'refs/heads/' + args.at(-2);
+  if (control.wrongPrAcquisition && destination) {
     runGit([...prefix, 'update-ref', destination.startsWith('refs/') ? destination : 'refs/heads/' + destination,
       ${JSON.stringify(sameTreeHead)}]);
   }
-  if (control.prIdentityDriftAfterFetch === 'oid') {
+  if (control.prIdentityDriftAfterAcquisition === 'oid') {
     control.metadata.headRefOid = ${JSON.stringify(sameTreeHead)};
-  } else if (control.prIdentityDriftAfterFetch === 'branch') {
+  } else if (control.prIdentityDriftAfterAcquisition === 'branch') {
     control.metadata.headRefName = 'renamed';
-  } else if (control.prIdentityDriftAfterFetch === 'repository') {
+  } else if (control.prIdentityDriftAfterAcquisition === 'repository') {
     control.metadata.headRepository.nameWithOwner = 'fixture/replacement';
   }
-  if (control.prIdentityDriftAfterFetch) writeFileSync(controlFile, JSON.stringify(control));
+  if (control.prIdentityDriftAfterAcquisition) writeFileSync(controlFile, JSON.stringify(control));
 }
 if (mainFetch && result.status === 0) {
   const prefix = args.slice(0, args.indexOf('fetch'));
@@ -404,9 +402,10 @@ process.exit(result.status ?? 1);
     `#!/bin/sh
 instrument=false
 decision=false
+case "$*" in 'branch --force --no-track '*) instrument=true ;; esac
 for arg in "$@"; do
   case "$arg" in
-    fetch|checkout|push) instrument=true ;;
+    fetch|checkout|push|--no-lazy-fetch) instrument=true ;;
     merge-base|diff|update-ref) decision=true ;;
   esac
 done
@@ -424,6 +423,15 @@ exec ${shellQuote(realGit)} "$@"
     prelude +
       `
 event({ kind: 'gh', args });
+const inputPath = args.find(arg => arg.startsWith('--input='))?.slice('--input='.length)
+  ?? (args.includes('--input') ? args[args.indexOf('--input') + 1] : undefined);
+let inputPayload;
+if (args[0] === 'api' && inputPath !== undefined) {
+  if (inputPath === '-' || !isAbsolute(inputPath)) throw new Error('API payload must use an absolute file, not stdin');
+  if (!statSync(inputPath).isFile()) throw new Error('API payload file is unavailable');
+  if (readFileSync(0).length) throw new Error('API payload leaked to child stdin');
+  inputPayload = readFileSync(inputPath, 'utf8');
+}
 if (args[0] === 'browse') {
   console.log('https://github.com/fixture/repo');
   process.exit(0);
@@ -434,8 +442,11 @@ if (repositoryLocatorRequest) {
   console.log(JSON.stringify({ full_name: 'fixture/repo', html_url: 'https://github.com/fixture/repo' }));
   process.exit(0);
 }
+const repositoryAuthorityArgs = ['api', '--hostname', 'github.com', 'repos/fixture/repo', '-H', 'Cache-Control: max-age=0'];
+const repositoryAuthorityRequests = [repositoryAuthorityArgs,
+  [...repositoryAuthorityArgs, '-H', 'X-GitHub-Api-Version: 2026-03-10']];
 if (args[0] === 'api' && args.includes('repos/fixture/repo') &&
-    JSON.stringify(args.filter(arg => arg !== '--include')) !== JSON.stringify(['api', '--hostname', 'github.com', 'repos/fixture/repo', '-H', 'Cache-Control: max-age=0'])) {
+    !repositoryAuthorityRequests.some(expected => JSON.stringify(args.filter(arg => arg !== '--include')) === JSON.stringify(expected))) {
   throw new Error('Unexpected authoritative repository request');
 }
 let value;
@@ -450,8 +461,8 @@ if (args[0] === 'pr' && args[1] === 'view') {
   control.metadata.autoMergeRequest = { mergeMethod: 'SQUASH' };
   writeFileSync(controlFile, JSON.stringify(control));
   value = {};
-} else if (args[0] === 'api' && args.includes('graphql') && args.includes('--input')) {
-  const payload = JSON.parse(readFileSync(0, 'utf8'));
+} else if (args[0] === 'api' && args.includes('graphql') && inputPayload !== undefined) {
+  const payload = JSON.parse(inputPayload);
   const input = payload.variables.input;
   if (input.expectedHeadOid !== control.metadata.headRefOid || input.pullRequestId !== control.metadata.id ||
       input.mergeMethod !== 'SQUASH' || Object.hasOwn(input, 'commitHeadline')) {
@@ -593,8 +604,7 @@ if (args[0] === 'pr' && args[1] === 'view') {
     if (args.includes('POST')) {
       value = { html_url: 'https://example.invalid/pr/42#completion' };
     } else {
-      event({ kind: 'review-comments' });
-      value = [control.reviewComments];
+      value = [[]];
     }
   } else if (endpoint === 'repos/fixture/repo/pulls/' + control.metadata.number + '/files?per_page=100') {
     value = [control.metadata.files.map(file => ({
@@ -774,12 +784,12 @@ if (process.argv[1]?.endsWith('/watch-pr-ci.mts')) {
       writeFileSync(join(local, "prep.md"), "Prepared synthetic merge fixture.\n");
     },
     configure(update: Partial<typeof control>) {
-      Object.assign(control, update);
+      const next = { ...JSON.parse(readFileSync(controlFile, "utf8")), ...update };
       env.NODE_OPTIONS =
-        control.hostedCi === "scheduled"
+        next.hostedCi === "scheduled"
           ? privateNodeOptions
           : `${privateNodeOptions} --import=${pathToFileURL(clock).href}`;
-      writeFileSync(controlFile, JSON.stringify(control));
+      writeFileSync(controlFile, JSON.stringify(next));
     },
     events() {
       return readFileSync(eventsFile, "utf8")

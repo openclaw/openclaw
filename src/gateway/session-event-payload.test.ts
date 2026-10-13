@@ -21,6 +21,16 @@ it("clears a saved dashboard default in subscribed session metadata", () => {
   expect({ ...previous, ...cleared }).toMatchObject({ boardPresentation: null });
 });
 
+it("publishes snooze metadata and clears it when a subscribed session wakes", () => {
+  const sessionRow = { key: "agent:main:dashboard", kind: "direct" as const, updatedAt: 1 };
+  const previous = buildGatewaySessionSnapshot({
+    sessionRow: { ...sessionRow, snoozedUntil: 3_600_000, snoozedAt: 1 },
+  });
+  expect(previous).toMatchObject({ snoozedUntil: 3_600_000, snoozedAt: 1 });
+  const cleared = buildGatewaySessionSnapshot({ sessionRow });
+  expect({ ...previous, ...cleared }).toMatchObject({ snoozedUntil: null, snoozedAt: null });
+});
+
 it("projects session actors and explicitly clears absent attribution", () => {
   expect(
     buildGatewaySessionSnapshot({
@@ -187,7 +197,21 @@ it("preserves active run id ownership across omitted, liveness, and exact states
   });
 });
 
-it.each(["user", "auto", null] as const)(
+it.each([true, false, undefined])(
+  "publishes sidebarRoot %s including explicit clearing",
+  (sidebarRoot) => {
+    const snapshot = buildGatewaySessionSnapshot({
+      sessionRow: { key: "agent:main:dashboard:child", kind: "direct", updatedAt: 1, sidebarRoot },
+      includeSession: true,
+    });
+    expect(snapshot).toMatchObject({
+      sidebarRoot: sidebarRoot === true,
+      session: { sidebarRoot: sidebarRoot === true },
+    });
+  },
+);
+
+it.each(["user", null] as const)(
   "carries model override source %s into session change events",
   (source) => {
     expect(
@@ -203,9 +227,9 @@ it.each(["user", "auto", null] as const)(
   },
 );
 
-it.each(["user", "auto", null] as const)(
-  "serializes lifecycle starts without model source %s or prior terminal timing",
-  (modelOverrideSource) => {
+it.each([false, true])(
+  "serializes lifecycle starts without prior timing, deriving liveness from the owner (active=%s)",
+  (active) => {
     // oxlint-disable-next-line unicorn/prefer-structured-clone -- exercise timing clears on the wire
     const snapshot: unknown = JSON.parse(
       JSON.stringify(
@@ -223,10 +247,11 @@ it.each(["user", "auto", null] as const)(
             modelProvider: "provider",
             activeModel: "model-b",
             activeModelProvider: "fallback-provider",
-            modelOverrideSource,
+            modelOverrideSource: "user",
           },
           lifecycle: true,
           includeSession: true,
+          activeRunState: active ? { active: true, runIds: ["next-run"] } : undefined,
           event: {
             runId: "next-run",
             sessionId: "pinned-session",
@@ -239,12 +264,21 @@ it.each(["user", "auto", null] as const)(
       ),
     );
     expect(snapshot).toMatchObject({
-      status: "running",
+      ...(active ? { status: "running" } : {}),
       startedAt: 300,
       endedAt: null,
       runtimeMs: null,
-      session: { status: "running", startedAt: 300, endedAt: null, runtimeMs: null },
+      session: {
+        ...(active ? { status: "running" } : {}),
+        startedAt: 300,
+        endedAt: null,
+        runtimeMs: null,
+      },
     });
+    if (!active) {
+      expect(snapshot).not.toHaveProperty("status");
+      expect(snapshot).not.toHaveProperty("session.status");
+    }
     for (const field of [
       "model",
       "modelProvider",
@@ -269,8 +303,11 @@ it.each([
         key: "agent:main:terminal",
         sessionId: "terminal-session",
         kind: "direct",
+        createdAt: 50,
+        lastReadAt: 150,
+        lastActivityAt: 120,
+        unread: false,
         updatedAt: 100,
-        status: "running",
         startedAt: 100,
       },
       includeSession: true,
@@ -283,15 +320,25 @@ it.each([
         seq: 1,
         ts: 200,
         stream: "lifecycle",
+        controlUiVisible: true,
         data: { phase: "end", startedAt: 100, endedAt: 200, aborted },
       },
     }),
   ).toMatchObject({
     status,
+    unread: true,
+    lastActivityAt: 200,
     hasActiveRun: true,
     endedAt: 200,
     runtimeMs: 100,
-    session: { status, hasActiveRun: true, endedAt: 200, runtimeMs: 100 },
+    session: {
+      status,
+      unread: true,
+      lastActivityAt: 200,
+      hasActiveRun: true,
+      endedAt: 200,
+      runtimeMs: 100,
+    },
   });
 });
 

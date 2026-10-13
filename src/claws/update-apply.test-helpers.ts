@@ -28,6 +28,7 @@ export const install: PersistedClawInstall = {
   agentId: "worker",
   workspace: "/tmp/workspace-worker",
   agentConfigDigest: "sha256:current-agent",
+  agentOrigin: "created",
   agentOwnedPaths: ['agents.entries["worker"]'],
   status: "complete",
   addedAtMs: 1,

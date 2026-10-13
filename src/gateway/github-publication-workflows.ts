@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import {
   GitHubPublicationKnownFailure,
@@ -47,6 +48,32 @@ export async function prepareGitHubPublicationWorkflowGuard(
   return assertWorkflowChangesAllowed;
 }
 
+type WorkflowTree = ReadonlyMap<string, string>;
+
+/** Only an unchanged published definition or an unambiguous target-only update is exempt. */
+export async function hasUnapprovedGitHubPublicationWorkflowChanges(params: {
+  before: WorkflowTree;
+  accepted: WorkflowTree;
+  readUpstream: () => Promise<{ ancestor: WorkflowTree; target: WorkflowTree } | undefined>;
+}): Promise<boolean> {
+  const changed = [...new Set([...params.before.keys(), ...params.accepted.keys()])].filter(
+    (file) => params.before.get(file) !== params.accepted.get(file),
+  );
+  if (!changed.length) {
+    return false;
+  }
+  const upstream = await params.readUpstream();
+  // Absence is a value too: additions, deletions, renames and mode changes all
+  // follow the same rule. Never overwrite a branch-owned change just because
+  // the accepted definition matches main (including a revert to the old base).
+  return changed.some(
+    (file) =>
+      !upstream ||
+      params.before.get(file) !== upstream.ancestor.get(file) ||
+      params.accepted.get(file) !== upstream.target.get(file),
+  );
+}
+
 type TreeEntry = { path: string; mode: string; sha: string };
 
 function unavailableWorkflowTree() {
@@ -63,49 +90,47 @@ export async function hasRepositoryGitHubPublicationWorkflowChanges(params: {
   sourceRepository: string;
   comparisonRepository: string;
   comparisonTree: string;
+  readUpstream: () => Promise<
+    { repository: string; ancestorTree: string; targetTree: string } | undefined
+  >;
   readTree: (repository: string, sha: string) => Promise<unknown>;
 }): Promise<boolean> {
   const trees = new Map<string, Promise<TreeEntry[]>>();
   const readTree = (repository: string, sha: string): Promise<TreeEntry[]> => {
     const key = repository + "\0" + sha;
-    let pending = trees.get(key);
-    if (!pending) {
-      pending = (async () => {
-        const value = await params.readTree(repository, sha);
+    return getOrCreatePromise(trees, key, async () => {
+      const value = await params.readTree(repository, sha);
+      if (
+        !isRecord(value) ||
+        value.sha !== sha ||
+        value.truncated !== false ||
+        !Array.isArray(value.tree)
+      ) {
+        throw unavailableWorkflowTree();
+      }
+      const names = new Set<string>();
+      return value.tree.map((entry): TreeEntry => {
         if (
-          !isRecord(value) ||
-          value.sha !== sha ||
-          value.truncated !== false ||
-          !Array.isArray(value.tree)
+          !isRecord(entry) ||
+          typeof entry.path !== "string" ||
+          !entry.path ||
+          entry.path.includes("/") ||
+          names.has(entry.path) ||
+          typeof entry.sha !== "string" ||
+          !/^[a-f0-9]{40}$/u.test(entry.sha) ||
+          typeof entry.mode !== "string" ||
+          !(
+            (entry.mode === "040000" && entry.type === "tree") ||
+            (entry.mode === "160000" && entry.type === "commit") ||
+            (["100644", "100755", "120000"].includes(entry.mode) && entry.type === "blob")
+          )
         ) {
           throw unavailableWorkflowTree();
         }
-        const names = new Set<string>();
-        return value.tree.map((entry): TreeEntry => {
-          if (
-            !isRecord(entry) ||
-            typeof entry.path !== "string" ||
-            !entry.path ||
-            entry.path.includes("/") ||
-            names.has(entry.path) ||
-            typeof entry.sha !== "string" ||
-            !/^[a-f0-9]{40}$/u.test(entry.sha) ||
-            typeof entry.mode !== "string" ||
-            !(
-              (entry.mode === "040000" && entry.type === "tree") ||
-              (entry.mode === "160000" && entry.type === "commit") ||
-              (["100644", "100755", "120000"].includes(entry.mode) && entry.type === "blob")
-            )
-          ) {
-            throw unavailableWorkflowTree();
-          }
-          names.add(entry.path);
-          return { path: entry.path, mode: entry.mode, sha: entry.sha };
-        });
-      })();
-      trees.set(key, pending);
-    }
-    return pending;
+        names.add(entry.path);
+        return { path: entry.path, mode: entry.mode, sha: entry.sha };
+      });
+    });
   };
   const workflows = async (repository: string, root: string) => {
     let entries = await readTree(repository, root);
@@ -149,8 +174,19 @@ export async function hasRepositoryGitHubPublicationWorkflowChanges(params: {
       accepted.set(entry.path, entry.mode + ":" + entry.sha);
     }
   }
-  return (
-    before.size !== accepted.size ||
-    [...before].some(([file, object]) => accepted.get(file) !== object)
-  );
+  return await hasUnapprovedGitHubPublicationWorkflowChanges({
+    before,
+    accepted,
+    readUpstream: async () => {
+      const upstream = await params.readUpstream();
+      if (!upstream) {
+        return undefined;
+      }
+      const [ancestor, target] = await Promise.all([
+        workflows(upstream.repository, upstream.ancestorTree),
+        workflows(upstream.repository, upstream.targetTree),
+      ]);
+      return { ancestor, target };
+    },
+  });
 }

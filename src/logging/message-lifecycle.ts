@@ -1,4 +1,3 @@
-// Message lifecycle logging helpers emit queue and processing diagnostic events.
 import { logMessageProcessed, logMessageQueued, logSessionStateChange } from "./diagnostic.js";
 
 type MessageLifecycleRef = {
@@ -33,12 +32,9 @@ export function createDiagnosticMessageLifecycle(
     sessionId: override?.sessionId ?? params.sessionId,
     sessionKey: override?.sessionKey ?? params.sessionKey,
   });
-  const hasSessionRef = (ref: MessageLifecycleRef): boolean =>
-    Boolean(ref.sessionId || ref.sessionKey);
-
   // Processed events still matter without a session ref; queue-depth/state events do not.
   const canTrackSessionState = (ref: MessageLifecycleRef): boolean =>
-    params.enabled && params.trackSessionState && hasSessionRef(ref);
+    params.enabled && params.trackSessionState && Boolean(ref.sessionId || ref.sessionKey);
 
   return {
     markProcessing(override?: MessageLifecycleRef): void {

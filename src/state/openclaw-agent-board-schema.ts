@@ -62,7 +62,7 @@ export function ensureOpenClawAgentBoardSchemaInTransaction(db: DatabaseSync): v
   db.exec(OPENCLAW_AGENT_BOARD_SCHEMA_SQL); // sqlite-allow-raw -- Canonical DDL bootstrap for the lazy board schema.
   const row = db // sqlite-allow-raw -- Inspect the table DDL before the bounded same-version migration.
     .prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'board_widgets'")
-    .get() as { sql?: unknown } | undefined;
+    .get();
   if (typeof row?.sql !== "string") {
     throw new Error("OpenClaw agent board widget schema is missing after ensure.");
   }

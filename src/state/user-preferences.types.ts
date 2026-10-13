@@ -21,6 +21,11 @@ export type CanonicalUserPreferences = {
   entries: Record<string, unknown>;
 };
 
+export type UserPreferenceCoauthorMutation = {
+  kind: "user-preference-coauthor";
+  profileId: string;
+};
+
 export type UserPreferenceWorkerOperations = {
   "userPreferences.read": {
     input: { profileId: string; keys?: readonly string[] };

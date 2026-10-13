@@ -17,6 +17,7 @@ struct DeviceSettingsBridgeTests {
         ("app.nativeExperienceEnabled", .nativeExperienceEnabled),
         ("app.iconAnimationsEnabled", .iconAnimationsEnabled),
         ("app.launchAtLogin", .launchAtLogin),
+        ("app.keepGatewayRunning", .keepGatewayRunning),
         ("app.quickChatEnabled", .quickChatEnabled),
         ("app.debugPaneEnabled", .debugPaneEnabled),
         ("capabilities.canvasEnabled", .canvasEnabled),
@@ -101,6 +102,7 @@ struct DeviceSettingsBridgeTests {
             ("app.iconStyle", ["paper"]),
             ("app.quickChatShortcut", "⌥Space"),
             ("app.launchAtLoginAvailable", true),
+            ("app.keepGatewayRunningAvailable", true),
             ("capabilities.cuaDriverBundled", true),
             ("voice.supported", true),
             ("voice.triggerWords", ["computer"]),
@@ -160,7 +162,8 @@ struct DeviceSettingsBridgeTests {
         }
         let panels: [(String, DeviceSettingsPanel)] = [
             ("quick-chat-shortcut", .quickChatShortcut), ("microphone-test", .microphoneTest),
-            ("browser-import", .browserImport), ("connection", .connection), ("gateways", .gateways), ("debug", .debug),
+            ("browser-import", .browserImport), ("ai-setup", .aiSetup),
+            ("connection", .connection), ("gateways", .gateways), ("debug", .debug),
             ("diagnostics", .diagnostics), ("licenses", .licenses), ("about", .about), ("watch", .watch),
         ]
         #expect(Set(DeviceSettingsPanel.allCases.map(\.rawValue)) == Set(panels.map(\.0)))

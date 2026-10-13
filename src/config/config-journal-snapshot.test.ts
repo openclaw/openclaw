@@ -2,15 +2,22 @@
 import fs, { promises as fsPromises } from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { createSqliteAuditRecordStore } from "../infra/sqlite-audit-record-store.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
   fingerprintConfigSnapshotAuthoredConfig,
-  readConfigSnapshotAuditRecord,
-  readLatestConfigSnapshotAuditRecord,
-  restoreConfigSnapshotAuditRecord,
-  upsertConfigSnapshotAuditRecord,
+  readLatestConfigSnapshotAuditRecordAsync,
+  restoreConfigSnapshotAuditRecordAsync,
+  upsertConfigSnapshotAuditRecordAsync,
 } from "./config-journal-snapshot.js";
+import {
+  CONFIG_SNAPSHOT_KEY,
+  CONFIG_SNAPSHOT_SCOPE,
+  type ConfigSnapshotAuditRecord,
+} from "./config-journal-snapshot.kernel.js";
 
 describe("config journal snapshots", () => {
   const suiteRootTracker = createSuiteTempRootTracker({
@@ -68,18 +75,16 @@ describe("config journal snapshots", () => {
     const context = { env, homedir: () => home };
     const pathA = path.join(home, ".openclaw", "config-a.json");
     const pathB = path.join(home, ".openclaw", "config-b.json");
-    upsertConfigSnapshotAuditRecord({
+    await upsertConfigSnapshotAuditRecordAsync({
       ...context,
       configPath: pathA,
       rawHash: "path-a-hash",
       authoredConfig: { gateway: { port: 1 } },
     });
-    // Path-filtered read for B sees nothing, but the unfiltered slot is the
-    // CAS token that lets B take the slot over from A.
-    expect(readConfigSnapshotAuditRecord({ ...context, configPath: pathB })).toBeNull();
-    const foreign = readLatestConfigSnapshotAuditRecord(context);
+    // The unfiltered slot is the CAS token that lets B take the slot over from A.
+    const foreign = await readLatestConfigSnapshotAuditRecordAsync(context);
     expect(foreign?.configPath).toBe(path.resolve(pathA));
-    const taken = upsertConfigSnapshotAuditRecord({
+    const taken = await upsertConfigSnapshotAuditRecordAsync({
       ...context,
       configPath: pathB,
       rawHash: "path-b-hash",
@@ -87,44 +92,135 @@ describe("config journal snapshots", () => {
       expectedSnapshot: foreign,
     });
     expect(taken?.configPath).toBe(path.resolve(pathB));
-    expect(readConfigSnapshotAuditRecord({ ...context, configPath: pathB })?.rawHash).toBe(
-      "path-b-hash",
-    );
+    expect((await readLatestConfigSnapshotAuditRecordAsync(context))?.rawHash).toBe("path-b-hash");
   });
 
-  it("does not restore a snapshot slot after another writer replaces it", async () => {
+  it("preserves another writer's snapshot across queued publication and rollback", async () => {
     const home = await suiteRootTracker.make("snapshot-compare-and-set");
     const configPath = path.join(home, ".openclaw", "openclaw.json");
     const env = { OPENCLAW_STATE_DIR: path.join(home, ".openclaw") } as NodeJS.ProcessEnv;
     const context = { env, homedir: () => home };
-    const prior = upsertConfigSnapshotAuditRecord({
+    const prior = await upsertConfigSnapshotAuditRecordAsync({
       ...context,
       configPath,
       rawHash: "prior",
       authoredConfig: { gateway: { port: 18789 } },
     });
-    const written = upsertConfigSnapshotAuditRecord({
+    const written = await upsertConfigSnapshotAuditRecordAsync({
       ...context,
       configPath,
       rawHash: "written",
       authoredConfig: { gateway: { port: 18790 } },
     });
-    upsertConfigSnapshotAuditRecord({
+    expect(written).not.toBeNull();
+    const pending = upsertConfigSnapshotAuditRecordAsync({
       ...context,
       configPath,
-      rawHash: "newer-process",
-      authoredConfig: { gateway: { port: 18791 } },
+      rawHash: "queued",
+      authoredConfig: { gateway: { port: 18792 } },
+      expectedSnapshot: written,
     });
+    // A separate native writer can advance the slot while this actor is queued.
+    createSqliteAuditRecordStore<ConfigSnapshotAuditRecord>({
+      scope: CONFIG_SNAPSHOT_SCOPE,
+      maxEntries: 1,
+      env,
+    }).upsert(CONFIG_SNAPSHOT_KEY, {
+      configPath,
+      rawHash: "newer-process",
+      fingerprintedAuthoredConfig: fingerprintConfigSnapshotAuthoredConfig(
+        { gateway: { port: 18791 } },
+        context,
+      ),
+    });
+    await expect(pending).resolves.toBeNull();
 
-    restoreConfigSnapshotAuditRecord({
+    await restoreConfigSnapshotAuditRecordAsync({
       ...context,
       snapshot: prior,
       expectedSnapshot: written,
     });
 
-    expect(readConfigSnapshotAuditRecord({ ...context, configPath })).toMatchObject({
+    expect(await readLatestConfigSnapshotAuditRecordAsync(context)).toMatchObject({
       rawHash: "newer-process",
     });
+  });
+
+  it.each(["publication", "restoration"] as const)(
+    "refuses queued %s after its owner is revoked",
+    async (operation) => {
+      const home = await suiteRootTracker.make("snapshot-revoked-publication");
+      const env = { OPENCLAW_STATE_DIR: path.join(home, ".openclaw") };
+      const context = { env, homedir: () => home };
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const prior = await upsertConfigSnapshotAuditRecordAsync({
+        ...context,
+        configPath,
+        rawHash: "prior",
+        authoredConfig: { gateway: { port: 18789 } },
+      });
+      expect(prior).not.toBeNull();
+      let revoked = false;
+      const assertCurrent = () => {
+        if (revoked) {
+          throw new Error("Config source owner stopped");
+        }
+      };
+      const pending =
+        operation === "publication"
+          ? upsertConfigSnapshotAuditRecordAsync(
+              {
+                ...context,
+                configPath,
+                rawHash: "revoked",
+                authoredConfig: {},
+                expectedSnapshot: prior,
+              },
+              assertCurrent,
+            )
+          : restoreConfigSnapshotAuditRecordAsync(
+              { ...context, snapshot: null, expectedSnapshot: prior },
+              assertCurrent,
+            );
+      revoked = true;
+      await expect(pending).rejects.toThrow("Config source owner stopped");
+      expect(await readLatestConfigSnapshotAuditRecordAsync(context)).toEqual(prior);
+    },
+  );
+
+  it.each([false, true])("restores a prior snapshot off thread (existing=%s)", async (existing) => {
+    const home = await suiteRootTracker.make("snapshot-restoration");
+    const env = { OPENCLAW_STATE_DIR: path.join(home, ".openclaw") };
+    const context = { env, homedir: () => home };
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+    const sql = observeMainThreadSql();
+    sql.calibrate();
+    try {
+      const prior = existing
+        ? await upsertConfigSnapshotAuditRecordAsync({
+            ...context,
+            configPath,
+            rawHash: "prior",
+            authoredConfig: { gateway: { port: 18789 } },
+          })
+        : null;
+      const written = await upsertConfigSnapshotAuditRecordAsync({
+        ...context,
+        configPath,
+        rawHash: "written",
+        authoredConfig: { gateway: { port: 18790 } },
+      });
+      expect(written).not.toBeNull();
+      await restoreConfigSnapshotAuditRecordAsync({
+        ...context,
+        snapshot: prior,
+        expectedSnapshot: written,
+      });
+      expect(await readLatestConfigSnapshotAuditRecordAsync(context)).toEqual(prior);
+      sql.expectIdle();
+    } finally {
+      sql.restore();
+    }
   });
 
   it("falls back to a redaction marker when the fingerprint key cannot be stored", async () => {
@@ -144,7 +240,8 @@ describe("config journal snapshots", () => {
     await suiteRootTracker.cleanup();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
   });
 });

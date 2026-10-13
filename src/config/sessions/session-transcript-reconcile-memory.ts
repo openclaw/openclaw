@@ -3,6 +3,7 @@ import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import {
   getOpenClawAgentDatabaseIfOpen,
+  isIncognitoOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
@@ -61,6 +62,14 @@ function readSnapshot(database: OpenClawAgentDatabase, sessionId: string) {
         maxSeq: row.max_seq,
         generation: row.generation,
       }
+    : undefined;
+}
+
+/** Capture only the live incognito source; durable stores stay with the native execution owner. */
+export function captureMemoryTranscriptProjectionSource(options: OpenClawAgentDatabaseOptions) {
+  const database = getOpenClawAgentDatabaseIfOpen(options);
+  return database && isIncognitoOpenClawAgentDatabase(database)
+    ? createMemoryTranscriptProjectionSource(database, { ...options, path: database.path })
     : undefined;
 }
 

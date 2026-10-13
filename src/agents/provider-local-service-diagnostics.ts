@@ -1,4 +1,5 @@
 import { isSensitiveFieldKey, redactSensitiveText } from "../logging/redact.js";
+import { truncateUtf8Suffix } from "../utils/utf8-truncate.js";
 
 const LOCAL_SERVICE_OUTPUT_TAIL_MAX_BYTES = 8 * 1024;
 
@@ -29,39 +30,20 @@ export function appendLocalServiceOutputTail(
   healthHeaders: HeadersInit | undefined,
 ): string {
   let redacted = redactSensitiveText(`${current}${chunk.toString()}`, { mode: "tools" });
-  for (const value of Object.values(serviceEnv ?? {})) {
+  const secretValues = [
+    ...Object.values(serviceEnv ?? {}),
+    ...Object.entries(inheritedEnv).flatMap(([key, value]) =>
+      value && isSensitiveFieldKey(key) ? [value] : [],
+    ),
+    ...(serviceArgs ?? []),
+    ...new Headers(healthHeaders).values(),
+  ];
+  for (const value of secretValues) {
     if (value) {
       redacted = redacted.replaceAll(value, "[redacted]");
     }
   }
-  for (const [key, value] of Object.entries(inheritedEnv)) {
-    if (value && isSensitiveFieldKey(key)) {
-      redacted = redacted.replaceAll(value, "[redacted]");
-    }
-  }
-  for (const value of serviceArgs ?? []) {
-    if (value) {
-      redacted = redacted.replaceAll(value, "[redacted]");
-    }
-  }
-  for (const [, value] of new Headers(healthHeaders)) {
-    if (value) {
-      redacted = redacted.replaceAll(value, "[redacted]");
-    }
-  }
-  const bytes = Buffer.from(redacted);
-  if (bytes.byteLength <= LOCAL_SERVICE_OUTPUT_TAIL_MAX_BYTES) {
-    return redacted;
-  }
-  let start = bytes.byteLength - LOCAL_SERVICE_OUTPUT_TAIL_MAX_BYTES;
-  while (start < bytes.byteLength) {
-    const byte = bytes.at(start);
-    if (byte === undefined || (byte & 0xc0) !== 0x80) {
-      break;
-    }
-    start += 1;
-  }
-  return bytes.subarray(start).toString("utf8");
+  return truncateUtf8Suffix(redacted, LOCAL_SERVICE_OUTPUT_TAIL_MAX_BYTES);
 }
 
 export function formatLocalServiceDiagnosticTail(diagnostics: LocalServiceDiagnostics): string {

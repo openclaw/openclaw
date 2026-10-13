@@ -3,7 +3,6 @@ import path from "node:path";
 import { aroundEach, expect, it, vi } from "vitest";
 import { createManagedHandoffTestBinding } from "../../../test/helpers/managed-handoff-isolation.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { withStateDatabaseCoordinatorRuntimeDirectory } from "../../infra/state-database-coordinator.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import * as updateCheck from "../../infra/update-check.js";
 import * as handoffDatabase from "../../infra/update-managed-service-handoff-database.js";
@@ -96,14 +95,22 @@ export function registerPrivateHandoffBindingTests() {
     const createDatabase = handoffDatabase.createManagedHandoffLeaseDatabase;
     const database = vi
       .spyOn(handoffDatabase, "createManagedHandoffLeaseDatabase")
-      .mockImplementation((file, identity) => {
-        binding.assertPath(file);
-        return createDatabase(file, identity);
+      .mockImplementation((...args) => {
+        binding.assertPath(args[0]);
+        return createDatabase(...args);
+      });
+    const prepareDatabase = handoffDatabase.prepareManagedHandoffLeaseDatabase;
+    const preparedDatabase = vi
+      .spyOn(handoffDatabase, "prepareManagedHandoffLeaseDatabase")
+      .mockImplementation((...args) => {
+        binding.assertPath(args[0]);
+        return prepareDatabase(...args);
       });
     try {
       expect(resolveManagedUpdateLeaseDatabasePath()).toBe(binding.databasePath);
-      await withStateDatabaseCoordinatorRuntimeDirectory(binding.directory, runTest);
+      await runTest();
     } finally {
+      preparedDatabase.mockRestore();
       database.mockRestore();
       resolveTemp.mockRestore();
       dirs.cleanup();

@@ -8,8 +8,6 @@ import {
 import { normalizeOptionalString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CRABBOX_HEARTBEAT_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 
-export { nonEmptyString };
-
 const PROFILE_KEYS = new Set([
   "binary",
   "class",
@@ -75,10 +73,9 @@ export function parseCrabboxOperatingSystem(value: unknown): CrabboxOperatingSys
     return "linux";
   }
   const target = nonEmptyString(value);
-  for (const supported of CRABBOX_ENROLLABLE_TARGETS) {
-    if (target === supported) {
-      return supported;
-    }
+  const supported = CRABBOX_ENROLLABLE_TARGETS.find((os) => os === target);
+  if (supported) {
+    return supported;
   }
   throw new WorkerProviderError(
     `Crabbox target must be ${CRABBOX_ENROLLABLE_TARGETS.join(" or ")}`,
@@ -165,17 +162,15 @@ export function parseCrabboxProfile(profile: Readonly<Record<string, unknown>>):
     profile.idleTimeout,
     "idleTimeout",
   );
-  const binaryValue = profile.binary;
-  const binary = binaryValue === undefined ? undefined : nonEmptyString(binaryValue);
-  if (binaryValue !== undefined && !binary) {
+  const binary = nonEmptyString(profile.binary);
+  if (profile.binary !== undefined && !binary) {
     throw new WorkerProviderError("Crabbox profile binary must be a non-empty string");
   }
   if (binary && !path.isAbsolute(binary)) {
     throw new WorkerProviderError("Crabbox profile binary must be an absolute path");
   }
-  const setupValue = profile.setup;
-  const setup = setupValue === undefined ? undefined : nonEmptyString(setupValue);
-  if (setupValue !== undefined && !setup) {
+  const setup = nonEmptyString(profile.setup);
+  if (profile.setup !== undefined && !setup) {
     throw new WorkerProviderError("Crabbox profile setup must be a non-empty command string");
   }
   let setupEnv: string[] | undefined;
@@ -395,6 +390,7 @@ export function buildCrabboxAllocationArgs(
     "public",
     "--tailscale=false",
     ...(profile.class ? ["--class", profile.class] : []),
+    ...(profile.target === "linux" ? ["--target", "linux"] : []),
     ...(profile.target === "windows/wsl2" ? ["--target", "windows", "--windows-mode", "wsl2"] : []),
     ...(profile.target === "windows/normal"
       ? ["--target", "windows", "--windows-mode", "normal"]

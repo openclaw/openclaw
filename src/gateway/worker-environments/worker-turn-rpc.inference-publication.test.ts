@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   WORKER_INFERENCE_PROTOCOL_FEATURE,
@@ -5,9 +6,14 @@ import {
   type WorkerInferenceTerminalFrame,
   type WorkerInferenceTerminalOutcome,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import {
+  claimAgentRunDelegatedAuthority,
+  releaseAgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { dispatchWorkerRequest } from "../server/ws-connection/worker-connection-dispatch.js";
-import { hashWorkerCredential } from "./credential.js";
+import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import * as support from "./service.test-support.js";
 import { claimWorkerPlacement } from "./worker-turn-rpc.test-support.js";
@@ -68,7 +74,7 @@ const done: WorkerInferenceTerminalOutcome = {
 describe("worker inference inventory publication", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
-  it.each(["diagnostic", "credential replacement", "credential revocation"] as const)(
+  it.each(["diagnostic", "credential revocation"] as const)(
     "revalidates provider output while %s commit publication is delayed",
     async (mutationKind) => {
       const { store } = support.testState;
@@ -95,7 +101,7 @@ describe("worker inference inventory publication", () => {
         to: "attached",
         patch: support.attachedPatch(environmentId, sessionId),
       });
-      const { claim, store: placements } = claimWorkerPlacement({
+      const { claim, store: placements } = await claimWorkerPlacement({
         environmentId,
         ownerEpoch: attached.ownerEpoch,
         sessionId,
@@ -119,7 +125,26 @@ describe("worker inference inventory publication", () => {
         placementStore: createWorkerSessionPlacementGate(placements),
       });
       let mutation: Promise<unknown> | undefined;
+      const instance = createOperationalRunInstanceRef(claim.runId);
+      const authority = claimAgentRunDelegatedAuthority(instance);
       try {
+        await bindWorkerTurnOwner(
+          placements,
+          claim,
+          undefined,
+          instance,
+          {
+            agentId: "main",
+            sessionId,
+            sessionKey: `agent:main:${sessionId}`,
+            storePath: path.join(support.testState.root, "sessions.json"),
+          },
+          () => {
+            if (!placements.validateTurnClaim(claim)) {
+              throw new Error("Worker publication fixture claim is no longer current");
+            }
+          },
+        );
         const grant = await workerService.acquireTurnCredential(claim);
         expect(await workerService.acknowledgeCredentialDelivery(grant)).toBe(true);
         const admission = await workerService.admitWorker({
@@ -167,9 +192,7 @@ describe("worker inference inventory publication", () => {
         delivery.command =
           mutationKind === "diagnostic"
             ? "workerEnvironments.recordError"
-            : mutationKind === "credential replacement"
-              ? "workerEnvironments.renewCredential"
-              : "workerEnvironments.revokeEnvironmentCredential";
+            : "workerEnvironments.revokeEnvironmentCredential";
         delivery.afterCommit = async () => {
           committed.resolve();
           await publish.promise;
@@ -181,16 +204,7 @@ describe("worker inference inventory publication", () => {
                 state: "attached",
                 error: "unrelated provider diagnostic",
               })
-            : mutationKind === "credential replacement"
-              ? store.renewCredential({
-                  environmentId,
-                  expectedOwnerEpoch: identity.ownerEpoch,
-                  credentialHash: hashWorkerCredential("replacement-inference-credential"),
-                  sessionId,
-                  rpcSetVersion: 1,
-                  expiresAtMs: support.testState.nowMs + 60_000,
-                })
-              : store.revokeEnvironmentCredential(environmentId);
+            : store.revokeEnvironmentCredential(environmentId);
         await Promise.race([
           committed.promise,
           mutation.then(() => {
@@ -233,6 +247,10 @@ describe("worker inference inventory publication", () => {
         delivery.command = undefined;
         delivery.afterCommit = undefined;
         await workerService.stop();
+        if (placements.validateTurnClaim(claim)) {
+          await placements.releaseTurn(claim);
+        }
+        releaseAgentRunDelegatedAuthority(authority);
       }
     },
   );

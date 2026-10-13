@@ -37,9 +37,10 @@ export function finalizeUpdatedJob(params: {
   schedulingInputsRequested: boolean;
   scheduleChanged: boolean;
   explicitTriggerState?: CronJobPatch["state"];
+  isJobActive?: (id: string) => boolean;
 }) {
   const { job, nextJob, now } = params;
-  if (nextJob.schedule.kind === "every") {
+  if (params.scheduleChanged && nextJob.schedule.kind === "every") {
     const anchor = nextJob.schedule.anchorMs;
     if (typeof anchor !== "number" || !Number.isFinite(anchor)) {
       // Inherit the previous cadence anchor only for an unchanged-interval
@@ -55,13 +56,7 @@ export function finalizeUpdatedJob(params: {
         Number.isFinite(job.schedule.anchorMs)
           ? job.schedule.anchorMs
           : undefined;
-      const fallbackAnchorMs =
-        previousAnchorMs ??
-        (params.scheduleChanged
-          ? now
-          : typeof nextJob.createdAtMs === "number" && Number.isFinite(nextJob.createdAtMs)
-            ? nextJob.createdAtMs
-            : now);
+      const fallbackAnchorMs = previousAnchorMs ?? now;
       nextJob.schedule = {
         ...nextJob.schedule,
         anchorMs: Math.max(0, Math.floor(fallbackAnchorMs)),
@@ -128,7 +123,7 @@ export function finalizeUpdatedJob(params: {
       nextJob.state.queuedAtMs = undefined;
       // Preserve only genuine execution. Queued reservations must clear so a
       // disabled job can accept a later force run with the same timestamp.
-      if (!isCronJobActive(nextJob.id)) {
+      if (!(params.isJobActive ?? isCronJobActive)(nextJob.id)) {
         Object.assign(nextJob.state, { runningAtMs: undefined, runningReceiptId: undefined });
         delete nextJob.state.runningScheduleChangeId;
       }

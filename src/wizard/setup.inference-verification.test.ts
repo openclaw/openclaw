@@ -91,7 +91,7 @@ describe("offerLiveModelVerification", () => {
       browser: { enabled: false },
       agents: {
         ownership: "explicit",
-        entries: { main: { default: true } },
+        entries: { main: {} },
         defaults: { model: "openai/test-model@openai:working" },
       },
       auth: { profiles: { "openai:working": { provider: "openai", mode: "api_key" } } },
@@ -142,7 +142,6 @@ describe("offerLiveModelVerification", () => {
       opts: { nonInteractive: true },
       prompter: createPrompter(),
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      workspaceDir: stateDir,
       stateDir,
       agentDir,
       writeConfig,
@@ -162,6 +161,8 @@ describe("offerLiveModelVerification", () => {
       expect(Object.keys(readAuthProfileStoreForTest(agentDir).profiles)).toHaveLength(2);
       expect(persistAuthProfiles).toHaveBeenCalledOnce();
       expect(writeConfig).not.toHaveBeenCalled();
+      expect(mocks.repair).not.toHaveBeenCalled();
+      expect(params.prompter.select).not.toHaveBeenCalled();
       expect(config).toEqual(before);
     } finally {
       await removeOAuthTestTempRoot(stateDir);
@@ -174,19 +175,11 @@ describe("offerLiveModelVerification", () => {
     owner: string | undefined;
     harness: "codex" | "openclaw" | undefined;
   }>([
-    { label: "missing legacy roster", roster: {}, owner: "main", harness: undefined },
-    { label: "empty legacy roster", roster: { entries: {} }, owner: "main", harness: "openclaw" },
     {
       label: "named explicit owner",
       roster: { ownership: "explicit", entries: { research: {} } },
       owner: "research",
       harness: "codex",
-    },
-    {
-      label: "legacy named owner",
-      roster: { entries: { research: { default: true }, other: {} } },
-      owner: "research",
-      harness: "openclaw",
     },
     {
       label: "empty explicit roster",
@@ -236,7 +229,6 @@ describe("offerLiveModelVerification", () => {
       opts: { nonInteractive: true },
       prompter: createPrompter(),
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      workspaceDir: root,
       agentDir,
       stateDir: root,
       writeConfig,
@@ -260,32 +252,6 @@ describe("offerLiveModelVerification", () => {
     expect(config).toEqual(before);
   });
 
-  it("does not enter interactive repair for a failed noninteractive import", async () => {
-    mocks.verify.mockResolvedValue({ ok: false, status: "auth", error: "credential expired" });
-    const select = vi.fn();
-    const prompter = { ...createPrompter(), select };
-
-    await expect(
-      verifyWithMemoryConfig({
-        config: { agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } } },
-        opts: { nonInteractive: true },
-        prompter,
-        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as never,
-        workspaceDir: "/tmp/openclaw-test-workspace",
-        writeConfig: async (config) => config,
-        required: true,
-      }),
-    ).resolves.toEqual({
-      config: { agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } } },
-      attempted: true,
-      persisted: false,
-      verified: false,
-    });
-
-    expect(select).not.toHaveBeenCalled();
-    expect(mocks.repair).not.toHaveBeenCalled();
-  });
-
   it("stops verification progress when the provider check rejects", async () => {
     const verificationError = new Error("provider network dropped");
     mocks.verify.mockRejectedValue(verificationError);
@@ -301,7 +267,6 @@ describe("offerLiveModelVerification", () => {
         opts: { nonInteractive: true },
         prompter,
         runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as never,
-        workspaceDir: "/tmp/openclaw-test-workspace",
         writeConfig: async (config) => config,
         required: true,
       }),
@@ -314,7 +279,7 @@ describe("offerLiveModelVerification", () => {
 
   it("reports when a repair candidate persisted its verified config", async () => {
     const repairedConfig: OpenClawConfig = {
-      agents: { entries: { main: { default: true } } },
+      agents: { entries: { main: {} } },
       models: {
         providers: {
           openai: { apiKey: "test-key", baseUrl: "https://api.openai.com/v1", models: [] },
@@ -339,11 +304,10 @@ describe("offerLiveModelVerification", () => {
 
     await expect(
       verifyWithMemoryConfig({
-        config: { agents: { entries: { main: { default: true } } } },
+        config: { agents: { entries: { main: {} } } },
         opts: {},
         prompter,
         runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as never,
-        workspaceDir: "/tmp/openclaw-test-workspace",
         writeConfig,
       }),
     ).resolves.toEqual({
@@ -385,7 +349,6 @@ describe("offerLiveModelVerification", () => {
         opts: {},
         prompter,
         runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-        workspaceDir: "/tmp/openclaw-test-workspace",
         writeConfig,
       }),
     ).rejects.toThrow("repair cancelled");
@@ -417,7 +380,6 @@ describe("offerLiveModelVerification", () => {
         opts: {},
         prompter,
         runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-        workspaceDir: "/tmp/openclaw-test-workspace",
         writeConfig,
       }),
     ).toMatchObject({ attempted: false, verified: false, persisted: false });

@@ -9,6 +9,7 @@ import {
   isSidebarSlotVisible,
   normalizeSidebarLayout,
   openSlot,
+  presentNarrowSidebarLayout,
   promoteSidebarPanel,
   reorderPanel,
   resizeSidebarPanel,
@@ -72,6 +73,32 @@ describe("sidebar layout", () => {
     });
     expect(isSidebarSlotVisible(layout, "conversation")).toBe(true);
     expect(layout.expandedSide).toBeUndefined();
+  });
+
+  it("shows a narrow pane's open background panel in place of the main view, and nothing else", () => {
+    const saved = openSlot(openSlot({ columns: [] }, "terminal"), "subagents");
+    const before = structuredClone(saved);
+    const shown = presentNarrowSidebarLayout(saved);
+    expect(isSidebarSlotVisible(shown, "subagents")).toBe(true);
+    expect(isSidebarSlotVisible(shown, "conversation")).toBe(false);
+    // Presentation only: the layout is untouched and the same view comes back each time.
+    expect(saved).toEqual(before);
+    expect(presentNarrowSidebarLayout(saved)).toBe(shown);
+    expect(
+      isSidebarSlotVisible(
+        presentNarrowSidebarLayout(openSlot(saved, "processes")),
+        "conversation",
+      ),
+    ).toBe(false);
+    // Every other state is shown as it is: another panel, a closed side, a focused main view.
+    for (const layout of [
+      openSlot(saved, "terminal"),
+      setSidebarOpen(saved, false),
+      setSidebarExpanded(saved, true),
+      toggleSidebarPanelExpanded(saved, sidebarActivePanel(saved)!.id),
+    ]) {
+      expect(presentNarrowSidebarLayout(layout)).toBe(layout);
+    }
   });
 
   it("opens every slot as a tab in one right-side column", () => {

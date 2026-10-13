@@ -153,13 +153,19 @@ describe("destructive cleanup with a live unmanaged state owner", () => {
           ? { env: { vars: { constructor: "${OPENCLAW_TEST_MISSING_WORKSPACE}" } } }
           : {}),
         agents: {
+          ownership: "explicit",
+          defaults: {
+            heartbeat: { agentId: "main" },
+            systemAgent: { agentId: "main" },
+          },
           entries: {
             [agentId]: {
               workspace: warningPath ? "${OPENCLAW_TEST_MISSING_WORKSPACE}" : state.workspaceDir,
             },
-            main: { default: true, workspace: state.workspaceDir },
+            main: { workspace: state.workspaceDir },
           },
         },
+        talk: { agentId: "main" },
       });
       const removeState = vi
         .spyOn(cleanupUtils, "removeStateAndLinkedPaths")
@@ -236,7 +242,7 @@ describe("destructive cleanup with a live unmanaged state owner", () => {
       configState.isNixMode = nixMode;
       const workspacePath = path.join(state.workspaceDir, "project.bin");
       await state.writeConfig({
-        agents: { entries: { main: { default: true, workspace: state.workspaceDir } } },
+        agents: { entries: { main: { workspace: state.workspaceDir } } },
       });
       const markerPath = await state.writeText("keep.txt", "preserved");
       await fs.mkdir(path.dirname(workspacePath), { recursive: true });

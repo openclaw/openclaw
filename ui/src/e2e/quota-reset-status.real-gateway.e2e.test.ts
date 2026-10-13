@@ -12,6 +12,7 @@ import { waitForControlUiDocument } from "../../../src/commands/control-ui-hando
 import type { ModelAuthStatusResult } from "../../../src/gateway/server-methods/models-auth-status.types.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../../src/state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../../../src/state/openclaw-state-db.paths.js";
+import { quotaRequestMode } from "../../../test/e2e/qa-lab/runtime/quota-reset-diagnostics.mjs";
 import {
   ACCOUNT_ID,
   MARKER,
@@ -172,7 +173,7 @@ async function captureFinalStatus(
     );
     await page.addInitScript(() => {
       localStorage.setItem(
-        "openclaw:control-ui:community-invite",
+        "openclaw:control-ui:community-invite:v2",
         JSON.stringify({ dismissedAtMs: 1770000000000 }),
       );
     });
@@ -340,7 +341,7 @@ describe.each(["automatic", "saved-clear", "automatic-during-catalog"] as const)
               },
               { model: "gpt-5.5", path: "/v1/responses" },
             );
-            const auxiliary = await fetch(`${provider.baseUrl}/v1/responses`, {
+            const auxiliary = await provider.fetch("/v1/responses", {
               method: "POST",
               headers: {
                 "content-type": "application/json",
@@ -359,7 +360,11 @@ describe.each(["automatic", "saved-clear", "automatic-during-catalog"] as const)
             .filter((request) => request.path.endsWith("/responses"));
           const primaryInference = inference.filter(({ body }) => {
             const request: unknown = JSON.parse(body ?? "{}");
-            return isRecord(request) && request.model === "gpt-5.5";
+            return (
+              isRecord(request) &&
+              request.model === "gpt-5.5" &&
+              quotaRequestMode(body) === "inference"
+            );
           });
           observations.push({ action: "next-ordinary-turn", result: nextTurn, state: stats() });
           expect.soft(nextTurn, evidence()).toEqual({ status: "ok", output: [MARKER] });
@@ -378,7 +383,17 @@ describe.each(["automatic", "saved-clear", "automatic-during-catalog"] as const)
             expect(beforeRecoveryReply?.blockedUntil, evidence()).toBeUndefined();
             const refreshed = await catalogRefresh;
             observations.push({ action: "held-catalog-refresh", result: refreshed });
-            expect(refreshed, evidence()).toMatchObject({ ok: true });
+            // Recovery changes availability, so the held generation must not publish stale facts.
+            expect(refreshed, evidence()).toMatchObject({
+              ok: false,
+              error: {
+                name: "GatewayClientRequestError",
+                code: "UNAVAILABLE",
+                retryable: true,
+                retryAfterMs: 0,
+                message: expect.stringContaining("catalog generation was superseded"),
+              },
+            });
             let published: ModelsListResult | undefined;
             await expect
               .poll(async () => {

@@ -1,9 +1,10 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { addMeetingSetupCheck } from "openclaw/plugin-sdk/meeting-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { GoogleMeetConfig, GoogleMeetModeInput, GoogleMeetTransport } from "./config.js";
-import { addGoogleMeetSetupCheck, getGoogleMeetSetupStatus } from "./setup.js";
+import { getGoogleMeetSetupStatus } from "./setup.js";
 import { resolveChromeNodeInfo } from "./transports/chrome-browser-proxy.js";
 import { assertGoogleMeetAudioAvailable } from "./transports/chrome.js";
 import { GOOGLE_MEET_NODE_COMMAND } from "./transports/google-meet-platform-constants.js";
@@ -58,7 +59,7 @@ export async function getGoogleMeetRuntimeSetupStatus(params: {
         requestedNode: params.config.chromeNode.node,
       });
       const label = node.displayName ?? node.remoteIp ?? node.nodeId ?? "connected node";
-      status = addGoogleMeetSetupCheck(status, {
+      status = addMeetingSetupCheck(status, {
         id: "chrome-node-connected",
         ok: true,
         message: `Connected Google Meet node ready: ${label}`,
@@ -81,7 +82,7 @@ export async function getGoogleMeetRuntimeSetupStatus(params: {
           },
           timeoutMs: 12_000,
         });
-        status = addGoogleMeetSetupCheck(status, {
+        status = addMeetingSetupCheck(status, {
           id: "chrome-node-audio-prerequisites",
           ok: true,
           message: setup
@@ -90,7 +91,7 @@ export async function getGoogleMeetRuntimeSetupStatus(params: {
         });
       }
     } catch (error) {
-      status = addGoogleMeetSetupCheck(status, {
+      status = addMeetingSetupCheck(status, {
         id: "chrome-node-connected",
         ok: false,
         message: formatErrorMessage(error),
@@ -106,13 +107,13 @@ export async function getGoogleMeetRuntimeSetupStatus(params: {
       config: params.config,
       timeoutMs: Math.min(params.config.chrome.joinTimeoutMs, 10_000),
     });
-    status = addGoogleMeetSetupCheck(status, {
+    status = addMeetingSetupCheck(status, {
       id: "chrome-local-audio-device",
       ok: true,
       message: "Virtual meeting audio backend is ready",
     });
   } catch (error) {
-    status = addGoogleMeetSetupCheck(status, {
+    status = addMeetingSetupCheck(status, {
       id: "chrome-local-audio-device",
       ok: false,
       message: formatErrorMessage(error),
@@ -129,7 +130,7 @@ export async function getGoogleMeetRuntimeSetupStatus(params: {
       missingCommands.push(command);
     }
   }
-  return addGoogleMeetSetupCheck(status, {
+  return addMeetingSetupCheck(status, {
     id: "chrome-local-audio-commands",
     ok: commands.length > 0 && missingCommands.length === 0,
     message:

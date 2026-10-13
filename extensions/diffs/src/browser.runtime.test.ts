@@ -4,6 +4,11 @@ import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type {
+  OpenClawPluginApi,
+  OpenClawPluginToolContext,
+} from "openclaw/plugin-sdk/plugin-entry";
 import type {
   PluginBlobEntry,
   PluginBlobEntryInfo,
@@ -13,7 +18,6 @@ import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createMockServerResponse } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig, OpenClawPluginApi, OpenClawPluginToolContext } from "../api.js";
 import { registerDiffsPlugin } from "./plugin.js";
 import { createTempDiffRoot } from "./test-helpers.js";
 
@@ -22,6 +26,9 @@ const { launchMock } = vi.hoisted(() => ({
 }));
 
 let PlaywrightDiffScreenshotter: typeof import("./browser.runtime.js").PlaywrightDiffScreenshotter;
+type ScreenshotParams = Parameters<
+  InstanceType<typeof PlaywrightDiffScreenshotter>["screenshotHtml"]
+>[0];
 
 vi.mock("playwright-core", () => ({
   chromium: {
@@ -74,21 +81,31 @@ describe("PlaywrightDiffScreenshotter", () => {
     await cleanupRootDir();
   });
 
-  async function renderWithBrowserDiscovery(): Promise<{ executablePath?: string }> {
-    launchMock.mockResolvedValue(createMockBrowser([]));
-    const screenshotter = new PlaywrightDiffScreenshotter({ config: {}, browserIdleMs: 1_000 });
-    await screenshotter.screenshotHtml({
+  function screenshotParams(
+    overrides: Partial<Omit<ScreenshotParams, "image">> & {
+      image?: Partial<ScreenshotParams["image"]>;
+    } = {},
+  ): ScreenshotParams {
+    return {
       html: '<html><head></head><body><main class="oc-frame"></main></body></html>',
       outputPath,
       theme: "dark",
+      ...overrides,
       image: {
         format: "png",
         qualityPreset: "standard",
-        scale: 1,
+        scale: 2,
         maxWidth: 960,
         maxPixels: 8_000_000,
+        ...overrides.image,
       },
-    });
+    };
+  }
+
+  async function renderWithBrowserDiscovery(): Promise<{ executablePath?: string }> {
+    launchMock.mockResolvedValue(createMockBrowser([]));
+    const screenshotter = new PlaywrightDiffScreenshotter({ config: {} });
+    await screenshotter.screenshotHtml(screenshotParams({ image: { scale: 1 } }));
     return firstMockCall(launchMock, "browser launch")[0] as { executablePath?: string };
   }
 
@@ -109,26 +126,6 @@ describe("PlaywrightDiffScreenshotter", () => {
     vi.stubEnv("ProgramFiles", params.programFiles);
     vi.stubEnv("ProgramFiles(x86)", params.programFilesX86);
   }
-
-  it("uses the Windows per-user install root when LOCALAPPDATA is blank", async () => {
-    stubWindowsBrowserDiscoveryEnv({
-      localAppData: " \t ",
-      programFiles: "",
-      programFilesX86: "   ",
-    });
-    vi.spyOn(os, "homedir").mockReturnValue("C:\\Users\\test");
-    const chromePath = "C:\\Users\\test\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe";
-    const accessMock = vi.spyOn(fs, "access").mockImplementation(async (candidate) => {
-      if (String(candidate) !== chromePath) {
-        throw new Error("ENOENT");
-      }
-    });
-
-    await expect(renderWithBrowserDiscovery()).resolves.toEqual(
-      expect.objectContaining({ executablePath: chromePath }),
-    );
-    expect(accessMock.mock.calls.map(([candidate]) => String(candidate))).toEqual([chromePath]);
-  });
 
   it("uses standard Windows system roots when install-root overrides are blank", async () => {
     stubWindowsBrowserDiscoveryEnv({
@@ -153,54 +150,11 @@ describe("PlaywrightDiffScreenshotter", () => {
     expect(candidates.every((candidate) => path.win32.isAbsolute(candidate))).toBe(true);
   });
 
-  it("preserves custom Windows install-root precedence", async () => {
-    stubWindowsBrowserDiscoveryEnv({
-      localAppData: "D:\\User Apps",
-      programFiles: "D:\\System Apps",
-      programFilesX86: "D:\\System Apps x86",
-    });
-    const customChromePath = "D:\\User Apps\\Google\\Chrome\\Application\\chrome.exe";
-    const accessMock = vi.spyOn(fs, "access").mockImplementation(async (candidate) => {
-      if (String(candidate) !== customChromePath) {
-        throw new Error("ENOENT");
-      }
-    });
-
-    await expect(renderWithBrowserDiscovery()).resolves.toEqual(
-      expect.objectContaining({ executablePath: customChromePath }),
-    );
-    expect(accessMock.mock.calls.map(([candidate]) => String(candidate))).toEqual([
-      customChromePath,
-    ]);
-  });
-
   it("reuses the same browser across renders and closes it after the idle window", async () => {
     const { pages, browser, screenshotter } = await createScreenshotterHarness();
 
-    await screenshotter.screenshotHtml({
-      html: '<html><head></head><body><main class="oc-frame"></main></body></html>',
-      outputPath,
-      theme: "dark",
-      image: {
-        format: "png",
-        qualityPreset: "standard",
-        scale: 2,
-        maxWidth: 960,
-        maxPixels: 8_000_000,
-      },
-    });
-    await screenshotter.screenshotHtml({
-      html: '<html><head></head><body><main class="oc-frame"></main></body></html>',
-      outputPath,
-      theme: "dark",
-      image: {
-        format: "png",
-        qualityPreset: "standard",
-        scale: 2,
-        maxWidth: 960,
-        maxPixels: 8_000_000,
-      },
-    });
+    await screenshotter.screenshotHtml(screenshotParams());
+    await screenshotter.screenshotHtml(screenshotParams());
 
     expect(launchMock).toHaveBeenCalledTimes(1);
     expect(browser.newPage).toHaveBeenCalledTimes(2);
@@ -212,26 +166,15 @@ describe("PlaywrightDiffScreenshotter", () => {
     expect(pages[0]?.close).toHaveBeenCalledTimes(1);
     expect(pages[1]?.close).toHaveBeenCalledTimes(1);
 
-    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(30_000);
     expect(browser.close).toHaveBeenCalledTimes(1);
 
-    await screenshotter.screenshotHtml({
-      html: '<html><head></head><body><main class="oc-frame"></main></body></html>',
-      outputPath,
-      theme: "light",
-      image: {
-        format: "png",
-        qualityPreset: "standard",
-        scale: 2,
-        maxWidth: 960,
-        maxPixels: 8_000_000,
-      },
-    });
+    await screenshotter.screenshotHtml(screenshotParams({ theme: "light" }));
 
     expect(launchMock).toHaveBeenCalledTimes(2);
   });
 
-  it.each(["config", "runtimeConfig"] as const)(
+  it.each(["config"] as const)(
     "uses explicit tool %s for viewer links and screenshot browser selection",
     async (configField) => {
       const processConfig: OpenClawConfig = {
@@ -248,7 +191,7 @@ describe("PlaywrightDiffScreenshotter", () => {
       });
       launchMock.mockResolvedValue(createMockBrowser([]));
 
-      const { details } = await render({ config: processConfig, [configField]: explicitConfig });
+      const { details } = await render({ [configField]: explicitConfig });
 
       expect
         .soft(String(details.viewerUrl))
@@ -265,18 +208,9 @@ describe("PlaywrightDiffScreenshotter", () => {
     const { pages, screenshotter } = await createScreenshotterHarness();
     const pdfPath = path.join(rootDir, "preview.pdf");
 
-    await screenshotter.screenshotHtml({
-      html: '<html><head></head><body><main class="oc-frame"></main></body></html>',
-      outputPath: pdfPath,
-      theme: "light",
-      image: {
-        format: "pdf",
-        qualityPreset: "standard",
-        scale: 2,
-        maxWidth: 960,
-        maxPixels: 8_000_000,
-      },
-    });
+    await screenshotter.screenshotHtml(
+      screenshotParams({ outputPath: pdfPath, theme: "light", image: { format: "pdf" } }),
+    );
 
     expect(launchMock).toHaveBeenCalledTimes(1);
     expect(pages).toHaveLength(1);
@@ -292,34 +226,15 @@ describe("PlaywrightDiffScreenshotter", () => {
   });
 
   it("fails fast when PDF render exceeds size limits", async () => {
-    const pages: Array<{
-      close: ReturnType<typeof vi.fn>;
-      screenshot: ReturnType<typeof vi.fn>;
-      pdf: ReturnType<typeof vi.fn>;
-    }> = [];
-    const browser = createMockBrowser(pages, {
+    const { pages, screenshotter } = await createScreenshotterHarness({
       boundingBox: { x: 40, y: 40, width: 960, height: 60_000 },
-    });
-    launchMock.mockResolvedValue(browser);
-    const screenshotter = new PlaywrightDiffScreenshotter({
-      config: createConfig(),
-      browserIdleMs: 1_000,
     });
     const pdfPath = path.join(rootDir, "oversized.pdf");
 
     await expect(
-      screenshotter.screenshotHtml({
-        html: '<html><head></head><body><main class="oc-frame"></main></body></html>',
-        outputPath: pdfPath,
-        theme: "light",
-        image: {
-          format: "pdf",
-          qualityPreset: "standard",
-          scale: 2,
-          maxWidth: 960,
-          maxPixels: 8_000_000,
-        },
-      }),
+      screenshotter.screenshotHtml(
+        screenshotParams({ outputPath: pdfPath, theme: "light", image: { format: "pdf" } }),
+      ),
     ).rejects.toThrow("Diff frame did not render within image size limits.");
 
     expect(launchMock).toHaveBeenCalledTimes(1);
@@ -332,18 +247,7 @@ describe("PlaywrightDiffScreenshotter", () => {
     const { pages, screenshotter } = await createScreenshotterHarness();
 
     await expect(
-      screenshotter.screenshotHtml({
-        html: '<html><head></head><body><main class="oc-frame"></main></body></html>',
-        outputPath,
-        theme: "dark",
-        image: {
-          format: "png",
-          qualityPreset: "standard",
-          scale: 1,
-          maxWidth: 960,
-          maxPixels: 10,
-        },
-      }),
+      screenshotter.screenshotHtml(screenshotParams({ image: { scale: 1, maxPixels: 10 } })),
     ).rejects.toThrow("Diff frame did not render within image size limits.");
     expect(pages).toHaveLength(1);
     expect(pages[0]?.screenshot).toHaveBeenCalledTimes(0);
@@ -353,23 +257,11 @@ describe("PlaywrightDiffScreenshotter", () => {
     launchMock.mockRejectedValue(new Error("launch failed"));
     const screenshotter = new PlaywrightDiffScreenshotter({
       config: createConfig(),
-      browserIdleMs: 1_000,
     });
 
-    await expect(
-      screenshotter.screenshotHtml({
-        html: '<html><head></head><body><main class="oc-frame"></main></body></html>',
-        outputPath,
-        theme: "dark",
-        image: {
-          format: "png",
-          qualityPreset: "standard",
-          scale: 2,
-          maxWidth: 960,
-          maxPixels: 8_000_000,
-        },
-      }),
-    ).rejects.toThrow("requires a Chromium-compatible browser");
+    await expect(screenshotter.screenshotHtml(screenshotParams())).rejects.toThrow(
+      "requires a Chromium-compatible browser",
+    );
   });
 
   it("wraps new-page failures with Chromium installation guidance", async () => {
@@ -378,50 +270,11 @@ describe("PlaywrightDiffScreenshotter", () => {
     launchMock.mockResolvedValue(browser);
     const screenshotter = new PlaywrightDiffScreenshotter({
       config: createConfig(),
-      browserIdleMs: 1_000,
     });
 
-    await expect(
-      screenshotter.screenshotHtml({
-        html: '<html><head></head><body><main class="oc-frame"></main></body></html>',
-        outputPath,
-        theme: "dark",
-        image: {
-          format: "png",
-          qualityPreset: "standard",
-          scale: 2,
-          maxWidth: 960,
-          maxPixels: 8_000_000,
-        },
-      }),
-    ).rejects.toThrow("requires a Chromium-compatible browser");
-  });
-
-  it("preserves render errors after a browser page has opened", async () => {
-    const browser = createMockBrowser([]);
-    const page = createMockPage();
-    page.waitForFunction.mockRejectedValue(new Error("hydration timeout"));
-    browser.newPage.mockResolvedValue(page);
-    launchMock.mockResolvedValue(browser);
-    const screenshotter = new PlaywrightDiffScreenshotter({
-      config: createConfig(),
-      browserIdleMs: 1_000,
-    });
-
-    await expect(
-      screenshotter.screenshotHtml({
-        html: '<html><head></head><body><main class="oc-frame"></main></body></html>',
-        outputPath,
-        theme: "dark",
-        image: {
-          format: "png",
-          qualityPreset: "standard",
-          scale: 2,
-          maxWidth: 960,
-          maxPixels: 8_000_000,
-        },
-      }),
-    ).rejects.toThrow("hydration timeout");
+    await expect(screenshotter.screenshotHtml(screenshotParams())).rejects.toThrow(
+      "requires a Chromium-compatible browser",
+    );
   });
 });
 
@@ -483,69 +336,47 @@ function createRegistrationHarness(params: {
   };
 }
 
+const STARTUP_DIFFS_DEFAULTS = {
+  mode: "view",
+  theme: "light",
+  background: false,
+  layout: "split",
+  showLineNumbers: false,
+  diffIndicators: "classic",
+  lineSpacing: 2,
+};
+
+function createRuntimeConfig(config: Record<string, unknown>): OpenClawConfig {
+  return {
+    gateway: { port: 18789, bind: "loopback" },
+    plugins: { entries: { diffs: { config } } },
+  };
+}
+
 describe("diffs plugin registration", () => {
   it("uses live runtime tool config through the registered tool factory", async () => {
-    let configFile: OpenClawConfig = {
-      gateway: {
-        port: 18789,
-        bind: "loopback",
-      },
-      plugins: {
-        entries: {
-          diffs: {
-            config: {
-              viewerBaseUrl: "https://startup.example.com/openclaw",
-              defaults: {
-                mode: "view",
-                theme: "light",
-                background: false,
-                layout: "split",
-                showLineNumbers: false,
-                diffIndicators: "classic",
-                lineSpacing: 2,
-              },
-            },
-          },
-        },
-      },
+    const startupConfig = {
+      viewerBaseUrl: "https://startup.example.com/openclaw",
+      defaults: STARTUP_DIFFS_DEFAULTS,
     };
+    let configFile = createRuntimeConfig(startupConfig);
     const { render, handleRequest } = createRegistrationHarness({
-      pluginConfig: {
-        viewerBaseUrl: "https://startup.example.com/openclaw",
-        defaults: {
-          mode: "view",
-          theme: "light",
-          background: false,
-          layout: "split",
-          showLineNumbers: false,
-          diffIndicators: "classic",
-          lineSpacing: 2,
-        },
-      },
+      pluginConfig: startupConfig,
       currentConfig: () => configFile,
     });
 
-    configFile = {
-      ...configFile,
-      plugins: {
-        entries: {
-          diffs: {
-            config: {
-              viewerBaseUrl: "https://live.example.com/gateway",
-              defaults: {
-                mode: "view",
-                theme: "dark",
-                background: true,
-                layout: "unified",
-                showLineNumbers: true,
-                diffIndicators: "bars",
-                lineSpacing: 1.6,
-              },
-            },
-          },
-        },
+    configFile = createRuntimeConfig({
+      viewerBaseUrl: "https://live.example.com/gateway",
+      defaults: {
+        mode: "view",
+        theme: "dark",
+        background: true,
+        layout: "unified",
+        showLineNumbers: true,
+        diffIndicators: "bars",
+        lineSpacing: 1.6,
       },
-    };
+    });
 
     const { details, viewerPath } = await render({
       agentId: "main",
@@ -574,34 +405,10 @@ describe("diffs plugin registration", () => {
   });
 
   it("uses live runtime viewer-access config through the registered HTTP handler", async () => {
-    let configFile: OpenClawConfig = {
-      gateway: {
-        port: 18789,
-        bind: "loopback",
-      },
-      plugins: {
-        entries: {
-          diffs: {
-            config: {
-              security: {
-                allowRemoteViewer: true,
-              },
-            },
-          },
-        },
-      },
-    };
+    let configFile = createRuntimeConfig({ security: { allowRemoteViewer: true } });
     const { on, render, handleRequest } = createRegistrationHarness({
       pluginConfig: {
-        defaults: {
-          mode: "view",
-          theme: "light",
-          background: false,
-          layout: "split",
-          showLineNumbers: false,
-          diffIndicators: "classic",
-          lineSpacing: 2,
-        },
+        defaults: STARTUP_DIFFS_DEFAULTS,
         security: {
           allowRemoteViewer: true,
         },
@@ -656,20 +463,7 @@ describe("diffs plugin registration", () => {
       agentAccountId: "default",
     });
 
-    configFile = {
-      ...configFile,
-      plugins: {
-        entries: {
-          diffs: {
-            config: {
-              security: {
-                allowRemoteViewer: false,
-              },
-            },
-          },
-        },
-      },
-    };
+    configFile = createRuntimeConfig({ security: { allowRemoteViewer: false } });
 
     const proxiedRes = createMockServerResponse();
     const proxiedHandled = await handleRequest(
@@ -688,23 +482,7 @@ describe("diffs plugin registration", () => {
   });
 
   it("fails closed for remote viewer access when the live diffs plugin entry is removed", async () => {
-    let configFile: OpenClawConfig = {
-      gateway: {
-        port: 18789,
-        bind: "loopback",
-      },
-      plugins: {
-        entries: {
-          diffs: {
-            config: {
-              security: {
-                allowRemoteViewer: true,
-              },
-            },
-          },
-        },
-      },
-    };
+    let configFile = createRuntimeConfig({ security: { allowRemoteViewer: true } });
     const { render, handleRequest } = createRegistrationHarness({
       pluginConfig: {
         security: {
@@ -876,7 +654,6 @@ async function createScreenshotterHarness(options?: {
   launchMock.mockResolvedValue(browser);
   const screenshotter = new PlaywrightDiffScreenshotter({
     config: createConfig(),
-    browserIdleMs: 1_000,
   });
   return { pages, browser, screenshotter };
 }

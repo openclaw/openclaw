@@ -32,12 +32,10 @@ configured item registry.
 - Every access attempt is recorded in OpenClaw's shared SQLite state. Audit
   rows include the supplied reason; keep reasons non-sensitive. The broker
   never copies a fetched value or the service token into an audit row.
-- After the current tool execution, OpenClaw-owned transcript persistence
-  replaces a successful `get` value with redacted metadata.
-- The value is model-visible for that execution. If the model copies it into a
-  later tool call or reply, that separate record is outside this plugin's
-  persistence hook. Keep policies narrow and do not ask the model to echo a
-  value.
+- A successful `get` value reaches the model and remains in tool results and
+  persisted transcripts without secret masking. Later tool calls and replies
+  can also contain it. Keep policies narrow, protect transcripts, and review
+  conversation text before sharing it.
 - The plugin invokes `op` once per cache miss. It does not retry rate limits or
   other failures.
 - Each `op` call runs with a minimal environment that disables 1Password
@@ -256,6 +254,11 @@ Each evaluated authorization is single-use and is handed to the executing tool
 call through shared SQLite state, so the handoff also works when more than one
 plugin instance is active in the gateway process. Unused authorizations expire
 after the 600-second approval window.
+
+Pending authorization reads and writes run on the SQLite worker. Tool execution
+waits for an approval's pending write to finish before consuming it; a failed
+write fails the request without retrieving a secret. Existing pending rows and
+their expiry remain compatible across updates.
 
 The in-memory cache defaults to 300 seconds and is bounded by the configured
 slug registry. Set `cacheTtlSeconds` to `0` to disable it. Policy is evaluated

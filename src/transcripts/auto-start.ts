@@ -6,9 +6,12 @@ import { normalizeCapabilityProviderId } from "../plugins/provider-registry-shar
 import { truncateUtf16Safe } from "../utils.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
 import { createTranscriptsStore, stopTranscriptCapture } from "./capture-operations.js";
-import { retainTranscriptStartRetry, TranscriptStartError } from "./capture-startup.js";
 import {
   activeSessions,
+  retainTranscriptStartRetry,
+  TranscriptStartError,
+} from "./capture-startup.js";
+import {
   createTranscriptSessionId,
   isTranscriptSessionStarting,
   resolveSourceProvider,
@@ -330,7 +333,6 @@ function startTranscriptsAutoStartEntry(
     capture: OwnedCapture,
     params: Pick<
       Parameters<typeof startTranscripts>[0],
-      | "store"
       | "rawParams"
       | "abortSignal"
       | "existingSession"
@@ -349,6 +351,7 @@ function startTranscriptsAutoStartEntry(
           ? { expectedInputRevision: retry.revision, assertCurrent: retry.assertCurrent }
           : params.existingSessionCondition,
         ctx,
+        store,
         startupWaitMs: AUTO_START_PROVIDER_READY_TIMEOUT_MS,
         configuredLifecycle: true,
         lifecycleToken: capture.lifecycleToken,
@@ -396,7 +399,6 @@ function startTranscriptsAutoStartEntry(
           );
         }
         await startCapture(capture, {
-          store,
           sessionIdOrigin: entry.sessionId ? "supplied" : "generated",
           abortSignal: controller.signal,
           rawParams: { ...entry, title: futureTitle() },
@@ -510,7 +512,6 @@ function startTranscriptsAutoStartEntry(
           diagnosticToken = owned.lifecycleToken;
           capture = owned;
           const result = await startCapture(owned, {
-            store,
             sessionIdOrigin: "generated",
             abortSignal: controller.signal,
             existingSession: candidate?.session,

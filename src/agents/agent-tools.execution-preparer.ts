@@ -1,3 +1,4 @@
+import { createDeferredCore } from "../shared/deferred.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import type { InternalToolExecutionPreparer } from "./runtime/internal-hooks.js";
 
@@ -12,23 +13,17 @@ type InternalExecutionControl = {
 };
 
 function createControl(): InternalExecutionControl {
-  let markReady!: (args: unknown) => void;
-  let decide!: (value: { launch: boolean; start?: () => void }) => void;
-  const ready = new Promise<unknown>((resolve) => {
-    markReady = resolve;
-  });
-  const decision = new Promise<{ launch: boolean; start?: () => void }>((resolve) => {
-    decide = resolve;
-  });
+  const ready = createDeferredCore<unknown>();
+  const decision = createDeferredCore<{ launch: boolean; start?: () => void }>();
   return {
     [INTERNAL_EXECUTION_CONTROL]: true,
-    ready,
+    ready: ready.promise,
     pause: (args) => {
-      markReady(args);
-      return decision;
+      ready.resolve(args);
+      return decision.promise;
     },
-    launch: (start) => decide({ launch: true, start }),
-    dispose: () => decide({ launch: false }),
+    launch: (start) => decision.resolve({ launch: true, start }),
+    dispose: () => decision.resolve({ launch: false }),
   };
 }
 

@@ -87,15 +87,6 @@ export function telegramIngestGroupForTest(
   };
 }
 
-export type TelegramMentionCaseForTest = [
-  string,
-  TelegramMentionPolicyForTest,
-  TelegramMentionPolicyForTest | undefined,
-  number | undefined,
-  boolean,
-  number,
-];
-
 export async function waitForTelegramMockCalls(
   mock: { mock: { calls: unknown[] } },
   count: number,

@@ -46,10 +46,11 @@ it.runIf(process.platform !== "win32")(
     const sandbox = createSandboxTestContext({
       overrides: { workspaceDir: root, agentWorkspaceDir: root, containerWorkdir: root, backend },
     });
-    const bridge = createSandboxFsBridge({ sandbox });
+    const bridge = createSandboxFsBridge({ sandbox: { ...sandbox, backend } });
     sandbox.fsBridge = bridge;
     try {
       bindLocalSandboxWorkspace(sandbox, {
+        [Symbol.dispose]() {},
         workspaceDir: root,
         workspaceCwd: root,
         checkpoint,
@@ -133,8 +134,9 @@ it.runIf(process.platform !== "win32")(
     const sandbox = createSandboxTestContext({
       overrides: { workspaceDir: root, agentWorkspaceDir: root, containerWorkdir: root, backend },
     });
-    sandbox.fsBridge = createSandboxFsBridge({ sandbox });
+    sandbox.fsBridge = createSandboxFsBridge({ sandbox: { ...sandbox, backend } });
     bindLocalSandboxWorkspace(sandbox, {
+      [Symbol.dispose]() {},
       workspaceDir: root,
       workspaceCwd: root,
       provision: async (run) => await run(),

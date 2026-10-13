@@ -14,7 +14,8 @@ import { getBinDir } from "./config.js";
 type ShellConfig = {
   shell: string;
   args: string[];
-} & ({ commandTransport: "argv" } | { commandTransport: "stdin" });
+  commandTransport: "argv" | "stdin";
+};
 
 type ShellCommandInvocation =
   | { argv: [string, ...string[]]; input?: undefined; stdin: "ignore" }
@@ -200,25 +201,14 @@ export function getShellConfig(customShellPath?: string): ShellConfig {
   }
 
   const rawEnvShell = process.env.SHELL?.trim();
-  const envShell = rawEnvShell && !isNonInteractiveShell(rawEnvShell) ? rawEnvShell : undefined;
-  const shellName = envShell ? path.basename(envShell) : "";
+  let shell = rawEnvShell && !isNonInteractiveShell(rawEnvShell) ? rawEnvShell : undefined;
   // Fish rejects common bashisms used by tools, so prefer bash when detected.
-  if (shellName === "fish") {
-    const bash = resolveShellFromPath("bash");
-    if (bash) {
-      return createArgvShellConfig(bash, getPosixShellArgs(bash));
-    }
-    const sh = resolveShellFromPath("sh");
-    if (sh) {
-      return createArgvShellConfig(sh, getPosixShellArgs(sh));
-    }
-  }
-  if (envShell) {
-    return createArgvShellConfig(envShell, getPosixShellArgs(envShell));
+  if (shell && path.basename(shell) === "fish") {
+    shell = resolveShellFromPath("bash") ?? resolveShellFromPath("sh") ?? shell;
   }
   // Placeholder SHELL (or unset): prefer a resolved sh/bash on PATH so we do not
   // re-invoke the placeholder and get a spurious exitCode=1.
-  const shell = resolveShellFromPath("sh") ?? resolveShellFromPath("bash") ?? "sh";
+  shell ??= resolveShellFromPath("sh") ?? resolveShellFromPath("bash") ?? "sh";
   return createArgvShellConfig(shell, getPosixShellArgs(shell));
 }
 
@@ -362,9 +352,6 @@ export function createStreamingBinaryOutputSanitizer(
 
 function sanitizeStrippedBinaryOutput(text: string): string {
   const scrubbed = text.replace(/[\p{Format}\p{Surrogate}]/gu, "");
-  if (!scrubbed) {
-    return scrubbed;
-  }
   return scrubbed.replace(/\p{Cc}/gu, (control) =>
     control === "\t" || control === "\n" || control === "\r"
       ? control

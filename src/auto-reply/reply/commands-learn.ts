@@ -1,7 +1,7 @@
 // Handles /learn by turning the command into a Skill Workshop authoring turn.
 import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
 import { detectNodeClaudePlacement } from "../../agents/cli-runner/prepare-claude.js";
-import { resolveConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
+import { prepareConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
 import { selectAgentHarness } from "../../agents/harness/selection.js";
 import { agentHarnessExposesOpenClawTools } from "../../agents/harness/tool-surface.js";
 import {
@@ -9,13 +9,25 @@ import {
   resolveCliRuntimeExecutionProvider,
 } from "../../agents/model-runtime-aliases.js";
 import { supportsModelTools } from "../../agents/model-tool-support.js";
-import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
+import { resolveSandboxRuntimeStatusAsync } from "../../agents/sandbox.js";
 import { isToolAllowedByPolicyName } from "../../agents/tool-policy-match.js";
 import { resolveConfiguredModelCompat } from "../../agents/tools-effective-inventory.js";
 import { buildLearnPrompt, DEFAULT_LEARN_REQUEST } from "../../skills/workshop/learn-prompt.js";
+import { WorkshopWriteError } from "../../skills/workshop/library.js";
+import {
+  describeWorkshopReviewUndo,
+  undoWorkshopReview,
+  WorkshopReviewNotFoundError,
+  workshopReviewRunId,
+} from "../../skills/workshop/review-undo.js";
 import { resolveSkillWorkshopToolPolicyAvailability } from "../../skills/workshop/tool-policy-diagnostic.js";
 import { applyCommandTextToParams } from "./command-context-rewrite.js";
-import { commandReply, defineAuthorizedTextCommand } from "./command-gates.js";
+import {
+  commandReply,
+  defineAuthorizedTextCommand,
+  requireGatewayClientScope,
+} from "./command-gates.js";
+import { matchSlashCommandToken } from "./commands-slash-parse.js";
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 
@@ -23,34 +35,32 @@ const LEARN_COMMAND_PREFIX = "/learn";
 const SKILL_WORKSHOP_TOOL_NAME = "skill_workshop";
 const SKILL_WORKSHOP_UNAVAILABLE_REPLY =
   "Skill workshop is not available on this agent. Use a non-sandboxed agent where the skill_workshop tool is available, or use the openclaw skills workshop CLI.";
-const PERSONAL_WORKSHOP_LEARN_REPLY =
-  "This turn cannot stage a pending workspace proposal, so /learn made no change. Ordinary explicit personal skill creation publishes a revision. Ask for that directly if intended, or use the existing administrator UI or openclaw skills workshop CLI for workspace proposal review.";
 
-function parseLearnRequest(raw: string): string | null {
-  const trimmed = raw.trim();
-  const commandEnd = trimmed.search(/\s/);
-  const commandToken = commandEnd === -1 ? trimmed : trimmed.slice(0, commandEnd);
-  if (commandToken.toLowerCase() !== LEARN_COMMAND_PREFIX) {
+// Only this exact form undoes; any other "/learn undo ..." text stays a learn request.
+const UNDO_PATTERN = /^undo\s+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+
+type LearnCommand = { kind: "learn"; request: string } | { kind: "undo"; reviewId: string };
+
+function parseLearnCommand(raw: string): LearnCommand | null {
+  const request = matchSlashCommandToken(raw, LEARN_COMMAND_PREFIX);
+  if (request === null) {
     return null;
   }
-  const request = commandEnd === -1 ? "" : trimmed.slice(commandEnd).trim();
-  return request || DEFAULT_LEARN_REQUEST;
+  const reviewId = UNDO_PATTERN.exec(request)?.[1];
+  return reviewId
+    ? { kind: "undo", reviewId: reviewId.toLowerCase() }
+    : { kind: "learn", request: request || DEFAULT_LEARN_REQUEST };
 }
 
-function resolveWorkshopSurface(
-  params: HandleCommandsParams,
-): "workspace" | "personal" | undefined {
-  if (params.opts?.disableTools) {
-    return undefined;
-  }
-  if (params.opts?.toolsAllow?.length === 0) {
-    return undefined;
-  }
+/** /learn needs a harness that exposes OpenClaw tools and a policy that allows skill_workshop. */
+async function isWorkshopAvailable(params: HandleCommandsParams): Promise<boolean> {
   if (
-    params.opts?.toolsAllow !== undefined &&
-    !isToolAllowedByPolicyName(SKILL_WORKSHOP_TOOL_NAME, { allow: params.opts.toolsAllow })
+    params.opts?.disableTools ||
+    params.opts?.toolsAllow?.length === 0 ||
+    (params.opts?.toolsAllow !== undefined &&
+      !isToolAllowedByPolicyName(SKILL_WORKSHOP_TOOL_NAME, { allow: params.opts.toolsAllow }))
   ) {
-    return undefined;
+    return false;
   }
 
   const policySessionKey = resolveRuntimePolicySessionKey({
@@ -59,13 +69,22 @@ function resolveWorkshopSurface(
     ctx: params.ctx,
     sessionKey: params.sessionKey,
   });
-  const sandboxRuntime = resolveSandboxRuntimeStatus({
+  const sandboxRuntime = await resolveSandboxRuntimeStatusAsync({
     cfg: params.cfg,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     classificationSessionKey: policySessionKey,
+    ...(policySessionKey === params.sessionKey
+      ? {
+          preparedSessionEntry:
+            params.sessionStore?.[params.sessionKey] ?? params.sessionEntry ?? null,
+        }
+      : {}),
   });
-  let personalOnly = params.opts?.skillLibraryAuthoring?.defaultTarget === "personal";
+  // Workshop skills live on the host under the agent dir, outside a sandboxed workspace.
+  if (sandboxRuntime.sandboxed) {
+    return false;
+  }
 
   try {
     const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
@@ -88,7 +107,7 @@ function resolveWorkshopSurface(
         agentId: params.agentId,
       });
       if (!cliBackend?.bundleMcp) {
-        return undefined;
+        return false;
       }
       if (
         detectNodeClaudePlacement({
@@ -97,10 +116,7 @@ function resolveWorkshopSurface(
           execNode: targetSessionEntry?.execNode,
         })
       ) {
-        if (!params.opts?.skillLibraryAuthoring) {
-          return undefined;
-        }
-        personalOnly = true;
+        return false;
       }
     } else {
       const harness = selectAgentHarness({
@@ -111,7 +127,7 @@ function resolveWorkshopSurface(
         sessionKey: params.sessionKey,
       });
       if (!agentHarnessExposesOpenClawTools(harness.id)) {
-        return undefined;
+        return false;
       }
     }
     const modelCompat = resolveConfiguredModelCompat({
@@ -120,15 +136,14 @@ function resolveWorkshopSurface(
       modelId: params.model,
     });
     if (modelCompat && !supportsModelTools({ compat: modelCompat })) {
-      return undefined;
+      return false;
     }
-    const capabilityProfile = resolveConversationCapabilityProfile({
+    const capabilityProfile = await prepareConversationCapabilityProfile({
       config: params.cfg,
       agentId: sandboxRuntime.classificationAgentId,
       sessionKey: sandboxRuntime.classificationSessionKey,
       runSessionKey: params.sessionKey,
       workspaceDir: params.workspaceDir,
-      agentDir: params.agentDir,
       runtimeToolAllowlist: params.opts?.toolsAllow,
       messageProvider: params.command.channel,
       senderId: params.command.senderId,
@@ -143,33 +158,71 @@ function resolveWorkshopSurface(
       groupChannel: params.sessionEntry?.groupChannel ?? params.ctx.GroupChannel,
       groupSpace: params.sessionEntry?.space ?? params.ctx.GroupSpace,
     });
-    const available = resolveSkillWorkshopToolPolicyAvailability({
+    return resolveSkillWorkshopToolPolicyAvailability({
       config: params.cfg,
       conversationCapabilityProfile: capabilityProfile,
     }).available;
-    return available && (personalOnly || !sandboxRuntime.sandboxed)
-      ? personalOnly
-        ? "personal"
-        : "workspace"
-      : undefined;
   } catch {
-    return undefined;
+    return false;
   }
 }
 
-/** Command handler for /learn skill-draft requests. */
+/** Reverts one background review's skill changes, as the Undo button on its notice asks. */
+async function undoReview(params: HandleCommandsParams, reviewId: string) {
+  const missingAdminScope = requireGatewayClientScope(params, {
+    label: "/learn undo",
+    allowedScopes: ["operator.admin"],
+    missingText: "❌ /learn undo requires operator.admin for gateway clients.",
+  });
+  if (missingAdminScope) {
+    return missingAdminScope;
+  }
+  try {
+    const result = await undoWorkshopReview(
+      {
+        config: params.cfg,
+        agentId: params.agentId,
+        actor: "user",
+        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+        ...(params.command.assertOwnerCurrent
+          ? { assertLive: params.command.assertOwnerCurrent }
+          : {}),
+      },
+      { runId: workshopReviewRunId(reviewId) },
+    );
+    return commandReply(
+      result.status === "undone"
+        ? `↩️ Undid the skill change: ${describeWorkshopReviewUndo(result.changes)}.`
+        : "That skill change was already undone.",
+    );
+  } catch (error) {
+    if (error instanceof WorkshopReviewNotFoundError) {
+      return commandReply("No skill change found for that id.");
+    }
+    if (error instanceof WorkshopWriteError) {
+      return commandReply(`⚠️ ${error.message}`);
+    }
+    throw error;
+  }
+}
+
+/** Command handler for /learn: a foreground turn that writes Workshop skills directly. */
 export const handleLearnCommand: CommandHandler = defineAuthorizedTextCommand(
-  { label: LEARN_COMMAND_PREFIX, match: parseLearnRequest },
-  (params, request) => {
-    const surface = resolveWorkshopSurface(params);
-    if (!surface) {
+  {
+    label: LEARN_COMMAND_PREFIX,
+    match: parseLearnCommand,
+    // Undo changes skills without a model turn, so it takes the owner gate other writes use.
+    ownerOnly: (_params, command) => command.kind === "undo",
+  },
+  async (params, command) => {
+    if (command.kind === "undo") {
+      return undoReview(params, command.reviewId);
+    }
+    if (!(await isWorkshopAvailable(params))) {
       return commandReply(SKILL_WORKSHOP_UNAVAILABLE_REPLY);
     }
-    if (surface === "personal") {
-      return commandReply(PERSONAL_WORKSHOP_LEARN_REPLY);
-    }
 
-    applyCommandTextToParams(params, buildLearnPrompt(request));
+    applyCommandTextToParams(params, buildLearnPrompt(command.request));
     return { shouldContinue: true };
   },
 );

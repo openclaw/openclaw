@@ -1,11 +1,11 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import * as subagentRegistryState from "../agents/subagents/registry/subagent-registry-state.js";
 import {
   canonicalSubagentRunFixtures,
   type SubagentRunFixture,
 } from "../agents/subagents/registry/subagent-registry.persistence.test-support.js";
-import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
@@ -22,7 +22,7 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withStateDirEnv as withRawStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createResidentSessionRowReader } from "./session-row-projection.test-support.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 
 const rowReader = createResidentSessionRowReader();
 
@@ -47,16 +47,16 @@ describe("session list subagent payload reads", () => {
   afterEach(async () => {
     resetAgentEventsForTest({ preserveListeners: true });
     await closeOpenClawStateDatabaseAsync();
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
   });
-  beforeEach(() => {
+  beforeEach(async () => {
     resetAgentEventsForTest({ preserveListeners: true });
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
   });
 
   const cfg: OpenClawConfig = {
     session: { mainKey: "main" },
-    agents: { list: [{ id: "main", default: true }] },
+    agents: { entries: { main: {} } },
   };
 
   test("loads direct children without repeated or unrelated host-thread payload validation", async () => {
@@ -124,7 +124,9 @@ describe("session list subagent payload reads", () => {
           );
 
           await subagentRegistryState.prepareSubagentSessionListReadCache();
-          const { store } = loadGatewaySessionEntryReadOnly("main", {
+          const { store } = await loadGatewaySessionEntryReadOnlyInWorker({
+            cfg,
+            key: "main",
             includeStoreChildEntries: true,
           });
           expect(Object.keys(store)).toEqual([
@@ -198,7 +200,7 @@ describe("session list subagent payload reads", () => {
             });
           }
           saveSubagentRegistryToSqlite(canonicalSubagentRunFixtures(runs));
-          addSubagentRunForTests({
+          await addSubagentRunForTests({
             runId: "live-child",
             childSessionKey: childKey,
             controllerSessionKey: parentKey,

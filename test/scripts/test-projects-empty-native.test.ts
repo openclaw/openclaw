@@ -154,7 +154,7 @@ describe("project runner native empty-file policy", () => {
           recursive: true,
         });
       }
-      for (const name of ["scripts", "src", "packages", "node_modules"]) {
+      for (const name of ["scripts", "src", "packages", "ui", "node_modules"]) {
         fs.symlinkSync(path.join(repoRoot, name), path.join(root, name), "junction");
       }
       for (const name of ["package.json", "tsconfig.json"]) {
@@ -193,7 +193,6 @@ describe("project runner native empty-file policy", () => {
         OPENCLAW_TEST_PROJECTS_TIMINGS: "0",
         OPENCLAW_VITEST_MAX_WORKERS: "1",
         OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(root, "module-cache"),
-        OPENCLAW_VITEST_NO_OUTPUT_RETRY: "0",
         ...(scenario.parallel ? { OPENCLAW_TEST_PROJECTS_PARALLEL: "2" } : {}),
       };
       for (const name of ["home", "state", "tmp", "cache", "config"]) {

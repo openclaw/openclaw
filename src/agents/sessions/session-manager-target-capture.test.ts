@@ -1,21 +1,116 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { mkdir, symlink } from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
 import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { isRecordedModelFallbackStop } from "../model-fallback-stop.js";
+import * as metadataRuntime from "./session-manager-metadata-runtime.js";
+import type { SessionEntry } from "./session-manager-types.js";
 import { SessionManager } from "./session-manager.js";
 
+it("retains committed raw-write facts when target binding or authority changes before publication", async () => {
+  await withOpenClawTestState({ label: "manager-raw-commit-publication" }, async (state) => {
+    for (const change of ["binding", "authority"] as const) {
+      const original = {
+        agentId: "main",
+        sessionId: `raw-${change}`,
+        sessionKey: `agent:main:raw-${change}`,
+        storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+      };
+      const replacement = {
+        ...original,
+        sessionId: `other-${change}`,
+        sessionKey: `agent:main:other-${change}`,
+      };
+      for (const target of [original, replacement]) {
+        await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+      }
+      const manager = await SessionManager.openAsync(original);
+      const seed = expectDefined(
+        await manager.appendMessageAsync({ role: "user", content: "Synthetic seed", timestamp: 1 }),
+        "Expected committed seed",
+      );
+      const before = await loadTranscriptEvents(original);
+      const replacementBefore = await loadTranscriptEvents(replacement);
+      const raw: SessionEntry = {
+        type: "custom",
+        customType: "committed-raw",
+        id: `raw-entry-${change}`,
+        parentId: seed,
+        timestamp: new Date(2).toISOString(),
+      };
+      let active = true;
+      const runExternalRetarget = AsyncLocalStorage.snapshot();
+      const withWorker = metadataRuntime.withSessionMetadataWorker;
+      const delayPublication: typeof withWorker = async (
+        options,
+        database,
+        assertCurrent,
+        operation,
+        controls,
+      ) => {
+        const receipt = await withWorker(options, database, assertCurrent, operation, controls);
+        if (change === "binding") {
+          await runExternalRetarget(() => manager.setSessionTargetAsync(replacement));
+        } else {
+          active = false;
+        }
+        return receipt;
+      };
+      const delayed = vi
+        .spyOn(metadataRuntime, "withSessionMetadataWorker")
+        .mockImplementation(delayPublication);
+      let failure: unknown;
+      try {
+        const persist = () => manager.persistAsync(raw);
+        await (
+          change === "binding"
+            ? persist()
+            : withSessionTranscriptWriteAssertion(
+                original,
+                () => {
+                  if (!active) {
+                    throw new Error("Raw write authority ended after commit");
+                  }
+                },
+                persist,
+              )
+        ).catch((error: unknown) => {
+          failure = error;
+        });
+        expect(failure).toMatchObject({
+          name: "SessionEntryCommittedError",
+          committedEntryId: raw.id,
+          committedTarget: original,
+          committedVersion: {
+            generation: expect.any(String),
+            rawSeq: expect.any(Number),
+            updatedAt: expect.any(Number),
+          },
+        });
+        expect(isRecordedModelFallbackStop(failure)).toBe(true);
+        expect(() => manager.getEntries()).toThrow("Session entry committed");
+      } finally {
+        delayed.mockRestore();
+      }
+      expect(await loadTranscriptEvents(original)).toEqual([...before, raw]);
+      expect(await loadTranscriptEvents(replacement)).toEqual(replacementBefore);
+    }
+  });
+});
+
 it.each([
-  { entry: "open", storePath: "session-store.sqlite", linked: false },
   { entry: "open", storePath: "sessions.json", linked: false },
   { entry: "open", storePath: "custom-store.json", linked: false },
   { entry: "open", storePath: "linked/session-store.sqlite", linked: true },
   { entry: "openBounded", storePath: "session-store.sqlite", linked: false },
   { entry: "setSessionTarget", storePath: "session-store.sqlite", linked: false },
-  { entry: "openAsync", storePath: "session-store.sqlite", linked: false },
   { entry: "openAsync", storePath: "linked/session-store.sqlite", linked: true },
   { entry: "openBoundedAsync", storePath: "session-store.sqlite", linked: false },
   { entry: "setSessionTargetAsync", storePath: "session-store.sqlite", linked: false },

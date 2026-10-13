@@ -27,6 +27,8 @@ openclaw-plugin-install-action {
   box-sizing: border-box;
   width: 380px;
   max-width: calc(100vw - 24px);
+  max-height: var(--auto-size-available-height, calc(100dvh - 16px));
+  overflow-y: auto;
   padding: 20px;
   border: 1px solid var(--border-strong);
   border-radius: 12px;
@@ -49,6 +51,16 @@ openclaw-plugin-install-action {
   color: var(--muted);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
+}
+.plugin-install-progress__recovery,
+.plugin-install-progress__failure {
+  margin: 16px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.plugin-install-progress__failure > p {
+  white-space: pre-wrap;
 }
 .plugin-install-progress__activities {
   display: grid;

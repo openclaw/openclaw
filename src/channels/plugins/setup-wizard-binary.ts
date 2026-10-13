@@ -1,8 +1,3 @@
-/**
- * Setup wizard binary helpers.
- *
- * Builds status and text-input helpers for channel setup flows that need local binaries.
- */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { detectBinary as defaultDetectBinary } from "../../infra/detect-binary.js";
 import type {
@@ -14,9 +9,6 @@ import type {
 type SetupTextInputParams = Parameters<NonNullable<ChannelSetupWizardTextInput["currentValue"]>>[0];
 type SetupStatusParams = Parameters<NonNullable<ChannelSetupWizardStatus["resolveStatusLines"]>>[0];
 
-/**
- * Creates setup status resolvers for channels backed by a required local binary.
- */
 export function createDetectedBinaryStatus(params: {
   channelLabel: string;
   binaryLabel: string;
@@ -53,14 +45,7 @@ export function createDetectedBinaryStatus(params: {
         `${params.binaryLabel}: ${detected ? "found" : "missing"} (${binaryPath})`,
       ];
     },
-    async resolveSelectionHint({
-      cfg,
-      accountId,
-    }: {
-      cfg: OpenClawConfig;
-      accountId?: string;
-      configured: boolean;
-    }): Promise<string | undefined> {
+    async resolveSelectionHint({ cfg, accountId }: SetupStatusParams): Promise<string | undefined> {
       return (await detectBinary(params.resolveBinaryPath({ cfg, accountId })))
         ? params.configuredHint
         : params.unconfiguredHint;
@@ -68,11 +53,7 @@ export function createDetectedBinaryStatus(params: {
     async resolveQuickstartScore({
       cfg,
       accountId,
-    }: {
-      cfg: OpenClawConfig;
-      accountId?: string;
-      configured: boolean;
-    }): Promise<number | undefined> {
+    }: SetupStatusParams): Promise<number | undefined> {
       return (await detectBinary(params.resolveBinaryPath({ cfg, accountId })))
         ? params.configuredScore
         : params.unconfiguredScore;
@@ -80,9 +61,6 @@ export function createDetectedBinaryStatus(params: {
   };
 }
 
-/**
- * Creates a setup text input that records or reuses a CLI path.
- */
 export function createCliPathTextInput(params: {
   inputKey: ChannelSetupWizardTextInput["inputKey"];
   message: string;

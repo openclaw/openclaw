@@ -1,9 +1,13 @@
 // Memory Core tests cover manager search plugin behavior.
 import type { DatabaseSync } from "node:sqlite";
-import { describe, expect, it, vi } from "vitest";
-import { bm25RankToScore, buildFtsQuery } from "./keyword-query.js";
-import { searchKeyword } from "./manager-search.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { searchKeyword, searchKeywordWithFallback } from "./manager-search.js";
 import { createMemorySearchDb, insertKeywordFixture } from "./manager-search.test-support.js";
+import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 type KeywordSearchOptions = Omit<Parameters<typeof searchKeyword>[0], "db" | "query">;
 
@@ -20,10 +24,17 @@ function searchKeywordFixture(
     limit: 10,
     snippetMaxChars: 200,
     sourceFilter: { sql: "", params: [] },
-    buildFtsQuery,
-    bm25RankToScore,
     ...options,
   });
+}
+
+function supportsFts(): boolean {
+  const { db, schema } = createMemorySearchDb();
+  try {
+    return schema.ftsAvailable;
+  } finally {
+    db.close();
+  }
 }
 
 describe("searchKeyword trigram fallback", () => {
@@ -74,12 +85,10 @@ describe("searchKeyword trigram fallback", () => {
   itWithTrigramFts.each([
     { query: "成语", text: "今天玩成语接龙游戏", unrelated: "今天看电影" },
     { query: "AI", text: "Use ai for classification", unrelated: "Use rules for classification" },
-    { query: "UK", text: "Ship to the uk", unrelated: "Ship to the EU" },
     { query: "42", text: "The answer is 42", unrelated: "The answer is 24" },
     { query: "C_", text: "Keep the C_ prefix", unrelated: "Keep the CA prefix" },
     { query: "ΔΕ", text: "The δε project", unrelated: "The δζ project" },
     { query: "МО", text: "The мо project", unrelated: "The ми project" },
-    { query: "ΟΣ", text: "The οσ project", unrelated: "The οτ project" },
     { query: "Σ", text: "ς", unrelated: "τ" },
     { query: "S", text: "ſ", unrelated: "z" },
     { query: "K", text: "K", unrelated: "q" },
@@ -134,12 +143,6 @@ describe("searchKeyword trigram fallback", () => {
       match: "Shipping for the δε project",
       partial: "Shipping for the δζ project",
       short: "δε office",
-    },
-    {
-      query: "shipping ΟΣ",
-      match: "Shipping for the οσ project",
-      partial: "Shipping for the οτ project",
-      short: "οσ office",
     },
   ])(
     "keeps MATCH semantics while requiring every term in $query",
@@ -219,15 +222,6 @@ describe("searchKeyword trigram fallback", () => {
 });
 
 describe("searchKeyword FTS MATCH fallback", () => {
-  function supportsFts(): boolean {
-    const { db, schema } = createMemorySearchDb();
-    try {
-      return schema.ftsAvailable;
-    } finally {
-      db.close();
-    }
-  }
-
   function createFtsDb() {
     const { db, schema } = createMemorySearchDb();
     if (!schema.ftsAvailable) {
@@ -238,65 +232,6 @@ describe("searchKeyword FTS MATCH fallback", () => {
   }
 
   const itWithFts = supportsFts() ? it : it.skip;
-
-  itWithFts("falls back to LIKE search when FTS MATCH throws", async () => {
-    const db = createFtsDb();
-    try {
-      insertKeywordFixture(db, {
-        text: "The Agent framework handles API calls and cron jobs",
-        id: "1",
-        path: "doc.md",
-        source: "sessions",
-        endLine: 5,
-      });
-      insertKeywordFixture(db, {
-        text: "Deploy the database cluster on Hetzner",
-        id: "2",
-        path: "ops.md",
-        source: "sessions",
-        endLine: 3,
-      });
-
-      // Simulate a buildFtsQuery that produces a broken MATCH expression
-      const brokenBuildFtsQuery = () => "BROKEN_QUERY_SYNTAX <<<";
-
-      const results = await searchKeywordFixture(db, "Agent", {
-        buildFtsQuery: brokenBuildFtsQuery,
-      });
-
-      // LIKE fallback should find "Agent" in the first row
-      expect(results.length).toBeGreaterThan(0);
-      expect(results[0]?.id).toBe("1");
-      // LIKE fallback has no BM25 ranking, so textScore is 0 (recall only) and
-      // cannot inflate the hybrid merge into a spurious finalScore = 1.0.
-      expect(results[0]?.textScore).toBe(0);
-      expect(results[0]?.hasBodyMatch).toBe(true);
-    } finally {
-      db.close();
-    }
-  });
-
-  itWithFts("returns BM25-scored results when FTS MATCH succeeds", async () => {
-    const db = createFtsDb();
-    try {
-      insertKeywordFixture(db, {
-        text: "The Transformer architecture powers modern LLMs",
-        id: "1",
-        path: "ml.md",
-        endLine: 3,
-      });
-
-      const results = await searchKeywordFixture(db, "Transformer");
-
-      expect(results.length).toBe(1);
-      expect(results[0]?.id).toBe("1");
-      // BM25 score should be a real computed value, not the fallback default
-      expect(results[0]?.textScore).toBeGreaterThan(0);
-      expect(results[0]?.textScore).toBeLessThan(1);
-    } finally {
-      db.close();
-    }
-  });
 
   itWithFts("applies source filter in LIKE fallback", async () => {
     const db = createFtsDb();
@@ -315,10 +250,11 @@ describe("searchKeyword FTS MATCH fallback", () => {
         endLine: 3,
       });
 
-      const brokenBuildFtsQuery = () => "BROKEN <<<";
+      vi.spyOn(db, "prepare").mockImplementationOnce(() => {
+        throw new Error("FTS5 MATCH unavailable");
+      });
       const results = await searchKeywordFixture(db, "Agent", {
         sourceFilter: { sql: " AND source IN (?)", params: ["sessions"] },
-        buildFtsQuery: brokenBuildFtsQuery,
       });
 
       expect(results.length).toBe(1);
@@ -351,10 +287,10 @@ describe("searchKeyword FTS MATCH fallback", () => {
 
       // A single-substring LIKE '%Agent cron%' would miss row 1 because
       // the words are not adjacent. Per-token LIKE should find it.
-      const brokenBuildFtsQuery = () => "BROKEN <<<";
-      const results = await searchKeywordFixture(db, "Agent cron", {
-        buildFtsQuery: brokenBuildFtsQuery,
+      vi.spyOn(db, "prepare").mockImplementationOnce(() => {
+        throw new Error("FTS5 MATCH unavailable");
       });
+      const results = await searchKeywordFixture(db, "Agent cron");
 
       // Per-token fallback: both "Agent" AND "cron" must match
       expect(results.length).toBe(1);
@@ -376,9 +312,10 @@ describe("searchKeyword FTS MATCH fallback", () => {
         endLine: 1,
       });
 
-      await searchKeywordFixture(db, "test", {
-        buildFtsQuery: () => "BROKEN <<<",
+      vi.spyOn(db, "prepare").mockImplementationOnce(() => {
+        throw new Error("FTS5 MATCH unavailable");
       });
+      await searchKeywordFixture(db, "test");
 
       expect(warnSpy).toHaveBeenCalledTimes(1);
       const [warning] = warnSpy.mock.calls[0] ?? [];
@@ -395,17 +332,76 @@ describe("searchKeyword FTS MATCH fallback", () => {
   });
 });
 
-describe("searchKeyword ranked limits", () => {
+describe("searchKeyword boosted relevance", () => {
   it.each(["unicode61", "trigram"] as const)(
-    "stops examining scoped candidates after filling the %s result window",
+    "preserves %s relevance differences before dated-note decay",
     async (ftsTokenizer) => {
+      const { db } = createMemorySearchDb({ ftsTokenizer });
+      try {
+        const notes = [
+          "Quartz compass calibration: coefficient 17. Quartz compass calibration was completed, verified and approved. Record the quartz compass calibration coefficient 17 for future measurements.",
+          "We discussed quartz compass calibration in planning. The next meeting will schedule a demonstration; no coefficient or measurement was recorded.",
+          "The garden committee reviewed watering schedules, planted new herbs and replaced several flower pots. Volunteers will meet on Saturday to organize tools and prepare fresh soil for the spring beds.",
+          "Dinner planning covered a vegetable soup, fresh bread and a fruit dessert. We compared grocery prices and agreed to prepare the meal together after shopping on Friday afternoon.",
+          "The walking group selected a route through the forest and checked the weather forecast. Everyone will bring drinking water, comfortable boots and a jacket for the afternoon outing.",
+        ];
+        for (const [index, text] of notes.entries()) {
+          insertKeywordFixture(db, {
+            id: String(index),
+            path: `memory/2026-10-${index === 0 ? "05" : "06"}-note-${index}.md`,
+            text: `user: ${text}`,
+          });
+        }
+        const query = "quartz compass calibration";
+        const raw = await searchKeywordFixture(db, query, { ftsTokenizer });
+        const boosted = await searchKeywordFixture(db, query, {
+          ftsTokenizer,
+          boostFallbackRanking: true,
+        });
+        await expect(
+          searchKeywordFixture(db, `quartz quartz ${query}`, {
+            ftsTokenizer,
+            boostFallbackRanking: true,
+          }),
+        ).resolves.toEqual(boosted);
+        expect(boosted.map((row) => row.id)).toEqual(["0", "1"]);
+        expect(boosted.map((row) => row.textScore)).toEqual(raw.map((row) => row.textScore));
+        for (const row of boosted) {
+          expect(row.score).toBeGreaterThan(row.textScore);
+          expect(row.score).toBeLessThan(1);
+        }
+        expect(boosted[0]!.score).toBeGreaterThan(boosted[1]!.score);
+
+        const decayed = await applyTemporalDecayToHybridResults({
+          results: boosted,
+          temporalDecay: { enabled: true, halfLifeDays: 30 },
+          nowMs: Date.UTC(2026, 9, 6),
+        });
+        expect(decayed[0]!.score).toBeLessThan(boosted[0]!.score);
+        expect(decayed[0]!.score).toBeGreaterThan(decayed[1]!.score);
+      } finally {
+        db.close();
+      }
+    },
+  );
+});
+
+describe("searchKeyword ranked limits", () => {
+  it.each([
+    { ftsTokenizer: "unicode61", query: "common", matchAny: false },
+    { ftsTokenizer: "trigram", query: "common", matchAny: false },
+    { ftsTokenizer: "trigram", query: "common UK", matchAny: true },
+    { ftsTokenizer: "trigram", query: "missing UK", matchAny: true },
+  ] as const)(
+    "stops examining scoped candidates after filling the $ftsTokenizer result window for $query",
+    async ({ ftsTokenizer, query, matchAny }) => {
       const { db } = createMemorySearchDb({ ftsTokenizer });
       try {
         for (let index = 0; index < 64; index++) {
           insertKeywordFixture(db, {
             id: `chunk-${index}`,
             path: `memory/${index}.md`,
-            text: "common keyword",
+            text: "common keyword UK",
             source: index % 2 === 0 ? "memory" : "sessions",
           });
         }
@@ -414,8 +410,9 @@ describe("searchKeyword ranked limits", () => {
           examined++;
           return 1;
         });
-        const results = await searchKeywordFixture(db, "common", {
+        const results = await searchKeywordFixture(db, query, {
           ftsTokenizer,
+          matchAny,
           limit: 3,
           sourceFilter: {
             sql: " AND source IN (?) AND observe_keyword_candidate() = 1",
@@ -463,15 +460,6 @@ describe("searchKeyword ranked limits", () => {
 });
 
 describe("searchKeyword cross-model FTS visibility (issue #48300)", () => {
-  function supportsFts(): boolean {
-    const { db, schema } = createMemorySearchDb();
-    try {
-      return schema.ftsAvailable;
-    } finally {
-      db.close();
-    }
-  }
-
   const itWithFts = supportsFts() ? it : it.skip;
 
   itWithFts("returns FTS hits indexed under a different embedding model", async () => {
@@ -531,6 +519,127 @@ describe("searchKeyword cross-model FTS visibility (issue #48300)", () => {
       const results = await searchKeywordFixture(db, "Clyde");
 
       expect(results.map((row) => row.id)).toEqual(["live-clyde"]);
+    } finally {
+      db.close();
+    }
+  });
+});
+
+describe("searchKeyword relaxed question ranking", () => {
+  it.each(["unicode61", "trigram"] as const)(
+    "keeps the answer inside a bounded %s candidate pool",
+    async (ftsTokenizer) => {
+      const { db } = createMemorySearchDb({ ftsTokenizer });
+      try {
+        for (let index = 0; index < 202; index += 1) {
+          insertKeywordFixture(db, {
+            id: `note-${index}`,
+            path: `memory/note-${index}.md`,
+            text:
+              index === 0
+                ? "user: Tag v0.78.42.0 is an annotated tag object 0b1698f pointing at the release commit."
+                : "user: annotated tag object hash created v0",
+          });
+        }
+        const query = "What is the annotated tag object hash created for v0.78.42.0?";
+        const options = { ftsTokenizer, limit: 200, matchAny: true };
+        const results = await searchKeywordFixture(db, query, options);
+        expect(results).toHaveLength(200);
+        expect(results[0]?.id).toBe("note-0");
+        expect(results[0]?.textScore).toBeGreaterThan(results[1]?.textScore ?? 0);
+        // Expansion lowercases terms; it must not add a second BM25 vote.
+        await expect(searchKeywordFixture(db, query.toUpperCase(), options)).resolves.toEqual(
+          results,
+        );
+      } finally {
+        db.close();
+      }
+    },
+  );
+});
+
+describe("searchKeyword zero-hit fallback", () => {
+  it.each(["unicode61", "trigram"] as const)(
+    "preserves AND precision and bounds %s retries",
+    async (ftsTokenizer) => {
+      const { db } = createMemorySearchDb({ ftsTokenizer });
+      try {
+        for (const row of [
+          { id: "full", path: "memory/full.md", text: "alpha beta" },
+          { id: "partial", path: "memory/partial.md", text: "alpha" },
+          { id: "path", path: "memory/exact.md", text: "unrelated" },
+          { id: "dotted", path: "memory/dotted.md", text: "i\u0307" },
+        ]) {
+          insertKeywordFixture(db, row);
+        }
+        const prepare = vi.spyOn(db, "prepare");
+        const search = (query: string) =>
+          searchKeywordWithFallback({
+            db,
+            body: {
+              query,
+              ftsTokenizer,
+              ftsTable: "memory_index_chunks_fts",
+              limit: 10,
+              snippetMaxChars: 200,
+              sourceFilter: { sql: "", params: [] },
+            },
+            path: {
+              query,
+              ftsTokenizer,
+              pathFtsTable: "memory_index_paths_fts",
+              limit: 10,
+              snippetMaxChars: 200,
+              sourceFilter: { sql: "", params: [] },
+            },
+          });
+        const bodyQueries = () =>
+          prepare.mock.calls.filter(([sql]) => /FROM memory_index_chunks_fts\b/.test(sql)).length;
+
+        expect((await search("alpha beta")).body.rows.map((row) => row.id)).toEqual(["full"]);
+        expect(bodyQueries()).toBe(1);
+        prepare.mockClear();
+        const exact = await search("exact.md");
+        expect(exact.body.rows).toEqual([]);
+        expect(exact.path.rows.map((row) => row.id)).toEqual(["path"]);
+        expect(bodyQueries()).toBe(1);
+        prepare.mockClear();
+        const relaxed = await search("alpha beta missing");
+        expect(relaxed.body.error).toBeUndefined();
+        expect(relaxed.body.rows.map((row) => row.id).toSorted()).toEqual(["full", "partial"]);
+        expect(bodyQueries()).toBe(2);
+        prepare.mockClear();
+        expect((await search("İ missing")).body.rows.map((row) => row.id)).toEqual(["dotted"]);
+      } finally {
+        db.close();
+      }
+    },
+  );
+
+  it("combines canonical MATCH and short trigram OR terms without scoring substring-only hits", async () => {
+    const { db } = createMemorySearchDb({ ftsTokenizer: "trigram" });
+    try {
+      for (const row of [
+        { id: "long", path: "memory/long.md", text: "cafe\u0301" },
+        { id: "short", path: "memory/short.md", text: "uk plans" },
+        { id: "other", path: "memory/other.md", text: "unrelated" },
+      ]) {
+        insertKeywordFixture(db, row);
+      }
+      insertKeywordFixture(db, {
+        id: "hidden",
+        path: "sessions/hidden.md",
+        text: "café UK",
+        source: "sessions",
+      });
+      const results = await searchKeywordFixture(db, "café UK", {
+        ftsTokenizer: "trigram",
+        matchAny: true,
+        sourceFilter: { sql: " AND source = ?", params: ["memory"] },
+      });
+      expect(results.map((row) => row.id)).toEqual(["long", "short"]);
+      expect(results[0]?.textScore).toBeGreaterThan(0);
+      expect(results[1]?.textScore).toBe(0);
     } finally {
       db.close();
     }

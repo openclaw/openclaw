@@ -6,7 +6,7 @@ import { telegramOutbound, telegramPlugin } from "../extensions/telegram/api.js"
 import { getOrCreateAccountThrottler } from "../extensions/telegram/test-api.js";
 import {
   announceRestartRecoveryResumption,
-  isRestartRecoveryDeliveryCurrent,
+  prepareRestartRecoveryDeliveryCurrent,
 } from "../src/agents/main-session-recovery/main-session-restart-recovery-delivery.js";
 import type { ChannelHeartbeatAdapter } from "../src/channels/plugins/types.adapters.js";
 import { replaceSessionEntry } from "../src/config/sessions/session-accessor.js";
@@ -127,7 +127,6 @@ describe("recovery notice final transport fence", () => {
         {
           sessionId: scope.sessionId,
           updatedAt: Date.now(),
-          status: "running",
           restartRecoveryDeliveryRunId: scope.recoveryRunId,
           restartRecoveryDeliveryContext: scope.deliveryContext,
         },
@@ -218,8 +217,9 @@ describe("recovery notice final transport fence", () => {
             {
               sessionId: scope.sessionId,
               updatedAt: Date.now(),
-              status: mode === "owner retired" ? "done" : "running",
-              restartRecoveryDeliveryRunId: scope.recoveryRunId,
+              ...(mode === "owner retired"
+                ? { status: "done" as const }
+                : { restartRecoveryDeliveryRunId: scope.recoveryRunId }),
               restartRecoveryDeliveryContext: scope.deliveryContext,
               ...(mode === "automatic delivery revoked"
                 ? { restartRecoverySourceReplyDeliveryMode: "message_tool_only" as const }
@@ -326,7 +326,6 @@ describe("recovery typing final transport fence", () => {
         {
           sessionId: scope.sessionId,
           updatedAt: Date.now(),
-          status: "running",
           restartRecoveryDeliveryRunId: scope.recoveryRunId,
           restartRecoveryDeliveryContext: scope.deliveryContext,
         },
@@ -377,6 +376,9 @@ describe("recovery typing final transport fence", () => {
       );
       let held: ServerResponse | undefined;
       let stop: (() => void) | undefined;
+      let deliveryCurrent:
+        | Awaited<ReturnType<typeof prepareRestartRecoveryDeliveryCurrent>>
+        | undefined;
       try {
         held = await Promise.race([
           blocked.promise,
@@ -384,10 +386,11 @@ describe("recovery typing final transport fence", () => {
             throw new Error("Predecessor did not enter HTTP");
           }),
         ]);
+        deliveryCurrent = await prepareRestartRecoveryDeliveryCurrent(scope);
         stop = runtime.recovery.startRecoveryTyping?.({
           ...scope.deliveryContext,
           runId: scope.recoveryRunId,
-          isCurrent: (latest) => isRestartRecoveryDeliveryCurrent({ ...scope, cfg: latest }),
+          isCurrent: deliveryCurrent.isCurrent,
         });
         await started.promise;
         await new Promise<void>((resolve) => {
@@ -403,7 +406,7 @@ describe("recovery typing final transport fence", () => {
         if (mode === "session replaced") {
           await replaceSessionEntry(
             { storePath: scope.storePath, sessionKey: scope.sessionKey },
-            { sessionId: "replacement-session", updatedAt: Date.now(), status: "running" },
+            { sessionId: "replacement-session", updatedAt: Date.now() },
           );
         }
         if (mode === "runtime policy revoked") {
@@ -443,6 +446,7 @@ describe("recovery typing final transport fence", () => {
         }
         await predecessor.catch(() => {});
         stop?.();
+        deliveryCurrent?.release();
         runtime.close();
         restoreActivePluginRegistrySnapshot(snapshot);
         for (const socket of sockets) {

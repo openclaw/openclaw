@@ -1,8 +1,7 @@
 import type { SpeechVoiceOption } from "openclaw/plugin-sdk/speech";
-// Fish Audio HTTP client for buffered and streaming TTS plus voice discovery.
-import { MAX_AUDIO_BYTES } from "openclaw/plugin-sdk/speech-provider";
 import {
   asOptionalRecord,
+  normalizeTrimmedStringList,
   normalizeOptionalString as trimToUndefined,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
@@ -132,16 +131,8 @@ function parseVoiceItem(value: unknown): SpeechVoiceOption | undefined {
   if (!id) {
     return undefined;
   }
-  const languages = Array.isArray(item?.languages)
-    ? item.languages.flatMap((entry) =>
-        typeof entry === "string" && entry.trim() ? [entry.trim()] : [],
-      )
-    : [];
-  const tags = Array.isArray(item?.tags)
-    ? item.tags.flatMap((entry) =>
-        typeof entry === "string" && entry.trim() ? [entry.trim()] : [],
-      )
-    : [];
+  const languages = normalizeTrimmedStringList(item?.languages);
+  const tags = normalizeTrimmedStringList(item?.tags);
   return {
     id,
     name: trimToUndefined(item?.title),
@@ -226,5 +217,3 @@ export async function listFishAudioVoices(params: {
     return true;
   });
 }
-
-export const FISH_AUDIO_STREAM_MAX_BYTES = MAX_AUDIO_BYTES;

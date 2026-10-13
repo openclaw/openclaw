@@ -19,7 +19,6 @@ import {
 } from "./session-accessor.sqlite-import-stage.js";
 import { invalidateSessionEntryMaintenanceAgeFact } from "./session-accessor.sqlite-maintenance-age.js";
 import {
-  formatSqliteSessionReferenceForScope,
   getSessionKysely,
   resolveSqliteScope,
   runExclusiveSqliteSessionWrite,
@@ -46,7 +45,6 @@ type SqliteSessionImportRowsParams = Pick<
   /** Doctor-discovered history cannot replace the current logical session or window owner. */
   historicalOnly?: boolean;
   preserveExactStoredKey?: boolean;
-  skipIfExists?: boolean;
   entry: SessionEntry;
   legacyAcpMigrationSource?: LegacyAcpMigrationSource;
   readTranscriptEvents?: (append: (event: TranscriptEvent) => void) => void | (() => void);
@@ -57,7 +55,6 @@ type SqliteSessionImportRowsParams = Pick<
 type SqliteSessionImportRowsResult = {
   sessionId: string;
   sessionKey: string;
-  skippedExisting?: true;
   recovery?: { complete: boolean; repaired: boolean; events: number };
   transcriptEvents: number;
 };
@@ -85,14 +82,6 @@ function importSqliteSessionRowsInTransaction(
   const currentEntry = readExactSessionEntryRowForCanonicalRepair(database, resolved.sessionKey, {
     allowMalformedRowRepair: params.allowMalformedRowRepair === true,
   })?.entry;
-  if (params.skipIfExists === true && currentEntry) {
-    return {
-      sessionId: params.entry.sessionId,
-      sessionKey: resolved.sessionKey,
-      skippedExisting: true,
-      transcriptEvents,
-    };
-  }
   assertSessionTranscriptHot(database.db, params.entry.sessionId);
   const preservedHarnessId =
     params.entry.agentHarnessId === undefined &&
@@ -105,10 +94,7 @@ function importSqliteSessionRowsInTransaction(
   const importedEntry = {
     ...params.entry,
     ...(preservedHarnessId ? { agentHarnessId: preservedHarnessId } : {}),
-    sessionFile: formatSqliteSessionReferenceForScope({
-      ...resolved,
-      sessionId: params.entry.sessionId,
-    }),
+    sessionFile: resolved.sessionKey,
   };
   let preserveHistoricalNode = false;
   if (params.historicalOnly) {
@@ -256,6 +242,7 @@ export async function importSqliteSessionRowsBatch(
               ),
             ),
           toDatabaseOptions(resolved),
+          { operationLabel: "session.import.batch" },
         );
       }),
     "session.import.batch",

@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { runExistingOpenClawStateWriteTransaction } from "../state/openclaw-state-db-existing-write.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
+import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { recordedUpdateRunDrivers } from "./update-run-activity.js";
 import { encodeRun, type UpdateRunLedgerOptions } from "./update-run-codec.js";
@@ -35,12 +36,7 @@ export function readInstalledUpdateCandidate(
   if (!receipt?.detail) {
     return undefined;
   }
-  try {
-    const parsed = installedUpdateCandidateSchema.safeParse(JSON.parse(receipt.detail));
-    return parsed.success ? parsed.data : undefined;
-  } catch {
-    return undefined;
-  }
+  return safeParseJsonWithSchema(installedUpdateCandidateSchema, receipt.detail) ?? undefined;
 }
 
 export function canSettleInterruptedUpdate(run: UpdateRunRecord): boolean {
@@ -79,9 +75,9 @@ export function persistInterruptedUpdateObservation(
   options: UpdateRunLedgerOptions,
   assertCurrent: (stage: "transaction" | "commit") => void,
 ): InterruptedUpdateSettlementResult {
+  assertCurrent("transaction");
   return runExistingOpenClawStateWriteTransaction(
     ({ db }) => {
-      assertCurrent("transaction");
       const accept = (run: UpdateRunRecord | undefined): InterruptedUpdateSettlementResult => {
         assertCurrent("commit");
         return { accepted: true, run };
@@ -110,7 +106,7 @@ export function persistInterruptedUpdateObservation(
       const uncertain = input.cleanup === "pending" || input.cleanup === "unknown";
       const verification = uncertain ? undefined : input.verification;
       if (!verification && previous && input.cleanup === undefined) {
-        return { accepted: true, run: current };
+        return accept(current);
       }
       upsertStep(current, {
         step: "reconcile:settle",

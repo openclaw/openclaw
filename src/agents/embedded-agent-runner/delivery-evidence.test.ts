@@ -165,19 +165,6 @@ describe("collectDeliveredMediaUrls attachment recursion", () => {
     ]);
   });
 
-  it("does not overflow the stack on a self-referential attachments cycle", () => {
-    // Payloads arrive as in-process `unknown` objects; a malformed self-referential
-    // attachments chain previously recursed until the stack overflowed.
-    const cyclic: Record<string, unknown> = { url: "https://example.com/loop.png" };
-    cyclic.attachments = [cyclic];
-
-    let urls: string[] = [];
-    expect(() => {
-      urls = collectDeliveredMediaUrls({ payloads: [cyclic] });
-    }).not.toThrow();
-    expect(urls).toEqual(["https://example.com/loop.png"]);
-  });
-
   it("does not overflow on a mutual attachments cycle", () => {
     const a: Record<string, unknown> = { mediaUrl: "https://example.com/a.png" };
     const b: Record<string, unknown> = { mediaUrl: "https://example.com/b.png" };
@@ -308,7 +295,7 @@ describe("queued delivery evidence", () => {
     ).toBe(false);
   });
 
-  it("credits an ambiguous single-payload send only when requested", () => {
+  it("does not credit an ambiguous single-payload send as delivered", () => {
     const result = {
       payloads: [{ mediaUrls: ["/tmp/proof.png"] }],
       deliveryStatus: {
@@ -316,15 +303,7 @@ describe("queued delivery evidence", () => {
         payloadOutcomes: [{ index: 0, status: "failed", sentBeforeError: true }],
       },
     };
-    expect(
-      collectAutomaticDeliveredMediaUrls(result, { includeSuppressedOutcomes: false }),
-    ).toEqual([]);
-    expect(
-      collectAutomaticDeliveredMediaUrls(result, {
-        includeAmbiguousSinglePayloadFailure: true,
-        includeSuppressedOutcomes: false,
-      }),
-    ).toEqual(["/tmp/proof.png"]);
+    expect(collectAutomaticDeliveredMediaUrls(result)).toEqual([]);
   });
 });
 

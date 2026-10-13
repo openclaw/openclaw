@@ -1,5 +1,6 @@
 {
   "id": "team-reports",
+  "uiCapabilities": ["page", "navigation"],
   "name": "Team Reports",
   "description": "Daily, weekly, and monthly team activity reports from GitHub and Discord, with model-written summaries, served in the Control UI.",
   "categories": ["data-analytics"],

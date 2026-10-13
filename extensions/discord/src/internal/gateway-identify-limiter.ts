@@ -1,5 +1,3 @@
-import { parseFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
-
 const IDENTIFY_WINDOW_MS = 5_000;
 
 type IdentifyRateState = {
@@ -7,19 +5,12 @@ type IdentifyRateState = {
   nextAllowedAt: number;
 };
 
-function normalizeMaxConcurrency(value: number | undefined): number {
-  const parsed = parseFiniteNumber(value);
-  return parsed === undefined ? 1 : Math.max(1, Math.floor(parsed));
-}
-
 class GatewayIdentifyLimiter {
-  private stateByKey = new Map<number, IdentifyRateState>();
+  private state: IdentifyRateState | undefined;
 
-  async wait(params: { shardId?: number; maxConcurrency?: number }): Promise<void> {
-    const maxConcurrency = normalizeMaxConcurrency(params.maxConcurrency);
-    const rateKey = (params.shardId ?? 0) % maxConcurrency;
+  async wait(): Promise<void> {
     const now = Date.now();
-    const state = this.stateByKey.get(rateKey);
+    const state = this.state;
     const clockMovedBackward = state !== undefined && now < state.lastObservedAt;
     const nextAllowedAt =
       state === undefined
@@ -28,10 +19,10 @@ class GatewayIdentifyLimiter {
           ? now + IDENTIFY_WINDOW_MS
           : state.nextAllowedAt;
     const waitMs = Math.max(0, nextAllowedAt - now);
-    this.stateByKey.set(rateKey, {
+    this.state = {
       lastObservedAt: now,
       nextAllowedAt: Math.max(now, nextAllowedAt) + IDENTIFY_WINDOW_MS,
-    });
+    };
     if (waitMs > 0) {
       await new Promise<void>((resolve) => {
         const timer = setTimeout(resolve, waitMs);
@@ -41,7 +32,7 @@ class GatewayIdentifyLimiter {
   }
 
   reset(): void {
-    this.stateByKey.clear();
+    this.state = undefined;
   }
 }
 

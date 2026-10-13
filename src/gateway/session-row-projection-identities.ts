@@ -1,15 +1,26 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { SessionSharingIdentity } from "../../packages/gateway-protocol/src/index.js";
+import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
 import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
+import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
 import { listOpenIncognitoAgentDatabases } from "../state/openclaw-agent-db.js";
-import { first, identity, type Row } from "./session-row-projection-record.js";
+import {
+  first,
+  identity,
+  type Lookup,
+  type Query,
+  type Row,
+} from "./session-row-projection-record.js";
 
 type Contribution = { key: string; storePath: string; actor: SessionSharingIdentity };
 const isSentinel = (key: string) => key === "global" || key === "unknown";
 
 /** Retain only creator facts, not superseded rows or their materialized graphs. */
 export function createSessionRowCreatorIndex() {
+  const inOwner = AsyncLocalStorage.snapshot();
   const byCreator = new Map<string, Map<string, Contribution>>();
   const resolved = new Map<string, SessionSharingIdentity>();
   const dirty = new Set<string>();
@@ -59,64 +70,78 @@ export function createSessionRowCreatorIndex() {
         dirty.add(after.id);
       }
     },
-    list(selectedPaths: ReadonlyMap<string, number>, matching: (query: { key: string }) => Row[]) {
-      if (disposed) {
-        return [];
-      }
-      if (paths !== selectedPaths) {
-        paths = selectedPaths;
-        invalidate();
-      }
-      const sentinels = new Set<string>();
-      for (const key of ["global", "unknown"]) {
-        const winner = first(
-          matching({ key }).filter(
-            (row) => row.entry && selectedPaths.has(row.storeTarget.storePath),
-          ),
-          selectedPaths.keys(),
-        );
-        if (winner) {
-          sentinels.add(identity(winner));
+    list(
+      selectPaths: () => ReadonlyMap<string, number>,
+      matching: (query: { key: string }) => Row[],
+    ) {
+      const memory = captureSessionActorStorageOwner({});
+      const binding = memory ? undefined : captureIncognitoSessionBinding();
+      return inOwner(() => {
+        const selectedPaths = selectPaths();
+        if (disposed) {
+          return [];
         }
-      }
-      // Match combined-store precedence, then SQLite's binary session-key order.
-      const later = (candidate: Contribution, previous: Contribution | undefined) =>
-        !previous ||
-        selectedPaths.get(candidate.storePath)! > selectedPaths.get(previous.storePath)! ||
-        (candidate.storePath === previous.storePath &&
-          Buffer.compare(Buffer.from(candidate.key), Buffer.from(previous.key)) > 0);
-      for (const id of dirty) {
-        let last: Contribution | undefined;
-        let labeled: Contribution | undefined;
-        for (const [rowId, candidate] of byCreator.get(id) ?? []) {
-          if (
-            !selectedPaths.has(candidate.storePath) ||
-            (isSentinel(candidate.key) && !sentinels.has(rowId))
-          ) {
-            continue;
-          }
-          if (later(candidate, last)) {
-            last = candidate;
-          }
-          if (candidate.actor.label !== undefined && later(candidate, labeled)) {
-            labeled = candidate;
+        if (paths !== selectedPaths) {
+          paths = selectedPaths;
+          invalidate();
+        }
+        const sentinels = new Set<string>();
+        for (const key of ["global", "unknown"]) {
+          const winner = first(
+            matching({ key }).filter(
+              (row) => row.entry && selectedPaths.has(row.storeTarget.storePath),
+            ),
+            selectedPaths.keys(),
+          );
+          if (winner) {
+            sentinels.add(identity(winner));
           }
         }
-        if (last) {
-          resolved.set(id, {
-            type: last.actor.type,
-            id,
-            ...(labeled ? { label: labeled.actor.label } : {}),
-          });
-        } else {
-          resolved.delete(id);
+        // Match combined-store precedence, then SQLite's binary session-key order.
+        const later = (candidate: Contribution, previous: Contribution | undefined) =>
+          !previous ||
+          selectedPaths.get(candidate.storePath)! > selectedPaths.get(previous.storePath)! ||
+          (candidate.storePath === previous.storePath &&
+            Buffer.compare(Buffer.from(candidate.key), Buffer.from(previous.key)) > 0);
+        for (const id of dirty) {
+          let last: Contribution | undefined;
+          let labeled: Contribution | undefined;
+          for (const [rowId, candidate] of byCreator.get(id) ?? []) {
+            if (
+              !selectedPaths.has(candidate.storePath) ||
+              (isSentinel(candidate.key) && !sentinels.has(rowId))
+            ) {
+              continue;
+            }
+            if (later(candidate, last)) {
+              last = candidate;
+            }
+            if (candidate.actor.label !== undefined && later(candidate, labeled)) {
+              labeled = candidate;
+            }
+          }
+          if (last) {
+            resolved.set(id, {
+              type: last.actor.type,
+              id,
+              ...(labeled ? { label: labeled.actor.label } : {}),
+            });
+          } else {
+            resolved.delete(id);
+          }
         }
-      }
-      dirty.clear();
-      return [
-        ...Array.from(resolved.values(), ({ type, id, label }) => ({ type, id, label })),
-        ...listOpenIncognitoSessionCreators(),
-      ];
+        dirty.clear();
+        return [
+          ...Array.from(resolved.values(), ({ type, id, label }) => ({ type, id, label })),
+          ...(memory
+            ? (memory.owner
+                ?.listSessions(memory.authority)
+                .flatMap(({ entry }) =>
+                  entry?.incognito && entry.createdActor?.id ? [entry.createdActor] : [],
+                ) ?? [])
+            : listOpenIncognitoSessionCreators(binding)),
+        ];
+      });
     },
     dispose() {
       disposed = true;
@@ -129,7 +154,20 @@ export function createSessionRowCreatorIndex() {
 }
 
 /** Incognito creators preserve the existing picker scope without entering resident memory. */
-function listOpenIncognitoSessionCreators() {
+function listOpenIncognitoSessionCreators(
+  binding: ReturnType<typeof captureIncognitoSessionBinding>,
+) {
+  if (binding) {
+    binding.admissionSignal?.throwIfAborted();
+    binding.actor.assertReadable();
+    if (readAgentDatabaseAdmissionRefusal(binding.actor.agentId)) {
+      return [];
+    }
+    return binding.actor.sessions.deadlines().flatMap(({ sessionKey }) => {
+      const entry = binding.actor.sessions.readSharing(sessionKey)?.entry;
+      return entry?.incognito && entry.createdActor?.id ? [entry.createdActor] : [];
+    });
+  }
   return listOpenIncognitoAgentDatabases().flatMap((target) => {
     if (readAgentDatabaseAdmissionRefusal(target.agentId)) {
       return [];
@@ -141,4 +179,45 @@ function listOpenIncognitoSessionCreators() {
           : [],
     );
   });
+}
+
+/** Capability policy consumes only the receipt-updated metadata projection. */
+export function createSessionRowCapabilityReader(owner: {
+  state: () => { disposed: boolean; topologyDirty: boolean };
+  lookup: (query: Lookup) => Row | undefined;
+  matching: (query: Query, kind?: string) => Row[];
+}) {
+  return (
+    query: { agentId: string; storePath: string } & (
+      | { key: string; sessionId?: never }
+      | { sessionId: string; key?: never }
+    ),
+  ) => {
+    const state = owner.state();
+    if (state.disposed || state.topologyDirty) {
+      return undefined;
+    }
+    let row: Row | undefined;
+    if (query.key !== undefined) {
+      const candidate = owner.lookup(query);
+      row = candidate?.key === query.key ? candidate : undefined;
+    } else {
+      const sessionId = query.sessionId;
+      const scope = { agentId: query.agentId, storePath: query.storePath };
+      const exact = owner.matching({ ...scope, key: sessionId }, "id");
+      const candidates = (exact.length ? exact : owner.matching(scope))
+        .filter((candidate) => !isInternalSessionEffectsKey(candidate.key))
+        .toSorted((left, right) => (left.key < right.key ? -1 : left.key > right.key ? 1 : 0));
+      if (candidates.some((candidate) => !candidate.sharingEntry)) {
+        return undefined;
+      }
+      row =
+        candidates.find((candidate) => candidate.sharingEntry?.sessionId === sessionId) ??
+        candidates.find((candidate) => candidate.sharingEntry?.sessionId.trim() === sessionId);
+    }
+    // Known absence is authoritative. A row awaiting metadata preparation is not absent.
+    return row && (!row.storedEntry || row.sharingEntry !== row.storedEntry)
+      ? undefined
+      : { entry: row?.storedEntry };
+  };
 }

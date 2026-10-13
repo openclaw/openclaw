@@ -65,8 +65,8 @@ vi.mock("../wizard/setup.shared.js", async (importOriginal) => ({
   writeWizardConfigFile: mocks.writeWizardConfigFile,
 }));
 
-vi.mock("../commands/onboard-channels.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../commands/onboard-channels.js")>()),
+vi.mock("../flows/channel-setup.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../flows/channel-setup.js")>()),
   setupChannels: mocks.setupChannels,
 }));
 
@@ -105,14 +105,12 @@ const tempDirs: string[] = [];
 
 export const sharedVerifiedInferenceConfig = {
   agents: {
-    list: [
-      {
-        id: "main",
-        default: true,
+    entries: {
+      main: {
         agentDir: "/tmp/openclaw-openclaw-chat-engine-agent",
         model: "openai/gpt-5.5",
       },
-    ],
+    },
   },
   models: {
     providers: {

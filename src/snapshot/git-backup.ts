@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -12,6 +12,7 @@ import {
   requireGitCommand as requireGit,
   requireGitCommandOutput,
 } from "../infra/git-exec.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { assertNotUpdateCapturePath } from "../infra/update-capture-paths.js";
 import { formatCommandOutput, formatCommandResult } from "../process/command-error.js";
 import { spawnCommand } from "../process/exec-spawn.js";
@@ -294,15 +295,17 @@ export async function createGitBackup(params: {
     stateDir: params.stateDir,
     gitEnv: params.gitEnv,
   });
-  const stagingRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-git-backup-"));
-  await fs.chmod(stagingRoot, 0o700);
+  const staging = await tempWorkspace({
+    rootDir: resolvePreferredOpenClawTmpDir(),
+    prefix: "openclaw-git-backup-",
+  });
   const manifests: GitBackupManifest[] = [];
   const warnings: string[] = [];
   try {
     for (const [index, database] of params.databases.entries()) {
-      const outputPath = path.join(stagingRoot, gitBackupScopePath(database.identity));
+      const outputPath = path.join(staging.dir, gitBackupScopePath(database.identity));
       await fs.mkdir(path.dirname(outputPath), { recursive: true, mode: 0o700 });
-      const copyPath = path.join(stagingRoot, `${database.identity.role}-${index}.sqlite`);
+      const copyPath = staging.path(`${database.identity.role}-${index}.sqlite`);
       try {
         await createOpenClawSnapshotCopy({
           database: { ...database, path: await fs.realpath(database.path) },
@@ -338,10 +341,10 @@ export async function createGitBackup(params: {
       );
     }
     for (const { identity } of manifests) {
-      await copyStagedScope(stagingRoot, repositoryPath, identity);
+      await copyStagedScope(staging.dir, repositoryPath, identity);
     }
   } finally {
-    await fs.rm(stagingRoot, { recursive: true, force: true }).catch(() => undefined);
+    await staging.cleanup().catch(() => undefined);
   }
   // Keep both owned roots present so Git accepts both scoped pathspecs even on a first global-only
   // or agent-only backup. Empty directories remain untracked.
@@ -415,23 +418,19 @@ export async function createGitBackup(params: {
   };
 }
 
-async function resolveGitCommit(repositoryPath: string, ref?: string): Promise<string> {
-  return await requireGit(repositoryPath, [
-    "rev-parse",
-    "--verify",
-    `${ref?.trim() || "HEAD"}^{commit}`,
-  ]);
-}
-
 /** Materialize one database scope from a Git ref into a private temporary directory. */
 async function materializeGitBackupRef(params: {
   repositoryPath: string;
   identity: GitBackupIdentity;
   ref?: string;
-}): Promise<{ commit: string; path: string; cleanup: () => Promise<void> }> {
+}): Promise<{ commit: string; path: string } & AsyncDisposable> {
   const repositoryPath = path.resolve(params.repositoryPath);
   await assertGitRepository(repositoryPath);
-  const commit = await resolveGitCommit(repositoryPath, params.ref);
+  const commit = await requireGit(repositoryPath, [
+    "rev-parse",
+    "--verify",
+    `${params.ref?.trim() || "HEAD"}^{commit}`,
+  ]);
   const scope = gitBackupScopePath(params.identity).split(path.sep).join("/");
   const files = (
     await requireGit(repositoryPath, ["ls-tree", "-r", "--name-only", commit, "--", scope])
@@ -442,9 +441,11 @@ async function materializeGitBackupRef(params: {
   if ([...required].some((entry) => !files.includes(entry))) {
     throw new Error(`Git backup ref ${commit} does not contain ${scope}.`);
   }
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-git-restore-"));
-  await fs.chmod(root, 0o700);
-  const outputPath = path.join(root, scope);
+  const workspace = await tempWorkspace({
+    rootDir: resolvePreferredOpenClawTmpDir(),
+    prefix: "openclaw-git-restore-",
+  });
+  const outputPath = path.join(workspace.dir, scope);
   try {
     for (const file of files) {
       if (
@@ -471,10 +472,10 @@ async function materializeGitBackupRef(params: {
     return {
       commit,
       path: outputPath,
-      cleanup: async () => await fs.rm(root, { recursive: true, force: true }),
+      [Symbol.asyncDispose]: workspace[Symbol.asyncDispose],
     };
   } catch (error) {
-    await fs.rm(root, { recursive: true, force: true }).catch(() => undefined);
+    await workspace.cleanup().catch(() => undefined);
     throw error;
   }
 }
@@ -486,19 +487,15 @@ export async function restoreGitBackupRef(params: {
   ref?: string;
   targetPath: string;
 }): Promise<GitBackupRestoreResult & { commit: string }> {
-  const materialized = await materializeGitBackupRef(params);
-  try {
-    return {
-      ...(await restoreGitBackupDirectory({
-        sourcePath: materialized.path,
-        targetPath: params.targetPath,
-        expectedIdentity: params.identity,
-      })),
-      commit: materialized.commit,
-    };
-  } finally {
-    await materialized.cleanup();
-  }
+  await using materialized = await materializeGitBackupRef(params);
+  return {
+    ...(await restoreGitBackupDirectory({
+      sourcePath: materialized.path,
+      targetPath: params.targetPath,
+      expectedIdentity: params.identity,
+    })),
+    commit: materialized.commit,
+  };
 }
 
 /** Verify a Git snapshot by restoring it privately and comparing every table digest. */
@@ -507,15 +504,17 @@ export async function verifyGitBackupRef(params: {
   identity: GitBackupIdentity;
   ref?: string;
 }): Promise<GitBackupRestoreResult & { commit: string }> {
-  const scratch = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-git-verify-"));
-  await fs.chmod(scratch, 0o700);
+  const scratch = await tempWorkspace({
+    rootDir: resolvePreferredOpenClawTmpDir(),
+    prefix: "openclaw-git-verify-",
+  });
   try {
     return await restoreGitBackupRef({
       ...params,
-      targetPath: path.join(scratch, "database.sqlite"),
+      targetPath: scratch.path("database.sqlite"),
     });
   } finally {
-    await fs.rm(scratch, { recursive: true, force: true }).catch(() => undefined);
+    await scratch.cleanup().catch(() => undefined);
   }
 }
 

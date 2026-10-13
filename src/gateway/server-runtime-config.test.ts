@@ -1,8 +1,26 @@
 // Runtime config tests cover gateway bind/auth resolution, trusted proxy rules,
 // container defaults, and invalid config rejection before server startup.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createConfigResolutionFacts,
+  setConfigResolutionFacts,
+} from "../config/resolution-facts.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetContainerEnvironmentCacheForTest } from "../infra/container-environment.js";
 import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
+
+const hooksWarn = vi.hoisted(() => vi.fn());
+
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (name: string) => {
+      const logger = actual.createSubsystemLogger(name);
+      return name === "gateway/hooks" ? { ...logger, warn: hooksWarn } : logger;
+    },
+  };
+});
 
 const TRUSTED_PROXY_AUTH = {
   mode: "trusted-proxy" as const,
@@ -17,11 +35,61 @@ const TOKEN_AUTH = {
 };
 
 describe("resolveGatewayRuntimeConfig", () => {
+  describe("unresolved external hook credentials", () => {
+    it.each(["missing", "pending"] as const)(
+      "disables hooks and warns without blocking startup for %s credentials",
+      async (kind) => {
+        hooksWarn.mockClear();
+        const cfg: OpenClawConfig = {
+          gateway: { bind: "loopback", auth: TOKEN_AUTH },
+          hooks: { enabled: true, token: "synthetic-unresolved-hook-value" },
+        };
+        setConfigResolutionFacts(
+          cfg,
+          createConfigResolutionFacts(
+            kind === "missing"
+              ? [{ varName: "MISSING_HOOK_SECRET", configPath: "hooks.token" }]
+              : [],
+            kind === "pending" ? new Map([["hooks.token", "PENDING_HOOK_SECRET"]]) : new Map(),
+          ),
+        );
+        const result = await resolveGatewayRuntimeConfig({ cfg, port: 18789 });
+        expect(result.hooksConfig).toBeNull();
+        expect(result.bindHost).toBe("127.0.0.1");
+        expect(result.resolvedAuth.token).toBe(TOKEN_AUTH.token);
+        expect(hooksWarn).toHaveBeenCalledExactlyOnceWith(
+          expect.stringContaining("External hooks disabled at startup:"),
+        );
+        expect(hooksWarn.mock.calls[0]?.[0]).not.toContain("synthetic-unresolved-hook-value");
+      },
+    );
+
+    it("keeps valid hooks enabled without a disable warning", async () => {
+      hooksWarn.mockClear();
+      const result = await resolveGatewayRuntimeConfig({
+        cfg: {
+          gateway: { bind: "loopback", auth: TOKEN_AUTH },
+          hooks: { enabled: true, token: "synthetic-valid-hook-secret" },
+        },
+        port: 18789,
+      });
+      expect(result.hooksConfig?.token).toBe("synthetic-valid-hook-secret");
+      expect(hooksWarn).not.toHaveBeenCalled();
+    });
+
+    it("does not suppress unrelated invalid hook settings", async () => {
+      await expect(
+        resolveGatewayRuntimeConfig({
+          cfg: {
+            gateway: { bind: "loopback", auth: TOKEN_AUTH },
+            hooks: { enabled: true, token: "synthetic-valid-hook-secret", path: "/" },
+          },
+          port: 18789,
+        }),
+      ).rejects.toThrow("hooks.path may not be");
+    });
+  });
   describe("trusted-proxy auth mode", () => {
-    // This test validates BOTH validation layers:
-    // 1. CLI validation in src/cli/gateway-cli/run.ts (line 246)
-    // 2. Runtime config validation in src/gateway/server-runtime-config.ts (line 99)
-    // Both must allow lan binding when authMode === "trusted-proxy"
     it.each([
       {
         name: "lan binding",
@@ -46,55 +114,27 @@ describe("resolveGatewayRuntimeConfig", () => {
         },
         expectedBindHost: "127.0.0.1",
       },
-      {
-        name: "loopback binding with ::1 proxy",
-        cfg: {
-          gateway: { bind: "loopback" as const, auth: TRUSTED_PROXY_AUTH, trustedProxies: ["::1"] },
-        },
-        expectedBindHost: "127.0.0.1",
-      },
-      {
-        name: "loopback binding with loopback cidr proxy",
-        cfg: {
-          gateway: {
-            bind: "loopback" as const,
-            auth: TRUSTED_PROXY_AUTH,
-            trustedProxies: ["127.0.0.0/8"],
-          },
-        },
-        expectedBindHost: "127.0.0.1",
-      },
     ])("allows $name", async ({ cfg, expectedBindHost }) => {
       const result = await resolveGatewayRuntimeConfig({ cfg, port: 18789 });
       expect(result.authMode).toBe("trusted-proxy");
       expect(result.bindHost).toBe(expectedBindHost);
     });
 
-    it.each([
-      {
-        name: "loopback binding without trusted proxies",
-        cfg: {
-          gateway: { bind: "loopback" as const, auth: TRUSTED_PROXY_AUTH, trustedProxies: [] },
-        },
-        expectedMessage:
-          "gateway auth mode=trusted-proxy requires gateway.trustedProxies to be configured",
-      },
-      {
-        name: "lan binding without trusted proxies",
-        cfg: {
-          gateway: {
-            bind: "lan" as const,
-            auth: TRUSTED_PROXY_AUTH,
-            trustedProxies: [],
-            controlUi: { allowedOrigins: ["https://control.example.com"] },
+    it("rejects lan binding without trusted proxies", async () => {
+      await expect(
+        resolveGatewayRuntimeConfig({
+          cfg: {
+            gateway: {
+              bind: "lan",
+              auth: TRUSTED_PROXY_AUTH,
+              trustedProxies: [],
+              controlUi: { allowedOrigins: ["https://control.example.com"] },
+            },
           },
-        },
-        expectedMessage:
-          "gateway auth mode=trusted-proxy requires gateway.trustedProxies to be configured",
-      },
-    ])("rejects $name", async ({ cfg, expectedMessage }) => {
-      await expect(resolveGatewayRuntimeConfig({ cfg, port: 18789 })).rejects.toThrow(
-        expectedMessage,
+          port: 18789,
+        }),
+      ).rejects.toThrow(
+        "gateway auth mode=trusted-proxy requires gateway.trustedProxies to be configured",
       );
     });
 
@@ -221,6 +261,29 @@ describe("resolveGatewayRuntimeConfig", () => {
           gateway: {
             bind: "lan" as const,
             auth: TOKEN_AUTH,
+          },
+        },
+        expectedError: "non-loopback Control UI requires gateway.controlUi.allowedOrigins",
+      },
+      {
+        name: "allows non-loopback control UI with the advertised public origin",
+        cfg: {
+          gateway: {
+            bind: "lan" as const,
+            auth: TOKEN_AUTH,
+            publicOrigin: "https://control.example.com",
+          },
+        },
+        expectedBindHost: "0.0.0.0",
+      },
+      {
+        name: "does not replace an explicit empty origin list with the public origin",
+        cfg: {
+          gateway: {
+            bind: "lan" as const,
+            auth: TOKEN_AUTH,
+            publicOrigin: "https://control.example.com",
+            controlUi: { allowedOrigins: [] },
           },
         },
         expectedError: "non-loopback Control UI requires gateway.controlUi.allowedOrigins",

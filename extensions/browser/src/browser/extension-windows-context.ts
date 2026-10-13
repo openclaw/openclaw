@@ -19,19 +19,9 @@ const hash = (bytes: Buffer) => crypto.createHash("sha256").update(bytes).digest
 export function matchesWindowsContext(a: NativeWindowsContext, b: NativeWindowsContext): boolean {
   return (
     a.browserProfile === b.browserProfile &&
-    ["nodePath", "cliPath", "stateDir", "configPath"].every((key) => {
-      // The property set is fixed by the strict context schema.
-      switch (key) {
-        case "nodePath":
-          return sameWindowsPath(a.nodePath, b.nodePath);
-        case "cliPath":
-          return sameWindowsPath(a.cliPath, b.cliPath);
-        case "stateDir":
-          return sameWindowsPath(a.stateDir, b.stateDir);
-        default:
-          return sameWindowsPath(a.configPath, b.configPath);
-      }
-    })
+    (["nodePath", "cliPath", "stateDir", "configPath"] as const).every((key) =>
+      sameWindowsPath(a[key], b[key]),
+    )
   );
 }
 /** Descriptor/receipt are evidence, never permission to skip current OS admission. */

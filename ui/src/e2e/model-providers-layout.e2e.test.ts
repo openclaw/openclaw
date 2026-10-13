@@ -117,6 +117,9 @@ suite.define(() => {
             "Fast Mode",
           ]);
           expect(rows.every((row) => (width > 640 ? row.sideBySide : row.stacked))).toBe(true);
+          await page
+            .locator(".settings-sidebar openclaw-agent-select")
+            .waitFor({ state: "attached" });
           expect(await page.locator(".content openclaw-agent-select").count()).toBe(0);
           expect(await page.locator(".settings-sidebar openclaw-agent-select").count()).toBe(1);
           const bounds = await page

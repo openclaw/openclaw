@@ -40,6 +40,11 @@ OpenClaw uses stable per-source roots:
 - Local/path/archive installs are copied or referenced without dependency
   repair.
 
+These roots are durable install state, not caches. Deleting `~/.openclaw/npm` or
+`~/.openclaw/git` removes every installed external plugin; deployment cleanup
+scripts must leave them in place. Superseded plugin generations are retired by
+the Gateway itself.
+
 npm installs run in that per-plugin project root with:
 
 ```bash
@@ -234,10 +239,19 @@ plugins. Each entry binds a chunk filename and SHA-256 hash to its owning
 plugins; every owner must declare the dependency in its bundled or installed
 `@openclaw/<id>` package manifest. Root imports, including root references to
 otherwise plugin-owned chunks, still require root dependency declarations.
-Missing metadata or changed chunk bytes cannot grant a plugin exemption.
-Rebuilt releases, including `2026.7.33`, use this same generated artifact;
-package versions and generated source-region comments do not grant ownership.
-This verification does not change Node's runtime dependency resolution.
+For candidates built with the metadata producer, missing metadata or changed
+chunk bytes cannot grant a plugin exemption.
+
+Release preflight has a compatibility exception for source checkouts that predate
+`scripts/lib/runtime-dependency-ownership-build-plugin.mts`. When ownership
+metadata is absent, it can attribute individual imports inside generated plugin
+regions to that plugin's packaged or trusted source manifest. Imports outside
+those regions still require root declarations. A root reference to a chunk
+revokes its plugin exemption, including through transitive relative imports.
+Hoisted static imports follow the chunk's graph ownership; executable imports
+outside plugin regions remain root references. Public package entrypoints always
+count as root-owned. Present but invalid metadata never falls back to region ownership. This
+verification does not change Node's runtime dependency resolution.
 
 In source checkouts, use `pnpm install` followed by `pnpm build`. OpenClaw
 prefers `dist/extensions`, then `dist-runtime/extensions`, and falls back to
@@ -247,6 +261,11 @@ workspace links. Native Node imports resolve from each plugin package;
 packaged bundled runtime still uses the root runtime declarations above.
 Rebuild to pick up source edits when using a built tree. Source checkout development is pnpm-only; plain
 `npm install` at the repository root does not prepare the pnpm workspace.
+
+The root build discovers plugin packages and additional top-level source entries
+from Git's tracked files, preserving spaces and Unicode in filenames. Add new
+packages and auto-discovered entry files to the Git index before building. The
+standalone build below also supports packages that are not yet tracked.
 
 | Install shape                                   | Bundled plugin location                              | Dependency owner                                       |
 | ----------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------ |

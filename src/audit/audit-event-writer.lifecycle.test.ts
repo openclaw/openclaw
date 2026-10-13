@@ -4,9 +4,15 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { SqliteWorkerError, type SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import type { AuditEventInput } from "./audit-event-types.js";
 import { createAuditEventWriter } from "./audit-event-writer.js";
-import type { AuditWriterOperations, AuditWriterResult } from "./audit-event-writer.types.js";
+import { input } from "./audit-event-writer.test-support.js";
+import type { AuditWriterResult } from "./audit-event-writer.types.js";
+import type { AuditWriterOperations } from "./audit-event-writer.worker.js";
 
 const { execute } = vi.hoisted(() => ({
   execute:
@@ -42,18 +48,23 @@ afterEach(async () => {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function event(sourceId: string): AuditEventInput {
-  return {
-    sourceId,
-    sourceSequence: 1,
-    occurredAt: Date.now(),
-    kind: "agent_run",
-    action: "agent.run.started",
-    status: "started",
-    actorType: "agent",
-    actorId: "main",
-    agentId: "main",
-    runId: sourceId,
-  };
+  return { ...input(), sourceId, runId: sourceId };
+}
+
+function mockEventRequests(handler: (sourceId: string) => Promise<AuditWriterResult>) {
+  const requests: string[] = [];
+  execute.mockImplementation(async (command) => {
+    if (command.type === "audit.writer.prune") {
+      return { status: "settled" };
+    }
+    if (command.input.type !== "record-event") {
+      throw new Error("Unexpected audit request in event lifecycle test");
+    }
+    const sourceId = command.input.input.sourceId;
+    requests.push(sourceId);
+    return await handler(sourceId);
+  });
+  return requests;
 }
 
 async function advanceDispatch() {
@@ -62,23 +73,55 @@ async function advanceDispatch() {
 }
 
 describe("audit writer async settlement", () => {
+  it("coalesces overdue idle maintenance and cancels it after writer shutdown", async () => {
+    vi.useRealTimers();
+    const clock = createGatewaySchedulerClock();
+    const scheduler = createTestGatewayScheduler(clock.clock);
+    execute.mockResolvedValue({ status: "settled" });
+    const writer = createAuditEventWriter({
+      scheduler,
+      stateDir: tempDirs.make("audit-writer-maintenance-"),
+    });
+    try {
+      await writer.ready;
+      execute.mockClear();
+      const pruned = createDeferred();
+      execute.mockImplementation(async (command) => {
+        if (command.type === "audit.writer.prune" && command.input === "progress") {
+          pruned.resolve();
+        }
+        return { status: "settled" };
+      });
+      await clock.advanceBy(60 * 60_000 - 1);
+      expect(execute).not.toHaveBeenCalled();
+      await clock.advanceBy(2 * 60 * 60_000 + 1);
+      await pruned.promise;
+      expect(
+        execute.mock.calls.filter(
+          ([command]) => command.type === "audit.writer.prune" && command.input === "events",
+        ),
+      ).toHaveLength(1);
+
+      await writer.stop();
+      execute.mockClear();
+      await clock.advanceBy(60 * 60_000);
+      expect(execute).not.toHaveBeenCalled();
+    } finally {
+      await writer.stop();
+      await scheduler.stop();
+    }
+  });
+
   it("retains in-flight capacity and joins submission after the shutdown deadline", async () => {
     const submitted = createDeferred();
     const finish = createDeferred<AuditWriterResult>();
-    const requests: string[] = [];
-    execute.mockImplementation(async (command) => {
-      if (command.type === "audit.writer.prune") {
-        return { status: "settled" };
-      }
-      if (command.input.type !== "record-event") {
-        throw new Error("Unexpected audit request in event lifecycle test");
-      }
-      requests.push(command.input.input.sourceId);
+    const requests = mockEventRequests(async () => {
       submitted.resolve();
       return await finish.promise;
     });
     const errors: string[] = [];
     const writer = createAuditEventWriter({
+      scheduler: createTestGatewayScheduler(),
       stateDir: tempDirs.make("audit-writer-settlement-"),
       maxPending: 2,
       onError: (error) => errors.push(error),
@@ -125,106 +168,74 @@ describe("audit writer async settlement", () => {
     }
   });
 
-  it("does not replay an unknown transport outcome with SQLite busy fields", async () => {
-    const submitted = createDeferred();
-    const firstResult = createDeferred<AuditWriterResult>();
-    const requests: string[] = [];
-    execute.mockImplementation(async (command) => {
-      if (command.type === "audit.writer.prune") {
-        return { status: "settled" };
-      }
-      if (command.input.type !== "record-event") {
-        throw new Error("Unexpected audit request in event lifecycle test");
-      }
-      const sourceId = command.input.input.sourceId;
-      requests.push(sourceId);
-      if (sourceId === "unknown-outcome") {
-        submitted.resolve();
-        return await firstResult.promise;
-      }
-      return { status: "settled" };
-    });
-    const errors: string[] = [];
-    const writer = createAuditEventWriter({
-      stateDir: tempDirs.make("audit-writer-unknown-outcome-"),
-      onError: (error) => errors.push(error),
-    });
-    try {
-      await advanceDispatch();
-      await writer.ready;
-      expect(writer.record(event("unknown-outcome"))).toBe(true);
-      expect(writer.record(event("next"))).toBe(true);
-      await advanceDispatch();
-      await submitted.promise;
-      expect(requests).toEqual(["unknown-outcome"]);
-      const stopping = writer.stop();
-      const failure = Object.assign(
-        new SqliteWorkerError(
-          "Audit write outcome is unknown: database is locked",
-          "outcome-unknown",
-        ),
-        { errcode: 5, errstr: "SQLITE_BUSY" },
-      );
-      firstResult.reject(failure);
-      await vi.advanceTimersByTimeAsync(10_000);
-      await stopping;
-      expect(errors).toEqual([failure.message]);
-      expect(requests).toEqual(["unknown-outcome", "next"]);
-      await vi.advanceTimersByTimeAsync(60 * 60_000);
-      expect(errors).toEqual([failure.message]);
-      expect(requests).toEqual(["unknown-outcome", "next"]);
-    } finally {
-      firstResult.resolve({ status: "settled" });
-      const stopping = writer.stop();
-      await vi.advanceTimersByTimeAsync(10_000);
-      await stopping;
-    }
-  });
-  it("releases settled capacity before notifying the error observer", async () => {
-    const requests: string[] = [];
-    execute.mockImplementation(async (command) => {
-      if (command.type === "audit.writer.prune") {
-        return { status: "settled" };
-      }
-      if (command.input.type !== "record-event") {
-        throw new Error("Unexpected audit request");
-      }
-      const sourceId = command.input.input.sourceId;
-      requests.push(sourceId);
-      if (sourceId === "unknown-outcome") {
-        throw new SqliteWorkerError("Audit write outcome is unknown", "outcome-unknown");
-      }
-      return { status: "settled" };
-    });
-    const errors: string[] = [];
-    let offered = false;
-    let followUpAccepted: boolean | undefined;
-    const writer = createAuditEventWriter({
-      stateDir: tempDirs.make("audit-writer-error-notification-"),
-      maxPending: 1,
-      onError: (error) => {
-        errors.push(error);
-        if (!offered) {
-          offered = true;
-          followUpAccepted = writer.record(event("from-error-observer"));
+  it.each(["queued", "error observer"] as const)(
+    "settles an unknown transport outcome before processing the %s follow-up",
+    async (followUp) => {
+      const submitted = createDeferred();
+      const firstResult = createDeferred<AuditWriterResult>();
+      const fromObserver = followUp === "error observer";
+      const next = fromObserver ? "from-error-observer" : "next";
+      const requests = mockEventRequests(async (sourceId) => {
+        if (sourceId === "unknown-outcome") {
+          submitted.resolve();
+          return await firstResult.promise;
         }
-      },
-    });
-    try {
-      await advanceDispatch();
-      await writer.ready;
-      expect(writer.record(event("unknown-outcome"))).toBe(true);
-      await advanceDispatch();
-      const stopping = writer.stop();
-      await vi.advanceTimersByTimeAsync(10_000);
-      await stopping;
-      expect(followUpAccepted).toBe(true);
-      expect(errors).toEqual(["Audit write outcome is unknown"]);
-      expect(requests).toEqual(["unknown-outcome", "from-error-observer"]);
-    } finally {
-      const stopping = writer.stop();
-      await vi.advanceTimersByTimeAsync(10_000);
-      await stopping;
-    }
-  });
+        return { status: "settled" };
+      });
+      const errors: string[] = [];
+      let offered = false;
+      let followUpAccepted: boolean | undefined;
+      const writer = createAuditEventWriter({
+        scheduler: createTestGatewayScheduler(),
+        stateDir: tempDirs.make("audit-writer-unknown-outcome-"),
+        maxPending: fromObserver ? 1 : undefined,
+        onError: (error) => {
+          errors.push(error);
+          if (fromObserver && !offered) {
+            offered = true;
+            followUpAccepted = writer.record(event(next));
+          }
+        },
+      });
+      try {
+        await advanceDispatch();
+        await writer.ready;
+        expect(writer.record(event("unknown-outcome"))).toBe(true);
+        if (!fromObserver) {
+          expect(writer.record(event(next))).toBe(true);
+        }
+        await advanceDispatch();
+        await submitted.promise;
+        expect(requests).toEqual(["unknown-outcome"]);
+        const stopping = fromObserver ? undefined : writer.stop();
+        const failure = Object.assign(
+          new SqliteWorkerError(
+            fromObserver
+              ? "Audit write outcome is unknown"
+              : "Audit write outcome is unknown: database is locked",
+            "outcome-unknown",
+          ),
+          fromObserver ? {} : { errcode: 5, errstr: "SQLITE_BUSY" },
+        );
+        firstResult.reject(failure);
+        if (fromObserver) {
+          await advanceDispatch();
+          expect(followUpAccepted).toBe(true);
+        }
+        const stopped = stopping ?? writer.stop();
+        await vi.advanceTimersByTimeAsync(10_000);
+        await stopped;
+        expect(errors).toEqual([failure.message]);
+        expect(requests).toEqual(["unknown-outcome", next]);
+        await vi.advanceTimersByTimeAsync(60 * 60_000);
+        expect(errors).toEqual([failure.message]);
+        expect(requests).toEqual(["unknown-outcome", next]);
+      } finally {
+        firstResult.resolve({ status: "settled" });
+        const stopping = writer.stop();
+        await vi.advanceTimersByTimeAsync(10_000);
+        await stopping;
+      }
+    },
+  );
 });

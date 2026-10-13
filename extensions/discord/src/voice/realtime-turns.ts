@@ -202,10 +202,8 @@ export class DiscordRealtimeTurns {
   }
 
   clear(): void {
-    this.pendingAudio = false;
-    this.lastSpeakerTurn = undefined;
-    this.resetPartialWakeNameTracking();
-    this.pendingWakeNameFollowup = undefined;
+    this.resetProviderContinuity();
+    this.wakeNameAckedForTurn = false;
   }
 
   consumePendingSpeakerContext(): DiscordRealtimeSpeakerContext | undefined {

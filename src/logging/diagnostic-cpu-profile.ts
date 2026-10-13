@@ -13,7 +13,11 @@ const INTERVAL_MICROS = 10_000;
 const MAX_NODES = 16_384;
 const MAX_SAMPLES = 65_536;
 
-function sanitizeProfile(profile: Profiler.Profile, packageRoot: string | null) {
+function sanitizeProfile(
+  profile: Profiler.Profile,
+  packageRoot: string | null,
+  { startBlockedMs }: { startBlockedMs: number },
+) {
   assertProfile(
     Array.isArray(profile.nodes) &&
       profile.nodes.length > 0 &&
@@ -83,6 +87,7 @@ function sanitizeProfile(profile: Profiler.Profile, packageRoot: string | null) 
   const result = {
     requestedDurationMs: DURATION_MS,
     actualDurationMs: (profile.endTime - profile.startTime) / 1_000,
+    startBlockedMs,
     samplingIntervalMicros: INTERVAL_MICROS,
     sampleLossCount: null,
     redactedNodeCount,

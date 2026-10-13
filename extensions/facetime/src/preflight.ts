@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { asRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { FACETIME_FEED_DEVICE_NAME, FACETIME_MIC_DEVICE_NAME } from "./audio-pump.js";
 import type { FaceTimeConfig } from "./config.js";
@@ -156,7 +156,6 @@ export async function runFaceTimePreflight(params: {
   config: FaceTimeConfig;
   fullConfig: OpenClawConfig;
   runtime: PluginRuntime;
-  logger?: RuntimeLogger;
   helperConnected: boolean;
   captureBinary: string;
 }): Promise<FaceTimePreflightResult> {

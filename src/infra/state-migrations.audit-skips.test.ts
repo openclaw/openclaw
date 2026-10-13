@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -9,16 +9,20 @@ import {
   AuditMigrationFixture,
   buildAuditScrubbedContent,
   configAuditRecord,
+  failAuditMove,
   systemAuditEvent,
   writeAuditRestoreJournal,
 } from "./state-migrations.audit.test-support.js";
 import { autoMigrateLegacyState } from "./state-migrations.doctor.js";
 import { throwIfDoctorStateMigrationRefused } from "./state-migrations.messages.js";
 
+afterEach(() => vi.restoreAllMocks());
+
 describe("Doctor legacy audit skips", () => {
   it.each([
     ["checkpointless whitespace", "checkpointless raw archive begins with ambiguous whitespace"],
     ["checkpoint capacity", "durable raw-archive checkpoint capacity is exhausted"],
+    ["hard links unavailable", "filesystem rejects native no-replace rename and hard links"],
   ])("continues later repairs after %s and preserves recovery inputs", async (shape, warning) => {
     await withOpenClawTestState({ label: "audit-skip" }, async (state) => {
       const cfg = { plugins: { enabled: false } };
@@ -32,7 +36,7 @@ describe("Doctor legacy audit skips", () => {
           audit.config.sanitized,
           Array.from({ length: 45 }, () => record),
         );
-      } else {
+      } else if (shape === "checkpoint capacity") {
         await audit.writeJsonLines(audit.config.source, [record]);
         expect((await audit.migrate()).warnings).toEqual([]);
         const store = openLegacyAuditRawCheckpointStore(state.stateDir);
@@ -46,9 +50,14 @@ describe("Doctor legacy audit skips", () => {
         );
         await audit.writeJsonLines(audit.config.source, [record]);
         preservedPath = audit.config.source;
+      } else {
+        await audit.writeJsonLines(audit.config.source, [record]);
+        preservedPath = audit.config.source;
+        failAuditMove(audit, audit.config.source);
       }
       const sourceBytes = await fs.readFile(preservedPath);
-      const sanitizedBytes = await fs.readFile(audit.config.sanitized);
+      const sanitizedBytes =
+        shape === "hard links unavailable" ? undefined : await fs.readFile(audit.config.sanitized);
       const execPath = await state.writeJson("exec-approvals.json", {
         version: 1,
         defaults: { security: "allowlist", ask: "on-miss" },
@@ -72,9 +81,16 @@ describe("Doctor legacy audit skips", () => {
       });
       expect(() => throwIfDoctorStateMigrationRefused(result.stepReceipts)).not.toThrow();
       expect(result.warnings.join("\n")).toContain(warning);
-      expect(result.warnings.join("\n")).toContain(
-        "https://docs.openclaw.ai/cli/update/repair-and-recovery",
-      );
+      if (shape === "hard links unavailable") {
+        expect(result.warnings.join("\n")).toContain(audit.config.source);
+        expect(result.warnings.join("\n")).toContain("OPENCLAW_STATE_DIR=");
+        expect(result.warnings.join("\n")).toContain(state.stateDir);
+        expect(result.warnings.join("\n")).toContain("openclaw doctor --fix");
+      } else {
+        expect(result.warnings.join("\n")).toContain(
+          "https://docs.openclaw.ai/cli/update/repair-and-recovery",
+        );
+      }
       expect(result.stepReceipts.find((receipt) => receipt.id === "exec-approvals")).toMatchObject({
         outcome: "completed",
       });
@@ -93,7 +109,11 @@ describe("Doctor legacy audit skips", () => {
       expect(repeated.warnings.join("\n")).toContain(warning);
       expect(() => throwIfDoctorStateMigrationRefused(repeated.stepReceipts)).not.toThrow();
       await expect(fs.readFile(preservedPath)).resolves.toEqual(sourceBytes);
-      await expect(fs.readFile(audit.config.sanitized)).resolves.toEqual(sanitizedBytes);
+      if (sanitizedBytes) {
+        await expect(fs.readFile(audit.config.sanitized)).resolves.toEqual(sanitizedBytes);
+      } else {
+        await expect(fs.access(audit.config.sanitized)).rejects.toMatchObject({ code: "ENOENT" });
+      }
     });
   });
 

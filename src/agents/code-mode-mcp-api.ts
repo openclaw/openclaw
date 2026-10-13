@@ -22,7 +22,6 @@ type McpApiToolDoc = {
 export type McpApiServerDoc = {
   identifier: string;
   serverName: string;
-  nodeLabel?: string;
   tools: McpApiToolDoc[];
 };
 
@@ -216,10 +215,7 @@ export function buildMcpParamDocs(schema: unknown, depth = 0): McpApiParamDoc[] 
   });
 }
 
-function renderMcpToolSignature(
-  tool: McpApiToolDoc,
-  functionName = tool.path.at(-1) ?? tool.method,
-): string[] {
+function renderMcpToolSignature(tool: McpApiToolDoc): string[] {
   const resultType = {
     tool: "McpToolResult",
     resources_list: "McpResourcesListResult",
@@ -235,7 +231,7 @@ function renderMcpToolSignature(
   const optional = inputParams.some((param) => param.required) ? "" : "?";
   return [
     ...renderDocComment(tool.description, inputParams),
-    `function ${functionName}(`,
+    `function ${tool.path.at(-1) ?? tool.method}(`,
     `  input${optional}: ${renderInlineObjectType(tool.parameters, inputParams)}`,
     `): Promise<${resultType}>;`,
   ];

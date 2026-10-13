@@ -1,9 +1,8 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { deliverPendingDeliveryNotice } from "./pending-delivery-notice.js";
 
 const PENDING_DELIVERY_NOTICE =
@@ -27,17 +26,16 @@ vi.mock("../../infra/outbound/delivery-queue-storage.js", async (importOriginal)
 });
 
 describe("pending delivery notice", () => {
-  let tmpDir: string;
+  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-pending-notice-");
   let storePath: string;
   const sessionKey = "agent:main:telegram:direct:chat-1";
 
   beforeEach(async () => {
     vi.clearAllMocks();
-    sendRecoveryNotice.mockResolvedValue({ suppressed: false });
+    sendRecoveryNotice.mockReset().mockResolvedValue({ suppressed: false });
     findDeliveryIntentOwner.mockReturnValue(null);
     appendAssistantMessageToSessionTranscript.mockResolvedValue({ ok: true });
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pending-notice-"));
-    storePath = path.join(tmpDir, "sessions.json");
+    storePath = path.join(sessionDirs.make(), "sessions.json");
     await replaceSessionEntry(
       { sessionKey, storePath },
       {
@@ -58,10 +56,6 @@ describe("pending delivery notice", () => {
         },
       },
     );
-  });
-
-  afterEach(async () => {
-    await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
   it("retains acknowledgment after the stable notice is recorded", async () => {
@@ -171,15 +165,26 @@ describe("pending delivery notice", () => {
     async (suppressedFirst) => {
       const first = createDeferred<{ suppressed: boolean }>();
       const second = createDeferred<{ suppressed: boolean }>();
-      sendRecoveryNotice.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+      const firstStarted = createDeferred();
+      const secondStarted = createDeferred();
+      sendRecoveryNotice
+        .mockImplementationOnce(() => {
+          firstStarted.resolve();
+          return first.promise;
+        })
+        .mockImplementationOnce(() => {
+          secondStarted.resolve();
+          return second.promise;
+        });
       const attempts = [
         deliverPendingDeliveryNotice(sessionKey, storePath),
         deliverPendingDeliveryNotice(sessionKey, storePath),
       ];
+      await Promise.all([firstStarted.promise, secondStarted.promise]);
       first.resolve({ suppressed: suppressedFirst });
-      await attempts[0];
+      await Promise.race(attempts);
       second.resolve({ suppressed: !suppressedFirst });
-      await attempts[1];
+      await Promise.all(attempts);
       expect(loadSessionEntry({ sessionKey, storePath })?.pendingDeliveryNotice?.state).toBe(
         "acknowledged",
       );
@@ -189,8 +194,13 @@ describe("pending delivery notice", () => {
 
   it("leaves a replacement notice owed when an earlier send finishes", async () => {
     const sent = createDeferred<{ suppressed: boolean }>();
-    sendRecoveryNotice.mockReturnValueOnce(sent.promise);
+    const sendStarted = createDeferred();
+    sendRecoveryNotice.mockImplementationOnce(() => {
+      sendStarted.resolve();
+      return sent.promise;
+    });
     const attempt = deliverPendingDeliveryNotice(sessionKey, storePath);
+    await sendStarted.promise;
     const entry = loadSessionEntry({ sessionKey, storePath })!;
     const replacement = { ...entry.pendingDeliveryNotice!, intentId: "intent-2" };
     await replaceSessionEntry(

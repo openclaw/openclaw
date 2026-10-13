@@ -6,13 +6,13 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
   OpenClawConfig,
   OpenClawPluginApi,
-  OpenClawPluginService,
-  OpenClawPluginServiceContext,
+  OpenClawPluginServiceContextV2,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { aggregateDay } from "./src/aggregate.js";
 import * as configRuntime from "./src/config.js";
 import { describePeriod } from "./src/periods.js";
@@ -41,7 +41,9 @@ const config: OpenClawConfig = {
 };
 
 function captureReports(runtimeSource = fileURLToPath(new URL("./index.ts", import.meta.url))) {
-  const services: OpenClawPluginService[] = [];
+  const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
+  const scheduler = createTestPluginServiceScheduler();
+  onTestFinished(() => scheduler.stop());
   const routes: Array<Parameters<OpenClawPluginApi["registerHttpRoute"]>[0]> = [];
   const methods: Array<Parameters<OpenClawPluginApi["registerGatewayMethod"]>> = [];
   const captured = capturePluginRegistration({
@@ -76,7 +78,7 @@ function captureReports(runtimeSource = fileURLToPath(new URL("./index.ts", impo
       });
     },
   });
-  return { captured, services, routes, methods };
+  return { captured, services, routes, methods, scheduler };
 }
 
 beforeEach(() => vi.clearAllMocks());
@@ -99,7 +101,7 @@ describe("Team Reports registration", () => {
     "locates its %s worker from the selected runtime entry",
     async (_layout, entry, worker) => {
       const runtimeSource = path.resolve(entry);
-      const { services } = captureReports(runtimeSource);
+      const { services, scheduler } = captureReports(runtimeSource);
       const parsed = configRuntime.parseTeamReportsConfig(pluginConfig);
       vi.spyOn(configRuntime, "resolveTeamReportsConfig").mockResolvedValue({
         github: { ...parsed.github, token: "fixture-github-token", ignoreCommentPatterns: [] },
@@ -108,7 +110,7 @@ describe("Team Reports registration", () => {
       const stopBeforeOpening = new Error("worker location captured");
       vi.mocked(createTeamReportsStore).mockRejectedValueOnce(stopBeforeOpening);
       await expect(
-        services[0]!.start({ config, stateDir: "/unused", logger: console }),
+        services[0]!.start({ config, stateDir: "/unused", logger: console, scheduler }),
       ).rejects.toBe(stopBeforeOpening);
       expect(createTeamReportsStore).toHaveBeenCalledWith({
         stateDir: "/unused",
@@ -143,10 +145,11 @@ describe("Team Reports registration", () => {
       github: { ...parsed.github, token: "fixture-github-token", ignoreCommentPatterns: [] },
       people: [],
     });
-    const { captured, services } = captureReports();
+    const { captured, services, scheduler } = captureReports();
     const service = services[0]!;
     const lifecycle = captured.runtimeLifecycles[0]!;
     const starting = service.start({
+      scheduler,
       config,
       stateDir: directory,
       logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -164,9 +167,9 @@ describe("Team Reports registration", () => {
       await Promise.all([starting, cleanup]);
     }
     await expect(store.listRuns()).rejects.toThrow("store is closed");
-    await expect(service.start({ config, stateDir: directory, logger: console })).rejects.toThrow(
-      "runtime has been retired",
-    );
+    await expect(
+      service.start({ config, stateDir: directory, logger: console, scheduler }),
+    ).rejects.toThrow("runtime has been retired");
   });
 
   it("exposes reports through the authenticated tab, read methods, and admin generation method", () => {
@@ -227,9 +230,10 @@ describe("Team Reports registration", () => {
       workerModuleUrl: resolveRuntimeWorkerUrl(teamReportsSqliteBackendEntrypoint),
     });
     vi.mocked(createTeamReportsStore).mockResolvedValueOnce(store);
-    const { services, methods } = captureReports();
+    const { services, methods, scheduler } = captureReports();
     const service = services[0]!;
-    const context: OpenClawPluginServiceContext = {
+    const context: OpenClawPluginServiceContextV2 = {
+      scheduler,
       config,
       stateDir: directory,
       logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -307,7 +311,7 @@ describe("Team Reports registration", () => {
         entered.resolve();
         return credentials.promise;
       });
-      const { captured, services } = captureReports();
+      const { captured, services, scheduler } = captureReports();
       const service = services.find((entry) => entry.id === "team-reports");
       const lifecycle = captured.runtimeLifecycles.find(
         (entry) => entry.id === "team-reports-service",
@@ -315,7 +319,8 @@ describe("Team Reports registration", () => {
       if (!service || !lifecycle?.cleanup) {
         throw new Error("Team Reports must register its service and runtime cleanup");
       }
-      const context: OpenClawPluginServiceContext = {
+      const context: OpenClawPluginServiceContextV2 = {
+        scheduler,
         config,
         stateDir: "/unused-team-reports-test-state",
         logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },

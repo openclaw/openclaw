@@ -85,7 +85,7 @@ export function createManagedServiceCommandFixture(params: {
         `${managedServiceStateUpdateScript(statePath, "state.guardedRestart = process.argv.slice(1)")};`,
         ...(checksServiceIdentity
           ? [
-              `const recoveryInsideService = await isCurrentProcessInsideLaunchdService("ai.openclaw.gateway", process.env);`,
+              `const recoveryInsideService = await isCurrentProcessInsideLaunchdService("ai.openclaw.gateway");`,
               `${managedServiceStateUpdateScript(
                 statePath,
                 `state.recoveryInsideService = recoveryInsideService;

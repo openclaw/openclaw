@@ -1,4 +1,5 @@
 import type { GatewayClient } from "./server-methods/types.js";
+import { withReadySessionRows } from "./session-row-prepared-read.js";
 import { prepareProjectedSessionPresentation } from "./session-row-presentation.js";
 import type { MaterializedRow } from "./session-row-projection-record.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
@@ -87,51 +88,44 @@ export async function withCurrentSessionListRows<T>(
   if (!projection || selected.some((read) => read.projection.deref() !== projection)) {
     throw new Error("Gateway changed while preparing session inventory; retry the request");
   }
-  while (true) {
-    const prepared = await projection.withPreparedExactRows(
-      () => selected.map(({ agentId, key }) => ({ agentId, key })),
-      (read) => {
-        const presentations = new Map<
-          GatewayClient | null | undefined,
-          ReturnType<typeof prepareProjectedSessionPresentation>
-        >();
-        const visible = selected.map((selectedRead) => {
-          const { agentId, key, client } = selectedRead;
-          const query = { agentId, key };
-          const record = read.describe(query);
-          if (
-            !record ||
-            record.agentId !== agentId ||
-            record.key !== key ||
-            record.storeTarget.storePath !== selectedRead.storePath ||
-            record.storeTarget.agentId !== selectedRead.storeAgentId ||
-            record.generation !== selectedRead.generation ||
-            record.entry.sessionId !== selectedRead.sessionId ||
-            record.entry.lifecycleRevision !== selectedRead.lifecycleRevision
-          ) {
-            return false;
-          }
-          if (client === undefined) {
-            return true;
-          }
-          let presentation = presentations.get(client);
-          if (!presentation) {
-            presentation = prepareProjectedSessionPresentation(read, client);
-            presentations.set(client, presentation);
-          }
-          return (
-            !presentation.authorizeDescription(query) &&
-            presentation.sharing.entryFilter?.(record.key, record.entry) !== false
-          );
-        });
-        return consume(visible);
-      },
-    );
-    if (prepared.kind === "complete") {
-      return prepared.value;
-    }
-    const { certifySessionCanonicalValidationPending } =
-      await import("../config/sessions/session-canonical-validation-readiness.js");
-    await certifySessionCanonicalValidationPending(prepared.database);
-  }
+  return withReadySessionRows(
+    projection,
+    () => selected.map(({ agentId, key }) => ({ agentId, key })),
+    (read) => {
+      const presentations = new Map<
+        GatewayClient | null | undefined,
+        ReturnType<typeof prepareProjectedSessionPresentation>
+      >();
+      const visible = selected.map((selectedRead) => {
+        const { agentId, key, client } = selectedRead;
+        const query = { agentId, key };
+        const record = read.describe(query);
+        if (
+          !record ||
+          record.agentId !== agentId ||
+          record.key !== key ||
+          record.storeTarget.storePath !== selectedRead.storePath ||
+          record.storeTarget.agentId !== selectedRead.storeAgentId ||
+          record.generation !== selectedRead.generation ||
+          record.entry.sessionId !== selectedRead.sessionId ||
+          record.entry.lifecycleRevision !== selectedRead.lifecycleRevision
+        ) {
+          return false;
+        }
+        if (client === undefined) {
+          return true;
+        }
+        let presentation = presentations.get(client);
+        if (!presentation) {
+          presentation = prepareProjectedSessionPresentation(read, client);
+          presentations.set(client, presentation);
+        }
+        return (
+          !presentation.authorizeDescription(query) &&
+          presentation.sharing.entryFilter?.(record.key, record.entry) !== false
+        );
+      });
+      return consume(visible);
+    },
+  );
 }

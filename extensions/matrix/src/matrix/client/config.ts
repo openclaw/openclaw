@@ -1,4 +1,3 @@
-// Matrix helper module supports config behavior.
 import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
@@ -13,10 +12,7 @@ import {
   normalizeResolvedSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
-import {
-  isPrivateNetworkOptInEnabled,
-  ssrfPolicyFromDangerouslyAllowPrivateNetwork,
-} from "openclaw/plugin-sdk/ssrf-runtime";
+import { ssrfPolicyFromDangerouslyAllowPrivateNetwork } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   requiresExplicitMatrixDefaultAccount,
   resolveMatrixDefaultOrOnlyAccountId,
@@ -50,16 +46,12 @@ const loadMatrixCredentialsReadDeps = createLazyRuntimeModule(
 );
 
 const loadMatrixCredentialsWriteRuntime = createLazyRuntimeModule(
-  () => import("../credentials-write.runtime.js"),
+  () => import("../credentials.js"),
 );
 
 const loadMatrixSecretInputDeps = createLazyRuntimeModule(
-  () => import("./config-secret-input.runtime.js"),
+  () => import("openclaw/plugin-sdk/secret-input-runtime"),
 );
-
-function isAbortSignalTriggered(signal?: AbortSignal): boolean {
-  return signal?.aborted === true;
-}
 
 function credentialsMatchBackfillAuthLineage(params: {
   stored: MatrixStoredCredentials | null;
@@ -189,10 +181,6 @@ async function resolveConfiguredMatrixAuthSecretInput(params: {
   );
 }
 
-function clampMatrixInitialSyncLimit(value: unknown): number | undefined {
-  return resolveOptionalIntegerOption(value, { min: 0 });
-}
-
 function buildMatrixNetworkFields(params: {
   allowPrivateNetwork: boolean | undefined;
   proxy?: string;
@@ -246,14 +234,7 @@ export {
 
 function hasScopedMatrixEnvConfig(accountId: string, env: NodeJS.ProcessEnv): boolean {
   const scoped = resolveScopedMatrixEnvConfig(accountId, env);
-  return Boolean(
-    scoped.homeserver ||
-    scoped.userId ||
-    scoped.accessToken ||
-    scoped.password ||
-    scoped.deviceId ||
-    scoped.deviceName,
-  );
+  return Object.values(scoped).some(Boolean);
 }
 
 function readMatrixConfigStrings(params: {
@@ -326,9 +307,12 @@ function resolveMatrixAccountConfigSnapshot(
     }),
     globalEnv,
   });
-  const accountInitialSyncLimit = clampMatrixInitialSyncLimit(account.initialSyncLimit);
+  const accountInitialSyncLimit = resolveOptionalIntegerOption(account.initialSyncLimit, {
+    min: 0,
+  });
   const allowPrivateNetwork =
-    isPrivateNetworkOptInEnabled(account) || isPrivateNetworkOptInEnabled(matrix)
+    account.network?.dangerouslyAllowPrivateNetwork === true ||
+    matrix.network?.dangerouslyAllowPrivateNetwork === true
       ? true
       : undefined;
   return {
@@ -340,7 +324,8 @@ function resolveMatrixAccountConfigSnapshot(
       deviceId: resolvedStrings.deviceId || undefined,
       deviceName: resolvedStrings.deviceName || undefined,
       initialSyncLimit:
-        accountInitialSyncLimit ?? clampMatrixInitialSyncLimit(matrix.initialSyncLimit),
+        accountInitialSyncLimit ??
+        resolveOptionalIntegerOption(matrix.initialSyncLimit, { min: 0 }),
       encryption:
         typeof account.encryption === "boolean" ? account.encryption : (matrix.encryption ?? false),
       ...buildMatrixNetworkFields({
@@ -386,9 +371,9 @@ function resolveMatrixAuthState(params: {
   accountId?: string | null;
 }): { context: MatrixAuthContext; authInputs: MatrixAuthInputs } {
   const cfg = requireRuntimeConfig(params.cfg, "Matrix auth context") as CoreConfig;
-  const env = params?.env ?? process.env;
-  const requestedAccountId = params?.accountId?.trim();
-  const explicitAccountId = normalizeOptionalAccountId(params?.accountId);
+  const env = params.env ?? process.env;
+  const requestedAccountId = params.accountId?.trim();
+  const explicitAccountId = normalizeOptionalAccountId(params.accountId);
   if (requestedAccountId && !explicitAccountId) {
     throw new Error(`Matrix account id "${requestedAccountId}" is invalid.`);
   }
@@ -472,7 +457,6 @@ export async function resolveMatrixAuth(params?: {
       ? cached
       : null;
 
-  // If we have an access token, we can fetch userId via whoami if not provided
   if (accessToken) {
     let userId = resolved.userId;
     const hasMatchingCachedToken = cachedCredentials?.accessToken === accessToken;
@@ -565,17 +549,22 @@ export async function resolveMatrixAuth(params?: {
     ssrfPolicy: resolved.ssrfPolicy,
     dispatcherPolicy: resolved.dispatcherPolicy,
   });
-  const login = await retryMatrixAuthRequest(
-    "matrix auth login",
-    async () =>
-      (await loginClient.doRequest("POST", "/_matrix/client/v3/login", undefined, {
-        type: "m.login.password",
-        identifier: { type: "m.id.user", user: resolved.userId },
-        password,
-        device_id: resolved.deviceId,
-        initial_device_display_name: resolved.deviceName ?? "OpenClaw Gateway",
-      })) as MatrixLoginResponse,
-  );
+  let login: MatrixLoginResponse;
+  try {
+    login = await retryMatrixAuthRequest(
+      "matrix auth login",
+      async () =>
+        (await loginClient.doRequest("POST", "/_matrix/client/v3/login", undefined, {
+          type: "m.login.password",
+          identifier: { type: "m.id.user", user: resolved.userId },
+          password,
+          device_id: resolved.deviceId,
+          initial_device_display_name: resolved.deviceName ?? "OpenClaw Gateway",
+        })) as MatrixLoginResponse,
+    );
+  } finally {
+    await loginClient.stopWithoutPersist();
+  }
 
   const loginAccessToken = login.access_token?.trim();
   if (!loginAccessToken) {
@@ -615,7 +604,7 @@ export async function backfillMatrixAuthDeviceIdAfterStartup(params: {
   if (knownDeviceId) {
     return knownDeviceId;
   }
-  if (isAbortSignalTriggered(params.abortSignal)) {
+  if (params.abortSignal?.aborted) {
     return undefined;
   }
 
@@ -631,7 +620,7 @@ export async function backfillMatrixAuthDeviceIdAfterStartup(params: {
     });
   } catch (err) {
     // Cancelled requests yield no device ID; disposal failures remain visible.
-    if (isAbortSignalTriggered(params.abortSignal) && !(err instanceof MatrixWhoamiCleanupError)) {
+    if (params.abortSignal?.aborted && !(err instanceof MatrixWhoamiCleanupError)) {
       return undefined;
     }
     throw err;
@@ -640,7 +629,7 @@ export async function backfillMatrixAuthDeviceIdAfterStartup(params: {
   if (!deviceId) {
     return undefined;
   }
-  if (isAbortSignalTriggered(params.abortSignal)) {
+  if (params.abortSignal?.aborted) {
     return undefined;
   }
 
@@ -655,7 +644,7 @@ export async function backfillMatrixAuthDeviceIdAfterStartup(params: {
     return undefined;
   }
 
-  if (isAbortSignalTriggered(params.abortSignal)) {
+  if (params.abortSignal?.aborted) {
     return undefined;
   }
 
@@ -670,14 +659,14 @@ export async function backfillMatrixAuthDeviceIdAfterStartup(params: {
   if (!repairedStorageMeta) {
     throw new Error("Matrix deviceId backfill failed to repair current-token storage metadata");
   }
-  if (isAbortSignalTriggered(params.abortSignal)) {
+  if (params.abortSignal?.aborted) {
     return undefined;
   }
 
   const credentialsWriter = await loadMatrixCredentialsWriteRuntime();
   const currentCredentials = await loadMatrixCredentialsAsync(env, params.auth.accountId);
   if (
-    isAbortSignalTriggered(params.abortSignal) ||
+    params.abortSignal?.aborted ||
     !credentialsMatchBackfillAuthLineage({ stored: currentCredentials, auth: params.auth })
   ) {
     return undefined;

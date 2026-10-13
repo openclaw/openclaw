@@ -1,10 +1,9 @@
 // `openclaw plugins list`: builds registry reports and defers terminal-only formatting modules.
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import type { PluginRecord } from "../plugins/registry.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 import { quietPluginJsonLogger } from "./plugins-json-logger.js";
 
-/** Options accepted by the plugin list command. */
 export type PluginsListOptions = {
   json?: boolean;
   enabled?: boolean;
@@ -18,35 +17,13 @@ function toPluginListJsonRecord(plugin: PluginRecord): Omit<PluginRecord, "agent
   return record;
 }
 
-async function loadHumanListModules() {
-  const [sourceDisplay, table, themeModule, commandFormat, listFormat] = await Promise.all([
-    import("../plugins/source-display.js"),
-    import("../../packages/terminal-core/src/table.js"),
-    import("../../packages/terminal-core/src/theme.js"),
-    import("./command-format.js"),
-    import("./plugins-list-format.js"),
-  ]);
-
-  return {
-    formatPluginLine: listFormat.formatPluginLine,
-    formatPluginStatus: listFormat.formatPluginStatus,
-    formatPluginSourceForTable: sourceDisplay.formatPluginSourceForTable,
-    formatCliCommand: commandFormat.formatCliCommand,
-    getTerminalTableWidth: table.getTerminalTableWidth,
-    renderTable: table.renderTable,
-    resolvePluginSourceRoots: sourceDisplay.resolvePluginSourceRoots,
-    theme: themeModule.theme,
-  };
-}
-
-/** Render installed plugin discovery state as JSON, compact table, or verbose text. */
 export async function runPluginsListCommand(
   opts: PluginsListOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
   const { buildPluginRegistrySnapshotReport } = await import("../plugins/status-snapshot.js");
   // The inventory projector owns plugin metadata validation from the installed index.
-  const cfg = getRuntimeConfig({ skipPluginValidation: true });
+  const cfg = await captureRuntimeConfigAsyncReader({ skipPluginValidation: true })();
   const report = buildPluginRegistrySnapshotReport({
     config: cfg,
     ...(opts.json ? { logger: quietPluginJsonLogger } : {}),
@@ -68,16 +45,19 @@ export async function runPluginsListCommand(
     return;
   }
 
-  const {
-    formatCliCommand,
-    formatPluginLine,
-    formatPluginStatus,
-    formatPluginSourceForTable,
-    getTerminalTableWidth,
-    renderTable,
-    resolvePluginSourceRoots,
-    theme,
-  } = await loadHumanListModules();
+  const [
+    { formatPluginSourceForTable, resolvePluginSourceRoots },
+    { getTerminalTableWidth, renderTable },
+    { theme },
+    { formatCliCommand },
+    { formatPluginLine, formatPluginStatus },
+  ] = await Promise.all([
+    import("../plugins/source-display.js"),
+    import("../../packages/terminal-core/src/table.js"),
+    import("../../packages/terminal-core/src/theme.js"),
+    import("./command-format.js"),
+    import("./plugins-list-format.js"),
+  ]);
 
   const diagnostics = [...report.diagnostics, ...report.registryDiagnostics].filter(
     (diagnostic) =>
@@ -164,10 +144,5 @@ export async function runPluginsListCommand(
     return;
   }
 
-  const lines: string[] = [];
-  for (const plugin of list) {
-    lines.push(formatPluginLine(plugin));
-    lines.push("");
-  }
-  runtime.log(lines.join("\n").trim());
+  runtime.log(list.map(formatPluginLine).join("\n\n").trim());
 }

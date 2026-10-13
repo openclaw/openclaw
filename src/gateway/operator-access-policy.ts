@@ -3,16 +3,17 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   GatewayAccessGrantRef,
   PluginGatewayAccessAuthority,
+  PluginGatewayAccessPolicy,
 } from "../plugins/gateway-access-policy.types.js";
 import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import { onUserProfilesChanged, readUserProfileVersion } from "../state/user-profile-events.js";
-import { getUserProfileListItem } from "../state/user-profiles.js";
+import { captureResidentUserProfileAccess } from "../state/user-profile-list.js";
 import type { UserProfileAccessFacts } from "../state/user-profiles.types.js";
 import type { GatewayOperatorAccessAuthority } from "./operator-access-policy.types.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
 
 export const GATEWAY_OPERATOR_ACCESS_DENIED_MESSAGE =
-  "Gateway access is no longer active; ask a Gateway administrator to restore it.";
+  "Gateway access is not active for this account; ask a Gateway administrator to grant or restore access.";
 
 export class GatewayOperatorAccessDeniedError extends Error {
   constructor() {
@@ -67,9 +68,31 @@ function currentAccessPolicies() {
 
 export function hasGatewayOperatorAccessPolicies(config: OpenClawConfig): boolean {
   return (
+    usesGitHubRoleAssignments(config, null) ||
     currentAccessPolicies().length > 0 ||
     Object.values(config.gateway?.roles?.definitions ?? {}).some((role) => role.accessPolicyPlugin)
   );
+}
+
+function usesGitHubRoleAssignments(config: OpenClawConfig, assignedRole: string | null): boolean {
+  const roles = config.gateway?.roles;
+  return Boolean(
+    roles &&
+    Object.keys(roles.assignments?.byGithubLogin ?? {}).length > 0 &&
+    (!assignedRole || !Object.hasOwn(roles.definitions, assignedRole)),
+  );
+}
+
+function pluginProfile(
+  profile: Pick<UserProfileAccessFacts, "profileId" | "emails" | "githubAccountIds">,
+  assignedRole: string | null,
+): Parameters<PluginGatewayAccessPolicy["authorize"]>[0]["profile"] {
+  return {
+    profileId: profile.profileId,
+    emails: [...profile.emails],
+    ...(profile.githubAccountIds ? { githubAccountIds: [...profile.githubAccountIds] } : {}),
+    assignedRole,
+  };
 }
 
 /** Bind additional access to this exact authenticated person and the original policy lifetimes. */
@@ -83,25 +106,36 @@ export function resolveGatewayOperatorAccessAuthority(
   if (!hasGatewayOperatorAccessPolicies(config)) {
     return null;
   }
-  const profile = getUserProfileListItem(profileId);
+  const resident = captureResidentUserProfileAccess(profileId);
+  const profile = resident.readCurrentFacts();
   const emails = [...profile.emails];
+  const githubAccountIds = [...(profile.githubAccountIds ?? [])];
+  const usesGithubAssignments = usesGitHubRoleAssignments(config, profile.assignedRole);
   let profileVersion = readUserProfileVersion();
   return resolvePreparedGatewayOperatorAccessAuthority(
     {
-      profileId: profile.id,
+      profileId: profile.profileId,
       emails,
-      role: profile.role ?? null,
+      githubAccountIds,
+      role: profile.assignedRole,
+      githubLogin: profile.githubLogin ?? null,
       isCurrent: () => {
-        if (profile.id !== profileId) {
+        resident.assertCurrent();
+        if (profile.profileId !== profileId) {
           return false;
         }
         const currentVersion = readUserProfileVersion();
         if (currentVersion !== profileVersion) {
-          const current = getUserProfileListItem(profileId);
+          const current = resident.readCurrentFacts();
           const currentEmails = new Set(current.emails);
           // A merge or alias replacement cannot transfer a captured grant to its successor.
           // Display/avatar changes preserve admitted work.
-          if (current.id !== profileId || emails.some((email) => !currentEmails.has(email))) {
+          if (
+            current.profileId !== profileId ||
+            (usesGithubAssignments && current.githubLogin !== profile.githubLogin) ||
+            emails.some((email) => !currentEmails.has(email)) ||
+            githubAccountIds.some((accountId) => !current.githubAccountIds?.includes(accountId))
+          ) {
             return false;
           }
           profileVersion = currentVersion;
@@ -118,6 +152,8 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
   profile: Readonly<{
     profileId: string;
     emails: readonly string[];
+    githubAccountIds?: readonly number[];
+    githubLogin?: string | null;
     role: string | null;
     isCurrent: () => boolean;
   }>,
@@ -130,11 +166,11 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
   if (policies.length === 0 && !hasGatewayOperatorAccessPolicies(config)) {
     return null;
   }
-  const emails = [...profile.emails];
   const requiredPlugin = resolveOperatorRolePolicyForAssignment(
     profile.profileId,
     profile.role,
     config,
+    profile.githubLogin ?? null,
   )?.accessPolicyPlugin;
   if (requiredPlugin && !policies.some((entry) => entry.pluginId === requiredPlugin)) {
     throw new GatewayOperatorAccessDeniedError();
@@ -169,7 +205,7 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
     const authorities = policies.flatMap(({ policy, pluginId }) => {
       const authority = policy.authorize({
         config,
-        profile: { profileId: profile.profileId, emails: [...emails], assignedRole: profile.role },
+        profile: pluginProfile(profile, profile.role),
         requiredByRole: pluginId === requiredPlugin,
       });
       if (authority && pluginId === requiredPlugin) {
@@ -180,7 +216,7 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
     if (!requiredPolicyConfirmed) {
       throw new GatewayOperatorAccessDeniedError();
     }
-    if (authorities.length === 0) {
+    if (authorities.length === 0 && !usesGitHubRoleAssignments(config, profile.role)) {
       releaseProfiles();
       return null;
     }
@@ -208,7 +244,9 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
       signal,
       gatewayAccessGrant: original?.authority.grantId
         ? Object.freeze({ pluginId: original.pluginId, grantId: original.authority.grantId })
-        : undefined,
+        : authorities.length === 0
+          ? null
+          : undefined,
     };
   } catch {
     releaseProfiles();
@@ -217,17 +255,18 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
   }
 }
 
-/** The caller supplies current profile facts and rechecks its retained authority after callbacks. */
+/** Recheck current facts, returning the original grant's live authority for retained work. */
 export function resumeGatewayOperatorAccessGrant(
   profile: UserProfileAccessFacts,
   config: OpenClawConfig,
   grant: GatewayAccessGrantRef | null,
-): void {
+): PluginGatewayAccessAuthority | undefined {
   const policies = currentAccessPolicies();
   const requiredPlugin = resolveOperatorRolePolicyForAssignment(
     profile.profileId,
     profile.assignedRole,
     config,
+    profile.githubLogin ?? null,
   )?.accessPolicyPlugin;
   if (requiredPlugin && requiredPlugin !== grant?.pluginId) {
     // A newly required policy cannot replace the original request's recorded basis.
@@ -235,8 +274,9 @@ export function resumeGatewayOperatorAccessGrant(
   }
   const context = {
     config,
-    profile,
+    profile: pluginProfile(profile, profile.assignedRole),
   };
+  let resumed: PluginGatewayAccessAuthority | undefined;
   if (grant) {
     const policy = policies.find(({ pluginId }) => pluginId === grant.pluginId)?.policy;
     if (!policy?.resume) {
@@ -258,6 +298,7 @@ export function resumeGatewayOperatorAccessGrant(
     if (!authority || authority.grantId !== grant.grantId) {
       throw new GatewayOperatorAccessDeniedError();
     }
+    resumed = authority;
   }
   for (const { pluginId, policy } of policies) {
     if (pluginId === grant?.pluginId) {
@@ -274,6 +315,7 @@ export function resumeGatewayOperatorAccessGrant(
       throw new GatewayOperatorAccessDeniedError();
     }
   }
+  return resumed;
 }
 
 export function hasCurrentGatewayOperatorAccess(

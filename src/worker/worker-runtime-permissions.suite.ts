@@ -1,7 +1,9 @@
 import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import type { WorkerToolSurface } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import type { WorkerInferenceStartParams } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ExecApprovalsFile } from "../infra/exec-approvals.js";
 import * as logger from "../logger.js";
 import type { WorkerLaunchDescriptor } from "./launch-descriptor.js";
@@ -17,13 +19,107 @@ type WorkerPermissionFixture = {
     >;
     execApprovals?: ExecApprovalsFile;
   }) => Promise<{
-    gateway: { inferenceRequests: WorkerInferenceStartParams[]; methods: string[] };
+    gateway: {
+      inferenceRequests: WorkerInferenceStartParams[];
+      methods: string[];
+      config?: OpenClawConfig;
+      toolSurface: () => WorkerToolSurface;
+    };
     workspaceDir: string;
     launch: WorkerLaunchDescriptor;
   }>;
 };
 
 export function registerWorkerPermissionTests({ setup }: WorkerPermissionFixture) {
+  it("enforces Gateway filesystem and patch configuration through the worker entry point", async () => {
+    const cases = [
+      { workspaceOnly: true, toolName: "read", patch: { enabled: false }, patchAllowed: false },
+      {
+        workspaceOnly: true,
+        toolName: "write",
+        patch: { allowModels: ["other-model"] },
+        patchAllowed: false,
+      },
+      { workspaceOnly: false, toolName: "read", patch: {}, patchAllowed: true },
+      { workspaceOnly: false, toolName: "write", patch: {}, patchAllowed: true },
+    ];
+    const { gateway, workspaceDir, launch } = await setup({
+      inferencePlans: [
+        ...cases.flatMap(({ toolName }, index) => [
+          {
+            toolName,
+            toolCallId: `fs-${index}`,
+            args: { path: "../outside.txt", content: "after" },
+          },
+          "text" as const,
+        ]),
+        {
+          toolName: "write",
+          toolCallId: "memory-append",
+          args: { path: "memory/state.md", content: "appended" },
+        },
+        {
+          toolName: "write",
+          toolCallId: "memory-denied",
+          args: { path: "other.md", content: "denied" },
+        },
+        "text",
+      ],
+    });
+    const contained = path.join(workspaceDir, "contained");
+    const outside = path.join(workspaceDir, "outside.txt");
+    await mkdir(contained);
+    launch.assignment.workspaceDir = contained;
+    for (const [index, testCase] of cases.entries()) {
+      await writeFile(outside, "before\n");
+      gateway.config = {
+        tools: {
+          fs: { workspaceOnly: testCase.workspaceOnly },
+          exec: { applyPatch: testCase.patch },
+        },
+      };
+      await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+      const initial = gateway.inferenceRequests[index * 2];
+      expect(initial?.context.tools?.some((tool) => tool.name === "apply_patch")).toBe(
+        testCase.patchAllowed,
+      );
+      const result = gateway.inferenceRequests[index * 2 + 1]?.context.messages.find(
+        (message) => message.role === "toolResult",
+      );
+      if (testCase.workspaceOnly) {
+        expect(JSON.stringify(result)).toMatch(/escapes sandbox root/iu);
+        await expect(readFile(outside, "utf8")).resolves.toBe("before\n");
+      } else {
+        expect(JSON.stringify(result)).not.toMatch(/escapes sandbox root/iu);
+        if (testCase.toolName === "read") {
+          expect(JSON.stringify(result)).toContain("before");
+        } else {
+          await expect(readFile(outside, "utf8")).resolves.toBe("after");
+        }
+      }
+    }
+    const prepare = gateway.toolSurface;
+    gateway.toolSurface = () => {
+      const surface = prepare();
+      return {
+        ...surface,
+        policy: { ...surface.policy, workspaceOnly: true, memoryFlushWritePath: "memory/state.md" },
+        tools: surface.tools.filter((entry) => ["read", "write"].includes(entry.definition.name)),
+      };
+    };
+    await mkdir(path.join(contained, "memory"));
+    await writeFile(path.join(contained, "memory/state.md"), "seed");
+    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+    await expect(readFile(path.join(contained, "memory/state.md"), "utf8")).resolves.toBe(
+      "seed\nappended",
+    );
+    await expect(stat(path.join(contained, "other.md"))).rejects.toMatchObject({ code: "ENOENT" });
+    expect(JSON.stringify(gateway.inferenceRequests.at(-1)?.context.messages)).toContain(
+      "Memory flush writes are restricted",
+    );
+    expect(gateway.methods).not.toContain("worker.toolSurface");
+  });
+
   it.each([
     {
       mode: "read-only" as const,
@@ -108,7 +204,7 @@ export function registerWorkerPermissionTests({ setup }: WorkerPermissionFixture
     {
       policy: "default",
       permissionMode: undefined,
-      operatorHint: "workspace-contained by default on worker placements",
+      operatorHint: "workspace-contained by configuration",
     },
     {
       policy: "guarded",
@@ -170,7 +266,6 @@ export function registerWorkerPermissionTests({ setup }: WorkerPermissionFixture
           .filter((message) => message.startsWith("[tools] apply_patch failed:"));
         expect(operatorLogs).toHaveLength(1);
         expect(operatorLogs[0]).toContain(operatorHint);
-        expect(operatorLogs[0]).not.toContain("workspace-contained by configuration");
         await expect(readFile(outside, "utf8")).resolves.toBe("outside-before\n");
         expect((await stat(outside)).mode).toBe(originalMode);
       } finally {

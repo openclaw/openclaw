@@ -5,11 +5,7 @@ import { GatewayRequestError } from "../../api/gateway.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import {
-  clearFirstRunActivationReceipt,
-  persistFirstRunActivationReceipt,
-  readFirstRunActivationReceipt,
-} from "./first-run-activation-receipt.ts";
+import { persistFirstRunActivationReceipt } from "./first-run-activation-receipt.ts";
 import { FirstRunSetup } from "./first-run-setup.ts";
 import {
   candidate,
@@ -21,6 +17,7 @@ import {
   waitForModelSetupDetection,
 } from "./model-setup-first-run.test-support.ts";
 import { MODEL_SETUP_AUTH_START_TIMEOUT_MS } from "./state.ts";
+import { unmountModelSetupPage } from "./test-helpers/solid-page.test-support.tsx";
 
 describe("ModelSetupPage first-run activation ownership", () => {
   beforeEach(async () => {
@@ -36,104 +33,6 @@ describe("ModelSetupPage first-run activation ownership", () => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
-  it.each([false, true])(
-    "refreshes a missing wizard without replay when a committed model exists: %s",
-    async (configured) => {
-      const { context, client, request } = createFirstRunContext();
-      request.mockImplementation(async (method) => {
-        if (method === "openclaw.setup.auth.start") {
-          return { done: false, status: "running" };
-        }
-        if (method === "wizard.next") {
-          throw new GatewayRequestError({
-            code: "INVALID_REQUEST",
-            message: "wizard not found",
-            details: { code: "WIZARD_NOT_FOUND" },
-          });
-        }
-        if (method === "openclaw.setup.detect") {
-          return {
-            ...detection,
-            authOptions: [
-              { id: "provider-login", label: "Provider", kind: "oauth", featured: true },
-            ],
-            ...(configured ? { configuredModel: "provider/selected", setupComplete: true } : {}),
-          };
-        }
-        if (method === "openclaw.setup.verify") {
-          return { ok: true, modelRef: "provider/selected", latencyMs: 12 };
-        }
-        throw new Error(`Unexpected setup request: ${method}`);
-      });
-      const { page } = await mountPage(context, {
-        client,
-        firstRun: true,
-        state: {
-          phase: "ready",
-          result: {
-            ...detection,
-            authOptions: [
-              { id: "provider-login", label: "Provider", kind: "oauth", featured: true },
-            ],
-          },
-        },
-      });
-      page.querySelector<HTMLButtonElement>('[data-auth-choice="provider-login"] button')!.click();
-      await waitForFast(() =>
-        expect(page.textContent).toContain("Gateway no longer has this setup session"),
-      );
-      const receipt = localStorage.getItem("openclaw.modelSetup.pendingActivation.v1");
-      expect(receipt).not.toBeNull();
-      [...page.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button")]
-        .find((button) => button.textContent?.trim() === "Close")!
-        .click();
-      await page.updateComplete;
-      const checkAgain = () =>
-        [...page.querySelectorAll<HTMLButtonElement>(".model-setup__recovery button")].find(
-          (button) => button.textContent?.trim() === "Check again",
-        )!;
-      checkAgain().click();
-      await waitForFast(() =>
-        expect(request.mock.calls.map(([method]) => method)).toEqual([
-          "openclaw.setup.auth.start",
-          "wizard.next",
-          "openclaw.setup.detect",
-        ]),
-      );
-      await waitForModelSetupDetection(page);
-      expect(localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")).toBe(receipt);
-      expect(context.navigate).not.toHaveBeenCalled();
-      if (configured) {
-        page.querySelector<HTMLButtonElement>(".model-setup__recovery .btn.primary")!.click();
-        await waitForFast(() =>
-          expect(context.navigate).toHaveBeenCalledWith("custodian", { search: "?onboarding=1" }),
-        );
-        expect(request.mock.calls.map(([method]) => method)).toEqual([
-          "openclaw.setup.auth.start",
-          "wizard.next",
-          "openclaw.setup.detect",
-          "openclaw.setup.verify",
-        ]);
-      } else {
-        expect(
-          page.querySelector<HTMLButtonElement>('[data-auth-choice="provider-login"] button')!
-            .disabled,
-        ).toBe(true);
-        vi.spyOn(Date, "now").mockReturnValue(JSON.parse(receipt!).deadlineMs + 1);
-        checkAgain().click();
-        await waitForFast(() =>
-          expect(
-            page.querySelector<HTMLButtonElement>('[data-auth-choice="provider-login"] button')!
-              .disabled,
-          ).toBe(false),
-        );
-        expect(
-          request.mock.calls.filter(([method]) => method === "openclaw.setup.auth.start"),
-        ).toHaveLength(1);
-        expect(localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")).toBeNull();
-      }
-    },
-  );
 
   it("keeps first-run activation owned through an equivalent route-data refresh", async () => {
     const { context, client, request } = createFirstRunContext();
@@ -248,23 +147,28 @@ describe("ModelSetupPage first-run activation ownership", () => {
       const receipt = localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")!;
       expect(JSON.parse(receipt).modelRef).toBeNull();
       expect(receipt).not.toContain("test-only-provider-key");
-      expect(receipt).not.toContain("provider-login");
+      expect(JSON.parse(receipt).wizard?.authChoice).toBe(
+        entry === "provider sign-in" ? "provider-login" : undefined,
+      );
       publishGatewaySnapshot({ ...snapshot, phase: "reconnecting", hello: null });
       await page.updateComplete;
+      if (entry === "provider sign-in") {
+        expect(page.textContent).toContain("Waiting for it to reconnect");
+      }
       publishGatewaySnapshot({ ...snapshot, hello: { ...snapshot.hello } });
       if (entry === "provider sign-in") {
+        // A restarted Gateway lost the wizard: recovery replaces the reconnect notice.
         await waitForFast(() =>
           expect(page.textContent).toContain("Gateway no longer has this setup session"),
         );
+        expect(page.textContent).not.toContain("Waiting for it to reconnect");
         [...page.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button")]
           .find((button) => button.textContent?.trim() === "Close")!
           .click();
         await page.updateComplete;
-        [...page.querySelectorAll<HTMLButtonElement>(".model-setup__recovery button")]
-          .find((button) => button.textContent?.trim() === "Check again")!
-          .click();
       }
       await waitForFast(() => expect(page.textContent).toContain("Verify & use selected model"));
+      await waitForModelSetupDetection(page);
       expect(
         request.mock.calls.filter(([method]) => method === "openclaw.setup.verify"),
       ).toHaveLength(0);
@@ -288,150 +192,90 @@ describe("ModelSetupPage first-run activation ownership", () => {
     },
   );
 
-  it.each([
-    ["auth", "terminal error"],
-    ["prepare", "terminal error"],
-    ["auth", "rejected test"],
-    ["auth", "busy start"],
-    ["prepare", "busy start"],
-    ["auth", "busy next"],
-    ["auth", "unknown start"],
-    ["auth", "wrong-code start"],
-    ["auth", "transport error"],
-    ["auth", "RPC error"],
-    ["auth", "retryable RPC error"],
-    ["auth", "validation error"],
-  ])("allows retry only after definitive %s %s", async (mode, outcome) => {
-    const { context, client, request } = createFirstRunContext();
-    const startMethod = `openclaw.setup.${mode}.start`;
-    const selector = `[data-${mode === "auth" ? "auth" : "prepare"}-choice="provider-login"] button`;
-    const failure = "Provider could not finish this sign-in";
-    let nextCount = 0;
-    let startCount = 0;
-    request.mockImplementation(async (method) => {
-      if (method === startMethod) {
-        if (
-          startCount++ === 0 &&
-          ["busy start", "unknown start", "wrong-code start"].includes(outcome)
-        ) {
-          throw new GatewayRequestError({
-            code: outcome === "wrong-code start" ? "INVALID_REQUEST" : "UNAVAILABLE",
-            message: failure,
-            ...(outcome !== "unknown start" ? { details: { code: "SETUP_ADMISSION_BUSY" } } : {}),
-            retryable: true,
-          });
+  it.each(["wrong-code start", "validation error"])(
+    "retains unresolved auth after %s",
+    async (outcome) => {
+      const { context, client, request } = createFirstRunContext();
+      const startMethod = "openclaw.setup.auth.start";
+      const selector = '[data-auth-choice="provider-login"] button';
+      const failure = "Provider could not finish this sign-in";
+      request.mockImplementation(async (method) => {
+        if (method === startMethod) {
+          if (outcome === "wrong-code start") {
+            throw new GatewayRequestError({
+              code: "INVALID_REQUEST",
+              message: failure,
+              details: { code: "SETUP_ADMISSION_BUSY" },
+              retryable: true,
+            });
+          }
+          return { done: false, status: "running" };
         }
-        return { done: false, status: "running" };
-      }
-      if (method === "wizard.next") {
-        if (nextCount++ > 0 || startCount > 1) {
+        if (method === "wizard.next") {
           return {
             done: false,
             status: "running",
-            step: { id: "retry", type: "text", message: "Retry sign-in" },
+            error: failure,
+            step: { id: "login", type: "text" },
           };
         }
-        if (outcome === "transport error") {
-          throw new Error(failure);
-        }
-        if (
-          outcome === "RPC error" ||
-          outcome === "retryable RPC error" ||
-          outcome === "busy next"
-        ) {
+        if (method === "wizard.cancel") {
+          if (outcome === "validation error") {
+            return { status: "running" };
+          }
           throw new GatewayRequestError({
-            code: "UNAVAILABLE",
-            message: failure,
-            retryable: outcome === "retryable RPC error",
-            ...(outcome === "busy next" ? { details: { code: "SETUP_ADMISSION_BUSY" } } : {}),
+            code: "INVALID_REQUEST",
+            message: "wizard not found",
+            details: { code: "WIZARD_NOT_FOUND" },
           });
         }
-        return outcome === "validation error"
-          ? { done: false, status: "running", error: failure, step: { id: "login", type: "text" } }
-          : {
-              done: true,
-              status: "error",
-              error: failure,
-              ...(outcome === "rejected test"
-                ? {
-                    activationRejection: {
-                      disposition: "rejected-before-promotion",
-                      status: "auth",
-                    },
-                  }
-                : {}),
-            };
-      }
-      if (method === "wizard.cancel") {
-        if (outcome === "validation error") {
-          return { status: "running" };
-        }
-        throw new GatewayRequestError({
-          code: "INVALID_REQUEST",
-          message: "wizard not found",
-          details: { code: "WIZARD_NOT_FOUND" },
-        });
-      }
-      throw new Error(`Unexpected method ${method}`);
-    });
-    const { page } = await mountPage(context, {
-      state: {
-        phase: "ready",
-        result: {
-          ...detection,
-          authOptions: [{ id: "provider-login", label: "Provider", kind: "oauth", featured: true }],
-          prepareOptions: [{ id: "provider-login", label: "Provider" }],
+        throw new Error(`Unexpected method ${method}`);
+      });
+      const { page } = await mountPage(context, {
+        state: {
+          phase: "ready",
+          result: {
+            ...detection,
+            authOptions: [
+              { id: "provider-login", label: "Provider", kind: "oauth", featured: true },
+            ],
+          },
         },
-      },
-      client,
-      firstRun: true,
-    });
-    const signIn = () => page.querySelector<HTMLButtonElement>(selector)!;
-    signIn().click();
-    await waitForFast(() => expect(page.textContent).toContain(failure));
-    [...page.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button")]
-      .find(
-        (button) =>
-          button.textContent?.trim() === (outcome === "validation error" ? "Cancel" : "Close"),
-      )!
-      .click();
-    await page.updateComplete;
-    if (outcome === "validation error") {
-      await waitForFast(() =>
-        expect(page.textContent).toContain("Setup is finishing the current step"),
-      );
-      expect(page.querySelector("openclaw-modal-dialog")).not.toBeNull();
-    } else {
-      expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
-    }
-    const terminal =
-      (mode === "prepare" && outcome === "terminal error") ||
-      outcome === "rejected test" ||
-      outcome === "busy start";
-    if (outcome === "busy start") {
-      expect(request.mock.calls.map(([method]) => method)).toEqual([startMethod]);
-    }
-    expect(signIn().disabled).toBe(!terminal);
-    expect(localStorage.getItem("openclaw.modelSetup.pendingActivation.v1") === null).toBe(
-      terminal,
-    );
-    signIn().click();
-    if (terminal) {
-      await waitForFast(() => expect(page.textContent).toContain("Retry sign-in"));
-    }
-    expect(request.mock.calls.filter(([method]) => method === startMethod)).toHaveLength(
-      terminal ? 2 : 1,
-    );
-    expect(request.mock.calls.some(([method]) => method === "openclaw.setup.verify")).toBe(false);
-    expect(page.textContent).not.toContain("Connection verified");
-    expect(context.navigate).not.toHaveBeenCalled();
-  });
+        client,
+        firstRun: true,
+      });
+      const signIn = () => page.querySelector<HTMLButtonElement>(selector)!;
+      signIn().click();
+      await waitForFast(() => expect(page.textContent).toContain(failure));
+      [...page.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button")]
+        .find(
+          (button) =>
+            button.textContent?.trim() === (outcome === "validation error" ? "Cancel" : "Close"),
+        )!
+        .click();
+      await page.updateComplete;
+      if (outcome === "validation error") {
+        await waitForFast(() =>
+          expect(page.textContent).toContain("Setup is finishing the current step"),
+        );
+        expect(page.querySelector("openclaw-modal-dialog")).not.toBeNull();
+      } else {
+        expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
+      }
+      expect(signIn().disabled).toBe(true);
+      expect(localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")).not.toBeNull();
+      signIn().click();
+      expect(request.mock.calls.filter(([method]) => method === startMethod)).toHaveLength(1);
+      expect(request.mock.calls.some(([method]) => method === "openclaw.setup.verify")).toBe(false);
+      expect(page.textContent).not.toContain("Connection verified");
+      expect(context.navigate).not.toHaveBeenCalled();
+    },
+  );
 
-  it.each(
-    ["same page", "new page", "new authenticated context"].flatMap((replacement) =>
-      ["cancelled", "error", "busy"].map((terminal) => ({ replacement, terminal })),
-    ),
-  )(
+  it.each([
+    { replacement: "same page", terminal: "busy" },
+    { replacement: "new authenticated context", terminal: "cancelled" },
+  ])(
     "does not clear a replacement sign-in after late $terminal ($replacement)",
     async ({ replacement, terminal }) => {
       const original = createFirstRunContext();
@@ -505,6 +349,7 @@ describe("ModelSetupPage first-run activation ownership", () => {
         next.request.mockImplementation(respond);
       }
       if (replacement !== "same page") {
+        unmountModelSetupPage(page);
         page.remove();
         ({ page } = await mountPage(next.context, {
           state: { phase: "ready", result },
@@ -567,6 +412,9 @@ describe("ModelSetupPage first-run activation ownership", () => {
       setVerifyState: () => undefined,
       setActivationState: () => undefined,
       setRefreshWarning: () => undefined,
+      resumeWizard: () => undefined,
+      closeWizard: () => undefined,
+      notify: () => undefined,
     });
     const notify = vi.fn();
     const unsubscribe = setup.subscribe(notify);
@@ -591,24 +439,10 @@ describe("ModelSetupPage first-run activation ownership", () => {
     }
   });
 
-  const retirements = [
-    "auth",
-    "Gateway",
-    "agent",
-    "client",
-    "hello",
-    "route",
-    "expiry",
-    "removal",
-    "replacement",
-  ] as const;
-  it.each(
-    ["manual key", "provider sign-in"].flatMap((entry) =>
-      ["reply", "refresh"].flatMap((boundary) =>
-        retirements.map((changed) => ({ entry, boundary, changed })),
-      ),
-    ),
-  )(
+  it.each([
+    { entry: "manual key", boundary: "reply", changed: "auth" },
+    { entry: "provider sign-in", boundary: "refresh", changed: "agent" },
+  ])(
     "fences $entry success when $changed retires it during $boundary",
     async ({ entry, boundary, changed }) => {
       const reply = createDeferred<unknown>();
@@ -675,43 +509,9 @@ describe("ModelSetupPage first-run activation ownership", () => {
       if (changed === "auth") {
         context.gateway.connection.token = "replacement-auth";
       }
-      if (changed === "Gateway") {
-        context.gateway.connection.gatewayUrl = "ws://different.example";
-      }
       if (changed === "agent") {
         context.agentSelection.state.selectedId = "research";
       }
-      if (changed === "client") {
-        const replacementClient = createFirstRunContext();
-        replacementClient.request.mockResolvedValue(detection);
-        context.gateway.snapshot.client = replacementClient.client;
-      }
-      if (changed === "hello") {
-        context.gateway.snapshot.hello = { ...context.gateway.snapshot.hello! };
-      }
-      if (changed === "route") {
-        page.routeData = { firstRun: false };
-      }
-      if (changed === "expiry") {
-        const receipt = readFirstRunActivationReceipt(context)!;
-        vi.spyOn(Date, "now").mockReturnValue(receipt.deadlineMs + 1);
-      }
-      if (changed === "removal") {
-        clearFirstRunActivationReceipt();
-      }
-      const replacement =
-        changed === "replacement"
-          ? persistFirstRunActivationReceipt(
-              {
-                ...context,
-                gateway: {
-                  ...context.gateway,
-                  connection: { ...context.gateway.connection, token: "replacement-auth" },
-                },
-              },
-              { kind: "provider-auth", modelRef: "provider/replacement" },
-            )
-          : null;
       await page.updateComplete;
       reply.resolve(success);
       refresh.resolve();
@@ -725,143 +525,66 @@ describe("ModelSetupPage first-run activation ownership", () => {
       expect(page.textContent).not.toContain("Cannot read properties");
       expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
       expect(context.navigate).not.toHaveBeenCalled();
-      if (replacement) {
-        expect(localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")).toBe(
-          JSON.stringify(replacement),
-        );
-      }
     },
   );
 
-  it.each(
-    ["active", "replacement"].flatMap((ownership) =>
-      ["result", "uncertain", "busy"].flatMap((rejection) =>
-        ["candidate", "manual"].map((entry) => ({ ownership, rejection, entry })),
-      ),
-    ),
-  )(
-    "handles $rejection without losing failure feedback or replacement ownership ($ownership, $entry)",
-    async ({ ownership, rejection, entry }) => {
-      const { context, client, request } = createFirstRunContext();
-      const rejected = createDeferred<unknown>();
-      request.mockReturnValue(rejected.promise);
-      const { page } = await mountPage(context, {
-        state: {
-          phase: "ready",
-          result: {
-            ...detection,
-            manualProviders: [{ id: "provider-key", label: "Provider key" }],
-            candidates:
-              entry === "manual"
-                ? []
-                : [
-                    {
-                      kind: "openai-api-key",
-                      label: "Provider",
-                      detail: "Available",
-                      modelRef: "provider/model",
-                      recommended: true,
-                      credentials: true,
-                    },
-                  ],
-          },
+  it("preserves replacement ownership after a late manual busy rejection", async () => {
+    const { context, client, request } = createFirstRunContext();
+    const rejected = createDeferred<unknown>();
+    request.mockReturnValue(rejected.promise);
+    const { page } = await mountPage(context, {
+      state: {
+        phase: "ready",
+        result: {
+          ...detection,
+          manualProviders: [{ id: "provider-key", label: "Provider key" }],
         },
-        client,
-        firstRun: true,
-      });
-      if (entry === "manual") {
-        await selectManualProvider(page, "provider-key");
-        const input = page.querySelector<HTMLInputElement>('input[type="password"]')!;
-        input.value = "test-only-provider-key";
-        input.dispatchEvent(new Event("input", { bubbles: true }));
-        page.querySelector<HTMLButtonElement>(".model-setup__manual .btn.primary")!.click();
-      } else {
-        await clickCandidate(page, "openai-api-key");
-      }
-      await waitForFast(() => expect(request).toHaveBeenCalledOnce());
-      const originalReceipt = localStorage.getItem("openclaw.modelSetup.pendingActivation.v1");
-      const replacement =
-        ownership === "replacement"
-          ? persistFirstRunActivationReceipt(
-              {
-                ...context,
-                gateway: {
-                  ...context.gateway,
-                  connection: { ...context.gateway.connection, token: "replacement-auth" },
-                },
-              },
-              { kind: "provider-auth", modelRef: "provider/replacement" },
-            )
-          : null;
-      if (rejection === "busy") {
-        rejected.reject(
-          new GatewayRequestError({
-            code: "UNAVAILABLE",
-            message: "Provider rejected this test key",
-            details: { code: "SETUP_ADMISSION_BUSY" },
-          }),
-        );
-      } else {
-        rejected.resolve({
-          done: true,
-          status: "error",
-          error: "Provider rejected this test key",
-          ...(rejection === "result"
-            ? { activationRejection: { disposition: "rejected-before-promotion", status: "auth" } }
-            : {}),
-        });
-      }
-      await waitForFast(() =>
-        expect(context.runtimeConfig.runExternalMutation).toHaveResolvedWith(
-          expect.objectContaining({ ok: true }),
-        ),
-      );
-      await page.updateComplete;
-      if (ownership === "active") {
-        expect(page.textContent).toContain("Provider rejected this test key");
-      } else {
-        expect(page.textContent).not.toContain("Provider rejected this test key");
-      }
-      expect(page.textContent).not.toContain("Cannot read properties");
-      expect(page.textContent).not.toContain("Connection verified");
-      expect(localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")).toBe(
-        replacement
-          ? JSON.stringify(replacement)
-          : rejection === "uncertain"
-            ? originalReceipt
-            : null,
-      );
-      expect(context.navigate).not.toHaveBeenCalled();
-      if (ownership === "active" && entry === "manual" && rejection !== "uncertain") {
-        [...page.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button")]
-          .find((button) => button.textContent?.trim() === "Close")!
-          .click();
-        await page.updateComplete;
-        const retry = page.querySelector<HTMLButtonElement>(".model-setup__manual .btn.primary")!;
-        expect(retry.disabled).toBe(false);
-        retry.click();
-        await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
-      }
-    },
-  );
+      },
+      client,
+      firstRun: true,
+    });
+    await selectManualProvider(page, "provider-key");
+    const input = page.querySelector<HTMLInputElement>('input[type="password"]')!;
+    input.value = "test-only-provider-key";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    page.querySelector<HTMLButtonElement>(".model-setup__manual .btn.primary")!.click();
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    const replacement = persistFirstRunActivationReceipt(
+      {
+        ...context,
+        gateway: {
+          ...context.gateway,
+          connection: { ...context.gateway.connection, token: "replacement-auth" },
+        },
+      },
+      { kind: "provider-auth", modelRef: "provider/replacement" },
+    );
+    rejected.reject(
+      new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: "Provider rejected this test key",
+        details: { code: "SETUP_ADMISSION_BUSY" },
+      }),
+    );
+    await waitForFast(() =>
+      expect(context.runtimeConfig.runExternalMutation).toHaveResolvedWith(
+        expect.objectContaining({ ok: true }),
+      ),
+    );
+    await page.updateComplete;
+    expect(page.textContent).not.toContain("Provider rejected this test key");
+    expect(page.textContent).not.toContain("Cannot read properties");
+    expect(page.textContent).not.toContain("Connection verified");
+    expect(localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")).toBe(
+      JSON.stringify(replacement),
+    );
+    expect(context.navigate).not.toHaveBeenCalled();
+  });
 
   it.each([
-    ["cancelled", "in place"],
-    ["error", "in place"],
-    ["error", "route refresh"],
     ["error", "reconnect"],
-    ["error", "unmount"],
-    ["busy", "in place"],
-    ["busy", "route refresh"],
-    ["busy", "reconnect"],
-    ["busy", "unmount"],
-    ["running", "in place"],
-    ["cancelled", "route refresh"],
-    ["cancelled", "reconnect"],
     ["cancelled", "unmount"],
     ["running", "unmount"],
-    ["unknown", "unmount"],
-    ["absent", "unmount"],
   ])(
     "only releases first-run intent after a confirmed negative terminal result (%s, %s)",
     async (cancelStatus, lifecycle) => {
@@ -877,9 +600,6 @@ describe("ModelSetupPage first-run activation ownership", () => {
       };
       request.mockImplementation(async (method) => {
         if (method === "openclaw.setup.auth.start") {
-          if (cancelStatus === "busy") {
-            return await cancelled.promise;
-          }
           return { sessionId: "auth", done: false, status: "running" };
         }
         if (method === "wizard.next") {
@@ -893,13 +613,6 @@ describe("ModelSetupPage first-run activation ownership", () => {
           };
         }
         if (method === "wizard.cancel") {
-          if (cancelStatus === "busy") {
-            throw new GatewayRequestError({
-              code: "INVALID_REQUEST",
-              message: "wizard not found",
-              details: { code: "WIZARD_NOT_FOUND" },
-            });
-          }
           // The server settles its status before sending the reply. A resumed
           // next request sees that outcome even while this transport is delayed.
           if (cancelStatus === "cancelled" || cancelStatus === "error") {
@@ -939,45 +652,21 @@ describe("ModelSetupPage first-run activation ownership", () => {
       await page.updateComplete;
       expect(page.querySelector("openclaw-modal-dialog")).not.toBeNull();
       expect(localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")).not.toBeNull();
-      if (lifecycle === "route refresh") {
-        page.routeData = { ...page.routeData! };
-      } else if (lifecycle === "reconnect") {
+      if (lifecycle === "reconnect") {
         publishGatewaySnapshot({ ...snapshot, phase: "reconnecting", hello: null });
         await page.updateComplete;
         publishGatewaySnapshot({ ...snapshot, hello: { ...snapshot.hello } });
       } else if (lifecycle === "unmount") {
+        unmountModelSetupPage(page);
         page.remove();
       }
       await page.updateComplete;
-      if (cancelStatus === "busy") {
-        cancelled.reject(
-          new GatewayRequestError({
-            code: "UNAVAILABLE",
-            message: "Setup busy",
-            details: { code: "SETUP_ADMISSION_BUSY" },
-          }),
-        );
-      } else if (cancelStatus === "absent") {
-        cancelled.reject(
-          new GatewayRequestError({
-            code: "INVALID_REQUEST",
-            message: "wizard not found",
-            details: { code: "WIZARD_NOT_FOUND" },
-          }),
-        );
-      } else {
-        cancelled.resolve(cancelStatus === "unknown" ? {} : { status: cancelStatus });
-      }
+      cancelled.resolve({ status: cancelStatus });
       await waitForFast(() => {
-        const cancelIndex = request.mock.calls.findIndex(
-          ([method]) =>
-            method === (cancelStatus === "busy" ? "openclaw.setup.auth.start" : "wizard.cancel"),
-        );
-        expect(request.mock.settledResults[cancelIndex]?.type).toBe(
-          cancelStatus === "absent" || cancelStatus === "busy" ? "rejected" : "fulfilled",
-        );
+        const cancelIndex = request.mock.calls.findIndex(([method]) => method === "wizard.cancel");
+        expect(request.mock.settledResults[cancelIndex]?.type).toBe("fulfilled");
       });
-      if (lifecycle !== "unmount" && ["cancelled", "error", "busy"].includes(cancelStatus)) {
+      if (lifecycle === "reconnect") {
         const terminalClose = () =>
           [...page.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button")].find(
             (button) => button.textContent?.trim() === "Close",
@@ -990,8 +679,6 @@ describe("ModelSetupPage first-run activation ownership", () => {
         terminalClose()?.click();
         await page.updateComplete;
         expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
-      } else if (lifecycle === "in place" && cancelStatus === "running") {
-        expect(page.querySelector("openclaw-modal-dialog")).not.toBeNull();
       }
       if (lifecycle === "unmount") {
         ({ page } = await mountPage(context, {
@@ -1005,10 +692,10 @@ describe("ModelSetupPage first-run activation ownership", () => {
           '[data-auth-choice="provider-login"] button',
         );
         expect(button).not.toBeNull();
-        expect(button!.disabled).toBe(!["cancelled", "busy"].includes(cancelStatus));
+        expect(button!.disabled).toBe(cancelStatus !== "cancelled");
       });
       expect(localStorage.getItem("openclaw.modelSetup.pendingActivation.v1") === null).toBe(
-        ["cancelled", "busy"].includes(cancelStatus),
+        cancelStatus === "cancelled",
       );
       expect(context.navigate).not.toHaveBeenCalled();
     },

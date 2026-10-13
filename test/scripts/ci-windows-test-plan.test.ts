@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { isPrExemptRuntimeTestFile } from "../../scripts/lib/ci-proof-test-inventory.mts";
 import { createWindowsTestShards } from "../../scripts/lib/ci-windows-test-plan.mts";
 import { resolveVitestPretestBuildMode } from "../../scripts/lib/vitest-build-prerequisites.mts";
 
@@ -27,7 +28,8 @@ describe("Windows CI whole-file placement", () => {
     expect(shards.flatMap((shard) => shard.targets).toSorted(compareFiles)).toEqual(
       inventory.toSorted(compareFiles),
     );
-    expect(shards.every((shard) => shard.predicted_seconds < 420)).toBe(true);
+    // The Windows long-path identity regression (#162332) rounds every shard to 428s; retain the approved tiny budget bump.
+    expect(shards.every((shard) => shard.predicted_seconds < 429)).toBe(true);
     expect(
       shards.filter(
         (shard) =>
@@ -35,6 +37,18 @@ describe("Windows CI whole-file placement", () => {
       ),
     ).toHaveLength(1);
     expect(createWindowsTestShards(packageScripts(inventory.toReversed()))).toEqual(shards);
+    const pr = createWindowsTestShards(scripts, { includePrExemptRuntimeTests: false });
+    expect(pr.flatMap((shard) => shard.targets).toSorted(compareFiles)).toEqual(
+      inventory.filter((file: string) => !isPrExemptRuntimeTestFile(file)).toSorted(compareFiles),
+    );
+    const changed = inventory.find((file: string) => isPrExemptRuntimeTestFile(file));
+    expect(changed).toBeDefined();
+    expect(
+      createWindowsTestShards(scripts, {
+        includePrExemptRuntimeTests: false,
+        changedPaths: [changed],
+      }).flatMap((shard) => shard.targets),
+    ).toContain(changed);
     expect(
       shards.filter((shard) =>
         shard.targets.includes("test/scripts/vitest-worker-artifacts.test.ts"),
@@ -42,26 +56,35 @@ describe("Windows CI whole-file placement", () => {
     ).toHaveLength(1);
   });
 
-  it("keeps an unmeasured project together regardless of inventory ordering", () => {
-    const files = Array.from({ length: 24 }, (_, index) => `src/native/case-${index}.test.ts`);
-    const forward = createWindowsTestShards(packageScripts(files));
-    expect(forward).toHaveLength(1);
-    expect(forward.flatMap((shard) => shard.targets).toSorted()).toEqual(files.toSorted());
-    expect(createWindowsTestShards(packageScripts(files.toReversed()))).toEqual(forward);
-  });
-
-  it("splits a project whose rounded prediction reaches the budget", () => {
-    const files = [
-      "extensions/msteams/src/messenger.test.ts",
-      ...Array.from(
-        { length: 101 },
-        (_, index) => `extensions/msteams/src/rounding-${index}.test.ts`,
-      ),
-    ];
-    const shards = createWindowsTestShards(packageScripts(files));
-    expect(shards.flatMap((shard) => shard.targets).toSorted()).toEqual(files.toSorted());
-    expect(shards.every((shard) => shard.predicted_seconds < 420)).toBe(true);
-  });
+  it.each([
+    {
+      label: "unmeasured project",
+      files: Array.from({ length: 24 }, (_, index) => `src/native/case-${index}.test.ts`),
+      together: true,
+    },
+    {
+      label: "rounded budget",
+      files: [
+        "extensions/msteams/src/messenger.test.ts",
+        ...Array.from(
+          { length: 101 },
+          (_, index) => `extensions/msteams/src/rounding-${index}.test.ts`,
+        ),
+      ],
+      together: false,
+    },
+  ])(
+    "places every file at the $label boundary regardless of input order",
+    ({ files, together }) => {
+      const shards = createWindowsTestShards(packageScripts(files));
+      expect(shards.flatMap((shard) => shard.targets).toSorted()).toEqual(files.toSorted());
+      if (together) {
+        expect(shards).toHaveLength(1);
+      }
+      expect(createWindowsTestShards(packageScripts(files.toReversed()))).toEqual(shards);
+      expect(shards.every((shard) => shard.predicted_seconds < 420)).toBe(true);
+    },
+  );
 
   it.each([
     { "test:windows:ci:1": `${command} src/first.test.ts` },

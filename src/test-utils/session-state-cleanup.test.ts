@@ -9,8 +9,8 @@ import { readPersistedAuthProfileStoreRaw } from "../agents/auth-profiles/sqlite
 import { runExclusiveSqliteSessionWrite } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
-import { resetFileLockStateForTest } from "../infra/file-lock.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
+import { resetFileLockStateForTest } from "../plugin-sdk/file-lock.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,

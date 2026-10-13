@@ -1,12 +1,9 @@
-// Diffs plugin module implements plugin behavior.
 import fs from "node:fs";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
-import {
-  resolvePreferredOpenClawTmpDir,
-  type OpenClawConfig,
-  type OpenClawPluginApi,
-} from "../api.js";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import {
   resolveDiffsPluginDefaults,
   resolveDiffsPluginSecurity,
@@ -63,7 +60,6 @@ export function registerDiffsPlugin(api: OpenClawPluginApi): void {
       allowRealIpFallback: currentConfig.gateway?.allowRealIpFallback === true,
     };
   };
-  const initialAccessConfig = resolveCurrentAccessConfig();
 
   api.registerTool(
     (ctx) => {
@@ -92,9 +88,6 @@ export function registerDiffsPlugin(api: OpenClawPluginApi): void {
     handler: createDiffsHttpHandler({
       store,
       logger: api.logger,
-      allowRemoteViewer: initialAccessConfig.allowRemoteViewer,
-      trustedProxies: initialAccessConfig.trustedProxies,
-      allowRealIpFallback: initialAccessConfig.allowRealIpFallback,
       resolveAccessConfig: resolveCurrentAccessConfig,
     }),
   });

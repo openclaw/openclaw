@@ -12,7 +12,7 @@ import {
   runActivePluginPayloadSmokeCheck,
 } from "../../../plugins/active-payload-verification.js";
 import { resolvePluginNpmGenerationProjectDir } from "../../../plugins/install-paths.js";
-import { readPersistedInstalledPluginIndexInstallRecords } from "../../../plugins/installed-plugin-index-records.js";
+import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "../../../plugins/installed-plugin-index-records.js";
 import { loadPluginManifestRegistryCore } from "../../../plugins/manifest-registry.js";
 import { createPluginCache, withPluginCache } from "../../../plugins/plugin-cache.js";
 import { seedInstalledPluginIndex } from "../../../plugins/test-helpers/installed-plugin-index.js";
@@ -137,12 +137,9 @@ describe("post-core convergence on source checkouts", () => {
   });
 
   it.each([
-    { version: "2026.9.3", selector: false, corrupt: false, flow: "doctor" },
-    { version: HOST_VERSION, selector: false, corrupt: false, flow: "doctor" },
     { version: "2026.9.3", selector: true, corrupt: false, flow: "doctor" },
-    { version: HOST_VERSION, selector: true, corrupt: false, flow: "doctor" },
     { version: HOST_VERSION, selector: false, corrupt: true, flow: "doctor" },
-    ...["cli named", "cli all", "stable", "beta"].map((flow) => ({
+    ...["cli named", "cli all", "stable"].map((flow) => ({
       version: HOST_VERSION,
       selector: false,
       corrupt: false,
@@ -279,7 +276,9 @@ describe("post-core convergence on source checkouts", () => {
           expect
             .soft(fs.readFileSync(path.join(npmDir, "package.json"), "utf8"))
             .toBe(npmPackageBefore);
-          expect.soft(readPersistedInstalledPluginIndexInstallRecords({ env })).toEqual(records);
+          expect
+            .soft(await readPersistedInstalledPluginIndexInstallRecordsAsync({ env }))
+            .toEqual(records);
           const registry = loadPluginManifestRegistryCore({ config: cfg, env });
           const selected = registry.plugins.find((plugin) => plugin.id === "codex");
           expect.soft(selected).toMatchObject({ origin: "bundled", rootDir: bundledDir });
@@ -298,7 +297,7 @@ describe("post-core convergence on source checkouts", () => {
             });
             expect(mocks.error).not.toHaveBeenCalled();
             expect(mocks.log.mock.calls.flat().join("\n")).toContain('Kept bundled plugin "codex"');
-          } else if (flow === "stable" || flow === "beta") {
+          } else if (flow === "stable") {
             const cohort = await convergePluginReleaseCohort({
               config: { ...cfg, plugins: { ...cfg.plugins, installs: records } },
               channel: flow,

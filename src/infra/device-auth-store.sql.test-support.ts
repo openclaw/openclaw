@@ -1,45 +1,17 @@
 import fs from "node:fs";
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { vi } from "vitest";
-import * as nodeSqlite from "./node-sqlite.js";
-import {
-  captureStateDatabaseCoordinatorRuntime,
-  resolveStateDatabaseCoordinatorPath,
-} from "./state-database-coordinator.js";
 
 const emptyCounts = () => ({ prepare: 0, exec: 0, close: 0, get: 0, all: 0, run: 0, iterate: 0 });
 
-/** Distinguish token-data work from the existing synchronous lifecycle coordinator. */
+/** Observe token-data and unexpected host SQLite work without exempting control databases. */
 export function observeDeviceAuthHostSql(databasePath: string) {
-  const coordinatorPath = resolveStateDatabaseCoordinatorPath({
-    databasePath,
-    runtimeDirectory: captureStateDatabaseCoordinatorRuntime().directory,
-    uid: process.getuid?.(),
-  });
-  const runtimeInitialization = Symbol("coordinator runtime initialization");
-  type Source = string | null | typeof runtimeInitialization;
+  type Source = string | null;
   const databaseLocations = new WeakMap<DatabaseSync, Source>();
   const statementLocations = new WeakMap<StatementSync, Source>();
-  const open = nodeSqlite.openNodeSqliteDatabase;
-  let openingCoordinator = false;
-  const openSpy = vi
-    .spyOn(nodeSqlite, "openNodeSqliteDatabase")
-    .mockImplementation((pathname, options) => {
-      const previous = openingCoordinator;
-      openingCoordinator = pathname === coordinatorPath;
-      try {
-        return open(pathname, options);
-      } finally {
-        openingCoordinator = previous;
-      }
-    });
   const location = (database: DatabaseSync) => {
     if (!databaseLocations.has(database)) {
-      const pathname = database.location();
-      databaseLocations.set(
-        database,
-        pathname === null && openingCoordinator ? runtimeInitialization : pathname,
-      );
+      databaseLocations.set(database, database.location());
     }
     return databaseLocations.get(database) ?? null;
   };
@@ -79,22 +51,12 @@ export function observeDeviceAuthHostSql(databasePath: string) {
     counts() {
       const counts = {
         data: emptyCounts(),
-        coordinator: emptyCounts(),
-        runtimeInitialization: emptyCounts(),
         unknown: emptyCounts(),
       };
       const dataPath = canonicalPath(databasePath);
-      const controlPath = canonicalPath(coordinatorPath);
       const record = (method: keyof ReturnType<typeof emptyCounts>, source: Source | undefined) => {
         const pathname = typeof source === "string" ? canonicalPath(source) : null;
-        const group =
-          source === runtimeInitialization
-            ? "runtimeInitialization"
-            : pathname === dataPath
-              ? "data"
-              : pathname === controlPath
-                ? "coordinator"
-                : "unknown";
+        const group = pathname === dataPath ? "data" : "unknown";
         counts[group][method]++;
       };
       for (const method of ["prepare", "exec", "close"] as const) {
@@ -116,11 +78,7 @@ export function observeDeviceAuthHostSql(databasePath: string) {
       return counts;
     },
     restore() {
-      for (const spy of [
-        openSpy,
-        ...Object.values(databaseSpies),
-        ...Object.values(statementSpies),
-      ]) {
+      for (const spy of [...Object.values(databaseSpies), ...Object.values(statementSpies)]) {
         spy.mockRestore();
       }
     },

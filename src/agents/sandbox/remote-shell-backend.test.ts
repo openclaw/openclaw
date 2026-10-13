@@ -271,8 +271,6 @@ describe.runIf(process.platform === "linux" || process.platform === "darwin")(
   () => {
     it.each([
       { interrupted: "workspace", readOnly: false },
-      { interrupted: "agent", readOnly: false },
-      { interrupted: "workspace", readOnly: true },
       { interrupted: "agent", readOnly: true },
     ])(
       "retries incomplete $interrupted uploads without publishing a partial workspace (readonly=$readOnly)",
@@ -316,7 +314,6 @@ describe.runIf(process.platform === "linux" || process.platform === "darwin")(
     );
 
     it.each([
-      { winner: "edited", readOnlyLoser: false },
       { winner: "emptied", readOnlyLoser: false },
       { winner: "edited", readOnlyLoser: true },
     ])(

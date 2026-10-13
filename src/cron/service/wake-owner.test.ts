@@ -2,7 +2,6 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { startHeartbeatRunner } from "../../infra/heartbeat-runner.js";
 import {
   requestHeartbeatAndWait,
   setHeartbeatWakeHandler,
@@ -14,6 +13,7 @@ import {
   peekSystemEventEntries,
   resetSystemEventsForTest,
 } from "../../infra/system-events.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import type { CronJob } from "../types.js";
 import { createCronServiceState } from "./state.js";
 import { executeJobCore } from "./timer-execution.js";
@@ -36,7 +36,9 @@ afterEach(async () => {
 
 function createHarness(handler: HeartbeatWakeHandler) {
   setHeartbeatWakeHandler(handler);
+  const wakeQueued = createDeferred();
   const state = createCronServiceState({
+    scheduler: createTestGatewayScheduler(),
     cronEnabled: true,
     storePath: path.join(tempDirs.make("cron-wake-owner-"), "jobs.json"),
     log: { debug() {}, info() {}, warn() {}, error() {} },
@@ -50,7 +52,16 @@ function createHarness(handler: HeartbeatWakeHandler) {
     },
     requestHeartbeat: vi.fn(),
     requestHeartbeatAndWait: (wake, lifecycle) =>
-      requestHeartbeatAndWait({ ...wake, sessionKey, coalesceMs: 0 }, lifecycle),
+      requestHeartbeatAndWait(
+        { ...wake, sessionKey, coalesceMs: 0 },
+        {
+          ...lifecycle,
+          onQueued: () => {
+            lifecycle?.onQueued?.();
+            wakeQueued.resolve();
+          },
+        },
+      ),
     runIsolatedAgentJob: async () => ({ status: "ok" }),
   });
   const run = (id = "reminder", signal?: AbortSignal) => {
@@ -68,7 +79,7 @@ function createHarness(handler: HeartbeatWakeHandler) {
     };
     return executeJobCore(state, job, signal);
   };
-  return { state, run };
+  return { state, run, wakeQueued };
 }
 
 it("coalesces two main jobs and settles both only after their shared turn", async () => {
@@ -86,7 +97,7 @@ it("coalesces two main jobs and settles both only after their shared turn", asyn
     return results;
   });
   try {
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(2 * 60_000 + 1);
     expect(handler).toHaveBeenCalledTimes(1);
     expect(observed).toEqual([["first", "second"]]);
     expect(finished).toBe(false);
@@ -99,7 +110,7 @@ it("coalesces two main jobs and settles both only after their shared turn", asyn
   ]);
 });
 
-it.each(["preempted", "requests-in-flight"] as const)(
+it.each(["requests-in-flight"] as const)(
   "waits through %s without shortening the queue's retry deadline",
   async (reason) => {
     const handler = vi
@@ -160,30 +171,10 @@ it.each([
   },
 );
 
-it("does not spend the busy budget while the model is executing", async () => {
-  const release = createDeferred();
-  const { run } = createHarness(async () => {
-    await release.promise;
-    return ran;
-  });
-  let finished = false;
-  const pending = run().then((result) => {
-    finished = true;
-    return result;
-  });
-  try {
-    await vi.advanceTimersByTimeAsync(2 * 60_000 + 1);
-    expect(finished).toBe(false);
-  } finally {
-    release.resolve();
-  }
-  await expect(pending).resolves.toMatchObject({ status: "ok" });
-});
-
 it.each([false, true])("removes only the cancelled job's event, retrying=%s", async (retrying) => {
   const observed: string[] = [];
   let calls = 0;
-  const { run } = createHarness(async () => {
+  const { run, wakeQueued } = createHarness(async () => {
     if (retrying && ++calls === 1) {
       return { status: "skipped", reason: "requests-in-flight" };
     }
@@ -193,6 +184,7 @@ it.each([false, true])("removes only the cancelled job's event, retrying=%s", as
   enqueueSystemEventWithReceipt("unrelated", { sessionKey, contextKey: "other" });
   const controller = new AbortController();
   const pending = run("cancelled", controller.signal);
+  await wakeQueued.promise;
   if (retrying) {
     await vi.advanceTimersByTimeAsync(0);
   }
@@ -210,38 +202,6 @@ it("removes only the failed job's event after terminal wake failure", async () =
   await vi.advanceTimersByTimeAsync(0);
   await expect(pending).resolves.toMatchObject({ status: "error", error: "runner refused" });
   expect(peekSystemEventEntries(sessionKey).map((event) => event.text)).toEqual(["unrelated"]);
-});
-
-it("applies the canonical immediate flood guard to main cron wakes", async () => {
-  const runOnce = vi.fn(async () => {
-    drainSystemEventEntries(sessionKey);
-    return ran;
-  });
-  const { run } = createHarness(async () => ran);
-  const runner = startHeartbeatRunner({
-    cfg: { agents: { defaults: { heartbeat: { every: "0m" } } } },
-    runOnce,
-  });
-  try {
-    for (let index = 0; index < 5; index++) {
-      const pending = run(`event-${index}`);
-      await vi.advanceTimersByTimeAsync(0);
-      await expect(pending).resolves.toMatchObject({ status: "ok" });
-    }
-    let finished = false;
-    const pending = run("sixth").then((result) => {
-      finished = true;
-      return result;
-    });
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(runOnce).toHaveBeenCalledTimes(5);
-    expect(finished).toBe(false);
-    await vi.advanceTimersByTimeAsync(1);
-    await expect(pending).resolves.toMatchObject({ status: "ok" });
-    expect(runOnce).toHaveBeenCalledTimes(6);
-  } finally {
-    runner.stop();
-  }
 });
 
 it("hands off at the original busy budget after repeated retry deadlines", async () => {

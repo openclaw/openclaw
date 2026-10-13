@@ -1,4 +1,3 @@
-// QA Lab Matrix substrate implements E2EE client behavior.
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type {
@@ -10,10 +9,8 @@ import type {
   MessageEventContent,
 } from "@openclaw/matrix/test-api.js";
 import type {
-  OpenKeyedStoreOptions,
-  PluginStateEntry,
-  PluginStateKeyedStore,
-  PluginStateSyncKeyedStore,
+  OpenAsyncKeyedStoreOptions,
+  PluginStateActionAuthority,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { buildMatrixQaMessageContent } from "./client-message-content.js";
 import {
@@ -28,6 +25,7 @@ import type { MatrixQaObservedEvent } from "./events.js";
 
 type MatrixQaE2eeRuntime = typeof import("@openclaw/matrix/test-api.js");
 type MatrixQaCrypto = NonNullable<MatrixClient["crypto"]>;
+const matrixQaStateOwners = new Map<string, { active: boolean }>();
 
 type MatrixQaE2eeClientParams = {
   accessToken: string;
@@ -41,153 +39,6 @@ type MatrixQaE2eeClientParams = {
   userId: string;
 };
 
-type MatrixQaPluginStateValue = {
-  createdAt: number;
-  expiresAt?: number;
-  value: unknown;
-};
-
-const matrixQaPluginStateNamespaces = new Map<string, Map<string, MatrixQaPluginStateValue>>();
-
-function resolveMatrixQaPluginStateNamespaceKey(options: OpenKeyedStoreOptions): string {
-  return `${options.env?.OPENCLAW_STATE_DIR ?? ""}\0${options.namespace}`;
-}
-
-function resolveMatrixQaPluginStateRows(
-  options: OpenKeyedStoreOptions,
-): Map<string, MatrixQaPluginStateValue> {
-  const namespaceKey = resolveMatrixQaPluginStateNamespaceKey(options);
-  let rows = matrixQaPluginStateNamespaces.get(namespaceKey);
-  if (!rows) {
-    rows = new Map();
-    matrixQaPluginStateNamespaces.set(namespaceKey, rows);
-  }
-  return rows;
-}
-
-function pruneMatrixQaExpiredPluginState(rows: Map<string, MatrixQaPluginStateValue>): void {
-  const now = Date.now();
-  for (const [key, row] of rows) {
-    if (row.expiresAt !== undefined && row.expiresAt <= now) {
-      rows.delete(key);
-    }
-  }
-}
-
-function enforceMatrixQaPluginStateLimit(
-  rows: Map<string, MatrixQaPluginStateValue>,
-  maxEntries: number,
-  nextKey: string,
-): void {
-  if (rows.has(nextKey)) {
-    return;
-  }
-  while (rows.size >= maxEntries) {
-    const oldest = [...rows.entries()].toSorted(
-      (a, b) => a[1].createdAt - b[1].createdAt || a[0].localeCompare(b[0]),
-    )[0]?.[0];
-    if (!oldest) {
-      return;
-    }
-    rows.delete(oldest);
-  }
-}
-
-function createMatrixQaPluginStateSyncKeyedStore<T>(
-  options: OpenKeyedStoreOptions,
-): PluginStateSyncKeyedStore<T> & Required<Pick<PluginStateSyncKeyedStore<T>, "lookupMany">> {
-  const rows = resolveMatrixQaPluginStateRows(options);
-  const resolveExpiresAt = (ttlMs?: number) => {
-    const effectiveTtlMs = ttlMs ?? options.defaultTtlMs;
-    return effectiveTtlMs === undefined ? undefined : Date.now() + effectiveTtlMs;
-  };
-  const register = (key: string, value: T, opts?: { ttlMs?: number }) => {
-    pruneMatrixQaExpiredPluginState(rows);
-    enforceMatrixQaPluginStateLimit(rows, options.maxEntries, key);
-    rows.set(key, {
-      createdAt: rows.get(key)?.createdAt ?? Date.now(),
-      expiresAt: resolveExpiresAt(opts?.ttlMs),
-      value,
-    });
-  };
-  return {
-    register,
-    registerIfAbsent(key, value, opts) {
-      pruneMatrixQaExpiredPluginState(rows);
-      if (rows.has(key)) {
-        return false;
-      }
-      register(key, value, opts);
-      return true;
-    },
-    update(key, updateValue, opts) {
-      pruneMatrixQaExpiredPluginState(rows);
-      const next = updateValue(rows.get(key)?.value as T | undefined);
-      if (next === undefined) {
-        return false;
-      }
-      register(key, next, opts);
-      return true;
-    },
-    lookup(key) {
-      pruneMatrixQaExpiredPluginState(rows);
-      return rows.get(key)?.value as T | undefined;
-    },
-    lookupMany(keys) {
-      pruneMatrixQaExpiredPluginState(rows);
-      // SAFETY: This namespace contains only values registered with the store's T contract.
-      return keys.map((key) => ({ ok: true, value: rows.get(key)?.value as T | undefined }));
-    },
-    consume(key) {
-      pruneMatrixQaExpiredPluginState(rows);
-      const value = rows.get(key)?.value as T | undefined;
-      rows.delete(key);
-      return value;
-    },
-    delete(key) {
-      pruneMatrixQaExpiredPluginState(rows);
-      return rows.delete(key);
-    },
-    entries() {
-      pruneMatrixQaExpiredPluginState(rows);
-      return [...rows.entries()].map(([key, row]): PluginStateEntry<T> => {
-        const entry: PluginStateEntry<T> = {
-          key,
-          value: row.value as T,
-          createdAt: row.createdAt,
-        };
-        if (row.expiresAt !== undefined) {
-          entry.expiresAt = row.expiresAt;
-        }
-        return entry;
-      });
-    },
-    clear() {
-      rows.clear();
-    },
-  };
-}
-
-function createMatrixQaPluginStateKeyedStore<T>(
-  options: OpenKeyedStoreOptions,
-): PluginStateKeyedStore<T> {
-  const syncStore = createMatrixQaPluginStateSyncKeyedStore<T>(options);
-  return {
-    register: async (...args) => syncStore.register(...args),
-    registerIfAbsent: async (...args) => syncStore.registerIfAbsent(...args),
-    update: async (...args) => syncStore.update?.(...args) ?? false,
-    lookup: async (...args) => syncStore.lookup(...args),
-    lookupMany: async (...args) => syncStore.lookupMany(...args),
-    consume: async (...args) => syncStore.consume(...args),
-    delete: async (key, opts) => {
-      opts?.assertCurrent?.();
-      return syncStore.delete(key);
-    },
-    entries: async () => syncStore.entries(),
-    clear: async () => syncStore.clear(),
-  };
-}
-
 export async function loadMatrixQaE2eeRuntime(): Promise<MatrixQaE2eeRuntime> {
   const { loadQaRunnerBundledPluginTestApi } =
     await import("openclaw/plugin-sdk/qa-runner-runtime");
@@ -196,11 +47,22 @@ export async function loadMatrixQaE2eeRuntime(): Promise<MatrixQaE2eeRuntime> {
 
 async function createMatrixQaE2eeMatrixClient(params: MatrixQaE2eeClientParams) {
   const runtime = await loadMatrixQaE2eeRuntime();
+  const { createPluginStateKeyedStoreV2 } =
+    await import("openclaw/plugin-sdk/plugin-state-store-runtime");
   const storage = await prepareMatrixQaE2eeStorage({
     actorId: params.actorId,
     outputDir: params.outputDir,
     scenarioId: params.scenarioId,
   });
+  const stateDir = path.resolve(storage.accountDir);
+  const stateOwner = { active: true };
+  matrixQaStateOwners.set(stateDir, stateOwner);
+  const closeState = () => {
+    stateOwner.active = false;
+    if (matrixQaStateOwners.get(stateDir) === stateOwner) {
+      matrixQaStateOwners.delete(stateDir);
+    }
+  };
   runtime.setMatrixRuntime({
     config: {
       current: () => ({}),
@@ -219,26 +81,57 @@ async function createMatrixQaE2eeMatrixClient(params: MatrixQaE2eeClientParams) 
     },
     state: {
       resolveStateDir: () => params.outputDir,
-      openKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
-        createMatrixQaPluginStateKeyedStore<T>(options),
-      openSyncKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
-        createMatrixQaPluginStateSyncKeyedStore<T>(options),
+      openKeyedStoreV2: <T>(
+        options: OpenAsyncKeyedStoreOptions,
+        authority?: PluginStateActionAuthority,
+      ) => {
+        const storeStateDir = path.resolve(options.env?.OPENCLAW_STATE_DIR ?? stateDir);
+        const owner = matrixQaStateOwners.get(storeStateDir);
+        return createPluginStateKeyedStoreV2<T>(
+          "matrix",
+          {
+            ...options,
+            env: {
+              ...process.env,
+              ...options.env,
+              OPENCLAW_STATE_DIR: storeStateDir,
+            },
+          },
+          {
+            ...authority,
+            assertCurrent: () => {
+              if (!owner?.active) {
+                throw new Error("Matrix QA E2EE state owner is closed");
+              }
+              authority?.assertCurrent();
+            },
+          },
+        );
+      },
     },
   } as never);
-  return new runtime.MatrixClient(params.baseUrl, params.accessToken, {
-    autoBootstrapCrypto: false,
-    cryptoDatabasePrefix: storage.cryptoDatabasePrefix,
-    deviceId: params.deviceId,
-    encryption: true,
-    idbSnapshotPath: storage.idbSnapshotPath,
-    localTimeoutMs: Math.max(10_000, params.timeoutMs),
-    password: params.password,
-    recoveryKeyPath: storage.recoveryKeyPath,
-    ssrfPolicy: { allowPrivateNetwork: true },
-    syncStore: await runtime.SqliteBackedMatrixSyncStore.create(path.dirname(storage.storagePath)),
-    syncFilter: MATRIX_QA_E2EE_SYNC_FILTER,
-    userId: params.userId,
-  });
+  try {
+    const client = new runtime.MatrixClient(params.baseUrl, params.accessToken, {
+      autoBootstrapCrypto: false,
+      cryptoDatabasePrefix: storage.cryptoDatabasePrefix,
+      deviceId: params.deviceId,
+      encryption: true,
+      idbSnapshotPath: storage.idbSnapshotPath,
+      localTimeoutMs: Math.max(10_000, params.timeoutMs),
+      password: params.password,
+      recoveryKeyPath: storage.recoveryKeyPath,
+      ssrfPolicy: { allowPrivateNetwork: true },
+      syncStore: await runtime.SqliteBackedMatrixSyncStore.create(
+        path.dirname(storage.storagePath),
+      ),
+      syncFilter: MATRIX_QA_E2EE_SYNC_FILTER,
+      userId: params.userId,
+    });
+    return { client, closeState };
+  } catch (error) {
+    closeState();
+    throw error;
+  }
 }
 
 export async function createMatrixQaE2eeScenarioClient(
@@ -246,7 +139,7 @@ export async function createMatrixQaE2eeScenarioClient(
     observedEvents: MatrixQaObservedEvent[];
   },
 ) {
-  const client: MatrixClient = await createMatrixQaE2eeMatrixClient(params);
+  const { client, closeState } = await createMatrixQaE2eeMatrixClient(params);
   const localEvents: MatrixQaObservedEvent[] = [];
   const verificationSummaries: MatrixVerificationSummary[] = [];
   let primeCursorIndex = 0;
@@ -270,14 +163,15 @@ export async function createMatrixQaE2eeScenarioClient(
 
   const shutdownTimeoutMs = Math.max(1, Math.min(10_000, params.timeoutMs));
   const lifecycle = createMatrixQaE2eeClientLifecycle({
+    abortPendingRequests: () => client.abortPendingRequests(),
     detachListeners: () => {
       client.off("room.message", recordEvent);
       client.off("verification.summary", recordVerificationSummary);
     },
     drainPendingDecryptions: () => client.drainPendingDecryptions(),
     shutdownTimeoutMs,
-    stopAndPersist: () => client.stopAndPersist(),
-    stopWithoutPersist: () => client.stopWithoutPersist(),
+    stopAndPersist: () => client.stopAndPersist().finally(closeState),
+    stopWithoutPersist: () => client.stopWithoutPersist().finally(closeState),
   });
 
   try {
@@ -333,10 +227,15 @@ export async function createMatrixQaE2eeScenarioClient(
     }
     return client.crypto;
   };
-  const runClientOperation = <T>(label: string, run: () => Promise<T>) =>
+  const runClientOperation = <T>(
+    label: string,
+    roomId: string,
+    run: (assertCurrent: () => void) => Promise<T>,
+  ) =>
     lifecycle.runOperation({
       label,
-      run,
+      run: (assertActive) =>
+        client.withLiveEncryptedRoom(roomId, run, { assertCurrent: assertActive }),
       timeoutMs: params.timeoutMs,
     });
 
@@ -344,32 +243,22 @@ export async function createMatrixQaE2eeScenarioClient(
     async acceptVerification(id: string) {
       return await requireCrypto().acceptVerification(id);
     },
-    async bootstrapOwnDeviceVerification(
-      opts?: Parameters<MatrixClient["bootstrapOwnDeviceVerification"]>[0],
-    ) {
-      return await client.bootstrapOwnDeviceVerification(opts);
-    },
+    bootstrapOwnDeviceVerification: client.bootstrapOwnDeviceVerification.bind(client),
     async confirmVerificationReciprocateQr(id: string) {
       return await requireCrypto().confirmVerificationReciprocateQr(id);
     },
     async confirmVerificationSas(id: string) {
       return await requireCrypto().confirmVerificationSas(id);
     },
-    async deleteOwnDevices(deviceIds: string[]) {
-      return await client.deleteOwnDevices(deviceIds);
-    },
+    deleteOwnDevices: client.deleteOwnDevices.bind(client),
     async generateVerificationQr(id: string) {
       return await requireCrypto().generateVerificationQr(id);
     },
-    async getDeviceVerificationStatus(userId: string, deviceId: string) {
-      return await client.getDeviceVerificationStatus(userId, deviceId);
-    },
+    getDeviceVerificationStatus: client.getDeviceVerificationStatus.bind(client),
     async getRecoveryKey() {
       return await requireCrypto().getRecoveryKey();
     },
-    async listOwnDevices() {
-      return await client.listOwnDevices();
-    },
+    listOwnDevices: client.listOwnDevices.bind(client),
     async listVerifications() {
       const current = await requireCrypto().listVerifications();
       return [...verificationSummaries, ...current].toSorted((a, b) =>
@@ -392,12 +281,8 @@ export async function createMatrixQaE2eeScenarioClient(
     async requestVerification(opts: Parameters<MatrixQaCrypto["requestVerification"]>[0]) {
       return await requireCrypto().requestVerification(opts);
     },
-    async resetRoomKeyBackup(paramsLocal?: Parameters<MatrixClient["resetRoomKeyBackup"]>[0]) {
-      return await client.resetRoomKeyBackup(paramsLocal);
-    },
-    async restoreRoomKeyBackup(opts?: Parameters<MatrixClient["restoreRoomKeyBackup"]>[0]) {
-      return await client.restoreRoomKeyBackup(opts);
-    },
+    resetRoomKeyBackup: client.resetRoomKeyBackup.bind(client),
+    restoreRoomKeyBackup: client.restoreRoomKeyBackup.bind(client),
     async scanVerificationQr(id: string, qrDataBase64: string) {
       return await requireCrypto().scanVerificationQr(id, qrDataBase64);
     },
@@ -406,7 +291,7 @@ export async function createMatrixQaE2eeScenarioClient(
         roomId: string;
       },
     ) {
-      return await runClientOperation("Matrix E2EE text send", () =>
+      return await runClientOperation("Matrix E2EE text send", opts.roomId, () =>
         client.sendMessage(opts.roomId, buildMatrixQaMessageContent(opts) as MessageEventContent),
       );
     },
@@ -415,7 +300,7 @@ export async function createMatrixQaE2eeScenarioClient(
         roomId: string;
       },
     ) {
-      return await runClientOperation("Matrix E2EE notice send", () =>
+      return await runClientOperation("Matrix E2EE notice send", opts.roomId, () =>
         client.sendMessage(opts.roomId, {
           ...buildMatrixQaMessageContent(opts),
           msgtype: "m.notice",
@@ -430,27 +315,33 @@ export async function createMatrixQaE2eeScenarioClient(
       mentionUserIds?: string[];
       roomId: string;
     }) {
-      const encrypted = await requireCrypto().encryptMedia(opts.buffer);
-      const contentUri = await client.uploadContent(
-        encrypted.buffer,
-        opts.contentType,
-        opts.fileName,
-      );
-      const file: EncryptedFile = { url: contentUri, ...encrypted.file };
-      return await runClientOperation("Matrix E2EE image send", () =>
-        client.sendMessage(opts.roomId, {
-          ...buildMatrixQaMessageContent({
-            body: opts.body,
-            mentionUserIds: opts.mentionUserIds,
-          }),
-          file,
-          filename: opts.fileName,
-          info: {
-            mimetype: opts.contentType,
-            size: opts.buffer.byteLength,
-          },
-          msgtype: "m.image",
-        } as MessageEventContent),
+      return await runClientOperation(
+        "Matrix E2EE image send",
+        opts.roomId,
+        async (assertCurrent) => {
+          const encrypted = await requireCrypto().encryptMedia(opts.buffer);
+          assertCurrent();
+          const contentUri = await client.uploadContent(
+            encrypted.buffer,
+            opts.contentType,
+            opts.fileName,
+          );
+          assertCurrent();
+          const file: EncryptedFile = { url: contentUri, ...encrypted.file };
+          return await client.sendMessage(opts.roomId, {
+            ...buildMatrixQaMessageContent({
+              body: opts.body,
+              mentionUserIds: opts.mentionUserIds,
+            }),
+            file,
+            filename: opts.fileName,
+            info: {
+              mimetype: opts.contentType,
+              size: opts.buffer.byteLength,
+            },
+            msgtype: "m.image",
+          } as MessageEventContent);
+        },
       );
     },
     async startVerification(
@@ -471,9 +362,7 @@ export async function createMatrixQaE2eeScenarioClient(
       }
       throw new Error(`timed out after ${waitParams.timeoutMs}ms waiting for Matrix E2EE event`);
     },
-    async verifyWithRecoveryKey(rawRecoveryKey: string) {
-      return await client.verifyWithRecoveryKey(rawRecoveryKey);
-    },
+    verifyWithRecoveryKey: client.verifyWithRecoveryKey.bind(client),
   };
 }
 
@@ -484,11 +373,14 @@ export type MatrixQaE2eeScenarioClient = Awaited<
 export async function runMatrixQaE2eeBootstrap(
   params: MatrixQaE2eeClientParams,
 ): Promise<MatrixVerificationBootstrapResult> {
-  const client: MatrixClient = await createMatrixQaE2eeMatrixClient(params);
+  const { client, closeState } = await createMatrixQaE2eeMatrixClient(params);
 
   try {
     return await client.bootstrapOwnDeviceVerification();
   } finally {
-    await client.stopAndPersist().catch(() => undefined);
+    await client
+      .stopAndPersist()
+      .finally(closeState)
+      .catch(() => undefined);
   }
 }

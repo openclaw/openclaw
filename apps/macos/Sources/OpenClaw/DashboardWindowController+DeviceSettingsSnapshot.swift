@@ -26,8 +26,8 @@ extension DashboardWindowController {
 
     func canUseDeviceSettings(sourceID: String) -> Bool {
         !Task.isCancelled && self.notificationSourceID == sourceID && self.isWindowOpen &&
-            !self.isShowingFailurePage && self.hasCurrentBrowserSession &&
-            Self.isTrustedLinkSource(self.webView.url, dashboardURL: self.currentURL)
+            !self.isShowingFailurePage && self.documentHost.hasCurrentBrowserSession &&
+            ControlUIDocumentHost.isTrustedLinkSource(self.webView.url, dashboardURL: self.currentURL)
     }
 
     private func deviceSettingsSnapshot(
@@ -57,6 +57,8 @@ extension DashboardWindowController {
                 // A moved app can still remove its existing login item; enabling keeps its separate gate.
                 launchAtLoginAvailable: self.deviceLaunchAtLoginAvailable ||
                     (!AppProfile.current.isActive && state.launchAtLogin),
+                keepGatewayRunning: GatewayProcessManager.shared.gatewayHosting == .service,
+                keepGatewayRunningAvailable: GatewayProcessManager.shared.keepGatewayRunningAvailable,
                 quickChatEnabled: state.quickChatEnabled,
                 quickChatShortcut: .some(KeyboardShortcuts.getShortcut(for: .toggleQuickChat)?.description),
                 debugPaneEnabled: state.debugPaneEnabled),
@@ -70,7 +72,8 @@ extension DashboardWindowController {
                 cuaDriverBundled: CuaDriverArtifact.bundledExecutableURL != nil,
                 peekabooBridgeEnabled: state.peekabooBridgeEnabled,
                 activeComputerPresenceEnabled: state.activeComputerPresenceEnabled,
-                unattendedDesktopEnabled: MacDesktopAvailabilityCoordinator.shared.unattendedEnabled),
+                unattendedDesktopEnabled: MacDesktopAvailabilityCoordinator.shared.unattendedEnabled,
+                aiSetupAvailable: true),
             desktopAvailability: .init(state: MacDesktopAvailabilityCoordinator.shared.refresh()),
             browser: .init(
                 importAvailable: state.connectionMode == .local && BrowserProfileImportModel.shared.importAvailable,

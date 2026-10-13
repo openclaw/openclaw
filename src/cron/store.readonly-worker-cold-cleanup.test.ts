@@ -1,32 +1,36 @@
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { pathToFileURL } from "node:url";
 import type { WorkerOptions } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { loadCronJobsStoreWithConfigJobsReadOnly } from "./store.js";
+import { installCronSnapshotFaults } from "./store.readonly-worker-faults.test-support.js";
 
-const injection = vi.hoisted((): { preload?: string } => ({}));
+const injection = vi.hoisted(
+  (): { preload?: string; workerUrl?: string; observe?: (message: unknown) => void } => ({}),
+);
 vi.mock("node:worker_threads", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:worker_threads")>();
   return {
     ...actual,
     Worker: class extends actual.Worker {
       constructor(filename: string | URL, options?: WorkerOptions) {
+        const selected = String(filename) === injection.workerUrl;
         super(filename, {
           ...options,
           execArgv: [
             ...(options?.execArgv ?? []),
-            ...(injection.preload && String(filename).includes("/cron/store/read-only.worker.")
-              ? ["--import", injection.preload]
-              : []),
+            ...(injection.preload && selected ? ["--import", injection.preload] : []),
           ],
         });
+        if (selected) {
+          this.on("message", (message: unknown) => injection.observe?.(message));
+        }
       }
     },
   };
@@ -45,38 +49,27 @@ it.each(["read", "copy"] as const)(
         const db = new DatabaseSync(databasePath);
         db.exec("CREATE TABLE marker(value TEXT)");
         db.close();
-        const preload = await state.writeText(
-          "snapshot-removal-failure.mjs",
-          `
-import fs from "node:fs";
-${failureStage === "copy" ? 'process.env.NODE_OPTIONS = (process.env.NODE_OPTIONS ?? "") + " --import=" + import.meta.url;' : ""}
-const remove = fs.rmSync;
-fs.rmSync = (target, ...args) => {
-  if (String(target).includes("openclaw-sqlite-readonly-")) {
-    throw Object.assign(new Error("controlled worker snapshot removal failure"), { code: "EACCES" });
-  }
-  return remove(target, ...args);
-};
-`,
-        );
-        injection.preload = pathToFileURL(preload).href;
-        const remove = fsSync.promises.rm;
-        let parentRemovalFailed = false;
-        const removal = vi
-          .spyOn(fsSync.promises, "rm")
-          .mockImplementation(async (target, options) => {
-            if (
-              !parentRemovalFailed &&
-              String(target).startsWith(cacheRoot) &&
-              String(target).includes("openclaw-sqlite-readonly-")
-            ) {
-              parentRemovalFailed = true;
-              throw Object.assign(new Error("controlled parent snapshot removal failure"), {
-                code: "EACCES",
-              });
-            }
-            await remove(target, options);
-          });
+        const originalBytes = await fs.readFile(databasePath);
+        const fault = await installCronSnapshotFaults(state, failureStage);
+        injection.preload = fault.cronPreload;
+        injection.workerUrl = fault.cronWorkerUrl;
+        const originalFailure =
+          failureStage === "read"
+            ? "controlled cron read query failure"
+            : "controlled worker snapshot copy failure";
+        let originalFailureObserved = false;
+        injection.observe = (message) => {
+          if (
+            isRecord(message) &&
+            message.status === "ok" &&
+            isRecord(message.value) &&
+            message.value.ok === false &&
+            isRecord(message.value.error) &&
+            typeof message.value.error.message === "string"
+          ) {
+            originalFailureObserved ||= message.value.error.message.includes(originalFailure);
+          }
+        };
         const remaining = async () =>
           (await fs.readdir(cacheRoot, { recursive: true })).filter((name) =>
             name.includes("openclaw-sqlite-readonly-"),
@@ -90,13 +83,29 @@ fs.rmSync = (target, ...args) => {
               ),
             ),
           ).rejects.toThrow("cleanup failed");
+          expect(originalFailureObserved).toBe(true);
+          expect(fault.count(failureStage === "read" ? "read-query" : "copy-open")).toBeGreaterThan(
+            0,
+          );
+          expect(fault.count("staging-rm")).toBeGreaterThan(0);
+          expect(await fs.readFile(databasePath)).toEqual(originalBytes);
           expect((await remaining()).length).toBeGreaterThan(0);
+          await closeOpenClawStateDatabaseByPathAsync(state.statePath("unrelated.sqlite"));
+          expect((await remaining()).length).toBeGreaterThan(0);
+          fault.allowRemoval();
           await closeOpenClawStateDatabaseByPathAsync(databasePath);
           expect(await remaining()).toEqual([]);
-          expect(parentRemovalFailed).toBe(true);
+          expect(await fs.readFile(databasePath)).toEqual(originalBytes);
         } finally {
-          removal.mockRestore();
-          injection.preload = undefined;
+          fault.allowRemoval();
+          try {
+            await closeOpenClawStateDatabaseByPathAsync(databasePath);
+          } finally {
+            fault.restore();
+            injection.preload = undefined;
+            injection.workerUrl = undefined;
+            injection.observe = undefined;
+          }
         }
       },
     );

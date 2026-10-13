@@ -28,10 +28,13 @@ export function printDaemonStatusVersions(
       ? `${serviceInstallVersion} (${shortenHomePath(status.service.layout.packageRoot)})`
       : serviceInstallVersion
     : null;
+  if (!gatewayVersion && !serviceInstallLine) {
+    return;
+  }
+  if (cliVersionLine) {
+    defaultRuntime.log(`${label("CLI version:")} ${infoText(cliVersionLine)}`);
+  }
   if (gatewayVersion) {
-    if (cliVersionLine) {
-      defaultRuntime.log(`${label("CLI version:")} ${infoText(cliVersionLine)}`);
-    }
     defaultRuntime.log(`${label("Gateway version:")} ${infoText(gatewayVersion)}`);
     if (status.cli?.version && status.cli.version !== gatewayVersion) {
       defaultRuntime.error(
@@ -45,13 +48,9 @@ export function printDaemonStatusVersions(
         ),
       );
     }
-    defaultRuntime.log("");
   } else if (serviceInstallLine) {
     // No Gateway version came back (failed or skipped probe). Report the install the
     // service points at so a stale service behind a bare connect error stays visible.
-    if (cliVersionLine) {
-      defaultRuntime.log(`${label("CLI version:")} ${infoText(cliVersionLine)}`);
-    }
     defaultRuntime.log(`${label("Gateway service version:")} ${infoText(serviceInstallLine)}`);
     defaultRuntime.log(infoText("The Gateway did not report its own version."));
     if (
@@ -70,6 +69,6 @@ export function printDaemonStatusVersions(
         defaultRuntime.error(warnText(guidance));
       }
     }
-    defaultRuntime.log("");
   }
+  defaultRuntime.log("");
 }

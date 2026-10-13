@@ -41,12 +41,11 @@ function matchesCapturedWalPrefix(source: number, destination: string, bytes: nu
 }
 
 /** Preserve source coordination bytes while SQLite interprets a bounded private WAL. */
-export function copySqliteWalPrefixSync(
+export function prepareSqliteWalPrefixCopy(
   source: number,
   destination: string,
-  copyMain: () => void,
   verifyMainCopy: () => boolean,
-): boolean | undefined {
+): (() => boolean) | undefined {
   const generation = readWalGeneration(source);
   if (!generation) {
     // Empty or unrecognized WALs retain the conservative whole-file copy path.
@@ -54,45 +53,46 @@ export function copySqliteWalPrefixSync(
   }
   // A checkpoint may put existing frames into main. Capture its WAL prefix only
   // afterward, and fence resets across both copies, including main-file ABA.
-  copyMain();
-  const walBytes = fs.fstatSync(source).size;
-  if (!Number.isSafeInteger(walBytes) || walBytes < generation.length) {
-    return false;
-  }
-  const target = fs.openSync(destination, "wx", 0o600);
-  try {
-    const buffer = Buffer.allocUnsafe(Math.min(COPY_BUFFER_BYTES, walBytes));
-    for (let position = 0; position < walBytes;) {
-      const window = buffer.subarray(0, Math.min(buffer.length, walBytes - position));
-      if (readFileWindowFullySync(source, window, position) !== window.length) {
-        return false;
-      }
-      if (position === 0 && !window.subarray(0, generation.length).equals(generation)) {
-        return false;
-      }
-      for (let offset = 0; offset < window.length;) {
-        const written = fs.writeSync(
-          target,
-          window,
-          offset,
-          window.length - offset,
-          position + offset,
-        );
-        if (written <= 0) {
-          throw new Error("SQLite WAL snapshot write made no progress");
-        }
-        offset += written;
-      }
-      position += window.length;
+  return () => {
+    const walBytes = fs.fstatSync(source).size;
+    if (!Number.isSafeInteger(walBytes) || walBytes < generation.length) {
+      return false;
     }
-    fs.fsyncSync(target);
-  } finally {
-    fs.closeSync(target);
-  }
-  // Whole-file equality would reject valid appends; verify only captured bytes.
-  return (
-    verifyMainCopy() &&
-    matchesCapturedWalPrefix(source, destination, walBytes) &&
-    readWalGeneration(source)?.equals(generation) === true
-  );
+    const target = fs.openSync(destination, "wx", 0o600);
+    try {
+      const buffer = Buffer.allocUnsafe(Math.min(COPY_BUFFER_BYTES, walBytes));
+      for (let position = 0; position < walBytes;) {
+        const window = buffer.subarray(0, Math.min(buffer.length, walBytes - position));
+        if (readFileWindowFullySync(source, window, position) !== window.length) {
+          return false;
+        }
+        if (position === 0 && !window.subarray(0, generation.length).equals(generation)) {
+          return false;
+        }
+        for (let offset = 0; offset < window.length;) {
+          const written = fs.writeSync(
+            target,
+            window,
+            offset,
+            window.length - offset,
+            position + offset,
+          );
+          if (written <= 0) {
+            throw new Error("SQLite WAL snapshot write made no progress");
+          }
+          offset += written;
+        }
+        position += window.length;
+      }
+      fs.fsyncSync(target);
+    } finally {
+      fs.closeSync(target);
+    }
+    // Whole-file equality would reject valid appends; verify only captured bytes.
+    return (
+      verifyMainCopy() &&
+      matchesCapturedWalPrefix(source, destination, walBytes) &&
+      readWalGeneration(source)?.equals(generation) === true
+    );
+  };
 }

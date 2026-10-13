@@ -1,7 +1,9 @@
-// Browser snapshot, navigation, and screenshot routes.
 import path from "node:path";
-import { getImageMetadata } from "../../media/media-services.js";
-import { ensureMediaDir, saveMediaBuffer } from "../../media/store.js";
+import {
+  ensureMediaDir,
+  getImageMetadata,
+  saveMediaBuffer,
+} from "openclaw/plugin-sdk/media-runtime";
 import { resolveBrowserNavigationTimeoutMs } from "../act-policy.js";
 import type { CdpDocumentIdentities } from "../cdp-page-session.js";
 import {
@@ -10,29 +12,23 @@ import {
   snapshotAria,
   snapshotRoleViaCdp,
 } from "../cdp.js";
+import type { ChromeMcpTargetOperation } from "../chrome-mcp-contracts.js";
 import {
   navigateChromeMcpPage,
   takeChromeMcpScreenshot,
   takeChromeMcpSnapshot,
 } from "../chrome-mcp.js";
-import {
-  collectChromeMcpSnapshotUrls,
-  withChromeMcpLabels,
-  type ChromeMcpSnapshotOperation,
-} from "../chrome-mcp.snapshot-page.js";
-import {
-  buildChromeMcpRouteSnapshot,
-  flattenChromeMcpRouteSnapshot,
-} from "../chrome-mcp.snapshot-result.js";
+import { collectChromeMcpSnapshotUrls, withChromeMcpLabels } from "../chrome-mcp.snapshot-page.js";
+import { buildChromeMcpRouteSnapshot } from "../chrome-mcp.snapshot-result.js";
+import { flattenChromeMcpSnapshotToAriaResult } from "../chrome-mcp.snapshot.js";
 import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "../constants.js";
 import {
   assertBrowserNavigationAllowed,
   assertBrowserNavigationResultAllowed,
 } from "../navigation-guard.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
-import { getLoadedPwAiModule } from "../pw-ai-module.js";
-import { finalizeRoleSnapshot, type RoleRefMap } from "../pw-role-snapshot.js";
-import type { BrowserObservedState } from "../pw-session-contracts.js";
+import { getLoadedPwAiModule, getPwAiModule } from "../pw-ai-module.js";
+import { finalizeRoleSnapshot } from "../pw-role-snapshot.js";
 import type { AnnotationItem } from "../screenshot-annotate.js";
 import { scaleAnnotations } from "../screenshot-annotate.js";
 import {
@@ -50,7 +46,6 @@ import { appendSnapshotUrls } from "../snapshot-urls.js";
 import { normalizeBrowserTimerDelayMs } from "../timer-delay.js";
 import {
   browserNavigationPolicyForProfile,
-  getPwAiModule,
   handleRouteError,
   readBody,
   requirePwAi,
@@ -62,11 +57,7 @@ import {
   captureBrowserOperationTarget,
   resolveOperationTargetOutcome,
 } from "./agent.snapshot-target.js";
-import {
-  resolveSnapshotPlan,
-  shouldUsePlaywrightForAriaSnapshot,
-  shouldUsePlaywrightForScreenshot,
-} from "./agent.snapshot.plan.js";
+import { resolveSnapshotPlan } from "./agent.snapshot.plan.js";
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
 import { readRoutePositiveInteger, readRouteTimerTimeoutMs } from "./route-numeric.js";
 import type { BrowserRouteRegistrar } from "./types.js";
@@ -135,7 +126,6 @@ async function rescaleAnnotationsForNormalization(params: {
   return scaleAnnotations(params.annotations, next.width / orig.width, next.height / orig.height);
 }
 
-/** Register snapshot, screenshot, and navigation endpoints. */
 export function registerBrowserAgentSnapshotRoutes(
   app: BrowserRouteRegistrar,
   ctx: BrowserRouteContext,
@@ -287,7 +277,7 @@ export function registerBrowserAgentSnapshotRoutes(
           res.json({ ok: true, path: imagePath, targetId: tab.targetId, url: tab.url, ...details });
         };
         if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
-          const operation: ChromeMcpSnapshotOperation = {
+          const operation: ChromeMcpTargetOperation = {
             profileName: profileCtx.profile.name,
             profile: profileCtx.profile,
             targetId: tab.targetId,
@@ -338,50 +328,37 @@ export function registerBrowserAgentSnapshotRoutes(
         const shouldUsePlaywright =
           labels ||
           getLoadedPwAiModule()?.hasCachedPlaywrightBrowserConnection(cdpUrl) ||
-          shouldUsePlaywrightForScreenshot({
-            profile: profileCtx.profile,
-            wsUrl: tab.wsUrl,
-            ref,
-            element,
-          });
+          !tab.wsUrl ||
+          Boolean(ref) ||
+          Boolean(element);
         if (shouldUsePlaywright) {
           const pw = await requirePwAi(res, "screenshot");
           if (!pw) {
             return;
           }
-          if (labels) {
-            const snap = ref
-              ? undefined
-              : await pw.snapshotRoleViaPlaywright({
+          const snap =
+            labels && !ref
+              ? await pw.snapshotRoleViaPlaywright({
                   cdpUrl,
                   targetId: tab.targetId,
                   ssrfPolicy: ctx.state().resolved.ssrfPolicy,
                   timeoutMs,
                   signal,
-                });
-            capture = await pw.screenshotWithLabelsViaPlaywright({
-              cdpUrl,
-              targetId: tab.targetId,
-              refs: snap?.refs,
-              type,
-              timeoutMs,
-              fullPage,
-              ref,
-              element,
-              signal,
-            });
-          } else {
-            capture = await pw.takeScreenshotViaPlaywright({
-              cdpUrl,
-              targetId: tab.targetId,
-              ref,
-              element,
-              fullPage,
-              type,
-              timeoutMs,
-              signal,
-            });
-          }
+                })
+              : undefined;
+          const screenshotOptions: Parameters<typeof pw.takeScreenshotViaPlaywright>[0] = {
+            cdpUrl,
+            targetId: tab.targetId,
+            ref,
+            element,
+            fullPage,
+            type,
+            timeoutMs,
+            signal,
+          };
+          capture = labels
+            ? await pw.screenshotWithLabelsViaPlaywright({ ...screenshotOptions, refs: snap?.refs })
+            : await pw.takeScreenshotViaPlaywright(screenshotOptions);
         } else {
           const profileRuntime = ctx.state().profiles.get(profileCtx.profile.name);
           capture = {
@@ -410,7 +387,7 @@ export function registerBrowserAgentSnapshotRoutes(
       return;
     }
     const targetId = typeof req.query.targetId === "string" ? req.query.targetId.trim() : "";
-    const pwModule = await getPwAiModule();
+    const pwModule = await getPwAiModule({ mode: "soft" });
     const hasPlaywright = Boolean(pwModule);
     const plan = resolveSnapshotPlan({
       profile: profileCtx.profile,
@@ -452,6 +429,11 @@ export function registerBrowserAgentSnapshotRoutes(
               url: tab.url,
               ...snapshot,
             });
+          const snapshotOptions = {
+            interactive: plan.interactive ?? undefined,
+            compact: plan.compact ?? undefined,
+            maxDepth: plan.depth ?? undefined,
+          };
           const deltaFamily: SnapshotDeltaFamily | undefined =
             plan.format === "ai"
               ? {
@@ -473,37 +455,8 @@ export function registerBrowserAgentSnapshotRoutes(
                   maxChars: plan.resolvedMaxChars,
                 }
               : undefined;
-          const createDeltaState = (documentIdentity?: string) => {
-            const previousKeys =
-              deltaFamily && documentIdentity
-                ? getPreviousSnapshotKeys(ctx, {
-                    profile: profileCtx.profile.name,
-                    targetId: tab.targetId,
-                    documentIdentity,
-                    family: deltaFamily,
-                  })
-                : undefined;
-            return {
-              delta:
-                deltaFamily && previousKeys !== undefined
-                  ? { mode: deltaFamily.identity, previousKeys }
-                  : undefined,
-              record: (refs: RoleRefMap) => {
-                if (!deltaFamily || !documentIdentity) {
-                  return;
-                }
-                recordSnapshotKeys(ctx, {
-                  profile: profileCtx.profile.name,
-                  targetId: tab.targetId,
-                  documentIdentity,
-                  family: deltaFamily,
-                  refs,
-                });
-              },
-            };
-          };
           if (usesChromeMcp) {
-            const operation: ChromeMcpSnapshotOperation = {
+            const operation: ChromeMcpTargetOperation = {
               profileName: profileCtx.profile.name,
               profile: profileCtx.profile,
               targetId: tab.targetId,
@@ -512,15 +465,11 @@ export function registerBrowserAgentSnapshotRoutes(
             };
             const snapshot = await takeChromeMcpSnapshot(operation);
             if (plan.format === "aria") {
-              return jsonSnapshot(flattenChromeMcpRouteSnapshot(snapshot, plan.limit));
+              return jsonSnapshot(flattenChromeMcpSnapshotToAriaResult(snapshot, plan.limit));
             }
             const built = buildChromeMcpRouteSnapshot({
               root: snapshot,
-              options: {
-                interactive: plan.interactive ?? undefined,
-                compact: plan.compact ?? undefined,
-                maxDepth: plan.depth ?? undefined,
-              },
+              options: snapshotOptions,
             });
             const builtWithUrls = plan.urls
               ? {
@@ -551,17 +500,19 @@ export function registerBrowserAgentSnapshotRoutes(
             }
             return jsonSnapshot(finalized);
           }
+          const playwrightTarget = {
+            cdpUrl: profileCtx.profile.cdpUrl,
+            targetId: tab.targetId,
+          };
           const readPlaywrightDocumentIdentities = pwModule?.getDocumentIdentitiesViaPlaywright;
-          let observedBrowserState: BrowserObservedState | undefined;
-          if (pwModule) {
-            observedBrowserState = await pwModule
-              .getObservedBrowserStateViaPlaywright({
-                cdpUrl: profileCtx.profile.cdpUrl,
-                targetId: tab.targetId,
-                ssrfPolicy: ctx.state().resolved.ssrfPolicy,
-              })
-              .catch(() => undefined);
-          }
+          const observedBrowserState = pwModule
+            ? await pwModule
+                .getObservedBrowserStateViaPlaywright({
+                  ...playwrightTarget,
+                  ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+                })
+                .catch(() => undefined)
+            : undefined;
           const browserStateFields =
             observedBrowserState &&
             (observedBrowserState.dialogs.pending.length ||
@@ -578,8 +529,7 @@ export function registerBrowserAgentSnapshotRoutes(
           const readDocumentIdentities = async (): Promise<CdpDocumentIdentities> => {
             const playwrightIdentities = readPlaywrightDocumentIdentities
               ? await readPlaywrightDocumentIdentities({
-                  cdpUrl: profileCtx.profile.cdpUrl,
-                  targetId: tab.targetId,
+                  ...playwrightTarget,
                   timeoutMs: plan.timeoutMs,
                 }).catch(() => undefined)
               : undefined;
@@ -598,11 +548,24 @@ export function registerBrowserAgentSnapshotRoutes(
             plan.format === "ai" &&
             !plan.frameSelectorValue &&
             (plan.refsMode === "aria" || !pwModule || !plan.wantsRoleSnapshot);
-          const deltaState = createDeltaState(
+          const deltaDocumentIdentity =
             snapshotSpansFrames || plan.frameSelectorValue
               ? initialIdentities.frameTree
-              : initialDocumentIdentity,
-          );
+              : initialDocumentIdentity;
+          const deltaKey =
+            deltaFamily && deltaDocumentIdentity
+              ? {
+                  profile: profileCtx.profile.name,
+                  targetId: tab.targetId,
+                  documentIdentity: deltaDocumentIdentity,
+                  family: deltaFamily,
+                }
+              : undefined;
+          const previousKeys = deltaKey ? getPreviousSnapshotKeys(ctx, deltaKey) : undefined;
+          const delta =
+            deltaFamily && previousKeys !== undefined
+              ? { mode: deltaFamily.identity, previousKeys }
+              : undefined;
           const assertDocumentIdentityUnchanged = async () => {
             if (!initialDocumentIdentity) {
               return;
@@ -619,24 +582,32 @@ export function registerBrowserAgentSnapshotRoutes(
               );
             }
           };
+          const publishSnapshot = async (snapshot: () => Record<string, unknown>) => {
+            await assertDocumentIdentityUnchanged();
+            return jsonSnapshot({ ...browserStateFields, ...snapshot() });
+          };
           if (plan.format === "ai") {
             const roleSnapshotArgs = {
-              cdpUrl: profileCtx.profile.cdpUrl,
-              targetId: tab.targetId,
-              selector: plan.selectorValue,
-              frameSelector: plan.frameSelectorValue,
-              refsMode: plan.refsMode,
+              ...playwrightTarget,
               ssrfPolicy: ctx.state().resolved.ssrfPolicy,
               urls: plan.urls,
               timeoutMs: plan.timeoutMs,
-              maxChars: plan.resolvedMaxChars,
               signal,
-              options: {
-                interactive: plan.interactive ?? undefined,
-                compact: plan.compact ?? undefined,
-                maxDepth: plan.depth ?? undefined,
-              },
-              delta: deltaState.delta,
+              delta,
+              ...(plan.wantsRoleSnapshot
+                ? {
+                    selector: plan.selectorValue,
+                    frameSelector: plan.frameSelectorValue,
+                    refsMode: plan.refsMode,
+                    maxChars: plan.resolvedMaxChars,
+                    options: snapshotOptions,
+                  }
+                : {
+                    refsMode: "aria" as const,
+                    ...(typeof plan.resolvedMaxChars === "number"
+                      ? { maxChars: plan.resolvedMaxChars }
+                      : {}),
+                  }),
             };
 
             const cdpRoleWsUrl =
@@ -657,12 +628,8 @@ export function registerBrowserAgentSnapshotRoutes(
                 recurseIframes,
                 timeoutMs: plan.timeoutMs,
                 maxChars: plan.resolvedMaxChars,
-                options: {
-                  interactive: plan.interactive ?? undefined,
-                  compact: plan.compact ?? undefined,
-                  maxDepth: plan.depth ?? undefined,
-                },
-                delta: deltaState.delta,
+                options: snapshotOptions,
+                delta,
               });
               usedCdpRoleSnapshot = true;
               return snapshot;
@@ -670,29 +637,13 @@ export function registerBrowserAgentSnapshotRoutes(
 
             const pw = pwModule;
             const cdpFirstPw = pw && plan.wantsRoleSnapshot && cdpRoleWsUrl ? pw : null;
-            const snap = plan.wantsRoleSnapshot
-              ? cdpFirstPw
-                ? await cdpRoleSnapshot(false).catch(async () => {
-                    signal.throwIfAborted();
-                    return await cdpFirstPw.snapshotRoleViaPlaywright(roleSnapshotArgs);
-                  })
-                : pw
-                  ? await pw.snapshotRoleViaPlaywright(roleSnapshotArgs)
-                  : await cdpRoleSnapshot()
+            const snap = cdpFirstPw
+              ? await cdpRoleSnapshot(false).catch(async () => {
+                  signal.throwIfAborted();
+                  return await cdpFirstPw.snapshotRoleViaPlaywright(roleSnapshotArgs);
+                })
               : pw
-                ? await pw.snapshotRoleViaPlaywright({
-                    cdpUrl: profileCtx.profile.cdpUrl,
-                    targetId: tab.targetId,
-                    refsMode: "aria",
-                    ssrfPolicy: ctx.state().resolved.ssrfPolicy,
-                    urls: plan.urls,
-                    timeoutMs: plan.timeoutMs,
-                    signal,
-                    ...(typeof plan.resolvedMaxChars === "number"
-                      ? { maxChars: plan.resolvedMaxChars }
-                      : {}),
-                    delta: deltaState.delta,
-                  })
+                ? await pw.snapshotRoleViaPlaywright(roleSnapshotArgs)
                 : await cdpRoleSnapshot();
             if (!snap) {
               await requirePwAi(res, "ai snapshot");
@@ -701,8 +652,7 @@ export function registerBrowserAgentSnapshotRoutes(
             if (usedCdpRoleSnapshot && pw && "refs" in snap) {
               await assertDocumentIdentityUnchanged();
               await pw.storeSnapshotRefsViaPlaywright({
-                cdpUrl: profileCtx.profile.cdpUrl,
-                targetId: tab.targetId,
+                ...playwrightTarget,
                 refs: snap.refs,
                 signal,
                 deadlineMs: cdpCaptureDeadlineMs,
@@ -717,8 +667,7 @@ export function registerBrowserAgentSnapshotRoutes(
                 return jsonError(res, 501, "Snapshot labels require Playwright.");
               }
               const labeled = await pw.screenshotWithLabelsViaPlaywright({
-                cdpUrl: profileCtx.profile.cdpUrl,
-                targetId: tab.targetId,
+                ...playwrightTarget,
                 refs: "refs" in snap ? snap.refs : {},
                 type: "png",
                 timeoutMs: plan.timeoutMs,
@@ -727,28 +676,22 @@ export function registerBrowserAgentSnapshotRoutes(
               image = await saveBrowserScreenshot(labeled, "png");
             }
 
-            await assertDocumentIdentityUnchanged();
-            deltaState.record(snap.refs ?? {});
-            return jsonSnapshot({
-              ...browserStateFields,
-              ...image,
-              ...snap,
+            return await publishSnapshot(() => {
+              if (deltaKey) {
+                recordSnapshotKeys(ctx, { ...deltaKey, refs: snap.refs ?? {} });
+              }
+              return { ...image, ...snap };
             });
           }
 
-          const usePlaywrightAriaSnapshot = shouldUsePlaywrightForAriaSnapshot({
-            profile: profileCtx.profile,
-            wsUrl: tab.wsUrl,
-          });
           let resolved: Awaited<ReturnType<typeof snapshotAria>>;
-          if (usePlaywrightAriaSnapshot) {
+          if (!tab.wsUrl) {
             const pw = await requirePwAi(res, "aria snapshot");
             if (!pw) {
               return;
             }
             resolved = await pw.snapshotAriaViaPlaywright({
-              cdpUrl: profileCtx.profile.cdpUrl,
-              targetId: tab.targetId,
+              ...playwrightTarget,
               limit: plan.limit,
               timeoutMs: plan.timeoutMs,
               ssrfPolicy: ctx.state().resolved.ssrfPolicy,
@@ -764,8 +707,7 @@ export function registerBrowserAgentSnapshotRoutes(
             });
             await assertDocumentIdentityUnchanged();
             await pwModule?.storeSnapshotRefsViaPlaywright?.({
-              cdpUrl: profileCtx.profile.cdpUrl,
-              targetId: tab.targetId,
+              ...playwrightTarget,
               nodes: resolved.nodes,
               signal,
               deadlineMs: captureDeadlineMs,
@@ -774,15 +716,11 @@ export function registerBrowserAgentSnapshotRoutes(
                 : {}),
             });
           }
-          await assertDocumentIdentityUnchanged();
-          return jsonSnapshot({
-            ...browserStateFields,
-            ...resolved,
-          });
+          return await publishSnapshot(() => resolved);
         },
       });
     } catch (err) {
-      handleRouteError(ctx, res, err);
+      handleRouteError(res, err);
     }
   });
 }

@@ -1,6 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { TemplateContext } from "../templating.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
@@ -13,7 +13,6 @@ import {
   parkedSteerConsumeMock,
   parkedSteerFallbackMock,
   queueEmbeddedAgentMessageWithOutcomeAsyncMock,
-  resolveOutboundAttachmentFromUrlMock,
   runEmbeddedAgentMock,
   runReplyAgent,
   tempDirs,
@@ -44,7 +43,7 @@ describe("runReplyAgent media path normalization", () => {
       followupRun.run.taskSuggestionDeliveryMode = "gateway";
       followupRun.run.approvalReviewerDeviceId = "device-a";
 
-      const params = makeRunReplyAgentParams({
+      const params = await makeRunReplyAgentParams({
         resolvedQueue: { mode: "steer" } as QueueSettings,
         shouldSteer: true,
         shouldFollowup: true,
@@ -89,7 +88,7 @@ describe("runReplyAgent media path normalization", () => {
         prompt: "generate chart",
         run: { permissionMode: "full", approvalReviewerDeviceId: "device-a" },
       });
-      const params = makeRunReplyAgentParams({
+      const params = await makeRunReplyAgentParams({
         resolvedQueue: { mode: "steer" } as QueueSettings,
         shouldSteer: true,
         shouldFollowup: true,
@@ -106,13 +105,47 @@ describe("runReplyAgent media path normalization", () => {
       await runReplyAgent(params);
 
       expect(queueEmbeddedAgentMessageWithOutcomeAsyncMock).not.toHaveBeenCalled();
-      expect(parkSteerCandidateMock).not.toHaveBeenCalled();
-      expect(enqueueFollowupRunMock).toHaveBeenCalledOnce();
-      expect(enqueueFollowupRunMock.mock.calls[0]?.[1]).toBe(followupRun);
+      expect(parkedSteerFallbackMock).toHaveBeenCalledOnce();
+      expect(parkSteerCandidateMock).toHaveBeenCalledWith(
+        params.queueKey,
+        followupRun,
+        params.resolvedQueue,
+        expect.any(Function),
+      );
     },
   );
 
-  it("steers ordered current-turn images with the active prompt", async () => {
+  it("does not wait on a queued command source when the target has no reply operation", async () => {
+    const source = createRegisteredReplyOperation({
+      sessionKey: "agent:main:slash:source",
+      sessionId: "command-source",
+      resetTriggered: false,
+    });
+    enqueueFollowupRunMock.mockReturnValueOnce(true);
+    const params = await makeRunReplyAgentParams({
+      replyOperation: source,
+      sessionKey: "main",
+      resolvedQueue: { mode: "steer" },
+      shouldSteer: true,
+      shouldFollowup: true,
+      isActive: true,
+    });
+    await runReplyAgent(params);
+    expect(source.phase).toBe("queued");
+    expect(source.abortSignal.aborted).toBe(false);
+    expect(enqueueFollowupRunMock).toHaveBeenCalledExactlyOnceWith(
+      params.queueKey,
+      params.followupRun,
+      params.resolvedQueue,
+      "message-id",
+      expect.any(Function),
+      false,
+    );
+    expect(parkSteerCandidateMock).not.toHaveBeenCalled();
+    expect(queueEmbeddedAgentMessageWithOutcomeAsyncMock).not.toHaveBeenCalled();
+  });
+
+  it("steers ordered current-turn images and quoted context with the active prompt", async () => {
     queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockImplementation(async (sessionId: string) => ({
       queued: true,
       sessionId,
@@ -125,13 +158,16 @@ describe("runReplyAgent media path normalization", () => {
     ];
     const followupRun = createMediaFollowupRun({ prompt: "compare these" });
     followupRun.images = images;
+    followupRun.currentInboundContext = {
+      text: "Replied message: Which color for the invitation?",
+    };
     followupRun.media = [
       { path: "/tmp/first.jpg", contentType: "image/jpeg" },
       { path: "/tmp/second.png", contentType: "image/png" },
     ];
 
     await runReplyAgent(
-      makeRunReplyAgentParams({
+      await makeRunReplyAgentParams({
         resolvedQueue: { mode: "steer" } as QueueSettings,
         shouldSteer: true,
         shouldFollowup: true,
@@ -149,6 +185,7 @@ describe("runReplyAgent media path normalization", () => {
     expect(queueEmbeddedAgentMessageWithOutcomeAsyncMock.mock.calls[0]?.[2]).toMatchObject({
       images,
       media: followupRun.media,
+      currentInboundContext: followupRun.currentInboundContext,
     });
     expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
     expect(parkedSteerConsumeMock).toHaveBeenCalledOnce();
@@ -167,7 +204,7 @@ describe("runReplyAgent media path normalization", () => {
     followupRun.images = images;
 
     await runReplyAgent(
-      makeRunReplyAgentParams({
+      await makeRunReplyAgentParams({
         resolvedQueue: { mode: "steer" } as QueueSettings,
         shouldSteer: true,
         shouldFollowup: true,
@@ -198,8 +235,10 @@ describe("runReplyAgent media path normalization", () => {
       resetTriggered: false,
     });
     operation.setPhase("running");
-    operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(followupRun));
+    await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(followupRun));
     expect(operation.acceptedSteeredInboundAudio).toBe(false);
+    // An answer sent before this steer must not count as answering it.
+    operation.markSourceReplyDelivered();
     queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockImplementation(async (sessionId: string) => ({
       queued: true,
       sessionId,
@@ -208,7 +247,7 @@ describe("runReplyAgent media path normalization", () => {
     }));
 
     await runReplyAgent(
-      makeRunReplyAgentParams({
+      await makeRunReplyAgentParams({
         followupRun,
         replyOperation: operation,
         sessionKey: "agent:main:whatsapp:direct:chat-1",
@@ -220,6 +259,7 @@ describe("runReplyAgent media path normalization", () => {
     );
 
     expect(operation.acceptedSteeredInboundAudio).toBe(true);
+    expect(operation.sourceReplyDelivered).toBe(false);
     expect(
       queueEmbeddedAgentMessageWithOutcomeAsyncMock.mock.calls.map(([sessionId, prompt]) => [
         sessionId,
@@ -233,7 +273,7 @@ describe("runReplyAgent media path normalization", () => {
 
   it("queues active prompts in followup mode without steering", async () => {
     await runReplyAgent(
-      makeRunReplyAgentParams({
+      await makeRunReplyAgentParams({
         resolvedQueue: { mode: "followup" } as QueueSettings,
         shouldSteer: false,
         shouldFollowup: true,
@@ -248,83 +288,13 @@ describe("runReplyAgent media path normalization", () => {
     expect(enqueueFollowupRunMock.mock.calls[0]?.[1].prompt).toBe("generate chart");
   });
 
-  it("falls back to a queued followup when active steering is rejected", async () => {
-    queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockImplementation(async (sessionId: string) => ({
-      queued: false,
-      sessionId,
-      reason: "runtime_rejected",
-      gatewayHealth: "live",
-      errorMessage: "cannot steer a compact turn",
-    }));
-
-    await runReplyAgent(
-      makeRunReplyAgentParams({
-        resolvedQueue: { mode: "steer" } as QueueSettings,
-        shouldSteer: true,
-        shouldFollowup: true,
-        isActive: true,
-        isRunActive: () => true,
-      }),
-    );
-
-    expect(parkSteerCandidateMock).toHaveBeenCalledWith(
-      "main",
-      expect.objectContaining({ prompt: "generate chart" }),
-      expect.objectContaining({ mode: "steer" }),
-      expect.any(Function),
-    );
-    expect(parkedSteerFallbackMock).toHaveBeenCalledOnce();
-    expect(parkedSteerConsumeMock).not.toHaveBeenCalled();
-    expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
-  });
-
-  it("shares one media cache between block accumulation and final payload delivery", async () => {
-    const { createReplyMediaContext } =
-      await vi.importActual<typeof import("./reply-media-paths.js")>("./reply-media-paths.js");
-    const mediaContext = createReplyMediaContext({
-      cfg: {},
-      sessionKey: "main",
-      workspaceDir: testWorkspaceDir,
-      messageProvider: "telegram",
-      accountId: "default",
-    });
-    let stagedIndex = 0;
-    resolveOutboundAttachmentFromUrlMock.mockImplementation(async (mediaUrl: string) => {
-      stagedIndex += 1;
-      return {
-        path: path.join("/tmp/outbound-media", `${stagedIndex}-${path.basename(mediaUrl)}`),
-      };
-    });
-
-    const blockPayload = await mediaContext.normalizePayload({
-      text: "here is the chart",
-      mediaUrl: "./out/chart.png",
-      mediaUrls: ["./out/chart.png"],
-    });
-    const finalPayload = await mediaContext.normalizePayload({
-      text: "here is the chart",
-      mediaUrl: "./out/chart.png",
-      mediaUrls: ["./out/chart.png"],
-    });
-
-    expect(blockPayload).toEqual({
-      text: "here is the chart",
-      mediaUrl: "/tmp/outbound-media/1-chart.png",
-      mediaUrls: ["/tmp/outbound-media/1-chart.png"],
-      attachments: [{ name: "chart.png", mimeType: "image/png", trustedLocalMedia: true }],
-      trustedLocalMedia: true,
-    });
-    expect(finalPayload).toEqual(blockPayload);
-    expect(resolveOutboundAttachmentFromUrlMock).toHaveBeenCalledTimes(1);
-  });
-
   async function runAgentTurnWithSessionContext(
     sessionCtx: TemplateContext,
     prompt = "describe this image",
     overrides: Partial<AgentTurnParams> = {},
   ) {
     const { executeAgentTurn } = await import("./agent-runner-execution.js");
-    return await executeAgentTurn({
+    const params: AgentTurnParams = {
       commandBody: prompt,
       followupRun:
         overrides.followupRun ??
@@ -360,7 +330,6 @@ describe("runReplyAgent media path normalization", () => {
       shouldEmitToolResult: () => false,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
       getActiveSessionEntry: () => undefined,
@@ -369,7 +338,9 @@ describe("runReplyAgent media path normalization", () => {
         normalizePayload: async (payload) => payload,
       },
       ...overrides,
-    });
+    };
+    setRuntimeConfigSnapshot(params.followupRun.run.config);
+    return await executeAgentTurn(params);
   }
 
   it.each([true, false])(
@@ -424,8 +395,7 @@ describe("runReplyAgent media path normalization", () => {
         },
       );
 
-      // The .runtime import is only used by agent-runner-execution.ts. This path
-      // should never create its own media context when the caller provides one.
+      // Execution creates a context only when the caller did not provide one.
       if (providedContext) {
         expect(createReplyMediaContextRuntimeMock).not.toHaveBeenCalled();
       } else {

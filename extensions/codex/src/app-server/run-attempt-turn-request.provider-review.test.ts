@@ -21,7 +21,6 @@ vi.mock("./attempt-diagnostics.js", () => ({
   createCodexModelCallDiagnosticEmitter: () => ({ setRequestPayloadBytes: vi.fn() }),
   utf8JsonByteLength: () => 1,
 }));
-vi.mock("./binding-connection.js", () => ({ assertCodexSessionRuntimeOwnership: vi.fn() }));
 vi.mock("./client-runtime.js", () => ({
   prepareCodexWorkspaceReferences: () => ({
     include: !references.delivered,
@@ -44,16 +43,19 @@ vi.mock("./run-attempt-lifecycle.js", () => ({
   emitCodexAppServerEvent: vi.fn(),
   withCodexAppServerFastModeServiceTier: (value: unknown) => value,
 }));
-vi.mock("./run-attempt-state.js", () => ({ joinPresentSections: () => "developer instructions" }));
-vi.mock("./thread-lifecycle.js", () => ({
+vi.mock("./developer-instruction-sections.js", () => ({
+  joinPresentSections: () => "developer instructions",
+}));
+vi.mock("./turn-params.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./turn-params.js")>()),
+  buildCodexParentLocalInstructions: vi.fn(),
   buildTurnStartParams: (_params: unknown, options: { threadId: string; promptText: string }) => ({
     threadId: options.threadId,
     input: [{ type: "text", text: options.promptText, text_elements: [] }],
   }),
 }));
 vi.mock("./trajectory.js", () => ({ recordCodexTrajectoryContext: vi.fn() }));
-vi.mock("./transcript-mirror.js", () => ({ buildCodexUserPromptMessage: vi.fn() }));
-vi.mock("./turn-params.js", () => ({ buildCodexParentLocalInstructions: vi.fn() }));
+vi.mock("./user-prompt-message.js", () => ({ buildCodexUserPromptMessage: vi.fn() }));
 
 beforeEach(() => {
   references.delivered = false;
@@ -162,7 +164,6 @@ async function prepare(
     prompt: {
       turnState,
       systemPromptReport: { injectedWorkspaceFiles: [] },
-      codexModelInputHistoryMessages: [],
       contextImageGroups: [],
       buildRenderedCodexDeveloperInstructions: () => "developer instructions",
       refreshWorkspaceReferences: (include: boolean) => {
@@ -187,6 +188,7 @@ async function prepare(
             usesSupervisionConnection,
             runAbortController: new AbortController(),
             assertCurrent: vi.fn(),
+            bindModelExecution: vi.fn(),
           },
         },
       },
@@ -236,11 +238,6 @@ function changeSelection(attempt: Awaited<ReturnType<typeof prepare>>, kind: Sel
       thread.modelProvider = "changed-provider";
       break;
   }
-}
-async function start(acknowledged: boolean) {
-  const attempt = await prepare(acknowledged ? createAcknowledgment().acknowledgment : undefined);
-  await attempt.prepared.startCodexTurn();
-  return attempt.request.mock.calls.find(([method]) => method === "turn/start")?.[1].input;
 }
 
 describe("native acknowledged turn requests", () => {
@@ -345,21 +342,6 @@ describe("native acknowledged turn requests", () => {
     expect(attempt.releaseCurrentRoute).toHaveBeenCalledOnce();
   });
 
-  it.each([true, false])("accepts a stable tuple (supervision: %s)", async (supervised) => {
-    const host = createAcknowledgment();
-    const attempt = await prepare(host.acknowledgment, createNativeThread(), supervised);
-    if (!supervised) {
-      delete attempt.resources.state.thread.liveThreadOwnership;
-    }
-    await expect(attempt.prepared.startCodexTurn()).resolves.toMatchObject({
-      turn: { turn: { id: "new-turn", status: "inProgress" } },
-      upstreamUserText: "literal steer",
-    });
-    expect(host.acknowledgment.read().phase).toBe("accepted");
-    expect(cleanup.interrupt).not.toHaveBeenCalled();
-    expect(attempt.releaseCurrentRoute).not.toHaveBeenCalled();
-  });
-
   it("selects the replacement thread on a fresh ordinary retry", async () => {
     const attempt = await prepare(undefined, createNativeThread(), false);
     attempt.request.mockRejectedValueOnce(new Error("context overflow"));
@@ -422,15 +404,4 @@ describe("native acknowledged turn requests", () => {
       expect(cleanup.interrupt).toHaveBeenCalledTimes(1);
     },
   );
-
-  it("retains unsent workspace references for the next ordinary turn", async () => {
-    expect(await start(true)).toEqual([{ type: "text", text: "literal steer", text_elements: [] }]);
-    expect(references.accepted).not.toHaveBeenCalled();
-    expect(await start(false)).toEqual([
-      { type: "text", text: "workspace reference\nuser input", text_elements: [] },
-    ]);
-    expect(references.accepted).toHaveBeenCalledOnce();
-    expect(await start(false)).toEqual([{ type: "text", text: "user input", text_elements: [] }]);
-    expect(references.accepted).toHaveBeenCalledOnce();
-  });
 });

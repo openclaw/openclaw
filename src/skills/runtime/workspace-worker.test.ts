@@ -1,3 +1,4 @@
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { PassThrough, Readable } from "node:stream";
@@ -38,59 +39,72 @@ function fixture() {
   return { home, workspace: path.join(home, "workspace") };
 }
 
-it("keeps native file replacement behind the Gateway policy decision", async () => {
-  const f = fixture();
-  const extractedRoot = path.join(f.home, ".cache/openclaw/skill-installs/source");
-  await fs.mkdir(extractedRoot, { recursive: true });
-  await fs.writeFile(path.join(extractedRoot, "SKILL.md"), "# Test skill\n");
-  const input = new PassThrough();
-  const output = new PassThrough();
-  const messages: unknown[] = [];
-  const prepared = new Promise<void>((resolve) => {
-    output.once("data", (chunk: Buffer) => {
-      messages.push(JSON.parse(chunk.toString()));
-      resolve();
+it.each([false, true])(
+  "supports the SSH publisher's single policy reply (allowed=%s)",
+  async (allowed) => {
+    const f = fixture();
+    const extractedRoot = path.join(f.home, ".cache/openclaw/skill-installs/source");
+    await fs.mkdir(extractedRoot, { recursive: true });
+    await fs.writeFile(path.join(extractedRoot, "SKILL.md"), "# Test skill\n");
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const messages: unknown[] = [];
+    const prepared = new Promise<void>((resolve) => {
+      output.once("data", (chunk: Buffer) => {
+        messages.push(JSON.parse(chunk.toString()));
+        resolve();
+      });
     });
-  });
-  const run = serveWorkspaceSkills({ ...f, operation: "applyRoot", input, output });
-  input.write(`${JSON.stringify({ extractedRoot, slug: "test", mode: "install" })}\n`);
-  await prepared;
-  expect(messages).toEqual([{ type: "prepared", mode: "install" }]);
-  await expect(fs.stat(path.join(f.workspace, "skills/test"))).rejects.toMatchObject({
-    code: "ENOENT",
-  });
-  output.on("data", (chunk: Buffer) => messages.push(JSON.parse(chunk.toString())));
-  input.end(
-    `${JSON.stringify({ decision: { error: "Denied by policy", failureKind: "invalid-request" } })}\n`,
-  );
-  await run;
-  expect(messages[1]).toEqual({
-    type: "result",
-    result: { ok: false, error: "Denied by policy", failureKind: "invalid-request" },
-  });
-  await expect(fs.stat(path.join(f.workspace, "skills/test"))).rejects.toMatchObject({
-    code: "ENOENT",
-  });
-});
+    const run = serveWorkspaceSkills({ ...f, operation: "applyRoot", input, output });
+    input.write(`${JSON.stringify({ extractedRoot, slug: "test", mode: "install" })}\n`);
+    await prepared;
+    expect(messages).toEqual([{ type: "prepared", mode: "install" }]);
+    await expect(fs.stat(path.join(f.workspace, "skills/test"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    output.on("data", (chunk: Buffer) => messages.push(JSON.parse(chunk.toString())));
+    input.end(
+      `${JSON.stringify({ decision: allowed ? null : { error: "Denied by policy", failureKind: "invalid-request" } })}\n`,
+    );
+    await run;
+    expect(messages).toHaveLength(2);
+    if (allowed) {
+      expect(messages[1]).toMatchObject({ type: "result", result: { ok: true, mode: "install" } });
+      expect(await fs.readFile(path.join(f.workspace, "skills/test/SKILL.md"), "utf8")).toBe(
+        "# Test skill\n",
+      );
+      return;
+    }
+    expect(messages[1]).toEqual({
+      type: "result",
+      result: { ok: false, error: "Denied by policy", failureKind: "invalid-request" },
+    });
+    await expect(fs.stat(path.join(f.workspace, "skills/test"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  },
+);
 
-it("rejects a discovery request for another workspace before scanning it", async () => {
-  const f = fixture();
-  const input = Readable.from([
-    JSON.stringify({ sourcePlan: { workspaceDir: path.join(f.home, "other") } }),
-  ]);
-  await expect(
-    serveWorkspaceSkills({ ...f, operation: "discovery", input, output: new PassThrough() }),
-  ).rejects.toThrow("does not match the provisioned workspace");
-});
-
-it("does not treat unknown operations as discovery", async () => {
-  const f = fixture();
-  await expect(
-    serveWorkspaceSkills({
-      ...f,
-      operation: "unknown",
-      input: Readable.from(["{}"]),
-      output: new PassThrough(),
-    }),
-  ).rejects.toThrow("Unknown skill worker operation");
-});
+it.each([
+  { operation: "discovery", error: "does not match the provisioned workspace" },
+  { operation: "unknown", error: "Unknown skill worker operation" },
+])(
+  "rejects $operation before scanning an unprovisioned workspace",
+  async ({ operation, error }) => {
+    const f = fixture();
+    await expect(
+      serveWorkspaceSkills({
+        ...f,
+        operation,
+        input: Readable.from([
+          JSON.stringify(
+            operation === "discovery"
+              ? { sourcePlan: { workspaceDir: path.join(f.home, "other") } }
+              : {},
+          ),
+        ]),
+        output: new PassThrough(),
+      }),
+    ).rejects.toThrow(error);
+  },
+);

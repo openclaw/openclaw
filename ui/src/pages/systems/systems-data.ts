@@ -4,14 +4,16 @@ import type {
   SystemInfoResult,
 } from "@openclaw/gateway-protocol";
 import type { NodeListNode } from "../../../../src/shared/node-list-types.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import type { ApplicationGateway } from "../../app/gateway.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { readSystemInfo } from "../../lib/system-info.ts";
 
 export type SystemsInventory = {
   environments: EnvironmentSummary[];
   nodes: NodeListNode[];
   gatewaySystemInfo: SystemInfoResult | null;
+  gatewaySampledAtMs: number | null;
   errors: { nodes?: string; systemInfo?: string };
 };
 
@@ -28,12 +30,13 @@ export type SystemsInventoryRow = {
   sessions: SystemsSessionRelation[];
 };
 
-/** The route owns connection epochs, refresh scheduling and publication of this snapshot. */
+/** The route owns refresh scheduling and publication of this snapshot. */
 export async function loadSystemsInventory(
-  client: Pick<GatewayBrowserClient, "request">,
-  options: { isCurrent: () => boolean; signal?: AbortSignal },
+  gateway: ApplicationGateway,
+  options: { signal?: AbortSignal; fresh?: boolean },
 ): Promise<SystemsInventory | undefined> {
-  if (!options.isCurrent() || options.signal?.aborted) {
+  const client = gateway.snapshot.client;
+  if (!client) {
     return undefined;
   }
   const requestOptions = { signal: options.signal };
@@ -44,11 +47,8 @@ export async function loadSystemsInventory(
       requestOptions,
     ),
     client.request<{ nodes: NodeListNode[] }>("node.list", {}, requestOptions),
-    client.request<SystemInfoResult>("system.info", {}, requestOptions),
+    readSystemInfo(gateway, options.signal, { fresh: options.fresh }),
   ]);
-  if (!options.isCurrent() || options.signal?.aborted) {
-    return undefined;
-  }
   // Never rebuild inventory from auxiliary node reads: that would resurrect cloud-owned
   // pairings deliberately suppressed by environments.list and hide inventory failures.
   if (inventory.status === "rejected") {
@@ -57,7 +57,8 @@ export async function loadSystemsInventory(
   return {
     environments: inventory.value.environments,
     nodes: nodes.status === "fulfilled" ? nodes.value.nodes : [],
-    gatewaySystemInfo: systemInfo.status === "fulfilled" ? systemInfo.value : null,
+    gatewaySystemInfo: systemInfo.status === "fulfilled" ? systemInfo.value.value : null,
+    gatewaySampledAtMs: systemInfo.status === "fulfilled" ? systemInfo.value.at : null,
     errors: {
       ...(nodes.status === "rejected" ? { nodes: formatUiError(nodes.reason) } : {}),
       ...(systemInfo.status === "rejected" ? { systemInfo: formatUiError(systemInfo.reason) } : {}),
@@ -73,13 +74,9 @@ export function projectSystemsInventory(
   const nodes = new Map(inventory.nodes.map((node) => [`node:${node.nodeId}`, node]));
   const relations = new Map<string, SystemsSessionRelation[]>();
   const add = (id: string, kind: SystemsSessionRelation["kind"], session: GatewaySessionRow) => {
-    const existing = relations.get(id);
-    const relation = { kind, session };
-    if (existing) {
-      existing.push(relation);
-    } else {
-      relations.set(id, [relation]);
-    }
+    const existing = relations.get(id) ?? [];
+    existing.push({ kind, session });
+    relations.set(id, existing);
   };
   for (const session of sessions) {
     const placement = session.placement;
@@ -112,13 +109,11 @@ export function projectSystemsInventory(
         (environment.worker?.state !== "destroyed" && environment.worker?.state !== "failed")
       );
     })
-    .map((environment) => {
-      return {
-        environment,
-        node: environment.type === "node" ? nodes.get(environment.id) : undefined,
-        gatewaySystemInfo:
-          environment.id === "gateway" ? (inventory.gatewaySystemInfo ?? undefined) : undefined,
-        sessions: relations.get(environment.id) ?? [],
-      };
-    });
+    .map((environment) => ({
+      environment,
+      node: environment.type === "node" ? nodes.get(environment.id) : undefined,
+      gatewaySystemInfo:
+        environment.id === "gateway" ? (inventory.gatewaySystemInfo ?? undefined) : undefined,
+      sessions: relations.get(environment.id) ?? [],
+    }));
 }

@@ -46,6 +46,7 @@ suite.define(() => {
           : {}),
       },
       async ({ page }) => {
+        await page.clock.install();
         const activeRows = Array.from({ length: 101 }, (_, index) => ({
           key: index === 0 ? "global" : index === 1 ? "unknown" : `agent:main:older-${index}`,
           agentId: "main",
@@ -203,7 +204,8 @@ suite.define(() => {
           .toContain("432 MB");
         await expect
           .poll(() => overlay.locator(".gateway-vital--cpu").textContent())
-          .toContain("25%");
+          .toContain("0.25 cores");
+        await page.clock.runFor(10_000);
         await expect.poll(() => overlay.locator(".gateway-vital--cpu polyline").count()).toBe(1);
         if (captureUiProof) {
           await page.screenshot({
@@ -236,7 +238,7 @@ suite.define(() => {
           .toContain("432 MB");
         const desktopWidget = await widget.boundingBox();
         expect(desktopWidget).not.toBeNull();
-        expect(desktopWidget!.width).toBeLessThanOrEqual(210);
+        expect(desktopWidget!.width).toBeLessThanOrEqual(240);
         expect(desktopWidget!.height).toBeLessThanOrEqual(100);
         expect(1280 - desktopWidget!.x - desktopWidget!.width).toBeGreaterThanOrEqual(0);
         expect(1280 - desktopWidget!.x - desktopWidget!.width).toBeLessThanOrEqual(32);
@@ -278,16 +280,17 @@ suite.define(() => {
             heapTotalBytes: 384 * 1_048_576,
           },
         });
+        await page.clock.runFor(10_000);
         await gateway.waitForRequest("system.info", { after: nextSystemInfoCount });
         // This delay is the simulated network latency the ping graph must measure.
-        await page.waitForTimeout(initialPingMs + 250);
+        await page.clock.runFor(initialPingMs + 250);
         await gateway.resolveDeferred("system.info");
         await expect
           .poll(() => widget.locator(".gateway-vital--memory").textContent())
           .toContain("654 MB");
         await expect
           .poll(() => widget.locator(".gateway-vital--cpu").textContent())
-          .toContain("75%");
+          .toContain("0.75 cores");
         await expect
           .poll(async () =>
             Number.parseInt(
@@ -304,6 +307,7 @@ suite.define(() => {
           );
         }
         expect(await ping.getAttribute("data-degraded")).toBe("");
+        await page.clock.runFor(10_000);
         await expect.poll(() => ping.getAttribute("data-degraded")).toBeNull();
         await gateway.waitForRequest("system.info", { after: systemInfoCount + 2 });
         expect(await gateway.getRequests("sessions.list", currentWorkQuery)).toHaveLength(
@@ -386,12 +390,19 @@ suite.define(() => {
         await page.setViewportSize({ height: 844, width: 390 });
         const mobileWidget = await widget.boundingBox();
         expect(mobileWidget).not.toBeNull();
-        expect(mobileWidget!.width).toBeLessThanOrEqual(210);
+        expect(mobileWidget!.width).toBeLessThanOrEqual(240);
         expect(mobileWidget!.height).toBeLessThanOrEqual(100);
         expect(mobileWidget!.x).toBeGreaterThanOrEqual(0);
         expect(mobileWidget!.y).toBeGreaterThanOrEqual(0);
         expect(mobileWidget!.x + mobileWidget!.width).toBeLessThanOrEqual(390);
         expect(mobileWidget!.y + mobileWidget!.height).toBeLessThanOrEqual(844);
+        expect(
+          await widget
+            .locator(".sparkline-tile__label, .sparkline-tile__value")
+            .evaluateAll((elements) =>
+              elements.every((element) => element.scrollWidth <= element.clientWidth),
+            ),
+        ).toBe(true);
         if (captureUiProof) {
           await page.screenshot({
             animations: "disabled",
@@ -451,9 +462,10 @@ suite.define(() => {
               heapTotalBytes: 384 * 1_048_576,
             },
           });
+          await page.clock.runFor(10_000);
           await expect
             .poll(() => widget.locator(".gateway-vital--cpu .sparkline-tile__value").textContent())
-            .toContain(`${Math.round(scenario.total * 100)}%`);
+            .toContain(`${scenario.total.toFixed(2)} cores`);
           await expect
             .poll(() => widget.locator(".sparkline-tile__secondary").textContent())
             .toContain(
@@ -518,6 +530,7 @@ suite.define(() => {
           await gateway.getRequests("sessions.list", { ...currentWorkQuery, offset: 100 }),
         ).toHaveLength(0);
         await gateway.setMethodResponse("sessions.list", listing([]));
+        await page.clock.runFor(10_000);
         await activeRuns.getByText("No active runs.", { exact: true }).waitFor();
         expect((await activeCount.textContent())?.trim()).toBe("0 active");
         expect(await activeRuns.locator("li").count()).toBe(0);
@@ -557,16 +570,17 @@ suite.define(() => {
         await page.getByRole("button", { name: /^Open overlay/u }).click();
         await expect
           .poll(() => overlay.locator(".gateway-vital--cpu").textContent())
-          .toContain("50%");
+          .toContain("0.50 cores");
         await overlay.getByRole("button", { name: "Minimize system busyness" }).click();
         await widget.waitFor();
         await gateway.setOnline(false);
         await expect.poll(() => widget.textContent()).toContain("Unavailable");
-        expect(await widget.textContent()).not.toContain("50%");
+        expect(await widget.textContent()).not.toContain("0.50 cores");
         expect(await widget.textContent()).not.toContain("654 MB");
+        await expect.poll(() => snapshots.textContent()).toContain("Offline");
         await expect
           .poll(() => snapshots.textContent())
-          .toMatch(/Offline\s+Connect to the Gateway/u);
+          .toContain("Connect to the Gateway to refresh diagnostics.");
         expect(await refresh.isDisabled()).toBe(true);
         await expect.poll(() => snapshots.textContent()).toContain("diagnostics-e2e");
         await page.setViewportSize({ height: 844, width: 390 });

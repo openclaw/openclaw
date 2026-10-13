@@ -120,7 +120,7 @@ describe("content-addressed skill refresh", () => {
       name: "demo",
       description: "Changed first scope",
     });
-    const directoryReads = vi.spyOn(fsSync, "readdirSync");
+    const directoryReads = vi.spyOn(fsSync, "opendirSync");
     bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch", sourceScopes: [firstScope] });
     const reconciledReadCount = directoryReads.mock.calls.length;
     expect(reconciledReadCount).toBeGreaterThan(0);

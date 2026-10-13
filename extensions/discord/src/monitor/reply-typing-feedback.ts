@@ -18,13 +18,7 @@ export function createDiscordReplyTypingFeedback(params: {
   maxDurationMs?: number;
   keepaliveIntervalMs?: number;
 }) {
-  const rest =
-    params.rest ??
-    createDiscordRestClient({
-      cfg: params.cfg,
-      token: params.token,
-      accountId: params.accountId,
-    }).rest;
+  const rest = params.rest ?? createDiscordRestClient(params).rest;
   return createTypingCallbacks({
     start: () => sendTyping({ rest, channelId: params.channelId }),
     onStartError: (err) => {

@@ -24,10 +24,6 @@ const STYLE_CONSTRUCTS: Partial<Record<MarkdownStyle, FormatConstruct>> = {
   blockquote: "blockquote",
 };
 
-function isHeading(style: MarkdownStyle): boolean {
-  return style.startsWith("heading_");
-}
-
 function projectStyles(
   styles: MarkdownStyleSpan[],
   profile: FormatCapabilityProfile,
@@ -35,7 +31,7 @@ function projectStyles(
   const projected: MarkdownStyleSpan[] = [];
   let synthesizedHeading = false;
   for (const span of styles) {
-    if (isHeading(span.style)) {
+    if (span.style.startsWith("heading_")) {
       if (profile.constructs.heading === "native") {
         projected.push(span);
       } else if (

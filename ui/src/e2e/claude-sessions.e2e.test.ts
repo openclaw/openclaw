@@ -7,10 +7,12 @@ import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { expectHistoryBoundaryState } from "./chat-history-boundary.test-support.ts";
 import {
+  expectTranscriptLayoutCommitted,
   hostGroupedNativeCatalogs,
   resumableClaudeCatalog,
 } from "./claude-sessions.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { expectVirtualRowPaintProbeLifecycle } from "./virtual-row-anchor.lifecycle.test-support.ts";
 import {
   captureTopVisibleVirtualRow,
   expectPaintedVirtualRowAnchor,
@@ -93,7 +95,10 @@ async function triggerClaudeCatalogTerminal(page: Page, options: { force?: boole
     hasText: "Native Claude terminal",
   });
   await row.click({ button: "right", force: options.force });
-  await page.locator('wa-dropdown-item[value="terminal"]').click({ force: options.force });
+  await page
+    .locator("openclaw-catalog-session-menu")
+    .getByRole("menuitem", { name: "Open in terminal", exact: true })
+    .click({ force: options.force });
 }
 
 async function openClaudeCatalogTerminal(page: Page) {
@@ -349,10 +354,11 @@ suite.define(() => {
         title: "claude --resume claude-termi…",
       });
       await expect.poll(() => connecting.count()).toBe(1);
+      const terminalOutput = "Claude Code ready\r\n";
       await gateway.emitGatewayEvent("terminal.data", {
         sessionId: "claude-terminal-e2e",
-        seq: 17,
-        data: "Claude Code ready\r\n",
+        seq: terminalOutput.length,
+        data: terminalOutput,
       });
       await expect.poll(() => connecting.count()).toBe(0);
       expect(await page.locator(".tabstrip-tab.is-live").count()).toBe(1);
@@ -620,7 +626,7 @@ suite.define(() => {
         )
         .toBe(41);
       await page.clock.runFor(100);
-      await waitForPaintedVirtualRowAnchor(thread, anchor);
+      await waitForPaintedVirtualRowAnchor(thread);
     } finally {
       paintResult = await stopVirtualRowPaintProbe(thread);
     }
@@ -632,11 +638,21 @@ suite.define(() => {
       .poll(() => page.getByText("This session is on a paired device and is view-only.").count())
       .toBe(1);
     const expectCenteredLayout = async (screenshotName: string) => {
-      const [workbenchBox, threadBox, composerBox] = await Promise.all([
-        catalogPane.locator(".chat-workbench").boundingBox(),
-        catalogPane.locator(".chat-thread-inner").boundingBox(),
-        catalogPane.locator(".agent-chat__composer-shell").boundingBox(),
-      ]);
+      await expectTranscriptLayoutCommitted(thread);
+      // Sample all centers in one browser turn so they describe the same layout.
+      const [workbenchBox, threadBox, composerBox] = await catalogPane.evaluate((element) =>
+        [".chat-workbench", ".chat-thread-inner", ".agent-chat__composer-shell"].map((selector) => {
+          const target = element.querySelector(selector);
+          const box = target?.getBoundingClientRect();
+          return target &&
+            getComputedStyle(target).visibility === "visible" &&
+            box &&
+            box.width > 0 &&
+            box.height > 0
+            ? { x: box.x, width: box.width }
+            : null;
+        }),
+      );
       expect(workbenchBox).not.toBeNull();
       expect(threadBox).not.toBeNull();
       expect(composerBox).not.toBeNull();
@@ -966,28 +982,33 @@ suite.define(() => {
     expect(await gateway.getRequests("chat.history")).toHaveLength(failedRequestCount + 1);
     const readerAnchor = await captureTopVisibleVirtualRow(thread);
     await startVirtualRowPaintProbe(thread, readerAnchor);
-    await gateway.resolveDeferred("chat.history", {
-      messages: older,
-      hasMore: true,
-      nextOffset: 1100,
-      totalMessages: 1140,
-      sessionId: "native-scrollback",
-      thinkingLevel: null,
-    });
-    await expect
-      .poll(() =>
-        page
-          .locator("openclaw-chat-pane")
-          .evaluate(
-            (element) =>
-              (element as HTMLElement & { state: { chatMessages: unknown[] } }).state.chatMessages
-                .length,
-          ),
-      )
-      .toBe(1100);
-    await expectHistoryBoundaryState(page, false);
-    await waitForPaintedVirtualRowAnchor(thread, readerAnchor);
-    expectPaintedVirtualRowAnchor(readerAnchor, await stopVirtualRowPaintProbe(thread));
+    let paintResult: VirtualRowPaintResult;
+    try {
+      await gateway.resolveDeferred("chat.history", {
+        messages: older,
+        hasMore: true,
+        nextOffset: 1100,
+        totalMessages: 1140,
+        sessionId: "native-scrollback",
+        thinkingLevel: null,
+      });
+      await expect
+        .poll(() =>
+          page
+            .locator("openclaw-chat-pane")
+            .evaluate(
+              (element) =>
+                (element as HTMLElement & { state: { chatMessages: unknown[] } }).state.chatMessages
+                  .length,
+            ),
+        )
+        .toBe(1100);
+      await expectHistoryBoundaryState(page, false);
+      await waitForPaintedVirtualRowAnchor(thread);
+    } finally {
+      paintResult = await stopVirtualRowPaintProbe(thread);
+    }
+    expectPaintedVirtualRowAnchor(readerAnchor, paintResult);
     if (artifactDir) {
       await page.screenshot({
         path: path.join(artifactDir, "03-native-history-prepended-visible.png"),
@@ -1020,5 +1041,11 @@ suite.define(() => {
     expect(await page.getByRole("button", { name: "Show earlier" }).count()).toBe(0);
     expect(await gateway.getRequests("chat.history")).toHaveLength(failedRequestCount + 2);
     await page.close();
+  });
+
+  it("seals completed paint evidence and retains queued anchor jumps", async () => {
+    await suite.withPage(undefined, async ({ page }) => {
+      await expectVirtualRowPaintProbeLifecycle(page);
+    });
   });
 });

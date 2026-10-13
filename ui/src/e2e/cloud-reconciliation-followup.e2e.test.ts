@@ -119,8 +119,8 @@ suite.define(() => {
 
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await gateway.waitForRequest("chat.startup");
-        await page.getByRole("button", { name: "Cloud · syncing files" }).waitFor();
-        await page.getByText("Safely applying cloud edits", { exact: false }).waitFor();
+        await page.getByRole("button", { name: "Worker · syncing files" }).waitFor();
+        await page.getByText("Finalizing worker workspace", { exact: false }).waitFor();
         const composer = page.locator(".agent-chat__composer-combobox textarea");
         await expect.poll(() => composer.isEnabled()).toBe(true);
         await page.getByText("your message starts automatically", { exact: false }).waitFor();
@@ -254,9 +254,18 @@ suite.define(() => {
           sessionKey,
         });
         await page.getByText("Runner failed", { exact: true }).waitFor();
-        await page
-          .getByText("Workspace reconciliation failed: local worktree is locked.", { exact: false })
+        const failure = page.locator(".chat-error").filter({
+          hasText: "Workspace reconciliation failed: local worktree is locked.",
+        });
+        await failure
+          .locator("summary strong")
+          .getByText("Couldn't finish this reply. Check the conversation before trying again.")
           .waitFor();
+        await failure.locator("summary").click();
+        await failure.getByLabel("Error details", { exact: true }).waitFor();
+        expect(await failure.getByLabel("Error details", { exact: true }).textContent()).toContain(
+          "Workspace reconciliation failed: local worktree is locked.",
+        );
         if (captureUiProofEnabled) {
           await page.screenshot({
             fullPage: true,

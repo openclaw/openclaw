@@ -1,11 +1,6 @@
-// Gateway Bench Child script supports OpenClaw repository automation.
 import type { ChildProcess } from "node:child_process";
 import { performance } from "node:perf_hooks";
-import {
-  inspectManagedProcessGroup,
-  terminateManagedChild,
-  waitForManagedProcessGroupExit,
-} from "./managed-child-process.mts";
+import { inspectManagedProcessGroup, terminateManagedChild } from "./managed-child-process.mts";
 import { sleep as delay } from "./sleep.mjs";
 
 export { delay };
@@ -24,6 +19,7 @@ export type StopChildResult = ChildExit & {
 };
 
 type StopChildOptions = {
+  onForceKill?: () => void;
   killGraceMs?: number;
   teardownGraceMs?: number;
 };
@@ -109,13 +105,15 @@ export async function stopChild(
   const signalProcessTree = (signal: NodeJS.Signals): boolean => {
     let delivered = true;
     terminateManagedChild(
-      {
-        kill(childSignal) {
-          delivered = child.kill(childSignal);
-          return delivered;
-        },
-        pid: child.pid,
-      },
+      process.platform === "win32"
+        ? child
+        : {
+            kill(childSignal) {
+              delivered = child.kill(childSignal);
+              return delivered;
+            },
+            pid: child.pid,
+          },
       signal,
       {
         onChildSignalError(error) {
@@ -139,57 +137,13 @@ export async function stopChild(
     }
     return exit;
   };
-  const waitForProcessTreeExit = (ms: number): Promise<boolean> =>
-    waitForManagedProcessGroupExit(child, ms, {
-      clampPollToDeadline: true,
-      errorPolicy: "alive-on-eperm",
-      pollIntervalMs: EXIT_POLL_MS,
-    });
-  const cleanupExitedProcessTree = async (
-    exit: ChildExit,
-    exitedBeforeTeardown: boolean,
-  ): Promise<StopChildResult> => {
-    if (!processTreeAlive()) {
-      return { ...exit, exitedBeforeTeardown };
-    }
-    const sentTeardownSignal = signalProcessTree("SIGTERM");
-    if (sentTeardownSignal) {
-      await waitForProcessTreeExit(teardownGraceMs);
-    }
-    if (sentTeardownSignal && processTreeAlive()) {
-      signalProcessTree("SIGKILL");
-      await waitForProcessTreeExit(killGraceMs);
-    }
-    if (!sentTeardownSignal) {
-      releaseUnsettledChild(child);
-    }
-    return { ...exit, exitedBeforeTeardown };
-  };
-
-  const existingExit = directExit();
-  if (existingExit != null) {
-    return await cleanupExitedProcessTree(existingExit, true);
-  }
-
-  const exited = new Promise<ChildExit>((resolve) => {
-    child.once("exit", (exitCode, signal) => {
-      observedExit = { exitCode, signal };
-      resolve(observedExit);
-    });
+  child.once("exit", (exitCode, signal) => {
+    observedExit = { exitCode, signal };
   });
   const waitForExit = async (ms: number): Promise<ChildExit | null> => {
     const deadlineAt = Date.now() + ms;
-    while (Date.now() < deadlineAt) {
-      const waitMs = Math.min(EXIT_POLL_MS, deadlineAt - Date.now());
-      if (directExit() == null) {
-        await Promise.race([exited, delay(waitMs)]);
-      } else {
-        await delay(waitMs);
-      }
-      const exit = currentExit();
-      if (exit != null) {
-        return exit;
-      }
+    while (currentExit() === null && Date.now() < deadlineAt) {
+      await delay(Math.min(EXIT_POLL_MS, deadlineAt - Date.now()));
     }
     return currentExit();
   };
@@ -197,31 +151,28 @@ export async function stopChild(
   await new Promise<void>((resolve) => {
     setImmediate(resolve);
   });
-  const queuedExit = directExit();
-  if (queuedExit != null) {
-    return await cleanupExitedProcessTree(queuedExit, true);
+  const exitedBeforeTeardown = directExit() !== null;
+  const existingExit = currentExit();
+  if (existingExit !== null) {
+    return { ...existingExit, exitedBeforeTeardown };
   }
 
   const sentTeardownSignal = signalProcessTree("SIGTERM");
   const gracefulExit = await waitForExit(teardownGraceMs);
   if (gracefulExit != null) {
-    return { ...gracefulExit, exitedBeforeTeardown: !sentTeardownSignal };
-  }
-
-  const postGraceExit = currentExit();
-  if (postGraceExit != null) {
-    return { ...postGraceExit, exitedBeforeTeardown: !sentTeardownSignal };
+    return { ...gracefulExit, exitedBeforeTeardown: exitedBeforeTeardown || !sentTeardownSignal };
   }
   if (!sentTeardownSignal) {
     releaseUnsettledChild(child);
     return { exitCode: null, exitedBeforeTeardown: true, signal: null };
   }
 
+  options.onForceKill?.();
   signalProcessTree("SIGKILL");
   const killedExit = await waitForExit(killGraceMs);
-  const finalExit = killedExit ?? currentExit();
+  const finalExit = killedExit ?? (exitedBeforeTeardown ? directExit() : currentExit());
   if (finalExit != null) {
-    return { ...finalExit, exitedBeforeTeardown: false };
+    return { ...finalExit, exitedBeforeTeardown };
   }
 
   releaseUnsettledChild(child);

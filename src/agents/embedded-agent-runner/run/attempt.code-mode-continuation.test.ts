@@ -11,8 +11,9 @@ import {
   pluginToolWithExecute,
   resetCodeModeTestState,
 } from "../../code-mode.test-support.js";
-import { Agent, type AgentTool } from "../../runtime/index.js";
+import { Agent } from "../../runtime/index.js";
 import { SessionManager } from "../../sessions/session-manager.js";
+import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
 import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import { isToolResultError } from "../../tool-result-error.js";
 import { jsonResult } from "../../tools/common.js";
@@ -103,10 +104,11 @@ describe("runEmbeddedAttempt Code Mode recovery boundary", () => {
     const providerContexts: Context[] = [];
     const createSession = () => {
       const session = createDefaultEmbeddedSession();
-      const options = hoisted.createAgentSessionMock.mock.calls.at(-1)?.[0] as {
-        customTools: AgentTool[];
-      };
-      const allTools = options.customTools;
+      const options = hoisted.createAgentSessionMock.mock.calls.at(-1)?.[0];
+      if (!options?.customTools) {
+        throw new Error("Expected the embedded attempt to supply custom tools");
+      }
+      const allTools = options.customTools.map((definition) => wrapToolDefinition(definition));
       const agent = new Agent({
         initialState: { model, tools: allTools },
         afterToolCall: async ({ result, isError }) => ({
@@ -119,7 +121,14 @@ describe("runEmbeddedAttempt Code Mode recovery boundary", () => {
           return streamAssistant(
             code === undefined
               ? [{ type: "text", text: "all changes verified" }]
-              : [{ type: "toolCall", id: `program-${turn}`, name: "exec", arguments: { code } }],
+              : [
+                  {
+                    type: "toolCall",
+                    id: `program-${turn}`,
+                    name: "exec",
+                    arguments: { title: "Continue the source repair", code },
+                  },
+                ],
           );
         },
       });

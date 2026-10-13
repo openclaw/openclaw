@@ -20,12 +20,14 @@ type FeishuToolRequirement = {
   label: string;
 };
 
-function resolveImplicitToolAccountId(params: {
+type FeishuToolAccountParams = {
   cfg: OpenClawConfig;
   executeParams?: AccountAwareParams;
   defaultAccountId?: string;
   requiredTool: FeishuToolRequirement;
-}): string {
+};
+
+function resolveImplicitToolAccountId(params: FeishuToolAccountParams): string {
   const explicitAccountId = normalizeOptionalString(params.executeParams?.accountId);
   if (explicitAccountId) {
     const normalizedAccountId = normalizeOptionalAccountId(explicitAccountId);
@@ -96,12 +98,7 @@ function resolveImplicitToolAccountId(params: {
   throw new Error(`No usable Feishu account has ${params.requiredTool.label} tools enabled`);
 }
 
-export function resolveFeishuToolAccount(params: {
-  cfg: OpenClawConfig;
-  executeParams?: AccountAwareParams;
-  defaultAccountId?: string;
-  requiredTool: FeishuToolRequirement;
-}): ResolvedFeishuAccount {
+export function resolveFeishuToolAccount(params: FeishuToolAccountParams): ResolvedFeishuAccount {
   const account = resolveFeishuRuntimeAccount({
     cfg: params.cfg,
     accountId: resolveImplicitToolAccountId(params),
@@ -114,12 +111,7 @@ export function resolveFeishuToolAccount(params: {
   return account;
 }
 
-export function createFeishuToolClient(params: {
-  cfg: OpenClawConfig;
-  executeParams?: AccountAwareParams;
-  defaultAccountId?: string;
-  requiredTool: FeishuToolRequirement;
-}): Lark.Client {
+export function createFeishuToolClient(params: FeishuToolAccountParams): Lark.Client {
   return createFeishuClient(resolveFeishuToolAccount(params));
 }
 

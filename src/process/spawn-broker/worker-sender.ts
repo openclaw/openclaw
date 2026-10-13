@@ -1,7 +1,6 @@
 import { Socket } from "node:net";
 import { createBrokerSender, type BrokerPublisher } from "./ipc.js";
 
-type Send = Parameters<typeof createBrokerSender>[0];
 type PendingPipe = {
   id: number;
   fd: number;
@@ -11,7 +10,7 @@ type PendingPipe = {
 };
 
 /** A receipt keeps Node's internal handle queue empty before inspecting the next socket. */
-export function createWorkerSender(send: Send) {
+export function createWorkerSender(send: Parameters<typeof createBrokerSender>[0]) {
   let pending: PendingPipe | undefined;
   let closed: Error | undefined;
   const finish = (pipe: PendingPipe, error: Error | null) => {

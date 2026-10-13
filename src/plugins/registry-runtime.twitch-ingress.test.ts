@@ -5,7 +5,7 @@ import {
   readChannelContextAdmissionEvidence,
 } from "../channels/message-access/admission-evidence.js";
 import { importBundledChannelContractSourceArtifact } from "../channels/plugins/contracts/test-helpers/runtime-artifacts.js";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import { runChannelInboundEvent } from "../plugin-sdk/channel-inbound.js";
@@ -248,27 +248,27 @@ describe("Twitch registered participant provenance", () => {
     await withTwitchMonitor("default", {}, async () => {});
   });
 
-  it.each(
-    ["default", "secondary"].flatMap(
-      (accountId) =>
-        [
-          { accountId, policy: { allowFrom: ["123456"] }, name: "allowlist", coverage: "enforced" },
-          {
-            accountId,
-            policy: { allowedRoles: ["moderator"] },
-            name: "role",
-            coverage: "enforced",
-          },
-          { accountId, policy: {}, name: "open", coverage: "attribution-only" },
-          {
-            accountId,
-            policy: { allowedRoles: ["all"] },
-            name: "wildcard",
-            coverage: "attribution-only",
-          },
-        ] satisfies { accountId: string; policy: Policy; name: string; coverage: string }[],
-    ),
-  )(
+  it.each([
+    {
+      accountId: "secondary",
+      policy: { allowFrom: ["123456"] },
+      name: "allowlist",
+      coverage: "enforced",
+    },
+    {
+      accountId: "default",
+      policy: { allowedRoles: ["moderator"] },
+      name: "role",
+      coverage: "enforced",
+    },
+    { accountId: "default", policy: {}, name: "open", coverage: "attribution-only" },
+    {
+      accountId: "default",
+      policy: { allowedRoles: ["all"] },
+      name: "wildcard",
+      coverage: "attribution-only",
+    },
+  ] satisfies { accountId: string; policy: Policy; name: string; coverage: string }[])(
     "preserves $accountId $name sender through actual ingress and reply",
     async ({ accountId, policy, coverage, name }) => {
       await withTwitchMonitor(accountId, policy, async ({ client, evidence, waitForReply }) => {

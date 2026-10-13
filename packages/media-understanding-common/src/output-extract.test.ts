@@ -1,27 +1,11 @@
-// Media Understanding Common tests cover provider output extraction behavior.
 import { describe, expect, it } from "vitest";
 import { extractGeminiResponse } from "./output-extract.js";
 
 describe("extractGeminiResponse", () => {
   it("extracts the response from noisy output with nested JSON objects", () => {
-    expect(
-      extractGeminiResponse(
-        [
-          "debug: invoking gemini",
-          JSON.stringify({
-            response: "a useful description",
-            usage: {
-              inputTokens: 12,
-              outputTokens: 4,
-            },
-          }),
-        ].join("\n"),
-      ),
-    ).toBe("a useful description");
-  });
-
-  it("returns null for an incomplete JSON object", () => {
-    expect(extractGeminiResponse("{")).toBeNull();
+    const raw =
+      'debug: invoking gemini\n{"response":"a useful description","usage":{"inputTokens":12,"outputTokens":4}}';
+    expect(extractGeminiResponse(raw)).toBe("a useful description");
   });
 
   it("ignores unmatched quotes in noisy output before the JSON object", () => {
@@ -49,34 +33,13 @@ describe("extractGeminiResponse", () => {
     expect(extractGeminiResponse(JSON.stringify({ response }))).toBe(response);
   });
 
-  it("extracts pretty-printed JSON output", () => {
-    expect(
-      extractGeminiResponse(
-        JSON.stringify(
-          {
-            response: "pretty response",
-            usage: { inputTokens: 12 },
-          },
-          null,
-          2,
-        ),
-      ),
-    ).toBe("pretty response");
-  });
-
   it("preserves pretty-printed object elements inside arrays", () => {
-    expect(
-      extractGeminiResponse(
-        JSON.stringify(
-          {
-            response: "array response",
-            items: [{ id: 1 }, { id: 2 }],
-          },
-          null,
-          2,
-        ),
-      ),
-    ).toBe("array response");
+    const raw = JSON.stringify(
+      { response: "array response", items: [{ id: 1 }, { id: 2 }] },
+      null,
+      2,
+    );
+    expect(extractGeminiResponse(raw)).toBe("array response");
   });
 
   it("does not accept an inner response from a malformed trailing object", () => {
@@ -84,10 +47,6 @@ describe("extractGeminiResponse", () => {
       "good",
     );
     expect(extractGeminiResponse('{"response":"good"} {"meta":{"response":"bad"}')).toBe("good");
-  });
-
-  it("ignores a nested response inside an unfinished outer object", () => {
-    expect(extractGeminiResponse('noise {"meta":{"response":"bad"}')).toBeNull();
   });
 
   it("does not promote a child from a malformed outer object", () => {

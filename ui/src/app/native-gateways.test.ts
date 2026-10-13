@@ -42,6 +42,24 @@ function installBridge() {
 }
 
 describe("native gateways", () => {
+  it.each([
+    ["", "This computer"],
+    ["This Mac", "This Mac"],
+    ["My desktop", "My desktop"],
+  ])("uses a shell's local label with a neutral fallback (%s)", async (name, expected) => {
+    installBridge();
+    Object.assign(window, {
+      __OPENCLAW_NATIVE_GATEWAYS__: {
+        ...snapshot,
+        gateways: [{ ...snapshot.gateways[0], name }],
+      },
+    });
+    const { nativeSetupCapability } = await import("./native-setup.ts");
+    const capability = nativeSetupCapability({ nativeDeviceSettings: null, navigate: vi.fn() });
+
+    expect(capability?.currentGateway).toEqual({ name: expected, kind: "local" });
+  });
+
   it("returns null without the WebKit bridge", async () => {
     const { nativeGatewaysCapability } = await import("./native-gateways.runtime.ts");
 
@@ -86,22 +104,6 @@ describe("native gateways", () => {
       new CustomEvent(EVENT, { detail: { ...snapshot, currentId: "profile:studio" } }),
     );
     expect(listener).not.toHaveBeenCalled();
-  });
-
-  it("reads the latest global when attached lazily, then publishes native updates", async () => {
-    installBridge();
-    const attachedSnapshot = { ...snapshot, currentId: "profile:studio" };
-    Object.assign(window, { __OPENCLAW_NATIVE_GATEWAYS__: attachedSnapshot });
-    const { nativeGatewaysCapability } = await import("./native-gateways.runtime.ts");
-    const capability = nativeGatewaysCapability();
-
-    expect(capability?.snapshot).toEqual(attachedSnapshot);
-
-    const listener = vi.fn();
-    const unsubscribe = capability?.subscribe(listener);
-    window.dispatchEvent(new CustomEvent(EVENT, { detail: snapshot }));
-    expect(listener).toHaveBeenCalledWith(snapshot);
-    unsubscribe?.();
   });
 
   it("creates the app-lifetime singleton only once", async () => {

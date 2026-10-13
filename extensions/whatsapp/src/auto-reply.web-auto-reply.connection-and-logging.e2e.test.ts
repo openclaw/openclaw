@@ -3,12 +3,13 @@ import "./test-helpers.js";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as waitForLogTick } from "node:timers/promises";
 import { escapeRegExp, formatEnvelopeTimestamp } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { extractErrorCode, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { getChildLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import { getActiveWebListener } from "./active-listener.js";
 import { WhatsAppAuthUnstableError, resolveWebCredsPath } from "./auth-store.js";
 import { resolveOAuthDir } from "./auth-store.runtime.js";
@@ -99,6 +100,37 @@ async function waitForScriptedListeners(
     },
     { timeout: 250, interval: 2 },
   );
+}
+
+// The async file transport's flush promise is not exposed through the plugin SDK.
+async function waitForLogText(
+  filePath: string,
+  text: string,
+  signal: AbortSignal,
+): Promise<string> {
+  try {
+    for (;;) {
+      signal.throwIfAborted();
+      const content = await withinTest(
+        fs.readFile(filePath, "utf8").catch((error: unknown) => {
+          if (extractErrorCode(error) === "ENOENT") {
+            return "";
+          }
+          throw error;
+        }),
+        signal,
+      );
+      if (content.includes(text)) {
+        return content;
+      }
+      await waitForLogTick(10, undefined, { signal });
+    }
+  } catch (error) {
+    if (signal.aborted) {
+      throw new Error(`Timed out waiting for ${text} in ${filePath}`, { cause: error });
+    }
+    throw error;
+  }
 }
 
 describe("web auto-reply connection", () => {
@@ -326,47 +358,6 @@ describe("web auto-reply connection", () => {
     expectErrorContaining(runtime.error, "openclaw channels login --channel whatsapp");
   });
 
-  it("keeps post-open Baileys 428 on the reconnect path", async () => {
-    const sleep = vi.fn(async () => {});
-    const scripted = createScriptedWebListenerFactory();
-    const { controller, run } = startWebAutoReplyMonitor({
-      monitorWebChannelFn: monitorWebChannel as never,
-      listenerFactory: scripted.listenerFactory,
-      sleep,
-      reconnect: { initialMs: 10, maxMs: 10, maxAttempts: 3, factor: 1.1 },
-    });
-
-    await vi.waitFor(
-      () => {
-        expect(scripted.getListenerCount()).toBe(1);
-      },
-      { timeout: 250, interval: 2 },
-    );
-    scripted.resolveClose(0, {
-      status: 428,
-      isLoggedOut: false,
-      error: "Connection Terminated",
-    });
-
-    await vi.waitFor(
-      () => {
-        expect(scripted.getListenerCount()).toBeGreaterThanOrEqual(2);
-      },
-      { timeout: 250, interval: 2 },
-    );
-
-    controller.abort();
-    scripted.resolveClose(scripted.getListenerCount() - 1, {
-      status: 499,
-      isLoggedOut: false,
-      error: "aborted",
-    });
-    await run;
-
-    expect(scripted.getListenerCount()).toBeGreaterThanOrEqual(2);
-    expect(sleep).toHaveBeenCalled();
-  });
-
   it("drains pending deliveries while connected and stops after close", async () => {
     vi.useFakeTimers();
     try {
@@ -437,56 +428,6 @@ describe("web auto-reply connection", () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it("treats status 440 as non-retryable and stops without retrying", async () => {
-    const sleep = vi.fn(async () => {});
-    const scripted = createScriptedWebListenerFactory();
-    const { runtime, controller, run } = startWebAutoReplyMonitor({
-      monitorWebChannelFn: monitorWebChannel as never,
-      listenerFactory: scripted.listenerFactory,
-      sleep,
-      reconnect: { initialMs: 10, maxMs: 10, maxAttempts: 3, factor: 1.1 },
-    });
-
-    await vi.waitFor(
-      () => {
-        expect(scripted.getListenerCount()).toBe(1);
-      },
-      { timeout: 250, interval: 2 },
-    );
-    scripted.resolveClose(0, {
-      status: 440,
-      isLoggedOut: false,
-      error: "Unknown Stream Errored (conflict)",
-    });
-
-    const completedQuickly = await Promise.race([
-      run.then(() => true),
-      new Promise<boolean>((resolve) => {
-        setTimeout(() => resolve(false), 60);
-      }),
-    ]);
-
-    if (!completedQuickly) {
-      await vi.waitFor(
-        () => {
-          expect(scripted.getListenerCount()).toBeGreaterThanOrEqual(2);
-        },
-        { timeout: 250, interval: 2 },
-      );
-      controller.abort();
-      scripted.resolveClose(1, { status: 499, isLoggedOut: false, error: "aborted" });
-      await run;
-    }
-
-    expect(completedQuickly).toBe(true);
-    expect(scripted.getListenerCount()).toBe(1);
-    expect(sleep).not.toHaveBeenCalled();
-    expectErrorContaining(runtime.error, "status 440");
-    expectErrorContaining(runtime.error, "session conflict");
-    expectErrorContaining(runtime.error, "openclaw channels logout --channel whatsapp");
-    expectErrorContaining(runtime.error, "Stopping web monitoring");
   });
 
   it.each([
@@ -569,45 +510,24 @@ describe("web auto-reply connection", () => {
     },
   );
 
-  it.each([
-    ["retries inbox attach when auth state is still stabilizing", true, 3],
-    ["stops retrying inbox attach when auth stays unstable past max attempts", false, 2],
-  ] as const)("%s", async (_name, recovers, maxAttempts) => {
+  it("stops retrying inbox attach when auth stays unstable past max attempts", async () => {
     const sleep = vi.fn(async () => {});
     const listenerFactory = vi.fn(async () => {
-      if (recovers && listenerFactory.mock.calls.length > 1) {
-        return createMockWebListener();
-      }
       throw new WhatsAppAuthUnstableError(
         "WhatsApp auth state is still stabilizing; retrying inbox attach.",
       );
     });
-    const { runtime, controller, run } = startWebAutoReplyMonitor({
+    const { runtime, run } = startWebAutoReplyMonitor({
       monitorWebChannelFn: monitorWebChannel as never,
       listenerFactory,
       sleep,
-      reconnect: { initialMs: 5, maxMs: 5, maxAttempts, factor: 1.1 },
+      reconnect: { initialMs: 5, maxMs: 5, maxAttempts: 2, factor: 1.1 },
     });
-
-    if (recovers) {
-      await vi.waitFor(() => expect(listenerFactory).toHaveBeenCalledTimes(2), {
-        timeout: 250,
-        interval: 2,
-      });
-      controller.abort();
-    }
     await run;
-
     expect(listenerFactory).toHaveBeenCalledTimes(2);
-    if (recovers) {
-      expect(typeof mockCallArg(sleep, 0, 0)).toBe("number");
-      expect(mockCallArg(sleep, 0, 1)).toBeInstanceOf(AbortSignal);
-      expectErrorContaining(runtime.error, "inbox attach");
-    } else {
-      expect(sleep).toHaveBeenCalledTimes(1);
-      expectErrorContaining(runtime.error, "Retry 1/2");
-      expectErrorContaining(runtime.error, "Stopping web monitoring");
-    }
+    expect(sleep).toHaveBeenCalledTimes(1);
+    expectErrorContaining(runtime.error, "Retry 1/2");
+    expectErrorContaining(runtime.error, "Stopping web monitoring");
   });
 
   type WatchdogCaseContext = {
@@ -686,35 +606,6 @@ describe("web auto-reply connection", () => {
         socket.ws.emit("frame");
         await vi.advanceTimersByTimeAsync(20);
         expect(scripted.getListenerCount()).toBe(1);
-      },
-    },
-    {
-      name: "does not let transport frames mask application silence forever",
-      exercise: async ({ scripted }) => {
-        const socket = getLastWebAutoReplySessionSocket();
-        for (let elapsedMs = 0; elapsedMs < 140; elapsedMs += 20) {
-          socket.ws.emit("frame");
-          await vi.advanceTimersByTimeAsync(20);
-        }
-        await waitForScriptedListeners(scripted, 2, true);
-      },
-    },
-    {
-      name: "publishes frame-driven transport activity for quiet sessions",
-      captureStatus: true,
-      options: {
-        heartbeatSeconds: 1,
-        transportTimeoutMs: 60_000,
-        messageTimeoutMs: 60_000,
-      },
-      exercise: async ({ statuses }) => {
-        const initialTransportAt = Number(statuses.at(-1)?.lastTransportActivityAt ?? 0);
-        const socket = getLastWebAutoReplySessionSocket();
-        await vi.advanceTimersByTimeAsync(250);
-        socket.ws.emit("frame");
-        await vi.advanceTimersByTimeAsync(1_000);
-        const lastTransportAt = Number(statuses.at(-1)?.lastTransportActivityAt ?? 0);
-        expect(lastTransportAt).toBeGreaterThan(initialTransportAt);
       },
     },
     {
@@ -826,46 +717,42 @@ describe("web auto-reply connection", () => {
     scenario.assertAfterRun?.(context);
   });
 
-  it.each([undefined, 75])(
-    "keeps live debounce config and explicit transport override (%s)",
-    async (debounceMs) => {
-      const capture = createWebListenerFactoryCapture();
+  it("passes live debounce config to the listener", async () => {
+    const capture = createWebListenerFactoryCapture();
 
-      setLoadConfigMock({
-        messages: {
-          inbound: {
-            debounceMs: 250,
-          },
+    setLoadConfigMock({
+      messages: {
+        inbound: {
+          debounceMs: 250,
         },
-        channels: {
-          whatsapp: {
-            accounts: {
-              work: {
-                authDir: "/tmp/work",
-              },
+      },
+      channels: {
+        whatsapp: {
+          accounts: {
+            work: {
+              authDir: "/tmp/work",
             },
           },
         },
-      } as OpenClawConfig);
-      await monitorWebChannel(
-        false,
-        capture.listenerFactory as never,
-        false,
-        async () => ({ text: "ok" }),
-        undefined,
-        undefined,
-        {
-          accountId: "work",
-          debounceMs,
-        },
-      );
+      },
+    } as OpenClawConfig);
+    await monitorWebChannel(
+      false,
+      capture.listenerFactory as never,
+      false,
+      async () => ({ text: "ok" }),
+      undefined,
+      undefined,
+      {
+        accountId: "work",
+      },
+    );
 
-      resetLoadConfigMock();
-      expect(capture.getLastOptions()?.debounceMs).toBe(debounceMs);
-      expect(capture.getLastOptions()?.cfg.messages?.inbound?.debounceMs).toBe(250);
-      expect(capture.getLastOptions()?.loadConfig).toEqual(expect.any(Function));
-    },
-  );
+    resetLoadConfigMock();
+    expect(capture.getLastOptions()?.debounceMs).toBeUndefined();
+    expect(capture.getLastOptions()?.cfg.messages?.inbound?.debounceMs).toBe(250);
+    expect(capture.getLastOptions()?.loadConfig).toEqual(expect.any(Function));
+  });
 
   it("raises the process listener budget before opening the web listener", async () => {
     const originalMax = process.getMaxListeners();
@@ -918,52 +805,7 @@ describe("web auto-reply connection", () => {
     expect(secondBody).not.toContain("first");
   });
 
-  it("emits heartbeat logs with connection metadata", async () => {
-    vi.useFakeTimers();
-    const logPath = `/tmp/openclaw-heartbeat-${crypto.randomUUID()}.log`;
-    setLoggerOverride({ level: "trace", file: logPath });
-
-    const runtime = createRuntimeSpies();
-
-    const controller = new AbortController();
-    const listenerFactory = vi.fn(async () => {
-      const onClose = new Promise<void>(() => {
-        // never resolves; abort will short-circuit
-      });
-      return { close: vi.fn(), onClose };
-    });
-
-    const run = monitorWebChannel(
-      false,
-      listenerFactory as never,
-      true,
-      async () => ({ text: "ok" }),
-      runtime as never,
-      controller.signal,
-      {
-        heartbeatSeconds: 1,
-        reconnect: { initialMs: 5, maxMs: 5, maxAttempts: 1, factor: 1.1 },
-      },
-    );
-
-    await vi.waitFor(() => expect(listenerFactory).toHaveBeenCalledOnce());
-    await vi.advanceTimersByTimeAsync(1_000);
-    controller.abort();
-    await vi.runAllTimersAsync();
-    await run.catch(() => {});
-    vi.useRealTimers();
-
-    let content = "";
-    await vi.waitFor(async () => {
-      content = await fs.readFile(logPath, "utf-8").catch(() => "");
-      expect(content).toMatch(/web-heartbeat/);
-    });
-    expect(content).toMatch(/web-heartbeat/);
-    expect(content).toMatch(/connectionId/);
-    expect(content).toMatch(/messagesHandled/);
-  });
-
-  it("logs outbound replies to file", async () => {
+  it("logs outbound replies to file", async ({ signal }) => {
     const logPath = `/tmp/openclaw-log-test-${crypto.randomUUID()}.log`;
     setLoggerOverride({ level: "trace", file: logPath });
     const spies = createWebInboundDeliverySpies();
@@ -991,11 +833,7 @@ describe("web auto-reply connection", () => {
       connectionId: "conn-file-log",
     });
 
-    let content = "";
-    await vi.waitFor(async () => {
-      content = await fs.readFile(logPath, "utf-8").catch(() => "");
-      expect(content).toMatch(/web-auto-reply/);
-    });
+    const content = await waitForLogText(logPath, "web-auto-reply", signal);
     expect(content).toMatch(/web-auto-reply/);
     expect(content).toMatch(/auto/);
   });

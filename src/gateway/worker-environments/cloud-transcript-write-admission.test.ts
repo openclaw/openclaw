@@ -1,8 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { withSessionManagerWrite } from "../../agents/sessions/session-manager-write-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import * as sessionAccess from "../../config/sessions/session-accessor.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { projectWorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
 import {
   ENVIRONMENT_ID,
@@ -14,6 +16,7 @@ import {
   createWorkerSessionTurnPlacementProvider,
   credential,
   measureLaunchTurn,
+  readLaunchToolNames,
   placements,
   root,
   seedActivePlacement,
@@ -22,9 +25,25 @@ import {
   turn,
   unusedEnvironments,
 } from "./worker-turn-launcher.test-support.js";
+import { withWorkerTurnTranscriptDatabase } from "./worker-turn-transcript-target.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
-import { reconcileWorkspaceAfterTurn } from "./workspace-result-finalize.js";
+import { reconcileWorkspaceAfterTurn as reconcileWorkspaceAfterTurnCore } from "./workspace-result-finalize.js";
 import * as resultStaging from "./workspace-result-staging.js";
+
+function reconcileWorkspaceAfterTurn(
+  params: Parameters<typeof reconcileWorkspaceAfterTurnCore>[0],
+) {
+  return withWorkerTurnTranscriptDatabase(
+    { ...params.transcriptTarget, sessionTarget: params.transcriptTarget },
+    {
+      assertCurrent() {},
+      prepareAuthority: () => params.placements.prepareTurnClaimAuthority(params.turnClaim),
+    },
+    (transcriptTarget) => reconcileWorkspaceAfterTurnCore({ ...params, transcriptTarget }),
+  );
+}
+
+afterAll(closeStateDatabaseForTest);
 
 // Pause only the physical admission boundary, without holding a native database lock.
 vi.mock("../../agents/sessions/session-manager-write-admission.js", () => ({
@@ -47,13 +66,13 @@ describe("cloud transcript write admission", () => {
   afterEach(async () => {
     vi.restoreAllMocks();
     vi.mocked(withSessionManagerWrite).mockReset();
-    await cleanupWorkerTurnLauncherTest();
+    await cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true });
   });
 
   it.each(["current", "run", "claim", "environment", "missing", "writer", "lifecycle"] as const)(
     "checks %s authority after admitting the fallback user write",
     async (change) => {
-      seedActivePlacement();
+      await seedActivePlacement();
       const input = turn();
       await sessionAccess.patchSessionEntryCore(sessionTarget, () => ({
         activeWriterRunId: input.runId,
@@ -79,6 +98,7 @@ describe("cloud transcript write admission", () => {
         ownerEpoch: OWNER_EPOCH,
         runWorkspaceCommand: vi.fn(),
         measureLaunchTurn,
+        readLaunchToolNames,
         launchTurn: launch,
         quiesceWorkspace: vi.fn(),
         reconcileWorkspace: vi.fn(),
@@ -119,18 +139,30 @@ describe("cloud transcript write admission", () => {
         if (change === "run") {
           runCurrent = false;
         } else if (change === "claim") {
-          vi.spyOn(placements, "validateTurnClaim").mockReturnValue(false);
+          const placement = placements.get(SESSION_ID);
+          const claim = placement ? projectWorkerSessionTurnClaim(placement) : undefined;
+          if (!claim) {
+            throw new Error("expected current worker claim");
+          }
+          await placements.releaseTurn(claim);
         } else if (change === "environment") {
           environment.ownerEpoch += 1;
         } else if (change === "missing") {
-          vi.spyOn(sessionAccess, "loadSessionEntry").mockReturnValue(undefined);
-        } else if (change === "writer" || change === "lifecycle") {
-          vi.spyOn(sessionAccess, "loadSessionEntry").mockReturnValue({
-            ...entry,
-            ...(change === "writer"
-              ? { activeWriterRunId: "replacement-run" }
-              : { lifecycleRevision: "replacement-lifecycle" }),
+          await sessionAccess.deleteSessionEntryLifecycle({
+            ...sessionTarget,
+            archiveTranscript: false,
+            target: {
+              canonicalKey: sessionTarget.sessionKey,
+              storeKeys: [sessionTarget.sessionKey],
+            },
+            expectedSessionId: entry.sessionId,
           });
+        } else if (change === "writer" || change === "lifecycle") {
+          await sessionAccess.patchSessionEntryCore(sessionTarget, () =>
+            change === "writer"
+              ? { activeWriterRunId: "replacement-run" }
+              : { lifecycleRevision: "replacement-lifecycle" },
+          );
         }
         gate.release.resolve();
         const outcome = await operation;
@@ -162,22 +194,21 @@ describe("cloud transcript write admission", () => {
     { change: "missing", cleared: false },
     { change: "writer", cleared: false },
     { change: "current", cleared: true },
-    { change: "claim", cleared: true },
   ] as const)(
     "checks $change settlement authority after admitting a workspace report (cleared: $cleared)",
     async ({ change, cleared }) => {
-      seedActivePlacement("remote-exec");
+      await seedActivePlacement("remote-exec");
       const placement = placements.get(SESSION_ID);
       if (placement?.state !== "active") {
         throw new Error("expected active placement");
       }
-      const turnClaim = placements.claimTurn({
+      const turnClaim = await placements.claimTurn({
         ...sessionTarget,
         owner: { kind: "local", environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
         claimId: "report-claim",
         runId: "report-run",
       });
-      placements.markWorkspaceResultPending(turnClaim);
+      await placements.markWorkspaceResultPending(turnClaim);
       if (cleared) {
         placements.recordWorkspaceResultConflict(turnClaim, {
           paths: ["src/local.ts"],
@@ -205,14 +236,16 @@ describe("cloud transcript write admission", () => {
             throw new Error("expected local staged result");
           }
           if (!cleared) {
-            request.source.stagedResult.record(request.source.stagedResult.ref);
+            await request.source.stagedResult.record(request.source.stagedResult.ref);
           }
-          request.source.journal.commit(MANIFEST_REF);
+          await request.source.journal.commit(MANIFEST_REF);
           return {
             manifestRef: MANIFEST_REF,
             changed: false,
             verifyStable: async () => {},
             verifyLocalStable: async () => {},
+            publishStagedResult: async () => {},
+            discardPreparedStagedResult: async () => {},
             getAppliedWorkspaceResult: () => ({
               manifestRef: MANIFEST_REF,
               manifest: { version: 1, baseCommit: null, entries: [] },
@@ -242,16 +275,23 @@ describe("cloud transcript write admission", () => {
         expect(publish).not.toHaveBeenCalled();
         expect(placements.validateWorkspaceResultClaim(turnClaim)).toBe(true);
         if (change === "draining") {
-          placements.startWorkspaceResultDrain(turnClaim);
+          await placements.startWorkspaceResultDrain(turnClaim);
         } else if (change === "claim") {
           vi.spyOn(placements, "validateWorkspaceResultClaim").mockReturnValue(false);
         } else if (change === "missing") {
-          vi.spyOn(sessionAccess, "loadSessionEntry").mockReturnValue(undefined);
-        } else if (change === "writer") {
-          vi.spyOn(sessionAccess, "loadSessionEntry").mockReturnValue({
-            ...entry,
-            activeWriterRunId: "replacement-run",
+          await sessionAccess.deleteSessionEntryLifecycle({
+            ...sessionTarget,
+            archiveTranscript: false,
+            target: {
+              canonicalKey: sessionTarget.sessionKey,
+              storeKeys: [sessionTarget.sessionKey],
+            },
+            expectedSessionId: entry.sessionId,
           });
+        } else if (change === "writer") {
+          await sessionAccess.patchSessionEntryCore(sessionTarget, () => ({
+            activeWriterRunId: "replacement-run",
+          }));
         }
         gate.release.resolve();
         const outcome = await operation;
@@ -273,7 +313,7 @@ describe("cloud transcript write admission", () => {
           expect(outcome).toBeInstanceOf(Error);
           expect(SessionManager.open(sessionTarget).getBranch()).toEqual([]);
           expect(publish).not.toHaveBeenCalled();
-          expect(placements.listPendingWorkspaceResults()).toHaveLength(1);
+          expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
         }
       } finally {
         gate.release.resolve();
