@@ -131,7 +131,11 @@ describe("skill library real Gateway identity boundary", () => {
           );
           expect(profiles.profiles).toHaveLength(3);
           expect(profiles.profiles.map((profile) => profile.id)).toEqual(
-            expect.arrayContaining([GATEWAY_OWNER_PROFILE_ID, aliceList.profileId, bobList.profileId]),
+            expect.arrayContaining([
+              GATEWAY_OWNER_PROFILE_ID,
+              aliceList.profileId,
+              bobList.profileId,
+            ]),
           );
 
           const original = skillLibraryProofBundle();
