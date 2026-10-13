@@ -81,7 +81,13 @@ export function createGatewayRunCleanup(
         operations.closeSharedState,
         operations.releaseLock,
         operations.clearStartupWatchdog,
-        operations.clearRequestWatchdogs,
+        () => {
+          // Failed process-owned cleanup keeps its unref'ed safety deadlines.
+          // Non-owning loops must still retire their referenced timers.
+          if (!cleanupFailed || ownsProcessLifecycle !== true) {
+            operations.clearRequestWatchdogs();
+          }
+        },
         joinCleanup,
         operations.cleanupSignals,
       ];

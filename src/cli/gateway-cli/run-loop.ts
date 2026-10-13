@@ -1271,19 +1271,14 @@ export async function runGatewayLoop(params: {
     releaseLock: releaseLockIfHeld,
     clearStartupWatchdog: startupWatchdog.clear,
     clearRequestWatchdogs: () => {
-      // Process-owned failures may leave referenced native resources, so keep
-      // their unref'ed safety deadlines. Non-owning loops must retire their
-      // referenced timers when they return, even after failed cleanup.
-      if (!cleanup.failed || params.ownsProcessLifecycle !== true) {
-        for (const clear of requestWatchdogs) {
-          clear();
-        }
+      for (const clear of requestWatchdogs) {
+        clear();
       }
-      requestWatchdogs.clear();
     },
     cleanupSignals,
     onSettled: params.onProcessResourcesSettled,
   });
+  requestWatchdogs.clear();
   if (loopFailure) {
     failures.unshift(loopFailure.error);
   }
