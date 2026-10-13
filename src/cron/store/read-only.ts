@@ -3,12 +3,14 @@ import { ensureSqliteLibrarySelected } from "../../infra/bun-sqlite-library.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
 import {
   removeTempDirectoryAsync,
+  SqliteSnapshotCleanupError,
   retainSnapshotTempDirectory,
   retainSnapshotWork,
 } from "../../infra/sqlite-readonly-location-cleanup.js";
 import { createSqliteSnapshotStagingDirectory } from "../../infra/sqlite-snapshot-staging.js";
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
+import { getChildLogger } from "../../logging/logger.js";
 import type { PluginDoctorCronJob } from "../../plugins/doctor-contract-module.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
@@ -93,6 +95,7 @@ async function readCronState({
   let stagingRoot: string | undefined;
   let releaseSnapshot: (() => void) | undefined;
   let workerStopped = false;
+  let readSucceeded = false;
   let cleaned = false;
   let cleanupPending: Promise<void> | undefined;
   const cleanup = (): Promise<void> => {
@@ -109,8 +112,25 @@ async function readCronState({
       releaseSnapshot?.();
       releaseSnapshot = undefined;
       if (stagingRoot) {
-        if (!(await removeTempDirectoryAsync(stagingRoot))) {
-          throw new Error("Cron read-only state snapshot cleanup failed.");
+        let cause: unknown;
+        if (!(await removeTempDirectoryAsync(stagingRoot, (error) => (cause = error)))) {
+          const error = new SqliteSnapshotCleanupError(
+            "Cron read-only state snapshot cleanup failed.",
+            { cause },
+          );
+          if (!readSucceeded) {
+            throw error;
+          }
+          // All readers are retired; the disposable directory remains registered for retry.
+          // Failed removal must not replace the successful inventory with a repair failure.
+          try {
+            getChildLogger({ subsystem: "cron" }).warn(
+              { path: stagingRoot, error: String(cause) },
+              "Cron read-only snapshot cleanup deferred; the read completed successfully.",
+            );
+          } catch {
+            // Diagnostic failure cannot change the read's outcome.
+          }
         }
         stagingRoot = undefined;
       }
@@ -168,6 +188,7 @@ async function readCronState({
         throw restoreCronLoadError(result.error);
       }
       loaded = result;
+      readSucceeded = true;
     } finally {
       producerSettled.resolve();
       await cleanup();
