@@ -348,14 +348,14 @@ These are intentionally guarded by the `ci-workflow-guards`,
   Frozen/manual targets, retries and fully hosted fallback
   manifests remain outside this first-attempt limit, including existing >45-row
   fallbacks. Do not change the backend variable or existing caps to enable it.
-- The existing extension-package-boundary matrix row requests the 32-class
-  whenever its existing route selects Blacksmith. Its two-CPU compiler reserve
-  admits four children on the observed eight-CPU/30.95-GiB allocation, versus
-  two on the previous 16-class. Run 36248684656 measured a 569s complete job
-  on the 16-class; unchanged duration on the 32-class would add 151.7
-  class-vCPU-minutes (1.17% of that broad run). Include that allowance with
-  Node packing costs until native proof measures the new duration. No jobs,
-  registrations, permissions, compiler checks, or hosted eligibility are added.
+- Current extension-package-boundary checks request the 16-class in both the
+  additional-check matrix and shared SDK producer; frozen targets retain the
+  32-class. The existing two-CPU compiler reserve admits two children on the
+  observed four-CPU 16-class allocation. Keep that resource guard authoritative.
+  Compare equivalent workloads and cache states before claiming savings;
+  historical 16/32-class runs also differed in compiler optimization. See
+  `docs/ci/routing-costs.md` for sizing evidence. No jobs, registrations,
+  permissions, compiler checks, or hosted eligibility are added.
   The package-boundary row has a 30-minute whole-job budget: three hosted
   four-CPU attempts hit the former 20-minute limit, with about 19 minutes in
   SDK preparation and 126 compiles before final validation/canary/cleanup.

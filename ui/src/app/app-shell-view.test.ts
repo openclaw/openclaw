@@ -2,7 +2,7 @@
 
 import { render } from "@solidjs/testing-library";
 import type { ReactiveElement } from "lit";
-import { createComponent, flush } from "solid-js";
+import { flush } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { ControlUiHost, ControlUiReplacement } from "../../../src/plugin-sdk/control-ui.js";
 import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
@@ -11,7 +11,7 @@ import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import { ShellOwner } from "./app-host.tsx";
 import { connectLegacyApplicationContext } from "./app-root-lit.ts";
-import { ApplicationShell } from "./app-shell-view.tsx";
+import { renderApplicationShell } from "./app-shell-view.tsx";
 import { bootstrapApplication } from "./bootstrap.ts";
 
 setupSidebarTest();
@@ -22,7 +22,7 @@ async function mountShell() {
   owner.routeState = { routeId: "chat" };
   const disconnectContext = connectLegacyApplicationContext(owner.element, runtime.context);
   document.body.append(owner.element);
-  const view = render(() => createComponent(ApplicationShell, { host: owner }), {
+  const view = render(() => renderApplicationShell(owner), {
     container: owner.element,
   });
   onTestFinished(() => {

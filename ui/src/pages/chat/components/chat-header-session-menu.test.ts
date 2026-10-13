@@ -2,7 +2,6 @@
 
 import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { ApplicationContext } from "../../../app/context.ts";
 import type { UiSettings } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
@@ -57,37 +56,40 @@ function settings(): UiSettings {
   };
 }
 
-async function mountMenu({
-  context,
-  session,
-  ...properties
-}: Partial<
-  Pick<
-    HeaderMenuElement,
-    | "worktreePath"
-    | "onboarding"
-    | "preferencesBrowserOnly"
-    | "compact"
-    | "bubbleModeEnabled"
-    | "copyMarkdownAllowed"
-    | "splitAllowed"
-    | "panelActions"
-    | "layoutActions"
-    | "sharing"
-    | "currentOwner"
-    | "actionDisabledReasons"
-    | "forkFromLastCompleted"
-    | "archiveAllowed"
-    | "archiveShortcut"
-    | "deleteAllowed"
-    | "onOpenCommandPalette"
-    | "onSettingsChange"
-    | "onAction"
-  >
-> & {
-  session?: Partial<HeaderMenuElement["session"]>;
-  context?: ApplicationContext;
-} = {}): Promise<HeaderMenuElement> {
+async function mountMenu(
+  {
+    context,
+    session,
+    ...properties
+  }: Partial<
+    Pick<
+      HeaderMenuElement,
+      | "worktreePath"
+      | "onboarding"
+      | "preferencesBrowserOnly"
+      | "compact"
+      | "bubbleModeEnabled"
+      | "copyMarkdownAllowed"
+      | "splitAllowed"
+      | "panelActions"
+      | "layoutActions"
+      | "sharing"
+      | "currentOwner"
+      | "actionDisabledReasons"
+      | "forkFromLastCompleted"
+      | "archiveAllowed"
+      | "archiveShortcut"
+      | "deleteAllowed"
+      | "onOpenCommandPalette"
+      | "onSettingsChange"
+      | "onAction"
+    >
+  > & {
+    session?: Partial<HeaderMenuElement["session"]>;
+    context?: ApplicationContext;
+  } = {},
+  open = true,
+): Promise<HeaderMenuElement> {
   const container = context
     ? createApplicationContextProvider(context)
     : document.createElement("div");
@@ -105,6 +107,10 @@ async function mountMenu({
   } satisfies Partial<HeaderMenuElement>);
   container.append(menu);
   await menu.updateComplete;
+  if (open) {
+    menu.querySelector("wa-dropdown")!.dispatchEvent(new Event("wa-show"));
+    await menu.updateComplete;
+  }
   return menu;
 }
 
@@ -138,6 +144,24 @@ function select(menu: ParentNode, value: string) {
 }
 
 describe("chat header session menu", () => {
+  it("defers session actions until first open and retains them across reopening", async () => {
+    const menu = await mountMenu({}, false);
+    expect(menu.querySelector("button[slot='trigger']")).not.toBeNull();
+    expect(menu.querySelector("wa-dropdown-item")).toBeNull();
+    menu.session = { ...menu.session, label: "Latest session", pinned: true };
+    await menu.updateComplete;
+    expect(menu.querySelector("wa-dropdown-item")).toBeNull();
+    const dropdown = menu.querySelector("wa-dropdown")!;
+    dropdown.dispatchEvent(new Event("wa-show"));
+    await menu.updateComplete;
+    const pin = item(menu, "Unpin session");
+    expect(pin).not.toBeNull();
+    dropdown.dispatchEvent(new Event("wa-after-hide"));
+    dropdown.dispatchEvent(new Event("wa-show"));
+    await menu.updateComplete;
+    expect(item(menu, "Unpin session")).toBe(pin);
+  });
+
   it.each(["shown", "selected", "aborted", "retargeted"] as const)(
     "settles native opening only at the current popup boundary: %s",
     async (outcome) => {
@@ -244,9 +268,9 @@ describe("chat header session menu", () => {
     "offers session editors only for native-local workspaces: $name",
     async (testCase) => {
       setNativeGatewayTestState(testCase.nativeGateway);
-      const client = {
+      const client = createGatewayBrowserClientFixture({
         gatewayUrl: "gatewayUrl" in testCase ? testCase.gatewayUrl : "ws://localhost:18789",
-      } as GatewayBrowserClient;
+      });
       const { pane, state } = createTestChatPane({
         client,
         sessions: createSessionCapabilityFixture(),
@@ -279,6 +303,8 @@ describe("chat header session menu", () => {
         { container },
       );
       const menu = container.querySelector<HeaderMenuElement>("openclaw-chat-header-session-menu");
+      await menu?.updateComplete;
+      menu?.querySelector("wa-dropdown")?.dispatchEvent(new Event("wa-show"));
       await menu?.updateComplete;
 
       expect(menu?.textContent?.includes("Open in")).toBe(true);
@@ -339,6 +365,8 @@ describe("chat header session menu", () => {
     if (!menu) {
       throw new Error("Expected chat header session menu");
     }
+    await menu.updateComplete;
+    menu.querySelector("wa-dropdown")!.dispatchEvent(new Event("wa-show"));
     await menu.updateComplete;
 
     const moveToGroup = item(menu, "Move to group");

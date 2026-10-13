@@ -81,53 +81,31 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     count: 0,
   };
   protected abstract markLocalEmbeddingProviderDegraded(err: unknown): void;
-  private activeProviderUses = new Map<
-    EmbeddingProvider,
-    ReturnType<typeof createDeferred<void>> & { count: number }
-  >();
+  private readonly activeProviderUses = new Map<EmbeddingProvider, Set<Promise<void>>>();
   private syncProviderGenerationRelease: (() => void) | null = null;
   private syncProviderGenerationOwners = 0;
 
   protected acquireProviderUse(provider: EmbeddingProvider): () => void {
-    const use = this.activeProviderUses.get(provider) ?? {
-      ...createDeferred(),
-      count: 0,
-    };
-    use.count += 1;
-    this.activeProviderUses.set(provider, use);
-    let released = false;
+    const completion = createDeferred();
+    const uses = this.activeProviderUses.get(provider) ?? new Set<Promise<void>>();
+    uses.add(completion.promise);
+    this.activeProviderUses.set(provider, uses);
     return () => {
-      if (released) {
+      if (!uses.delete(completion.promise)) {
         return;
       }
-      released = true;
-      use.count -= 1;
-      if (use.count > 0) {
-        return;
+      completion.resolve();
+      if (uses.size === 0) {
+        this.activeProviderUses.delete(provider);
       }
-      this.activeProviderUses.delete(provider);
-      use.resolve();
     };
-  }
-
-  protected async withProviderUse<T>(
-    provider: EmbeddingProvider,
-    run: () => Promise<T>,
-  ): Promise<T> {
-    const release = this.acquireProviderUse(provider);
-    try {
-      return await run();
-    } finally {
-      release();
-    }
   }
 
   protected async awaitProviderIdle(provider: EmbeddingProvider): Promise<void> {
-    const use = this.activeProviderUses.get(provider);
-    if (!use) {
-      return;
+    const uses = this.activeProviderUses.get(provider);
+    if (uses) {
+      await Promise.all(uses);
     }
-    await use.promise;
   }
 
   protected override beginSyncProviderGeneration(options?: { forceFtsOnly?: boolean }): void {
@@ -297,61 +275,59 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
       cacheCandidate: cacheCandidates?.[index],
     }));
     try {
-      return await this.withProviderUse(provider, () =>
-        runMemoryEmbeddingBatchRetryWithSplit({
-          items: requestItems,
-          maxInputsPerRequest: provider.maxInputsPerRequest,
-          run: async (batchItems) => {
-            const timeoutMs = this.resolveEmbeddingTimeout("batch", provider, generation?.runtime);
-            log.debug(`memory embeddings: ${label} start`, {
+      return await runMemoryEmbeddingBatchRetryWithSplit({
+        items: requestItems,
+        maxInputsPerRequest: provider.maxInputsPerRequest,
+        run: async (batchItems) => {
+          const timeoutMs = this.resolveEmbeddingTimeout("batch", provider, generation?.runtime);
+          log.debug(`memory embeddings: ${label} start`, {
+            provider: provider.id,
+            items: batchItems.length,
+            timeoutMs,
+          });
+          const result = await runEmbeddingOperationWithTimeout({
+            timeoutMs,
+            message: `memory embeddings batch timed out after ${Math.round(timeoutMs / 1000)}s`,
+            run: async (signal) =>
+              await provider.embedBatch(
+                batchItems.map((item) =>
+                  formatEmbeddingModelInput(item.input, provider.model, "document"),
+                ),
+                { signal, inputType: "document" },
+              ),
+          });
+          if (!structured) {
+            log.debug("memory embeddings: batch completed", {
               provider: provider.id,
               items: batchItems.length,
-              timeoutMs,
             });
-            const result = await runEmbeddingOperationWithTimeout({
-              timeoutMs,
-              message: `memory embeddings batch timed out after ${Math.round(timeoutMs / 1000)}s`,
-              run: async (signal) =>
-                await provider.embedBatch(
-                  batchItems.map((item) =>
-                    formatEmbeddingModelInput(item.input, provider.model, "document"),
-                  ),
-                  { signal, inputType: "document" },
-                ),
-            });
-            if (!structured) {
-              log.debug("memory embeddings: batch completed", {
-                provider: provider.id,
-                items: batchItems.length,
-              });
-            }
-            return result;
-          },
-          onSuccess: async (batchItems, batchEmbeddings) => {
-            if (!generation) {
-              return;
-            }
-            const batchCandidates = batchItems.flatMap((item) =>
-              item.cacheCandidate ? [item.cacheCandidate] : [],
-            );
-            if (batchCandidates.length !== batchItems.length) {
-              return;
-            }
-            await this.persistGeneratedEmbeddings(batchCandidates, batchEmbeddings, generation);
-          },
-          waitForRetry: async (delayMs) => {
-            await this.waitForEmbeddingRetry(
-              delayMs,
-              structured ? "retrying structured batch" : "retrying",
-            );
-          },
-          onSplit: ({ itemCount, splitAt }) => {
-            log.warn(
-              `memory embeddings ${label} failed; splitting ${itemCount} inputs into ${Math.ceil(itemCount / splitAt)} batches of at most ${splitAt}`,
-            );
-          },
-        }),
-      );
+          }
+          return result;
+        },
+        onSuccess: async (batchItems, batchEmbeddings) => {
+          if (!generation) {
+            return;
+          }
+          const batchCandidates = batchItems.flatMap((item) =>
+            item.cacheCandidate ? [item.cacheCandidate] : [],
+          );
+          if (batchCandidates.length !== batchItems.length) {
+            return;
+          }
+          await this.persistGeneratedEmbeddings(batchCandidates, batchEmbeddings, generation);
+        },
+        waitForRetry: async (delayMs) => {
+          await this.waitForEmbeddingRetry(
+            delayMs,
+            structured ? "retrying structured batch" : "retrying",
+          );
+        },
+        onSplit: ({ itemCount, splitAt }) => {
+          log.warn(
+            `memory embeddings ${label} failed; splitting ${itemCount} inputs into ${Math.ceil(itemCount / splitAt)} batches of at most ${splitAt}`,
+          );
+        },
+      });
     } catch (err) {
       if (!structured) {
         log.debug("memory embeddings: batch failed", {
@@ -412,13 +388,11 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
         message: `memory embedding probe timed out after ${Math.round(timeoutMs / 1000)}s`,
         deadlineControl,
         run: (signal) =>
-          this.withProviderUse(provider, () =>
-            provider.embed(formatEmbeddingModelInput("ping", provider.model, "query"), {
-              signal,
-              inputType: "query",
-              [MEMORY_SEARCH_DEADLINE_CONTROL]: deadlineControl,
-            }),
-          ),
+          provider.embed(formatEmbeddingModelInput("ping", provider.model, "query"), {
+            signal,
+            inputType: "query",
+            [MEMORY_SEARCH_DEADLINE_CONTROL]: deadlineControl,
+          }),
       });
     } catch (error) {
       if (provider === this.provider) {
@@ -441,36 +415,30 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
       throw new Error("Cannot embed query in FTS-only mode (no embedding provider)");
     }
     try {
-      return await this.withProviderUse(
-        provider,
-        async () =>
-          await runMemoryEmbeddingRetryLoop({
-            profile: "query",
-            run: async () => {
-              signal?.throwIfAborted();
-              const timeoutMs = this.resolveEmbeddingTimeout("query", provider, providerRuntime);
-              log.debug("memory embeddings: query start", { provider: provider.id, timeoutMs });
-              return await runEmbeddingOperationWithTimeout({
-                timeoutMs,
-                message: `memory embeddings query timed out after ${Math.round(timeoutMs / 1000)}s`,
-                signal,
-                deadlineControl,
-                run: async (opSignal) =>
-                  await provider.embed(formatEmbeddingModelInput(text, provider.model, "query"), {
-                    signal: opSignal,
-                    inputType: "query",
-                    ...(deadlineControl
-                      ? { [MEMORY_SEARCH_DEADLINE_CONTROL]: deadlineControl }
-                      : {}),
-                  }),
-              });
-            },
+      return await runMemoryEmbeddingRetryLoop({
+        profile: "query",
+        run: async () => {
+          signal?.throwIfAborted();
+          const timeoutMs = this.resolveEmbeddingTimeout("query", provider, providerRuntime);
+          log.debug("memory embeddings: query start", { provider: provider.id, timeoutMs });
+          return await runEmbeddingOperationWithTimeout({
+            timeoutMs,
+            message: `memory embeddings query timed out after ${Math.round(timeoutMs / 1000)}s`,
             signal,
-            waitForRetry: async (delayMs) => {
-              await this.waitForEmbeddingRetry(delayMs, "retrying query", signal);
-            },
-          }),
-      );
+            deadlineControl,
+            run: async (opSignal) =>
+              await provider.embed(formatEmbeddingModelInput(text, provider.model, "query"), {
+                signal: opSignal,
+                inputType: "query",
+                ...(deadlineControl ? { [MEMORY_SEARCH_DEADLINE_CONTROL]: deadlineControl } : {}),
+              }),
+          });
+        },
+        signal,
+        waitForRetry: async (delayMs) => {
+          await this.waitForEmbeddingRetry(delayMs, "retrying query", signal);
+        },
+      });
     } catch (err) {
       throw createMemoryEmbeddingOperationError({
         operation: "query",

@@ -131,13 +131,15 @@ sidebarTitle: "Troubleshooting"
     and arguments, including repeated unknown tool IDs. This protection is always
     active; enabling `tools.loopDetection` is not required.
 
-    On Ollama 0.40.1, some model templates can cause the server to mistake the
-    `<tool_call>` marker for Tool Search's `tool_call` function. OpenClaw avoids
-    this collision with transport-only tool aliases, so Tool Search can remain
-    enabled. Execution and session history keep the original tool names; raw
-    provider requests may show names such as `openclaw_tool_call`.
+    Ollama 0.40's generic parser can mistake a chat-template marker for an
+    advertised tool name. Tool Search uses the collision-free `dispatch_action`
+    name across providers, with the same name in instructions, requests, and
+    new session history. It no longer needs an `openclaw_tool_call` wire alias.
+    Directly exposed names that still collide, such as `ls`, `name`, and
+    `function`, retain transport-only aliases such as `openclaw_ls`. Execution
+    and session history keep those tools' original names.
 
-    This translation covers native Ollama and the Ollama plugin's identified
+    These remaining aliases cover native Ollama and the Ollama plugin's identified
     OpenAI-compatible chat-completions route. Other providers are unchanged.
     Custom Ollama templates with different markers may need separate diagnosis.
 

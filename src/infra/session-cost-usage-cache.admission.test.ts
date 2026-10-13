@@ -779,6 +779,82 @@ it.each([
   },
 );
 
+it("acquires a current usage writer after its captured executor retires", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const agentId = "main";
+    const database = openOpenClawAgentDatabase({ agentId, env: state.env });
+    const storePath = database.path;
+    const scope = { agentId, sessionKey: `agent:${agentId}:first`, storePath, env: state.env };
+    const lock = prepareSessionCostUsageRefreshLock(agentId, storePath, { env: state.env });
+    try {
+      // Close the captured executor before the refresh consumes its queued writer.
+      await closeOpenClawAgentDatabaseByPathAsync(storePath, agentId);
+      expect(await lock.acquire()).toBe(true);
+      const entry = { sessionId: "created-after-retirement", updatedAt: 1 };
+      expect(await replaceSessionEntry(scope, entry)).toEqual({
+        ...entry,
+        delivery: { kind: "none" },
+      });
+      expect(
+        await lock.writeRollup({
+          rollupId: "session.jsonl",
+          valueJson: Buffer.from('{"totalTokens":7}'),
+          blob: null,
+          updatedAt: 1,
+        }),
+      ).toBe(true);
+      const current = openOpenClawAgentDatabase({ agentId, path: storePath, env: state.env });
+      expect(readExactSessionEntryRow(current, scope.sessionKey)?.entry.sessionId).toBe(
+        entry.sessionId,
+      );
+      expect(readSessionCostUsageRollupRows(agentId, storePath)).toEqual([
+        { key: "session.jsonl", valueJson: '{"totalTokens":7}', updatedAt: 1 },
+      ]);
+    } finally {
+      await lock.release();
+    }
+  });
+});
+
+it.each(["replacement", "revocation"] as const)(
+  "refuses usage acquisition after executor retirement and $0",
+  async (change) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const agentId = "main";
+      const database = openOpenClawAgentDatabase({ agentId, env: state.env });
+      const storePath = database.path;
+      let current = true;
+      const lock = prepareSessionCostUsageRefreshLock(agentId, storePath, {
+        env: state.env,
+        assertCurrent() {
+          if (!current) {
+            throw new Error("Refresh revoked");
+          }
+        },
+      });
+      try {
+        await closeOpenClawAgentDatabaseByPathAsync(storePath, agentId);
+        if (change === "replacement") {
+          const original = state.statePath("original-usage.sqlite");
+          fs.renameSync(storePath, original);
+          fs.copyFileSync(original, storePath);
+        } else {
+          current = false;
+        }
+        const before = fs.readFileSync(storePath);
+        await expect(lock.acquire()).rejects.toThrow(
+          change === "replacement"
+            ? "SQLite database file identity changed before existing-only open"
+            : "Refresh revoked",
+        );
+        expect(fs.readFileSync(storePath)).toEqual(before);
+      } finally {
+        await lock.release();
+      }
+    });
+  },
+);
+
 it("allows first session creation while a fresh usage refresh awaits acquisition", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const agentId = "main";

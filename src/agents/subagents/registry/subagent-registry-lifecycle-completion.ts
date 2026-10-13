@@ -15,10 +15,7 @@ import {
   clearPublishedSwarmCollectorOutput,
   updateSwarmCollectorCompletion,
 } from "../swarm/swarm-collector.js";
-import {
-  resolveSubagentChildAuthority,
-  warnLegacySubagentAuthority,
-} from "./subagent-child-owner-match.js";
+import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
 import {
   prepareSubagentKillSession,
@@ -154,7 +151,6 @@ export async function completeSubagentRunAttempt(
     throw new SubagentRegistryMutationRejectedError("Subagent terminal execution changed");
   }
   try {
-    warnLegacySubagentAuthority(selected, (message, meta) => params.warn(message, meta));
     const assertCurrent = () => {
       assertSubagentRegistryWriteSourceCurrent(stateContext);
       if (

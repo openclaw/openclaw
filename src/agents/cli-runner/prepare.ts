@@ -48,7 +48,6 @@ import {
 } from "../../routing/session-key.js";
 import { captureAsyncWorkTracker } from "../../shared/async-work-scope.js";
 import { resolveUserPath } from "../../utils.js";
-import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import {
   readRunOperatorAuthority,
   resolveAdmittedRunActiveAssertion,
@@ -106,7 +105,7 @@ import { loadManifestModelCatalog, overlayConfiguredModelCatalog } from "../mode
 import { resolveModelContextWindowProfile } from "../model-context-window.js";
 import { recordAdmittedModelRoutingDecision } from "../model-routing-decision.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
-import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
+import { resolveRuntimeChannelPromptContext } from "../runtime-capabilities.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
 import { normalizeToolPolicyName } from "../tool-policy.js";
@@ -1399,16 +1398,14 @@ async function prepareCliRunContextWithinReadFence(
             sessionKey: params.sessionKey?.trim() || params.sessionId,
           });
     assertSkillsCurrent();
-    const runtimeChannel = skipsTurnPreparation
-      ? undefined
-      : normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
-    const runtimeCapabilities = skipsTurnPreparation
-      ? undefined
-      : collectRuntimeChannelCapabilities({
-          cfg: params.config,
-          channel: runtimeChannel,
-          accountId: params.agentAccountId,
-        });
+    const { runtimeChannel, runtimeCapabilities, customInlineButtonHint, messageToolHints } =
+      resolveRuntimeChannelPromptContext({
+        cfg: params.config,
+        channel: skipsTurnPreparation
+          ? undefined
+          : (params.messageChannel ?? params.messageProvider),
+        accountId: params.agentAccountId,
+      });
     const requesterProfileId = readRunOperatorAuthority(params)?.profileId;
     const builtSystemPrompt = isControlOperation
       ? ""
@@ -1427,6 +1424,8 @@ async function prepareCliRunContextWithinReadFence(
             runtimeChannel,
             runtimeChatType,
             runtimeCapabilities,
+            customInlineButtonHint,
+            messageToolHints,
             ownerNumbers: params.ownerNumbers,
             docsPath: openClawReferences.docsPath ?? undefined,
             sourcePath: openClawReferences.sourcePath ?? undefined,

@@ -44,6 +44,7 @@ import {
   expectedDiagnosticsTargetBlock,
   expectResultTextContains,
   mockArg,
+  mutatingCodexRequestMethods,
   oauthProfile,
   readDiagnosticsConfirmationToken,
   requestParams,
@@ -557,9 +558,7 @@ describe("codex command", () => {
         expect(result.text).toContain("controlled by its parent");
         expect(testCodexAppServerBindingStore.read(identity)).toEqual(before);
         expect(release).not.toHaveBeenCalled();
-        const mutations = request.mock.calls
-          .map(([method]) => method)
-          .filter((method) => method !== "thread/read");
+        const mutations = mutatingCodexRequestMethods(request.mock.calls);
         expect(mutations).toEqual(
           knownBeforeResume
             ? []
@@ -948,7 +947,7 @@ describe("codex command", () => {
       const result = await runCommand("resume thread-active-resume", { codexControlRequest });
 
       expect(result.text).toContain("lost its native subscription owner");
-      expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/resume"]);
+      expect(mutatingCodexRequestMethods(request.mock.calls)).toEqual(["thread/resume"]);
       expect(isCodexAppServerLiveThreadClaimed(harness.client, "thread-active-resume")).toBe(true);
       expect(testCodexAppServerBindingStore.read(identity)).toMatchObject({
         threadId: existingThreadId,

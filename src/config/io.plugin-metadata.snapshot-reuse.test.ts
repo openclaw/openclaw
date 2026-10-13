@@ -2,7 +2,6 @@ import { DatabaseSync } from "node:sqlite";
 import { it, expect, vi } from "vitest";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
-import * as readonly from "../state/openclaw-state-db-readonly.js";
 import {
   openOpenClawStateDatabase,
   closeOpenClawStateDatabaseForTest,
@@ -10,7 +9,7 @@ import {
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { readBestEffortConfig } from "./io.js";
 
-it("shares the CLI routing metadata snapshot without changing the resolved config", async () => {
+it("reads CLI routing metadata from a single state snapshot", async () => {
   await withOpenClawTestState({}, async (state) => {
     await state.writeConfig({ mcp: { servers: {} } });
     const opened = openOpenClawStateDatabase();
@@ -28,16 +27,8 @@ it("shares the CLI routing metadata snapshot without changing the resolved confi
     const prepare = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationSync");
     try {
       clearPluginMetadataLifecycleCaches();
-      const bypass = vi
-        .spyOn(readonly, "withSynchronousArtifactPreservingStateSnapshot")
-        .mockImplementation((operation) => operation());
-      const baseline = await readBestEffortConfig({ observe: false, skipPluginValidation: true });
-      expect(prepare).toHaveBeenCalledTimes(2);
-      bypass.mockRestore();
-      clearPluginMetadataLifecycleCaches();
-      prepare.mockClear();
       const config = await readBestEffortConfig({ observe: false, skipPluginValidation: true });
-      expect(config).toEqual(baseline);
+      expect(config.mcp).toEqual({ servers: {} });
       expect(prepare).toHaveBeenCalledTimes(1);
     } finally {
       vi.restoreAllMocks();

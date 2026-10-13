@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { render } from "lit";
+import { flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
@@ -260,6 +261,8 @@ describe("chat pane session access", () => {
     expect(
       container.querySelector<HTMLButtonElement>(".chat-pane__sharing-trigger")?.disabled,
     ).toBe(false);
+    container.querySelector(".chat-pane__sharing-menu")?.dispatchEvent(new Event("wa-show"));
+    flush();
     expect(
       container.querySelector('wa-dropdown-item[value="visibility:read-only"]'),
     ).not.toBeNull();
