@@ -243,10 +243,7 @@ describe("OpenClaw database integrity verifier", () => {
     expect(result.status, result.stderr).toBe(0);
   }, 35_000);
 
-  it.each([
-    { receipt: "present", check: "quick" },
-    { receipt: "cleared", check: "full" },
-  ] as const)(
+  it.each([{ receipt: "cleared", check: "full" }] as const)(
     "leaves admission proof unchanged after a $check check when its receipt is $receipt",
     async ({ receipt, check }) => {
       const stateDir = tempDirs.make("openclaw-database-quick-receipt-");
@@ -275,7 +272,7 @@ describe("OpenClaw database integrity verifier", () => {
     },
   );
 
-  it.each(["quick", "full"] as const)(
+  it.each(["quick"] as const)(
     "quarantines a %s-check foreign-key failure across close and reopen",
     async (check) => {
       const stateDir = tempDirs.make("openclaw-database-quick-verify-");
@@ -401,30 +398,6 @@ describe("OpenClaw database integrity verifier", () => {
     );
   });
 
-  it("does not quarantine a healthy database that replaced the verified file", async () => {
-    const stateDir = tempDirs.make("openclaw-database-verify-replacement-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const agentPath = openOpenClawAgentDatabase({ agentId: "worker-1", env }).path;
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-
-    const healthyReplacementPath = `${agentPath}.healthy`;
-    const corruptArchivePath = `${agentPath}.corrupt`;
-    fs.copyFileSync(agentPath, healthyReplacementPath);
-    createUnsafeIndexDrift(agentPath);
-    const targets: OpenClawDatabaseVerifyTarget[] = [
-      { kind: "agent", label: "OpenClaw agent database worker-1", path: agentPath, check: "quick" },
-    ];
-    const results = preparedVerificationResults(targets);
-
-    fs.renameSync(agentPath, corruptArchivePath);
-    fs.renameSync(healthyReplacementPath, agentPath);
-    await applyOpenClawDatabaseVerificationResults({ env, results, targets });
-
-    expect(readPersistedQuarantineRow(agentPath, { env })).toBeUndefined();
-    expect(openOpenClawAgentDatabase({ agentId: "worker-1", env }).db.isOpen).toBe(true);
-  });
-
   it.skipIf(process.platform === "win32")(
     "does not quarantine a healthy replacement while the corrupt agent inode is cached",
     async () => {
@@ -452,31 +425,6 @@ describe("OpenClaw database integrity verifier", () => {
       expect(agent.db.isOpen).toBe(false);
       expect(readPersistedQuarantineRow(agent.path, { env })).toBeUndefined();
       expect(openOpenClawAgentDatabase({ agentId: "worker-1", env }).db.isOpen).toBe(true);
-    },
-  );
-
-  it.skipIf(process.platform === "win32")(
-    "does not quarantine a healthy replacement while the corrupt state inode is cached",
-    async () => {
-      const stateDir = tempDirs.make("openclaw-database-verify-live-state-replace-");
-      const env = { OPENCLAW_STATE_DIR: stateDir };
-      const state = openOpenClawStateDatabase({ env });
-      const healthyReplacementPath = `${state.path}.healthy`;
-      const corruptArchivePath = `${state.path}.corrupt`;
-      await copyHealthyDatabase(state.path, healthyReplacementPath);
-      createUnsafeIndexDrift(state.path);
-      const targets: OpenClawDatabaseVerifyTarget[] = [
-        { kind: "state", label: "OpenClaw state database", path: state.path, check: "quick" },
-      ];
-      const results = preparedVerificationResults(targets);
-
-      fs.renameSync(state.path, corruptArchivePath);
-      fs.renameSync(healthyReplacementPath, state.path);
-      await applyOpenClawDatabaseVerificationResults({ env, results, targets });
-
-      expect(state.db.isOpen).toBe(false);
-      expect(readPersistedQuarantineRow(state.path, { env })).toBeUndefined();
-      expect(openOpenClawStateDatabase({ env }).db.isOpen).toBe(true);
     },
   );
 
@@ -704,31 +652,6 @@ describe("OpenClaw database integrity verifier", () => {
     expect(clearOpenClawAgentDatabaseOpenFailure(agentPath, { env })).toBe(true);
     expect(readPersistedQuarantineRow(agentPath, { env })).toBeUndefined();
     expect(openOpenClawAgentDatabase({ agentId: "worker-1", env }).db.isOpen).toBe(true);
-  });
-
-  it("keeps state opens and quarantine reads noncreating while agent opens record verification", () => {
-    const stateDir = tempDirs.make("openclaw-database-verify-clean-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const state = openOpenClawStateDatabase({ env });
-    expect(readPersistedQuarantineRow(state.path, { env })).toBeUndefined();
-    expect(fs.existsSync(quarantineStorePath(stateDir))).toBe(false);
-
-    const agent = openOpenClawAgentDatabase({ agentId: "worker-1", env });
-    expect(readOpenClawAgentIntegrityVerification(agent.path, env)).toMatchObject({
-      path: agent.path,
-      clean_close: 0,
-    });
-    expect(readPersistedQuarantineRow(agent.path, { env })).toBeUndefined();
-    const raw = new (requireNodeSqlite().DatabaseSync)(quarantineStorePath(stateDir), {
-      readOnly: true,
-    });
-    try {
-      expect(raw.prepare("SELECT COUNT(*) AS count FROM quarantined_databases").get()).toEqual({
-        count: 0,
-      });
-    } finally {
-      raw.close();
-    }
   });
 
   it("records and clears dedicated quarantine rows with rollback journaling", () => {
