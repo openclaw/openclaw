@@ -31,6 +31,7 @@ import {
 import { createDiagnosticMessageLifecycle } from "../../logging/message-lifecycle.js";
 import { stripLegacyMediaContextFields } from "../../media/media-facts.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import type { PluginHookReplyDispatchContext } from "../../plugins/hook-types.js";
 import { resolveSessionDispatchKind } from "../../sessions/session-key-utils.js";
 import { prepareChannelParticipantObservation } from "../../sessions/session-participant-input.js";
 import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
@@ -69,7 +70,6 @@ import {
 } from "./reply-operation-run-state.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
 import { isReplyProfilerEnabled } from "./reply-timing-tracker.js";
-import { bindReplyTurnAdoption } from "./reply-turn-adoption.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { stageRemoteInboundMediaIfNeeded } from "./stage-remote-inbound-media.js";
 
@@ -107,14 +107,42 @@ export async function gatherDispatchRequest(
         : {}),
     },
   };
-  if (normalizedParams.replyOptions?.turnAdoptionLifecycle) {
-    onDispose?.(bindReplyTurnAdoption(ctx, normalizedParams.replyOptions.turnAdoptionLifecycle));
+  let turnAdoption: PluginHookReplyDispatchContext["turnAdoption"];
+  const adoptInput = normalizedParams.replyOptions?.turnAdoptionLifecycle?.onAdopted;
+  if (adoptInput) {
+    let active = true;
+    let pending: Promise<void> | undefined;
+    let failure: { error: unknown } | undefined;
+    const assertCurrent = () => {
+      if (!active) {
+        throw new Error("Reply input adoption is no longer active.");
+      }
+      if (failure) {
+        throw failure.error;
+      }
+    };
+    turnAdoption = {
+      assertCurrent,
+      adopt: () => {
+        assertCurrent();
+        return (pending ??= Promise.resolve()
+          .then(adoptInput)
+          .catch((error: unknown) => {
+            failure = { error };
+            throw error;
+          }));
+      },
+    };
+    onDispose?.(() => {
+      active = false;
+    });
   }
   const replyOperationRunState: ReplyOperationRunState =
     resolveReplyOperationRunState(normalizedParams.replyOptions) ?? {};
   let replayUnsafeActivity = false;
   const state = {
     params: normalizedParams,
+    turnAdoption,
     messageAuditTerminal,
     allowInboundHandlers:
       replyOperationRunState.heartbeat === undefined &&

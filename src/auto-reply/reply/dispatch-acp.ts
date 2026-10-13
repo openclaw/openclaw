@@ -45,6 +45,7 @@ import {
   stripExtractedFileImageMetadata,
   type ExtractedFileImage,
 } from "../../media-understanding/extracted-file-images.js";
+import type { PluginHookReplyDispatchContext } from "../../plugins/hook-types.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { recordAcceptedSessionParticipantInput } from "../../sessions/session-participant-input-recording.js";
 import { prepareChannelParticipantObservation } from "../../sessions/session-participant-input.js";
@@ -77,7 +78,6 @@ import type { InboundMessageAuditTerminalRecorder } from "./dispatch-from-config
 import { appendRecentHistoryImageContext } from "./history-media.js";
 import { hasInboundMediaForUnderstanding } from "./inbound-media.js";
 import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
-import { readReplyTurnAdoption } from "./reply-turn-adoption.js";
 import { assertPreparedConversationBindingRouteCurrent } from "./session-conversation-binding.js";
 
 const loadDispatchAcpManagerRuntime = createLazyPromise(
@@ -120,6 +120,7 @@ export async function tryDispatchAcpReplyCore(
     bypassForCommand: boolean;
     onAgentRunStart?: GetReplyOptions["onAgentRunStart"];
     onPreparedAgentRunStart?: GetReplyOptions["onPreparedAgentRunStart"];
+    turnAdoption?: PluginHookReplyDispatchContext["turnAdoption"];
     userTurnTranscriptRecorder?: GetReplyOptions["userTurnTranscriptRecorder"];
     prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
     recordProcessed: InboundMessageAuditTerminalRecorder["note"];
@@ -133,7 +134,6 @@ export async function tryDispatchAcpReplyCore(
   prepareChannelParticipantObservation(params.ctx);
   const inputRecorder = params.userTurnTranscriptRecorder;
   const input = bindUserTurnInput(inputRecorder, () => params.abortSignal?.throwIfAborted());
-  const adoptInput = readReplyTurnAdoption(params.ctx);
 
   const { getAcpSessionManager, maybeUnbindStaleBoundConversations, prepareAcpDispatchStart } =
     await loadDispatchAcpManagerRuntime();
@@ -650,7 +650,7 @@ export async function tryDispatchAcpReplyCore(
       ...(params.abortSignal ? { signal: params.abortSignal } : {}),
       onBeforePrompt: async () => {
         await input.withCurrent(() => {});
-        await adoptInput?.adopt();
+        await params.turnAdoption?.adopt();
         await assertPreparedConversationBindingRouteCurrent(params.ctx);
         await input.withCurrent(() => {
           if (getAdmittedRunDelegatedAuthority(turnAdmission) === undefined) {
@@ -724,7 +724,7 @@ export async function tryDispatchAcpReplyCore(
     emitAuditTerminal();
     return result;
   } catch (err) {
-    adoptInput?.assertCurrent();
+    params.turnAdoption?.assertCurrent();
     const acpError = toAcpRuntimeError({
       error: err,
       fallbackCode: "ACP_TURN_FAILED",

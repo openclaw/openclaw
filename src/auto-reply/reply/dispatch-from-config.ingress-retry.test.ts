@@ -37,6 +37,7 @@ import {
   withDispatchProcessedOutcomeSink,
   type DispatchProcessedNote,
 } from "./dispatch-processed-outcome.js";
+import { isFinalizedInboundContext } from "./inbound-context.js";
 import { resetInboundDedupe } from "./inbound-dedupe.js";
 import { enqueueFollowupRun, type FollowupRun } from "./queue.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
@@ -234,7 +235,7 @@ describe("dispatch retry after queued ingress abandonment", () => {
   );
 });
 
-it.each(["completed", "cancelled", "adoption-rejected"] as const)(
+it.each(["completed", "cancelled", "adoption-rejected", "non-finalized-context"] as const)(
   "retains ACP ingress ownership through %s without replaying its input",
   async (outcome) => {
     await withTempState(async (stateDir) => {
@@ -285,9 +286,18 @@ it.each(["completed", "cancelled", "adoption-rejected"] as const)(
       const acpx = createPluginRecord({ id: "acpx", origin: "bundled" });
       const fallbackPlugin = createPluginRecord({ id: "fallback", origin: "bundled" });
       builder.registry.plugins.push(acpx, fallbackPlugin);
-      builder
-        .createApi(acpx, { config: cfg })
-        .on("reply_dispatch", tryDispatchAcpReplyHook, { priority: 10 });
+      builder.createApi(acpx, { config: cfg }).on(
+        "reply_dispatch",
+        (event, context) => {
+          if (outcome === "non-finalized-context") {
+            const copiedContext = { ...event.ctx };
+            expect(isFinalizedInboundContext(copiedContext)).toBe(false);
+            return tryDispatchAcpReplyHook({ ...event, ctx: copiedContext }, context);
+          }
+          return tryDispatchAcpReplyHook(event, context);
+        },
+        { priority: 10 },
+      );
       const fallback = vi.fn(() => undefined);
       builder.createApi(fallbackPlugin, { config: cfg }).on("reply_dispatch", fallback);
       const hooks = createHookRunner(builder.registry);
@@ -362,7 +372,7 @@ it.each(["completed", "cancelled", "adoption-rejected"] as const)(
           }
           release.resolve();
           await dispatched.promise;
-          if (outcome === "completed") {
+          if (outcome !== "cancelled") {
             expect(dispatcher.sendFinalReply).toHaveBeenCalledExactlyOnceWith(
               expect.objectContaining({ text: "Long task completed." }),
             );

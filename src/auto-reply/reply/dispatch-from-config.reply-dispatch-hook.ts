@@ -5,7 +5,6 @@ import {
   createReplyDispatchEvent,
 } from "./dispatch-from-config.events.js";
 import type { PrepareDispatchOperationReadyState } from "./dispatch-from-config.prepare-operation.js";
-import { readReplyTurnAdoption } from "./reply-turn-adoption.js";
 
 export function runReplyDispatchHook(
   state: PrepareDispatchOperationReadyState,
@@ -66,6 +65,7 @@ export function runReplyDispatchHook(
                 onReplyStart: params.replyOptions?.onReplyStart,
                 onAgentRunStart: params.replyOptions?.onAgentRunStart,
                 onPreparedAgentRunStart: params.replyOptions?.onPreparedAgentRunStart,
+                turnAdoption: state.turnAdoption,
                 userTurnTranscriptRecorder: params.replyOptions?.userTurnTranscriptRecorder,
                 prepareAssistantTranscriptMessage:
                   params.replyOptions?.prepareAssistantTranscriptMessage,
@@ -74,7 +74,7 @@ export function runReplyDispatchHook(
               },
               {
                 ...(!options.isTailDispatch ? { prepare: state.assertCurrentBindingRoute } : {}),
-                assertCurrent: readReplyTurnAdoption(state.ctx)?.assertCurrent,
+                assertCurrent: state.turnAdoption?.assertCurrent,
               },
             ),
           );
