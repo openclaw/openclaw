@@ -243,48 +243,25 @@ describe("createTtsDirectiveTextStreamCleaner", () => {
     expect(cleaner.flush()).toBe("");
   });
 
-  it("keeps plain tts block contents visible", () => {
+  it.each([
+    [["Some [[tts:hello there]] note"], "Some hello there note"],
+    [["Go [[tts:", "answered aloud]] back"], "Go answered aloud back"],
+    [["Done. [[tts:first line\nsecond line]] more"], "Done. first line\nsecond line more"],
+    [["Go [[tts:\nhello]] now"], "Go hello now"],
+    [["[[tts]]read", " this[[/tts]] now"], "read this now"],
+    [["See [[note"], "See [[note"],
+  ] as const)("preserves visible reply text across chunks: %j", (chunks, expected) => {
     const cleaner = createTtsDirectiveTextStreamCleaner();
-
-    expect(cleaner.push("[[tts]]read")).toBe("read");
-    expect(cleaner.push(" this[[/tts]] now")).toBe(" this now");
+    expect(chunks.map((chunk) => cleaner.push(chunk)).join("") + cleaner.flush()).toBe(expected);
   });
 
-  it("preserves non-tts bracket markup and flushes incomplete literals", () => {
+  it.each([
+    ["```\n", "[[tts:literal", " speech]]\n", "```\n"],
+    ["Use `", "[[tts:literal", " speech]]", "` here."],
+  ])("preserves code literals across chunks: %j", (...chunks) => {
     const cleaner = createTtsDirectiveTextStreamCleaner();
-
-    expect(cleaner.push("See [[note")).toBe("See ");
-    expect(cleaner.flush()).toBe("[[note");
-  });
-
-  it("keeps a free-text [[tts:...]] body visible through the cleaner", () => {
-    const cleaner = createTtsDirectiveTextStreamCleaner();
-
-    expect(cleaner.push("Some [[tts:hello there]] note")).toBe("Some hello there note");
-    expect(cleaner.flush()).toBe("");
-  });
-
-  it("keeps a free-text tts body whose tag spans streamed chunks", () => {
-    const cleaner = createTtsDirectiveTextStreamCleaner();
-
-    expect(cleaner.push("Go [[tts:")).toBe("Go ");
-    expect(cleaner.push("answered aloud]] back")).toBe("answered aloud back");
-    expect(cleaner.flush()).toBe("");
-  });
-
-  it("keeps a multiline free-text tts body visible through the cleaner", () => {
-    const cleaner = createTtsDirectiveTextStreamCleaner();
-
-    expect(cleaner.push("Done. [[tts:first line\nsecond line]] more")).toBe(
-      "Done. first line\nsecond line more",
-    );
-    expect(cleaner.flush()).toBe("");
-  });
-
-  it("keeps a free-text tts body that starts on the line after [[tts:", () => {
-    const cleaner = createTtsDirectiveTextStreamCleaner();
-
-    expect(cleaner.push("Go [[tts:\nhello]] now")).toBe("Go hello now");
+    expect(chunks.map((chunk) => cleaner.push(chunk)).join("")).toBe(chunks.join(""));
+    expect(cleaner.push(" [[tts:Visible speech]]")).toBe(" Visible speech");
     expect(cleaner.flush()).toBe("");
   });
 });

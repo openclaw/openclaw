@@ -1,4 +1,9 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  buildCodeSpanIndex,
+  createInlineCodeState,
+} from "../../packages/markdown-core/src/code-spans.js";
+import type { FenceScanState } from "../../packages/markdown-core/src/fences.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { AssistantDeliveryTtsFacts } from "../llm/types.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
@@ -97,10 +102,13 @@ function classifyTtsTag(body: string): "hidden-open" | "hidden-close" | "tts" | 
 export function createTtsDirectiveTextStreamCleaner(): TtsDirectiveTextStreamCleaner {
   let pending = "";
   let insideHiddenTextBlock = false;
+  let inlineCode = createInlineCodeState();
+  let fence: FenceScanState = {};
 
   return {
     push(text: string): string {
       const input = pending + text;
+      const code = buildCodeSpanIndex(input, inlineCode, fence);
       pending = "";
       let output = "";
       let index = 0;
@@ -132,7 +140,9 @@ export function createTtsDirectiveTextStreamCleaner(): TtsDirectiveTextStreamCle
 
         const rawTag = input.slice(tagStart, tagEnd + 2);
         const tag = classifyTtsTag(input.slice(tagStart + 2, tagEnd));
-        if (tag === "hidden-open") {
+        if (code.isInside(tagStart) && !insideHiddenTextBlock) {
+          output += rawTag;
+        } else if (tag === "hidden-open") {
           insideHiddenTextBlock = true;
         } else if (tag === "hidden-close") {
           insideHiddenTextBlock = false;
@@ -147,6 +157,11 @@ export function createTtsDirectiveTextStreamCleaner(): TtsDirectiveTextStreamCle
 
         index = tagEnd + 2;
       }
+      const consumed = pending
+        ? buildCodeSpanIndex(input.slice(0, input.length - pending.length), inlineCode, fence)
+        : code;
+      inlineCode = consumed.inlineState;
+      fence = consumed.fenceState;
 
       return output;
     },
@@ -154,6 +169,8 @@ export function createTtsDirectiveTextStreamCleaner(): TtsDirectiveTextStreamCle
       const tail = insideHiddenTextBlock ? "" : pending;
       pending = "";
       insideHiddenTextBlock = false;
+      inlineCode = createInlineCodeState();
+      fence = {};
       return tail;
     },
     hasBufferedDirectiveText(): boolean {
