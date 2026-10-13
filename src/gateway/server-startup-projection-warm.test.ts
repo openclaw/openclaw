@@ -37,7 +37,7 @@ function createStartupState(label: string) {
   });
 }
 
-it("overlaps early services with retained projection startup and waits for both before ready", async ({
+it("overlaps early services with retained projection startup and waits for both before finishing", async ({
   signal,
 }) => {
   const basePath = "/health";
@@ -58,6 +58,7 @@ it("overlaps early services with retained projection startup and waits for both 
   const requestSignal = AbortSignal.any([signal, requests.signal]);
   const entryPath = `${buildControlUiSessionEntryUrl(`${basePath}/chat/main/topic`, basePath)}&probe=1`;
   let startup: Promise<GatewayServer> | undefined;
+  let startupFinished = false;
   let earlyEntryRequest: Promise<Response> | undefined;
   let entryRequest: Promise<Response> | undefined;
   try {
@@ -112,6 +113,9 @@ it("overlaps early services with retained projection startup and waits for both 
       bind: "loopback",
       controlUiEnabled: true,
       sidecarStartup: "defer",
+    }).then((server) => {
+      startupFinished = true;
+      return server;
     });
     await withinTest(
       awaitGateBeforeSettlement(
@@ -181,11 +185,8 @@ it("overlaps early services with retained projection startup and waits for both 
     expect(secondEntryResponse.writableEnded).toBe(false);
     releaseProjection.resolve();
     expect((await entryRequest).status).toBe(204);
-    const waitingForEarlyRuntime = await fetch(`http://127.0.0.1:${port}/ready`, {
-      signal: requestSignal,
-    });
-    expect(waitingForEarlyRuntime.status).toBe(503);
-    expect(await waitingForEarlyRuntime.json()).toMatchObject({ ready: false });
+    // Minimal Gateways bypass sidecar readiness, but startup still joins early services.
+    expect(startupFinished).toBe(false);
     releaseEarlyRuntime.resolve();
     const server = await startup;
     await server.startupSettled;

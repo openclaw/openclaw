@@ -7607,7 +7607,6 @@
 ["src/gateway/server-startup-handler-prewarm.test.ts","./server-history-prewarm.js","9d5a415928390cd042c44085d6bdd17867edac0fd7709ddf477f45c9331cc6d1",1]
 ["src/gateway/server-startup-handler-prewarm.test.ts","./server-methods/core-handlers.js","f35b0ab14c052931db7789b2fa4ea027d153afc1a6ad7d03172545cd1fe8383d",1]
 ["src/gateway/server-startup-handler-prewarm.test.ts","./server-session-key.js","6fae0141c1d05f40a2be60ddc95fa728ff900c045fc5007c52cf352ea02b86eb",1]
-["src/gateway/server-startup-handler-prewarm.test.ts","./server/ws-connection/message-handler.js","31a8589200dadf76ebb8d55777bb1cfcdad7a8dfa296bbcbf7595d32ec8cc0fd",1]
 ["src/gateway/server-startup-legacy-pairing.test.ts","../channels/plugins/lifecycle-startup.js","d4a2beee81e351f26e9ac4724894bdd918322df5c85d118400917f8d8e53cb43",1]
 ["src/gateway/server-startup-log.test.ts","../agents/model-thinking-default.js","6a364a2992636391f939ca4a84a919aaed4bca187cafb7d2ff3ce7aa1b9f89de",1]
 ["src/gateway/server-startup-plugins.test.ts","../agents/agent-scope.js","228d1f4bba0058e9f57ef6719b08537742567404ac26826a2eb9b508a5a01814",1]
