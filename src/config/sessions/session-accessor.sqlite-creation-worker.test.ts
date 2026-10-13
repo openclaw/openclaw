@@ -32,14 +32,17 @@ import {
 import { createOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { createSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   createSessionEntryWithTranscript,
   prepareSessionEntryMutationDatabases,
 } from "./session-accessor.entry-mutation.js";
 import { withSqliteSessionDeletions } from "./session-accessor.sqlite-deletion.js";
-import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication.js";
 import {
   assertSessionEntryCreationPublication,
+  readPreparedSessionEntryChange,
+} from "./session-accessor.sqlite-entry-cache-publication.js";
+import {
   projectSessionSharingEntry,
   retainPreparedSessionSharingFacts,
 } from "./session-accessor.sqlite-entry-cache.js";
@@ -361,6 +364,7 @@ it.each(["incognito", "maintenance", "alias replacement"] as const)(
   "retains valid native %s creation through follow-up",
   async (kind) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const scope = {
         agentId: "main",
         sessionKey:

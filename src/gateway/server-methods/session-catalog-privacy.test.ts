@@ -4,6 +4,7 @@ import {
   type SessionCatalogHost,
   type SessionsCatalogHostEvent,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import {
@@ -69,6 +70,7 @@ async function createCatalog() {
       },
     },
   };
+  setRuntimeConfigSnapshot(config);
   for (const [id, profileId, source, visibility] of [
     ["foreign", other.id, "profile", "shared"],
     ["owned", caller.id, "profile", "draft"],

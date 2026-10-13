@@ -507,7 +507,9 @@ describe("temporary human mention Inbox", () => {
                 return statement.sourceSQL;
               }),
             )
-            .filter((query) => /config_machine_state/i.test(query)),
+            .filter((query) =>
+              /config_machine_state|\bselect\b[\s\S]*\bsession_nodes\b/i.test(query),
+            ),
         ).toEqual([]);
       } finally {
         for (const spy of sql) {
@@ -566,6 +568,10 @@ describe("temporary human mention Inbox", () => {
       expect(f.broadcast.mock.calls.some((call) => call[2].has("bob-one"))).toBe(false);
       await f.post();
       const visible = await read(f.inbox, f.bobClient);
+      await f.setSession({ displayName: "Updated design review" });
+      expect((await read(f.inbox, f.bobClient)).items[0]?.sessionTitle).toBe(
+        "Updated design review",
+      );
       await f.setSession({ visibility: "draft" });
       await f.inbox.invalidateAsync();
       const hidden = await read(f.inbox, f.bobClient);

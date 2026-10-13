@@ -508,13 +508,16 @@ final class DashboardManager {
         }
     }
 
+    @discardableResult
     func show(
         atPath path: String,
         search: String? = nil,
         target requestedTarget: DashboardGatewayTarget? = nil,
-        ifCurrent: @escaping @MainActor () -> Bool = { true }) async
+        ifCurrent: @escaping @MainActor () -> Bool = { true },
+        waitForLoad: Bool = false,
+        reportErrors: Bool = true) async -> Result<Void, Error>
     {
-        guard ifCurrent() else { return }
+        guard ifCurrent() else { return .failure(CancellationError()) }
         let target = requestedTarget ?? self.frontmostDashboard()?.target ?? self.mainTarget
         let source = self.dashboardController(for: target) ?? (self.mainTarget == target ? self.controller : nil)
         let windowIntent = WindowIntent(source)
@@ -533,11 +536,11 @@ final class DashboardManager {
             let destination: DashboardWindowController?
             if requestedTarget == nil, source == nil {
                 try await self.show()
-                guard isCurrent(), self.mainTarget == target else { return }
+                guard isCurrent(), self.mainTarget == target else { return .failure(CancellationError()) }
                 destination = self.controller
             } else {
                 let (configuration, endpoint) = try await self.windowConfiguration(for: target, userGesture: true)
-                guard isCurrent() else { return }
+                guard isCurrent() else { return .failure(CancellationError()) }
                 destination = self.presentDashboard(
                     configuration: configuration, endpoint: endpoint, target: target, source: currentSource())
             }
@@ -546,14 +549,30 @@ final class DashboardManager {
                       byAppendingSameAppPath: path,
                       search: search,
                       to: destination.currentURL)
-            else { return }
+            else { return .failure(CancellationError()) }
             destination.dispatchNativeNavigation(DashboardNativeNavigation(
                 path: path,
                 search: search,
                 fallbackURL: fallbackURL))
+            if waitForLoad {
+                do {
+                    try await destination.waitForDocumentLoad(at: fallbackURL)
+                } catch {
+                    if self.navigationIntents[target]?.id == intent {
+                        // Retire the document too, so cancelled setup cannot continue behind native onboarding.
+                        self.retireNavigation(for: target, from: destination)
+                        destination.closeDashboard()
+                    }
+                    throw error
+                }
+            }
+            guard isCurrent() else { return .failure(CancellationError()) }
+            return .success(())
         } catch {
-            guard isCurrent(), !(error is CancellationError) else { return }
-            self.presentGatewayError(error, title: "Could Not Open Dashboard", over: currentSource()?.window)
+            if reportErrors, isCurrent(), !(error is CancellationError) {
+                self.presentGatewayError(error, title: "Could Not Open Dashboard", over: currentSource()?.window)
+            }
+            return .failure(error)
         }
     }
 
@@ -635,11 +654,7 @@ final class DashboardManager {
             let needsRecovery = !source.isWindowOpen || !source.canDeliverNativeCommands
             source.dispatchNativeCommand(command)
             source.show()
-            guard needsRecovery, source.pendingGatewaySwitch == nil else { return }
-            if source === self.controller, target == .primary, self.showConfiguredWindowIfPossible() {
-                return
-            }
-            self.switchTarget(target, in: source, forceReload: true)
+            if needsRecovery { self.recoverDashboard(source) }
             return
         }
         self.pendingOpenCommands.append(command)
@@ -662,6 +677,15 @@ final class DashboardManager {
                 self.showFailure(error)
             }
         }
+    }
+
+    func recoverDashboard(_ source: DashboardWindowController) {
+        guard source.pendingGatewaySwitch == nil else { return }
+        let target = self.target(for: source) ?? self.mainTarget
+        if source === self.controller, target == .primary, self.showConfiguredWindowIfPossible() {
+            return
+        }
+        self.switchTarget(target, in: source, forceReload: true)
     }
 
     private func installMainController(_ controller: DashboardWindowController) {

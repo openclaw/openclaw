@@ -4,6 +4,7 @@ import {
   WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { WorkerNodeEnrollment } from "../../plugins/types.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -33,6 +34,7 @@ describe("worker node provisioning shutdown replay", () => {
     const physicalLeases = new Set<string>();
     const enrollments: WorkerNodeEnrollment[] = [];
     support.testState.config.gateway = { publicOrigin: "https://gateway.example.test" };
+    setRuntimeConfigSnapshot(support.testState.config);
     const prepareArtifact = async () => ({
       tarballPath: "/gateway/cache/node-runtime.tgz",
       tarballSha256: support.NODE_BOOTSTRAP.sha256,

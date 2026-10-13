@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Value } from "typebox/value";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   WorkerLiveEventParamsSchema,
   type WorkerLiveEventParams,
@@ -26,6 +26,7 @@ import type { SpawnResult } from "../../process/exec.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { NodeWorkerWorkspaceTransferError } from "../../worker/node-workspace-transfer-protocol.js";
 import { createGatewayWorkerDispatchAdmission } from "../server-worker-placement-dispatch-admission.js";
@@ -82,6 +83,8 @@ import {
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 import { gitInit } from "./workspace-recovery.test-support.js";
 
+afterAll(closeStateDatabaseForTest);
+
 describe("worker finishing admission", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
@@ -112,7 +115,7 @@ describe("worker finishing admission", () => {
 
 describe("worker turn launcher terminal results", () => {
   beforeEach(setupWorkerTurnLauncherTest);
-  afterEach(cleanupWorkerTurnLauncherTest);
+  afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
 
   const completedWorkerMessage = () =>
     makeAgentAssistantMessage({
@@ -518,7 +521,7 @@ describe("worker turn launcher terminal results", () => {
       placements,
       loadSessionRuntime: async () => ({
         managedWorktrees: { findLiveByOwner: async () => undefined },
-        resolveGatewaySessionStoreTargetWithStore: () => ({
+        resolveGatewaySessionStoreTargetInWorker: async () => ({
           storePath: sessionTarget.storePath,
           canonicalKey: SESSION_KEY,
           storeKeys: [SESSION_KEY],
@@ -699,7 +702,7 @@ describe("worker turn launcher terminal results", () => {
       expect(placements.get(SESSION_ID)).toMatchObject({ state: "draining", turnClaim: null });
       throw new Error("fixture: Move barrier complete");
     });
-    const loadSessionRuntime = createWorkerTurnSessionRuntimeLoader();
+    const loadSessionRuntime = await createWorkerTurnSessionRuntimeLoader();
     const moveBarrier = createGatewayWorkerPlacementMoveBarrier({
       placements,
       loadSessionRuntime,

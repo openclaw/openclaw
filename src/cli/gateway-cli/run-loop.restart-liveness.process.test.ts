@@ -28,12 +28,13 @@ const childScript = `
   import { fileLogTransport } from ${JSON.stringify(fileLogTransportUrl)};
   const faultPath = process.argv[1];
   const closeFailure = process.argv[2];
+  const ownsProcessLifecycle = process.argv[3] !== "false";
   setGatewayRestartPolicy({ allowExternal: true });
   let starts = 0;
   try {
     process.once("beforeExit", () => process.stdout.write("natural-exit\\n"));
     process.exitCode = await runGatewayLoop({
-      ownsProcessLifecycle: true,
+      ownsProcessLifecycle,
       start: async () => {
         const attempt = ++starts;
         process.stdout.write("start:" + attempt + "\\n");
@@ -105,7 +106,11 @@ afterEach(async () => {
   tempDirs.cleanup();
 });
 
-function startFixture(initialFailure = false, closeFailure = "", executable = process.execPath) {
+function startFixture(
+  initialFailure = false,
+  closeFailure = "",
+  options: { executable?: string; ownsProcessLifecycle?: boolean } = {},
+) {
   const directory = tempDirs.make("openclaw-restart-liveness-");
   const home = path.join(directory, "home");
   fs.mkdirSync(home);
@@ -131,7 +136,7 @@ function startFixture(initialFailure = false, closeFailure = "", executable = pr
     fs.writeFileSync(faultPath, "refuse");
   }
   const child = spawn(
-    executable,
+    options.executable ?? process.execPath,
     [
       "--inspect-port=127.0.0.1:0",
       "--import",
@@ -141,6 +146,7 @@ function startFixture(initialFailure = false, closeFailure = "", executable = pr
       childScript,
       faultPath,
       closeFailure,
+      String(options.ownsProcessLifecycle ?? true),
     ],
     {
       env: {
@@ -198,7 +204,7 @@ describe("runGatewayLoop failed-restart process lifetime", () => {
   posixIt(
     "attaches the Node debugger on SIGUSR1 and restarts only on SIGUSR2",
     async () => {
-      const fixture = startFixture(false, "", resolveTestNodeExecPath());
+      const fixture = startFixture(false, "", { executable: resolveTestNodeExecPath() });
       await fixture.waitForOutput("ready:1");
       expect(fixture.child.kill("SIGUSR1")).toBe(true);
       await fixture.waitForOutput("Debugger listening on ws://127.0.0.1:");
@@ -256,13 +262,18 @@ describe("runGatewayLoop failed-restart process lifetime", () => {
     60_000,
   );
 
-  posixIt(
-    "naturally exits nonzero after native close settles with a reported failure",
-    async () => {
-      const fixture = startFixture(false, "rejected");
+  posixIt.each([false, true])(
+    "naturally exits nonzero after settled close failure (ownsProcessLifecycle=%s)",
+    async (ownsProcessLifecycle) => {
+      const fixture = startFixture(false, "rejected", { ownsProcessLifecycle });
       await fixture.waitForOutput("ready:1");
       expect(fixture.child.kill("SIGUSR2")).toBe(true);
-      expect(await fixture.closed, fixture.output()).toEqual([1, null]);
+      const exited = await withTestTimeout(
+        fixture.closed,
+        15_000,
+        "settled close failure retained a referenced shutdown deadline",
+      );
+      expect(exited, fixture.output()).toEqual([1, null]);
       expect(fixture.output()).toContain("http-closed:1");
       expect(fixture.output()).toContain("loop-returned:1");
       expect(fixture.output()).toContain("natural-exit");

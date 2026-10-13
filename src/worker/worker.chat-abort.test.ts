@@ -197,7 +197,6 @@ describe("worker chat.abort settlement", () => {
         );
       };
       owner.signal.addEventListener("abort", cancelWorker, { once: true });
-      setRuntimeConfigSnapshot(harness.cfg);
       const startedAt = performance.now();
       let phase = "command-start";
       let commandOutcome = "pending";

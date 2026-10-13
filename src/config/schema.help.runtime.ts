@@ -536,7 +536,9 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "skills.load.watch":
     "Enable filesystem watching for skill-definition changes so updates can be applied without full process restart. Keep enabled in development workflows and disable in immutable production images.",
   "skills.workshop.autonomous.mode":
-    'Controls background learning: "auto" lets agents save and update Workshop skills after substantial work or after using a learned skill, and archives learned skills unused for 30 days. Every change is recorded and undoable. "off" disables background learning. Default: "auto".',
+    'Controls background learning: "auto" lets agents save and update Workshop skills after substantial work, and archives learned skills unused for 30 days. Every change is recorded and undoable. "off" disables background learning. Default: "auto".',
+  "skills.workshop.autonomous.channelNotices":
+    'Post background review notices to channel conversations, except Slack, with an Undo button (default: false); the Control UI shows that message as plain text. When disabled, notices appear only as the Learned row in the Control UI chat. Saying "undo" works either way.',
   approvals:
     "Approval routing controls for forwarding exec and plugin approval requests to chat destinations outside the originating session. Keep these disabled unless operators need explicit out-of-band approval visibility.",
   "approvals.exec":
@@ -589,6 +591,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Restrict filesystem tools (read/write/edit/apply_patch) to the workspace directory (default: false).",
   "tools.sessions.visibility":
     'Controls which sessions can be targeted by sessions_list/sessions_history/sessions_search/sessions_send/session_status. ("all" default = any session on the Gateway, including other agents and users; "agent" = any session in the current agent id; "self" = only current; "tree" = current session + spawned subagent sessions). Cross-agent access is on by default and scoped by tools.agentToAgent; use narrower visibility to restrict reads and ordinary sends. Explicit agents.entries.<id>.tools.agentToAgent.send destinations can permit sends without widening reads.',
+  "tools.sessions.allowThreadTargets":
+    "Allow sessions_send to target thread- or topic-scoped chat sessions such as Telegram forum topics or Slack/Discord threads (default: false). The target runs in that session; anything it sends with the message tool lands in the human-facing thread.",
   "tools.message.crossContext.allowWithinProvider":
     "Allow sends to other channels within the same provider (default: true).",
   "tools.message.crossContext.allowAcrossProviders":

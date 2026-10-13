@@ -1,4 +1,4 @@
-import { html } from "lit";
+import { html, nothing } from "lit";
 import {
   COMMAND_PALETTE_DIALOG_STYLE,
   COMMAND_PALETTE_OPEN_EVENT,
@@ -12,6 +12,7 @@ import {
 import { CommandPaletteInput } from "../components/command-palette-input.tsx";
 import type { OpenClawModalDialog } from "../components/modal-dialog.ts";
 import { t } from "../i18n/index.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
@@ -21,9 +22,10 @@ import { uploadsEnabled, uploadsDisabledMessage } from "../lib/uploads.ts";
 import { solidContent } from "../lit/solid-content.tsx";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
 import { gatewayPresentationScope } from "./gateway-presentation-scope.ts";
-import type {
-  LazyCustomElementRequestController,
-  OptionalCustomElement,
+import {
+  ensureCustomElementDefined,
+  type LazyCustomElementRequestController,
+  type OptionalCustomElement,
 } from "./lazy-custom-element.ts";
 import { lazyShellEvent, type LazyShellEvent } from "./lazy-shell-action.ts";
 
@@ -177,6 +179,23 @@ export class CommandPaletteLoadingState {
     if (!this.active) {
       this.#returnFocus =
         document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    }
+    if (!customElements.get("openclaw-modal-dialog")) {
+      void ensureCustomElementDefined(
+        "openclaw-modal-dialog",
+        () => import("../components/modal-dialog.ts"),
+      ).then(
+        () => {
+          if (this.active) {
+            this.#host.requestUpdate();
+          }
+        },
+        (error: unknown) => {
+          if (this.active) {
+            showToast({ message: formatUiError(error) });
+          }
+        },
+      );
     }
   }
 
@@ -381,6 +400,9 @@ export function renderCommandPaletteLoading(
   state: CommandPaletteLoadingState,
   onClose: () => void,
 ) {
+  if (!customElements.get("openclaw-modal-dialog")) {
+    return nothing;
+  }
   const label = t("palette.placeholder");
   return html`<openclaw-modal-dialog
     class="cmd-palette-overlay palette"

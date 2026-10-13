@@ -24,7 +24,7 @@ import {
 } from "../../config/sessions/session-source-authority.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
-import { listProfiles } from "../../state/user-profiles.js";
+import { listResidentUserProfileDisplayFacts } from "../../state/user-profile-list.js";
 import {
   encodePublicSessionShareLocator,
   loadPublicSessionShareTokenCodec,
@@ -200,9 +200,6 @@ function createSessionMembersListHandler(
       const managed = access.target;
       const projection = requireSessionRowProjection(context);
       await projection.withSelectionPreparation(async () => {
-        const profiles = await measureSessionCollaborationPhase(`${method}.profiles`, () =>
-          listProfiles(),
-        );
         do {
           await measureSessionCollaborationPhase(`${method}.projection`, () =>
             Promise.resolve(projection.prepareSelection()),
@@ -267,7 +264,7 @@ function createSessionMembersListHandler(
         const identities = knownSessionIdentities({
           creators: projection.listCreatedActors(),
           actor,
-          profiles,
+          profiles: listResidentUserProfileDisplayFacts(),
         });
         for (const member of projectedMembers) {
           if (!identities.some((identity) => identity.id === member.identityId)) {
@@ -326,7 +323,6 @@ function createSessionMemberMutationHandler(
       let addActor: SharingActorFacts | undefined;
       if (action === "add") {
         const projection = requireSessionRowProjection(context);
-        const profiles = await listProfiles();
         do {
           await projection.ensureMaterialized();
         } while (projection.needsMaterialization);
@@ -335,7 +331,7 @@ function createSessionMemberMutationHandler(
         const known = knownSessionIdentities({
           creators: projection.listCreatedActors(),
           actor: addActor,
-          profiles,
+          profiles: listResidentUserProfileDisplayFacts(),
         });
         if (!known.some((identity) => identity.id === params.identityId)) {
           respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown identity"));
@@ -476,7 +472,7 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
           throw new Error("session changed before sharing mutation");
         }
         if (changed) {
-          access.currentStored();
+          access.current();
           emitSessionsChanged(context, {
             reason: "sharing",
             sessionKey: current.canonicalKey,
@@ -484,7 +480,7 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
           });
         }
       });
-      const { target: published } = access.currentStored();
+      const { target: published } = access.current();
       const currentGrant = resolveSessionPublicShare(published.entry);
       if (currentGrant?.id !== publicShareGrant?.id) {
         throw new Error("session publication changed before sharing response");
@@ -516,7 +512,7 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
       const managed = access.target;
       const visibility = params.visibility;
       const assertVisibilityCurrent = () => {
-        const { target } = access.currentStored();
+        const { target } = access.current();
         if (resolveSessionVisibility(target.entry) !== visibility) {
           throw new Error("session visibility changed before sharing response");
         }

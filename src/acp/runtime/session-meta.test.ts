@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   loadExactSessionEntry,
   loadSessionEntry,
@@ -361,6 +362,7 @@ async function seedCanonicalSession(state: OpenClawTestState, sessionKey = SESSI
     agents: { ownership: "explicit", entries: { main: {} } },
   };
   await state.writeConfig(cfg);
+  setRuntimeConfigSnapshot(cfg);
   const scope = { cfg, env: state.env, agentId: "main", sessionKey };
   await replaceSessionEntry(scope, {
     sessionId: "alias-session",

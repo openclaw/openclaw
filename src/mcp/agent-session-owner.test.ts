@@ -21,7 +21,7 @@ it("carries the private argv owner and exact logical key into the real automatio
     agentId: "work",
     sessionKey: "global",
   });
-  const [tool] = resolveOpenClawToolsForMcp({ agentId, agentSessionKey: "global" });
+  const [tool] = await resolveOpenClawToolsForMcp({ agentId, agentSessionKey: "global" });
   callGatewayTool.mockImplementationOnce(async () => {
     expect(getGatewayToolCallerIdentity()).toMatchObject({
       agentId: "work",
@@ -31,9 +31,9 @@ it("carries the private argv owner and exact logical key into the real automatio
   });
   await tool!.execute("owner-proof", { action: "status" });
   expect(callGatewayTool).toHaveBeenCalledOnce();
-  expect(() =>
+  await expect(
     resolveOpenClawToolsForMcp({ agentId: "main", agentSessionKey: "agent:work:main" }),
-  ).toThrow("matching explicit");
+  ).rejects.toThrow("matching explicit");
 });
 
 it("rejects missing or duplicate private argv owners", () => {

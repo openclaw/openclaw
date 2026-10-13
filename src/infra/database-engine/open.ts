@@ -5,12 +5,12 @@ import {
   publishSqliteDatabaseAdmission,
   type SqliteDatabaseAdmissionKey,
 } from "../sqlite-database-admission.js";
-import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../sqlite-schema-facts.js";
 import { runSqliteImmediateTransactionSync } from "../sqlite-transaction.js";
 import { databaseEngineAdapters } from "./adapters.js";
 import type { DatabaseEngineInput } from "./config.js";
 import type { AdmittedStore, EngineConnection, StoreSchema } from "./contract.js";
 import { observeConnection } from "./observation.js";
+import { admitPostgresPhysicalFacts } from "./physical-facts.js";
 
 type EngineAdmission =
   | { engine: "sqlite" }
@@ -64,6 +64,7 @@ export function openEngineStore(ref: {
   input?: DatabaseEngineInput;
   openSqlite: () => void;
   prepareAnchor: () => void;
+  inspectSqlite: () => { hasExistingData: boolean; hasEngineAnchor: boolean };
 }): EngineConnection {
   const { anchor, schema } = ref;
   observeConnection(anchor);
@@ -93,23 +94,21 @@ export function openEngineStore(ref: {
     known?.engine === "postgres"
       ? known
       : runSqliteImmediateTransactionSync(anchor, () => {
-          admitSqliteSchema(anchor);
-          if (
-            [...(getAdmittedSqliteSchemaFacts(anchor)?.tables ?? [])].some((name) =>
-              name.startsWith(`${schema.id}_`),
-            )
-          ) {
+          const inspection = ref.inspectSqlite();
+          if (inspection.hasExistingData) {
             throw new Error(
               `Existing SQLite ${schema.id} data cannot switch engines; wait for the database port tool.`,
             );
           }
-          anchor.exec(
-            "CREATE TABLE IF NOT EXISTS openclaw_engine_anchor (store_id TEXT NOT NULL, engine TEXT NOT NULL CHECK (engine = 'postgres'), schema TEXT NOT NULL)",
-          );
+          if (!inspection.hasEngineAnchor) {
+            anchor.exec(
+              "CREATE TABLE IF NOT EXISTS openclaw_engine_anchor (store_id TEXT NOT NULL, engine TEXT NOT NULL CHECK (engine = 'postgres'), schema TEXT NOT NULL)",
+            );
+          }
           const rows = anchor
             .prepare("SELECT store_id, engine, schema FROM openclaw_engine_anchor")
             .all();
-          if (rows.length > 1) {
+          if (rows.length > 1 || (inspection.hasEngineAnchor && rows.length === 0)) {
             throw new Error(
               "Invalid engine anchor: expected exactly one identity. Restore a matching backup.",
             );
@@ -140,40 +139,44 @@ export function openEngineStore(ref: {
   try {
     if (!known) {
       // Bootstrap borrows opening custody; ordinary writes still require domain admission.
-      db.runTransaction(
-        () => {
-          db.exec(`CREATE SCHEMA IF NOT EXISTS "${identity.namespace.replaceAll('"', '""')}"`);
-          db.exec(
-            "CREATE TABLE IF NOT EXISTS openclaw_schema_meta (store TEXT PRIMARY KEY, version BIGINT NOT NULL, store_id TEXT NOT NULL)",
-          );
-          const meta = db
-            .prepare("SELECT version, store_id FROM openclaw_schema_meta WHERE store = ?")
-            .get(schema.id);
-          if (!meta) {
-            adapter.schema.bootstrap(store, db);
-          } else {
-            if (meta.store_id !== identity.storeId) {
-              throw new Error(
-                `PostgreSQL database identity mismatch: expected ${identity.storeId}, found ${String(meta.store_id)}. Restore the matching anchor and PostgreSQL backup.`,
-              );
-            }
-            if (meta.version !== schema.version) {
-              adapter.schema.migrate(store, Number(meta.version));
-            }
+      db.runTransaction(() => {
+        db.exec(`CREATE SCHEMA IF NOT EXISTS "${identity.namespace.replaceAll('"', '""')}"`);
+        db.exec(
+          "CREATE TABLE IF NOT EXISTS openclaw_schema_meta (store TEXT PRIMARY KEY, version BIGINT NOT NULL, store_id TEXT NOT NULL)",
+        );
+        const meta = db
+          .prepare("SELECT version, store_id FROM openclaw_schema_meta WHERE store = ?")
+          .get(schema.id);
+        if (!meta) {
+          adapter.schema.bootstrap(store, db);
+        } else {
+          if (meta.store_id !== identity.storeId) {
+            throw new Error(
+              `PostgreSQL database identity mismatch: expected ${identity.storeId}, found ${String(meta.store_id)}. Restore the matching anchor and PostgreSQL backup.`,
+            );
           }
-        },
-        undefined,
-        false,
-        false,
-        false,
-      );
+          if (meta.version !== schema.version) {
+            adapter.schema.migrate(store, Number(meta.version));
+          }
+        }
+      });
+    } else if (known.engine === "postgres" && known.version !== schema.version) {
+      adapter.schema.migrate(store, known.version);
+    }
+    admitPostgresPhysicalFacts({
+      anchor,
+      db,
+      namespace: identity.namespace,
+      storeId: identity.storeId,
+      store: schema.id,
+      version: schema.version,
+    });
+    if (!known) {
       publishSqliteDatabaseAdmission(anchor, admissionKey, {
         engine: "postgres",
         ...identity,
         version: schema.version,
       });
-    } else if (known.engine === "postgres" && known.version !== schema.version) {
-      adapter.schema.migrate(store, known.version);
     }
     return db;
   } catch (error) {

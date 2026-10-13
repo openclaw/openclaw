@@ -125,10 +125,16 @@ export function createSessionRowProjectionTranscriptUpdates(params: {
                   generation: fact.value.generation,
                   maxSeq: fact.value.rawSeq,
                 },
+                transcriptPreview: fact.value.lastMessagePreview,
               }
             : undefined;
         row.retainedDatabaseFacts = retained;
-        if (!retained || pending || readSessionActivitySummary(facts?.entry)) {
+        if (
+          !retained ||
+          pending ||
+          retained.transcriptPreview !== undefined ||
+          readSessionActivitySummary(facts?.entry)
+        ) {
           params.refresh(identity(row), retained);
         } else {
           row.databaseFactsRevision++;

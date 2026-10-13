@@ -78,6 +78,11 @@ combined.
 
 ## Schedule types
 
+For positional interval schedules, use `every <duration>`, such as `"every 10m"`.
+Natural-language schedules such as `"every day at 9am sharp"` are not supported;
+use `"0 9 * * *"` instead. Invalid cron expressions are rejected by the CLI with
+the supplied expression and examples of valid syntax.
+
 As an alternative to positional creation syntax, `automations add|create`
 accepts one of these schedule flags. `automations edit` uses the same flags
 to replace a job's schedule:

@@ -11,6 +11,7 @@ import {
   runOpenClawAgentWriteTransaction,
   withOpenClawAgentDatabaseRuntime,
 } from "../../state/openclaw-agent-db.js";
+import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { prepareSessionMetaPatch } from "./metadata.js";
 import type {
   RecordInboundSessionMetaParams,
@@ -460,6 +461,13 @@ async function patchSqliteSessionEntrySnapshot(
     return result.entry;
   }
   let wrote = false;
+  // A background owner can retain the same absent store before its first write.
+  const creatingExecution =
+    useWorker && !options.retainedExecution && targetIdentity.key.startsWith("path:")
+      ? captureOpenClawAgentDatabaseExecution(databaseOptions, {
+          expectedCreationIdentity: targetIdentity,
+        })
+      : undefined;
   const workerPatch = (source: PreparedSessionSourceAuthority, assertSource?: () => void) =>
     patchSessionEntryInWorker({
       database: { ...databaseOptions, path: databasePath },
@@ -475,7 +483,7 @@ async function patchSqliteSessionEntrySnapshot(
       },
       shouldCommit: options.shouldCommit,
       preparedSource: source,
-      retainedExecution: options.retainedExecution,
+      retainedExecution: options.retainedExecution ?? creatingExecution,
       reduction:
         typeof params.update === "function"
           ? undefined
@@ -504,7 +512,7 @@ async function patchSqliteSessionEntrySnapshot(
     });
   const sourceAssertion = options.workerGuard?.source;
   // Reserve the existing FIFO before async source planning or selecting either writer path.
-  const committed = await runExclusiveSqliteSessionWrite(
+  const pendingCommit = runExclusiveSqliteSessionWrite(
     resolved,
     async () => {
       if (useWorker) {
@@ -636,6 +644,12 @@ async function patchSqliteSessionEntrySnapshot(
       ? "foreground-reentrant"
       : "foreground",
   );
+  let committed: SessionEntry | null;
+  try {
+    committed = await pendingCommit;
+  } finally {
+    await creatingExecution?.release();
+  }
   if (wrote) {
     kickSessionEntryMaintenanceAfterWrite({
       activeSessionKey: sessionKey,
@@ -680,7 +694,10 @@ export async function recordInboundSessionMeta(
 
 /** Updates last-route/delivery metadata without refreshing activity timestamps. */
 export async function updateSessionLastRoute(
-  params: UpdateSessionLastRouteParams & { assertCommitAllowed?: () => void },
+  params: UpdateSessionLastRouteParams & {
+    assertCommitAllowed?: () => void;
+    workerGuard?: SessionEntryPatchGuard;
+  },
 ): Promise<SessionEntry | null> {
   return await updateSessionLastRouteInScope(
     { sessionKey: params.sessionKey, storePath: params.storePath },

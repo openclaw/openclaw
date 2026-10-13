@@ -786,7 +786,8 @@ suite.define(() => {
         .locator('.sidebar-recent-session[data-session-key="agent:main:session-a"]')
         .locator(".sidebar-recent-session__name")
         .evaluate((label) => getComputedStyle(label).fontWeight);
-      expect(activeWeight).toBe(inactiveWeight);
+      expect(activeWeight).toBe("600");
+      expect(inactiveWeight).toBe("500");
 
       const filterAndSort = page.getByRole("button", { name: "Filter & sort", exact: true });
       await filterAndSort.click();
@@ -907,7 +908,8 @@ suite.define(() => {
         .toContainEqual(expect.objectContaining({ includeDerivedTitles: true }));
       await expect.poll(() => label.textContent()).toBe(readableTitle);
       expect(await link.getAttribute("aria-current")).toBe("page");
-      expect(await link.ariaSnapshot()).toContain(`link "Unread ${readableTitle}"`);
+      // The retained title can match before the refresh renders Unread.
+      await expect.poll(() => link.ariaSnapshot()).toContain(`link "Unread ${readableTitle}"`);
       expect(await link.getByRole("img", { name: "Unread", exact: true }).count()).toBe(1);
       await captureSessionAccessibilityProof(suite, page, "after-patch-refresh");
     } finally {

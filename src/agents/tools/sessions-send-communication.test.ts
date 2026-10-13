@@ -82,6 +82,51 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 describe("sessions_send communication boundary", () => {
+  it.each([
+    [undefined, undefined, false],
+    [true, false, false],
+    [false, true, false],
+    [true, true, true],
+  ] as const)(
+    "thread admission requires captured=%s and current=%s permission",
+    async (captured, current, allowed) => {
+      state.config = { tools: { sessions: { allowThreadTargets: captured } } };
+      const input = operation(undefined, endpoint("discord:channel:123:thread:456"));
+      state.config = { tools: { sessions: { allowThreadTargets: current } } };
+      const pending = prepareSessionsSendCommunication(input);
+      if (allowed) {
+        (await pending).close();
+      } else {
+        await expect(pending).rejects.toThrow("cannot target a thread session");
+      }
+      expect(state.approve).not.toHaveBeenCalled();
+      expect(input.callGateway).not.toHaveBeenCalled();
+    },
+  );
+
+  it("revocation at the final thread admission has no target effect", async () => {
+    state.config = { tools: { sessions: { allowThreadTargets: true } } };
+    const input = operation(undefined, endpoint("discord:channel:123:thread:456"));
+    const effect = vi.fn();
+    input.callGateway.mockImplementation(async (request) => {
+      state.config = { tools: { sessions: { allowThreadTargets: false } } };
+      request.sessionMutationCommitGuard?.();
+      effect();
+    });
+    const gate = await prepareSessionsSendCommunication(input);
+    try {
+      await expect(
+        gate.callGateway({
+          method: "agent",
+          params: { agentId: "main", sessionKey: input.target.sessionKey, message: input.message },
+        }),
+      ).rejects.toThrow("policy changed");
+      expect(effect).not.toHaveBeenCalled();
+    } finally {
+      gate.close();
+    }
+  });
+
   it.each(["send", "receive"] as const)(
     "never %s denies same-agent peers before any prompt or delivery",
     async (direction) => {
@@ -94,24 +139,6 @@ describe("sessions_send communication boundary", () => {
       expect(input.callGateway).not.toHaveBeenCalled();
     },
   );
-  it("default always fences the final host admission without taking completion custody", async () => {
-    const input = operation();
-    input.callGateway.mockImplementation(async (request) => {
-      request.sessionMutationCommitGuard?.();
-      return { status: "accepted", runId: "accepted-run" };
-    });
-    const gate = await prepareSessionsSendCommunication(input);
-    await expect(
-      gate.callGateway({
-        method: "agent",
-        params: { agentId: "main", sessionKey: input.target.sessionKey, message: input.message },
-      }),
-    ).resolves.toEqual({ status: "accepted", runId: "accepted-run" });
-    expect(state.approve).not.toHaveBeenCalled();
-    gate.close();
-    // Completion now belongs to the Gateway. Closing this gate creates no cancellation work.
-    expect(input.callGateway).toHaveBeenCalledOnce();
-  });
   it("asks sender then recipient for exact content and waits for both human decisions", async () => {
     const input = operation(
       endpoint("source", { communication: { send: "ask" } }),

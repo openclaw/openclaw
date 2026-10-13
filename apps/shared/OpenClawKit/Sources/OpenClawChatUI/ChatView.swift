@@ -391,6 +391,34 @@ extension OpenClawChatView {
             resolveInputModel: self.resolveComposerModel)
     }
 
+    /// The turn has ended, but a helper it started is still running.
+    @ViewBuilder
+    private var subagentWaitRow: some View {
+        if let wait = self.viewModel.subagentWait {
+            HStack(spacing: 7) {
+                ChatWorkingClawView(seed: "subagent-wait", parked: true)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Waiting on subagents")
+                        .font(OpenClawChatTypography.caption)
+                        .foregroundStyle(.secondary)
+                    if let child = wait.child {
+                        Button {
+                            self.viewModel.switchSession(to: child.key)
+                        } label: {
+                            Text(child.name)
+                                .font(OpenClawChatTypography.caption)
+                                .underline()
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("chat-subagent-wait-child")
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 4)
+        }
+    }
+
     @ViewBuilder
     private var turnRecapRow: some View {
         if !self.showsWorkingIndicator,
@@ -417,6 +445,7 @@ extension OpenClawChatView {
                     if !self.showsComposer, !self.viewModel.hasBlockingRunActivity {
                         self.turnRecapRow
                     }
+                    self.subagentWaitRow
 
                     Color.clear
                         #if os(macOS)

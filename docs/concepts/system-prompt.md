@@ -6,7 +6,7 @@ read_when:
 title: "System prompt"
 ---
 
-OpenClaw builds its own system prompt for every agent run; there is no runtime default prompt.
+OpenClaw owns the system prompt for every agent run; there is no runtime default prompt. Runtime adapters can reuse session preparation while applying current turn context and explicit refreshes.
 
 Assembly has three layers:
 

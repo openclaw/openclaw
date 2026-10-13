@@ -108,7 +108,11 @@ export const SessionRowSchema = Type.Object(
   {
     key: Type.String(),
     /** Fields outside the requested projection must not clear a client's full-row cache. */
-    rowMode: Type.Optional(Type.Union([Type.Literal("compact"), Type.Literal("dashboard")])),
+    rowMode: Type.Optional(
+      Type.Union([Type.Literal("compact"), Type.Literal("dashboard"), Type.Literal("sidebar")]),
+    ),
+    /** Response-local indexes into the list's sharedFacts; expand before merging rows. */
+    sharedFacts: Type.Optional(Type.Array(Type.Integer({ minimum: 0 }))),
     sessionId: Type.Optional(Type.String()),
     /** Incarnation revision for invalidating session-scoped client caches after resets. */
     lifecycleRevision: Type.Optional(NonEmptyString),

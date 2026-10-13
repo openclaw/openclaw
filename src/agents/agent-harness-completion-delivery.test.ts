@@ -1,5 +1,5 @@
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
@@ -9,6 +9,10 @@ import {
   readAdmittedHarnessCompletionInputAsync,
 } from "../agents/agent-harness-completion-recovery.js";
 import { createAgentHarnessCompletionScope } from "../agents/agent-harness-completion-scope.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import {
   buildRestartRecoveryClaimCleanupPatch,
   getRestartRecoveryTerminalDeliveryEvidence,
@@ -50,6 +54,8 @@ import { reconcileHarnessCompletionDelivery } from "./agent-harness-completion-d
 import { captureAdmittedHarnessCompletionForTest } from "./agent-harness-completion.test-support.js";
 import { runWithAgentToolSourceExecutionScope } from "./agent-tool-source-execution-guard.js";
 
+afterEach(() => clearRuntimeConfigSnapshot());
+
 const sessionKey = "agent:main:main";
 const runId = "harness:child-1";
 const announceId = "announce:example:parent:child-1:succeeded";
@@ -65,6 +71,7 @@ async function admit(
   state: OpenClawTestState,
   sourceDeliveryContext: { channel: string; to: string; accountId?: string } = deliveryContext,
 ) {
+  setRuntimeConfigSnapshot({});
   const entry: SessionEntry = {
     sessionId: "physical-1",
     lifecycleRevision: "revision-1",

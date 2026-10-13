@@ -158,7 +158,10 @@ export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}):
     const wait = () =>
       waitForReachableControlUiDocument(
         { timeoutMs: deps.buildId === undefined ? 0 : undefined },
-        () => recoveryByStorage.get(storageIdentity) === target && canReloadControlUiDocument(),
+        () =>
+          recoveryByStorage.get(storageIdentity) === target &&
+          target.buildId === buildId &&
+          canReloadControlUiDocument(),
       );
     const delayMs =
       deps.buildId === undefined ? 0 : Math.floor(Math.random() * BUILD_RELOAD_JITTER_MS);

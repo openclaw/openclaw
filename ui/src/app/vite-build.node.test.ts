@@ -254,6 +254,48 @@ describe("Control UI Vite build", () => {
     expect(html).not.toContain(gateChunk.fileName);
   });
 
+  it("caches attachment workers offline without preloading them as document modules", async () => {
+    const config = createConfig();
+    const sidebar = fileURLToPath(new URL("../components/app-sidebar.ts", import.meta.url));
+    const worker = path.join(root, "resize.js");
+    await fs.writeFile(worker, 'self.onmessage = () => self.postMessage("resized");');
+    await fs.writeFile(
+      path.join(root, "main.js"),
+      `globalThis.loadSidebar = () => import(${JSON.stringify(sidebar)});`,
+    );
+    config.plugins = [
+      {
+        name: "attachment-worker-fixture",
+        enforce: "pre",
+        resolveId: (id) => (id === sidebar ? id : null),
+        load: (id) =>
+          id === sidebar
+            ? `import url from ${JSON.stringify(`${worker}?worker&url`)}; export const resize = () => new Worker(url);`
+            : null,
+      },
+      ...(config.plugins ?? []),
+    ];
+    const built = await build(config);
+    if (Array.isArray(built) || !("output" in built)) {
+      throw new Error("Expected one production bundle");
+    }
+    const sidebarChunk = built.output.find(
+      (entry) => entry.type === "chunk" && entry.facadeModuleId === sidebar,
+    );
+    expect(sidebarChunk).toBeDefined();
+    const assets = await fs.readdir(path.join(outDir, "assets"));
+    const workerFile = assets.find((name) => /^resize-.*\.js$/u.test(name));
+    expect(workerFile).toBeDefined();
+    const serviceWorker = await fs.readFile(path.join(outDir, "sw.js"), "utf8");
+    const boot = JSON.parse(/const OFFLINE_BOOT = (.+);/u.exec(serviceWorker)![1]!) as {
+      assets: Array<{ path: string }>;
+    };
+    expect(boot.assets.map((asset) => asset.path)).toContain(`assets/${workerFile}`);
+    const html = await fs.readFile(path.join(outDir, "index.html"), "utf8");
+    expect(html).toContain(sidebarChunk!.fileName);
+    expect(html).not.toContain(workerFile);
+  });
+
   it.each(["unresolved import", "blocked output"])(
     "preserves the original %s diagnostic without finalizing the build",
     async (failure) => {

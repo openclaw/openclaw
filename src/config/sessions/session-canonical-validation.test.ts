@@ -24,38 +24,24 @@ import {
   validateCanonicalSessionValidationBatch,
 } from "./session-canonical-validation.js";
 
-it.each([true])(
-  "rejects unvalidated offline repair lineage on each fresh committed view (writer closed: %s)",
-  async (reopen) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-      const scope = { agentId: "main", env, sessionKey: "agent:main:selected" };
-      replaceSessionEntrySync(scope, {
-        sessionId: "selected",
-        updatedAt: 1,
-        parentSessionKey: "agent:main:parent",
-      });
-      expect(loadSessionEntryReadOnly(scope)?.sessionId).toBe("selected");
-      const database = openOpenClawAgentDatabase(scope);
-      markCanonicalSessionValidationPending(database, [scope.sessionKey]);
-      database.db
-        .prepare("UPDATE session_nodes SET parent_session_key = ? WHERE session_key = ?")
-        .run("agent:main:other", scope.sessionKey);
-      if (reopen) {
-        closeOpenClawAgentDatabaseByPath(database.path);
-      }
-      if (!reopen) {
-        database.db.exec("BEGIN IMMEDIATE");
-      }
-      try {
-        expect(() => loadSessionEntryReadOnly(scope)).toThrow("openclaw doctor --fix");
-      } finally {
-        if (!reopen) {
-          database.db.exec("ROLLBACK");
-        }
-      }
+it("rejects unvalidated offline repair lineage after closing the writer", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const scope = { agentId: "main", env, sessionKey: "agent:main:selected" };
+    replaceSessionEntrySync(scope, {
+      sessionId: "selected",
+      updatedAt: 1,
+      parentSessionKey: "agent:main:parent",
     });
-  },
-);
+    expect(loadSessionEntryReadOnly(scope)?.sessionId).toBe("selected");
+    const database = openOpenClawAgentDatabase(scope);
+    markCanonicalSessionValidationPending(database, [scope.sessionKey]);
+    database.db
+      .prepare("UPDATE session_nodes SET parent_session_key = ? WHERE session_key = ?")
+      .run("agent:main:other", scope.sessionKey);
+    closeOpenClawAgentDatabaseByPath(database.path);
+    expect(() => loadSessionEntryReadOnly(scope)).toThrow("openclaw doctor --fix");
+  });
+});
 
 it("keeps changed rows pending across prepared certification and restores markers on rollback", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
@@ -167,61 +153,42 @@ it("does not retain native admission from a rolled-back repair of an unrelated r
   });
 });
 
-it.each([{ kind: "serialized identity", transaction: false }])(
-  "rejects a divergent canonical projection through $kind (transaction: $transaction)",
-  async ({ kind, transaction }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-      const scope = { agentId: "main", env, sessionKey: "agent:main:serialization" };
-      replaceSessionEntrySync(scope, { sessionId: "serialization", updatedAt: 1 });
-      const divergent =
-        kind === "serialized identity"
-          ? {
-              sessionId: "serialization",
-              updatedAt: 2,
-              toJSON: () => ({ sessionId: "other", updatedAt: 2 }),
-            }
-          : {
-              sessionId: "serialization",
-              updatedAt: 2,
-              parentSessionKey: "agent:main:parent-" + String.fromCharCode(0xd800),
-            };
-      const write = (database: ReturnType<typeof openOpenClawAgentDatabase>) =>
-        writeSessionEntry(database, scope.sessionKey, divergent);
-      expect(() =>
-        transaction
-          ? runOpenClawAgentWriteTransaction(write, scope)
-          : write(openOpenClawAgentDatabase(scope)),
-      ).toThrow("openclaw doctor --fix");
-      expect(loadSessionEntry(scope)).toMatchObject({ sessionId: "serialization", updatedAt: 1 });
-      expect(hasPendingCanonicalSessionValidation(openOpenClawAgentDatabase(scope))).toBe(false);
-    });
-  },
-);
+it("rejects a divergent serialized identity during an autocommit write", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const scope = { agentId: "main", env, sessionKey: "agent:main:serialization" };
+    replaceSessionEntrySync(scope, { sessionId: "serialization", updatedAt: 1 });
+    const divergent = {
+      sessionId: "serialization",
+      updatedAt: 2,
+      toJSON: () => ({ sessionId: "other", updatedAt: 2 }),
+    };
+    expect(() =>
+      writeSessionEntry(openOpenClawAgentDatabase(scope), scope.sessionKey, divergent),
+    ).toThrow("openclaw doctor --fix");
+    expect(loadSessionEntry(scope)).toMatchObject({ sessionId: "serialization", updatedAt: 1 });
+    expect(hasPendingCanonicalSessionValidation(openOpenClawAgentDatabase(scope))).toBe(false);
+  });
+});
 
-it.each(["receipt"] as const)(
-  "does not publish an autocommit main-key change when %s invalidation fails",
-  async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-      const scope = { agentId: "main", env, sessionKey: "agent:main:policy" };
-      replaceSessionEntrySync(scope, { sessionId: "policy", updatedAt: 1 });
-      const database = openOpenClawAgentDatabase(scope);
-      database.db.setAuthorizer((action, table, column) => {
-        const denied =
-          action === constants.SQLITE_UPDATE &&
-          table === "session_key_contract" &&
-          column === "canonical_ready";
-        return denied ? constants.SQLITE_DENY : constants.SQLITE_OK;
-      });
-      try {
-        expect(() => setCanonicalSqliteSessionMainKey(database, "changed-main")).toThrow(
-          /authoriz/u,
-        );
-      } finally {
-        database.db.setAuthorizer(null);
-      }
-      expect(
-        database.db.prepare("SELECT main_key FROM session_key_contract WHERE id = 1").get(),
-      ).toEqual({ main_key: "main" });
+it("does not publish an autocommit main-key change when receipt invalidation fails", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const scope = { agentId: "main", env, sessionKey: "agent:main:policy" };
+    replaceSessionEntrySync(scope, { sessionId: "policy", updatedAt: 1 });
+    const database = openOpenClawAgentDatabase(scope);
+    database.db.setAuthorizer((action, table, column) => {
+      const denied =
+        action === constants.SQLITE_UPDATE &&
+        table === "session_key_contract" &&
+        column === "canonical_ready";
+      return denied ? constants.SQLITE_DENY : constants.SQLITE_OK;
     });
-  },
-);
+    try {
+      expect(() => setCanonicalSqliteSessionMainKey(database, "changed-main")).toThrow(/authoriz/u);
+    } finally {
+      database.db.setAuthorizer(null);
+    }
+    expect(
+      database.db.prepare("SELECT main_key FROM session_key_contract WHERE id = 1").get(),
+    ).toEqual({ main_key: "main" });
+  });
+});

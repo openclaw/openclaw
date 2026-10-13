@@ -303,10 +303,10 @@ export function PluginsPageView(props: { page: PluginsPageController; revision: 
       <SettingsWorkspace>
         {PluginRowMessageView(page().state.pageNotice ?? undefined)}
         {page().surface === "discovery" ? (
-          <wa-tab-panel
+          <div
             id={PLUGINS_HUB_PANEL_ID}
-            name="plugins"
-            prop:active={true}
+            role="tabpanel"
+            tabindex="0"
             aria-labelledby="plugins-tab-plugins"
           >
             {page().state.catalogDetail ? (
@@ -389,7 +389,7 @@ export function PluginsPageView(props: { page: PluginsPageController; revision: 
                 />
               </SettingsPage>
             )}
-          </wa-tab-panel>
+          </div>
         ) : detailPluginId() ? (
           <InstalledDetail pluginId={detailPluginId()!} />
         ) : (

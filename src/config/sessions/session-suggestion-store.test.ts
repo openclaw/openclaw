@@ -1,6 +1,7 @@
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "./session-accessor.js";
 import {
   addSessionSuggestionInWorker as addSessionSuggestion,
@@ -39,7 +40,12 @@ async function resolvePendingSuggestion(params: {
     : null;
 }
 
+afterAll(clearRuntimeConfigSnapshot);
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-session-suggestions-");
+
+beforeEach(() => {
+  setRuntimeConfigSnapshot({});
+});
 
 describe("session suggestion store", () => {
   it("keeps deterministic rows and resolves only pending suggestions", async () => {

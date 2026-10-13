@@ -1,6 +1,7 @@
 import type { StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
   listSessionEntriesReadOnly,
@@ -43,6 +44,7 @@ function observeQueries(prototype: StatementSync) {
 
 it("publishes byte-identical group and participant facts without host membership SQL during cold admission, row refresh or 50 viewer reads", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
     const scope = { agentId: "main", sessionKey: "agent:main:projected-members" };
     await upsertSessionEntryCore(scope, {
       sessionId: "projected-members",
@@ -138,6 +140,7 @@ it("publishes byte-identical group and participant facts without host membership
 
 it("publishes final replacement facts to observers registered before the projection", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
     const scope = { agentId: "main", sessionKey: "agent:main:transaction-members" };
     await upsertSessionEntryCore(scope, { sessionId: "old", updatedAt: 1, category: "old" });
     addSessionMember(scope, { identityId: "old-viewer", addedBy: "owner" });
@@ -235,6 +238,7 @@ it("publishes final replacement facts to observers registered before the project
 it("installs every category in a worker reply before the first row observer", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = {};
+    setRuntimeConfigSnapshot(cfg);
     await putSessionGroups({ cfg, names: ["work", "done"] });
     const keys = ["agent:main:category-a", "agent:main:category-b"];
     for (const sessionKey of keys) {

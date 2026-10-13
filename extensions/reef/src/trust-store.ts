@@ -3,7 +3,6 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import type {
   PluginStateOperation,
   PluginStateOperationReceipt,
-  PluginStateSyncKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { ReefChannelConfig } from "./config-schema.js";
 import {
@@ -24,7 +23,6 @@ import {
   REEF_TRUST_STORE_OPTIONS,
   REEF_DELIVERY_STORE_OPTIONS,
   MESSAGE_ID_PATTERN,
-  listReefPeerTrust,
   createReefPairingApproval,
   parseReefPairingApproval,
   type ReefRequestSettlement,
@@ -63,7 +61,6 @@ class WorkerReefTrustStore {
   constructor(
     stores: ReturnType<typeof openStores>,
     config: ReefChannelConfig,
-    private readonly currentPeers: PluginStateSyncKeyedStore<ReefPeerStateSnapshot>,
     assertActive?: () => void,
   ) {
     const identityScope = resolveReefIdentityScope(config);
@@ -134,12 +131,6 @@ class WorkerReefTrustStore {
           ),
         }
       : undefined;
-  }
-
-  // Released ChannelPlugin policy and account-description adapters are synchronous.
-  listCurrent() {
-    this.operationState.assertCurrent();
-    return listReefPeerTrust(this.currentPeers.entries(), this.#prefix);
   }
 
   async list() {
@@ -393,7 +384,5 @@ export function openReefTrustStore(
   if (!stores.peers.createOperation) {
     return new LegacyReefTrustStore(runtime, config, assertCurrent);
   }
-  const currentPeers =
-    runtime.state.openSyncKeyedStore<ReefPeerStateSnapshot>(REEF_TRUST_STORE_OPTIONS);
-  return new WorkerReefTrustStore(stores, config, currentPeers, assertCurrent);
+  return new WorkerReefTrustStore(stores, config, assertCurrent);
 }

@@ -12,6 +12,7 @@ import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntry, loadTranscriptEventsSync } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
 import { listWorkshopChanges } from "../skills/workshop/library.js";
 import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
@@ -88,6 +89,7 @@ describe("Gateway automatic Workshop learning", () => {
         },
       });
       let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
+      let reviewWarnings: ReturnType<typeof createWarnLogCapture> | undefined;
       const providerErrors: unknown[] = [];
       const reviewRequests: ProviderRequest[] = [];
       const laterForegroundRequests: ProviderRequest[] = [];
@@ -255,6 +257,7 @@ describe("Gateway automatic Workshop learning", () => {
               token,
               scopes: ["operator.admin", "operator.read", "operator.write"],
             });
+            reviewWarnings = createWarnLogCapture("openclaw-gateway-workshop-learning");
             const sessionKey = "agent:main:workshop-learning-proof";
             const accepted = await gateway.client.request<{ runId: string; status: string }>(
               "agent",
@@ -338,6 +341,7 @@ describe("Gateway automatic Workshop learning", () => {
                     ),
                     changes: await listWorkshopChanges("main"),
                     providerErrors,
+                    reviewFailure: await reviewWarnings?.findText("skill experience review failed"),
                   }),
                   { cause },
                 );
@@ -375,6 +379,7 @@ describe("Gateway automatic Workshop learning", () => {
         );
       } finally {
         releaseReview.resolve();
+        reviewWarnings?.cleanup();
         if (gateway) {
           await disconnectGatewayClient(gateway.client);
           await gateway.server.close({ reason: "Workshop learning proof cleanup" });

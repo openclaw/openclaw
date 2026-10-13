@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -26,11 +26,30 @@ try {
 
 const preload = new URL("./test-database-conformance-preload.mjs", import.meta.url);
 preload.searchParams.set("connection", values.connection);
+const catalog = spawnSync(
+  process.execPath,
+  [
+    "--import",
+    fileURLToPath(new URL("./tsx.mjs", import.meta.url)),
+    fileURLToPath(new URL("./generate-postgres-schema.mts", import.meta.url)),
+    "--check-connection",
+    values.connection,
+  ],
+  { encoding: "utf8" },
+);
+for (const output of [catalog.stdout, catalog.stderr]) {
+  if (output) {
+    process.stdout.write(output.replaceAll(values.connection, "[database connection]"));
+  }
+}
+if (catalog.status !== 0) {
+  process.exit(catalog.status ?? 1);
+}
 const forwarded = separator < 0 ? [] : process.argv.slice(separator + 1);
 const targets =
   forwarded.length && !forwarded[0].startsWith("-")
     ? []
-    : ["extensions/workboard", "src/infra/postgres-sync"];
+    : ["extensions/workboard", "src/infra/postgres-sync", "src/infra/database-engine"];
 const child = spawn(
   process.execPath,
   [

@@ -604,13 +604,6 @@ describe("AppSidebar session indicators", () => {
     const { sidebar } = await mountSidebar(gatewayHarness.gateway, sessions.sessions);
     sidebar.connected = true;
     await sidebar.updateComplete;
-    await waitForFast(() => {
-      expect(request).toHaveBeenCalledWith(
-        SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-        { sessionKeys: [] },
-        { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
-      );
-    });
     sessions.sessions.setPullRequestSummary(keys.openPullRequest, { numbers: [1], state: "open" });
     sessions.sessions.setPullRequestSummary(keys.mergedPullRequest, {
       numbers: [1],

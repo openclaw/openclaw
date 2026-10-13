@@ -72,8 +72,12 @@ export function createSessionRowProjectionBackfill(params: {
         });
         await params.ready();
         const live = params.read(id);
-        if (!disposed && live?.generation === row.generation && params.current(live)) {
-          // A newer queued transcript update will replace these optional preview fields.
+        if (
+          !disposed &&
+          live?.generation === row.generation &&
+          revisions.get(id) === captured &&
+          params.current(live)
+        ) {
           params.publish(live, fields);
         } else if (live?.generation === row.generation && revisions.get(id) === captured) {
           revisions.delete(id);
@@ -107,6 +111,12 @@ export function createSessionRowProjectionBackfill(params: {
     prepare(row: EntryRow, facts: Row["retainedDatabaseFacts"]) {
       const id = identity(row);
       const next = revision(row, facts);
+      if (facts?.transcriptPreview !== undefined && !row.entry.fallbackNotice) {
+        revisions.set(id, next);
+        queued.delete(id);
+        params.publish(row, { lastMessagePreview: facts.transcriptPreview ?? undefined });
+        return;
+      }
       if (!isDeepStrictEqual(revisions.get(id), next)) {
         revisions.set(id, next);
         queued.add(id);

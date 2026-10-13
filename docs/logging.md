@@ -280,6 +280,23 @@ bounded, redacted error details for classification, including when a large
 partial response cannot fit in the transcript. Unrecognized errors still use
 generic chat copy; inspect the Gateway logs and stored error for diagnosis.
 
+When reply dispatch consumes a thrown error after a partial reply or an adopted
+turn, its terminal `message.dispatch.completed` and `message.processed`
+diagnostics retain the failure outcome, identifiers, and timing. The extra
+free-form cause is omitted at the default `info` file level and less verbose
+levels, including from diagnostic subscribers and telemetry exports.
+
+To collect that cause in the events' `error` field, enable `diagnostics.enabled`
+and set the effective **file** `logging.level` to `debug` or `trace`. The existing
+`OPENCLAW_LOG_LEVEL` and `--log-level` overrides apply; `logging.consoleLevel` or
+`--verbose` alone do not enable it. Chat notices stay generic.
+
+The cause uses mandatory built-in credential redaction plus
+`logging.redactPatterns`, then is capped at 2,048 UTF-16 code units without
+splitting a surrogate pair. Redaction is not a guarantee that arbitrary private
+text is removed: debug causes can still contain provider or user content. Treat
+debug logs and telemetry as sensitive, and return to `info` after diagnosis.
+
 Responses output-identity conflicts record the event type, output position,
 expected and observed item types, and whether a tool call completed, without
 recording item IDs or response content. OpenClaw uses the existing bounded session
@@ -1063,8 +1080,12 @@ to `"pretty"`.
 
 ### Redaction
 
-OpenClaw masks sensitive values in console output, file logs, diagnostic and
-support exports, and OpenTelemetry output. Config snapshots, audit output, and
+File logs store raw records with owner-only (`0600`) permissions. OpenClaw masks
+sensitive values when logs are read through `logs.tail` (CLI or Control UI),
+printed to the console, or exported through diagnostic/support bundles and
+OpenTelemetry. Direct file reads are raw: protect and review them before sharing.
+Log messages should contain IDs, sizes, and outcomes, never message text, prompts,
+tool arguments, or tool results. Config snapshots, audit output, and
 credential-bearing URLs and command-line options retain their credential masking.
 
 `logging.redactPatterns` replaces the default regex string list for logs and

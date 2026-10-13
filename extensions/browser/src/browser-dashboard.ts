@@ -1,5 +1,5 @@
 import type { SessionEntryCurrentPreparation } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   readBrowserDashboardDefinition,
   sameBrowserDashboardDefinition,

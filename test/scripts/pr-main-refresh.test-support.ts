@@ -784,12 +784,12 @@ if (process.argv[1]?.endsWith('/watch-pr-ci.mts')) {
       writeFileSync(join(local, "prep.md"), "Prepared synthetic merge fixture.\n");
     },
     configure(update: Partial<typeof control>) {
-      Object.assign(control, update);
+      const next = { ...JSON.parse(readFileSync(controlFile, "utf8")), ...update };
       env.NODE_OPTIONS =
-        control.hostedCi === "scheduled"
+        next.hostedCi === "scheduled"
           ? privateNodeOptions
           : `${privateNodeOptions} --import=${pathToFileURL(clock).href}`;
-      writeFileSync(controlFile, JSON.stringify(control));
+      writeFileSync(controlFile, JSON.stringify(next));
     },
     events() {
       return readFileSync(eventsFile, "utf8")

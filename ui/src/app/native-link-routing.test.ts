@@ -10,6 +10,9 @@ import {
 import "../components/modal-dialog.ts";
 import { TEST_LINK_READER } from "../test-helpers/link-reader.ts";
 import { postNativeUpdate, startNativeLinkRouting } from "./native-link-routing.ts";
+import { client, flushMicrotasks, type RequestFn } from "./overlays-access.test-support.ts";
+import { createApplicationOverlays } from "./overlays.ts";
+import { updateRunHarness } from "./update-run.test-support.ts";
 
 const NATIVE_UPDATE_DECLINED_EVENT = "openclaw:native-update-declined";
 
@@ -165,21 +168,42 @@ describe("native link routing", () => {
     },
   );
 
-  it("delivers each native update decline once across route changes", async () => {
-    const onNativeUpdateDeclined = vi.fn();
+  it("keeps native decline fallback on its posted Gateway and consumes it once", async () => {
+    const requestA = vi.fn<RequestFn>(async () => ({}));
+    const requestB = vi.fn<RequestFn>(async () => ({}));
+    const harness = updateRunHarness(requestA);
+    const overlays = createApplicationOverlays(harness.gateway);
     const postMessage = vi.fn();
     vi.stubGlobal("webkit", { messageHandlers: { openclawUpdate: { postMessage } } });
-    routing = startNativeLinkRouting({ onNativeUpdateDeclined });
+    routing = startNativeLinkRouting({
+      prepareNativeUpdateFallback: () => ({
+        isCurrent: overlays.captureUpdateTarget(),
+        run: () => void overlays.runUpdate(),
+      }),
+    });
+    const updateCalls = (request: typeof requestA) =>
+      request.mock.calls.filter(([method]) => method === "update.run");
+    try {
+      await flushMicrotasks();
+      expect(postNativeUpdate()).toBe(true);
+      harness.gateway.connection.gatewayUrl = "ws://other-gateway.test";
+      harness.update({ client: client(requestB) });
+      window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
+      await flushMicrotasks();
+      expect(updateCalls(requestA)).toEqual([]);
+      expect(updateCalls(requestB)).toEqual([]);
 
-    expect(postNativeUpdate()).toBe(true);
-    window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
-    window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
-    expect(onNativeUpdateDeclined).toHaveBeenCalledOnce();
-
-    expect(postNativeUpdate()).toBe(true);
-    window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
-    expect(onNativeUpdateDeclined).toHaveBeenCalledTimes(2);
-    expect(postMessage).toHaveBeenCalledTimes(2);
+      expect(postNativeUpdate()).toBe(true);
+      window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
+      await flushMicrotasks();
+      window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
+      await flushMicrotasks();
+      expect(updateCalls(requestA)).toEqual([]);
+      expect(updateCalls(requestB)).toHaveLength(1);
+      expect(postMessage).toHaveBeenCalledTimes(2);
+    } finally {
+      overlays.dispose();
+    }
   });
 
   it("does not install native behavior without the WebKit bridge", async () => {
@@ -192,23 +216,19 @@ describe("native link routing", () => {
     expect(document.querySelector("openclaw-native-link-menu")).toBeNull();
   });
 
-  it("defines the hovercard once across duplicate bootstrap module instances", async () => {
-    // Regression: the non-isolated jsdom lane evaluates the registration
-    // module once per sibling file against one persistent document, so stale
-    // bootstrap listeners fire alongside this file's own. Reproduce that order
-    // and require a single registry definition.
-    // Reevaluate only the bootstrap; resetting all modules splits Solid's scheduler
-    // and tries to register unrelated custom elements twice.
+  it("shares a working hovercard across duplicate bootstrap module instances", async () => {
+    // Reevaluate only the bootstrap, preserving Solid's scheduler and the registry.
     const duplicateBootstrap =
       "../components/link-reader-hovercard-registration.ts?duplicate-bootstrap";
     await import(duplicateBootstrap);
-    const define = vi.spyOn(customElements, "define");
-    await focusGitHubLink();
-    const hovercardDefines = define.mock.calls.filter(
-      ([tag]) => tag === "openclaw-link-reader-hovercard-provider",
+    const anchor = await focusGitHubLink();
+    const registered = customElements.get("openclaw-link-reader-hovercard-provider");
+    expect(registered).toBeDefined();
+    expect(anchor.parentElement?.constructor).toBe(registered);
+    expect(document.querySelectorAll(".link-reader-hovercard")).toHaveLength(1);
+    expect(document.querySelector(".link-reader-hovercard")?.textContent).toContain(
+      "Open links in a sidebar browser",
     );
-    expect(hovercardDefines).toHaveLength(1);
-    define.mockRestore();
   });
 
   it("closes an active GitHub hovercard after routing its link", async () => {

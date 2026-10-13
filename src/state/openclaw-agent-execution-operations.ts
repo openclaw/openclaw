@@ -388,7 +388,7 @@ export async function loadAgentTrajectoryOperations() {
       kernel.appendSqliteTrajectoryRuntimeEventsWithWriter(input, (label, write) =>
         writeTransaction(label, "Trajectory append", (current) => {
           const result = write(current);
-          deferSqliteWorkerCommitReceipt(current.db, { kind: "trajectory-runtime-append" });
+          deferSqliteWorkerCommitReceipt(current.db, result.receipt);
           admit("commit");
           return result;
         }),
