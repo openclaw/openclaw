@@ -39,6 +39,7 @@ import { renderWikiMarkdown } from "./markdown.js";
 import { createWikiPromptSectionPreparer } from "./prompt-section.js";
 import { getMemoryWikiPage } from "./query.js";
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
+import { resolveMemoryWikiStatus } from "./status.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 import { activateExistingMemoryWikiVault, initializeMemoryWikiVault } from "./vault.js";
 import { buildMemoryWikiOverview } from "./wiki-overview.js";
@@ -655,7 +656,8 @@ describe("Memory Wiki compiled cache lifecycle", () => {
   });
 
   it("reports transient SQLite read failures as failed dashboard state", async () => {
-    const { config } = await createPersistentVault({ initialize: true });
+    const { rootDir, config } = await createPersistentVault({ initialize: true });
+    await fs.writeFile(path.join(rootDir, "sources", "native.md"), "# Native source\n");
     const errors: unknown[] = [];
     let failNextRead = false;
     const store = createMemoryWikiCompiledCacheStore(
@@ -685,6 +687,12 @@ describe("Memory Wiki compiled cache lifecycle", () => {
       state: "failed",
     });
     expect(errors).toHaveLength(1);
+    failNextRead = true;
+    await expect(resolveMemoryWikiStatus(config)).resolves.toMatchObject({
+      pageCounts: { source: 1 },
+      sourceCounts: { native: 1 },
+    });
+    expect(errors).toHaveLength(2);
     expect((await loadMemoryWikiCompiledCache(config))?.claims[0]?.text).toBe("recoverable");
   });
 

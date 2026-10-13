@@ -305,7 +305,7 @@ export async function loadMemoryWikiVaultCounts(
   const counts = (active.counts ??= (
     dashboardStates.has(dashboardStateKey(config))
       ? Promise.resolve(null)
-      : loadMemoryWikiCompiledCache(config)
+      : loadMemoryWikiCompiledCache(config).catch(() => null)
   ).then(collect));
   try {
     return await counts;
