@@ -1,12 +1,13 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { nothing, render, type ReactiveControllerHost } from "lit";
+import { createSignal, flush } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayBrowserClient, GatewayRequestError } from "../api/gateway.ts";
 import type { WizardNextResult } from "../api/types.ts";
 import * as uuid from "../lib/uuid.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
-import { WizardLoginController } from "./wizard-login-controller.ts";
+import { WizardLogin, WizardLoginController } from "./wizard-login-controller.tsx";
 
 it.each([
   ["mcp.authLogin", "terminal during status", "cancelled"],
@@ -93,13 +94,8 @@ it.each([
         ),
         `${label} control`,
       ).click();
-    const host = {
-      addController: vi.fn(),
-      removeController: vi.fn(),
-      updateComplete: Promise.resolve(true),
-      requestUpdate: () =>
-        render(controller.render({ doneMessage: "Authentication saved" }), container),
-    } satisfies ReactiveControllerHost;
+    const [revision, setRevision] = createSignal(0);
+    const host = { requestUpdate: () => setRevision((value) => value + 1) };
     const controller = new WizardLoginController(host, {
       getClient: () => client,
       getAgentId: () => "main",
@@ -107,6 +103,16 @@ it.each([
       requestFailedMessage: () => "failed",
       sessionExpiredMessage: () => "expired",
     });
+    const view = mountSolid(
+      () => (
+        <WizardLogin
+          controller={controller}
+          revision={revision}
+          options={{ doneMessage: "Authentication saved" }}
+        />
+      ),
+      { container },
+    );
     const start = () => {
       controller.runner.prepareSignIn("oauth", "docs");
       return startMethod === "mcp.authLogin"
@@ -116,6 +122,7 @@ it.each([
     try {
       const first = start();
       await nextRequested.promise;
+      flush();
       clickButton("Cancel");
       await cancellationRequested.promise;
       if (ordering === "failed cancellation") {
@@ -133,6 +140,7 @@ it.each([
       }
       nextResult.resolve({ done: true, status: terminal });
       await first;
+      flush();
       expect(nextRequests).toBe(2);
       if (terminal === "done") {
         expect(container.textContent).toContain("Authentication saved");
@@ -144,6 +152,7 @@ it.each([
         expect(controller.cancelling).toBe(false);
       });
       await start();
+      flush();
       expect(starts).toBe(2);
       expect(controller.runner.state.phase).toBe("done");
       expect(container.textContent).toContain("Authentication saved");
@@ -153,7 +162,7 @@ it.each([
       statusResult.resolve({ status: "cancelled" });
       nextResult.resolve({ done: true, status: "cancelled" });
       await controller.runner.cancel();
-      render(nothing, container);
+      view.unmount();
       container.remove();
       request.mockRestore();
       generateUUID.mockRestore();

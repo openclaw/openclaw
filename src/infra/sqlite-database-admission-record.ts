@@ -196,13 +196,18 @@ export class SqliteDatabaseAdmissionRegistry {
     record.writeScopes.clear();
   }
 
-  releaseWorker(owner: number): void {
+  releaseWorker(owner: number, exitCode: number | undefined): void {
     for (const record of this.records.values()) {
       const references = owner > 0 ? record.references.get(owner) : undefined;
+      let priorReferences: number | undefined;
       if (references) {
         // Zero permits a live worker to reopen; negative cells cannot be revived by old snapshots.
-        Atomics.store(new Int32Array(references), 0, -1);
+        priorReferences = Atomics.exchange(new Int32Array(references), 0, -1);
         this.retireUnreferenced(record);
+      }
+      // Native close settles receipts before releasing the worker's final reference.
+      if (exitCode === 0 && priorReferences === 0) {
+        continue;
       }
       advanceSqliteDatabaseGeneration(record, "writeRevision");
       advanceSqliteDatabaseGeneration(record, "unscopedWriteRevision");

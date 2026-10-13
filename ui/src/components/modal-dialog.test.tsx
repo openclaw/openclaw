@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
 import { showToast } from "../lib/toast.ts";
@@ -11,6 +10,7 @@ import {
   installDialogPolyfill,
   nextFrame,
 } from "../test-helpers/modal-dialog.ts";
+import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
 import "./modal-dialog.ts";
 
 let container: HTMLDivElement;
@@ -40,8 +40,8 @@ async function atOpeningCommit(modal: Modal, assert: (dialog: HTMLDialogElement)
 }
 
 async function renderModal() {
-  render(
-    html`
+  mountSolid(
+    () => (
       <openclaw-modal-dialog
         label="Confirm action"
         description="Review the operation before continuing."
@@ -53,8 +53,8 @@ async function renderModal() {
           <button id="last-action">Last</button>
         </section>
       </openclaw-modal-dialog>
-    `,
-    container,
+    ),
+    { container },
   );
   const { modal, dialog } = await getRenderedModalDialog(container);
   return { modal, dialog };
@@ -70,7 +70,7 @@ describe("openclaw-modal-dialog", () => {
   });
 
   afterEach(() => {
-    render(nothing, container);
+    cleanupSolid();
     container.remove();
     vi.restoreAllMocks();
     restoreDialogPolyfill();
@@ -187,11 +187,13 @@ describe("openclaw-modal-dialog", () => {
   });
 
   it("focuses slotted autofocus content", async () => {
-    render(
-      html`<openclaw-modal-dialog label="Edit">
-        <textarea id="autofocus-target" autofocus></textarea>
-      </openclaw-modal-dialog>`,
-      container,
+    mountSolid(
+      () => (
+        <openclaw-modal-dialog label="Edit">
+          <textarea id="autofocus-target" autofocus></textarea>
+        </openclaw-modal-dialog>
+      ),
+      { container },
     );
     await getRenderedModalDialog(container);
 
@@ -200,11 +202,13 @@ describe("openclaw-modal-dialog", () => {
 
   it("focuses slotted input once the opening update commits, without waiting for a frame", async () => {
     vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => 1);
-    render(
-      html`<openclaw-modal-dialog label="Edit">
-        <textarea autofocus></textarea>
-      </openclaw-modal-dialog>`,
-      container,
+    mountSolid(
+      () => (
+        <openclaw-modal-dialog label="Edit">
+          <textarea autofocus></textarea>
+        </openclaw-modal-dialog>
+      ),
+      { container },
     );
     const modal = container.querySelector("openclaw-modal-dialog")!;
     await atOpeningCommit(modal, (dialog) => {
@@ -228,11 +232,14 @@ describe("openclaw-modal-dialog", () => {
         showModal.call(this);
         container.querySelector<HTMLVideoElement>("video")!.focus();
       });
-      render(
-        html`<openclaw-modal-dialog label="Media"
-          ><button autofocus>Close</button><video controls tabindex="0"></video
-        ></openclaw-modal-dialog>`,
-        container,
+      mountSolid(
+        () => (
+          <openclaw-modal-dialog label="Media">
+            <button autofocus>Close</button>
+            <video controls tabindex="0"></video>
+          </openclaw-modal-dialog>
+        ),
+        { container },
       );
       const modal = container.querySelector("openclaw-modal-dialog")!;
       const interactAtOpening = () =>
@@ -267,12 +274,14 @@ describe("openclaw-modal-dialog", () => {
   );
 
   it("keeps focus on a field the user selected when the show animation settles", async () => {
-    render(
-      html`<openclaw-modal-dialog label="Edit">
-        <input id="autofocus-target" autofocus />
-        <textarea id="notes-field"></textarea>
-      </openclaw-modal-dialog>`,
-      container,
+    mountSolid(
+      () => (
+        <openclaw-modal-dialog label="Edit">
+          <input id="autofocus-target" autofocus />
+          <textarea id="notes-field"></textarea>
+        </openclaw-modal-dialog>
+      ),
+      { container },
     );
     await getRenderedModalDialog(container);
     const notes = container.querySelector<HTMLTextAreaElement>("#notes-field");
@@ -356,7 +365,7 @@ describe("openclaw-modal-dialog", () => {
 
     await renderModal();
 
-    render(nothing, container);
+    cleanupSolid();
     await nextFrame();
 
     expect(document.activeElement).toBe(returnTarget);
@@ -403,7 +412,7 @@ describe("openclaw-modal-dialog", () => {
 
     modal.setReturnFocusTarget(null);
     container.querySelector<HTMLElement>("#first-action")?.focus();
-    render(nothing, container);
+    cleanupSolid();
     await nextFrame();
 
     expect(document.activeElement).not.toBe(originalTrigger);

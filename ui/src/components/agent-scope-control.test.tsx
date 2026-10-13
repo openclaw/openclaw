@@ -1,9 +1,10 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { createSignal, flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentSelectionCapability } from "../app/agent-selection.ts";
-import { renderAgentScopeControl } from "./agent-scope-control.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { AgentScopeControl } from "./agent-scope-control.tsx";
 import type { AgentSelectOption } from "./agent-select.ts";
 
 type AgentSelectElement = HTMLElement & {
@@ -22,47 +23,41 @@ function createSelection(setScope: (agentId: string | null) => void) {
   } as unknown as AgentSelectionCapability;
 }
 
-async function mountScope(overrides: Partial<Parameters<typeof renderAgentScopeControl>[0]> = {}) {
-  const container = document.body.appendChild(document.createElement("div"));
-  render(
-    renderAgentScopeControl({
-      agents: [
+async function mountScope(overrides: Partial<Parameters<typeof AgentScopeControl>[0]> = {}) {
+  const { container } = mountSolid(() => (
+    <AgentScopeControl
+      agents={[
         { id: "main", name: "Main agent" },
         { id: "writer", name: "Writer" },
-      ],
-      selection: createSelection(vi.fn()),
-      ...overrides,
-    }),
-    container,
-  );
+      ]}
+      selection={createSelection(vi.fn())}
+      {...overrides}
+    />
+  ));
+  flush();
   const select = container.querySelector<AgentSelectElement>("openclaw-agent-select");
   await select?.updateComplete;
   return { container, select };
 }
 
-describe("renderAgentScopeControl", () => {
+describe("AgentScopeControl", () => {
   it("renders only when multiple configured agents are selectable", () => {
-    const container = document.createElement("div");
-    const renderAgents = (agents: Array<{ id: string; name: string }>) => {
-      render(
-        renderAgentScopeControl({
-          agents,
-          selection: createSelection(vi.fn()),
-        }),
-        container,
-      );
-    };
-
-    renderAgents([]);
+    const [agents, setAgents] = createSignal<Array<{ id: string; name: string }>>([]);
+    const { container } = mountSolid(() => (
+      <AgentScopeControl agents={agents()} selection={createSelection(vi.fn())} />
+    ));
+    flush();
     expect(container.querySelector(".agent-scope-control")).toBeNull();
 
-    renderAgents([{ id: "main", name: "Main agent" }]);
+    setAgents([{ id: "main", name: "Main agent" }]);
+    flush();
     expect(container.querySelector(".agent-scope-control")).toBeNull();
 
-    renderAgents([
+    setAgents([
       { id: "main", name: "Main agent" },
       { id: "writer", name: "Writer" },
     ]);
+    flush();
     expect(container.querySelector(".agent-scope-control")).not.toBeNull();
   });
 
