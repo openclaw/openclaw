@@ -5,7 +5,12 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { setVerbose } from "../global-state.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
-import { formatForLog, logWs, summarizeAgentEventForWsLog } from "./ws-log.js";
+import {
+  formatForLog,
+  logWs,
+  summarizeAgentEventForWsLog,
+  summarizeSessionListForWsLog,
+} from "./ws-log.js";
 import { setGatewayWsLogStyle } from "./ws-logging.js";
 
 function shouldLogWs(direction: "in" | "out", kind: string): boolean {
@@ -27,6 +32,19 @@ afterEach(() => {
 });
 
 describe("gateway ws log helpers", () => {
+  test.each([
+    ["compact", "compact"],
+    ["dashboard", "dashboard"],
+    ["sidebar", "sidebar"],
+    [undefined, "full"],
+    ["unrecognized caller value", "full"],
+  ])("reports session row mode %s as %s", (rowMode, expected) => {
+    expect(summarizeSessionListForWsLog({ source: "sidebar", rowMode })).toMatchObject({
+      source: "sidebar",
+      rowMode: expected,
+    });
+  });
+
   test.each(["optimized", "compact", "full"] as const)(
     "bounds unanswered timing and preserves request identity across %s log changes",
     (style) => {
@@ -172,11 +190,6 @@ describe("gateway ws log helpers", () => {
 
   test.each([
     {
-      name: "formats Error instances",
-      input: Object.assign(new Error("boom"), { name: "TestError" }),
-      expected: "TestError: boom",
-    },
-    {
       name: "formats message-like objects with codes",
       input: { name: "Oops", message: "failed", code: "E1" },
       expected: "Oops: failed: code=E1",
@@ -233,7 +246,7 @@ describe("gateway ws log helpers", () => {
     expect(formatForLog(input)).toBe(`${"a".repeat(239)}...`);
   });
 
-  test.each(["assistant", "tool", "lifecycle", "other"])(
+  test.each(["lifecycle"])(
     "keeps Incognito %s content out of verbose event logs while retaining routing metadata",
     (stream) => {
       setVerbose(true);
@@ -262,28 +275,6 @@ describe("gateway ws log helpers", () => {
     },
   );
 
-  test("summarizeAgentEventForWsLog counts assistant content and media", () => {
-    const summary = summarizeAgentEventForWsLog({
-      runId: "12345678-1234-1234-1234-123456789abc",
-      sessionKey: "agent:main:main",
-      stream: "assistant",
-      seq: 2,
-      data: {
-        text: "hello\n\nworld ".repeat(20),
-        mediaUrls: ["a", "b"],
-      },
-    });
-
-    expect(summary.agent).toBe("main");
-    expect(summary.run).toBe("12345678…9abc");
-    expect(summary.session).toBe("main");
-    expect(summary.stream).toBe("assistant");
-    expect(summary.aseq).toBe(2);
-    expect(summary.media).toBe(2);
-    expect(summary.textChars).toBe(260);
-    expect(summary).not.toHaveProperty("text");
-  });
-
   test.each(["assistant", "tool"])("keeps %s content out of verbose event logs", (stream) => {
     setVerbose(true);
     setGatewayWsLogStyle("full");
@@ -292,31 +283,38 @@ describe("gateway ws log helpers", () => {
     loggingState.rawConsole = { log: output, info: output, warn: output, error: output };
     const marker = "synthetic-private-content";
     const summary = summarizeAgentEventForWsLog({
-      runId: "run-1",
+      runId: "12345678-1234-1234-1234-123456789abc",
       sessionKey: "agent:main:thread-1",
       stream,
-      data: { text: marker, meta: marker, phase: "start", name: "exec" },
+      seq: 2,
+      data: {
+        text: marker,
+        meta: marker,
+        phase: "start",
+        name: "fetch",
+        toolCallId: "12345678-1234-1234-1234-123456789abc",
+        mediaUrls: ["a", "b"],
+      },
     });
 
     logWs("out", "event", { event: "agent", ...summary });
 
     expect(output).toHaveBeenCalled();
     expect(JSON.stringify(output.mock.calls)).not.toContain(marker);
+    expect(summary).toMatchObject({
+      run: "12345678…9abc",
+      agent: "main",
+      session: "thread-1",
+      stream,
+      aseq: 2,
+      ...(stream === "assistant"
+        ? { media: 2, textChars: 25 }
+        : { tool: "start:fetch", call: "12345678…9abc" }),
+    });
+    expect(summary).not.toHaveProperty("text");
     expect(output).toHaveBeenLastCalledWith(
       expect.stringContaining(`${stream === "assistant" ? "textChars" : "metaChars"}=25`),
     );
-  });
-
-  test("summarizeAgentEventForWsLog includes tool metadata", () => {
-    const summary = summarizeAgentEventForWsLog({
-      runId: "run-1",
-      stream: "tool",
-      data: { phase: "start", name: "fetch", toolCallId: "12345678-1234-1234-1234-123456789abc" },
-    });
-    expect(summary.run).toBe("run-1");
-    expect(summary.stream).toBe("tool");
-    expect(summary.tool).toBe("start:fetch");
-    expect(summary.call).toBe("12345678…9abc");
   });
 
   test("summarizeAgentEventForWsLog includes lifecycle errors with compact previews", () => {

@@ -295,6 +295,10 @@ diagnostic. Restarting without changing the named configuration will repeat the
 same failure. Gateway logs do not contain node credentials or the node-local
 model catalog in full.
 
+A current node also reports `not configured on this node` when its local model
+configuration or credentials are missing. Configure the node before restarting
+it; update first only if that node runs an older OpenClaw version.
+
 ## Upgrade and downgrade
 
 The canonical profile values are `gateway` and `worker`; omission means `gateway`.

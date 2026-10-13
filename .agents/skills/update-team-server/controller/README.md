@@ -166,6 +166,52 @@ for the retirement contract.
 
 ## Complete-pair adoption
 
+Release preparation fetches only the frozen commit from the already verified
+official mirror. Each candidate keeps its own shallow Git object database, with
+no alternates or dependency on the mirror after publication. Ancestry checks
+continue to use the full mirror before preparation.
+
+The build account retains pnpm's content-addressed store under
+`OPENCLAW_TEAM_BUILD_HOME/cache/store` across candidates. The frozen lockfile and
+pnpm's integrity checks select package contents; `clone-or-copy` imports keep
+candidate files independent of writable store inodes. pnpm owns store format,
+invalidation, and pruning. Operators can reclaim unused packages with
+`pnpm store prune --store-dir <build-home>/cache/store` as the build account when
+the deployment owner is idle. Candidate cleanup removes only the work and
+staging trees. Staging uses reflinks where supported and ordinary copies
+otherwise; sealing, filesystem ownership, manifest validation, and directory
+publication remain unchanged. The build account also retains the build owner's
+artifact cache at `cache/build-artifacts`. Input content hashes select reusable
+package, plugin, and Control UI outputs; copies use independent inodes and reflinks
+where available. A missing, changed, or incomplete cache entry rebuilds normally.
+This cache is disposable while the deployment owner is idle.
+
+The fresh build overlaps the Control UI's staged build and precompression with
+runtime finalization after the compiler and plugin builders finish. Both
+writers finish before final build metadata is emitted, including when either
+fails. All build checks still run; cached compiler output never substitutes for a
+validation result. The Control UI refreshes release identity and its offline
+shell even when its bundles and precompressed assets are reused.
+
+Sealing makes every regular file read-only (preserving executable bits as `0555`),
+every directory `0555`, and leaves relative in-tree symlinks intact. The staging
+copy has independent inodes, is root-owned, and is not exposed to the runtime
+user. After the complete permission walk, GNU `sync -f` performs one `syncfs`
+barrier for the staging filesystem: file bytes, inode metadata, and directory
+entries must be durable before publication. A failed barrier aborts publication;
+the rename still has its separate parent-directory fsync. The barrier flushes
+the filesystem's other pending writes too, so its latency can reflect concurrent
+I/O. It does not evict page-cache contents.
+
+The manifest binds the exact source SHA, build ID, schema declarations, official
+origin, and Control UI entrypoint SHA-256; validation also checks build stamps,
+asset presence, ownership, modes, and contained symlinks across the tree. This
+is a durable, owner-protected release, not a cryptographic digest of every file
+or protection against subsequent root writes. New builds also record their
+selected input hashes in `dist/build-cache-inputs.json` and the deployment
+manifest. Admission compares these records; older sealed releases without cache
+metadata remain supported. Sealing preserves the existing integrity contract.
+
 Release publication now prewarms Node's release-scoped compile cache before
 cutover, including reuse of an already published release. The bounded import
 runs as `openclaw`, with the selected Gateway runtime, after publication at its

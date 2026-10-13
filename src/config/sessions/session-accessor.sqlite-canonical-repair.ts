@@ -158,13 +158,20 @@ export async function ensureSqliteTranscriptGenerationsForCanonicalRepair(
 ): Promise<void> {
   const byDatabase = new Map<
     string,
-    { resolved: ReturnType<typeof resolveSqliteStoreScope>; sources: typeof sources }
+    {
+      resolved: ReturnType<typeof resolveSqliteStoreScope>;
+      sources: Array<(typeof sources)[number]>;
+    }
   >();
   for (const source of sources) {
     const resolved = resolveSqliteStoreScope(source.storePath, { agentId: source.agentId });
     const key = `${resolved.path ?? source.storePath}\0${resolved.databaseAgentId ?? resolved.agentId}`;
-    const grouped = byDatabase.get(key) ?? { resolved, sources: [] };
-    byDatabase.set(key, { ...grouped, sources: [...grouped.sources, source] });
+    const grouped = byDatabase.get(key);
+    if (grouped) {
+      grouped.sources.push(source);
+    } else {
+      byDatabase.set(key, { resolved, sources: [source] });
+    }
   }
   for (const group of byDatabase.values()) {
     await runExclusiveSqliteSessionWrite(

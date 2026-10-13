@@ -52,10 +52,20 @@ import {
   captureManagedUpdateLeaseDatabaseIdentity,
   prepareManagedHandoffLeaseDatabaseIdentity,
 } from "./update-managed-service-handoff-database.js";
+import { resolveManagedUpdateLeaseDatabasePath } from "./update-managed-service-handoff-lease.js";
 import { supportsPostCoreExecutor } from "./update-post-core-capability.js";
 import type { UpdateRecoveryFence } from "./update-run-recovery.js";
 
 export type { PackageActivationStatus } from "./package-update-activation-status.js";
+
+function isForeignLeaseDirectory(databasePath: string): boolean {
+  const uid = process.getuid?.();
+  if (uid === undefined) {
+    return false;
+  }
+  const directory = fs.lstatSync(path.dirname(databasePath), { throwIfNoEntry: false });
+  return directory?.isDirectory() === true && directory.uid !== uid;
+}
 
 function inspectPackageActivationLease({
   databasePath,
@@ -63,6 +73,10 @@ function inspectPackageActivationLease({
   parentIdentity,
 }: PackageActivationRecord["descriptor"]["authority"]) {
   let current: ReturnType<typeof captureManagedUpdateLeaseDatabaseIdentity> | undefined;
+  // Historical receipts do not grant access to another user's replacement directory.
+  if (isForeignLeaseDirectory(databasePath)) {
+    return { current, changed: true, foreignDirectory: true };
+  }
   try {
     current = captureManagedUpdateLeaseDatabaseIdentity(databasePath);
   } catch (error) {
@@ -73,6 +87,7 @@ function inspectPackageActivationLease({
   return {
     current,
     changed: !isDeepStrictEqual(current, { databasePath, databaseIdentity, parentIdentity }),
+    foreignDirectory: false,
   };
 }
 
@@ -326,7 +341,7 @@ export async function settlePendingPackageActivation(
       initial.intent === null &&
       initial.publications.length === 0) ||
       initial.phase === "aborted");
-  const publicationNotStarted = !identities && !leaseIdentityChanged && unusedPreparation;
+  const publicationNotStarted = !leaseIdentityChanged && unusedPreparation;
   if (
     !complete &&
     !publicationNotStarted &&
@@ -334,19 +349,23 @@ export async function settlePendingPackageActivation(
     !(
       leaseIdentityChanged &&
       (unusedPreparation ||
-        (initial.phase === "publication-complete" &&
-          replacementIdentity === initial.descriptor.previous.identity) ||
+        (!identities &&
+          initial.phase === "publication-complete" &&
+          replacementIdentity === previousIdentity) ||
         initial.phase === "superseded")
     ) &&
-    [initial.descriptor.previous.identity, initial.descriptor.candidate.identity].includes(
-      replacementIdentity,
-    )
+    [previousIdentity, candidateIdentity].includes(replacementIdentity)
   ) {
+    if (identities) {
+      throw new Error(
+        "Remounted previous package has unfinished publication; use the original recovery owner.",
+      );
+    }
     assertNoPendingPackageActivation(installKey);
     return undefined;
   }
   if (options?.dryRun) {
-    if (externalPublication) {
+    if (externalPublication || (identities && unusedPreparation)) {
       await verifyPackagePublicationSettlement(
         initial,
         () => journal.assertCurrent(initial),
@@ -355,7 +374,7 @@ export async function settlePendingPackageActivation(
     }
     return {
       operationId: initial.descriptor.operationId,
-      reason,
+      reason: identities && unusedPreparation ? "publication-not-started" : reason,
       retained: `${anchor}.superseded-${initial.descriptor.operationId}`,
       detail: undefined,
       warning: undefined,
@@ -363,7 +382,11 @@ export async function settlePendingPackageActivation(
   }
   const currentDatabase =
     lease.current ??
-    (await prepareManagedHandoffLeaseDatabaseIdentity(originalAuthority.databasePath));
+    (await prepareManagedHandoffLeaseDatabaseIdentity(
+      lease.foreignDirectory
+        ? resolveManagedUpdateLeaseDatabasePath()
+        : originalAuthority.databasePath,
+    ));
   return withUpdateCommandExecutor(
     randomUUID(),
     async (executor) => {
@@ -396,7 +419,7 @@ export async function settlePendingPackageActivation(
       if (complete && receipt) {
         return finish(receipt);
       }
-      if (publicationNotStarted) {
+      if (publicationNotStarted && !identities) {
         const owner = createPublicationOwner(anchor, journal, assertReplacement, initial);
         if (initial.phase === "prepared") {
           try {
@@ -429,7 +452,7 @@ export async function settlePendingPackageActivation(
           replacementIdentity,
           settled: true,
         };
-      if (externalPublication) {
+      if (externalPublication || (identities && unusedPreparation)) {
         const verified = await verifyPackagePublicationSettlement(
           initial,
           assertCurrent,
@@ -443,7 +466,9 @@ export async function settlePendingPackageActivation(
         assertReplacement = verified.assertUnchanged;
         assertArchiveCurrent = verified.assertInstalledUnchanged;
         settlement = {
-          kind: "publication-settled-external-change",
+          kind: unusedPreparation
+            ? "publication-not-started"
+            : "publication-settled-external-change",
           replacementIdentity,
           settled: true,
           detail: receipt?.detail ?? verified.detail,
@@ -529,7 +554,9 @@ export async function runPackageActivationRecovery(
     ? {
         ...initial.descriptor.authority,
         ...(await prepareManagedHandoffLeaseDatabaseIdentity(
-          initial.descriptor.authority.databasePath,
+          isForeignLeaseDirectory(initial.descriptor.authority.databasePath)
+            ? resolveManagedUpdateLeaseDatabasePath()
+            : initial.descriptor.authority.databasePath,
         )),
       }
     : initial.descriptor.authority;

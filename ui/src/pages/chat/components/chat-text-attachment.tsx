@@ -16,6 +16,7 @@ import {
   LitContent,
   type SolidBridgeElement,
 } from "../../../lit/solid-bridge.ts";
+import { AttachmentPreviewSkeleton } from "./chat-attachment-card-solid.tsx";
 import { readAttachmentText } from "./chat-attachment-text-reader.ts";
 import { htmlPreviewElement, isHtmlDocument } from "./chat-html-preview.ts";
 
@@ -281,47 +282,29 @@ function TextAttachment(props: TextAttachmentProps, host: SolidBridgeElement<Tex
           )}
         </p>
       ) : (
-        <Show
-          when={reader()}
-          keyed
-          fallback={
-            <div
-              class="sidebar-attachment-preview__loading"
-              role="status"
-              aria-label={t("common.loading")}
-            >
-              <div class="skeleton skeleton-line" aria-hidden="true" />
-              <div class="skeleton skeleton-line skeleton-line--long" aria-hidden="true" />
-              <div class="skeleton skeleton-line skeleton-line--medium" aria-hidden="true" />
-            </div>
-          }
-        >
+        <Show when={reader()} keyed fallback={<AttachmentPreviewSkeleton />}>
           {(content) => (
             <>
-              {htmlDocument() ? (
-                <>
-                  <div class="chat-html-preview" hidden={source()}>
-                    {htmlLoadState()}
-                    <openclaw-chat-html-preview
-                      prop:html={content.text}
-                      prop:sourceIdentity={props.sourceIdentity || props.src}
-                      title={props.label}
-                      prop:embedSandboxMode={props.embedSandboxMode}
-                    />
-                  </div>
-                  <pre
-                    class="sidebar-attachment-preview__text"
-                    tabindex={0}
-                    aria-label={props.label}
-                    hidden={!source()}
-                  >
-                    {content.text}
-                  </pre>
-                </>
-              ) : markdown() && !source() ? (
+              <Show when={htmlDocument()}>
+                <div class="chat-html-preview" hidden={source()}>
+                  {htmlLoadState()}
+                  <openclaw-chat-html-preview
+                    prop:html={content.text}
+                    prop:sourceIdentity={props.sourceIdentity || props.src}
+                    title={props.label}
+                    prop:embedSandboxMode={props.embedSandboxMode}
+                  />
+                </div>
+              </Show>
+              {markdown() && !htmlDocument() && !source() ? (
                 <MarkdownAttachment text={content.text} label={props.label} />
               ) : (
-                <pre class="sidebar-attachment-preview__text" tabindex={0} aria-label={props.label}>
+                <pre
+                  class="sidebar-attachment-preview__text"
+                  tabindex={0}
+                  aria-label={props.label}
+                  hidden={htmlDocument() && !source()}
+                >
                   {content.text}
                 </pre>
               )}

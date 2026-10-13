@@ -192,7 +192,7 @@ describe("native PR provisioning diagnostics", () => {
   });
 
   it.skipIf(process.platform === "win32")(
-    "reports the real native storage failure while retaining exit and recovery custody",
+    "reports the real native storage failure, keeps its exit status, and releases the drained lock",
     () => {
       const f = createMainRefreshFixture(tempDirs.make("openclaw-pr-diagnostic-"), {
         precreateWorktree: false,
@@ -222,9 +222,8 @@ describe("native PR provisioning diagnostics", () => {
       expect(readFileSync(database, "utf8")).toBe(corrupt);
       expect(existsSync(f.worktree)).toBe(false);
       expect(f.git(f.canonical, "rev-parse", "refs/heads/temp/pr-42")).toBe(f.main);
-      expect(f.git(f.canonical, "rev-parse", "refs/openclaw/pr-operation-locks/42")).toMatch(
-        /^[0-9a-f]{40}$/,
-      );
+      expect(result.stderr).toContain("Released the operation lock for PR #42 after exit code 1");
+      expect(f.git(f.canonical, "for-each-ref", "refs/openclaw/pr-operation-locks")).toBe("");
     },
   );
 });

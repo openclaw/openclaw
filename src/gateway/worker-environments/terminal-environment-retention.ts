@@ -7,6 +7,7 @@ import {
 } from "../../infra/kysely-sync.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
 import { WORKER_ENVIRONMENT_TERMINAL_STATES } from "./state.js";
+import { executeWorkerEnvironmentWrite } from "./store-write.js";
 import type {
   WorkerEnvironmentPruneObservation,
   WorkerEnvironmentPruneReadInput,
@@ -105,7 +106,7 @@ export function pruneObservedTerminalWorkerEnvironments(
     // including the profile, activation and terminal age, under the write lock.
     // Worker transport drops the SQLite driver's null prototype; all column values stay exact.
     if (current && isDeepStrictEqual({ ...current }, { ...observed })) {
-      const result = executeSqliteQuerySync(
+      const result = executeWorkerEnvironmentWrite(
         db,
         currentQuery
           .deleteFrom("worker_environments")

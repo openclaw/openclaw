@@ -12,6 +12,7 @@ import {
   describeCodexNativeWebSearch,
   resolveCodexNativeWebSearchConfig,
 } from "./codex-native-web-search.shared.js";
+import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
 
 const baseConfig = {
   tools: {
@@ -229,18 +230,20 @@ describe("resolveCodexNativeSearchActivation", () => {
       },
     );
 
-    const result = resolveCodexNativeSearchActivation({
-      config: {
-        ...baseConfig,
-        session: {
-          store: storePath,
+    const result = await withPreparedSessionCapabilityRead(() =>
+      resolveCodexNativeSearchActivation({
+        config: {
+          ...baseConfig,
+          session: {
+            store: storePath,
+          },
         },
-      },
-      sessionKey,
-      modelProvider: "gateway",
-      modelApi: "openai-chatgpt-responses",
-      modelId: "gpt-5.5",
-    });
+        sessionKey,
+        modelProvider: "gateway",
+        modelApi: "openai-chatgpt-responses",
+        modelId: "gpt-5.5",
+      }),
+    );
 
     expect(result.state).toBe("managed_only");
     expect(result.inactiveReason).toBe("tool_policy_denied");

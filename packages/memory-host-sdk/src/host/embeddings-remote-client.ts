@@ -180,21 +180,36 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
   const headers = Object.fromEntries(
     new Map(entries.map((entry) => [entry[0].toLowerCase(), entry])).values(),
   );
-  const policy = resolveProviderRequestPolicyConfig({
-    provider: params.provider,
-    api: providerConfig?.api ?? "openai-completions",
-    baseUrl,
-    capability: "other",
-    request: { allowPrivateNetwork: providerConfig?.request?.allowPrivateNetwork },
-  });
   return {
     baseUrl,
     headers,
-    ssrfPolicy: resolveProviderTransportSsrFPolicy({
+    ssrfPolicy: resolveEmbeddingProviderSsrFPolicy({
+      provider: params.provider,
+      api: providerConfig?.api ?? "openai-completions",
       baseUrl,
-      url: baseUrl,
-      allowPrivateNetwork: policy.allowPrivateNetwork,
-      trustConfiguredBaseUrlOrigin: policy.trustConfiguredBaseUrlOrigin,
+      allowPrivateNetwork: providerConfig?.request?.allowPrivateNetwork,
     }),
   };
+}
+
+/** Embedding adapters share inference's endpoint classification and explicit network policy. */
+export function resolveEmbeddingProviderSsrFPolicy(params: {
+  provider: string;
+  api?: string;
+  baseUrl: string;
+  allowPrivateNetwork?: boolean;
+}): SsrFPolicy | undefined {
+  const policy = resolveProviderRequestPolicyConfig({
+    provider: params.provider,
+    api: params.api,
+    baseUrl: params.baseUrl,
+    capability: "other",
+    request: { allowPrivateNetwork: params.allowPrivateNetwork },
+  });
+  return resolveProviderTransportSsrFPolicy({
+    baseUrl: params.baseUrl,
+    url: params.baseUrl,
+    allowPrivateNetwork: policy.allowPrivateNetwork,
+    trustConfiguredBaseUrlOrigin: policy.trustConfiguredBaseUrlOrigin,
+  });
 }

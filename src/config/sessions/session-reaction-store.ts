@@ -1,4 +1,3 @@
-import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import { getOpenIncognitoAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import {
@@ -33,6 +32,7 @@ import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
 import { withSessionStoreTarget } from "./session-store-target-runtime.js";
 import { projectionLane } from "./session-transcript-worker-resources.js";
+import { createSessionWorkerExecutionSource } from "./session-worker-execution-source.js";
 
 export { SessionReactionLimitError, SessionReactionMessageMissingError };
 export type { StoredMessageReactionSummary } from "./session-reaction-store.types.js";
@@ -158,21 +158,7 @@ export async function setSessionReactionAsync(
           assertHeld();
           const result = await runOpenClawAgentWorkerWrite(options, () =>
             execution.runExisting(
-              {
-                assertCurrent: assertHeld,
-                createAdmission(binding) {
-                  return () => ({
-                    nativeLocations: binding.nativeLocations,
-                    admission: createSqliteWorkerOperationAdmission((admissionRequest, grant) => {
-                      binding.authorize(admissionRequest);
-                      assertHeld();
-                      if (!grant()) {
-                        throw new Error("Reaction authority expired");
-                      }
-                    }, binding.attachment),
-                  });
-                },
-              },
+              createSessionWorkerExecutionSource(assertHeld, "Reaction authority expired"),
               (worker) =>
                 worker.execute({
                   type: "session.reaction.set",

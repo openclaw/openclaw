@@ -254,6 +254,8 @@ export type OpenClawStateReadCommand =
   | { type: "worktrees.list" }
   | { type: "workerPlacements.changeSnapshot"; profileIds?: string[] }
   | { type: "nodeHost.config" }
+  | { type: "cron.store" }
+  | { type: "hooks.internal.installs" }
   | { type: "tts.prefsPath" }
   | { type: "voicewake.triggers" }
   | { type: "voicewake.routing" }

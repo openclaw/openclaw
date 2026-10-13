@@ -19,7 +19,6 @@ import {
   resolveBackupConfigCapture,
 } from "../../infra/backup-config-capture.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
-import { withOpenClawStateDatabaseReadSnapshot } from "../../state/openclaw-state-db-readonly.js";
 
 type UpdateConfigFileSnapshot = {
   path: string;
@@ -53,62 +52,59 @@ export async function captureUpdateConfigSnapshot(
   if (!parsed?.ok || !containsConfigIncludeDirective(parsed.parsed)) {
     return root;
   }
-  return await withOpenClawStateDatabaseReadSnapshot(
-    async () => {
-      const selected = await createConfigIO({
-        configPath,
-        env,
-        observe: false,
-        // The candidate may already have migrated state beyond this updater's schema.
-        pluginValidation: "core-only",
-      }).readConfigFileSnapshotForWrite();
-      // Doctor can repair an unresolved include; incomplete preimages cannot authorize rollback.
-      if (selected.snapshot.includeProvenance === undefined) {
-        return { ...root, doctorOwned: false };
+  try {
+    const selected = await createConfigIO({
+      configPath,
+      env,
+      observe: false,
+      // Capture authored files only; candidate Doctor owns state verification.
+      pluginValidation: "core-only",
+    }).readConfigFileSnapshotForWrite();
+    // Doctor can repair an unresolved include; incomplete preimages cannot authorize rollback.
+    if (selected.snapshot.includeProvenance === undefined) {
+      return { ...root, doctorOwned: false };
+    }
+    const capture = await resolveBackupConfigCapture(selected, {
+      env,
+      pluginValidation: "core-only",
+      allowIncludeAliases: true,
+    });
+    const rootTarget = await fs.realpath(configPath);
+    const files = new Map<
+      string,
+      UpdateConfigFileSnapshot & { pathSnapshot: ConfigFileWritePathSnapshot }
+    >();
+    for (const file of capture.files) {
+      const sourcePath = file.canonicalPath === rootTarget ? configPath : file.sourcePath;
+      const proof = captureConfigFileWritePathProof(sourcePath, file.canonicalPath, fsNode);
+      const raw = (await readBackupConfigCaptureFile(file)).toString("utf8");
+      proof.assertCurrent();
+      const existing = files.get(file.canonicalPath);
+      if (existing) {
+        existing.pathSnapshot.entries.push(...proof.snapshot.entries);
+      } else {
+        files.set(file.canonicalPath, {
+          path: sourcePath,
+          raw,
+          hash: hashConfigRaw(raw),
+          pathSnapshot: proof.snapshot,
+        });
       }
-      const capture = await resolveBackupConfigCapture(selected, {
-        env,
-        pluginValidation: "core-only",
-        allowIncludeAliases: true,
-      });
-      const rootTarget = await fs.realpath(configPath);
-      const files = new Map<
-        string,
-        UpdateConfigFileSnapshot & { pathSnapshot: ConfigFileWritePathSnapshot }
-      >();
-      for (const file of capture.files) {
-        const sourcePath = file.canonicalPath === rootTarget ? configPath : file.sourcePath;
-        const proof = captureConfigFileWritePathProof(sourcePath, file.canonicalPath, fsNode);
-        const raw = (await readBackupConfigCaptureFile(file)).toString("utf8");
-        proof.assertCurrent();
-        const existing = files.get(file.canonicalPath);
-        if (existing) {
-          existing.pathSnapshot.entries.push(...proof.snapshot.entries);
-        } else {
-          files.set(file.canonicalPath, {
-            path: sourcePath,
-            raw,
-            hash: hashConfigRaw(raw),
-            pathSnapshot: proof.snapshot,
-          });
-        }
-      }
-      const capturedRoot = files.get(rootTarget);
-      if (!capturedRoot) {
-        throw new Error("Update config capture is missing its root file.");
-      }
-      return {
-        ...capturedRoot,
-        includedFiles: [...files.values()].filter((file) => file !== capturedRoot),
-      };
-    },
-    { env },
-  ).catch((error: unknown) => {
+    }
+    const capturedRoot = files.get(rootTarget);
+    if (!capturedRoot) {
+      throw new Error("Update config capture is missing its root file.");
+    }
+    return {
+      ...capturedRoot,
+      includedFiles: [...files.values()].filter((file) => file !== capturedRoot),
+    };
+  } catch (error) {
     if (error instanceof BackupConfigCaptureError || error instanceof ConfigMutationConflictError) {
       return { ...root, doctorOwned: false };
     }
     throw error;
-  });
+  }
 }
 
 export async function createUpdateConfigSnapshot(

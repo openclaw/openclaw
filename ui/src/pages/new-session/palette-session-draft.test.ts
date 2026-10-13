@@ -111,6 +111,8 @@ describe("PaletteSessionDraft", () => {
     vi.mocked(context.placementStartup.start).mockImplementation(() => submitted.resolve());
     host.draft.setMessage("Carry my cold Send into the required worker");
     host.draft.adoptImageFiles([new File(["cold attachment"], "cold.txt", { type: "text/plain" })]);
+    await host.updateComplete;
+    expect(host.querySelector('.chat-attachment-loading[data-state="reading"]')).not.toBeNull();
     await host.attachmentReady.promise;
     host.observeColdSubmission = true;
     host.draft.submitCold();

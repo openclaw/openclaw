@@ -49,7 +49,6 @@ import {
 } from "./provider-transport-sse.js";
 
 const DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS = 60;
-const SLOW_MODEL_FETCH_MS = 1_000;
 const OPENAI_SDK_STREAM_CONTENT_SNIFF_BYTES = 2 * 1024;
 const log = createSubsystemLogger("provider-transport-fetch");
 
@@ -395,7 +394,7 @@ export function buildGuardedModelFetch(
       `status=${response.status} elapsedMs=${elapsedMs} ` +
       `dispatcher=${result.dispatcherReused ? "reused" : "new"} ` +
       `contentType=${response.headers.get("content-type") ?? ""}`;
-    if (!response.ok || elapsedMs >= SLOW_MODEL_FETCH_MS) {
+    if (!response.ok) {
       log.info(responseMessage);
     } else {
       emitModelTransportDebug(log, responseMessage);

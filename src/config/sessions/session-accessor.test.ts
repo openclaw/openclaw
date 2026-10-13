@@ -669,6 +669,7 @@ describe("session accessor seam", () => {
   );
 
   it("rejects a default-store transcript turn when the session id rotates mid-append", async () => {
+    setRuntimeConfigSnapshot({});
     // Caller omits storePath; resolveTranscriptTurnTarget derives the default
     // store. The guarded path must still apply so rotation is visible.
     const stateDir = path.join(tempDir, "state-rotate-default");
@@ -685,6 +686,7 @@ describe("session accessor seam", () => {
     );
 
     const result = await persistSessionTranscriptTurn(scope, {
+      config: {},
       messages: [
         {
           message: { role: "user", content: "default-rotate-hello", timestamp: Date.now() },
@@ -703,10 +705,7 @@ describe("session accessor seam", () => {
 
     expect(result.rejectedReason).toBe("session-rebound");
     await expect(
-      loadTranscriptEvents({
-        ...scope,
-        storePath: expectedStorePath,
-      }),
+      loadTranscriptEvents({ ...scope, storePath: expectedStorePath }),
     ).resolves.not.toContainEqual(
       expect.objectContaining({
         type: "message",

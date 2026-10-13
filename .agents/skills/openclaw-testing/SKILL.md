@@ -29,7 +29,7 @@ description: Choose proportional OpenClaw tests/checks, diagnose failures, route
 ## Select the proof
 
 - Runtime defect: reproduce real entry point; rerun it + relevant siblings.
-- Trusted source: `pnpm changed:lanes --json`, `pnpm check:changed`, focused tests.
+- Trusted source: `pnpm changed:lanes --json`, focused tests + targeted typecheck/lint/format; `pnpm check:changed` = optional smart local check.
 - Public SDK/plugin contract: representative consumers, not all-plugin sweep.
 - Build output, lazy imports, package boundaries: include `pnpm build`.
 - Workflow: `git diff --check` + `pnpm check:workflows`.
@@ -61,6 +61,10 @@ description: Choose proportional OpenClaw tests/checks, diagnose failures, route
 
 ## CI failures
 
+- PR CI fails → `pnpm test:ci-failed <pr>`; read pre-existing/new/unknown classification.
+- Fix new failures; investigate unknown → `pnpm test:ci-failed <pr> --run` until selected tests pass locally → push once.
+- Pre-existing failures: [failure-table landing rule](../openclaw-pr-maintainer/references/landing.md#red-main-and-inherited-failures). Matching signatures ≠ job-name-only attribution.
+- Never `gh run rerun` to chase green; never local full suite for CI repair.
 - Bind diagnosis to exact SHA + job. Fetch failed logs once; prefer exact run/job
   state over stale PR rollups.
 - Distinguish product, harness, infrastructure, credentials, superseded-run

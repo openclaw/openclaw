@@ -656,7 +656,7 @@ describe("runGatewayLoop", () => {
         "expected SIGUSR2 to trigger restart",
       );
 
-      expect(abortActiveCronTaskRuns).toHaveBeenCalledWith("Gateway restarting.");
+      expect(abortActiveCronTaskRuns).toHaveBeenCalledWith(undefined);
       expect(waitForActiveCronTaskRuns).toHaveBeenCalledWith(1_000);
       expect(waitForActiveCronJobs).toHaveBeenCalledWith(1_000);
       expect(advanceCronActiveJobGeneration).toHaveBeenCalledTimes(1);

@@ -157,6 +157,9 @@ describe("createGatewayRequestContext", () => {
       const source = ensureProfileForEmail("event-source@example.test");
       const target = ensureProfileForEmail("event-target@example.test");
       const third = ensureProfileForEmail("event-third@example.test");
+      using _ = {
+        [Symbol.dispose]: (await userProfileCatalog.prepareUserProfileCatalog()).release,
+      };
       const frames: Array<{ connId: string; event: string; recipientProfileId?: string }> = [];
       const clients = new GatewayClientRegistry();
       for (const [index, profile] of [source, target, third].entries()) {

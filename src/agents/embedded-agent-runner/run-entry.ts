@@ -40,6 +40,7 @@ import {
   resolveEmbeddedCyberFailoverConfig,
   resolveEmbeddedCyberFailoverTarget,
 } from "./embedded-cyber-failover.js";
+import { persistModelFallbackTranscriptNotice } from "./model-fallback-transcript.js";
 import {
   classifyEmbeddedAgentRunResultForModelFallback,
   mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
@@ -289,7 +290,13 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
           }
         },
         prepareAgentHarnessRuntime: prepareHarnessRuntime,
-        onFallbackStep: params.onFallbackStep,
+        onFallbackStep: async (step) => {
+          try {
+            await params.onFallbackStep?.(step);
+          } finally {
+            await persistModelFallbackTranscriptNotice(params, step, assertCurrent);
+          }
+        },
         ...(params.behavior.kind === "maintenance"
           ? {}
           : {
@@ -559,6 +566,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
     failed = terminalOutcome.status === "error";
     const result = mergeRunEntryExecutionTrace({
       result: candidateResult,
+      config: params.selection.cfg,
       terminalStatus: terminalOutcome.status,
       provider: fallbackResult.provider,
       model: fallbackResult.model,

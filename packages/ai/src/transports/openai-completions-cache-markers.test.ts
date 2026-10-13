@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { assert, describe, expect, it } from "vitest";
+import { publishRuntimeToolInputSchema } from "../providers/tool-schema-json-projection.js";
 import type { Context } from "../types.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
 import { buildOpenAICompletionsParams } from "./openai-completions-params.js";
@@ -27,6 +29,25 @@ function markers(payload: unknown) {
 }
 
 describe("managed Completions cache markers", () => {
+  it("keeps cache markers request-local when tool descriptors are published", () => {
+    const { schema } = publishRuntimeToolInputSchema({ type: "object", properties: {} });
+    assert(isRecord(schema));
+    const publishedContext = {
+      ...context,
+      tools: [{ name: "lookup", description: "Lookup", parameters: schema }],
+    };
+    const markedRequest = buildOpenAICompletionsParams(model, publishedContext, {
+      cacheRetention: "short",
+    });
+    const unmarkedRequest = buildOpenAICompletionsParams(model, publishedContext, {
+      cacheRetention: "none",
+    });
+    expect(markedRequest.tools?.[0]).toHaveProperty("cache_control", marker);
+    expect(unmarkedRequest.tools?.[0]).not.toHaveProperty("cache_control");
+    expect(markedRequest.tools?.[0]?.function).toBe(unmarkedRequest.tools?.[0]?.function);
+    expect(markedRequest.tools?.[0]).not.toBe(unmarkedRequest.tools?.[0]);
+  });
+
   it("keeps every message as a string for string-only endpoints with caching enabled", () => {
     const payload = buildOpenAICompletionsParams(
       { ...model, compat: { requiresStringContent: true, cacheControlFormat: "anthropic" } },

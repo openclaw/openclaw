@@ -135,6 +135,9 @@ the handoff, the candidate retains exact file and parent-directory identities;
 later replacement still stops the update. Lease read failures report their
 underlying cause instead of a parent-binding mismatch.
 
+Service backups and interrupted agent cleanup also retain exact file identities.
+Older rounded receipts remain readable and upgrade after verification on their next write.
+
 Post-install Doctor also accepts older updaters, including `2026.8.2`, that do not
 provide an update run ID. Its commands retain invocation-specific custody without
 requiring an environment-variable workaround.
@@ -619,6 +622,13 @@ Use the original anchor and operation ID with a supported external Node or Bun
 runtime. Keep other updaters and package managers stopped. Ordinary `status` and
 update admission remain strict for unfinished identity-mismatched journals.
 
+If publication never started and the previous package is still installed, repair
+verifies its full tree fingerprint and unchanged launchers under the same device
+mapping, then settles the operation as `publication-not-started`. The candidate
+is retained as evidence; the installed package is unchanged. A previous package
+with unfinished publication intent or launcher receipts still requires its
+original recovery owner and is not silently archived.
+
 For an already installed candidate, repair requires the staging path to be absent,
 consistent device-number changes with matching object inodes,
 the original intact helper and retained previous generation, a matching full
@@ -861,6 +871,12 @@ Dev Git target. The card checks again before opening update confirmation. While
 checking, it hides the previous SHA and disables the update action. A failed
 check shows an error; retry the action to check again. Opening the card does not
 start an update.
+
+Update confirmation belongs to the Gateway and profile that opened it. Switching
+Gateways or profiles retires the pending confirmation; open it again on the
+intended Gateway. Native updates also check current administrator access when you
+confirm and show an access error if it was revoked. Once an update starts, its
+progress report remains available through that Gateway's restart.
 
 Ask the agent to update OpenClaw, or send `/update` from Discord or another
 connected chat. Natural-language requests use the existing `gateway` tool's

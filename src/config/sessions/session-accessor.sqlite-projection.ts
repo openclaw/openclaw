@@ -219,7 +219,11 @@ export async function applySessionEntryLifecycleMutation(
                       );
                     }
                   };
-                  if (upserts.length > 0 && execution && !hasPreparedNativeSessionDeletion()) {
+                  if (
+                    (upserts.length > 0 || removals.length === 0) &&
+                    execution &&
+                    !hasPreparedNativeSessionDeletion()
+                  ) {
                     return withArchivePublication(
                       await commitSessionLifecycleProjectionInWorker({
                         database: reclamationOptions,

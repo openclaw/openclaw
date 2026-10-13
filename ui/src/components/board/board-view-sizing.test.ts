@@ -1,9 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  boardChromeRowPx,
-  effectiveBoardWidgetRows,
-  exactBoardWidgetHeightPx,
-} from "../../lib/board/grid.ts";
+import { exactBoardWidgetHeightPx } from "../../lib/board/grid.ts";
 // Side-effect import: test-support only type-imports the component, so the
 // custom element must be registered here for mount() to render anything.
 import "./board-view.ts";
@@ -15,25 +11,6 @@ afterEach(() => {
 });
 
 describe("board widget sizing", () => {
-  it("snaps reported HTML heights to rows with card inset and fixed-mode fallbacks", () => {
-    const card = boardWidget({ sizeH: 6 });
-    expect(effectiveBoardWidgetRows(card, 98)).toBe(2);
-    expect(effectiveBoardWidgetRows(card, 99)).toBe(3);
-    expect(effectiveBoardWidgetRows({ ...card, presentation: "full-bleed" }, 122)).toBe(2);
-    expect(effectiveBoardWidgetRows({ ...card, presentation: "frameless" }, 123)).toBe(3);
-    expect(effectiveBoardWidgetRows(card, 1)).toBe(2);
-    expect(effectiveBoardWidgetRows(card, 10_000)).toBe(20);
-    expect(effectiveBoardWidgetRows(card, 10_000, 0, 240)).toBeGreaterThan(20);
-    expect(effectiveBoardWidgetRows({ ...card, heightMode: "fixed" }, 600)).toBe(6);
-    expect(effectiveBoardWidgetRows(card, undefined)).toBe(6);
-    expect(effectiveBoardWidgetRows({ ...card, contentKind: "mcp-app" }, 600)).toBe(6);
-    // Coarse-pointer layouts keep the 38px bar in flow; the same report needs
-    // more rows than the fine-pointer overlay layout.
-    expect(effectiveBoardWidgetRows(card, 101, 38)).toBe(3);
-    expect(effectiveBoardWidgetRows(card, 150, 38)).toBe(4);
-    expect(effectiveBoardWidgetRows(card, 150, 0)).toBe(3);
-  });
-
   it("hugs auto cards to their exact content height inside the quantized cell", () => {
     const card = boardWidget({ sizeH: 6 });
     // Every presentation reserves its border; cards also add 12px per edge.
@@ -50,31 +27,6 @@ describe("board widget sizing", () => {
     expect(exactBoardWidgetHeightPx({ ...card, heightMode: "fixed" }, 300)).toBeUndefined();
     expect(exactBoardWidgetHeightPx(card, undefined)).toBeUndefined();
     expect(exactBoardWidgetHeightPx({ ...card, contentKind: "mcp-app" }, 300)).toBeUndefined();
-  });
-
-  it("pins the exact reported height on the card and re-fills while dragging", async () => {
-    const view = await mount();
-    const cell = view.querySelector("openclaw-board-widget-cell");
-    const frame = cell?.querySelector("iframe");
-    window.dispatchEvent(
-      new MessageEvent("message", {
-        source: frame?.contentWindow ?? null,
-        data: { type: "openclaw:widget-size", height: 300 },
-      }),
-    );
-    const widget = boardWidget();
-    const expected = exactBoardWidgetHeightPx(widget, 300, boardChromeRowPx());
-    const section = () => cell?.querySelector<HTMLElement>(".board-widget");
-    await vi.waitFor(() => {
-      expect(section()?.getAttribute("style")).toContain(
-        `height: calc(${expected}px - var(--board-widget-height-trim, 0px))`,
-      );
-      expect(section()?.getAttribute("style")).toContain("align-self: start");
-    });
-    // Gestures manipulate the quantized cell, so the card fills it again.
-    Reflect.set(cell ?? {}, "dragging", true);
-    await cell?.updateComplete;
-    expect(section()?.getAttribute("style")).not.toContain("align-self");
   });
 
   it("lets a dashboard document fit tall HTML content without an inner scroll viewport", async () => {

@@ -169,6 +169,7 @@ jobs:
             --artifacts-dir "${RUNNER_TEMP}/linux-gateway-switch" \
             2>&1 | tee "${RUNNER_TEMP}/linux-gateway-switch/run.log"
           mkdir -p "${RUNNER_TEMP}/linux-gateway-switch/onboarding"
+          node scripts/run-node-package-bin.mts vite build --config apps/linux/tests/fixtures/vite.onboarding.config.ts
           xvfb-run -a -s '-screen 0 1440x1080x24' dbus-run-session -- \
             /usr/bin/python3 apps/linux/tests/first_run.py \
             apps/linux/src-tauri/target/debug/openclaw-desktop --gateway-onboarding \

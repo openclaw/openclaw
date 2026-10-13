@@ -1216,7 +1216,9 @@ the sentinel.
 
   </Step>
   <Step title="Sync plugins">
-    Against the installed target, syncs plugins to the active channel before restarting the managed service. Dev uses bundled plugins; stable and beta use npm or ClawHub while preserving recorded source choices. A changed plugin snapshot or deferred model retirement recorded by this update runs fresh Doctor repairs. Unchanged plugins with no pending repair do not run another full Doctor pass. The updater then revalidates the service owner, starts the Gateway, and verifies the final snapshot.
+    Against the installed target, syncs plugins to the active channel before restarting the managed service. Dev uses bundled plugins; stable and beta use npm or ClawHub while preserving recorded source choices. A changed plugin snapshot, pending plugin data/settings upgrade, or deferred model retirement recorded by this update runs fresh Doctor repairs. Unchanged plugins with no pending repair do not run another full Doctor pass. The updater then revalidates the service owner, starts the Gateway, and verifies the final snapshot.
+
+    If plugin data/settings upgrades remain pending after Doctor, the update records a warning naming each plugin and its recovery command, such as `openclaw doctor --fix`. Doctor-only and after-session repairs keep their existing offline ownership requirements; pending work does not by itself fail the core update. Skipped plugin updates also print the plugin name and skip reason alongside the summary counts.
 
     The updater performing plugin convergence owns this deferred-repair decision. Package updates that delegate this work to the new version can use its repair immediately. If an older updater leaves model retirement deferred, run the newly installed `openclaw doctor --fix` once to finish it. Later updates use their own run history to complete the follow-up; they do not use another update's pending marker.
 

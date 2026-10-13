@@ -29,6 +29,8 @@ Storage-engine PRs and scheduled main runs include a hosted PostgreSQL 17
 
 Full hybrid extension lint packs the same canonical chunks into three existing rows, sharing setup and SDK preparation within each row. Targeted plans and frozen routes retain their existing layout; see [runner profiles](/ci/runners#runner-backend-modes).
 
+Full hybrid PR checks share central formatting and scripts lint with core lint stripe 1 when those are the complete central command inventory. The existing 16-class runner executes them sequentially within its 15-minute deadline, removing one checkout and dependency setup. Additional central checks, targeted core stripes, and plans without another required check row retain their separate lint job. Central lint still runs after a core lint failure and fails the shared job if it fails.
+
 Default fork first attempts run their existing core lint stripes on Blacksmith16, retaining the same core and extension chunk assignments and restore-only caches. Retries and the GitHub override remain hosted; see [runner placement](/ci/runners#runners).
 
 [Automation admission](/ci/scheduled-workflows#comment-automation) filters known
@@ -249,9 +251,10 @@ The generator records successful hosted job walls, including setup, in the exist
 spans and survive the daily refit. The hosted full planner splits measured rows
 above 12 minutes after file bundling, retaining exact coverage and worker settings.
 Complete split generations keep subsequent plans from recombining expensive work.
-The whole Gateway-methods owner retains its completed hosted cost when files are
-added or removed, until a complete observation covers the new inventory. Partial
-generations never supply that floor. Its full-validation rows use the existing
+Agents-support, CLI-process, Gateway chat, Gateway methods, and runtime-config
+owners retain their completed hosted cost when files are added or removed, until
+a complete observation covers the new inventory. Partial generations never supply
+that floor. Their full-validation rows use the existing
 `-hosted-N` split, while compact main and PR routing retain their existing policy.
 An indivisible over-budget test fails planning with its owner named; unmeasured
 rows still need native timing evidence before claiming the 20-minute objective.

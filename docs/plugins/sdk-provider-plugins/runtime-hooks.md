@@ -60,6 +60,13 @@ caller signal with an operation timeout. Start it before credential preparation
 when authentication shares the request budget, and call its `cleanup` in
 `finally` to release the timer.
 
+## OAuth refresh configuration
+
+`refreshOAuth(credential, config)` receives the caller's effective OpenClaw config
+as an optional second argument. Use that captured config for checks such as
+regional endpoint compatibility instead of reloading global runtime config.
+Existing one-argument hooks remain compatible, and direct callers can omit config.
+
 ## Hook examples
 
 <Tabs>

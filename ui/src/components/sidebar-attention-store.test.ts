@@ -69,10 +69,13 @@ describe("sidebar attention source publication", () => {
     vi.unstubAllGlobals();
   });
 
-  it("retains an in-flight cron inventory when chat selection changes within its scope", async () => {
+  it("retains cron inventory without reviving stale auth when returning to an agent", async () => {
     vi.useFakeTimers();
     const inventory = deferred<CompactCronPage>();
     const oldAuth = deferred<ModelAuthStatusResult>();
+    const writerAuth = deferred<ModelAuthStatusResult>();
+    const currentAuth = deferred<ModelAuthStatusResult>();
+    let mainAuthCalls = 0;
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "cron.list") {
         return inventory.promise;
@@ -81,8 +84,8 @@ describe("sidebar attention source publication", () => {
         return { enabled: true, jobs: 1 };
       }
       return isRecord(params) && params.agentId === "main"
-        ? oldAuth.promise
-        : { ts: 1, providers: [] };
+        ? (++mainAuthCalls === 1 ? oldAuth : currentAuth).promise
+        : writerAuth.promise;
     });
     const harness = createGatewayHarness(mockClient(request));
     let selectionListener = () => {};
@@ -95,22 +98,45 @@ describe("sidebar attention source publication", () => {
     } as unknown as ApplicationContext["agentSelection"];
     store = createStore(harness.gateway, undefined, selection);
     store.activate(SidebarAttentionStoreController);
-    selection.state.selectedId = "writer";
-    selectionListener();
-    selectionListener();
-    harness.update({});
-    await vi.advanceTimersByTimeAsync(0);
-    inventory.resolve(cronPage("incident"));
-    oldAuth.resolve({ ts: 1, providers: [] });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(store.entries).toMatchObject([{ label: "incident" }]);
-    for (const method of ["cron.list", "cron.status"]) {
-      expect(request.mock.calls.filter(([name]) => name === method)).toHaveLength(1);
+    try {
+      selection.state.selectedId = "writer";
+      selectionListener();
+      selectionListener();
+      harness.update({});
+      await vi.advanceTimersByTimeAsync(0);
+
+      invalidateModelAuthStatusRequests(harness.gateway.snapshot.client!);
+      harness.emitEvent("chat.metadata.changed", { authChanged: true });
+      selection.state.selectedId = "main";
+      selectionListener();
+      inventory.resolve(cronPage("incident"));
+      currentAuth.resolve({ ts: 2, providers: [] });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(store.entries).toMatchObject([{ label: "incident" }]);
+      expect(mainAuthCalls).toBe(2);
+
+      oldAuth.resolve({
+        ts: 1,
+        providers: [{ provider: "openai", displayName: "OpenAI", status: "missing", profiles: [] }],
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(store.entries).toMatchObject([{ label: "incident" }]);
+      for (const method of ["cron.list", "cron.status"]) {
+        expect(request.mock.calls.filter(([name]) => name === method)).toHaveLength(1);
+      }
+      expect(request.mock.calls.filter(([name]) => name === "models.authStatus")).toEqual([
+        ["models.authStatus", { agentId: "main" }],
+        ["models.authStatus", { agentId: "writer" }],
+        ["models.authStatus", { agentId: "main" }],
+      ]);
+    } finally {
+      store.dispose();
+      inventory.resolve(cronPage("incident"));
+      for (const pending of [oldAuth, writerAuth, currentAuth]) {
+        pending.resolve({ ts: 2, providers: [] });
+      }
+      await vi.advanceTimersByTimeAsync(0);
     }
-    expect(request.mock.calls.filter(([name]) => name === "models.authStatus")).toEqual([
-      ["models.authStatus", { agentId: "main" }],
-      ["models.authStatus", { agentId: "writer" }],
-    ]);
   });
 
   it.each([{ restartPending: true }, { suspensionPhase: "draining" as const }])(

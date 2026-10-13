@@ -467,6 +467,13 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
+      "path": "ui/src/pages/custodian/custodian-setup-card.tsx",
+      "text": "openclaw onboard"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
       "path": "ui/src/pages/debug/view.tsx",
       "text": "openclaw security audit --deep"
     },
@@ -481,28 +488,28 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/new-session/cloud-target.ts",
+      "path": "ui/src/pages/new-session/cloud-target-view.tsx",
       "text": "openclaw config set nodeHost.workerRuns.enabled true"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/new-session/cloud-target.ts",
+      "path": "ui/src/pages/new-session/cloud-target-view.tsx",
       "text": "openclaw node install --force"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/new-session/cloud-target.ts",
+      "path": "ui/src/pages/new-session/cloud-target-view.tsx",
       "text": "openclaw node restart"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/new-session/cloud-target.ts",
+      "path": "ui/src/pages/new-session/cloud-target-view.tsx",
       "text": "openclaw update"
     },
     {

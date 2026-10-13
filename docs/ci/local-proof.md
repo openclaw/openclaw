@@ -98,8 +98,8 @@ contexts instead of process-global evaluation.
 
 ```bash
 pnpm changed:lanes                            # inspect the local changed-lane classifier for origin/main...HEAD
-pnpm check:changed                            # smart local check gate: changed formatting/typecheck/lint/guards by boundary lane
-pnpm check                                    # fast local gate: prod tsgo + sharded lint + parallel fast guards
+pnpm check:changed                            # optional smart local check: changed formatting/typecheck/lint/guards by boundary lane
+pnpm check                                    # optional broad local check: prod tsgo + sharded lint + parallel fast guards
 pnpm check:test-types
 pnpm check:timed                              # same gate with per-stage timings
 pnpm build:strict-smoke
@@ -697,6 +697,12 @@ only its former root links to `/var/tmp/openclaw-pnpm/node_modules` or
 installing physical workspace dependencies, including links whose runner cache
 was already cleared. It preserves external package caches and unrelated
 dependency links.
+
+Linux hydration also installs the Control UI E2E browser prerequisites with CI's
+commands: Playwright Chromium and FFmpeg, plus WebKit with its system dependencies.
+It removes group/other write from the owned workspace ancestry and `.artifacts`,
+and later run commands inherit `umask go-w` while preserving stricter masks.
+Full UI E2E on AWS and Hetzner leases needs no manual runner repair.
 
 Native Windows daemon hydration retains its external dependency junction because
 released Crabbox native Windows delete-sync replaces workspace contents. Move

@@ -10,8 +10,8 @@ import {
   type HeartbeatToolResponse,
 } from "../auto-reply/heartbeat-tool-response.js";
 import { stripHeartbeatToken } from "../auto-reply/heartbeat.js";
-import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
-import { isSilentReplyPayloadText, isSilentReplyPrefixText } from "../auto-reply/tokens.js";
+import { copyReplyPayloadMetadata, getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
+import { isSilentReplyPayloadText } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { escapeRegExp } from "../utils.js";
 import { truncateHeartbeatPreview } from "./heartbeat-runner-prompt.js";
@@ -50,12 +50,6 @@ function isStreamErrorFallbackPlaceholderOnly(text: string): boolean {
   return remaining.length === 0;
 }
 
-// Some models stop mid-token (for example `NO_R`). Streaming already hides
-// these fragments; the final must apply the same rule so they never deliver.
-function isHeartbeatSilentReplyText(text: string | undefined): boolean {
-  return isSilentReplyPayloadText(text) || isSilentReplyPrefixText(text?.trim());
-}
-
 const TRAILING_HEARTBEAT_NOTIFY_FALSE_RE = /(?:^|[\r\n])[ \t]*notify=false[ \t]*(?:\r?\n[ \t]*)*$/i;
 
 function stripTrailingHeartbeatNotifyFalse(text: string): {
@@ -85,7 +79,7 @@ function normalizeHeartbeatDelivery(
     const { payload, mode, ackMaxChars } = source;
     const rawText = typeof payload.text === "string" ? payload.text : "";
     const textForStrip = stripLeadingHeartbeatResponsePrefix(rawText, responsePrefix);
-    const isSilentReply = isHeartbeatSilentReplyText(textForStrip);
+    const isSilentReply = isSilentReplyPayloadText(textForStrip);
     const stripped = stripHeartbeatToken(isSilentReply ? "" : textForStrip, {
       mode,
       maxAckChars: ackMaxChars,
@@ -176,12 +170,14 @@ export function classifyHeartbeatAgentOutcome(params: {
     !shouldSuppressSourceReply &&
     (!heartbeatToolResponse || agentRunFailed) &&
     replyPayload !== undefined &&
-    hasOutboundReplyContent({
-      ...replyPayload,
-      text: undefined,
-      mediaUrl: undefined,
-      mediaUrls: undefined,
-    });
+    hasOutboundReplyContent(
+      copyReplyPayloadMetadata(replyPayload, {
+        ...replyPayload,
+        text: undefined,
+        mediaUrl: undefined,
+        mediaUrls: undefined,
+      }),
+    );
   const shouldSkipMain =
     // A completed quiet turn also suppresses tool warnings and media; a later crash does not.
     (!agentRunFailed && heartbeatToolResponse?.notify === false) ||
@@ -204,8 +200,7 @@ export function classifyHeartbeatAgentOutcome(params: {
     // A heartbeat's canonical quiet reply still honors explicit showOk; event
     // relays and message-tool privacy retain their unconditional silence.
     const silent =
-      normalized.silent &&
-      !(mode === "heartbeat" && isHeartbeatSilentReplyText(replyPayload?.text));
+      normalized.silent && !(mode === "heartbeat" && isSilentReplyPayloadText(replyPayload?.text));
     return { kind: "ack", eventStatus: "ok-token", silent } as const;
   }
   return {

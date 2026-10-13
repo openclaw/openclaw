@@ -71,7 +71,7 @@ export async function confirmAndStartUpdateRuntime(
 ): Promise<void> {
   // Native confirms block reentrancy; refuse a second request rather than
   // stacking a dialog over an update that is already being reported.
-  if (updateDialogOpen) {
+  if (updateDialogOpen || (!params.existingRun && !params.isCurrentTarget())) {
     return;
   }
   const host = document.createElement("div");
@@ -113,6 +113,13 @@ export async function confirmAndStartUpdateRuntime(
         params.onAcknowledge?.();
       }
       close();
+    };
+    const retainTarget = () => {
+      if (params.isCurrentTarget()) {
+        return true;
+      }
+      close();
+      return false;
     };
     const watchProgress = (
       watch: NonNullable<ConfirmAndStartUpdateParams["watchUpdateProgress"]>,
@@ -294,11 +301,14 @@ export async function confirmAndStartUpdateRuntime(
     async function refreshTarget(
       prepare: NonNullable<ConfirmAndStartUpdateParams["prepareRetry"]>,
     ) {
+      if (!retainTarget()) {
+        return false;
+      }
       statusCheck = "pending";
       draw();
       try {
         const target = await prepare();
-        if (settled) {
+        if (settled || !retainTarget()) {
           return false;
         }
         if (!target) {
@@ -317,7 +327,7 @@ export async function confirmAndStartUpdateRuntime(
     }
 
     function checkNativePermission(): boolean {
-      if (params.canStartNativeUpdate?.() === false) {
+      if (params.canStartNativeUpdate?.() !== true) {
         statusCheck = { error: t("updates.adminRequired") };
         draw();
         return false;
@@ -342,7 +352,7 @@ export async function confirmAndStartUpdateRuntime(
     }
 
     async function retry() {
-      if (statusCheck === "pending" || latestProgress?.connected === false) {
+      if (statusCheck === "pending" || latestProgress?.connected === false || !retainTarget()) {
         return;
       }
       if (restoreNativeOwner() === "denied") {
@@ -361,7 +371,8 @@ export async function confirmAndStartUpdateRuntime(
       if (
         statusCheck === "pending" ||
         latestProgress?.connected === false ||
-        !params.onCheckStatus
+        !params.onCheckStatus ||
+        !retainTarget()
       ) {
         return;
       }
@@ -381,7 +392,7 @@ export async function confirmAndStartUpdateRuntime(
     }
 
     async function confirm() {
-      if (phase.kind !== "confirm" || statusCheck === "pending") {
+      if (phase.kind !== "confirm" || statusCheck === "pending" || !retainTarget()) {
         return;
       }
       const nativeOwner = restoreNativeOwner();
@@ -411,6 +422,9 @@ export async function confirmAndStartUpdateRuntime(
       }
       const watch = params.watchUpdateProgress;
       if (!watch) {
+        if (!retainTarget()) {
+          return;
+        }
         params.startGatewayUpdate();
         finish();
         return;
@@ -426,6 +440,9 @@ export async function confirmAndStartUpdateRuntime(
       // snapshot as the subscribe-time emit, so a failure still present on it
       // belongs to the previous attempt and is not this update's outcome —
       // a refused request is reported by the accept timer below instead.
+      if (!retainTarget()) {
+        return;
+      }
       params.startGatewayUpdate();
       let retainedEmit = true;
       watchProgress(watch, (progress) => {

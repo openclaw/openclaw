@@ -1,13 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../../config/runtime-snapshot.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { WorkerNodeEnrollment } from "../../plugins/types.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -29,7 +26,6 @@ import { createWorkerBootstrapArtifactTransferService } from "./worker-bootstrap
 
 describe("worker node provisioning shutdown replay", () => {
   support.setupWorkerEnvironmentServiceSuite();
-  afterEach(clearRuntimeConfigSnapshot);
 
   it("cancels guarded enrollment without releasing the exact lease and adopts it after restart", async () => {
     const deviceId = "device-node-shutdown-replay";

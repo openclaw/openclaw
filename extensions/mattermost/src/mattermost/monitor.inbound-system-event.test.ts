@@ -105,22 +105,6 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
-  return {
-    ...actual,
-    createReplyDispatcherWithTyping: (...args: unknown[]) =>
-      mockState.createReplyDispatcherWithTyping(...args),
-    dispatchInboundMessage: async (params: Parameters<typeof actual.dispatchInboundMessage>[0]) => {
-      try {
-        return await mockState.dispatchInboundMessage(params);
-      } finally {
-        await params.onSettled?.();
-      }
-    },
-  };
-});
-
 vi.mock("./client.js", async () => {
   const actual = await vi.importActual<typeof import("./client.js")>("./client.js");
   return {

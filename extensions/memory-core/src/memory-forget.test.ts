@@ -4,6 +4,10 @@ import path from "node:path";
 import { StatementSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { encodeMemoryEmbedding } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { deleteSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
@@ -50,10 +54,11 @@ describe("memory forget", () => {
   beforeEach(async () => {
     fixture = await createMemoryForgetFixture();
     ({ workspaceDir, cfg } = fixture);
+    setRuntimeConfigSnapshot(cfg);
   });
 
   afterEach(async () => {
-    await fixture.cleanup();
+    await fixture.cleanup().finally(clearRuntimeConfigSnapshot);
   });
 
   it("previews an unresolved session without creating the absent agent store", async () => {

@@ -8,6 +8,7 @@ import { registerResolvedAgentDir } from "../agents/agent-dir-registry.js";
 import { createAuthProfileStoreFixture } from "../agents/auth-profiles/credential-fixtures.test-support.js";
 import { getRuntimeAuthProfileStoreCredentialMutationToken } from "../agents/auth-profiles/mutation-lineage.js";
 import { noteCommittedSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
+import { coercePersistedAuthProfileStore } from "../agents/auth-profiles/persisted-store.js";
 import { failNextRuntimeAuthSnapshotPublication } from "../agents/auth-profiles/profile-mutations.test-support.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -18,6 +19,7 @@ import {
   readPersistedAuthProfileStoreRaw,
   readPersistedSharedAuthProfileStoreRaw,
   resolveAuthProfileDatabasePath,
+  runAuthProfileWriteTransaction,
   writePersistedAuthProfileStateRaw,
 } from "../agents/auth-profiles/sqlite.js";
 import {
@@ -26,6 +28,7 @@ import {
 } from "../agents/auth-profiles/store-runtime.js";
 import { getRuntimeAuthProfileStoreSnapshot } from "../agents/auth-profiles/store.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -34,6 +37,8 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { captureAuthProfileCredentialAuthority } from "../state/user-model-account-authority.js";
 import {
   createApplyFixture,
   createOpenAiProviderConfig,
@@ -63,6 +68,22 @@ let runSecretsApply: typeof import("./apply.js").runSecretsApply;
 let applyTesting: typeof import("./apply.js").testing;
 let clearSecretsRuntimeSnapshot: typeof import("./runtime.js").clearSecretsRuntimeSnapshot;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function captureCredentialAuthority(agentDir: string, env: NodeJS.ProcessEnv) {
+  const database = runAuthProfileWriteTransaction(agentDir, (owner) => owner, { env });
+  const source = readDatabasePathIdentitySync(database.path);
+  const authority = captureAuthProfileCredentialAuthority(
+    captureOpenClawStateWorkerContext({ env }),
+    { identity: `${source.key}:${source.birthtime ?? ""}`, databasePath: database.path },
+    "openai:default",
+  );
+  authority.observe(
+    coercePersistedAuthProfileStore(readPersistedAuthProfileStoreRaw(agentDir))?.profiles[
+      "openai:default"
+    ],
+  );
+  return authority;
+}
 
 function stripVolatileConfigMeta(input: string): Record<string, unknown> {
   const parsed = JSON.parse(input) as Record<string, unknown>;
@@ -238,6 +259,7 @@ describe("secrets apply", () => {
     const stateBefore = readPersistedAuthProfileStateRaw(fixture.agentDir);
     const authJsonBefore = await fs.readFile(fixture.authJsonPath, "utf8");
     const envBefore = await fs.readFile(fixture.envPath, "utf8");
+    const authority = captureCredentialAuthority(fixture.agentDir, fixture.env);
 
     const dryRun = await runSecretsApply({ plan, env: fixture.env, write: false });
     expect(dryRun.mode).toBe("dry-run");
@@ -283,6 +305,7 @@ describe("secrets apply", () => {
       provider: "default",
       id: "OPENAI_KEY_NEXT",
     });
+    expect(authority.readCurrentCredential()).toEqual(nextAuthStore.profiles["openai:default"]);
 
     const nextAuthJson = JSON.parse(await fs.readFile(fixture.authJsonPath, "utf8")) as Record<
       string,
@@ -599,6 +622,7 @@ describe("secrets apply", () => {
       },
     ]);
     const publicationFailure = failNextRuntimeAuthSnapshotPublication();
+    const authority = captureCredentialAuthority(fixture.agentDir, fixture.env);
 
     await expect(runSecretsApply({ plan, env: fixture.env, write: true })).rejects.toThrow(
       "auth profile runtime publication failed",
@@ -607,6 +631,11 @@ describe("secrets apply", () => {
     expect(publicationFailure).toHaveBeenCalledOnce();
     expect(readPersistedAuthProfileStoreRaw(fixture.agentDir)).toEqual(credentialsBefore);
     expect(readPersistedAuthProfileStateRaw(fixture.agentDir)).toEqual(stateBefore);
+    expect(authority.readCurrentCredential()).toEqual({
+      type: "api_key",
+      provider: "openai",
+      key: "fake",
+    });
   });
 
   it("atomically deletes a newly created auth store when a later auth write fails", async () => {
@@ -627,6 +656,7 @@ describe("secrets apply", () => {
       version: 1 as const,
       order: { openai: ["openai:preexisting"] },
     };
+    registerResolvedAgentDir({ agentId: "first", agentDir: firstAgentDir, env: fixture.env });
     const firstDatabase = openOpenClawAgentDatabase({
       agentId: "first",
       path: firstStorePath,
@@ -637,6 +667,7 @@ describe("secrets apply", () => {
     ]);
     const firstMutationRevision =
       getRuntimeAuthProfileStoreCredentialMutationToken(firstAgentDir).revision;
+    const authority = captureCredentialAuthority(firstAgentDir, fixture.env);
     const secondDatabase = openOpenClawAgentDatabase({
       agentId: "second",
       path: secondStorePath,
@@ -671,6 +702,7 @@ describe("secrets apply", () => {
 
     expect(await fs.stat(firstStorePath)).toBeDefined();
     expect(readPersistedAuthProfileStoreRaw(firstAgentDir)).toBeNull();
+    expect(authority.readCurrentCredential()).toBeUndefined();
     expect(readPersistedAuthProfileStateRaw(firstAgentDir)).toEqual(firstState);
     expect(getRuntimeAuthProfileStoreSnapshot(firstAgentDir)).toMatchObject({
       profiles: {},

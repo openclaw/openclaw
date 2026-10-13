@@ -548,7 +548,7 @@ describe("diagnostic stability bundles", () => {
     });
     const snapshot = bundle.snapshot as Record<string, unknown>;
     Object.assign(snapshot, {
-      count: 3,
+      count: 4,
       privateSnapshot: "snapshot-secret",
       events: [
         {
@@ -578,12 +578,22 @@ describe("diagnostic stability bundles", () => {
           usage: {},
           context: {},
         },
+        {
+          seq: 4,
+          ts: 4,
+          type: "model.call.error",
+          durationMs: 130,
+          providerProcessingMs: 20.25,
+          providerWaitEstimateMs: 109.75,
+          failureKind: "aborted",
+        },
       ],
       summary: {
         byType: {
           "webhook.error": 1,
           "exec.approval.followup_suppressed": 1,
           "model.usage": 1,
+          "model.call.error": 1,
           "private summary type": 1,
         },
         privateSummary: "summary-secret",
@@ -643,10 +653,20 @@ describe("diagnostic stability bundles", () => {
         context: {},
       }),
     );
+    expect(result.bundle.snapshot.events[3]).toEqual({
+      seq: 4,
+      ts: 4,
+      type: "model.call.error",
+      failureKind: "aborted",
+      durationMs: 130,
+      providerProcessingMs: 20.25,
+      providerWaitEstimateMs: 109.75,
+    });
     expect(result.bundle.snapshot.summary.byType).toEqual({
       "webhook.error": 1,
       "exec.approval.followup_suppressed": 1,
       "model.usage": 1,
+      "model.call.error": 1,
     });
     const sanitized = JSON.stringify(result.bundle);
     for (const secret of [

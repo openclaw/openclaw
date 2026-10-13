@@ -71,14 +71,14 @@ function createHarness(
     stop: async () => {},
   }));
   const warn = vi.fn();
+  const releaseInventory = vi.fn();
+  const prepareMaintenancePlacements = vi.fn(async () => ({
+    placements: [placement],
+    assertCurrent() {},
+    release: releaseInventory,
+  }));
   const monitor = createWorkerPlacementDiskSpaceMonitor({
-    placements: {
-      prepareMaintenancePlacements: async () => ({
-        placements: [placement],
-        assertCurrent() {},
-        release() {},
-      }),
-    },
+    placements: { prepareMaintenancePlacements },
     environments: { startTunnel },
     runnerAvailability: {
       read: () => ({ kind: "device", deviceId: "node-1", status: runnerStatus }),
@@ -91,6 +91,8 @@ function createHarness(
     monitor,
     startTunnel,
     warn,
+    prepareMaintenancePlacements,
+    releaseInventory,
     get placement() {
       return placement;
     },
@@ -108,6 +110,37 @@ function createHarness(
 }
 
 describe("active worker placement disk-space monitoring", () => {
+  it.each(["active", "inactive", "revoked"] as const)(
+    "releases the %s placement inventory before leaving the sweep",
+    async (state) => {
+      const harness = createHarness(async () => {
+        expect(harness.releaseInventory).toHaveBeenCalledTimes(1);
+        return result(6 * GIB, 10 * GIB);
+      });
+      if (state === "inactive") {
+        harness.setPlacement({ ...activePlacement(), state: "draining" });
+      } else if (state === "revoked") {
+        harness.prepareMaintenancePlacements.mockResolvedValueOnce({
+          get placements(): WorkerSessionPlacementRecord[] {
+            throw new Error("placement authority revoked");
+          },
+          assertCurrent() {},
+          release: harness.releaseInventory,
+        });
+      }
+
+      if (state === "revoked") {
+        await expect(harness.monitor.sweep()).rejects.toThrow("placement authority revoked");
+      } else {
+        await harness.monitor.sweep();
+      }
+
+      expect(harness.releaseInventory).toHaveBeenCalledTimes(1);
+      expect(harness.startTunnel).toHaveBeenCalledTimes(state === "active" ? 1 : 0);
+      expect(harness.warn).not.toHaveBeenCalled();
+    },
+  );
+
   it("reuses an idle sample for fifteen minutes and refreshes after placement activity", async () => {
     const runWorkspaceCommand = vi.fn(async () => result(6 * GIB, 10 * GIB));
     const harness = createHarness(runWorkspaceCommand);
