@@ -48,7 +48,12 @@ import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 const worktreeTargets = createStaleWhileRevalidateCache<{
   supported: boolean;
   assertCurrent: () => void;
-}>({ maxEntries: 256, ttlMs: 15_000, cacheable: (target) => target.supported });
+}>({
+  maxEntries: 256,
+  maxPending: Number.POSITIVE_INFINITY,
+  ttlMs: 15_000,
+  cacheable: (target) => target.supported,
+});
 
 function publicationConfigSnapshot() {
   const active = getActiveSecretsRuntimeConfigSnapshot();
