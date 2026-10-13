@@ -528,7 +528,9 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     }
   }
   // Voice captions reconcile against unfiltered immutable history, not the
-  // current search or streaming projection.
+  // current search or streaming projection. Talk becoming idle is not a
+  // persistence receipt: unmatched captions stay in this tail until their
+  // saved history ids arrive, and only those matching ids leave the tail.
   const realtimeConversation = renderRealtimeTalkConversation({
     ...props,
     realtimeTalkConversation: props.realtimeTalkConversation?.filter((entry) => {
