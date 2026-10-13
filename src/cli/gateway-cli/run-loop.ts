@@ -856,7 +856,7 @@ export async function runGatewayLoop(params: {
         }
         // Keep deadlines through final cleanup and updater handoff, not merely
         // server close. The next iteration also joins native watchdog retirement.
-        if (!forcedExitStarted) {
+        if (!forcedExitStarted && !cleanup.failed) {
           clearForceExitTimer();
           requestWatchdogs.delete(clearForceExitTimer);
         }
@@ -1291,7 +1291,10 @@ export async function runGatewayLoop(params: {
     releaseLock: releaseLockIfHeld,
     clearStartupWatchdog: startupWatchdog.clear,
     clearRequestWatchdogs: () => {
-      for (const clear of requestWatchdogs) {
+      // A rejected close can leave referenced native resources after the loop
+      // returns. Keep the existing unref'ed safety deadline until process exit;
+      // a clean natural exit does not wait for it.
+      for (const clear of cleanup.failed ? [] : requestWatchdogs) {
         clear();
       }
       requestWatchdogs.clear();
