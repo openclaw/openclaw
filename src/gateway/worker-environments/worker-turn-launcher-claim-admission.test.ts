@@ -3,13 +3,20 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { waitForEmbeddedAgentRunEnd } from "../../agents/embedded-agent-runner/runs.js";
 import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SpawnResult } from "../../process/exec.js";
+import { requireOpenClawStateDatabaseIdentity } from "../../state/openclaw-state-db-cache.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { parseWorkerLaunchDescriptor } from "../../worker/launch-descriptor.js";
 import { placementTurnOwner } from "./placement-record.js";
 import { completeWorkerWorkspaceTeardown } from "./placement-teardown.js";
 import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
+import {
+  stagePlacementRetirementWorkerPublication,
+  stagePlacementWorkspaceJournalWorkerPublication,
+  stagePlacementWorkspaceResultWorkerPublication,
+} from "./placement-turn-authority.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
 import { createWorkerGatewayTools } from "./worker-session-tool-executor.js";
@@ -44,6 +51,88 @@ afterAll(closeStateDatabaseForTest);
 describe("worker turn launcher claim admission", () => {
   beforeEach(setupWorkerTurnLauncherTest);
   afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
+
+  it("keeps required-profile launch admission live during placement-neutral publications", async () => {
+    await seedActivePlacement();
+    const inputTurn = turn("required-profile-publications");
+    const config = {
+      ...inputTurn.config,
+      cloudWorkers: { requiredProfile: "development" },
+    };
+    const identity = requireOpenClawStateDatabaseIdentity({ db: database.db });
+    const launchTurn = vi.fn<WorkerTurnTunnelHandle["launchTurn"]>(async (request) => {
+      const assertCurrent = request.assertCurrent;
+      if (!assertCurrent) {
+        throw new Error("Worker launch did not carry live admission");
+      }
+      setRuntimeConfigSnapshot(config);
+      try {
+        // Policy activated after admission still governs the launch effect.
+        // Result and ACK share the same pending-publication owner.
+        for (const stage of [
+          () => stagePlacementWorkspaceJournalWorkerPublication(identity, SESSION_ID, true),
+          () => stagePlacementWorkspaceResultWorkerPublication(identity, SESSION_ID),
+        ]) {
+          const publication = stage();
+          try {
+            expect(assertCurrent).not.toThrow();
+          } finally {
+            publication.rollback();
+          }
+        }
+        const retirement = stagePlacementRetirementWorkerPublication(
+          identity,
+          SESSION_ID,
+          "active",
+        );
+        try {
+          expect(assertCurrent).toThrow(/placement authority changed|turn claim/u);
+        } finally {
+          retirement.rollback();
+        }
+        setRuntimeConfigSnapshot({ ...config, cloudWorkers: { requiredProfile: "replacement" } });
+        try {
+          expect(assertCurrent).toThrow("required worker profile policy");
+        } finally {
+          setRuntimeConfigSnapshot(config);
+        }
+        assertCurrent();
+      } finally {
+        setRuntimeConfigSnapshot(inputTurn.config);
+      }
+      request.onDispatchReady?.();
+      const completed = await openSessionManager();
+      const leafId = await completed.appendMessageAsync(
+        makeAgentAssistantMessage({
+          content: [{ type: "text", text: "Required-profile worker completed" }],
+          timestamp: 41,
+        }),
+      );
+      return acknowledgeCompletedWorkerTurn(request.turnClaim, leafId);
+    });
+    const environments: WorkerTurnEnvironmentService = {
+      get: vi.fn(attachedEnvironment),
+      acquireTurnCredential: vi.fn(async () => credential()),
+      acknowledgeCredentialDelivery: vi.fn(async () => true),
+      startTunnel: vi.fn(async () =>
+        createWorkerTurnTunnel({
+          launchTurn,
+          reconcileWorkspace: vi.fn(reconcileUnchangedLocalWorkspace),
+        }),
+      ),
+      stopTunnel: vi.fn(async () => {}),
+      destroy: vi.fn(async () => attachedEnvironment()),
+    };
+    const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
+    await expect(
+      provider.executeTurn({ ...sessionTarget, runId: inputTurn.runId }, inputTurn, async () => ({
+        meta: { durationMs: 1 },
+      })),
+    ).resolves.toMatchObject({ payloads: [{ text: "Required-profile worker completed" }] });
+    expect(launchTurn).toHaveBeenCalledOnce();
+    await waitForPendingWorkerResult({ placements, sessionId: SESSION_ID });
+    expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
+  });
 
   it.each(["worker-turn", "remote-exec"] as const)(
     "rejects compaction successors throughout the %s placement lifecycle without changing ownership",

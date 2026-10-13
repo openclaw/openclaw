@@ -4,6 +4,11 @@ import { MessageChannel, MessagePort, receiveMessageOnPort } from "node:worker_t
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import {
+  captureSqliteWorkerMaintenanceAuthority,
+  getOpenClawDatabaseMaintenanceScope,
+  type OpenClawDatabaseMaintenanceScope,
+} from "../state/openclaw-state-maintenance-context.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-record.js";
 import {
@@ -19,6 +24,7 @@ import {
   SqliteWorkerError,
   type SqliteWorkerAdmissionRequest,
   type SqliteWorkerExecutionAuthority,
+  type SqliteWorkerMaintenanceAuthority,
 } from "./sqlite-worker-contract.js";
 import {
   SQLITE_COLD_ADMISSION_PENDING,
@@ -103,6 +109,26 @@ export function readSqliteWorkerExecutionAuthority(
   return executionAuthorities.get(admission);
 }
 
+const maintenanceAuthorities = resolveGlobalSingleton(
+  Symbol.for("openclaw.sqliteWorkerMaintenanceAuthorities"),
+  () =>
+    new WeakMap<
+      SqliteWorkerOperationAdmission,
+      {
+        scope: OpenClawDatabaseMaintenanceScope;
+        authority: SqliteWorkerMaintenanceAuthority;
+      }
+    >(),
+);
+
+export function readSqliteWorkerMaintenanceAuthority(
+  admission: SqliteWorkerOperationAdmission,
+  scope: OpenClawDatabaseMaintenanceScope | undefined,
+): SqliteWorkerMaintenanceAuthority | undefined {
+  const captured = maintenanceAuthorities.get(admission);
+  return captured?.scope === scope ? captured?.authority : undefined;
+}
+
 /** Private publication binding leaves released SDK admission factories structurally unchanged. */
 export function observeSqliteWorkerCommittedFacts(
   admission: SqliteWorkerOperationAdmission,
@@ -156,6 +182,9 @@ function createOperationAdmission(
     }
   }
   const inOwnerContext = AsyncLocalStorage.snapshot();
+  const maintenanceScope = getOpenClawDatabaseMaintenanceScope();
+  const maintenanceAuthority =
+    maintenanceScope && captureSqliteWorkerMaintenanceAuthority(maintenanceScope);
   const decisions = new Set<Int32Array>();
   const databaseAdmissionCursor = createSqliteDatabaseAdmissionCursor();
   const cleanupFailures: unknown[] = [];
@@ -606,6 +635,12 @@ function createOperationAdmission(
     }
     observeCommit = observer;
   });
+  if (maintenanceScope && maintenanceAuthority) {
+    maintenanceAuthorities.set(admission, {
+      scope: maintenanceScope,
+      authority: maintenanceAuthority,
+    });
+  }
   return admission;
 }
 

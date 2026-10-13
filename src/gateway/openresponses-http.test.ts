@@ -3,7 +3,11 @@ import http from "node:http";
 import path from "node:path";
 import OpenAI from "openai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { createClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import { FailoverError } from "../agents/failover-error.js";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
@@ -816,17 +820,18 @@ describe("OpenResponses HTTP API (e2e)", () => {
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
   });
 
-  it.each([
+  it.for([
     ["completed response without a provider terminal", "completed", false, false, false],
     ["provider-failed response with a resolved run", "failed", true, true, false],
     ["rejected response with a provider terminal", "failed", true, true, true],
-  ])(
+  ] as const)(
     "keeps the %s admitted until its deferred SSE terminal is written",
-    async (_label, name, failed, providerTerminal, reject) => {
+    async ([_label, name, failed, providerTerminal, reject], { signal }) => {
       const idleRootCount = getActiveGatewayRootWorkCount();
       const terminalAdmission = createDeferred<{ active: number }>();
       const wireResponse = createDeferred<string>();
       const continueAgent = createDeferred();
+      const agentEntered = createDeferred();
       const lifecycleTerminals: string[] = [];
       let activeRunId: string | undefined;
       const unsubscribe = onAgentEvent((event) => {
@@ -852,6 +857,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         if (!activeRunId) {
           throw new Error("expected a streaming response run ID");
         }
+        agentEntered.resolve();
         await continueAgent.promise;
         emitAgentEvent({ runId: activeRunId, stream: "assistant", data: { delta: "answer" } });
         if (providerTerminal) {
@@ -889,25 +895,38 @@ describe("OpenResponses HTTP API (e2e)", () => {
         const terminalEvents: string[] = [];
         stream.on("response.completed", () => terminalEvents.push("response.completed"));
         stream.on("response.failed", () => terminalEvents.push("response.failed"));
-        const finalResponse = stream.finalResponse();
-        await vi.waitFor(() => expect(agentCommandMock).toHaveBeenCalledTimes(1));
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
-        continueAgent.resolve();
+        const responseAndWire = Promise.all([stream.finalResponse(), wireResponse.promise]);
+        try {
+          await withinTest(
+            awaitGateBeforeSettlement(
+              agentEntered.promise,
+              responseAndWire,
+              "response settled before its agent run entered",
+            ),
+            signal,
+          );
+          expect(agentCommandMock).toHaveBeenCalledTimes(1);
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
+          continueAgent.resolve();
 
-        const [admission, response, wire] = await Promise.all([
-          terminalAdmission.promise,
-          finalResponse,
-          wireResponse.promise,
-        ]);
+          const [admission, [response, wire]] = await withinTest(
+            Promise.all([terminalAdmission.promise, responseAndWire]),
+            signal,
+          );
 
-        expect(admission.active).toBe(idleRootCount + 1);
-        expect(response.status).toBe(name);
-        expect(terminalEvents).toEqual([`response.${name}`]);
-        expect(lifecycleTerminals).toEqual([failed ? "error" : "end"]);
-        expect(parseSseEvents(wire).at(-1)?.data).toBe("[DONE]");
-        await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount));
+          expect(admission.active).toBe(idleRootCount + 1);
+          expect(response.status).toBe(name);
+          expect(terminalEvents).toEqual([`response.${name}`]);
+          expect(lifecycleTerminals).toEqual([failed ? "error" : "end"]);
+          expect(parseSseEvents(wire).at(-1)?.data).toBe("[DONE]");
+          await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount));
+        } finally {
+          continueAgent.resolve();
+          stream.abort();
+          await Promise.allSettled([responseAndWire]);
+        }
       } finally {
         unsubscribe();
       }

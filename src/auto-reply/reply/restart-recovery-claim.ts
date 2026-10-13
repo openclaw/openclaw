@@ -332,11 +332,11 @@ export function createReplyRestartRecoveryClaimController(params: {
       ? resolveSessionWorkerPlacementContext()
       : undefined;
     const placementService = placementContext?.workerSessionPlacementService;
-    if (placementService && !placementService.prepareRuntimeRefresh) {
+    if (placementService && !placementService.prepareSessionPlacement) {
       throw new Error("Worker placement observation service is unavailable");
     }
-    const placementObservation = placementService?.prepareRuntimeRefresh
-      ? await placementService.prepareRuntimeRefresh(sessionId)
+    const placementRead = placementService?.prepareSessionPlacement
+      ? await placementService.prepareSessionPlacement(sessionId)
       : undefined;
     let entry: SessionEntry;
     let stagedWorkerInput = false;
@@ -352,8 +352,12 @@ export function createReplyRestartRecoveryClaimController(params: {
         if (placementContext?.workerSessionPlacementService !== placementService) {
           throw new Error("Worker placement service changed before durable user-turn admission");
         }
-        placementObservation?.assertCurrent();
+        return placementRead?.current();
       };
+      const pendingPlacement = placementRead?.prepareRead();
+      if (pendingPlacement) {
+        await pendingPlacement;
+      }
       let current: SessionEntry | undefined;
       try {
         current = await readEntry(params.sessionKey);
@@ -361,17 +365,15 @@ export function createReplyRestartRecoveryClaimController(params: {
         assertAdmissionCurrent();
         throw error;
       }
-      assertAdmissionCurrent();
+      const placement = assertAdmissionCurrent();
       if (!current || current.sessionId !== sessionId) {
         throw new Error("session changed before durable user-turn admission");
       }
       entry = current;
-      stagedWorkerInput = Boolean(
-        placementObservation?.placement && placementObservation.placement.state !== "local",
-      );
+      stagedWorkerInput = Boolean(placement && placement.state !== "local");
     } finally {
-      // The observation selects admission; the claim writer owns its later durable guards.
-      placementObservation?.release();
+      // Setup progress changes the placement, but its claim writer still owns staged input.
+      placementRead?.release();
     }
     const admissionRunId = normalizeOptionalString(params.admissionRunId);
     const sourceTurnId = normalizeOptionalString(params.sourceTurnId);

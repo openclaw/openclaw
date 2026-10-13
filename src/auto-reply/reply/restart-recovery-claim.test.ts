@@ -349,15 +349,41 @@ describe("createReplyRestartRecoveryClaimController", () => {
       };
     }
 
-    it("leaves staged worker input with placement admission without caller-thread SQL", async () => {
+    it("keeps staged input worker-owned when provisioning commits during its placement read", async () => {
       await using fixture = await createPlacementAdmission();
+      const beforeAdmission = loadSessionEntry(fixture.scope);
+      const requested = await fixture.service.getAsync(fixture.entry.sessionId);
+      const provisioning = await fixture.service.transition({
+        sessionId: fixture.entry.sessionId,
+        from: "requested",
+        to: "provisioning",
+        expectedGeneration: expectDefined(requested, "requested placement").generation,
+        patch: { environmentId: "placement-environment" },
+      });
+      const finishProvisioning = () =>
+        fixture.service.transition({
+          sessionId: fixture.entry.sessionId,
+          from: "provisioning",
+          to: "syncing",
+          expectedGeneration: provisioning.generation,
+          patch: { workerBundleHash: "a".repeat(64) },
+        });
+      // Both snapshot and retained readers must tolerate the same committed setup progress.
+      const readProjection = fixture.service.readProjection.bind(fixture.service);
+      vi.spyOn(fixture.service, "readProjection").mockImplementationOnce(async (...args) => {
+        const prior = await readProjection(...args);
+        await finishProvisioning();
+        return prior;
+      });
+      const getAsync = fixture.service.getAsync.bind(fixture.service);
+      vi.spyOn(fixture.service, "getAsync").mockImplementationOnce(async (...args) => {
+        const prior = await getAsync(...args);
+        await finishProvisioning();
+        return prior;
+      });
       const hostSql = observeHostDataSql();
       try {
-        expect((await fixture.service.getManyAsync([fixture.entry.sessionId])).size).toBe(1);
-        expect(hostSql.queries).toEqual([]);
-
         await expect(fixture.controller.admitUserTurn(fixture.recorder)).resolves.toBe("admitted");
-
         expect(hostSql.queries).toEqual([]);
         expect(fixture.persistApproved).not.toHaveBeenCalled();
         expect(fixture.recorder.hasPersisted()).toBe(false);
@@ -365,6 +391,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
       } finally {
         hostSql.restore();
       }
+      expect(loadSessionEntry(fixture.scope)).toEqual(beforeAdmission);
     });
 
     it("refuses an unavailable placement observation instead of reading synchronously", async () => {
@@ -385,7 +412,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
     });
 
     it.each([
-      "placement-publication",
+      "placement-failed",
       "session-retarget",
       "lifecycle-rotation",
       "service-replacement",
@@ -396,8 +423,8 @@ describe("createReplyRestartRecoveryClaimController", () => {
       await using fixture = await createPlacementAdmission();
       const prepared = createDeferred();
       const resume = createDeferred();
-      const prepare = fixture.service.prepareRuntimeRefresh.bind(fixture.service);
-      vi.spyOn(fixture.service, "prepareRuntimeRefresh").mockImplementation(async (sessionId) => {
+      const prepare = fixture.service.prepareSessionPlacement.bind(fixture.service);
+      vi.spyOn(fixture.service, "prepareSessionPlacement").mockImplementation(async (sessionId) => {
         const observation = await prepare(sessionId);
         prepared.resolve();
         await resume.promise;
@@ -411,7 +438,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
           admission,
           "admission settled before placement preparation",
         );
-        if (change === "placement-publication") {
+        if (change === "placement-failed") {
           await fixture.service.fail({
             sessionId: fixture.entry.sessionId,
             recoveryError: "placement interrupted",
@@ -433,13 +460,12 @@ describe("createReplyRestartRecoveryClaimController", () => {
         }
         resume.resolve();
         const result = await outcome;
-        if (change === "terminal-source") {
-          expect(result).toBe("duplicate-source");
+        if (change === "terminal-source" || change === "placement-failed") {
+          expect(result).toBe(change === "terminal-source" ? "duplicate-source" : "admitted");
         } else if (change === "lifecycle-rotation") {
           expect(isAgentRunStaleLifecycleError(result)).toBe(true);
         } else {
           const message = {
-            "placement-publication": `Session ${fixture.entry.sessionId} placement authority changed`,
             "session-retarget": "session changed before durable user-turn admission",
             "service-replacement":
               "Worker placement service changed before durable user-turn admission",

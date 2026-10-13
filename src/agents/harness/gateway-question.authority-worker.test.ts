@@ -9,6 +9,7 @@ import {
   updateSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { assertNoRetainedSessionSharingReads } from "../../config/sessions/session-accessor.sqlite-diagnostics.test-support.js";
 import * as sessionReads from "../../config/sessions/session-entry-read-runtime.js";
 import { createGatewayMethodRegistry } from "../../gateway/methods/registry.js";
 import { QuestionManager } from "../../gateway/question-manager.js";
@@ -39,7 +40,10 @@ import {
   withAgentQuestionAnswerAuthority,
 } from "./host-private-capabilities.js";
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  assertNoRetainedSessionSharingReads();
+});
 
 it("leaves image steering with its owner when there is no pending question", async () => {
   const compatibility = vi.fn(() => {
@@ -106,6 +110,7 @@ it.each([
       config,
     });
     const snapshot = prepareReplyToolAuthority(run);
+    using _ = { [Symbol.dispose]: snapshot.close };
     const fingerprint = await snapshot.fingerprintAsync(run.run);
     const controller = new AbortController();
     const assertCurrent = () => controller.signal.throwIfAborted();

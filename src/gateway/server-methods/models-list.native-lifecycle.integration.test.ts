@@ -313,6 +313,26 @@ it.for([false, true])(
         }
         nativeReleased.resolve();
         for (const result of await firstReads) {
+          const nativeModel = result.models.find((row) => row.id === nativeModelId);
+          if (nativeModel) {
+            expect(nativeModel.available).toBe(true);
+          } else {
+            // Foreground discovery can return pending rows while its held response finishes.
+            expect(result.pendingProviders).toContain(provider);
+          }
+        }
+        const publishedReads = await Promise.all(
+          [list, list].map((read) =>
+            waitForCatalogPublication({
+              signal,
+              read,
+              ready: (result) =>
+                !result.pendingProviders?.includes(provider) &&
+                result.models.some((row) => row.id === nativeModelId),
+            }),
+          ),
+        );
+        for (const result of publishedReads) {
           expect(result.models.find((row) => row.id === nativeModelId)?.available).toBe(true);
         }
         expect((await list()).models).toContainEqual(modelRow(provider, "harness-host-row"));

@@ -10,6 +10,7 @@ import {
   SqliteWorkerError,
   type SqliteWorkerAdmissionTimeoutError,
   type SqliteWorkerExecutionAuthority,
+  type SqliteWorkerMaintenanceAuthority,
 } from "./sqlite-worker-contract.js";
 import type { SqliteWorkerRequestCustodyDescriptor } from "./sqlite-worker-request-custody.js";
 
@@ -18,6 +19,7 @@ export type SqliteWorkerOperationContext = {
   /** Present for broker-owned work; standalone admission owners keep their own lifetime. */
   requestCustody?: SqliteWorkerRequestCustodyDescriptor;
   executionAuthority?: SqliteWorkerExecutionAuthority;
+  maintenanceAuthority?: SqliteWorkerMaintenanceAuthority;
   attachment?: { value: unknown };
   refusal?: SqliteWorkerError | InstanceType<typeof SqliteWorkerAdmissionTimeoutError>;
   committed?: { facts: unknown };

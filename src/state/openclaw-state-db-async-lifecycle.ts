@@ -9,6 +9,10 @@ import {
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveDatabasePath } from "./openclaw-state-db.paths.js";
 import {
+  MaintenanceContinuationLifetime,
+  MaintenanceScopeLifetime,
+} from "./openclaw-state-maintenance-authority.js";
+import {
   getOpenClawDatabaseMaintenanceScope,
   maintenanceResources,
   runMaintenance,
@@ -95,18 +99,18 @@ export function createOpenClawDatabaseMaintenanceScope(
   const pending = new Set<Promise<unknown>>();
   const schemaMigrationChecks = new Set<(migration: AgentSchemaMigration) => void>();
   const resources = new Map<object, MaintenanceResource>();
-  let closed = false;
+  const lifetime = new MaintenanceScopeLifetime();
   let checkingOwner = false;
   let closing: Promise<void> | undefined;
   const assertOpen = () => {
-    if (closed) {
+    if (lifetime.closed) {
       throw new Error("Database maintenance resource scope is closed");
     }
   };
   const assertAdmissionLifecycle = () => {
     assertOpen();
     const inherited = maintenanceResources.current.getStore();
-    if (closing && !(inherited?.scope === scope && inherited.active)) {
+    if (!lifetime.admits(inherited?.scope === scope ? inherited.lifetime.state : undefined)) {
       throw new Error("Database maintenance resource admission is closed");
     }
   };
@@ -188,8 +192,10 @@ export function createOpenClawDatabaseMaintenanceScope(
     },
     own(resource, phase, close) {
       assertOpen();
+      maintenanceResources.claims.get(resource)?.lifetime.retire();
       resources.set(resource, { phase, close });
       maintenanceResources.claims.set(resource, {
+        lifetime: new MaintenanceContinuationLifetime(),
         scope,
         phase,
         close,
@@ -202,9 +208,11 @@ export function createOpenClawDatabaseMaintenanceScope(
       }
       // A disposer can reenter admission before its first awaited cleanup.
       const completion = createDeferredCore();
+      lifetime.drain();
       closing = completion.promise;
+      const cleanupLifetime = new MaintenanceContinuationLifetime();
       void maintenanceResources.current
-        .run({ scope, active: true }, async () => {
+        .run({ scope, lifetime: cleanupLifetime }, async () => {
           let beforeSharedResources = beforeResources;
           while (pending.size || resources.size || beforeSharedResources) {
             while (pending.size) {
@@ -239,6 +247,7 @@ export function createOpenClawDatabaseMaintenanceScope(
                       resources.delete(key);
                     }
                     if (maintenanceResources.claims.get(key) === claim) {
+                      claim?.lifetime.retire();
                       maintenanceResources.claims.delete(key);
                     }
                   }),
@@ -256,15 +265,19 @@ export function createOpenClawDatabaseMaintenanceScope(
             }
           }
           schemaMigrationChecks.clear();
-          closed = true;
+          cleanupLifetime.retire();
+          lifetime.close();
         })
         .then(completion.resolve, (error: unknown) => {
+          cleanupLifetime.retire();
+          lifetime.reopen();
           closing = undefined;
           completion.reject(error);
         });
       return completion.promise;
     },
   };
+  maintenanceResources.lifetimes.set(scope, lifetime);
   if (parent) {
     maintenanceResources.parents.set(scope, parent);
   }

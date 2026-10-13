@@ -1,6 +1,7 @@
 import { MessagePort, type Transferable } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readAgentDatabaseExecutionAuthority } from "../state/openclaw-agent-execution-authority.js";
+import { isSqliteWorkerMaintenanceAuthorityCurrent } from "../state/openclaw-state-maintenance-authority.js";
 import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-record.js";
 import { currentSqliteOperationTiming } from "./sqlite-reader-lifecycle.js";
 import {
@@ -19,7 +20,7 @@ const REQUESTED = 0;
 const GRANTED = 1;
 const TIMED_OUT = 3;
 
-function assertRequestCustody(owner: SqliteWorkerOperationContext): void {
+export function assertSqliteWorkerOperationAuthority(owner: SqliteWorkerOperationContext): void {
   if (owner.requestCustody && !readSqliteWorkerRequestCustody(owner.requestCustody)) {
     const refusal = new SqliteWorkerError("SQLite worker request custody is revoked", "closed");
     owner.refusal = refusal;
@@ -27,6 +28,14 @@ function assertRequestCustody(owner: SqliteWorkerOperationContext): void {
   }
   if (owner.executionAuthority && !readAgentDatabaseExecutionAuthority(owner.executionAuthority)) {
     const refusal = new SqliteWorkerError("SQLite execution authority is revoked", "closed");
+    owner.refusal = refusal;
+    throw refusal;
+  }
+  if (
+    owner.maintenanceAuthority &&
+    !isSqliteWorkerMaintenanceAuthorityCurrent(owner.maintenanceAuthority)
+  ) {
+    const refusal = new SqliteWorkerError("SQLite maintenance authority is revoked", "closed");
     owner.refusal = refusal;
     throw refusal;
   }
@@ -44,7 +53,7 @@ export function requestSqliteWorkerOperationAdmission(
   if (scope.owner.sourceReservations) {
     throw new SqliteWorkerError("SQLite source reservations prohibit host admission", "closed");
   }
-  assertRequestCustody(scope.owner);
+  assertSqliteWorkerOperationAuthority(scope.owner);
   const decision = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
   const startedAt = Date.now();
   const deadlineNs =
@@ -97,5 +106,5 @@ export function requestSqliteWorkerOperationAdmission(
     scope.owner.refusal = refusal;
     throw refusal;
   }
-  assertRequestCustody(scope.owner);
+  assertSqliteWorkerOperationAuthority(scope.owner);
 }

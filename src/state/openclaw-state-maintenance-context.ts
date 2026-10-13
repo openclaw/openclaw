@@ -2,6 +2,11 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import {
+  MaintenanceContinuationLifetime,
+  MaintenanceScopeLifetime,
+  type SqliteWorkerMaintenanceAuthority,
+} from "./openclaw-state-maintenance-authority.js";
 
 export type MaintenanceResource = {
   phase:
@@ -96,14 +101,19 @@ export function maintenanceOwnerMayCopySourcesInProcess(
 export const maintenanceResources = resolveGlobalSingleton(
   Symbol.for("openclaw.databaseMaintenanceResources"),
   () => ({
+    lifetimes: new WeakMap<OpenClawDatabaseMaintenanceScope, MaintenanceScopeLifetime>(),
     current: new AsyncLocalStorage<{
       scope: OpenClawDatabaseMaintenanceScope;
-      active: boolean;
+      lifetime: MaintenanceContinuationLifetime;
       workerAccess?: boolean;
     }>(),
     claims: new WeakMap<
       object,
-      MaintenanceResource & { scope: OpenClawDatabaseMaintenanceScope; release: () => void }
+      MaintenanceResource & {
+        scope: OpenClawDatabaseMaintenanceScope;
+        lifetime: MaintenanceContinuationLifetime;
+        release: () => void;
+      }
     >(),
     parents: new WeakMap<OpenClawDatabaseMaintenanceScope, OpenClawDatabaseMaintenanceScope>(),
   }),
@@ -158,21 +168,21 @@ export function runMaintenance<T>(
   operation: () => T,
   workerAccess = isOpenClawDatabaseMaintenanceWorkerAccess(),
 ): T {
-  const accepted = { scope, active: true, workerAccess };
+  const accepted = { scope, lifetime: new MaintenanceContinuationLifetime(), workerAccess };
   try {
     const result = maintenanceResources.current.run(accepted, operation);
     if (result instanceof Promise) {
       const settled = () => {
-        accepted.active = false;
+        accepted.lifetime.retire();
       };
       void result.then(settled, settled);
       void scope.track(result);
     } else {
-      accepted.active = false;
+      accepted.lifetime.retire();
     }
     return result;
   } catch (error) {
-    accepted.active = false;
+    accepted.lifetime.retire();
     throw error;
   }
 }
@@ -185,7 +195,7 @@ export function captureOpenClawDatabaseMaintenanceResource(
   const claim = maintenanceResources.claims.get(resource);
   const assertCurrent = () => {
     expectedScope.assertOwnerCurrent();
-    if (claim?.scope !== expectedScope || maintenanceResources.claims.get(resource) !== claim) {
+    if (claim?.scope !== expectedScope || !claim.lifetime.active) {
       throw new Error("Database maintenance resource owner changed");
     }
   };
@@ -218,6 +228,7 @@ export function observeOpenClawDatabaseMaintenanceResource(resource: object | un
     return;
   }
   claim.scope.assertAdmission();
+  claim.lifetime.retire();
   claim.release();
   maintenanceResources.claims.delete(resource);
   if (owner) {
@@ -243,4 +254,32 @@ function commonMaintenanceAncestor(
     }
   }
   return undefined;
+}
+
+/** Capture the same frame used by the host admission, without exposing scope internals to callers. */
+export function captureSqliteWorkerMaintenanceAuthority(
+  scope: OpenClawDatabaseMaintenanceScope,
+): SqliteWorkerMaintenanceAuthority | undefined {
+  const lifetime = maintenanceResources.lifetimes.get(scope);
+  if (!lifetime) {
+    return undefined;
+  }
+  const owners: Int32Array<SharedArrayBuffer>[] = [];
+  for (
+    let owner: OpenClawDatabaseMaintenanceScope | undefined = scope;
+    owner;
+    owner = maintenanceResources.parents.get(owner)
+  ) {
+    const current = maintenanceResources.lifetimes.get(owner);
+    if (!current) {
+      return undefined;
+    }
+    owners.push(current.state);
+  }
+  const frame = maintenanceResources.current.getStore();
+  return {
+    scope: lifetime.state,
+    owners,
+    ...(frame?.scope === scope ? { frame: frame.lifetime.state } : {}),
+  };
 }

@@ -83,6 +83,7 @@ afterEach(async () => {
 });
 
 function pauseIntegrityInspections(params: {
+  signal: AbortSignal;
   root: string;
   paths: string[];
   pausePaths?: string[];
@@ -133,9 +134,7 @@ DatabaseSync.prototype.prepare = function(sql) {
     fs.renameSync(pendingMarker, marker);
     receipts?.postMessage({ source: marker, line: 'entered' });
     const pause = new Int32Array(new SharedArrayBuffer(4));
-    const deadline = Date.now() + 60000;
     while (paused[index] && !fs.existsSync(release) && !fs.existsSync(releases[index])) {
-      if (Date.now() > deadline) throw new Error('inspection fixture pause expired');
       Atomics.wait(pause, 0, 0, 10);
     }
   }
@@ -147,6 +146,14 @@ DatabaseSync.prototype.prepare = function(sql) {
   for (const [key, value] of Object.entries(env)) {
     vi.stubEnv(key, value);
   }
+  // The test owns this pause; slow startup must not convert it into inspection failure.
+  params.signal.throwIfAborted();
+  const releaseOnAbort = () => {
+    fs.writeFileSync(releasePath, "resume");
+    fs.writeFileSync(preparationReleasePath, "resume");
+  };
+  params.signal.addEventListener("abort", releaseOnAbort, { once: true });
+  onTestFinished(() => params.signal.removeEventListener("abort", releaseOnAbort));
   return {
     env,
     releasePath,
@@ -284,6 +291,7 @@ it.for([
     const paused = outcome !== "corrupt" && outcome !== "physical-corrupt" && outcome !== "fast";
     const pause = paused
       ? pauseIntegrityInspections({
+          signal,
           root,
           paths: [agentPath],
           pausePreparation: outcome === "shutdown-preparation" || outcome === "handoff",

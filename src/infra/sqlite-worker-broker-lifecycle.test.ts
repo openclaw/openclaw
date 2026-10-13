@@ -4,11 +4,13 @@ import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { captureSqliteWorkerOpen } from "./sqlite-worker-broker-admission.js";
 import { createSqliteWorkerLifecycle } from "./sqlite-worker-broker-lifecycle.js";
 import type { Actor, Slot } from "./sqlite-worker-broker.types.js";
 import {
   requestSqliteWorkerOperationAdmission,
+  readSqliteWorkerMaintenanceAuthority,
   withSqliteWorkerOperationAdmission,
 } from "./sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "./sqlite-worker-operation-settlement.js";
@@ -315,4 +317,40 @@ describe("SQLite worker slots", () => {
       expect(actors.size).toBe(0);
     },
   );
+});
+
+it("refuses an identity open captured before its maintenance owner closes", async () => {
+  const maintenance = createOpenClawDatabaseMaintenanceScope();
+  const opening = maintenance.run(() =>
+    captureSqliteWorkerOpen({
+      moduleUrl: new URL("file:///openclaw/dist/backend.js"),
+      databasePath: "/state/openclaw.sqlite",
+      input: undefined,
+      existingOnly: true,
+      admission: { identity: "file:opening", assertCurrent() {} },
+    }),
+  );
+  assert(opening.createOpenAdmission);
+  const { admission } = opening.createOpenAdmission({
+    settled: Promise.resolve({ kind: "completed" }),
+  });
+  const wait = vi.spyOn(Atomics, "wait").mockImplementation(() => {
+    admission.service();
+    return "ok";
+  });
+  try {
+    await maintenance.close();
+    expect(() =>
+      withSqliteWorkerOperationAdmission(
+        {
+          port: admission.port,
+          maintenanceAuthority: readSqliteWorkerMaintenanceAuthority(admission, maintenance),
+        },
+        () => requestSqliteWorkerOperationAdmission({ stage: "open", facts: undefined }),
+      ),
+    ).toThrow("SQLite maintenance authority is revoked");
+  } finally {
+    wait.mockRestore();
+    admission.finish();
+  }
 });

@@ -182,6 +182,9 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             return await runLocalTurn(prepared);
           }
           prepared.release();
+          using placementReadCleanup = new DisposableStack();
+          const placementRead = await options.placements.prepareSessionPlacement(claim.sessionId);
+          placementReadCleanup.defer(placementRead.release);
           let identity = resolvePlacementIdentity(claim, current);
           const reportProvisioning = () =>
             emitAgentRunStatusEvent({
@@ -204,7 +207,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             (assertSources) => {
               inputTurn.abortSignal?.throwIfAborted();
               assertSources();
-              requiredAdmission.assertCurrent(claim);
+              requiredAdmission.assertCurrent(placementRead.current);
             },
           );
           // An admission wait ends without authority; retry from the durable placement.
@@ -250,7 +253,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
               reportProvisioning();
               preparedResultPending = undefined;
               const ready = await waitForInitialWorkerPlacement({
-                placements: options.placements,
+                readPlacement: placementRead.current,
                 placement: routablePlacement,
                 turn,
                 wait: options.waitForInitialPlacement,
@@ -403,11 +406,6 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
                 };
                 activeWorkerTurns.set(turnClaim.sessionId, activeWorkerTurn);
               }
-              using placementReadCleanup = new DisposableStack();
-              const placementRead = await options.placements.prepareSessionPlacement(
-                turnClaim.sessionId,
-              );
-              placementReadCleanup.defer(placementRead.release);
               const readPreparedPlacement = (assertAdmission: () => void) => {
                 turn.abortSignal?.throwIfAborted();
                 assertAdmission();

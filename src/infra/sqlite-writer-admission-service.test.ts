@@ -4,7 +4,9 @@ import { MessageChannel, receiveMessageOnPort, type Worker } from "node:worker_t
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { publishOpenClawStateDatabaseWorkerAdmission } from "../state/openclaw-state-db-cache.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
@@ -17,6 +19,11 @@ import {
   fenceUserProfileMutationAuthority,
 } from "../state/user-profile-events.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import {
+  createSqliteWorkerOperationAdmission,
+  readSqliteWorkerMaintenanceAuthority,
+  type SqliteWorkerOperationAdmission,
+} from "./sqlite-worker-operation-admission.js";
 import { SqliteWorkerSlotCustody } from "./sqlite-worker-request-custody.js";
 import {
   assertSqliteWriterBrokerAdmission,
@@ -264,4 +271,86 @@ it("revokes worker-only storage before asynchronous drainage and keeps old descr
     }),
   ).resolves.toBe("current");
   await expect(owner.read(structuredClone(request))).resolves.toBe("revoked");
+});
+
+it("checks the original maintenance frame through the service while its scope drains", async () => {
+  const owner = service();
+  const connection = await owner.connect();
+  const custody = new SqliteWorkerSlotCustody().createRequest();
+  custody.activate();
+  const scope = createOpenClawDatabaseMaintenanceScope();
+  const createAdmission = () =>
+    createSqliteWorkerOperationAdmission((_request, grant) => {
+      grant();
+    });
+  const outsideAdmission = scope.run(createAdmission);
+  const outside = readSqliteWorkerMaintenanceAuthority(outsideAdmission, scope)!;
+  const resume = createDeferredCore();
+  let accepted: typeof outside | undefined;
+  let acceptedAdmission: SqliteWorkerOperationAdmission | undefined;
+  const running = scope.run(async () => {
+    acceptedAdmission = createAdmission();
+    accepted = readSqliteWorkerMaintenanceAuthority(acceptedAdmission, scope);
+    await resume.promise;
+  });
+  try {
+    const closing = scope.close();
+    expect(() =>
+      assertSqliteWriterBrokerAdmission(connection, custody.descriptor, undefined, outside),
+    ).toThrow("revoked");
+    // Bypass the client's early refusal to exercise the service's independent live check.
+    const decision = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+    connection.port.postMessage(
+      {
+        custody: custody.descriptor,
+        decision,
+        maintenanceAuthority: outside,
+      },
+      [],
+    );
+    Atomics.wait(decision, 0, 0, 30_000);
+    expect(Atomics.load(decision, 0)).toBe(2);
+    // The blocking waiter prevents host callbacks; the service reads the live frame itself.
+    assertSqliteWriterBrokerAdmission(connection, custody.descriptor, undefined, accepted);
+    resume.resolve();
+    await running;
+    await closing;
+    expect(() =>
+      assertSqliteWriterBrokerAdmission(connection, custody.descriptor, undefined, accepted),
+    ).toThrow("revoked");
+    await owner.close();
+    const replacement = await service().connect();
+    const successor = createOpenClawDatabaseMaintenanceScope();
+    const successorAdmission = successor.run(createAdmission);
+    try {
+      const late = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+      replacement.port.postMessage(
+        {
+          custody: custody.descriptor,
+          decision: late,
+          maintenanceAuthority: accepted,
+        },
+        [],
+      );
+      Atomics.wait(late, 0, 0, 30_000);
+      expect(Atomics.load(late, 0)).toBe(2);
+      assertSqliteWriterBrokerAdmission(
+        replacement,
+        custody.descriptor,
+        undefined,
+        readSqliteWorkerMaintenanceAuthority(successorAdmission, successor),
+      );
+    } finally {
+      successorAdmission.finish();
+      await successor.close();
+      replacement.port.close();
+    }
+  } finally {
+    resume.resolve();
+    await running;
+    await scope.close();
+    outsideAdmission.finish();
+    acceptedAdmission?.finish();
+    connection.port.close();
+  }
 });

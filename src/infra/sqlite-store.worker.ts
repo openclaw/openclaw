@@ -55,6 +55,7 @@ import {
   createSqliteWorkerTransferReceiver,
   type SqliteWorkerTransferFrame,
 } from "./sqlite-worker-transfer.js";
+import { assertSqliteWorkerOperationAuthority } from "./sqlite-writer-admission-client.js";
 import { cancelWorkerIdleGc, scheduleWorkerIdleGc } from "./worker-idle-gc.js";
 import { ownedWorkerBytes } from "./worker-transfer-bytes.js";
 
@@ -195,6 +196,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
             port: request.operationAdmission,
             requestCustody: request.requestCustody,
             executionAuthority: request.executionAuthority,
+            maintenanceAuthority: request.maintenanceAuthority,
           },
         };
       }
@@ -420,16 +422,18 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
       }
       const backend: unknown = await runInActorContextAsync(request.actor, () => {
         const input = deserialize(request.input);
-        if (request.openAdmission) {
-          try {
+        try {
+          if (request.openAdmission) {
             requestSqliteWorkerOperationAdmission({
               stage: "open",
               facts: request.openAdmission === "input" ? input : undefined,
             });
-          } catch (error) {
-            openNotEntered = true;
-            throw error;
+          } else if (operationAdmission?.actor === request.actor) {
+            assertSqliteWorkerOperationAuthority(operationAdmission.context);
           }
+        } catch (error) {
+          openNotEntered = true;
+          throw error;
         }
         return factory(input, {
           databasePath: request.databasePath,

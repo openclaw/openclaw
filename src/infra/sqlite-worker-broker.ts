@@ -11,6 +11,7 @@ import {
   assertSqliteWorkerActorReusable,
   createSqliteWorkerAdmissionWarning,
   captureSqliteWorkerOpen,
+  captureSqliteWorkerDatabaseAdmission,
   captureSqliteWorkerAdmissionPaths,
   findUnclaimedSharedStateActors,
   closeUnclaimedSharedStateActors,
@@ -88,7 +89,12 @@ export class SqliteWorkerBroker {
     slots: this.slots,
     stores: this.stores,
     enqueueClose: (actor, maintenanceScope) =>
-      this.enqueue(actor.slot, { type: "close", actor: actor.id }, 0, { maintenanceScope }),
+      this.enqueue(actor.slot, { type: "close", actor: actor.id }, 0, {
+        maintenanceScope,
+        createAdmission: captureSqliteWorkerDatabaseAdmission(
+          actor.stateDatabasePath ?? actor.databasePath,
+        ),
+      }),
     fail: (slot, error) => this.fail(slot, error),
   });
   private nextActor = 0;
@@ -266,7 +272,7 @@ export class SqliteWorkerBroker {
           databasePath,
           ...(options.createAdmission
             ? { openAdmission: "input" as const }
-            : options.createOpenAdmission
+            : options.expectedIdentity
               ? { openAdmission: "identity" as const }
               : {}),
           ...(options.existingOnly ? { existingIdentity: key } : {}),
@@ -375,7 +381,9 @@ export class SqliteWorkerBroker {
             requestClass,
             scope,
             assertCurrent,
-            createAdmission,
+            createAdmission:
+              createAdmission ??
+              captureSqliteWorkerDatabaseAdmission(owned.stateDatabasePath ?? owned.databasePath),
             maintenanceScope: scope
               ? scope.maintenanceScope
               : getOpenClawDatabaseMaintenanceScope(),

@@ -164,6 +164,16 @@ Transaction-dependent decisions consume the native transaction's preimage.
 Bookkeeping required before grant moves to its named owner or completes before
 dispatch; it cannot become an asynchronous notification.
 
+Lexical maintenance has separate scope, accepted-frame and resource-claim lifetimes.
+Draining rejects new scope entry while accepted frames and still-owned resource
+continuations retain cleanup access. Claim transfer rejects subsequent claim
+checks without revoking unrelated accepted frames. Failed cleanup reopens the
+same scope; successful close is permanent. Native checks carry the admission's
+original scope/frame and parent lifetimes, not the broker callback's ambient
+context. Shared claim cells remain checked by existing explicit host assertions;
+the service does not validate resource claims in this slice. Owner policy,
+physical identity, schema and process custody remain independent checks.
+
 Final host COMMIT authorization, native COMMIT, receipt publication and settlement
 remain unchanged. Thus host stalls can still delay COMMIT, dispatch and ACK
 publication. Measure those separately; this program first removes repeated

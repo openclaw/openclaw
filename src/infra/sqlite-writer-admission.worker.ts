@@ -1,6 +1,7 @@
 import { MessagePort, workerData } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readAgentDatabaseExecutionAuthority } from "../state/openclaw-agent-execution-authority.js";
+import { isSqliteWorkerMaintenanceAuthorityCurrent } from "../state/openclaw-state-maintenance-authority.js";
 import {
   readProfileAuthority,
   type ProfileAuthorityDescriptor,
@@ -32,7 +33,14 @@ function isBrokerRequest(value: unknown): value is SqliteBrokerAdmissionRequest 
         typeof value.executionAuthority.physicalIdentity === "string" &&
         typeof value.executionAuthority.incarnation === "string" &&
         (value.executionAuthority.birthtime === undefined ||
-          typeof value.executionAuthority.birthtime === "string")))
+          typeof value.executionAuthority.birthtime === "string"))) &&
+    (value.maintenanceAuthority === undefined ||
+      (isRecord(value.maintenanceAuthority) &&
+        isSharedCell(value.maintenanceAuthority.scope) &&
+        Array.isArray(value.maintenanceAuthority.owners) &&
+        value.maintenanceAuthority.owners.every(isSharedCell) &&
+        (value.maintenanceAuthority.frame === undefined ||
+          isSharedCell(value.maintenanceAuthority.frame))))
   );
 }
 
@@ -72,7 +80,9 @@ serveWorkerTasks<SqliteWriterAdmissionResult>((input) => {
         Atomics.load(lifetime, 0) === 1 &&
         readSqliteWorkerRequestCustody(request.custody) &&
         (!request.executionAuthority ||
-          readAgentDatabaseExecutionAuthority(request.executionAuthority));
+          readAgentDatabaseExecutionAuthority(request.executionAuthority)) &&
+        (!request.maintenanceAuthority ||
+          isSqliteWorkerMaintenanceAuthorityCurrent(request.maintenanceAuthority));
       Atomics.compareExchange(request.decision, 0, 0, current ? 1 : 2);
       Atomics.notify(request.decision, 0);
     });

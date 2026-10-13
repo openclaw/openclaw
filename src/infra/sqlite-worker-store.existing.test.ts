@@ -3,8 +3,11 @@ import { copyFileSync, renameSync, unlinkSync } from "node:fs";
 import { link, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { Worker } from "node:worker_threads";
+import { getEnvironmentData, setEnvironmentData, Worker } from "node:worker_threads";
 import { describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import { SqliteWorkerBroker } from "./sqlite-worker-broker.js";
 import type { SqliteWorkerRequest } from "./sqlite-worker-contract.js";
 import { useSqliteWorkerStoreFixture } from "./sqlite-worker-fixture.test-support.js";
 import { openSqliteWorkerStore } from "./sqlite-worker-store.js";
@@ -126,6 +129,80 @@ describe("existing-only SQLite worker admission", () => {
       await aliasClient.close();
       expect(await open(alias, true)).toBeUndefined();
       expect(await original.execute({ type: "read", input: undefined })).toEqual(["original"]);
+    },
+  );
+
+  it.for([false, true])(
+    "checks maintenance at native open after module loading (accepted frame: %s)",
+    async (accepted, { signal }) => {
+      const file = databasePath();
+      await seed(file, "original");
+      const modulePath = path.join(path.dirname(file), "maintenance-open.mjs");
+      const gateKey = modulePath;
+      const gate = new Int32Array(new SharedArrayBuffer(3 * Int32Array.BYTES_PER_ELEMENT));
+      const previousGate = getEnvironmentData(gateKey);
+      await writeFile(
+        modulePath,
+        `
+        import { DatabaseSync } from "node:sqlite";
+        import { getEnvironmentData } from "node:worker_threads";
+        const gate = new Int32Array(getEnvironmentData(${JSON.stringify(gateKey)}));
+        Atomics.store(gate, 0, 1);
+        Atomics.notify(gate, 0);
+        await Atomics.waitAsync(gate, 1, 0).value;
+        export function createSqliteWorkerBackend(_input, context) {
+          const database = new DatabaseSync(context.databasePath);
+          Atomics.add(gate, 2, 1);
+          return {
+            execute() { return database.prepare("SELECT value FROM entries ORDER BY id").all().map(row => row.value); },
+            close() { database.close(); }
+          };
+        }
+      `,
+      );
+      const broker = new SqliteWorkerBroker();
+      const maintenance = createOpenClawDatabaseMaintenanceScope();
+      let opening: ReturnType<typeof broker.open<FixtureOperations>> | undefined;
+      let closing: Promise<void> | undefined;
+      setEnvironmentData(gateKey, gate.buffer);
+      try {
+        const acceptedOpening = maintenance.run(() => {
+          opening = broker.open<FixtureOperations>({
+            moduleUrl: pathToFileURL(modulePath),
+            databasePath: file,
+            input: undefined,
+          });
+          return accepted ? opening : undefined;
+        });
+        opening = acceptedOpening ?? opening;
+        assert(opening);
+        await withinTest(
+          awaitGateBeforeSettlement(
+            Promise.resolve(Atomics.waitAsync(gate, 0, 0).value),
+            opening,
+            "Opening settled before backend module loading paused",
+          ),
+          signal,
+        );
+        closing = maintenance.close();
+        Atomics.store(gate, 1, 1);
+        Atomics.notify(gate, 1);
+        if (accepted) {
+          const store = await withinTest(opening, signal);
+          assert(store);
+          expect(Atomics.load(gate, 2)).toBe(1);
+        } else {
+          await expect(opening).rejects.toThrow("SQLite maintenance authority is revoked");
+          expect(Atomics.load(gate, 2)).toBe(0);
+        }
+      } finally {
+        Atomics.store(gate, 1, 1);
+        Atomics.notify(gate, 1);
+        await Promise.allSettled([opening]);
+        await broker.close();
+        await (closing ?? maintenance.close());
+        setEnvironmentData(gateKey, previousGate);
+      }
     },
   );
 

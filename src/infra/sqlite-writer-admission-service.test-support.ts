@@ -1,11 +1,13 @@
 import { MessageChannel, type MessagePort } from "node:worker_threads";
 import { readAgentDatabaseExecutionAuthority } from "../state/openclaw-agent-execution-authority.js";
+import { isSqliteWorkerMaintenanceAuthorityCurrent } from "../state/openclaw-state-maintenance-authority.js";
 import type { ProfileAuthorityDescriptor } from "../state/user-profile-authority.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import {
   SqliteWorkerAdmissionTimeoutError,
   SqliteWorkerError,
   type SqliteWorkerExecutionAuthority,
+  type SqliteWorkerMaintenanceAuthority,
 } from "./sqlite-worker-contract.js";
 import {
   readSqliteWorkerRequestCustody,
@@ -34,17 +36,19 @@ export function assertSqliteWriterBrokerAdmission(
   connection: SqliteWriterAdmissionConnection,
   custody: SqliteWorkerRequestCustodyDescriptor,
   executionAuthority?: SqliteWorkerExecutionAuthority,
+  maintenanceAuthority?: SqliteWorkerMaintenanceAuthority,
 ): void {
   const current = () =>
     Atomics.load(connection.lifetime, 0) === 1 &&
     readSqliteWorkerRequestCustody(custody) &&
-    (!executionAuthority || readAgentDatabaseExecutionAuthority(executionAuthority));
+    (!executionAuthority || readAgentDatabaseExecutionAuthority(executionAuthority)) &&
+    (!maintenanceAuthority || isSqliteWorkerMaintenanceAuthorityCurrent(maintenanceAuthority));
   if (!current()) {
     throw new SqliteWorkerError("SQLite broker admission is revoked", "closed");
   }
   const decision = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
   const deadline = process.hrtime.bigint() + 30_000_000_000n;
-  connection.port.postMessage({ custody, decision, executionAuthority }, []);
+  connection.port.postMessage({ custody, decision, executionAuthority, maintenanceAuthority }, []);
   while (Atomics.load(decision, 0) === 0) {
     const remainingMs = Number(deadline - process.hrtime.bigint()) / 1e6;
     if (remainingMs <= 0) {

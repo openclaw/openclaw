@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { EventEmitter } from "node:events";
-import { existsSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -11,18 +11,25 @@ import { withinTest } from "../../test/helpers/promise.js";
 import * as logging from "../logging/logger.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db-contract.js";
+import { isSqliteWorkerMaintenanceAuthorityCurrent } from "../state/openclaw-state-maintenance-authority.js";
 import { initializeSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
 import { onInternalDiagnosticEvent, waitForDiagnosticEventsDrained } from "./diagnostic-events.js";
 import type { DiagnosticWorkerRequestFields } from "./diagnostic-process-types.js";
 import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-record.js";
 import * as stateOwner from "./gateway-state-owner.js";
 import { SqliteWorkerBroker } from "./sqlite-worker-broker.js";
+import type {
+  SqliteWorkerMaintenanceAuthority,
+  SqliteWorkerRequest,
+} from "./sqlite-worker-contract.js";
 import {
   useSqliteWorkerStoreFixture,
   appendWorkerRow as append,
   readWorkerRows as read,
 } from "./sqlite-worker-fixture.test-support.js";
+import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 import {
   reserveSqliteWorkerInputPreparation,
   runSqliteWorkerStoreOperation,
@@ -596,3 +603,99 @@ poolIt.each([
     parallelism.mockRestore();
   }
 });
+it("rolls back a broker write when maintenance closes before the commit grant reaches native", async () => {
+  const file = databasePath();
+  const gatePath = databasePath();
+  writeFileSync(gatePath, "ready");
+  const store = await open(file, {
+    type: "prepare",
+    markerPath: databasePath(),
+    gatePath,
+    guarded: true,
+  });
+  const maintenance = createOpenClawDatabaseMaintenanceScope();
+  // A captured synchronous frame can enter while OPEN, but owns no drain hold.
+  const inSource = maintenance.run(() => AsyncLocalStorage.snapshot());
+  let closing: Promise<void> | undefined;
+  const write = inSource(() =>
+    runSqliteWorkerStoreOperation(
+      store,
+      (scope) => scope.execute({ type: "append", input: { value: "revoked" } }),
+      undefined,
+      undefined,
+      () => ({
+        nativeLocations: [file],
+        admission: createSqliteWorkerOperationAdmission((request, grant) => {
+          grant(() => {
+            if (request.stage === "commit") {
+              closing = maintenance.close();
+            }
+          });
+        }),
+      }),
+    ),
+  );
+  try {
+    await expect(write).rejects.toThrow("SQLite maintenance authority is revoked");
+    await closing;
+    expect(await read(store)).toEqual([]);
+  } finally {
+    await maintenance.close();
+  }
+});
+
+it.each([1, 128])(
+  "retains maintenance reads through queued dispatch with %s predecessors",
+  async (count) => {
+    const store = await open(databasePath());
+    const thread = (await append(store, "retained")).threadId;
+    const held = createDeferredCore();
+    let authority: SqliteWorkerMaintenanceAuthority | undefined;
+    let release: (() => void) | undefined;
+    const messages = vi.spyOn(Worker.prototype, "emit");
+    messages.mockImplementation(function (
+      this: Worker,
+      event: string | symbol,
+      ...args: unknown[]
+    ) {
+      if (event === "message" && this.threadId === thread) {
+        messages.mockRestore();
+        const postMessage = this.postMessage.bind(this);
+        vi.spyOn(this, "postMessage").mockImplementation(
+          (message: SqliteWorkerRequest, ...postArgs) => {
+            if (message.type === "execute" && message.maintenanceAuthority) {
+              authority = message.maintenanceAuthority;
+              expect(isSqliteWorkerMaintenanceAuthorityCurrent(authority)).toBe(true);
+            }
+            return postMessage(message, ...postArgs);
+          },
+        );
+        release = () => EventEmitter.prototype.emit.call(this, event, ...args);
+        held.resolve();
+        return true;
+      }
+      return EventEmitter.prototype.emit.call(this, event, ...args);
+    });
+    const predecessors = Promise.all(Array.from({ length: count }, () => read(store)));
+    const maintenance = createOpenClawDatabaseMaintenanceScope();
+    let closing: Promise<void> | undefined;
+    try {
+      await held.promise;
+      const accepted = maintenance.run(async () => read(store));
+      const outcome = expect(accepted).resolves.toEqual(["retained"]);
+      closing = maintenance.close();
+      release?.();
+      release = undefined;
+      await outcome;
+      assert(authority, "queued read must carry its captured maintenance authority");
+      await closing;
+      expect(isSqliteWorkerMaintenanceAuthorityCurrent(authority)).toBe(false);
+    } finally {
+      messages.mockRestore();
+      release?.();
+      await predecessors;
+      await closing;
+      await maintenance.close();
+    }
+  },
+);

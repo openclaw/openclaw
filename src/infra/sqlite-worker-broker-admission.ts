@@ -15,8 +15,12 @@ import type {
   Job,
   SqliteWorkerOpenCustody,
 } from "./sqlite-worker-broker.types.js";
+import { SqliteWorkerError } from "./sqlite-worker-contract.js";
 import { readDatabasePathIdentity, type DatabasePathIdentity } from "./sqlite-worker-identity.js";
-import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
+import {
+  createSqliteWorkerOperationAdmission,
+  type SqliteWorkerAdmissionFactory,
+} from "./sqlite-worker-operation-admission.js";
 import {
   captureSqliteWorkerStateContext,
   type SqliteWorkerStateContext,
@@ -50,6 +54,21 @@ export function validateSqliteWorkerDatabaseLocator(databasePath: string): void 
       "SQLite worker stores require a file-backed filesystem path; in-memory and incognito databases are not supported",
     );
   }
+}
+
+/** Capture the caller now; ports exist only after the bounded queue admits dispatch. */
+export function captureSqliteWorkerDatabaseAdmission(
+  databasePath: string | undefined,
+): SqliteWorkerAdmissionFactory | undefined {
+  if (!databasePath) {
+    return undefined;
+  }
+  return AsyncLocalStorage.bind(() => ({
+    nativeLocations: [databasePath],
+    admission: createSqliteWorkerOperationAdmission(() => {
+      throw new SqliteWorkerError("SQLite domain operation requires its own admission", "closed");
+    }),
+  }));
 }
 
 export function captureSqliteWorkerOpen(
@@ -92,24 +111,29 @@ export function captureSqliteWorkerOpen(
     ...(options.admission
       ? {
           expectedIdentity: options.admission.identity,
-          createOpenAdmission: () => {
-            let granted = false;
-            return {
-              nativeLocations: [databasePath],
-              admission: createSqliteWorkerOperationAdmission((request, grant) => {
-                if (granted || request.stage !== "open") {
-                  throw new Error("SQLite Worker open admission requested out of order");
-                }
-                assertOpening!();
-                if (!grant()) {
-                  throw new Error("SQLite Worker open admission expired");
-                }
-                granted = true;
-              }),
-            };
-          },
+          createOpenAdmission: () =>
+            inCaller(() => {
+              let granted = false;
+              return {
+                nativeLocations: [databasePath],
+                admission: createSqliteWorkerOperationAdmission((request, grant) => {
+                  if (granted || request.stage !== "open") {
+                    throw new Error("SQLite Worker open admission requested out of order");
+                  }
+                  assertOpening!();
+                  if (!grant()) {
+                    throw new Error("SQLite Worker open admission expired");
+                  }
+                  granted = true;
+                }),
+              };
+            }),
         }
-      : {}),
+      : {
+          createOpenAdmission: createAdmission
+            ? undefined
+            : captureSqliteWorkerDatabaseAdmission(databasePath),
+        }),
     moduleUrl: new URL(options.moduleUrl),
     databasePath,
     input: serialize(options.input),
