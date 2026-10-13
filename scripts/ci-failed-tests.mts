@@ -30,7 +30,7 @@ type Failure = {
   class: string;
   files: FailedFile[];
   url: string;
-  localCommand: string | null;
+  failedSteps: string[];
   reason: string;
 };
 const CONTROL_JOBS = new Set([
@@ -165,76 +165,48 @@ export function formatCommand(args: string[]) {
   if (!args.length) {
     return null;
   }
-  return `pnpm ${args.map((arg, index) => (index > 0 && args[index - 1] === "-t" ? `"${arg}"` : arg)).join(" ")}`;
-}
-
-export function localCheckCommand(job: Job) {
-  const steps =
-    job.steps?.filter((step) => ["failure", "timed_out"].includes(step.conclusion)) ?? [];
-  const exactSteps: Record<string, string> = {
-    "Check formatting": "pnpm format:check",
-    "Check config docs baseline": "pnpm config:docs:check",
-    "Check plugin inventory": "pnpm plugins:inventory:check",
-    "Check docs": "pnpm check:docs",
-    "Build dist": "pnpm build:ci-artifacts",
-  };
-  if (steps.length === 1 && exactSteps[steps[0]!.name]) {
-    return exactSteps[steps[0]!.name]!;
-  }
-  const commands: Record<string, string> = {
-    "check-prod-types": "pnpm tsgo:prod",
-    "check-test-types": "pnpm tsgo:test",
-    "check-lint": "pnpm lint",
-    "check-docs": "pnpm check:docs",
-    "build-artifacts": "pnpm build:ci-artifacts",
-  };
-  if (steps.length !== 1) {
-    return null;
-  }
-  if (steps[0]!.name === "Run hosted core test-types stripe") {
-    return "pnpm tsgo:core:test";
-  }
-  if (steps[0]!.name === "Run hosted core lint stripe") {
-    return "node --import ./scripts/tsx.mjs scripts/run-oxlint-shards.mts --only=core --split-core --threads=1";
-  }
-  if (steps[0]!.name === "Run hosted extension lint stripe") {
-    return "node --import ./scripts/tsx.mjs scripts/run-oxlint-shards.mts --only=extensions --threads=1";
-  }
-  return steps[0]!.name === "Run check shard" ? (commands[job.name] ?? null) : null;
+  return `pnpm ${args.map((arg, index) => (index > 0 && args[index - 1] === "-t" ? `'${arg.replaceAll("'", "'\\''")}'` : arg)).join(" ")}`;
 }
 
 export async function collectFailures(run: Run, repo: string, api: Api) {
   const options = { repository: repo, api };
   const jobs: Job[] = await readCiRunJobs(options, run);
   const classifier = createMainFailureClassifier(options);
-  const failures: Failure[] = [];
-  // Shared gh transport limits all reads (including classifier main evidence) to four.
-  for (const job of jobs.filter(
-    (entry) => ["failure", "timed_out"].includes(entry.conclusion) && !CONTROL_JOBS.has(entry.name),
-  )) {
-    const classification = await classifier.classifyJob(job);
-    let files: FailedFile[] = [];
-    let reason = classification.reason;
-    try {
-      files = extractNodeFailedTests(
-        z.string().parse(await api(`/actions/jobs/${job.id}/logs`, true)),
-      );
-    } catch {
-      reason += "; job log unavailable";
-    }
-    failures.push({
-      job: job.name,
-      class: classification.class,
-      files,
-      url: job.html_url,
-      localCommand: files.length ? null : localCheckCommand(job),
-      reason,
-    });
-  }
+  // Shared gh transport bounds concurrent job and main-evidence reads to four.
+  const failures: Failure[] = await Promise.all(
+    jobs
+      .filter(
+        (entry) =>
+          ["failure", "timed_out"].includes(entry.conclusion) && !CONTROL_JOBS.has(entry.name),
+      )
+      .map(async (job) => {
+        const classification = await classifier.classifyJob(job);
+        let files: FailedFile[] = [];
+        let reason = classification.reason;
+        try {
+          files = extractNodeFailedTests(
+            z.string().parse(await api(`/actions/jobs/${job.id}/logs`, true)),
+          );
+        } catch {
+          reason += "; job log unavailable";
+        }
+        return {
+          job: job.name,
+          class: classification.class,
+          files,
+          url: job.html_url,
+          failedSteps: (job.steps ?? [])
+            .filter((step) => ["failure", "timed_out"].includes(step.conclusion))
+            .map((step) => step.name),
+          reason,
+        };
+      }),
+  );
   return failures.toSorted(
     (a, b) =>
       Number(a.class === "pre-existing") - Number(b.class === "pre-existing") ||
-      a.job.localeCompare(b.job),
+      a.job.localeCompare(b.job) ||
+      a.url.localeCompare(b.url),
   );
 }
 
@@ -251,7 +223,10 @@ export function formatFailures(run: Run, failures: Failure[], command: string | 
       lines.push(`  ${entry.file}`, ...entry.tests.map((test) => `    > ${test}`));
     }
     if (!failure.files.length) {
-      lines.push(`  ${failure.localCommand ?? `no local rerun: read log ${failure.url}`}`);
+      lines.push(
+        ...failure.failedSteps.map((step) => `  failed step: ${step}`),
+        `  no Vitest rerun; read log ${failure.url}`,
+      );
     }
   }
   lines.push("", command ? `Rerun: ${command}` : "No selected Vitest failures to rerun.");

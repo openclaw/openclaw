@@ -37,18 +37,21 @@ the authenticated `gh` CLI and prints focused local proof. `--repo` defaults to
 `ci.yml` run for its current head SHA; a run target selects that exact run.
 
 The command fetches each failed or timed-out job's log once, with at most four
-requests in flight, and skips CI control jobs. It shows each job's
-pre-existing/new/unknown class and the deduplicated Vitest files and test names.
+requests in flight, processes failed jobs concurrently, and skips CI control jobs.
+It shows each job's pre-existing/new/unknown class and the deduplicated Vitest
+files and test names.
 New and unknown failures appear first; pre-existing failures appear separately
 and are excluded from the rerun command unless `--include-pre-existing` is set.
 Classification uses the same owner as the PR failure table.
 
 The command prints one `pnpm test <file…>` selection. When there is one file with
 at most three safely quoted test names, it adds a test-name filter; otherwise it
-reruns the whole selected files. Non-Vitest failures show the matching local
-command when known, or a log URL to investigate. `--run` executes the selected
+reruns the whole selected files. Displayed test-name filters use single quotes
+with embedded apostrophes escaped for safe copying into zsh or bash; execution
+arguments remain unquoted. Non-Vitest failures show their failed step names and
+“no Vitest rerun; read log” with the job log URL. `--run` executes the selected
 test command with the local runner's default worker behavior. `--json` emits
-`{ run, failures: [{ job, class, files: [{ file, tests }] }], command }`.
+`{ run, failures: [{ job, class, files: [{ file, tests }], failedSteps, url, reason }], command }`.
 
 After PR CI fails, run `pnpm test:ci-failed <pr>`, fix new failures and investigate
 unknown ones, then run `pnpm test:ci-failed <pr> --run` until those pass locally

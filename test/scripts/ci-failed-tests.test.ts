@@ -3,7 +3,6 @@ import {
   collectFailures,
   formatCommand,
   formatFailures,
-  localCheckCommand,
   parseArgs,
   parseTarget,
   rerunArgs,
@@ -24,7 +23,7 @@ const failure = (file: string, tests: string[] = [], classification = "new") => 
   class: classification,
   files: [{ file, tests }],
   url: "job-url",
-  localCommand: null,
+  failedSteps: [],
   reason: "Matching main job passed",
 });
 const file = "src/gateway/server.sessions.abort-authorization.test.ts";
@@ -75,7 +74,7 @@ describe("CI failed-test reruns", () => {
       failure(file, ["session > denies"]),
       failure("test/old.test.ts", [], "pre-existing"),
     ];
-    expect(formatCommand(rerunArgs(failures))).toBe(`pnpm test ${file} -- -t "session > denies"`);
+    expect(formatCommand(rerunArgs(failures))).toBe(`pnpm test ${file} -- -t 'session > denies'`);
     expect(formatCommand(rerunArgs(failures, true))).toBe(`pnpm test ${file} test/old.test.ts`);
     expect(rerunArgs([failure(file, [], "pre-existing")])).toEqual([]);
   });
@@ -95,34 +94,55 @@ describe("CI failed-test reruns", () => {
     expect(rerunArgs([failure(file, names), failure(file)])).toEqual(["test", file]);
   });
 
-  it("maps failed check steps without mistaking setup failures for check failures", () => {
-    const job = {
-      id: 1,
-      name: "check-lint-core-1",
+  it("quotes displayed patterns for zsh/bash without quoting execution arguments", () => {
+    const args = rerunArgs([failure(file, ["session > denies!"])]);
+    expect(args.at(-1)).toBe("session > denies!");
+    expect(formatCommand(args)).toBe(`pnpm test ${file} -- -t 'session > denies!'`);
+    expect(formatCommand(["test", file, "--", "-t", "owner's session!"])).toBe(
+      `pnpm test ${file} -- -t 'owner'\\''s session!'`,
+    );
+  });
+
+  it("starts failed-job log reads together and sorts results by job name", async () => {
+    let releaseLogs!: (log: string) => void;
+    const logs = new Promise<string>((resolve) => {
+      releaseLogs = resolve;
+    });
+    let firstLogStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      firstLogStarted = resolve;
+    });
+    const requestedLogs: string[] = [];
+    const jobs = ["zulu", "alpha", "bravo"].map((name, index) => ({
+      id: index + 1,
+      name,
+      run_id: run.id,
+      run_attempt: run.run_attempt,
+      status: "completed",
       conclusion: "failure",
-      html_url: "job-url",
-      steps: [{ name: "Run hosted core lint stripe", conclusion: "failure" }],
+      html_url: `job-${index + 1}`,
+    }));
+    const api = async (route: string) => {
+      if (route.startsWith("/actions/runs/100/")) {
+        return { total_count: jobs.length, jobs };
+      }
+      if (route.startsWith("/actions/workflows/")) {
+        return { workflow_runs: [] };
+      }
+      if (route.endsWith("/logs")) {
+        requestedLogs.push(route);
+        firstLogStarted();
+        return logs;
+      }
+      throw new Error(`Unexpected route ${route}`);
     };
-    expect(localCheckCommand(job)).toContain("--only=core");
-    expect(
-      localCheckCommand({
-        ...job,
-        steps: [{ name: "Setup Node environment", conclusion: "failure" }],
-      }),
-    ).toBeNull();
-    expect(
-      localCheckCommand({
-        ...job,
-        name: "check-prod-types",
-        steps: [{ name: "Run check shard", conclusion: "failure" }],
-      }),
-    ).toBe("pnpm tsgo:prod");
-    expect(
-      localCheckCommand({
-        ...job,
-        steps: [{ name: "Check config docs baseline", conclusion: "failure" }],
-      }),
-    ).toBe("pnpm config:docs:check");
+    const pending = collectFailures(run, "openclaw/openclaw", api);
+    await started;
+    const beforeRelease = [...requestedLogs];
+    releaseLogs("build failed");
+    const failures = await pending;
+    expect(beforeRelease).toHaveLength(3);
+    expect(failures.map((entry) => entry.job)).toEqual(["alpha", "bravo", "zulu"]);
   });
 
   it("shares classifier evidence, excludes control jobs, and explains non-Vitest failures", async () => {
@@ -134,7 +154,18 @@ describe("CI failed-test reruns", () => {
       status: "completed",
       conclusion,
       html_url: `job-${id}`,
-      steps: [{ name: name === "check-docs" ? "Check docs" : "Run Node test shard", conclusion }],
+      steps:
+        name === "check-docs"
+          ? [
+              { name: "Check docs", conclusion },
+              { name: "Upload report", conclusion: "failure" },
+            ]
+          : [
+              {
+                name: name === "custom-e2e" ? "Run browser E2E" : "Run Node test shard",
+                conclusion,
+              },
+            ],
     });
     const jobs = [
       job(1, "checks-node-new"),
@@ -186,8 +217,18 @@ describe("CI failed-test reruns", () => {
     expect(failures[0]?.files).toEqual([{ file, tests: ["native session > denies"] }]);
     expect(api.mock.calls.filter(([route]) => route === "/actions/jobs/1/logs")).toHaveLength(1);
     const output = formatFailures(run, failures, formatCommand(rerunArgs(failures)));
-    expect(output).toContain("no local rerun: read log job-3");
-    expect(output).toContain("pnpm check:docs");
+    expect(output).toContain("no Vitest rerun; read log job-3");
+    expect(output).toContain("failed step: Run browser E2E");
+    expect(output).toContain("failed step: Check docs");
+    expect(output).toContain("failed step: Upload report");
+    expect(failures.find((entry) => entry.job === "check-docs")).toEqual({
+      job: "check-docs",
+      class: "pre-existing",
+      files: [],
+      url: "job-2",
+      failedSteps: ["Check docs", "Upload report"],
+      reason: expect.any(String),
+    });
     expect(output).toContain("Pre-existing failures");
   });
 });
