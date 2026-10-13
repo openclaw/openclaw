@@ -30,6 +30,7 @@ import {
   runWithDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
 import { isGatewaySuspendControlAvailable } from "../../../infra/gateway-suspend-coordinator.js";
+import { resolveHostAccountName } from "../../../infra/host-account-name.js";
 import { runWithMainThreadTask } from "../../../infra/main-thread-stall.js";
 import { rawDataByteLength } from "../../../infra/ws.js";
 import { logRejectedLargePayload } from "../../../logging/diagnostic-payload.js";
@@ -372,6 +373,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         if (!authenticated) {
           return;
         }
+        // Account metadata is process-stable and can resolve while device authorization runs.
+        void resolveHostAccountName();
         const deviceAuthorized = await authorizeGatewayConnectDevice(phaseContext, authenticated);
         if (!deviceAuthorized) {
           return;
