@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import path from "node:path";
 import { json } from "node:stream/consumers";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   writeOpenAiResponsesSse,
   writeOpenAiResponsesText,
@@ -23,6 +23,7 @@ import {
   resetGatewayTestState,
   setupGatewayTempHome,
 } from "./gateway.test-support.js";
+import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import type { SessionsListResult } from "./session-utils.types.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 
@@ -143,6 +144,13 @@ describe("session notification store ownership through the Gateway", () => {
       resetGatewayTestState();
       resetHeartbeatEventsForTest();
       const home = await setupGatewayTempHome({ prefix: "openclaw-heartbeat-store-" });
+      using _ = vi
+        .spyOn(SessionMutationAuthorizationChangedError.prototype, "toString")
+        .mockImplementation(function (this: SessionMutationAuthorizationChangedError) {
+          const message = Error.prototype.toString.call(this);
+          console.error("[heartbeat-store:authorization-error]", this.stack);
+          return message;
+        });
       let provider: Awaited<ReturnType<typeof startProvider>> | undefined;
       let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
       await runQaGatewayFixture(
