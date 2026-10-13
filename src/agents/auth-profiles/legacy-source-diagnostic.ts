@@ -8,6 +8,7 @@ import {
   hasUnresolvedProviderAuthEndpoint,
   resolveProviderIdForAuth,
 } from "../provider-auth-aliases.js";
+import { authProfileSourceExists } from "./file-state.js";
 import {
   coerceLegacyFlatCredential,
   parseLegacyCredentialEntry,
@@ -337,16 +338,13 @@ export function assertAuthProfileMigrationCandidates(params: {
     params.config,
     params.deferScopedRefusals,
   );
-  // Older shipped processes and restores can recreate these three fixed files
-  // after startup, so this credential boundary deliberately rechecks their names.
+  // External restores invalidate the owner's source facts through directory observation.
   const sources = params.candidates.filter(
-    (source) => isCredentialSource(source) && fs.existsSync(source.path),
+    (source) => isCredentialSource(source) && authProfileSourceExists(source.path),
   );
   if (sources.length === 0) {
     return;
   }
-  // The store read only happens once a retired file actually exists, so the
-  // healthy majority keeps the plain name check on this hot path.
   if (params.hasCredentials()) {
     warnLegacyAuthProfileSourcesIgnored({ databasePath: params.databasePath, sources });
     return;

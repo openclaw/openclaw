@@ -16,6 +16,10 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  closeAuthProfileFileState,
+  refreshAuthProfileFileState,
+} from "../auth-profiles/file-state.js";
 import * as migrationDiagnostics from "../auth-profiles/legacy-source-diagnostic.js";
 import {
   assertAuthProfileMigrationReady,
@@ -318,6 +322,7 @@ describe("SDK migration guard endpoint context", () => {
           // A raw write plus archive models another process's Doctor; this process keeps its fence.
           writePersistedAuthProfileStoreRaw(legacy, ownerDir);
           await rename(legacyFile, `${legacyFile}.migrated`);
+          await refreshAuthProfileFileState();
           storage.reload();
           await expect(storage.getApiKey("arcee", { baseUrl })).rejects.toMatchObject({
             code: "AUTH_PROFILE_MIGRATION_REQUIRED",
@@ -340,6 +345,7 @@ describe("SDK migration guard endpoint context", () => {
             });
             writePersistedAuthProfileStoreRaw({ version: 1, profiles: {} });
             await state.writeJson(legacyPath, legacy);
+            await refreshAuthProfileFileState();
             expect(() => assertAuthProfileMigrationReady()).toThrow(
               "requires legacy credential migration",
             );
@@ -465,6 +471,7 @@ describe("SDK migration guard endpoint context", () => {
             "requires legacy credential migration",
           );
           writePersistedAuthProfileStoreRaw(apiKeyStore("arcee", { key: localKey }), agentDir);
+          closeAuthProfileFileState();
           storage.reload();
           reloadedSelectedCredential = true;
         });
