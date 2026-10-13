@@ -560,11 +560,18 @@ export async function createPageViaPlaywright(
       await page?.close();
     }
   };
+  let abortCleanup: Promise<void> | undefined;
+  const onAbort = () => {
+    // This owner may interrupt its new page, never the shared browser context.
+    abortCleanup = close().catch(() => {});
+  };
   let navigationClosedBlockedTarget = false;
   try {
     assertCurrent();
     ensureContextState(context);
     page = await context.newPage();
+    opts.signal?.addEventListener("abort", onAbort, { once: true });
+    // Cancellation during allocation still owns the page that just arrived.
     assertCurrent();
     ensurePageState(page);
     clearBlockedPageRef(opts.cdpUrl, page);
@@ -628,9 +635,12 @@ export async function createPageViaPlaywright(
     };
   } catch (error) {
     if (opts.isolatedContext || !navigationClosedBlockedTarget) {
-      await close().catch(() => {});
+      await (abortCleanup ?? close().catch(() => {}));
     }
+    opts.signal?.throwIfAborted();
     throw error;
+  } finally {
+    opts.signal?.removeEventListener("abort", onAbort);
   }
 }
 
