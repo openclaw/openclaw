@@ -12,6 +12,10 @@ sidebarTitle: "Chat"
 
 How the chat pane behaves: the session rail, the composer, and how the transcript renders.
 
+When the latest history page has no visible messages, for example because tool
+activity is hidden, the pane loads earlier history automatically. An incomplete
+history page does not show the new-chat welcome screen.
+
 Enable **Settings → Labs → Speech bubbles** to try the experimental view (off by default).
 While enabled, Home uses bubbles by default. The session menu’s **View → Speech bubbles**
 option changes only that conversation. Explicit choices stay in this browser for this

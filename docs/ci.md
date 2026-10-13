@@ -84,7 +84,7 @@ and Wear store capture script in one hosted Ubuntu job. The final CI gate requir
 capture to succeed; unit-test-only and documentation changes omit it. See
 [the job graph](/ci/pipeline#pipeline-overview) for capture evidence and scope details.
 
-Eligible core-source and core-test PRs use targeted type checks when every selected path exists in the checkout. GitHub and hybrid profiles distribute the selected consumers across their existing core stripes; the Blacksmith profile checks them in the central row. Ambiguous ownership and deleted core tests keep the full type-check coverage.
+Eligible core-source and core-test PRs use targeted type checks when every selected compiler input exists in the checkout. Deleted Markdown files and UI stylesheets do not prevent narrowing for accompanying code changes. GitHub and hybrid profiles distribute the selected consumers across their existing core stripes; the Blacksmith profile checks them in the central row. Ambiguous ownership and deleted compiler inputs keep the full type-check coverage.
 
 Preflight passes the complete changed-path manifest between steps as a local JSON
 file, so large PRs do not lose test-planning inputs to Actions output or environment

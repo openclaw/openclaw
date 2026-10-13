@@ -690,6 +690,8 @@ These are intentionally guarded by the `ci-workflow-guards`,
   same rows: each validates the complete graph boundary and intersects selected
   consumers with its original stripe. Empty intersections stay empty; ambiguous
   selection falls back to every canonical graph across those same stripes.
+  Check existence only for compiler inputs: deleted Markdown and UI CSS paths
+  do not widen accompanying code changes; deleted compiler inputs retain full coverage.
   Frozen targets retain two paired rows for stripes 1+2 and 3+4 sequentially,
   with stripe 5 in the central row. Keep at most two compiler children per
   stripe and one builder per child. A failing stripe stops its row; other
