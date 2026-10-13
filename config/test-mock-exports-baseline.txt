@@ -4312,8 +4312,6 @@
 ["src/cli/gateway-cli/lifecycle-import-boundary.test.ts","../../logging/subsystem.js","832a7a7f43ebb0fe20354719ee80cf58b27c485e0b0330bcadf0ac710ad851f0",1]
 ["src/cli/gateway-cli/lifecycle-import-boundary.test.ts","./lifecycle.runtime.js","27120a39eb60152c68ec24e61b4f8bba30cc3b37ebd14891ca78ec560c404e4c",1]
 ["src/cli/gateway-cli/lifecycle-import-boundary.test.ts","./lifecycle.runtime.js","9bde89641933b73b20a236a9c5f9e1b0d44c507134964e9dd30e78be0ccccc7e",1]
-["src/cli/gateway-cli/pre-bootstrap.reset-invalid-config.test.ts","../../config/config.js","8b6d3204745e9cfa6bd70a7684fa79b2b256282ef9082a5e86badd8fdc1d3120",1]
-["src/cli/gateway-cli/pre-bootstrap.reset-invalid-config.test.ts","../../config/io.factory.js","d37a6283cac4f5c9505f1036f321f8d9da9c32eca48fdc6cfb85f4a92751a48e",1]
 ["src/cli/gateway-cli/register-restart-handoff.test.ts","../../infra/restart-handoff.js","acf252a1353c04f9942bd86557c4e0e2273b598834fadc59daf63df17cd3f811",1]
 ["src/cli/gateway-cli/register-restart-handoff.test.ts","../../runtime.js","c16762af0d3584b5012d69f7d3cde52553a84f822e49a786d2be054e90712da3",1]
 ["src/cli/gateway-cli/register.option-collisions.test.ts","../../../packages/terminal-core/src/health-style.js","25995e9a99f621b9b3469831b952080d6edde3341df50c546f7e00de04255b6e",1]
