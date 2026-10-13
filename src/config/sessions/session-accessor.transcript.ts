@@ -58,7 +58,6 @@ export {
   appendTranscriptEvent,
   appendTranscriptMessage,
   appendTranscriptMessageSync,
-  replaceSessionWithBranchedTranscript,
   replaceTranscriptSuffixEventsSync,
   rewriteTranscriptEventRowsExact,
   withTranscriptWriteLock,

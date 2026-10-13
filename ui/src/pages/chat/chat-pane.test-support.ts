@@ -355,6 +355,7 @@ export function createInitializationContext(client?: GatewayBrowserClient): Appl
     },
     runtimeConfig: {
       state: { configNeedsApply: false, configSnapshot: null },
+      ensureLoaded: async () => undefined,
       subscribe: () => () => {},
     },
     placementStartup: {

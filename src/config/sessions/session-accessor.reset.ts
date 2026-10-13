@@ -88,7 +88,7 @@ type ReplySessionInitializationSelection = {
   relatedSessionKeys?: readonly string[];
 };
 
-function loadReplySessionInitializationEntries(
+function loadReplySessionInitializationEntriesForMaintenance(
   params: ReplySessionInitializationSelection,
 ): Record<string, SessionEntry> {
   assertSessionInitializationAgentScope(params.agentId, params.sessionKey);
@@ -145,7 +145,7 @@ async function loadReplySessionInitializationEntriesAsync(
     return entries;
   }
   if (!supportsOpenClawAgentDatabaseExecution(database)) {
-    return loadReplySessionInitializationEntries(params);
+    return loadReplySessionInitializationEntriesForMaintenance(params);
   }
   return withSessionHistoryWorkerDatabase(database, async (reader) => {
     const currentKey = normalizeStoreSessionKey(params.sessionKey);

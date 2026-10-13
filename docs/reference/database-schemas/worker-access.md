@@ -47,6 +47,12 @@ Every refresh still re-admits the current database source and checks its authori
 Reader retirement stops change publications and joins the retained reader;
 the next Gateway generation rebinds retained observers before startup admission.
 
+Persisted auth-row observation belongs to the host. Catalog workers reload
+credentials through their native task owner instead of retaining background row
+readers for WAL notifications. Workers still observe physical file replacement
+to retire native SQLite handles; session-only WAL activity needs no worker auth
+reread.
+
 Synchronous boot admission, migrations, Doctor/CLI one-shots, and lock primitives
 are the limited exceptions. Runtime access still using them is migration debt.
 For engine stores, the synchronous `withEngineStoreAdmission` scope is lexical:
@@ -86,6 +92,14 @@ the final handle retires those facts, so the next open admits the database again
 Replacement files also require new admission; migration and repair owners publish
 replacement facts after committed DDL. Doctor and explicit verification retain
 their checks. See [integrity admission](/reference/database-schemas/integrity-and-recovery).
+
+The SQLite worker broker also retains the canonical database and owner-lock paths
+captured at open. Ordinary operations reuse those paths while still checking live
+ownership; they do not resolve filesystem aliases again. Repointing an alias does
+not redirect an open worker handle. Closing and reopening captures the new path
+identity, and open admission still rejects replacements that collide with a live
+owner. Creation and schema-maintenance requests keep their target checks at the
+actual effect.
 
 Retained task workers request admission facts through their existing relay when
 needed. Task messages must not copy the global admission snapshot. Committed
@@ -1610,8 +1624,13 @@ transcript receipts cannot certify complete pending-input and model-context
 facts. Native, SDK, recovery, and maintenance writers keep their existing
 publication and final-authority guards during this incremental cutover.
 
-Closed entry patches reuse an already resident actor when the session and
-lifecycle stay unchanged. The entry writer supplies its complete row and window
+Entry patch preparation and commit reuse the resident actor's current canonical
+row, window, membership, and board facts. Prepared replacements still compare
+against the current snapshot before writing, so an intervening patch cannot lose
+updates. Singleton canonical targets share this path; alias selections and missing
+residency retain their SQL readers.
+Patches reuse the actor after writing when the session and lifecycle stay
+unchanged. The entry writer supplies its complete row and window
 postimages; the actor keeps the untouched pending inputs and transcript facts,
 then publishes its full hot state through the same commit receipt. A rollback
 preserves the stored preimage; conservative receipt invalidation can require a

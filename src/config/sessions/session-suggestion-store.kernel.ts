@@ -30,8 +30,6 @@ import { SessionWorkStartInvalidatedError } from "./work-start-error.js";
 
 type SuggestionDatabase = Pick<OpenClawAgentKyselyDatabase, "session_suggestions">;
 
-export { SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS } from "./session-suggestion-policy.js";
-
 function suggestionDb(database: Pick<OpenClawAgentDatabase, "db">) {
   return getNodeSqliteKysely<SuggestionDatabase>(database.db);
 }

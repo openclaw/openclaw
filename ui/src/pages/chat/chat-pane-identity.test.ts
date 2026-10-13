@@ -167,6 +167,7 @@ describe("chat pane assistant identity snapshots", () => {
       },
       runtimeConfig: {
         state: { configNeedsApply: false, configSnapshot: null },
+        ensureLoaded: async () => undefined,
         subscribe: () => () => undefined,
       },
     });

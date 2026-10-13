@@ -268,10 +268,26 @@ unit's effective `TimeoutStopUSec`, including drop-ins. It logs the source and
 reconciled stop budget at both points, so a repaired unit takes effect without
 restarting first. Inspection and any wait for startup to finish consume the same
 shutdown deadline. Active-work drain uses at most
-315 seconds, with up to 10 seconds reserved for final chat writes and server cleanup
-and up to another 5 seconds before systemd's deadline. A unit with the default
-90-second stop timeout therefore gets a 75-second drain and an 85-second Gateway
+315 seconds for requested restarts, with up to 10 seconds reserved for final chat writes and server cleanup
+and up to another 5 seconds before systemd's deadline. For a requested restart, a unit with the default
+90-second stop timeout gets a 75-second drain and an 85-second Gateway
 shutdown deadline. A shorter supervisor timeout also caps requested restart waits.
+
+An ordinary stop (including `systemctl restart` without a managed restart intent)
+gives active runs at most 20 seconds to finish before cancelling execution. Final
+chat writes, worktree lease release, checkpointing, and database close retain the
+remaining native shutdown budget. Shutdown settles received work and stop hooks
+before full harness disposal, then joins worktree leases before worker retirement,
+so a run's finalizer can release its lease. Code cells are cancelled before received
+work is joined. This avoids a
+lease join blocking the teardown needed to complete it. A clean database close
+also avoids a stale-lease integrity scan on the next startup; an interrupted close
+still requires that scan.
+
+The Codex native-profile recovery warning runs as service-owned background work.
+It does not hold readiness while another agent's database admission finishes.
+Doctor still awaits the same diagnostic, and shutdown joins any diagnostic reads
+that already started.
 
 Both allowances are bounded when the deadline cannot fund them, by the same rule the
 launchd budget uses and for the same reason: subtracting two values sized for a

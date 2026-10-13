@@ -39,7 +39,7 @@ Rich Telegram surfaces: formatted messages, inline keyboards, agent message acti
 
     Default: off, for client compatibility — some current Desktop, Web, Android, and third-party clients render accepted rich messages as unsupported. Keep this off unless every client used with the bot can render them. `/status` shows whether the current session has rich messages on or off.
 
-    Link previews are on by default. `channels.telegram.linkPreview: false` disables automatic entity detection for rich text.
+    Link previews are on by default. `channels.telegram.linkPreview: false` disables automatic entity detection for rich text. OpenClaw explicitly marks bare URLs so they remain tappable, except URLs containing `&`, which stay plain to avoid Telegram's query-separator encoding issue. Use a labeled Markdown link for those URLs.
 
   </Accordion>
 

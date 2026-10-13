@@ -1,4 +1,4 @@
-import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
+import type { TalkCatalogResult, TalkConfigResult } from "@openclaw/gateway-protocol";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import {
@@ -21,6 +21,7 @@ export class ComposerMicrophonePicker {
   private discoveryRequest = 0;
   private catalogClient: GatewayBrowserClient | null = null;
   private catalogConnected = false;
+  private catalogSessionKey: string | undefined;
   private catalogRequest = 0;
   realtimeStatus: ComposerTalkCapabilityStatus = "unknown";
   dictationStatus: ComposerTalkCapabilityStatus = "unknown";
@@ -29,19 +30,24 @@ export class ComposerMicrophonePicker {
 
   constructor(private readonly requestUpdate: () => void) {}
 
-  syncCatalog(client: GatewayBrowserClient | null, connected: boolean): void {
+  syncCatalog(client: GatewayBrowserClient | null, connected: boolean, sessionKey?: string): void {
     const canRead = hasOperatorReadAccess(client?.auth ?? null);
     const catalogConnected = connected && canRead;
-    if (client === this.catalogClient && catalogConnected === this.catalogConnected) {
+    if (
+      client === this.catalogClient &&
+      catalogConnected === this.catalogConnected &&
+      sessionKey === this.catalogSessionKey
+    ) {
       return;
     }
     window.removeEventListener("focus", this.refreshOnFocus);
     this.catalogClient = client;
     this.catalogConnected = catalogConnected;
+    this.catalogSessionKey = sessionKey;
     this.catalogRequest++;
+    this.realtimeStatus = canRead ? "unknown" : "unavailable";
+    this.dictationStatus = canRead ? "unknown" : "unavailable";
     if (!client || !catalogConnected) {
-      this.realtimeStatus = canRead ? "unknown" : "unavailable";
-      this.dictationStatus = canRead ? "unknown" : "unavailable";
       return;
     }
     window.addEventListener("focus", this.refreshOnFocus);
@@ -130,14 +136,43 @@ export class ComposerMicrophonePicker {
     if (notify) {
       this.requestUpdate();
     }
-    void client
-      .request<TalkCatalogResult>("talk.catalog", {})
-      .then((catalog) => {
+    void Promise.all([
+      client.request<TalkCatalogResult>(
+        "talk.catalog",
+        this.catalogSessionKey === undefined ? {} : { sessionKey: this.catalogSessionKey },
+      ),
+      client.request<TalkConfigResult>("talk.config", {}),
+    ])
+      .then(async ([catalog, config]) => {
         if (request !== this.catalogRequest) {
           return;
         }
-        this.realtimeStatus = catalog.realtime?.ready === true ? "ready" : "unavailable";
         this.dictationStatus = catalog.transcription?.ready === true ? "ready" : "unavailable";
+        const talk = config.config?.talk;
+        if (talk?.realtime?.mode !== "stt-tts") {
+          this.realtimeStatus = catalog.realtime?.ready === true ? "ready" : "unavailable";
+          return;
+        }
+        let speechReady: boolean;
+        if (talk.provider || talk.resolved?.provider) {
+          speechReady = catalog.speech.providers.some(
+            (provider) => provider.id === catalog.speech.activeProvider && provider.configured,
+          );
+        } else {
+          const status = await client.request<{
+            provider: string;
+            providerStates: Array<{ id: string; configured: boolean }>;
+            fallbackProviders: string[];
+          }>("tts.status", {});
+          speechReady =
+            status.providerStates.some(
+              (provider) => provider.id === status.provider && provider.configured,
+            ) || status.fallbackProviders.length > 0;
+        }
+        if (request === this.catalogRequest) {
+          this.realtimeStatus =
+            this.dictationStatus === "ready" && speechReady ? "ready" : "unavailable";
+        }
       })
       .catch(() => {
         if (request !== this.catalogRequest) {

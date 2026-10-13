@@ -128,7 +128,13 @@ export async function resetSessionEntryLifecycle(
         resetSessionEntryInWorker(params, databaseOptions, resolved.agentId, markCommitted),
     );
   }
-  // Explicit native maintenance retains the same reset contract.
+  return resetSessionEntryLifecycleForMaintenance(params, resolved);
+}
+
+async function resetSessionEntryLifecycleForMaintenance(
+  params: ResetSessionEntryLifecycleParams,
+  resolved: ResolvedSqliteScope,
+): Promise<ResetSessionEntryLifecycleResult> {
   if (params.resetBoundary) {
     params.commitGuard?.();
     const source = withOpenClawAgentDatabaseReadOnly(

@@ -1,8 +1,10 @@
 import { execFile } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { promisify } from "node:util";
+import { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { applyAgentDatabaseReaderRequest } from "../../infra/agent-database-readers.js";
@@ -58,6 +60,123 @@ it("keeps unchanged fallback observations off row workers and detects WAL-only w
   await refreshAuthProfileFileState();
   expect(refresh).toHaveBeenCalledOnce();
 });
+
+it.skipIf(process.platform === "win32")(
+  "keeps worker WAL observations off row children while retiring replaced credential files",
+  async () => {
+    const directory = temporary.make("auth-file-native-worker-");
+    const worker = new Worker(
+      `
+      const assert = require("node:assert/strict");
+      const fs = require("node:fs");
+      const path = require("node:path");
+      const { syncBuiltinESMExports } = require("node:module");
+      const { DatabaseSync } = require("node:sqlite");
+      const { parentPort, workerData } = require("node:worker_threads");
+      let spawned = 0;
+      require("node:child_process").spawn = () => {
+        spawned += 1;
+        throw new Error("Worker auth observation requested a row child");
+      };
+      fs.watch = () => { throw new Error("synthetic unavailable watcher"); };
+      syncBuiltinESMExports();
+      (async () => {
+        const { register } = await import(workerData.loader);
+        const unregister = register();
+        const files = await import(workerData.files);
+        const snapshots = await import(workerData.snapshots);
+        const { acquireAuthProfileReadDatabase } = await import(workerData.pool);
+        const { readAuthProfileRowsReadOnly } = await import(workerData.rows);
+        const { runInDetachedAsyncContext } = await import(workerData.detached);
+        const { closeOpenClawStateDatabaseAsync } = await import(workerData.cleanup);
+        const databasePath = path.join(workerData.directory, "openclaw-agent.sqlite");
+        const store = (key) => ({
+          version: 1,
+          profiles: { fixture: { type: "api_key", provider: "fixture", key } },
+        });
+        const create = (pathname, key) => {
+          const db = new DatabaseSync(pathname);
+          db.exec(
+            "CREATE TABLE auth_profile_store (store_key TEXT PRIMARY KEY, store_json TEXT);" +
+            "CREATE TABLE auth_profile_state (state_key TEXT PRIMARY KEY, state_json TEXT);" +
+            "INSERT INTO auth_profile_state VALUES ('primary', '{}');"
+          );
+          db.prepare("INSERT INTO auth_profile_store VALUES ('primary', ?)").run(JSON.stringify(store(key)));
+          return db;
+        };
+        const writer = create(databasePath, "worker-original");
+        try {
+          writer.exec("PRAGMA journal_mode=WAL; PRAGMA wal_checkpoint(TRUNCATE)");
+          const acquired = acquireAuthProfileReadDatabase(databasePath);
+          assert.equal(acquired.status, "readable");
+          const reader = acquired.db;
+          const owner = { databasePath, sharedDatabasePath: databasePath, location: "legacy-main" };
+          snapshots.setRuntimeAuthProfileStoreSnapshotAtDatabasePath(
+            store("worker-original"), databasePath, workerData.directory, owner
+          );
+          snapshots.recordRuntimeAuthProfilePersistedStore(databasePath, store("worker-original"));
+          const changes = [];
+          const unsubscribe = files.registerAuthProfileFileChangeListener((change) => changes.push(change));
+          try {
+            writer.prepare("UPDATE auth_profile_state SET state_json = ?").run('{"lastGood":{"fixture":"fixture"}}');
+            assert.ok(fs.statSync(databasePath + "-wal").size > 0);
+            await runInDetachedAsyncContext(files.refreshAuthProfileFileState);
+            assert.ok(changes.some((change) => change.contentsChanged && !change.identityChanged));
+            assert.equal(spawned, 0, "WAL-only observation must not launch an auth row child");
+            assert.equal(snapshots.runtimeAuthProfileRowsCache.hasSource(databasePath), false);
+            assert.equal(reader.isOpen, true);
+            assert.deepEqual(snapshots.getRuntimeAuthProfileStoreSnapshotAtDatabasePath(databasePath), store("worker-original"));
+
+            writer.close();
+            const replacement = databasePath + ".replacement";
+            create(replacement, "worker-replacement").close();
+            fs.renameSync(replacement, databasePath);
+            await runInDetachedAsyncContext(files.refreshAuthProfileFileState);
+            assert.ok(changes.some((change) => change.identityChanged));
+            assert.equal(reader.isOpen, false);
+            assert.equal(snapshots.getRuntimeAuthProfileStoreSnapshotAtDatabasePath(databasePath), undefined);
+            assert.deepEqual(readAuthProfileRowsReadOnly(databasePath).store, {
+              status: "readable", raw: store("worker-replacement")
+            });
+            assert.equal(spawned, 0);
+          } finally {
+            unsubscribe();
+          }
+        } finally {
+          if (writer.isOpen) writer.close();
+          snapshots.clearRuntimeAuthProfileStoreSnapshots();
+          await closeOpenClawStateDatabaseAsync();
+          unregister();
+        }
+        parentPort.postMessage("worker observations verified");
+        parentPort.close();
+      })().catch((error) => { throw error; });
+      `,
+      {
+        eval: true,
+        execArgv: [],
+        env: { ...process.env, OPENCLAW_STATE_DIR: directory },
+        workerData: {
+          directory,
+          loader: import.meta.resolve("tsx/esm/api"),
+          files: new URL("./file-state.ts", import.meta.url).href,
+          snapshots: new URL("./runtime-snapshots.ts", import.meta.url).href,
+          pool: new URL("./sqlite-read-pool.ts", import.meta.url).href,
+          rows: new URL("./sqlite-json.ts", import.meta.url).href,
+          detached: new URL("../../shared/detached-async-context.ts", import.meta.url).href,
+          cleanup: new URL("../../state/openclaw-state-db-cache.ts", import.meta.url).href,
+        },
+      },
+    );
+    try {
+      const [[result], [code]] = await Promise.all([once(worker, "message"), once(worker, "exit")]);
+      expect(code).toBe(0);
+      expect(result).toBe("worker observations verified");
+    } finally {
+      await worker.terminate();
+    }
+  },
+);
 
 it("rejects a swapped database before a privileged write even before observation runs", async () => {
   const directory = temporary.make("auth-file-write-admission-");
