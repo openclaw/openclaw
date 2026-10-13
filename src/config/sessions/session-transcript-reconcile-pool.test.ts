@@ -1,10 +1,12 @@
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import type { Worker } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
+import * as admissionTurn from "../../infra/sqlite-database-admission-turn.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -40,6 +42,54 @@ vi.mock("node:worker_threads", async () =>
 
 const observer = useReconcileWorkerObserver();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+it("closes a queued admission without dispatching it after shutdown", async () => {
+  const resume = createDeferredCore();
+  const queued = createDeferredCore();
+  let admissionCompletion: Promise<unknown> | undefined;
+  const admissionSpy = vi
+    .spyOn(admissionTurn, "runWithSqliteDatabaseAdmissionTurn")
+    .mockImplementationOnce((_paths, run) => {
+      queued.resolve();
+      const completion = resume.promise.then(run);
+      admissionCompletion = completion;
+      return completion;
+    });
+  const dispatch = vi.fn();
+  observer.onTask = dispatch;
+  const operation = runSessionTranscriptReconcileOperation(async (owner) => {
+    const task = await owner.startTask({ mode: "memory", sessionIds: [] });
+    try {
+      await task.completion;
+    } finally {
+      task.port.close();
+    }
+  });
+  const outcome = Promise.allSettled([operation]);
+  let closed = false;
+  let closing: Promise<void> | undefined;
+  try {
+    await queued.promise;
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    closing = closeSessionTranscriptReconcileWorkerPool().then(() => {
+      closed = true;
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    await setImmediate();
+    expect(closed).toBe(true);
+    expect(await outcome).toEqual([expect.objectContaining({ status: "rejected" })]);
+    resume.resolve();
+    await admissionCompletion?.catch(() => {});
+    expect(dispatch).not.toHaveBeenCalled();
+  } finally {
+    vi.useRealTimers();
+    resume.resolve();
+    await outcome;
+    await closing;
+    admissionSpy.mockRestore();
+    await closeSessionTranscriptReconcileWorkerPool();
+  }
+});
 
 function readAgentDatabaseLeaseIds(pathname: string, env: NodeJS.ProcessEnv): string[] {
   return openOpenClawStateDatabase({ env })

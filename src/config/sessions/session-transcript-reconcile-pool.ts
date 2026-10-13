@@ -2,6 +2,7 @@ import { addAbortListener } from "node:events";
 import { MessageChannel } from "node:worker_threads";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import type { Result } from "@openclaw/normalization-core/result";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { runWithSqliteDatabaseAdmissionTurn } from "../../infra/sqlite-database-admission-turn.js";
@@ -296,7 +297,7 @@ async function startReconcileWorkerTask(
     const { runOpenClawStateWorkerOperation } =
       await import("../../state/openclaw-state-worker-store.js");
     await runOpenClawStateWorkerOperation(owner.context, async () => undefined, {
-      assertCurrent: () => signal?.throwIfAborted(),
+      signal,
     });
   }
   signal?.throwIfAborted();
@@ -345,31 +346,41 @@ async function startReconcileWorkerTask(
         (input.mode === "disk" ? 2 * input.agentId.length : 0));
   let poolCompletion: Promise<void> | undefined;
   const execute = async (coordination?: SqliteMutationWorkerCoordination) => {
-    poolCompletion = runWithSqliteDatabaseAdmissionTurn(
-      input.mode === "disk" ? [input.path] : [],
+    const waiting = new AbortController();
+    const abort = addAbortListener(controller.signal, () =>
+      waiting.abort(controller.signal.reason),
+    );
+    poolCompletion = racePromiseWithAbortSignal(
       () =>
-        pool.run(
-          {
-            input,
-            port: port2,
-            coordination,
-            sourceIdentity,
-          },
-          {
-            inputBytes,
-            transferList: (task) => [
-              task.port,
-              ...(task.coordination?.databaseAdmission
-                ? [task.coordination.databaseAdmission]
-                : []),
-            ],
-            signal: controller.signal,
-          },
-        ),
+        runWithSqliteDatabaseAdmissionTurn(input.mode === "disk" ? [input.path] : [], () => {
+          // Cancel queued admission, but join native settlement once the task is dispatched.
+          abort[Symbol.dispose]();
+          controller.signal.throwIfAborted();
+          return pool.run(
+            {
+              input,
+              port: port2,
+              coordination,
+              sourceIdentity,
+            },
+            {
+              inputBytes,
+              transferList: (task) => [
+                task.port,
+                ...(task.coordination?.databaseAdmission
+                  ? [task.coordination.databaseAdmission]
+                  : []),
+              ],
+              signal: controller.signal,
+            },
+          );
+        }),
+      waiting.signal,
     );
     try {
       await poolCompletion;
     } finally {
+      abort[Symbol.dispose]();
       port2.close();
       await closed;
     }
