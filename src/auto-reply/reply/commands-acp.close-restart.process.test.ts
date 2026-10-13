@@ -2,23 +2,26 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createAgentRegistry, createFileSessionStore } from "acpx/runtime";
 import { expect, it } from "vitest";
-import { AcpxRuntime } from "../../../extensions/acpx/src/runtime.js";
 import {
   disposeAcpSessionManager,
   getAcpSessionManager,
   testing as managerTesting,
   type AcpSessionManager,
 } from "../../acp/control-plane/manager.js";
-import {
-  registerAcpRuntimeBackend,
-  testing as registryTesting,
-  unregisterAcpRuntimeBackend,
-} from "../../acp/runtime/registry.js";
+import { testing as registryTesting } from "../../acp/runtime/registry.js";
 import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createTestPluginApi } from "../../plugin-sdk/plugin-test-api.js";
+import { createPluginRuntimeMock } from "../../plugin-sdk/plugin-test-runtime.js";
+import { createPluginStateKeyedStore } from "../../plugin-state/plugin-state-store.js";
+import type {
+  OpenClawPluginService,
+  OpenClawPluginServiceContext,
+} from "../../plugins/plugin-registration.types.js";
+import type { OpenClawPluginDefinition } from "../../plugins/types.js";
+import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { handleAcpCommand } from "./commands-acp.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
@@ -33,6 +36,16 @@ const cfg = {
   agents: { ownership: "explicit", entries: { main: {} } },
   acp: { enabled: true, backend: "acpx", dispatch: { enabled: true } },
 } as OpenClawConfig;
+
+type AcpxRuntimeService = OpenClawPluginService & {
+  getRuntime: (ctx: OpenClawPluginServiceContext) => Promise<unknown>;
+};
+
+type StartedBackend = {
+  service: AcpxRuntimeService;
+  context: OpenClawPluginServiceContext;
+  manager: AcpSessionManager;
+};
 
 function sessionFile(stateRoot: string, sessionKey: string): string {
   return path.join(stateRoot, "sessions", `${encodeURIComponent(sessionKey)}.json`);
@@ -49,7 +62,7 @@ async function snapshotStore(stateRoot: string) {
     }
   }
   const rows = [];
-  for (const name of names.sort()) {
+  for (const name of names.toSorted()) {
     const buf = await fs.readFile(path.join(dir, name));
     const parsed = JSON.parse(buf.toString("utf8")) as {
       schema?: string;
@@ -67,14 +80,14 @@ async function snapshotStore(stateRoot: string) {
       acp_session_id: parsed.acp_session_id ?? null,
       closed: parsed.closed ?? null,
       reset_on_next_ensure: parsed.acpx?.reset_on_next_ensure ?? null,
-      acpx_keys: parsed.acpx ? Object.keys(parsed.acpx).sort() : [],
+      acpx_keys: parsed.acpx ? Object.keys(parsed.acpx).toSorted() : [],
     });
   }
   return rows;
 }
 
 async function fixtureHistories(directory: string) {
-  const names = (await fs.readdir(directory)).filter((name) => name.endsWith(".json")).sort();
+  const names = (await fs.readdir(directory)).filter((name) => name.endsWith(".json")).toSorted();
   const rows = [];
   for (const name of names) {
     const parsed = JSON.parse(await fs.readFile(path.join(directory, name), "utf8")) as {
@@ -85,27 +98,78 @@ async function fixtureHistories(directory: string) {
   return rows;
 }
 
-function startBackend(stateRoot: string, peerDir: string) {
-  registryTesting.resetAcpRuntimeBackendsForTests();
-  managerTesting.resetAcpSessionManagerForTests();
-  const runtime = new AcpxRuntime({
-    cwd: stateRoot,
-    sessionStore: createFileSessionStore({ stateDir: stateRoot }),
-    agentRegistry: createAgentRegistry({
-      overrides: { fixture: [process.execPath, peer, peerDir] },
-    }),
-    permissionMode: "deny-all",
-    timeoutMs: 5_000,
-  });
-  registerAcpRuntimeBackend({ id: "acpx", runtime });
-  return { runtime, manager: getAcpSessionManager() };
+function isAcpxRuntimeService(service: OpenClawPluginService): service is AcpxRuntimeService {
+  return "getRuntime" in service && typeof service.getRuntime === "function";
 }
 
-async function stopBackend(runtime: AcpxRuntime | undefined): Promise<void> {
+async function loadBackend(stateRoot: string, peerDir: string, openClawStateDir: string) {
+  registryTesting.resetAcpRuntimeBackendsForTests();
+  managerTesting.resetAcpSessionManagerForTests();
+  let registered: OpenClawPluginService | undefined;
+  const { default: plugin } = await loadBundledPluginFacade<{ default: OpenClawPluginDefinition }>({
+    pluginId: "acpx",
+    artifactBasename: "index.js",
+  });
+  const api = createTestPluginApi({
+    id: "acpx",
+    name: "ACPX Runtime",
+    config: cfg,
+    pluginConfig: {
+      cwd: stateRoot,
+      stateDir: stateRoot,
+      permissionMode: "deny-all",
+      nonInteractivePermissions: "deny",
+      timeoutSeconds: 5,
+      piSessionCatalog: { enabled: false },
+      agents: {
+        fixture: {
+          command: process.execPath,
+          args: [peer, peerDir],
+        },
+      },
+    },
+    runtime: createPluginRuntimeMock({
+      config: { current: () => cfg },
+      state: {
+        resolveStateDir: () => openClawStateDir,
+        openKeyedStore: (options) => createPluginStateKeyedStore("acpx", options),
+      },
+    }),
+    registerService(service) {
+      registered = service;
+    },
+  });
+  if (!plugin.register) {
+    throw new Error("ACPX registration missing");
+  }
+  plugin.register(api);
+  if (!registered || !isAcpxRuntimeService(registered)) {
+    throw new Error("ACPX runtime service missing");
+  }
+  const context: OpenClawPluginServiceContext = {
+    config: cfg,
+    workspaceDir: stateRoot,
+    stateDir: openClawStateDir,
+    logger: api.logger,
+  };
+  return { service: registered, context };
+}
+
+async function startBackend(backend: {
+  service: AcpxRuntimeService;
+  context: OpenClawPluginServiceContext;
+}): Promise<StartedBackend> {
+  await backend.service.start(backend.context);
+  await backend.service.getRuntime(backend.context);
+  return { ...backend, manager: getAcpSessionManager() };
+}
+
+async function stopBackend(
+  backend: { service: AcpxRuntimeService; context: OpenClawPluginServiceContext } | undefined,
+): Promise<void> {
+  await backend?.service.stop?.(backend.context);
   await disposeAcpSessionManager("proof-restart");
   managerTesting.resetAcpSessionManagerForTests();
-  unregisterAcpRuntimeBackend("acpx");
-  await runtime?.shutdown();
 }
 
 async function openSession(manager: AcpSessionManager, sessionKey: string, cwd: string) {
@@ -151,14 +215,14 @@ it("closes through shipped /acp close, then restarts without resuming that sessi
     setRuntimeConfigSnapshot(cfg);
     const peerDir = path.join(state.root, "peer");
     await fs.mkdir(peerDir);
-    const runtimes: AcpxRuntime[] = [];
+    const backend = await loadBackend(state.root, peerDir, state.stateDir);
+    let started: StartedBackend | undefined;
     try {
-      const first = startBackend(state.root, peerDir);
-      runtimes.push(first.runtime);
-      const closed = await openSession(first.manager, closedKey, state.root);
-      const kept = await openSession(first.manager, keptKey, state.root);
-      const beforeClosed = await prompt(first.manager, closedKey, "before");
-      const beforeKept = await prompt(first.manager, keptKey, "kept-before");
+      started = await startBackend(backend);
+      const closed = await openSession(started.manager, closedKey, state.root);
+      const kept = await openSession(started.manager, keptKey, state.root);
+      const beforeClosed = await prompt(started.manager, closedKey, "before");
+      const beforeKept = await prompt(started.manager, keptKey, "kept-before");
       proof.beforeClose = {
         closed: {
           backendSessionId: closed.backendSessionId,
@@ -170,7 +234,8 @@ it("closes through shipped /acp close, then restarts without resuming that sessi
         },
         fixture: await fixtureHistories(peerDir),
       };
-      await stopBackend(first.runtime);
+      await stopBackend(started);
+      started = undefined;
 
       const keptRaw = JSON.parse(
         await fs.readFile(sessionFile(state.root, keptKey), "utf8"),
@@ -187,10 +252,9 @@ it("closes through shipped /acp close, then restarts without resuming that sessi
         proof.preUpgradeOnDisk as Array<{ acpx_record_id: string; sha256: string }>
       ).find((row) => row.acpx_record_id === legacyKey)?.sha256;
 
-      const reopened = startBackend(state.root, peerDir);
-      runtimes.push(reopened.runtime);
-      const keptAgain = await openSession(reopened.manager, keptKey, state.root);
-      const keptReopen = await prompt(reopened.manager, keptKey, "kept-reopen");
+      started = await startBackend(backend);
+      const keptAgain = await openSession(started.manager, keptKey, state.root);
+      const keptReopen = await prompt(started.manager, keptKey, "kept-reopen");
       proof.preUpgradeOpen = {
         previousBackendSessionId: kept.backendSessionId,
         backendSessionId: keptAgain.backendSessionId,
@@ -224,14 +288,14 @@ it("closes through shipped /acp close, then restarts without resuming that sessi
         fixture: await fixtureHistories(peerDir),
       };
       expect(commandText).toContain(`Closed ACP session ${closedKey}`);
-      await stopBackend(reopened.runtime);
+      await stopBackend(started);
+      started = undefined;
 
-      const restarted = startBackend(state.root, peerDir);
-      runtimes.push(restarted.runtime);
-      const closedRestart = await openSession(restarted.manager, closedKey, state.root);
-      const afterClosed = await prompt(restarted.manager, closedKey, "after");
-      const keptRestart = await openSession(restarted.manager, keptKey, state.root);
-      const afterKept = await prompt(restarted.manager, keptKey, "kept-after");
+      started = await startBackend(backend);
+      const closedRestart = await openSession(started.manager, closedKey, state.root);
+      const afterClosed = await prompt(started.manager, closedKey, "after");
+      const keptRestart = await openSession(started.manager, keptKey, state.root);
+      const afterKept = await prompt(started.manager, keptKey, "kept-after");
       proof.afterRestart = {
         closed: {
           previousBackendSessionId: closed.backendSessionId,
@@ -271,7 +335,7 @@ it("closes through shipped /acp close, then restarts without resuming that sessi
       ).store.find((row) => row.acpx_record_id === keptKey);
       expect(keptAfterStore?.reset_on_next_ensure ?? null).not.toBe(true);
     } finally {
-      await Promise.allSettled(runtimes.map((runtime) => stopBackend(runtime)));
+      await stopBackend(started);
       process.stdout.write(`${JSON.stringify(proof)}\n`);
     }
   });
