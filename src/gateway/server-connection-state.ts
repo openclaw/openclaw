@@ -3,6 +3,7 @@ import { sessionChanges } from "../sessions/session-row-changes.js";
 // Gateway connection and run registries.
 // This state is transport-fed but can be constructed without HTTP or WebSocket servers.
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
+import { captureWebPushAnswerPreviewAuthority } from "./event-web-push-answer-authority.js";
 import { createEventWebPushDelivery } from "./event-web-push.js";
 import { createMentionInbox } from "./mention-inbox.js";
 import { createPresenceRecipientProjection } from "./presence-projection.js";
@@ -172,12 +173,35 @@ export function createGatewayConnectionState(params: {
         },
       );
     },
-    onBroadcast: (event, payload, opts) =>
+    onBroadcast: (event, payload, opts) => {
+      const answerPreview = captureWebPushAnswerPreviewAuthority({
+        event,
+        payload,
+        opts,
+        getConfig: loadRuntimeConfig,
+        getProjection: () => sessionRowProjection,
+      });
+      // Personal Gateways omit fanout scope; the canonical question can still
+      // constrain offline delivery without changing websocket recipients.
+      const questionPreview = opts?.questionPreview;
+      const question =
+        event === "question.requested" && questionPreview?.record === payload
+          ? questionPreview?.record
+          : undefined;
       eventWebPush.handleEvent(
         event,
         payload,
-        opts ? { agentId: opts.agentId, sessionKeys: opts.sessionKeys } : undefined,
-      ),
+        opts
+          ? {
+              agentId: opts.agentId ?? question?.agentId,
+              sessionKeys:
+                opts.sessionKeys ?? (question?.sessionKey ? [question.sessionKey] : undefined),
+              questionPreview,
+              answerPreview,
+            }
+          : undefined,
+      );
+    },
   });
   const mentionInbox = createMentionInbox({
     scheduler: params.scheduler,

@@ -67,6 +67,8 @@ const WebPushQuietHoursSchema = closedObject({
 export const WebPushNotificationPreferencesSchema = closedObject({
   categories: WebPushCategoryPreferencesSchema,
   detailLevel: WebPushDetailLevelSchema,
+  answerPreviewConsentVersion: Type.Optional(Type.Literal(1)),
+  questionPreviewConsentVersion: Type.Optional(Type.Literal(1)),
   quietHours: WebPushQuietHoursSchema,
   agentIds: Type.Array(Type.String({ minLength: 1, maxLength: 128 }), { maxItems: 128 }),
 });
@@ -84,6 +86,8 @@ export const WebPushDevicePreferencesSchema = closedObject({
     }),
   ),
   detailLevel: Type.Optional(WebPushDetailLevelSchema),
+  answerPreviewConsentVersion: Type.Optional(Type.Literal(1)),
+  questionPreviewConsentVersion: Type.Optional(Type.Literal(1)),
   quietHours: Type.Optional(WebPushQuietHoursSchema),
   agentIds: Type.Optional(
     Type.Array(Type.String({ minLength: 1, maxLength: 128 }), { maxItems: 128 }),
@@ -141,6 +145,30 @@ export type WebPushNotificationPreferences = Static<typeof WebPushNotificationPr
 export type WebPushDevicePreferences = Static<typeof WebPushDevicePreferencesSchema>;
 export type WebPushPreferencesGetParams = Static<typeof WebPushPreferencesGetParamsSchema>;
 export type WebPushPreferencesSetParams = Static<typeof WebPushPreferencesSetParamsSchema>;
+
+/** Consented display data, never authority to resolve a question or access a session. */
+export type WebPushContentPreview =
+  | {
+      version: 1;
+      kind: "answer";
+      sessionKey: string;
+      runId: string;
+      text: string;
+    }
+  | {
+      version: 1;
+      kind: "question";
+      requestId: string;
+      sessionKey: string;
+      runId?: string;
+      expiresAtMs: number;
+      question: {
+        id: string;
+        text: string;
+        choices: string[];
+        allowTextReply: boolean;
+      };
+    };
 
 // Wire types derive directly from local schema consts so public d.ts graphs never
 // pull in the ProtocolSchemas registry.

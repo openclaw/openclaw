@@ -37,7 +37,11 @@ it("runs web-push preference get and set without preparing SQLite on the calling
     params: {
       endpoint,
       scope: "user",
-      preferences: normalizeWebPushNotificationPreferences({ detailLevel: "detailed" }),
+      preferences: normalizeWebPushNotificationPreferences({
+        detailLevel: "detailed",
+        answerPreviewConsentVersion: 1,
+        questionPreviewConsentVersion: 1,
+      }),
     },
     client: {
       connId: "preferences-owner",
@@ -112,7 +116,11 @@ it("runs web-push preference get and set without preparing SQLite on the calling
     true,
     expect.objectContaining({
       durableIdentity: true,
-      user: expect.objectContaining({ detailLevel: "detailed" }),
+      user: expect.objectContaining({
+        detailLevel: "detailed",
+        answerPreviewConsentVersion: 1,
+        questionPreviewConsentVersion: 1,
+      }),
     }),
     undefined,
   );

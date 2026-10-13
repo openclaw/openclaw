@@ -28,6 +28,7 @@ import {
   QuestionManagerErrorCodes,
   type QuestionObservation,
 } from "./question-manager.js";
+import { questionPreviewAuthority } from "./question-preview-authority.js";
 import type { QuestionSessionAccess } from "./question-session-access.types.js";
 import { readGatewayRequestMutationAuthority } from "./server-methods/session-mutation-guards.js";
 import type { GatewayClient, GatewayRequestHandlerOptions } from "./server-methods/types.js";
@@ -684,7 +685,11 @@ export function questionBroadcastOptions(params: {
       (!expectedRecord ||
         (observation.record === expectedRecord && expectedRecord.status === "pending")),
     );
+  const questionPreview = isCurrent()
+    ? questionPreviewAuthority(observation, prepared, expectedRecord)
+    : undefined;
   return {
+    ...(questionPreview ? { questionPreview } : {}),
     questionRecipient: (client: GatewayClient) => {
       if (!isCurrent()) {
         return false;
