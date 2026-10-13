@@ -8,16 +8,11 @@ import {
 } from "./model-catalog-auth-labels.js";
 
 const envKey = vi.hoisted(() => vi.fn());
-vi.mock("./model-auth.js", () => ({
+vi.mock("./model-auth-env.js", () => ({
   resolveEnvApiKey: envKey,
-  resolveUsableCustomProviderApiKey: () => null,
 }));
-vi.mock("./auth-profiles.js", async () => ({
-  isConfiguredAwsSdkAuthProfileForProvider: (await import("./auth-profiles/order.js"))
-    .isConfiguredAwsSdkAuthProfileForProvider,
-  isProfileInCooldown: (await import("./auth-profiles/usage-state.js")).isProfileInCooldown,
-  resolveAuthProfileDisplayLabel: (await import("./auth-profiles/display.js"))
-    .resolveAuthProfileDisplayLabel,
+vi.mock("./model-auth-provider-config.js", () => ({
+  resolveUsableCustomProviderApiKey: () => null,
 }));
 const capture = (provider: string, store: AuthProfileStore, cfg: OpenClawConfig = {}) => {
   const capturedStore = structuredClone(store);
