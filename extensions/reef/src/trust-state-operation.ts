@@ -166,7 +166,7 @@ export function runReefTrustStateOperation(
       if (next) {
         tx.set(0, command.input.key, next);
       }
-      return command.type === "set" || command.type === "beginRequest" ? undefined : !!next;
+      return command.type === "set" || command.type === "beginRequest" ? undefined : Boolean(next);
     }
     case "requestStatus":
       return reefOutboundRequestStatus(

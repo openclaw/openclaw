@@ -86,7 +86,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
   private syncProviderGenerationOwners = 0;
 
   protected acquireProviderUse(provider: EmbeddingProvider): () => void {
-    const completion = createDeferred<void>();
+    const completion = createDeferred();
     const uses = this.activeProviderUses.get(provider) ?? new Set<Promise<void>>();
     uses.add(completion.promise);
     this.activeProviderUses.set(provider, uses);
@@ -102,7 +102,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
   }
 
   protected async awaitProviderIdle(provider: EmbeddingProvider): Promise<void> {
-    await Promise.all(this.activeProviderUses.get(provider) ?? []);
+    const uses = this.activeProviderUses.get(provider);
+    if (uses) {
+      await Promise.all(uses);
+    }
   }
 
   protected override beginSyncProviderGeneration(options?: { forceFtsOnly?: boolean }): void {

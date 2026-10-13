@@ -94,4 +94,5 @@ export function transitionReefPeer(
     case "removeRequest":
       return withoutReefOutboundRequest(current, command.input.requestId);
   }
+  return command satisfies never;
 }

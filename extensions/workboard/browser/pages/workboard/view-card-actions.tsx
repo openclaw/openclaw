@@ -246,6 +246,7 @@ export function CardAction(
       case "delete":
         return { label: "workboard.deleteCard", icon: icons.trash, disabled: input.busy };
     }
+    return input satisfies never;
   });
   const perform = () => {
     const context = workboardMutationContext(input.workboard);
