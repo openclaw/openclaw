@@ -55,6 +55,7 @@ export const buildGatewayConnectionDetails = vi.fn(
   }),
 );
 
+// mock-isolation: Command tests must not resolve real Gateway credentials or connections.
 vi.mock("../gateway/call.js", () => ({
   GatewayTransportError: MockGatewayTransportError,
   buildGatewayConnectionDetails: (
@@ -63,12 +64,14 @@ vi.mock("../gateway/call.js", () => ({
   isGatewayTransportError: (value: unknown) => value instanceof MockGatewayTransportError,
 }));
 
+// mock-isolation: Scripted log pages must not read the operator's filesystem.
 vi.mock("../logging/log-tail.js", () => ({
   readConfiguredLogTail: (
     ...args: Parameters<typeof import("../logging/log-tail.js").readConfiguredLogTail>
   ) => readConfiguredLogTail(...args),
 }));
 
+// mock-isolation: Journal recovery must not inspect or spawn real system services.
 vi.mock("./logs-cli.runtime.js", () => ({
   buildGatewayConnectionDetails: (
     ...args: Parameters<typeof import("../gateway/call.js").buildGatewayConnectionDetails>
@@ -84,6 +87,7 @@ vi.mock("./logs-cli.runtime.js", () => ({
   ) => "openclaw-gateway",
 }));
 
+// mock-isolation: Retry tests use zero backoff instead of waiting on wall-clock delays.
 vi.mock("../infra/backoff.js", () => ({
   computeBackoff: vi.fn().mockReturnValue(0),
 }));

@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   readConfig: vi.fn(() => ({})),
 }));
 vi.mock("node:timers/promises", () => ({ setTimeout: mocks.delay }));
+// mock-isolation: Exercise unreadable config without reading the operator's configuration.
 vi.mock("../config/gateway-dispatch-config.js", () => ({
   readGatewayDispatchConfig: mocks.readConfig,
 }));
