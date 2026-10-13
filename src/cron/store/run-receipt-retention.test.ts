@@ -133,6 +133,7 @@ describe("pending cron receipt retention", () => {
             database: db,
             receiptSchema: prepareCronRunReceiptWriteSchema(db),
             handle: pending!,
+            pendingReceiptId: pending!.receiptId,
             status: "ok",
             finishedAtMs: now,
           }),

@@ -297,6 +297,7 @@ export async function admitReplyTurn(
                   {
                     signal,
                     assertCurrent,
+                    onRegistryChange: params.onDatabaseRegistration,
                   },
                 );
                 try {

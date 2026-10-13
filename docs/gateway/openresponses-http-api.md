@@ -35,6 +35,11 @@ See [Operator scopes](/gateway/operator-scopes) and [Security](/gateway/security
 
 By default the endpoint is **stateless per request** (a new session key is generated each call).
 
+If a routed session is archived, non-streaming requests return HTTP `409` with
+`invalid_request_error` and guidance to restore it in the Control UI. Streaming
+requests report the same error in the stream. Unarchive the session before
+retrying; the rejected request preserves its archived state and history.
+
 If the request includes an OpenResponses `user` string, the Gateway derives a stable session key from it so repeated calls can share an agent session.
 
 `previous_response_id` reuses the earlier response's session when the request stays within the same agent/user/requested-session scope (matched by auth subject, agent id, and `x-openclaw-session-key`).

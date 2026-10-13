@@ -3,7 +3,6 @@ import { existsSync, mkdirSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { ExpressionBuilder } from "kysely";
 import { hasErrnoCode } from "../infra/errno.js";
 import {
   executeSqliteQuerySync,
@@ -272,18 +271,15 @@ export function recordOpenClawAgentIntegrityVerification(
 export function clearOpenClawAgentIntegrityVerification(
   pathname: string,
   env: NodeJS.ProcessEnv = process.env,
-  runtimeProof: "revoke" | "retain" = "revoke",
 ): void {
-  if (runtimeProof === "revoke") {
-    invalidateOpenClawAgentDatabaseValidation(pathname);
-  }
+  invalidateOpenClawAgentDatabaseValidation(pathname);
   if (statSync(resolveQuarantineStorePath(env), { throwIfNoEntry: false }) === undefined) {
     return;
   }
   withQuarantineWriter(env, (database) =>
     runSqliteImmediateTransactionSync(
       database,
-      () => invalidateAgentIntegrityVerification(database, pathname, runtimeProof),
+      () => invalidateAgentIntegrityVerification(database, pathname),
       {
         databaseLabel: resolveQuarantineStorePath(env),
         operationLabel: "quarantine.integrity.invalidate",
@@ -295,7 +291,7 @@ export function clearOpenClawAgentIntegrityVerification(
 function invalidateAgentIntegrityVerification(
   database: DatabaseSync,
   pathname: string,
-  runtimeProof: "revoke" | "retain" | "clear-receipt" = "revoke",
+  runtimeProof: "revoke" | "clear-receipt" = "revoke",
 ): void {
   const query = getNodeSqliteKysely<IntegrityDatabase>(database);
   const stored = executeSqliteQueryTakeFirstSync(
@@ -313,26 +309,21 @@ function invalidateAgentIntegrityVerification(
       }
     }
   }
-  const matchesFile = (eb: ExpressionBuilder<IntegrityDatabase, "agent_integrity_verifications">) =>
-    eb.or([
-      eb("path", "=", resolveAgentIntegrityPath(pathname)),
-      ...[stored, current].flatMap((file) =>
-        file ? [eb.and([eb("dev", "=", String(file.dev)), eb("ino", "=", String(file.ino))])] : [],
+  executeSqliteQuerySync(
+    database,
+    query
+      .deleteFrom("agent_integrity_verifications")
+      .where((eb) =>
+        eb.or([
+          eb("path", "=", resolveAgentIntegrityPath(pathname)),
+          ...[stored, current].flatMap((file) =>
+            file
+              ? [eb.and([eb("dev", "=", String(file.dev)), eb("ino", "=", String(file.ino))])]
+              : [],
+          ),
+        ]),
       ),
-    ]);
-  // A blocked checkpoint dirties restart proof, but a later last writer can
-  // still certify this verified file after completing its checkpoint and close.
-  if (runtimeProof === "retain") {
-    executeSqliteQuerySync(
-      database,
-      query.updateTable("agent_integrity_verifications").set({ clean_close: 0 }).where(matchesFile),
-    );
-  } else {
-    executeSqliteQuerySync(
-      database,
-      query.deleteFrom("agent_integrity_verifications").where(matchesFile),
-    );
-  }
+  );
 }
 
 /** Only the last graceful lease release may publish cleanliness. */

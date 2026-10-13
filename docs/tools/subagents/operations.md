@@ -191,7 +191,8 @@ original session identity or lifecycle revision. They can settle, deliver,
 finish cleanup bookkeeping, resume, and stop under the authorized requester.
 Legacy Stop cancels the exact task and its registered execution, when available;
 it does not guess which current session or successor to interrupt. OpenClaw
-warns once per retained run and suppresses child-session mutations, including
+warns once per Gateway process after registry restore, with a count of unique
+legacy run IDs and a few sample IDs, and suppresses child-session mutations, including
 deletion, reset, and transcript cleanup. Missing historical identity is never
 backfilled. A conflicting recorded identity remains a mismatch, not a legacy exception.
 

@@ -174,7 +174,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
         }
         operationAdmission = {
           actor: request.actor,
-          context: { port: request.operationAdmission },
+          context: { port: request.operationAdmission, requestCustody: request.requestCustody },
         };
       }
       if (request.stateContext) {

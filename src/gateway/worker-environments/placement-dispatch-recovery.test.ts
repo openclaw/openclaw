@@ -1,13 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
   WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
   type WorkerAdmissionHandshake,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
-import { setRuntimeConfigSnapshot } from "../../config/io.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { STALE_WORKER_BUILD_REASON } from "./admission.js";
@@ -40,7 +39,6 @@ function createPlacementStore() {
 
 describe("worker placement restart recovery", () => {
   support.setupWorkerEnvironmentServiceSuite();
-  beforeEach(() => setRuntimeConfigSnapshot(support.testState.config));
 
   describe.each(["startup", "active"] as const)("%s recovery after worker retirement", (mode) => {
     it.each(["idle", "claimed turn", "pending result", "provider loss"] as const)(

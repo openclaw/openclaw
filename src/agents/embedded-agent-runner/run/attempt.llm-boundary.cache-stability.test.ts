@@ -48,6 +48,8 @@ import { SessionManager } from "../../sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { clearToolSearchCatalog, createToolSearchCatalogRef } from "../../tool-search-catalog.js";
+import type { TranscriptPolicy } from "../../transcript-policy.types.js";
+import { sanitizeSessionHistory, validateReplayTurns } from "../replay-history.js";
 import {
   clearEmbeddedSessionPromptStates,
   persistSessionSystemPrompt,
@@ -284,14 +286,24 @@ describe("prompt-cache boundary regressions", () => {
   describe("cross-run failure and queued-input replay", () => {
     registerParityHostLifecycle();
 
-    it.each([
-      ["openai-responses", "error"],
-      ["openai-responses", "aborted"],
-      ["anthropic-messages", "error"],
-      ["anthropic-messages", "aborted"],
-    ] as const)(
-      "%s keeps diagnostics off-wire and staged operator history stable after %s",
-      async (api, stopReason) => {
+    it.each(
+      (["openai-responses", "anthropic-messages"] as const).flatMap((api) =>
+        (["error", "aborted"] as const).flatMap((stopReason) =>
+          (
+            [
+              "partial",
+              "empty",
+              "blank",
+              "completed-tool",
+              "unfinished-tool",
+              "unfinished-tool-only",
+            ] as const
+          ).map((contentKind) => ({ api, stopReason, contentKind })),
+        ),
+      ),
+    )(
+      "$api preserves $contentKind $stopReason history through cold replay",
+      async ({ api, stopReason, contentKind }) => {
         const staged = user("Staged follow-up", TS + 2);
         const operator = {
           ...buildSystemUpdateMessage("Current operator facts", "runtime-context", true),
@@ -303,11 +315,60 @@ describe("prompt-cache boundary regressions", () => {
           provider: api === "anthropic-messages" ? "anthropic" : "openai",
           model: api === "anthropic-messages" ? "claude-opus-5" : model.id,
           stopReason,
-          content: [{ type: "text" as const, text: "Incomplete answer" }],
+          content:
+            contentKind === "empty"
+              ? []
+              : [
+                  ...(contentKind === "unfinished-tool-only"
+                    ? []
+                    : [
+                        {
+                          type: "text" as const,
+                          text: contentKind === "blank" ? "" : "Incomplete answer",
+                        },
+                      ]),
+                  ...(contentKind === "completed-tool" ||
+                  contentKind === "unfinished-tool" ||
+                  contentKind === "unfinished-tool-only"
+                    ? [
+                        {
+                          type: "toolCall" as const,
+                          id: "call_fixture",
+                          name: "read",
+                          arguments: {},
+                        },
+                      ]
+                    : []),
+                ],
           errorMessage: "private provider diagnostic",
           __openclaw: { runId: "first-run", itemId: "first-item" },
         };
-        const messages = [user("First question"), failed, staged, operator];
+        const messages = [
+          user("First question"),
+          failed,
+          ...(contentKind === "completed-tool"
+            ? [
+                {
+                  role: "toolResult" as const,
+                  toolCallId: "call_fixture",
+                  toolName: "read",
+                  content: [{ type: "text" as const, text: "Read result" }],
+                  isError: false,
+                  timestamp: TS + 1,
+                },
+              ]
+            : []),
+          {
+            ...answer,
+            api,
+            provider: failed.provider,
+            model: failed.model,
+            content: [{ type: "text" as const, text: "Recovered reply." }],
+            __openclaw: { runId: "recovered-run", itemId: "recovered-item" },
+          },
+          staged,
+          operator,
+        ];
         const boundaryOptions = {
           ...options,
           sessionVersion: 4,
@@ -343,6 +404,9 @@ describe("prompt-cache boundary regressions", () => {
             })
           ).payload;
         };
+        const firstBoundary = convertToLlm(
+          normalizeMessagesForLlmBoundary(messages, boundaryOptions),
+        );
         const first = await captureRequest(messages);
         const manager = SessionManager.inMemory();
         for (const message of messages) {
@@ -350,7 +414,37 @@ describe("prompt-cache boundary regressions", () => {
         }
         manager.appendMessage(answer);
         manager.appendMessage(user("Next run", TS + 60000));
-        const second = await captureRequest(manager.buildSessionContext().messages);
+        const policy: TranscriptPolicy = {
+          sanitizeMode: "images-only",
+          sanitizeToolCallIds: false,
+          preserveNativeAnthropicToolUseIds: api === "anthropic-messages",
+          repairToolUseResultPairing: true,
+          preserveSignatures: api === "anthropic-messages",
+          appendOnlyRuntimeContext: true,
+          inHistorySystemUpdates: true,
+          dropThinkingBlocks: false,
+          applyGoogleTurnOrdering: false,
+          validateGeminiTurns: false,
+          validateAnthropicTurns: api === "anthropic-messages",
+          allowSyntheticToolResults: true,
+        };
+        const sanitized = await sanitizeSessionHistory({
+          messages: manager.buildSessionContext().messages,
+          modelApi: api,
+          policy,
+          sessionManager: manager,
+          sessionId: `failed-replay-${api}`,
+        });
+        const replayed = await validateReplayTurns({ messages: sanitized, modelApi: api, policy });
+        // Observation uses this sequence before provider encoding, so it must be
+        // stable even when the transport omits an empty failed assistant.
+        expect(
+          convertToLlm(normalizeMessagesForLlmBoundary(replayed, boundaryOptions)).slice(
+            0,
+            firstBoundary.length,
+          ),
+        ).toEqual(firstBoundary);
+        const second = await captureRequest(replayed);
         const field = api === "anthropic-messages" ? "messages" : "input";
         const before = first[field] as unknown[];
         const after = second[field] as unknown[];
@@ -367,7 +461,13 @@ describe("prompt-cache boundary regressions", () => {
           }),
         );
         expect(JSON.stringify(before)).toContain("Staged follow-up");
-        for (const value of ["private provider diagnostic", "first-run", "first-item"]) {
+        for (const value of [
+          "private provider diagnostic",
+          "first-run",
+          "first-item",
+          "recovered-run",
+          "recovered-item",
+        ]) {
           expect(JSON.stringify(first)).not.toContain(value);
           expect(JSON.stringify(second)).not.toContain(value);
         }

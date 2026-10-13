@@ -4,8 +4,8 @@ import {
   findOverlayParent,
   type Overlay,
   type OverlayOptions,
-  type OverlayPhase,
 } from "./overlay-lifecycle.ts";
+import type { OverlayPhase } from "./overlay-types.ts";
 
 type Fixture = ReturnType<typeof mountOverlay>;
 const owners: Overlay[] = [];

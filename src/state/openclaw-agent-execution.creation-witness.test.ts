@@ -7,6 +7,10 @@ import {
   getRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
+import {
+  replaceSessionEntry,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.sqlite-entry.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import {
   createSqliteWorkerOperationAdmission,
@@ -642,6 +646,43 @@ it("creates an absent target through its already captured logical owner", async 
     await Promise.allSettled([creator?.release(), sibling.release()]);
   }
 });
+
+it.each([
+  { name: "replacement", write: replaceSessionEntry },
+  { name: "upsert", write: upsertSessionEntryCore },
+])(
+  "allows the first session $name while an ordinary owner is retained",
+  async ({ name, write }) => {
+    const options = fixture();
+    const sibling = captureOpenClawAgentDatabaseExecution(options);
+    const sessionKey = "agent:main:first-entry";
+    const entry = { sessionId: "first-session", updatedAt: 1 };
+    try {
+      expect(fs.existsSync(options.path)).toBe(false);
+      const writeStartedAt = Date.now();
+      const written = await write(
+        { agentId: options.agentId, env: options.env, storePath: options.path, sessionKey },
+        entry,
+      );
+      const writeFinishedAt = Date.now();
+      assert(written);
+      expect(written.sessionId).toBe(entry.sessionId);
+      if (name === "replacement") {
+        expect(written).toEqual({ ...entry, delivery: { kind: "none" } });
+      } else {
+        expect(written.updatedAt).toBeGreaterThanOrEqual(writeStartedAt);
+        expect(written.updatedAt).toBeLessThanOrEqual(writeFinishedAt);
+      }
+      const read = await sibling.runExisting(source(), (scope) =>
+        scope.execute({ type: "session.entry.read", input: { sessionKeys: [sessionKey] } }),
+      );
+      assert(read);
+      expect(read.entries).toEqual([{ sessionKey, entry: written }]);
+    } finally {
+      await sibling.release();
+    }
+  },
+);
 
 it("releases an unused creation reservation while a sibling remains", async () => {
   const options = fixture();

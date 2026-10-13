@@ -860,10 +860,16 @@ describe("createManagedOutgoingImageBlocks", () => {
       const filePath = path.join(stateDir, name);
       await fs.writeFile(filePath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
       const sourcePath = await fs.realpath(filePath);
+      const sourceStat = await fs.stat(sourcePath);
       pending.push(
         actual.resolvePlaybackMetadataForSource({
           sourcePath,
-          sourceStat: await fs.stat(sourcePath),
+          sourceStat: {
+            size: sourceStat.size,
+            mtimeMs: sourceStat.mtimeMs,
+            ctimeMs: sourceStat.ctimeMs,
+            exactIdentity: await fs.stat(sourcePath, { bigint: true }),
+          },
           mimeType: "audio/mpeg",
           kind: "audio",
         }),

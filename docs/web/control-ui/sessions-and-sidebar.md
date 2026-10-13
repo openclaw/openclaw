@@ -471,7 +471,7 @@ With **Person** grouping, open the owner-filter title to show one owner, includi
 
 ## Session colors
 
-Choose **Advanced → Icon & color** from a session menu and select a color swatch to add a narrow color stripe to its sidebar row and a matching dot beside the chat title. Pick one of eight colors, or choose **Default** to clear only the color. **Reset to default** clears both the icon and color. The colors match Claude Code’s `/color` names, so imported Claude Code sessions keep the same color. Imported catalog rows show their color without offering color editing.
+Choose **Advanced → Icon & color** from a session menu and select a color swatch to add a soft full-row tint, a narrow color stripe, and a matching dot beside the chat title. Sidebar titles and metadata stay neutral and readable in light and dark mode. Pinned rows use the same tint; the open conversation keeps a distinct neutral fill and stronger title, while multi-selected rows use the selection fill instead of the session tint. Pick one of eight colors, or choose **Default** to clear only the color. **Reset to default** clears both the icon and color. The colors match Claude Code’s `/color` names, so imported Claude Code sessions keep the same color. Imported catalog rows show their color without offering color editing.
 
 ## Direct session shortcuts
 

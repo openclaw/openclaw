@@ -65,6 +65,7 @@ export function isCiProofTestFile(file: string): boolean {
 // Runtime integration and released-state matrices retain their canonical Vitest
 // owners, but automatic CI runs them only when the test itself changes.
 export const RELEASE_ONLY_RUNTIME_TEST_FILES = [
+  "extensions/codex/src/app-server/thread-lifecycle.warm-cleanup.native.test.ts",
   "src/agents/agent-bundle-mcp-retention.test.ts",
   "src/agents/harness/acp-native-execution.process.test.ts",
   "src/agents/mcp-stdio-client.cleanup.real.test.ts",
@@ -3552,15 +3553,8 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/skills/lifecycle/upload-store.test.ts",
   "src/skills/loading/frontmatter.test.ts",
   "src/skills/loading/session.test.ts",
+  "src/skills/runtime/discovery.integration.test.ts",
   "src/skills/runtime/embedded-run-entries.test.ts",
-  "src/skills/runtime/refresh-content-native.test.ts",
-  "src/skills/runtime/refresh.churn.test.ts",
-  "src/skills/runtime/refresh.missing-root.integration.test.ts",
-  "src/skills/runtime/refresh.rescan.test.ts",
-  "src/skills/runtime/refresh.residency.test.ts",
-  "src/skills/runtime/refresh.subscriptions.test.ts",
-  "src/skills/runtime/refresh.test.ts",
-  "src/skills/runtime/refresh.windows.test.ts",
   "src/skills/runtime/refresh.workspace.test.ts",
   "src/skills/runtime/resources.workspace.test.ts",
   "src/skills/runtime/session-snapshot.integration.test.ts",
