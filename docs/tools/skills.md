@@ -789,6 +789,10 @@ trigger prompt refreshes with the normal debounce. Each watcher logs one warning
 when automatic selection falls back to polling, including the reported reason
 when available.
 
+Native watchers also reconcile every five minutes to recover missed events
+without frequent idle scans. A change with no native event can therefore take up
+to five minutes to be detected; polling and fallback intervals are unchanged.
+
 Watcher subscriptions are retained for the 128 most recently used combinations of
 agent, configured workspace, and execution workspace. Subscriptions idle for an
 hour are also retired when another workspace prepares its skills. Shared skill

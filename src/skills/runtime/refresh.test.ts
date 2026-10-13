@@ -51,7 +51,7 @@ function observeScan(
   }
 }
 
-it("honors the polling interval and reports automatic fallback once", async () => {
+it("reconciles native events less often, honors polling overrides, and reports fallback once", async () => {
   const failure = {
     operation: "watch",
     code: "ENOTSUP",
@@ -64,6 +64,7 @@ it("honors the polling interval and reports automatic fallback once", async () =
   expect(observer.subscriptions.length).toBeGreaterThan(0);
   for (const observed of observer.subscriptions) {
     expect(observed.options.mode).toBe("auto");
+    expect(observed.options.intervalMs).toBe(300_000);
     expect(observed.options.pollIntervalMs).toBe(40);
   }
   const observed = observer.forRoot(path.join(fixture.workspaceDir, "skills"));

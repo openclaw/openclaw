@@ -1952,8 +1952,13 @@ These changes require no schema, retention, durability, or update migration.
 
 Workspace publication and move/reclaim retain synchronous final-authority guards.
 Independent lease heartbeats for the same physical state database share one
-worker and native connection. Each lease retains its own expiry, current-owner
-checks, requests, and cleanup. Closing one lease leaves its siblings running;
+worker, native connection, and earliest-deadline timer. Due renewals update their
+exact owners in one statement, retaining each lease's own expiry and cleanup.
+Matching renewal intervals share a deadline; joining one may renew a lease early.
+The Gateway SQL owner renews every 30 seconds: one third of its 90-second stale
+heartbeat bound, which is shorter than its 300-second lease TTL. The separate
+filesystem owner still renews every 15 seconds. Startup identity repair and
+explicit verification retain their current checks. Closing one lease leaves its siblings running;
 closing the last joins native worker exit. Renewal remains independent of the
 Gateway event loop, including during concurrent worktree creation.
 Workspace reservation keeps its existing lease acquisition order and native
@@ -3930,6 +3935,13 @@ an in-process write receipt changes. Sibling handles and workers share that rece
 blocked or failed checkpoints keep retrying when a reader may have released.
 Connections without a known write receipt continue checkpointing on every tick.
 Page reclamation and blocking checkpoint modes keep their zero-timeout scope.
+
+Completed checkpoint-only passes publish their write revision through the existing
+physical database admission. Other connections to that WAL reuse the completion
+instead of copying the same frames again. A later in-process write invalidates it;
+an incomplete checkpoint never publishes completion. Explicit checkpoints, final
+close, and periodic page reclamation retain their existing behavior.
+
 While an offline maintenance scope retains a shared-state worker, its scheduled
 WAL work pauses so Doctor and update-recovery captures keep stable source bytes.
 Explicitly admitted maintenance remains available. The final maintenance client

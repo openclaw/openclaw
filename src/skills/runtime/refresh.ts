@@ -8,7 +8,7 @@ import {
 } from "@openclaw/fs-safe/watch";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveFsObservationMode } from "../../infra/fs-observation-mode.js";
+import { FS_RECONCILE_MS, resolveFsObservationMode } from "../../infra/fs-observation-mode.js";
 import { admitObservationRoot } from "../../infra/fs-observation-root.js";
 import { readObservationSnapshot } from "../../infra/fs-observation-snapshot.js";
 import { runWithMainThreadTask } from "../../infra/main-thread-stall.js";
@@ -340,6 +340,7 @@ function createSkillsPathWatcher(
       subscription = watch(authority, {
         scopes: [scope],
         mode,
+        intervalMs: FS_RECONCILE_MS,
         pollIntervalMs,
         signal: lifetime.signal,
         exclude: (entry) => {

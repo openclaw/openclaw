@@ -140,9 +140,13 @@ resources requires the reported repair or retry before it can restart. See
 
 Detailed readiness can include the latest completed `eventLoop` diagnostic
 snapshot. The sampler owns observation windows; health reads do not reset a
-pending measurement. Native event-loop delay sampling runs at 20 ms resolution;
-the Gateway publishes completed observations once per second, without waking a
-JavaScript callback for every delay sample. Long blocking callbacks remain part
+pending measurement. During active work, degradation, or diagnostic sample
+export, native event-loop delay sampling runs at 20 ms resolution and the Gateway
+publishes completed observations once per second. A healthy idle Gateway publishes
+every ten seconds and pauses the native histogram. Idle windows still track
+blocking callbacks and overdue sampling deadlines; `delayP99Ms` is zero while the
+histogram is paused. Work or an exporter becoming active restores full sampling
+at the next idle deadline, within ten seconds. Long blocking callbacks remain part
 of the observation even when they delay the publisher. No snapshot is available
 until the first window completes. Its
 `cpuCoreRatio` measures user and system CPU time across the whole Gateway process,
