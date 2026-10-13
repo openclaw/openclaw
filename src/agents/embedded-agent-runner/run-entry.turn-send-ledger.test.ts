@@ -1,4 +1,8 @@
-import { beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { FailoverReason } from "../failover/signal.js";
 import type { ContextEngineTurnAttemptFacts } from "../harness/context-engine-turn-attempt.js";
 import type { ModelFallbackRunOptions } from "../model-fallback-attempt.js";
@@ -189,7 +193,9 @@ describe("runEmbeddedAgentEntry", () => {
 
     beforeEach(() => {
       resetTurnSendLedgerForTest();
+      setRuntimeConfigSnapshot({});
     });
+    afterEach(() => clearRuntimeConfigSnapshot());
 
     // A landed send committed by the message/conversations_send tool during a candidate,
     // keyed exactly as those tools key it for this run.
