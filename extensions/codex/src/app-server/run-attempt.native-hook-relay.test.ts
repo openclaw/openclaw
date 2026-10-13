@@ -408,7 +408,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
             tool_input: { command: "python3 -c 'print(\"x\")'" },
           },
         }),
-      ).resolves.toMatchObject({ exitCode: 0 });
+      ).rejects.toThrow("Codex session generation is no longer current");
 
       firstHarness.close();
       const secondHarness = sameExecutionSession

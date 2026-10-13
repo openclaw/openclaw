@@ -244,7 +244,7 @@ describe("prepareCodexAttemptConnection", () => {
     await patchSessionEntry({ ...scope, update: () => ({ sessionId: "next-compaction" }) });
 
     expect(() => originalHostCapabilities.assertActive()).not.toThrow();
-    expect(() => connection.assertCurrent()).not.toThrow();
+    expect(connection.assertCurrent).toThrow("Codex session generation is no longer current");
     expect(connection.assertLegacyCurrent).toThrow("Codex session generation is no longer current");
     const effect = vi.fn();
     await expect(connection.withCurrent(effect)).rejects.toThrow(

@@ -337,7 +337,7 @@ function qaSessionRuntimeEnv(tempRoot: string): NodeJS.ProcessEnv {
 }
 
 async function seedQaSessionEntries(
-  env: Pick<QaSuiteRuntimeEnv, "gateway">,
+  env: { gateway: Pick<QaSuiteRuntimeEnv["gateway"], "tempRoot"> },
   entries: readonly QaSessionEntrySeed[],
 ): Promise<void> {
   const runtimeEnv = qaSessionRuntimeEnv(env.gateway.tempRoot);

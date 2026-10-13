@@ -53,6 +53,7 @@ export async function withCodexThreadLifecycleBinding(
     binding: CodexAppServerThreadBinding | undefined,
     authority: CodexBindingAuthority,
   ) => Promise<CodexAppServerThreadLifecycleBinding>,
+  onFailure?: (error: unknown) => Promise<never>,
 ): Promise<CodexAppServerThreadLifecycleBinding> {
   const identity = sessionBindingIdentity({
     sessionId: params.params.sessionId,
@@ -103,16 +104,24 @@ export async function withCodexThreadLifecycleBinding(
     );
   // Ordinary resumes own their binding key even when a legacy row omits sessionId.
   // Foreign-owner rejection belongs to adoption, not an upgrade of that same binding.
-  return snapshot?.pendingResumeConfiguration
-    ? await withExclusiveCodexAppServerThread({
-        bindingStore: params.bindingStore,
-        identity,
-        threadId: snapshot.threadId,
-        run: runWithLease,
-      })
-    : snapshot
-      ? await withCodexAppServerThreadMutation(snapshot.threadId, runWithLease)
-      : await runWithLease();
+  try {
+    return snapshot?.pendingResumeConfiguration
+      ? await withExclusiveCodexAppServerThread({
+          bindingStore: params.bindingStore,
+          identity,
+          threadId: snapshot.threadId,
+          run: runWithLease,
+        })
+      : snapshot
+        ? await withCodexAppServerThreadMutation(snapshot.threadId, runWithLease)
+        : await runWithLease();
+  } catch (error) {
+    // Failed publication still owns cleanup, including failures settling the lease.
+    if (onFailure) {
+      return await onFailure(error);
+    }
+    throw error;
+  }
 }
 
 type PendingResumeContext = CodexThreadRequestContext & {
