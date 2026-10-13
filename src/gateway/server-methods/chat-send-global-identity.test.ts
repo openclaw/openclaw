@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import * as dispatch from "../../auto-reply/dispatch.js";
-import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
   appendTranscriptMessage,
@@ -19,18 +19,14 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
-  closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
 } from "../../state/openclaw-agent-db.js";
-import * as profileReader from "../../state/user-profile-list.js";
-import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
-import * as sessionUtils from "../session-utils.js";
+import * as sessionStores from "../session-utils-store.js";
 import * as chatDispatch from "./chat-send-agent-dispatch.js";
 import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
-import type { GatewayClient } from "./types.js";
 
 type DispatchOptions = Parameters<typeof dispatch.dispatchInboundMessageWithProjectedDispatcher>[0];
 
@@ -44,11 +40,17 @@ it.each<{
   separateStore?: boolean;
   replaceDatabase?: "copy" | "symlink";
   replayAfterCollision?: boolean;
-  writeDuringAdmission?: "counterpart" | "unrelated";
-  writeDuringProfilePreparation?: boolean;
+  writeDuringAdmission?: boolean;
   replaceDuringPersistence?: boolean;
   pendingReplacement?: boolean;
   switchStoreAfterAck?: boolean;
+  configDuringAdmission?:
+    | "unrelated"
+    | "unrelated provider"
+    | "unrelated channel"
+    | "model"
+    | "security"
+    | "routing";
 }>([
   {
     name: "raw global only",
@@ -91,6 +93,15 @@ it.each<{
     allowed: true,
   },
   {
+    name: "empty counterpart store preserves raw source",
+    raw: true,
+    literal: false,
+    shared: false,
+    key: "global",
+    allowed: true,
+    separateStore: true,
+  },
+  {
     name: "collision across discovered stores",
     raw: true,
     literal: true,
@@ -127,32 +138,32 @@ it.each<{
     replayAfterCollision: true,
   },
   {
-    name: "counterpart appears while operator profile preparation waits",
-    raw: true,
-    literal: false,
-    shared: false,
-    key: "global",
-    allowed: false,
-    writeDuringProfilePreparation: true,
-  },
-  {
-    name: "counterpart appears while admission waits",
-    raw: true,
-    literal: false,
-    shared: false,
-    key: "global",
-    allowed: false,
-    writeDuringAdmission: "counterpart",
-  },
-  {
     name: "unrelated row appears while admission waits",
     raw: true,
     literal: false,
     shared: false,
     key: "global",
     allowed: true,
-    writeDuringAdmission: "unrelated",
+    writeDuringAdmission: true,
   },
+  ...(
+    [
+      "unrelated",
+      "unrelated provider",
+      "unrelated channel",
+      "model",
+      "security",
+      "routing",
+    ] as const
+  ).map((configDuringAdmission) => ({
+    name: `${configDuringAdmission} config changes during admission read`,
+    raw: true,
+    literal: false,
+    shared: false,
+    key: "global",
+    allowed: configDuringAdmission.startsWith("unrelated"),
+    configDuringAdmission,
+  })),
   {
     name: "database replacement after recorder target resolution",
     raw: true,
@@ -237,6 +248,12 @@ it.each<{
     for (const row of rows) {
       await seedRow(row);
     }
+    if (scenario.separateStore && !scenario.literal) {
+      await replaceSessionEntry(
+        { ...literalScope, sessionKey: "agent:research:other" },
+        { sessionId: "other-session", updatedAt: 1 },
+      );
+    }
     const originalPath = state.path("original.sqlite");
     const replacementPath = state.path("replacement.sqlite");
     if (scenario.replaceDatabase === "symlink") {
@@ -278,79 +295,67 @@ it.each<{
         return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
       });
     const context = createDirectChatContext({ getRuntimeConfig });
-    const profilePrepared = createDeferred();
-    const resumeProfile = createDeferred();
-    const admissionCallback = vi.fn(async () => true);
-    const interrupted = vi.fn();
-    const activeRun = scenario.writeDuringProfilePreparation
-      ? createReplyOperation({
-          agentId: "research",
-          sessionKey: "agent:research:global",
-          sessionId: "raw-session",
-          resetTriggered: false,
-        })
-      : undefined;
-    activeRun?.attachBackend({
-      kind: "embedded",
-      runId: "preparing-profile-predecessor",
-      cancel: () => {
-        interrupted();
-        expectDefined(activeRun, "active predecessor run").complete();
-      },
-    });
-    const profile = scenario.writeDuringProfilePreparation
-      ? ensureProfileForEmail("chat-target-preparation@example.test")
-      : undefined;
-    const client: GatewayClient | null = profile
-      ? {
-          connId: "chat-target-preparation",
-          authenticatedUserProfile: {
-            profileId: profile.id,
-            displayName: null,
-            hasAvatar: false,
-            updatedAt: profile.updatedAt,
-          },
-          connect: {
-            minProtocol: 1,
-            maxProtocol: 1,
-            role: "operator",
-            scopes: ["operator.admin"],
-            client: {
-              id: "openclaw-control-ui",
-              version: "test",
-              platform: "web",
-              mode: "webchat",
+    let configReloaded = false;
+    const readQualifiedEntry = sessionStores.withQualifiedGatewaySessionEntry;
+    const reloadDuringRead = scenario.configDuringAdmission
+      ? vi.spyOn(sessionStores, "withQualifiedGatewaySessionEntry").mockImplementation((params) =>
+          readQualifiedEntry({
+            ...params,
+            consume: (...args) => {
+              if (!configReloaded) {
+                const changedConfig: OpenClawConfig =
+                  scenario.configDuringAdmission === "unrelated"
+                    ? { ...cfg, logging: { level: "debug" }, ui: { seamColor: "#123456" } }
+                    : scenario.configDuringAdmission === "unrelated provider"
+                      ? {
+                          ...cfg,
+                          models: {
+                            ...cfg.models,
+                            providers: {
+                              ...cfg.models?.providers,
+                              other: {
+                                baseUrl: "https://provider.example.test/v1",
+                                api: "openai-responses",
+                                models: [],
+                              },
+                            },
+                          },
+                        }
+                      : scenario.configDuringAdmission === "unrelated channel"
+                        ? { ...cfg, channels: { ...cfg.channels, telegram: { enabled: false } } }
+                        : scenario.configDuringAdmission === "model"
+                          ? {
+                              ...cfg,
+                              agents: {
+                                ...cfg.agents,
+                                defaults: {
+                                  ...cfg.agents?.defaults,
+                                  model: "anthropic/claude-sonnet-4-6",
+                                },
+                              },
+                            }
+                          : scenario.configDuringAdmission === "security"
+                            ? { ...cfg, tools: { ...cfg.tools, fs: { workspaceOnly: true } } }
+                            : { ...cfg, session: { ...cfg.session, mainKey: "changed-main" } };
+                setRuntimeConfigSnapshot(changedConfig, changedConfig);
+                configReloaded = true;
+              }
+              return params.consume(...args);
             },
-          },
-        }
-      : null;
-    let preparedProfile:
-      | Awaited<ReturnType<typeof profileReader.prepareUserProfileIdentity>>
-      | undefined;
-    const prepareProfile = profileReader.prepareUserProfileIdentity;
-    const holdProfile = profile
-      ? vi
-          .spyOn(profileReader, "prepareUserProfileIdentity")
-          .mockImplementation(async (...args) => {
-            const prepared = await prepareProfile(...args);
-            preparedProfile = prepared;
-            vi.spyOn(prepared, "release");
-            profilePrepared.resolve();
-            await resumeProfile.promise;
-            return prepared;
-          })
+          }),
+        )
       : undefined;
     let databaseReplaced = false;
-    const loadSessionEntry = sessionUtils.loadSessionEntry;
+    const readSessionEntry = sessionStores.withGatewaySessionEntry;
     const replaceAfterSelection = scenario.replaceDatabase
-      ? vi.spyOn(sessionUtils, "loadSessionEntry").mockImplementation((...args) => {
-          const loaded = loadSessionEntry(...args);
+      ? vi.spyOn(sessionStores, "withGatewaySessionEntry").mockImplementation(async (...args) => {
+          const loaded = await readSessionEntry(...args);
           if (!databaseReplaced) {
-            const source = loaded.readSource;
-            if (!source) {
+            const source = isRecord(loaded) ? loaded.capturedReadSource : undefined;
+            if (!isRecord(source) || typeof source.path !== "string") {
               throw new Error("Expected the selected physical database before replacement");
             }
-            closeOpenClawAgentDatabaseByPath(source.path);
+            await closeOpenClawAgentDatabaseByPathAsync(source.path);
             if (scenario.replaceDatabase === "copy") {
               fs.renameSync(source.path, originalPath);
               fs.copyFileSync(originalPath, source.path);
@@ -370,7 +375,6 @@ it.each<{
         sessionKey: scenario.key,
         message,
         idempotencyKey: runId,
-        ...(scenario.writeDuringProfilePreparation ? { queueMode: "interrupt" as const } : {}),
       };
       sending = handleDirectExternalChatSend(
         {
@@ -378,7 +382,7 @@ it.each<{
           req: { type: "req", id: runId, method: "chat.send", params },
           respond,
           context,
-          client,
+          client: null,
           isWebchatConnect: () => false,
         },
         scenario.writeDuringAdmission
@@ -387,28 +391,8 @@ it.each<{
               await resumeAdmission.promise;
               return true;
             }
-          : scenario.writeDuringProfilePreparation
-            ? admissionCallback
-            : undefined,
+          : undefined,
       );
-      if (scenario.writeDuringProfilePreparation) {
-        try {
-          await Promise.race([
-            profilePrepared.promise,
-            sending.then(() => {
-              throw new Error("chat.send settled before real operator profile preparation");
-            }),
-          ]);
-          await seedRow(literalScope);
-          rows.push(literalScope);
-          const withCounterpart = await snapshot();
-          expect(withCounterpart.entries[0]).toEqual(before.entries[0]);
-          expect(withCounterpart.transcripts[0]).toEqual(before.transcripts[0]);
-          before = withCounterpart;
-        } finally {
-          resumeProfile.resolve();
-        }
-      }
       if (scenario.writeDuringAdmission) {
         try {
           await Promise.race([
@@ -417,14 +401,11 @@ it.each<{
               throw new Error("chat.send settled before the admission callback");
             }),
           ]);
-          const inserted =
-            scenario.writeDuringAdmission === "counterpart"
-              ? literalScope
-              : {
-                  ...literalScope,
-                  sessionKey: "agent:research:other",
-                  sessionId: "unrelated-session",
-                };
+          const inserted = {
+            ...literalScope,
+            sessionKey: "agent:research:other",
+            sessionId: "unrelated-session",
+          };
           await seedRow(inserted);
           rows.push(inserted);
           const withCounterpart = await snapshot();
@@ -436,19 +417,8 @@ it.each<{
         }
       }
       await sending;
-      if (scenario.writeDuringProfilePreparation) {
-        expect(interrupted).not.toHaveBeenCalled();
-        expect(admissionCallback).not.toHaveBeenCalled();
-        expect(
-          expectDefined(preparedProfile, "prepared operator profile").release,
-        ).toHaveBeenCalledOnce();
-        expect(respond).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({
-            message: expect.stringContaining("ambiguous stored identity"),
-          }),
-        );
+      if (scenario.configDuringAdmission) {
+        expect(configReloaded).toBe(true);
       }
       if (!scenario.allowed) {
         expect(respond).toHaveBeenCalledWith(
@@ -653,7 +623,6 @@ it.each<{
         expect(await snapshot()).toEqual(beforeRetry);
       }
     } finally {
-      resumeProfile.resolve();
       resumeAdmission.resolve();
       await Promise.allSettled(sending ? [sending] : []);
       const owned = observeDispatch.mock.calls.at(-1)?.[0];
@@ -665,11 +634,7 @@ it.each<{
         : undefined;
       release.resolve();
       await settled;
-      activeRun?.complete();
-      if (preparedProfile) {
-        vi.mocked(preparedProfile.release).mockRestore();
-      }
-      holdProfile?.mockRestore();
+      reloadDuringRead?.mockRestore();
       replaceAfterSelection?.mockRestore();
       holdDispatch.mockRestore();
       observeDispatch.mockRestore();

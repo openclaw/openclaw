@@ -29,10 +29,8 @@ Good output, one line each:
 - `openclaw status` shows configured channels, no auth errors.
 - `openclaw status --all` produces a full, shareable report.
 - `openclaw gateway probe` shows `Reachable: yes`. `Capability: ...` is the
-  auth level the probe proved; `Read probe: limited - missing scope:
-operator.read` is degraded diagnostics, not a connect failure.
-- `openclaw gateway status` shows `Runtime: running`, `Connectivity probe:
-ok`, and a plausible `Capability: ...`. Add `--require-rpc` to also require
+  auth level the check proved. Missing `operator.read` scope limits read diagnostics; it does not mean the connection failed.
+- `openclaw gateway status` shows `Runtime: running`, a successful connectivity check, and a plausible `Capability: ...`. Add `--require-rpc` to also require
   read-scope RPC proof.
 - `openclaw doctor` reports no blocking config/service errors.
 - `openclaw channels status --probe` returns live per-account transport state
@@ -75,7 +73,7 @@ Full profile/group table: [Tool profiles](/gateway/config-tools/tool-policy#tool
 ## Local OpenAI-compatible backend works directly but fails in OpenClaw
 
 Your local/self-hosted `/v1` backend answers direct `/v1/chat/completions`
-probes but fails on `openclaw infer model run` or normal agent turns:
+checks but fails on `openclaw infer model run` or normal agent turns:
 
 1. Error mentions `messages[].content` expecting a string: set
    `models.providers.<provider>.models[].compat.requiresStringContent: true`.
@@ -83,7 +81,7 @@ probes but fails on `openclaw infer model run` or normal agent turns:
    `models.providers.<provider>.models[].compat.supportsTools: false` and retry.
 3. Tiny direct calls work but larger OpenClaw prompts crash the backend: that
    is an upstream model/server limit, not an OpenClaw bug. Continue in
-   [Local OpenAI-compatible backend passes direct probes but agent runs fail](/gateway/troubleshooting#local-openai-compatible-backend-passes-direct-probes-but-agent-runs-fail).
+   [Local OpenAI-compatible backend passes direct checks but agent runs fail](/gateway/troubleshooting#local-openai-compatible-backend-passes-direct-probes-but-agent-runs-fail).
 
 ## Plugin install fails with missing openclaw extensions
 
@@ -126,7 +124,7 @@ Avoid these policy shapes unless you also maintain the matching upgrade rule:
 "update"` request).
 - Treating the policy command as optional: when `security.installPolicy` is
   enabled, a missing, slow, unreadable, or permission-blocked policy
-  executable fails closed.
+  executable blocks the install.
 - Approving versions without checking the request's `openclawVersion` against
   plugin candidate metadata.
 
@@ -214,7 +212,7 @@ Each branch is the title of an accordion below.
     Good output:
 
     - `Runtime: running`
-    - `Connectivity probe: ok`
+    - A successful connectivity check
     - `Capability: read-only`, `write-capable`, or `admin-capable`
     - Channel shows transport connected and, where supported, `works` or
       `audit ok` in `channels status --probe`
@@ -242,7 +240,7 @@ Each branch is the title of an accordion below.
     Good output:
 
     - `Dashboard: http://...` shown in `openclaw gateway status`
-    - `Connectivity probe: ok`
+    - A successful connectivity check
     - `Capability: read-only`, `write-capable`, or `admin-capable`
     - No auth loop in logs
 
@@ -252,7 +250,7 @@ Each branch is the title of an accordion below.
     - `origin not allowed` → browser `Origin` is not allowed for the Control UI gateway target.
     - `AUTH_TOKEN_MISMATCH` with `canRetryWithDeviceToken=true` → one trusted device-token retry may occur automatically, reusing the paired token's cached scopes.
     - repeated `unauthorized` after that retry → wrong token/password, auth mode mismatch, or stale paired device token.
-    - `too many failed authentication attempts (retry later)` → repeated failures from that browser `Origin` are temporarily locked out; other localhost origins use separate buckets. See [Dashboard/Control UI connectivity](/gateway/troubleshooting#dashboard-control-ui-connectivity) for the Tailscale Serve concurrent-retry nuance.
+    - `too many failed authentication attempts (retry later)` → repeated failures from that browser `Origin` are temporarily locked out; other localhost origins use separate buckets. See [Dashboard/Control UI connectivity](/gateway/troubleshooting#dashboard-control-ui-connectivity) for the Tailscale Serve concurrent-retry details.
     - `gateway connect failed:` → UI targets the wrong URL/port, or the gateway is unreachable.
 
     Deep pages: [Dashboard/Control UI connectivity](/gateway/troubleshooting#dashboard-control-ui-connectivity), [Control UI](/web/control-ui), [Authentication](/gateway/authentication)
@@ -272,7 +270,7 @@ Each branch is the title of an accordion below.
 
     - `Service: ... (loaded)`
     - `Runtime: running`
-    - `Connectivity probe: ok`
+    - A successful connectivity check
     - `Capability: read-only`, `write-capable`, or `admin-capable`
 
     Log signatures:
@@ -330,7 +328,7 @@ Each branch is the title of an accordion below.
 
     - `cron: scheduler disabled; jobs will not run automatically` → cron is disabled.
     - `heartbeat skipped` reason `quiet-hours` → outside configured active hours.
-    - `heartbeat skipped` reason `empty-heartbeat-file` → heartbeat monitor scratch contains only blank, comment, header, fence, or empty-checklist scaffolding.
+    - `heartbeat skipped` reason `empty-heartbeat-file` → heartbeat monitor scratch contains only blank, comment, header, fence, or empty-checklist markup.
     - `heartbeat skipped` reason `alerts-disabled` → `showOk`, `showAlerts`, and `useIndicator` are all off.
     - `requests-in-flight` → main lane busy; heartbeat wake deferred.
     - `unknown accountId` → heartbeat delivery target account does not exist.

@@ -4,6 +4,7 @@ import {
   appendInterruptedTurnMessage,
 } from "../../../../packages/agent-core/src/turn-interruption.js";
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
+import { loadSessionEntryForAdmission } from "../../../config/sessions/session-accessor.sqlite-entry-admission.js";
 import { withOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
 import { rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import type { ImageContent } from "../../../llm/types.js";
@@ -12,6 +13,7 @@ import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-tr
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
 } from "../../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createAgentRunRestartAbortError } from "../../run-termination.js";
@@ -29,7 +31,7 @@ import { SettingsManager } from "../../sessions/settings-manager.js";
 import {
   clearEmbeddedSessionPromptStates,
   createToolResultPromptProjectionState,
-  getEmbeddedSessionPromptState,
+  retainEmbeddedSessionPromptState,
   persistToolResultProjections,
 } from "../session-prompt-state.js";
 import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
@@ -108,20 +110,30 @@ export async function withInterruptedTurn(
   }) => Promise<void>,
   options: {
     interruptedTurn?: boolean;
+    partialText?: string;
     toolProgress?: boolean;
     settledPrefix?: boolean;
     oversizedMetadata?: boolean;
     compactedInput?: boolean;
+    selectedOwner?: boolean;
+    sharedStore?: boolean;
+    admittedReceipt?: boolean;
   } = {},
 ) {
   await withOpenClawTestState({ label: "interrupted-keyed-replay" }, async (state) => {
     const runId = "interrupted-keyed-replay";
+    const agentId = options.sharedStore ? "ops" : "main";
     const target = {
-      agentId: "main",
+      agentId,
       sessionId: runId,
-      sessionKey: `agent:main:${runId}`,
-      storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+      sessionKey: `agent:${agentId}:${runId}`,
+      storePath: options.sharedStore
+        ? state.statePath("shared.sqlite")
+        : path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
     };
+    if (options.sharedStore) {
+      openOpenClawAgentDatabase({ agentId: "main", path: target.storePath, env: state.env });
+    }
     await upsertSessionEntryCore(target, {
       sessionId: target.sessionId,
       updatedAt: 1,
@@ -190,9 +202,15 @@ export async function withInterruptedTurn(
       await appendCompletedToolWork(original, runId);
     }
     if (options.interruptedTurn !== false) {
-      await original.appendMessageAsync(
-        createFailureMessage(testModel, createAgentRunRestartAbortError(), true),
-      );
+      await original.appendMessageAsync({
+        ...createFailureMessage(testModel, createAgentRunRestartAbortError(), true),
+        ...(options.partialText
+          ? {
+              content: [{ type: "text" as const, text: options.partialText }],
+              errorCode: "OPENCLAW_RESTART_ABORT",
+            }
+          : {}),
+      });
       await appendInterruptedTurnMessage([], async (event) => {
         if (event.type !== "message_end") {
           return;
@@ -214,6 +232,16 @@ export async function withInterruptedTurn(
     closeOpenClawAgentDatabasesForTest();
     const recorder = makeRecorder();
     await recorder.stageApproved!({ runId, assertCurrent: () => {} });
+    if (options.admittedReceipt) {
+      recorder.markRuntimePersisted(
+        previous.getPersistedMessage?.(),
+        previous.getAdmissionReceipt(),
+        {
+          appended: false,
+        },
+      );
+      await recorder.waitForRuntimePersistence();
+    }
     const attempt = {
       config: {},
       contextTokenBudget: 8000,
@@ -230,6 +258,14 @@ export async function withInterruptedTurn(
       userTurnTranscriptRecorder: recorder,
     } as EmbeddedRunAttemptParams;
     const lifecycle = createEmbeddedAttemptTranscriptLifecycle(attempt);
+    const selected = options.selectedOwner ? await loadSessionEntryForAdmission(target) : undefined;
+    const sessionReader =
+      selected && "kind" in selected.databaseClaim && selected.databaseClaim.kind === "worker"
+        ? selected.databaseClaim.reader
+        : undefined;
+    if (selected && !sessionReader) {
+      throw new Error("Replay fixture requires a selected worker reader");
+    }
     let active = true;
     const withOwnedTranscriptWrite = <T>(operation: () => Promise<T> | T) =>
       withOwnedSessionTranscriptWrites(
@@ -239,6 +275,7 @@ export async function withInterruptedTurn(
             expectedLifecycleRevision: "current-generation",
             expectedWriterRunId: runId,
           },
+          sessionReader,
           assertCommitAllowed: () => {
             if (!active) {
               throw new Error("original writer closed");
@@ -265,13 +302,14 @@ export async function withInterruptedTurn(
             onSessionManagerCreated: onCreated ?? (() => {}),
             replayAllowedToolNames: new Set(["read"]),
             resolveActiveContextEnginePluginId: () => undefined,
-            sessionAgentId: "main",
+            sessionAgentId: target.agentId,
             withOwnedTranscriptWrite,
           }),
       });
     } finally {
       recorder.finishPendingInput!("interrupted");
       await lifecycle.dispose();
+      await selected?.databaseClaim.release();
       clearEmbeddedSessionPromptStates([target.sessionId]);
     }
   });
@@ -337,7 +375,8 @@ export async function withReplaySession(
       sessionManager: prepared.sessionManager,
       setActiveSessionSystemPrompt: () => {},
     });
-    const promptState = getEmbeddedSessionPromptState(target.sessionId);
+    using promptStateLease = retainEmbeddedSessionPromptState(target.sessionId);
+    const promptState = promptStateLease.state;
     const submit = () =>
       submitEmbeddedAttemptPrompt({
         attempt,

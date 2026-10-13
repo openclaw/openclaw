@@ -58,10 +58,13 @@ const GITHUB_QUOTA_RETRY_MS = 60_000;
 // API environments and release their cooldown state with that transport.
 const transportCooldowns = new WeakMap<typeof fetch, Map<string, ControlUiGitHubError>>();
 // Body-reported quotas belong to the admitted request even after API configuration changes.
-const responseCredentialScopes = new WeakMap<Response, string>();
+const responseRequestScopes = new WeakMap<
+  Response,
+  { credentialScope: string; fetchImpl: typeof fetch; resource: string }
+>();
 
 export class ControlUiGitHubError extends Error {
-  private readonly retryAtMs?: number;
+  readonly retryAtMs: number | undefined;
   readonly upstreamStatus: number;
   readonly retryable: boolean;
 
@@ -335,7 +338,7 @@ export async function fetchGitHubApi(
       throw retained;
     }
     if (!isGitHubApiRedirect(response.status)) {
-      responseCredentialScopes.set(response, credentialScope);
+      responseRequestScopes.set(response, { credentialScope, fetchImpl, resource });
       return response;
     }
 
@@ -373,8 +376,8 @@ export async function readBoundedResponse(response: Response, maxBytes: number):
 }
 
 // GitHub reports quota exhaustion as 429 or as 403 with exhausted-quota
-// headers; a bare 403 is a permission response and must stay distinguishable
-// so callers can degrade optional fetches instead of flagging rate limits.
+// headers. Body-reported secondary limits are classified by the JSON reader;
+// other 403 responses remain permission failures.
 function isGitHubRateLimitResponse(response: Response): boolean {
   if (response.status === 429) {
     return true;
@@ -395,8 +398,8 @@ function githubResponseErrorStatus(response: Response): number {
   return 502;
 }
 
-function githubResponseError(response: Response, graphqlRateLimited = false): ControlUiGitHubError {
-  const status = graphqlRateLimited ? 429 : githubResponseErrorStatus(response);
+function githubResponseError(response: Response, rateLimited = false): ControlUiGitHubError {
+  const status = rateLimited ? 429 : githubResponseErrorStatus(response);
   let retryAtMs: number | undefined;
   if (status === 429) {
     const now = Date.now();
@@ -413,7 +416,10 @@ function githubResponseError(response: Response, graphqlRateLimited = false): Co
           ? reset * 1_000
           : undefined;
     retryAtMs =
-      proposed !== undefined && Number.isSafeInteger(proposed) && proposed > now
+      proposed !== undefined &&
+      Number.isSafeInteger(proposed) &&
+      Number.isFinite(new Date(proposed).getTime()) &&
+      proposed > now
         ? proposed
         : now + GITHUB_QUOTA_RETRY_MS;
   }
@@ -431,7 +437,7 @@ export async function readGitHubGraphQLResponse(
   maxBytes?: number,
 ): Promise<unknown> {
   const credentialScope =
-    responseCredentialScopes.get(response) ??
+    responseRequestScopes.get(response)?.credentialScope ??
     `${DEFAULT_GITHUB_API_BASE_URL}:${githubApiCredentialCacheScope(token)}`;
   const value =
     response.status === 403 && !isGitHubRateLimitResponse(response)
@@ -527,6 +533,31 @@ export async function readGitHubJsonResponse(
   maxBytes = GITHUB_JSON_MAX_BYTES,
 ): Promise<unknown> {
   if (!response.ok) {
+    if (response.status === 403 && !isGitHubRateLimitResponse(response)) {
+      let payload: unknown;
+      try {
+        payload = await readGitHubJsonBody(response, maxBytes);
+      } catch {
+        // An unreadable error body must not change a permission failure's status.
+      }
+      if (
+        isRecord(payload) &&
+        typeof payload.message === "string" &&
+        /\b(?:secondary rate limit|abuse detection)\b/iu.test(payload.message)
+      ) {
+        const error = githubResponseError(response, true);
+        const scope = responseRequestScopes.get(response);
+        throw scope
+          ? retainGitHubCooldown(
+              scope.fetchImpl,
+              scope.credentialScope,
+              scope.resource,
+              response,
+              error,
+            )
+          : error;
+      }
+    }
     await discardResponse(response);
     throw githubResponseError(response);
   }

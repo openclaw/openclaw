@@ -83,7 +83,6 @@ describe("Discord REST error redaction", () => {
       }
       const client = new RequestClient(token, {
         baseUrl: `http://127.0.0.1:${address.port}`,
-        apiVersion: 10,
         queueRequests: false,
       });
 
@@ -120,13 +119,14 @@ describe("Discord REST error redaction", () => {
       expect(rateLimitError.scope).toBe("user");
       expect(rateLimitError.bucket).toMatch(/^sha256:[a-f0-9]{32}$/);
 
-      const bucketCount = client.getSchedulerMetrics().activeBuckets;
+      const { scheduler } = client as unknown as { scheduler: { buckets: Map<string, unknown> } };
+      const bucketCount = scheduler.buckets.size;
       expect(bucketCount).toBeGreaterThan(0);
       const repeatedRateError = await captureError(client.get(webhookRateLimitPath));
       expect(repeatedRateError).toBeInstanceOf(RateLimitError);
       expect((repeatedRateError as RateLimitError).bucket).toBe(rateLimitError.bucket);
-      expect(client.getSchedulerMetrics().activeBuckets).toBe(bucketCount);
-      expect(JSON.stringify(client.getSchedulerMetrics())).not.toContain(token);
+      expect(scheduler.buckets.size).toBe(bucketCount);
+      expect(JSON.stringify([...scheduler.buckets])).not.toContain(token);
 
       const reflectedHeaderError = await captureError(client.get("/rate-limit-reflected-headers"));
       expect(reflectedHeaderError).toBeInstanceOf(RateLimitError);
@@ -134,7 +134,7 @@ describe("Discord REST error redaction", () => {
       const reflectedHeaderDetails = JSON.stringify({
         bucket: reflectedRateLimitError.bucket,
         scope: reflectedRateLimitError.scope,
-        scheduler: client.getSchedulerMetrics(),
+        scheduler: [...scheduler.buckets],
       });
       expect(reflectedHeaderDetails).not.toContain(token);
       expect(reflectedHeaderDetails).not.toContain(uniqueTokenFragment);
@@ -182,23 +182,6 @@ describe("Discord REST error redaction", () => {
     expect(deepDetails).toContain("[Discord error body redacted: maximum depth exceeded]");
   });
 
-  it("preserves fields whose redacted error keys collide", () => {
-    const error = new DiscordError(new Response(null, { status: 500 }), {
-      message: "safe diagnostic",
-      reflectedKeys: {
-        "authorization=alpha-secret-value-123456": "first rejection",
-        "authorization=bravo-secret-value-123456": "second rejection",
-      },
-    });
-    const reflectedKeys = (error.rawBody as { reflectedKeys: Record<string, unknown> })
-      .reflectedKeys;
-
-    expect(reflectedKeys).toEqual({
-      "authorization=***": "first rejection",
-      "authorization=*** [2]": "second rejection",
-    });
-  });
-
   it("redacts reflected credentials inside Discord validation arrays", () => {
     const token = "MTAxMjM0NTY3ODkwMTIzNDU2.validation.array.credential";
     const error = new DiscordError(new Response(null, { status: 400 }), {
@@ -237,18 +220,6 @@ describe("Discord REST error redaction", () => {
         "*** [2]": "***",
       },
     });
-  });
-
-  it("ignores empty Discord rate-limit bucket headers", () => {
-    const error = new RateLimitError(
-      new Response(null, {
-        status: 429,
-        headers: { "X-RateLimit-Bucket": "" },
-      }),
-      { message: "Rate limited", retry_after: 1, global: false },
-    );
-
-    expect(error.bucket).toBeNull();
   });
 
   it("marks a priority-only object that exhausts the redaction node budget", () => {

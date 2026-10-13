@@ -64,7 +64,13 @@ function selectFixture(fixture: InstallFixture = {}) {
   const restores: Array<() => void> = [];
   const property = (name: "platform" | "execPath" | "argv", value: unknown) => {
     const descriptor = Object.getOwnPropertyDescriptor(process, name)!;
-    Object.defineProperty(process, name, { ...descriptor, value });
+    // A data override must not retain an accessor's get/set fields.
+    Object.defineProperty(process, name, {
+      configurable: descriptor.configurable,
+      enumerable: descriptor.enumerable,
+      writable: descriptor.writable ?? true,
+      value,
+    });
     restores.push(() => Object.defineProperty(process, name, descriptor));
   };
   if (fixture.platform) {

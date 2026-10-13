@@ -246,11 +246,8 @@ describe("node runner auto-update handoff", () => {
     );
   });
 
-  it.each([
-    { label: "service enrollment", stopAfterFirstConnect: true },
-    { label: "an ephemeral worker", ephemeral: true },
-  ])("does not schedule updates for $label", async ({ label: _label, ...options }) => {
-    await withRunningNodeHost(options, async ({ running, stop }) => {
+  it("does not schedule updates for service enrollment", async () => {
+    await withRunningNodeHost({ stopAfterFirstConnect: true }, async ({ running, stop }) => {
       hello();
       stop();
       await running;

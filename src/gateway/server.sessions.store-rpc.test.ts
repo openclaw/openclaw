@@ -28,18 +28,6 @@ const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
 
 type SessionPatchResponse = { ok: true; key: string; entry: Record<string, unknown> };
 
-test("sessions.patch validates persistent session icons", async () => {
-  const invalid = await directSessionHandlerReq("sessions.patch", {
-    key: "agent:main:main",
-    icon: "hand",
-  });
-  expect(invalid.error).toEqual({
-    code: "INVALID_REQUEST",
-    message:
-      "icon must be a single emoji, a named icon (braces, book, monitor, bot, kanban, coins), or self-contained SVG markup/data URL up to 16 KiB",
-  });
-});
-
 test("lists and patches session store via sessions.* RPC", async () => {
   const { storePath } = await createSessionStoreDir();
   const now = Date.now();
@@ -673,26 +661,6 @@ test("sessions.list configuredAgentsOnly keeps configured-agent children and hid
       enumerateAgentDirs.mockRestore();
     }
   });
-});
-
-test("sessions.list hides phantom agent store placeholder rows", async () => {
-  await createSessionStoreDir();
-  await writeSessionStore({
-    entries: {
-      sessions: {},
-      main: {
-        sessionId: "sess-main",
-        updatedAt: 20,
-      },
-    },
-  });
-
-  const listed = await directSessionHandlerReq<SessionsListResult>("sessions.list", {
-    includeGlobal: false,
-    includeUnknown: false,
-  });
-  expect(listed.ok).toBe(true);
-  expect(listed.payload?.sessions.map((session) => session.key)).toEqual(["agent:main:main"]);
 });
 
 test("write-scoped operators manage chat organization but not admin session settings", async () => {

@@ -1,4 +1,3 @@
-// Control UI shared Gateway error helpers.
 import {
   ErrorCodes,
   GatewayErrorDetailCodes,
@@ -38,12 +37,7 @@ export function isSetupAdmissionBusyError(err: unknown): boolean {
 }
 
 export function isMissingOperatorReadScopeError(err: unknown): boolean {
-  // Retained custom elements can hold an earlier client error class.
-  return (
-    err instanceof Error &&
-    err.name === "GatewayRequestError" &&
-    readMissingScopeError(err)?.missingScope === "operator.read"
-  );
+  return readMissingScopeError(err)?.missingScope === "operator.read";
 }
 
 export function isArchiveAccessDeniedError(err: unknown): boolean {

@@ -1,4 +1,3 @@
-// Slack plugin module builds shared chat.postMessage payloads.
 import type { MessageMetadata } from "@slack/types";
 import type { Block, ChatPostMessageArguments, KnownBlock } from "@slack/web-api";
 
@@ -31,16 +30,6 @@ export type SlackBasePostMessagePayload = SlackPostThreadPayload & {
 // argument type is a union where some members do not expose `text` or `blocks`.
 export type SlackPostMessagePayload = ChatPostMessageArguments & SlackBasePostMessagePayload;
 
-function buildSlackUnfurlPayload(options?: SlackUnfurlOptions) {
-  return {
-    // Default unfurl_links to false so bot messages don't expand inline
-    // link previews (Slack message links, URLs, etc.) unless the operator
-    // explicitly opts in via `channels.slack.unfurlLinks: true`.
-    unfurl_links: options?.unfurlLinks ?? false,
-    ...(typeof options?.unfurlMedia === "boolean" ? { unfurl_media: options.unfurlMedia } : {}),
-  };
-}
-
 export function buildSlackPostMessagePayload(params: {
   channelId: string;
   text: string;
@@ -57,7 +46,6 @@ export function buildSlackPostMessagePayload(params: {
       : params.threadTs
         ? { thread_ts: params.threadTs }
         : {};
-  const unfurlPayload = buildSlackUnfurlPayload(params.unfurl);
   return {
     channel: params.channelId,
     text: params.text,
@@ -65,6 +53,12 @@ export function buildSlackPostMessagePayload(params: {
     ...(params.metadata ? { metadata: params.metadata } : {}),
     ...(typeof params.mrkdwn === "boolean" ? { mrkdwn: params.mrkdwn } : {}),
     ...threadPayload,
-    ...unfurlPayload,
+    // Default unfurl_links to false so bot messages don't expand inline
+    // link previews (Slack message links, URLs, etc.) unless the operator
+    // explicitly opts in via `channels.slack.unfurlLinks: true`.
+    unfurl_links: params.unfurl?.unfurlLinks ?? false,
+    ...(typeof params.unfurl?.unfurlMedia === "boolean"
+      ? { unfurl_media: params.unfurl.unfurlMedia }
+      : {}),
   };
 }

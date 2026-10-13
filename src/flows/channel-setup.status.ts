@@ -2,7 +2,6 @@ import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveAgentWorkspaceDir, resolveAmbientOwnerAgentId } from "../agents/agent-scope.js";
 import { listChatChannels } from "../channels/chat-meta.js";
-import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import { listChannelSetupPlugins } from "../channels/plugins/setup-registry.js";
 import type {
   ChannelSetupPlugin,
@@ -31,9 +30,6 @@ import { t, wizardT } from "../wizard/i18n/index.js";
 import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
 
 type ChannelStatusSummary = {
-  installedPlugins: ChannelSetupPlugin[];
-  catalogEntries: ChannelPluginCatalogEntry[];
-  installedCatalogEntries: ChannelPluginCatalogEntry[];
   statusByChannel: Map<ChannelChoice, ChannelSetupStatus>;
   statusLines: string[];
 };
@@ -83,9 +79,9 @@ const CHANNEL_PRIMER_BLURB_KEYS: Record<string, string> = {
   zalouser: "wizard.channelsPrimer.blurbs.zalouser",
 };
 
-function formatSetupSelectionLabel(label: string, fallback: string): string {
+function formatSetupSelectionLabel(label: string | undefined, fallback = ""): string {
   return (
-    sanitizeTerminalText(label).trim() ||
+    sanitizeTerminalText(label ?? "").trim() ||
     sanitizeTerminalText(fallback).trim() ||
     "<invalid channel>"
   );
@@ -98,17 +94,12 @@ function formatSetupSelectionHint(hint: string | undefined): string | undefined 
   return sanitizeTerminalText(hint) || undefined;
 }
 
-function formatSetupDisplayText(value: string | undefined, fallback = ""): string {
-  return formatSetupSelectionLabel(value ?? "", fallback);
-}
-
 function formatSetupFreeText(value: string | undefined): string {
   return sanitizeTerminalText(value ?? "").trim();
 }
 
 function formatSetupOptionalDisplayText(value: string | undefined): string | undefined {
-  const safe = sanitizeTerminalText(value ?? "").trim();
-  return safe || undefined;
+  return formatSetupFreeText(value) || undefined;
 }
 
 function formatSetupDisplayList(values: readonly string[] | undefined): string[] | undefined {
@@ -121,8 +112,8 @@ function formatSetupDisplayList(values: readonly string[] | undefined): string[]
 
 function formatSetupDisplayMeta(meta: ChannelMeta): ChannelMeta {
   const { selectionDocsPrefix, ...displayMeta } = meta;
-  const safeId = formatSetupDisplayText(meta.id, "<invalid channel>");
-  const safeLabel = formatSetupDisplayText(meta.label, safeId);
+  const safeId = formatSetupSelectionLabel(meta.id, "<invalid channel>");
+  const safeLabel = formatSetupSelectionLabel(meta.label, safeId);
   const safeSelectionDocsPrefix =
     selectionDocsPrefix === "" ? "" : formatSetupOptionalDisplayText(selectionDocsPrefix?.trim());
   const safeSelectionExtras = formatSetupDisplayList(meta.selectionExtras);
@@ -130,9 +121,9 @@ function formatSetupDisplayMeta(meta: ChannelMeta): ChannelMeta {
     ...displayMeta,
     id: safeId,
     label: safeLabel,
-    selectionLabel: formatSetupDisplayText(meta.selectionLabel, safeLabel),
-    docsPath: formatSetupDisplayText(meta.docsPath, "/"),
-    ...(meta.docsLabel ? { docsLabel: formatSetupDisplayText(meta.docsLabel, safeId) } : {}),
+    selectionLabel: formatSetupSelectionLabel(meta.selectionLabel, safeLabel),
+    docsPath: formatSetupSelectionLabel(meta.docsPath, "/"),
+    ...(meta.docsLabel ? { docsLabel: formatSetupSelectionLabel(meta.docsLabel, safeId) } : {}),
     blurb: formatSetupFreeText(meta.blurb),
     ...(safeSelectionDocsPrefix !== undefined
       ? { selectionDocsPrefix: safeSelectionDocsPrefix }
@@ -377,9 +368,6 @@ export async function collectChannelStatus(params: {
   const mergedStatusByChannel = new Map(combinedStatuses.map((entry) => [entry.channel, entry]));
   const statusLines = combinedStatuses.flatMap((entry) => entry.statusLines);
   return {
-    installedPlugins,
-    catalogEntries: installableCatalogEntries,
-    installedCatalogEntries,
     statusByChannel: mergedStatusByChannel,
     statusLines,
   };

@@ -64,15 +64,7 @@ function chromeNodeBrowserRequest(
   runtime: PluginRuntime,
   nodeId: string,
 ): MeetingBrowserRequestCaller {
-  return async (request) =>
-    await callBrowserProxyOnNode({
-      runtime,
-      nodeId,
-      method: request.method,
-      path: request.path,
-      body: request.body,
-      timeoutMs: request.timeoutMs,
-    });
+  return (request) => callBrowserProxyOnNode({ ...request, runtime, nodeId });
 }
 
 export async function leaveChromeMeet(

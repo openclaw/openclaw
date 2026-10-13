@@ -37,7 +37,7 @@ import {
 import { log } from "../logger.js";
 import { normalizeAssistantReplayContent } from "../replay-history.js";
 import {
-  cloneToolResultPromptProjectionState,
+  createToolResultPromptProjectionState,
   type ToolResultPromptProjectionState,
 } from "../session-prompt-state.js";
 import {
@@ -65,7 +65,6 @@ import {
 } from "./attempt-prompt-helpers.js";
 import { applyResolvedToolPromptFinalizer } from "./attempt-prompt-support.js";
 import { composeSystemPromptWithHookContext } from "./attempt-thread-helpers.js";
-import { pruneProcessedHistoryImages } from "./history-image-prune.js";
 import {
   buildRuntimeContextCustomMessage,
   resolveRuntimeContextPromptParts,
@@ -75,16 +74,26 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 type HookRunner = ReturnType<typeof getGlobalHookRunner>;
 type OrphanRepairPlan = ReturnType<typeof resolveOrphanRepairPlan>;
 
-type EmbeddedAttemptSteeringLease = {
+export type EmbeddedAttemptSteeringLease = {
   leaseId: string;
   runIds: string[];
   isCurrent: () => boolean;
 };
 
 export async function prepareEmbeddedAttemptPromptAssembly(input: {
-  attempt: EmbeddedRunAttemptParams;
-  activeSession: AgentSession;
-  sessionManager: SessionManager;
+  attempt: Omit<
+    EmbeddedRunAttemptParams,
+    | "authStorage"
+    | "authProfileStore"
+    | "modelRegistry"
+    | "sessionFile"
+    | "thinkLevel"
+    | "timeoutMs"
+    | "modelId"
+    | "fastMode"
+  >;
+  activeSession: Pick<AgentSession, "messages">;
+  sessionManager: Pick<SessionManager, "getLeafId">;
   hookRunner: HookRunner;
   hookAgentId: string;
   diagnosticTrace: DiagnosticTraceContext;
@@ -149,8 +158,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     modelId: attempt.model.id,
     inputProvenance: attempt.inputProvenance,
   };
-  const promptBuildMessages =
-    pruneProcessedHistoryImages(input.activeSession.messages) ?? input.activeSession.messages;
+  const promptBuildMessages = input.activeSession.messages;
   const promptEvent = { prompt: effectivePrompt, messages: promptBuildMessages };
   const hookResult = preserveExactPrompt
     ? undefined
@@ -361,11 +369,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
         ? " to prevent consecutive user turns. "
         : " without removing the active session leaf. ") +
       `runId=${attempt.runId} sessionId=${attempt.sessionId} trigger=${attempt.trigger}`;
-    if (shouldWarnOnOrphanedUserRepair(attempt.trigger)) {
-      log.warn(message);
-    } else {
-      log.debug(message);
-    }
+    log[shouldWarnOnOrphanedUserRepair(attempt.trigger) ? "warn" : "debug"](message);
   }
 
   if (leasedSteering && leasedSteeringPrompt) {
@@ -422,6 +426,7 @@ type PromptContextAttempt = Pick<
   | "runtimeContextFragments"
   | "sessionId"
   | "sessionKey"
+  | "sessionTarget"
   | "suppressNextUserMessagePersistence"
   | "operation"
 >;
@@ -436,6 +441,7 @@ type PromptAssemblyContext = {
 export async function prepareEmbeddedAttemptPromptContext(input: {
   sessionVersion?: number;
   appendOnlyRuntimeContext?: boolean;
+  executionHost?: boolean;
   inHistorySystemUpdates?: boolean;
   attempt: PromptContextAttempt;
   capabilityToolNames: ReadonlySet<string>;
@@ -488,13 +494,11 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
     contextTokenBudget,
     promptToolResultMaxChars,
     promptToolResultAggregateMaxChars,
-    cloneToolResultPromptProjectionState(input.toolResultPromptProjectionState),
+    createToolResultPromptProjectionState(input.toolResultPromptProjectionState),
   );
   const promptHistoryChanged = promptToolResultTruncation.messages !== sessionMessages;
   const { aggregatePressureEngaged } = promptToolResultTruncation;
-  if (promptHistoryChanged) {
-    sessionMessages = promptToolResultTruncation.messages;
-  }
+  sessionMessages = promptToolResultTruncation.messages;
   if (promptHistoryChanged || aggregatePressureEngaged) {
     const sessionLogKey = attempt.sessionKey ?? attempt.sessionId ?? "unknown";
     const truncationLog =
@@ -554,9 +558,11 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
       ? []
       : await buildRuntimeFactsContext({
           capabilityToolNames: input.capabilityToolNames,
+          executionHost: input.executionHost,
           cfg: attempt.config ?? {},
           sessionKey: attempt.sessionKey,
           sessionId: attempt.sessionId,
+          sessionTarget: attempt.sessionTarget,
           agentId: input.sessionAgentId,
           includeEmptySnapshots: input.appendOnlyRuntimeContext === true,
         });
@@ -620,6 +626,7 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
     promptToolResultAggregateMaxChars,
     promptToolResultMaxChars,
     ...(runtimeContextMessageForCurrentTurn ? { runtimeContextMessageForCurrentTurn } : {}),
+    runtimeContextFragments: contextFragments,
     systemPromptForHook,
   };
 }

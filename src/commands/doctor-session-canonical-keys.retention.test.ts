@@ -9,14 +9,17 @@ import {
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { createTranscriptEventInserter } from "../config/sessions/transcript-payload.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
-import { repairCanonicalSessionKeys } from "./doctor-session-canonical-keys.js";
-import { insertLegacySession } from "./doctor-session-canonical-keys.test-support.js";
+import {
+  insertLegacySession,
+  repairCanonicalSessionKeys,
+} from "./doctor-session-canonical-keys.test-support.js";
 
 afterEach(() => closeOpenClawAgentDatabasesForTest());
 
@@ -55,18 +58,19 @@ describe("doctor canonical session-key retention repair", () => {
           "INSERT INTO session_windows (session_id, session_key, reason, session_scope, created_at, updated_at) VALUES ('destination-only-previous', 'agent:main:shared', 'recovery', 'conversation', 4, 4)",
         )
         .run();
-      destinationDatabase.db
-        .prepare(
-          "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES ('destination-only-previous', 0, ?, 4)",
-        )
-        .run(
-          JSON.stringify({
-            id: "destination-only-message",
-            message: { content: "destination-only history", role: "user" },
-            parentId: null,
-            type: "message",
-          }),
-        );
+      createTranscriptEventInserter(
+        destinationDatabase.db,
+        "destination-only-previous",
+      )({
+        seq: 0,
+        eventJson: JSON.stringify({
+          id: "destination-only-message",
+          message: { content: "destination-only history", role: "user" },
+          parentId: null,
+          type: "message",
+        }),
+        createdAt: 4,
+      });
 
       insertLegacySession({
         agentId: "ops",

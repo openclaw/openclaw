@@ -9,7 +9,6 @@ import {
   resolveActivePluginInstallRoots,
 } from "../../plugins/install-root-context.js";
 import { CONFIG_DIR, resolveConfigDir } from "../../utils.js";
-import { copySkillFileHost } from "../skill-file-host.js";
 import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
 import type { Skill } from "./skill-contract.js";
 import { tryRealpath } from "./symlink-targets.js";
@@ -28,7 +27,6 @@ export function shouldSyncSkillPath(filePath: string): boolean {
   return name !== ".git" && name !== "node_modules";
 }
 
-/** Resolve the effective user home used by skill discovery. */
 export function resolveSkillsUserHomeDir(): string | undefined {
   return resolveOsHomeDir(process.env, os.homedir);
 }
@@ -65,14 +63,12 @@ export function compactPromptSkills(
   }
   const preservedRoots = resolvePreservedPromptSkillPathRoots(options);
   const tildeRoots = resolvePromptTildeRoots();
-  return skills.map((skill) =>
-    copySkillFileHost(skill, {
-      ...skill,
-      filePath: shouldPreservePromptSkillPath(skill.filePath, preservedRoots, tildeRoots)
-        ? skill.filePath
-        : compactHomePath(skill.filePath, prefixes),
-    }),
-  );
+  return skills.map((skill) => ({
+    ...skill,
+    filePath: shouldPreservePromptSkillPath(skill.filePath, preservedRoots, tildeRoots)
+      ? skill.filePath
+      : compactHomePath(skill.filePath, prefixes),
+  }));
 }
 
 function resolvePreservedPromptSkillPathRoots(options: {
@@ -145,7 +141,6 @@ function compactHomePrefixesForHome(home: string): string[] {
   return prefixes;
 }
 
-/** Compact a skill path for console diagnostics. */
 export function compactSkillPath(filePath: string): string {
   return compactHomePath(filePath, resolveCompactHomePrefixes());
 }

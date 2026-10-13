@@ -7,6 +7,7 @@ import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import {
   closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
@@ -200,6 +201,9 @@ it.each(["changed", "revoked", "rejected"])(
       release.resolve();
       if (outcome !== "changed") {
         await expect(work).rejects.toThrow(/revoked|closed|injected retention rejection/);
+        if (outcome === "revoked") {
+          await closeOpenClawAgentDatabaseByPathAsync(database.path);
+        }
         database = openOpenClawAgentDatabase(options());
         expect(retainedIds()).toEqual([...candidates, "unaffected"]);
       } else {

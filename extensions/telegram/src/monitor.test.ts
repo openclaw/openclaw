@@ -25,8 +25,10 @@ const mocks = vi.hoisted(() => ({
   runtime: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", () => ({
-  getRuntimeConfig: mocks.config,
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
+  readRuntimeConfig: mocks.config,
+  captureRuntimeConfigAsyncReader: () => async () => mocks.config(),
 }));
 vi.mock("./runtime.js", () => ({ getTelegramRuntime: mocks.runtime }));
 vi.mock("./polling-session.js", () => ({
@@ -297,16 +299,17 @@ describe("monitorTelegramProvider", () => {
   });
 
   it("allows separate tokens and releases the first token after shutdown", async () => {
-    const started = createDeferred<void>();
+    const firstStarted = createDeferred<void>();
+    const secondStarted = createDeferred<void>();
     mocks.runSession.mockImplementation((options) => {
-      if (mocks.sessions.length === 2) {
-        started.resolve();
-      }
+      (mocks.sessions.length === 1 ? firstStarted : secondStarted).resolve();
       return keepSessionRunning(options);
     });
     const first = startMonitor({ token: "test-token-a" });
+    // Vitest cannot resolve concurrent manual-mocked imports; keep the first monitor live.
+    await firstStarted.promise;
     const second = startMonitor({ token: "test-token-b" });
-    await started.promise;
+    await secondStarted.promise;
     first.abort.abort();
     await first.task;
     mocks.runSession.mockResolvedValueOnce(undefined);

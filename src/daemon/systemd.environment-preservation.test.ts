@@ -81,7 +81,7 @@ describe.skipIf(process.platform === "win32")("systemd operator environment pres
       };
       const unitPath = resolveSystemdUnitPath(env);
       await fs.mkdir(stateDir, { mode: 0o700 });
-      await fs.mkdir(`${unitPath}.d`, { recursive: true });
+      await fs.mkdir(`${unitPath}.d`, { recursive: true, mode: 0o700 });
       const wrapperPath = path.join(stateDir, "openclaw-wrapper");
       const dropInPath = `${unitPath}.d/operator.conf`;
       const operatorFile = path.join(stateDir, "operator.env");
@@ -98,8 +98,8 @@ describe.skipIf(process.platform === "win32")("systemd operator environment pres
       };
       const dropIn = `[Service]\n${source}=${source === "EnvironmentFile" ? operatorFile : `${operatorKey}=${operatorValue}`}\n`;
       await fs.writeFile(wrapperPath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-      await fs.writeFile(unitPath, buildSystemdUnit(base));
-      await fs.writeFile(dropInPath, dropIn);
+      await fs.writeFile(unitPath, buildSystemdUnit(base), { mode: 0o600 });
+      await fs.writeFile(dropInPath, dropIn, { mode: 0o600 });
       if (source === "EnvironmentFile") {
         await fs.writeFile(operatorFile, `${operatorKey}=${operatorValue}\n`, { mode: 0o600 });
       }

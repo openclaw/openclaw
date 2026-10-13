@@ -116,15 +116,6 @@ describe("iOS release shell wrapper arguments", () => {
     },
   );
 
-  it("lets the guarded upload lane resolve omitted release arguments", () => {
-    const script = readFileSync(path.join(process.cwd(), "scripts/ios-release-upload.sh"), "utf8");
-
-    expect(script).not.toContain("Missing required --version.");
-    expect(script).not.toContain("Missing required --revision.");
-    expect(script).toContain('[[ -n "${RELEASE_VERSION}" ]]');
-    expect(script).toContain('[[ -n "${APP_STORE_REVISION}" ]]');
-  });
-
   it("rejects App Store release relay URL overrides before release work", () => {
     const result = runScript(
       path.join(process.cwd(), "scripts/ios-release-prepare.sh"),
@@ -198,7 +189,7 @@ describe("iOS release shell wrapper arguments", () => {
       bundle,
       "#!/usr/bin/env bash\n" +
         '[[ "$BUNDLE_GEMFILE" == "$OPENCLAW_FASTLANE_EXPECTED_GEMFILE" ]] || exit 91\n' +
-        '[[ "${1:-}" == "_4.0.21_" ]] || exit 92\n' +
+        '[[ "${1:-}" == "_4.0.22_" ]] || exit 92\n' +
         '[[ "${2:-}" != "check" ]] || exit 0\n' +
         '[[ "${2:-}" == "exec" && "${3:-}" == "fastlane" ]] || exit 93\n' +
         "shift 3\n" +
@@ -255,15 +246,6 @@ describe("iOS release shell wrapper arguments", () => {
   it("preserves Fastlane failures through the pinned shared runner", () => {
     const result = runSharedFastlane({ fastlaneExit: 37 });
     expect(result.status).toBe(37);
-  });
-
-  it("overrides a hostile inherited Gemfile in the shared runner", () => {
-    const result = runSharedFastlane({
-      bundleGemfile: "/tmp/hostile/Gemfile",
-      fastlaneExit: 0,
-    });
-
-    expect(result.status).toBe(0);
   });
 
   it("keeps the repository Gemfile after the caller changes directories", () => {

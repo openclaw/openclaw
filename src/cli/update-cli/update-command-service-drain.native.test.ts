@@ -20,8 +20,8 @@ import {
 import { inspectors } from "../../infra/gateway-suspend-coordinator.test-support.js";
 import type { ImmutableInstallDescriptor } from "../../infra/update-immutable-install-schema.js";
 import {
+  controlImmutableService,
   inspectImmutableActivationService,
-  stopImmutableService,
 } from "../../infra/update-immutable-service.js";
 import {
   isGatewayWorkAdmissionClosed,
@@ -394,7 +394,7 @@ async function stopWithLiveDrain() {
     },
     async (guard) => {
       events.push("stop:entered");
-      await stopImmutableService({
+      await controlImmutableService("stop", {
         descriptor,
         expected: observed,
         assertCurrent,

@@ -6,15 +6,13 @@ import {
 } from "../infra/sqlite-readonly-worker.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { AgentDatabaseAdmissionRefusal } from "./agent-database-admission.js";
+import { AGENT_DATABASE_PREFLIGHT_CONCURRENCY } from "./openclaw-agent-db-contract.js";
 import { createAgentSchemaInspectionWorker } from "./openclaw-agent-schema-inspection-worker.js";
 import type {
   AgentDatabasePreflightStats,
   OpenClawDatabaseSchemaPreflight,
 } from "./openclaw-database-preflight.types.js";
 
-// Snapshot preparation can be disk-heavy; overlap one additional agent
-// without fanning out across every registered database.
-export const AGENT_DATABASE_PREFLIGHT_CONCURRENCY = 2;
 // Slow disks keep their full inspection budget without holding the Gateway listener.
 const AGENT_DATABASE_STARTUP_WAIT_MS = 5_000;
 
@@ -25,7 +23,7 @@ export async function preflightAgentDatabasesBounded<T>(
     inspection: OpenClawDatabaseSchemaPreflight,
     claimAgentTarget: (realPath: string, agentId: string | undefined) => boolean,
     inspectSchema: ReturnType<typeof createAgentSchemaInspectionWorker>["inspect"],
-  ) => Promise<void>,
+  ) => Promise<"defer" | void>,
   result: OpenClawDatabaseSchemaPreflight,
   signal?: AbortSignal,
   startup?: {
@@ -88,7 +86,7 @@ export async function preflightAgentDatabasesBounded<T>(
           target: targets[index]!,
           result: completions[index]!.promise,
         })),
-        `The ${AGENT_DATABASE_STARTUP_WAIT_MS / 1000} second foreground startup budget elapsed; inspection continues.`,
+        "Inspection and writable admission continue after the Gateway listener binds.",
       );
       foreground.resolve();
     } catch (error) {
@@ -120,11 +118,18 @@ export async function preflightAgentDatabasesBounded<T>(
         indeterminate: [],
       };
       try {
-        await inspect(target, inspection, claimAgentTarget, (input, requestSignal, snapshot) =>
-          reader.inspect(input, inspectionSignal ?? requestSignal, snapshot),
+        const disposition = await inspect(
+          target,
+          inspection,
+          claimAgentTarget,
+          (input, requestSignal, snapshot) =>
+            reader.inspect(input, inspectionSignal ?? requestSignal, snapshot),
         );
         inspections[index] = inspection;
         completions[index]!.resolve(inspection);
+        if (disposition === "defer" && startup?.canDefer(target)) {
+          deferred.add(index);
+        }
       } catch (error) {
         failures.set(index, error);
         completions[index]!.reject(error);

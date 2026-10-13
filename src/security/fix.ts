@@ -1,4 +1,3 @@
-// Applies safe automatic fixes for supported security audit findings.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { modeBits } from "@openclaw/fs-safe/permissions";
@@ -139,29 +138,8 @@ async function applySecurityFixConfigMutations(params: {
   cfg: OpenClawConfig;
   changes: string[];
 }> {
-  const channelFixes = await collectChannelSecurityConfigFixMutation({
-    cfg: params.cfg,
-    env: params.env,
-    channelPlugins: params.channelPlugins,
-  });
-  const cfg = structuredClone(channelFixes.cfg ?? {});
-  const changes: string[] = [];
-  for (const channel of Object.keys(cfg.channels ?? {})) {
-    setGroupPolicyAllowlist({ cfg, channel, changes });
-  }
-  return {
-    cfg,
-    changes: [...changes, ...channelFixes.changes],
-  };
-}
-
-async function collectChannelSecurityConfigFixMutation(params: {
-  cfg: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  channelPlugins?: ChannelPlugin[];
-}) {
   let nextCfg = params.cfg;
-  const changes: string[] = [];
+  const channelChanges: string[] = [];
   const collectPlugins = async (): Promise<ChannelPlugin[]> => {
     if (params.channelPlugins) {
       return params.channelPlugins;
@@ -188,9 +166,14 @@ async function collectChannelSecurityConfigFixMutation(params: {
       continue;
     }
     nextCfg = mutation.config;
-    changes.push(...mutation.changes);
+    channelChanges.push(...mutation.changes);
   }
-  return { cfg: nextCfg, changes };
+  const cfg = structuredClone(nextCfg ?? {});
+  const changes: string[] = [];
+  for (const channel of Object.keys(cfg.channels ?? {})) {
+    setGroupPolicyAllowlist({ cfg, channel, changes });
+  }
+  return { cfg, changes: [...changes, ...channelChanges] };
 }
 
 async function collectSecurityPermissionTargets(params: {

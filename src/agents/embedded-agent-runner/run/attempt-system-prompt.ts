@@ -2,32 +2,16 @@ import {
   splitSystemPromptCacheBoundary,
   SYSTEM_PROMPT_CACHE_BOUNDARY,
 } from "@openclaw/ai/internal/shared";
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import type { ProviderTransformSystemPromptContext } from "../../../plugins/types.js";
-import type { buildEmbeddedSystemPrompt } from "../system-prompt.js";
+import type { buildConfiguredAgentSystemPrompt } from "../../system-prompt-config.js";
 
-type EmbeddedSystemPromptParams = Parameters<typeof buildEmbeddedSystemPrompt>[0];
 export type SystemPromptRefresh = ((currentSystemPrompt: string) => string) & {
   /** A prepared render is authoritative even when it restores the pinned bytes. */
   freshlyRendered?: boolean;
 };
-type ProviderSystemPromptTransform = (params: {
-  provider: string;
-  config?: OpenClawConfig;
-  workspaceDir: string;
-  context: ProviderTransformSystemPromptContext;
-}) => string;
-
 type BuildAttemptSystemPromptParams = {
   isRawModelRun: boolean;
-  embeddedSystemPrompt: EmbeddedSystemPromptParams;
-  transformProviderSystemPrompt: ProviderSystemPromptTransform;
-  providerTransform: {
-    provider: string;
-    config?: OpenClawConfig;
-    workspaceDir: string;
-    context: Omit<ProviderTransformSystemPromptContext, "systemPrompt">;
-  };
+  embeddedSystemPrompt: Parameters<typeof buildConfiguredAgentSystemPrompt>[0];
+  transformSystemPrompt: (systemPrompt: string) => string;
 };
 
 const ATTEMPT_PROMPT_SECTION =
@@ -52,9 +36,9 @@ export function extractAttemptPermissionNotice(systemPrompt: string) {
  * diagnostics/cache boundaries, but submit an empty provider prompt.
  */
 export async function buildAttemptSystemPrompt(params: BuildAttemptSystemPromptParams) {
-  const { buildEmbeddedSystemPrompt } = await import("../system-prompt.js");
+  const { buildConfiguredAgentSystemPrompt } = await import("../../system-prompt-config.js");
   let renderedSkillsPrompt = "";
-  const baseSystemPrompt = buildEmbeddedSystemPrompt({
+  const baseSystemPrompt = buildConfiguredAgentSystemPrompt({
     ...params.embeddedSystemPrompt,
     onRenderedSkillsPrompt: (skillsPrompt) => {
       renderedSkillsPrompt = skillsPrompt;
@@ -63,15 +47,7 @@ export async function buildAttemptSystemPrompt(params: BuildAttemptSystemPromptP
   });
   const transformedSystemPrompt = params.isRawModelRun
     ? ""
-    : params.transformProviderSystemPrompt({
-        provider: params.providerTransform.provider,
-        config: params.providerTransform.config,
-        workspaceDir: params.providerTransform.workspaceDir,
-        context: {
-          ...params.providerTransform.context,
-          systemPrompt: baseSystemPrompt,
-        },
-      });
+    : params.transformSystemPrompt(baseSystemPrompt);
   // Runtime additions at the cache boundary stay outside both owned regions;
   // permission refreshes replace capability guidance without dropping that context.
   const splitPrompt = splitSystemPromptCacheBoundary(transformedSystemPrompt);

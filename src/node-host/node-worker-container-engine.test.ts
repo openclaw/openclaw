@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { runExec } from "../process/exec.js";
 import {
   createNodeWorkerContainer,
@@ -30,52 +30,42 @@ function containerEngine(id: NodeWorkerContainerEngine["id"]): NodeWorkerContain
   };
 }
 
-describe("container command timeout diagnostics", () => {
-  it.each(["docker", "podman"] as const)(
-    "identifies %s revalidation and its deadline without launching a container",
-    async (id) => {
-      const timeout = Object.assign(new Error("Command timed out"), { timedOut: true });
-      vi.mocked(runExec).mockRejectedValue(timeout);
-      const engine = containerEngine(id);
-
-      await expect(createNodeWorkerContainer(engine, launch)).rejects.toMatchObject({
-        message: `Container command timed out after 30000 milliseconds: ${id} info`,
-        cause: timeout,
+it.each([
+  { id: "docker", operation: "info", timedOut: true },
+  { id: "podman", operation: "info", timedOut: true },
+  { id: "docker", operation: "create", timedOut: true },
+  { id: "docker", operation: "info", timedOut: false },
+] as const)(
+  "preserves $id $operation failure diagnostics (timeout=$timedOut)",
+  async ({ id, operation, timedOut }) => {
+    const failure = Object.assign(
+      new Error(timedOut ? "Command timed out" : "daemon unavailable"),
+      { timedOut },
+    );
+    if (operation === "create") {
+      vi.mocked(runExec).mockResolvedValueOnce({ stdout: "synthetic-daemon\n", stderr: "" });
+    }
+    vi.mocked(runExec).mockRejectedValueOnce(failure);
+    const engine = containerEngine(id);
+    const result = createNodeWorkerContainer(engine, launch);
+    const timeoutMs = operation === "create" ? 300_000 : 30_000;
+    if (timedOut) {
+      await expect(result).rejects.toMatchObject({
+        message: `Container command timed out after ${timeoutMs} milliseconds: ${id} ${operation}`,
+        cause: failure,
       });
-      expect(runExec).toHaveBeenCalledExactlyOnceWith(
-        engine.command,
-        expect.arrayContaining(["info", "--format"]),
-        expect.objectContaining({ timeoutMs: 30_000, logOutput: false }),
-      );
-    },
-  );
-
-  it("omits private creation arguments while retaining the original timeout cause", async () => {
-    const timeout = Object.assign(new Error("Command timed out"), { timedOut: true });
-    vi.mocked(runExec)
-      .mockResolvedValueOnce({ stdout: "synthetic-daemon\n", stderr: "" })
-      .mockRejectedValueOnce(timeout);
-    const engine = containerEngine("docker");
-
-    await expect(createNodeWorkerContainer(engine, launch)).rejects.toMatchObject({
-      message: "Container command timed out after 300000 milliseconds: docker create",
-      cause: timeout,
-    });
-    expect(runExec).toHaveBeenCalledTimes(2);
+    } else {
+      await expect(result).rejects.toBe(failure);
+    }
+    expect(runExec).toHaveBeenCalledTimes(operation === "create" ? 2 : 1);
     expect(runExec).toHaveBeenLastCalledWith(
       engine.command,
-      expect.arrayContaining(["create", "SUPPLIED_SECRET=synthetic-private-value"]),
-      expect.objectContaining({ timeoutMs: 300_000 }),
+      expect.arrayContaining(
+        operation === "create"
+          ? ["create", "SUPPLIED_SECRET=synthetic-private-value"]
+          : ["info", "--format"],
+      ),
+      expect.objectContaining({ timeoutMs, logOutput: false }),
     );
-  });
-
-  it("preserves a non-timeout command failure unchanged", async () => {
-    const failure = Object.assign(new Error("daemon unavailable"), { timedOut: false });
-    vi.mocked(runExec).mockRejectedValue(failure);
-
-    await expect(createNodeWorkerContainer(containerEngine("docker"), launch)).rejects.toBe(
-      failure,
-    );
-    expect(runExec).toHaveBeenCalledOnce();
-  });
-});
+  },
+);

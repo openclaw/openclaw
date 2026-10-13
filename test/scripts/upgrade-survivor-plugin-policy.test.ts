@@ -195,78 +195,34 @@ printf 'main-preserved\\n'
     },
   );
 
-  it("preserves allowed channel and slot policy without opening the allowlist", () => {
+  it("preserves channel and slot policy while rejecting retired or widened permissions", () => {
     const config = policy();
+    const check = (value: unknown) => assertSolePluginPolicy(value, specimen, baseline);
     for (const allow of [["telegram"], ["memory-core"], ["memory-core", "telegram"]]) {
-      expect(() =>
-        assertSolePluginPolicy(
-          { ...config, plugins: { ...config.plugins, allow } },
-          specimen,
-          baseline,
-        ),
-      ).not.toThrow();
+      expect(() => check({ ...config, plugins: { ...config.plugins, allow } })).not.toThrow();
     }
-    expect(() =>
-      assertSolePluginPolicy(
-        { ...config, plugins: { ...config.plugins, enabled: false } },
-        specimen,
-        baseline,
+    for (const [patch, error] of [
+      [
+        { plugins: { ...config.plugins, enabled: false } },
+        "disabled permitted channel or slot plugins",
+      ],
+      ...[[], ["memory-core", "telegram", "unrelated"]].map(
+        (allow) =>
+          [{ plugins: { ...config.plugins, allow } }, "restrictive plugin allowlist"] as const,
       ),
-    ).toThrow("disabled permitted channel or slot plugins");
-    for (const allow of [[], ["memory-core", "telegram", "unrelated"]]) {
-      expect(() =>
-        assertSolePluginPolicy(
-          { ...config, plugins: { ...config.plugins, allow } },
-          specimen,
-          baseline,
-        ),
-      ).toThrow("restrictive plugin allowlist");
+      ...[{ entries: { webhooks: { enabled: true } } }, { deny: ["webhooks", "device-pair"] }].map(
+        (retained) => [{ plugins: { ...config.plugins, ...retained } }, "retired"] as const,
+      ),
+      [{ hooks: { ...hooks, enabled: false } }, "ordinary hooks changed"],
+      [{ plugins: { ...config.plugins, deny: [] } }, "unrelated plugin denial was removed"],
+      [{ channels: { telegram: { enabled: false } } }, "configured Telegram channel was disabled"],
+      [
+        { plugins: { ...config.plugins, slots: { memory: "none" } } },
+        "selected memory slot changed",
+      ],
+    ] as const) {
+      expect(() => check({ ...config, ...patch })).toThrow(error);
     }
-  });
-
-  it("rejects a retained retired reference or a changed core-hook configuration", () => {
-    for (const retained of [
-      { entries: { webhooks: { enabled: true } } },
-      { deny: ["webhooks", "device-pair"] },
-    ]) {
-      const config = policy();
-      expect(() =>
-        assertSolePluginPolicy(
-          { ...config, plugins: { ...config.plugins, ...retained } },
-          specimen,
-          baseline,
-        ),
-      ).toThrow("retired");
-    }
-    expect(() =>
-      assertSolePluginPolicy(
-        { ...policy(), hooks: { ...hooks, enabled: false } },
-        specimen,
-        baseline,
-      ),
-    ).toThrow("ordinary hooks changed");
-    const config = policy();
-    expect(() =>
-      assertSolePluginPolicy(
-        { ...config, plugins: { ...config.plugins, deny: [] } },
-        specimen,
-        baseline,
-      ),
-    ).toThrow("unrelated plugin denial was removed");
-    expect(() =>
-      assertSolePluginPolicy(
-        { ...config, channels: { telegram: { enabled: false } } },
-        specimen,
-        baseline,
-      ),
-    ).toThrow("configured Telegram channel was disabled");
-    expect(() =>
-      assertSolePluginPolicy(
-        { ...config, plugins: { ...config.plugins, slots: { memory: "none" } } },
-        specimen,
-        baseline,
-      ),
-    ).toThrow("selected memory slot changed");
   });
 
   it("reads the actual 9.2 eligibility shape and checks candidate runtime separately", () => {

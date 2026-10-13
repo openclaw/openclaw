@@ -1,7 +1,7 @@
 import path from "node:path";
 import { afterAll, afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
-import type { OpenClawConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader, type OpenClawConfig } from "../config/config.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
@@ -26,6 +26,10 @@ import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 
 const CRON_RUN_KEY = "agent:main:cron:daily-report:run:run-42";
 const sessionDirs = useSessionStoreTempDirs(afterAll, "cron-yield-policy-");
+
+beforeEach(async () => {
+  await captureRuntimeConfigAsyncReader()();
+});
 
 async function seedRequiredChild(
   requesterSessionKey = CRON_RUN_KEY,
@@ -125,31 +129,29 @@ describe("requester yield ownership", () => {
     resetProcessRegistryForTests();
   });
 
-  it.each([CRON_RUN_KEY])(
-    "rejects %s before runtime claim, durable intent, or runtime yield",
-    async (requesterSessionKey) => {
-      await seedRequiredChild(requesterSessionKey);
-      const before = structuredClone(getSubagentRunByRunId("run-child"));
-      const runtimeClaim = vi.fn(() => true);
-      const onYield = vi.fn();
-      const tool = createYieldToolForTurn({
-        requesterSessionKey,
-        requesterTurnRunId: "run-requester",
-        claimYieldCompletion: runtimeClaim,
-        onYield,
-      });
+  it("rejects cron runs before runtime claim, durable intent, or runtime yield", async () => {
+    const requesterSessionKey = CRON_RUN_KEY;
+    await seedRequiredChild(requesterSessionKey);
+    const before = structuredClone(getSubagentRunByRunId("run-child"));
+    const runtimeClaim = vi.fn(() => true);
+    const onYield = vi.fn();
+    const tool = createYieldToolForTurn({
+      requesterSessionKey,
+      requesterTurnRunId: "run-requester",
+      claimYieldCompletion: runtimeClaim,
+      onYield,
+    });
 
-      const result = await tool.execute("yield-call", {});
+    const result = await tool.execute("yield-call", {});
 
-      expect(result.details).toMatchObject({
-        status: "error",
-        error: expect.stringContaining("no requester continuation"),
-      });
-      expect(runtimeClaim).not.toHaveBeenCalled();
-      expect(onYield).not.toHaveBeenCalled();
-      expect(getSubagentRunByRunId("run-child")).toEqual(before);
-    },
-  );
+    expect(result.details).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("no requester continuation"),
+    });
+    expect(runtimeClaim).not.toHaveBeenCalled();
+    expect(onYield).not.toHaveBeenCalled();
+    expect(getSubagentRunByRunId("run-child")).toEqual(before);
+  });
 
   it.each([
     { kind: "visible child", key: "dashboard:visible", child: true },
@@ -497,27 +499,24 @@ describe("requester yield ownership", () => {
     },
   );
 
-  it.each(["runtime"])(
-    "preserves a %s completion claim with an owned background exec",
-    async (owner) => {
-      const sessionKey = "agent:main:subagent:watcher";
-      backgroundProcess(sessionKey);
-      const onYield = vi.fn();
-      const tool = createTestOpenClawTools({
-        sessionKey,
-        sessionId: "watcher-session",
-        runId: "run-requester",
-        claimYieldCompletion: () => owner === "runtime",
-        onYield,
-      }).find((candidate) => candidate.name === "sessions_yield");
-      assert.isDefined(tool);
+  it("preserves a runtime completion claim with an owned background exec", async () => {
+    const sessionKey = "agent:main:subagent:watcher";
+    backgroundProcess(sessionKey);
+    const onYield = vi.fn();
+    const tool = createTestOpenClawTools({
+      sessionKey,
+      sessionId: "watcher-session",
+      runId: "run-requester",
+      claimYieldCompletion: () => true,
+      onYield,
+    }).find((candidate) => candidate.name === "sessions_yield");
+    assert.isDefined(tool);
 
-      expect((await tool.execute("yield-watcher", {})).details).toMatchObject({
-        status: "yielded",
-      });
-      expect(onYield).toHaveBeenCalledOnce();
-    },
-  );
+    expect((await tool.execute("yield-watcher", {})).details).toMatchObject({
+      status: "yielded",
+    });
+    expect(onYield).toHaveBeenCalledOnce();
+  });
 
   it("checks background exec after an awaited runtime completion claim", async () => {
     const sessionKey = "agent:main:subagent:watcher";
@@ -547,32 +546,29 @@ describe("requester yield ownership", () => {
     expect(onYield).not.toHaveBeenCalled();
   });
 
-  it.each([{ name: "with a registry turn", requesterTurnRunId: "run-collector-turn" }])(
-    "rejects a swarm collector yield $name",
-    async ({ requesterTurnRunId }) => {
-      await seedRequiredChild("agent:main:subagent:collector");
-      const before = structuredClone(getSubagentRunByRunId("run-child"));
-      const runtimeClaim = vi.fn(() => true);
-      const onYield = vi.fn();
-      const tool = createYieldToolForTurn({
-        requesterSessionKey: "agent:main:subagent:collector",
-        requesterTurnRunId,
-        swarmCollector: true,
-        claimYieldCompletion: runtimeClaim,
-        onYield,
-      });
+  it("rejects a swarm collector yield with a registry turn", async () => {
+    await seedRequiredChild("agent:main:subagent:collector");
+    const before = structuredClone(getSubagentRunByRunId("run-child"));
+    const runtimeClaim = vi.fn(() => true);
+    const onYield = vi.fn();
+    const tool = createYieldToolForTurn({
+      requesterSessionKey: "agent:main:subagent:collector",
+      requesterTurnRunId: "run-collector-turn",
+      swarmCollector: true,
+      claimYieldCompletion: runtimeClaim,
+      onYield,
+    });
 
-      expect((await tool.execute("yield-call", {})).details).toMatchObject({
-        status: "error",
-        error: expect.stringContaining("collected explicitly"),
-      });
-      // A collector owns no requester continuation, so no claim source may admit
-      // its yield or record durable intent against a child row.
-      expect(runtimeClaim).not.toHaveBeenCalled();
-      expect(onYield).not.toHaveBeenCalled();
-      expect(getSubagentRunByRunId("run-child")).toEqual(before);
-    },
-  );
+    expect((await tool.execute("yield-call", {})).details).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("collected explicitly"),
+    });
+    // A collector owns no requester continuation, so no claim source may admit
+    // its yield or record durable intent against a child row.
+    expect(runtimeClaim).not.toHaveBeenCalled();
+    expect(onYield).not.toHaveBeenCalled();
+    expect(getSubagentRunByRunId("run-child")).toEqual(before);
+  });
 
   it.each([
     { policy: { profile: "coding" as const }, runtime: undefined, allowed: true },
@@ -766,6 +762,30 @@ describe("requester yield ownership", () => {
       status: "already_pending",
       message: expect.stringContaining("already spawned 1 child session"),
       pendingChildren: [{ runId: "run-child", state: "running", wakeArmed: false }],
+    });
+    expect(onYield).not.toHaveBeenCalled();
+  });
+
+  it("reports runtime-owned earlier-turn children beside registry children", async () => {
+    const requesterSessionKey = "agent:main:main";
+    await seedRequiredChild(requesterSessionKey, { requesterTurnRunId: undefined });
+    const nativeChild = {
+      runId: "codex-thread:native-child",
+      childSessionKey: "codex-thread:native-child",
+      state: "running" as const,
+      wakeArmed: false,
+    };
+    const onYield = vi.fn();
+    const tool = createYieldToolForTurn({
+      requesterSessionKey,
+      requesterTurnRunId: "run-turn-2",
+      claimYieldCompletion: () => ({ pendingChildren: [nativeChild] }),
+      onYield,
+    });
+    expect((await tool.execute("yield-turn-2", {})).details).toMatchObject({
+      status: "already_pending",
+      message: expect.stringContaining("already spawned 2 child sessions"),
+      pendingChildren: [nativeChild, { runId: "run-child", state: "running" }],
     });
     expect(onYield).not.toHaveBeenCalled();
   });

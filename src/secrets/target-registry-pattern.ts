@@ -13,9 +13,7 @@ type PathPatternToken =
 /** Registry entry with compiled path/ref pattern tokens. */
 export type CompiledTargetRegistryEntry = SecretTargetRegistryEntry & {
   pathTokens: PathPatternToken[];
-  pathDynamicTokenCount: number;
   refPathTokens?: PathPatternToken[];
-  refPathDynamicTokenCount: number;
 };
 
 /** Concrete config value matched by expanding a path pattern. */
@@ -32,7 +30,7 @@ function countDynamicPatternTokens(tokens: PathPatternToken[]): number {
 /**
  * Parses a dotted target pattern into literal, wildcard, and array traversal tokens.
  */
-function parsePathPattern(pathPattern: string, pathSegments?: string[]): PathPatternToken[] {
+export function parsePathPattern(pathPattern: string, pathSegments?: string[]): PathPatternToken[] {
   const segments = pathSegments ?? parseDotPath(pathPattern);
   return segments.map((segment) => {
     if (segment === "*") {
@@ -70,9 +68,7 @@ export function compileTargetRegistryEntry(
   return {
     ...entry,
     pathTokens,
-    pathDynamicTokenCount,
     refPathTokens,
-    refPathDynamicTokenCount,
   };
 }
 
@@ -164,7 +160,11 @@ export function materializePathTokens(
 /**
  * Expands a pattern across a config object and returns every matching value with captures.
  */
-export function expandPathTokens(root: unknown, tokens: PathPatternToken[]): ExpandedPathMatch[] {
+export function expandPathTokens(
+  root: unknown,
+  tokens: PathPatternToken[],
+  options: { requireOwnKeys?: boolean } = {},
+): ExpandedPathMatch[] {
   const out: ExpandedPathMatch[] = [];
   const walk = (
     node: unknown,
@@ -180,18 +180,10 @@ export function expandPathTokens(root: unknown, tokens: PathPatternToken[]): Exp
     const isLeaf = tokenIndex === tokens.length - 1;
 
     if (token.kind === "literal") {
-      if (!isRecord(node)) {
+      if (!isRecord(node) || (options.requireOwnKeys && !Object.hasOwn(node, token.value))) {
         return;
       }
-      if (isLeaf) {
-        out.push({
-          segments: [...segments, token.value],
-          captures,
-          value: node[token.value],
-        });
-        return;
-      }
-      if (!Object.hasOwn(node, token.value)) {
+      if (!isLeaf && !Object.hasOwn(node, token.value)) {
         return;
       }
       walk(node[token.value], tokenIndex + 1, [...segments, token.value], captures);
@@ -211,7 +203,7 @@ export function expandPathTokens(root: unknown, tokens: PathPatternToken[]): Exp
       return;
     }
 
-    if (!isRecord(node)) {
+    if (!isRecord(node) || (options.requireOwnKeys && !Object.hasOwn(node, token.field))) {
       return;
     }
     const items = node[token.field];

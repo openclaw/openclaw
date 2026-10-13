@@ -1,0 +1,80 @@
+import {
+  readPersonalGitHubPublicationInDatabase,
+  listUnreportedPersonalGitHubPublicationsInDatabase,
+} from "../gateway/github-personal-publication-store.worker.js";
+import {
+  listGitHubPublicationsForClaimInDatabase,
+  listSharedGitHubPublicationsInDatabase,
+  readGitHubPublicationRequest,
+} from "../gateway/github-publication-store.worker.js";
+import { listRepositoryGitHubPublicationsInDatabase } from "../gateway/github-repository-publication-read.worker.js";
+import {
+  readRepositoryGitHubPublicationBranchInDatabase,
+  readRepositoryGitHubPublicationInDatabase,
+} from "../gateway/github-repository-publication-store.worker.js";
+import { tableExists } from "./openclaw-state-db-schema-helpers.js";
+import type { WorkerOperationHandlers } from "./worker-operation-registry.js";
+
+export const publicationReadOperations = {
+  "githubPublications.sharedRead": (
+    input: Parameters<typeof readGitHubPublicationRequest>[1],
+    { open },
+  ) => {
+    const { db } = open();
+    return {
+      type: "githubPublications.sharedRead" as const,
+      row: tableExists(db, "github_publication_requests")
+        ? readGitHubPublicationRequest(db, input)
+        : undefined,
+    };
+  },
+  "githubPublications.sharedList": (
+    input: Parameters<typeof listSharedGitHubPublicationsInDatabase>[1],
+    { open },
+  ) => ({
+    type: "githubPublications.sharedList" as const,
+    rows: listSharedGitHubPublicationsInDatabase(open().db, input),
+  }),
+  "githubPublications.claimRequests": (
+    input: {
+      claim: Parameters<typeof listGitHubPublicationsForClaimInDatabase>[1];
+      pendingOnly?: boolean;
+    },
+    { open },
+  ) => ({
+    type: "githubPublications.claimRequests" as const,
+    rows: listGitHubPublicationsForClaimInDatabase(open().db, input.claim, input),
+  }),
+  "githubPublications.personalRead": (
+    input: {
+      owner: string;
+      request: Parameters<typeof readPersonalGitHubPublicationInDatabase>[2];
+    },
+    { open },
+  ) => ({
+    type: "githubPublications.personalRead" as const,
+    row: readPersonalGitHubPublicationInDatabase(open().db, input.owner, input.request),
+  }),
+  "githubPublications.unreported": (_input: undefined, { open }) => ({
+    type: "githubPublications.unreported" as const,
+    rows: listUnreportedPersonalGitHubPublicationsInDatabase(open().db),
+  }),
+  "githubPublications.repositoryList": (
+    input: Parameters<typeof listRepositoryGitHubPublicationsInDatabase>[1],
+    { open },
+  ) => ({
+    type: "githubPublications.repositoryList" as const,
+    rows: listRepositoryGitHubPublicationsInDatabase(open().db, input),
+  }),
+  "githubPublications.repositoryRead": ({ requestId }: { requestId: string }, { open }) => ({
+    type: "githubPublications.repositoryRead" as const,
+    row: readRepositoryGitHubPublicationInDatabase(open().db, requestId),
+  }),
+  "githubPublications.branch": (
+    input: Parameters<typeof readRepositoryGitHubPublicationBranchInDatabase>[1],
+    { open },
+  ) => ({
+    type: "githubPublications.branch" as const,
+    branch: readRepositoryGitHubPublicationBranchInDatabase(open().db, input),
+  }),
+} satisfies WorkerOperationHandlers;

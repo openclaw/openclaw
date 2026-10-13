@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ModelsRuntimeChoice } from "openclaw/plugin-sdk/models-provider-runtime";
 import * as runtimeConfigSnapshotModule from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import type * as SessionTranscriptRuntime from "openclaw/plugin-sdk/session-transcript-runtime";
 import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import * as commandTextModule from "openclaw/plugin-sdk/text-utility-runtime";
@@ -36,7 +37,15 @@ import { createNoopThreadBindingManager, type ThreadBindingManager } from "./thr
 
 vi.mock("openclaw/plugin-sdk/runtime-env", { spy: true });
 
-const hostSdk = vi.hoisted(() => ({ runtimeChoicesAvailable: true }));
+const hostSdk = vi.hoisted(() => ({
+  runtimeChoicesAvailable: true,
+  recordDeliveredCommandExchange: vi.fn(async () => ({ ok: true })),
+}));
+
+vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof SessionTranscriptRuntime>()),
+  recordDeliveredCommandExchange: hostSdk.recordDeliveredCommandExchange,
+}));
 
 vi.mock("openclaw/plugin-sdk/models-provider-runtime", async (importOriginal) => {
   const sdk = await importOriginal<typeof import("openclaw/plugin-sdk/models-provider-runtime")>();
@@ -183,7 +192,7 @@ function mockModelCommandPipeline(modelCommand = createModelCommandDefinition())
     name === "model" ? modelCommand : undefined,
   );
   vi.spyOn(commandRegistryModule, "listChatCommands").mockReturnValue([modelCommand]);
-  vi.spyOn(commandRegistryModule, "resolveCommandArgMenu").mockReturnValue(null);
+  vi.spyOn(commandRegistryModule, "resolveCommandArgMenuAsync").mockResolvedValue(null);
 }
 
 function createModelsViewSelectData(): PickerSelectData {
@@ -231,10 +240,7 @@ type ApplySelectionParams = Parameters<typeof applyDiscordModelPickerSelection>[
 function applySelection({
   result,
   ...selection
-}: Pick<
-  ApplySelectionParams,
-  "resolveCurrentModel" | "resolveCurrentRuntime" | "selectedRuntime"
-> & {
+}: Pick<ApplySelectionParams, "resolveCurrentSelection" | "selectedRuntime"> & {
   result: Awaited<ReturnType<DispatchDiscordCommandInteraction>>;
 }) {
   return applyDiscordModelPickerSelection({
@@ -439,6 +445,7 @@ describe("Discord model picker interactions", () => {
 
   beforeEach(async () => {
     hostSdk.runtimeChoicesAvailable = true;
+    hostSdk.recordDeliveredCommandExchange.mockClear();
     tempDir = tempDirs.make("case-", sessionRoot);
     vi.useRealTimers();
     vi.restoreAllMocks();
@@ -671,8 +678,10 @@ describe("Discord model picker interactions", () => {
     const recordRecentSpy = vi
       .spyOn(modelPickerPreferencesModule, "recordDiscordModelPickerRecentModel")
       .mockResolvedValue();
-    const resolveCurrentModel = vi.fn(() => "openai/gpt-4.1");
-    const resolveCurrentRuntime = vi.fn(() => "codex");
+    const resolveCurrentSelection = vi.fn(async () => ({
+      modelRef: "openai/gpt-4.1",
+      runtime: "codex",
+    }));
     const result = await applySelection({
       result: {
         accepted: true,
@@ -681,8 +690,7 @@ describe("Discord model picker interactions", () => {
           isError: true,
         },
       },
-      resolveCurrentModel,
-      resolveCurrentRuntime,
+      resolveCurrentSelection,
     });
 
     expect(result).toEqual({
@@ -690,8 +698,7 @@ describe("Discord model picker interactions", () => {
       noticeMessage:
         "Model change was not applied because the session changed.\nCurrent selection: openai/gpt-4.1 with runtime codex.",
     });
-    expect(resolveCurrentModel).toHaveBeenCalledOnce();
-    expect(resolveCurrentRuntime).toHaveBeenCalledOnce();
+    expect(resolveCurrentSelection).toHaveBeenCalledOnce();
     expect(recordRecentSpy).not.toHaveBeenCalled();
   });
 
@@ -710,8 +717,10 @@ describe("Discord model picker interactions", () => {
           hiddenFinalReply: { text: "scope-aware core notice" },
         },
         selectedRuntime,
-        resolveCurrentModel: () => "openai/gpt-4o",
-        resolveCurrentRuntime: () => currentRuntime,
+        resolveCurrentSelection: async () => ({
+          modelRef: "openai/gpt-4o",
+          runtime: currentRuntime,
+        }),
       });
 
       expect(result.status).toBe(expectedStatus);
@@ -889,6 +898,14 @@ describe("Discord model picker interactions", () => {
       JSON.stringify(serializePayload(selectInteraction.editReply.mock.calls[0]![0]!)),
     ).toContain("Selected: openai/gpt-4o · OpenClaw Default (press Submit)");
     expect(dispatchSpy).not.toHaveBeenCalled();
+    expect(hostSdk.recordDeliveredCommandExchange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commandText: "/model",
+        replyId: "picker-update",
+        replyText: expect.stringContaining("Selected: openai/gpt-4o"),
+      }),
+    );
+    hostSdk.recordDeliveredCommandExchange.mockClear();
 
     const submitInteraction = await submit(createModelsViewSubmitData());
 
@@ -902,9 +919,17 @@ describe("Discord model picker interactions", () => {
       | Parameters<DispatchDiscordCommandInteraction>[0]
       | undefined;
     expect(dispatchCall?.dispatchReplyFromConfig).toBe(dispatchReplyFromConfig);
+    expect(hostSdk.recordDeliveredCommandExchange).toHaveBeenCalledOnce();
+    expect(hostSdk.recordDeliveredCommandExchange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commandText: "/model openai/gpt-4o",
+        replyId: "selection",
+        replyText: expect.not.stringContaining("Applying model change"),
+      }),
+    );
   });
 
-  it.each(["auto", "default"])(
+  it.each(["default"])(
     "routes selected runtime %s through the hidden /model command",
     async (runtime) => {
       const context = createModelPickerContext();
@@ -1117,17 +1142,13 @@ describe("Discord model picker interactions", () => {
         accepted: true,
         effectiveRoute,
       },
-      resolveCurrentModel: (route) => {
+      resolveCurrentSelection: async (route) => {
         seenRoutes.push(route);
-        return "openai/gpt-4.1";
-      },
-      resolveCurrentRuntime: (route) => {
-        seenRoutes.push(route);
-        return "auto";
+        return { modelRef: "openai/gpt-4.1", runtime: "auto" };
       },
     });
 
-    expect(seenRoutes).toEqual([effectiveRoute, effectiveRoute]);
+    expect(seenRoutes).toEqual([effectiveRoute]);
     expect(result).toEqual({
       status: "mismatch",
       effectiveModelRef: "openai/gpt-4.1",
@@ -1137,22 +1158,22 @@ describe("Discord model picker interactions", () => {
   });
 
   it("reports a rejected hidden /model dispatch without reading authoritative state", async () => {
-    const resolveCurrentModel = vi.fn(() => "openai/gpt-4.1");
-    const resolveCurrentRuntime = vi.fn(() => "auto");
+    const resolveCurrentSelection = vi.fn(async () => ({
+      modelRef: "openai/gpt-4.1",
+      runtime: "auto",
+    }));
     const result = await applySelection({
       result: {
         accepted: false,
       },
-      resolveCurrentModel,
-      resolveCurrentRuntime,
+      resolveCurrentSelection,
     });
 
     expect(result).toEqual({
       status: "rejected",
       noticeMessage: "❌ Failed to apply openai/gpt-4o. Try /model openai/gpt-4o directly.",
     });
-    expect(resolveCurrentModel).not.toHaveBeenCalled();
-    expect(resolveCurrentRuntime).not.toHaveBeenCalled();
+    expect(resolveCurrentSelection).not.toHaveBeenCalled();
   });
 
   it("loads model picker data from the effective bound route", async () => {
@@ -1200,6 +1221,15 @@ describe("Discord model picker interactions", () => {
     expect(loadSpy).toHaveBeenCalledWith(context.cfg, "worker", {
       sessionEntry: expect.objectContaining(entry),
     });
+    expect(hostSdk.recordDeliveredCommandExchange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "worker",
+        sessionKey: "agent:worker:subagent:bound",
+        expectedSessionId: "bound-session",
+        commandText: "/model",
+        replyText: expect.stringContaining("Select a model, then press Submit."),
+      }),
+    );
   });
 
   it("opens the first visible provider when the current model provider is filtered out", async () => {

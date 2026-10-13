@@ -2641,13 +2641,15 @@ class WearChatEventFlowTest {
     }
     flow.settleApp()
     flow.captureApp(if (dictate) "dictate-error" else "type-reply")
-    assertTrue("Accepted ordinary input must open Chat, not leave its outcome hidden on Voice", flow.hasAppText("CHAT"))
     if (failure) {
       flow.scrollAppTo(0)
       assertTrue(flow.hasAppText("Error"))
     } else {
       assertTrue("The ordinary reply must be visible", flow.hasAppText("Hello from Chat"))
     }
+    // Following the reply can scroll the page heading out of the round viewport.
+    flow.scrollAppTo(0)
+    assertTrue("Accepted ordinary input must open Chat, not leave its outcome hidden on Voice", flow.hasAppText("CHAT"))
     assertTrue(
       flow.state.realtimeTalk.conversation
         .isEmpty(),
@@ -2744,7 +2746,7 @@ class WearChatEventFlowTest {
     val abortRuns = mutableListOf<String?>()
     private var replyObserver: ActivityController<out ComponentActivity>? = null
     private val client =
-      WearProxyClient.createForTests(
+      WearProxyClient(
         nodeResolver = WearNodeResolver { "phone-a" },
         transport = WearMessageTransport { _, _, bytes -> respond(bytes) },
       )
@@ -2768,7 +2770,7 @@ class WearChatEventFlowTest {
     fun idle() = shadowOf(Looper.getMainLooper()).idle()
 
     fun observeReplyCompletion() {
-      val sessionKey = state.selectedSession?.key
+      val sessionKey = checkNotNull(state.selectedSession).key
       val expectedRunId = state.pendingReply?.runId ?: state.replyTerminal?.runId
       val controller = Robolectric.buildActivity(ComponentActivity::class.java).setup()
       replyObserver = controller
@@ -2778,8 +2780,7 @@ class WearChatEventFlowTest {
         WearReplyCompletionEffect(
           state = current,
           snapshot = current.toConversationSnapshot(),
-          awaitingReply = awaiting,
-          awaitingReplySessionId = sessionKey,
+          awaitingReplySessionId = sessionKey.takeIf { awaiting },
           expectedAssistantKey = null,
           awaitingReplyRunId = expectedRunId,
         ) { reply ->

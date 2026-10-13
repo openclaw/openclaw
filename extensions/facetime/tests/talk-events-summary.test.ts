@@ -4,7 +4,10 @@ import { summarizeRecentTalkEvents } from "../src/talk-events-summary.js";
 describe("talk event summaries", () => {
   it("returns compact status-safe summaries for recent talk events", () => {
     const events = [
-      { type: "session.started", payload: { callUUID: "call-1" } },
+      ...Array.from({ length: 9 }, () => ({
+        type: "session.started",
+        payload: { callUUID: "call-1" },
+      })),
       { type: "input.audio.delta", turnId: "turn-1", payload: { byteLength: 2400 } },
       { type: "transcript.done", turnId: "turn-1", payload: { role: "user", text: "hello" } },
       { type: "tool.call", turnId: "turn-1", callId: "tool-1", payload: { name: "lookup" } },
@@ -15,7 +18,8 @@ describe("talk event summaries", () => {
       },
     ];
 
-    expect(summarizeRecentTalkEvents(events, 4)).toEqual([
+    expect(summarizeRecentTalkEvents(events)).toEqual([
+      ...Array.from({ length: 8 }, () => ({ type: "session.started" })),
       { type: "input.audio.delta", turnId: "turn-1", byteLength: 2400 },
       { type: "transcript.done", turnId: "turn-1", text: "hello" },
       { type: "tool.call", turnId: "turn-1", callId: "tool-1", name: "lookup" },

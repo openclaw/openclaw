@@ -5,6 +5,9 @@ import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+// Installed only after the immutable bootstrap admits the adapter import closure.
+/** @type {(value: unknown, label: string, limit?: number) => string} */
+let text;
 
 const ownRoot = realpathSync(resolve(dirname(fileURLToPath(import.meta.url)), ".."));
 const entryPath = "scripts/preflight-frozen-target-contracts.mjs";
@@ -12,6 +15,9 @@ const readerPath = "scripts/lib/frozen-target-source.mjs";
 const toolingClosure = [
   entryPath,
   readerPath,
+  "scripts/lib/frozen-target-workflow-request.mjs",
+  "scripts/lib/release-upgrade-baseline.mjs",
+  "scripts/lib/canonical-json.mjs",
   "scripts/lib/docker-e2e-plan.mts",
   "scripts/lib/docker-e2e-scenarios.mts",
   "scripts/lib/official-external-channel-catalog.json",
@@ -172,111 +178,6 @@ const selectedMetadata = {
     "scripts/e2e/lib/text-file-utils.mjs",
   ],
 };
-
-function workflowRequest(env) {
-  const serialized = env.ADMISSION_INPUTS ?? "{}";
-  if (typeof serialized !== "string" || Buffer.byteLength(serialized, "utf8") > 48 * 1024) {
-    throw new Error("invalid workflow inputs");
-  }
-  const raw = JSON.parse(serialized);
-  if (
-    !raw ||
-    Array.isArray(raw) ||
-    typeof raw !== "object" ||
-    Object.values(raw).some((value) => !["string", "boolean", "number"].includes(typeof value))
-  ) {
-    throw new Error("invalid workflow inputs");
-  }
-  const get = (name, fallback = "") => raw[name] ?? fallback;
-  const flag = (value) => value === true || value === "true";
-  const profile =
-    env.ADMISSION_RELEASE_PROFILE || get("release_test_profile", get("release_profile", "stable"));
-  const options = {
-    releaseProfile: profile === "minimum" ? "beta" : profile,
-    phase: get("phase", "all"),
-    rerunGroup: get("rerun_group", "all"),
-    runReleaseSoak: flag(get("run_release_soak")) || profile === "stable" || profile === "full",
-    qaFilterSeen: flag(env.ADMISSION_QA_FILTER_SEEN),
-    liveSuiteFilter: env.ADMISSION_REPO_LIVE_SUITE_FILTER ?? get("live_suite_filter"),
-    liveModelsOnly: flag(get("live_models_only")),
-    liveModelProviders: get("live_model_providers"),
-    includeLiveSuites: flag(get("include_live_suites", true)),
-    includeReleasePathSuites: flag(get("include_release_path_suites", true)),
-    includeOpenWebUI: flag(get("include_openwebui")),
-    includeRepoE2e: flag(get("include_repo_e2e", true)),
-    prepareOnly: flag(get("prepare_only")),
-    dockerLanes: get("docker_lanes"),
-    targetedDockerLaneGroupSize: String(get("targeted_docker_lane_group_size", 1)),
-    suiteProfile: get("suite_profile", "package"),
-    telegramMode: get("telegram_mode", "none"),
-    telegramScenarios: get("telegram_scenarios"),
-    upgradeSurvivorBaseline:
-      env.ADMISSION_BASELINE ?? get("published_upgrade_survivor_baseline", "openclaw@latest"),
-    upgradeSurvivorBaselines:
-      env.ADMISSION_BASELINES ?? get("published_upgrade_survivor_baselines"),
-    upgradeSurvivorBaselineScope:
-      env.ADMISSION_BASELINE_SCOPE ??
-      get("published_upgrade_survivor_baseline_scope", "all-scenarios"),
-    upgradeSurvivorScenarios: get("published_upgrade_survivor_scenarios"),
-    baselinesResolved: env.ADMISSION_BASELINES_RESOLVED === "true",
-    packageOverride: Boolean(String(get("release_package_spec")).trim()),
-    acceptanceOverride: Boolean(String(get("package_acceptance_package_spec")).trim()),
-  };
-  const workflow = env.ADMISSION_WORKFLOW;
-  if (workflow === "parent") {
-    options.upgradeSurvivorScenarios = options.runReleaseSoak ? "reported-issues" : "";
-  }
-  return {
-    version: 2,
-    repository: text(env.GITHUB_REPOSITORY, "repository"),
-    selected: {
-      root: text(env.ADMISSION_SELECTED_ROOT, "selected root"),
-      sha: text(env.ADMISSION_SELECTED_SHA, "selected SHA"),
-    },
-    tooling: {
-      root: text(env.ADMISSION_TOOLING_ROOT, "tooling root"),
-      sha: text(env.ADMISSION_TOOLING_SHA, "tooling SHA"),
-    },
-    allowFrozenTargetScenarioOmissions:
-      flag(get("allow_frozen_target_scenario_omissions")) ||
-      (workflow === "parent" && Boolean(get("target_context_ref"))),
-    workflow,
-    options,
-    requestedBaselines: {
-      baseline: get("published_upgrade_survivor_baseline", "openclaw@latest"),
-      baselines: get("published_upgrade_survivor_baselines"),
-      scope: get("published_upgrade_survivor_baseline_scope", "all-scenarios"),
-      scenarios: options.upgradeSurvivorScenarios,
-    },
-    binding: {
-      workflowRef: text(env.ADMISSION_WORKFLOW_REF, "workflow ref"),
-      inputsDigest: createHash("sha256")
-        .update(
-          JSON.stringify(
-            Object.fromEntries(
-              Object.keys(raw)
-                .toSorted()
-                .map((key) => [key, raw[key]]),
-            ),
-          ),
-        )
-        .digest("hex"),
-      coveragePolicy: text(env.ADMISSION_COVERAGE_POLICY ?? "", "coverage policy"),
-      candidateRequestDigest: text(
-        env.ADMISSION_CANDIDATE_REQUEST_DIGEST ?? "",
-        "candidate request digest",
-      ),
-      packageSourceSha: text(env.ADMISSION_PACKAGE_SOURCE_SHA ?? "", "package source SHA"),
-      packageSha256: text(env.ADMISSION_PACKAGE_SHA256 ?? "", "package digest"),
-      packageVersion: text(env.ADMISSION_PACKAGE_VERSION ?? "", "package version"),
-      stage: text(env.ADMISSION_STAGE ?? "source", "admission stage"),
-    },
-    provenance: {
-      runId: text(env.GITHUB_RUN_ID, "run id"),
-      runAttempt: text(env.GITHUB_RUN_ATTEMPT, "run attempt"),
-    },
-  };
-}
 
 async function planWorkflowAdmission(input) {
   object(
@@ -764,18 +665,6 @@ function object(value, keys, label) {
   return value;
 }
 
-function text(value, label, limit = 4096) {
-  if (typeof value !== "string" || value.length > limit) {
-    throw new Error(`invalid ${label}`);
-  }
-  for (let index = 0; index < value.length; index += 1) {
-    if (value.charCodeAt(index) < 32) {
-      throw new Error(`invalid ${label}`);
-    }
-  }
-  return value;
-}
-
 function tokenListText(value, label) {
   if (typeof value !== "string") {
     throw new Error(`invalid ${label}`);
@@ -865,7 +754,14 @@ function verifyReaderBootstrap(sha) {
   // The launched bootstrap and checkout are trusted; this binds their working
   // bytes, not hostile bootstrap code or concurrent writers. The verified reader
   // still owns Git version, HEAD, commit/tree hashes, and all other source reads.
-  for (const path of [entryPath, readerPath]) {
+  for (const path of [
+    entryPath,
+    readerPath,
+    "scripts/lib/frozen-target-workflow-request.mjs",
+    "scripts/lib/release-upgrade-baseline.mjs",
+    "scripts/lib/release-version.mjs",
+    "scripts/lib/canonical-json.mjs",
+  ]) {
     const entry = /^(100644|100755) blob ([0-9a-f]{40})\t([^\0]+)\0$/.exec(
       git("ls-tree", "-z", sha, "--", path).toString("utf8"),
     );
@@ -879,6 +775,13 @@ function verifyReaderBootstrap(sha) {
     }
     verifyToolingFile(path, content);
   }
+}
+
+async function loadWorkflowAdapter(sha) {
+  verifyReaderBootstrap(sha);
+  const adapter = await import("./lib/frozen-target-workflow-request.mjs");
+  text = adapter.frozenAdmissionText;
+  return adapter.buildFrozenTargetWorkflowRequest;
 }
 
 async function loadVerifiedTooling(identity, workflow = false) {
@@ -1288,6 +1191,7 @@ if (invokedAsMain) {
   try {
     const args = process.argv.slice(2);
     if (args.length === 1 && args[0] === "--workflow-request") {
+      const workflowRequest = await loadWorkflowAdapter(process.env.ADMISSION_TOOLING_SHA);
       process.stdout.write(`${JSON.stringify(workflowRequest(process.env))}\n`);
       process.exit(0);
     }
@@ -1295,6 +1199,7 @@ if (invokedAsMain) {
       if (args.length !== 3) {
         throw new Error("expected exact tooling root and SHA");
       }
+      await loadWorkflowAdapter(args[2]);
       await loadVerifiedTooling({ root: args[1], sha: args[2] }, true);
       process.exit(0);
     }
@@ -1304,6 +1209,7 @@ if (invokedAsMain) {
       throw new Error("expected one bounded admission request file");
     }
     const input = JSON.parse(readFileSync(file, "utf8"));
+    await loadWorkflowAdapter(input.tooling?.sha);
     const result = planOnly
       ? await planWorkflowAdmission(input)
       : input.version === 2

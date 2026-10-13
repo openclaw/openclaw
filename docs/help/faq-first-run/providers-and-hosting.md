@@ -67,7 +67,7 @@ first-run failures see
 
     Want direct OpenAI Platform billing? Set `OPENAI_API_KEY`. Want ChatGPT/Codex
     subscription auth? Run `openclaw models auth login --provider openai`. Keep
-    model refs under the canonical `openai/*` provider. Fresh subscription
+    model refs under the standard `openai/*` provider. Fresh subscription
     setup uses exact `openai/gpt-6-astra`; doctor repairs legacy Codex-prefixed
     refs without upgrading an explicit `openai/gpt-5.5` selection.
 

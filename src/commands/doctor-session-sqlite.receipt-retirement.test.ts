@@ -38,11 +38,24 @@ function expectCanonicalSessions(scope: SessionScope, label: string) {
 }
 
 describe("deferred plugin session receipt retirement", () => {
-  it.each(["missing", "changed"] as const)(
-    "keeps a receipt active when its archived transcript is %s",
-    async (damage) => {
+  it.each([
+    ["missing", false, "retained_plugin_source_conflict"],
+    ["changed", false, "retained_plugin_source_conflict"],
+    ["missing", true, "historical_transcript_deferred"],
+    ["changed", true, "historical_transcript_deferred"],
+  ] as const)(
+    "keeps a receipt active when its archived transcript is %s (leftover pointer: %s)",
+    async (damage, leftoverPointer, issueCode) => {
       await withOpenClawTestState({ label: "deferred-damaged-archive" }, async (state) => {
         const { cfg, scope } = await seedDeferredPluginSessionSource(state, "default");
+        const pointer = path.join(state.sessionsDir("main"), "legacy-kept.trajectory-path.json");
+        const pointerBytes = JSON.stringify({
+          traceSchema: "openclaw-trajectory-pointer",
+          runtimeFile: path.join(state.sessionsDir("main"), "missing.trajectory.jsonl"),
+        });
+        if (leftoverPointer) {
+          fs.writeFileSync(pointer, pointerBytes);
+        }
         const run = () =>
           runDoctorSessionSqlite({ cfg, env: state.env, allAgents: true, mode: "import" });
         const target = (await run()).targets[0]!;
@@ -65,6 +78,10 @@ describe("deferred plugin session receipt retirement", () => {
         const move = manifest.targets
           .flatMap((entry) => entry.completedMoves)
           .find((entry) => entry.sourcePath === transcript)!;
+        // Older interrupted settlements can leave a pointer beside an archived transcript.
+        if (leftoverPointer) {
+          fs.writeFileSync(pointer, pointerBytes);
+        }
         // Recreate the unfinished receipt left by a published version after successful archival.
         runOpenClawStateWriteTransaction(
           ({ db }) => {
@@ -85,9 +102,12 @@ describe("deferred plugin session receipt retirement", () => {
 
         const refused = await run();
         expect(hasDeferredPluginSessionImport(receiptParams)).toBe(true);
+        if (leftoverPointer) {
+          expect(fs.readFileSync(pointer, "utf8")).toBe(pointerBytes);
+        }
         expect(refused.targets.flatMap((entry) => entry.issues)).toContainEqual(
           expect.objectContaining({
-            code: "retained_plugin_source_conflict",
+            code: issueCode,
             message: expect.stringContaining(transcript),
           }),
         );
@@ -103,7 +123,7 @@ describe("deferred plugin session receipt retirement", () => {
     },
   );
 
-  it("rebinds an archived receipt to a replaced database before retiring it and importing later history", async () => {
+  it("supersedes an archived receipt bound to a replaced database before importing later history", async () => {
     await withOpenClawTestState({ label: "deferred-archived-database-rebind" }, async (state) => {
       const { cfg, scope } = await seedDeferredPluginSessionSource(state, "default");
       const run = () =>
@@ -160,16 +180,16 @@ describe("deferred plugin session receipt retirement", () => {
         laterTranscript,
         `${laterEvents.map((event) => JSON.stringify(event)).join("\n")}\n`,
       );
-      const rebound = await run();
-      const issues = rebound.targets.flatMap((entry) => entry.issues);
+      const recovered = await run();
+      const issues = recovered.targets.flatMap((entry) => entry.issues);
       expect(issues).not.toContainEqual(
         expect.objectContaining({ code: "retained_plugin_source_conflict" }),
       );
       expect(issues).toContainEqual(
-        expect.objectContaining({ code: "retained_plugin_source_index_rebuilt" }),
+        expect.objectContaining({ code: "retained_plugin_receipt_superseded" }),
       );
-      expect(rebound.totals.importedEntries).toBe(1);
-      expect(rebound.totals.importedTranscriptEvents).toBe(2);
+      expect(recovered.totals.importedEntries).toBe(1);
+      expect(recovered.totals.importedTranscriptEvents).toBe(2);
       expect(readDeferredPluginSessionImport(receiptParams)).toBeUndefined();
       expect(loadExactSessionEntry({ ...scope, sessionKey: "agent:main:kept" })?.entry.label).toBe(
         "current SQLite metadata",
@@ -267,7 +287,7 @@ describe("deferred plugin session receipt retirement", () => {
   });
 
   it.each(["completed", "disabled", "uninstalled", "globally-disabled"] as const)(
-    "retires a %s plugin's receipt and imports later history without replaying old sessions",
+    "requires migration completion before retiring a %s plugin's retained inputs",
     async (completion) => {
       await withOpenClawTestState({ label: "deferred-plugin-receipt-lifecycle" }, async (state) => {
         const { cfg, storePath, scope } = await seedDeferredPluginSessionSource(state, "default");
@@ -327,23 +347,29 @@ describe("deferred plugin session receipt retirement", () => {
                 }
               : {}),
           };
+          await run();
+          expect(readDeferredPluginMigrations({ env: state.env })).toContainEqual(
+            expect.objectContaining({ pluginId: "fixture-plugin" }),
+          );
+          expect(receipt()).toBeDefined();
+          expect(fs.readFileSync(transcript, "utf8")).toBe(contents);
+          expectCanonicalSessions(scope, "current SQLite metadata");
+          return;
         }
         await run();
         expect(readDeferredPluginMigrations({ env: state.env })).toEqual([]);
         expect(receipt()).toBeUndefined();
         expect(fs.readFileSync(transcript, "utf8")).toBe(contents);
-        if (completion === "completed") {
-          // Published versions left archived receipts active indefinitely.
-          runOpenClawStateWriteTransaction(
-            ({ db }) => {
-              db.prepare(
-                "UPDATE migration_sources SET removed_source = 0 WHERE migration_kind = 'deferred-plugin-session-import'",
-              ).run();
-            },
-            { env: state.env },
-          );
-          expect(receipt()).toBeDefined();
-        }
+        // Published versions left archived receipts active indefinitely.
+        runOpenClawStateWriteTransaction(
+          ({ db }) => {
+            db.prepare(
+              "UPDATE migration_sources SET removed_source = 0 WHERE migration_kind = 'deferred-plugin-session-import'",
+            ).run();
+          },
+          { env: state.env },
+        );
+        expect(receipt()).toBeDefined();
         const later = await run();
         expect(later.totals.importedEntries).toBe(1);
         expect(later.totals.importedTranscriptEvents).toBe(2);

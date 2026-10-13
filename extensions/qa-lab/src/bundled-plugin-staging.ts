@@ -174,26 +174,21 @@ function resolveQaBuiltBundledPluginTreeRoot(params: { repoRoot: string; sourceD
   return null;
 }
 
-async function symlinkQaStagedDirEntry(params: {
-  sourcePath: string;
-  targetPath: string;
-  directory?: boolean;
-}) {
+async function symlinkQaStagedDirEntry(sourcePath: string, targetPath: string, directory: boolean) {
   await fs.symlink(
-    params.sourcePath,
-    params.targetPath,
-    params.directory ? (process.platform === "win32" ? "junction" : "dir") : "file",
+    sourcePath,
+    targetPath,
+    directory ? (process.platform === "win32" ? "junction" : "dir") : "file",
   );
 }
 
 async function symlinkQaStagedEntry(sourceDir: string, targetDir: string, entry: Dirent) {
   const sourcePath = path.join(sourceDir, entry.name);
-  await symlinkQaStagedDirEntry({
+  await symlinkQaStagedDirEntry(
     sourcePath,
-    targetPath: path.join(targetDir, entry.name),
-    directory:
-      entry.isDirectory() || (entry.isSymbolicLink() && (await fs.stat(sourcePath)).isDirectory()),
-  });
+    path.join(targetDir, entry.name),
+    entry.isDirectory() || (entry.isSymbolicLink() && (await fs.stat(sourcePath)).isDirectory()),
+  );
 }
 
 async function seedQaStagedNodeModules(params: { repoRoot: string; stagedRoot: string }) {
@@ -311,11 +306,7 @@ export async function createQaBundledPluginsDir(params: {
   if (stagedTreeName === "dist-runtime" && !existsSync(path.join(stagedRoot, "dist"))) {
     const repoDistDir = path.join(params.repoRoot, "dist");
     const stagedDistTarget = existsSync(repoDistDir) ? repoDistDir : stagedTreeRoot;
-    await symlinkQaStagedDirEntry({
-      sourcePath: stagedDistTarget,
-      targetPath: path.join(stagedRoot, "dist"),
-      directory: true,
-    });
+    await symlinkQaStagedDirEntry(stagedDistTarget, path.join(stagedRoot, "dist"), true);
   }
   const bundledPluginsDir = path.join(stagedTreeRoot, "extensions");
   await fs.mkdir(bundledPluginsDir, { recursive: true });
@@ -328,11 +319,11 @@ export async function createQaBundledPluginsDir(params: {
       await fs.copyFile(manifestPath, path.join(targetDir, "openclaw.plugin.json"));
     }
   }
-  await symlinkQaStagedDirEntry({
-    sourcePath: path.join(stagedRoot, "dist"),
-    targetPath: path.join(stagedOpenClawPackageDir, "dist"),
-    directory: true,
-  });
+  await symlinkQaStagedDirEntry(
+    path.join(stagedRoot, "dist"),
+    path.join(stagedOpenClawPackageDir, "dist"),
+    true,
+  );
   return {
     bundledPluginsDir,
     stagedRoot,

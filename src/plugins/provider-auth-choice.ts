@@ -4,9 +4,8 @@ import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
-import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
+import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
 import { formatLiteralProviderPrefixedModelRef } from "../agents/model-ref-shared.js";
-import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -21,7 +20,10 @@ import type { WizardPrompter } from "../wizard/prompts.js";
 import { enablePluginWithCapabilityConsent } from "./enable.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
-import { applyProviderAuthConfigPatch } from "./provider-auth-choice-helpers.js";
+import {
+  applyProviderAuthConfigPatch,
+  restoreAgentsDefaultsModel,
+} from "./provider-auth-choice-helpers.js";
 import { resolveManifestProviderAuthChoice } from "./provider-auth-choices.js";
 import { applyAuthProfileConfig } from "./provider-auth-helpers.js";
 import { runProviderPluginAuthMethodUnpersisted } from "./provider-auth-method.js";
@@ -85,25 +87,9 @@ function restoreConfiguredPrimaryModel(
   nextConfig: OpenClawConfig,
   originalConfig: OpenClawConfig,
 ): OpenClawConfig {
-  const originalModel = originalConfig.agents?.defaults?.model;
-  const nextAgents = nextConfig.agents;
-  const nextDefaults = nextAgents?.defaults;
-  if (!nextDefaults) {
-    return nextConfig;
-  }
-  const defaults = { ...nextDefaults };
-  if (originalModel === undefined) {
-    delete defaults.model;
-  } else {
-    defaults.model = originalModel;
-  }
-  return {
-    ...nextConfig,
-    agents: {
-      ...nextAgents,
-      defaults,
-    },
-  };
+  return nextConfig.agents?.defaults
+    ? restoreAgentsDefaultsModel(nextConfig, originalConfig.agents?.defaults?.model)
+    : nextConfig;
 }
 
 function resolveConfiguredDefaultModelPrimary(cfg: OpenClawConfig): string | undefined {
@@ -117,105 +103,20 @@ function resolveConfiguredDefaultModelPrimary(cfg: OpenClawConfig): string | und
   return undefined;
 }
 
-async function noteDefaultModelResult(params: {
-  previousPrimary: string | undefined;
-  selectedModel: string;
-  selectedModelDisplay?: string;
-  preserveExistingDefaultModel: boolean | undefined;
-  prompter: WizardPrompter;
-}): Promise<void> {
-  const selectedModelDisplay = params.selectedModelDisplay ?? params.selectedModel;
-  if (
-    params.preserveExistingDefaultModel === true &&
-    params.previousPrimary &&
-    params.previousPrimary !== params.selectedModel
-  ) {
-    await params.prompter.note(
-      t("wizard.model.keptExistingDefault", {
-        current: params.previousPrimary,
-        selected: selectedModelDisplay,
-      }),
-      t("wizard.model.configuredTitle"),
-    );
-    return;
-  }
-
-  await params.prompter.note(
-    t("wizard.model.defaultSet", { model: selectedModelDisplay }),
-    t("wizard.model.configuredTitle"),
-  );
-}
-
-async function applyDefaultModelFromAuthChoice(params: {
-  config: OpenClawConfig;
-  entryConfig: OpenClawConfig;
-  selectedModel: string;
-  selectedModelDisplay?: string;
-  preserveExistingDefaultModel: boolean | undefined;
-  prompter: WizardPrompter;
-  runtime: RuntimeEnv;
-  workspaceDir?: string;
-  beforePersistentEffect?: () => void | Promise<void>;
-  runSelectedModelHook: (config: OpenClawConfig) => Promise<void>;
-}): Promise<OpenClawConfig | null> {
-  const previousPrimary = resolveConfiguredDefaultModelPrimary(params.entryConfig);
-  const preservesDifferentPrimary =
-    params.preserveExistingDefaultModel === true &&
-    previousPrimary !== undefined &&
-    previousPrimary !== params.selectedModel;
-  const defaultModelBaseConfig = params.entryConfig;
-  const defaultModelConfig =
-    params.preserveExistingDefaultModel === true
-      ? restoreConfiguredPrimaryModel(params.config, defaultModelBaseConfig)
-      : params.config;
-  let nextConfig = applyPrimaryModel(defaultModelConfig, params.selectedModel, {
-    preserveExistingPrimary: params.preserveExistingDefaultModel === true,
-  });
-  if (!preservesDifferentPrimary) {
-    const runtimePlugins = await import("../commands/runtime-plugin-install.js");
-    const installed = await runtimePlugins.ensureModelSelectionRuntimePlugins({
-      cfg: nextConfig,
-      model: params.selectedModel,
-      prompter: params.prompter,
-      runtime: params.runtime,
-      beforePersistentEffect: params.beforePersistentEffect,
-      ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-    });
-    if (!installed.ok) {
-      await params.prompter.note(installed.message, "Runtime unavailable");
-      return null;
-    }
-    nextConfig = installed.cfg;
-    await params.runSelectedModelHook(nextConfig);
-    if (installed.codexInstalled) {
-      // Offer Codex CLI state migration whenever the harness is in place for
-      // the selected model, regardless of whether this run was a fresh install
-      // or a repair against an already-present harness. The user can always
-      // decline the prompt; surfacing it again costs nothing if there is no
-      // migratable state to find.
-      const { offerPostInstallMigrations } =
-        await import("../wizard/setup.post-install-migration.js");
-      const migrationResult = await offerPostInstallMigrations({
-        config: nextConfig,
-        runtime: params.runtime,
-        prompter: params.prompter,
-        installedPluginIds: [runtimePlugins.CODEX_RUNTIME_PLUGIN_ID],
-      });
-      nextConfig = migrationResult.config;
-    }
-  }
-  await noteDefaultModelResult({
-    previousPrimary,
-    selectedModel: params.selectedModel,
-    selectedModelDisplay: params.selectedModelDisplay,
-    preserveExistingDefaultModel: params.preserveExistingDefaultModel,
-    prompter: params.prompter,
-  });
-  return nextConfig;
-}
-
 function withProviderPluginId(provider: ProviderPlugin, pluginId: string): ProviderPlugin {
   return provider.pluginId === pluginId ? provider : { ...provider, pluginId };
+}
+
+function assertUtilityModelSeparation(
+  config: OpenClawConfig,
+  modelTarget: "utility" | undefined,
+): void {
+  if (modelTarget === "utility") {
+    const error = resolveUtilityModelSeparationError(config);
+    if (error) {
+      throw new Error(error);
+    }
+  }
 }
 export function applyProviderPluginAuthMethodResultConfig(params: {
   config: OpenClawConfig;
@@ -259,7 +160,6 @@ export async function runProviderPluginAuthMethod(params: {
   signal?: AbortSignal;
   isRemote?: boolean;
   beforePersistentEffect?: () => void | Promise<void>;
-  emitNotes?: boolean;
   secretInputMode?: ProviderAuthOptionBag["secretInputMode"];
   allowSecretRefPrompt?: boolean;
   opts?: Partial<ProviderAuthOptionBag>;
@@ -283,11 +183,8 @@ async function prepareProviderPluginAuthMethod(
 }> {
   const agentId = params.agentId ?? resolveDefaultAgentId(params.config);
   const agentDir = params.agentDir ?? resolveAgentDir(params.config, agentId);
-  const workspaceDir =
-    params.workspaceDir ??
-    resolveAgentWorkspaceDir(params.config, agentId) ??
-    resolveDefaultAgentWorkspaceDir();
-  const store = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
+  const workspaceDir = params.workspaceDir ?? resolveAgentWorkspaceDir(params.config, agentId);
+  const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(agentDir);
   const existingProfiles = Object.entries(store.profiles)
     .filter(([, credential]) => credential.provider === params.providerId)
     .map(([profileId, credential]) => ({ profileId, credential }));
@@ -307,7 +204,7 @@ async function prepareProviderPluginAuthMethod(
     opts: params.opts,
   });
 
-  if (params.emitNotes !== false && result.notes && result.notes.length > 0) {
+  if (result.notes && result.notes.length > 0) {
     await params.prompter.note(result.notes.join("\n"), "Provider notes");
   }
 
@@ -356,10 +253,7 @@ export async function prepareAuthChoiceLoadedPluginProvider<T>(
   let cache = initialCache;
   const entryConfig = params.config;
   const agentId = params.agentId ?? resolveDefaultAgentId(params.config);
-  const workspaceDir =
-    params.workspaceDir ??
-    resolveAgentWorkspaceDir(params.config, agentId) ??
-    resolveDefaultAgentWorkspaceDir();
+  const workspaceDir = params.workspaceDir ?? resolveAgentWorkspaceDir(params.config, agentId);
   const {
     resolvePluginProviders,
     resolvePluginSetupProvider,
@@ -384,12 +278,10 @@ export async function prepareAuthChoiceLoadedPluginProvider<T>(
         env: params.env,
         includeUntrustedWorkspacePlugins: false,
       });
-      if ((manifestAuthChoice ?? installCatalogEntry)?.modelTarget === "utility") {
-        const error = resolveUtilityModelSeparationError(params.config);
-        if (error) {
-          throw new Error(error);
-        }
-      }
+      assertUtilityModelSeparation(
+        params.config,
+        (manifestAuthChoice ?? installCatalogEntry)?.modelTarget,
+      );
       const resolveChoice = (providers: ProviderPlugin[], config: OpenClawConfig) =>
         resolveProviderPluginChoice({
           providers,
@@ -514,12 +406,7 @@ export async function prepareAuthChoiceLoadedPluginProvider<T>(
           ? null
           : preparedWithoutAuthProfiles({ config: nextConfig, retrySelection: true });
       }
-      if (resolved.wizard?.modelTarget === "utility") {
-        const error = resolveUtilityModelSeparationError(params.config);
-        if (error) {
-          throw new Error(error);
-        }
-      }
+      assertUtilityModelSeparation(params.config, resolved.wizard?.modelTarget);
       if (nextConfig === params.config && enabledConfig !== params.config) {
         nextConfig = enabledConfig;
       }
@@ -547,12 +434,7 @@ export async function prepareAuthChoiceLoadedPluginProvider<T>(
       ...(params.signal ? { signal: params.signal } : {}),
       ...(params.isRemote !== undefined ? { isRemote: params.isRemote } : {}),
       beforePersistentEffect: async () => {
-        if (resolved.wizard?.modelTarget === "utility") {
-          const error = resolveUtilityModelSeparationError(params.config);
-          if (error) {
-            throw new Error(error);
-          }
-        }
+        assertUtilityModelSeparation(params.config, resolved.wizard?.modelTarget);
         await params.beforePersistentEffect?.();
       },
       secretInputMode: params.opts?.secretInputMode,
@@ -590,37 +472,70 @@ export async function prepareAuthChoiceLoadedPluginProvider<T>(
         ? formatLiteralProviderPrefixedModelRef(resolved.provider.id, selectedModel)
         : selectedModel;
       if (params.setDefaultModel) {
-        const defaultModelConfig = await applyDefaultModelFromAuthChoice({
-          config: nextConfig,
-          entryConfig,
-          selectedModel,
-          selectedModelDisplay,
-          preserveExistingDefaultModel: params.preserveExistingDefaultModel,
-          prompter: params.prompter,
-          runtime: params.runtime,
-          workspaceDir,
-          beforePersistentEffect: params.beforePersistentEffect,
-          runSelectedModelHook: async (config) => {
-            await runProviderModelSelectedHook({
-              config,
-              model: selectedModel,
-              preparedProvider: resolved.provider,
-              env: params.env,
-              prompter: params.prompter,
-              agentDir: params.agentDir,
-              workspaceDir,
-            });
-          },
+        const previousPrimary = resolveConfiguredDefaultModelPrimary(entryConfig);
+        const preservesDifferentPrimary =
+          params.preserveExistingDefaultModel === true &&
+          previousPrimary !== undefined &&
+          previousPrimary !== selectedModel;
+        const defaultModelConfig =
+          params.preserveExistingDefaultModel === true
+            ? restoreConfiguredPrimaryModel(nextConfig, entryConfig)
+            : nextConfig;
+        nextConfig = applyPrimaryModel(defaultModelConfig, selectedModel, {
+          preserveExistingPrimary: params.preserveExistingDefaultModel === true,
         });
-        if (!defaultModelConfig) {
-          return await consume(
-            preparedWithoutAuthProfiles({
-              config: entryConfig,
-              retrySelection: true,
-            }),
-          );
+        if (!preservesDifferentPrimary) {
+          const runtimePlugins = await import("../commands/runtime-plugin-install.js");
+          const installed = await runtimePlugins.ensureModelSelectionRuntimePlugins({
+            cfg: nextConfig,
+            model: selectedModel,
+            prompter: params.prompter,
+            runtime: params.runtime,
+            beforePersistentEffect: params.beforePersistentEffect,
+            ...(workspaceDir !== undefined ? { workspaceDir } : {}),
+          });
+          if (!installed.ok) {
+            await params.prompter.note(installed.message, "Runtime unavailable");
+            return await consume(
+              preparedWithoutAuthProfiles({ config: entryConfig, retrySelection: true }),
+            );
+          }
+          nextConfig = installed.cfg;
+          await runProviderModelSelectedHook({
+            config: nextConfig,
+            model: selectedModel,
+            preparedProvider: resolved.provider,
+            env: params.env,
+            prompter: params.prompter,
+            agentDir: params.agentDir,
+            workspaceDir,
+          });
+          if (installed.codexInstalled) {
+            // Offer Codex CLI state migration whenever the harness is in place for
+            // the selected model, regardless of whether this run was a fresh install
+            // or a repair against an already-present harness. The user can always
+            // decline the prompt; surfacing it again costs nothing if there is no
+            // migratable state to find.
+            const { offerPostInstallMigrations } =
+              await import("../wizard/setup.post-install-migration.js");
+            const migrationResult = await offerPostInstallMigrations({
+              config: nextConfig,
+              runtime: params.runtime,
+              prompter: params.prompter,
+              installedPluginIds: [runtimePlugins.CODEX_RUNTIME_PLUGIN_ID],
+            });
+            nextConfig = migrationResult.config;
+          }
         }
-        nextConfig = defaultModelConfig;
+        await params.prompter.note(
+          preservesDifferentPrimary && previousPrimary
+            ? t("wizard.model.keptExistingDefault", {
+                current: previousPrimary,
+                selected: selectedModelDisplay,
+              })
+            : t("wizard.model.defaultSet", { model: selectedModelDisplay }),
+          t("wizard.model.configuredTitle"),
+        );
         return await consumeAuthenticated({ config: nextConfig });
       }
       nextConfig = restoreConfiguredPrimaryModel(nextConfig, params.config);

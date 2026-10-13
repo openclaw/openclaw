@@ -11,6 +11,7 @@ import type { OpenClawStateWorkerLease } from "../state/openclaw-state-worker-st
 import { resolveDebugProxySettings, type DebugProxySettings } from "./env.js";
 import { withDeferredDebugProxyCapture } from "./runtime-deferral.js";
 import {
+  captureWsEventAsync,
   finalizeDebugProxyCapture,
   finalizeDebugProxyCaptureAsync,
   initializeDebugProxyCapture,
@@ -55,11 +56,10 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it.each(
-  (["selection", "continuation"] as const).flatMap((phase) =>
-    (["success", "failure"] as const).map((outcome) => ({ phase, outcome })),
-  ),
-)(
+it.each([
+  { phase: "selection", outcome: "success" },
+  { phase: "continuation", outcome: "failure" },
+] as const)(
   "keeps transport $outcome independent of $phase capture admission and retains the diagnostic",
   async ({ phase, outcome }) => {
     const admissionFailure = new Error("synthetic admission refusal");
@@ -136,6 +136,30 @@ function stubGuardedCaptureEnv(sessionId: string) {
     vi.stubEnv(key, undefined);
   }
 }
+
+it("returns owner admission failure as an observed rejecting Promise", async () => {
+  stubGuardedCaptureEnv("owner-admission");
+  const admissionFailure = new Error("synthetic capture admission rejected");
+  control.scope = createOpenClawDatabaseMaintenanceScope();
+  vi.spyOn(control.scope, "assertAdmission").mockImplementation(() => {
+    throw admissionFailure;
+  });
+  try {
+    const result = captureWsEventAsync({
+      url: "wss://synthetic.invalid/capture",
+      direction: "outbound",
+      kind: "ws-frame",
+      flowId: "fixture",
+      payload: "fixture",
+    });
+    expect(result).toBeInstanceOf(Promise);
+    await expect(result).rejects.toBe(admissionFailure);
+  } finally {
+    const scope = control.scope;
+    control.scope = undefined;
+    await scope.close();
+  }
+});
 
 it.each(["fresh", "cached-worker", "saved-fetch"] as const)(
   "defers %s capture writes until the live update owner releases them",
@@ -260,11 +284,10 @@ it.each(["fresh", "cached-worker", "saved-fetch"] as const)(
   },
 );
 
-it.each(
-  (["ready", "reservation"] as const).flatMap((failureKind) =>
-    (["success", "failure"] as const).map((outcome) => ({ failureKind, outcome })),
-  ),
-)(
+it.each([
+  { failureKind: "ready", outcome: "success" },
+  { failureKind: "reservation", outcome: "failure" },
+] as const)(
   "keeps guarded transport $outcome independent of $failureKind capture preparation failure",
   async ({ failureKind, outcome }) => {
     const preparationFailure = new Error("synthetic capture preparation rejected");

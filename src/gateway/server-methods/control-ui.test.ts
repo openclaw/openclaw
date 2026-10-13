@@ -603,7 +603,7 @@ describe("controlUi.sessionPullRequests.checks", () => {
   ])("rejects invalid or client-URL parameters before loading: %j", async (input) => {
     const load = vi.fn().mockResolvedValue(result);
     const handler = expectDefined(
-      createControlUiHandlers(undefined, undefined, load)["controlUi.sessionPullRequests.checks"],
+      createControlUiHandlers(undefined, load)["controlUi.sessionPullRequests.checks"],
       "CI checks handler",
     );
     const respond = vi.fn<RespondFn>();
@@ -620,6 +620,7 @@ describe("controlUi.sessionPullRequests.checks", () => {
     "rejects a %s without invoking the GitHub loader",
     async (missing) => {
       await withOpenClawTestState({ label: "ci-details-unavailable" }, async () => {
+        setRuntimeConfigSnapshot({});
         if (missing === "unavailable projection") {
           await replaceSessionEntry(
             { agentId: "main", sessionKey: params.sessionKey },
@@ -633,9 +634,7 @@ describe("controlUi.sessionPullRequests.checks", () => {
         }
         const load = vi.fn().mockResolvedValue(result);
         const handler = expectDefined(
-          createControlUiHandlers(undefined, undefined, load)[
-            "controlUi.sessionPullRequests.checks"
-          ],
+          createControlUiHandlers(undefined, load)["controlUi.sessionPullRequests.checks"],
           "CI checks handler",
         );
         const respond = vi.fn<RespondFn>();
@@ -655,6 +654,7 @@ describe("controlUi.sessionPullRequests.checks", () => {
 
   it("binds the visible session generation and rechecks it before returning details", async () => {
     await withOpenClawTestState({ label: "ci-details-generation" }, async () => {
+      setRuntimeConfigSnapshot({});
       const session = {
         agentId: "main",
         sessionKey: params.sessionKey,
@@ -672,7 +672,7 @@ describe("controlUi.sessionPullRequests.checks", () => {
         return deferred.promise;
       });
       const handler = expectDefined(
-        createControlUiHandlers(undefined, undefined, load)["controlUi.sessionPullRequests.checks"],
+        createControlUiHandlers(undefined, load)["controlUi.sessionPullRequests.checks"],
         "CI checks handler",
       );
       const respond = vi.fn<RespondFn>();
@@ -707,6 +707,7 @@ describe("controlUi.sessionPullRequests.checks", () => {
     "does not expose a hidden session to another profile: %j",
     async (hidden) => {
       await withOpenClawTestState({ label: "ci-details-hidden" }, async () => {
+        setRuntimeConfigSnapshot({});
         await replaceSessionEntry(
           { agentId: "main", sessionKey: params.sessionKey },
           {
@@ -718,9 +719,7 @@ describe("controlUi.sessionPullRequests.checks", () => {
         );
         const load = vi.fn().mockResolvedValue(result);
         const handler = expectDefined(
-          createControlUiHandlers(undefined, undefined, load)[
-            "controlUi.sessionPullRequests.checks"
-          ],
+          createControlUiHandlers(undefined, load)["controlUi.sessionPullRequests.checks"],
           "CI checks handler",
         );
         const respond = vi.fn<RespondFn>();
@@ -741,13 +740,14 @@ describe("controlUi.sessionPullRequests.checks", () => {
         session: { scope: "global" },
         agents: { entries: { main: {}, research: {} } },
       };
+      setRuntimeConfigSnapshot(cfg);
       await replaceSessionEntry(
         { agentId: "research", sessionKey: "global" },
         { sessionId: "research-ci", updatedAt: 1 },
       );
       const load = vi.fn().mockResolvedValue(result);
       const handler = expectDefined(
-        createControlUiHandlers(undefined, undefined, load)["controlUi.sessionPullRequests.checks"],
+        createControlUiHandlers(undefined, load)["controlUi.sessionPullRequests.checks"],
         "CI checks handler",
       );
       const respond = vi.fn<RespondFn>();
@@ -767,6 +767,7 @@ describe("controlUi.sessionPullRequests.checks", () => {
 
 describe("controlUi.linkPreview", () => {
   afterEach(() => {
+    clearRuntimeConfigSnapshot();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -787,6 +788,51 @@ describe("controlUi.linkPreview", () => {
     );
     expect(fetch).not.toHaveBeenCalled();
   });
+
+  it.each(["authority", "config", "principal"] as const)(
+    "suppresses a preview when %s changes during the fetch",
+    async (change) => {
+      let cfg: OpenClawConfig = { gateway: { port: 19010 } };
+      setRuntimeConfigSnapshot(cfg);
+      let current = true;
+      const client = { ...identifiedClient("preview-reader"), connId: "preview-connection" };
+      const started = createDeferred();
+      const gate = createDeferred<Response>();
+      const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async (input) => {
+        if ((input instanceof Request ? input.url : input.toString()).endsWith("/favicon.ico")) {
+          return new Response(null, { status: 404 });
+        }
+        started.resolve();
+        return gate.promise;
+      });
+      vi.stubGlobal("fetch", fetch);
+      const respond = vi.fn();
+      const pending = createControlUiHandlers()["controlUi.linkPreview"]!({
+        ...requestOptions({ url: `https://rpc-preview.example/retired-${change}` }, respond, {
+          client,
+          context: { getRuntimeConfig: () => cfg },
+        }),
+        hasCurrentClientAuthority: () => current,
+      });
+      await started.promise;
+      if (change === "authority") {
+        current = false;
+      } else if (change === "config") {
+        cfg = { gateway: { port: 19011 } };
+        setRuntimeConfigSnapshot(cfg);
+      } else {
+        client.authenticatedUserId = "another-reader";
+      }
+      gate.resolve(
+        new Response("<head><title>Retired preview</title></head>", {
+          headers: { "content-type": "text/html" },
+        }),
+      );
+      await pending;
+      expect(respond).toHaveBeenCalledWith(true, {}, undefined);
+      expect(fetch).toHaveBeenCalledOnce();
+    },
+  );
 
   it.each([true, false])(
     "projects public metadata only when fetching is enabled: %s",

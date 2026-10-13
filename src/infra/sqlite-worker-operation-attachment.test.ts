@@ -10,14 +10,13 @@ import { runSqliteWorkerAttachmentFramingProof } from "./sqlite-worker-operation
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 
-it("consumes the queued attachment once inside its active operation scope", async () => {
+it("shares the queued attachment only inside its active operation scope", async () => {
   const admission = createSqliteWorkerOperationAdmission(() => {}, { label: "scope-fixture" });
   try {
     const afterScope = withSqliteWorkerOperationAdmission({ port: admission.port }, () => {
-      expect(takeSqliteWorkerOperationAdmissionAttachment()).toEqual({ label: "scope-fixture" });
-      expect(() => takeSqliteWorkerOperationAdmissionAttachment()).toThrow(
-        "attachment is unavailable",
-      );
+      const attachment = takeSqliteWorkerOperationAdmissionAttachment();
+      expect(attachment).toEqual({ label: "scope-fixture" });
+      expect(takeSqliteWorkerOperationAdmissionAttachment()).toBe(attachment);
       return Promise.resolve().then(() => takeSqliteWorkerOperationAdmissionAttachment());
     });
     await expect(afterScope).rejects.toThrow("requires its retained admission");

@@ -44,6 +44,7 @@ import {
   downloadVerifiedFile,
   ensureLlamaServerInstalled,
   sha256File,
+  UnsupportedLlamaServerHostError,
 } from "./llama-server-install.js";
 
 type FileHandle = Awaited<ReturnType<typeof fs.open>>;
@@ -240,6 +241,62 @@ describe("cached file integrity", () => {
 });
 
 describe("downloadVerifiedFile", () => {
+  it.each(["partial", "wrong-checksum", "unavailable", "cancelled"] as const)(
+    "preserves the previous artifact and removes partial bytes after %s, then permits retry",
+    async (outcome) => {
+      const { destination, root } = await createDestination();
+      const previous = "GGUFprevious";
+      const payload = Buffer.from("GGUFprojector");
+      await fs.writeFile(destination, previous);
+      const controller = new AbortController();
+      const release = mockDownload(outcome === "partial" ? payload.subarray(0, 4) : payload);
+      if (outcome === "unavailable") {
+        mocks.fetchWithSsrFGuard.mockResolvedValue({
+          response: new Response(null, { status: 503 }),
+          release,
+        });
+      }
+      const digest = createHash("sha256").update(payload).digest("hex");
+      await expect(
+        downloadVerifiedFile({
+          url: "https://downloads.example/mmproj.gguf",
+          destination,
+          expectedSize: payload.byteLength,
+          expectedSha256: outcome === "wrong-checksum" ? "0".repeat(64) : digest,
+          signal: controller.signal,
+          onProgress: () => {
+            if (outcome === "cancelled") {
+              controller.abort();
+            }
+          },
+        }),
+      ).rejects.toThrow(
+        {
+          partial: /size mismatch/u,
+          "wrong-checksum": /SHA-256 mismatch/u,
+          unavailable: /HTTP 503/u,
+          cancelled: /abort/iu,
+        }[outcome],
+      );
+      expect(await fs.readFile(destination, "utf8")).toBe(previous);
+      expect(await fs.readdir(root)).toEqual(["model.gguf"]);
+      expect(release).toHaveBeenCalledOnce();
+      expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
+        expect.objectContaining({ signal: controller.signal }),
+      );
+
+      mockDownload(payload);
+      await downloadVerifiedFile({
+        url: "https://downloads.example/mmproj.gguf",
+        destination,
+        expectedSize: payload.byteLength,
+        expectedSha256: digest,
+      });
+      expect(await fs.readFile(destination)).toEqual(payload);
+      expect(await fs.readdir(root)).toEqual(["model.gguf"]);
+    },
+  );
+
   it.each([
     { label: "shared clock ticks", times: [1000, 1000, 1010], rates: [0, 0, 300_000_000] },
     {
@@ -382,11 +439,16 @@ describe("ensureLlamaServerInstalled", () => {
     const versionReply = createDeferred<string>();
     mocks.execFile.mockImplementation(
       (
-        _command: string,
+        file: string,
         _args: string[],
         _options: unknown,
         callback: (error: ExecFileException | null, stdout: string, stderr: string) => void,
       ) => {
+        // macOS hosts probe the product version first; hold only the server probe.
+        if (file === "/usr/bin/sw_vers") {
+          callback(null, "26.0\n", "");
+          return;
+        }
         started.resolve();
         void versionReply.promise.then((output) => callback(null, output, ""));
       },
@@ -402,7 +464,7 @@ describe("ensureLlamaServerInstalled", () => {
     );
     await expect(first).resolves.toMatchObject({ command });
     await expect(ensureLlamaServerInstalled()).resolves.toMatchObject({ command });
-    expect(mocks.execFile).toHaveBeenCalledTimes(2);
+    expect(mocks.execFile.mock.calls.filter(([file]) => file === command)).toHaveLength(2);
   });
 
   it("rejects a different active build even when output mentions the pinned build later", async () => {
@@ -416,7 +478,7 @@ describe("ensureLlamaServerInstalled", () => {
     );
   });
 
-  it("stages the app-local VC runtime only after the fresh CPU ZIP cannot start", async () => {
+  it("allows slow version initialization before publication, after publication, and on reuse", async () => {
     const { root, asset, runtime } = await createCpuArchive();
     const calls: Array<{ command: string; args: string[]; timeout?: number }> = [];
     mocks.execFile.mockImplementation(
@@ -427,6 +489,19 @@ describe("ensureLlamaServerInstalled", () => {
         callback: (error: ExecFileException | null, stdout: string, stderr: string) => void,
       ) => {
         calls.push({ command, args, timeout: options.timeout });
+        // Measured Metal initialization took 23 seconds even for an installed runtime.
+        if (options.timeout !== undefined && options.timeout < 23_000) {
+          callback(
+            Object.assign(new Error("version initialization timed out"), {
+              cmd: [command, ...args].join(" "),
+              killed: true,
+              signal: "SIGTERM" as const,
+            }),
+            "",
+            "",
+          );
+          return;
+        }
         void Promise.all(
           runtime.files.map((file) => fs.stat(path.join(path.dirname(command), file.target))),
         )
@@ -454,8 +529,8 @@ describe("ensureLlamaServerInstalled", () => {
     ).toEqual([
       { published: false, args: ["--version"], timeout: 120_000 },
       { published: false, args: ["--version"], timeout: 120_000 },
-      { published: true, args: ["--version"], timeout: 15_000 },
-      { published: true, args: ["--version"], timeout: 15_000 },
+      { published: true, args: ["--version"], timeout: 120_000 },
+      { published: true, args: ["--version"], timeout: 120_000 },
     ]);
     expect(await fs.readFile(command, "utf8")).toBe("server");
     for (const file of runtime.files) {
@@ -653,7 +728,7 @@ describe("ensureLlamaServerInstalled", () => {
         expect(commandCalls).toEqual([
           { args: ["--version"], timeout: 120_000 },
           { args: ["--list-devices"], timeout: 15_000 },
-          { args: ["--version"], timeout: 15_000 },
+          { args: ["--version"], timeout: 120_000 },
           { args: ["--list-devices"], timeout: 15_000 },
         ]);
       } else {
@@ -684,6 +759,106 @@ describe("ensureLlamaServerInstalled", () => {
       ).toBe(true);
     },
   );
+});
+
+describe("macOS runtime floor", () => {
+  const pinnedVersion = `version: 0.1.0-dev (build ${LLAMA_SERVER_BUILD}, commit ${LLAMA_SERVER_COMMIT.slice(0, 9)})`;
+  const dyldFailure = Object.assign(
+    new Error("dyld: Symbol not found: _cblas_sgemm$NEWLAPACK$ILP64"),
+    {
+      cmd: "llama-server --version",
+    },
+  );
+
+  async function prepareMac(
+    productVersion: string | ExecFileException,
+    installed: "none" | "valid" | "crashes",
+  ) {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "llama-server-macos-"));
+    tempRoots.push(root);
+    mocks.resolveLlamaCppDataDir.mockReturnValue(root);
+    const asset = selectLlamaServerAsset("darwin", "x64", { kind: "cpu" });
+    const { command } = resolveManagedLlamaServerPaths(asset);
+    if (installed !== "none") {
+      await fs.mkdir(path.dirname(command), { recursive: true });
+      await fs.writeFile(command, "");
+    }
+    mocks.execFile.mockImplementation(
+      (
+        file: string,
+        _args: string[],
+        _options: unknown,
+        callback: (error: ExecFileException | null, stdout: string, stderr: string) => void,
+      ) => {
+        if (file !== "/usr/bin/sw_vers") {
+          callback(installed === "crashes" ? dyldFailure : null, pinnedVersion, "");
+        } else if (typeof productVersion !== "string") {
+          callback(productVersion, "", "");
+        } else {
+          callback(null, `${productVersion}\n`, "");
+        }
+      },
+    );
+    return { asset, command };
+  }
+
+  it("refuses macOS below 13.3 before downloading the verified build", async () => {
+    const { asset } = await prepareMac("12.7.6", "none");
+
+    const install = ensureLlamaServerInstalled({ asset });
+    await expect(install).rejects.toBeInstanceOf(UnsupportedLlamaServerHostError);
+    await expect(install).rejects.toThrow(
+      "requires macOS 13.3+; this Mac runs macOS 12.7.6. Build llama-server for this Mac and set models.providers.llama-cpp.localService.command",
+    );
+    expect(mocks.execFile.mock.calls.map(([file]) => file)).toEqual(["/usr/bin/sw_vers"]);
+    expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
+  });
+
+  it("reuses a validating build on macOS below 13.3", async () => {
+    const { asset, command } = await prepareMac("12.7.6", "valid");
+
+    await expect(ensureLlamaServerInstalled({ asset })).resolves.toMatchObject({ command });
+    expect(mocks.execFile.mock.calls.map(([file]) => file)).toEqual([command]);
+  });
+
+  it("explains a build that cannot start on macOS below 13.3", async () => {
+    const { asset } = await prepareMac("12.7.6", "crashes");
+
+    const install = ensureLlamaServerInstalled({ asset });
+    await expect(install).rejects.toBeInstanceOf(UnsupportedLlamaServerHostError);
+    await expect(install).rejects.toMatchObject({
+      message: expect.stringContaining("requires macOS 13.3+"),
+      cause: expect.objectContaining({ message: expect.stringContaining("dyld") }),
+    });
+    expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
+  });
+
+  it.each(["13.3", "26.0.1"])("keeps the verified build on macOS %s", async (productVersion) => {
+    const { asset, command } = await prepareMac(productVersion, "valid");
+
+    await expect(ensureLlamaServerInstalled({ asset })).resolves.toMatchObject({ command });
+  });
+
+  it("keeps the launch error when the macOS version cannot be read", async () => {
+    const { asset, command } = await prepareMac(
+      Object.assign(new Error("sw_vers unavailable"), { cmd: "sw_vers" }),
+      "crashes",
+    );
+
+    const install = ensureLlamaServerInstalled({ asset });
+    await expect(install).rejects.not.toBeInstanceOf(UnsupportedLlamaServerHostError);
+    await expect(install).rejects.toThrow("dyld");
+    expect(mocks.execFile.mock.calls.map(([file]) => file)).toEqual([command, "/usr/bin/sw_vers"]);
+    expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
+  });
+
+  it("keeps the launch error for a build that cannot start on a supported Mac", async () => {
+    const { asset } = await prepareMac("13.3", "crashes");
+
+    const install = ensureLlamaServerInstalled({ asset });
+    await expect(install).rejects.not.toBeInstanceOf(UnsupportedLlamaServerHostError);
+    await expect(install).rejects.toThrow("dyld");
+  });
 });
 
 describe("CUDA runtime selection", () => {

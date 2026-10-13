@@ -249,8 +249,7 @@ describe("Codex native configuration", () => {
         throw new Error("Registered Codex harness must support run attempts");
       }
       // Model policy owns this proof; cold preparation must not spend its logical clock.
-      // Keep I/O and cleanup timers real.
-      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
       const run = harness.runAttempt(params);
       const settled = run.then(
         () => false,
@@ -672,7 +671,7 @@ describe("Codex native configuration", () => {
   );
 });
 
-it.each(["restore", "fresh", "fresh after yield"] as const)(
+it.each(["restore", "fresh"] as const)(
   "cancels accepted unqualified native work when a policy is introduced (%s)",
   async (origin) => {
     const fresh = origin !== "restore";

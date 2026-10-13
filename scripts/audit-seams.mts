@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-// Audits repo ownership seams, optional plugin leaks, and nearby test coverage signals.
 
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -124,10 +123,6 @@ function isTestLikePath(relativePath: string) {
   );
 }
 
-function isProductionLikeFile(relativePath: string) {
-  return !isTestLikePath(relativePath);
-}
-
 async function walkCodeFiles(
   rootDir: string,
   options: { includeTests?: boolean; ignoreUnreadable?: boolean } = {},
@@ -153,7 +148,7 @@ async function walkCodeFiles(
       } else if (
         entry.isFile() &&
         isCodeFile(entry.name) &&
-        (options.includeTests || isProductionLikeFile(normalizePath(fullPath)))
+        (options.includeTests || !isTestLikePath(normalizePath(fullPath)))
       ) {
         out.push(fullPath);
       }
@@ -427,7 +422,7 @@ function stemFromRelativePath(relativePath: string) {
 function splitNameTokens(name: string) {
   return name
     .split(/[^a-zA-Z0-9]+/)
-    .map((token) => token.trim().toLowerCase())
+    .map((token) => token.toLowerCase())
     .filter(Boolean);
 }
 
@@ -443,18 +438,6 @@ function hasAnyImportSource(source: string, specifiers: string[]) {
   return specifiers.some((specifier) => hasImportSource(source, specifier));
 }
 
-function isCronProductionPath(relativePath: string) {
-  return relativePath.startsWith("src/cron/") && isProductionLikeFile(relativePath);
-}
-
-function isSubagentProductionPath(relativePath: string) {
-  return (
-    (relativePath.startsWith("src/agents/") || relativePath.startsWith("src/cron/")) &&
-    isProductionLikeFile(relativePath) &&
-    /subagent|sessions-spawn|acp-spawn/.test(relativePath)
-  );
-}
-
 function matchingSeamKinds(source: string, rules: Array<[string, boolean, RegExp]>) {
   return rules
     .filter(([, enabled, pattern]) => enabled && pattern.test(source))
@@ -462,7 +445,7 @@ function matchingSeamKinds(source: string, rules: Array<[string, boolean, RegExp
 }
 
 function describeCronSeamKinds(relativePath: string, source: string) {
-  if (!isCronProductionPath(relativePath)) {
+  if (!relativePath.startsWith("src/cron/") || isTestLikePath(relativePath)) {
     return [];
   }
 
@@ -541,7 +524,11 @@ function describeCronSeamKinds(relativePath: string, source: string) {
 }
 
 function describeSubagentSeamKinds(relativePath: string, source: string) {
-  if (!isSubagentProductionPath(relativePath)) {
+  if (
+    (!relativePath.startsWith("src/agents/") && !relativePath.startsWith("src/cron/")) ||
+    isTestLikePath(relativePath) ||
+    !/subagent|sessions-spawn|acp-spawn/.test(relativePath)
+  ) {
     return [];
   }
 
@@ -619,7 +606,7 @@ function describeSubagentSeamKinds(relativePath: string, source: string) {
     [
       "subagent-announce-delivery",
       importsAnnounceDelivery || isAnnounceDispatchPath,
-      /\brunSubagentAnnounceFlow\b|\brunSubagentAnnounceDispatch\b|\benqueueAnnounce\b|\bcreateBoundDeliveryRouter\b|\bqueueEmbeddedAgentMessage\b|\bwaitForEmbeddedAgentRunEnd\b|\bqueue-fallback\b|\bdirect-primary\b/,
+      /\brunSubagentAnnounceFlow\b|\brunSubagentAnnounceDispatch\b|\benqueueAnnounce\b|\bresolveBoundDeliveryDestination\b|\bqueueEmbeddedAgentMessage\b|\bwaitForEmbeddedAgentRunEnd\b|\bqueue-fallback\b|\bdirect-primary\b/,
     ],
     [
       "subagent-session-cleanup",

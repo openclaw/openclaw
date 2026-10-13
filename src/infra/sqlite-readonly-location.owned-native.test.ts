@@ -73,48 +73,51 @@ beforeEach(() => {
   });
 });
 
-it("keeps the existing default snapshot cleanup synchronous", async () => {
-  const prepared = await prepareSqliteReadOnlyLocationFromOwnedDatabase(database, () => {});
-  expect(mocks.backup.mock.calls[0]?.[0]).toBe(database);
-  expect(prepared.cleanup()).toBe(true);
-  expect(mocks.retireSync).toHaveBeenCalledOnce();
-  expect(mocks.retire).not.toHaveBeenCalled();
-  expect(fs.existsSync(directory)).toBe(false);
-  expect(database.isOpen).toBe(true);
-});
-
-it("joins retained cleanup before releasing the published private bytes", async () => {
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
-  mocks.retire.mockImplementation(async () => {
-    entered.resolve();
-    await release.promise;
-  });
-  const prepared = await prepareSqliteReadOnlyLocationFromOwnedDatabase(
-    database,
-    () => {},
-    undefined,
-    "async",
-  );
-  let finished = false;
-  const closing = prepared.cleanupAsync().then((removed) => {
-    finished = true;
-    return removed;
-  });
-  try {
-    // The original synchronous path never invokes the asynchronous retirement owner.
-    await Promise.race([entered.promise, closing]);
-    expect(mocks.retire).toHaveBeenCalledOnce();
-    expect(finished).toBe(false);
-    expect(fs.existsSync(prepared.location)).toBe(true);
+it.each(["sync", "async"] as const)(
+  "joins %s cleanup before releasing private bytes",
+  async (mode) => {
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    if (mode === "async") {
+      mocks.retire.mockImplementation(async () => {
+        entered.resolve();
+        await release.promise;
+      });
+    }
+    if (mode === "sync") {
+      const prepared = await prepareSqliteReadOnlyLocationFromOwnedDatabase(database, () => {});
+      expect(mocks.backup.mock.calls[0]?.[0]).toBe(database);
+      expect(prepared.cleanup()).toBe(true);
+      expect(mocks.retireSync).toHaveBeenCalledOnce();
+      expect(mocks.retire).not.toHaveBeenCalled();
+    } else {
+      const prepared = await prepareSqliteReadOnlyLocationFromOwnedDatabase(
+        database,
+        () => {},
+        undefined,
+        mode,
+      );
+      let finished = false;
+      const closing = prepared.cleanupAsync().then((removed) => {
+        finished = true;
+        return removed;
+      });
+      try {
+        await Promise.race([entered.promise, closing]);
+        expect(mocks.retire).toHaveBeenCalledOnce();
+        expect(finished).toBe(false);
+        expect(fs.existsSync(prepared.location)).toBe(true);
+        expect(database.isOpen).toBe(true);
+      } finally {
+        release.resolve();
+        await closing;
+      }
+      expect(mocks.retireSync).not.toHaveBeenCalled();
+    }
+    expect(fs.existsSync(directory)).toBe(false);
     expect(database.isOpen).toBe(true);
-  } finally {
-    release.resolve();
-    await closing;
-  }
-  expect(fs.existsSync(directory)).toBe(false);
-  expect(mocks.retireSync).not.toHaveBeenCalled();
-});
+  },
+);
 
 it("retains original and unpublished cleanup failures until the snapshot registry retries", async () => {
   const original = new Error("native backup failed");
@@ -143,64 +146,61 @@ it("retains original and unpublished cleanup failures until the snapshot registr
   expect(mocks.retire).toHaveBeenCalledTimes(2);
 });
 
-it.each(["allocation", "backup"] as const)(
-  "rechecks captured authority after %s and cleans without publishing",
+it.each(["allocation", "backup", "cancelled allocation"] as const)(
+  "joins %s before rejecting lost authority without publishing",
   async (phase) => {
-    const failure = new Error("source owner replaced");
+    const failure = new Error(
+      phase === "cancelled allocation" ? "native inspection cancelled" : "source owner replaced",
+    );
+    const controller = new AbortController();
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
     let current = true;
     const assertCurrent = () => {
       if (!current) {
         throw failure;
       }
     };
-    if (phase === "allocation") {
-      const allocate = mocks.allocate.getMockImplementation()!;
-      mocks.allocate.mockImplementation(async (...args) => {
-        const result = await allocate(...args);
-        current = false;
-        return result;
-      });
-    } else {
+    if (phase === "backup") {
       const backup = mocks.backup.getMockImplementation()!;
       mocks.backup.mockImplementation(async (...args) => {
         const result = await backup(...args);
         current = false;
         return result;
       });
+    } else {
+      const allocate = mocks.allocate.getMockImplementation()!;
+      mocks.allocate.mockImplementation(async (...args) => {
+        if (phase === "cancelled allocation") {
+          entered.resolve();
+          await release.promise;
+        }
+        const result = await allocate(...args);
+        if (phase === "allocation") {
+          current = false;
+        }
+        return result;
+      });
     }
-    await expect(
-      prepareSqliteReadOnlyLocationFromOwnedDatabase(database, assertCurrent, undefined, "async"),
-    ).rejects.toBe(failure);
-    expect(mocks.backup).toHaveBeenCalledTimes(phase === "allocation" ? 0 : 1);
+    const result = prepareSqliteReadOnlyLocationFromOwnedDatabase(
+      database,
+      assertCurrent,
+      controller.signal,
+      "async",
+    );
+    const rejected = expect(result).rejects.toBe(failure);
+    try {
+      if (phase === "cancelled allocation") {
+        await entered.promise;
+        controller.abort(failure);
+        expect(mocks.backup).not.toHaveBeenCalled();
+      }
+    } finally {
+      release.resolve();
+      await rejected;
+    }
+    expect(mocks.backup).toHaveBeenCalledTimes(phase === "backup" ? 1 : 0);
     expect(fs.existsSync(directory)).toBe(false);
     expect(database.isOpen).toBe(true);
   },
 );
-
-it("joins accepted allocation before cleaning a cancelled native snapshot", async () => {
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
-  const allocate = mocks.allocate.getMockImplementation()!;
-  mocks.allocate.mockImplementation(async (...args) => {
-    entered.resolve();
-    await release.promise;
-    return allocate(...args);
-  });
-  const controller = new AbortController();
-  const reason = new Error("native inspection cancelled");
-  const result = prepareSqliteReadOnlyLocationFromOwnedDatabase(
-    database,
-    () => {},
-    controller.signal,
-    "async",
-  );
-  const outcome = result.catch((error: unknown) => error);
-  await entered.promise;
-  controller.abort(reason);
-  expect(mocks.backup).not.toHaveBeenCalled();
-  release.resolve();
-  expect(await outcome).toBe(reason);
-  expect(mocks.backup).not.toHaveBeenCalled();
-  expect(fs.existsSync(directory)).toBe(false);
-  expect(database.isOpen).toBe(true);
-});

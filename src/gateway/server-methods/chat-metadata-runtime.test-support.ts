@@ -17,7 +17,7 @@ import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metada
 import { connectUserModelAccount } from "../../state/user-model-accounts.js";
 import { setDisplayName } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
-import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
+import { ModelAccountConnectAuthorityError } from "../model-account-connect-errors.js";
 import type { ChatMetadataRuntimeDeps } from "./chat-metadata-facts.js";
 import { createGatewayChatMetadataRuntime } from "./chat-metadata-runtime.js";
 import type { ChatMetadataProjectionFacts } from "./chat-metadata-session-projection.js";
@@ -153,8 +153,6 @@ export function createChatMetadataOwner(
 export function createChatMetadataHarness(
   initialConfig: OpenClawConfig = { agents: { entries: { main: {} } } },
   runtimeOptions: {
-    beforeRefresh?: () => Promise<void>;
-    refreshOnRead?: boolean;
     useDefaultProjection?: boolean;
     onChanged?: () => void;
   } = {},

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { homedir } from "node:os";
 import { isDeepStrictEqual } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { fingerprintConfigSnapshotAuthoredConfig } from "../config/config-journal-snapshot.js";
 import { readRecentConfigAuditRecords, type ConfigAuditRecord } from "../config/io.audit.js";
@@ -39,12 +40,7 @@ function fileIdentity(file: string) {
 
 function fingerprint(raw: string, env: NodeJS.ProcessEnv): ConfigFingerprint {
   const parsed = parseConfigJson5(raw);
-  if (
-    !parsed.ok ||
-    parsed.parsed === null ||
-    typeof parsed.parsed !== "object" ||
-    Array.isArray(parsed.parsed)
-  ) {
+  if (!parsed.ok || !isRecord(parsed.parsed)) {
     throw new Error("Immutable update requires a readable object-shaped config.");
   }
   const result = immutableConfigFingerprintSchema.safeParse(
@@ -248,7 +244,7 @@ export function verifyImmutableProtection(
   context: ProtectionContext & {
     candidate: ImmutableProtectionCandidate;
   },
-): { configMigrated: boolean } {
+): void {
   context.assertCurrent();
   context.candidate.assertCurrent();
   assertState(snapshot);
@@ -258,7 +254,6 @@ export function verifyImmutableProtection(
       ? recent.length
       : recent.findIndex((record) => auditKey(record) === snapshot.auditBoundary);
   const records = (boundary < 0 ? recent : recent.slice(0, boundary)).toReversed();
-  let configMigrated = false;
   for (const file of snapshot.config) {
     const current = readFile(file, context.env);
     if (current.hash === file.hash && isDeepStrictEqual(current.identity, file.identity)) {
@@ -293,22 +288,16 @@ export function verifyImmutableProtection(
         continue;
       }
       const ts = Date.parse(record.ts);
-      const previous = {
-        dev: record.previousDev,
-        ino: record.previousIno,
-        mode: record.previousMode,
-        nlink: record.previousNlink,
-        uid: record.previousUid,
-        gid: record.previousGid,
-      };
-      const next = immutableProtectedFileIdentitySchema.safeParse({
-        dev: record.nextDev,
-        ino: record.nextIno,
-        mode: record.nextMode,
-        nlink: record.nextNlink,
-        uid: record.nextUid,
-        gid: record.nextGid,
+      const identity = (prefix: "previous" | "next") => ({
+        dev: record[`${prefix}Dev`],
+        ino: record[`${prefix}Ino`],
+        mode: record[`${prefix}Mode`],
+        nlink: record[`${prefix}Nlink`],
+        uid: record[`${prefix}Uid`],
+        gid: record[`${prefix}Gid`],
       });
+      const previous = identity("previous");
+      const next = immutableProtectedFileIdentitySchema.safeParse(identity("next"));
       if (
         record.pid !== context.candidate.pid ||
         record.cwd !== context.candidate.generationPath ||
@@ -341,10 +330,8 @@ export function verifyImmutableProtection(
     ) {
       throw new Error("Config migration is missing its complete config-audit publication receipt.");
     }
-    configMigrated = true;
   }
   assertState(snapshot);
   context.candidate.assertCurrent();
   context.assertCurrent();
-  return { configMigrated };
 }

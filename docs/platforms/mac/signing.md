@@ -29,6 +29,13 @@ The signer seals App and Sparkle bundle owners once, after their nested code. A 
 
 Sign a private staged copy that no other process modifies. The signer rejects hardlinked files and special files such as FIFOs before attribute cleanup. Copy or rebuild the bundle if this check fails. Attribute cleanup and signing use macOS `/usr/bin/sandbox-exec`. It restricts filesystem writes to the fixed app and temporary signing directories. Extra inherited file descriptors are closed. Signing fails if this mutation boundary cannot start. There is no unrestricted fallback.
 
+## Permission evidence
+
+Platform claims require real-device evidence. macOS permission proof requires a
+stable, signed app: keep the bundle ID, signing identity, and app path stable
+across rebuilds. An ad-hoc or changing signature does not qualify TCC permission
+persistence proof.
+
 ## Usage
 
 ```bash
@@ -42,8 +49,9 @@ DISABLE_LIBRARY_VALIDATION=1 scripts/package-mac-app.sh                         
 
 Runtime packaging honors the existing `OPENCLAW_DOCKER_PACKAGE_INVENTORY_TIMEOUT_MS`,
 `OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS`, and
-`OPENCLAW_DOCKER_PACKAGE_TARBALL_CHECK_TIMEOUT_MS` budgets. Each defaults to five
-minutes; set a positive integer in milliseconds when packaging needs more time.
+`OPENCLAW_DOCKER_PACKAGE_TARBALL_CHECK_TIMEOUT_MS` budgets. Inventory and
+tarball checks default to five minutes; package creation defaults to fifteen
+minutes. Set a positive integer in milliseconds when packaging needs more time.
 These budgets pass through the runtime's isolated environment without exposing
 operator credentials or state. The tarball-check budget covers the whole check,
 including extraction and validation.

@@ -1,8 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../io.js";
 import {
   appendTranscriptMessage,
   loadTranscriptEvents,
@@ -10,7 +12,9 @@ import {
 } from "./session-accessor.js";
 import { readTranscriptEventMessage } from "./session-accessor.sqlite-read.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import * as transcriptAnchors from "./session-transcript-anchor-read.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
+import { withSessionTranscriptWriteAssertion } from "./transcript-write-context.js";
 import {
   appendAssistantMessageToSessionTranscript,
   appendExactAssistantMessageToSessionTranscript,
@@ -38,6 +42,7 @@ function legacyMirrorMessage(text = "Chart") {
 }
 
 describe("assistant mirror media identity", () => {
+  afterAll(clearRuntimeConfigSnapshot);
   const fixture = useTempSessionsFixture("transcript-media-identity-");
 
   async function createScope() {
@@ -47,6 +52,7 @@ describe("assistant mirror media identity", () => {
       sessionKey: "agent:main:legacy-media",
       storePath: fixture.storePath(),
     };
+    setRuntimeConfigSnapshot({ session: { store: scope.storePath } });
     await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     return scope;
   }
@@ -62,6 +68,61 @@ describe("assistant mirror media identity", () => {
       .db.prepare("SELECT event_json FROM transcript_events WHERE session_id = ? ORDER BY seq")
       .all(sessionId);
   }
+
+  it.each(["explicit", "owned"] as const)(
+    "rejects revoked duplicate authority after the anchor read: %s",
+    async (authority) => {
+      const scope = await createScope();
+      const params = {
+        ...scope,
+        expectedSessionId: scope.sessionId,
+        message: legacyMirrorMessage(),
+      };
+      const first = await appendExactAssistantMessageToSessionTranscript(params);
+      expect(first.ok).toBe(true);
+      let current = true;
+      const assertCurrent = () => {
+        if (!current) {
+          throw new Error("duplicate writer revoked");
+        }
+      };
+      const append = () =>
+        authority === "explicit"
+          ? appendExactAssistantMessageToSessionTranscript({ ...params, assertCurrent })
+          : withSessionTranscriptWriteAssertion(scope, assertCurrent, () =>
+              appendExactAssistantMessageToSessionTranscript(params),
+            );
+      await expect(append()).resolves.toEqual(first);
+      const before = readRawEvents(scope.sessionId);
+      const held = createDeferred();
+      const release = createDeferred();
+      const read = transcriptAnchors.readActiveTranscriptEntryAnchorAsync;
+      const observation = vi
+        .spyOn(transcriptAnchors, "readActiveTranscriptEntryAnchorAsync")
+        .mockImplementation(async (...args) => {
+          const anchor = await read(...args);
+          held.resolve();
+          await release.promise;
+          return anchor;
+        });
+      const duplicate = append();
+      try {
+        await awaitGateBeforeSettlement(
+          held.promise,
+          duplicate,
+          "Duplicate append settled without awaiting its anchor read",
+        );
+        current = false;
+        release.resolve();
+        await expect(duplicate).rejects.toThrow("duplicate writer revoked");
+        expect(readRawEvents(scope.sessionId)).toEqual(before);
+      } finally {
+        release.resolve();
+        await duplicate.catch(() => undefined);
+        observation.mockRestore();
+      }
+    },
+  );
 
   it.each([false, true])(
     "replays literal legacy media bytes before and after reopen with content=%s",

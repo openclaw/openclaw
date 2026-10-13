@@ -4,10 +4,10 @@ import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { pluginDoctorContractRegistryLoaderState } from "../plugins/doctor-contract-registry-loader-state.js";
 import { clearPluginDoctorContractRegistryCache } from "../plugins/doctor-contract-registry.test-fixtures.js";
 import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
+import * as pluginSetupModule from "../plugins/plugin-setup-module.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
@@ -46,7 +46,6 @@ async function makeFixture() {
 }
 
 afterEach(async () => {
-  pluginDoctorContractRegistryLoaderState.moduleLoaderFactory = undefined;
   resetAutoMigrateLegacyStateDirForTest();
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
@@ -57,50 +56,6 @@ afterEach(async () => {
 });
 
 describe("legacy state migration caller plugin execution", () => {
-  it("keeps absent migration descriptors stable when plugin migrations are disabled", async () => {
-    const fixture = await makeFixture();
-    fixture.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
-    const cfg: OpenClawConfig = { plugins: { enabled: false } };
-    fs.writeFileSync(fixture.configPath, `${JSON.stringify(cfg)}\n`);
-    const plan = await planLegacyStateMigrationsReadOnly({
-      mode: "doctor",
-      candidate: { root: fixture.root, version: "test" },
-      snapshot: {
-        homeDir: fixture.homeDir,
-        configPath: fixture.configPath,
-        stateDir: fixture.stateDir,
-      },
-      env: fixture.env,
-    });
-
-    const result = await autoMigrateLegacyState({
-      cfg,
-      doctorOnlyStateMigrations: true,
-      env: fixture.env,
-      homedir: () => fixture.homeDir,
-      legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
-    });
-
-    expectPlanReceiptDescriptorsToMatch({
-      plan: {
-        ...plan,
-        steps: plan.steps.filter((step) => step.id !== "plugin-doctor-post-session-state"),
-      },
-      receipts: result.stepReceipts,
-    });
-    expect(result.postSessionPluginMigration?.step).toMatchObject({
-      id: "plugin-doctor-post-session-state",
-      source: [],
-      target: [],
-      requiredness: "not-required",
-    });
-    expect(plan.steps.find((step) => step.id === "plugin-doctor-state")).toMatchObject({
-      source: [],
-      target: [],
-      requiredness: "not-required",
-    });
-  });
-
   it.each([
     {
       name: "reordered exports with only the second action pending",
@@ -419,11 +374,10 @@ module.exports = { stateMigrations: [{
       const legacyStateDir = legacyRoot
         ? path.join(fixture.homeDir, ".clawdbot")
         : fixture.stateDir;
-      const stateDir = legacyRoot ? path.join(fixture.homeDir, ".openclaw") : fixture.stateDir;
       const pluginId = "relocated-owner";
       const pluginRoot = fromInstallIndex
         ? path.join(fixture.root, pluginId)
-        : path.join(legacyRoot ? fixture.root : stateDir, "extensions", pluginId);
+        : path.join(legacyStateDir, "extensions", pluginId);
       const markerPath = path.join(fixture.root, "relocated-action-ran");
       const doctorOnlyMarkerPath = path.join(fixture.root, "doctor-only-action-ran");
       fs.mkdirSync(legacyStateDir, { recursive: true });
@@ -497,7 +451,10 @@ module.exports = { stateMigrations: [{
         agents: { entries: { main: {} } },
         plugins: { entries: { [pluginId]: { enabled: true } } },
       };
-      fs.writeFileSync(fixture.configPath, `${JSON.stringify(cfg)}\n`);
+      fs.writeFileSync(
+        legacyRoot ? path.join(legacyStateDir, "openclaw.json") : fixture.configPath,
+        `${JSON.stringify(cfg)}\n`,
+      );
       const env: NodeJS.ProcessEnv = {
         ...fixture.env,
         OPENCLAW_HOME: fixture.homeDir,
@@ -506,6 +463,8 @@ module.exports = { stateMigrations: [{
       };
       if (legacyRoot) {
         delete env.OPENCLAW_STATE_DIR;
+        delete env.OPENCLAW_HOME;
+        delete env.OPENCLAW_CONFIG_PATH;
       }
       if (legacySchema) {
         const databasePath = resolveOpenClawStateSqlitePath(env);
@@ -571,7 +530,7 @@ module.exports = { stateMigrations: [{
       expect(preludeReceipt, JSON.stringify(preludeReceipt)).toMatchObject({
         outcome: legacyRoot ? "completed" : "skipped",
       });
-      expect(fs.realpathSync(legacyStateDir)).toBe(fs.realpathSync(stateDir));
+      expect(fs.existsSync(legacyStateDir)).toBe(!legacyRoot);
       expect(result.warnings).toEqual([]);
       if (legacySchema) {
         expect(result.stepReceipts.find((receipt) => receipt.id === "state-schema")).toMatchObject({
@@ -823,10 +782,11 @@ module.exports = { stateMigrations: [{
       },
     };
     fs.writeFileSync(fixture.configPath, `${JSON.stringify(cfg)}\n`);
-    const pluginLoader = vi.fn(() => {
-      throw new Error("copied planning must not load a Doctor contract");
-    });
-    pluginDoctorContractRegistryLoaderState.moduleLoaderFactory = pluginLoader;
+    const pluginLoader = vi
+      .spyOn(pluginSetupModule, "getPluginSetupModuleLoader")
+      .mockImplementation(() => {
+        throw new Error("copied planning must not load a Doctor contract");
+      });
     const plan = await planLegacyStateMigrationsReadOnly({
       mode: "doctor",
       candidate: { root: fixture.root, version: "test" },

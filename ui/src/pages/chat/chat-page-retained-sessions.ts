@@ -349,7 +349,9 @@ export class ChatPageRetainedSessions {
     }
   }
 
-  private clearPreviewWork(): void {
+  private readonly cancelPreview = () => {
+    const layout = this.bindings.layout();
+    const paneId = this.preview?.paneId ?? layout.activePaneId;
     if (this.previewFrame !== undefined) {
       cancelAnimationFrame(this.previewFrame);
       this.previewFrame = undefined;
@@ -358,12 +360,6 @@ export class ChatPageRetainedSessions {
       window.clearTimeout(this.previewTimer);
       this.previewTimer = undefined;
     }
-  }
-
-  private readonly cancelPreview = () => {
-    const layout = this.bindings.layout();
-    const paneId = this.preview?.paneId ?? layout.activePaneId;
-    this.clearPreviewWork();
     this.preview = null;
     // A commit can focus another split. Restore the pane whose presentation
     // this preview changed using its current authoritative selection.

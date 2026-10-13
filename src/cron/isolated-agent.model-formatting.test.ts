@@ -68,33 +68,6 @@ beforeEach(() => {
 afterEach(clearRuntimeConfigSnapshot);
 
 describe("cron model selection", () => {
-  it("uses the published read-only default when overrides are blank", async () => {
-    await expect(
-      select({
-        payload: { ...payload, model: " " },
-        sessionEntry: { providerOverride: "openai", modelOverride: " " },
-      }),
-    ).resolves.toMatchObject({ ok: true, ...defaultRef, modelSource: "default" });
-    expect(mocks.loadOwner).toHaveBeenCalledWith({
-      config: {},
-      readOnly: true,
-      allowGatewaySubagentBinding: true,
-    });
-    expect(mocks.allowed).not.toHaveBeenCalled();
-  });
-
-  it("trims the payload override before selecting it over a conflicting session model", async () => {
-    await expect(
-      select({
-        payload: { ...payload, model: "  openai/gpt-4.1-mini  " },
-        sessionEntry: { providerOverride: "anthropic", modelOverride: "claude-sonnet-4-6" },
-      }),
-    ).resolves.toMatchObject({ ok: true, ...selectedRef, modelSource: "payload" });
-    expect(mocks.allowed).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ raw: "openai/gpt-4.1-mini" }),
-    );
-  });
-
   it("uses the session model when no payload model is present", async () => {
     await expect(
       select({ sessionEntry: { providerOverride: "openai", modelOverride: "gpt-4.1-mini" } }),
@@ -128,21 +101,8 @@ describe("cron model selection", () => {
       ok: false,
       error: `automation model override 'openai/gpt-4.1-mini' ${expected}`,
     });
-  });
-
-  it("authorizes aliases against the original agent policy scope", async () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          models: { "openai/gpt-4.1-mini": { alias: "approved" } },
-          modelPolicy: { allow: ["approved"] },
-        },
-        entries: { worker: { models: { "anthropic/claude-sonnet-4-6": { alias: "approved" } } } },
-      },
-    };
-    await select({ cfg, agentId: "worker", payload: { ...payload, model: "approved" } });
     expect(mocks.allowed).toHaveBeenCalledWith(
-      expect.objectContaining({ cfg, agentId: "worker", raw: "approved" }),
+      expect.objectContaining({ cfg, agentId: agentId ?? "main" }),
     );
   });
 
@@ -169,8 +129,12 @@ describe("cron model selection", () => {
     };
     mocks.loadOwner.mockResolvedValueOnce(owner);
     await expect(
-      select({ cfg, payload: { ...payload, model: "openai/gpt-4.1-mini" } }),
-    ).resolves.toMatchObject({ ok: true, ...selectedRef, owner });
+      select({
+        cfg,
+        payload: { ...payload, model: "  openai/gpt-4.1-mini  " },
+        sessionEntry: { providerOverride: "anthropic", modelOverride: "claude-sonnet-4-6" },
+      }),
+    ).resolves.toMatchObject({ ok: true, ...selectedRef, owner, modelSource: "payload" });
     expect(mocks.loadOwner).toHaveBeenCalledExactlyOnceWith({
       config: cfg,
       readOnly: true,

@@ -367,11 +367,15 @@ export function collectPackageRootImports(
     if (expression.type === "CallExpression" || expression.type === "OptionalCallExpression") {
       const specifier = literal(expression.arguments[0]);
       const namespace = specifier === undefined ? undefined : namespaces.get(specifier);
-      const locations = expression.arguments.map((value) =>
-        origins(value, new Set(seen), inputScope),
-      );
+      const callees = origins(expression.callee, new Set(seen), inputScope);
+      // Only path-producing calls consume argument origins; unknown calls can contain deep DAGs.
+      const locations = callees.some((loader) =>
+        ["factory", "resolve", "realpath", "realpath-async", "join"].includes(loader),
+      )
+        ? expression.arguments.map((value) => origins(value, new Set(seen), inputScope))
+        : [];
       return union(
-        ...origins(expression.callee, new Set(seen), inputScope).map((loader): Origin[] => {
+        ...callees.map((loader): Origin[] => {
           if (loader === "factory") {
             return (locations[0] ?? ["unknown"]).map((location) =>
               location === "location"

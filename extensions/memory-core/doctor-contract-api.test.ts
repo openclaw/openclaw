@@ -17,7 +17,6 @@ import {
   resetDoctorPluginState,
   type RawLegacyDoctorConfig,
 } from "./doctor-contract-api.test-support.js";
-import { bm25RankToScore, buildFtsQuery } from "./src/memory/keyword-query.js";
 import { runVectorKnnQuery } from "./src/memory/manager-search-knn.js";
 import { searchKeyword } from "./src/memory/manager-search.js";
 import { resetMemoryCoreDreamingStateForTests } from "./src/test-helpers.js";
@@ -301,8 +300,6 @@ async function searchMigratedKeywordRows(agentPath: string, query: string) {
     limit: 10,
     snippetMaxChars: 200,
     sourceFilter: { sql: "", params: [] },
-    buildFtsQuery,
-    bm25RankToScore,
   });
 }
 
@@ -1424,7 +1421,7 @@ describe("memory-core doctor dreaming migration", () => {
 
       expect(result.warnings).toEqual([]);
       expect(result.changes).toEqual([
-        "Resolved Memory Core legacy memory index conflict for agent main by keeping canonical per-agent SQLite rows",
+        "Resolved Memory Core legacy memory index conflict for agent main by keeping existing per-agent SQLite rows",
         expect.stringContaining("Archived Memory Core legacy memory index sidecar"),
       ]);
       expect(readMemoryRows(agentPath)).toEqual({
@@ -1456,7 +1453,7 @@ describe("memory-core doctor dreaming migration", () => {
 
     expect(result.warnings).toEqual([
       expect.stringContaining(
-        "Skipped Memory Core legacy memory index import for agent main because legacy rows could not be imported: Error: legacy memory chunks_vec dimensions 3 do not match canonical memory chunks_vec dimensions 4",
+        "Skipped Memory Core legacy memory index import for agent main because legacy rows could not be imported: Error: legacy memory chunks_vec dimensions 3 do not match current memory chunks_vec dimensions 4",
       ),
     ]);
     expect(result.changes).toEqual([]);
@@ -1472,7 +1469,7 @@ describe("memory-core doctor dreaming migration", () => {
 
     expect(result.warnings).toEqual([]);
     expect(result.changes).toEqual([
-      "Resolved Memory Core legacy memory index conflict for agent main by keeping canonical per-agent SQLite rows",
+      "Resolved Memory Core legacy memory index conflict for agent main by keeping existing per-agent SQLite rows",
       expect.stringContaining("Archived Memory Core legacy memory index sidecar"),
     ]);
     await expect(fs.access(legacyPath)).rejects.toThrow();

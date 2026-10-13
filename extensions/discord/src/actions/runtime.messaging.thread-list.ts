@@ -50,10 +50,6 @@ export function readDiscordChannelType(value: unknown): number | undefined {
   return typeof type === "number" ? type : undefined;
 }
 
-export function isDiscordThreadChannel(value: unknown): boolean {
-  return isDiscordThreadChannelType(readDiscordChannelType(value));
-}
-
 export function filterDiscordActiveThreadList(params: {
   value: unknown;
   guildId: string;

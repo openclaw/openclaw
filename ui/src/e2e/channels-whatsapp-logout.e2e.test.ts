@@ -165,7 +165,7 @@ suite.define(() => {
         }
 
         await gateway.deferNext("config.set");
-        await detail.locator("wa-switch").first().click();
+        await detail.getByRole("switch", { name: "Enabled" }).click();
         await gateway.waitForRequest("config.set");
         await gateway.rejectDeferred("config.set", {
           code: "INVALID_REQUEST",
@@ -538,7 +538,7 @@ suite.define(() => {
         await expect
           .poll(() => detail.locator("h2.settings-section__heading").textContent())
           .toContain(label);
-        await detail.getByRole("button", { name: "Probe" }).waitFor();
+        await detail.getByRole("button", { name: "Check connection" }).waitFor();
         for (const value of expectedFields[channelId] ?? []) {
           await detail.getByText(value, { exact: true }).waitFor();
         }

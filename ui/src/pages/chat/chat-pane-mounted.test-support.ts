@@ -49,6 +49,9 @@ export function createMountedPanes(
         entry.key === (params?.sessionKey ?? params?.key) &&
         (!params?.agentId || entry.agentId === params.agentId),
     );
+    if (method === "users.list") {
+      return { profiles: [] };
+    }
     if (method === "models.list") {
       return { models: [] };
     }

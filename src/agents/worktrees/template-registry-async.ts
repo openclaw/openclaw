@@ -1,3 +1,4 @@
+import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "../../infra/sqlite-worker-operation-settlement.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
@@ -16,6 +17,7 @@ async function runTemplateCommand<Key extends TemplateOperation>(
 ): Promise<OpenClawStateWorkerOperations[Key]["output"]> {
   const context = captureOpenClawStateWorkerContext({ env });
   let settled: Promise<SqliteWorkerOperationSettlement> | undefined;
+  let outcome: { value: OpenClawStateWorkerOperations[Key]["output"] } | { error: unknown };
   try {
     const { runOpenClawStateWorkerOperation } =
       await import("../../state/openclaw-state-worker-store.js");
@@ -39,11 +41,30 @@ async function runTemplateCommand<Key extends TemplateOperation>(
     );
     context.admission.assertCurrent();
     commitGuard?.();
-    return result;
-  } finally {
-    // Keep filesystem cleanup behind the accepted write's native settlement.
-    await settled;
+    outcome = { value: result };
+  } catch (error) {
+    outcome = { error };
   }
+  // Result delivery can succeed even when the worker cannot confirm native cleanup.
+  const settlement = await settled;
+  if (settlement?.kind === "unknown") {
+    const error = new SqliteWorkerError(
+      "Worktree template native state outcome is unknown",
+      "outcome-unknown",
+    );
+    error.cause =
+      "error" in outcome
+        ? new AggregateError(
+            [outcome.error, settlement.error],
+            "Template result delivery and native settlement failed",
+          )
+        : settlement.error;
+    throw error;
+  }
+  if ("error" in outcome) {
+    throw outcome.error;
+  }
+  return outcome.value;
 }
 
 export function readTemplateAsync(
@@ -105,19 +126,6 @@ export function markTemplateReadyAsync(
   );
 }
 
-export function touchTemplateAsync(
-  env: NodeJS.ProcessEnv,
-  id: string,
-  now: number,
-  commitGuard: () => void,
-): Promise<boolean> {
-  return runTemplateCommand(
-    env,
-    { type: "worktrees.templates.touch", input: { id, now } },
-    commitGuard,
-  );
-}
-
 export function deleteTemplateAsync(
   env: NodeJS.ProcessEnv,
   id: string,
@@ -126,6 +134,38 @@ export function deleteTemplateAsync(
   return runTemplateCommand(
     env,
     { type: "worktrees.templates.delete", input: { id } },
+    commitGuard,
+  );
+}
+
+export function retainTemplateReaderAsync(
+  env: NodeJS.ProcessEnv,
+  input: OpenClawStateWorkerOperations["worktrees.templates.retainReader"]["input"],
+  commitGuard: () => void,
+): Promise<WorktreeTemplateRecord | undefined> {
+  return runTemplateCommand(env, { type: "worktrees.templates.retainReader", input }, commitGuard);
+}
+
+export function releaseTemplateReaderAsync(
+  env: NodeJS.ProcessEnv,
+  key: string,
+  commitGuard: () => void,
+): Promise<void> {
+  return runTemplateCommand(
+    env,
+    { type: "worktrees.templates.releaseReader", input: { key } },
+    commitGuard,
+  );
+}
+
+export function hasTemplateReadersAsync(
+  env: NodeJS.ProcessEnv,
+  id: string,
+  commitGuard: () => void,
+): Promise<boolean> {
+  return runTemplateCommand(
+    env,
+    { type: "worktrees.templates.hasReaders", input: { id } },
     commitGuard,
   );
 }

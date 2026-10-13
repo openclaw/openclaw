@@ -1,17 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
-import { performance } from "node:perf_hooks";
 import { isMainThread } from "node:worker_threads";
 import { expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import { withExistingOpenClawStateSchema } from "../state/openclaw-state-db-schema-policy.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import type { OpenClawStateReadReply } from "../state/openclaw-state-read.types.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import { configureNodeHost, loadNodeHostConfig } from "./config.js";
@@ -40,14 +37,12 @@ function seed(env: NodeJS.ProcessEnv) {
   });
 }
 
-async function withoutParentSql(operation: () => Promise<void>): Promise<number> {
+async function withoutParentSql(operation: () => Promise<void>): Promise<void> {
   requireNodeSqlite();
   const sql = observeMainThreadSql();
   try {
     await operation();
-    const count = sql.count();
-    expect(count).toBe(0);
-    return count;
+    expect(sql.count()).toBe(0);
   } finally {
     vi.restoreAllMocks();
   }
@@ -63,14 +58,8 @@ it.each(["cached", "fresh"] as const)(
     if (mode === "fresh") {
       await closeOpenClawStateDatabaseAsync();
     }
-    const startedAt = performance.now();
-    const parentSqlCalls = await withoutParentSql(async () => {
+    await withoutParentSql(async () => {
       expect(await loadNodeHostConfig(env)).toEqual(expected);
-    });
-    console.info("node-host configuration read", {
-      mode,
-      parentSqlCalls,
-      elapsedMs: Math.round(performance.now() - startedAt),
     });
     expect(source.db.isOpen).toBe(mode === "cached");
   },
@@ -93,6 +82,9 @@ it.each(["fresh", "cached"] as const)(
       await withoutParentSql(async () => {
         expect(await loadNodeHostConfig(env)).toEqual(expected);
       });
+      await closeOpenClawStateDatabaseAsync();
+      fs.renameSync(databasePath, `${databasePath}.template`);
+      fs.copyFileSync(`${databasePath}.template`, databasePath, fs.constants.COPYFILE_EXCL);
       const external = new DatabaseSync(databasePath);
       try {
         external.exec("DROP INDEX idx_plugin_state_listing");
@@ -120,11 +112,21 @@ it.each(["fresh", "cached"] as const)(
   },
 );
 
-it("leaves absent node-host configuration stores uncreated", async () => {
-  const { env, databasePath } = fixture();
-  expect(await loadNodeHostConfig(env)).toBeNull();
-  expect(fs.existsSync(databasePath)).toBe(false);
-});
+it.each([false, true])(
+  "reads an absent store only after the legacy gate (legacy=%s)",
+  async (legacy) => {
+    const { env, root, databasePath } = fixture();
+    const execute = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+    if (legacy) {
+      fs.writeFileSync(path.join(root, "node.json"), "{}\n");
+      await expect(loadNodeHostConfig(env)).rejects.toThrow("openclaw doctor --fix");
+      expect(execute).not.toHaveBeenCalled();
+    } else {
+      expect(await loadNodeHostConfig(env)).toBeNull();
+    }
+    expect(fs.existsSync(databasePath)).toBe(false);
+  },
+);
 
 it("joins admitted node-host configuration reads before their disposable scope exits", async () => {
   const { env, databasePath } = fixture();
@@ -166,44 +168,26 @@ it.each([
   expect(failure).toMatchObject({ message: expect.stringMatching(row.message) });
 });
 
-it("refuses retired node-host files before admitting a read", async () => {
-  const { env, root } = fixture();
-  fs.writeFileSync(path.join(root, "node.json"), "{}\n");
-  const execute = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
-  await expect(loadNodeHostConfig(env)).rejects.toThrow("openclaw doctor --fix");
-  expect(execute).not.toHaveBeenCalled();
-});
-
-it.each([true, false])(
-  "retains the selected state root while reading (original marker=%s)",
-  async (markerAtOriginal) => {
-    const original = fixture();
-    const other = fixture();
-    const env = { ...original.env };
-    const reply = createDeferredCore<OpenClawStateReadReply>();
-    const execute = vi
-      .spyOn(stateReads, "executeExistingOpenClawStateRead")
-      .mockReturnValue(reply.promise);
-    const result = loadNodeHostConfig(env);
-    env.OPENCLAW_STATE_DIR = other.root;
-    fs.writeFileSync(path.join(markerAtOriginal ? original.root : other.root, "node.json"), "{}\n");
-    reply.resolve({
-      ok: true,
-      type: "nodeHost.config",
-      sourceAdmitted: true,
-      row: {
-        // The original-root legacy gate must run before decoding the returned row.
-        value_json: markerAtOriginal ? "{" : '{"version":1,"nodeId":"original-node"}',
-        updated_at_ms: 1,
-      },
+it("configures without host SQL and refreshes previously read configuration", async () => {
+  const { env } = fixture();
+  const initial = await seed(env);
+  expect(await loadNodeHostConfig(env)).toEqual(initial);
+  await withoutParentSql(async () => {
+    const configured = await configureNodeHost({
+      env,
+      displayName: "Updated Node",
+      fallbackDisplayName: "fallback",
+      gateway: { host: "new.gateway.example", port: 19443, tls: true },
+      commands: ["fixture.updated"],
+      nowMs: 5678,
     });
-    if (markerAtOriginal) {
-      await expect(result).rejects.toThrow(
-        `retired node-host state remains at ${path.join(original.root, "node.json")}`,
-      );
-    } else {
-      await expect(result).resolves.toMatchObject({ nodeId: "original-node" });
-    }
-    expect(execute.mock.calls[0]?.[0].env?.OPENCLAW_STATE_DIR).toBe(original.root);
-  },
-);
+    expect(configured).toMatchObject({
+      nodeId: initial.nodeId,
+      displayName: "Updated Node",
+      commands: ["fixture.updated"],
+      installedAppsSharing: true,
+      gateway: { host: "new.gateway.example", port: 19443, tls: true },
+    });
+    expect(await loadNodeHostConfig(env)).toEqual(configured);
+  });
+});

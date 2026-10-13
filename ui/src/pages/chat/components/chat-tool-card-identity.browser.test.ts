@@ -2,6 +2,7 @@ import { html, nothing, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
 import { prepareChatMessageRender } from "./chat-message-markdown.ts";
+import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 
 const containers: HTMLElement[] = [];
 afterEach(() => {
@@ -67,6 +68,7 @@ function fixture(mode: "inline" | "standalone") {
 }
 
 async function settleTabs(container: HTMLElement) {
+  await settleToolBridges(container);
   await Promise.all(
     ["wa-tab-group", "wa-tab", "wa-tab-panel"].map((tag) => customElements.whenDefined(tag)),
   );
@@ -122,10 +124,12 @@ describe
     const disclosureKey =
       mode === "inline" ? `${rows[0]!.key}:toolcard:0` : `toolmsg:${rows[0]!.key}`;
     bubbles[0]!.querySelector<HTMLButtonElement>(toggleSelector)!.click();
+    await settleTabs(container);
     expect(toggledKeys).toEqual([disclosureKey]);
     expect(bubbles[0]!.querySelector("wa-tab-group")).toBeNull();
     expect(bubbles[1]!.querySelector("wa-tab-group")).not.toBeNull();
     bubbles[0]!.querySelector<HTMLButtonElement>(toggleSelector)!.click();
+    await settleTabs(container);
     expect(toggledKeys).toEqual([disclosureKey, disclosureKey]);
     await settleTabs(container);
 

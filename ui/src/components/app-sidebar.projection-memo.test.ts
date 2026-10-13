@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 
 import { beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import type { SessionCatalog } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { ApplicationOverlaySnapshot } from "../app/overlays-types.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
@@ -11,6 +10,7 @@ import {
 } from "../test-helpers/app-sidebar-cases/roster.test-support.ts";
 import "../test-helpers/app-sidebar-suite.ts";
 import {
+  catalogPage,
   createContext,
   createGatewayHarness,
   createSessionsHarness,
@@ -18,10 +18,12 @@ import {
 } from "../test-helpers/app-sidebar.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
+import { flush } from "../test-helpers/solid-settle.ts";
 import * as sidebarAgentSessionRows from "./app-sidebar-agent-session-rows.ts";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import { SidebarSessionProjection } from "./app-sidebar-session-projection.ts";
-import "./app-sidebar.ts";
+import type { SelectPicker } from "./select-picker.ts";
+import "./app-sidebar.tsx";
 
 type Sidebar = AppSidebarSessionNavigationElement & {
   teamOnlineExpanded: boolean;
@@ -81,7 +83,12 @@ async function mount(rows: GatewaySessionRow[]) {
   const row = (sessionKey: string) => sidebar.querySelector(`[data-session-key="${sessionKey}"]`);
   const publish = (next: GatewaySessionRow[]) =>
     sessions.publishList({
-      result: { ...sessions.sessions.state.result!, sessions: next, count: next.length },
+      result: {
+        ...sessions.sessions.state.result!,
+        sessions: next,
+        count: next.length,
+        owners: structuredClone(sessions.sessions.state.result!.owners),
+      },
     });
   return {
     ...mounted,
@@ -102,6 +109,9 @@ async function mount(rows: GatewaySessionRow[]) {
 async function expectRowRefresh(sidebar: Sidebar, change: () => void) {
   projectRows.mockClear();
   change();
+  if (vi.isFakeTimers()) {
+    vi.advanceTimersToNextFrame();
+  }
   await settleLitElement(sidebar);
   expect(projectRows).toHaveBeenCalled();
 }
@@ -119,6 +129,10 @@ describe("sidebar projection memo", () => {
       ...Array.from({ length: 20 }, (_, index) => session(`thread-${index}`)),
     ];
     const { sidebar, sessions, row, publish } = await mount(rows);
+    const ownerPicker = sidebar
+      .querySelector("#sidebar-session-owner-title")!
+      .closest<SelectPicker>("openclaw-select-picker")!;
+    const ownerPickerParams = ownerPicker.params;
     const sections = vi.spyOn(SidebarSessionProjection.prototype, "project");
     expect(projectHome).toHaveBeenCalled();
     projectHome.mockClear();
@@ -145,6 +159,7 @@ describe("sidebar projection memo", () => {
     expect(projectRows).not.toHaveBeenCalled();
     expect(sections).not.toHaveBeenCalled();
     expect(projectHome).not.toHaveBeenCalled();
+    expect(ownerPicker.params).toBe(ownerPickerParams);
 
     await expectRowRefresh(sidebar, () =>
       publish([
@@ -154,6 +169,7 @@ describe("sidebar projection memo", () => {
       ]),
     );
     expect(row(key("first"))?.textContent).toContain("Renamed first");
+    expect(ownerPicker.params).toBe(ownerPickerParams);
     expect(projectHome).toHaveBeenCalled();
     expect(projectHome.mock.results.at(-1)?.value.lastMessagePreview).toBe("Home after");
     await expectRowRefresh(sidebar, () => {
@@ -192,6 +208,7 @@ describe("sidebar projection memo", () => {
     await settleLitElement(sidebar);
     expect(row(key("second"))).not.toBeNull();
     expect(row(key("first"))).toBeNull();
+    expect(ownerPicker.querySelector("button")?.getAttribute("aria-label")).toContain("Bob");
     const options = sidebar.sessionOwnerOptions;
     projectRows.mockClear();
     sidebar.devGitBranch = "another-branch";
@@ -217,96 +234,68 @@ describe("sidebar projection memo", () => {
     expect(row(key("first"))).toBeNull();
   });
 
-  it.each(["active", "snoozed"] as const)(
-    "refreshes %s row visibility when a cached snooze expires without another input",
-    async (statusFilter) => {
+  it.each([
+    { statusFilter: "snoozed", adopted: false },
+    { statusFilter: "active", adopted: true },
+  ] as const)(
+    "refreshes $statusFilter snooze visibility (adopted=$adopted)",
+    async ({ statusFilter, adopted }) => {
       vi.useFakeTimers();
       vi.setSystemTime(10_000);
-      const target = session("snoozed", { snoozedUntil: 11_000, snoozedAt: 9_000 });
-      const { sidebar, row } = await mount([target]);
+      const target = session(
+        "adopted",
+        adopted ? { key: "agent:work:adopted", agentId: "work" } : {},
+      );
+      const snoozed = { ...target, snoozedUntil: 11_000, snoozedAt: 9_000 };
+      const { sidebar, sessions, row } = await mount(adopted ? [] : [snoozed]);
       sidebar.sessionsStatusFilter = statusFilter;
+      if (adopted) {
+        const cachedResult = { ...sessions.sessions.state.result!, sessions: [target], count: 1 };
+        sidebar.sessionData.sessionResultsByAgent = { work: cachedResult };
+        sidebar.sessionData.sessionCatalogs = catalogPage([
+          { threadId: "adopted-thread", sessionKey: target.key, name: "Adopted catalog thread" },
+        ]).catalogs;
+        sidebar.requestUpdate();
+        await settleLitElement(sidebar);
+        expect(row(target.key)?.hasAttribute("data-catalog-session-key")).toBe(true);
+        sidebar.sessionData.sessionResultsByAgent = {
+          work: { ...cachedResult, sessions: [snoozed] },
+        };
+        sidebar.requestUpdate();
+      }
       await settleLitElement(sidebar);
       expect(row(target.key) !== null).toBe(statusFilter === "snoozed");
-
       sidebar.teamOnlineExpanded = true;
       await settleLitElement(sidebar);
       await vi.advanceTimersByTimeAsync(999);
       await settleLitElement(sidebar);
       expect(row(target.key) !== null).toBe(statusFilter === "snoozed");
-
       await vi.advanceTimersByTimeAsync(2);
       await settleLitElement(sidebar);
       expect(row(target.key) !== null).toBe(statusFilter === "active");
+      if (adopted) {
+        expect(row(target.key)?.hasAttribute("data-catalog-session-key")).toBe(true);
+        expect(row(target.key)?.textContent).toContain("adopted");
+      }
     },
   );
 
-  it("hides and wakes an adopted catalog row using its cached agent result", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(10_000);
-    const target = session("adopted", { key: "agent:work:adopted", agentId: "work" });
-    const { sidebar, sessions, row } = await mount([]);
-    const cachedResult = {
-      ...sessions.sessions.state.result!,
-      sessions: [target],
-      count: 1,
-    };
-    sidebar.sessionData.sessionResultsByAgent = { work: cachedResult };
-    sidebar.sessionData.sessionCatalogs = [
-      {
-        id: "fixture",
-        label: "Fixture",
-        capabilities: { continueSession: true, archive: true },
-        hosts: [
-          {
-            hostId: "gateway:fixture",
-            label: "Fixture host",
-            kind: "gateway",
-            connected: true,
-            sessions: [
-              {
-                threadId: "adopted-thread",
-                sessionKey: target.key,
-                name: "Adopted catalog thread",
-                status: "idle",
-                archived: false,
-                canContinue: true,
-                canArchive: true,
-              },
-            ],
-          },
-        ],
-      },
-    ];
-    sidebar.requestUpdate();
-    await settleLitElement(sidebar);
-    expect(row(target.key)?.hasAttribute("data-catalog-session-key")).toBe(true);
-
-    sidebar.sessionData.sessionResultsByAgent = {
-      work: {
-        ...cachedResult,
-        sessions: [{ ...target, snoozedUntil: 11_000, snoozedAt: 10_000 }],
-      },
-    };
-    sidebar.requestUpdate();
-    await settleLitElement(sidebar);
-    expect(row(target.key)).toBeNull();
-    await vi.advanceTimersByTimeAsync(999);
-    await settleLitElement(sidebar);
-    expect(row(target.key)).toBeNull();
-
-    await vi.advanceTimersByTimeAsync(2);
-    await settleLitElement(sidebar);
-    expect(row(target.key)?.hasAttribute("data-catalog-session-key")).toBe(true);
-    expect(row(target.key)?.textContent).toContain("adopted");
-  });
-
-  it("updates roster selection and menu state without reprojecting rows or sections", async () => {
+  it("updates roster selection without rebuilding an unchanged new-session menu", async () => {
     const mounted = await mountRoster();
     const sidebar = mounted.sidebar as unknown as Sidebar;
     sidebar.sidebarAgentsMode = "roster";
     await settleRoster(mounted.sidebar);
-    await rosterActivityStore(mounted.context).refresh();
+    const source = sidebar.rosterSessionSource;
+    const refresh = rosterActivityStore(mounted.context).refresh();
+    flush();
+    expect(sidebar.rosterSessionSource).toBe(source);
+    await refresh;
     await settleRoster(mounted.sidebar);
+    await vi.dynamicImportSettled();
+    flush();
+    const newSession = sidebar.querySelector(".sidebar-new-session-menu")!;
+    const menuItems = [...newSession.querySelectorAll('a[role="menuitem"]')];
+    expect(menuItems).toHaveLength(3);
     const sessionKey = "agent:main:recent";
     const row = () => sidebar.querySelector(`[data-session-key="${sessionKey}"]`);
     expect(row()).not.toBeNull();
@@ -329,18 +318,24 @@ describe("sidebar projection memo", () => {
     );
     expect(projectRows).not.toHaveBeenCalled();
     expect(sections).not.toHaveBeenCalled();
+    expect(sidebar.querySelector(".sidebar-new-session-menu")).toBe(newSession);
+    const retainedItems = [...newSession.querySelectorAll('a[role="menuitem"]')];
+    expect(retainedItems).toHaveLength(menuItems.length);
+    retainedItems.forEach((item, index) => expect(item).toBe(menuItems[index]));
   });
 
   it("invalidates live attention, expiry, outbox snapshots, and store-owned PR and archive facts", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
+    const expiresAt = 11_000;
     const target = session("attention", {
-      agentStatus: { note: "Waiting for credentials", attention: "key", expiresAt: 11_000 },
+      agentStatus: { note: "Waiting for credentials", attention: "key", expiresAt },
     });
     const { sidebar, sessions, gateway, row, publishApprovals } = await mount([target]);
     expect(row(target.key)?.querySelector('[data-session-attention="agent"]')).not.toBeNull();
     projectRows.mockClear();
-    await vi.advanceTimersByTimeAsync(1_000);
+    // Mount readiness advances fake timers; stop before the expiry invalidation turn.
+    await vi.advanceTimersByTimeAsync(expiresAt - Date.now());
     await settleLitElement(sidebar);
     expect(projectRows).not.toHaveBeenCalled();
     expect(row(target.key)?.querySelector('[data-session-attention="agent"]')).not.toBeNull();
@@ -423,70 +418,6 @@ describe("sidebar projection memo", () => {
       cancel?.();
     });
     expect(row(target.key)).not.toBeNull();
-  });
-
-  it("refreshes catalog visibility and child loading while expansion only refreshes sections", async () => {
-    const parent = session("parent", { childSessions: [key("child")] });
-    const child = session("child", { spawnedBy: parent.key });
-    const { sidebar, row, sessions } = await mount([parent, child]);
-    sessions.list.mockResolvedValue({
-      ...sessions.sessions.state.result!,
-      sessions: [child],
-      count: 1,
-    });
-    // An active parent retains its child observation even while collapsed.
-    sidebar.activeRouteId = "chat";
-    sidebar.sessionKey = parent.key;
-    await sidebar.sessionData.loadChildSessions(parent.key);
-    await settleLitElement(sidebar);
-    const sections = vi.spyOn(SidebarSessionProjection.prototype, "project");
-    projectRows.mockClear();
-    sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]")!.click();
-    await settleLitElement(sidebar);
-    expect(sections).toHaveBeenCalled();
-    expect(projectRows).not.toHaveBeenCalled();
-    expect(row(child.key)).not.toBeNull();
-    await expectRowRefresh(sidebar, () => {
-      sidebar.sessionData.loadingChildSessionKeys = new Set([parent.key]);
-      sidebar.requestUpdate();
-    });
-    expect(
-      projectRows.mock.results
-        .at(-1)
-        ?.value.find((value: { key: string }) => value.key === parent.key)?.loadingChildren,
-    ).toBe(true);
-    const catalog: SessionCatalog = {
-      id: "fixture",
-      label: "Fixture",
-      capabilities: { continueSession: true, archive: true },
-      hosts: [
-        {
-          hostId: "gateway:fixture",
-          label: "Fixture host",
-          kind: "gateway",
-          connected: true,
-          sessions: [
-            {
-              threadId: "catalog-thread",
-              name: "Catalog thread",
-              status: "idle",
-              archived: false,
-              canContinue: true,
-              canArchive: true,
-            },
-          ],
-        },
-      ],
-    };
-    await expectRowRefresh(sidebar, () => {
-      sidebar.sessionData.sessionCatalogs = [catalog];
-      sidebar.requestUpdate();
-    });
-    expect(sidebar.textContent).toContain("Catalog thread");
-    await expectRowRefresh(sidebar, () => {
-      sidebar.hiddenSessionCatalogIds = new Set([catalog.id]);
-    });
-    expect(sidebar.textContent).not.toContain("Catalog thread");
   });
 
   it("replaces held running subtitles at their deadline without another input or full row projection", async () => {

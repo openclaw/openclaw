@@ -206,7 +206,7 @@ export function createClackPrompter(
             : params.navigation
               ? selectWithNavigationFooter
               : select;
-          return await prompt({
+          return await prompt<(typeof params.options)[number]["value"]>({
             message,
             options,
             initialValue: params.initialValue,

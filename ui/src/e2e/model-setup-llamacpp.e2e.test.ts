@@ -178,18 +178,13 @@ suite.define(() => {
             page.getByText("Runs on Gateway host gateway-host", { exact: false }).textContent(),
           )
           .toContain("using Apple Metal");
-        await page.locator("openclaw-modal-dialog wa-dialog").evaluate(async (dialog) => {
-          // Visible slotted text can precede the native dialog's opening animation.
-          if (dialog.shadowRoot?.querySelector("dialog")?.classList.contains("show")) {
-            await new Promise<void>((resolve) => {
-              dialog.addEventListener("wa-after-show", () => resolve(), { once: true });
-            });
-          }
+        await page.locator("openclaw-modal-dialog > dialog").evaluate(async (dialog) => {
+          await Promise.all(dialog.getAnimations().map((animation) => animation.finished));
         });
         await expect
           .poll(() =>
-            page.locator("openclaw-modal-dialog wa-dialog dialog[open]").evaluate((dialog) => ({
-              opening: dialog.classList.contains("show"),
+            page.locator("openclaw-modal-dialog > dialog[open]").evaluate((dialog) => ({
+              opening: dialog.getAttribute("data-phase") === "opening",
               opacity: getComputedStyle(dialog).opacity,
               visibility: getComputedStyle(dialog).visibility,
             })),

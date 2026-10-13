@@ -1,6 +1,9 @@
 // Runtime-only rendering and config fallback for `openclaw channels status`.
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
@@ -104,21 +107,11 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
         }
       }
       appendModeBit(bits, account);
-      const botUsername = (() => {
-        const bot = account.bot as { username?: string | null } | undefined;
-        const probeBot = (account.probe as { bot?: { username?: string | null } } | undefined)?.bot;
-        const raw = bot?.username ?? probeBot?.username ?? "";
-        if (typeof raw !== "string") {
-          return "";
-        }
-        const trimmed = raw.trim();
-        if (!trimmed) {
-          return "";
-        }
-        return trimmed.startsWith("@") ? trimmed : `@${trimmed}`;
-      })();
+      const bot = account.bot as { username?: string | null } | undefined;
+      const probeBot = (account.probe as { bot?: { username?: string | null } } | undefined)?.bot;
+      const botUsername = normalizeOptionalString(bot?.username ?? probeBot?.username);
       if (botUsername) {
-        bits.push(`bot:${botUsername}`);
+        bits.push(`bot:${botUsername.startsWith("@") ? botUsername : `@${botUsername}`}`);
       }
       if (typeof account.dmPolicy === "string" && account.dmPolicy.length > 0) {
         bits.push(`dm:${account.dmPolicy}`);
@@ -150,7 +143,7 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
       appendBaseUrlBit(bits, account);
       const probe = account.probe as { ok?: boolean } | undefined;
       if (probe && typeof probe.ok === "boolean") {
-        bits.push(probe.ok ? "works" : "probe failed");
+        bits.push(probe.ok ? "works" : "check failed");
       }
       const audit = account.audit as { ok?: boolean } | undefined;
       if (audit && typeof audit.ok === "boolean") {
@@ -187,7 +180,7 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
     lines.push("");
   }
   lines.push(
-    `Tip: ${formatDocsLink("/cli/status", "status --deep")} adds gateway health probes to status output (requires a reachable gateway).`,
+    `Tip: ${formatDocsLink("/cli/status", "status --deep")} adds gateway health checks to status output (requires a reachable gateway).`,
   );
   return lines;
 }

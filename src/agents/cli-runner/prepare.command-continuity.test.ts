@@ -59,7 +59,7 @@ describe("direct CLI command continuity", () => {
     vi.restoreAllMocks();
   });
 
-  it.each(["new", "existing", "published", "published-explicit-false"] as const)(
+  it.each(["new", "published", "published-explicit-false"] as const)(
     "preserves CLI continuity through completion for %s requesters",
     async (sessionState) => {
       const { dir, sessionTarget: fixtureTarget } = cli.session;

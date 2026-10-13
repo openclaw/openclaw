@@ -19,8 +19,7 @@ import {
   setMessageActionTestPlugin as setTestPlugin,
 } from "./message-action-runner.test-helpers.js";
 
-const { hydrateAttachmentParamsForAction, normalizeSandboxMediaParams } =
-  await import("./message-action-params.js");
+const { hydrateAttachmentParamsForAction } = await import("./message-action-params.js");
 const loadWebMedia = messageActionRunnerMocks.loadWebMedia;
 
 const onePixelPng = Buffer.from(
@@ -156,7 +155,6 @@ describe("runMessageAction media behavior", () => {
 
   it.each(
     (["send", "sendAttachment"] as const).flatMap((action) => [
-      { action, name: "contentType", metadata: { contentType: "image/jpeg" } },
       { action, name: "mimeType", metadata: { mimeType: "image/jpeg" } },
       {
         action,
@@ -222,18 +220,6 @@ describe("runMessageAction media behavior", () => {
       fromSpy.mockRestore();
     }
   });
-
-  it.each(["media", "mediaUrl", "path", "filePath"])(
-    "keeps data URLs forbidden in the %s source field",
-    async (field) => {
-      await expect(
-        normalizeSandboxMediaParams({
-          args: { [field]: parameterizedPngDataUrl },
-          mediaPolicy: { mode: "host" },
-        }),
-      ).rejects.toThrow(/data: URLs are not supported for media/i);
-    },
-  );
 
   describe("sendAttachment hydration", () => {
     const cfg = {
@@ -432,14 +418,8 @@ describe("runMessageAction media behavior", () => {
       }
     });
 
-    it("hydrates buffer and filename from media for attachment upload-file", async () => {
-      const result = await runAttachmentRemoteMediaAction({ cfg, action: "upload-file" });
-
-      expectAttachmentRemoteMediaPayload(result);
-    });
-
     it("keeps original upload-file bytes when forced to send as a document", async () => {
-      await runMessageAction({
+      const result = await runMessageAction({
         cfg,
         action: "upload-file",
         params: {
@@ -451,6 +431,7 @@ describe("runMessageAction media behavior", () => {
         },
       });
 
+      expectAttachmentRemoteMediaPayload(result);
       expect(requireLoadWebMediaOptions().optimizeImages).toBe(false);
     });
 

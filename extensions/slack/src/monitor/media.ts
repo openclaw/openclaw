@@ -46,10 +46,8 @@ function isSlackHostname(hostname: string, govSlack: boolean): boolean {
 }
 
 function assertSlackFileUrl(rawUrl: string, govSlack: boolean): URL {
-  let parsed: URL;
-  try {
-    parsed = new URL(rawUrl);
-  } catch {
+  const parsed = URL.parse(rawUrl);
+  if (!parsed) {
     throw new Error(`Invalid Slack file URL: ${rawUrl}`);
   }
   if (parsed.protocol !== "https:") {
@@ -304,10 +302,6 @@ function resolveForwardedAttachmentImageUrl(
   }
 }
 
-/**
- * Downloads all files attached to a Slack message and returns them as an array.
- * Returns `null` when no files could be downloaded.
- */
 export async function resolveSlackMedia(params: {
   files?: SlackFile[];
   client?: SlackWebClient;
@@ -376,7 +370,6 @@ export async function resolveSlackMedia(params: {
   return resolved.length > 0 ? resolved : null;
 }
 
-/** Extracts text and media from forwarded-message attachments. Returns null when empty. */
 export async function resolveSlackAttachmentContent(params: {
   files?: SlackFile[];
   attachments?: SlackAttachment[];
@@ -405,41 +398,35 @@ export async function resolveSlackAttachmentContent(params: {
     return null;
   }
 
-  const fileIds = new Set<string>();
+  const fileGroups = new Map<string, SlackFile[]>();
   const allFiles = candidates
     .filter((file) => {
       const fileId = normalizeOptionalString(file.id);
       if (!fileId) {
         return true;
       }
-      if (fileIds.has(fileId)) {
+      const group = fileGroups.get(fileId);
+      if (group) {
+        group.push(file);
         return false;
       }
-      fileIds.add(fileId);
+      fileGroups.set(fileId, [file]);
       return true;
     })
     .map((file, index) => {
       if (index >= MAX_SLACK_MEDIA_FILES) {
         return file;
       }
-      const fileId = normalizeOptionalString(file.id);
-      const preloaded =
-        fileId &&
-        candidates.find(
-          (candidate) =>
-            normalizeOptionalString(candidate.id) === fileId &&
-            params.preloadedMedia?.has(candidate),
-        );
+      const group = fileGroups.get(normalizeOptionalString(file.id) ?? "");
+      const preloaded = group?.find((candidate) => params.preloadedMedia?.has(candidate));
       if (preloaded) {
         return preloaded;
       }
-      if (!fileId || file.url_private_download || file.url_private) {
+      if (!group || file.url_private_download || file.url_private) {
         return file;
       }
-      const downloadable = candidates.find(
-        (candidate) =>
-          normalizeOptionalString(candidate.id) === fileId &&
-          (candidate.url_private_download || candidate.url_private),
+      const downloadable = group.find(
+        (candidate) => candidate.url_private_download || candidate.url_private,
       );
       return downloadable ? Object.assign({}, file, downloadable) : file;
     });

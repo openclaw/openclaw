@@ -3,70 +3,43 @@ import { resolveIsolatedVitestBuild } from "../../scripts/lib/vitest-isolated-bu
 
 describe("isolated Vitest build selection", () => {
   it.each([
-    "src/plugins/setup-registry.migrations.test.ts",
-    "src/plugins/source-checkout-runtime.test.ts",
-  ])("prepares the runtime for the selected cold consumer %s", (file) => {
-    expect(
-      resolveIsolatedVitestBuild(
-        ["run", "--config", "test/vitest/vitest.unit-fast.config.ts", file],
-        {},
-      ),
-    ).toEqual({ profile: "qaRuntime", privateQa: false });
-  });
-
-  it("keeps source-only selections free of a runtime build", () => {
-    expect(
-      resolveIsolatedVitestBuild(
-        ["run", "--config", "test/vitest/vitest.unit-fast.config.ts", "src/polls.test.ts"],
-        {},
-      ),
-    ).toBeUndefined();
-  });
-
-  it("retains the stronger private-QA prerequisite in the default root", () => {
-    expect(
-      resolveIsolatedVitestBuild(
-        ["run", "src/channels/plugins/contracts/plugin-shape.contract.test.ts"],
-        {},
-      ),
-    ).toEqual({ profile: "qaRuntime", privateQa: true });
-  });
-
-  it("retains UI artifact preparation for browser selections", () => {
-    expect(
-      resolveIsolatedVitestBuild(
-        [
-          "run",
-          "--config",
-          "test/vitest/vitest.ui-e2e.config.ts",
-          "ui/src/e2e/command-palette-catalog.real-gateway.e2e.test.ts",
-        ],
-        {},
-      ),
-    ).toEqual({ profile: "ciArtifacts", privateQa: true });
-  });
-
-  it("prepares the complete ordinary E2E runtime before global setup", () => {
-    expect(
-      resolveIsolatedVitestBuild(
-        [
-          "run",
-          "--config",
-          "test/vitest/vitest.e2e.config.ts",
-          "test/e2e/qa-lab/runtime/node-worker-launch-wire.e2e.test.ts",
-          "test/e2e/qa-lab/runtime/skill-library-worker-wire.e2e.test.ts",
-        ],
-        {},
-      ),
-    ).toEqual({ profile: "qaRuntime", privateQa: true, declarations: true });
-  });
-
-  it("leaves custom config prerequisite ownership unchanged", () => {
-    expect(
-      resolveIsolatedVitestBuild(
-        ["run", "--config", "test/custom.config.ts", "src/plugins/source-checkout-runtime.test.ts"],
-        {},
-      ),
-    ).toBeUndefined();
+    ...[
+      "src/plugins/setup-registry.migrations.test.ts",
+      "src/plugins/source-checkout-runtime.test.ts",
+    ].map((file) => ({
+      args: ["--config", "test/vitest/vitest.unit-fast.config.ts", file],
+      expected: { profile: "qaRuntime", privateQa: false },
+    })),
+    {
+      args: ["--config", "test/vitest/vitest.unit-fast.config.ts", "src/polls.test.ts"],
+      expected: undefined,
+    },
+    {
+      args: ["src/channels/plugins/contracts/plugin-shape.contract.test.ts"],
+      expected: { profile: "qaRuntime", privateQa: true },
+    },
+    {
+      args: [
+        "--config",
+        "test/vitest/vitest.ui-e2e.config.ts",
+        "ui/src/e2e/command-palette-catalog.real-gateway.e2e.test.ts",
+      ],
+      expected: { profile: "ciArtifacts", privateQa: true },
+    },
+    {
+      args: [
+        "--config",
+        "test/vitest/vitest.e2e.config.ts",
+        "test/e2e/qa-lab/runtime/node-worker-launch-wire.e2e.test.ts",
+        "test/e2e/qa-lab/runtime/skill-library-worker-wire.e2e.test.ts",
+      ],
+      expected: { profile: "qaRuntime", privateQa: true, declarations: true },
+    },
+    {
+      args: ["--config", "test/custom.config.ts", "src/plugins/source-checkout-runtime.test.ts"],
+      expected: undefined,
+    },
+  ])("selects prerequisites for $args", ({ args, expected }) => {
+    expect(resolveIsolatedVitestBuild(["run", ...args], {})).toEqual(expected);
   });
 });

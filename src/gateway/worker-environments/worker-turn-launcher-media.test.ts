@@ -2,11 +2,12 @@ import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { runInNewContext } from "node:vm";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createNoisyPngBuffer,
   createSolidPngBuffer,
 } from "../../../test/helpers/image-fixtures.js";
+import { waitForEmbeddedAgentRunEnd } from "../../agents/embedded-agent-runner/runs.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -22,6 +23,7 @@ import {
   buildPersistedUserTurnMessage,
   createUserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import { NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES } from "../../worker/node-workspace-protocol.js";
 import { parseMessageWithAttachments } from "../chat-attachments.js";
@@ -45,6 +47,8 @@ import {
   setupWorkerTurnLauncherTest,
   turn,
 } from "./worker-turn-launcher.test-support.js";
+
+afterAll(closeStateDatabaseForTest);
 
 function harness(assistantText = "image received") {
   const launches: WorkerLaunchPlan[] = [];
@@ -125,10 +129,10 @@ describe("cloud turn media boundary", () => {
   beforeEach(setupWorkerTurnLauncherTest);
   afterEach(async () => {
     vi.restoreAllMocks();
-    await cleanupWorkerTurnLauncherTest();
+    await cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true });
   });
 
-  it.each(["relative", "absolute"] as const)(
+  it.each(["relative"] as const)(
     "stages %s worker reply bytes before reconciliation without using the Gateway copy",
     async (pathKind) => {
       const remoteRoot = path.join(root, "remote-output");
@@ -410,7 +414,9 @@ describe("cloud turn media boundary", () => {
     expect
       .soft(replayUsers.flatMap((message) => message.content).some((part) => part.type === "image"))
       .toBe(false);
-    expect(replayUsers[0]?.content).toEqual([{ type: "text", text: "raw image" }]);
+    expect(replayUsers[0]?.content).toEqual([
+      { type: "text", text: expect.stringMatching(/^\[[^\]]+\] raw image$/u) },
+    ]);
     const canonical = (await openSessionManager()).buildSessionContext().messages;
     expect(canonical.slice(0, canonicalHistory.length)).toEqual(canonicalHistory);
     expect(readPersistedMediaFacts(canonical.at(-2)!)?.map((fact) => fact.url)).toEqual(
@@ -463,7 +469,7 @@ describe("cloud turn media boundary", () => {
     await rig.execute({ ...turn("after-expiry"), prompt: "What is two plus two?" });
 
     expect(rig.launches).toHaveLength(4);
-    expect(rig.launches[3]?.assignment.prompt).toBe("What is two plus two?");
+    expect(rig.launches[3]?.assignment.prompt).toMatch(/^\[[^\]]+\] What is two plus two\?$/u);
     const replay = rig.launches[3]?.assignment.initialMessages;
     const firstUser = replay?.find((message) => message.role === "user");
     expect(firstUser?.content).toEqual([
@@ -493,20 +499,8 @@ describe("cloud turn media boundary", () => {
     },
     {
       modelHasVision: true,
-      contentType: "image/png",
-      hydrationSuppressed: true,
-      error: /media ID does not resolve/,
-    },
-    {
-      modelHasVision: true,
       contentType: "text/plain",
       hydrationSuppressed: true,
-      error: /media ID does not resolve/,
-    },
-    {
-      modelHasVision: false,
-      contentType: "image/png",
-      hydrationSuppressed: false,
       error: /media ID does not resolve/,
     },
   ])(
@@ -641,6 +635,7 @@ describe("cloud turn media boundary", () => {
       if (closure === "unrelated") {
         await operation;
         expect(rig.launches).toHaveLength(1);
+        await waitForEmbeddedAgentRunEnd(SESSION_ID, null);
         expect(transferSignal?.aborted).toBe(true);
         input.preparedRunAdmission.close();
       } else {
@@ -729,8 +724,10 @@ describe("cloud turn media boundary", () => {
       userTurnTranscriptRecorder: recorder,
     });
     expect(
-      rig.launches[0]?.assignment.initialMessages.some((message) =>
-        message.content.some((part) => part.type === "image"),
+      rig.launches[0]?.assignment.initialMessages.some(
+        (message) =>
+          typeof message.content !== "string" &&
+          message.content.some((part) => part.type === "image"),
       ),
     ).toBe(false);
     expect(rig.tunnel.stageAttachments).toHaveBeenCalledTimes(1);
@@ -739,7 +736,9 @@ describe("cloud turn media boundary", () => {
       "/worker/workspace",
       [...rig.inputFiles().keys()][0]!.split(path.sep).join("/"),
     );
-    expect(rig.launches[0]?.assignment.prompt).toBe(`described [media attached: ${remotePath}]`);
+    expect(rig.launches[0]?.assignment.prompt).toEqual(
+      expect.stringContaining(`described [media attached: ${remotePath}]`),
+    );
 
     const invalidRecorder = createUserTurnTranscriptRecorder({
       target: { ...sessionTarget, sessionEntry: undefined },

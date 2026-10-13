@@ -13,7 +13,9 @@ const InstallOwnerSchema = z.object({
   updateHint: z.string().trim().min(1),
 });
 
-export type InstallOwner = z.infer<typeof InstallOwnerSchema>;
+export type InstallOwner = Omit<z.infer<typeof InstallOwnerSchema>, "owner"> & {
+  owner: "macos-app" | "immutable-deployer";
+};
 
 /** Packaging owns this marker; absent or invalid files preserve normal install discovery. */
 export async function readInstallOwner(root: string | null): Promise<InstallOwner | null> {

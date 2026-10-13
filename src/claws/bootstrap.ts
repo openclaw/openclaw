@@ -22,7 +22,6 @@ export async function seedClawPackageBootstrap(
   plan: ClawAddPlan,
   options: {
     nowMs?: number;
-    seedBootstrap?: typeof seedWorkspaceBootstrap;
   } & OpenClawStateDatabaseOptions = {},
 ): Promise<"seeded" | "already-seeded" | "consumed" | undefined> {
   const actions = plan.actions.filter((action) => action.kind === "bootstrap");
@@ -73,7 +72,7 @@ export async function seedClawPackageBootstrap(
     );
   }
 
-  return (options.seedBootstrap ?? seedWorkspaceBootstrap)({
+  return seedWorkspaceBootstrap({
     dir: plan.agent.workspace,
     content: read.buffer,
     ...(options.nowMs !== undefined ? { nowMs: options.nowMs } : {}),

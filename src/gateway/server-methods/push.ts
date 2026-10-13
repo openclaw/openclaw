@@ -1,7 +1,4 @@
-import {
-  normalizeOptionalString,
-  normalizeStringifiedOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -46,7 +43,6 @@ import {
   setCanonicalUserPreferences,
 } from "../../state/user-preferences.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
-import { resolveUserProfileId } from "../../state/user-profiles.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "../role-policy.js";
 import { resolveNodePushTransport } from "./node-push-transport.js";
@@ -61,6 +57,10 @@ type PushRequestOptions = Omit<GatewayRequestHandlerOptions, "context"> & {
     "getRuntimeConfig" | "getClientConnIds" | "broadcastToConnIds"
   >;
 };
+
+function respondWebPushForbidden(respond: PushRequestOptions["respond"], message: string) {
+  respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, message));
+}
 
 function hasValidWebPushQuietHoursTimeZone(preferences: {
   quietHours?: { timeZone: string };
@@ -94,35 +94,20 @@ function createWebPushRequestGuard(options: PushRequestOptions) {
       throw new Error("Web Push requester authority changed");
     }
   };
-  const assertCurrent = () => {
-    authority.assertCurrent();
-    assertPolicyCurrent();
-    const currentReference = client?.authenticatedUserProfile?.profileId;
-    const currentProfileId = currentReference ? resolveUserProfileId(currentReference) : undefined;
-    const originalProfileId = profileReference ? resolveUserProfileId(profileReference) : undefined;
-    if (
-      (currentReference && !currentProfileId) ||
-      (profileReference && !originalProfileId) ||
-      currentProfileId !== originalProfileId
-    ) {
-      throw new Error("Web Push requester profile changed");
-    }
-    return currentProfileId;
-  };
   return {
     authority,
     assertPolicyCurrent,
     prepareMutation: (): WebPushMutationGuard => {
-      assertCurrent();
-      if (authority.family === "native-compatibility") {
-        return { family: "native-compatibility", assertCurrent };
-      }
       const currentReference = client?.authenticatedUserProfile?.profileId;
       return {
         family: "worker",
         profiles: { original: profileReference ?? null, current: currentReference ?? null },
         assertCurrent: () => {
-          authority.assertWorkerCurrent();
+          if (authority.family === "worker") {
+            authority.assertWorkerCurrent();
+          } else {
+            authority.assertCurrent();
+          }
           assertPolicyCurrent();
           if (client?.authenticatedUserProfile?.profileId !== currentReference) {
             throw new Error("Web Push requester profile changed");
@@ -144,7 +129,10 @@ function createWebPushRequestGuard(options: PushRequestOptions) {
 type AuthorizedWebPushSubscription = {
   subscription: BoundWebPushSubscription;
   assertCurrent: () => string | undefined;
-  prepareMutation: () => WebPushMutationGuard;
+  deferMutation: (
+    write: (target: Parameters<typeof clearBoundWebPushSubscription>[0]) => Promise<boolean>,
+    response: (changed: boolean) => unknown,
+  ) => { start: () => Promise<void> };
 };
 
 function withAuthorizedWebPushSubscription<T>(
@@ -171,11 +159,7 @@ function withAuthorizedWebPushSubscription<T>(
   };
   return withBoundWebPushSubscriptionByEndpoint({ endpoint }, async (subscription) => {
     if (!deviceId || !subscription || subscription.deviceId !== deviceId) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.FORBIDDEN, "subscription is not bound to this device"),
-      );
+      respondWebPushForbidden(respond, "subscription is not bound to this device");
       return undefined;
     }
     assertRequesterCurrent();
@@ -197,11 +181,7 @@ function withAuthorizedWebPushSubscription<T>(
       (client?.authenticatedUserProfile?.profileId && !currentProfileId) ||
       (subscriptionProfileId ?? null) !== (currentProfileId ?? null)
     ) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.FORBIDDEN, "subscription is not bound to this user"),
-      );
+      respondWebPushForbidden(respond, "subscription is not bound to this user");
       return undefined;
     }
     const assertCurrent = () => {
@@ -216,10 +196,23 @@ function withAuthorizedWebPushSubscription<T>(
     return prepare({
       subscription,
       assertCurrent,
-      prepareMutation: (): WebPushMutationGuard => {
-        const guard = requester.prepareMutation();
-        return guard.family === "native-compatibility" ? { ...guard, assertCurrent } : guard;
-      },
+      deferMutation: (write, response) => ({
+        start: () => {
+          const guard = requester.prepareMutation();
+          return write({
+            endpoint,
+            expectedDeviceId: subscription.deviceId,
+            expectedUserProfileId: subscription.userProfileId,
+            guard,
+          }).then((changed) => {
+            if (!changed) {
+              respondWebPushForbidden(respond, "subscription binding changed");
+              return;
+            }
+            respond(true, response(changed), undefined);
+          });
+        },
+      }),
     });
   });
 }
@@ -230,7 +223,7 @@ export const pushHandlers = {
       return;
     }
 
-    const nodeId = normalizeStringifiedOptionalString(params.nodeId) ?? "";
+    const nodeId = normalizeOptionalString(params.nodeId) ?? "";
     if (!nodeId) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
       return;
@@ -343,7 +336,7 @@ export const pushHandlers = {
         if (!(error instanceof WebPushSubscriptionBindingError)) {
           throw error;
         }
-        respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, error.message));
+        respondWebPushForbidden(respond, error.message);
       }
     });
   },
@@ -357,28 +350,9 @@ export const pushHandlers = {
     }
 
     await respondUnavailableOnThrow(respond, async () => {
-      await withAuthorizedWebPushSubscription(params.endpoint, options, (authorized) => {
-        const { subscription } = authorized;
-        return {
-          start: () =>
-            clearBoundWebPushSubscription({
-              endpoint: params.endpoint,
-              expectedDeviceId: subscription.deviceId,
-              expectedUserProfileId: subscription.userProfileId,
-              guard: authorized.prepareMutation(),
-            }).then((removed) => {
-              if (!removed) {
-                respond(
-                  false,
-                  undefined,
-                  errorShape(ErrorCodes.FORBIDDEN, "subscription binding changed"),
-                );
-                return;
-              }
-              respond(true, { removed }, undefined);
-            }),
-        };
-      });
+      await withAuthorizedWebPushSubscription(params.endpoint, options, (authorized) =>
+        authorized.deferMutation(clearBoundWebPushSubscription, (removed) => ({ removed })),
+      );
     });
   },
 
@@ -437,7 +411,6 @@ export const pushHandlers = {
       return;
     }
     await withAuthorizedWebPushSubscription(params.endpoint, options, async (authorized) => {
-      const { subscription } = authorized;
       const currentProfileId = authorized.assertCurrent();
       if (!hasValidWebPushQuietHoursTimeZone(params.preferences)) {
         respond(
@@ -498,26 +471,10 @@ export const pushHandlers = {
         }
       }
       const preferences = normalizeWebPushDevicePreferences(params.preferences);
-      return {
-        start: () =>
-          setWebPushSubscriptionPreferences({
-            endpoint: params.endpoint,
-            preferences,
-            expectedDeviceId: subscription.deviceId,
-            expectedUserProfileId: subscription.userProfileId,
-            guard: authorized.prepareMutation(),
-          }).then((updated) => {
-            if (!updated) {
-              respond(
-                false,
-                undefined,
-                errorShape(ErrorCodes.FORBIDDEN, "subscription binding changed"),
-              );
-              return;
-            }
-            respond(true, { scope: "device", preferences }, undefined);
-          }),
-      };
+      return authorized.deferMutation(
+        (target) => setWebPushSubscriptionPreferences({ ...target, preferences }),
+        () => ({ scope: "device", preferences }),
+      );
     });
   },
 

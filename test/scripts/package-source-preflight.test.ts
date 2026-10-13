@@ -16,7 +16,6 @@ import { validateBundledPackageDependencyAlignment } from "../../scripts/package
 import {
   validatePackageSource,
   validatePackageSourceDir,
-  validatePackageSourceRef,
 } from "../../scripts/package-source-preflight.mjs";
 import { writeRunSummary } from "../../scripts/test-docker-all.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -302,6 +301,9 @@ function runReleaseInputCapture(params: {
     for (const file of [
       "scripts/preflight-frozen-target-contracts.mjs",
       "scripts/lib/frozen-target-source.mjs",
+      "scripts/lib/frozen-target-workflow-request.mjs",
+      "scripts/lib/release-upgrade-baseline.mjs",
+      "scripts/lib/canonical-json.mjs",
       "scripts/lib/docker-e2e-plan.mts",
       "scripts/lib/docker-e2e-scenarios.mts",
       "scripts/lib/official-external-channel-catalog.json",
@@ -423,7 +425,6 @@ describe("package source preflight", () => {
   });
 
   it.each([
-    ["2026.8.1", "Unreleased"],
     ["2026.8.1-beta.4", "Unreleased"],
     ["2026.9.1", "2026.8.3 (Unreleased)"],
   ])("accepts aligned %s source manifests with %s notes", (version, heading) => {
@@ -531,21 +532,63 @@ describe("package source preflight", () => {
     ).toBe("2026.8.1");
   });
 
-  it("validates the current source ref without modifying the checkout", () => {
-    const committedManifest = JSON.parse(
-      execFileSync("git", ["show", "HEAD:package.json"], { encoding: "utf8" }),
-    ) as { version: string };
-    const workingManifest = JSON.parse(readFileSync("package.json", "utf8")) as { version: string };
-    expect(
-      validatePackageSourceRef("HEAD", {
-        allowUnreleasedChangelog: true,
-      }),
-    ).toBe(committedManifest.version);
-    expect(
-      validatePackageSourceDir(process.cwd(), {
-        allowUnreleasedChangelog: true,
-      }),
-    ).toBe(workingManifest.version);
+  it("rejects conflicting bundled dependencies before setup and reads only the selected source", () => {
+    const root = tempDirs.make("openclaw-package-source-dependencies-");
+    writeFileSync(path.join(root, "package.json"), rootManifest({ dependencies: {} }));
+    writeFileSync(path.join(root, "CHANGELOG.md"), changelog);
+    const writePlugin = (id: string, metadata: unknown) => {
+      const directory = path.join(root, "extensions", id);
+      mkdirSync(directory, { recursive: true });
+      writeFileSync(path.join(directory, "package.json"), JSON.stringify(metadata));
+    };
+    writePlugin("alpha", { dependencies: { shared: "1.0.0" } });
+    writePlugin("beta", { optionalDependencies: { shared: "2.0.0" } });
+    writePlugin("external", {
+      dependencies: { shared: "3.0.0" },
+      openclaw: { build: { bundledDist: false } },
+    });
+    const git = (...args: string[]) =>
+      execFileSync(
+        "git",
+        [
+          "-c",
+          "core.hooksPath=/dev/null",
+          "-c",
+          "commit.gpgsign=false",
+          "-c",
+          "user.name=Fixture",
+          "-c",
+          "user.email=fixture@example.test",
+          ...args,
+        ],
+        { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+      ).trim();
+    git("init", "-q");
+    git("add", ".");
+    git("commit", "-qm", "conflicting bundled source");
+    const ref = git("rev-parse", "HEAD");
+    const run = (...args: string[]) =>
+      spawnSync(
+        process.execPath,
+        [
+          path.resolve("scripts/package-source-preflight.mjs"),
+          "--allow-unreleased-changelog",
+          ...args,
+        ],
+        { cwd: root, encoding: "utf8" },
+      );
+    const conflict =
+      "dependency 'shared' has conflicting specs: alpha use '1.0.0', beta uses '2.0.0'";
+    const directoryFailure = run("--source-dir", root);
+    expect(directoryFailure.status).toBe(1);
+    expect(directoryFailure.stderr).toContain(conflict);
+
+    writePlugin("beta", { optionalDependencies: { shared: "1.0.0" } });
+    expect(run("--source-dir", root).status).toBe(0);
+    const committedFailure = run("--ref", ref);
+    expect(committedFailure.status).toBe(1);
+    expect(committedFailure.stderr).toContain(conflict);
+    expect(validatePackageSourceDir(root, { allowUnreleasedChangelog: true })).toBe("2026.8.1");
   });
 
   it("normalizes release-check package mode and guards the source resolver", () => {

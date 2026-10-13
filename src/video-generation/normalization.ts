@@ -11,15 +11,6 @@ import type {
   VideoGenerationResolution,
 } from "./types.js";
 
-const VIDEO_RESOLUTION_ORDER: readonly VideoGenerationResolution[] = [
-  "360P",
-  "480P",
-  "540P",
-  "720P",
-  "768P",
-  "1080P",
-];
-
 type ResolvedVideoGenerationOverrides = {
   size?: string;
   aspectRatio?: string;
@@ -55,7 +46,6 @@ export function resolveVideoGenerationOverrides(params: {
     aspectRatio: params.aspectRatio,
     resolution: params.resolution,
     capabilities: caps,
-    resolutionOrder: VIDEO_RESOLUTION_ORDER,
     reportUnrecognizedOverrides: true,
     useAspectRatioForRequestedSize: true,
   });

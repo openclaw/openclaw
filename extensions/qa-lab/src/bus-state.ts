@@ -19,13 +19,12 @@ import {
   buildQaBusSnapshot,
   cloneMessage,
   normalizeAccountId,
-  normalizeConversationFromTarget,
   pollQaBusEvents,
   requireQaBusMessageForAccount,
   searchQaBusMessages,
 } from "./bus-queries.js";
 import { createQaBusWaiterStore, throwQaBusClosed } from "./bus-waiters.js";
-import { sanitizeQaBusToolCalls } from "./qa-bus-protocol.js";
+import { parseQaTarget, sanitizeQaBusToolCalls } from "./qa-bus-protocol.js";
 
 const DEFAULT_BOT_ID = "openclaw";
 const DEFAULT_BOT_NAME = "OpenClaw QA";
@@ -193,11 +192,11 @@ export function createQaBusState() {
     },
     addOutboundMessage(input: QaBusOutboundMessageInput) {
       const accountId = normalizeAccountId(input.accountId);
-      const { conversation, threadId } = normalizeConversationFromTarget(input.to);
+      const { conversationId, chatType, threadId } = parseQaTarget(input.to);
       const message = createMessage({
         direction: "outbound",
         accountId,
-        conversation,
+        conversation: { id: conversationId, kind: chatType },
         senderId: input.senderId?.trim() || DEFAULT_BOT_ID,
         senderName: input.senderName?.trim() || DEFAULT_BOT_NAME,
         text: input.text,

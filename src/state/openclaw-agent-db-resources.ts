@@ -8,6 +8,10 @@ import {
 import { isPathInside } from "../infra/path-guards.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { reserveAgentCreationClaimAdmission } from "./agent-creation-claim.js";
+import { AgentDatabaseExecutionAdmissionClosedError } from "./agent-database-admission-error.js";
+import { captureAgentDeletionResourceOwner } from "./agent-deletion-cleanup.js";
+import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
 import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 
 export type OpenClawAgentDatabaseAsyncResource = {
@@ -15,17 +19,20 @@ export type OpenClawAgentDatabaseAsyncResource = {
   path: string;
   revoke: () => void;
   close: () => Promise<void>;
+  /** A native executor retains its database lease until dependent readers and publications settle. */
+  retireAfterResources?: true;
 };
 export type OpenClawAgentDatabaseReadCandidateResource = Omit<
   OpenClawAgentDatabaseAsyncResource,
   "agentId"
 > & { scope?: "sibling-family" };
-type AgentDatabaseResource =
+type AgentDatabaseResource = (
   | (OpenClawAgentDatabaseAsyncResource & { ownership: "known"; closeSync?: () => void })
   | (OpenClawAgentDatabaseReadCandidateResource & {
       ownership: "unresolved";
       agentId?: never;
-    });
+    })
+) & { cleanupOwner?: object };
 export type AgentDatabaseCloseSelection = {
   path?: string;
   rootPath?: string;
@@ -59,13 +66,15 @@ export function captureAgentDatabaseCloseFence(
 
 export { matchesAgentDatabaseReadCandidatePath };
 
-registerAgentDatabaseReaderCloser(async (candidates) => {
+registerAgentDatabaseReaderCloser(async (candidates, retainedPaths) => {
   const results = await Promise.allSettled(
     [...new Set([...resources.active, ...resources.closing.keys()])]
-      .filter((resource) =>
-        candidates.some((candidate) =>
-          matchesAgentDatabaseReadCandidatePath(candidate, resource.path),
-        ),
+      .filter(
+        (resource) =>
+          !retainedPaths?.has(path.resolve(resource.path)) &&
+          candidates.some((candidate) =>
+            matchesAgentDatabaseReadCandidatePath(candidate, resource.path),
+          ),
       )
       .map((resource) => closeAgentDatabaseResource(resource)),
   );
@@ -102,12 +111,12 @@ export function matchesAgentDatabaseClose(
 /** Register before admitting a Worker; revocation is synchronous, native drainage is joined. */
 export function registerOpenClawAgentDatabaseAsyncResource(
   resource: OpenClawAgentDatabaseAsyncResource,
+  creationOptions?: OpenClawAgentDatabaseOptions,
 ): () => void {
-  return registerAgentDatabaseResource({
-    ...resource,
-    ownership: "known",
-    agentId: normalizeAgentId(resource.agentId),
-  });
+  return registerAgentDatabaseResource(
+    { ...resource, ownership: "known", agentId: normalizeAgentId(resource.agentId) },
+    creationOptions,
+  );
 }
 
 /** Native readers close synchronously, so successful retirement leaves no asynchronous barrier. */
@@ -130,11 +139,39 @@ export function registerOpenClawAgentDatabaseReadCandidateResource(
   return registerAgentDatabaseResource({ ...resource, ownership: "unresolved" });
 }
 
-function registerAgentDatabaseResource(resource: AgentDatabaseResource): () => void {
-  const owned = {
+function registerAgentDatabaseResource(
+  resource: AgentDatabaseResource,
+  creationOptions?: OpenClawAgentDatabaseOptions,
+): () => void {
+  const owned: AgentDatabaseResource = {
     ...resource,
     path: path.resolve(resource.path),
   };
+  owned.cleanupOwner = captureAgentDeletionResourceOwner((target) =>
+    matchesAgentDatabaseClose(target, owned),
+  );
+  assertAgentDatabaseResourceAdmission(owned);
+  const releaseCreation =
+    creationOptions && owned.ownership === "known"
+      ? reserveAgentCreationClaimAdmission(owned, creationOptions, () =>
+          closeAgentDatabaseResource(owned),
+        )
+      : undefined;
+  const unregister = () => {
+    resources.active.delete(owned);
+    releaseCreation?.();
+  };
+  getOpenClawDatabaseMaintenanceScope()?.own(unregister, "agent-resources", () =>
+    closeAgentDatabaseResource(owned),
+  );
+  resources.active.add(owned);
+  return unregister;
+}
+
+/** Fresh native opens and resource registrations share the same close custody. */
+export function assertAgentDatabaseResourceAdmission(
+  owned: Parameters<typeof matchesAgentDatabaseClose>[1],
+): void {
   if (
     [...resources.selections.keys()].some((selection) =>
       matchesAgentDatabaseClose(selection, owned),
@@ -151,14 +188,10 @@ function registerAgentDatabaseResource(resource: AgentDatabaseResource): () => v
           closing.agentId === owned.agentId),
     )
   ) {
-    throw new Error(`Agent database resources are closing: ${owned.path}`);
+    throw new AgentDatabaseExecutionAdmissionClosedError(
+      `Agent database resources are closing: ${owned.path}`,
+    );
   }
-  const unregister = () => resources.active.delete(owned);
-  getOpenClawDatabaseMaintenanceScope()?.own(unregister, "agent-resources", () =>
-    closeAgentDatabaseResource(owned),
-  );
-  resources.active.add(owned);
-  return unregister;
 }
 
 function closeAgentDatabaseResource(
@@ -225,6 +258,50 @@ export function revokeAgentDatabaseResources(
 export async function drainAgentDatabaseResources<T>(
   selection: AgentDatabaseCloseSelection,
   closeNative: () => Promise<T>,
+  cleanupOwner?: object,
+): Promise<T> {
+  return withAgentDatabaseCloseFence(selection, async () => {
+    const selected = [...new Set([...resources.active, ...resources.closing.keys()])].filter(
+      (resource) =>
+        matchesAgentDatabaseClose(selection, resource) &&
+        (!cleanupOwner || resource.cleanupOwner === cleanupOwner),
+    );
+    const nativeOwners = selected.filter((resource) => resource.retireAfterResources);
+    for (const resource of nativeOwners) {
+      // Retain exact failed-close custody before revocation can cause another admission.
+      if (!resources.closing.has(resource)) {
+        resources.closing.set(resource, undefined);
+      }
+      resource.revoke();
+    }
+    const results = await Promise.allSettled(
+      selected
+        .filter((resource) => !resource.retireAfterResources)
+        .map((resource) => closeAgentDatabaseResource(resource)),
+    );
+    const errors = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (errors.length > 0) {
+      throw new AggregateError(errors, "Agent database resource drainage failed");
+    }
+    const nativeResults = await Promise.allSettled(
+      nativeOwners.map((resource) => closeAgentDatabaseResource(resource)),
+    );
+    const nativeErrors = nativeResults.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (nativeErrors.length > 0) {
+      throw new AggregateError(nativeErrors, "Agent database native retirement failed");
+    }
+    return closeNative();
+  });
+}
+
+/** Keep the complete selection fenced while its physical databases retire independently. */
+export async function withAgentDatabaseCloseFence<T>(
+  selection: AgentDatabaseCloseSelection,
+  close: (resourcePaths: readonly string[]) => Promise<T>,
 ): Promise<T> {
   const ownedSelection = { ...selection };
   const completion = createDeferredCore();
@@ -232,14 +309,10 @@ export async function drainAgentDatabaseResources<T>(
   void completion.promise.catch(() => {});
   resources.selections.set(ownedSelection, completion.promise);
   try {
-    const results = await Promise.allSettled(revokeAgentDatabaseResources(ownedSelection));
-    const errors = results.flatMap((result) =>
-      result.status === "rejected" ? [result.reason] : [],
-    );
-    if (errors.length > 0) {
-      throw new AggregateError(errors, "Agent database resource drainage failed");
-    }
-    const result = await closeNative();
+    const resourcePaths = [...new Set([...resources.active, ...resources.closing.keys()])]
+      .filter((resource) => matchesAgentDatabaseClose(ownedSelection, resource))
+      .map((resource) => resource.path);
+    const result = await close(resourcePaths);
     completion.resolve();
     return result;
   } catch (error) {

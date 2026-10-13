@@ -70,7 +70,6 @@ describe("default model provider menu", () => {
         },
         prompter,
         allowKeep: false,
-        ignoreAllowlist: true,
       });
       const modelPrompt = count > 30 && !singleProvider ? 1 : 0;
       expect(prompts).toHaveLength(modelPrompt + 1);
@@ -115,7 +114,6 @@ describe("default model provider menu", () => {
         config: { agents: { defaults: { model: "zeta/model-0" } } },
         prompter: makePrompter({ select }),
         allowKeep: false,
-        ignoreAllowlist: true,
       }),
     ).rejects.toBe(cancellation);
     expect(select).toHaveBeenCalledTimes(1);

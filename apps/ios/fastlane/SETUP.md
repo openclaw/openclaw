@@ -4,11 +4,11 @@ Install the pinned Ruby bundle:
 
 ```bash
 cd apps/ios
-# Install Ruby 3.4.10 with mise or another .ruby-version-aware manager.
+# Install Ruby 3.4.11 with mise or another .ruby-version-aware manager.
 ruby --version
-gem install bundler -v 4.0.21
-bundle _4.0.21_ install
-bundle _4.0.21_ check
+gem install bundler -v 4.0.22
+bundle _4.0.22_ install
+bundle _4.0.22_ check
 ```
 
 The expected runtime is recorded in `apps/ios/.ruby-version`, and the Gemfile
@@ -75,9 +75,9 @@ Code signing variable (optional in `.env`):
 IOS_DEVELOPMENT_TEAM=YOUR_TEAM_ID
 ```
 
-Tip: run `scripts/ios-team-id.sh --require-canonical` from repo root to verify the canonical OpenClaw iOS team (`FWJYW4S8P8`) is available locally. Fastlane uses the same canonical-only path when `IOS_DEVELOPMENT_TEAM` is missing, and rejects non-canonical teams for release archives.
+Tip: run `scripts/ios-team-id.sh --require-canonical` from repo root to verify the official OpenClaw iOS team (`FWJYW4S8P8`) is available locally. Fastlane uses the same official-team-only path when `IOS_DEVELOPMENT_TEAM` is missing, and rejects other teams for release archives.
 
-App Store release signing is manual and profile-pinned. The canonical manifest is `apps/ios/Config/AppStoreSigning.json`, and Fastlane `match` owns the encrypted signing repo and branch named there.
+App Store release signing is manual and profile-pinned. The signing manifest is `apps/ios/Config/AppStoreSigning.json`, and Fastlane `match` owns the encrypted signing repo and branch named there.
 
 One-time or rotation setup:
 
@@ -87,7 +87,7 @@ pnpm ios:release:signing:check
 pnpm ios:release:signing:setup
 ```
 
-`signing:setup` uses Fastlane `produce` and `modify_services` to create Developer Portal bundle IDs and enable required services before running `match`. The main app also requires App Attest, and the main app and share extension both require the shared App Group from `apps/ios/Config/AppStoreSigning.json`; associate that group with both bundle IDs in the Apple Developer Portal before regenerating profiles. If Fastlane does not already have a valid Apple Developer Portal session, run `cd apps/ios && BUNDLE_GEMFILE="$PWD/Gemfile" bundle _4.0.21_ exec fastlane spaceauth` for a release-owner Apple ID and export the resulting `FASTLANE_SESSION`.
+`signing:setup` uses Fastlane `produce` and `modify_services` to create Developer Portal bundle IDs and enable required services before running `match`. The main app also requires App Attest, and the main app and share extension both require the shared App Group from `apps/ios/Config/AppStoreSigning.json`; associate that group with both bundle IDs in the Apple Developer Portal before regenerating profiles. If Fastlane does not already have a valid Apple Developer Portal session, run `cd apps/ios && BUNDLE_GEMFILE="$PWD/Gemfile" bundle _4.0.22_ exec fastlane spaceauth` for a release-owner Apple ID and export the resulting `FASTLANE_SESSION`.
 
 Shared encrypted signing storage:
 
@@ -104,7 +104,7 @@ Validate auth:
 
 ```bash
 cd apps/ios
-BUNDLE_GEMFILE="$PWD/Gemfile" bundle _4.0.21_ exec fastlane ios auth_check
+BUNDLE_GEMFILE="$PWD/Gemfile" bundle _4.0.22_ exec fastlane ios auth_check
 ```
 
 App Store Connect API auth is required when:
@@ -120,7 +120,7 @@ Archive locally without upload:
 pnpm ios:release:archive -- --version 2026.7.2 --revision 1 --build-number 3
 ```
 
-Generate deterministic App Store screenshots:
+Generate repeatable App Store screenshots:
 
 ```bash
 pnpm ios:screenshots
@@ -191,10 +191,10 @@ a credential. After boot, the same Gateway issues the fresh setup code consumed 
 the app. The live test pairs a fresh install and
 verifies the `first` and `second` message round trips. It then terminates and
 relaunches the app, verifies the `relaunch` message on the restored connection,
-and opens native Overview. Each message must reach the deterministic local
+and opens native Overview. Each message must reach the fixed-response local
 `openai/ios-e2e` provider fixture as the latest user request.
 
-The harness then stops the Gateway and provider fixture and runs the deterministic
+The harness then stops the Gateway and provider fixture and runs the repeatable
 keyboard/transcript reader test on the same simulator. Its first fixture send checks
 that the transcript remains rendered above the open keyboard and follows the new
 reply. Its second, multiline send checks keyboard dismissal, retained draft text,
@@ -224,7 +224,7 @@ node --import ./scripts/tsx.mjs scripts/ios-release-e2e.ts \
 ```
 
 These diagnostics produce `native-build`/`built` or `gateway-probe`/`probe-passed`
-proofs, respectively. Neither is release qualification. The Gateway probe uses the
+proofs, respectively. Neither is release qualification. The Gateway check uses the
 same published-package selection and installation path as full qualification.
 
 The stock gate runs for the `release` operation in **iOS Store Release** after
@@ -348,7 +348,7 @@ APP_STORE_CONNECT_KEYCHAIN_ACCOUNT=YOUR_MAC_USERNAME
 
 ```bash
 cd apps/ios
-BUNDLE_GEMFILE="$PWD/Gemfile" bundle _4.0.21_ exec fastlane ios auth_check
+BUNDLE_GEMFILE="$PWD/Gemfile" bundle _4.0.22_ exec fastlane ios auth_check
 ```
 
 4. Inspect the live plan if needed, then run the release entry point:
@@ -378,7 +378,7 @@ Versioning rules:
 - `pnpm ios:version:check` validates version inputs without requiring changelog notes
 - The release flow regenerates `apps/ios/OpenClaw.xcodeproj` from `apps/ios/project.yml` before archiving
 - Local App Store signing uses a temporary generated xcconfig with profile names from `apps/ios/Config/AppStoreSigning.json` and leaves local development signing overrides untouched
-- App Store release uses `OpenClawPushMode=appStore`, which derives the canonical production hosted relay, production APNs, production relay profile, and `appleStrict` proof. The release lane rejects custom production relay URL overrides.
+- App Store release uses `OpenClawPushMode=appStore`, which derives the official production hosted relay, production APNs, production relay profile, and `appleStrict` proof. The release lane rejects custom production relay URL overrides.
 - The exported IPA is validated before upload by inspecting its push mode, signed entitlements, and embedded App Store profile.
 - The default `pnpm ios:release:upload` destination stages screenshots and the App Review PDF attachment before uploading the IPA, waits for processing, then stages saved notes and selects the build. It does not submit for App Review or upload the App Store Connect `Notes` field
 - See `apps/ios/VERSIONING.md` for the detailed workflow

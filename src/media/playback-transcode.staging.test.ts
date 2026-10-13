@@ -73,7 +73,16 @@ async function createSource(fileName: string, contents: string | Buffer) {
   const fixturePath = path.join(tempHome.home, fileName);
   await fs.writeFile(fixturePath, contents);
   const sourcePath = await fs.realpath(fixturePath);
-  return { sourcePath, sourceStat: await fs.stat(sourcePath) };
+  const sourceStat = await fs.stat(sourcePath);
+  return {
+    sourcePath,
+    sourceStat: {
+      size: sourceStat.size,
+      mtimeMs: sourceStat.mtimeMs,
+      ctimeMs: sourceStat.ctimeMs,
+      exactIdentity: await fs.stat(sourcePath, { bigint: true }),
+    },
+  };
 }
 
 describe("playback input staging", () => {
@@ -136,10 +145,11 @@ describe("playback input staging", () => {
           } else if (change === "truncate") {
             await fs.truncate(filePath, 1);
           } else if (change === "rewrite") {
+            const beforeRewrite = await fs.stat(filePath);
             await fs.writeFile(filePath, "edited-source");
             await fs.utimes(
               filePath,
-              source.sourceStat.atime,
+              beforeRewrite.atime,
               new Date(source.sourceStat.mtimeMs + 2000),
             );
             expect((await fs.stat(filePath)).mtimeMs).not.toBe(source.sourceStat.mtimeMs);

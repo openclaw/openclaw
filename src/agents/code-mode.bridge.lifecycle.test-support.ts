@@ -64,6 +64,7 @@ export function createSubscribedCodeModeHarness(params: {
       hasDeliveredSourceReply: () => false,
       markSourceReplyDelivered: () => undefined,
       builtinToolNames: new Set(),
+      sourceReplyCapableToolNames: new Set(),
       coreBuiltinToolNames: new Set(),
       replaySafeToolNames: new Set(),
       codeModeExecToolNames: new Set(),

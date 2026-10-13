@@ -1,5 +1,3 @@
-// Gateway auth config utilities materialize token/password SecretRefs only for
-// the auth mode that can actually consume them.
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput, resolveSecretInputRef } from "../config/types.secrets.js";
@@ -25,7 +23,6 @@ type GatewayAuthSecretRefResolutionParams = {
   hasTokenFallback: boolean;
 };
 
-/** Check whether a local Gateway auth input is configured directly or through defaults. */
 export function hasConfiguredGatewayAuthSecretInput(
   cfg: OpenClawConfig,
   path: GatewayAuthSecretInputPath,
@@ -33,7 +30,6 @@ export function hasConfiguredGatewayAuthSecretInput(
   return hasConfiguredSecretInput(readGatewaySecretInputValue(cfg, path), cfg.secrets?.defaults);
 }
 
-/** Decide whether a token/password secret ref can be active for the configured auth mode. */
 function shouldResolveGatewayAuthSecretRef(
   params: GatewayAuthSecretRefResolutionParams,
   path: GatewayAuthSecretInputPath,
@@ -73,7 +69,6 @@ function hasActiveExecGatewayAuthSecretRef(
   return ref?.source === "exec";
 }
 
-/** Check whether active local Gateway auth refs can be read without invoking exec providers. */
 export function canMaterializeGatewayAuthSecretRefsWithoutExec(
   params: GatewayAuthSecretRefResolutionParams,
 ): boolean {
@@ -96,20 +91,15 @@ async function resolveGatewayAuthSecretRefValue(
     value: readGatewaySecretInputValue(params.cfg, path),
     path,
   });
-  if (!value) {
-    return undefined;
-  }
-  return value;
+  return value || undefined;
 }
 
-/** Resolve the Gateway auth token ref only when token auth can use it. */
 export async function resolveGatewayTokenSecretRefValue(
   params: GatewayAuthSecretRefResolutionParams,
 ): Promise<string | undefined> {
   return resolveGatewayAuthSecretRefValue(params, "gateway.auth.token");
 }
 
-/** Resolve the Gateway auth password ref only when password auth can use it. */
 export async function resolveGatewayPasswordSecretRefValue(
   params: GatewayAuthSecretRefResolutionParams,
 ): Promise<string | undefined> {
@@ -138,7 +128,6 @@ async function resolveGatewayAuthSecretRef(
   return nextConfig;
 }
 
-/** Materialize active local Gateway auth secret refs on a cloned config. */
 export async function materializeGatewayAuthSecretRefs(
   params: GatewayAuthSecretRefResolutionParams,
 ): Promise<OpenClawConfig> {

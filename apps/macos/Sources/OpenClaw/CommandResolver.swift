@@ -12,10 +12,6 @@ enum CommandResolver {
             .first { FileManager().isReadableFile(atPath: $0) }
     }
 
-    static func runtimeResolution(searchPaths: [String]?) async -> Result<RuntimeResolution, RuntimeResolutionError> {
-        await RuntimeLocator.resolve(searchPaths: searchPaths ?? self.preferredPaths())
-    }
-
     static func errorCommand(with message: String) -> [String] {
         let script = """
         cat <<'__OPENCLAW_ERR__' >&2
@@ -182,15 +178,11 @@ enum CommandResolver {
             first.version == second.version ? first.name > second.name : first.version > second.version
         }
 
-        var paths: [String] = []
-        for (entry, _) in sorted {
+        return sorted.compactMap { entry, _ in
             let binDir = base.appendingPathComponent(entry).appendingPathComponent(suffix)
             let node = binDir.appendingPathComponent("node")
-            if FileManager().isExecutableFile(atPath: node.path) {
-                paths.append(binDir.path)
-            }
+            return FileManager().isExecutableFile(atPath: node.path) ? binDir.path : nil
         }
-        return paths
     }
 
     static func findExecutable(named name: String, searchPaths: [String]? = nil) -> String? {
@@ -241,16 +233,12 @@ enum CommandResolver {
         guard FileManager().isReadableFile(atPath: sourceRunner.path) else {
             throw MacNodeHostWorker.WorkerError.unavailable(reason: "Development worker source runner is missing")
         }
-        switch await self.runtimeResolution(searchPaths: searchPaths) {
-        case let .success(runtime):
-            return MacNodeHostWorkerLaunch(
-                command: self.nodeHostWorkerCommand(
-                    prefix: [runtime.path, sourceRunner.path],
-                    desktopSharingEnabled: desktopSharingEnabled),
-                currentDirectoryURL: root)
-        case let .failure(error):
-            throw error
-        }
+        let runtime = try await RuntimeLocator.resolve(searchPaths: searchPaths ?? self.preferredPaths()).get()
+        return MacNodeHostWorkerLaunch(
+            command: self.nodeHostWorkerCommand(
+                prefix: [runtime.path, sourceRunner.path],
+                desktopSharingEnabled: desktopSharingEnabled),
+            currentDirectoryURL: root)
         #else
         throw MacNodeHostWorker.WorkerError.unavailable(reason: "The node worker requires a packaged OpenClaw.app")
         #endif
@@ -313,7 +301,7 @@ enum CommandResolver {
         if let openclawPath = openclawExecutable(searchPaths: searchPaths) {
             return .executable([openclawPath])
         }
-        let runtimeResult = await self.runtimeResolution(searchPaths: searchPaths)
+        let runtimeResult = await RuntimeLocator.resolve(searchPaths: searchPaths ?? self.preferredPaths())
         if case let .success(runtime) = runtimeResult, let entry = gatewayEntrypoint(in: root) {
             return .executable([runtime.path, entry])
         }
@@ -511,10 +499,6 @@ enum CommandResolver {
         return SSHParsedTarget(user: trimmedUser, host: trimmedHost, port: port)
     }
 
-    private static func sshTargetString(_ target: SSHParsedTarget) -> String {
-        target.user.map { "\($0)@\(target.host)" } ?? target.host
-    }
-
     static func sshArguments(
         target: SSHParsedTarget,
         identity: String,
@@ -533,7 +517,7 @@ enum CommandResolver {
             args.append(contentsOf: ["-i", trimmedIdentity])
         }
         args.append("--")
-        args.append(self.sshTargetString(target))
+        args.append(target.user.map { "\($0)@\(target.host)" } ?? target.host)
         args.append(contentsOf: remoteCommand)
         return args
     }

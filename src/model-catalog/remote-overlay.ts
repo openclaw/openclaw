@@ -54,14 +54,6 @@ function isCompatible(bundle: RemoteModelCatalogWireBundle, bundledGeneratedAt: 
   return comparison !== null && comparison >= 0;
 }
 
-function readCompatibleRemoteModelCatalog(): ActiveRemoteModelCatalog | null {
-  const bundledGeneratedAt = bundledCatalogGeneratedAt();
-  if (bundledGeneratedAt === undefined) {
-    return null;
-  }
-  return selectCompatibleRemoteModelCatalog(readRemoteModelCatalog(), bundledGeneratedAt);
-}
-
 function selectCompatibleRemoteModelCatalog(
   stored: ReturnType<typeof readRemoteModelCatalog>,
   bundledGeneratedAt: number,
@@ -107,7 +99,11 @@ export function captureRemoteModelCatalogStartupSnapshot(): ActiveRemoteModelCat
   }
   let snapshot: ActiveRemoteModelCatalog | null;
   try {
-    snapshot = readCompatibleRemoteModelCatalog();
+    const bundledGeneratedAt = bundledCatalogGeneratedAt();
+    snapshot =
+      bundledGeneratedAt === undefined
+        ? null
+        : selectCompatibleRemoteModelCatalog(readRemoteModelCatalog(), bundledGeneratedAt);
   } catch {
     snapshot = null;
   }
@@ -219,16 +215,4 @@ export function getRemoteModelCatalogProviderOverlay(
 ): ModelCatalogProvider | undefined {
   const providerId = normalizeProviderId(provider);
   return providerId ? getActiveRemoteModelCatalog(config)?.providers[providerId] : undefined;
-}
-
-export function getRemoteModelCatalogPricing(
-  config: OpenClawConfig,
-): Readonly<Record<string, RemoteModelCatalogPrice>> | undefined {
-  return getActiveRemoteModelCatalog(config)?.pricing;
-}
-
-export function getRemoteModelCatalogUpstreamPricing(
-  config: OpenClawConfig,
-): Readonly<Record<string, RemoteModelCatalogUpstreamPrice>> | undefined {
-  return getActiveRemoteModelCatalog(config)?.upstreamPricing;
 }

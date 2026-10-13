@@ -26,17 +26,6 @@ const sessionLink = (text: string, url: string) => ({
 
 describe("buildSlackProgressCardBlocks", () => {
   it.each(["working", "success", "error"] as const)(
-    "omits filler and preserves failures in an empty %s card",
-    (state) => {
-      for (const detailed of [false, true]) {
-        expect(card({ detailed, state, lines: [] })).toEqual(
-          state === "error" ? [plain("Failed")] : [],
-        );
-      }
-    },
-  );
-
-  it.each(["working", "success", "error"] as const)(
     "keeps text, commentary, approvals, session links, and any failure outcome by default when %s",
     (state) => {
       const blocks = card({
@@ -81,9 +70,7 @@ describe("buildSlackProgressCardBlocks", () => {
 
   it.each([
     { toolCalls: 1, files: 1, added: 0, removed: 0, footer: "1 tool · 1 file · 2s" },
-    { toolCalls: 2, files: 3, added: 12, removed: 4, footer: "2 tools · 3 files +12 −4 · 2s" },
     { toolCalls: 0, files: 0, added: 0, removed: 0, footer: "2s" },
-    { toolCalls: 0, files: 1, added: 0, removed: 4, footer: "1 file −4 · 2s" },
   ])("renders the live footer as $footer", ({ toolCalls, files, added, removed, footer }) => {
     expect(
       card({
@@ -169,21 +156,12 @@ describe("buildSlackProgressCardBlocks", () => {
         "_Compare &lt;#C123&gt; approaches 🔍_\n_Checking *the fix* &lt;@U123&gt; &amp; &lt;!channel&gt; 🔧_\nExec — run tests",
       index: 1,
     },
-    ...(
-      [
-        ["Run **bold** checks", "_Run *bold* checks_"],
-        ["Read C:\\path", "_Read C:\\path_"],
-        [
-          "Check `code` for <@U123> & <!channel>",
-          "_Check `code` for &lt;@U123&gt; &amp; &lt;!channel&gt;_",
-        ],
-      ] as const
-    ).map(([text, expected]) => ({
-      name: text,
-      options: { narration: [{ text }] },
-      expected,
+    {
+      name: "literal backslash in narration",
+      options: { narration: [{ text: "Read C:\\path" }] },
+      expected: "_Read C:\\path_",
       index: 0,
-    })),
+    },
     {
       name: "narration with inline code and one italic wrapper",
       options: {

@@ -3,8 +3,12 @@ import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { invokeNativeHookRelay } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { patchSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { consumeCodexAppServerLiveThread, hasCodexAppServerLiveThread } from "./client-runtime.js";
@@ -50,6 +54,7 @@ import {
 } from "./sqlite-session.test-helpers.js";
 
 setupRunAttemptTestHooks();
+afterEach(() => clearRuntimeConfigSnapshot());
 
 type Actor = "maintainer" | "guest";
 type Terminal = {
@@ -80,6 +85,7 @@ function createSourceBoundHostCapabilities(signal: AbortSignal) {
 }
 
 async function fixture(options: { failSettlement?: boolean } = {}) {
+  setRuntimeConfigSnapshot({ tools: { web: { search: { enabled: false } } } });
   // Keep the attempt budget under test control while sockets, workers, and real children progress.
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   const sessionFile = path.join(tempDir, "native-owner-session.jsonl");
@@ -529,6 +535,7 @@ function createSandboxPolicyRun() {
     path.join(tempDir, "managed-policy.jsonl"),
     path.join(tempDir, "workspace"),
   );
+  setRuntimeConfigSnapshot(params.config ?? {});
   const controller = new AbortController();
   const preparation: string[] = [];
   const exec = createRuntimeDynamicTool("exec");
@@ -756,6 +763,8 @@ describe("native background process source authority", () => {
 
 describe("managed-only Codex sandbox compatibility", () => {
   it("executes the advertised sandbox alias after a managed-only native catalog upgrade", async () => {
+    // Keep worker preparation outside the policy fixture's logical attempt budget.
+    vi.useFakeTimers({ toFake: ["Date"] });
     const f = createSandboxPolicyRun();
     const options = {
       pluginConfig: { appServer: { experimental: { sandboxExecServer: true } } },

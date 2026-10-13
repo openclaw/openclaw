@@ -16,7 +16,7 @@ import {
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { describeSystemAgentPersistentOperation } from "../../system-agent/operations.js";
-import { appendTranscriptTurnAsync } from "../../system-agent/transcript-store.js";
+import { createSystemAgentTranscriptStore } from "../../system-agent/transcript-store.js";
 import type { AgentRuntimeDelegatedAuthority } from "../agent-runtime-identity-token.js";
 import { ApprovalObserverClosedError } from "../exec-approval-lifecycle.js";
 import { sameWorkerSessionTurnClaim } from "../worker-environments/placement-record.js";
@@ -366,6 +366,15 @@ export async function prepareDelegatedSystemAgentApproval(params: {
                   ) {
                     return { reply: cancelledReply, correction: undefined };
                   }
+                  const transcript = createSystemAgentTranscriptStore({
+                    assertCurrent: () => {
+                      if (params.sessions.get(params.sessionId) !== params.session) {
+                        throw new Error(
+                          "OpenClaw approval session changed during audit persistence",
+                        );
+                      }
+                    },
+                  });
                   let historyStart = params.session.engine.historyLength();
                   const terminalStatus =
                     record.status === "expired"
@@ -392,7 +401,7 @@ export async function prepareDelegatedSystemAgentApproval(params: {
                   } finally {
                     const at = Date.now();
                     for (const turn of params.session.engine.historySince(historyStart)) {
-                      await appendTranscriptTurnAsync({ ...turn, at });
+                      await transcript.appendTurn({ ...turn, at });
                     }
                   }
                 }),

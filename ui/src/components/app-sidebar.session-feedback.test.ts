@@ -14,12 +14,25 @@ import {
   createSessionsHarness,
   mountSidebar,
 } from "../test-helpers/app-sidebar.ts";
-import { SIDEBAR_SESSION_PAGE_SIZE } from "./app-sidebar-session-types.ts";
+import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import "../test-helpers/app-sidebar-suite.ts";
-import "./app-sidebar.ts";
+import { SIDEBAR_SESSION_PAGE_SIZE } from "./app-sidebar-session-types.ts";
+import "./app-sidebar.tsx";
 
 const hint = "No active sessions match this filter";
 const pagination = ".sidebar-session-pagination--roster button";
+
+function matchingCatalog(): SessionsCatalogListResult {
+  const page = catalogPage([{ threadId: "fixture-thread", name: "Catalog conversation" }]);
+  const catalog = page.catalogs[0]!;
+  catalog.capabilities.archive = false;
+  Object.assign(catalog.hosts[0]!.sessions[0]!, {
+    status: "stored",
+    canArchive: false,
+    createdActor: { type: "human", id: "profile-ada", label: "Ada" },
+  });
+  return page;
+}
 
 // Roster mode renders the owner filter from the roster's own list. Let that first
 // load settle so the Filter & sort owner picker is not replaced while in use.
@@ -29,7 +42,7 @@ async function useSidebarMode(
   mode: "chip" | "roster",
 ) {
   sidebar.sidebarAgentsMode = mode;
-  await sidebar.updateComplete;
+  await settleLitElement(sidebar);
   if (mode === "roster") {
     await vi.waitFor(() =>
       expect(rosterActivityStore(context).snapshot).toMatchObject({
@@ -37,7 +50,7 @@ async function useSidebarMode(
         result: expect.anything(),
       }),
     );
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
   }
 }
 
@@ -62,8 +75,8 @@ describe("sidebar session feedback", () => {
     const button = () => sidebar.querySelector<HTMLButtonElement>(pagination)!;
     expect(button().disabled).toBe(false);
     button().click();
-    button().click(); // The owner is already pending before Lit applies disabled.
-    await sidebar.updateComplete;
+    button().click(); // The owner is already pending before the renderer applies disabled.
+    await settleLitElement(sidebar);
     expect(button().disabled).toBe(true);
     expect(button().getAttribute("aria-busy")).toBe("true");
     button().click();
@@ -74,7 +87,7 @@ describe("sidebar session feedback", () => {
     const localMore = sidebar.querySelector<HTMLButtonElement>('button[aria-label="Show more"]')!;
     expect(localMore.disabled).toBe(false);
     localMore.click();
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(sidebar.querySelectorAll("[data-session-key]")).toHaveLength(keys.length);
     pending.reject(new Error("Fixture page failed"));
     await vi.waitFor(() => expect(button().disabled).toBe(false));
@@ -83,7 +96,7 @@ describe("sidebar session feedback", () => {
     expect(sidebar.textContent).toContain("Fixture page failed");
     pending = createDeferred<typeof first>();
     button().click();
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(button().disabled).toBe(true);
     expect(harness.list).toHaveBeenCalledTimes(2);
     pending.resolve({
@@ -114,46 +127,21 @@ describe("sidebar session feedback", () => {
     await vi.waitFor(() =>
       expect(request).toHaveBeenCalledWith("sessions.catalog.list", expect.anything()),
     );
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(sidebar.textContent).not.toContain(hint);
     const initialScan = pending;
     pending = createDeferred<SessionsCatalogListResult>();
     initialScan.resolve(catalogPage([], "fixture-next"));
     await vi.waitFor(() => expect(sidebar.sessionData.loadingMoreSessionCatalogIds.size).toBe(1));
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(sidebar.textContent).not.toContain(hint);
     pending.resolve(catalogPage([]));
     await vi.waitFor(() => expect(sidebar.textContent).toContain(hint));
     pending = createDeferred<SessionsCatalogListResult>();
     const refresh = sidebar.sessionData.refreshSessionCatalogs();
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(sidebar.textContent).not.toContain(hint);
-    const catalogs: SessionsCatalogListResult["catalogs"] = [
-      {
-        id: "fixture",
-        label: "Fixture catalog",
-        capabilities: { continueSession: true, archive: false },
-        hosts: [
-          {
-            hostId: "gateway:fixture",
-            label: "Fixture host",
-            kind: "gateway",
-            connected: true,
-            sessions: [
-              {
-                threadId: "fixture-thread",
-                name: "Catalog conversation",
-                status: "stored",
-                archived: false,
-                createdActor: { type: "human", id: "profile-ada", label: "Ada" },
-                canContinue: true,
-                canArchive: false,
-              },
-            ],
-          },
-        ],
-      },
-    ];
+    const catalogs = matchingCatalog().catalogs;
     pending.resolve({ catalogs });
     await refresh;
     await vi.waitFor(() => expect(sidebar.textContent).toContain("Catalog conversation"));
@@ -166,110 +154,116 @@ describe("sidebar session feedback", () => {
       }),
     );
     sidebar.requestUpdate();
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(sidebar.textContent).not.toContain(hint);
   });
 
-  it.each(["matching", "empty"] as const)(
-    "waits for a pending catalog host to publish its %s result",
-    async (outcome) => {
-      const { sidebar, gatewayHarness, request } = await mountRoster(undefined, []);
-      await selectFilter(sidebar, "owner:profile-ada");
-      await vi.waitFor(() => expect(sidebar.textContent).toContain(hint));
-      const catalog: SessionsCatalogListResult["catalogs"][number] = {
-        id: "fixture",
-        label: "Fixture catalog",
-        capabilities: { continueSession: true, archive: false },
+  it("waits for a pending catalog host to publish its matching result", async () => {
+    const { sidebar, gatewayHarness, request } = await mountRoster(undefined, []);
+    await selectFilter(sidebar, "owner:profile-ada");
+    await vi.waitFor(() => expect(sidebar.textContent).toContain(hint));
+    const catalog: SessionsCatalogListResult["catalogs"][number] = {
+      id: "fixture",
+      label: "Fixture catalog",
+      capabilities: { continueSession: true, archive: false },
+      hosts: [
+        {
+          hostId: "node:fixture",
+          label: "Fixture host",
+          kind: "node",
+          connected: true,
+          pending: true,
+          sessions: [],
+        },
+      ],
+    };
+    const original = request.getMockImplementation()!;
+    request.mockImplementation((method, ...args) =>
+      method === "sessions.catalog.list"
+        ? Promise.resolve({ catalogs: [catalog] })
+        : original(method, ...args),
+    );
+    gatewayHarness.publish({
+      hello: {
+        ...gatewayHarness.gateway.snapshot.hello!,
+        features: { methods: ["sessions.catalog.list"] },
+      },
+    });
+    await sidebar.sessionData.refreshSessionCatalogs();
+    await settleLitElement(sidebar);
+    const params = request.mock.calls.findLast(
+      ([method]) => method === "sessions.catalog.list",
+    )?.[1];
+    expect(params).toMatchObject({
+      agentId: "main",
+      allowPartialResults: true,
+      progressId: expect.any(String),
+    });
+    expect(sidebar.textContent).not.toContain(hint);
+
+    gatewayHarness.publishEvent("sessions.catalog.host", {
+      progressId: (params as { progressId: string }).progressId,
+      agentId: "main",
+      catalog: {
+        ...catalog,
         hosts: [
           {
-            hostId: "node:fixture",
-            label: "Fixture host",
-            kind: "node",
-            connected: true,
-            pending: true,
-            sessions: [],
+            ...catalog.hosts[0]!,
+            pending: false,
+            sessions: matchingCatalog().catalogs[0]!.hosts[0]!.sessions,
           },
         ],
-      };
-      const original = request.getMockImplementation()!;
-      request.mockImplementation((method, ...args) =>
-        method === "sessions.catalog.list"
-          ? Promise.resolve({ catalogs: [catalog] })
-          : original(method, ...args),
-      );
-      gatewayHarness.publish({
-        hello: {
-          ...gatewayHarness.gateway.snapshot.hello!,
-          features: { methods: ["sessions.catalog.list"] },
-        },
-      });
-      await sidebar.sessionData.refreshSessionCatalogs();
-      await sidebar.updateComplete;
-      const params = request.mock.calls.findLast(
-        ([method]) => method === "sessions.catalog.list",
-      )?.[1];
-      expect(params).toMatchObject({
-        agentId: "main",
-        allowPartialResults: true,
-        progressId: expect.any(String),
-      });
-      expect(sidebar.textContent).not.toContain(hint);
+      },
+    });
+    await settleLitElement(sidebar);
+    expect(sidebar.textContent).toContain("Catalog conversation");
+    expect(sidebar.textContent).not.toContain(hint);
+  });
 
-      gatewayHarness.publishEvent("sessions.catalog.host", {
-        progressId: (params as { progressId: string }).progressId,
-        agentId: "main",
-        catalog: {
-          ...catalog,
-          hosts: [
-            {
-              ...catalog.hosts[0]!,
-              pending: false,
-              sessions:
-                outcome === "matching"
-                  ? [
-                      {
-                        threadId: "fixture-thread",
-                        name: "Catalog conversation",
-                        status: "stored",
-                        archived: false,
-                        createdActor: { type: "human", id: "profile-ada", label: "Ada" },
-                        canContinue: true,
-                        canArchive: false,
-                      },
-                    ]
-                  : [],
-            },
-          ],
-        },
-      });
-      await sidebar.updateComplete;
-      if (outcome === "matching") {
-        expect(sidebar.textContent).toContain("Catalog conversation");
-        expect(sidebar.textContent).not.toContain(hint);
-      } else {
-        expect(sidebar.textContent).toContain(hint);
-      }
-    },
-  );
-
-  describe.each(["chip", "roster"] as const)("%s personal filter", (mode) => {
-    it.each(["owner:profile-ada", "involving-me"])(
-      "explains settled empty %s and preserves recovery",
-      async (filter) => {
-        const { sidebar, context, result } = await mountRoster(undefined, []);
-        await useSidebarMode(sidebar, context, mode);
+  it.each([
+    { mode: "chip", filter: "involving-me", failure: false },
+    { mode: "roster", filter: "owner:profile-ada", failure: false },
+    { mode: "roster", filter: "owner:profile-ada", failure: true },
+  ] as const)(
+    "explains only settled empty $mode filters ($filter, failure=$failure)",
+    async ({ mode, filter, failure }) => {
+      const { sidebar, context, result, sessions } = await mountRoster(undefined, []);
+      await useSidebarMode(sidebar, context, mode);
+      if (!failure) {
         for (const status of ["active", "archived", "all"]) {
           await selectFilter(sidebar, "status:" + status);
+          expect(
+            sidebar.querySelector<HTMLInputElement>(
+              `#sidebar-sessions-status input[value="${status}"]`,
+            )?.checked,
+          ).toBe(true);
           expect(sidebar.textContent).not.toContain(hint);
         }
         await selectFilter(sidebar, "status:active");
-        await selectFilter(sidebar, filter);
-        await vi.waitFor(() => expect(sidebar.textContent).toContain(hint));
+      }
+      await selectFilter(sidebar, filter);
+      await vi.waitFor(() => expect(sidebar.textContent).toContain(hint));
+      if (failure) {
+        const pending = createDeferred<never>();
+        sessions.list.mockImplementation(async () => await pending.promise);
+        const refresh = rosterActivityStore(context).refresh();
+        await settleLitElement(sidebar);
+        expect(sidebar.textContent).not.toContain(hint);
+        pending.reject(new Error("Fixture list failed"));
+        await refresh;
+        await settleLitElement(sidebar);
+        expect(sidebar.textContent).not.toContain(hint);
+      } else {
         if (mode === "chip") {
           expect(sidebar.querySelectorAll("[data-session-section]")).toHaveLength(0);
         }
         for (const status of ["archived", "all"] as const) {
           await selectFilter(sidebar, "status:" + status);
+          expect(
+            sidebar.querySelector<HTMLInputElement>(
+              `#sidebar-sessions-status input[value="${status}"]`,
+            )?.checked,
+          ).toBe(true);
           expect(sidebar.textContent).not.toContain(hint);
         }
         await selectFilter(sidebar, "status:active");
@@ -284,43 +278,12 @@ describe("sidebar session feedback", () => {
           };
           sidebar.requestUpdate();
         }
-        await sidebar.updateComplete;
+        await settleLitElement(sidebar);
         expect(sidebar.textContent).not.toContain(hint);
-        if (mode === "chip") {
-          sidebar.querySelector<HTMLButtonElement>(".sidebar-session-filter-summary")!.click();
-        } else {
-          await selectFilter(sidebar, "owner:");
-        }
-        await sidebar.updateComplete;
-        expect(sidebar.textContent).not.toContain(hint);
-      },
-    );
-
-    it("does not claim no matches before initial data, during refresh, or after a list error", async () => {
-      const filter = "owner:profile-ada";
-      const { sidebar, context, sessions } = await mountRoster(undefined, []);
-      await useSidebarMode(sidebar, context, mode);
-      await selectFilter(sidebar, filter);
-      await vi.waitFor(() => expect(sidebar.textContent).toContain(hint));
-      const pending = createDeferred<never>();
-      sessions.list.mockImplementation(async () => await pending.promise);
-      const refresh =
-        mode === "roster"
-          ? rosterActivityStore(context).refresh()
-          : sidebar.sessionData.refreshSidebarSessions();
-      await sidebar.updateComplete;
-      expect(sidebar.textContent).not.toContain(hint);
-      pending.reject(new Error("Fixture list failed"));
-      await refresh;
-      await sidebar.updateComplete;
-      expect(sidebar.textContent).not.toContain(hint);
-      if (mode === "chip") {
-        sidebar.sessionData.sessionsResult = null;
-        sidebar.sessionData.sessionMutationError = null;
-        sidebar.requestUpdate();
-        await sidebar.updateComplete;
+        await selectFilter(sidebar, "owner:");
+        await settleLitElement(sidebar);
         expect(sidebar.textContent).not.toContain(hint);
       }
-    });
-  });
+    },
+  );
 });

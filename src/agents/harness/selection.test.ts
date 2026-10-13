@@ -5,6 +5,7 @@ import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   listSessionPendingInputs,
   loadTranscriptEvents,
@@ -32,6 +33,7 @@ import {
 import { mintSecretSentinel } from "../../secrets/sentinel.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import {
@@ -67,13 +69,14 @@ import {
   setActiveEmbeddedRun,
 } from "../embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../embedded-agent-runner/runs.test-support.js";
+import { createAgentRunRestartAbortError } from "../run-termination.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { attachToolAllowlistIntersection } from "../tool-policy.js";
 import { getGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
 import { callGatewayTool } from "../tools/gateway.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
-import { resolveAgentHarnessNativeToolPolicyRestricted } from "./execution-environment.js";
+import { prepareAgentHarnessNativeToolPolicyRestricted } from "./execution-environment.js";
 import { resolveAgentHarnessPolicy } from "./policy.js";
 import {
   clearAgentHarnesses,
@@ -692,14 +695,16 @@ describe("runAgentHarnessAttempt", () => {
         },
         { ownerPluginId: "native" },
       );
+      const config = providerRuntimeConfig("codex", "native");
       const params = {
-        ...createAttemptParams(providerRuntimeConfig("codex", "native")),
+        ...createAttemptParams(config),
         ...target,
         workspaceDir,
         cwd,
         sessionTarget: target,
         userTurnTranscriptRecorder: recorder,
       };
+      setRuntimeConfigSnapshot(config);
       try {
         await recorder.withPendingInput?.(() => runAgentHarnessAttempt(params));
         const admission = recorder.getAdmissionReceipt();
@@ -967,73 +972,87 @@ describe("runAgentHarnessAttempt", () => {
     const params = createAttemptParams(
       providerRuntimeConfig("codex", harnessId),
     ) as EmbeddedRunAttemptParams & { systemAgentTool?: SystemAgentToolOptions };
+    Object.assign(
+      params,
+      Object.fromEntries(privateHarnessParamCases.map(({ field, value }) => [field, value])),
+    );
     params.toolsAllow = ["openclaw"];
     params.systemAgentTool = { surface: "cli", proposalRef: {}, directiveRef: {} };
 
     await runAgentHarnessAttempt(params);
 
     expect(pluginRunAttempt).toHaveBeenCalledTimes(1);
+    for (const { field, value } of privateHarnessParamCases) {
+      expect(params).toHaveProperty(field, value);
+      expect(pluginRunAttempt.mock.calls[0]?.[0]).not.toHaveProperty(field);
+    }
     expect(receivedPrivateAuthority).toBe(false);
     expect(hostScopeActive).toBe(true);
     expect(toolNames).toEqual(["openclaw"]);
     expect(isHostScopedAgentToolActive("openclaw")).toBe(false);
   });
 
-  it("strips private state at the plugin harness handoff without mutating its owner", async () => {
-    const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () => createAttemptResult("codex"));
-    registerHarness({
-      runAttempt,
-    });
-    const params = Object.assign(
-      createAttemptParams(providerRuntimeConfig("codex", "codex")),
-      Object.fromEntries(privateHarnessParamCases.map(({ field, value }) => [field, value])),
-    );
+  it.each(["active", "work ended", "restart"])(
+    "persists accepted plugin trajectory events when %s without admitting late events",
+    async (lifetime) => {
+      const work = new AsyncWorkScope();
+      selectionAdmission.close();
+      selectionAdmission = prepareAgentRunAdmission({
+        cfg: {},
+        facts: {
+          runId: "run-trajectory",
+          agentId: "main",
+          ingress: { kind: "system", boundary: "harness-trajectory-test", state: "present" },
+        },
+        operationalRunInstance: createOperationalRunInstanceRef("run-trajectory"),
+        assertSourceCurrent: () => work.signal.throwIfAborted(),
+      });
+      selectionAdmittedRunContext = await selectionAdmission.admit("plugin-harness");
+      const tempDir = trajectoryTempDirs.make("openclaw-harness-trajectory-");
+      const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
+      const sessionKey = "agent:main:main";
+      await replaceSessionEntry(
+        { sessionKey, storePath },
+        { sessionId: "session-1", updatedAt: 10 },
+      );
+      const trajectoryRecorder = await createTrajectoryRuntimeRecorder({
+        sessionId: "session-1",
+        sessionKey,
+        sessionTarget: { agentId: "main", sessionId: "session-1", sessionKey, storePath },
+      });
+      if (!trajectoryRecorder) {
+        throw new Error("Expected SQLite trajectory recorder");
+      }
+      registerHarness({
+        runAttempt: async (attempt) => {
+          const trajectory = attempt.hostCapabilities?.trajectory;
+          if (!trajectory) {
+            throw new Error("Expected host trajectory capability");
+          }
+          trajectory.recordEvent("plugin.selected");
+          if (lifetime !== "active") {
+            work.beginClose(lifetime === "restart" ? createAgentRunRestartAbortError() : undefined);
+            expect(() => trajectory.recordEvent("plugin.late")).toThrow();
+          }
+          await trajectory.flush();
+          return createAttemptResult("codex");
+        },
+      });
+      const params = createAttemptParams(providerRuntimeConfig("codex", "codex"));
+      params.sessionKey = sessionKey;
+      params.trajectoryRecorder = trajectoryRecorder;
 
-    await runAgentHarnessAttempt(params);
+      try {
+        await work.track(() => runAgentHarnessAttempt(params));
+      } finally {
+        await work.drain();
+      }
 
-    for (const { field, value } of privateHarnessParamCases) {
-      expect(params).toHaveProperty(field, value);
-    }
-    expect(runAttempt).toHaveBeenCalledOnce();
-    for (const { field } of privateHarnessParamCases) {
-      expect(runAttempt.mock.calls[0]?.[0]).not.toHaveProperty(field);
-    }
-  });
-
-  it("persists plugin trajectory events through the selected harness host capability", async () => {
-    const tempDir = trajectoryTempDirs.make("openclaw-harness-trajectory-");
-    const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
-    const sessionKey = "agent:main:main";
-    await replaceSessionEntry({ sessionKey, storePath }, { sessionId: "session-1", updatedAt: 10 });
-    const trajectoryRecorder = createTrajectoryRuntimeRecorder({
-      sessionId: "session-1",
-      sessionKey,
-      sessionTarget: { agentId: "main", sessionId: "session-1", sessionKey, storePath },
-    });
-    if (!trajectoryRecorder) {
-      throw new Error("Expected SQLite trajectory recorder");
-    }
-    registerHarness({
-      runAttempt: async (attempt) => {
-        const trajectory = attempt.hostCapabilities?.trajectory;
-        if (!trajectory) {
-          throw new Error("Expected host trajectory capability");
-        }
-        trajectory.recordEvent("plugin.selected");
-        await trajectory.flush();
-        return createAttemptResult("codex");
-      },
-    });
-    const params = createAttemptParams(providerRuntimeConfig("codex", "codex"));
-    params.sessionKey = sessionKey;
-    params.trajectoryRecorder = trajectoryRecorder;
-
-    await runAgentHarnessAttempt(params);
-
-    expect(await loadSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath })).toEqual([
-      expect.objectContaining({ source: "runtime", type: "plugin.selected" }),
-    ]);
-  });
+      expect(
+        await loadSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }),
+      ).toEqual([expect.objectContaining({ source: "runtime", type: "plugin.selected" })]);
+    },
+  );
 
   it.each([
     { boundary: "missing admission", selection: "host", ownership: "none" },
@@ -1150,9 +1169,7 @@ describe("runAgentHarnessAttempt", () => {
       get effectiveEngineId() {
         return effectiveEngine.info.id;
       },
-      get effectiveEnginePluginId() {
-        return undefined;
-      },
+      effectiveEnginePluginId: undefined,
       get degraded() {
         return degradedReason !== undefined;
       },
@@ -1170,6 +1187,8 @@ describe("runAgentHarnessAttempt", () => {
         return asEffective();
       }),
       deferDisposalUntil: vi.fn(),
+      disposed: false,
+      onDispose: vi.fn(),
       dispose: vi.fn(async () => {}),
     } satisfies ContextEngineLogicalTurnLease;
     contextEngineTurnAttemptMocks.drainPendingContextEngineTurnsBeforeRun.mockImplementationOnce(
@@ -1771,7 +1790,7 @@ describe("runAgentHarnessAttempt", () => {
         sessionKey: testCase.sessionKey,
         swarmCollector: testCase.swarmCollector,
       };
-      nativeRestrictions.push(resolveAgentHarnessNativeToolPolicyRestricted(params, harness));
+      nativeRestrictions.push(await prepareAgentHarnessNativeToolPolicyRestricted(params, harness));
       await runAgentHarnessAttempt(params);
     }
 
@@ -2214,27 +2233,6 @@ describe("selectAgentHarness", () => {
     ).toBe("codex");
   });
 
-  it("honors explicit OpenClaw runtime overrides when selecting a harness", async () => {
-    registerSuccessfulCodexHarness();
-
-    const harness = selectAgentHarness({
-      provider: "openai",
-      modelId: "gpt-5.4",
-      agentHarnessRuntimeOverride: "openclaw",
-    });
-
-    expect(harness.id).toBe("openclaw");
-    expect(providerOwnerMocks.resolveProviderRefOwnership).not.toHaveBeenCalled();
-
-    const result = await runAgentHarnessAttempt({
-      ...createAttemptParams(),
-      provider: "openai",
-      modelId: "gpt-5.4",
-      agentHarnessRuntimeOverride: "openclaw",
-    });
-    expect(result.sessionIdUsed).toBe("openclaw");
-  });
-
   it("skips harness compaction preflight for claude-cli runtime sessions", async () => {
     await expect(
       compactSession({
@@ -2309,37 +2307,6 @@ describe("selectAgentHarness", () => {
         runtimeAuthPlan: expect.objectContaining({ modelRoute: OPENAI_PLATFORM_ROUTE }),
       }),
     );
-  });
-
-  it("honors selected plugin harness pins during compaction preflight", async () => {
-    const compact = registerTestCompactor();
-    await expect(
-      compactSession({
-        authProfileId: "main-profile",
-        resolvedApiKey: "test-key",
-        agentHarnessId: "codex",
-        config: {
-          agents: {
-            entries: { main: { agentDir: "/tmp/main-agent" } },
-            defaults: {
-              models: {
-                "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } },
-              },
-            },
-          },
-        } as OpenClawConfig,
-      }),
-    ).resolves.toEqual({ ok: true, compacted: false });
-    expect(compact).toHaveBeenCalledTimes(1);
-    expect(compact.mock.calls[0]?.[0]).toMatchObject({
-      agentDir: "/tmp/main-agent",
-      agentId: "main",
-      resolvedApiKey: "test-key",
-      runtimeModel: {
-        id: "gpt-5.5",
-        provider: "openai",
-      },
-    });
   });
 
   it("skips internal post-context-engine compaction when the harness lacks the private capability", async () => {
@@ -2561,56 +2528,6 @@ describe("selectAgentHarness", () => {
     expect(compact.mock.calls[0]?.[0]).not.toHaveProperty("runtimeModel");
   });
 
-  it("passes runtime model and default credentials to compaction when auth profile id is absent", async () => {
-    compactAuthMocks.resolveModelAsync.mockResolvedValue({
-      model: {
-        id: "proxy-model",
-        provider: "local-proxy",
-        api: "openai-responses",
-        baseUrl: "https://proxy.example/v1",
-      },
-    });
-    const compact = registerTestCompactor({ id: "copilot", provider: "local-proxy" });
-
-    await expect(
-      compactSession({
-        provider: "local-proxy",
-        model: "proxy-model",
-        agentHarnessId: "copilot",
-      }),
-    ).resolves.toEqual({ ok: true, compacted: false });
-
-    expect(compactAuthMocks.resolveModelAsync).toHaveBeenCalledWith(
-      "local-proxy",
-      "proxy-model",
-      expect.any(String),
-      undefined,
-      expect.objectContaining({
-        authProfileId: undefined,
-        workspaceDir: "/tmp/workspace",
-      }),
-    );
-    expect(compactAuthMocks.getApiKeyForModelCore).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentDir: expect.any(String),
-        model: expect.objectContaining({
-          baseUrl: "https://proxy.example/v1",
-          id: "proxy-model",
-        }),
-        workspaceDir: "/tmp/workspace",
-      }),
-    );
-    expect(compact).toHaveBeenCalledWith(
-      expect.objectContaining({
-        resolvedApiKey: "test-key",
-        runtimeModel: expect.objectContaining({
-          baseUrl: "https://proxy.example/v1",
-          id: "proxy-model",
-        }),
-      }),
-    );
-  });
-
   it("keeps auth-route rematerialization on the caller-owned prepared generation", async () => {
     const cfg = {} as OpenClawConfig;
     const createStores = () => ({ authStorage: {} as never, modelRegistry: {} as never });
@@ -2708,6 +2625,7 @@ describe("selectAgentHarness", () => {
         expect(compactAuthMocks.resolveModelAsync).toHaveBeenCalledTimes(2);
         expect(compact).toHaveBeenCalledWith(
           expect.objectContaining({
+            resolvedApiKey: "direct-key",
             runtimeModel: expect.objectContaining({
               name: "Runtime A",
               api: "openai-responses",

@@ -1,8 +1,12 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { SessionsResolveParams } from "../../packages/gateway-protocol/src/index.js";
-import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
-import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
+import {
+  replaceSessionEntry,
+  replaceSessionEntrySync,
+} from "../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
@@ -24,7 +28,10 @@ import {
   withPreparedSessionResolve,
 } from "./sessions-resolve.js";
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  memorySessionActorOwners.reset();
+});
 
 function addUnrelatedSessions() {
   for (let index = 0; index < 96; index++) {
@@ -45,7 +52,7 @@ it("resolves free ACP aliases from current resident facts without SQLite or disc
       label: "Free ACP",
     };
     replaceSessionEntrySync({ agentId: "harness", sessionKey: acpKey }, acpEntry);
-    writeAcpSessionMetaForMigration({
+    seedCanonicalAcpSessionMeta({
       sessionKey: acpKey.replace("agent:harness:", "agent:HARNESS:"),
       lifecycleRevision: acpEntry.lifecycleRevision,
       meta: {
@@ -340,7 +347,7 @@ it("searches stored and selected model identities from retained row facts withou
 it("resolves authorized exact incognito keys without admitting them to discovery or resident rows", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const incognitoKey = "agent:main:dashboard:incognito-12345678-0aaa-4000-8000-000000000002";
-    replaceSessionEntrySync(
+    await replaceSessionEntry(
       { agentId: "main", sessionKey: incognitoKey },
       { sessionId: "private-resolve", updatedAt: 1, incognito: true, label: "Private" },
     );
@@ -380,18 +387,45 @@ it("resolves authorized exact incognito keys without admitting them to discovery
 
 it("prepares a cold exact resolution and refuses consumption after its projection owner changes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const archivedKey = "agent:main:archived-resolve";
+    const archivedKey = "agent:harness:acp:44444444-1111-4111-8111-111111111111";
     replaceSessionEntrySync(
-      { agentId: "main", sessionKey: archivedKey },
+      { agentId: "harness", sessionKey: archivedKey },
       { sessionId: "archived-resolve", updatedAt: 1, archivedAt: 1 },
     );
+    seedCanonicalAcpSessionMeta({
+      sessionKey: archivedKey,
+      sessionId: "archived-resolve",
+      meta: {
+        backend: "fixture",
+        agent: "harness",
+        runtimeSessionName: "archived-runtime",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: 1,
+      },
+    });
     const projection = await createSessionRowProjection({ cfg: {} });
     const consume = vi.fn((result) => result);
     try {
-      expect(projection.describe({ agentId: "main", key: archivedKey })).toBeUndefined();
-      await expect(
-        withPreparedSessionResolve({ projection, client: null, p: { key: archivedKey } }, consume),
-      ).resolves.toMatchObject({ ok: true, key: archivedKey, agentId: "main" });
+      expect(projection.describe({ agentId: "harness", key: archivedKey })).toBeUndefined();
+      const reads = observeMainThreadReads();
+      try {
+        await expect(
+          withPreparedSessionResolve(
+            { projection, client: null, p: { shortId: "44444444" } },
+            consume,
+          ),
+        ).resolves.toMatchObject({ ok: true, key: archivedKey, agentId: "harness" });
+        await expect(
+          withPreparedSessionResolve(
+            { projection, client: null, p: { key: archivedKey } },
+            consume,
+          ),
+        ).resolves.toMatchObject({ ok: true, key: archivedKey, agentId: "harness" });
+        reads.expectIdle();
+      } finally {
+        reads.restore();
+      }
       consume.mockClear();
       await expect(
         withPreparedSessionResolve(

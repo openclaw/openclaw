@@ -7,7 +7,10 @@ import { describe, expect, it } from "vitest";
 import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
-  appendTranscriptMessageSync,
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
@@ -44,6 +47,7 @@ async function createSqliteTranscriptFixture(params: {
   const sessionKey = "main";
   const agentId = "main";
   const storePath = path.join(dir, "sessions.json");
+  setRuntimeConfigSnapshot({});
   await replaceSessionEntry(
     { agentId, sessionKey, storePath },
     { sessionId: params.sessionId, updatedAt: Date.now() },
@@ -56,6 +60,7 @@ async function cleanupFixture(fixture: { dir: string }) {
   closeOpenClawAgentDatabasesForTest();
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
+  clearRuntimeConfigSnapshot();
   fs.rmSync(fixture.dir, { recursive: true, force: true });
 }
 
@@ -68,24 +73,6 @@ async function readTranscriptEvents(
     sessionKey: fixture.sessionKey,
     storePath: fixture.storePath,
   })) as Record<string, unknown>[];
-}
-
-async function appendHelloAndRequireId(fixture: SqliteTranscriptFixture): Promise<string> {
-  const appended = await appendInjectedAssistantMessageToTranscript({
-    agentId: fixture.agentId,
-    sessionId: fixture.sessionId,
-    sessionKey: fixture.sessionKey,
-    storePath: fixture.storePath,
-    message: "hello",
-  });
-  expect(appended.ok).toBe(true);
-  expect(appended.messageId).toBeTypeOf("string");
-  const messageId = appended.messageId;
-  if (!messageId) {
-    throw new Error("expected appended message id");
-  }
-  expect(messageId.length).toBeGreaterThan(0);
-  return messageId;
 }
 
 async function readLastTranscriptRecord(
@@ -129,6 +116,7 @@ describe("gateway chat.inject transcript writes", () => {
           ...fixture,
           message: "Image ready",
           content: [{ type: "text", text: "Image ready" }, ...blocks],
+          stopReason: "aborted",
           onMessageCommitted: (receipt, acceptCompletion) => {
             acceptCompletion(async () => {
               entered.resolve();
@@ -157,7 +145,10 @@ describe("gateway chat.inject transcript writes", () => {
         );
         expect(updates).toEqual([]);
         release.resolve();
-        expect(await pending).toMatchObject({ ok: !failCallback });
+        expect(await pending).toMatchObject({
+          ok: !failCallback,
+          ...(!failCallback ? { message: { stopReason: "aborted" } } : {}),
+        });
         expect(updates).toHaveLength(failCallback ? 0 : 1);
         const entries = await listManagedImageRecordEntries({ stateDir: fixture.dir });
         expect(entries).toHaveLength(1);
@@ -168,6 +159,7 @@ describe("gateway chat.inject transcript writes", () => {
         expect((await readLastTranscriptRecord(fixture)).message).toMatchObject({
           content: [{ type: "text", text: "Image ready" }],
           openclawDisplayContent: [{ type: "text", text: "Image ready" }, ...blocks],
+          stopReason: "aborted",
         });
       } finally {
         release.resolve();
@@ -178,89 +170,7 @@ describe("gateway chat.inject transcript writes", () => {
     },
   );
 
-  it.each(["aborted"] as const)(
-    "retains %s on both display and model content",
-    async (stopReason) => {
-      const fixture = await createSqliteTranscriptFixture({
-        prefix: "openclaw-chat-inject-display-content-",
-        sessionId: "sess-display-content",
-      });
-      const modelContent = [
-        { type: "thinking", thinking: "reasoning" },
-        { type: "text", text: "Slides ready" },
-        { type: "toolCall", id: "call-1", name: "read", arguments: {} },
-      ];
-      const attachment = {
-        type: "attachment",
-        attachment: { kind: "document", label: "slides.pptx" },
-      };
-
-      try {
-        const appended = await appendInjectedAssistantMessageToTranscript({
-          agentId: fixture.agentId,
-          sessionId: fixture.sessionId,
-          sessionKey: fixture.sessionKey,
-          storePath: fixture.storePath,
-          message: "Slides ready",
-          content: [...modelContent, attachment],
-          stopReason,
-        });
-        const last = (await readLastTranscriptRecord(fixture)) as {
-          message?: Record<string, unknown>;
-        };
-
-        expect(appended.message).toMatchObject({
-          role: "assistant",
-          content: [...modelContent, attachment],
-          stopReason,
-        });
-        expect(last.message).toMatchObject({
-          content: modelContent,
-          openclawDisplayContent: [...modelContent, attachment],
-          stopReason,
-        });
-      } finally {
-        await cleanupFixture(fixture);
-      }
-    },
-  );
-
-  it("preserves parent links after an oversized transcript row", async () => {
-    const fixture = await createSqliteTranscriptFixture({
-      prefix: "openclaw-chat-inject-large-",
-      sessionId: "sess-1",
-    });
-
-    try {
-      const existing = appendTranscriptMessageSync(
-        {
-          agentId: fixture.agentId,
-          sessionId: fixture.sessionId,
-          sessionKey: fixture.sessionKey,
-          storePath: fixture.storePath,
-        },
-        {
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "x".repeat(9 * 1024 * 1024) }],
-          },
-        },
-      );
-
-      const messageId = await appendHelloAndRequireId(fixture);
-      const last = await readLastTranscriptRecord(fixture);
-
-      expect(existing).toMatchObject({ ok: true });
-      expect(last.type).toBe("message");
-      expect(last).toHaveProperty("id", messageId);
-      expect(last).toHaveProperty("message");
-      expect(last).toHaveProperty("parentId", existing.ok ? existing.value?.messageId : undefined);
-    } finally {
-      await cleanupFixture(fixture);
-    }
-  });
-
-  it("emits a redacted injected message through its persisted transcript owner", async () => {
+  it("preserves injected source text through its persisted transcript owner", async () => {
     const fixture = await createSqliteTranscriptFixture({
       prefix: "openclaw-chat-inject-redact-",
       sessionId: "sess-redact",
@@ -280,14 +190,14 @@ describe("gateway chat.inject transcript writes", () => {
       });
 
       expect(appended.ok).toBe(true);
-      expect(JSON.stringify(appended.message)).not.toContain(fakeApiKey);
+      expect(JSON.stringify(appended.message)).toContain(fakeApiKey);
       expect(updates).toHaveLength(1);
       expect(updates[0]).toMatchObject({ sessionKey: "agent:main:main", agentId: "main" });
 
       const last = (await readLastTranscriptRecord(fixture)) as { message?: unknown };
-      expect(JSON.stringify(last.message)).not.toContain(fakeApiKey);
+      expect(JSON.stringify(last.message)).toContain(fakeApiKey);
       expect(updates[0]?.message).toEqual(last.message);
-      expect(JSON.stringify(updates[0]?.message)).not.toContain(fakeApiKey);
+      expect(JSON.stringify(updates[0]?.message)).toContain(fakeApiKey);
     } finally {
       unsubscribe();
       await cleanupFixture(fixture);

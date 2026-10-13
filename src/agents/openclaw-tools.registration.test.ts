@@ -1,22 +1,27 @@
 // Verifies OpenClaw tool registration, availability, and construction policy.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
 import type { WidgetPresenter } from "../plugins/plugin-registration.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import * as userProfileList from "../state/user-profile-list.js";
+import * as userProfileList from "../state/user-profile-list.native.js";
+import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
+import { createCodeModeTools } from "./code-mode.js";
 import { resolveCoreToolFactoryFamily } from "./core-tool-factory-descriptors.js";
 import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
 } from "./cron-creator-authority-context.js";
+import { createLazyExecTool } from "./lazy-exec-tool.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import {
   shouldIncludePrimarySessionToolForOpenClawTools,
   shouldIncludeProgressCardToolForOpenClawTools,
 } from "./openclaw-tools.registration.js";
+import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
 import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 import * as inProcessGateway from "./tools/in-process-gateway.js";
 
@@ -25,6 +30,8 @@ vi.mock("./openclaw-plugin-tools.js", () => ({
 }));
 
 type CreateOpenClawToolsOptions = NonNullable<Parameters<typeof createOpenClawTools>[0]>;
+beforeEach(() => setRuntimeConfigSnapshot({}));
+afterEach(() => clearRuntimeConfigSnapshot());
 
 function withDefaultRoster(config: OpenClawConfig | undefined): OpenClawConfig {
   return {
@@ -67,16 +74,76 @@ function expectToolNamed(
   return tool;
 }
 
+it("keeps top-level tool argument names distinct from the required schema keyword", () => {
+  const config: OpenClawConfig = {
+    agents: { entries: { main: {} } },
+    tools: { swarm: true },
+  };
+  const directTools = createOpenClawCodingTools({
+    config,
+    sessionKey: "agent:main:main",
+    wrapBeforeToolCallHook: false,
+    toolConstructionPlan: {
+      includeBaseCodingTools: true,
+      includeShellTools: true,
+      includeChannelTools: false,
+      includeOpenClawTools: true,
+      includePluginTools: false,
+    },
+  });
+  const codeModeTools = createCodeModeTools({ config, agentId: "main" });
+  expect(toolNames(directTools)).toEqual(expect.arrayContaining(["exec", "agents_wait"]));
+  expect(toolNames(codeModeTools)).toEqual(["exec", "wait"]);
+  const completionTools = finalizeAgentToolAvailability([createLazyExecTool()]);
+  expect(completionTools[0]!.parameters).not.toHaveProperty(["properties", "background"]);
+  expect(completionTools[0]!.parameters).not.toHaveProperty(["properties", "yieldMs"]);
+  const surfaces = {
+    direct: directTools,
+    codeMode: codeModeTools,
+    completion: completionTools,
+  };
+  // Kimi confuses a top-level argument named required with JSON Schema's keyword.
+  for (const [surface, tools] of Object.entries(surfaces)) {
+    for (const tool of tools) {
+      expect
+        .soft(tool.parameters, `${surface}:${tool.name}`)
+        .not.toHaveProperty(["properties", "required"]);
+    }
+  }
+});
+
 describe("openclaw-tools progress_card gating", () => {
   afterEach(() => {
     setEmbeddedMode(false);
   });
 
   it.each([false, true])(
+    "keeps progress-card policy with the admitted sandbox owner (allowed: %s)",
+    async (allowed) => {
+      const available = await withPreparedSessionCapabilityRead(() =>
+        shouldIncludeProgressCardToolForOpenClawTools({
+          config: {
+            agents: {
+              entries: {
+                main: { tools: { deny: allowed ? [] : ["progress_card"] } },
+                work: { tools: { deny: allowed ? ["progress_card"] : [] } },
+              },
+            },
+          },
+          agentId: "work",
+          sandboxAgentId: "main",
+          agentSessionKey: "agent:main:policy",
+        }),
+      );
+      expect(available).toBe(allowed);
+    },
+  );
+
+  it.each([false, true])(
     "gates personal instructions on multiple people (%s) without general filesystem access",
     (multipleProfiles) => {
       const identityCount = vi
-        .spyOn(userProfileList, "hasMultipleSessionSharingIdentities")
+        .spyOn(userProfileList, "hasMultipleSessionSharingIdentitiesNative")
         .mockReturnValue(multipleProfiles);
       const tools = createOpenClawCodingTools({
         sessionKey: "agent:main:dashboard:project",
@@ -102,7 +169,7 @@ describe("openclaw-tools progress_card gating", () => {
     },
   );
 
-  it("keeps human-question tools on permitted primary sessions", () => {
+  it("keeps human-question tools on permitted primary sessions", async () => {
     for (const toolName of ["ask_user", "secrets"] as const) {
       const includeTool = (agentSessionKey?: string) =>
         shouldIncludePrimarySessionToolForOpenClawTools(toolName, { agentSessionKey });
@@ -127,9 +194,11 @@ describe("openclaw-tools progress_card gating", () => {
     setEmbeddedMode(true);
 
     expect(
-      createFastToolNames({
-        agentSessionKey: "agent:main:subagent:worker",
-      }),
+      await withPreparedSessionCapabilityRead(() =>
+        createFastToolNames({
+          agentSessionKey: "agent:main:subagent:worker",
+        }),
+      ),
     ).not.toContain("ask_user");
     expect(
       createFastToolNames({

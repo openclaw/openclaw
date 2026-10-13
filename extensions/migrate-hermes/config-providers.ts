@@ -24,19 +24,7 @@ import {
 import { sanitizeName } from "./helpers.js";
 import { normalizeHermesCustomProviderId, resolveHermesConfiguredProviderId } from "./model.js";
 
-type HermesProviderSecretBinding = {
-  envVar: string;
-  provider: string;
-};
-
-type HermesProviderSource = {
-  id: string;
-  raw: Record<string, unknown>;
-  source: string;
-  custom: boolean;
-};
-
-function* providerSources(config: Record<string, unknown>): Generator<HermesProviderSource> {
+function* providerSources(config: Record<string, unknown>) {
   for (const [id, raw] of Object.entries(asNonArrayRecord(config.providers))) {
     if (isRecord(raw)) {
       yield { id, raw, source: `config.yaml:providers.${id}`, custom: false };
@@ -149,7 +137,7 @@ export function collectHermesProviders(
 export function collectHermesProviderSecretBindings(
   config: Record<string, unknown>,
   env: Record<string, string> = {},
-): HermesProviderSecretBinding[] {
+) {
   const bindings = collectHermesProviders(config, env).flatMap((entry) =>
     entry.apiKeyEnv ? [{ envVar: entry.apiKeyEnv, provider: entry.id }] : [],
   );

@@ -1,4 +1,3 @@
-// Openclaw Cross Os Release Workflow tests cover openclaw cross os release workflow script behavior.
 import { spawnSync } from "node:child_process";
 import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -18,7 +17,6 @@ const WORKFLOW_PATH = ".github/workflows/openclaw-cross-os-release-checks-reusab
 const RELEASE_CHECKS_PATH = ".github/workflows/openclaw-release-checks.yml";
 const WRAPPER_PATH = "scripts/github/run-openclaw-cross-os-release-checks.sh";
 const SCRIPT_PATH = "scripts/openclaw-cross-os-release-checks.ts";
-const HARNESS = "bash workflow/scripts/github/run-openclaw-cross-os-release-checks.sh";
 const BASH_BIN = process.platform === "win32" ? "bash" : "/bin/bash";
 
 type WorkflowStep = {
@@ -157,73 +155,47 @@ describe("cross-OS release checks workflow", () => {
     });
   });
 
-  it("filters the cross-OS runner matrix to a focused OS suite", () => {
-    const matrix = resolveRunnerMatrix({
-      mode: "both",
-      ref: "main",
-      suiteFilter: "windows/packaged-upgrade",
-      ubuntuRunner: "",
-      windowsRunner: "",
-      macosRunner: "",
-      varUbuntuRunner: "",
-      varWindowsRunner: "",
-      varMacosRunner: "",
-    });
-
-    expect(matrix.include).toEqual([
-      {
-        artifact_name: "windows",
-        display_name: "Windows",
-        node_version: "24.21.0",
-        lane: "upgrade",
-        os_id: "windows",
-        runner: "blacksmith-32vcpu-windows-2025",
-        suite: "packaged-upgrade",
-        suite_label: "packaged upgrade",
-      },
-      {
-        artifact_name: "windows-node26.1.0",
-        display_name: "Windows",
-        node_version: "26.1.0",
-        lane: "upgrade",
-        os_id: "windows",
-        runner: "blacksmith-32vcpu-windows-2025",
-        suite: "packaged-upgrade",
-        suite_label: "packaged upgrade (Node 26.1.0)",
-      },
-    ]);
-  });
-
-  it("filters the cross-OS runner matrix by suite across platforms", () => {
-    const matrix = resolveRunnerMatrix({
-      mode: "both",
-      ref: "main",
-      suiteFilter: "packaged-fresh",
-      ubuntuRunner: "",
-      windowsRunner: "",
-      macosRunner: "",
-      varUbuntuRunner: "",
-      varWindowsRunner: "",
-      varMacosRunner: "",
-    });
-
-    expect(matrix.include).toHaveLength(6);
-    expect([...new Set(matrix.include.map((entry) => entry.os_id))].toSorted()).toEqual([
-      "macos",
-      "ubuntu",
-      "windows",
-    ]);
-    expect(matrix.include.every((entry) => entry.suite === "packaged-fresh")).toBe(true);
-  });
-
-  it("runs the TypeScript release harness through the Windows-safe wrapper", () => {
-    const workflow = readFileSync(WORKFLOW_PATH, "utf8");
-
-    expect(workflow).toContain(HARNESS);
-    expect(workflow).toContain("suite_filter:");
-    expect(workflow).toContain('--suite-filter "${INPUT_SUITE_FILTER}"');
-    expect(workflow).not.toContain("TSX_VERSION");
-  });
+  it.each(["windows/packaged-upgrade", "packaged-fresh"])(
+    "filters the cross-OS runner matrix by %s",
+    (suiteFilter) => {
+      const matrix = resolveRunnerMatrix({ mode: "both", ref: "main", suiteFilter });
+      const workflow = readFileSync(WORKFLOW_PATH, "utf8");
+      expect(workflow).toContain("suite_filter:");
+      expect(workflow).toContain('--suite-filter "${INPUT_SUITE_FILTER}"');
+      if (suiteFilter === "windows/packaged-upgrade") {
+        expect(matrix.include).toEqual([
+          {
+            artifact_name: "windows",
+            display_name: "Windows",
+            node_version: "24.21.0",
+            lane: "upgrade",
+            os_id: "windows",
+            runner: "blacksmith-32vcpu-windows-2025",
+            suite: "packaged-upgrade",
+            suite_label: "packaged upgrade",
+          },
+          {
+            artifact_name: "windows-node26.1.0",
+            display_name: "Windows",
+            node_version: "26.1.0",
+            lane: "upgrade",
+            os_id: "windows",
+            runner: "blacksmith-32vcpu-windows-2025",
+            suite: "packaged-upgrade",
+            suite_label: "packaged upgrade (Node 26.1.0)",
+          },
+        ]);
+      } else {
+        expect(matrix.include).toHaveLength(6);
+        expect([...new Set(matrix.include.map((entry) => entry.os_id))].toSorted()).toEqual([
+          "macos",
+          "ubuntu",
+          "windows",
+        ]);
+        expect(matrix.include.every((entry) => entry.suite === "packaged-fresh")).toBe(true);
+      }
+    },
+  );
 
   it("preserves failed preparation and cross-OS test job conclusions", () => {
     const workflow = readWorkflow(WORKFLOW_PATH);
@@ -424,11 +396,12 @@ describe("cross-OS release checks workflow", () => {
     expect(crossOs.with?.previous_version).toBe(
       "${{ needs.prepare_release_package.outputs.upgrade_baseline }}",
     );
+    expect(crossOs.with?.workflow_ref).toBe("${{ github.sha }}");
     expect(docker.with?.published_upgrade_survivor_baseline).toBe(
       "${{ format('openclaw@{0}', needs.prepare_release_package.outputs.upgrade_baseline) }}",
     );
     expect(packageAcceptance.with?.published_upgrade_survivor_baseline).toBe(
-      "${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && format('openclaw@{0}', needs.prepare_release_package.outputs.upgrade_baseline) || 'openclaw@latest' }}",
+      "${{ inputs.qualification_baselines_json != '' && fromJSON(inputs.qualification_baselines_json).upgradeBaseline || (needs.resolve_target.outputs.package_acceptance_package_spec == '' && format('openclaw@{0}', needs.prepare_release_package.outputs.upgrade_baseline) || 'openclaw@latest') }}",
     );
   });
 
@@ -564,30 +537,12 @@ describe("cross-OS release checks workflow", () => {
     expect(crossOs.with?.required_companion_packages_json).toBeUndefined();
 
     expect(job(release, "docker_e2e_release_checks").with).toMatchObject({
-      package_artifact_digest: "${{ needs.prepare_release_package.outputs.artifact_digest }}",
-      package_artifact_id: "${{ needs.prepare_release_package.outputs.artifact_id }}",
-      package_artifact_name: "${{ needs.prepare_release_package.outputs.artifact_name }}",
-      package_artifact_run_attempt:
-        "${{ needs.prepare_release_package.outputs.artifact_run_attempt }}",
-      package_artifact_run_id: "${{ needs.prepare_release_package.outputs.artifact_run_id }}",
-      package_file_name: "${{ needs.prepare_release_package.outputs.package_file_name }}",
-      package_sha256: "${{ needs.prepare_release_package.outputs.package_sha256 }}",
-      package_source_sha: "${{ needs.prepare_release_package.outputs.source_sha }}",
-      package_version: "${{ needs.prepare_release_package.outputs.package_version }}",
       prepublish_plugin_registry_artifact_id:
         "${{ fromJSON(needs.prepare_release_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactId || '' }}",
       prepublish_plugin_registry_manifest_sha256:
         "${{ fromJSON(needs.prepare_release_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryManifestSha256 || '' }}",
     });
     expect(job(release, "package_acceptance_release_checks").with).toMatchObject({
-      artifact_digest: "${{ needs.prepare_release_package.outputs.artifact_digest }}",
-      artifact_id: "${{ needs.prepare_release_package.outputs.artifact_id }}",
-      artifact_name: "${{ needs.prepare_release_package.outputs.artifact_name }}",
-      artifact_run_attempt: "${{ needs.prepare_release_package.outputs.artifact_run_attempt }}",
-      artifact_run_id: "${{ needs.prepare_release_package.outputs.artifact_run_id }}",
-      package_file_name: "${{ needs.prepare_release_package.outputs.package_file_name }}",
-      package_source_sha: "${{ needs.prepare_release_package.outputs.source_sha }}",
-      package_version: "${{ needs.prepare_release_package.outputs.package_version }}",
       workflow_ref: "${{ github.sha }}",
     });
   });

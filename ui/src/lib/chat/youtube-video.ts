@@ -1,10 +1,4 @@
-export type YouTubeVideo = {
-  videoId: string;
-  startSeconds: number;
-  watchUrl: string;
-  embedUrl: string;
-  thumbnailUrl: string;
-};
+export type YouTubeVideo = NonNullable<ReturnType<typeof parseYouTubeVideoUrl>>;
 
 const YOUTUBE_HOSTS = new Set(["youtube.com", "www.youtube.com", "m.youtube.com"]);
 const YOUTUBE_EMBED_HOSTS = new Set(["youtube-nocookie.com", "www.youtube-nocookie.com"]);
@@ -28,17 +22,12 @@ function parseStartSeconds(value: string | null): number | undefined {
 }
 
 /** Resolves supported video links into fixed YouTube player and image origins. */
-export function parseYouTubeVideoUrl(raw: string | undefined): YouTubeVideo | undefined {
+export function parseYouTubeVideoUrl(raw: string | undefined) {
   if (!raw) {
     return undefined;
   }
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    return undefined;
-  }
-  if (url.protocol !== "https:" || url.username || url.password || url.port) {
+  const url = URL.parse(raw);
+  if (!url || url.protocol !== "https:" || url.username || url.password || url.port) {
     return undefined;
   }
   const query = url.searchParams;

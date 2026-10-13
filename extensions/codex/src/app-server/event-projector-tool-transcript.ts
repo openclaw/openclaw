@@ -51,7 +51,7 @@ import {
   type JsonValue,
 } from "./protocol.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
-import { sanitizeCodexToolArguments } from "./tool-progress-normalization.js";
+import { asCodexToolArguments } from "./tool-progress-normalization.js";
 import type { CodexTrajectoryRecorder } from "./trajectory.js";
 import type { CodexTranscriptCheckpointEntry } from "./transcript-checkpoint.js";
 import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
@@ -164,7 +164,7 @@ export class CodexToolTranscriptProjection {
     this.recordToolCall({
       id: params.callId,
       name: params.tool,
-      arguments: sanitizeCodexToolArguments(params.arguments),
+      arguments: asCodexToolArguments(params.arguments),
     });
   }
 
@@ -508,7 +508,11 @@ export class CodexToolTranscriptProjection {
   }
 
   emitAfterToolCallObservation(item: CodexThreadItem): void {
-    if (!this.shouldEmitAfterToolCallObservation(item)) {
+    if (
+      !isProjectedNativeToolItem(item) ||
+      this.afterToolCallObservedItemIds.has(item.id) ||
+      (this.options.nativePostToolUseRelayEnabled && isNativePostToolUseRelayItem(item))
+    ) {
       return;
     }
     const name = itemName(item);
@@ -668,13 +672,6 @@ export class CodexToolTranscriptProjection {
       error: formatMissingToolResultError({ id: firstMissingId, name }),
       ...(item && isMutatingNativeToolItem(item) ? { mutatingAction: true } : {}),
     });
-  }
-
-  private shouldEmitAfterToolCallObservation(item: CodexThreadItem): boolean {
-    if (!isProjectedNativeToolItem(item) || this.afterToolCallObservedItemIds.has(item.id)) {
-      return false;
-    }
-    return !(this.options.nativePostToolUseRelayEnabled && isNativePostToolUseRelayItem(item));
   }
 
   private createToolCallMessage(params: ToolTranscriptCallInput): AgentMessage {

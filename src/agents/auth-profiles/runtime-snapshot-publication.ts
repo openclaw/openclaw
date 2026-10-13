@@ -5,8 +5,7 @@ import {
   type OwnedRuntimeAuthProfileStoreSnapshotEntry,
 } from "./runtime-snapshot-owner.js";
 import { setRuntimeAuthProfileStoreSnapshotAtDatabasePath } from "./runtime-snapshots.js";
-import type { AuthProfileStoreOwner } from "./sqlite.js";
-import type { AuthProfileStore } from "./types.js";
+import type { AuthProfileStore, AuthProfileStoreOwner } from "./types.js";
 
 /** Publish canonical facts while retaining the current host's same-owner overlays. */
 export function publishPreparedRuntimeAuthProfileStoreSnapshot(

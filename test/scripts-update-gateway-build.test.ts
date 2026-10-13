@@ -256,81 +256,92 @@ describe("source update build output transaction", () => {
     },
   );
 
-  it("restores every prior owned output, removes newly created output, and restarts only after restoration", async () => {
-    const oldRoots = outputs().slice(0, -1);
-    for (const output of oldRoots) {
-      writeOutput(output, `old:${output}`);
-    }
-    const events: string[] = [];
-    const code = await runTransaction("stop", "restart", {
-      root: workdir,
-      lifecycle: async (command) => {
-        expect(fs.existsSync(path.join(resolveDistArtifactLockPath(workdir), "owner.json"))).toBe(
-          true,
-        );
-        events.push(command);
-        if (command === "restart") {
-          for (const output of oldRoots) {
-            expect(readOutput(output)).toBe(`old:${output}`);
-          }
-          expect(fs.existsSync(path.join(workdir, outputs().at(-1)!))).toBe(false);
-        }
-        return 0;
-      },
-      build: async () => {
-        events.push("build");
-        for (const output of outputs()) {
-          fs.rmSync(path.join(workdir, output), { recursive: true, force: true });
-          writeOutput(output, "partial");
-        }
-        return { exitCode: 17 };
-      },
-    });
-    expect(code).toBe(17);
-    expect(events).toEqual(["stop", "build", "restart"]);
-    expect(backups()).toEqual([]);
-  });
-
-  it("restores output and reports a non-Error build rejection as an Error", async () => {
-    writeOutput("dist", "old");
-    const events: string[] = [];
-    await expect(
-      runTransaction("stop", "restart", {
+  it.each(["exit", "non-Error rejection", "recovery failure"])(
+    "restores every output before restarting after build %s",
+    async (mode) => {
+      const oldRoots = outputs().slice(0, -1);
+      for (const output of oldRoots) {
+        writeOutput(output, `old:${output}`);
+      }
+      const events: string[] = [];
+      const result = runTransaction("stop", "restart", {
         root: workdir,
         lifecycle: async (command) => {
+          expect(fs.existsSync(path.join(resolveDistArtifactLockPath(workdir), "owner.json"))).toBe(
+            true,
+          );
           events.push(command);
-          return 0;
+          if (command === "restart") {
+            for (const output of oldRoots) {
+              expect(readOutput(output)).toBe(`old:${output}`);
+            }
+            expect(fs.existsSync(path.join(workdir, outputs().at(-1)!))).toBe(false);
+          }
+          return command === "restart" && mode === "recovery failure" ? 23 : 0;
         },
         build: async () => {
-          writeOutput("dist", "partial");
-          return vi
-            .fn<() => Promise<{ exitCode: number }>>()
-            .mockRejectedValue("compiler failed")();
+          events.push("build");
+          for (const output of outputs()) {
+            fs.rmSync(path.join(workdir, output), { recursive: true, force: true });
+            writeOutput(output, "partial");
+          }
+          if (mode !== "exit") {
+            return vi
+              .fn<() => Promise<{ exitCode: number }>>()
+              .mockRejectedValue(
+                mode === "non-Error rejection" ? "compiler failed" : new Error("build failed"),
+              )();
+          }
+          return { exitCode: 17 };
         },
-      }),
-    ).rejects.toMatchObject({ message: "Build failed", cause: "compiler failed" });
-    expect(events).toEqual(["stop", "restart"]);
-    expect(readOutput("dist")).toBe("old");
-    expect(backups()).toEqual([]);
-  });
+      });
+      if (mode === "exit") {
+        await expect(result).resolves.toBe(17);
+      } else if (mode === "non-Error rejection") {
+        await expect(result).rejects.toMatchObject({
+          message: "Build failed",
+          cause: "compiler failed",
+        });
+      } else {
+        await expect(result).rejects.toThrow("Previous build restored, but restart failed (23)");
+      }
+      expect(events).toEqual(["stop", "build", "restart"]);
+      for (const output of oldRoots) {
+        expect(readOutput(output)).toBe(`old:${output}`);
+      }
+      expect(backups()).toHaveLength(mode === "recovery failure" ? 1 : 0);
+    },
+  );
 
-  it("leaves preserved output available to the normal build on success", async () => {
-    writeOutput("dist/control-ui", "preserved UI");
-    writeOutput("dist", "old");
-    const code = await runTransaction("stop", "restart", {
-      root: workdir,
-      lifecycle: async () => 0,
-      build: async () => {
-        expect(readOutput("dist/control-ui")).toBe("preserved UI");
-        writeOutput("dist", "new");
-        return { exitCode: 0 };
-      },
-    });
-    expect(code).toBe(0);
-    expect(readOutput("dist")).toBe("new");
-    expect(readOutput("dist/control-ui")).toBe("preserved UI");
-    expect(backups()).toEqual([]);
-  });
+  it.each([0, 29])(
+    "keeps new output and retains recovery bytes only after restart failure (%s)",
+    async (restartCode) => {
+      writeOutput("dist/control-ui", "preserved UI");
+      writeOutput("dist", "old");
+      const result = runTransaction("stop", "restart", {
+        root: workdir,
+        lifecycle: async (command) => (command === "stop" ? 0 : restartCode),
+        build: async () => {
+          expect(readOutput("dist/control-ui")).toBe("preserved UI");
+          writeOutput("dist", "new");
+          return { exitCode: 0 };
+        },
+      });
+      if (restartCode) {
+        await expect(result).rejects.toThrow("previous output retained");
+      } else {
+        await expect(result).resolves.toBe(0);
+      }
+      expect(readOutput("dist")).toBe("new");
+      expect(readOutput("dist/control-ui")).toBe("preserved UI");
+      expect(backups()).toHaveLength(restartCode ? 1 : 0);
+      if (restartCode) {
+        expect(fs.readFileSync(path.join(workdir, backups()[0]!, "dist/marker"), "utf8")).toBe(
+          "old",
+        );
+      }
+    },
+  );
 
   it("does not build or replace outputs after a failed stop", async () => {
     writeOutput("dist", "old");
@@ -347,23 +358,6 @@ describe("source update build output transaction", () => {
     expect(built).toBe(false);
     expect(readOutput("dist")).toBe("old");
     expect(backups()).toEqual([]);
-  });
-
-  it("retains recovery bytes instead of replacing possibly live new chunks after restart failure", async () => {
-    writeOutput("dist", "old");
-    await expect(
-      runTransaction("stop", "restart", {
-        root: workdir,
-        lifecycle: async (command) => (command === "stop" ? 0 : 29),
-        build: async () => {
-          writeOutput("dist", "new");
-          return { exitCode: 0 };
-        },
-      }),
-    ).rejects.toThrow("previous output retained");
-    expect(readOutput("dist")).toBe("new");
-    expect(backups()).toHaveLength(1);
-    expect(fs.readFileSync(path.join(workdir, backups()[0]!, "dist/marker"), "utf8")).toBe("old");
   });
 
   it("retains output and ownership without restarting when build writers are unjoined", async () => {
@@ -438,22 +432,6 @@ describe("source update build output transaction", () => {
     expect(fs.readFileSync(path.join(workdir, "dist", "canary"), "utf8")).toBe("after-backup");
     expect(fs.statSync(path.join(workdir, "dist", "marker")).ino).toBe(inode);
     expect(backups()).toEqual([]);
-  });
-
-  it("restores prior output after a thrown build error and reports recovery restart failure", async () => {
-    writeOutput("dist", "old");
-    await expect(
-      runTransaction("stop", "restart", {
-        root: workdir,
-        lifecycle: async (command) => (command === "stop" ? 0 : 23),
-        build: async () => {
-          writeOutput("dist", "partial");
-          throw new Error("build failed");
-        },
-      }),
-    ).rejects.toThrow("Previous build restored, but restart failed (23)");
-    expect(readOutput("dist")).toBe("old");
-    expect(backups()).toHaveLength(1);
   });
 
   it("refuses a symlinked package parent before stopping the Gateway", async () => {

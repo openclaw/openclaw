@@ -136,7 +136,7 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.defaults.compaction.mode":
     'Compaction strategy mode: "safeguard" (the effective default when unset) applies guardrails to preserve recent context, while "default" uses baseline summarization without them. Set "default" only if safeguard summarization causes problems for your provider.',
   "agents.defaults.compaction.provider":
-    "Id of a registered compaction provider plugin used for summarization. When set and the provider is registered, its summarize() method is called instead of the built-in summarizeInStages pipeline. Falls back to built-in on provider failure. Leave unset to use the default built-in summarization.",
+    "Id of a registered compaction provider plugin used for summarization. When set and the provider is registered, its summarize() method is called instead of the built-in summary request. Falls back to built-in on provider failure. Leave unset to use the default built-in summarization.",
   "agents.defaults.compaction.thinkingLevel":
     'Thinking level used only for embedded OpenClaw compaction summaries: "off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max", "ultra", or "inherit". Defaults to the provider compaction preference, otherwise "low"; native local Ollama prefers "off". Set "inherit" to reuse the session level. Explicit settings override provider defaults, and the selected level is clamped to the actual compaction model/runtime. Native Codex app-server compaction ignores this setting because its compact request has no per-operation thinking override, and OpenClaw logs a warning.',
   "agents.defaults.compaction.keepRecentTokens":
@@ -160,7 +160,7 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.defaults.compaction.postCompactionSections":
     'Opt-in AGENTS.md H2/H3 section names re-injected after compaction. Leave unset or set [] to disable reinjection. Explicitly set ["Session Startup", "Red Lines"] to enable the legacy default pair.',
   "agents.defaults.compaction.timeoutSeconds":
-    "Safety window in seconds for each built-in compaction model request (default: 180). Multi-stage compaction refreshes the window as each serial request starts, so the complete compaction can take longer; plugin-owned compaction receives one window for the complete operation.",
+    "Seconds a built-in compaction model request may go without progress (default: 180). Each request start and each streamed output token refreshes the window, so a slow request that keeps streaming is not cut off; the complete compaction stops after 10 windows. Plugin-owned compaction receives one window for the complete operation.",
   "agents.defaults.compaction.model":
     "Optional provider/model or configured bare alias used only for compaction summarization. Bare aliases resolve before dispatch; a configured literal model ID wins if it collides with an alias. Leave unset to keep using the primary agent model.",
   "agents.defaults.compaction.maxActiveTranscriptBytes":

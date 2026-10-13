@@ -1,5 +1,8 @@
 import { MAX_IMAGE_BYTES, type MediaKind } from "@openclaw/media-core/constants";
 import { extensionForMime, kindFromMime, normalizeMimeType } from "@openclaw/media-core/mime";
+import type { Static } from "typebox";
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
+import type { ChatAttachmentSchema } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
 import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
@@ -18,16 +21,8 @@ import { registerMediaCleanupDrain } from "./server-media-cleanup-lifecycle.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import { formatForLog } from "./ws-log.js";
 
-export type ChatAttachment = {
-  type?: string;
-  mimeType?: string;
-  fileName?: string;
+export type ChatAttachment = SchemaContract<Omit<Static<typeof ChatAttachmentSchema>, "origin">> & {
   origin?: MediaFact["origin"];
-  content?: unknown;
-  sizeBytes?: number;
-  durationMs?: number;
-  width?: number;
-  height?: number;
 };
 
 export type ChatImageContent = {
@@ -36,6 +31,8 @@ export type ChatImageContent = {
   mimeType: string;
   fileName?: string;
   sourceIndex: number;
+  width?: number;
+  height?: number;
 };
 
 export type OffloadedRef = {
@@ -52,6 +49,28 @@ export type OffloadedRef = {
   width?: number;
   height?: number;
 };
+
+function projectOffloadedMediaFact(ref: OffloadedRef, durable: boolean): MediaFact {
+  const fact: MediaFact = {
+    ...(durable ? {} : { path: ref.path }),
+    url: durable ? buildManagedInboundMediaRef(ref.id) : ref.mediaRef,
+    contentType: ref.mimeType,
+    kind: ref.kind,
+    fileName: ref.label,
+    ...(ref.origin ? { origin: ref.origin } : {}),
+    sizeBytes: ref.sizeBytes,
+  };
+  for (const field of ["durationMs", "width", "height"] as const) {
+    // Durable facts preserve measured zeroes; parsed input retains its existing omission policy.
+    if (durable ? ref[field] !== undefined : ref[field]) {
+      fact[field] = ref[field];
+    }
+  }
+  if (durable && !ref.mimeType.startsWith("image/")) {
+    fact.hydrationSuppressed = true;
+  }
+  return fact;
+}
 
 /** Deletes prepared inbound files that never reached a durable owner. */
 export async function discardPreparedInboundMedia(
@@ -185,6 +204,8 @@ export async function persistInboundImagesForTranscript(params: {
             kind: "image",
             ...(image.fileName ? { fileName: image.fileName } : {}),
             sizeBytes: saved.size,
+            width: image.width,
+            height: image.height,
           },
         });
       } catch (err) {
@@ -207,18 +228,7 @@ export async function persistInboundImagesForTranscript(params: {
   }
 
   for (const ref of params.offloadedRefs) {
-    const fact: MediaFact = {
-      url: buildManagedInboundMediaRef(ref.id),
-      contentType: ref.mimeType,
-      kind: ref.kind,
-      fileName: ref.label,
-      ...(ref.origin ? { origin: ref.origin } : {}),
-      sizeBytes: ref.sizeBytes,
-      ...(ref.durationMs !== undefined ? { durationMs: ref.durationMs } : {}),
-      ...(ref.width !== undefined ? { width: ref.width } : {}),
-      ...(ref.height !== undefined ? { height: ref.height } : {}),
-      ...(ref.mimeType.startsWith("image/") ? {} : { hydrationSuppressed: true }),
-    };
+    const fact = projectOffloadedMediaFact(ref, true);
     entries.push({
       id: ref.id,
       path: ref.path,
@@ -411,6 +421,8 @@ export async function parseMessageWithAttachments(
           mimeType: finalMime,
           ...(att.fileName ? { fileName: att.fileName } : {}),
           sourceIndex: idx,
+          width: prepared.width,
+          height: prepared.height,
         });
         imageOrder.push("inline");
         continue;
@@ -456,7 +468,7 @@ export async function parseMessageWithAttachments(
           : `[Gateway] Offloaded attachment (${finalMime}). Saved: ${mediaRef}`,
       );
 
-      offloadedRefs.push({
+      const offloaded: OffloadedRef = {
         mediaRef,
         id: savedMedia.id,
         path: savedMedia.path,
@@ -466,18 +478,15 @@ export async function parseMessageWithAttachments(
         sizeBytes,
         sourceIndex: idx,
         ...(att.origin === "paste" || att.origin === "file" ? { origin: att.origin } : {}),
-        ...(typeof att.durationMs === "number" &&
-        Number.isFinite(att.durationMs) &&
-        att.durationMs >= 0
-          ? { durationMs: att.durationMs }
-          : {}),
-        ...(typeof att.width === "number" && Number.isFinite(att.width) && att.width >= 0
-          ? { width: att.width }
-          : {}),
-        ...(typeof att.height === "number" && Number.isFinite(att.height) && att.height >= 0
-          ? { height: att.height }
-          : {}),
-      });
+      };
+      for (const field of ["durationMs", "width", "height"] as const) {
+        // Only byte-derived image geometry is authoritative; absent metadata stays unknown.
+        const value = isImage && field !== "durationMs" ? prepared[field] : att[field];
+        if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+          offloaded[field] = value;
+        }
+      }
+      offloadedRefs.push(offloaded);
       if (isImage) {
         imageOrder.push("offloaded");
         if (shouldForceImageOffload) {
@@ -507,18 +516,7 @@ export async function parseMessageWithAttachments(
     message: updatedMessage !== message ? updatedMessage.trimEnd() : message,
     images,
     imageOrder,
-    media: offloadedRefs.map((ref) => ({
-      path: ref.path,
-      url: ref.mediaRef,
-      contentType: ref.mimeType,
-      kind: ref.kind,
-      fileName: ref.label,
-      ...(ref.origin ? { origin: ref.origin } : {}),
-      sizeBytes: ref.sizeBytes,
-      ...(ref.durationMs ? { durationMs: ref.durationMs } : {}),
-      ...(ref.width ? { width: ref.width } : {}),
-      ...(ref.height ? { height: ref.height } : {}),
-    })),
+    media: offloadedRefs.map((ref) => projectOffloadedMediaFact(ref, false)),
     offloadedRefs,
   };
 }

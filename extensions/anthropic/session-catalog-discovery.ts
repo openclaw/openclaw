@@ -146,6 +146,7 @@ async function readIndexRecords(context: ClaudeSessionScanContext) {
         parseDateFirstTimestampMs(entry.modified) ?? parseDateFirstTimestampMs(entry.fileMtime);
       const summary = readBoundedString(entry.summary, 500);
       const firstPrompt = readBoundedString(entry.firstPrompt, 500);
+      const gitBranch = readBoundedString(entry.gitBranch, 500);
       records.set(sessionId, {
         threadId: sessionId,
         name: summary ?? firstPrompt ?? null,
@@ -155,9 +156,7 @@ async function readIndexRecords(context: ClaudeSessionScanContext) {
         ...(updatedAt !== undefined ? { updatedAt, recencyAt: updatedAt } : {}),
         source: "claude-cli",
         modelProvider: "anthropic",
-        ...(readBoundedString(entry.gitBranch, 500)
-          ? { gitBranch: readBoundedString(entry.gitBranch, 500) }
-          : {}),
+        ...(gitBranch ? { gitBranch } : {}),
         archived: false,
         filePath: safeFile.filePath,
       });
@@ -333,6 +332,8 @@ async function discoverCliRecords(
         collectTranscriptText(raw.message.content, fragments);
         const firstPrompt = readBoundedString(fragments[0], 500);
         const createdAt = parseDateFirstTimestampMs(raw.timestamp);
+        const cliVersion = readBoundedString(raw.version, 256);
+        const gitBranch = readBoundedString(raw.gitBranch, 500);
         record = {
           threadId: sessionId,
           name: firstPrompt ?? null,
@@ -343,12 +344,8 @@ async function discoverCliRecords(
           recencyAt: stat.mtimeMs,
           source: "claude-cli",
           modelProvider: "anthropic",
-          ...(readBoundedString(raw.version, 256)
-            ? { cliVersion: readBoundedString(raw.version, 256) }
-            : {}),
-          ...(readBoundedString(raw.gitBranch, 500)
-            ? { gitBranch: readBoundedString(raw.gitBranch, 500) }
-            : {}),
+          ...(cliVersion ? { cliVersion } : {}),
+          ...(gitBranch ? { gitBranch } : {}),
           archived: false,
           filePath,
         };

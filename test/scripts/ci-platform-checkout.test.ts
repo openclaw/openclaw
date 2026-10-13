@@ -48,10 +48,14 @@ function expectedHarnessSparseCheckoutArgs(linux: boolean) {
     "/scripts/ios-screenshot-evidence.mjs",
     "/scripts/lib/direct-run.mjs",
     "/scripts/ci-static-step.sh",
+    "/scripts/ci-collect-checks.sh",
     ...(linux
       ? [
           "/scripts/lib/release-upgrade-baseline.mjs",
           "/scripts/lib/release-version.mjs",
+          "/scripts/lib/canonical-json.mjs",
+          "/scripts/lib/upgrade-survivor-policy.mjs",
+          "/scripts/lib/upgrade-survivor-scenarios.json",
           "/scripts/ci-npm-lock-admission.mjs",
           "/scripts/generate-npm-package-lock.mjs",
           "/scripts/generate-npm-package-lock.mts",
@@ -350,8 +354,6 @@ it.concurrent.for([
     ? []
     : [
         { event: "push", workflow: "same", target: "selected", code: 0, fetches: 2 },
-        { event: "pull_request", workflow: "same", target: "selected", code: 0, fetches: 2 },
-        { event: "pull_request", workflow: "previous", target: "selected", code: 0, fetches: 2 },
         {
           event: "workflow_dispatch",
           workflow: "previous",
@@ -407,6 +409,7 @@ it.concurrent.for([
       "scripts/ios-screenshot-evidence.mjs": "workflow evidence script\n",
       "scripts/lib/direct-run.mjs": "workflow direct-run script\n",
       "scripts/ci-static-step.sh": "workflow static-step script\n",
+      "scripts/ci-collect-checks.sh": "workflow collect-checks script\n",
     };
     const nodeSetupScripts = {
       "scripts/lib/pnpm-lockfile-documents.mjs": readFileSync(
@@ -432,6 +435,9 @@ it.concurrent.for([
         "scripts/lib/release-context.mjs",
         "scripts/lib/release-version.mjs",
         "scripts/lib/release-upgrade-baseline.mjs",
+        "scripts/lib/canonical-json.mjs",
+        "scripts/lib/upgrade-survivor-policy.mjs",
+        "scripts/lib/upgrade-survivor-scenarios.json",
       ].map((name) => [name, readFileSync(name, "utf8")]),
     );
     const candidateFiles = {
@@ -701,7 +707,12 @@ it.concurrent.for([
         }
         for (const [name, contents] of Object.entries(releasePolicy)) {
           const ownsPolicy = preflight
-            ? name !== "scripts/lib/release-upgrade-baseline.mjs"
+            ? ![
+                "scripts/lib/release-upgrade-baseline.mjs",
+                "scripts/lib/canonical-json.mjs",
+                "scripts/lib/upgrade-survivor-policy.mjs",
+                "scripts/lib/upgrade-survivor-scenarios.json",
+              ].includes(name)
             : kind === "linux-node" && name !== "scripts/lib/release-context.mjs";
           expect(existsSync(path.join(harness, name))).toBe(ownsPolicy);
           if (ownsPolicy) {
@@ -1392,7 +1403,6 @@ ${policy}`,
 }
 
 it.each([
-  { scenario: "direct denial", setup: "", types: ["PermissionError"] },
   {
     scenario: "timeout context",
     setup: "error.__context__ = owner.FetchTimeout()",

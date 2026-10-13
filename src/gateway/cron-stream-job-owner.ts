@@ -12,7 +12,7 @@ import type {
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
 import type { ManagedRun, ProcessSupervisor } from "../process/supervisor/index.js";
 import type { RunExit } from "../process/supervisor/types.js";
-import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { settlesWithin } from "../shared/settle-within.js";
 import {
   CronStreamOutput,

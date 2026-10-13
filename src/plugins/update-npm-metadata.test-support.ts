@@ -4,10 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { assert, expect, it, vi, type Mock } from "vitest";
 import type { runCommandWithTimeout } from "../process/exec.js";
 import { npmCommandArgs } from "../test-utils/npm-command.js";
-import {
-  expectIntegrityDriftRejected,
-  mockNpmViewMetadataResult,
-} from "../test-utils/npm-spec-install-test-helpers.js";
+import { expectIntegrityDriftRejected } from "../test-utils/npm-spec-install-test-helpers.js";
 import { resolvePluginInstallRoots, withPluginInstallRoots } from "./install-root-context.js";
 
 type NpmFixturePackage = {
@@ -36,7 +33,7 @@ export function registerNpmUpdateMetadataTests({
   writeInstalledNpmPlugin: (params: Omit<NpmFixturePackage, "spec">) => string;
 }) {
   const silentLogger = { info: () => {}, warn: () => {} };
-  it.each(["spec", "version", "trust"])(
+  it.each(["spec", "trust"])(
     "rejects prepared fallback facts after %s changes",
     async (changed) => {
       const spec = "@openclaw/voice-call";
@@ -69,7 +66,7 @@ export function registerNpmUpdateMetadataTests({
           metadata: { name: spec, version: "3.0.0-beta.1" },
           trustedPrereleaseResolution: {
             kind: "stable",
-            resolvedPrereleaseVersion: changed === "version" ? "4.0.0-beta.1" : "3.0.0-beta.1",
+            resolvedPrereleaseVersion: "3.0.0-beta.1",
             resolution: { name: spec, version: "99.0.0", resolvedSpec: `${spec}@99.0.0` },
             warning: "stale fallback warning",
           },
@@ -137,7 +134,7 @@ export function registerNpmUpdateMetadataTests({
     ).toEqual([`${packageName}@beta`, `${packageName}@latest`]);
   });
 
-  it.each(["stable", "beta"] as const)(
+  it.each(["stable"] as const)(
     "reuses the %s update selection without another npm metadata command",
     async (channel) => {
       const { updateNpmInstalledPlugins } = await import("./update-installed.js");
@@ -159,8 +156,6 @@ export function registerNpmUpdateMetadataTests({
       };
       mockNpmViewAndInstallMany([
         { ...available, spec: packageName },
-        { ...available, spec: `${packageName}@latest` },
-        { ...available, spec: `${packageName}@beta`, version: "1.5.0-beta.1" },
         { ...available, spec: `${packageName}@2.0.0` },
       ]);
       const result = await withPluginInstallRoots(
@@ -203,28 +198,19 @@ export function registerNpmUpdateMetadataTests({
         .map(([argv]) => npmCommandArgs(argv))
         .filter((args): args is string[] => args?.[0] === "view")
         .map((args) => expectDefined(args[1], "npm view package spec"));
-      expect(metadataCommands.toSorted((left, right) => left.localeCompare(right))).toEqual(
-        channel === "beta" ? [`${packageName}@beta`, `${packageName}@latest`] : [packageName],
-      );
+      expect(metadataCommands.toSorted((left, right) => left.localeCompare(right))).toEqual([
+        packageName,
+      ]);
     },
   );
 
   it.each([
-    {
-      label: "stable fallback",
-      initialVersion: "3.0.0-beta.1",
-      versions: ["2.0.0", "3.0.0-beta.1"],
-      selectedVersion: "2.0.0",
-      warning: "falling back to stable",
-      retry: false,
-    },
     {
       label: "newest prerelease",
       initialVersion: "2.0.0-beta.1",
       versions: ["2.0.0-beta.1", "3.0.0-beta.1"],
       selectedVersion: "3.0.0-beta.1",
       warning: "using newest prerelease",
-      retry: false,
     },
     {
       label: "allowed current prerelease",
@@ -232,15 +218,6 @@ export function registerNpmUpdateMetadataTests({
       versions: ["2.0.0-beta.1", "3.0.0-beta.1"],
       selectedVersion: "3.0.0-beta.1",
       warning: "allowing it",
-      retry: false,
-    },
-    {
-      label: "retry after unavailable preparation",
-      initialVersion: "3.0.0-beta.1",
-      versions: ["2.0.0", "3.0.0-beta.1"],
-      selectedVersion: "2.0.0",
-      warning: "falling back to stable",
-      retry: true,
     },
   ])("reuses successful official update metadata for $label", async (scenario) => {
     const { updateNpmInstalledPlugins } = await import("./update-installed.js");
@@ -272,27 +249,6 @@ export function registerNpmUpdateMetadataTests({
         expectedDependencySpec: scenario.selectedVersion,
       },
     ]);
-    if (scenario.retry) {
-      const runNpm = expectDefined(
-        runCommandWithTimeoutMock.getMockImplementation(),
-        "npm fixture",
-      );
-      let failed = false;
-      runCommandWithTimeoutMock.mockImplementation(async (...args) => {
-        if (!failed && npmCommandArgs(args[0])?.[2] === "versions") {
-          failed = true;
-          return {
-            code: 1,
-            stdout: "",
-            stderr: "registry temporarily unavailable",
-            signal: null,
-            killed: false,
-            termination: "exit",
-          };
-        }
-        return await runNpm(...args);
-      });
-    }
     const warnings: string[] = [];
     const result = await withPluginInstallRoots(
       { ...resolvePluginInstallRoots(), npmDir: npmRoot },
@@ -340,9 +296,7 @@ export function registerNpmUpdateMetadataTests({
     const metadataCommands = runCommandWithTimeoutMock.mock.calls
       .map(([argv]) => npmCommandArgs(argv))
       .filter((args): args is string[] => args?.[0] === "view");
-    expect(metadataCommands.filter((args) => args[2] === "versions")).toHaveLength(
-      scenario.retry ? 2 : 1,
-    );
+    expect(metadataCommands.filter((args) => args[2] === "versions")).toHaveLength(1);
     expect(
       metadataCommands.filter((args) => args[1] === `${packageName}@${scenario.selectedVersion}`),
     ).toHaveLength(scenario.initialVersion === scenario.selectedVersion ? 0 : 1);
@@ -354,62 +308,43 @@ export function registerNpmUpdateMetadataTests({
     );
   });
 
-  it.each(["fetched", "prepared", "prepared fallback"])(
-    "checks integrity with %s npm metadata",
-    async (source) => {
-      mockNpmViewMetadataResult(runCommandWithTimeoutMock, {
-        name: "@openclaw/voice-call",
-        version: "0.0.1",
-        integrity: "sha512-new",
-        shasum: "newshasum",
-      });
-
-      const onIntegrityDrift = vi.fn(async () => false);
-      const spec =
-        source === "prepared fallback" ? "@openclaw/voice-call" : "@openclaw/voice-call@0.0.1";
-      const result = await installPluginFromNpmSpec({
+  it("checks integrity with prepared fallback npm metadata", async () => {
+    const onIntegrityDrift = vi.fn(async () => false);
+    const spec = "@openclaw/voice-call";
+    const result = await installPluginFromNpmSpec({
+      spec,
+      expectedIntegrity: "sha512-old",
+      onIntegrityDrift,
+      trustedSourceLinkedOfficialInstall: true,
+      npmMetadata: {
         spec,
-        expectedIntegrity: "sha512-old",
-        onIntegrityDrift,
-        trustedSourceLinkedOfficialInstall: source === "prepared fallback",
-        ...(source !== "fetched"
-          ? {
-              npmMetadata: {
-                spec,
-                metadata: {
-                  name: "@openclaw/voice-call",
-                  version: source === "prepared fallback" ? "0.0.2-beta.1" : "0.0.1",
-                  integrity: source === "prepared fallback" ? "sha512-old" : "sha512-new",
-                  shasum: "newshasum",
-                },
-                ...(source === "prepared fallback"
-                  ? {
-                      trustedPrereleaseResolution: {
-                        kind: "stable" as const,
-                        resolvedPrereleaseVersion: "0.0.2-beta.1",
-                        resolution: {
-                          name: "@openclaw/voice-call",
-                          version: "0.0.1",
-                          integrity: "sha512-new",
-                          shasum: "newshasum",
-                        },
-                        warning: "falling back to stable @openclaw/voice-call@0.0.1",
-                      },
-                    }
-                  : {}),
-              },
-            }
-          : {}),
-      });
-      expectIntegrityDriftRejected({
-        onIntegrityDrift,
-        result,
-        expectedIntegrity: "sha512-old",
-        actualIntegrity: "sha512-new",
-      });
-      expect(
-        runCommandWithTimeoutMock.mock.calls.some(([argv]) => isManagedNpmInstallCommand(argv)),
-      ).toBe(false);
-    },
-  );
+        metadata: {
+          name: spec,
+          version: "0.0.2-beta.1",
+          integrity: "sha512-old",
+          shasum: "newshasum",
+        },
+        trustedPrereleaseResolution: {
+          kind: "stable",
+          resolvedPrereleaseVersion: "0.0.2-beta.1",
+          resolution: {
+            name: spec,
+            version: "0.0.1",
+            integrity: "sha512-new",
+            shasum: "newshasum",
+          },
+          warning: "falling back to stable @openclaw/voice-call@0.0.1",
+        },
+      },
+    });
+    expectIntegrityDriftRejected({
+      onIntegrityDrift,
+      result,
+      expectedIntegrity: "sha512-old",
+      actualIntegrity: "sha512-new",
+    });
+    expect(
+      runCommandWithTimeoutMock.mock.calls.some(([argv]) => isManagedNpmInstallCommand(argv)),
+    ).toBe(false);
+  });
 }

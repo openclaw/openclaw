@@ -64,7 +64,7 @@ describe("runDiscordGatewayLifecycle", () => {
     const emitter = new EventEmitter();
     const gateway: MockGateway = {
       isConnected: ready,
-      options: { intents: 0, reconnect: { maxAttempts: 50 } },
+      options: { intents: 0 },
       disconnect: vi.fn(),
       connect: vi.fn(),
       emitter,

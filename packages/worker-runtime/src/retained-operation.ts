@@ -50,10 +50,10 @@ export function createRetainedOperation<T>(
   };
 }
 
-/** Transform settled facts without making Promise reactions part of their progress. */
-export function mapRetainedOperation<T, U>(
+function driveRetainedOperation<T, U>(
   source: RetainedOperation<T>,
-  receive: (value: T) => U,
+  advance: (completion: ReturnType<typeof createRetainedOperation<U>>, service: () => void) => void,
+  onError?: (error: unknown) => unknown,
 ): RetainedOperation<U> {
   const inContext = AsyncLocalStorage.snapshot();
   let servicing = false;
@@ -65,15 +65,13 @@ export function mapRetainedOperation<T, U>(
     }
     servicing = true;
     try {
-      source.service();
-      const outcome = source.read();
-      if (outcome.status === "fulfilled") {
-        completion.resolve(receive(outcome.value));
-      } else if (outcome.status === "rejected") {
-        completion.reject(outcome.error);
-      }
+      advance(completion, serviceInContext);
     } catch (error) {
-      completion.reject(error);
+      try {
+        completion.reject(onError ? onError(error) : error);
+      } catch (combined) {
+        completion.reject(combined);
+      }
     } finally {
       servicing = false;
     }
@@ -81,6 +79,22 @@ export function mapRetainedOperation<T, U>(
   void source.result.then(serviceInContext, serviceInContext);
   completion.operation.service();
   return completion.operation;
+}
+
+/** Transform settled facts without making Promise reactions part of their progress. */
+export function mapRetainedOperation<T, U>(
+  source: RetainedOperation<T>,
+  receive: (value: T) => U,
+): RetainedOperation<U> {
+  return driveRetainedOperation<T, U>(source, (completion) => {
+    source.service();
+    const outcome = source.read();
+    if (outcome.status === "fulfilled") {
+      completion.resolve(receive(outcome.value));
+    } else if (outcome.status === "rejected") {
+      completion.reject(outcome.error);
+    }
+  });
 }
 
 /** Sequence operations while retaining the continuation's captured caller context. */
@@ -88,60 +102,28 @@ export function flatMapRetainedOperation<T, U>(
   source: RetainedOperation<T>,
   next: (value: T) => RetainedOperation<U>,
 ): RetainedOperation<U> {
-  return flatMapRetainedOutcome(source, (outcome) => {
-    if (outcome.status === "rejected") {
-      throw outcome.error;
-    }
-    return next(outcome.value);
-  });
-}
-
-/** Final-only recovery joins the owner's successor rather than replaying the failed operation. */
-function flatMapRetainedOutcome<T, U>(
-  source: RetainedOperation<T>,
-  next: (outcome: Exclude<RetainedOutcome<T>, { status: "pending" }>) => RetainedOperation<U>,
-): RetainedOperation<U> {
-  const inContext = AsyncLocalStorage.snapshot();
   let child: RetainedOperation<U> | undefined;
-  let servicing = false;
-  const serviceInContext = () => inContext(service);
-  const completion = createRetainedOperation<U>(serviceInContext);
-  function service() {
-    if (servicing || completion.operation.read().status !== "pending") {
-      return;
-    }
-    servicing = true;
-    try {
-      if (!child) {
-        let outcome: RetainedOutcome<T>;
-        try {
-          source.service();
-          outcome = source.read();
-        } catch (error) {
-          outcome = { status: "rejected", error };
-        }
-        if (outcome.status === "pending") {
-          return;
-        }
-        child = next(outcome);
-        void child.result.then(serviceInContext, serviceInContext);
+  return driveRetainedOperation<T, U>(source, (completion, service) => {
+    if (!child) {
+      source.service();
+      const outcome = source.read();
+      if (outcome.status === "pending") {
+        return;
       }
-      child.service();
-      const outcome = child.read();
-      if (outcome.status === "fulfilled") {
-        completion.resolve(outcome.value);
-      } else if (outcome.status === "rejected") {
-        completion.reject(outcome.error);
+      if (outcome.status === "rejected") {
+        throw outcome.error;
       }
-    } catch (error) {
-      completion.reject(error);
-    } finally {
-      servicing = false;
+      child = next(outcome.value);
+      void child.result.then(service, service);
     }
-  }
-  void source.result.then(serviceInContext, serviceInContext);
-  completion.operation.service();
-  return completion.operation;
+    child.service();
+    const outcome = child.read();
+    if (outcome.status === "fulfilled") {
+      completion.resolve(outcome.value);
+    } else if (outcome.status === "rejected") {
+      completion.reject(outcome.error);
+    }
+  });
 }
 
 /** Join the owner's real cleanup; that owner chooses how simultaneous failures combine. */
@@ -153,18 +135,11 @@ export function finallyRetainedOperation<T>(
     cleanupError,
   ) => cleanupError,
 ): RetainedOperation<T> {
-  const inContext = AsyncLocalStorage.snapshot();
   let original: Exclude<RetainedOutcome<T>, { status: "pending" }> | undefined;
   let child: RetainedOperation<void> | undefined;
-  let servicing = false;
-  const serviceInContext = () => inContext(service);
-  const completion = createRetainedOperation<T>(serviceInContext);
-  function service() {
-    if (servicing || completion.operation.read().status !== "pending") {
-      return;
-    }
-    servicing = true;
-    try {
+  return driveRetainedOperation<T, T>(
+    source,
+    (completion, service) => {
       if (!original) {
         try {
           source.service();
@@ -177,7 +152,7 @@ export function finallyRetainedOperation<T>(
           original = { status: "rejected", error };
         }
         child = cleanup(original);
-        void child.result.then(serviceInContext, serviceInContext);
+        void child.result.then(service, service);
       }
       if (!child) {
         return;
@@ -195,19 +170,7 @@ export function finallyRetainedOperation<T>(
       } else {
         completion.resolve(original.value);
       }
-    } catch (error) {
-      try {
-        completion.reject(
-          original?.status === "rejected" ? combineErrors(original.error, error) : error,
-        );
-      } catch (combined) {
-        completion.reject(combined);
-      }
-    } finally {
-      servicing = false;
-    }
-  }
-  void source.result.then(serviceInContext, serviceInContext);
-  completion.operation.service();
-  return completion.operation;
+    },
+    (error) => (original?.status === "rejected" ? combineErrors(original.error, error) : error),
+  );
 }

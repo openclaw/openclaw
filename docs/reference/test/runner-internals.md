@@ -119,6 +119,17 @@ containing checkout as the ownership boundary. Other `pnpm tsgo` lanes continue
 to use the native CLI; its wrapper does not create or reuse a shared external
 install.
 
+Canvas A2UI asset builds use the shared build-artifact cache, including
+`BUILD_ALL_CACHE_ROOT` when consecutive update candidates use different checkouts.
+The cache verifies and restores both dialect bundles together. Canvas source,
+its package manifest, the lockfile, workspace dependency settings, patches, build
+scripts, Node version, and build environment invalidate reuse; unrelated root
+package scripts do not. `OPENCLAW_BUILD_CACHE=0` forces compilation. Explicit
+`OPENCLAW_A2UI_BUNDLE_OUT` destinations bypass the shared cache. Sparse checkouts
+retain their existing complete-prebuilt-bundle behavior. Cold A2UI builds default
+the native Rayon and Rolldown worker pools to four threads each, preserving explicit
+`RAYON_NUM_THREADS` and `ROLLDOWN_WORKER_THREADS` overrides.
+
 Packaged SDK declarations belong to one staged owner shared by full, package, and
 `ciArtifacts` builds. It serializes the two canonical tsdown SDK groups on a miss
 and caches their complete staged generation. Each successful compiler supplies its
@@ -139,7 +150,7 @@ be local, and a valid root `package.json` bounds source-package scope lookup.
 The shared snapshot policy still validates consumed bytes and resolution topology.
 Source and namespace changes during compilation prevent acceptance. New local
 module candidates invalidate cached records, as do ancestor-install appearance
-and removal. Outside probes always see missing files, so later changes to ancestor
+and removal. Outside checks always see missing files, so later changes to ancestor
 package contents cannot enter the compiler's filesystem view.
 Each emitted declaration must have one source-map owner in the successful compiler
 membership. The bundler consumes those declarations under their original source
@@ -190,7 +201,7 @@ removing one invocation's files cannot remove another fixture's port claim.
 A fixture that binds a Gateway, in-process or spawned, on a shared pool port holds
 that port's claim from selection until the Gateway closes. A Gateway retries a busy
 port while starting, so an unclaimed fixture can take another fixture's port during
-its handoff. `getDeterministicFreePortBlock` is a probe, not a lease; in-process
+its handoff. `getDeterministicFreePortBlock` is a check, not a lease; in-process
 Gateway E2E fixtures use `acquireGatewayE2ePortBlock` with `startClaimedGateway`.
 
 Live-aware setup still loads the original profile and stages live state when
@@ -244,7 +255,7 @@ reuse during the file and releasing it before isolated fork shutdown.
 - `src/test-utils/openclaw-test-state.ts`: use from Vitest when a test needs an isolated `HOME`, `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, config fixture, workspace, agent dir, or auth-profile store.
 - `pnpm test:env-mutations:report`: non-blocking report of tests/harnesses that mutate `HOME`, `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, `OPENCLAW_WORKSPACE_DIR`, or related env keys directly. Use it to find migration candidates for the shared test-state helper.
 - `test/helpers/openclaw-test-instance.ts`: process-level E2E tests needing a running Gateway, CLI env, log capture, and cleanup in one place.
-- Docker/Bash E2E lanes that source `scripts/lib/docker-e2e-image.sh` can pass `docker_e2e_test_state_shell_b64 <label> <scenario>` into the container and decode it with `scripts/lib/openclaw-e2e-instance.sh`; multi-home scripts can pass `docker_e2e_test_state_function_b64` and call `openclaw_test_state_create <label> <scenario>` in each flow. `node --import tsx scripts/lib/openclaw-test-state.mts -- create --label <name> --scenario <name> --env-file <path> --json` writes a sourceable host env file (the `--` before `create` keeps newer Node runtimes from treating `--env-file` as a Node flag). Lanes that launch a Gateway can source `scripts/lib/openclaw-e2e-instance.sh` for entrypoint resolution, mock OpenAI startup, foreground/background launch, readiness probes, state env export, log dumps, and process cleanup.
+- Docker/Bash E2E lanes that source `scripts/lib/docker-e2e-image.sh` can pass `docker_e2e_test_state_shell_b64 <label> <scenario>` into the container and decode it with `scripts/lib/openclaw-e2e-instance.sh`; multi-home scripts can pass `docker_e2e_test_state_function_b64` and call `openclaw_test_state_create <label> <scenario>` in each flow. `node --import tsx scripts/lib/openclaw-test-state.mts -- create --label <name> --scenario <name> --env-file <path> --json` writes a sourceable host env file (the `--` before `create` keeps newer Node runtimes from treating `--env-file` as a Node flag). Lanes that launch a Gateway can source `scripts/lib/openclaw-e2e-instance.sh` for entrypoint resolution, mock OpenAI startup, foreground/background launch, readiness checks, state env export, log dumps, and process cleanup.
 
 `createOpenClawTestState` selects and owns temporary paths and process environment
 selectors. It is not filesystem sandboxing and does not stop external producers.

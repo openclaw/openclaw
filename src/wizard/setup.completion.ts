@@ -1,4 +1,3 @@
-// Setup completion helpers render completion instructions after onboarding.
 import { CLI_NAME } from "../cli/cli-name.js";
 import {
   findCompletionProfileWriteError,
@@ -19,11 +18,10 @@ export async function setupWizardShellCompletion(params: {
   flow: WizardFlow;
   prompter: Pick<WizardPrompter, "confirm" | "note">;
 }): Promise<void> {
-  const cliName = CLI_NAME;
-  const completionStatus = await checkShellCompletionStatus(cliName);
+  const completionStatus = await checkShellCompletionStatus(CLI_NAME);
   const installCompletionForSetup = async (): Promise<boolean> => {
     try {
-      await installCompletion(completionStatus.shell, true, cliName);
+      await installCompletion(completionStatus.shell, true, CLI_NAME);
       return true;
     } catch (error) {
       const writeError = findCompletionProfileWriteError(error);
@@ -44,13 +42,12 @@ export async function setupWizardShellCompletion(params: {
       return false;
     }
   };
-  const generationOptions = { generationMode: "full" } as const;
   const ensureCompletionCache = async (): Promise<boolean> => {
-    const cacheGenerated = await ensureCompletionCacheExists(cliName, generationOptions);
+    const cacheGenerated = await ensureCompletionCacheExists(CLI_NAME, { generationMode: "full" });
     if (!cacheGenerated) {
       await params.prompter.note(
         t("wizard.completion.cacheFailed", {
-          command: `${cliName} completion --write-state --install`,
+          command: `${CLI_NAME} completion --write-state --install`,
         }),
         t("wizard.completion.title"),
       );
@@ -77,7 +74,7 @@ export async function setupWizardShellCompletion(params: {
         : await params.prompter.confirm({
             message: t("wizard.completion.enable", {
               shell: completionStatus.shell,
-              cli: cliName,
+              cli: CLI_NAME,
             }),
             initialValue: true,
           });

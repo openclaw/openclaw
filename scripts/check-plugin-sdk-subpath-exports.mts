@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-// Verifies plugin SDK subpath exports and generated entrypoint metadata.
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import * as ts from "typescript/unstable/ast";

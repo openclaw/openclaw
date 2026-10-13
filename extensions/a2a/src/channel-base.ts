@@ -62,7 +62,10 @@ export function createA2aChannelPluginBase(): A2aChannelPluginBase {
             peerName?: string;
             peerToken?: string;
           };
-          const current = resolveA2aChannelAccount({ cfg }).config;
+          // Read the authored section, not the resolved account: the account withholds
+          // peers whose token reference is unresolved, and rewriting from it would
+          // delete those peers from the saved config.
+          const currentPeers = cfg.channels?.a2a?.peers;
           const peerName = setup.peerName?.trim();
           const peerToken = setup.peerToken?.trim();
           const advertisedUrl = setup.advertisedUrl?.trim();
@@ -73,7 +76,7 @@ export function createA2aChannelPluginBase(): A2aChannelPluginBase {
             patch: {
               ...(advertisedUrl ? { advertisedUrl } : {}),
               ...(peerName && peerToken
-                ? { peers: { ...current.peers, [peerName]: { token: peerToken } } }
+                ? { peers: { ...currentPeers, [peerName]: { token: peerToken } } }
                 : {}),
             },
           });

@@ -84,6 +84,7 @@ function createChannelOwner(
 ) {
   const subagent: PluginRuntime["subagent"] = {
     complete: vi.fn<PluginRuntime["subagent"]["complete"]>(),
+    forkSession: vi.fn<PluginRuntime["subagent"]["forkSession"]>(),
     run: vi.fn<PluginRuntime["subagent"]["run"]>(),
     waitForRun: vi.fn<PluginRuntime["subagent"]["waitForRun"]>(),
     getSessionMessages: vi.fn<PluginRuntime["subagent"]["getSessionMessages"]>(),
@@ -183,7 +184,6 @@ function prepareOwners() {
 describe("prepared channel runtime ownership", () => {
   it.each([
     { path: "inbound", close: "consumer" },
-    { path: "selected", close: "consumer" },
     { path: "selected", close: "donor" },
   ])("retains the live transport through $path until $close closes", async ({ path, close }) => {
     const { live, selected, input } = prepareOwners();

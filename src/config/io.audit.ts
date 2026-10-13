@@ -7,9 +7,10 @@ import {
   readStringField,
 } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
-import { registerSqliteAuditRecordAsync } from "../infra/sqlite-audit-record-store.async.js";
+import { createSqliteAuditRecordWriter } from "../infra/sqlite-audit-record-store.async.js";
 import { createSqliteAuditRecordStore } from "../infra/sqlite-audit-record-store.js";
 import { redactSecrets } from "../logging/redact.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { resolveConfigAuditStoreEnv } from "./config-journal-snapshot.js";
 import type { ConfigHealthFingerprint } from "./io.health-state.types.js";
 import type { ConfigWriteAuditOrigin } from "./io.types.js";
@@ -533,37 +534,50 @@ export function sanitizeConfigAuditRecord(record: ConfigAuditRecord): ConfigAudi
   return redactSecrets(sanitized);
 }
 
-export async function appendConfigAuditRecord(
-  params: ConfigAuditAppendParams,
+export function captureConfigAuditAppender(
+  params: Pick<ConfigAuditAppendParams, "env" | "homedir">,
   assertCurrent?: () => void,
-): Promise<void> {
-  assertCurrent?.();
+): (record: ConfigAuditRecord) => Promise<void> {
+  let captured:
+    | { writer: ReturnType<typeof createSqliteAuditRecordWriter<ConfigAuditRecord>> }
+    | { error: unknown };
   try {
-    const record = sanitizeConfigAuditRecord(params.record);
-    await registerSqliteAuditRecordAsync(
-      {
+    captured = {
+      writer: createSqliteAuditRecordWriter<ConfigAuditRecord>({
         scope: CONFIG_AUDIT_SCOPE,
         maxEntries: CONFIG_AUDIT_MAX_ENTRIES,
         env: resolveConfigAuditStoreEnv(params),
         assertCurrent,
-      },
-      { key: configAuditEntryKey(record), value: record, createdAt: Date.parse(record.ts) },
-    );
-  } catch {
-    assertCurrent?.();
-    // best-effort
+      }),
+    };
+  } catch (error) {
+    captured = { error };
   }
+  return async (input) => {
+    assertCurrent?.();
+    try {
+      if ("error" in captured) {
+        throw captured.error;
+      }
+      const record = sanitizeConfigAuditRecord(input);
+      await captured.writer.register(configAuditEntryKey(record), record, Date.parse(record.ts));
+    } catch {
+      assertCurrent?.();
+      // best-effort
+    }
+  };
 }
 
-export function appendConfigAuditRecordSync(params: ConfigAuditAppendParams): void {
-  try {
-    const record = sanitizeConfigAuditRecord(params.record);
-    openConfigAuditStore(resolveConfigAuditStoreEnv(params)).register(
-      configAuditEntryKey(record),
-      record,
-      Date.parse(record.ts),
-    );
-  } catch {
-    // best-effort
-  }
+export async function appendConfigAuditRecord(
+  params: ConfigAuditAppendParams,
+  assertCurrent?: () => void,
+): Promise<void> {
+  await captureConfigAuditAppender(params, assertCurrent)(params.record);
+}
+
+/** Synchronous observations join their task's cleanup without opening SQLite here. */
+export function enqueueConfigAuditRecord(params: ConfigAuditAppendParams): void {
+  void trackAsyncWork(() => appendConfigAuditRecord(params)).catch(() => {
+    // A closed task can reject admission; diagnostic history remains best-effort.
+  });
 }

@@ -1,7 +1,9 @@
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useSqliteWorkerFault } from "../../test/helpers/sqlite-worker-fault.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -17,6 +19,14 @@ import {
 } from "../state/openclaw-state-db.js";
 import { recordMessageToolRunOutcome } from "./message-tool-run-outcome-store.js";
 
+const outcomeFault = useSqliteWorkerFault([
+  {
+    name: "refuse_outcome",
+    match: /^insert into message_tool_run_outcomes /,
+    sql: `CREATE TEMP TRIGGER refuse_outcome BEFORE INSERT ON main.message_tool_run_outcomes
+      WHEN NEW.run_id = 'refused' BEGIN SELECT RAISE(ABORT, 'outcome refused'); END;`,
+  },
+]);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function createEnv(): NodeJS.ProcessEnv {
@@ -91,22 +101,24 @@ describe("message-tool run outcome store", () => {
       });
     }
 
-    const db = openOpenClawAgentDatabase({ agentId: "main", env }).db;
-    db.exec(`CREATE TRIGGER refuse_outcome BEFORE INSERT ON message_tool_run_outcomes
-      WHEN NEW.run_id = 'refused' BEGIN SELECT RAISE(ABORT, 'outcome refused'); END;`);
-    await expect(
-      recordMessageToolRunOutcome({
-        runId: "refused",
-        sessionKey: "agent:main:main",
-        agentId: "main",
-        provider: "openai",
-        model: "gpt-5.6-luna",
-        outcome: "mute",
-        runStatus: "errored",
-        occurredAt: 100,
-        env,
-      }),
-    ).rejects.toMatchObject({ code: "ERR_SQLITE_ERROR", errcode: 1811 });
+    outcomeFault.enable();
+    try {
+      await expect(
+        recordMessageToolRunOutcome({
+          runId: "refused",
+          sessionKey: "agent:main:main",
+          agentId: "main",
+          provider: "openai",
+          model: "gpt-5.6-luna",
+          outcome: "mute",
+          runStatus: "errored",
+          occurredAt: 100,
+          env,
+        }),
+      ).rejects.toMatchObject({ code: "ERR_SQLITE_ERROR", errcode: 1811 });
+    } finally {
+      outcomeFault.disable();
+    }
 
     expect(
       openOpenClawAgentDatabase({ agentId: "main", env })
@@ -225,26 +237,24 @@ describe("message-tool run outcome store", () => {
     expect(getOpenClawAgentDatabaseIfOpen(target)).toBeUndefined();
   });
 
-  it("keeps incognito outcomes on their process-held owner", async () => {
+  it("does not recreate an absent incognito session for late outcome metadata", async () => {
     const env = createEnv();
     const target = { agentId: "main", env };
-    await recordMessageToolRunOutcome({
-      ...target,
-      runId: "private",
-      sessionKey: "agent:main:dashboard:incognito-outcome",
-      provider: "openai",
-      model: "gpt-5.6-luna",
-      outcome: "mute",
-      runStatus: "aborted",
-      occurredAt: 100,
-    });
-    const privateDb = getOpenClawAgentDatabaseIfOpen({
-      ...target,
-      path: resolveIncognitoOpenClawAgentSqlitePath(target),
-    });
-    expect(privateDb?.db.prepare("SELECT run_id FROM message_tool_run_outcomes").all()).toEqual([
-      { run_id: "private" },
-    ]);
+    await expect(
+      recordMessageToolRunOutcome({
+        ...target,
+        runId: "private",
+        sessionKey: "agent:main:dashboard:incognito-outcome",
+        provider: "openai",
+        model: "gpt-5.6-luna",
+        outcome: "mute",
+        runStatus: "aborted",
+        occurredAt: 100,
+      }),
+    ).rejects.toThrow("incognito");
+    const privateTarget = { ...target, path: resolveIncognitoOpenClawAgentSqlitePath(target) };
+    expect(memorySessionActorOwners.read(privateTarget)).toBeUndefined();
+    expect(getOpenClawAgentDatabaseIfOpen(privateTarget)).toBeUndefined();
     expect(getOpenClawAgentDatabaseIfOpen(target)).toBeUndefined();
   });
 });

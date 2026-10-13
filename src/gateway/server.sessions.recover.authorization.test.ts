@@ -3,10 +3,12 @@ import { getRuntimeConfig } from "../config/io.js";
 import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
 import { addSessionMember } from "../config/sessions/session-sharing-store.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import {
   captureGatewayDeviceRevocation,
   invalidateGatewayDeviceRevocation,
 } from "./device-revocation.js";
+import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import type { retainGatewayOperatorRun } from "./operator-run-cancellation.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "./server-methods.js";
@@ -167,6 +169,9 @@ test("sessions.recover denies a narrow continuation into a linked foreign succes
     storePath,
     ownerProfileId: sourceOwner.authenticatedUserProfile!.profileId,
   });
+  using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+  prepareGatewayRecipientProfile(sourceOwner);
+  prepareGatewayRecipientProfile(broadWriter);
   const context = createDirectChatContext({
     getRuntimeConfig: () =>
       loadSessionEntry({ agentId: "main", sessionKey: sourceKey, storePath })?.mainRestartRecovery
@@ -262,6 +267,8 @@ test("sessions.recover retains source revocation for its accepted own successor"
     storePath,
     ownerProfileId: owner.authenticatedUserProfile!.profileId,
   });
+  using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+  prepareGatewayRecipientProfile(owner);
   const context = createDirectChatContext({ getRuntimeConfig: () => recoveryConfig(storePath) });
   const requestAuthority = captureGatewayDeviceRevocation(
     context,

@@ -247,269 +247,161 @@ it.each([
   },
 );
 
-it.each([
-  { snapshot: undefined, missing: [] },
-  // Only the original's run ownership tells an older prompt from this turn's own.
-  { snapshot: { senderLabel: "Jordan", text: "Earlier question" }, missing: [] },
-  { snapshot: { senderLabel: "Jordan", text: "" }, missing: ["deleted"] },
-])(
-  "renders no strip in a 1:1 turn without its prompt for an unresolved or missing reference %o",
-  ({ snapshot, missing }) => {
-    draw(
-      prompt,
-      [
-        {
-          role: "assistant",
-          content: "Answer",
-          __openclaw: { replyToId: "deleted", replyToPreview: snapshot },
-        },
-      ],
-      false,
-      "group",
-      { missing },
-    );
-    expect(container.querySelector(".chat-reply-attribution")).toBeNull();
-    expect(container.textContent).not.toContain("Original message unavailable");
-  },
-);
+type Snapshot = { senderLabel: string; text: string };
+const jordanSnapshot: Snapshot = { senderLabel: "Jordan", text: "" };
 
 it.each([
-  { lookup: "pending", snapshot: undefined, name: undefined, unavailable: undefined },
-  { lookup: "missing", snapshot: undefined, name: undefined, unavailable: true },
-  {
-    lookup: "missing",
-    snapshot: { senderLabel: "Jordan", text: "" },
-    name: "Jordan",
-    unavailable: true,
-  },
+  { status: undefined, snapshot: undefined, reserve: false },
+  { status: undefined, snapshot: { ...jordanSnapshot, text: "Earlier question" }, reserve: false },
+  { status: "missing", snapshot: jordanSnapshot, reserve: false },
+  { status: "pending", snapshot: undefined, reserve: true },
+  { status: "missing", snapshot: undefined, reserve: true },
+  { status: "missing", snapshot: jordanSnapshot, reserve: true },
+  { status: "oversized", snapshot: jordanSnapshot, reserve: true },
+  { status: "oversized", snapshot: undefined, reserve: true },
 ] as const)(
-  "keeps a reserved strip row through a $lookup lookup (name $name)",
-  ({ lookup, snapshot, name, unavailable }) => {
-    const { row } = draw(
-      prompt,
-      [
-        {
-          role: "assistant",
-          content: "Answer",
-          __openclaw: { replyToId: "deleted", ...(snapshot ? { replyToPreview: snapshot } : {}) },
-        },
-      ],
-      false,
-      "group",
-      {
-        replyShared: true,
-        ...(lookup === "pending" ? { pending: ["deleted"] } : { missing: ["deleted"] }),
-      },
-    );
-    // A transport failure reads as pending until a new connection answers.
-    expect(row.classList.contains("chat-reply-attribution--pending")).toBe(!unavailable);
+  "settles a $status lookup with reserved row $reserve and snapshot $snapshot",
+  ({ status, snapshot, reserve }) => {
+    const { row } = draw(prompt, [reply("deleted", snapshot)], false, "group", {
+      ...(reserve ? (status === "oversized" ? turnSource : { replyShared: true }) : {}),
+      ...(status ? { [status]: ["deleted"] } : {}),
+    });
+    if (!reserve) {
+      expect(container.querySelector(".chat-reply-attribution")).toBeNull();
+      expect(container.textContent).not.toContain("Original message unavailable");
+      return;
+    }
+    const unavailable = status === "missing" || (status === "oversized" && !snapshot);
+    const name = snapshot?.senderLabel;
+    expect(row.classList.contains("chat-reply-attribution--pending")).toBe(status === "pending");
     expect(row.querySelector(".chat-reply-attribution__name")?.textContent).toBe(name);
     expect(Boolean(row.querySelector(".chat-reply-attribution__person"))).toBe(Boolean(name));
     expect(row.querySelector(".chat-reply-attribution__unavailable")?.textContent).toBe(
       unavailable ? "Original message unavailable" : undefined,
     );
-    expect(row.querySelector(".chat-author-avatar, button, a")).toBeNull();
+    expect(Boolean(row.querySelector(".chat-author-avatar, button, a"))).toBe(
+      status === "oversized" && !unavailable,
+    );
   },
 );
 
 it.each([
-  { presentation: "group", shared: true },
-  { presentation: "group", shared: false },
-  { presentation: "frame", shared: false },
+  { presentation: "group", shared: true, snapshotIndex: 0, text: "", settle: true },
+  { presentation: "group", shared: false, snapshotIndex: 0, text: "", settle: true },
+  { presentation: "frame", shared: false, snapshotIndex: 0, text: "", settle: true },
+  { presentation: "group", shared: false, snapshotIndex: 1, text: "", settle: false },
+  { presentation: "frame", shared: false, snapshotIndex: 1, text: "", settle: false },
+  {
+    presentation: "group",
+    shared: false,
+    snapshotIndex: 1,
+    text: "Earlier question",
+    settle: false,
+  },
+  {
+    presentation: "frame",
+    shared: false,
+    snapshotIndex: 0,
+    text: "Earlier question",
+    settle: false,
+  },
 ] as const)(
-  "paints a sender-only snapshot on the first frame and settles it in place ($presentation, shared $shared)",
-  ({ presentation, shared }) => {
-    const replyShared = shared || undefined;
-    const replies = [
-      {
-        role: "assistant",
-        content: "Answer",
-        __openclaw: {
-          replyToId: "older",
-          replyToPreview: { senderLabel: "Jordan", text: "" },
-        },
-      },
-    ];
-    // The lookup has not answered yet: the name alone fills the strip.
-    const context = { replyShared, ...turnSource };
-    const first = draw(prompt, replies, false, presentation, { ...context, pending: ["older"] });
-    const firstContainer = container;
-    expect(first.row.classList.contains("chat-reply-attribution--pending")).toBe(false);
-    expect(first.row.querySelector(".chat-reply-attribution__name")?.textContent).toBe("Jordan");
-    expect(first.row.querySelector(".chat-author-avatar")).not.toBeNull();
-    expect(first.row.querySelector(".chat-reply-attribution__unavailable")).toBeNull();
-    // A later authoritative page can confirm that the original is missing.
-    render(null, firstContainer);
-    firstContainer.remove();
-
-    // A lookup that confirms the original is gone keeps the name in the same row.
-    const settled = draw(prompt, replies, false, presentation, { ...context, missing: ["older"] });
-    expect(settled.row.querySelector(".chat-reply-attribution__name")?.textContent).toBe("Jordan");
-    expect(settled.row.querySelector(".chat-reply-attribution__unavailable")?.textContent).toBe(
-      "Original message unavailable",
+  "selects and settles the strongest snapshot in a $presentation ($shared, $snapshotIndex, $text, $settle)",
+  ({ presentation, shared, snapshotIndex, text, settle }) => {
+    const replies = [0, 1].map((index) =>
+      reply(
+        "older",
+        index === snapshotIndex
+          ? { ...jordanSnapshot, text }
+          : text
+            ? { senderLabel: "Name-only snapshot", text: "" }
+            : undefined,
+      ),
     );
-    expect(settled.row.querySelector(".chat-author-avatar, button, a")).toBeNull();
+    for (const lookup of settle ? ["pending", "missing"] : [text ? "pending" : "missing"]) {
+      const { row, onOpenReply } = draw(prompt, replies, false, presentation, {
+        ...turnSource,
+        replyShared: shared || undefined,
+        [lookup]: ["older"],
+      });
+      expect(row.classList.contains("chat-reply-attribution--pending")).toBe(false);
+      expect(row.querySelector(".chat-reply-attribution__name")?.textContent).toBe("Jordan");
+      if (lookup === "missing") {
+        expect(row.querySelector(".chat-reply-attribution__unavailable")?.textContent).toBe(
+          "Original message unavailable",
+        );
+        expect(row.querySelector(".chat-author-avatar, button, a")).toBeNull();
+      } else {
+        expect(row.querySelector(".chat-author-avatar")).not.toBeNull();
+        expect(row.querySelector(".chat-reply-attribution__unavailable")).toBeNull();
+        expect(container.querySelector(".chat-reply-attribution--inline")).toBeNull();
+        row.querySelector<HTMLButtonElement>("button.chat-reply-attribution__target")!.click();
+        expect(onOpenReply).toHaveBeenCalledWith("older");
+      }
+      render(null, container);
+      container.remove();
+    }
   },
 );
 
-it.each(["group", "frame"] as const)(
-  "keeps a later name-only snapshot for an unavailable source in a %s",
-  (presentation) => {
-    const { row } = draw(
-      prompt,
-      [
-        { role: "assistant", content: "First answer", __openclaw: { replyToId: "deleted" } },
-        {
-          role: "assistant",
-          content: "Further details",
-          __openclaw: {
-            replyToId: "deleted",
-            replyToPreview: { senderLabel: "Jordan", text: "" },
-          },
-        },
-      ],
-      false,
-      presentation,
-      { ...turnSource, missing: ["deleted"] },
-    );
-    expect(row.querySelector(".chat-reply-attribution__name")?.textContent).toBe("Jordan");
-    expect(row.querySelector(".chat-reply-attribution__unavailable")?.textContent).toBe(
-      "Original message unavailable",
-    );
-    expect(row.querySelector(".chat-author-avatar, button, a")).toBeNull();
-  },
-);
+function reply(id: string, snapshot?: Snapshot) {
+  return {
+    role: "assistant",
+    content: "Answer",
+    __openclaw: { replyToId: id, replyToPreview: snapshot },
+  };
+}
 
 it.each([
-  { snapshot: { senderLabel: "Jordan", text: "" }, name: "Jordan", unavailable: false },
-  { snapshot: undefined, name: undefined, unavailable: true },
-])(
-  "names an oversized original only from its snapshot ($name)",
-  ({ snapshot, name, unavailable }) => {
-    // A named snapshot keeps the full line; without one the reserved row is never
-    // left blank: it holds the anonymous unavailable placeholder.
-    const { row } = draw(
-      prompt,
-      [
-        {
-          role: "assistant",
-          content: "Answer",
-          __openclaw: { replyToId: "large", ...(snapshot ? { replyToPreview: snapshot } : {}) },
-        },
-      ],
-      false,
-      "group",
-      { ...turnSource, oversized: ["large"] },
-    );
-    expect(row?.querySelector(".chat-reply-attribution__name")?.textContent).toBe(name);
-    expect(row?.querySelector(".chat-reply-attribution__unavailable")?.textContent).toBe(
-      unavailable ? "Original message unavailable" : undefined,
-    );
-    expect(Boolean(row?.querySelector(".chat-author-avatar, button, a"))).toBe(!unavailable);
-    expect(container.querySelector(".chat-reply-attribution--pending")).toBeNull();
-  },
-);
-
-it.each([
-  { presentation: "group" as const, snapshotIndex: 1 },
-  { presentation: "frame" as const, snapshotIndex: 0 },
-])(
-  "keeps an available snapshot within a reply $presentation",
-  ({ presentation, snapshotIndex }) => {
-    const { row, onOpenReply } = draw(
-      prompt,
-      [0, 1].map((index) => ({
-        role: "assistant",
-        content: `Answer ${index}`,
-        __openclaw: {
-          replyToId: "deleted",
-          ...(index === snapshotIndex
-            ? { replyToPreview: { senderLabel: "Jordan", text: "Earlier question" } }
-            : { replyToPreview: { senderLabel: "Name-only snapshot", text: "" } }),
-        },
-      })),
-      false,
-      presentation,
-      turnSource,
-    );
-    expect(row.querySelector(".chat-reply-attribution__name")?.textContent).toBe("Jordan");
-    expect(container.querySelector(".chat-reply-attribution--inline")).toBeNull();
-    // A named snapshot with text resolves the reference before its source loads.
-    // The original is known but outside the loaded history: the name still navigates.
-    row.querySelector<HTMLButtonElement>("button.chat-reply-attribution__target")!.click();
-    expect(onOpenReply).toHaveBeenCalledWith("deleted");
-  },
-);
-
-it.each(["group", "frame"] as const)(
-  "navigates from a %s strip whose original was found outside the loaded history",
-  (presentation) => {
-    const older = {
+  { presentation: "group", location: "fetched", text: "Earlier question", name: "Jordan" },
+  { presentation: "frame", location: "fetched", text: "Earlier question", name: "Jordan" },
+  { presentation: "group", location: "loaded", text: [], name: "Mira" },
+  { presentation: "group", location: "fetched", text: [], name: "Mira" },
+] as const)(
+  "navigates to the $location original from a $presentation ($name)",
+  ({ presentation, location, text, name }) => {
+    const id = name === "Mira" ? "photo" : "older";
+    const original = {
       role: "user",
-      content: "Earlier question",
-      __openclaw: { id: "older", senderId: "jordan", senderName: "Jordan" },
-    };
-    const { row, onOpenReply } = draw(
-      prompt,
-      [{ role: "assistant", content: "Answer", __openclaw: { replyToId: "older" } }],
-      false,
-      presentation,
-      { replyShared: true, fetched: { older } },
-    );
-    const target = row.querySelector<HTMLButtonElement>("button.chat-reply-attribution__target")!;
-    expect(target.getAttribute("aria-label")).toBe("Replying to Jordan");
-    expect(target.querySelector(".chat-author-avatar")).not.toBeNull();
-    target.click();
-    expect(onOpenReply).toHaveBeenCalledWith("older");
-  },
-);
-
-it.each(["loaded", "fetched"] as const)(
-  "names the author of a %s original that has no text and navigates to it",
-  (location) => {
-    const photo = {
-      role: "user",
-      content: [],
+      content: text,
       __openclaw: {
-        id: "photo",
-        senderId: "mira",
-        senderName: "Mira",
-        senderIdentity: { type: "profile", id: "mira" },
+        id,
+        senderId: name.toLowerCase(),
+        senderName: name,
+        ...(name === "Mira" ? { senderIdentity: { type: "profile", id: "mira" } } : {}),
       },
     };
-    const { row, onOpenReply } = draw(
-      prompt,
-      [{ role: "assistant", content: "Nice photo", __openclaw: { replyToId: "photo" } }],
-      true,
-      "group",
-      {
-        replyShared: true,
-        ...(location === "loaded"
-          ? { sources: { photo: { message: photo, senderLabel: "Mira" } } }
-          : { fetched: { photo } }),
-      },
-    );
+    const { row, onOpenReply } = draw(prompt, [reply(id)], location === "loaded", presentation, {
+      replyShared: true,
+      ...(location === "loaded"
+        ? { sources: { [id]: { message: original, senderLabel: name } } }
+        : { fetched: { [id]: original } }),
+    });
     expect(row.classList.contains("chat-reply-attribution--pending")).toBe(false);
     expect(row.querySelector(".chat-reply-attribution__unavailable")).toBeNull();
     const target = row.querySelector<HTMLButtonElement>("button.chat-reply-attribution__target")!;
-    expect(target.getAttribute("aria-label")).toBe("Replying to Mira");
+    expect(target.getAttribute("aria-label")).toBe(`Replying to ${name}`);
     expect(target.querySelector(".chat-author-avatar")).not.toBeNull();
     target.click();
-    expect(onOpenReply).toHaveBeenCalledWith("photo");
+    expect(onOpenReply).toHaveBeenCalledWith(id);
   },
 );
 
 it.each([
-  { promptRun: undefined, name: undefined },
-  { promptRun: "run-a", name: undefined },
-  { promptRun: "run-b", name: "Alice" },
+  { promptRun: undefined, name: undefined, anonymous: false },
+  { promptRun: undefined, name: undefined, anonymous: true },
+  { promptRun: "run-a", name: undefined, anonymous: false },
+  { promptRun: "run-b", name: "Alice", anonymous: false },
 ])(
   "settles a 1:1 reply to a paged-out prompt by run ownership, not its snapshot (run $promptRun)",
-  ({ promptRun, name }) => {
+  ({ promptRun, name, anonymous }) => {
     const paged = {
       role: "user",
       content: "Deploy?",
-      __openclaw: { id: "p1", senderName: "Alice", idempotencyKey: `${promptRun}:user` },
+      __openclaw: {
+        id: "p1",
+        ...(anonymous ? {} : { senderName: "Alice", idempotencyKey: `${promptRun}:user` }),
+      },
     };
     const { row } = draw(
       prompt,
@@ -519,7 +411,7 @@ it.each([
           content: "Deploying",
           __openclaw: {
             replyToId: "p1",
-            replyToPreview: { senderLabel: "Alice", text: "Deploy?" },
+            replyToPreview: anonymous ? undefined : { senderLabel: "Alice", text: "Deploy?" },
           },
         },
       ],
@@ -529,30 +421,16 @@ it.each([
         runId: "run-a",
         replyToSender: undefined,
         replyToMessage: undefined,
-        ...(promptRun ? { fetched: { p1: paged } } : { pending: ["p1"] }),
+        ...(promptRun || anonymous ? { fetched: { p1: paged } } : { pending: ["p1"] }),
       },
     );
-    // Its own turn's prompt is hidden, so the row is not reserved while the lookup runs.
+    if (anonymous) {
+      expect(container.querySelector(".chat-reply-attribution")).toBeNull();
+    }
     expect(row?.querySelector(".chat-reply-attribution__name")?.textContent).toBe(name);
     expect(container.querySelector(".chat-reply-attribution--pending")).toBeNull();
   },
 );
-
-it("hides a 1:1 reply to a paged-out original with no author or run", () => {
-  draw(
-    prompt,
-    [{ role: "assistant", content: "Deploying", __openclaw: { replyToId: "p1" } }],
-    false,
-    "group",
-    {
-      runId: "run-a",
-      replyToSender: undefined,
-      replyToMessage: undefined,
-      fetched: { p1: { role: "user", content: "Deploy?", __openclaw: { id: "p1" } } },
-    },
-  );
-  expect(container.querySelector(".chat-reply-attribution")).toBeNull();
-});
 
 it.each([
   { shared: false, location: "fetched", snapshot: undefined, name: "Message" },
@@ -613,107 +491,91 @@ it.each([
   { finalTarget: "prompt", recipient: "Alice" },
   { finalTarget: "current-prompt", recipient: "Bob" },
   { finalTarget: "current", recipient: "Bob" },
+  { finalTarget: "older", recipient: "Jordan" },
+  { finalTarget: undefined, recipient: undefined },
 ])(
-  "renders only the selected attribution when a frame's final response targets $recipient",
+  "attributes a frame only through the final answer's target ($finalTarget)",
   ({ finalTarget, recipient }) => {
     const currentPrompt = {
       role: "user",
       content: "Bob's current question",
       __openclaw: { id: "current-prompt", senderId: "bob", senderName: "Bob" },
     };
-    const current = { openclawDelivery: { replyToCurrent: true } };
-    const explicit = (id: string) => ({ __openclaw: { replyToId: id } });
+    const older = {
+      role: "user",
+      content: "Earlier question",
+      __openclaw: { id: "older", senderId: "jordan", senderName: "Jordan" },
+    };
+    const current = {
+      role: "assistant",
+      content: "Answer",
+      openclawDelivery: { replyToCurrent: true },
+    };
     const bob = { key: "current-prompt-render-key", message: currentPrompt };
+    const explicitOlder = finalTarget === "older" || !finalTarget;
     draw(
       prompt,
       [
-        {
-          role: "assistant",
-          content: "Working on the current question",
-          ...(finalTarget === "current" ? explicit("prompt") : current),
-        },
-        {
-          role: "assistant",
-          content: "Final answer",
-          ...(finalTarget === "current" ? current : explicit(finalTarget)),
-        },
+        explicitOlder ? reply("older") : finalTarget === "current" ? reply("prompt") : current,
+        finalTarget === "current"
+          ? current
+          : finalTarget
+            ? reply(finalTarget)
+            : { role: "assistant", content: "Final answer" },
       ],
       true,
       "frame",
-      {
-        runId: "run",
-        replyToSender: { id: "bob", name: "Bob" },
-        replyToMessage: bob,
-        replyCurrentSource: bob,
-        sources: { "current-prompt": { message: currentPrompt, senderLabel: "Bob" } },
-      },
+      explicitOlder
+        ? {
+            replyShared: true,
+            replyToSender: undefined,
+            replyToMessage: undefined,
+            sources: { older: { message: older, senderLabel: "Jordan" } },
+          }
+        : {
+            runId: "run",
+            replyToSender: { id: "bob", name: "Bob" },
+            replyToMessage: bob,
+            replyCurrentSource: bob,
+            sources: { "current-prompt": { message: currentPrompt, senderLabel: "Bob" } },
+          },
     );
-    expect(container.querySelectorAll(".chat-reply-attribution--reply")).toHaveLength(1);
+    expect(container.querySelectorAll(".chat-reply-attribution--reply")).toHaveLength(
+      recipient ? 1 : 0,
+    );
     expect(container.querySelector(".chat-reply-attribution__name")?.textContent).toBe(recipient);
     expect(container.querySelector(".chat-reply-attribution--inline")).toBeNull();
   },
 );
 
 it.each([
-  { finalReplies: false, name: undefined },
-  { finalReplies: true, name: "Jordan" },
+  {
+    source: { ...prompt, senderLabel: "Alice", __openclaw: { id: "prompt", senderId: "user-123" } },
+    explicit: true,
+  },
+  { source: { role: "user", content: "Pending question" }, explicit: false },
+  { source: null, explicit: false },
 ])(
-  "attributes a frame only through its final answer's target (final replies $finalReplies)",
-  ({ finalReplies, name }) => {
-    const older = {
-      role: "user",
-      content: "Earlier question",
-      __openclaw: { id: "older", senderId: "jordan", senderName: "Jordan" },
-    };
-    const replyToOlder = { __openclaw: { replyToId: "older" } };
-    draw(
-      prompt,
-      [
-        { role: "assistant", content: "Intermediate answer", ...replyToOlder },
-        { role: "assistant", content: "Final answer", ...(finalReplies ? replyToOlder : {}) },
-      ],
-      true,
-      "frame",
-      {
-        replyShared: true,
-        replyToSender: undefined,
-        replyToMessage: undefined,
-        sources: { older: { message: older, senderLabel: "Jordan" } },
-      },
-    );
-    expect(container.querySelectorAll(".chat-reply-attribution--reply")).toHaveLength(name ? 1 : 0);
-    expect(container.querySelector(".chat-reply-attribution__name")?.textContent).toBe(name);
+  "renders a known recipient with navigation only for persisted sources ($source)",
+  ({ source, explicit }) => {
+    const { row } = draw(source, explicit ? [reply("prompt")] : undefined);
+    expect(row.querySelector(".chat-reply-attribution__name")?.textContent).toBe("Alice");
+    if (explicit) {
+      expect(row.querySelector(".chat-author-avatar")?.getAttribute("aria-label")).toBe("Alice");
+    } else {
+      expect(row.querySelector("button, a")).toBeNull();
+    }
+    if (source === null) {
+      const label = row.querySelector(".chat-reply-attribution__label")!;
+      expect(label.textContent?.trim()).toBe("Replying to");
+      expect(
+        label.querySelector(".chat-reply-attribution__mobile-icon")?.getAttribute("aria-hidden"),
+      ).toBe("true");
+      expect(row.querySelector(".chat-reply-attribution__unavailable")).toBeNull();
+      expect(row.nextElementSibling?.classList.contains("chat-bubble")).toBe(true);
+    }
   },
 );
-
-it("preserves the resolved display label when sender metadata contains only an ID", () => {
-  const { row } = draw(
-    { ...prompt, senderLabel: "Alice", __openclaw: { id: "prompt", senderId: "user-123" } },
-    [{ role: "assistant", content: "Answer", __openclaw: { replyToId: "prompt" } }],
-  );
-  expect(row.querySelector(".chat-reply-attribution__name")?.textContent).toBe("Alice");
-  expect(row.querySelector(".chat-author-avatar")?.getAttribute("aria-label")).toBe("Alice");
-});
-
-it("keeps pending prompts without a persisted ID noninteractive", () => {
-  const { row } = draw({ role: "user", content: "Pending question" });
-  expect(row.querySelector(".chat-reply-attribution__name")?.textContent).toBe("Alice");
-  expect(row.querySelector("button, a")).toBeNull();
-});
-
-it("renders an automatic recipient without claiming a textless source is unavailable", () => {
-  const { row } = draw(null);
-  expect(row.querySelector(".chat-reply-attribution__name")?.textContent).toBe("Alice");
-  // The decorative mobile icon adds no text to the visible label.
-  const label = row.querySelector(".chat-reply-attribution__label")!;
-  expect(label.textContent?.trim()).toBe("Replying to");
-  expect(
-    label.querySelector(".chat-reply-attribution__mobile-icon")?.getAttribute("aria-hidden"),
-  ).toBe("true");
-  expect(row.querySelector(".chat-reply-attribution__unavailable")).toBeNull();
-  expect(row.querySelector("button, a")).toBeNull();
-  expect(row.nextElementSibling?.classList.contains("chat-bubble")).toBe(true);
-});
 
 it.each([
   {
@@ -841,52 +703,41 @@ function drawOwnReply(
   return container.querySelector(".chat-bubble > .chat-reply-attribution--inline");
 }
 
-it.each([
-  { shared: false, snapshot: undefined, name: "Message" },
-  { shared: true, snapshot: undefined, name: undefined },
-  { shared: true, snapshot: { senderLabel: "Jordan", text: "" }, name: "Jordan" },
-] as const)(
-  "names a fetched original without sender provenance in an own reply only when it cannot be a guess (shared $shared)",
-  ({ shared, snapshot, name }) => {
-    const strip = drawOwnReply(
-      { role: "user", content: "Earlier question", __openclaw: { id: "older" } },
-      shared,
-      snapshot,
-    );
-    // A 1:1 thread keeps the neutral label; a shared thread never falls back to it.
-    expect(strip?.querySelector(".chat-reply-attribution__name")?.textContent).toBe(name);
-    expect(container.querySelector(".chat-reply-attribution--pending")).toBeNull();
-  },
-);
-
-it.each([
+type OwnReplyCase = {
+  shared: boolean;
+  sender?: { senderId: string; senderName?: string };
+  label?: string;
+  snapshot?: Snapshot;
+  name?: string;
+};
+const ownReplyCases: OwnReplyCase[] = [
+  { shared: false, name: "Message" },
+  { shared: true },
+  { shared: true, snapshot: jordanSnapshot, name: "Jordan" },
   {
+    shared: true,
     sender: { senderId: "jordan@example.com" },
-    label: undefined,
-    snapshot: "Jordan",
+    snapshot: jordanSnapshot,
     name: "Jordan",
   },
   {
+    shared: true,
     sender: { senderId: "jordan@example.com", senderName: "Jordan Lee" },
-    label: undefined,
-    snapshot: "Jordan",
+    snapshot: jordanSnapshot,
     name: "Jordan Lee",
   },
   {
+    shared: true,
     sender: { senderId: "jordan@example.com" },
     label: "Jordan Lee",
-    snapshot: "Jordan",
+    snapshot: jordanSnapshot,
     name: "Jordan Lee",
   },
-  {
-    sender: { senderId: "jordan@example.com" },
-    label: undefined,
-    snapshot: undefined,
-    name: "jordan",
-  },
-] as const)(
-  "keeps a shared snapshot's name when the fetched sender has only an id ($name, label $label)",
-  ({ sender, label, snapshot, name }) => {
+  { shared: true, sender: { senderId: "jordan@example.com" }, name: "jordan" },
+];
+it.each(ownReplyCases)(
+  "names a fetched own-reply source from provenance before its snapshot ($name, $label, $shared)",
+  ({ shared, sender, label, snapshot, name }) => {
     const strip = drawOwnReply(
       {
         role: "user",
@@ -894,11 +745,10 @@ it.each([
         ...(label ? { senderLabel: label } : {}),
         __openclaw: { id: "older", ...sender },
       },
-      true,
-      snapshot ? { senderLabel: snapshot, text: "" } : undefined,
+      shared,
+      snapshot,
     );
-    // The fetched original's own name or display label wins; an id-only sender
-    // keeps the snapshot's name, and only then its formatted id.
     expect(strip?.querySelector(".chat-reply-attribution__name")?.textContent).toBe(name);
+    expect(container.querySelector(".chat-reply-attribution--pending")).toBeNull();
   },
 );

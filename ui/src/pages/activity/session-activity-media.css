@@ -22,6 +22,9 @@ openclaw-activity-session-media {
 }
 
 .activity-feed__media .chat-image-frame {
+  --chat-image-gutter: 0px;
+
+  padding: 0;
   position: relative;
   display: block;
   flex: 0 0 128px;
@@ -32,6 +35,10 @@ openclaw-activity-session-media {
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 8px;
+}
+
+.activity-feed__media .chat-image-surface {
+  height: 100%;
 }
 
 .activity-feed__media .chat-message-image-button {

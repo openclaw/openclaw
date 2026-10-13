@@ -1,4 +1,4 @@
-// Shared row mutations for synchronous session signals and the shared-state worker.
+// Connection-bound signal mutations execute in the shared-state worker.
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
@@ -10,7 +10,6 @@ import {
 } from "../infra/kysely-sync.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
-import { parseAgentSessionKey } from "../routing/session-key.js";
 import { ensureColumn } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -24,8 +23,9 @@ import {
   type SessionStateEventKind,
 } from "./session-state-event-kinds.js";
 import type { SessionStateEventRecord } from "./session-state-events.types.js";
+import { isSessionStateWatchAddress } from "./session-state-events.watch-address.js";
 import {
-  rowToSessionUpstreamLink,
+  readSessionUpstreamLinkInDatabase,
   type SessionUpstreamLink,
 } from "./session-upstream-links.kernel.js";
 
@@ -83,16 +83,6 @@ function ensureWatcherStoreColumn(db: DatabaseSync) {
   deferSqlitePostCommitPublication(db, () => watcherSchemas.add(db));
 }
 
-// Bare keys (session.scope="global") are store-local per agent, but cursors, the
-// system-event queue, and heartbeat wakes are keyed by session key alone. A notice
-// for one agent's child could be drained and acknowledged by another agent's global
-// turn — a cross-A2A metadata leak plus a lost notification. Until watcher identity
-// is agent-scoped end-to-end, such watchers get durable events and changesSince but
-// no notices.
-export function isNotifiableWatcherKey(watcherSessionKey: string): boolean {
-  return parseAgentSessionKey(watcherSessionKey) != null;
-}
-
 export function getSessionStateKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<SessionStateDatabase>(db);
 }
@@ -101,15 +91,17 @@ export function hasSessionStateWatchersInDatabase(
   db: DatabaseSync,
   targetSessionKey: string,
 ): boolean {
-  return (
-    executeSqliteQueryTakeFirstSync(
-      db,
-      getSessionStateKysely(db)
-        .selectFrom("session_watch_cursors")
-        .select("watcher_session_key")
-        .where("target_session_key", "=", targetSessionKey)
-        .limit(1),
-    ) !== undefined
+  return executeSqliteQuerySync(
+    db,
+    getSessionStateKysely(db)
+      .selectFrom("session_watch_cursors")
+      .select("watcher_session_key")
+      .where("target_session_key", "=", targetSessionKey),
+  ).rows.some((row) =>
+    isSessionStateWatchAddress({
+      watcherSessionKey: row.watcher_session_key,
+      targetSessionKey,
+    }),
   );
 }
 
@@ -118,15 +110,8 @@ export function isSessionStateUpstreamCurrentInDatabase(
   db: DatabaseSync,
   expected: SessionUpstreamLink,
 ): boolean {
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "session_upstream_links">>(db)
-      .selectFrom("session_upstream_links")
-      .selectAll()
-      .where("session_key", "=", expected.sessionKey)
-      .where("agent_id", "=", expected.agentId),
-  );
-  return row !== undefined && isDeepStrictEqual(rowToSessionUpstreamLink(row), expected);
+  const current = readSessionUpstreamLinkInDatabase(db, expected.sessionKey, expected.agentId);
+  return current !== undefined && isDeepStrictEqual(current, expected);
 }
 
 export function normalizeOptionalSqliteNumber(
@@ -159,6 +144,9 @@ export function readCursor(
   watcherSessionKey: string,
   targetSessionKey: string,
 ): SessionWatchCursorRow | undefined {
+  if (!isSessionStateWatchAddress({ watcherSessionKey, targetSessionKey })) {
+    return undefined;
+  }
   return executeSqliteQueryTakeFirstSync(
     db,
     getSessionStateKysely(db)
@@ -208,6 +196,9 @@ export function upsertSeedCursor(params: {
   now: number;
   provenance?: SessionWatchCursorProvenance;
 }): void {
+  if (!isSessionStateWatchAddress(params)) {
+    return;
+  }
   ensureWatcherStoreColumn(params.db);
   const cursor = {
     watcher_store_path: params.watcherStorePath ?? null,
@@ -362,7 +353,13 @@ export function recordSessionStateEventInDatabase(
     : [];
   const watcherSessionKeys = [
     ...new Set([...(input.watcherSessionKeys ?? []), ...registeredWatcherKeys]),
-  ].filter((key) => Boolean(key) && isNotifiableWatcherKey(key));
+  ].filter((watcherSessionKey) =>
+    isSessionStateWatchAddress({
+      watcherSessionKey,
+      targetSessionKey: input.sessionKey,
+      targetAgentId: input.agentId,
+    }),
+  );
   const cursors =
     NOTIFY_BY_KIND[input.kind] && watcherSessionKeys.length > 1
       ? readMaterialCursors(

@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-// Runs local workflow sanity checks.
 // Uses qualified installed tools, otherwise falls back to pinned hooks where
 // possible, then runs repo-specific workflow guards.
 import { spawnSync } from "node:child_process";
@@ -146,23 +145,13 @@ function runPreCommitFromTempVenv(hookArgs: string[]): boolean {
       return false;
     }
     postVenvFailure = runChecked(python, ["-m", "pre_commit", ...hookArgs]);
-    if (postVenvFailure) {
-      return false;
-    }
-    return true;
+    return !postVenvFailure;
   } finally {
     rmSync(venvDir, { force: true, recursive: true });
     if (postVenvFailure) {
       exitWithFailure(postVenvFailure);
     }
   }
-}
-
-function workflowFiles(): string[] {
-  return readdirSync(WORKFLOW_DIR)
-    .filter((file) => file.endsWith(".yml") || file.endsWith(".yaml"))
-    .toSorted()
-    .map((file) => join(WORKFLOW_DIR, file));
 }
 
 function runPreCommitHook(hook: string, files: string[]): void {
@@ -185,7 +174,10 @@ function runPreCommitHook(hook: string, files: string[]): void {
   process.exit(1);
 }
 
-const workflows = workflowFiles();
+const workflows = readdirSync(WORKFLOW_DIR)
+  .filter((file) => file.endsWith(".yml") || file.endsWith(".yaml"))
+  .toSorted()
+  .map((file) => join(WORKFLOW_DIR, file));
 
 if (hasPinnedActionlint()) {
   run("actionlint", workflows);

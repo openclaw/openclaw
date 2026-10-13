@@ -27,7 +27,8 @@ suite.define(() => {
           page.on("filechooser", () => {});
           await page.goto(suite.server.baseUrl + "chat");
           const trigger = page.getByRole("button", { name: "Add attachment", exact: true });
-          const dropdown = page.locator("wa-dropdown:has(.agent-chat__attach-menu-option)");
+          const dropdown = page.locator("wa-dropdown.agent-chat__attach-menu");
+          await dropdown.locator('[part="menu"]').waitFor({ state: "attached" });
           // Pause only the real CSS show animation. Native key input and the actual
           // filechooser still pass through the production dropdown and composer.
           await dropdown.evaluate((element) => {
@@ -38,7 +39,7 @@ suite.define(() => {
             await trigger.press("Enter");
             await page.waitForFunction(() => {
               const menu = document
-                .querySelector("wa-dropdown:has(.agent-chat__attach-menu-option)")
+                .querySelector("wa-dropdown.agent-chat__attach-menu")
                 ?.shadowRoot?.querySelector('[part="menu"]');
               return menu?.getAnimations().some((animation) => animation.playState === "paused");
             });
@@ -62,13 +63,13 @@ suite.define(() => {
               });
             }
             const focus = await page.evaluate(() => document.activeElement?.getAttribute("value"));
+            expect(focus).toBe(kind);
             const pending = page.waitForEvent("filechooser");
             await page.keyboard.press("Enter");
             const chooser = await pending;
             expect(await chooser.element().getAttribute("class")).toBe(
               "agent-chat__" + kind + "-input",
             );
-            expect(focus).toBe(kind);
             expect(chooser.isMultiple()).toBe(true);
             expect(await chooser.element().getAttribute("capture")).toBeNull();
             // Boundary cancellation, not certification of a native OS dialog.

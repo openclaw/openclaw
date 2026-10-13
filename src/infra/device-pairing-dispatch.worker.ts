@@ -22,47 +22,63 @@ type DevicePairingMutationContext = {
   recordWorkerEnvironment: (
     facts: NonNullable<DevicePairingCommitReceipt["workerEnvironment"]>,
   ) => void;
+  recordNodeApproval: (facts: NonNullable<DevicePairingCommitReceipt["nodeApproval"]>) => void;
 };
 
 export function devicePairingMutation<Input, Result>(
   operation: (input: Input, context: DevicePairingMutationContext) => Result,
+  { publishPairing = true }: { publishPairing?: boolean } = {},
 ) {
   return (input: Input, { open }: WorkerOperationContext): Result => {
     const database = open();
     return runOpenClawStateWriteTransaction(
       () =>
-        withDevicePairingStoreDatabase(database, () =>
-          withDevicePairingMutationAdmission(() => {
-            const before = readPairedDevicePairingRecordsFromDatabase(database.db);
-            let tokensReplaced: DevicePairingCommitReceipt["tokensReplaced"];
-            let workerEnvironment: DevicePairingCommitReceipt["workerEnvironment"];
-            const result = operation(input, {
-              database,
-              recordTokenReplacement: (facts) => {
-                tokensReplaced = facts;
-              },
-              recordWorkerEnvironment: (facts) => {
-                workerEnvironment = facts;
-              },
-            });
-            const after = readPairedDevicePairingRecordsFromDatabase(database.db);
-            const changed: DevicePairingCommitReceipt["changed"] = [];
-            for (const deviceId of new Set([...Object.keys(before), ...Object.keys(after)])) {
-              if (JSON.stringify(before[deviceId]) !== JSON.stringify(after[deviceId])) {
-                changed.push(prepareDevicePairingBinding(deviceId, after[deviceId] ?? null));
+        withDevicePairingMutationAdmission(() => {
+          const before = publishPairing
+            ? readPairedDevicePairingRecordsFromDatabase(database.db)
+            : undefined;
+          const after = before ? structuredClone(before) : undefined;
+          return withDevicePairingStoreDatabase(
+            database,
+            () => {
+              let tokensReplaced: DevicePairingCommitReceipt["tokensReplaced"];
+              let workerEnvironment: DevicePairingCommitReceipt["workerEnvironment"];
+              let nodeApproval: DevicePairingCommitReceipt["nodeApproval"];
+              const result = operation(input, {
+                database,
+                recordTokenReplacement: (facts) => {
+                  tokensReplaced = facts;
+                },
+                recordWorkerEnvironment: (facts) => {
+                  workerEnvironment = facts;
+                },
+                recordNodeApproval: (facts) => {
+                  nodeApproval = facts;
+                },
+              });
+              if (!before || !after) {
+                return result;
               }
-            }
-            deferSqliteWorkerCommitReceipt(database.db, {
-              kind: "devicePairing",
-              beforeRevision: resolveDevicePairingStoreRevision(before),
-              revision: resolveDevicePairingStoreRevision(after),
-              changed,
-              ...(tokensReplaced ? { tokensReplaced } : {}),
-              ...(workerEnvironment ? { workerEnvironment } : {}),
-            } satisfies DevicePairingCommitReceipt);
-            return result;
-          }),
-        ),
+              const changed: DevicePairingCommitReceipt["changed"] = [];
+              for (const deviceId of new Set([...Object.keys(before), ...Object.keys(after)])) {
+                if (JSON.stringify(before[deviceId]) !== JSON.stringify(after[deviceId])) {
+                  changed.push(prepareDevicePairingBinding(deviceId, after[deviceId] ?? null));
+                }
+              }
+              deferSqliteWorkerCommitReceipt(database.db, {
+                kind: "devicePairing",
+                beforeRevision: resolveDevicePairingStoreRevision(before),
+                revision: resolveDevicePairingStoreRevision(after),
+                changed,
+                ...(tokensReplaced ? { tokensReplaced } : {}),
+                ...(workerEnvironment ? { workerEnvironment } : {}),
+                ...(nodeApproval ? { nodeApproval } : {}),
+              } satisfies DevicePairingCommitReceipt);
+              return result;
+            },
+            after,
+          );
+        }),
       { database, env: getSqliteWorkerStateContext().environment },
     );
   };

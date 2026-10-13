@@ -1,7 +1,19 @@
 import fs from "node:fs";
+import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { isPathInside, normalizeWindowsPathPreservingCase } from "../infra/path-guards.js";
+import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
+import {
+  acquireSqliteStagingToken,
+  SQLITE_STAGING_TOKEN_FILES,
+} from "../infra/sqlite-staging-token.js";
 
+export type NativeCaptureMaintenance = {
+  retainedPaths: ReadonlySet<string>;
+  assertCurrent: () => void | Promise<void>;
+  removed: string[];
+  startup?: boolean;
+};
 /** The process-wide capture owner installs this observer once. */
 function observePluginNativeLoads(): ReadonlySet<string> {
   const paths = new Set<string>();
@@ -24,14 +36,126 @@ function observePluginNativeLoads(): ReadonlySet<string> {
   return paths;
 }
 
-export function createPluginNativeCaptureCustody(ownedRoots: ReadonlySet<string>) {
+export function createPluginNativeCaptureCustody(ownedRoots: Set<string>) {
   const nativeLoadPaths = observePluginNativeLoads();
   const nativeReferences = new Map<string, number>();
   const retiringNativeRoots = new Set<string>();
   const retainedRoots = new Set<string>();
+  /** Reclamation owns an existing native token until its captured payload is gone. */
+  async function reclaimInstance(
+    directory: string,
+    originalDirectory: fs.Stats,
+    nativeMaintenance?: NativeCaptureMaintenance,
+  ): Promise<void> {
+    const ownerPath = path.join(directory, SQLITE_STAGING_TOKEN_FILES[0]);
+    const family = SQLITE_STAGING_TOKEN_FILES.map((file) =>
+      fs.lstatSync(path.join(directory, file), { throwIfNoEntry: false }),
+    );
+    const originalOwner = family[0];
+    const captures = path.join(directory, "captures");
+    const captured = fs.lstatSync(captures, { throwIfNoEntry: false });
+    if (
+      (process.getuid && originalDirectory.uid !== process.getuid()) ||
+      !originalOwner ||
+      family.some(
+        (file) =>
+          file &&
+          (!file.isFile() || file.nlink !== 1 || (process.getuid && file.uid !== process.getuid())),
+      ) ||
+      (captured && !captured.isDirectory())
+    ) {
+      return;
+    }
+    const unchanged = () => {
+      const currentDirectory = fs.lstatSync(directory);
+      const currentOwner = fs.lstatSync(ownerPath);
+      return (
+        currentDirectory.dev === originalDirectory.dev &&
+        currentDirectory.ino === originalDirectory.ino &&
+        currentDirectory.isDirectory() &&
+        currentOwner.isFile() &&
+        currentOwner.nlink === 1 &&
+        currentOwner.dev === originalOwner.dev &&
+        currentOwner.ino === originalOwner.ino
+      );
+    };
+    // Reclaim refuses a missing token and never creates a replacement ownership database.
+    const release = acquireSqliteStagingToken(directory, "reclaim");
+    let released = false;
+    const errors: unknown[] = [];
+    ownedRoots.add(directory);
+    try {
+      if (!unchanged()) {
+        return;
+      }
+      const native = path.join(directory, "native");
+      // A producer can publish native bytes between inspection and exclusive admission.
+      const nativeStat = fs.lstatSync(native, { throwIfNoEntry: false });
+      await nativeMaintenance?.assertCurrent();
+      if (!unchanged()) {
+        return;
+      }
+      await fsPromises.rm(captures, { recursive: true, force: true });
+      let retainedNative = Boolean(nativeStat);
+      if (nativeStat?.isDirectory() && nativeMaintenance) {
+        for (const nativeEntry of await fsPromises.readdir(native, { withFileTypes: true })) {
+          const nativeDirectory = path.join(native, nativeEntry.name);
+          if (!nativeEntry.isDirectory()) {
+            continue;
+          }
+          await nativeMaintenance.assertCurrent();
+          if (!unchanged()) {
+            return;
+          }
+          const contained = (file: string) => file.startsWith(nativeDirectory + path.sep);
+          if (
+            [...nativeMaintenance.retainedPaths].some(contained) ||
+            [...nativeReferences.keys()].some(contained)
+          ) {
+            continue;
+          }
+          retiringNativeRoots.add(nativeDirectory);
+          try {
+            await fsPromises.rm(nativeDirectory, { recursive: true, force: true });
+            nativeMaintenance.removed.push(nativeDirectory);
+          } finally {
+            retiringNativeRoots.delete(nativeDirectory);
+          }
+        }
+        retainedNative = (await fsPromises.readdir(native)).length > 0;
+      }
+      // Retirement closes staging admission; committed native readers use receipt-bound files.
+      await nativeMaintenance?.assertCurrent();
+      if (!unchanged()) {
+        return;
+      }
+      release(true);
+      released = true;
+      // The shipped instance ID is never reused. Windows requires closing before unlink.
+      if (!retainedNative) {
+        await nativeMaintenance?.assertCurrent();
+        if (unchanged()) {
+          await fsPromises.rm(directory, { recursive: true, force: true });
+        }
+      }
+    } catch (error) {
+      errors.push(error);
+    } finally {
+      try {
+        if (!released) {
+          release();
+        }
+      } catch (error) {
+        errors.push(error);
+      } finally {
+        ownedRoots.delete(directory);
+      }
+      throwSqliteLifecycleErrors(errors, "Plugin source reclamation and cleanup failed");
+    }
+  }
+
   return {
-    nativeReferences,
-    retiringNativeRoots,
+    reclaimInstance,
     /** Independent inventories and loaded modules can retain the same native namespace. */
     isPluginSourceCaptureRetained(this: void, directory: string): boolean {
       return (

@@ -211,22 +211,24 @@ export async function createSandboxBackend(
   }
   for (let attempt = 0; ; attempt++) {
     params.assertRuntimeCurrent?.();
-    const reservation = reserveSandboxRegistryEntry({
-      containerName: reserveRuntimeId(params),
-      backendId: params.cfg.backend,
-      sessionKey: params.scopeKey,
-      createdAtMs: Date.now(),
-      lastUsedAtMs: Date.now(),
-      image: params.cfg.docker.image,
-      workspaceDir: params.workspaceDir,
-    });
+    const reservation = await reserveSandboxRegistryEntry(
+      {
+        containerName: reserveRuntimeId(params),
+        backendId: params.cfg.backend,
+        sessionKey: params.scopeKey,
+        createdAtMs: Date.now(),
+        lastUsedAtMs: Date.now(),
+        image: params.cfg.docker.image,
+        workspaceDir: params.workspaceDir,
+      },
+      { ...guard, beforeLegacyApply: params.assertRuntimeCurrent },
+    );
     try {
       return await withSandboxRegistryEntryLock(reservation, async () => {
         const assertCurrent = () => {
           params.assertRuntimeCurrent?.();
           assertSandboxRegistryEntryCurrent(reservation);
         };
-        assertCurrent();
         try {
           const backend = await factory({
             ...params,
@@ -240,10 +242,11 @@ export async function createSandboxBackend(
           ) {
             throw new Error("Sandbox backend returned a runtime outside its reserved generation.");
           }
-          await completeSandboxRegistryReservation(toEntry(backend), false, {
-            ...guard,
-            beforeLegacyApply: assertCurrent,
-          });
+          await completeSandboxRegistryReservation(
+            { ...reservation, ...toEntry(backend), createdAtMs: reservation.createdAtMs },
+            false,
+            { ...guard, beforeLegacyApply: params.assertRuntimeCurrent },
+          );
           return backend;
         } catch (error) {
           if (
@@ -252,7 +255,7 @@ export async function createSandboxBackend(
           ) {
             await completeSandboxRegistryReservation(reservation, true, {
               ...guard,
-              beforeLegacyApply: assertCurrent,
+              beforeLegacyApply: params.assertRuntimeCurrent,
             });
           }
           throw error;

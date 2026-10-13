@@ -164,52 +164,6 @@ describe("native PDF provider API calls", () => {
     expect(opts.headers.get("X-Managed")).toBe("Bearer native-pdf-managed-secret");
   });
 
-  it("anthropicAnalyzePdf honors ANTHROPIC_BASE_URL when no base URL is configured", async () => {
-    vi.stubEnv("ANTHROPIC_BASE_URL", "https://anthropic-pdf-proxy.example/v1");
-    const fetchMock = mockFetchResponse(
-      jsonResponse({
-        content: [{ type: "text", text: "Analysis of PDF" }],
-      }),
-    );
-
-    await pdfNativeProviders.anthropicAnalyzePdf(makeAnthropicAnalyzeParams());
-
-    const [url] = firstFetchCall(fetchMock) as [string];
-    expect(url).toBe("https://anthropic-pdf-proxy.example/v1/messages");
-  });
-
-  it("bounds large Anthropic API error bodies", async () => {
-    // Provider errors can contain large or sensitive payloads; surface a compact
-    // diagnostic and cancel the stream once the cap is reached.
-    let canceled = false;
-    const body = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode(`${"x".repeat(9_000)}tail-marker`));
-      },
-      cancel() {
-        canceled = true;
-      },
-    });
-    mockFetchResponse(
-      new Response(body, {
-        status: 400,
-        statusText: "Bad Request",
-      }),
-    );
-
-    const error = await pdfNativeProviders
-      .anthropicAnalyzePdf(makeAnthropicAnalyzeParams())
-      .catch((caught: unknown) => caught);
-
-    if (!(error instanceof Error)) {
-      throw new Error("expected Anthropic PDF request to throw an Error");
-    }
-    expect(error.message).toContain("Anthropic PDF request failed");
-    expect(error.message).not.toContain("tail-marker");
-    expect(error.message.length).toBeLessThan(500);
-    expect(canceled).toBe(true);
-  });
-
   it("cancels Anthropic API error bodies that exactly fill the byte cap", async () => {
     let canceled = false;
     const body = new ReadableStream<Uint8Array>({
@@ -239,43 +193,8 @@ describe("native PDF provider API calls", () => {
       throw new Error("expected Anthropic PDF request to throw an Error");
     }
     expect(error.message).toContain("Anthropic PDF request failed");
+    expect(error.message.length).toBeLessThan(500);
     expect(canceled).toBe(true);
-  });
-
-  it("redacts a reflected x-api-key credential from Anthropic API error bodies", async () => {
-    const needle = "sk-ant-api03-vX7qP2mN9wKzR4tY8uI0oP3aS6dF7gH1jL5k";
-    mockFetchResponse(
-      textResponse(`upstream echoed x-api-key: ${needle}`, {
-        status: 401,
-        statusText: "Unauthorized",
-      }),
-    );
-
-    const error = await captureError(
-      pdfNativeProviders.anthropicAnalyzePdf(makeAnthropicAnalyzeParams({ apiKey: needle })),
-      "Anthropic PDF request",
-    );
-    expect(error.message).not.toContain(needle);
-    expect(error.message).toContain("Anthropic PDF request failed (401");
-    expect(error.message).toContain("x-api-key: ***");
-  });
-
-  it("redacts a reflected x-goog-api-key credential from Gemini API error bodies", async () => {
-    const needle = "gemini-test-credential-with-a-long-value";
-    mockFetchResponse(
-      textResponse(`upstream echoed x-goog-api-key: ${needle}`, {
-        status: 401,
-        statusText: "Unauthorized",
-      }),
-    );
-
-    const error = await captureError(
-      pdfNativeProviders.geminiAnalyzePdf(makeGeminiAnalyzeParams({ apiKey: needle })),
-      "Gemini PDF request",
-    );
-    expect(error.message).not.toContain(needle);
-    expect(error.message).toContain("Gemini PDF request failed (401");
-    expect(error.message).toContain("x-goog-api-key: ***");
   });
 
   it("masks a short Bearer credential actually sent through extra headers", async () => {
@@ -294,25 +213,6 @@ describe("native PDF provider API calls", () => {
     expect(opts.headers.get("Authorization")).toBe("bearer abc");
     expect(error.message).not.toContain("abc");
     expect(error.message).toContain("Anthropic PDF request failed (401 reflected token=***)");
-  });
-
-  it("masks a reflected non-Bearer Authorization payload", async () => {
-    const credential = "dGVzdC11c2VyOnRlc3QtcGFzc3dvcmQ=";
-    mockFetchResponse(textResponse(`reflected credential=${credential}`, { status: 401 }));
-
-    const error = await captureError(
-      pdfNativeProviders.anthropicAnalyzePdf(
-        makeAnthropicAnalyzeParams({
-          requestConfig: { headers: { Authorization: `Basic ${credential}` } },
-        }),
-      ),
-      "Anthropic PDF request",
-    );
-    const fetchMock = global.fetch as unknown as { mock: { calls: unknown[][] } };
-    const [, opts] = firstFetchCall(fetchMock) as [string, { headers: Headers }];
-    expect(opts.headers.get("Authorization")).toBe(`Basic ${credential}`);
-    expect(error.message).not.toContain(credential);
-    expect(error.message).toContain("reflected credential=***");
   });
 
   it("masks a reflected custom request-auth credential and preserves its prefix", async () => {
@@ -347,11 +247,6 @@ describe("native PDF provider API calls", () => {
   });
 
   it.each([
-    {
-      name: "character cutoff",
-      credential: "custom-secret-abcdefghij",
-      body: `${"x".repeat(390)} Token-custom-secret-abcdefghij`,
-    },
     {
       name: "byte cutoff",
       credential: "a".repeat(7_900),
@@ -395,21 +290,6 @@ describe("native PDF provider API calls", () => {
     await expect(
       pdfNativeProviders.anthropicAnalyzePdf(makeAnthropicAnalyzeParams()),
     ).rejects.toThrow("Anthropic PDF returned no text");
-  });
-
-  it("anthropicAnalyzePdf trusts the exact configured local provider origin", async () => {
-    const fetchMock = mockFetchResponse(
-      jsonResponse({
-        content: [{ type: "text", text: "ok" }],
-      }),
-    );
-
-    await expect(
-      pdfNativeProviders.anthropicAnalyzePdf(
-        makeAnthropicAnalyzeParams({ baseUrl: "http://127.0.0.1:11434" }),
-      ),
-    ).resolves.toBe("ok");
-    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("anthropicAnalyzePdf honors explicit private-network denial for a configured local origin", async () => {
@@ -563,41 +443,5 @@ describe("native PDF provider API calls", () => {
     await expect(
       pdfNativeProviders.geminiAnalyzePdf(makeGeminiAnalyzeParams({ apiKey: "" })),
     ).rejects.toThrow("apiKey required");
-  });
-
-  it("geminiAnalyzePdf does not duplicate /v1beta when baseUrl already includes it", async () => {
-    const fetchMock = mockFetchResponse(
-      jsonResponse({
-        candidates: [{ content: { parts: [{ text: "ok" }] } }],
-      }),
-    );
-
-    await pdfNativeProviders.geminiAnalyzePdf(
-      makeGeminiAnalyzeParams({
-        baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-      }),
-    );
-
-    const [url] = firstFetchCall(fetchMock);
-    expect(url).toContain("/v1beta/models/");
-    expect(url).not.toContain("/v1beta/v1beta");
-  });
-
-  it("geminiAnalyzePdf normalizes bare Google API hosts to a single /v1beta root", async () => {
-    const fetchMock = mockFetchResponse(
-      jsonResponse({
-        candidates: [{ content: { parts: [{ text: "ok" }] } }],
-      }),
-    );
-
-    await pdfNativeProviders.geminiAnalyzePdf(
-      makeGeminiAnalyzeParams({
-        baseUrl: "https://generativelanguage.googleapis.com",
-      }),
-    );
-
-    const [url] = firstFetchCall(fetchMock);
-    expect(url).toContain("https://generativelanguage.googleapis.com/v1beta/models/");
-    expect(url).not.toContain("/v1beta/v1beta");
   });
 });

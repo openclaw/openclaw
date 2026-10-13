@@ -210,57 +210,93 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
     vi.doUnmock("../../provider-model-normalization.runtime.js");
   });
 
-  it.each(["child", "parent"] as const)(
-    "cleans up the provisional child when fork %s lookup rejects",
-    async (lookup) => {
-      const runtime = await import("./subagent-spawn.runtime.js");
-      const resolveTarget = runtime.resolveGatewaySessionStoreTargetInWorker;
-      let provisional: { sessionKey: string; entry: SessionEntry } | undefined;
-      const selected = vi
-        .spyOn(runtime, "resolveGatewaySessionStoreTargetInWorker")
-        .mockImplementation(async (params) => {
-          const child = sessions
-            .listSessionEntriesCore({ agentId: "main", storePath })
-            .find(({ sessionKey }) => sessionKey !== parentKey);
-          if (
-            child &&
-            (lookup === "child" ? params.key === child.sessionKey : params.key === parentKey)
-          ) {
-            provisional = child;
-            throw new Error("fork lookup source unavailable");
-          }
-          return await resolveTarget(params);
-        });
-      try {
-        await spawnSubagentDirect(
-          { task: "inspect parent history", context: "fork" },
-          { agentSessionKey: parentKey },
-        ).catch(() => undefined);
+  it("cleans up the provisional child when fork parent lookup rejects", async () => {
+    const runtime = await import("./subagent-spawn.runtime.js");
+    const resolveTarget = runtime.resolveGatewaySessionStoreTargetInWorker;
+    let provisional: { sessionKey: string; entry: SessionEntry } | undefined;
+    const selected = vi
+      .spyOn(runtime, "resolveGatewaySessionStoreTargetInWorker")
+      .mockImplementation(async (params) => {
+        const child = sessions
+          .listSessionEntriesCore({ agentId: "main", storePath })
+          .find(({ sessionKey }) => sessionKey !== parentKey);
+        if (child && params.key === parentKey) {
+          provisional = child;
+          throw new Error("fork lookup source unavailable");
+        }
+        return await resolveTarget(params);
+      });
+    try {
+      await spawnSubagentDirect(
+        { task: "inspect parent history", context: "fork" },
+        { agentSessionKey: parentKey },
+      ).catch(() => undefined);
 
-        const created = expectDefined(provisional, "committed provisional child");
-        expect(
-          sessions.loadSessionEntry({ agentId: "main", sessionKey: created.sessionKey, storePath }),
-        ).toBeUndefined();
-        expect(dispatch).toHaveBeenCalledWith(
-          "sessions.delete",
-          expect.objectContaining({
-            key: created.sessionKey,
-            expectedSessionId: created.entry.sessionId,
-            expectedLifecycleRevision: created.entry.lifecycleRevision,
-          }),
-          expect.anything(),
-        );
-        expect(fork).not.toHaveBeenCalled();
-        expect(registerSubagentRun).not.toHaveBeenCalled();
-        expect(dispatch.mock.calls.some(([method]) => method === "agent")).toBe(false);
-        expect(
-          sessions.loadSessionEntry({ agentId: "main", sessionKey: parentKey, storePath }),
-        ).toMatchObject({ sessionId: parentId, lifecycleRevision: "parent-revision" });
-      } finally {
-        selected.mockRestore();
-      }
-    },
-  );
+      const created = expectDefined(provisional, "committed provisional child");
+      expect(
+        sessions.loadSessionEntry({ agentId: "main", sessionKey: created.sessionKey, storePath }),
+      ).toBeUndefined();
+      expect(dispatch).toHaveBeenCalledWith(
+        "sessions.delete",
+        expect.objectContaining({
+          key: created.sessionKey,
+          expectedSessionId: created.entry.sessionId,
+          expectedLifecycleRevision: created.entry.lifecycleRevision,
+        }),
+        expect.anything(),
+      );
+      expect(fork).not.toHaveBeenCalled();
+      expect(registerSubagentRun).not.toHaveBeenCalled();
+      expect(dispatch.mock.calls.some(([method]) => method === "agent")).toBe(false);
+      expect(
+        sessions.loadSessionEntry({ agentId: "main", sessionKey: parentKey, storePath }),
+      ).toMatchObject({ sessionId: parentId, lifecycleRevision: "parent-revision" });
+    } finally {
+      selected.mockRestore();
+    }
+  });
+
+  it("refuses an oversized fork when its created child disappears before preparation", async () => {
+    await sessions.upsertSessionEntryCore(
+      { agentId: "main", sessionKey: parentKey, storePath },
+      { totalTokens: 150_000, totalTokensFresh: true, totalTokensVersion: 1 },
+    );
+    let childSessionKey: string | undefined;
+    fork.mockImplementationOnce(async (input: unknown) => {
+      const params = input as Parameters<ForkSession>[0];
+      childSessionKey = params.sessionKey;
+      const child = expectDefined(
+        sessions.loadSessionEntry({ agentId: "main", sessionKey: childSessionKey, storePath }),
+        "created child before fork preparation",
+      );
+      const deleted = await sessions.deleteSessionEntryLifecycle({
+        agentId: "main",
+        storePath,
+        target: { canonicalKey: childSessionKey, storeKeys: [childSessionKey] },
+        expectedSessionId: child.sessionId,
+        expectedLifecycleRevision: child.lifecycleRevision,
+        archiveTranscript: false,
+      });
+      expect(deleted.deleted).toBe(true);
+      return await forkSession(params);
+    });
+
+    const result = await spawnSubagentDirect(
+      { task: "inspect parent history", context: "fork" },
+      { agentSessionKey: parentKey },
+    );
+
+    expect(result).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("could not fork the requester transcript"),
+      childSessionKey: expectDefined(childSessionKey, "deleted child key"),
+    });
+    expect(registerSubagentRun).not.toHaveBeenCalled();
+    expect(dispatch.mock.calls.some(([method]) => method === "agent")).toBe(false);
+    expect(sessions.listSessionEntriesCore({ agentId: "main", storePath })).toEqual([
+      expect.objectContaining({ sessionKey: parentKey }),
+    ]);
+  });
 
   it.each(["fork", "isolated"] as const)(
     "protects locked parent transcript ownership with context=%s",

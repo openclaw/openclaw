@@ -12,8 +12,9 @@ const { createOpenClawToolsMock } = vi.hoisted(() => ({
 
 export { createOpenClawToolsMock };
 
+// mock-isolation: Exercise inline execution and cancellation with owned fixture tools.
 vi.mock("../../agents/openclaw-tools.js", () => ({
-  createOpenClawTools: createOpenClawToolsMock,
+  createOpenClawToolsAsync: async (...args: unknown[]) => createOpenClawToolsMock(...args),
 }));
 
 export type HandleInlineActionsInput = Parameters<

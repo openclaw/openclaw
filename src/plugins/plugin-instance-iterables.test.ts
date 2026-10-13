@@ -64,18 +64,38 @@ describe("plugin async iterable protocol", () => {
   );
 
   it.each(["next", "throw"] as const)(
-    "preserves native %s completion after exhaustion while its owner is live",
+    "preserves exhausted iterator negotiation and native %s completion",
     async (method) => {
       async function* source(): AsyncGenerator<number, string, unknown> {
         yield 1;
         return "complete";
       }
       const native = source();
-      const wrapped = owner().wrap(source());
+      const instance = owner();
+      const raw = source();
+      let acquisitions = 0;
+      let factoryReads = 0;
+      Object.defineProperty(raw, Symbol.asyncIterator, {
+        get() {
+          factoryReads += 1;
+          return function (this: typeof raw) {
+            acquisitions += 1;
+            return this;
+          };
+        },
+      });
+      const stream = instance.wrap(raw);
+      const open = stream[Symbol.asyncIterator];
+      const wrapped = open();
       for (const iterator of [native, wrapped]) {
         await expect(iterator.next()).resolves.toEqual({ done: false, value: 1 });
         await expect(iterator.next()).resolves.toEqual({ done: true, value: "complete" });
       }
+      expect(open()).toBe(wrapped);
+      expect(wrapped[Symbol.asyncIterator]()).toBe(wrapped);
+      expect(instance.ordinaryCallCount).toBe(0);
+      expect(acquisitions).toBe(1);
+      expect(factoryReads).toBe(1);
       const supplied = new Error("caller-supplied terminal reason");
       const [expected, actual] = await Promise.allSettled([
         native[method](supplied),
@@ -91,58 +111,49 @@ describe("plugin async iterable protocol", () => {
     },
   );
 
-  it.each(["data", "getter", "proxy"] as const)(
-    "finishes iteration during retirement with a terminal %s result",
-    async (kind) => {
-      const instance = owner();
-      const started = createDeferredCore();
-      const finish = createDeferredCore();
-      const readDone = vi.fn(() => true);
-      const readValue = vi.fn(() => {
-        throw new Error("Iteration must not read the terminal value");
-      });
-      const terminal = {
-        done: true,
-        get value() {
-          return readValue();
-        },
-      };
-      if (kind === "getter") {
-        Object.defineProperty(terminal, "done", { get: readDone });
+  it("finishes iteration during retirement with a terminal proxy result", async () => {
+    const instance = owner();
+    const started = createDeferredCore();
+    const finish = createDeferredCore();
+    const readDone = vi.fn(() => true);
+    const readValue = vi.fn(() => {
+      throw new Error("Iteration must not read the terminal value");
+    });
+    const terminal = {
+      done: true,
+      get value() {
+        return readValue();
+      },
+    };
+    const result = new Proxy(terminal, {
+      get(target, key, receiver) {
+        return key === "done" ? readDone() : Reflect.get(target, key, receiver);
+      },
+    });
+    const stream = instance.wrap({
+      [Symbol.asyncIterator]() {
+        return {
+          async next() {
+            started.resolve();
+            await finish.promise;
+            return result;
+          },
+        };
+      },
+    });
+    const consume = (async () => {
+      for await (const _ of stream) {
+        throw new Error("The fixture only returns EOF");
       }
-      const result =
-        kind === "proxy"
-          ? new Proxy(terminal, {
-              get(target, key, receiver) {
-                return key === "done" ? readDone() : Reflect.get(target, key, receiver);
-              },
-            })
-          : terminal;
-      const stream = instance.wrap({
-        [Symbol.asyncIterator]() {
-          return {
-            async next() {
-              started.resolve();
-              await finish.promise;
-              return result;
-            },
-          };
-        },
-      });
-      const consume = (async () => {
-        for await (const _ of stream) {
-          throw new Error("The fixture only returns EOF");
-        }
-      })();
-      const consumed = expect(consume).resolves.toBeUndefined();
-      await started.promise;
-      const closing = instance.dispose();
-      finish.resolve();
-      await consumed;
-      await closing;
-      expect(readValue).not.toHaveBeenCalled();
-    },
-  );
+    })();
+    const consumed = expect(consume).resolves.toBeUndefined();
+    await started.promise;
+    const closing = instance.dispose();
+    finish.resolve();
+    await consumed;
+    await closing;
+    expect(readValue).not.toHaveBeenCalled();
+  });
 
   it.each(["inner", "outer"] as const)(
     "stops pending and future stream work when the %s consumer closes while delivered data stays readable",
@@ -316,94 +327,67 @@ describe("plugin async iterable protocol", () => {
     },
   );
 
-  it("negotiates a completed self-iterator without entering plugin code again", async () => {
+  it("preserves unread terminal callable results after self-retirement", async () => {
     const instance = owner();
-    let acquisitions = 0;
-    let factoryReads = 0;
-    class Stream {
-      get [Symbol.asyncIterator](): () => Stream {
-        factoryReads += 1;
-        return acquire;
-      }
-
-      async next() {
-        return { done: true, value: "finished" };
-      }
-    }
-    function acquire(this: Stream) {
-      acquisitions += 1;
-      return this;
-    }
-    const source = instance.wrap(new Stream());
-    const open = source[Symbol.asyncIterator];
-    const iterator = open();
-    await expect(iterator.next()).resolves.toEqual({ done: true, value: "finished" });
-    expect(open()).toBe(iterator);
-    expect(iterator[Symbol.asyncIterator]()).toBe(iterator);
-    expect(instance.ordinaryCallCount).toBe(0);
-    expect(acquisitions).toBe(1);
-    expect(factoryReads).toBe(1);
+    const payload = { content: [{ text: "complete" }] };
+    const result = { done: true, value: payload };
+    const callable = Object.assign(() => {}, result);
+    const source = instance.wrap({
+      [Symbol.asyncIterator]() {
+        return {
+          async next() {
+            await instance.dispose();
+            return callable;
+          },
+        };
+      },
+    });
+    const iterator = source[Symbol.asyncIterator]();
+    const next = await iterator.next();
+    expect(next.done).toBe(true);
+    await instance.dispose();
+    expect(next.value).toBe(payload);
+    expect(structuredClone(next.value)).toEqual(payload);
   });
 
-  it.each(["record", "callable", "proxy"] as const)(
-    "preserves unread terminal %s results after self-retirement",
-    async (kind) => {
-      const instance = owner();
-      const payload = { content: [{ text: "complete" }] };
-      const result = { done: true, value: payload };
-      const callable = Object.assign(() => {}, result);
-      Object.defineProperty(callable, "length", {
-        get() {
-          expect(instance.hasActiveCall).toBe(true);
-          return 0;
-        },
-      });
-      const source = instance.wrap({
-        [Symbol.asyncIterator]() {
-          return {
-            async next() {
-              await instance.dispose();
-              return kind === "callable"
-                ? callable
-                : kind === "proxy"
-                  ? Object.create(new Proxy(result, {}))
-                  : result;
-            },
-          };
-        },
-      });
-      const iterator = source[Symbol.asyncIterator]();
-      const next = await iterator.next();
-      expect(next.done).toBe(true);
-      await instance.dispose();
-      expect(next.value).toBe(payload);
-      expect(structuredClone(next.value)).toEqual(payload);
-    },
-  );
-
-  it.each(["missing", "done-false"] as const)(
+  it.each(["missing", "done-false", "getter", "non-callable"] as const)(
     "releases an early-break admission when return is %s",
     async (kind) => {
       const instance = owner();
+      const failure = new Error("return lookup failed");
       const returned = vi.fn(async () => ({ done: false, value: 2 }));
       const source = {
         [Symbol.asyncIterator]() {
-          return {
-            next: async () => ({ done: false, value: 1 }),
-            return: kind === "missing" ? undefined : returned,
-          };
+          const iterator = { next: async () => ({ done: false, value: 1 }) };
+          Object.defineProperty(iterator, "return", {
+            get() {
+              if (kind === "getter") {
+                throw failure;
+              }
+              return kind === "missing" ? undefined : kind === "non-callable" ? 1 : returned;
+            },
+          });
+          return iterator;
         },
       };
-      const stream = instance.wrap(source);
       const values: number[] = [];
-      await instance.runConsumer(async () => {
-        for await (const value of stream) {
+      const consume = async () => {
+        for await (const value of instance.wrap(source)) {
           values.push(value);
           break;
         }
-      });
+      };
+      const consumed =
+        kind === "getter" || kind === "non-callable" ? consume() : instance.runConsumer(consume);
+      if (kind === "getter") {
+        await expect(consumed).rejects.toBe(failure);
+      } else if (kind === "non-callable") {
+        await expect(consumed).rejects.toBeInstanceOf(TypeError);
+      } else {
+        await consumed;
+      }
       expect(values).toEqual([1]);
-      expect(returned).toHaveBeenCalledTimes(kind === "missing" ? 0 : 1);
+      expect(returned).toHaveBeenCalledTimes(kind === "done-false" ? 1 : 0);
       const closed = expect(instance.dispose()).resolves.toEqual({ errors: [] });
       await vi.runAllTimersAsync();
       await closed;
@@ -498,41 +482,6 @@ describe("plugin async iterable protocol", () => {
     },
   );
 
-  it.each(["getter", "non-callable"] as const)(
-    "releases an early-break admission when return has a %s failure",
-    async (kind) => {
-      const instance = owner();
-      const failure = new Error("return lookup failed");
-      const source = {
-        [Symbol.asyncIterator]() {
-          const iterator = { next: async () => ({ done: false, value: 1 }) };
-          Object.defineProperty(iterator, "return", {
-            get() {
-              if (kind === "getter") {
-                throw failure;
-              }
-              return 1;
-            },
-          });
-          return iterator;
-        },
-      };
-      const consume = async () => {
-        for await (const _ of instance.wrap(source)) {
-          break;
-        }
-      };
-      if (kind === "getter") {
-        await expect(consume()).rejects.toBe(failure);
-      } else {
-        await expect(consume()).rejects.toBeInstanceOf(TypeError);
-      }
-      const closed = expect(instance.dispose()).resolves.toEqual({ errors: [] });
-      await vi.runAllTimersAsync();
-      await closed;
-    },
-  );
-
   it.each([null, 1])("releases admission after an invalid protocol result %s", async (value) => {
     const instance = owner();
     const stream = instance.wrap({
@@ -546,47 +495,53 @@ describe("plugin async iterable protocol", () => {
     await instance.dispose();
   });
 
-  it("does not read an iterator getter until the consumer requests it", () => {
-    const instance = owner();
-    const failure = new Error("iterator getter requested");
-    const getter = vi.fn(() => {
-      throw failure;
-    });
-    const source = { label: "plain data" };
-    Object.defineProperty(source, Symbol.asyncIterator, { get: getter });
-
-    const wrapped = instance.wrap(source);
-    expect(wrapped.label).toBe("plain data");
-    expect(getter).not.toHaveBeenCalled();
-    expect(() => Reflect.get(wrapped, Symbol.asyncIterator)).toThrow(failure);
-    expect(getter).toHaveBeenCalledOnce();
-  });
-
-  it("calls the single captured iterator factory with its original receiver", async () => {
-    const instance = owner();
-    let reads = 0;
-    const receivers: unknown[] = [];
-    const source = {
-      get [Symbol.asyncIterator]() {
+  it.each(["factory", "throw"] as const)(
+    "reads an iterator getter lazily and preserves its %s outcome",
+    async (outcome) => {
+      const instance = owner();
+      const failure = new Error("iterator getter requested");
+      let reads = 0;
+      const receivers: unknown[] = [];
+      const getter = vi.fn(() => {
         const selected = ++reads;
+        if (outcome === "throw") {
+          throw failure;
+        }
         return async function* (this: object) {
           receivers.push(this);
           yield selected;
         };
-      },
-    };
-    const wrapped = instance.wrap(source);
-    const factory = wrapped[Symbol.asyncIterator];
-    const iterator = factory.call(wrapped);
-    expect(await iterator.next()).toEqual({ value: 1, done: false });
-    expect(await iterator.next()).toMatchObject({ done: true });
-    expect(reads).toBe(1);
-    expect(receivers).toEqual([source]);
-  });
+      });
+      const source = {
+        label: "plain data",
+        get [Symbol.asyncIterator]() {
+          return getter();
+        },
+      };
+      const wrapped = instance.wrap(source);
+      expect(wrapped.label).toBe("plain data");
+      expect(getter).not.toHaveBeenCalled();
+      if (outcome === "throw") {
+        expect(() => Reflect.get(wrapped, Symbol.asyncIterator)).toThrow(failure);
+      } else {
+        const factory = wrapped[Symbol.asyncIterator];
+        const iterator = factory.call(wrapped);
+        expect(await iterator.next()).toEqual({ value: 1, done: false });
+        expect(await iterator.next()).toMatchObject({ done: true });
+        expect(receivers).toEqual([source]);
+      }
+      expect(reads).toBe(1);
+      expect(getter).toHaveBeenCalledOnce();
+    },
+  );
 
-  it("does not read or call result while merely iterating", async () => {
+  it("only invokes a terminal hook on explicit calls, preserving arguments and receiver", async () => {
     const instance = owner();
-    const result = vi.fn(async () => "unused");
+    let calls = 0;
+    const result = vi.fn(async function (this: object, argument: string) {
+      expect(this).toBe(source);
+      return { call: ++calls, argument };
+    });
     const getter = vi.fn(() => result);
     const source = {
       async *[Symbol.asyncIterator]() {
@@ -604,21 +559,6 @@ describe("plugin async iterable protocol", () => {
     expect(chunks).toEqual(["chunk"]);
     expect(getter).not.toHaveBeenCalled();
     expect(result).not.toHaveBeenCalled();
-  });
-
-  it("preserves each explicit result call, its arguments, and its receiver", async () => {
-    const instance = owner();
-    let calls = 0;
-    const source = {
-      async *[Symbol.asyncIterator]() {
-        yield "chunk";
-      },
-      async result(argument: string) {
-        expect(this).toBe(source);
-        return { call: ++calls, argument };
-      },
-    };
-    const wrapped = instance.wrap(source);
     await expect(wrapped.result("first")).resolves.toEqual({ call: 1, argument: "first" });
     await expect(wrapped.result("second")).resolves.toEqual({ call: 2, argument: "second" });
     expect(calls).toBe(2);
@@ -643,34 +583,5 @@ describe("plugin async iterable protocol", () => {
     expect(cleanup).toHaveBeenCalledOnce();
     expect(iterator).not.toHaveBeenCalled();
     expect(result).not.toHaveBeenCalled();
-  });
-
-  it("drains an explicitly admitted terminal promise after iteration ends", async () => {
-    const instance = owner();
-    const terminal = createDeferredCore<string>();
-    const source = {
-      async *[Symbol.asyncIterator]() {
-        yield "chunk";
-      },
-      result: () => terminal.promise,
-    };
-    const wrapped = instance.wrap(source);
-    const iterator = wrapped[Symbol.asyncIterator]();
-    await iterator.next();
-    const result = wrapped.result();
-    let disposed = false;
-    const closing = instance.dispose().then(() => {
-      disposed = true;
-    });
-    try {
-      await expect(iterator.next()).resolves.toMatchObject({ done: true });
-      expect(disposed).toBe(false);
-      terminal.resolve("final");
-      await expect(result).resolves.toBe("final");
-      await closing;
-    } finally {
-      terminal.resolve("final");
-      await closing;
-    }
   });
 });

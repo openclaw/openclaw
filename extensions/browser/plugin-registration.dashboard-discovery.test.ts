@@ -17,6 +17,7 @@ import {
   createTestPluginApi,
   createTestPluginServiceScheduler,
 } from "openclaw/plugin-sdk/plugin-test-api";
+import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
@@ -24,12 +25,12 @@ import { registerBrowserPlugin } from "./plugin-registration.js";
 import { getBrowserStateRuntime, setBrowserStateRuntime } from "./src/browser-runtime-state.js";
 import { resolveBrowserConfig } from "./src/browser/config.js";
 import { createBrowserRuntimeState, stopBrowserRuntime } from "./src/browser/runtime-lifecycle.js";
+import { browserSessionTabStorageKey } from "./src/browser/session-tab-identity.js";
 import {
   closeTrackedBrowserTabsForSessions,
   trackSessionBrowserTab,
 } from "./src/browser/session-tab-registry.js";
 import {
-  browserSessionTabStorageKey,
   getBrowserSessionTabStore,
   persistBrowserDashboardStopIntent,
 } from "./src/browser/session-tab-store.js";
@@ -50,6 +51,7 @@ it.each(["stop", "replacement"] as const)(
   "runs cleanup under service authority until %s",
   async (end) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       // Native timers retain async context; keep that contract in the fake clock.
       const schedule = globalThis.setTimeout;
@@ -86,7 +88,6 @@ it.each(["stop", "replacement"] as const)(
         await lifecycle.stop();
         await stopBrowserRuntime({
           current: runtime,
-          getState: () => runtime,
           clearState: vi.fn(),
           onWarn: vi.fn(),
         });

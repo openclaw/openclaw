@@ -23,7 +23,7 @@ import {
 import { mapThinkingLevelToReasoningEffort } from "../llm/providers/stream-wrappers/reasoning-effort-utils.js";
 import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
 import { streamSimple } from "../llm/stream.js";
-import type { Model } from "../llm/types.js";
+import type { AssistantMessage, Model } from "../llm/types.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { findCodeRegions } from "../shared/text/code-regions.js";
 import { assertProviderStreamEvent } from "./provider-stream-event-normalization.js";
@@ -59,20 +59,6 @@ export function composeProviderStreamWrappers(
     (streamFn, wrapper) => (wrapper ? wrapper(streamFn) : streamFn),
     baseStreamFn,
   );
-}
-
-function resolveContextToolNames(context: Parameters<StreamFn>[1]): Set<string> {
-  const tools = (context as { tools?: unknown }).tools;
-  if (!Array.isArray(tools)) {
-    return new Set();
-  }
-  const names = tools
-    .map((tool) => {
-      const record = asOptionalObjectRecord(tool);
-      return typeof record?.name === "string" && record.name.trim() ? record.name : undefined;
-    })
-    .filter((name): name is string => Boolean(name));
-  return new Set(names);
 }
 
 function promotePlainTextToolCalls(
@@ -140,7 +126,9 @@ function wrapPlainTextToolCallStream(
   context: Parameters<StreamFn>[1],
   model: Model,
 ): ReturnType<StreamFn> {
-  const toolNames = resolveContextToolNames(context);
+  const toolNames = new Set(
+    (context.tools ?? []).map((tool) => tool.name).filter((name) => name.trim()),
+  );
   if (toolNames.size === 0) {
     return source;
   }
@@ -412,11 +400,10 @@ export function normalizeOpenAICompatibleReasoningPayload(
   }
 }
 
-/** Applies Qwen chat-template thinking flags without discarding provider-specific kwargs. */
 export function setQwenChatTemplateThinking(
   payload: Record<string, unknown>,
   enabled: boolean,
-): void {
+): Record<string, unknown> {
   const existing = payload.chat_template_kwargs;
   const next: Record<string, unknown> = {
     ...(existing && typeof existing === "object" && !Array.isArray(existing) ? existing : {}),
@@ -426,6 +413,7 @@ export function setQwenChatTemplateThinking(
     next.preserve_thinking = true;
   }
   payload.chat_template_kwargs = next;
+  return next;
 }
 
 /** @deprecated DeepSeek provider stream helper; do not use from third-party plugins. */
@@ -580,7 +568,7 @@ function promoteThinkingOnlyFinalOutputToText(message: unknown): void {
 /** Mutate streamed and final message objects without replacing or buffering events. */
 export function transformProviderStreamMessages(
   stream: Awaited<ReturnType<StreamFn>>,
-  transformMessage: (message: unknown) => void,
+  transformMessage: (message: AssistantMessage) => void,
 ): Awaited<ReturnType<StreamFn>> {
   const originalResult = stream.result.bind(stream);
   stream.result = async () => {
@@ -590,30 +578,32 @@ export function transformProviderStreamMessages(
   };
 
   const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
-  (stream as { [Symbol.asyncIterator]: typeof originalAsyncIterator })[Symbol.asyncIterator] =
-    function () {
-      const iterator = originalAsyncIterator();
-      return {
-        async next() {
-          const result = await iterator.next();
-          if (!result.done && result.value && typeof result.value === "object") {
-            const event = result.value as { partial?: unknown; message?: unknown };
-            transformMessage(event.partial);
+  stream[Symbol.asyncIterator] = function () {
+    const iterator = originalAsyncIterator();
+    return {
+      async next() {
+        const result = await iterator.next();
+        if (!result.done) {
+          const event = result.value;
+          if (event.type === "done") {
             transformMessage(event.message);
+          } else if (event.type !== "error" && event.partial) {
+            transformMessage(event.partial);
           }
-          return result;
-        },
-        async return(value?: unknown) {
-          return iterator.return?.(value) ?? { done: true as const, value: undefined };
-        },
-        async throw(error?: unknown) {
-          return iterator.throw?.(error) ?? { done: true as const, value: undefined };
-        },
-        [Symbol.asyncIterator]() {
-          return this;
-        },
-      };
+        }
+        return result;
+      },
+      async return(value?: unknown) {
+        return iterator.return?.(value) ?? { done: true as const, value: undefined };
+      },
+      async throw(error?: unknown) {
+        return iterator.throw?.(error) ?? { done: true as const, value: undefined };
+      },
+      [Symbol.asyncIterator]() {
+        return this;
+      },
     };
+  };
   return stream;
 }
 

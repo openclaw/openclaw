@@ -2,7 +2,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ProviderPrepareDynamicModelContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   coerceSecretRef,
-  ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
   findNormalizedProviderValue,
   listProfilesForProvider,
   normalizeOptionalSecretInput,
@@ -28,7 +28,7 @@ export async function resolveFirstGithubToken(params: {
   hasProfile: boolean;
   profileId?: string;
 }> {
-  const authStore = ensureAuthProfileStore(params.agentDir, {
+  const authStore = await ensureAuthProfileStoreAsync(params.agentDir, {
     allowKeychainPrompt: false,
   });
   const profileIds = listProfilesForProvider(authStore, PROVIDER_ID);

@@ -18,7 +18,7 @@ import type {
   TranscriptSessionDescriptor,
   TranscriptUtterance,
 } from "../transcripts/provider-types.js";
-import { TranscriptsStore } from "../transcripts/store.js";
+import { transcriptSessionExportKey, TranscriptsStore } from "../transcripts/store.js";
 
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -155,7 +155,152 @@ async function runTranscriptsCli(args: string[]): Promise<string> {
   });
 }
 
+async function afterFirstTranscriptArtifactWrite(
+  sessionDir: string,
+  afterWrite: () => void | Promise<void>,
+) {
+  const sessionRoots = [sessionDir, await fs.realpath(sessionDir)];
+  const open = fs.open;
+  let observed = false;
+  return vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+    const handle = await open(...args);
+    const [filePath, flags] = args;
+    if (
+      typeof filePath === "string" &&
+      sessionRoots.some((directory) => filePath.startsWith(`${directory}${path.sep}`)) &&
+      path.basename(filePath).includes("transcript.jsonl") &&
+      (flags === "w" || flags === "wx")
+    ) {
+      const writeFile = handle.writeFile.bind(handle);
+      vi.spyOn(handle, "writeFile").mockImplementation(async (...writeArgs) => {
+        await writeFile(...writeArgs);
+        if (!observed) {
+          observed = true;
+          await afterWrite();
+        }
+      });
+    }
+    return handle;
+  });
+}
+
 describe("transcript export digest worker", () => {
+  it("preserves the published artifact when its lease is revoked after a temporary file write", async () => {
+    const { store, session, artifacts, original, expectedHash, readManifest } =
+      await seedDigestRecovery(suiteStateDir, 1);
+    await store.materializeSessionArtifacts(session, "metadata");
+    expect(JSON.parse(readManifest().export_manifest_json)["transcript.jsonl"]).toBe(expectedHash);
+    await store.appendUtteranceForSession(session, {
+      id: "unpublished",
+      text: "Speech saved after the acknowledged export",
+    });
+    const filesBefore = await fs.readdir(artifacts.sessionDir);
+    const databasePath = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: suiteStateDir },
+    }).path;
+    const foreign = new DatabaseSync(databasePath);
+    const exportKey = transcriptSessionExportKey(session);
+    let revoked = false;
+    const openSpy = await afterFirstTranscriptArtifactWrite(artifacts.sessionDir, () => {
+      const changed = foreign
+        .prepare("UPDATE state_leases SET owner = ? WHERE scope = ? AND lease_key = ?")
+        .run("foreign-export-owner", "meeting-transcript.export", exportKey);
+      expect(changed.changes).toBe(1);
+      revoked = true;
+    });
+    try {
+      await expect(store.materializeSessionArtifacts(session, "transcript")).rejects.toMatchObject({
+        code: "OPENCLAW_STATE_LEASE_LOST",
+      });
+      expect(revoked).toBe(true);
+      const published = await fs.readFile(artifacts.transcriptPath, "utf8");
+      expect(published).toBe(original);
+      expect(createHash("sha256").update(published).digest("hex")).toBe(expectedHash);
+      const manifest = readManifest();
+      expect(JSON.parse(manifest.export_manifest_json)["transcript.jsonl"]).toBe(expectedHash);
+      expect(JSON.parse(manifest.export_pending_json)).toContain("transcript.jsonl");
+      expect((await fs.readdir(artifacts.sessionDir)).toSorted()).toEqual(filesBefore.toSorted());
+    } finally {
+      openSpy.mockRestore();
+      foreign
+        .prepare("DELETE FROM state_leases WHERE scope = ? AND lease_key = ? AND owner = ?")
+        .run("meeting-transcript.export", exportKey, "foreign-export-owner");
+      foreign.close();
+    }
+  });
+
+  it.each(["append", "reset"] as const)(
+    "keeps one artifact snapshot across a concurrent %s and refreshes the next export",
+    async (change) => {
+      const { store, session, utterances, artifacts, original, expectedHash, readManifest } =
+        await seedDigestRecovery(suiteStateDir, 70);
+      await store.materializeSessionArtifacts(session, "metadata");
+      const added = { id: "after-snapshot", text: `Speech after ${change}` };
+      let changed = false;
+      const openSpy = await afterFirstTranscriptArtifactWrite(artifacts.sessionDir, async () => {
+        if (change === "reset") {
+          const databasePath = openOpenClawStateDatabase({
+            env: { OPENCLAW_STATE_DIR: suiteStateDir },
+          }).path;
+          const foreign = new DatabaseSync(databasePath);
+          try {
+            foreign.exec("PRAGMA foreign_keys = ON; BEGIN IMMEDIATE");
+            foreign
+              .prepare(
+                "DELETE FROM meeting_transcript_utterances WHERE session_id = ? AND session_started_at = ?",
+              )
+              .run(session.sessionId, session.startedAt);
+            foreign
+              .prepare(
+                "DELETE FROM meeting_transcript_summaries WHERE session_id = ? AND session_started_at = ?",
+              )
+              .run(session.sessionId, session.startedAt);
+            foreign
+              .prepare(
+                "UPDATE meeting_transcript_sessions SET next_utterance_seq = 0 WHERE session_id = ? AND started_at = ?",
+              )
+              .run(session.sessionId, session.startedAt);
+            foreign.exec("COMMIT");
+          } finally {
+            if (foreign.isTransaction) {
+              foreign.exec("ROLLBACK");
+            }
+            foreign.close();
+          }
+          await store.writeSession(session);
+        }
+        await store.appendUtteranceForSession(session, added);
+        changed = true;
+      });
+      try {
+        await store.materializeSessionArtifacts(session, "transcript");
+        expect(changed).toBe(true);
+        expect(await fs.readFile(artifacts.transcriptPath, "utf8")).toBe(original);
+        expect(JSON.parse(readManifest().export_manifest_json)["transcript.jsonl"]).toBe(
+          expectedHash,
+        );
+      } finally {
+        openSpy.mockRestore();
+      }
+      await store.materializeSessionArtifacts(session, "transcript");
+      const refreshed = await fs.readFile(artifacts.transcriptPath, "utf8");
+      expect(
+        refreshed
+          .trimEnd()
+          .split("\n")
+          .map((line) => JSON.parse(line)),
+      ).toEqual(
+        [...(change === "append" ? utterances : []), added].map((utterance) =>
+          Object.assign({}, utterance, { sessionId: session.sessionId }),
+        ),
+      );
+      expect(JSON.parse(readManifest().export_manifest_json)["transcript.jsonl"]).toBe(
+        createHash("sha256").update(refreshed).digest("hex"),
+      );
+      expect(JSON.parse(readManifest().export_pending_json)).toEqual([]);
+    },
+  );
+
   it.each([
     { name: "empty", count: 0, modified: false },
     { name: "modified", count: 70, modified: true },

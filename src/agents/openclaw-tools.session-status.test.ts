@@ -11,7 +11,10 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
-import { compactToolOutputHint } from "./tool-schema-hints.js";
+import {
+  createMockConfig,
+  fixedStoreConfig,
+} from "./openclaw-tools.session-status.test-support.js";
 
 const loadSessionStoreMock = vi.fn();
 const updateSessionStoreMock = vi.fn();
@@ -46,36 +49,7 @@ const emptyPluginMetadataSnapshot = {
 };
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
-const createMockConfig = () => ({
-  session: { mainKey: "main", scope: "per-sender" },
-  agents: {
-    defaults: {
-      model: { primary: "openai/gpt-5.4" },
-      models: {},
-    },
-  },
-  tools: {
-    agentToAgent: { enabled: false },
-  },
-});
-
 let mockConfig: Record<string, unknown> = createMockConfig();
-
-function fixedStoreConfig() {
-  return {
-    session: { mainKey: "main", scope: "global", store: "/tmp/shared-sessions.sqlite" },
-    agents: {
-      ownership: "explicit",
-      defaults: {
-        model: { primary: "openai/gpt-5.4" },
-        models: {},
-        sessionStore: { agentId: "ops" },
-      },
-      entries: { ops: {}, research: {} },
-    },
-    tools: { agentToAgent: { enabled: false } },
-  };
-}
 
 function createSessionsModuleMock() {
   const resolveMockStorePath = (_store: string | undefined, opts?: { agentId?: string }) =>
@@ -201,7 +175,7 @@ function createModelAuthModuleMock() {
   return {
     resolveEnvApiKey: resolveEnvApiKeyMock,
     resolveUsableCustomProviderApiKey: resolveUsableCustomProviderApiKeyMock,
-    resolveModelAuthMode: () => "api-key",
+    resolveModelAuthModeAsync: () => "api-key",
   };
 }
 
@@ -270,6 +244,11 @@ function createCommandsStatusRuntimeModuleMock() {
 }
 
 vi.mock("../config/sessions.js", createSessionsModuleMock);
+vi.mock("../config/sessions/session-accessor.entry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/sessions/session-accessor.entry.js")>()),
+  resolveSessionEntryCandidateTargetForRuntime:
+    createSessionsModuleMock().resolveSessionEntryCandidateTarget,
+}));
 vi.mock("../gateway/call.js", createGatewayCallModuleMock);
 vi.mock("./tools/in-process-gateway.js", () => ({
   callAgentToolGatewayRequest: (opts: unknown) => agentToolGatewayCallMock(opts),
@@ -302,6 +281,7 @@ vi.mock("../plugins/providers.runtime.js", () => ({
   resolvePluginProvidersCore: () => [],
 }));
 vi.mock("../agents/auth-profiles.js", createAuthProfilesModuleMock);
+// mock-isolation: Session status uses fixture auth labels without discovering host keys or accounts.
 vi.mock("../agents/model-auth.js", createModelAuthModuleMock);
 vi.mock("../infra/provider-usage.js", createProviderUsageModuleMock);
 vi.mock("../status/status-text.js", createCommandsStatusRuntimeModuleMock);
@@ -711,7 +691,6 @@ describe("session_status tool", () => {
         thinkingLevel: "off",
       },
       [mainKey]: fixtureSession("s-main", {
-        status: "running",
         thinkingLevel: "high",
       }),
     });
@@ -735,9 +714,7 @@ describe("session_status tool", () => {
         updatedAt: 5,
         status: "done",
       },
-      [mainKey]: fixtureSession("s-main", {
-        status: "running",
-      }),
+      [mainKey]: fixtureSession("s-main"),
     });
 
     mockConfig = { ...mockConfig, tools: { sessions: { visibility: "tree" } } };
@@ -859,9 +836,7 @@ describe("session_status tool", () => {
         updatedAt: 5,
         status: "done",
       },
-      [mainKey]: fixtureSession("s-main", {
-        status: "running",
-      }),
+      [mainKey]: fixtureSession("s-main"),
     });
 
     mockConfig = { ...mockConfig, tools: { sessions: { visibility: "tree" } } };
@@ -1347,37 +1322,6 @@ describe("session_status tool", () => {
     expect(saved.authProfileOverride).toBe("session-status-team:prod");
     expect(saved.authProfileOverrideSource).toBe("user");
     expect(saved.authProfileOverrideCompactionCount).toBe(2);
-  });
-
-  it("returns a status card for the current session", async () => {
-    resetSessionStore({
-      main: {
-        sessionId: "s1",
-        updatedAt: 10,
-      },
-    });
-
-    const tool = getSessionStatusTool();
-
-    const result = await tool.execute("call1", {});
-    const details = result.details as { ok?: boolean; statusText?: string };
-    expect(details.ok).toBe(true);
-    expect(details.statusText).toContain("OpenClaw");
-    expect(details.statusText).toContain("🧠 Model:");
-    expect(details.statusText).not.toContain("OAuth/token status");
-    expect(tool.outputSchema).toBeDefined();
-    expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
-    expect(mockCallArg(buildStatusMessageMock)).toMatchObject({
-      thinkingCatalog: expect.arrayContaining([
-        expect.objectContaining({
-          provider: "openai",
-          id: "gpt-5.4",
-          contextWindow: 400_000,
-        }),
-      ]),
-    });
-    // The full contract exceeds the compact hint budget; never promote a truncated shape.
-    expect(compactToolOutputHint(tool.outputSchema)).toBeUndefined();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

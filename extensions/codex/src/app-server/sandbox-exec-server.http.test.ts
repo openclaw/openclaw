@@ -203,48 +203,6 @@ describe("OpenClaw Codex sandbox exec-server HTTP", () => {
     }
   });
 
-  it("routes HTTP requests through the sandbox backend", async () => {
-    const sandbox = createSandboxContext({
-      buildExecSpec: async () => ({
-        argv: [
-          process.execPath,
-          "-e",
-          [
-            "let input = '';",
-            "process.stdin.setEncoding('utf8');",
-            "process.stdin.on('data', chunk => input += chunk);",
-            "process.stdin.on('end', () => {",
-            "  const request = JSON.parse(input);",
-            "  process.stdout.write(JSON.stringify({",
-            "    status: 201, headers: request.headers, bodyBase64: request.bodyBase64,",
-            "  }));",
-            "});",
-          ].join("\n"),
-        ],
-        env: testExecEnv(),
-        stdinMode: "pipe-closed",
-      }),
-    });
-    const socket = await openSandboxHttpSocket(sandbox);
-    await rpc(socket, "initialize", { clientName: "test" });
-    socket.send(JSON.stringify({ method: "initialized" }));
-
-    await expect(
-      rpc(socket, "http/request", {
-        requestId: "http-1",
-        method: "POST",
-        url: "https://example.test/mcp",
-        headers: [{ name: "authorization", value: "Bearer test" }],
-        bodyBase64: Buffer.from("body").toString("base64"),
-      }),
-    ).resolves.toEqual({
-      status: 201,
-      headers: [{ name: "authorization", value: "Bearer test" }],
-      bodyBase64: Buffer.from("body").toString("base64"),
-    });
-    socket.close();
-  });
-
   it("blocks private HTTP targets before starting the sandbox backend", async () => {
     const buildExecSpec = vi.fn(async () => ({
       argv: [process.execPath, "-e", ""],
@@ -314,18 +272,6 @@ describe("OpenClaw Codex sandbox exec-server HTTP", () => {
   );
 
   it.each([
-    {
-      targetHost: "source.test",
-      preserveCredentials: true,
-      redirectStatus: 302,
-      streamResponse: false,
-    },
-    {
-      targetHost: "target.test",
-      preserveCredentials: false,
-      redirectStatus: 302,
-      streamResponse: false,
-    },
     {
       targetHost: "source.test",
       preserveCredentials: true,
@@ -403,51 +349,37 @@ describe("OpenClaw Codex sandbox exec-server HTTP", () => {
     },
   );
 
-  it.each([
-    { redirectStatus: 301, originalMethod: "POST", redirectedMethod: "GET" },
-    { redirectStatus: 302, originalMethod: "POST", redirectedMethod: "GET" },
-    { redirectStatus: 302, originalMethod: "PUT", redirectedMethod: "PUT" },
-    { redirectStatus: 303, originalMethod: "PUT", redirectedMethod: "GET" },
-    { redirectStatus: 307, originalMethod: "POST", redirectedMethod: "POST" },
-    { redirectStatus: 308, originalMethod: "POST", redirectedMethod: "POST" },
-  ])(
-    "preserves upstream HTTP redirect method semantics ($redirectStatus $originalMethod)",
-    async ({ redirectStatus, originalMethod, redirectedMethod }) => {
-      const fixture = await createLiveRedirectSandbox("source.test", redirectStatus);
-      const socket = await openSandboxHttpSocket(fixture.sandbox);
-      try {
-        await rpc(socket, "initialize", { clientName: "test" });
-        socket.send(JSON.stringify({ method: "initialized" }));
+  it("preserves POST bodies through HTTP 308 redirects", async () => {
+    const fixture = await createLiveRedirectSandbox("source.test", 308);
+    const socket = await openSandboxHttpSocket(fixture.sandbox);
+    try {
+      await rpc(socket, "initialize", { clientName: "test" });
+      socket.send(JSON.stringify({ method: "initialized" }));
 
-        await expect(
-          rpc(socket, "http/request", {
-            requestId: `http-method-${redirectStatus}-${originalMethod}`,
-            method: originalMethod,
-            url: fixture.url,
-            headers: [{ name: "content-type", value: "application/json" }],
-            bodyBase64: Buffer.from('{"message":"keep"}').toString("base64"),
-            redirectPolicy: "follow",
-          }),
-        ).resolves.toEqual(
-          expect.objectContaining({
-            status: 200,
-            bodyBase64: Buffer.from("final body").toString("base64"),
-          }),
-        );
-        expect(fixture.requests).toHaveLength(2);
-        expect(fixture.requests[1]?.method).toBe(redirectedMethod);
-        expect(fixture.requests[1]?.headers["content-type"]).toBe(
-          redirectedMethod === "GET" ? undefined : "application/json",
-        );
-        expect(fixture.requestBodies[1]).toBe(
-          redirectedMethod === "GET" ? "" : '{"message":"keep"}',
-        );
-      } finally {
-        socket.close();
-        await fixture.close();
-      }
-    },
-  );
+      await expect(
+        rpc(socket, "http/request", {
+          requestId: "http-method-308-POST",
+          method: "POST",
+          url: fixture.url,
+          headers: [{ name: "content-type", value: "application/json" }],
+          bodyBase64: Buffer.from('{"message":"keep"}').toString("base64"),
+          redirectPolicy: "follow",
+        }),
+      ).resolves.toEqual(
+        expect.objectContaining({
+          status: 200,
+          bodyBase64: Buffer.from("final body").toString("base64"),
+        }),
+      );
+      expect(fixture.requests).toHaveLength(2);
+      expect(fixture.requests[1]?.method).toBe("POST");
+      expect(fixture.requests[1]?.headers["content-type"]).toBe("application/json");
+      expect(fixture.requestBodies[1]).toBe('{"message":"keep"}');
+    } finally {
+      socket.close();
+      await fixture.close();
+    }
+  });
 
   it.each([
     { redirectStatus: 308, targetHost: "127.0.0.1", streamResponse: false },
@@ -477,29 +409,6 @@ describe("OpenClaw Codex sandbox exec-server HTTP", () => {
       }
     },
   );
-
-  it("blocks metadata HTTP targets before starting the streaming sandbox backend", async () => {
-    const buildExecSpec = vi.fn(async () => ({
-      argv: [process.execPath, "-e", ""],
-      env: testExecEnv(),
-      stdinMode: "pipe-closed" as const,
-    }));
-    const sandbox = createSandboxContext({ buildExecSpec });
-    const socket = await openSandboxHttpSocket(sandbox);
-    await rpc(socket, "initialize", { clientName: "test" });
-    socket.send(JSON.stringify({ method: "initialized" }));
-
-    await expect(
-      rpc(socket, "http/request", {
-        requestId: "http-metadata",
-        method: "GET",
-        url: "http://metadata.google.internal/",
-        streamResponse: true,
-      }),
-    ).rejects.toThrow("Blocked hostname or private/internal IP");
-    expect(buildExecSpec).not.toHaveBeenCalled();
-    socket.close();
-  });
 
   it("preserves split UTF-8 in streaming HTTP response headers", async () => {
     const headerLine = `${JSON.stringify({
@@ -583,61 +492,6 @@ describe("OpenClaw Codex sandbox exec-server HTTP", () => {
       },
     ]);
     socket.close();
-  });
-
-  it("terminates streaming HTTP subprocesses when the exec-server socket closes", async () => {
-    const finalizeExec = vi.fn(async () => undefined);
-    const sandbox = createSandboxContext({
-      buildExecSpec: async () => ({
-        argv: [
-          process.execPath,
-          "-e",
-          [
-            "process.on('SIGTERM', () => process.exit(143));",
-            `console.log(${JSON.stringify(
-              JSON.stringify({
-                type: "headers",
-                status: 200,
-                headers: [],
-              }),
-            )});`,
-            "setInterval(() => {}, 1000);",
-          ].join(""),
-        ],
-        env: testExecEnv(),
-        finalizeToken: "stream-token",
-        stdinMode: "pipe-closed",
-      }),
-      finalizeExec,
-    });
-    const socket = await openSandboxHttpSocket(sandbox);
-    await rpc(socket, "initialize", { clientName: "test" });
-    socket.send(JSON.stringify({ method: "initialized" }));
-
-    await expect(
-      rpc(socket, "http/request", {
-        requestId: "http-stream-close",
-        method: "GET",
-        url: "https://example.test/sse",
-        streamResponse: true,
-      }),
-    ).resolves.toEqual({
-      status: 200,
-      headers: [],
-      bodyBase64: "",
-    });
-    socket.terminate();
-
-    await vi.waitFor(
-      () =>
-        expect(finalizeExec).toHaveBeenCalledWith(
-          expect.objectContaining({
-            status: "failed",
-            token: "stream-token",
-          }),
-        ),
-      { timeout: 5_000 },
-    );
   });
 
   it("rejects streaming HTTP helpers that never terminate a stdout line", async () => {

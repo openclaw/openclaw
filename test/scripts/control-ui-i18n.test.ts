@@ -258,6 +258,33 @@ describe("translation provider privacy and fallback", () => {
     expect(log).not.toContain(fallback);
   });
 
+  it("does not let a timed-out batch switch models after its split replacements complete", async () => {
+    vi.useFakeTimers();
+    vi.stubEnv("OPENCLAW_CONTROL_UI_I18N_PROMPT_TIMEOUT", "50");
+    vi.stubEnv("OPENCLAW_CONTROL_UI_I18N_BATCH_CHAR_BUDGET", "2000");
+    const late = Promise.withResolvers<AssistantMessage>();
+    llm.completeSimple.mockReturnValueOnce(late.promise).mockResolvedValue(response());
+    try {
+      const translated = translateNativeEntries(entries.slice(0, 2), "fr");
+      await vi.advanceTimersByTimeAsync(50);
+      expect((await translated).size).toBe(2);
+      expect(llm.completeSimple.mock.calls[0]?.[2].signal.aborted).toBe(true);
+
+      late.resolve(
+        response({ stopReason: "error", errorCode: "model_not_found", errorMessage: primary }),
+      );
+      await vi.runAllTimersAsync();
+      expect(llm.completeSimple.mock.calls.map(([model]) => model.id)).toEqual([
+        primary,
+        primary,
+        primary,
+      ]);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("includes native owner context in the translation batch budget", async () => {
     vi.stubEnv("OPENCLAW_CONTROL_UI_I18N_BATCH_CHAR_BUDGET", "500");
     llm.completeSimple.mockResolvedValue(response());
@@ -572,14 +599,10 @@ describe("control-ui-i18n catalog validation", () => {
     const sourceFile = parser.parseSourceFile("ui/src/pages/example.tsx", source);
 
     expect(
-      collectControlUiRawCopyFromSource({
-        filePath: path.resolve("ui/src/pages/example.tsx"),
-        source,
-        sourceFile,
-      }).map(({ kind, text }) => ({ kind, text })),
+      collectControlUiRawCopyFromSource(sourceFile).map(({ kind, text }) => ({ kind, text })),
     ).toEqual([
-      { kind: "html-attribute", text: "Archive" },
       { kind: "html-attribute", text: "Preview" },
+      { kind: "html-attribute", text: "Archive" },
       { kind: "html-attribute", text: "Delete" },
       { kind: "html-text", text: "Delete" },
       { kind: "html-attribute", text: "Selection actions" },

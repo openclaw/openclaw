@@ -7,10 +7,9 @@ import { isProgressCardRefreshInputProvenance } from "../../sessions/input-prove
 import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
 import type { UserTurnInput } from "../../sessions/user-turn-transcript.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import type { PreparedSkillLibrarySession } from "../../skills/library/selection.js";
 import { isBrowserOperatorUiClient } from "../../utils/message-channel.js";
 import {
-  type ChatImageContent,
-  type OffloadedRef,
   INLINE_IMAGE_DURABLE_OMISSION_MARKER,
   discardPreparedInboundMedia,
   persistInboundImagesForTranscript,
@@ -39,37 +38,15 @@ type PersistedChatSendMedia = Awaited<
   ReturnType<typeof persistInboundImagesForTranscript>
 >["entries"];
 
-async function persistChatSendImages(params: {
-  images: ChatImageContent[];
-  offloadedRefs: OffloadedRef[];
-  client: GatewayRequestHandlerOptions["client"];
-  logGateway: GatewayRequestContext["logGateway"];
-  assertCurrent?: () => void;
-}): Promise<Awaited<ReturnType<typeof persistInboundImagesForTranscript>>> {
-  if (
-    (params.images.length === 0 && params.offloadedRefs.length === 0) ||
-    isAcpBridgeClient(params.client)
-  ) {
-    return { entries: [], omission: "none" };
-  }
-  return await persistInboundImagesForTranscript({
-    images: params.images,
-    offloadedRefs: params.offloadedRefs,
-    log: params.logGateway,
-    logContext: "chat.send",
-    assertCurrent: params.assertCurrent,
-  });
-}
-
 function resolveChatSendManagedMedia(
   entries: PersistedChatSendMedia,
-  suppressInlineHydration = false,
+  suppressPromptHydration = false,
 ): MediaFact[] {
   return entries.map((entry) => ({
     path: entry.path,
     contentType: entry.fact.contentType ?? "application/octet-stream",
     ...(entry.fact.fileName ? { fileName: entry.fact.fileName } : {}),
-    ...(suppressInlineHydration && entry.imageKind === "inline"
+    ...(suppressPromptHydration && (entry.imageKind === "inline" || entry.imageKind === "offloaded")
       ? { hydrationSuppressed: true }
       : {}),
   }));
@@ -112,7 +89,7 @@ function buildChatSendPromptMedia(
 }
 
 /** Assemble transcript media and the portable inbound context after attachment preparation. */
-export async function prepareChatSendUserTurn(params: {
+export function prepareChatSendUserTurn(params: {
   request: Pick<
     NormalizedChatSendRequest,
     | "clientInfo"
@@ -133,16 +110,26 @@ export async function prepareChatSendUserTurn(params: {
   userTurn: ChatSendUserTurnInputController;
 }) {
   const { request, session, admission, attachments, client, logGateway, userTurn } = params;
-  const persistedMediaForTranscriptPromise = persistChatSendImages({
-    images: attachments.parsedImages,
-    offloadedRefs: attachments.offloadedRefs,
-    client,
-    logGateway,
-    assertCurrent: () => {
-      admission.assertWorkAdmissionCurrent?.();
-      admission.assertClientUploadAllowed?.();
-    },
-  });
+  const persistedMediaForTranscriptPromise = (async (): ReturnType<
+    typeof persistInboundImagesForTranscript
+  > => {
+    if (
+      (attachments.parsedImages.length === 0 && attachments.offloadedRefs.length === 0) ||
+      isAcpBridgeClient(client)
+    ) {
+      return { entries: [], omission: "none" };
+    }
+    return await persistInboundImagesForTranscript({
+      images: attachments.parsedImages,
+      offloadedRefs: attachments.offloadedRefs,
+      log: logGateway,
+      logContext: "chat.send",
+      assertCurrent: () => {
+        admission.assertWorkAdmissionCurrent?.();
+        admission.assertClientUploadAllowed?.();
+      },
+    });
+  })();
   userTurn.setInputPromise(
     persistedMediaForTranscriptPromise.then((result) => {
       const media = result.entries.map((entry) => entry.fact);
@@ -163,15 +150,18 @@ export async function prepareChatSendUserTurn(params: {
       };
     }),
   );
-  const pluginBoundMediaPromise =
-    attachments.parsedImages.length > 0
-      ? persistedMediaForTranscriptPromise.then((result) => {
-          const entries = attachments.explicitOriginTargetsPlugin
-            ? result.entries
-            : result.entries.filter((entry) => entry.imageKind === "inline");
-          return resolveChatSendManagedMedia(entries, !attachments.explicitOriginTargetsPlugin);
-        })
-      : Promise.resolve([]);
+  const pluginBoundMediaPromise = persistedMediaForTranscriptPromise.then((result) =>
+    resolveChatSendManagedMedia(
+      result.entries.filter(
+        (entry) =>
+          attachments.explicitOriginTargetsPlugin ||
+          entry.imageKind === "inline" ||
+          (entry.imageKind === "offloaded" &&
+            !attachments.mediaPathOffloads.some((fact) => fact.contentType?.startsWith("image/"))),
+      ),
+      !attachments.explicitOriginTargetsPlugin,
+    ),
+  );
   void pluginBoundMediaPromise.catch(() => undefined);
   // Generated media hints belong to the prompt and reset payload, not command arguments.
   const commandBody = request.inboundMessage;
@@ -206,13 +196,7 @@ export async function prepareChatSendUserTurn(params: {
       : undefined;
   const { originatingChannel, originatingTo, accountId, messageThreadId, explicitDeliverRoute } =
     admission.originatingRoute;
-  const creation = request.systemInputProvenance
-    ? resolveOperatorSessionCreation(client)
-    : await prepareSkillLibrarySessionCreation(
-        client,
-        params.getConfig ?? session.cfg ?? {},
-        resolveOperatorSessionCreation(client),
-      );
+  const creation = resolveOperatorSessionCreation(client);
   admission.assertWorkAdmissionCurrent?.();
   const sandbox = session.cfg ? resolveCreatorSandbox(session.cfg, creation) : undefined;
   // Current and historical turns must reach the single LLM timestamp boundary
@@ -297,6 +281,18 @@ export async function prepareChatSendUserTurn(params: {
     prepareSessionParticipantInput(ctx, participant, userTurn.baseInput.timestamp);
   }
   return {
+    prepareSessionCreation: async (library?: PreparedSkillLibrarySession) => {
+      if (!request.systemInputProvenance) {
+        const prepared = await prepareSkillLibrarySessionCreation(
+          client,
+          params.getConfig ?? session.cfg ?? {},
+          creation,
+          library,
+        );
+        admission.assertWorkAdmissionCurrent?.();
+        ctx.SessionCreation = { ...prepared, ...(sandbox ? { sandbox } : {}) };
+      }
+    },
     applyApprovedText: (text: string) => {
       if (text === request.inboundMessage.trim()) {
         return;

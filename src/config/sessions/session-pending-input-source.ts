@@ -1,27 +1,65 @@
+import { prepareSqliteScope, resolveSqliteScope } from "./session-accessor.sqlite-scope.js";
 import {
-  assertExistingDatabaseIdentity,
-  readDatabasePathIdentitySync,
-} from "../../infra/sqlite-worker-identity.js";
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
-import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
-import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
-import {
-  prepareSqliteScope,
-  resolveSqliteScope,
-  toDatabaseOptions,
-} from "./session-accessor.sqlite-scope.js";
+  captureSessionActorStorageOwner,
+  withSessionActorStorage,
+} from "./session-actor-storage-binding.js";
 import type { PendingInputSourceRead } from "./session-pending-input-operations.types.js";
-import { assertSessionStoreReadCandidate } from "./session-store-read-candidates.js";
-import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
+import type { PendingInputScope } from "./session-pending-input-store.js";
+import { captureSessionStoreReadTarget } from "./session-store-read-target.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 export async function readPendingInputSource(
-  scope: SessionAccessScope & { agentId: string; sessionId: string },
+  scope: PendingInputScope,
   idempotencyKey: string,
   pendingOnly: boolean,
 ) {
+  const memory = captureSessionActorStorageOwner(scope, { assertCurrent() {}, authorize() {} });
+  if (memory) {
+    return withSessionActorStorage(
+      scope,
+      {
+        lifetime: { assertCurrent() {}, assertReadable() {} },
+        authority: memory.authority,
+      },
+      async (binding) => {
+        const snapshot = await binding.actor.storage!.read(
+          {
+            type: "session.pendingInput.read",
+            input: {
+              kind: "source",
+              sessionKey: binding.actor.target.sessionKey,
+              sessionId: scope.sessionId,
+              idempotencyKey,
+              pendingOnly,
+            },
+          },
+          binding.authority,
+        );
+        if (snapshot.kind !== "source") {
+          throw new Error("Submitted input returned a different operation");
+        }
+        const entry = binding.actor.snapshot(binding.authority)?.entry;
+        return {
+          path: binding.path,
+          snapshot,
+          assertCurrent() {
+            const current =
+              memory.binding?.actor.target.sessionKey === binding.actor.target.sessionKey
+                ? memory.binding.actor.snapshot(memory.authority)
+                : memory.owner?.readSession(binding.actor.target.sessionKey, memory.authority);
+            if (
+              !current?.entry ||
+              current.entry.sessionId !== entry?.sessionId ||
+              current.entry.lifecycleRevision !== entry?.lifecycleRevision
+            ) {
+              throw new Error("Submitted input session was closed or replaced");
+            }
+          },
+        };
+      },
+    );
+  }
   const captured = {
     ...scope,
     env: captureSessionTranscriptStorageEnvironment(scope.env ?? process.env),
@@ -34,65 +72,21 @@ export async function readPendingInputSource(
     idempotencyKey,
     pendingOnly,
   };
-  if (isIncognitoSessionKey(captured.sessionKey)) {
-    // Process-held incognito storage retains its native owner until the actor cutover.
-    const options = toDatabaseOptions(resolveSqliteScope(captured));
-    const database = getOpenClawAgentDatabaseIfOpen(options);
-    if (!database) {
-      return undefined;
-    }
-    const assertCurrent = () => {
-      if (getOpenClawAgentDatabaseIfOpen(options) !== database || !database.db.isOpen) {
-        throw new Error("Submitted input lost its incognito database owner");
-      }
-    };
-    const { readPendingInputSourceInDatabase } =
-      await import("./session-pending-input-source.kernel.js");
-    assertCurrent();
-    return {
-      path: database.path,
-      snapshot: readPendingInputSourceInDatabase(database, input),
-      assertCurrent,
-    };
-  }
-  const storePath =
-    logical.path ??
-    captured.storePath ??
-    resolveOpenClawAgentSqlitePath(toDatabaseOptions(logical));
-  const candidates = captureSessionStoreReadCandidates(storePath);
-  const identities = new Map(
-    candidates
-      .filter((candidate) => !candidate.scope)
-      .map((candidate) => {
-        const identity = readDatabasePathIdentitySync(candidate.path);
-        return [identity.canonicalPath, identity] as const;
-      }),
+  const target = captureSessionStoreReadTarget(
+    captured,
+    "Submitted input changed its captured database owner",
   );
   const resolved = await prepareSqliteScope(captured);
-  const options = toDatabaseOptions(resolved);
-  const path = resolveOpenClawAgentSqlitePath(options);
-  const identity = identities.get(assertSessionStoreReadCandidate(path, candidates));
-  if (!identity) {
-    throw new Error("Submitted input changed its captured database owner");
-  }
+  const { options, identity, source, assertCurrent } = target.resolve(resolved);
   if (!identity.key.startsWith("file:")) {
     return undefined;
   }
-  const assertCurrent = () => {
-    assertSessionStoreReadCandidate(path, candidates);
-    assertExistingDatabaseIdentity(path, identity.key, identity.birthtime);
-  };
   assertCurrent();
-  const snapshot = await withSessionHistoryWorkerDatabase({ ...options, path }, (owner) =>
+  const snapshot = await withSessionHistoryWorkerDatabase(options, (owner) =>
     owner.readPendingInputSource({
       input: { ...input, sessionKey: resolved.sessionKey },
       env: captured.env,
-      source: {
-        agentId: options.agentId,
-        path,
-        databaseIdentity: identity.key.slice(5),
-        databaseBirthtime: identity.birthtime,
-      },
+      source,
     }),
   );
   assertCurrent();

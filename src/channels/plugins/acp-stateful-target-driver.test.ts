@@ -6,7 +6,7 @@ const resetMocks = vi.hoisted(() => ({
   performGatewaySessionReset: vi.fn(async () => ({
     ok: true as const,
     key: "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
-    entry: { sessionId: "next-session", updatedAt: 1 },
+    entry: { sessionId: "next-session", lifecycleRevision: "next-lifecycle", updatedAt: 1 },
     agentId: "claude",
     storePath: "/tmp/claude-sessions.json",
   })),
@@ -18,8 +18,8 @@ const resolveMocks = vi.hoisted(() => ({
   resolveConfiguredAcpBindingSpecBySessionKey: vi.fn(() => null),
 }));
 
+// mock-isolation: Keep the ACP control plane's session-state dependencies outside this driver fixture.
 vi.mock("../../acp/persistent-bindings.lifecycle.js", () => ({
-  ensureConfiguredAcpBindingReadyCore: vi.fn(),
   ensureConfiguredAcpBindingSession: vi.fn(),
 }));
 vi.mock("../../gateway/session-reset-service.js", () => ({
@@ -33,9 +33,12 @@ vi.mock("../../acp/persistent-bindings.resolve.js", () => ({
     resolveMocks.resolveConfiguredAcpBindingSpecBySessionKey,
 }));
 
-import { acpStatefulBindingTargetDriver } from "./acp-stateful-target-driver.js";
+import {
+  resetConfiguredAcpBindingTargetInPlace,
+  resolveAcpBindingTargetBySessionKey,
+} from "./acp-stateful-target-driver.js";
 
-describe("acpStatefulBindingTargetDriver", () => {
+describe("ACP binding targets", () => {
   beforeEach(() => {
     resetMocks.performGatewaySessionReset.mockClear();
     sessionMetaMocks.readAcpSessionEntryAsync.mockReset().mockResolvedValue(null);
@@ -44,7 +47,7 @@ describe("acpStatefulBindingTargetDriver", () => {
 
   it("delegates bound resets to the gateway session reset authority", async () => {
     await expect(
-      acpStatefulBindingTargetDriver.resetInPlace?.({
+      resetConfiguredAcpBindingTargetInPlace({
         cfg: {},
         sessionKey: "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
         reason: "new",
@@ -60,6 +63,7 @@ describe("acpStatefulBindingTargetDriver", () => {
       ok: true,
       sessionKey: "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
       sessionId: "next-session",
+      lifecycleRevision: "next-lifecycle",
       storePath: "/tmp/claude-sessions.json",
     });
 
@@ -77,7 +81,7 @@ describe("acpStatefulBindingTargetDriver", () => {
 
   it("keeps ACP reset available when metadata has already been cleared", async () => {
     expect(
-      await acpStatefulBindingTargetDriver.resolveTargetBySessionKey?.({
+      await resolveAcpBindingTargetBySessionKey({
         cfg: {},
         sessionKey: "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
       }),
@@ -106,7 +110,7 @@ it("uses the canonical metadata owner for a bare binding whose harness differs",
       lastActivityAt: 1,
     },
   });
-  const bindingTarget = await acpStatefulBindingTargetDriver.resolveTargetBySessionKey?.(target);
+  const bindingTarget = await resolveAcpBindingTargetBySessionKey(target);
   expect(bindingTarget).toMatchObject({ sessionKey: "global", agentId: "work" });
   expect(sessionMetaMocks.readAcpSessionEntryAsync).toHaveBeenLastCalledWith(target);
 });

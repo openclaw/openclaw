@@ -1,13 +1,6 @@
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { runRemoteGatewayInferenceOnboarding } from "../commands/onboard-remote-gateway.js";
 
-export type GatewayLaunchTarget = {
-  config: OpenClawConfig;
-  gatewayUrl: string;
-  configuredRemote?: boolean;
-  token?: string;
-  password?: string;
-  tlsFingerprint?: string;
-};
+export type GatewayLaunchTarget = Parameters<typeof runRemoteGatewayInferenceOnboarding>[0];
 
 export type BareRootLaunchTarget =
   | { kind: "onboarding"; classic?: boolean }

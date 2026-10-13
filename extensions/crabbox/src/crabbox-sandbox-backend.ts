@@ -21,26 +21,14 @@ export const CRABBOX_SANDBOX_BACKEND_ID = "crabbox";
 const CRABBOX_SANDBOX_SLUG = "openclaw-sandbox";
 const READY_STATES = new Set(["started", "running", "ready"]);
 
-type CrabboxSandboxCommandRunner = (
-  argv: string[],
-  options: {
-    cwd?: string;
-    killProcessTree: boolean;
-    maxOutputBytes: number;
-    timeoutMs: number;
-  },
-) => Promise<SpawnResult>;
-
-export type CrabboxSandboxBackendDependencies = {
+type CrabboxSandboxBackendDependencies = {
   openclawRoot: string;
   pluginConfig: ResolvedCrabboxSandboxConfig;
-  runCommand?: CrabboxSandboxCommandRunner;
 };
 
 type CrabboxSandboxClient = {
   binary: string;
   pluginConfig: ResolvedCrabboxSandboxConfig;
-  runCommand: CrabboxSandboxCommandRunner;
   execSupport?: Promise<void>;
 };
 
@@ -55,7 +43,6 @@ function createClient(dependencies: CrabboxSandboxBackendDependencies): CrabboxS
       openclawRoot: dependencies.openclawRoot,
     }),
     pluginConfig: dependencies.pluginConfig,
-    runCommand: dependencies.runCommand ?? runCommandWithTimeout,
   };
 }
 
@@ -68,7 +55,7 @@ async function runCrabbox(
 ): Promise<SpawnResult> {
   let result: SpawnResult;
   try {
-    result = await client.runCommand([client.binary, ...args], {
+    result = await runCommandWithTimeout([client.binary, ...args], {
       ...(cwd ? { cwd } : {}),
       killProcessTree: true,
       maxOutputBytes: 64 * 1024,

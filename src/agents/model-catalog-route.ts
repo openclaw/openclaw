@@ -1,5 +1,4 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-/** Projects one physical donor into separate public and private runtime metadata. */
 import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -137,27 +136,6 @@ function applyLogicalOverrides(
   return overrides ? { ...entry, ...overrides } : entry;
 }
 
-/** Finds the exact physical row that supplied a selected provider route. */
-function findModelCatalogRouteDonor(params: {
-  entry: ModelCatalogEntry;
-  route: ProviderModelRouteCandidate;
-  policy: ModelCatalogRoutePolicy;
-  catalog?: readonly ModelCatalogEntry[];
-}): ModelCatalogEntry | undefined {
-  const identity = params.policy.resolveIdentity(params.entry);
-  const physicalDonor = identity
-    ? params.catalog?.find(
-        (candidate) =>
-          params.policy.resolveIdentity(candidate)?.key === identity.key &&
-          params.policy.matchesRoute(candidate, params.route),
-      )
-    : undefined;
-  if (physicalDonor) {
-    return physicalDonor;
-  }
-  return params.policy.matchesRoute(params.entry, params.route) ? params.entry : undefined;
-}
-
 /**
  * Builds public and private runtime rows from one selected physical donor.
  *
@@ -196,13 +174,15 @@ export function projectModelCatalogEntryForRoute(params: {
   }
 
   const { policy, route } = params.projection;
+  const identity = policy.resolveIdentity(params.entry);
   const donor: (ModelCatalogEntry & ThinkingCatalogPolicyCarrier) | undefined =
-    findModelCatalogRouteDonor({
-      entry: params.entry,
-      route,
-      policy,
-      catalog: params.catalog,
-    });
+    (identity
+      ? params.catalog?.find(
+          (candidate) =>
+            policy.resolveIdentity(candidate)?.key === identity.key &&
+            policy.matchesRoute(candidate, route),
+        )
+      : undefined) ?? (policy.matchesRoute(params.entry, route) ? params.entry : undefined);
   const projected = logicalIdentity(
     params.entry,
     id,
@@ -216,8 +196,13 @@ export function projectModelCatalogEntryForRoute(params: {
       ...projected,
       api: route.api,
       baseUrl: route.baseUrl,
-      ...(donor?.contextWindow !== undefined ? { contextWindow: donor.contextWindow } : {}),
+      ...(donor?.contextWindow !== undefined
+        ? { contextWindow: donor.contextWindow, contextWindowSource: donor.contextWindowSource }
+        : {}),
       ...(donor?.contextTokens !== undefined ? { contextTokens: donor.contextTokens } : {}),
+      ...(donor?.contextCapacitySource
+        ? { contextCapacitySource: donor.contextCapacitySource }
+        : {}),
       ...(donor?.contextWindows !== undefined ? { contextWindows: donor.contextWindows } : {}),
       ...(donor?.contextWindowDefault !== undefined
         ? { contextWindowDefault: donor.contextWindowDefault }

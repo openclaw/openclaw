@@ -16,26 +16,13 @@ const QA_LAB_UI_OVERLAY_DIR = "/opt/openclaw-qa-lab-ui";
 // not block startup on a network install before their health deadline.
 const QA_DOCKER_PLUGIN_SELECTION = "acpx qa-channel qa-lab";
 
-function renderImageBlock(params: {
-  outputDir: string;
-  repoRoot: string;
-  imageName: string;
-  usePrebuiltImage: boolean;
-}) {
-  if (params.usePrebuiltImage) {
-    return `    image: ${params.imageName}\n`;
-  }
-  const context = toRepoRelativePath(params.outputDir, params.repoRoot) || ".";
-  return `    build:\n      context: ${JSON.stringify(context)}\n      dockerfile: Dockerfile\n      args:\n        OPENCLAW_EXTENSIONS: "${QA_DOCKER_PLUGIN_SELECTION}"\n`;
-}
-
 function renderHealthcheck(port: number, retries: number, startPeriod: number) {
   return `    healthcheck:
       test:
         - CMD
         - node
         - -e
-        - fetch("http://127.0.0.1:${port}/healthz").then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))
+        - fetch("http://127.0.0.1:${port}/healthz").then(async(r)=>{await r.body?.cancel();process.exitCode=r.ok?0:1}).catch(()=>{process.exitCode=1})
       interval: 10s
       timeout: 5s
       retries: ${retries}
@@ -51,10 +38,11 @@ function renderCompose(params: {
   bindUiDist: boolean;
   gatewayPort: number;
   qaLabPort: number;
-  includeQaLabUi: boolean;
 }) {
-  const imageBlock = renderImageBlock(params);
   const repoMount = toRepoRelativePath(params.outputDir, params.repoRoot) || ".";
+  const imageBlock = params.usePrebuiltImage
+    ? `    image: ${params.imageName}\n`
+    : `    build:\n      context: ${JSON.stringify(repoMount)}\n      dockerfile: Dockerfile\n      args:\n        OPENCLAW_EXTENSIONS: "${QA_DOCKER_PLUGIN_SELECTION}"\n`;
   const taxonomyMount = toRepoRelativePath(
     params.outputDir,
     path.join(params.repoRoot, "taxonomy.yaml"),
@@ -79,9 +67,7 @@ ${renderHealthcheck(44080, 6, 3)}    environment:
       - "0.0.0.0"
       - --port
       - "44080"
-${
-  params.includeQaLabUi
-    ? `  qa-lab:
+  qa-lab:
 ${imageBlock}    pull_policy: never
     ports:
       - "127.0.0.1:${params.qaLabPort}:${QA_LAB_INTERNAL_PORT}"
@@ -103,9 +89,7 @@ ${params.bindUiDist ? `      - ${JSON.stringify(`${qaLabUiMount}:${QA_LAB_UI_OVE
     depends_on:
       qa-mock-openai:
         condition: service_healthy
-`
-    : ""
-}  openclaw-qa-gateway:
+  openclaw-qa-gateway:
 ${imageBlock}    pull_policy: never
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -123,83 +107,14 @@ ${imageBlock}    pull_policy: never
       - ./state:/opt/openclaw-scaffold:ro
       - ${JSON.stringify(`${repoMount}:/opt/openclaw-repo:ro`)}
 ${renderHealthcheck(18789, 12, 15)}    depends_on:
-${
-  params.includeQaLabUi
-    ? `      qa-lab:
+      qa-lab:
         condition: service_healthy
-`
-    : ""
-}      qa-mock-openai:
+      qa-mock-openai:
         condition: service_healthy
     command:
       - sh
       - -lc
       - mkdir -p /tmp/openclaw/workspace /tmp/openclaw/state && cp /opt/openclaw-scaffold/openclaw.json /tmp/openclaw/openclaw.json && cp -R /opt/openclaw-scaffold/seed-workspace/. /tmp/openclaw/workspace/ && rm -rf /tmp/openclaw/workspace/repo && ln -s /opt/openclaw-repo /tmp/openclaw/workspace/repo && exec node dist/index.js gateway run --port 18789 --bind lan --allow-unconfigured
-`;
-}
-
-function renderEnvExample(params: {
-  gatewayPort: number;
-  qaLabPort: number;
-  gatewayToken: string;
-  providerBaseUrl: string;
-  qaBusBaseUrl: string;
-  includeQaLabUi: boolean;
-}) {
-  return `# QA Docker harness example env
-OPENCLAW_GATEWAY_TOKEN=${params.gatewayToken}
-QA_GATEWAY_PORT=${params.gatewayPort}
-QA_BUS_BASE_URL=${params.qaBusBaseUrl}
-QA_PROVIDER_BASE_URL=${params.providerBaseUrl}
-${params.includeQaLabUi ? `QA_LAB_URL=http://127.0.0.1:${params.qaLabPort}\n` : ""}`;
-}
-
-function renderReadme(params: {
-  gatewayPort: number;
-  qaLabPort: number;
-  usePrebuiltImage: boolean;
-  includeQaLabUi: boolean;
-}) {
-  return `# QA Docker Harness
-
-Generated scaffold for the Docker-backed QA lane.
-
-Files:
-
-- \`docker-compose.qa.yml\`
-- \`.env.example\`
-- \`state/openclaw.json\`
-
-Suggested flow:
-
-1. Build the prebaked image once:
-   - \`docker build -t openclaw:qa-local-prebaked --build-arg OPENCLAW_EXTENSIONS="${QA_DOCKER_PLUGIN_SELECTION}" -f Dockerfile .\`
-2. Start the stack:
-   - \`docker compose -f docker-compose.qa.yml up${params.usePrebuiltImage ? "" : " --build"} -d\`
-3. Open the QA dashboard:
-   - \`${params.includeQaLabUi ? `http://127.0.0.1:${params.qaLabPort}` : "not published in this scaffold"}\`
-4. The single QA site embeds both panes:
-   - left: Control UI
-   - right: Slack-ish QA lab
-5. The repo-backed kickoff task auto-injects on startup.
-
-Fast UI refresh:
-
-- Start once with a prebuilt image + bind-mounted QA Lab assets:
-  - \`pnpm qa:lab:up --use-prebuilt-image --bind-ui-dist --skip-ui-build\`
-- In another shell, rebuild the QA Lab bundle on change:
-  - \`pnpm qa:lab:watch\`
-- The browser auto-reloads when the QA Lab asset hash changes.
-
-Gateway:
-
-- health: \`http://127.0.0.1:${params.gatewayPort}/healthz\`
-- Control UI: \`http://127.0.0.1:${params.gatewayPort}/\`
-- Mock OpenAI: internal \`http://qa-mock-openai:44080/v1\`
-
-This scaffold uses localhost Control UI insecure-auth compatibility for QA only.
-The gateway runs with in-process restarts inside Docker so restart actions do not
-kill the container by detaching a replacement child.
 `;
 }
 
@@ -214,7 +129,6 @@ export async function writeQaDockerHarnessFiles(params: {
   imageName?: string;
   usePrebuiltImage?: boolean;
   bindUiDist?: boolean;
-  includeQaLabUi?: boolean;
 }) {
   const gatewayPort = params.gatewayPort ?? 18789;
   const qaLabPort = params.qaLabPort ?? 43124;
@@ -224,7 +138,6 @@ export async function writeQaDockerHarnessFiles(params: {
   const imageName = params.imageName ?? "openclaw:qa-local-prebaked";
   const usePrebuiltImage = params.usePrebuiltImage ?? false;
   const bindUiDist = params.bindUiDist ?? false;
-  const includeQaLabUi = params.includeQaLabUi ?? true;
 
   await fs.mkdir(path.join(params.outputDir, "state", "seed-workspace"), { recursive: true });
   await seedQaAgentWorkspace({
@@ -257,28 +170,61 @@ export async function writeQaDockerHarnessFiles(params: {
         bindUiDist,
         gatewayPort,
         qaLabPort,
-        includeQaLabUi,
       }),
     ],
     [
       ".env.example",
-      renderEnvExample({
-        gatewayPort,
-        qaLabPort,
-        gatewayToken,
-        providerBaseUrl,
-        qaBusBaseUrl,
-        includeQaLabUi,
-      }),
+      `# QA Docker harness example env
+OPENCLAW_GATEWAY_TOKEN=${gatewayToken}
+QA_GATEWAY_PORT=${gatewayPort}
+QA_BUS_BASE_URL=${qaBusBaseUrl}
+QA_PROVIDER_BASE_URL=${providerBaseUrl}
+QA_LAB_URL=http://127.0.0.1:${qaLabPort}
+`,
     ],
     [
       "README.md",
-      renderReadme({
-        gatewayPort,
-        qaLabPort,
-        usePrebuiltImage,
-        includeQaLabUi,
-      }),
+      `# QA Docker Harness
+
+Generated scaffold for the Docker-backed QA lane.
+
+Files:
+
+- \`docker-compose.qa.yml\`
+- \`.env.example\`
+- \`state/openclaw.json\`
+
+Suggested flow:
+
+1. Build the prebaked image once:
+   - \`docker build -t openclaw:qa-local-prebaked --build-arg OPENCLAW_EXTENSIONS="${QA_DOCKER_PLUGIN_SELECTION}" -f Dockerfile .\`
+2. Start the stack:
+   - \`docker compose -f docker-compose.qa.yml up${usePrebuiltImage ? "" : " --build"} -d\`
+3. Open the QA dashboard:
+   - \`http://127.0.0.1:${qaLabPort}\`
+4. The single QA site embeds both panes:
+   - left: Control UI
+   - right: Slack-ish QA lab
+5. The repo-backed kickoff task auto-injects on startup.
+
+Fast UI refresh:
+
+- Start once with a prebuilt image + bind-mounted QA Lab assets:
+  - \`pnpm qa:lab:up --use-prebuilt-image --bind-ui-dist --skip-ui-build\`
+- In another shell, rebuild the QA Lab bundle on change:
+  - \`pnpm qa:lab:watch\`
+- The browser auto-reloads when the QA Lab asset hash changes.
+
+Gateway:
+
+- health: \`http://127.0.0.1:${gatewayPort}/healthz\`
+- Control UI: \`http://127.0.0.1:${gatewayPort}/\`
+- Mock OpenAI: internal \`http://qa-mock-openai:44080/v1\`
+
+This scaffold uses localhost Control UI insecure-auth compatibility for QA only.
+The gateway runs with in-process restarts inside Docker so restart actions do not
+kill the container by detaching a replacement child.
+`,
     ],
     [path.join("state", "openclaw.json"), `${JSON.stringify(config, null, 2)}\n`],
   ] as const;

@@ -129,7 +129,9 @@ export async function gateWorkerTurnInput({
   const message = buildAgentRunBlockedUserMessage(turn.runId, block);
   await withSessionTranscriptWriteAssertion(transcriptTarget, assertCurrent, async () => {
     if (recorder) {
-      const persisted = await recorder.persistBlocked(message);
+      const persisted = await recorder.persistBlocked(message, {
+        storageTarget: transcriptTarget,
+      });
       assertCurrent();
       if (persisted) {
         turn.onUserMessagePersisted?.(persisted.message);
@@ -182,7 +184,7 @@ export async function readWorkerTurnInputContext(params: WorkerTurnInputParams) 
       })
     : await SessionManager.openAsync(transcriptTarget, undefined, undefined, turn.abortSignal);
   assertCurrent();
-  const contextMessages = convertToLlm(manager.buildSessionContext().messages);
+  const contextMessages = manager.buildSessionContext().messages;
   const leaf = manager.getLeafEntry();
   const history =
     !admission &&

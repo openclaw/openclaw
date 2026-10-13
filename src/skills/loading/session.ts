@@ -1,6 +1,5 @@
 import { existsSync, readdirSync, readFileSync, statSync, type Dirent } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { getAgentDir } from "../../agents/config.js";
 import { CONFIG_DIR_NAME } from "../../agents/package-metadata.js";
 import type { ResourceDiagnostic } from "../../agents/sessions/diagnostics.js";
 import { canonicalizePath } from "../../agents/utils/paths.js";
@@ -98,11 +97,7 @@ function loadSkillsFromDirInternal(
     }
 
     for (const entry of entries) {
-      if (entry.name.startsWith(".")) {
-        continue;
-      }
-
-      if (entry.name === "node_modules") {
+      if (entry.name.startsWith(".") || entry.name === "node_modules") {
         continue;
       }
 
@@ -193,15 +188,8 @@ interface LoadSkillsOptions {
   includeDefaults: boolean;
 }
 
-function resolveSkillPath(p: string, cwd: string): string {
-  const normalized = expandTildePath(p);
-  return isAbsolute(normalized) ? normalized : resolve(cwd, normalized);
-}
-
 export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
   const { cwd, agentDir, skillPaths, includeDefaults } = options;
-
-  const resolvedAgentDir = agentDir ?? getAgentDir();
 
   const skillMap = new Map<string, Skill>();
   const realPathSet = new Set<string>();
@@ -237,28 +225,16 @@ export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
     }
   }
 
+  const userSkillsDir = join(agentDir, "skills");
+  const projectSkillsDir = resolve(cwd, CONFIG_DIR_NAME, "skills");
   if (includeDefaults) {
-    addSkills(loadSkillsFromDirInternal(join(resolvedAgentDir, "skills"), "user", true));
-    addSkills(loadSkillsFromDirInternal(resolve(cwd, CONFIG_DIR_NAME, "skills"), "project", true));
+    addSkills(loadSkillsFromDirInternal(userSkillsDir, "user", true));
+    addSkills(loadSkillsFromDirInternal(projectSkillsDir, "project", true));
   }
 
-  const userSkillsDir = join(resolvedAgentDir, "skills");
-  const projectSkillsDir = resolve(cwd, CONFIG_DIR_NAME, "skills");
-
-  const getSource = (resolvedPath: string): "user" | "project" | "path" => {
-    if (!includeDefaults) {
-      if (isPathInside(userSkillsDir, resolvedPath)) {
-        return "user";
-      }
-      if (isPathInside(projectSkillsDir, resolvedPath)) {
-        return "project";
-      }
-    }
-    return "path";
-  };
-
   for (const rawPath of skillPaths) {
-    const resolvedPath = resolveSkillPath(rawPath, cwd);
+    const expandedPath = expandTildePath(rawPath);
+    const resolvedPath = isAbsolute(expandedPath) ? expandedPath : resolve(cwd, expandedPath);
     if (!existsSync(resolvedPath)) {
       allDiagnostics.push({
         type: "warning",
@@ -270,7 +246,12 @@ export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
 
     try {
       const stats = statSync(resolvedPath);
-      const source = getSource(resolvedPath);
+      const source =
+        !includeDefaults && isPathInside(userSkillsDir, resolvedPath)
+          ? "user"
+          : !includeDefaults && isPathInside(projectSkillsDir, resolvedPath)
+            ? "project"
+            : "path";
       if (stats.isDirectory()) {
         addSkills(loadSkillsFromDirInternal(resolvedPath, source, true));
       } else if (stats.isFile() && resolvedPath.endsWith(".md")) {

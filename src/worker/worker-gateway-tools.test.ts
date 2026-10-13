@@ -57,6 +57,12 @@ function fixture() {
 describe("worker Gateway tool transport", () => {
   it("installs canonical definitions unchanged and forwards invocation and updates", async () => {
     const { surface, client, result } = fixture();
+    surface.tools[0]!.timeout = {
+      minimumMs: 60_000,
+      argument: "timeoutSeconds",
+      defaultSeconds: 30,
+      paddingMs: 60_000,
+    };
     Object.freeze(surface.tools[0]!.definition);
     client.invokeGatewayTool.mockImplementationOnce(async (_params, options) => {
       options?.onUpdate?.({ content: [{ type: "text", text: "working" }] });
@@ -82,6 +88,11 @@ describe("worker Gateway tool transport", () => {
       details: undefined,
     });
     expect(client.cancelGatewayTool).not.toHaveBeenCalled();
+    await expect(tools[0]!.execute("long", { timeoutSeconds: 600 })).resolves.toEqual(result);
+    expect(client.invokeGatewayTool.mock.calls.map((call) => call[1]?.timeoutMs)).toEqual([
+      90_000, 660_000,
+    ]);
+    expect(JSON.stringify(toToolDefinitions(tools))).not.toContain("paddingMs");
   });
 
   it("cancels the same issued invocation and rejects a late result", async () => {
@@ -119,22 +130,5 @@ describe("worker Gateway tool transport", () => {
       },
     });
     await expect(tool!.execute("stale", {})).rejects.toThrow("no longer current");
-  });
-
-  it("uses Gateway-issued wait budgets without exposing them to the model", async () => {
-    const { surface, client } = fixture();
-    surface.tools[0]!.timeout = {
-      minimumMs: 60_000,
-      argument: "timeoutSeconds",
-      defaultSeconds: 30,
-      paddingMs: 60_000,
-    };
-    const [tool] = createWorkerGatewayToolProxies(surface, client);
-    await tool!.execute("default", {});
-    await tool!.execute("long", { timeoutSeconds: 600 });
-    expect(client.invokeGatewayTool.mock.calls.map((call) => call[1]?.timeoutMs)).toEqual([
-      90_000, 660_000,
-    ]);
-    expect(JSON.stringify(toToolDefinitions([tool!]))).not.toContain("paddingMs");
   });
 });

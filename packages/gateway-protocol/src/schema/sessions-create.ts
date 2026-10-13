@@ -3,6 +3,7 @@ import { closedObject } from "./closed-object.js";
 import { HumanMentionsSchema } from "./human-mentions.js";
 import { ChatAttachmentsSchema } from "./logs-chat.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
+import { SessionCommunicationPolicySchema } from "./sessions-communication.js";
 import {
   SessionPermissionModeSchema,
   SessionRepositorySourceSchema,
@@ -18,6 +19,12 @@ export const SessionsCreateParamsSchema = closedObject({
   key: Type.Optional(NonEmptyString),
   idempotencyKey: Type.Optional(NonEmptyString),
   agentId: Type.Optional(NonEmptyString),
+  surface: Type.Optional(
+    Type.Literal("plugin-dock", {
+      description:
+        "Immutable presentation surface for a new operator-created dock conversation. Preserves creator identity and permissions; ignored when adopting an existing session.",
+    }),
+  ),
   label: Type.Optional(SessionLabelString),
   displayName: Type.Optional(
     Type.String({
@@ -43,6 +50,7 @@ export const SessionsCreateParamsSchema = closedObject({
     Type.Union([Type.Boolean(), Type.Literal("auto"), Type.Literal("ultrafast")]),
   ),
   permissionMode: Type.Optional(SessionPermissionModeSchema),
+  communication: Type.Optional(SessionCommunicationPolicySchema),
   toolOverrides: Type.Optional(SessionToolOverridesSchema),
   incognito: Type.Optional(Type.Boolean()),
   visibility: Type.Optional(SessionVisibilitySchema),

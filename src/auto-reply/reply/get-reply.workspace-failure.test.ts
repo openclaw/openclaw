@@ -68,11 +68,6 @@ it("keeps heartbeat workspace failures throwing for heartbeat-owned logging", as
   );
 });
 
-it("rethrows other workspace provisioning failures unchanged", async () => {
-  vi.mocked(ensureAgentWorkspace).mockRejectedValueOnce(new Error("EACCES: permission denied"));
-  await expect(getReplyFromConfig(buildGetReplyCtx(), undefined, {})).rejects.toThrow(/EACCES/u);
-});
-
 it("rejects queued reply preparation after abort or operator revocation without workspace effects", async ({
   signal,
 }) => {

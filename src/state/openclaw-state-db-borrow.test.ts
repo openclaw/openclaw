@@ -184,57 +184,41 @@ it("keeps concurrent synchronous release fenced behind the same asynchronous WAL
   }
 });
 
-describe.each(["borrowForRead", "retainForIndependentRead"] as const)("%s", (readPin) => {
-  it("checks access once when finding and retaining the same native owner", async () => {
-    const { database, retainer, scope, assertOpen } = fixture();
-    const pin = retainer[readPin](database.path);
-    try {
+describe("read pin custody", () => {
+  it.each([
+    { writer: false, admitted: false },
+    { writer: false, admitted: true },
+    { writer: true, admitted: false },
+    { writer: true, admitted: true },
+  ])(
+    "transfers read custody only after admission ($writer, $admitted)",
+    async ({ writer, admitted }) => {
+      const { database, retainer, retire, scope, assertOpen } = fixture();
+      const reference = writer ? scope.run(() => retainer.retain(database)) : undefined;
+      assertOpen.mockClear();
+      const pin = retainer.borrowForRead(database.path);
       expect(pin).toBeDefined();
       expect(assertOpen).toHaveBeenCalledExactlyOnceWith(database.path, undefined);
-    } finally {
-      pin?.release();
-      await scope.close();
-    }
-  });
-
-  it.each([false, true])("observes a read pin only after source admission=%s", async (admitted) => {
-    const { database, retainer, scope } = fixture(readPin === "retainForIndependentRead");
-    const pin = retainer[readPin](database.path);
-    expect(pin).toBeDefined();
-    expect(isOpenClawDatabaseMaintenanceResourceOwned(database.db, scope)).toBe(true);
-    if (admitted) {
-      pin?.observe();
-    }
-    pin?.release();
-    await scope.close();
-    expect(database.db.isOpen).toBe(admitted);
-  });
-
-  it.each([false, true])(
-    "keeps the original writer retirement current after read admission=%s",
-    async (admitted) => {
-      const { database, retainer, retire, scope } = fixture(readPin === "retainForIndependentRead");
-      const writer = scope.run(() => retainer.retain(database));
-      const pin = retainer[readPin](database.path);
-      writer.release();
+      expect(isOpenClawDatabaseMaintenanceResourceOwned(database.db, scope)).toBe(true);
+      reference?.release();
       expect(retire).not.toHaveBeenCalled();
       if (admitted) {
         pin?.observe();
       }
       pin?.release();
-      expect(retire.mock.calls).toEqual(admitted ? [] : [[database, false]]);
-      expect(database.db.isOpen).toBe(admitted);
+      expect(retire.mock.calls).toEqual(writer && !admitted ? [[database, false]] : []);
+      if (writer) {
+        expect(database.db.isOpen).toBe(admitted);
+      }
       await scope.close();
       expect(database.db.isOpen).toBe(admitted);
     },
   );
 
   it("does not let a stale scoped writer replace an unconditional cache cleanup request", async () => {
-    const { database, borrowers, retainer, retire, scope } = fixture(
-      readPin === "retainForIndependentRead",
-    );
+    const { database, borrowers, retainer, retire, scope } = fixture();
     const writer = scope.run(() => retainer.retain(database));
-    const pin = retainer[readPin](database.path);
+    const pin = retainer.borrowForRead(database.path);
     const owner = borrowers.get(database.db);
     if (!owner || !pin) {
       throw new Error("Expected retained native owner");
@@ -252,10 +236,8 @@ describe.each(["borrowForRead", "retainForIndependentRead"] as const)("%s", (rea
   });
 
   it("rejects stale observation and releases the original pin once", async () => {
-    const { database, borrowers, retainer, retire, scope } = fixture(
-      readPin === "retainForIndependentRead",
-    );
-    const pin = retainer[readPin](database.path);
+    const { database, borrowers, retainer, retire, scope } = fixture();
+    const pin = retainer.borrowForRead(database.path);
     expect(pin).toBeDefined();
     try {
       expect(() => pin?.assertCurrent()).not.toThrow();

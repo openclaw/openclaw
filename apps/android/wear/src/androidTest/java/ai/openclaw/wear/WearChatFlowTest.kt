@@ -241,7 +241,7 @@ class WearChatFlowTest {
     var runId = "not-sent"
     var lastMessage: String? = null
     val client: WearProxyClient =
-      WearProxyClient.createForTests(
+      WearProxyClient(
         nodeResolver = WearNodeResolver { "synthetic-phone" },
         transport = WearMessageTransport { _, path, bytes -> respond(path, bytes) },
       )

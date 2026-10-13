@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
-import fsSync from "node:fs";
+import fsSync, { type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { syncDirectory } from "@openclaw/fs-safe/durability";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { requireNodeSqlite } from "./node-sqlite.js";
+import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import { createPrivateSqliteDirectory } from "./sqlite-private-directory.js";
 
 type PublishFileExclusive = typeof import("@openclaw/fs-safe/durability").publishFileExclusive;
@@ -97,6 +97,7 @@ function mockExclusiveCopyTransfer() {
       return {
         method: "exclusive-copy",
         identity: await target.stat(),
+        exactIdentity: await target.stat({ bigint: true }),
         directorySync: await syncDirectory(path.dirname(options.targetPath)),
       };
     } finally {
@@ -107,14 +108,82 @@ function mockExclusiveCopyTransfer() {
   return transfer;
 }
 
+function mockUnavailableBirthtime(
+  mode: "zero" | "ctime",
+  afterTransfer?: (stagedPath: string) => Promise<void>,
+) {
+  durabilityTestState.transfer = async (options, publish) => {
+    const receipt = await publish(options);
+    expect(receipt.method).toBe("hardlink");
+    await afterTransfer?.(options.targetPath);
+    return receipt;
+  };
+  const substituteBirthtime = (stat: Stats) => {
+    // Model ctime advancing when the source link is retired, even on coarse clocks.
+    stat.birthtimeMs = mode === "zero" ? 0 : stat.ctimeMs + (stat.nlink === 1 ? 1_000 : 0);
+    return stat;
+  };
+  const fstat = fsSync.fstatSync.bind(fsSync);
+  vi.spyOn(fsSync, "fstatSync").mockImplementation((...args) =>
+    args[1]?.bigint ? fstat(args[0], { bigint: true }) : substituteBirthtime(fstat(args[0])),
+  );
+  const lstat = fs.lstat.bind(fs);
+  vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+    return args[1]?.bigint
+      ? await lstat(args[0], { bigint: true })
+      : substituteBirthtime(await lstat(args[0]));
+  });
+}
+
 describe("owned SQLite snapshot transfer", () => {
+  it("publishes a snapshot in a deeply nested destination", async () => {
+    let directory = tempDir;
+    while (Buffer.byteLength(directory) < 431) {
+      directory = path.join(
+        directory,
+        "nested".padEnd(Math.min(60, 430 - Buffer.byteLength(directory)), "x"),
+      );
+    }
+    await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+    const destination = path.join(directory, "snapshot.sqlite");
+    const source = new sqlite.DatabaseSync(sourcePath);
+    try {
+      source.exec(
+        "CREATE TABLE records(value TEXT); INSERT INTO records(rowid,value) VALUES(71,'retained');",
+      );
+    } finally {
+      source.close();
+    }
+    const original = await fs.readFile(sourcePath);
+
+    await createVerifiedSqliteSnapshot({
+      sourcePath,
+      targetPath: destination,
+      preserveRowIds: true,
+    });
+
+    {
+      using snapshot = openNodeSqliteDatabase(destination, { readOnly: true });
+      expect(snapshot.prepare("SELECT rowid,value FROM records").all()).toEqual([
+        { rowid: 71, value: "retained" },
+      ]);
+    }
+    expect(await fs.readFile(sourcePath)).toEqual(original);
+    expect(await fs.readdir(directory)).toEqual(["snapshot.sqlite"]);
+  });
+
   it.each([
-    { isolated: false, copyFallback: false },
-    { isolated: true, copyFallback: false },
-    { isolated: false, copyFallback: true },
-  ])(
-    "publishes one owned private image (isolated=$isolated, copy fallback=$copyFallback)",
-    async ({ isolated, copyFallback }) => {
+    { isolated: false, copyFallback: false, birthtime: "native" },
+    { isolated: true, copyFallback: false, birthtime: "native" },
+    { isolated: false, copyFallback: true, birthtime: "native" },
+    { isolated: false, copyFallback: false, birthtime: "zero" },
+    { isolated: false, copyFallback: false, birthtime: "ctime" },
+  ] as const)(
+    "publishes one owned private image (isolated=$isolated, copy fallback=$copyFallback, birthtime=$birthtime)",
+    async ({ isolated, copyFallback, birthtime }) => {
+      if (birthtime !== "native") {
+        mockUnavailableBirthtime(birthtime);
+      }
       const copy = copyFallback ? mockExclusiveCopyTransfer() : undefined;
       const source = new sqlite.DatabaseSync(sourcePath);
       try {
@@ -187,7 +256,7 @@ describe("owned SQLite snapshot transfer", () => {
     const original = await fs.readFile(sourcePath);
     await publishVerifiedSqliteFile({
       sourcePath,
-      sourceIdentity: await fs.stat(sourcePath),
+      sourceIdentity: await fs.stat(sourcePath, { bigint: true }),
       targetPath,
       expectedContent: {
         sha256: createHash("sha256").update(original).digest("hex"),
@@ -206,6 +275,20 @@ describe("owned SQLite snapshot transfer", () => {
     withReadOnlySnapshot(sqlite, sourcePath, (snapshot) => {
       expect(snapshot.prepare("SELECT value FROM records").get()).toEqual({ value: "after" });
     });
+  });
+
+  it("rejects same-size byte changes during a ctime-fallback transfer", async () => {
+    const original = await fs.readFile(sourcePath);
+    mockUnavailableBirthtime("ctime", async (stagedPath) => {
+      const bytes = await fs.readFile(stagedPath);
+      bytes.write("changed", 0, "utf8");
+      await fs.writeFile(stagedPath, bytes);
+    });
+    await expectSnapshotFailureWithoutTarget(
+      { sourcePath, targetPath, preserveRowIds: true },
+      /hash mismatch/,
+    );
+    expect(await fs.readFile(sourcePath)).toEqual(original);
   });
 
   it.each(["allocation", "durability", "dev", "ino"] as const)(

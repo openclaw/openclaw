@@ -1,25 +1,24 @@
-/* @vitest-environment jsdom */
-
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+/* @vitest-environment jsdom */
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
+import {
+  CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS,
+  createConfigCapabilityHarness,
+  createConfigServerMock,
+} from "../lib/config/config-test-harness.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
-import { changedServerUiPrefs } from "./server-prefs-intent.ts";
+import { resetServerUiPref } from "./server-prefs-controls.ts";
+import { changedServerUiPrefs, requestServerUiPrefIntent } from "./server-prefs-intent.ts";
+import { applyServerUiPrefs, resolveServerUiPrefState } from "./server-prefs-reconcile.ts";
 import {
   configWithPrefs,
   createServerPrefsWriter as createClient,
   type RequestMock,
 } from "./server-prefs.test-support.ts";
-import {
-  applyServerUiPrefs,
-  flushServerUiPrefs,
-  pushServerUiPrefs,
-  resetServerUiPref,
-  resetServerUiPrefsSync,
-  resolveServerUiPrefState,
-} from "./server-prefs.ts";
-import { loadSettings, patchSettings, setSettingsChangeListener } from "./settings.ts";
+import { flushServerUiPrefs, pushServerUiPrefs, resetServerUiPrefsSync } from "./server-prefs.ts";
+import { loadSettings, patchSettings } from "./settings.ts";
 
 const pendingKey = (scope: string) => `openclaw.control.serverPrefs.pending.v1:${scope}`;
 const readPending = (scope: string) =>
@@ -34,35 +33,94 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  setSettingsChangeListener(null);
   resetServerUiPrefsSync();
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
 function expectPatch(request: RequestMock, prefs: Record<string, unknown>) {
-  const params = { raw: JSON.stringify({ ui: { prefs } }), note: "control-ui prefs sync" };
+  const params = {
+    raw: JSON.stringify({ ui: { prefs } }),
+    note: "control-ui prefs sync",
+  };
   expect(request).toHaveBeenCalledWith("config.patch", params);
 }
 
-const conflictError = () =>
-  new Error("config changed since last load; re-run config.get and retry");
-
-const rejection = new GatewayRequestError({ code: "INVALID_REQUEST", message: "invalid config" });
-
 describe("server preferences", () => {
-  it("keeps presentation preferences browser-local", () => {
-    const before = loadSettings();
-    expect(
-      changedServerUiPrefs(before, {
-        ...before,
-        textScale: 125,
-        sidebarLiveActivity: false,
-        chatMessageMaxWidth: "82%",
-        showAdvancedSettings: true,
-        openLinksExternally: true,
-      }),
-    ).toBeNull();
+  it("adopts the preference revision before saving an in-flight Settings edit", async () => {
+    vi.useFakeTimers();
+    const started = createDeferred();
+    const release = createDeferred();
+    const committed = createDeferred();
+    const store = createConfigServerMock();
+    const request = vi.fn<Request>(async (method, params) => {
+      if (method === "config.patch") {
+        started.resolve();
+        await release.promise;
+        return store.request("config.set", {
+          raw: JSON.stringify({ count: 1, ui: { prefs: { themeMode: "dark" } } }),
+          baseHash: "hash-1",
+        });
+      }
+      return store.request(method, params);
+    });
+    const { runtimeConfig } = createConfigCapabilityHarness(
+      request as GatewayBrowserClient["request"],
+    );
+    try {
+      await runtimeConfig.ensureLoaded();
+      pushServerUiPrefs(
+        runtimeConfig,
+        { themeMode: "dark" },
+        {
+          afterCommit: () => committed.resolve(),
+        },
+      );
+      await started.promise;
+      runtimeConfig.patchForm(["count"], 2);
+      release.resolve();
+      await committed.promise;
+      expect(runtimeConfig.state.configDraftBaseHash).toBe("hash-2");
+      await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+      expect(store.submissions).toHaveLength(2);
+      expect(store.submissions[1]?.baseHash).toBe("hash-2");
+      expect(JSON.parse(store.submissions[1]!.raw)).toEqual({
+        count: 2,
+        ui: { prefs: { themeMode: "dark" } },
+      });
+      expect(request.mock.calls.filter(([method]) => method === "config.get")).toHaveLength(1);
+    } finally {
+      release.resolve();
+      runtimeConfig.setWritesSuspended(true);
+      runtimeConfig.dispose();
+    }
+  });
+
+  it.each([
+    { intents: ["write"], expected: { locale: "de" } },
+    { intents: ["write", "server"], expected: { locale: null } },
+    { intents: ["server", "write"], expected: { locale: null } },
+    { intents: ["write", "server", "device-local"], expected: null },
+    { intents: ["device-local", "server", "write"], expected: null },
+  ] as const)("consumes competing preference requests once: $intents", ({ intents, expected }) => {
+    const settings = patchSettings({ locale: "de" });
+    for (const intent of intents) {
+      requestServerUiPrefIntent("locale", intent);
+    }
+    expect(changedServerUiPrefs(settings, settings)).toEqual(expected);
+    expect(changedServerUiPrefs(settings, settings)).toBeNull();
+  });
+
+  it("settles rejected persisted keys even when they are not known preference names", async () => {
+    const completed = createDeferred();
+    const request = vi.fn(async () => {
+      throw new GatewayRequestError({ code: "INVALID_REQUEST", message: "Unknown preference" });
+    });
+    localStorage.setItem(pendingKey(scope), JSON.stringify({ unknownPreference: true }));
+    flushServerUiPrefs(createClient(request, scope), { afterCommit: () => completed.resolve() });
+    await completed.promise;
+    expectPatch(request, { unknownPreference: true });
+    expect(localStorage.getItem(pendingKey(scope))).toBeNull();
   });
 
   it("rejects malformed accents in a minimal persisted settings record", () => {
@@ -105,7 +163,6 @@ describe("server preferences", () => {
       chatShowToolCalls: false,
       chatPersistCommentary: false,
       chatSendShortcut: "modifier-enter",
-      sidebarEntries: ["route:usage", "session:agent:main:test"],
     });
   });
 
@@ -157,11 +214,11 @@ describe("server preferences", () => {
       ok: false,
       error: "config.get failed",
     });
-    const afterCommit = vi.fn();
+    const committed = createDeferred();
+    const afterCommit = vi.fn(() => committed.resolve());
     pushServerUiPrefs(client, { themeMode: "dark" }, { afterCommit });
-    await waitForFast(() =>
-      expect(localStorage.getItem(`openclaw.control.serverPrefs.pending.v1:${scope}`)).toBeNull(),
-    );
+    await committed.promise;
+    expect(localStorage.getItem(`openclaw.control.serverPrefs.pending.v1:${scope}`)).toBeNull();
 
     expect(applyServerUiPrefs(oldSnapshot, { scope, onApplied })).toBe(false);
     expect(loadSettings().themeMode).toBe("dark");
@@ -187,29 +244,6 @@ describe("server preferences", () => {
     expect(loadSettings().sidebarEntries).toEqual(["route:usage"]);
     expect(loadSettings().themeMode).toBe("light");
     expect(onApplied).toHaveBeenLastCalledWith({ themeMode: "light" });
-  });
-
-  it("syncs an authored default-valued reset through the settings listener", async () => {
-    const request = vi.fn(async () => ({}));
-    const writer = createClient(request, scope);
-    setSettingsChangeListener((previous, next) => {
-      const prefs = changedServerUiPrefs(previous, next);
-      if (prefs) {
-        pushServerUiPrefs(writer, prefs);
-      }
-    });
-
-    const state = resolveServerUiPrefState(configWithPrefs({ theme: "claw" }), "theme", scope);
-    resetServerUiPref("theme", state);
-
-    await vi.waitFor(() =>
-      expect(request).toHaveBeenCalledWith(
-        "config.patch",
-        expect.objectContaining({
-          raw: JSON.stringify({ ui: { prefs: { theme: null } } }),
-        }),
-      ),
-    );
   });
 
   it("restores product defaults when authored synced values are removed", () => {
@@ -309,46 +343,6 @@ describe("server preferences", () => {
     });
   });
 
-  it("retains a rejected local edit until that server key actually changes", async () => {
-    const initialConfig = configWithPrefs({ theme: "claw", locale: "de" });
-    const onApplied = vi.fn();
-    applyServerUiPrefs(initialConfig, { scope, onApplied });
-    const beforeLocalEdit = loadSettings();
-    const retained = patchSettings({ theme: "knot" });
-    const prefs = changedServerUiPrefs(beforeLocalEdit, retained);
-    const afterCommit = vi.fn();
-    const request = vi.fn<Request>().mockRejectedValue(rejection);
-
-    pushServerUiPrefs(createClient(request, scope), prefs ?? {}, { afterCommit });
-    await waitForFast(() =>
-      expect(afterCommit).toHaveBeenCalledWith({
-        needsRefresh: false,
-        retainedLocal: true,
-      }),
-    );
-
-    expect(
-      applyServerUiPrefs(configWithPrefs({ theme: "claw", locale: "de" }), { scope, onApplied }),
-    ).toBe(false);
-    expect(loadSettings().theme).toBe("knot");
-
-    resetServerUiPrefsSync();
-    expect(
-      applyServerUiPrefs(configWithPrefs({ theme: "claw", locale: "de" }), { scope, onApplied }),
-    ).toBe(false);
-    expect(loadSettings().theme).toBe("knot");
-
-    expect(
-      applyServerUiPrefs(configWithPrefs({ theme: "claw", locale: "fr" }), { scope, onApplied }),
-    ).toBe(true);
-    expect(loadSettings()).toMatchObject({ theme: "knot", locale: "fr" });
-
-    expect(
-      applyServerUiPrefs(configWithPrefs({ theme: "dash", locale: "fr" }), { scope, onApplied }),
-    ).toBe(true);
-    expect(loadSettings().theme).toBe("dash");
-  });
-
   it("settles only this tab's acknowledged keys from sibling persisted pending", async () => {
     const flight = createDeferred<unknown>();
     const request = vi.fn<Request>(() => flight.promise);
@@ -359,17 +353,6 @@ describe("server preferences", () => {
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
 
     flight.resolve({});
-
-    await waitForFast(() => expect(readPending(scope)).toEqual({ locale: "fr" }));
-  });
-
-  it("drops only this tab's validation-rejected keys from persisted pending", async () => {
-    const request = vi.fn<Request>().mockRejectedValue(rejection);
-    const client = createClient(request, scope);
-    flushServerUiPrefs(client);
-    localStorage.setItem(pendingKey(scope), JSON.stringify({ locale: "fr" }));
-
-    pushServerUiPrefs(client, { theme: "knot" });
 
     await waitForFast(() => expect(readPending(scope)).toEqual({ locale: "fr" }));
   });
@@ -410,22 +393,6 @@ describe("server preferences", () => {
 
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
     expectPatch(request, { locale: "de" });
-  });
-
-  it("retains a connected transient failure and retries it on flush", async () => {
-    const request = vi
-      .fn<Request>()
-      .mockRejectedValueOnce(new Error("socket closed"))
-      .mockResolvedValueOnce({});
-    const client = createClient(request);
-
-    pushServerUiPrefs(client, { locale: "de" });
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-    expect(readPending("ws://gw")).toEqual({ locale: "de" });
-
-    flushServerUiPrefs(client);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
-    await waitForFast(() => expect(localStorage.getItem(pendingKey("ws://gw"))).toBeNull());
   });
 
   it("ignores a superseded request rejection while its replacement is pending", async () => {
@@ -499,64 +466,12 @@ describe("server preferences", () => {
     });
   });
 
-  it("cancels a conflict re-drain when flush or reset supersedes its epoch", async () => {
-    vi.useFakeTimers();
-    const request = vi
-      .fn<Request>()
-      .mockRejectedValueOnce(conflictError())
-      .mockRejectedValueOnce(conflictError())
-      .mockResolvedValue({});
-    const client = createClient(request);
-
-    pushServerUiPrefs(client, { locale: "de" });
-    await vi.advanceTimersByTimeAsync(250);
-    flushServerUiPrefs(client);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(request).toHaveBeenCalledTimes(3);
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(request).toHaveBeenCalledTimes(3);
-
-    resetServerUiPrefsSync();
-    localStorage.clear();
-    const conflicting = vi.fn<Request>().mockRejectedValue(conflictError());
-    pushServerUiPrefs(createClient(conflicting), { locale: "fr" });
-    await vi.advanceTimersByTimeAsync(250);
-    expect(conflicting).toHaveBeenCalledTimes(2);
-    resetServerUiPrefsSync();
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(conflicting).toHaveBeenCalledTimes(2);
-  });
-
-  it("caps conflict-triggered re-drains at five", async () => {
-    vi.useFakeTimers();
-    const request = vi.fn<Request>().mockRejectedValue(conflictError());
-
-    pushServerUiPrefs(createClient(request), { locale: "de" });
-    for (let round = 0; round <= 5; round += 1) {
-      await vi.advanceTimersByTimeAsync(250);
-      expect(request).toHaveBeenCalledTimes((round + 1) * 2);
-      if (round < 5) {
-        await vi.advanceTimersByTimeAsync(1_000);
-      }
-    }
-    await vi.advanceTimersByTimeAsync(5_000);
-
-    expect(request).toHaveBeenCalledTimes(12);
-    expect(localStorage.getItem(pendingKey("ws://gw"))).not.toBeNull();
-  });
-
-  it("marks sidebar arrays for replacement", async () => {
+  it("keeps personal sidebar arrays out of global config writes", () => {
     const request = vi.fn<Request>(async () => ({}));
     const sidebarEntries = ["route:usage"];
 
     pushServerUiPrefs(createClient(request), { sidebarEntries });
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-
-    expect(request).toHaveBeenCalledWith("config.patch", {
-      raw: JSON.stringify({ ui: { prefs: { sidebarEntries } } }),
-      replacePaths: ["ui.prefs.sidebarEntries"],
-      note: "control-ui prefs sync",
-    });
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("re-adopts scope when a stable writer gains or changes its gateway client", async () => {
@@ -667,6 +582,34 @@ describe("read-only server preference lifecycle", () => {
     flushServerUiPrefs(writer);
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
     await vi.waitFor(() => expect(localStorage.getItem(pendingKey(scope))).toBeNull());
+  });
+
+  it("refuses an old queued config dispatch after a new scope owns identical pending intent", async () => {
+    const gate = createDeferred();
+    const queued = createDeferred();
+    const resumed = createDeferred();
+    const oldRequest = vi.fn<Request>(async () => ({}));
+    const writer = createClient(oldRequest, "ws://old");
+    const dispatch = writer.runExternalMutation;
+    writer.runExternalMutation = async (task, options) => {
+      queued.resolve();
+      await gate.promise;
+      const result = await dispatch(task, options);
+      resumed.resolve();
+      return result;
+    };
+    pushServerUiPrefs(writer, { locale: "de" });
+    await queued.promise;
+    const replacement = createClient(
+      vi.fn<Request>(async () => ({})),
+      "ws://new",
+      false,
+    );
+    pushServerUiPrefs(replacement, { locale: "de" });
+    gate.resolve();
+    await resumed.promise;
+    expect(oldRequest).not.toHaveBeenCalled();
+    expect(readPending("ws://new")).toEqual({ locale: "de" });
   });
 
   it("rechecks write capability after queued config writes settle", async () => {

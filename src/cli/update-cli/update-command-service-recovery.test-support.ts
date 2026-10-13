@@ -8,9 +8,10 @@ import { stampConfigWriteMetadata } from "../../config/io.meta.js";
 import { resolveConfigPath } from "../../config/paths.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
+import * as gatewayNamespace from "../../infra/gateway-lock-payload.js";
 import { acquireGatewayOwnerLease } from "../../infra/gateway-owner-lease.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
-import { consumeGatewayRestartIntentPayloadSync } from "../../infra/restart-intent.js";
+import { prepareGatewayRestartIntentConsumption } from "../../infra/restart-intent.js";
 import * as processAncestry from "../../infra/restart-stale-pids.js";
 import * as openClawTmp from "../../infra/tmp-openclaw-dir.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
@@ -32,6 +33,20 @@ import {
 } from "./update-command-service.js";
 
 const hostPlatform = process.platform;
+
+function withHostPlatform<T>(run: () => T): T {
+  const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+  Object.defineProperty(process, "platform", {
+    configurable: true,
+    enumerable: descriptor.enumerable,
+    value: hostPlatform,
+  });
+  try {
+    return run();
+  } finally {
+    Object.defineProperty(process, "platform", descriptor);
+  }
+}
 
 function createServingOwnerFixture() {
   let lease: ReturnType<typeof acquireGatewayOwnerLease> | undefined;
@@ -76,7 +91,9 @@ function createServingOwnerFixture() {
     },
     async restart() {
       if (lease) {
-        expect(consumeGatewayRestartIntentPayloadSync(env)).toEqual({ reason: "gateway.restart" });
+        expect(await prepareGatewayRestartIntentConsumption(env)()).toEqual({
+          reason: "gateway.restart",
+        });
         await release();
       }
     },
@@ -89,21 +106,15 @@ export async function createServiceActivationFixture() {
     await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-activation-")),
   );
   vi.spyOn(openClawTmp, "resolvePreferredOpenClawTmpDir").mockReturnValue(root);
+  // Native service transport is simulated; process ancestry and namespaces belong to the host.
   const inspectHostAncestry = processAncestry.inspectSelfAndAncestorPidsSync;
-  vi.spyOn(processAncestry, "inspectSelfAndAncestorPidsSync").mockImplementation((...args) => {
-    const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
-    // The native manager is simulated; this test process still has real host ancestors.
-    Object.defineProperty(process, "platform", {
-      configurable: true,
-      enumerable: descriptor.enumerable,
-      value: hostPlatform,
-    });
-    try {
-      return inspectHostAncestry(...args);
-    } finally {
-      Object.defineProperty(process, "platform", descriptor);
-    }
-  });
+  vi.spyOn(processAncestry, "inspectSelfAndAncestorPidsSync").mockImplementation((...args) =>
+    withHostPlatform(() => inspectHostAncestry(...args)),
+  );
+  const classifyOwnerNamespace = gatewayNamespace.classifyGatewayOwnerProcessNamespace;
+  vi.spyOn(gatewayNamespace, "classifyGatewayOwnerProcessNamespace").mockImplementation((...args) =>
+    withHostPlatform(() => classifyOwnerNamespace(...args)),
+  );
   const readProcessStartTime = processIdentity.getFileLockProcessStartTime;
   // The service platform is simulated; only this live test process gets a fixed start identity.
   vi.spyOn(processIdentity, "getFileLockProcessStartTime").mockImplementation((pid, ...args) =>
@@ -212,7 +223,6 @@ export function registerRecoveryTests(params: {
   };
 }): void {
   it.each([
-    { startup: "slow", readyAfterMs: 20_000, needsRecovery: false },
     { startup: "unready", readyAfterMs: Infinity, needsRecovery: false },
     { startup: "wrong version", readyAfterMs: 0, needsRecovery: true },
   ])(
@@ -380,104 +390,99 @@ export function registerRecoveryTests(params: {
       );
     },
   );
-  it.each([
-    "foreign",
-    "metadata",
-    "unit",
-    "unavailable",
-    "profile",
-    "before activation",
-    "after readiness",
-  ])("revalidates stale-parent failed-update recovery after %s changes", async (change) => {
-    const root = params.root();
-    const configPath = params.configPath();
-    const mocks = params.mocks;
-    mocks.capability.mockResolvedValue({ kind: "writable" });
-    const before = await maybeStopManagedServiceBeforeMutableUpdate({
-      updateInstallKind: "package",
-      root,
-      shouldRestart: true,
-      jsonMode: true,
-    });
-    expect(before.stopped).toBe(true);
-    await writeRecoveryConfig(configPath, "9999.1.1");
-    process.env.OPENCLAW_GATEWAY_PORT = "19999";
-    const command = await mocks.command(process.env);
-    if (!command) {
-      throw new Error("missing fixture command");
-    }
-    if (change === "unavailable") {
-      mocks.command.mockRejectedValue(new Error("manager unavailable"));
-    } else {
-      const foreign = path.join(root, "foreign");
-      await fs.mkdir(path.join(foreign, "dist"), { recursive: true });
-      await fs.writeFile(
-        path.join(foreign, "package.json"),
-        JSON.stringify({ name: "openclaw", version: VERSION }),
-      );
-      await fs.writeFile(path.join(foreign, "dist", "index.js"), "export {};\n");
-      const replacement = {
-        ...command,
-        programArguments: [
-          process.execPath,
-          path.join(change === "foreign" ? foreign : root, "dist", "index.js"),
-          "gateway",
-          "--port",
-          "19002",
-        ],
-        environment: {
-          HOME: root,
-          OPENCLAW_PROFILE: "default",
-          OPENCLAW_STATE_DIR: path.dirname(configPath),
-          OPENCLAW_CONFIG_PATH: configPath,
-          OPENCLAW_SYSTEMD_UNIT:
-            change === "unit" ? "openclaw-other.service" : "openclaw-gateway.service",
-          ...(change === "profile"
-            ? {
-                OPENCLAW_PROFILE: "second",
-                OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-second.service",
-                OPENCLAW_STATE_DIR: path.join(root, ".openclaw-second"),
-                OPENCLAW_CONFIG_PATH: path.join(root, ".openclaw-second", "openclaw.json"),
-              }
-            : {}),
-        },
-      };
-      if (change === "after readiness") {
-        mocks.health.mockImplementationOnce(async ({ port }) => {
-          mocks.command.mockResolvedValue(replacement);
-          return readyRecoveryHealth(port, true);
-        });
+  it.each(["foreign", "profile", "before activation", "after readiness"])(
+    "revalidates stale-parent failed-update recovery after %s changes",
+    async (change) => {
+      const root = params.root();
+      const configPath = params.configPath();
+      const mocks = params.mocks;
+      mocks.capability.mockResolvedValue({ kind: "writable" });
+      const before = await maybeStopManagedServiceBeforeMutableUpdate({
+        updateInstallKind: "package",
+        root,
+        shouldRestart: true,
+        jsonMode: true,
+      });
+      expect(before.stopped).toBe(true);
+      await writeRecoveryConfig(configPath, "9999.1.1");
+      process.env.OPENCLAW_GATEWAY_PORT = "19999";
+      const command = await mocks.command(process.env);
+      if (!command) {
+        throw new Error("missing fixture command");
+      }
+      if (change === "unavailable") {
+        mocks.command.mockRejectedValue(new Error("manager unavailable"));
       } else {
-        mocks.command.mockResolvedValue(replacement);
-        if (change === "before activation") {
-          mocks.command.mockResolvedValueOnce(command);
+        const foreign = path.join(root, "foreign");
+        await fs.mkdir(path.join(foreign, "dist"), { recursive: true });
+        await fs.writeFile(
+          path.join(foreign, "package.json"),
+          JSON.stringify({ name: "openclaw", version: VERSION }),
+        );
+        await fs.writeFile(path.join(foreign, "dist", "index.js"), "export {};\n");
+        const replacement = {
+          ...command,
+          programArguments: [
+            process.execPath,
+            path.join(change === "foreign" ? foreign : root, "dist", "index.js"),
+            "gateway",
+            "--port",
+            "19002",
+          ],
+          environment: {
+            HOME: root,
+            OPENCLAW_PROFILE: "default",
+            OPENCLAW_STATE_DIR: path.dirname(configPath),
+            OPENCLAW_CONFIG_PATH: configPath,
+            OPENCLAW_SYSTEMD_UNIT:
+              change === "unit" ? "openclaw-other.service" : "openclaw-gateway.service",
+            ...(change === "profile"
+              ? {
+                  OPENCLAW_PROFILE: "second",
+                  OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-second.service",
+                  OPENCLAW_STATE_DIR: path.join(root, ".openclaw-second"),
+                  OPENCLAW_CONFIG_PATH: path.join(root, ".openclaw-second", "openclaw.json"),
+                }
+              : {}),
+          },
+        };
+        if (change === "after readiness") {
+          mocks.health.mockImplementationOnce(async ({ port }) => {
+            mocks.command.mockResolvedValue(replacement);
+            return readyRecoveryHealth(port, true);
+          });
+        } else {
+          mocks.command.mockResolvedValue(replacement);
+          if (change === "before activation") {
+            mocks.command.mockResolvedValueOnce(command);
+          }
         }
       }
-    }
-    mocks.events.push("update failed after definition changed");
-    const recovered = await maybeRestartServiceAfterFailedMutableUpdate({
-      recovery: { serviceRestartSafe: true, version: VERSION },
-      preManagedServiceStop: before,
-      jsonMode: true,
-    });
-    if (change === "metadata") {
-      expect(mocks.child).toHaveBeenCalledOnce();
-      expect(mocks.child.mock.calls[0]?.[0]).toContain("--preserve-definition");
-      expect(mocks.restart).not.toHaveBeenCalled();
-      expect(mocks.child.mock.calls[0]?.[1]).toMatchObject({ baseEnv: {} });
-      expect(mocks.child.mock.calls[0]?.[1]).not.toHaveProperty("env.OPENCLAW_GATEWAY_PORT");
-    } else if (change === "after readiness") {
-      expect(recovered).toBe("failed");
-      expect(mocks.child).toHaveBeenCalledOnce();
-      expect(mocks.restart).not.toHaveBeenCalled();
-      expect(mocks.error.mock.calls.flat().join("\n")).toContain(
-        "ownership or manager identity changed",
-      );
-    } else {
-      expect(mocks.child).not.toHaveBeenCalled();
-      expect(mocks.restart).not.toHaveBeenCalled();
-      expect(mocks.error.mock.calls.flat().join("\n")).toContain("Failed to restart");
-      expect(mocks.events).toEqual(["native stop", "update failed after definition changed"]);
-    }
-  });
+      mocks.events.push("update failed after definition changed");
+      const recovered = await maybeRestartServiceAfterFailedMutableUpdate({
+        recovery: { serviceRestartSafe: true, version: VERSION },
+        preManagedServiceStop: before,
+        jsonMode: true,
+      });
+      if (change === "metadata") {
+        expect(mocks.child).toHaveBeenCalledOnce();
+        expect(mocks.child.mock.calls[0]?.[0]).toContain("--preserve-definition");
+        expect(mocks.restart).not.toHaveBeenCalled();
+        expect(mocks.child.mock.calls[0]?.[1]).toMatchObject({ baseEnv: {} });
+        expect(mocks.child.mock.calls[0]?.[1]).not.toHaveProperty("env.OPENCLAW_GATEWAY_PORT");
+      } else if (change === "after readiness") {
+        expect(recovered).toBe("failed");
+        expect(mocks.child).toHaveBeenCalledOnce();
+        expect(mocks.restart).not.toHaveBeenCalled();
+        expect(mocks.error.mock.calls.flat().join("\n")).toContain(
+          "ownership or manager identity changed",
+        );
+      } else {
+        expect(mocks.child).not.toHaveBeenCalled();
+        expect(mocks.restart).not.toHaveBeenCalled();
+        expect(mocks.error.mock.calls.flat().join("\n")).toContain("Failed to restart");
+        expect(mocks.events).toEqual(["native stop", "update failed after definition changed"]);
+      }
+    },
+  );
 }

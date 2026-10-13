@@ -18,6 +18,27 @@ const { mediaPreparation } = vi.hoisted(() => ({
   mediaPreparation: vi.fn<() => void | Promise<void>>(),
 }));
 
+const effectGate = vi.hoisted(() => ({ prepare: undefined as (() => Promise<void>) | undefined }));
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>();
+  return {
+    ...actual,
+    captureEffectAuthority: () => {
+      const authority = actual.captureEffectAuthority();
+      const prepare = effectGate.prepare;
+      return prepare
+        ? {
+            ...authority,
+            initiate: async <T>(effect: () => T | Promise<T>) => {
+              await prepare();
+              return authority.initiate(effect);
+            },
+          }
+        : authority;
+    },
+  };
+});
+
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
   return {
@@ -214,6 +235,54 @@ describe("registered LINE send handoff", () => {
       expect(requests.length).toBeGreaterThan(0);
       expect(startedWhileActive.every(Boolean)).toBe(true);
       expect(requests.every((request) => request.to === to)).toBe(true);
+    },
+  );
+
+  it.each([false, true])(
+    "rechecks the registered caller after effect preparation (retired=%s)",
+    async (retired) => {
+      const preparing = createDeferred<void>();
+      const prepared = createDeferred<void>();
+      const dispatched = createDeferred<void>();
+      effectGate.prepare = async () => {
+        preparing.resolve();
+        await prepared.promise;
+      };
+      onRequest = () => {
+        dispatched.resolve();
+        retire();
+        return 200;
+      };
+      const sending = send("message-text").then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        await Promise.race([
+          preparing.promise,
+          dispatched.promise.then(() => {
+            throw new Error("dispatched before preparation");
+          }),
+          sending.then(() => {
+            throw new Error("settled before preparation");
+          }),
+        ]);
+        expect(startedWhileActive).toEqual([]);
+        if (retired) {
+          retire();
+        }
+        prepared.resolve();
+        expect(await sending).toMatchObject(
+          retired
+            ? { error: { message: "LINE handoff retired" } }
+            : { value: { messageId: "sent-1" } },
+        );
+        expect(requests).toHaveLength(retired ? 0 : 1);
+      } finally {
+        prepared.resolve();
+        await sending;
+        effectGate.prepare = undefined;
+      }
     },
   );
 

@@ -139,6 +139,8 @@ suite.define(() => {
           }),
         );
         await page.goto(url.href);
+        // Read the login document only after its UI is ready, not during document replacement.
+        await page.getByLabel("Gateway secret", { exact: true }).waitFor();
         expect(await page.evaluate(() => window.isSecureContext)).toBe(true);
         await page
           .getByLabel("Gateway secret", { exact: true })
@@ -215,7 +217,8 @@ suite.define(() => {
         await fixture.instance.stopGateway();
         await fixture.instance.startGateway();
         readback = await connectReadbackClient();
-        await waitForControlUiGatewayReady(page);
+        // The browser may still be in its 15-second reconnect backoff.
+        await waitForControlUiGatewayReady(page, 30_000);
         expect(await profile()).toMatchObject({
           type: "api_key",
           profileId: `${loginProvider}:default`,

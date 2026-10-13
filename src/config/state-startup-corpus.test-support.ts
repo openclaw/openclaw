@@ -13,7 +13,7 @@ import { applyLegacyCompatibilityStep } from "../commands/doctor/shared/config-f
 import { normalizeCompatibilityConfigValues } from "../commands/doctor/shared/legacy-config-core-migrate.js";
 import { loadCronJobsStore, resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { loadGatewayStartupConfigSnapshot } from "../gateway/server-startup-config-helpers.js";
-import { runStartupSessionMigration } from "../gateway/server-startup-session-migration.js";
+import { runStartupSessionMaintenanceForTest } from "../gateway/server-startup-session-migration.test-support.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { createSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { resolveBundledDirFromPackageRoot } from "../plugins/bundled-dir.js";
@@ -31,6 +31,7 @@ import {
   readConfigCorpusFixture,
 } from "./config-corpus.test-support.js";
 import { createConfigIO } from "./io.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "./runtime-snapshot.js";
 import {
   readRecentUserAssistantTextForSession,
   resolveDefaultSessionStorePath,
@@ -210,7 +211,9 @@ export function createStateStartupCorpusFixture() {
             });
             fs.writeFileSync(configPath, JSON.stringify(normalized.config));
             // Repeat the real repair path: a second run must preserve the same records.
+            let config = normalized.config;
             for (let pass = 0; pass < 2; pass += 1) {
+              setRuntimeConfigSnapshot(config);
               phase("doctor-repair");
               await runDoctorConfigPreflight({
                 observe: false,
@@ -227,9 +230,10 @@ export function createStateStartupCorpusFixture() {
                 ambientEnvTriggers: "suppress",
                 log: console,
               });
-              const config = startup.snapshot.config;
+              config = startup.snapshot.config;
+              setRuntimeConfigSnapshot(config);
               phase("startup-session-migration");
-              await runStartupSessionMigration({ cfg: config, log: console });
+              await runStartupSessionMaintenanceForTest({ cfg: config, log: console });
               phase("state-assertions");
               for (const session of fixture.sessions) {
                 signal.throwIfAborted();
@@ -341,6 +345,7 @@ export function createStateStartupCorpusFixture() {
       // A rejected drain abandons its local handles, not its ownership evidence.
       // Retain that receipt so another hook or case cannot certify the lost join.
       return (cleanupReceipt ??= lifetime.cleanup().then(() => {
+        clearRuntimeConfigSnapshot();
         for (const [key, value] of originalEnv) {
           if (value === undefined) {
             delete process.env[key];

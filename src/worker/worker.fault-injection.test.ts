@@ -127,10 +127,12 @@ describe("cloud worker milestone 2 fault injection", () => {
         token: "synthetic-worker-cleanup-token",
         branch: "openclaw/cleanup-fixture",
       };
+      const skillsSnapshot = await buildSkillSnapshot(harness.root, {
+        entries: loadWorkspaceSkills(harness.root, { workspaceOnly: true }),
+      });
+      descriptor.assignment.systemPrompt = skillsSnapshot.prompt;
       descriptor.assignment.skillResources = await prepareSkillResourceDelivery(
-        await buildSkillSnapshot(harness.root, {
-          entries: loadWorkspaceSkills(harness.root, { workspaceOnly: true }),
-        }),
+        skillsSnapshot,
         () => {},
       );
       const previousStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -236,6 +238,8 @@ describe("cloud worker milestone 2 fault injection", () => {
         const payload = finishing[0]!.event.payload;
         if (outcome === "provider failure") {
           expect(payload).toHaveProperty("error", "fixture provider failed");
+        } else if (outcome === "cancellation") {
+          expect(payload).toHaveProperty("error", "worker turn cancelled");
         } else {
           expect(payload).not.toHaveProperty("error");
         }

@@ -18,6 +18,13 @@ export const NODE_WORKER_PORTAL_STREAM_VERSION = 1;
 export const NODE_WORKER_ENVIRONMENT_SESSION_VERSION = 1;
 export const NODE_WORKER_STATUS_WAIT_VERSION = 1;
 export const NODE_WORKER_PREPARED_WORKSPACE_VERSION = 1;
+export const NODE_WORKER_NATIVE_INFERENCE_VERSION = 1;
+export const NODE_WORKER_INFERENCE_SETUP_ERROR =
+  "Worker-local inference is not configured on this node. Add a compatible model under " +
+  "models.providers with a usable credential in the node openclaw.json, set " +
+  'nodeHost.workerRuns.isolation to "none", then restart the node host. ' +
+  "If the node runs an older OpenClaw version, update it first.";
+export const NODE_WORKER_PROMPT_CONTEXT_VERSION = 1;
 export const NODE_WORKER_HOST_DISABLED_REASON_MAX_LENGTH = 1_024;
 // Couples the lease owner with foreground tree ownership; neither rolls out alone.
 export const NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION = 1;
@@ -85,6 +92,8 @@ const WorkerHost = z
       workspaceQuiescence: z.literal(NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION).optional(),
       launchToolNames: LaunchToolNames.optional(),
       idleRetention: z.literal(true).optional(),
+      nativeInference: z.literal(NODE_WORKER_NATIVE_INFERENCE_VERSION).optional(),
+      promptContext: z.literal(NODE_WORKER_PROMPT_CONTEXT_VERSION).optional(),
     }).refine(
       (host) =>
         (host.bundleStatus === undefined || host.bundleRetention !== undefined) &&
@@ -156,11 +165,13 @@ export function createNodeRunnerInventoryIssueError(
     : new Error(formatNodeRunnerInventoryIssue(nodeId, issue));
 }
 
-/** Worker execution requires the node to preserve the Gateway's captured exec policy. */
+/** Worker execution requires captured policy and the current assignment prompt context. */
 export function resolveNodeWorkerExecutionIssue(
   workerHost: NodeWorkerHostDeclaration,
 ): NodeRunnerInventoryIssue | undefined {
-  return workerHost.enabled && workerHost.capturedExecPolicy !== true
+  return workerHost.enabled &&
+    (workerHost.capturedExecPolicy !== true ||
+      workerHost.promptContext !== NODE_WORKER_PROMPT_CONTEXT_VERSION)
     ? NODE_RUNNER_UPDATE_REQUIRED_ISSUE
     : undefined;
 }

@@ -6,9 +6,8 @@ import {
   clearMemoryPluginState,
   registerTestMemoryPromptBuilder,
 } from "../../plugins/memory-state.test-fixtures.js";
-import type { AgentSession } from "../sessions/index.js";
+import { buildConfiguredAgentSystemPrompt } from "../system-prompt-config.js";
 import { createStubTool } from "../test-helpers/agent-tool-stubs.js";
-import { applySystemPromptToSession, buildEmbeddedSystemPrompt } from "./system-prompt.js";
 
 vi.mock("../../tts/tts-settings.js", () => ({
   buildTtsSystemPromptHint: vi.fn(() => undefined),
@@ -16,7 +15,7 @@ vi.mock("../../tts/tts-settings.js", () => ({
   setTtsMachinePrefsPathResolver: vi.fn(),
 }));
 
-function basicPromptInputs(): Parameters<typeof buildEmbeddedSystemPrompt>[0] {
+function basicPromptInputs(): Parameters<typeof buildConfiguredAgentSystemPrompt>[0] {
   return {
     workspaceDir: "/tmp/openclaw",
     reasoningTagHint: false,
@@ -26,16 +25,13 @@ function basicPromptInputs(): Parameters<typeof buildEmbeddedSystemPrompt>[0] {
       arch: "arm64",
       node: process.version,
       model: "gpt-5.4",
-      provider: "openai",
     },
     tools: [],
     modelAliasLines: [],
-    userTimezone: "UTC",
-    userDate: "2026-01-05",
   };
 }
 
-function fixedEmbeddedPromptInputs(): Parameters<typeof buildEmbeddedSystemPrompt>[0] {
+function fixedEmbeddedPromptInputs(): Parameters<typeof buildConfiguredAgentSystemPrompt>[0] {
   return {
     workspaceDir: "/tmp/openclaw-prompt-agent",
     runtimeCwd: "/tmp/openclaw-prompt-project",
@@ -46,14 +42,11 @@ function fixedEmbeddedPromptInputs(): Parameters<typeof buildEmbeddedSystemPromp
       arch: "arm64",
       node: "v24.14.0",
       model: "fixture-model",
-      provider: "fixture-provider",
       channel: "discord",
       chatType: "direct",
     },
     tools: ["read", "exec", "process", "message", "sessions_spawn"].map(createStubTool),
     capabilityToolNames: ["tool_search", "web_search"],
-    userTimezone: "UTC",
-    userDate: "2026-01-05",
     ownerNumbers: ["fixture-owner"],
     modelAliasLines: ["- direct-alias: fixture/direct"],
     ttsHint: "Fixture direct TTS hint.",
@@ -67,19 +60,7 @@ function fixedEmbeddedPromptInputs(): Parameters<typeof buildEmbeddedSystemPromp
   };
 }
 
-describe("applySystemPromptToSession", () => {
-  it("applies the trimmed prompt through the session base prompt setter", () => {
-    const setBaseSystemPrompt = vi.fn();
-
-    applySystemPromptToSession(
-      { setBaseSystemPrompt } as unknown as AgentSession,
-      "  embedded prompt  ",
-    );
-
-    expect(setBaseSystemPrompt).toHaveBeenCalledWith("embedded prompt");
-  });
-});
-describe("buildEmbeddedSystemPrompt", () => {
+describe("buildConfiguredAgentSystemPrompt", () => {
   afterEach(() => {
     // Memory prompt sections are shared plugin state, so each prompt-rendering
     // test leaves the global registry clean.
@@ -94,7 +75,7 @@ describe("buildEmbeddedSystemPrompt", () => {
         message: Type.Optional(Type.String()),
         ...(surface === "available" ? { clawhub: Type.Object({ query: Type.String() }) } : {}),
       });
-      const prompt = buildEmbeddedSystemPrompt({
+      const prompt = buildConfiguredAgentSystemPrompt({
         ...fixedEmbeddedPromptInputs(),
         runtimeInfo: { ...fixedEmbeddedPromptInputs().runtimeInfo, channel: "webchat" },
         tools: surface === "absent" ? [] : [message],
@@ -110,7 +91,7 @@ describe("buildEmbeddedSystemPrompt", () => {
   );
 
   it("forwards provider prompt contributions into the embedded prompt", () => {
-    const prompt = buildEmbeddedSystemPrompt({
+    const prompt = buildConfiguredAgentSystemPrompt({
       ...basicPromptInputs(),
       runtimeCwd: "/tmp/task-repo",
       promptContribution: {
@@ -124,7 +105,7 @@ describe("buildEmbeddedSystemPrompt", () => {
   });
 
   it("keeps post-compaction curated context scoped to the prepared project", () => {
-    const prompt = buildEmbeddedSystemPrompt({
+    const prompt = buildConfiguredAgentSystemPrompt({
       ...basicPromptInputs(),
       activeProjectKeys: ["github.com/acme/Alpha"],
       contextFiles: [
@@ -145,7 +126,7 @@ describe("buildEmbeddedSystemPrompt", () => {
   });
 
   it("uses config-backed sub-agent delegation mode", () => {
-    const prompt = buildEmbeddedSystemPrompt({
+    const prompt = buildConfiguredAgentSystemPrompt({
       ...basicPromptInputs(),
       config: {
         agents: {
@@ -165,7 +146,7 @@ describe("buildEmbeddedSystemPrompt", () => {
   });
 
   it("uses deferred capability names without listing them as visible tools", () => {
-    const prompt = buildEmbeddedSystemPrompt({
+    const prompt = buildConfiguredAgentSystemPrompt({
       ...basicPromptInputs(),
       config: {
         agents: {
@@ -187,7 +168,7 @@ describe("buildEmbeddedSystemPrompt", () => {
   });
 
   it("forwards run-scoped proactive orchestration independently of config preference", () => {
-    const prompt = buildEmbeddedSystemPrompt({
+    const prompt = buildConfiguredAgentSystemPrompt({
       ...basicPromptInputs(),
       config: {
         agents: {
@@ -207,7 +188,6 @@ describe("buildEmbeddedSystemPrompt", () => {
         arch: "arm64",
         node: process.version,
         model: "openai/gpt-5.6-sol",
-        provider: "openai",
       },
       tools: [{ name: "sessions_spawn" } as never],
     });
@@ -219,7 +199,7 @@ describe("buildEmbeddedSystemPrompt", () => {
   it("adds workspace-only scratch path guidance when fs workspaceOnly is enabled", () => {
     // The prompt must steer writes toward workspace-local scratch paths when
     // filesystem tools are constrained to the workspace.
-    const prompt = buildEmbeddedSystemPrompt({
+    const prompt = buildConfiguredAgentSystemPrompt({
       ...basicPromptInputs(),
       config: {
         tools: {
@@ -236,7 +216,7 @@ describe("buildEmbeddedSystemPrompt", () => {
   });
 
   it("omits workspace-only scratch path guidance when fs workspaceOnly is disabled", () => {
-    const prompt = buildEmbeddedSystemPrompt({
+    const prompt = buildConfiguredAgentSystemPrompt({
       ...basicPromptInputs(),
       config: {
         tools: {
@@ -252,7 +232,7 @@ describe("buildEmbeddedSystemPrompt", () => {
   });
 
   it("forwards the subagent prompt surface to embedded prompt rendering", () => {
-    const prompt = buildEmbeddedSystemPrompt({
+    const prompt = buildConfiguredAgentSystemPrompt({
       ...basicPromptInputs(),
       promptSurface: "subagent",
       tools: [{ name: "sessions_spawn" } as never],
@@ -274,7 +254,7 @@ describe("buildEmbeddedSystemPrompt", () => {
   it("can omit base memory guidance for non-legacy context engines", () => {
     registerTestMemoryPromptBuilder(() => ["## Memory Recall", "Use memory carefully.", ""]);
 
-    const prompt = buildEmbeddedSystemPrompt({
+    const prompt = buildConfiguredAgentSystemPrompt({
       ...basicPromptInputs(),
       includeMemorySection: false,
     });
@@ -286,15 +266,15 @@ describe("buildEmbeddedSystemPrompt", () => {
     const params = {
       ...basicPromptInputs(),
       tools: [{ name: "process" } as never],
-    } satisfies Parameters<typeof buildEmbeddedSystemPrompt>[0];
-    const prompt = buildEmbeddedSystemPrompt(params);
+    } satisfies Parameters<typeof buildConfiguredAgentSystemPrompt>[0];
+    const prompt = buildConfiguredAgentSystemPrompt(params);
 
     expect(prompt).not.toContain("Active exec sessions:");
     expect(prompt).toContain("Before input: process log");
     expect(prompt).toContain("waitingForInput/stdinWritable");
     expect(prompt).toContain("process list");
 
-    const restrictedPrompt = buildEmbeddedSystemPrompt({ ...params, tools: [] });
+    const restrictedPrompt = buildConfiguredAgentSystemPrompt({ ...params, tools: [] });
     expect(restrictedPrompt).not.toContain("Active exec sessions:");
     expect(restrictedPrompt).not.toContain("process log");
     expect(restrictedPrompt).not.toContain("process list");
@@ -308,7 +288,7 @@ describe("buildEmbeddedSystemPrompt", () => {
     ["no agent identity", {}, {}, false],
   ])("resolves embedded prompt policy for %s", (name, selector, runtime, restricted) => {
     const inputs = fixedEmbeddedPromptInputs();
-    const prompt = buildEmbeddedSystemPrompt({
+    const prompt = buildConfiguredAgentSystemPrompt({
       ...inputs,
       ...selector,
       runtimeInfo: { ...inputs.runtimeInfo, ...runtime },
@@ -330,7 +310,10 @@ describe("buildEmbeddedSystemPrompt", () => {
   it.each(["full", "minimal", "none"] as const)(
     "preserves the fixed embedded prompt in %s mode",
     (promptMode) => {
-      const prompt = buildEmbeddedSystemPrompt({ ...fixedEmbeddedPromptInputs(), promptMode });
+      const prompt = buildConfiguredAgentSystemPrompt({
+        ...fixedEmbeddedPromptInputs(),
+        promptMode,
+      });
       expect(prompt).toContain("You are a personal assistant running inside OpenClaw.");
       if (promptMode === "none") {
         expect(prompt).not.toContain("Fixture");
@@ -364,8 +347,8 @@ describe("buildEmbeddedSystemPrompt", () => {
     },
   ])("preserves absent optional fields with $name", ({ name, configInput, directHint }) => {
     const inputs = { ...fixedEmbeddedPromptInputs(), ...configInput };
-    const prompt = buildEmbeddedSystemPrompt(inputs);
-    const explicitUndefined = buildEmbeddedSystemPrompt({
+    const prompt = buildConfiguredAgentSystemPrompt(inputs);
+    const explicitUndefined = buildConfiguredAgentSystemPrompt({
       ...inputs,
       reactionGuidance: undefined,
       workspaceNotes: undefined,

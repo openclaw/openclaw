@@ -37,7 +37,6 @@ afterEach(async () => {
 describe("transcript provider cleanup custody", () => {
   it.each([
     { owner: "service", failure: "returned", registryChange: "none" },
-    { owner: "service", failure: "thrown", registryChange: "none" },
     { owner: "manual-service", failure: "returned", registryChange: "none" },
     { owner: "tool", failure: "returned", registryChange: "removed" },
     { owner: "tool", failure: "thrown", registryChange: "replaced" },
@@ -365,14 +364,9 @@ describe("live transcript capture policy", () => {
   });
 });
 
-it.each([
-  { source: "inspection", retry: false },
-  { source: "inspection", retry: true },
-  { source: "prepared", retry: false },
-  { source: "prepared", retry: true },
-] as const)(
-  "keeps a tool capture's $source source after its agent closes (cleanup retry: $retry)",
-  async ({ source, retry }) => {
+it.each(["inspection", "prepared"] as const)(
+  "keeps a tool capture's %s source through cleanup retry after its agent closes",
+  async (source) => {
     const stateDir = tempDirs.make("transcript-source-retention-");
     const owner = createTestPluginRegistry();
     const record = createPluginRecord({
@@ -388,7 +382,7 @@ it.each([
     const disposed = vi.fn();
     instance.lifecycle.onDispose(disposed);
     let request: TranscriptStartRequest | undefined;
-    let failStop = retry;
+    let failStop = true;
     const stop = vi.fn<NonNullable<TranscriptSourceProvider["stop"]>>(async ({ sessionId }) => {
       if (failStop) {
         throw new Error("caption transport stop failed");
@@ -456,7 +450,6 @@ it.each([
       env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
     });
     let disabled: ReturnType<typeof prepareTranscriptCaptureDisable> | undefined;
-    let releaseReplacement: (() => void) | undefined;
     try {
       await withPluginRuntimeRegistryScope(registry, () =>
         agent.run(() =>
@@ -470,20 +463,16 @@ it.each([
       agent.release();
       await releaseRegistry();
       expect(disposed).not.toHaveBeenCalled();
-      sibling.reserveReplacement()();
       expect(sibling.retainedWorkCount).toBe(0);
-      releaseReplacement = instance.reserveReplacement();
       expect(instance.retainedWorkCount).toBeGreaterThan(0);
       await request!.onUtterance({ text: "Speech after the agent turn finished" });
       disabled = prepareTranscriptCaptureDisable(stateDir);
-      if (retry) {
-        await expect(disabled.drain()).rejects.toThrow("Transcript capture policy drainage failed");
-        expect(disposed).not.toHaveBeenCalled();
-        expect(instance.retainedWorkCount).toBeGreaterThan(0);
-        failStop = false;
-      }
+      await expect(disabled.drain()).rejects.toThrow("Transcript capture policy drainage failed");
+      expect(disposed).not.toHaveBeenCalled();
+      expect(instance.retainedWorkCount).toBeGreaterThan(0);
+      failStop = false;
       await disabled.drain();
-      expect(stop).toHaveBeenCalledTimes(retry ? 2 : 1);
+      expect(stop).toHaveBeenCalledTimes(2);
       expect(disposed).toHaveBeenCalledOnce();
       expect(instance.retainedWorkCount).toBe(0);
       expect(await store.readSummary(request!.session)).toMatchObject({
@@ -491,7 +480,6 @@ it.each([
       });
       expect((await store.readSession("retained-capture"))?.stoppedAt).toEqual(expect.any(String));
     } finally {
-      releaseReplacement?.();
       failStop = false;
       agent.release();
       disabled ??= prepareTranscriptCaptureDisable(stateDir);

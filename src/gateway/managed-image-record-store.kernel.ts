@@ -204,10 +204,11 @@ function attachManagedImageRecordInDatabase(
   return true;
 }
 
-/** Claim only the exact row cleanup planned against; concurrent updates win. */
-function claimManagedImageRecordCleanupInDatabase(
+/** Both cleanup transitions require the exact planned row; concurrent updates win. */
+function mutateManagedImageCleanupInDatabase(
   db: DatabaseSync,
   planned: ManagedImageRecord,
+  transition: "claim" | "delete",
 ): boolean {
   const stateDb = getNodeSqliteKysely<ManagedImageRecordDatabase>(db);
   const row = executeSqliteQueryTakeFirstSync(
@@ -219,47 +220,27 @@ function claimManagedImageRecordCleanupInDatabase(
   );
   if (
     !row ||
-    row.cleanup_pending === 1 ||
+    (row.cleanup_pending === 1) !== (transition === "delete") ||
     !managedImageRecordsEqual(managedImageRecordFromRow(row), planned)
   ) {
     return false;
   }
-  executeSqliteQuerySync(
-    db,
-    stateDb
-      .updateTable("managed_outgoing_image_records")
-      .set({ cleanup_pending: 1 })
-      .where("attachment_id", "=", planned.attachmentId),
-  );
-  return true;
-}
-
-/** Delete a durably claimed row only after its attachment file is gone. */
-function deleteClaimedManagedImageRecordInDatabase(
-  db: DatabaseSync,
-  planned: ManagedImageRecord,
-): boolean {
-  const stateDb = getNodeSqliteKysely<ManagedImageRecordDatabase>(db);
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    stateDb
-      .selectFrom("managed_outgoing_image_records")
-      .select(MANAGED_IMAGE_RECORD_COLUMNS)
-      .where("attachment_id", "=", planned.attachmentId),
-  );
-  if (
-    !row ||
-    row.cleanup_pending !== 1 ||
-    !managedImageRecordsEqual(managedImageRecordFromRow(row), planned)
-  ) {
-    return false;
+  if (transition === "delete") {
+    executeSqliteQuerySync(
+      db,
+      stateDb
+        .deleteFrom("managed_outgoing_image_records")
+        .where("attachment_id", "=", planned.attachmentId),
+    );
+  } else {
+    executeSqliteQuerySync(
+      db,
+      stateDb
+        .updateTable("managed_outgoing_image_records")
+        .set({ cleanup_pending: 1 })
+        .where("attachment_id", "=", planned.attachmentId),
+    );
   }
-  executeSqliteQuerySync(
-    db,
-    stateDb
-      .deleteFrom("managed_outgoing_image_records")
-      .where("attachment_id", "=", planned.attachmentId),
-  );
   return true;
 }
 
@@ -284,11 +265,11 @@ export const managedImageRecordOperations = {
   "managedImages.attach": mutation("managedImages.attach", attachManagedImageRecordInDatabase),
   "managedImages.claimCleanup": mutation(
     "managedImages.claimCleanup",
-    claimManagedImageRecordCleanupInDatabase,
+    (db, record: ManagedImageRecord) => mutateManagedImageCleanupInDatabase(db, record, "claim"),
   ),
   "managedImages.deleteClaimed": mutation(
     "managedImages.deleteClaimed",
-    deleteClaimedManagedImageRecordInDatabase,
+    (db, record: ManagedImageRecord) => mutateManagedImageCleanupInDatabase(db, record, "delete"),
   ),
   "managedImages.read": ({ attachmentId }: { attachmentId: string }, { open }) =>
     readManagedImageRecordInDatabase(open().db, attachmentId),

@@ -19,7 +19,6 @@ export type ExecResult = Pick<SpawnResult, "stdout" | "stderr"> & {
   errorCode?: string;
 };
 
-/** Runs a child process as UTF-8 and returns exit data instead of throwing on nonzero exit. */
 export async function execFileUtf8(
   command: string,
   args: string[],

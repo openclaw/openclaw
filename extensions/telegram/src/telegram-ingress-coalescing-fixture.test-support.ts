@@ -11,7 +11,12 @@ import {
   type GetReplyOptions,
   type MsgContext,
 } from "openclaw/plugin-sdk/reply-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { expect, vi, type Mock } from "vitest";
 import {
   holdTelegramMediaTimeouts,
@@ -20,6 +25,7 @@ import {
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import { createTelegramBot } from "./bot.js";
 import type { TelegramTransport } from "./fetch.js";
+import * as messageDispatchDedupe from "./message-dispatch-dedupe.js";
 import { setTelegramRuntime } from "./runtime.js";
 import { resetTelegramAccountThrottlersForTest } from "./runtime.test-support.js";
 import type { TelegramRuntime } from "./runtime.types.js";
@@ -109,7 +115,6 @@ export function createDownstreamTurnFixture(
   function holdFirstDownstreamTurn() {
     const headDispatched = createDeferred<void>();
     const releaseHead = createDeferred<void>();
-    const headFinished = createDeferred<void>();
     downstreamTurns.mockImplementation(async (_ctx, abortSignal, lifecycle) => {
       if (downstreamTurns.mock.calls.length === 1) {
         if (!lifecycle?.deferredHeartbeatIntervalMs) {
@@ -128,18 +133,17 @@ export function createDownstreamTurnFixture(
           }
         } finally {
           clearInterval(heartbeat);
-          headFinished.resolve();
         }
       }
       return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
     });
-    return { headDispatched, releaseHead, headFinished };
+    return { headDispatched, releaseHead };
   }
 
   function holdDownstreamLane() {
     const releaseHead = createDeferred<void>();
-    const turnsDeferred = [createDeferred<void>(), createDeferred<void>()];
-    const turnsFinished: Promise<void>[] = [];
+    const turnsDeferred = [createDeferred<void>(), createDeferred<void>()] as const;
+    let turnIndex = 0;
     // Session-lane stand-in: every turn defers, heartbeats, and adopts after the turn ahead.
     let laneTail: Promise<void> = releaseHead.promise;
     downstreamTurns.mockImplementation(async (_ctx, abortSignal, lifecycle) => {
@@ -149,13 +153,13 @@ export function createDownstreamTurnFixture(
       const ahead = laneTail;
       const finished = createDeferred<void>();
       laneTail = finished.promise;
-      const turnIndex = turnsFinished.push(finished.promise) - 1;
       lifecycle.onDeferred?.();
       const heartbeat = setInterval(
         () => lifecycle.onDeferredHeartbeat?.(),
         lifecycle.deferredHeartbeatIntervalMs,
       );
       turnsDeferred[turnIndex]?.resolve();
+      turnIndex += 1;
       try {
         await ahead;
         if (!abortSignal?.aborted) {
@@ -167,7 +171,7 @@ export function createDownstreamTurnFixture(
       }
       return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
     });
-    return { releaseHead, turnsDeferred, turnsFinished };
+    return { releaseHead, turnsDeferred };
   }
 
   return {
@@ -180,6 +184,7 @@ export function createDownstreamTurnFixture(
 }
 
 export function resetTelegramIngressRuntime() {
+  setRuntimeConfigSnapshot(cfg);
   resetInboundDedupe();
   resetPluginStateStoreForTests({ closeDatabase: false });
   resetTelegramAccountThrottlersForTest();
@@ -269,18 +274,86 @@ export async function admitAlbum(
 
 export type TelegramIngressResources = Awaited<ReturnType<typeof createIngressMonitor>>;
 
-export async function stopIngressResources(activeResources: TelegramIngressResources[]) {
+export async function releaseIngressCase(
+  activeResources: TelegramIngressResources[],
+  activeTurns: Set<Promise<void>>,
+  stateDir: string,
+) {
   await Promise.all(
-    activeResources.map(async ({ monitor, telegramTransport, abortController }) => {
+    activeResources.splice(0).map(async ({ monitor, telegramTransport, abortController }) => {
       abortController.abort(new Error("test cleanup"));
       await monitor.stop();
       await telegramTransport.close();
     }),
   );
+  // Shutdown settles claims without waiting for turns still recording their session;
+  // a late write would bind this case's agent database to the next case's state.
+  while (activeTurns.size > 0) {
+    await Promise.all(activeTurns);
+  }
+  // Session maintenance outlives its writer by design; retire it with this case's databases.
+  await closeOpenClawAgentDatabasesAsync(stateDir);
+  clearRuntimeConfigSnapshot();
 }
 
 export function useIngressTimers() {
   vi.useFakeTimers({
     toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "performance"],
   });
+}
+
+/** Intercepts durable replay settlement while preserving the real claim and rollback operations. */
+export function interceptReplayGuard(hooks: {
+  commit: (count: number, commit: () => Promise<boolean>) => Promise<boolean>;
+  forget?: (forget: () => Promise<boolean>) => Promise<boolean>;
+}) {
+  const createGuard = messageDispatchDedupe.createTelegramMessageDispatchReplayGuard;
+  const commitReplay = messageDispatchDedupe.commitTelegramMessageDispatchReplay;
+  const settlements: Promise<void>[] = [];
+  const commitSpy = vi
+    .spyOn(messageDispatchDedupe, "commitTelegramMessageDispatchReplay")
+    .mockImplementation((params) => {
+      const settlement = commitReplay(params);
+      settlements.push(settlement);
+      return settlement;
+    });
+  let commitCount = 0;
+  const guardSpy = vi
+    .spyOn(messageDispatchDedupe, "createTelegramMessageDispatchReplayGuard")
+    .mockImplementation((options) => {
+      const guard = createGuard(options);
+      const forget = hooks.forget;
+      return {
+        ...guard,
+        claim: async (...args) => {
+          const claim = await guard.claim(...args);
+          if (claim.kind !== "claimed") {
+            return claim;
+          }
+          return {
+            ...claim,
+            handle: {
+              ...claim.handle,
+              commit: async (commitOptions) => {
+                commitCount += 1;
+                return await hooks.commit(commitCount, () => claim.handle.commit(commitOptions));
+              },
+            },
+          };
+        },
+        ...(forget
+          ? {
+              forget: async (...args: Parameters<typeof guard.forget>) =>
+                await forget(() => guard.forget(...args)),
+            }
+          : {}),
+      };
+    });
+  return {
+    settlements,
+    restore: () => {
+      commitSpy.mockRestore();
+      guardSpy.mockRestore();
+    },
+  };
 }

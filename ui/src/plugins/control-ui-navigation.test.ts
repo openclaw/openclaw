@@ -1,16 +1,146 @@
-import { render, type LitElement } from "lit";
-import { afterEach, expect, it, vi } from "vitest";
+import { getObserver } from "@solidjs/signals";
+import { render as renderLit } from "lit";
+import { createSignal } from "solid-js";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import type { ControlUiHost, ControlUiNavigationItem } from "../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../app/context.ts";
 import { icons } from "../components/icons.ts";
+import { SidebarMenusController } from "../components/sidebar-menus-controller.tsx";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { flush } from "../test-helpers/solid-settle.ts";
 import type { ControlUiRegistration } from "./control-ui-capability.ts";
-import "./control-ui-view.runtime.ts";
+import "./control-ui-view.solid.tsx";
+import "./control-ui-contributions.solid.tsx";
 
 const originalLocation = window.location.href;
 afterEach(() => {
   document.body.replaceChildren();
   window.history.replaceState(null, "", originalLocation);
+});
+
+it("opens navigation actions through the sidebar menu owner for pointer and keyboard access", async () => {
+  const run = vi.fn();
+  const abort = new AbortController();
+  const host = {
+    navigation: { pageHref: () => "/boards" },
+  } as unknown as ControlUiHost;
+  const entries = ["boards", "child", "plain"].map((id) => ({
+    key: `example/${id}`,
+    pluginId: "example",
+    signal: abort.signal,
+    host,
+    value: {
+      id,
+      label: id,
+      page: { id: "boards" },
+      ...(id === "child" ? { parent: "boards" } : {}),
+      ...(id !== "plain"
+        ? {
+            actions: [
+              { id: "delete", label: "Delete board…", icon: "trash", destructive: true, run },
+            ],
+          }
+        : {}),
+    },
+  }));
+  const provider = createApplicationContextProvider({
+    plugins: { registrations: () => entries, subscribe: () => () => {} },
+    router: { subscribe: () => () => {} },
+  } as unknown as ApplicationContext);
+  const [menuRevision, setMenuRevision] = createSignal(0);
+  const controller = new SidebarMenusController({
+    addController: vi.fn(),
+    requestUpdate: () => setMenuRevision((revision) => revision + 1),
+  } as unknown as ConstructorParameters<typeof SidebarMenusController>[0]);
+  onTestFinished(() => controller.hostDisconnected());
+  await controller.preloadMenuRenderer();
+  const menuRoot = document.createElement("div");
+  const contributions = ["boards", "child", "plain"].map((id) =>
+    Object.assign(document.createElement("openclaw-plugin-contributions"), {
+      kind: "navigation",
+      navigationKey: `example/${id}`,
+      navigationMenus: controller,
+    }),
+  );
+  window.history.replaceState(null, "", "/boards");
+  provider.append(...contributions, menuRoot);
+  document.body.append(provider);
+  await Promise.all(contributions.map((element) => element.updateComplete));
+  // Project the standalone controller's updates as the sidebar host does.
+  const menuView = new Proxy(controller, {
+    get(target, key, receiver) {
+      if (getObserver()) {
+        menuRevision();
+      }
+      return Reflect.get(target, key, receiver);
+    },
+  });
+  mountSolid(() => menuView.render(), { container: menuRoot });
+  const [parent, pinned, plain] = contributions;
+  const links = [
+    parent!.querySelector("a")!,
+    parent!.querySelector(".nav-item--child")!,
+    pinned!.querySelector("a")!,
+  ];
+  const open = (link: Element, event: Event) => {
+    link.dispatchEvent(event);
+    flush();
+    return menuRoot.querySelector(".sidebar-plugin-navigation-menu")!;
+  };
+  for (const [index, link] of links.entries()) {
+    const menu = open(
+      link,
+      index === 0
+        ? new MouseEvent("contextmenu", {
+            bubbles: true,
+            cancelable: true,
+            clientX: 24,
+            clientY: 32,
+          })
+        : new KeyboardEvent("keydown", {
+            bubbles: true,
+            cancelable: true,
+            key: index === 1 ? "F10" : "ContextMenu",
+            shiftKey: index === 1,
+          }),
+    );
+    expect(menu).not.toBeNull();
+    expect(menu.querySelector("button")?.style.left).toBe(index === 0 ? "24px" : "8px");
+    const item = menu.querySelector("wa-dropdown-item")!;
+    expect(item.textContent?.trim()).toBe("Delete board…");
+    expect(item.classList.contains("session-menu__item--destructive")).toBe(true);
+    expect(item.getAttribute("variant")).toBe("danger");
+    expect(item.querySelector("svg")).not.toBeNull();
+    menu.dispatchEvent(new CustomEvent("wa-select", { detail: { item } }));
+    expect(run).toHaveBeenCalledTimes(index + 1);
+    flush();
+    expect(menuRoot.querySelector("wa-dropdown")).toBeNull();
+  }
+  const menu = open(links[0]!, new MouseEvent("contextmenu", { bubbles: true }));
+  menu.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  menu.dispatchEvent(new CustomEvent("wa-after-hide"));
+  flush();
+  expect(menuRoot.querySelector("wa-dropdown")).toBeNull();
+  expect(document.activeElement).toBe(links[0]);
+  open(links[0]!, new MouseEvent("contextmenu", { bubbles: true })).dispatchEvent(
+    new CustomEvent("wa-after-hide"),
+  );
+  flush();
+  expect(menuRoot.querySelector("wa-dropdown")).toBeNull();
+
+  for (const event of [
+    new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
+    new KeyboardEvent("keydown", { key: "ContextMenu", bubbles: true, cancelable: true }),
+  ]) {
+    expect(open(plain!.querySelector("a")!, event)).toBeNull();
+    expect(event.defaultPrevented).toBe(false);
+  }
+  const staleMenu = open(links[0]!, new MouseEvent("contextmenu", { bubbles: true }));
+  const staleItem = staleMenu.querySelector("wa-dropdown-item")!;
+  abort.abort();
+  staleMenu.dispatchEvent(new CustomEvent("wa-select", { detail: { item: staleItem } }));
+  expect(run).toHaveBeenCalledTimes(3);
 });
 
 it("shows the active plugin section's ordered children and leaves pinned children standalone", async () => {
@@ -74,7 +204,7 @@ it("shows the active plugin section's ordered children and leaves pinned childre
     router: { subscribe },
   } as unknown as ApplicationContext);
   const contribution = (key: string) =>
-    Object.assign(document.createElement("openclaw-plugin-contributions") as LitElement, {
+    Object.assign(document.createElement("openclaw-plugin-contributions"), {
       kind: "navigation",
       navigationKey: key,
     });
@@ -90,11 +220,14 @@ it("shows the active plugin section's ordered children and leaves pinned childre
   expect(children.map((child) => child.textContent?.trim())).toEqual(["Alpha", "Beta", "Zulu"]);
   expect(children.map((child) => child.getAttribute("aria-current"))).toEqual(["page", null, null]);
   const icon = document.createElement("div");
-  render(icons.activity, icon);
-  expect(children[0]?.querySelector("svg")?.outerHTML).toBe(icon.querySelector("svg")?.outerHTML);
-  expect(children[1]?.querySelector("svg")?.outerHTML).toBe(
-    parent.querySelector(".nav-item__icon svg")?.outerHTML,
-  );
+  renderLit(icons.activity, icon);
+  expect(
+    [...children[0]!.querySelectorAll("svg path")].map((path) => path.getAttribute("d")),
+  ).toEqual([...icon.querySelectorAll("svg path")].map((path) => path.getAttribute("d")));
+  renderLit(icons.layers, icon);
+  expect(
+    [...children[1]!.querySelectorAll("svg path")].map((path) => path.getAttribute("d")),
+  ).toEqual([...icon.querySelectorAll("svg path")].map((path) => path.getAttribute("d")));
   expect(pinned.querySelectorAll("a")).toHaveLength(1);
   expect(pinned.querySelector(".nav-item--child")).toBeNull();
   expect(pinned.querySelector("a")?.getAttribute("aria-current")).toBe("page");

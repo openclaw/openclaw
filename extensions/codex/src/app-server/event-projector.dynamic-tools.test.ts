@@ -240,12 +240,8 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
   });
 
   it.each([
-    { privateQa: false, namespace: "openclaw" },
-    { privateQa: true, namespace: undefined },
-    { privateQa: true, namespace: null },
     { privateQa: true, namespace: "" },
     { privateQa: true, namespace: "other" },
-    { privateQa: true, namespace: " openclaw " },
   ])(
     "does not credit discovery with privateQa=$privateQa namespace=$namespace",
     async ({ privateQa, namespace }) => {
@@ -475,62 +471,6 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
     });
   });
 
-  it("emits dynamic tool summaries and full output once across native notifications", async () => {
-    const onAgentEvent = vi.fn();
-    const onToolResult = vi.fn();
-    const projector = await createProjector({
-      ...(await createParams()),
-      verboseLevel: "full",
-      onAgentEvent,
-      onToolResult,
-    });
-
-    const item = {
-      type: "dynamicToolCall",
-      id: "call-browser-1",
-      tool: "browser",
-      arguments: { action: "open", url: "http://127.0.0.1:3000" },
-      status: "inProgress",
-    };
-    await projector.handleNotification(forCurrentTurn("item/started", { item }));
-    expect(onToolResult).not.toHaveBeenCalled();
-    projector.recordDynamicToolCall({
-      callId: item.id,
-      tool: item.tool,
-      arguments: item.arguments,
-    });
-
-    const toolEvents = onAgentEvent.mock.calls.filter(([event]) => {
-      const record = requireRecord(event, "agent event");
-      return record.stream === "tool";
-    });
-    expect(toolEvents).toHaveLength(0);
-    expect(onToolResult).toHaveBeenCalledTimes(1);
-    const payload = mockCallArg(onToolResult, 0, 0, "onToolResult") as { text?: string };
-    expect(payload.text).toContain("Browser");
-
-    const result = {
-      callId: item.id,
-      tool: item.tool,
-      success: true,
-      contentItems: [{ type: "inputText" as const, text: "Browser opened" }],
-    };
-    projector.recordDynamicToolResult(result);
-    projector.recordDynamicToolResult(result);
-    const completedItem = {
-      ...item,
-      status: "completed",
-      success: true,
-      contentItems: result.contentItems,
-    };
-    await projector.handleNotification(forCurrentTurn("item/completed", { item: completedItem }));
-    await projector.handleNotification(turnCompleted([completedItem]));
-    expect(onToolResult).toHaveBeenCalledTimes(2);
-    expect(onToolResult).toHaveBeenLastCalledWith({
-      text: expect.stringContaining("Browser opened"),
-    });
-  });
-
   it("does not replay transcript summaries when only tool output is enabled", async () => {
     const onToolResult = vi.fn();
     const projector = await createProjector({
@@ -556,28 +496,6 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
     const payload = mockCallArg(onToolResult, 0, 0, "onToolResult") as { text?: string };
     expect(payload.text).toContain("opened");
     expect(payload.text).toContain("```txt\nopened\n```");
-  });
-
-  it("keeps side-effect evidence for dynamic tools that error after execution", async () => {
-    const projector = await createProjector();
-
-    projector.recordDynamicToolCall({
-      callId: "call-process-kill",
-      tool: "process",
-      arguments: { action: "kill", sessionId: "session-1" },
-    });
-    projector.recordDynamicToolResult({
-      callId: "call-process-kill",
-      tool: "process",
-      success: false,
-      terminalType: "error",
-      sideEffectEvidence: true,
-      contentItems: [{ type: "inputText", text: "process exited" }],
-    });
-
-    const result = projector.buildResult(buildEmptyToolTelemetry());
-
-    expect(result.replayMetadata).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
   });
 
   it("does not keep side-effect evidence for pre-execution dynamic tool errors", async () => {

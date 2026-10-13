@@ -1,11 +1,15 @@
 import type fs from "node:fs";
 import path from "node:path";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   extractErrorCode,
   formatErrorMessageWithCode,
   isMissingPathError,
 } from "../infra/errors.js";
+import { isPathInside } from "../infra/path-guards.js";
+import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
+import { normalizePluginId } from "./config-state.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import type { OpenClawPackageManifest } from "./manifest.js";
 import { resolvePackagePluginApiRange, satisfiesPluginApiRange } from "./package-compat.js";
@@ -150,4 +154,81 @@ export function hasIncompletePluginDiscovery(diagnostics: readonly PluginDiagnos
   return diagnostics.some(
     (diagnostic) => diagnostic.level === "error" || diagnostic.configDisposition === "preserve",
   );
+}
+
+/** Blocked candidates are present, not stale. Explicit identity excludes path-name guesses. */
+export function createBlockedPluginDiagnosticLookup(params: {
+  diagnostics: readonly PluginDiagnostic[];
+  config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}) {
+  const BLOCKED_PLUGIN_CANDIDATE_PREFIX = "blocked plugin candidate:";
+  const blockedPluginDiagnostics = new Map<string, { message: string; source?: string }>();
+  const blockedPluginDiagnosticsWithSource: Array<{ message: string; source: string }> = [];
+  const normalizeBlockedDiagnosticPath = (value: string | undefined): string => {
+    const trimmed = value?.trim();
+    if (!trimmed) {
+      return "";
+    }
+    try {
+      return path.resolve(resolveUserPath(trimmed, params.env ?? process.env));
+    } catch {
+      return path.resolve(trimmed);
+    }
+  };
+  for (const diag of params.diagnostics) {
+    if (!diag.message.startsWith(BLOCKED_PLUGIN_CANDIDATE_PREFIX)) {
+      continue;
+    }
+    if (!diag.pluginId && diag.source) {
+      blockedPluginDiagnosticsWithSource.push({ message: diag.message, source: diag.source });
+    }
+    if (diag.pluginId) {
+      const normalizedPluginId = normalizePluginId(diag.pluginId);
+      for (const key of [diag.pluginId, normalizedPluginId]) {
+        if (key && !blockedPluginDiagnostics.has(key)) {
+          blockedPluginDiagnostics.set(key, {
+            message: diag.message,
+            ...(diag.source ? { source: diag.source } : {}),
+          });
+        }
+      }
+    }
+  }
+  const blockedDiagnosticSourceMatchesPluginId = (
+    diagnostic: { message: string; source: string },
+    pluginId: string,
+  ): boolean => {
+    const normalizedPluginId = normalizePluginId(pluginId);
+    if (!normalizedPluginId) {
+      return false;
+    }
+    const sourcePath = normalizeBlockedDiagnosticPath(diagnostic.source);
+    if (!sourcePath) {
+      return false;
+    }
+    if (
+      normalizePluginId(path.basename(sourcePath)) === normalizedPluginId ||
+      normalizePluginId(path.basename(path.dirname(sourcePath))) === normalizedPluginId
+    ) {
+      return true;
+    }
+    for (const loadPath of params.config?.plugins?.load?.paths ?? []) {
+      const resolvedLoadPath = normalizeBlockedDiagnosticPath(loadPath);
+      if (
+        resolvedLoadPath &&
+        normalizePluginId(path.basename(resolvedLoadPath)) === normalizedPluginId &&
+        (isPathInside(resolvedLoadPath, sourcePath) || isPathInside(sourcePath, resolvedLoadPath))
+      ) {
+        return true;
+      }
+    }
+    return false;
+  };
+  return (pluginId: string) =>
+    blockedPluginDiagnostics.get(pluginId) ??
+    blockedPluginDiagnostics.get(normalizePluginId(pluginId)) ??
+    blockedPluginDiagnosticsWithSource.find((diagnostic) =>
+      blockedDiagnosticSourceMatchesPluginId(diagnostic, pluginId),
+    );
 }

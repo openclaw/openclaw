@@ -7,14 +7,17 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ProgressCardStore } from "../../session-cards/progress-card-store.types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
+import { ensureUserProfilesSchema } from "../../state/user-profiles-schema.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { progressCardStore, type ProgressCardStore } from "../progress-card-store.js";
+import { progressCardStore } from "../progress-card-store.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
 import {
-  resolveSessionMutationAuthorization,
-  resolveSessionSharingTarget,
+  resolveSessionSharingTargetAsync,
   SessionMutationAuthorizationChangedError,
 } from "../session-sharing.js";
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
@@ -29,6 +32,9 @@ describe("progress card request authorization", () => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         const cfg = rolePolicyConfig();
         setRuntimeConfigSnapshot(cfg, cfg);
+        ensureUserProfilesSchema({});
+        using profileCatalog = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+        void profileCatalog;
         const client = roleClient("view", "card-viewer");
         client.connect.scopes = [scope];
         const owner = roleClient("view", "other-card-owner");
@@ -112,6 +118,9 @@ describe("progress card request authorization", () => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         const cfg = rolePolicyConfig();
         setRuntimeConfigSnapshot(cfg, cfg);
+        ensureUserProfilesSchema({});
+        using profileCatalog = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+        void profileCatalog;
         const client = roleClient("view", "delayed-card-viewer");
         client.connect.scopes = ["operator.sessions.read"];
         const owner = roleClient("view", "delayed-card-owner");
@@ -205,6 +214,9 @@ describe("progress card request authorization", () => {
           agents: { ownership: "explicit", entries: { main: {}, work: {} } },
         };
         setRuntimeConfigSnapshot(cfg, cfg);
+        ensureUserProfilesSchema({});
+        using profileCatalog = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+        void profileCatalog;
         const target = { sessionKey: "global", agentId: "work" };
         const client = { ...roleClient("view", "card-owner"), connId: "card-owner" };
         const entry = {
@@ -327,6 +339,9 @@ describe("progress card request authorization", () => {
           session: { scope: "per-sender" },
         };
         setRuntimeConfigSnapshot(cfg, cfg);
+        ensureUserProfilesSchema({});
+        using profileCatalog = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+        void profileCatalog;
         const target = { sessionKey: testCase.sessionKey, agentId: "work" };
         const client = { ...roleClient("view", "admitted-owner"), connId: "admitted-owner" };
         const successor = roleClient("view", "successor-owner");
@@ -357,12 +372,14 @@ describe("progress card request authorization", () => {
             ? { idempotencyKey: "revoked-refresh" }
             : {}),
         };
-        const oracle = resolveSessionMutationAuthorization({
+        const oracle = await resolveSessionMutationAuthorizationAsync({
           client,
           method: testCase.method,
           requestParams: params,
           context,
         });
+        using authorizationCleanup = { [Symbol.dispose]: () => oracle.authorization?.release?.() };
+        void authorizationCleanup;
         expect(oracle.error).toBeNull();
         const authorization = oracle.authorization;
         if (!authorization) {
@@ -398,7 +415,7 @@ describe("progress card request authorization", () => {
           ]);
           expect(respond).not.toHaveBeenCalled();
           if (testCase.replace) {
-            const resolved = resolveSessionSharingTarget({ cfg, ...target });
+            const resolved = await resolveSessionSharingTargetAsync({ cfg, ...target });
             if (!resolved) {
               throw new Error("expected the admitted persisted session");
             }
@@ -519,6 +536,9 @@ it.each(
       agents: { ownership: "explicit", entries: { main: {}, work: {} } },
     };
     setRuntimeConfigSnapshot(cfg, cfg);
+    ensureUserProfilesSchema({});
+    using profileCatalog = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    void profileCatalog;
     const target = { sessionKey: "global", agentId: "work" };
     const client = { ...roleClient("view", "reset-card-owner"), connId: "reset-card-owner" };
     if (admin) {
@@ -582,7 +602,7 @@ it.each(
           );
         }),
       ]);
-      const resolved = resolveSessionSharingTarget({ cfg, ...target })!;
+      const resolved = (await resolveSessionSharingTargetAsync({ cfg, ...target }))!;
       await resetSessionEntryLifecycle({
         agentId: resolved.agentId,
         storePath: resolved.storePath,

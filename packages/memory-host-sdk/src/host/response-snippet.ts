@@ -20,8 +20,7 @@ type ResponseJsonOptions = {
 };
 
 type ResponsePrefix = {
-  bytes: Uint8Array[];
-  length: number;
+  bytes: Uint8Array;
   truncated: boolean;
 };
 
@@ -33,11 +32,11 @@ export async function readMemoryHostResponseTextSnippet(
   const maxBytes = options.maxBytes ?? DEFAULT_ERROR_BODY_MAX_BYTES;
   const maxChars = options.maxChars ?? DEFAULT_ERROR_BODY_MAX_CHARS;
   const prefix = await readResponsePrefix(res, maxBytes, options.signal);
-  if (prefix.length === 0) {
+  if (prefix.bytes.length === 0) {
     return "";
   }
 
-  const text = decodeTextPrefix(joinChunks(prefix.bytes, prefix.length), {
+  const text = decodeTextPrefix(prefix.bytes, {
     truncated: prefix.truncated,
   });
   const collapsed = text.replace(/\s+/g, " ").trim();
@@ -63,9 +62,7 @@ export async function readResponseJsonWithLimit(
   }
 
   const prefix = await readResponsePrefix(res, maxBytes, options.signal, options.errorPrefix);
-  const text = new TextDecoder("utf-8", { fatal: true }).decode(
-    joinChunks(prefix.bytes, prefix.length),
-  );
+  const text = new TextDecoder("utf-8", { fatal: true }).decode(prefix.bytes);
 
   try {
     return JSON.parse(text);
@@ -116,7 +113,7 @@ async function readResponsePrefix(
 ): Promise<ResponsePrefix> {
   const body = res.body;
   if (!body || typeof body.getReader !== "function") {
-    return { bytes: [], length: 0, truncated: false };
+    return { bytes: new Uint8Array(), truncated: false };
   }
 
   const reader = body.getReader();
@@ -149,8 +146,7 @@ async function readResponsePrefix(
   }
 
   return {
-    bytes: chunks,
-    length: result.truncated ? Math.max(0, maxBytes) : result.size,
+    bytes: chunks.length === 1 ? chunks[0]! : Buffer.concat(chunks),
     truncated: result.truncated,
   };
 }
@@ -168,11 +164,8 @@ function parseContentLength(raw: string | null, errorPrefix: string): number | u
   if (!trimmed) {
     return undefined;
   }
-  if (!/^\d+$/.test(trimmed)) {
-    throw new Error(`${errorPrefix}: invalid content-length header: ${raw}`);
-  }
   const value = Number(trimmed);
-  if (!Number.isSafeInteger(value)) {
+  if (!/^\d+$/.test(trimmed) || !Number.isSafeInteger(value)) {
     throw new Error(`${errorPrefix}: invalid content-length header: ${raw}`);
   }
   return value;
@@ -182,17 +175,4 @@ function responseTooLarge(errorPrefix: string, size: number, maxBytes: number): 
   return new Error(
     `${errorPrefix}: response body too large: ${size} bytes (limit: ${maxBytes} bytes)`,
   );
-}
-
-function joinChunks(chunks: Uint8Array[], length: number): Uint8Array {
-  if (chunks.length === 1 && chunks[0]?.length === length) {
-    return chunks[0];
-  }
-  const joined = new Uint8Array(length);
-  let offset = 0;
-  for (const chunk of chunks) {
-    joined.set(chunk, offset);
-    offset += chunk.length;
-  }
-  return joined;
 }

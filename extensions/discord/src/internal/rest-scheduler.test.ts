@@ -51,64 +51,35 @@ describe("RestScheduler", () => {
     expect(scheduler.queueSize).toBe(0);
   });
 
-  it("ignores 429 retry deadlines that exceed the Date range", () => {
+  it.each([
+    ["ignores deadlines beyond the Date range", MAX_DATE_TIMESTAMP_MS, 1, 0],
+    ["dispatches immediate deadlines", 1_000, 0, 0],
+    ["rounds fractional milliseconds up", 1_000, 0.0004, 1],
+  ] as const)("%s", async (_label, now, retryAfter, waitMs) => {
     vi.useFakeTimers();
-    vi.setSystemTime(MAX_DATE_TIMESTAMP_MS);
+    vi.setSystemTime(now);
     try {
-      const scheduler = new RestScheduler(vi.fn());
+      const executor = vi.fn(async () => "sent");
+      const scheduler = new RestScheduler(executor);
+      const rateLimit = { message: "Rate limited", retry_after: retryAfter, global: true };
       scheduler.recordResponse(
-        "GET /channels/c1/messages",
+        "POST /channels/c1/messages",
         "/channels/c1/messages",
-        createJsonResponse(
-          { message: "Rate limited", retry_after: 1, global: true },
-          { status: 429 },
-        ),
-        { message: "Rate limited", retry_after: 1, global: true },
+        createJsonResponse(rateLimit, { status: 429 }),
+        rateLimit,
       );
 
-      expect(scheduler.getMetrics().globalRateLimitUntil).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("keeps immediate 429 retry deadlines working", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-05-28T12:00:00.000Z"));
-    try {
-      const scheduler = new RestScheduler(vi.fn());
-      scheduler.recordResponse(
-        "GET /channels/c1/messages",
-        "/channels/c1/messages",
-        createJsonResponse(
-          { message: "Rate limited", retry_after: 0, global: true },
-          { status: 429 },
-        ),
-        { message: "Rate limited", retry_after: 0, global: true },
-      );
-
-      expect(scheduler.getMetrics().globalRateLimitUntil).toBe(Date.now());
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("rounds fractional millisecond 429 retry deadlines up", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-05-28T12:00:00.000Z"));
-    try {
-      const scheduler = new RestScheduler(vi.fn());
-      scheduler.recordResponse(
-        "GET /channels/c1/messages",
-        "/channels/c1/messages",
-        createJsonResponse(
-          { message: "Rate limited", retry_after: 0.0004, global: true },
-          { status: 429 },
-        ),
-        { message: "Rate limited", retry_after: 0.0004, global: true },
-      );
-
-      expect(scheduler.getMetrics().globalRateLimitUntil).toBe(Date.now() + 1);
+      const request = scheduler.enqueue({
+        method: "POST",
+        path: "/channels/c1/messages",
+        priority: "standard",
+      });
+      expect(executor).toHaveBeenCalledTimes(waitMs === 0 ? 1 : 0);
+      if (waitMs > 0) {
+        await vi.advanceTimersByTimeAsync(waitMs);
+      }
+      await expect(request).resolves.toBe("sent");
+      expect(executor).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }

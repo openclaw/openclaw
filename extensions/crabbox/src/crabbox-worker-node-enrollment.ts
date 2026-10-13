@@ -51,7 +51,7 @@ function createCrabboxNodeSetup(params: {
   target?: CrabboxOperatingSystem;
 }): { command: string; forwardedEnv: Record<string, string> } {
   const { enrollment, leaseId } = params;
-  const { token, ...nodeBootstrap } = params.nodeBootstrap;
+  const { token, linuxToolchainSetup, ...nodeBootstrap } = params.nodeBootstrap;
   const workerBundle = params.workerBundle
     ? (({ token: _token, ...artifact }) => artifact)(params.workerBundle)
     : undefined;
@@ -89,6 +89,7 @@ delete process.env.${CLOUD_BOOTSTRAP_TOKEN_ENV};
 delete process.env.${CLOUD_SETUP_CODE_ENV};
 if (process.platform !== "win32") process.umask(0o077);
 let phase;
+const failureMessage = (artifact, failedPhase, code, origin) => "Cloud worker " + artifact + " " + failedPhase + " failed" + (code ? " (" + code + ")" : "") + (origin ? " from " + origin : "");
 const setPhase = (next) => {
   if (phase === next) return;
   phase = next;
@@ -111,7 +112,7 @@ setPhase("preparation");
   const nodeEnv = { ...process.env, ...(mode ? { OPENCLAW_STATE_DIR: stateDir } : {}) };
   // Tools travel inside the verified full-node artifact and share its preparation identity.
   if (process.platform !== "win32") {
-    nodeEnv.PATH = path.join(runtimeDir, "node_modules", "openclaw", "dist", "worker-tools", "bin") + path.delimiter + (nodeEnv.PATH || "");
+    nodeEnv.PATH = (process.platform === "linux" ? path.dirname(process.execPath) + path.delimiter : "") + path.join(runtimeDir, "node_modules", "openclaw", "dist", "worker-tools", "bin") + path.delimiter + (nodeEnv.PATH || "");
   }
   const subprocessError = (message, result) => {
     let detail = [result.error?.message, result.stderr].filter(Boolean).join("\\n");
@@ -143,6 +144,22 @@ setPhase("preparation");
     if (result.status !== 0) throw new Error("Cloud worker desktop setup failed" + (result.signal ? " (" + result.signal + ")" : " with exit code " + result.status));
   };
   const directoryOptions = process.platform === "win32" ? {} : { mode: 0o700 };
+  // Forks of a warm image load disk blocks lazily on first read, so a cold node start
+  // spends ~30 s on serial reads. A boot-time parallel read of the current runtime
+  // overlaps that with SSH readiness. Best effort: images without cron keep the cold start.
+  // Only a Crabbox run on this lease edits the crontab; local executions (tests) never do.
+  const installRuntimePrefetch = () => {
+    if (process.platform !== "linux" || process.env.CRABBOX_LEASE_ID !== leaseId) return;
+    try {
+      const script = path.join(runtimeRoot, ".prefetch.sh");
+      const nodeDir = path.dirname(path.dirname(fs.realpathSync(process.execPath)));
+      fs.writeFileSync(path.join(runtimeRoot, ".prefetch"), runtimeDir + "\\n" + nodeDir + "\\n");
+      fs.writeFileSync(script, '#!/bin/sh\\ncd "$(dirname "$0")" || exit 0\\ndate +%s.%N > .prefetch.log\\nwhile IFS= read -r dir; do find "$dir" -type f -print0; done < .prefetch | xargs -0 -n 64 -P 64 cat > /dev/null 2>&1\\ndate +%s.%N >> .prefetch.log\\n', { mode: 0o700 });
+      const current = spawnSync("crontab", ["-l"], { encoding: "utf8", timeout: 10000 });
+      const kept = (current.status === 0 ? current.stdout : "").split("\\n").filter((line) => line && !line.includes(script));
+      spawnSync("crontab", ["-"], { input: [...kept, "@reboot /bin/sh " + script].join("\\n") + "\\n", timeout: 10000 });
+    } catch {}
+  };
   const launcher = path.join(process.env.ProgramFiles || "C:\\\\Program Files", "Crabbox", "bin", "Start-CrabboxDetachedProcess.ps1");
   if (process.platform === "win32" && mode && !${JSON.stringify(desktopTarget === "windows/normal")} && !fs.existsSync(launcher)) {
     throw new Error("Cloud worker requires " + launcher + "; update the Crabbox Windows bootstrap image and reprovision the worker");
@@ -271,13 +288,17 @@ setPhase("preparation");
   };
   const downloadArchive = async (artifact, token, archive, reportPhase = setPhase) => {
     let downloadPhase;
+    let origin;
+    const downloadArtifact = artifact === workerBundle ? "archive" : "node bootstrap";
     const progress = (next) => { downloadPhase = next; reportPhase(next); };
     let attempt = 1;
     let retries = 0;
     let noProgressFailures = 0;
     let offset = 0;
+    let retainedAnyBytes = false;
     const partial = archive + ".partial";
     try {
+      origin = new URL(artifact.url).origin;
       for (;;) {
         try {
           if (retries > 0) await delay(Math.round(250 * 2 ** Math.min(retries - 1, 3) * (0.5 + Math.random())), undefined, { signal: downloadAbort.signal });
@@ -296,18 +317,22 @@ setPhase("preparation");
             // Count retained progress, not bytes replayed by a proxy that ignores Range.
             noProgressFailures = retainedBytes > offset ? 0 : noProgressFailures + 1;
             offset = retainedBytes;
+            retainedAnyBytes ||= retainedBytes > 0;
           }
           if (!transient || noProgressFailures === 3) {
-            throw Object.assign(new Error(error.message + " (download attempt " + attempt + (noProgressFailures === 3 ? "; 3 consecutive no-progress failures" : "") + ")", { cause: error }), { code: error.code });
+            const hint = !retainedAnyBytes && ["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EHOSTUNREACH", "ENETUNREACH", "EAI_AGAIN"].includes(error.code)
+              ? " The worker could not reach the Gateway public origin <" + origin + ">; verify the provider's network can reach it (for example with curl from a sandbox) or configure gateway.publicOrigin on a reachable hostname."
+              : "";
+            throw Object.assign(new Error(error.message + " (download attempt " + attempt + (noProgressFailures === 3 ? "; 3 consecutive no-progress failures" : "") + ")" + hint, { cause: error }), { code: error.code });
           }
           if (!busy) attempt++;
           retries++;
-          console.error("Cloud worker bootstrap " + downloadPhase + " failed (" + (error.code || "HTTP_" + error.statusCode) + "); retrying download attempt " + attempt + " (" + noProgressFailures + "/3 consecutive no-progress failures)");
+          console.error(failureMessage("bootstrap", downloadPhase, error.code || "HTTP_" + error.statusCode, origin) + "; retrying download attempt " + attempt + " (" + noProgressFailures + "/3 consecutive no-progress failures)");
         }
       }
     } catch (error) {
       if (!downloadAbort.signal.aborted) {
-        downloadAbort.abort(Object.assign(error, { downloadPhase, downloadArtifact: artifact === workerBundle ? "archive" : "node bootstrap" }));
+        downloadAbort.abort(Object.assign(new Error(failureMessage(downloadArtifact, downloadPhase || phase, error.code, origin) + ": " + error.message, { cause: error }), { code: error.code, downloadPhase, downloadArtifact }));
       }
       throw downloadAbort.signal.reason;
     } finally { fs.rmSync(partial, { force: true }); }
@@ -431,6 +456,7 @@ setPhase("preparation");
     if (!existingRuntime) fs.renameSync(installDir, runtimeDir);
   } finally { fs.rmSync(stage, { recursive: true, force: true }); }
   }
+  installRuntimePrefetch();
   // A project snapshot contains only verified runtime bytes, never enrollment state.
   if (!mode) {
     setPhase("complete");
@@ -457,14 +483,17 @@ setPhase("preparation");
   await launchNodeProcess();
   if (desktopTarget !== "macos") finishDesktopSetup();
   setPhase("complete");
-})().catch((error) => { console.error("Cloud worker " + (error.downloadArtifact || "node bootstrap") + " " + (error.downloadPhase || phase) + " failed" + (error.code ? " (" + error.code + ")" : "") + ": " + error.message); process.exitCode = 1; });
+})().catch((error) => { console.error(error.downloadArtifact ? error.message : failureMessage("node bootstrap", error.downloadPhase || phase, error.code) + ": " + error.message); process.exitCode = 1; });
 `;
   return {
-    command: wrapCrabboxNodeScript(
-      script.trimEnd(),
-      params.target,
-      "CRABBOX_NODE_ENROLLMENT_SCRIPT",
-    ),
+    command:
+      ((params.target ?? "linux") === "linux" ? (linuxToolchainSetup ?? "") : "") +
+      wrapCrabboxNodeScript(
+        script.trimEnd(),
+        params.target,
+        "CRABBOX_NODE_ENROLLMENT_SCRIPT",
+        "bootstrap",
+      ),
     forwardedEnv: {
       [CLOUD_BOOTSTRAP_TOKEN_ENV]: JSON.stringify({
         nodeBootstrap: token,

@@ -123,50 +123,39 @@ it("honors another completed marker before a later non-final import batch", asyn
   expect(first.gateway.readPreference("main")).not.toHaveProperty("worktreeName");
 });
 
-it("recomputes missing imports after a concurrent value changes without completing migration", async () => {
-  const preference = seedBrowserPreferences(1);
-  const prefs = identityPreferences(true, undefined, {});
-  let changed = false;
-  prefs.beforeSave.mockImplementation(async (params) => {
-    if (!changed && params.entries[migrationKey] === true) {
-      changed = true;
-      await first.context.gateway.snapshot.client!.request("users.prefs.set", {
-        entries: { "new-session.v1:main": { ...preference, worktreeName: "newer-task" } },
-      });
+it.each([false, true])(
+  "rebases migration conflicts on authoritative values (exhausted: %s)",
+  async (exhausted) => {
+    const preference = seedBrowserPreferences(1);
+    const prefs = identityPreferences(true, undefined, {});
+    let attempts = 0;
+    prefs.beforeSave.mockImplementation(async (params) => {
+      if (params.entries[migrationKey] === true && (exhausted || attempts === 0)) {
+        attempts += 1;
+        await first.context.gateway.snapshot.client!.request("users.prefs.set", {
+          entries: {
+            ...(exhausted ? { [migrationKey]: attempts } : {}),
+            "new-session.v1:main": { ...preference, worktreeName: `newer-${attempts}` },
+          },
+        });
+      }
+    });
+    const first = prefs.make();
+    await prefs.ready(first);
+    expect(attempts).toBe(exhausted ? 3 : 1);
+    expect(prefs.stored()).toMatchObject({ worktreeName: exhausted ? "newer-3" : "newer-1" });
+    if (exhausted) {
+      expect(first.gateway.readPreference("main")).toMatchObject({ worktreeName: "newer-3" });
+      expect(first.gateway.readPreference("agent-00")).toBeNull();
+      expect(prefs.stored("agent-00")).toBeUndefined();
+    } else {
+      expect(prefs.stored("agent-00")).toMatchObject({ worktreeName: "first-task" });
+      expect(
+        await first.context.gateway.snapshot.client!.request("users.prefs.get", {}),
+      ).toMatchObject({ entries: { [migrationKey]: true } });
     }
-  });
-  const first = prefs.make();
-  await prefs.ready(first);
-  expect(prefs.stored()).toMatchObject({ worktreeName: "newer-task" });
-  expect(prefs.stored("agent-00")).toMatchObject({ worktreeName: "first-task" });
-  expect(await first.context.gateway.snapshot.client!.request("users.prefs.get", {})).toMatchObject(
-    { entries: { [migrationKey]: true } },
-  );
-});
-
-it("bounds migration conflicts and publishes the last authoritative values without browser fallback", async () => {
-  const preference = seedBrowserPreferences(1);
-  const prefs = identityPreferences(true, undefined, {});
-  let attempts = 0;
-  prefs.beforeSave.mockImplementation(async (params) => {
-    if (params.entries[migrationKey] === true) {
-      attempts += 1;
-      await first.context.gateway.snapshot.client!.request("users.prefs.set", {
-        entries: {
-          [migrationKey]: attempts,
-          "new-session.v1:main": { ...preference, worktreeName: `newer-${attempts}` },
-        },
-      });
-    }
-  });
-  const first = prefs.make();
-  await prefs.ready(first);
-  expect(attempts).toBe(3);
-  expect(prefs.stored()).toMatchObject({ worktreeName: "newer-3" });
-  expect(first.gateway.readPreference("main")).toMatchObject({ worktreeName: "newer-3" });
-  expect(first.gateway.readPreference("agent-00")).toBeNull();
-  expect(prefs.stored("agent-00")).toBeUndefined();
-});
+  },
+);
 
 it("does not publish browser fallback when a conflict reread fails", async () => {
   const preference = seedBrowserPreferences();

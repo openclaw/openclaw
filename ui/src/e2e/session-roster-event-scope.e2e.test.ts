@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import type { AgentsListResult } from "../api/types.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   captureUiProof,
@@ -23,7 +24,18 @@ suite.define(() => {
     });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
-      methodResponses: { "sessions.list": sessionsListResponse([row]) },
+      methodResponses: {
+        "sessions.list": sessionsListResponse([row]),
+        "agents.list": {
+          defaultId: "main",
+          mainKey: "main",
+          scope: "per-sender",
+          agents: [
+            { id: "main", name: "Main" },
+            { id: "research", name: "Research" },
+          ],
+        } satisfies AgentsListResult,
+      },
       sessionKey: key,
       historyMessages: [
         { role: "assistant", content: [{ type: "text", text: "The weekly report is ready." }] },
@@ -35,8 +47,8 @@ suite.define(() => {
       const selectedRow = sidebar.locator(`[data-session-key="${key}"]`);
       await expect.poll(() => selectedRow.textContent()).toContain("Weekly report");
       await sidebar.locator(".sidebar-agent-card__main").click();
-      await sidebar.locator('wa-dropdown-item[value="command:sidebar-agents"]').click();
-      await expect.poll(() => sidebar.locator(".sidebar-agent-roster__row").count()).toBe(1);
+      await sidebar.locator('wa-dropdown-item[value="scope:all"]').click();
+      await expect.poll(() => sidebar.locator(".sidebar-agent-roster__row").count()).toBe(2);
 
       const activityQuery = {
         archived: "all",

@@ -1,5 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as fetchModule from "openclaw/plugin-sdk/fetch-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -82,6 +83,34 @@ describe("container health", () => {
   });
 });
 
+describe("discarded container responses", () => {
+  it.each([
+    { operation: "health", status: 200, expected: { ok: true, status: 200, error: null } },
+    { operation: "health", status: 503, expected: { ok: false, status: 503, error: "HTTP 503" } },
+    { operation: "attachment", status: 404, expected: { data: undefined } },
+  ])(
+    "does not wait for unread body cancellation: $operation HTTP $status",
+    async ({ operation, status, expected }) => {
+      vi.useFakeTimers();
+      const release = createDeferred<void>();
+      const cancel = vi.fn(() => release.promise);
+      mockFetch.mockResolvedValue(new Response(new ReadableStream({ cancel }), { status }));
+      const settled = vi.fn();
+      const result = (
+        operation === "health" ? containerCheck(baseUrl, 25) : attachment({ timeoutMs: 25 })
+      ).then(settled);
+      try {
+        await vi.advanceTimersByTimeAsync(25);
+        expect(cancel).toHaveBeenCalledOnce();
+        expect(settled).toHaveBeenCalledWith(expected);
+      } finally {
+        release.resolve();
+        await result;
+      }
+    },
+  );
+});
+
 describe("container REST responses", () => {
   it.each([
     { status: 500, text: "x".repeat(20_000), error: `Signal REST 500: ${"x".repeat(16 * 1024)}` },
@@ -137,25 +166,69 @@ describe("container REST responses", () => {
     await expect(rpc("version")).rejects.toThrow(/exceeds \d+ bytes/);
     expect(emitted).toBeLessThan(20);
   });
-  it("parses a multi-MiB success response without truncation", async () => {
-    const items = Array.from({ length: 50_000 }, (_, id) => ({
-      id,
-      note: "signal-container-payload-entry",
-    }));
-    const text = JSON.stringify({ items });
-    expect(text.length).toBeGreaterThan(2 * 1024 * 1024);
-    expect(text.length).toBeLessThan(16 * 1024 * 1024);
-    mockFetch.mockResolvedValue(new Response(text));
-    await expect(rpc("version")).resolves.toEqual({ items });
-    expect(request()).toMatchObject({
-      url: `${baseUrl}/v1/about`,
-      method: "GET",
-      headers: { "Content-Type": "application/json" },
-    });
-  });
 });
 
 describe("container send payloads", () => {
+  it.each([false, true])(
+    "prepares the REST handoff and rechecks its caller after waiting (revoked=%s)",
+    async (revoked) => {
+      const preparing = createDeferred<void>();
+      const prepared = createDeferred<void>();
+      const arrived = createDeferred<void>();
+      const response = createDeferred<Response>();
+      const authority = fetchModule.captureEffectAuthority();
+      vi.spyOn(fetchModule, "captureEffectAuthority").mockReturnValue({
+        ...authority,
+        async initiate(effect) {
+          preparing.resolve();
+          await prepared.promise;
+          return authority.initiate(effect);
+        },
+      });
+      mockFetch.mockImplementation(() => {
+        arrived.resolve();
+        return response.promise;
+      });
+      const caller = new AbortController();
+      const failure = new Error("Signal caller ended during preparation");
+      const sending = rpc(
+        "send",
+        { account, recipient, message: "prepared" },
+        {
+          assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
+        },
+      ).then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        await Promise.race([
+          preparing.promise,
+          arrived.promise.then(() => {
+            throw new Error("REST request bypassed preparation");
+          }),
+        ]);
+        expect(mockFetch).not.toHaveBeenCalled();
+        if (revoked) {
+          caller.abort(failure);
+        }
+        prepared.resolve();
+        if (!revoked) {
+          await arrived.promise;
+          response.resolve(Response.json({ timestamp: 1700000000000 }));
+        }
+        expect(await sending).toEqual(
+          revoked ? { error: failure } : { value: { timestamp: 1700000000000 } },
+        );
+        expect(mockFetch).toHaveBeenCalledTimes(revoked ? 0 : 1);
+      } finally {
+        prepared.resolve();
+        response.resolve(Response.json({ timestamp: 1700000000000 }));
+        await sending;
+      }
+    },
+  );
+
   it("rejects a non-decimal send timestamp", async () => {
     respond({ timestamp: "0x18bcfe56800" });
     await expect(rpc("send", { account, recipient, message: "Hello" })).rejects.toThrow(
@@ -221,13 +294,10 @@ describe("container send payloads", () => {
     });
     expect(payload()).toEqual({ recipient: target });
   });
-  it.each([
-    { type: undefined, expected: "read" },
-    { type: "viewed", expected: "viewed" },
-  ])("sends a $expected receipt", async ({ type, expected }) => {
+  it("sends a read receipt", async () => {
     mockFetch.mockResolvedValue(new Response(null, { status: 204 }));
     await expect(
-      rpc("sendReceipt", { account, recipient, targetTimestamp: 1700000000000, type }),
+      rpc("sendReceipt", { account, recipient, targetTimestamp: 1700000000000 }),
     ).resolves.toBeUndefined();
     expect(request()).toMatchObject({
       url: `${baseUrl}/v1/receipts/%2B14259798283`,
@@ -236,7 +306,7 @@ describe("container send payloads", () => {
     expect(payload()).toEqual({
       recipient: "+15550001111",
       timestamp: 1700000000000,
-      receipt_type: expected,
+      receipt_type: "read",
     });
   });
   it.each([

@@ -49,8 +49,6 @@ export function normalizeProviderMapKeys<T>(
 /** Existing provider config shape that may carry persisted secret/base URL fields. */
 export type ExistingProviderConfig = ProviderConfig & {
   apiKey?: string;
-  baseUrl?: string;
-  api?: string;
 };
 
 /** Authored fields keyed by exact provider/model tuples, independent of display ref syntax. */

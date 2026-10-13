@@ -27,8 +27,18 @@ export function createPluginGenerationReceipt(prepared?: PluginGenerationReceipt
       file.onContent(content);
     }
   };
-  const readContent = (file: PluginReceiptFile, receipt?: Hash) => {
-    const content = hashPluginSourceFile(file.target, file.boundary, receipt, file.content);
+  const readContent = (file: PluginReceiptFile, receipt?: Hash, expected = file.content) => {
+    const content = hashPluginSourceFile(
+      file.target,
+      file.boundary,
+      receipt,
+      file.native ? file.content : undefined,
+    );
+    if (!file.native && expected && content.contentHash !== expected.contentHash) {
+      throw new Error(
+        "Plugin source changed while preparing its reload; retry after the edit finishes.",
+      );
+    }
     publishContent(file, content);
   };
   const inputSignature = () => {
@@ -56,8 +66,12 @@ export function createPluginGenerationReceipt(prepared?: PluginGenerationReceipt
     file(params: Omit<PluginReceiptFile, "content"> & { prepared?: PluginSourceContent }): void {
       const { prepared: content, ...input } = params;
       const file: PluginReceiptFile = input;
-      if (file.native && content) {
-        publishContent(file, content);
+      if (content) {
+        if (finished && !file.native) {
+          readContent(file, undefined, content);
+        } else {
+          publishContent(file, content);
+        }
       } else if (!file.native || finished) {
         readContent(file);
       }
@@ -77,8 +91,9 @@ export function createPluginGenerationReceipt(prepared?: PluginGenerationReceipt
       for (const event of events) {
         if (typeof event === "string") {
           receipt?.update(event);
-        } else if (receipt || !event.content) {
-          // The legacy receipt includes raw bytes; a miss must replay even known native digests.
+        } else if (receipt || !event.content || !event.native) {
+          // Copied descriptors supply bytes, not pathname admission. Recheck ordinary
+          // destinations even on a receipt hit; misses also replay native raw bytes.
           readContent(event, receipt);
         }
       }

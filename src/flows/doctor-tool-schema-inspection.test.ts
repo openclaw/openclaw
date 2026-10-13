@@ -21,17 +21,49 @@ afterEach(() => {
 });
 
 it.each([
-  { mode: "doctor", fails: false },
-  { mode: "lint", fails: true },
+  { mode: "doctor", fails: false, variant: "tools" },
+  { mode: "lint", fails: true, variant: "tools" },
+  { mode: "doctor", fails: false, variant: "missing-provider-collision" },
+  { mode: "doctor", fails: false, variant: "provider-collision" },
+  { mode: "doctor", fails: false, variant: "provider-without-tools" },
+  { mode: "lint", fails: true, variant: "provider-collision" },
+  { mode: "doctor", fails: false, variant: "legacy-provider-collision" },
+  { mode: "doctor", fails: false, variant: "duplicate-provider-collision" },
+  { mode: "doctor", fails: false, variant: "early-duplicate-provider-collision" },
+  { mode: "doctor", fails: false, variant: "cleanup-errors" },
 ] as const)(
-  "inspects each agent through one registration in $mode with detector failure=$fails",
-  async ({ mode, fails }) => {
+  "inspects each agent through one registration in $mode with detector failure=$fails ($variant)",
+  async ({ mode, fails, variant }) => {
+    const collision = variant.endsWith("collision");
+    const withoutPluginTools = variant === "provider-without-tools";
+    const toolName = collision ? "web_search" : "fleet_tool";
+    const providerOnly = variant !== "tools" && variant !== "missing-provider-collision";
+    const providerFirst = variant === "early-duplicate-provider-collision";
+    const providerPluginId = providerFirst ? "a-search-provider" : "z-search-provider";
+    const duplicateProvider = variant === "duplicate-provider-collision" || providerFirst;
+    const providerConfigured = providerOnly && (!duplicateProvider || providerFirst);
+    const registeredPluginIds = [
+      ...(withoutPluginTools ? [] : ["failed-tool", "fleet-tool"]),
+      ...(providerOnly ? [providerPluginId] : []),
+    ].toSorted();
     await withOpenClawTestState(
-      { env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
+      {
+        env: {
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+          OPENCLAW_TEST_INSPECTED_SEARCH_KEY: "",
+          OPENCLAW_TEST_SUPPLEMENTAL_SEARCH_KEY: "synthetic-search-key",
+        },
+      },
       async (state) => {
         const events = state.path("doctor-tool-events.jsonl");
         const unexpectedProbe = state.path("requester-server-probed");
-        const ids = ["fleet-tool", "failed-tool", "excluded-tool"];
+        const ids = [
+          ...(providerFirst ? [providerPluginId] : []),
+          "fleet-tool",
+          "failed-tool",
+          "excluded-tool",
+          ...(providerOnly && !providerFirst ? [providerPluginId] : []),
+        ];
         const paths = ids.map((id) => {
           const root = state.path("plugins", id);
           fs.mkdirSync(root, { recursive: true });
@@ -47,7 +79,15 @@ it.each([
             path.join(root, "openclaw.plugin.json"),
             JSON.stringify({
               id,
-              contracts: { tools: [id.replaceAll("-", "_")] },
+              contracts: {
+                ...(id !== providerPluginId
+                  ? { tools: [id === "fleet-tool" ? toolName : id.replaceAll("-", "_")] }
+                  : {}),
+                ...((id === providerPluginId && variant !== "legacy-provider-collision") ||
+                (id === "fleet-tool" && duplicateProvider)
+                  ? { webSearchProviders: ["fixture-search"] }
+                  : {}),
+              },
               configSchema: { type: "object", additionalProperties: false },
             }),
           );
@@ -62,15 +102,28 @@ const event = (kind, details = {}) => fs.appendFileSync(file, JSON.stringify({id
 module.exports = { id, register(api) {
   const prior = fs.existsSync(file) ? fs.readFileSync(file, "utf8").trim().split("\\n").filter(Boolean).map(JSON.parse) : [];
   event("register");
-  api.lifecycle.onDispose(() => event("dispose"));
+  api.lifecycle.onDispose(() => {
+    event("dispose");
+    if (${variant === "cleanup-errors"} && id !== "failed-tool") throw new Error(id + " cleanup unavailable");
+  });
   if (prior.some(row => row.id === id && row.kind === "register")) throw new Error("repeated fleet registration");
   if (id === "failed-tool") throw new Error("fixture registration unavailable");
+  if (id === ${JSON.stringify(providerPluginId)} || ${duplicateProvider}) {
+    api.registerWebSearchProvider({
+      id: "fixture-search", label: "Search fixture", hint: "Synthetic search",
+      envVars: [id === ${JSON.stringify(providerPluginId)} ? "OPENCLAW_TEST_SUPPLEMENTAL_SEARCH_KEY" : "OPENCLAW_TEST_INSPECTED_SEARCH_KEY"],
+      placeholder: "", signupUrl: "https://example.com", credentialPath: "",
+      getCredentialValue() {}, setCredentialValue() {},
+      createTool() { throw new Error("Schema inspection must not execute search providers"); }
+    });
+  }
+  if (id === ${JSON.stringify(providerPluginId)}) return;
   api.registerTool(context => {
     event("factory", {agentId: context.agentId, workspaceDir: context.workspaceDir});
-    return { name: "fleet_tool", label: "Fleet fixture", description: "Synthetic fleet tool",
+    return { name: ${JSON.stringify(toolName)}, label: "Fleet fixture", description: "Synthetic fleet tool",
       parameters: {type: "array", items: {type: "string"}},
       execute: async () => ({content: [{type: "text", text: "unused"}]}) };
-  }, {name: "fleet_tool"});
+  }, {name: ${JSON.stringify(toolName)}});
 } };
 `,
           );
@@ -84,13 +137,17 @@ module.exports = { id, register(api) {
               alpha: {
                 workspace: state.path("alpha"),
                 tools: {
-                  allow: ["fleet_tool", "failed_tool", "requester__*"],
+                  allow: withoutPluginTools
+                    ? ["web_search", "requester__*"]
+                    : [toolName, "failed_tool", "requester__*"],
                 },
               },
               beta: {
                 workspace: state.path("beta"),
                 tools: {
-                  allow: ["fleet_tool", "failed_tool", "requester__*"],
+                  allow: withoutPluginTools
+                    ? ["web_search", "requester__*"]
+                    : [toolName, "failed_tool", "requester__*"],
                 },
               },
               excluded: { workspace: state.path("excluded"), tools: { deny: ["group:plugins"] } },
@@ -182,22 +239,33 @@ module.exports = { id, register(api) {
               requirement: "authenticated requester context",
             }),
           );
-          expect(findings.filter((finding) => finding.target === "fleet_tool")).toEqual(
-            ["alpha", "beta"].map((agentId) =>
-              expect.objectContaining({
-                message: expect.stringContaining(
-                  `Agent ${agentId} tool fleet_tool from plugin fleet-tool`,
-                ),
-                path: "plugins.entries.fleet-tool",
-              }),
+          expect(findings.filter((finding) => finding.target === toolName)).toEqual(
+            (withoutPluginTools || (collision && providerConfigured) ? [] : ["alpha", "beta"]).map(
+              (agentId) =>
+                expect.objectContaining({
+                  message: expect.stringContaining(
+                    `Agent ${agentId} tool ${toolName} from plugin fleet-tool`,
+                  ),
+                  path: "plugins.entries.fleet-tool",
+                }),
             ),
           );
-          expect(findings).toContainEqual(
-            expect.objectContaining({
-              target: "failed-tool",
-              requirement: expect.stringContaining("fixture registration unavailable"),
-            }),
-          );
+          if (!withoutPluginTools) {
+            expect(findings).toContainEqual(
+              expect.objectContaining({
+                target: "failed-tool",
+                requirement: expect.stringContaining("fixture registration unavailable"),
+              }),
+            );
+          }
+          if (variant === "cleanup-errors") {
+            expect(findings).toContainEqual(
+              expect.objectContaining({
+                message: "Runtime tool schema inspection could not confirm plugin cleanup.",
+                requirement: expect.stringContaining("Plugin tool inspection cleanup failed"),
+              }),
+            );
+          }
         }
         expect(rejectColdRead).not.toHaveBeenCalled();
         expect(fs.existsSync(unexpectedProbe)).toBe(false);
@@ -211,9 +279,9 @@ module.exports = { id, register(api) {
             .filter((row) => row.kind === "register")
             .map((row) => row.id)
             .toSorted((left, right) => left.localeCompare(right)),
-        ).toEqual(["failed-tool", "fleet-tool"]);
+        ).toEqual(registeredPluginIds);
         expect(observed.filter((row) => row.kind === "factory")).toEqual(
-          ["alpha", "beta"].map((agentId) => ({
+          (withoutPluginTools ? [] : ["alpha", "beta"]).map((agentId) => ({
             id: "fleet-tool",
             kind: "factory",
             agentId,
@@ -225,7 +293,7 @@ module.exports = { id, register(api) {
             .filter((row) => row.kind === "dispose")
             .map((row) => row.id)
             .toSorted((left, right) => left.localeCompare(right)),
-        ).toEqual(["failed-tool", "fleet-tool"]);
+        ).toEqual(registeredPluginIds);
       },
     );
   },

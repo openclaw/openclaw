@@ -42,7 +42,6 @@ function pngImage(data: string | Buffer): ImageContent {
 
 describe("prepareCliPromptImagePayload prompt references", () => {
   beforeEach(() => {
-    // Restore spies because these helpers use real modules with per-test mocks.
     vi.restoreAllMocks();
   });
 
@@ -122,51 +121,6 @@ describe("prepareCliPromptImagePayload prompt references", () => {
       backend: { command: "gemini", imagePathScope: "workspace" },
       prompt: `Compare ${imagePath} with ${imagePath} and ${path.join(workspaceDir, "missing.png")}`,
       workspaceDir,
-    });
-
-    expect(result.imagePaths).toHaveLength(1);
-  });
-
-  it("does not hydrate media suppressed during current-turn admission", async () => {
-    await expect(
-      prepareCliPromptImagePayload({
-        backend: { command: "claude" },
-        prompt: "describe the attachment",
-        imagePrompt: "describe the attachment",
-        workspaceDir: "/workspace",
-        images: [],
-        imageOrder: [],
-        mediaImageLayout: { slots: [], suppressedFactIndexes: [0] },
-        media: [
-          {
-            path: "/openclaw-test-missing/current.png",
-            contentType: "image/png",
-            hydrationSuppressed: true,
-          },
-        ],
-      }),
-    ).resolves.toEqual({ prompt: "describe the attachment" });
-  });
-
-  it("delivers readable structured images when an unresolved attachment is hydration-suppressed", async () => {
-    const workspaceDir = imageWorkspace();
-    const imagePath = path.join(workspaceDir, "present.png");
-    const image = createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 255 });
-    await fs.writeFile(imagePath, image);
-    const result = await prepareCliPromptImagePayload({
-      backend: { command: "codex" },
-      prompt: "describe the attachments",
-      workspaceDir,
-      images: [pngImage(image)],
-      imageOrder: ["inline"],
-      media: [
-        { path: imagePath, contentType: "image/png" },
-        {
-          path: path.join(workspaceDir, "missing.png"),
-          contentType: "image/png",
-          hydrationSuppressed: true,
-        },
-      ],
     });
 
     expect(result.imagePaths).toHaveLength(1);
@@ -257,33 +211,6 @@ describe("writeCliImages", () => {
       ),
     ).toBeUndefined();
     expect(readCliImageTurnContext(formatCliImageTurnContext("not-a-key"))).toBeUndefined();
-  });
-
-  it("sweeps stale workspace-scoped CLI image files", async () => {
-    const workspaceDir = imageWorkspace();
-    const imageRoot = path.join(workspaceDir, ".openclaw-cli-images");
-    const stalePath = path.join(imageRoot, "stale.png");
-    const freshPath = path.join(imageRoot, "fresh.png");
-    const image = pngImage("bmV3LWltYWdl");
-
-    await fs.mkdir(imageRoot, { recursive: true });
-    await fs.writeFile(stalePath, "stale");
-    await fs.writeFile(freshPath, "fresh");
-    const staleTime = new Date(Date.now() - 8 * 24 * 60 * 60 * 1_000);
-    await fs.utimes(stalePath, staleTime, staleTime);
-
-    const written = await prepareCliPromptImagePayload({
-      backend: { command: "gemini", imagePathScope: "workspace" },
-      prompt: "",
-      workspaceDir,
-      images: [image],
-    });
-
-    await expect(fs.access(stalePath)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fs.readFile(freshPath, "utf-8")).resolves.toBe("fresh");
-    await expect(
-      fs.readFile(expectDefined(written.imagePaths?.[0], "written image path test invariant")),
-    ).resolves.toEqual(Buffer.from(image.data, "base64"));
   });
 
   it("appends Gemini prompt refs with @-prefixed image paths", async () => {

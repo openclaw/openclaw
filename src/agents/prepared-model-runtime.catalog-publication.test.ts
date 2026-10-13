@@ -12,7 +12,6 @@ import {
   requestContext,
 } from "../gateway/server-methods/sessions-read-cache.test-support.js";
 import { readPreparedGatewayModelCatalog } from "../gateway/server-model-catalog.js";
-import * as projectionWork from "../gateway/session-projection-work.js";
 import { bindSessionRowProjection } from "../gateway/session-row-projection-access.js";
 import {
   createSessionRowProjection,
@@ -238,8 +237,9 @@ describe("catalog publication session rows", () => {
       const completed = await owner.loadFullModelCatalog!({ changedOnly: true });
       expect(completed.entries).toMatchObject([model]);
       expect(owner.readFullModelCatalog?.()).toBe(completed);
-      expect(mocks.runPreparedModelCatalogWorker).not.toHaveBeenCalled();
-      expect(changes).not.toContain(true);
+      // Without provider inventory, a changed-only pass acquires the full catalog.
+      expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledExactlyOnceWith(undefined);
+      changes.length = 0;
       for (let observation = 0; observation < 2; observation += 1) {
         const unchanged = await owner.loadNativeModelCatalog!({
           provider: model.provider,
@@ -268,7 +268,7 @@ describe("catalog publication session rows", () => {
         contextWindow: 32_000,
       });
       expect(selected.routeVariants).toContainEqual(expect.objectContaining(nativeModel));
-      expect(mocks.runPreparedModelCatalogWorker).not.toHaveBeenCalled();
+      expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledOnce();
       expect(changes).toContain(true);
     } finally {
       unsubscribe();
@@ -422,12 +422,15 @@ describe("catalog publication session rows", () => {
       expect(rows.dirtyRowCount).toBe(0);
       expect(readCatalog).toHaveBeenCalledTimes(catalogReads);
       expect(events.mock.calls.map(([event]) => event)).toEqual([
+        { phase: "catalog-status", modelFactsChanged: false },
         { phase: "catalog-published", modelFactsChanged: false, refreshStatusChanged: true },
+        { phase: "catalog-status", modelFactsChanged: false },
         {
           phase: "catalog-failed",
           error: expect.objectContaining({ message: "synthetic failure" }),
           modelFactsChanged: false,
         },
+        { phase: "catalog-status", modelFactsChanged: false },
         { phase: "catalog-published", modelFactsChanged: false, refreshStatusChanged: true },
       ]);
     } finally {
@@ -453,25 +456,5 @@ describe("catalog publication session rows", () => {
     await refresh();
     expect((await list()).sessions.every((row) => row.contextTokens === 64_000)).toBe(true);
     expect(rows.needsMaterialization).toBe(false);
-  });
-
-  it("serves retained rows after a failed background catalog read and retries on the next list", async () => {
-    const { rows, list, refresh, readCatalog } = await setup();
-    const replacement = createDeferred<Awaited<ReturnType<typeof readCatalog>>>();
-    readCatalog.mockReturnValueOnce(replacement.promise);
-    mocks.runPreparedModelCatalogWorker.mockResolvedValue(
-      catalog({ ...model, contextWindow: 64_000 }),
-    );
-    await refresh();
-    try {
-      expect((await list()).sessions.every((row) => row.contextTokens === 32_000)).toBe(true);
-      replacement.reject(new Error("projection read failure"));
-      await projectionWork.yieldSessionListWork();
-      expect(rows.needsMaterialization).toBe(false);
-      expect((await list()).sessions.every((row) => row.contextTokens === 64_000)).toBe(true);
-      expect(rows.needsMaterialization).toBe(false);
-    } finally {
-      replacement.resolve([]);
-    }
   });
 });

@@ -29,57 +29,56 @@ function groupFor(input: unknown) {
 
 afterEach(() => render(nothing, container));
 
-it.each(["gutter", "footer"] as const)(
-  "shows an owner-only input as Message without a %s avatar for every viewer",
-  (avatarPlacement) => {
-    const original = structuredClone(message);
-    for (const viewer of viewers) {
-      render(
-        renderMessageGroup(groupFor(message), {
-          showReasoning: false,
-          showToolCalls: true,
-          showOwnSenderName: false,
-          avatarPlacement,
-          ...viewer,
-        }),
-        container,
-      );
-      expect(container.querySelector(".chat-sender-name")?.textContent).toBe("Message");
-      expect(
-        container.querySelector(".chat-avatar, .chat-author-avatar, a.chat-sender-name"),
-      ).toBeNull();
+it.each([
+  { name: "owner-only gutter", avatarPlacement: "gutter", sender: undefined },
+  { name: "owner-only footer", avatarPlacement: "footer", sender: undefined },
+  {
+    name: "unqualified sender",
+    avatarPlacement: "gutter",
+    sender: { senderId: "alex", senderName: "Recorded author" },
+  },
+  {
+    name: "remote sender",
+    avatarPlacement: "gutter",
+    sender: {
+      senderId: "alex",
+      senderName: "Recorded author",
+      senderIdentity: {
+        type: "observation",
+        pluginId: "discord",
+        accountId: "work",
+        senderKind: "human",
+        id: "alex",
+      },
+    },
+  },
+] as const)("does not borrow the viewer's identity for $name", ({ avatarPlacement, sender }) => {
+  const input = sender ? { ...message, __openclaw: sender } : message;
+  const original = structuredClone(input);
+  for (const viewer of sender ? [viewers[0]] : viewers) {
+    render(
+      renderMessageGroup(groupFor(input), {
+        showReasoning: false,
+        showToolCalls: true,
+        showOwnSenderName: false,
+        avatarPlacement,
+        ...viewer,
+      }),
+      container,
+    );
+    expect(container.querySelector(".chat-sender-name")?.textContent).toBe(
+      sender ? "Recorded author" : "Message",
+    );
+    expect(container.querySelector("a.chat-sender-name, img")).toBeNull();
+    if (sender) {
+      expect(container.querySelector(".chat-avatar")?.textContent?.trim()).toBe("RA");
+    } else {
+      expect(container.querySelector(".chat-avatar, .chat-author-avatar")).toBeNull();
       expect(container.querySelector(".chat-group--peer")).toBeNull();
       expect(container.querySelector(".chat-text")?.textContent).toContain(message.content);
     }
-    expect(message).toEqual(original);
-  },
-);
-
-it.each([
-  { senderId: "alex", senderName: "Recorded author" },
-  {
-    senderId: "alex",
-    senderName: "Recorded author",
-    senderIdentity: {
-      type: "observation",
-      pluginId: "discord",
-      accountId: "work",
-      senderKind: "human",
-      id: "alex",
-    },
-  },
-])("keeps unqualified and remote senders distinct from a matching viewer", (sender) => {
-  render(
-    renderMessageGroup(groupFor({ ...message, __openclaw: sender }), {
-      showReasoning: false,
-      showToolCalls: true,
-      ...viewers[0],
-    }),
-    container,
-  );
-  expect(container.querySelector(".chat-sender-name")?.textContent).toBe("Recorded author");
-  expect(container.querySelector(".chat-avatar")?.textContent?.trim()).toBe("RA");
-  expect(container.querySelector("a.chat-sender-name, img")).toBeNull();
+  }
+  expect(input).toEqual(original);
 });
 
 it.each(["loaded", "fetched"] as const)(

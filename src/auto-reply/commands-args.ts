@@ -1,4 +1,3 @@
-/** Argument serializers for command definitions that expose structured values. */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -56,7 +55,6 @@ function formatNamedArgs(
   return parts.length > 0 ? parts.join(" ") : undefined;
 }
 
-/** Command-specific serializers used when rebuilding slash-command text from parsed args. */
 export const COMMAND_ARG_FORMATTERS: Record<string, CommandArgsFormatter> = {
   config: formatActionArgs,
   mcp: formatActionArgs,

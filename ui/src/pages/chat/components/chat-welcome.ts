@@ -21,7 +21,7 @@ import {
   resolveSessionDisplayName,
   resolveSessionWorkSubtitle,
 } from "../../../lib/session-display.ts";
-import { getVisibleSessionRows } from "../../../lib/sessions/navigation.ts";
+import { filterVisibleSessionRows } from "../../../lib/sessions/navigation.ts";
 import {
   areUiSessionKeysEquivalent,
   parseAgentSessionKey,
@@ -103,7 +103,11 @@ function selectWelcomeRecentSessions(props: ChatWelcomeProps): GatewaySessionRow
   const defaultAgentId = resolveUiSelectedGlobalAgentId(host);
   const agentId = parseAgentSessionKey(props.sessionKey)?.agentId ?? defaultAgentId;
   return (
-    getVisibleSessionRows(props.sessions, { agentId, defaultAgentId, filterByAgent: true })
+    filterVisibleSessionRows(props.sessions.sessions, {
+      agentId,
+      defaultAgentId,
+      filterByAgent: true,
+    })
       .filter(
         (row) =>
           !areUiSessionKeysEquivalent(row.key, props.sessionKey) &&

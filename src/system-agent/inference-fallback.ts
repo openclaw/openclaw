@@ -2,8 +2,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import { listAgentIds } from "../agents/agent-scope.js";
 import { hasAvailableAuthForProvider } from "../agents/model-auth.js";
-import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   resolveSystemAgentConfiguredRouteFromConfig,
@@ -43,11 +42,6 @@ type InferenceFallbackDeps = {
   }) => Promise<BoundVerifySetupInferenceResult>;
 };
 
-async function readCurrentSnapshot(): Promise<ConfigFileSnapshot> {
-  const { readConfigFileSnapshot } = await import("../config/config.js");
-  return await readConfigFileSnapshot();
-}
-
 type InferenceFallbackParams = {
   requestingAgentId?: string;
   runtime: RuntimeEnv;
@@ -77,17 +71,16 @@ export async function verifySystemAgentInferenceWithFallback(
 ): Promise<BoundVerifySetupInferenceResult | ConfiguredRouteResult> {
   const deps = params.deps ?? {};
   const routePolicy = params.routePolicy;
-  const snapshot = deps.readConfig ? undefined : await readCurrentSnapshot();
+  const snapshot = deps.readConfig
+    ? undefined
+    : await (await import("../config/config.js")).readConfigFileSnapshot();
   const config = deps.readConfig
     ? await deps.readConfig()
     : snapshot?.exists && snapshot.valid
       ? (snapshot.runtimeConfig ?? snapshot.config)
       : {};
   const requestedAgentId = resolveAmbientOwnerAgentId(config, params.requestingAgentId);
-  const candidateAgentIds = new Set([
-    requestedAgentId,
-    ...listAgentIds(config).map((agentId) => normalizeAgentId(agentId)),
-  ]);
+  const candidateAgentIds = new Set([requestedAgentId, ...listAgentIds(config)]);
   const resolveRoute =
     deps.resolveRoute ??
     ((candidateConfig: OpenClawConfig, agentId: string) =>

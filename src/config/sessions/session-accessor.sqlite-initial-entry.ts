@@ -1,4 +1,3 @@
-/** Lazy session identity creation, including the original admission's first writer claim. */
 import {
   deferOpenClawAgentPostCommitPublication,
   runOpenClawAgentWriteTransaction,
@@ -8,60 +7,62 @@ import type {
   SessionAccessScope,
   SessionTranscriptWriteScope,
 } from "./session-accessor.sqlite-contract.js";
+import { readSessionEntryRowScan } from "./session-accessor.sqlite-entry-read.js";
 import {
-  readSessionEntryRow,
-  readSessionIdentitySnapshot,
+  parseReadableSqliteSessionEntryRow,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { assertCanonicalSessionKeyWrite } from "./session-canonical-key.js";
-import { collectSessionEntryLookupKeys } from "./store-entry.js";
+/** Lazy session identity creation, including the original admission's first writer claim. */
+import type { InitialSessionEntryCommit } from "./session-manager-write-contract.js";
 import {
   assertOwnedTranscriptWriteCommit,
   getOwnedSessionTranscriptInitialWriter,
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWriterFence,
-  type SessionTranscriptWriterFence,
 } from "./transcript-write-context.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
-
-export type InitialSessionEntryCommit = {
-  owned: boolean;
-  fence?: SessionTranscriptWriterFence;
-  identity?: {
-    previous: Map<string, SessionEntry>;
-    current: Map<string, SessionEntry>;
-  };
-};
 
 /** The transaction owns absence and writer-row checks; callers publish only committed facts. */
 export function ensureSessionEntryInTransaction(
   database: OpenClawAgentDatabase,
   resolved: ReturnType<typeof resolveSqliteScope>,
-  scope: Pick<SessionTranscriptWriteScope, "expectedWriterRunId">,
+  scope: Pick<SessionTranscriptWriteScope, "expectedWriterRunId" | "expectedOwner">,
   entry: SessionEntry,
   initialWriterRunId?: string,
 ): InitialSessionEntryCommit {
-  const identityKeys = collectSessionEntryLookupKeys(resolved.sessionKey);
-  const previous = readSessionIdentitySnapshot(database, identityKeys);
-  const existing = readSessionEntryRow(database, resolved.sessionKey)?.entry;
+  const snapshot = readSessionEntryRowScan(database, resolved.sessionKey);
+  const existing = snapshot?.selected?.entry;
   if (existing) {
     if (initialWriterRunId !== undefined) {
       throw new SessionTranscriptWriterClaimReboundError();
     }
     return { owned: existing.sessionId === entry.sessionId };
   }
-  if (scope.expectedWriterRunId !== undefined && initialWriterRunId === undefined) {
+  if (
+    scope.expectedOwner !== undefined ||
+    (scope.expectedWriterRunId !== undefined && initialWriterRunId === undefined)
+  ) {
     return { owned: false };
+  }
+  const previous = new Map<string, SessionEntry>();
+  for (const row of snapshot?.rows ?? []) {
+    const previousEntry = parseReadableSqliteSessionEntryRow(database, row);
+    if (previousEntry) {
+      previous.set(row.session_key, previousEntry);
+    }
   }
   const persisted = writeSessionEntry(
     database,
     resolved.sessionKey,
     initialWriterRunId !== undefined ? { ...entry, activeWriterRunId: initialWriterRunId } : entry,
+    { canonicalPreviousEntry: null },
   );
-  const current = readSessionIdentitySnapshot(database, identityKeys);
-  const owned = current.get(resolved.sessionKey)?.sessionId === entry.sessionId;
+  // The writer owns this postimage; no second read is needed to certify its own insert.
+  const current = new Map(previous).set(resolved.sessionKey, persisted);
+  const owned = persisted.sessionId === entry.sessionId;
   if (initialWriterRunId !== undefined) {
     if (!owned || persisted.activeWriterRunId !== initialWriterRunId) {
       throw new SessionTranscriptWriterClaimReboundError();

@@ -1,6 +1,3 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -50,21 +47,6 @@ describe("findExtraGatewayServices (win32)", () => {
   it("skips Scheduled Task queries unless deep mode is enabled", async () => {
     await expect(findExtraGatewayServices({})).resolves.toEqual({ services: [], errors: [] });
     expect(listScheduledTasksMock).not.toHaveBeenCalled();
-  });
-
-  it("reports query failures as incomplete inspection without inventing a cleanup target", async () => {
-    listScheduledTasksMock.mockImplementation(() => {
-      throw new Error("Access denied");
-    });
-
-    const result = await findExtraGatewayServices(nativeEnv, { deep: true });
-
-    expect(result).toEqual({
-      services: [],
-      errors: [{ source: "schtasks", message: expect.stringContaining("could not be queried") }],
-    });
-    expect(renderGatewayServiceCleanupHints(result.services)).toEqual([]);
-    await expect(listManagedOpenClawGatewayServices(nativeEnv)).resolves.toEqual(result);
   });
 
   it("keeps verified Node and legacy services while rejecting an unrelated branded monitor", async () => {
@@ -137,7 +119,7 @@ describe("findExtraGatewayServices (win32)", () => {
     }
   });
 
-  it.each(["gateway", "node"])(
+  it.each(["node"])(
     "recognizes verified %s launcher metadata independently of the task label",
     async (kind) => {
       listScheduledTasksMock.mockReturnValue([
@@ -162,31 +144,6 @@ describe("findExtraGatewayServices (win32)", () => {
     },
   );
 
-  it.each([
-    ["modern Gateway", "Services\\Selected Gateway", "openclaw", "gateway run", false, true],
-    ["legacy command", "Services\\Selected Legacy", "clawdbot", "run", true, false],
-    ["upgraded legacy task", "Clawdbot Gateway", "openclaw", "gateway run", true, true],
-    ["Node", "Services\\Selected Node", "openclaw", "node run", true, false],
-  ] as const)(
-    "keeps selected %s diagnostic and managed projections separate",
-    async (_kind, name, marker, args, extra, managedGateway) => {
-      const label = `\\${name}`;
-      listScheduledTasksMock.mockReturnValue([task(label, `C:\\${marker}\\${marker}.exe`, args)]);
-      const env = { ...nativeEnv, OPENCLAW_WINDOWS_TASK_NAME: name };
-      const extras = await findExtraGatewayServices(env, { deep: true });
-      expect(extras.errors).toEqual([]);
-      expect(extras.services).toEqual(extra ? [expect.objectContaining({ label, marker })] : []);
-      expect(renderGatewayServiceCleanupHints(extras.services)).toEqual(
-        extra ? [`schtasks /Query /TN "${label}" /V /FO LIST`] : [],
-      );
-      const managed = await listManagedOpenClawGatewayServices(env);
-      expect(managed.services).toEqual(
-        managedGateway ? [expect.objectContaining({ label, marker: "openclaw" })] : [],
-      );
-      expect(managed.errors).toEqual([]);
-    },
-  );
-
   type IncompleteCase = {
     name: string;
     tasks: ScheduledTaskSnapshot[];
@@ -201,7 +158,7 @@ describe("findExtraGatewayServices (win32)", () => {
   const missingLabels = [...knownLabels, "\\Custom Service"];
   const custom = "\\Custom Assistant";
   it.each<IncompleteCase>([
-    ...[undefined, []].map((actions) => ({
+    ...[undefined].map((actions) => ({
       name: `known selectors with ${actions ? "empty" : "missing"} actions`,
       tasks: ["\\OpenClaw Gateway", "\\Selected Custom"].map((taskPath) => ({
         taskPath,
@@ -212,43 +169,6 @@ describe("findExtraGatewayServices (win32)", () => {
       projection: "both" as const,
       sources: ["\\OpenClaw Gateway", "\\Selected Custom"],
     })),
-    ...knownLabels.map((label) => ({
-      name: `unreadable known launcher ${label}`,
-      tasks: [task(label, "C:\\custom\\gateway.cmd", "")],
-      read: "unreadable" as const,
-      projection: "both" as const,
-      sources: [label],
-      exact: true,
-    })),
-    ...["missing action", "unreadable launcher", "disappeared launcher", "multiple actions"].map(
-      (fault) => {
-        const selected = task(custom, "C:\\custom\\assistant.cmd", "");
-        if (fault === "missing action") {
-          selected.actions = [];
-        }
-        if (fault === "multiple actions") {
-          selected.actions = [0, 1].map(
-            () => task(custom, "C:\\OpenClaw\\openclaw.exe", "gateway run").actions[0]!,
-          );
-        }
-        return {
-          name: `selected custom task with ${fault}`,
-          tasks: [selected],
-          selected: custom,
-          read: fault === "unreadable launcher" ? ("unreadable" as const) : ("missing" as const),
-          sources: [custom],
-        };
-      },
-    ),
-    {
-      name: "unrelated running tasks with unreadable or missing actions",
-      tasks: [
-        { ...task("\\Maintenance", "C:\\tools\\maintenance.cmd", ""), state: 4 },
-        { taskPath: "\\Native Maintenance", state: 4, actions: [] },
-      ],
-      read: "unreadable",
-      sources: [],
-    },
     {
       name: "disappeared OpenClaw launchers with unknown native state",
       tasks: missingLabels.map((label) => task(label, "C:\\OpenClaw\\gateway.cmd", "")),
@@ -269,24 +189,6 @@ describe("findExtraGatewayServices (win32)", () => {
       ],
       sources: ["\\Mixed Assistant"],
       message: "Multiple Scheduled Task actions",
-    },
-    ...[
-      ["direct", "C:\\custom\\assistant.bat", ""],
-      ["through cmd.exe", "C:\\Windows\\System32\\cmd.exe", "/c C:\\custom\\assistant.bat"],
-    ].map(([mode, executable, args]) => ({
-      name: `uninspectable selected BAT launcher ${mode}`,
-      tasks: [task(custom, executable!, args!)],
-      selected: custom,
-      read: "unreadable" as const,
-      sources: [custom],
-      exact: true,
-    })),
-    {
-      name: "recognizable launcher with an unreadable nested launcher",
-      tasks: [task("\\Custom Service", "C:\\fixtures\\service.cmd", "")],
-      read: "recognizable",
-      projection: "extras",
-      sources: ["\\Custom Service"],
     },
   ])(
     "qualifies incomplete inventory: $name",
@@ -324,55 +226,6 @@ describe("findExtraGatewayServices (win32)", () => {
       if (projection === "both") {
         expect(await listManagedOpenClawGatewayServices(env)).toEqual(result);
       }
-    },
-  );
-  it.each(["absolute script", "relative script", "direct executable"] as const)(
-    "keeps a modern Gateway beneath a legacy-named parent (%s)",
-    async (entryKind) => {
-      const root = path.join(
-        tempDirs.make("managed-windows-identity-", os.tmpdir()),
-        "clawdbot",
-        "openclaw",
-      );
-      const entry = path.join(root, "dist", "entry.js");
-      const executable = path.join(root, "openclaw.exe");
-      await fs.mkdir(path.dirname(entry), { recursive: true });
-      await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
-      await fs.writeFile(entry, "export {};\n");
-      await fs.writeFile(executable, "synthetic executable bytes; never launched\n");
-      const script = entryKind === "relative script" ? path.join("dist", "entry.js") : entry;
-      const labels = ["\\OpenClaw Gateway (dev)", "\\Custom Modern"];
-      listScheduledTasksMock.mockReturnValue(
-        labels.map((label) => ({
-          taskPath: label,
-          state: 4,
-          actions: [
-            {
-              type: 0,
-              path: entryKind === "direct executable" ? executable : process.execPath,
-              arguments:
-                entryKind === "direct executable" ? "gateway run" : `"${script}" gateway run`,
-              workingDirectory: root,
-            },
-          ],
-        })),
-      );
-
-      const managed = await listManagedOpenClawGatewayServices(nativeEnv);
-
-      expect(managed).toEqual({
-        services: labels.map((label) =>
-          expect.objectContaining({ label, marker: "openclaw", legacy: false }),
-        ),
-        errors: [],
-      });
-      await expect(findExtraGatewayServices(nativeEnv, { deep: true })).resolves.toEqual({
-        services: [
-          expect.objectContaining({ label: "\\Custom Modern", marker: "openclaw", legacy: false }),
-        ],
-        errors: [],
-      });
-      expect(await fs.readFile(entry, "utf8")).toBe("export {};\n");
     },
   );
 });

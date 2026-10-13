@@ -2,7 +2,7 @@ import { availableWorkerSlots } from "../../../../packages/gateway-protocol/src/
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import type { DraftEnvironment } from "./discovery.ts";
-import { environmentMenuFacts, MAX_PLACE_MENU_FACTS } from "./place-facts.ts";
+import { environmentIssueFact, environmentMenuFacts, MAX_PLACE_MENU_FACTS } from "./place-facts.ts";
 import { disambiguate } from "./place-labels.ts";
 
 registerNewSessionSetupEnglish();
@@ -34,16 +34,9 @@ function unavailableReason(
   environment: DraftEnvironment,
   requirement: DevicePlacementRequirement,
 ): string | undefined {
-  const updateIssue = environment.issues?.find((issue) => issue.code === "update-required");
-  if (updateIssue) {
-    return t("newSession.nodeUpdateRequired", {
-      updateCommand: updateIssue.updateCommand,
-      restartCommand: updateIssue.headlessReconnectCommand,
-    });
-  }
-  const hostIssue = environment.issues?.find((issue) => issue.code === "worker-host-unavailable");
-  if (hostIssue) {
-    return hostIssue.message;
+  const issue = environmentIssueFact(environment);
+  if (issue !== undefined) {
+    return issue;
   }
   if (environment.status !== "available") {
     return t("newSession.deviceUnavailable");

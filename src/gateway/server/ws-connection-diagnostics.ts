@@ -1,12 +1,13 @@
 import type { Socket } from "node:net";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type { WebSocket } from "ws";
 import { truncateUtf16Safe } from "../../utils.js";
 
 const LOG_HEADER_MAX_LEN = 300;
 
 export function stringMetaValue(meta: Record<string, unknown>, key: string): string | undefined {
-  const value = meta[key];
-  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+  return readNonBlankString(meta[key]);
 }
 
 export function sanitizeWsLogValue(value: string | undefined): string | undefined {
@@ -63,13 +64,10 @@ export function resolveSocketAddress(socket: WebSocket): {
 }
 
 export function isWsPayloadLimitError(err: unknown): boolean {
-  if (!err || typeof err !== "object") {
-    return false;
-  }
-  const code = (err as { code?: unknown }).code;
-  if (code === "WS_ERR_UNSUPPORTED_MESSAGE_LENGTH") {
+  const error = asOptionalObjectRecord(err);
+  if (error?.code === "WS_ERR_UNSUPPORTED_MESSAGE_LENGTH") {
     return true;
   }
-  const message = (err as { message?: unknown }).message;
+  const message = error?.message;
   return typeof message === "string" && /max payload size exceeded/i.test(message);
 }

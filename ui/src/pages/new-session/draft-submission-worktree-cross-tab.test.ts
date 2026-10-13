@@ -16,119 +16,63 @@ afterEach(() => {
   sessionStorage.clear();
 });
 
-it("preserves a newer independent Gateway draft when an accepted clear commits late", async () => {
-  const prefs = identityPreferences(true, async () => ({
-    models: [
-      { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" },
-      { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai" },
-    ],
-  }));
-  const first = prefs.make();
-  const next = prefs.make();
-  expect(first.context.gateway).not.toBe(next.context.gateway);
-  expect(first.context.gateway.snapshot.client).not.toBe(next.context.gateway.snapshot.client);
-  expect(first.context.gateway.snapshot.selfUser?.id).toBe(
-    next.context.gateway.snapshot.selfUser?.id,
-  );
-  await prefs.ready(first);
-  await prefs.ready(next);
-  const clearStarted = createDeferred();
-  const releaseClear = createDeferred();
-  // Delay only A's already prepared replacement before the synthetic server commits it.
-  let heldAcceptedClear = false;
-  prefs.beforeSave.mockImplementation(async (params) => {
-    const entry = params.entries["new-session.v1:main"];
-    if (
-      !heldAcceptedClear &&
-      entry &&
-      typeof entry === "object" &&
-      "folder" in entry &&
-      entry.folder === "/repo" &&
-      "worktreeName" in entry &&
-      entry.worktreeName === ""
-    ) {
-      heldAcceptedClear = true;
-      clearStarted.resolve();
-      await releaseClear.promise;
-    }
-  });
-  vi.mocked(first.context.sessions.createResult).mockResolvedValue(acceptedWorktreeSession);
-  first.flow.setMessage("first task");
-  const submitting = first.flow.submit(undefined, true);
-  let newer: unknown;
-  try {
-    await clearStarted.promise;
-    next.place.applyFolder("/other-repo");
-    await vi.waitFor(() => expect(prefs.stored()).toMatchObject({ folder: "/other-repo" }));
-    next.place.setWorktreeName("next-task");
-    const control = next.place.modelControl;
-    await vi.waitFor(() =>
-      expect(
-        renderControl(control, next.context).querySelector(
-          '[data-chat-model-option="openai/gpt-5.6-sol"]',
-        ),
-      ).not.toBeNull(),
-    );
-    renderControl(control, next.context)
-      .querySelector<HTMLButtonElement>('[data-chat-model-option="openai/gpt-5.6-sol"]')!
-      .click();
-    await vi.waitFor(() =>
-      expect(prefs.stored()).toMatchObject({
-        folder: "/other-repo",
-        worktreeName: "next-task",
-        model: "openai/gpt-5.6-sol",
-      }),
-    );
-    newer = structuredClone(prefs.stored());
-  } finally {
-    releaseClear.resolve();
-    await submitting;
-  }
-  expect(first.context.sessions.createResult).toHaveBeenCalledOnce();
-  expect(next.context.sessions.createResult).not.toHaveBeenCalled();
-  expect(first.flow.error).toBeNull();
-  expect(first.place.worktreeName).toBe("");
-  expect(prefs.stored()).toEqual(newer);
-});
+const models = ["gpt-5.6-luna", "gpt-5.6-sol"].map((id) => ({ id, name: id, provider: "openai" }));
 
-it.each(["model", "empty base"] as const)(
-  "reconciles a concurrent independent draft %s change without losing accepted creation",
+it.each(["repository", "model", "empty base", "base before read"] as const)(
+  "reconciles concurrent independent draft intent: %s",
   async (change) => {
-    const prefs = identityPreferences(true, async () => ({
-      models: [
-        { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" },
-        { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai" },
-      ],
-    }));
-    const first = prefs.make();
-    const next = prefs.make();
-    await prefs.ready(first);
-    await prefs.ready(next);
+    const prefs = identityPreferences(
+      true,
+      change === "base before read" ? undefined : async () => ({ models }),
+    );
+    const first = await readyPreferenceDraft(prefs);
+    const next = await readyPreferenceDraft(prefs);
+    expect(first.context.gateway).not.toBe(next.context.gateway);
+    expect(first.context.gateway.snapshot.client).not.toBe(next.context.gateway.snapshot.client);
+    expect(first.context.gateway.snapshot.selfUser?.id).toBe(
+      next.context.gateway.snapshot.selfUser?.id,
+    );
     const started = createDeferred();
     const release = createDeferred();
     let held = false;
-    prefs.beforeSave.mockImplementation(async (params) => {
-      const entry = params.entries["new-session.v1:main"];
-      if (
-        !held &&
-        entry &&
-        typeof entry === "object" &&
-        "worktreeName" in entry &&
-        entry.worktreeName === ""
-      ) {
-        held = true;
+    if (change === "base before read") {
+      vi.mocked(first.context.sessions.createResult).mockImplementation(async () => {
         started.resolve();
         await release.promise;
-      }
-    });
-    vi.mocked(first.context.sessions.createResult).mockResolvedValue(acceptedWorktreeSession);
-    const warning = vi.spyOn(toast, "showToast").mockReturnValue(false);
+        return acceptedWorktreeSession;
+      });
+    } else {
+      prefs.beforeSave.mockImplementation(async ({ entries }) => {
+        const entry = entries["new-session.v1:main"];
+        if (
+          !held &&
+          entry &&
+          typeof entry === "object" &&
+          "worktreeName" in entry &&
+          entry.worktreeName === ""
+        ) {
+          held = true;
+          started.resolve();
+          await release.promise;
+        }
+      });
+      vi.mocked(first.context.sessions.createResult).mockResolvedValue(acceptedWorktreeSession);
+    }
+    const warning =
+      change === "model" || change === "empty base"
+        ? vi.spyOn(toast, "showToast").mockReturnValue(false)
+        : undefined;
     first.flow.setMessage("first task");
     const submitting = first.flow.submit(undefined, true);
     let newer: unknown;
     try {
       await started.promise;
-      if (change === "model") {
+      if (change === "repository") {
+        next.place.applyFolder("/other-repo");
+        await vi.waitFor(() => expect(prefs.stored()).toMatchObject({ folder: "/other-repo" }));
+        next.place.setWorktreeName("next-task");
+      }
+      if (change === "repository" || change === "model") {
         const control = next.place.modelControl;
         await vi.waitFor(() =>
           expect(
@@ -141,14 +85,22 @@ it.each(["model", "empty base"] as const)(
           .querySelector<HTMLButtonElement>('[data-chat-model-option="openai/gpt-5.6-sol"]')!
           .click();
         await vi.waitFor(() =>
-          expect(prefs.stored()).toMatchObject({ model: "openai/gpt-5.6-sol" }),
+          expect(prefs.stored()).toMatchObject({
+            model: "openai/gpt-5.6-sol",
+            ...(change === "repository"
+              ? { folder: "/other-repo", worktreeName: "next-task" }
+              : {}),
+          }),
         );
       } else {
-        const baseRef = "";
-        next.place.setBaseRef(baseRef);
-        await vi.waitFor(() => expect(prefs.stored()).toMatchObject({ baseRef }));
+        next.place.setBaseRef("");
+        await vi.waitFor(() => expect(prefs.stored()).toMatchObject({ baseRef: "" }));
       }
       newer = structuredClone(prefs.stored());
+      if (change === "base before read") {
+        const { invalidateUserPreferences } = await import("../../app/user-prefs-cache.ts");
+        invalidateUserPreferences(first.context.gateway.snapshot.client!);
+      }
     } finally {
       release.resolve();
       await submitting;
@@ -156,12 +108,14 @@ it.each(["model", "empty base"] as const)(
     expect(first.context.sessions.createResult).toHaveBeenCalledOnce();
     expect(next.context.sessions.createResult).not.toHaveBeenCalled();
     expect(first.flow.error).toBeNull();
-    expect(
-      warning.mock.calls.filter(
-        ([notice]) =>
-          typeof notice.message === "string" && notice.message.startsWith("Session accepted,"),
-      ),
-    ).toEqual([]);
+    if (warning) {
+      expect(
+        warning.mock.calls.filter(
+          ([notice]) =>
+            typeof notice.message === "string" && notice.message.startsWith("Session accepted,"),
+        ),
+      ).toEqual([]);
+    }
     if (change === "model") {
       expect(prefs.stored()).toMatchObject({ worktreeName: "", model: "openai/gpt-5.6-sol" });
       expect(decodeIdentityPreferences({ "new-session.v1:main": prefs.stored() })).toEqual(
@@ -172,80 +126,71 @@ it.each(["model", "empty base"] as const)(
     } else {
       expect(prefs.stored()).toEqual(newer);
     }
+    if (change === "repository") {
+      expect(first.place.worktreeName).toBe("");
+    }
   },
 );
 
-it("warns once after bounded contention without replaying an accepted session", async () => {
-  const prefs = identityPreferences();
-  const first = prefs.make();
-  const next = prefs.make();
-  await prefs.ready(first);
-  await prefs.ready(next);
-  let clears = 0;
-  prefs.beforeSave.mockImplementation(async (params) => {
-    const entry = params.entries["new-session.v1:main"];
-    if (
-      entry &&
-      typeof entry === "object" &&
-      "worktreeName" in entry &&
-      entry.worktreeName === ""
-    ) {
-      clears += 1;
-      await prefs.publish(next, { thinkingLevel: `concurrent-${clears}` });
-    }
-  });
-  vi.mocked(first.context.sessions.createResult).mockResolvedValue(acceptedWorktreeSession);
-  const warning = vi.spyOn(toast, "showToast").mockReturnValue(false);
-  first.flow.setMessage("first task");
-  await first.flow.submit(undefined, true);
-  expect(first.context.sessions.createResult).toHaveBeenCalledOnce();
-  expect(first.flow.error).toBeNull();
-  expect(clears).toBe(3);
-  expect(
-    warning.mock.calls.filter(
-      ([notice]) =>
-        typeof notice.message === "string" && notice.message.startsWith("Session accepted,"),
-    ),
-  ).toEqual([
-    [
-      {
+it.each(["accepted clear", "ordinary edit"] as const)(
+  "bounds contention for %s without replaying creation",
+  async (operation) => {
+    const prefs = identityPreferences();
+    const first = await readyPreferenceDraft(prefs);
+    const next = await readyPreferenceDraft(prefs);
+    const accepted = operation === "accepted clear";
+    let attempts = 0;
+    prefs.beforeSave.mockImplementation(async ({ entries }) => {
+      const entry = entries["new-session.v1:main"];
+      if (
+        entry &&
+        typeof entry === "object" &&
+        (accepted
+          ? "worktreeName" in entry && entry.worktreeName === ""
+          : "baseRef" in entry && entry.baseRef === "release")
+      ) {
+        attempts += 1;
+        await prefs.publish(next, { thinkingLevel: `concurrent-${attempts}` });
+      }
+    });
+    const warning = vi.spyOn(toast, "showToast").mockReturnValue(false);
+    if (accepted) {
+      vi.mocked(first.context.sessions.createResult).mockResolvedValue(acceptedWorktreeSession);
+      first.flow.setMessage("first task");
+      await first.flow.submit(undefined, true);
+      expect(first.context.sessions.createResult).toHaveBeenCalledOnce();
+      expect(first.flow.error).toBeNull();
+      expect(
+        warning.mock.calls.filter(
+          ([notice]) =>
+            typeof notice.message === "string" && notice.message.startsWith("Session accepted,"),
+        ),
+      ).toEqual([
+        [
+          {
+            message:
+              "Session accepted, but clearing the saved worktree name could not be confirmed. Check Name before starting another worktree.",
+          },
+        ],
+      ]);
+    } else {
+      const writes = vi.spyOn(first.gateway, "persistPreference");
+      first.place.setBaseRef("release");
+      await Promise.all(writes.mock.results.map((result) => result.value));
+      expect(first.context.sessions.createResult).not.toHaveBeenCalled();
+      expect(warning).toHaveBeenCalledExactlyOnceWith({
         message:
-          "Session accepted, but clearing the saved worktree name could not be confirmed. Check Name before starting another worktree.",
-      },
-    ],
-  ]);
-  expect(prefs.stored()).toMatchObject({
-    worktreeName: "first-task",
-    thinkingLevel: "concurrent-3",
-  });
-});
-
-it("preserves an explicit base cleared by another draft before acceptance reads preferences", async () => {
-  const prefs = identityPreferences();
-  const first = prefs.make();
-  const next = prefs.make();
-  await prefs.ready(first);
-  await prefs.ready(next);
-  const accepted = createDeferred<{
-    key: string;
-    initialRun: { status: "started"; runId: string };
-  }>();
-  vi.mocked(first.context.sessions.createResult).mockReturnValue(accepted.promise);
-  first.flow.setMessage("first task");
-  const submitting = first.flow.submit(undefined, true);
-  await vi.waitFor(() => expect(first.context.sessions.createResult).toHaveBeenCalledOnce());
-  next.place.setBaseRef("");
-  await vi.waitFor(() => expect(prefs.stored()).toMatchObject({ baseRef: "" }));
-  const newer = structuredClone(prefs.stored());
-  const { invalidateUserPreferences } = await import("../../app/user-prefs-cache.ts");
-  // The other tab's users.prefs.changed event invalidates the old read, not its local selection.
-  invalidateUserPreferences(first.context.gateway.snapshot.client!);
-  accepted.resolve(acceptedWorktreeSession);
-  await submitting;
-  expect(first.context.sessions.createResult).toHaveBeenCalledOnce();
-  expect(first.flow.error).toBeNull();
-  expect(prefs.stored()).toEqual(newer);
-});
+          "Saving your new-session choices could not be confirmed. Check them before starting a session.",
+      });
+    }
+    expect(attempts).toBe(3);
+    expect(prefs.stored()).toMatchObject({
+      worktreeName: "first-task",
+      baseRef: "main",
+      thinkingLevel: "concurrent-3",
+    });
+  },
+);
 
 it.each(["explicit", "implicit", "cleared"] as const)(
   "reconciles a restored creating placement with an %s base without guessing newer intent",
@@ -323,12 +268,7 @@ it.each(["explicit", "implicit", "cleared"] as const)(
 );
 
 it("keeps an accepted name retired when an older independent model save commits last", async () => {
-  const prefs = identityPreferences(true, async () => ({
-    models: [
-      { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" },
-      { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai" },
-    ],
-  }));
+  const prefs = identityPreferences(true, async () => ({ models }));
   const first = prefs.make();
   const next = prefs.make();
   expect(first.context.gateway).not.toBe(next.context.gateway);
@@ -385,31 +325,4 @@ it("keeps an accepted name retired when an older independent model save commits 
   expect(
     decodeIdentityPreferences({ "new-session.v1:main": prefs.stored() }).main?.worktreeName,
   ).toBeUndefined();
-});
-
-it("warns once when an ordinary draft edit exhausts conditional saves without publishing stale preferences", async () => {
-  const prefs = identityPreferences();
-  const first = prefs.make();
-  const next = prefs.make();
-  await prefs.ready(first);
-  await prefs.ready(next);
-  let attempts = 0;
-  prefs.beforeSave.mockImplementation(async (params) => {
-    const entry = params.entries["new-session.v1:main"];
-    if (entry && typeof entry === "object" && "baseRef" in entry && entry.baseRef === "release") {
-      attempts += 1;
-      await prefs.publish(next, { thinkingLevel: `concurrent-${attempts}` });
-    }
-  });
-  const warning = vi.spyOn(toast, "showToast").mockReturnValue(false);
-  const writes = vi.spyOn(first.gateway, "persistPreference");
-  first.place.setBaseRef("release");
-  await Promise.all(writes.mock.results.map((result) => result.value));
-  expect(attempts).toBe(3);
-  expect(warning).toHaveBeenCalledExactlyOnceWith({
-    message:
-      "Saving your new-session choices could not be confirmed. Check them before starting a session.",
-  });
-  expect(prefs.stored()).toMatchObject({ baseRef: "main", thinkingLevel: "concurrent-3" });
-  expect(first.context.sessions.createResult).not.toHaveBeenCalled();
 });

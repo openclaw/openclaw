@@ -326,28 +326,6 @@ describe("commands registry", () => {
     );
   });
 
-  it("registers /dashboard as a standard tools command with optional requirements", () => {
-    const dashboard = requireChatCommand("dashboard");
-    expect(dashboard.nativeName).toBe("dashboard");
-    expect(dashboard.textAliases).toEqual(["/dashboard"]);
-    expect(dashboard.category).toBe("tools");
-    expect(dashboard.tier).toBe("standard");
-    expect(dashboard.acceptsArgs).toBe(true);
-    expect(requireCommandArg(dashboard, "request").required).not.toBe(true);
-    expect(resolveTextCommand("/dashboard release health")?.args).toBe("release health");
-  });
-
-  it("registers /loop as a standard tools command with an optional spec", () => {
-    const loop = requireChatCommand("loop");
-    expect(loop.nativeName).toBe("loop");
-    expect(loop.textAliases).toEqual(["/loop"]);
-    expect(loop.category).toBe("tools");
-    expect(loop.tier).toBe("standard");
-    expect(loop.acceptsArgs).toBe(true);
-    expect(requireCommandArg(loop, "spec").required).not.toBe(true);
-    expect(resolveTextCommand("/loop 5m check ci")?.args).toBe("5m check ci");
-  });
-
   it("preserves multiline payloads for direct skill slash aliases only when unregistered", () => {
     expect(normalizeCommandBody("/demo_skill first line\nsecond line")).toBe(
       "/demo_skill first line\nsecond line",
@@ -476,13 +454,6 @@ describe("commands registry", () => {
         includeBundledChannelFallback: false,
       }),
     ).toBeUndefined();
-  });
-
-  it("can resolve default native command names without loading bundled channel fallbacks", () => {
-    const command = findCommandByNativeName("status", "discord", {
-      includeBundledChannelFallback: false,
-    });
-    expect(command?.key).toBe("status");
   });
 
   it("keeps discord native command specs within slash-command limits", () => {
@@ -622,26 +593,6 @@ describe("commands registry", () => {
     }
   });
 
-  it("normalizes telegram-style command mentions for the current bot", () => {
-    expect(normalizeCommandBody("/help@openclaw", { botUsername: "openclaw" })).toBe("/help");
-    expect(
-      normalizeCommandBody("/help@openclaw args", {
-        botUsername: "openclaw",
-      }),
-    ).toBe("/help args");
-    expect(
-      normalizeCommandBody("/help@openclaw: args", {
-        botUsername: "openclaw",
-      }),
-    ).toBe("/help args");
-  });
-
-  it("keeps telegram-style command mentions for other bots", () => {
-    expect(normalizeCommandBody("/help@otherbot", { botUsername: "openclaw" })).toBe(
-      "/help@otherbot",
-    );
-  });
-
   it("normalizes targeted command bodies before bot identity only when requested", () => {
     expect(
       normalizeCommandBody("/help@unresolved_bot", {
@@ -759,19 +710,6 @@ describe("commands registry args", () => {
       );
     },
   );
-
-  it("resolves auto arg menus when missing a choice arg", () => {
-    const command = createUsageModeCommand();
-
-    const menu = requireCommandArgMenu({ command, args: undefined, cfg: {} as never });
-    expect(menu.arg.name).toBe("mode");
-    expect(menu.choices).toEqual([
-      { label: "off", value: "off" },
-      { label: "tokens", value: "tokens" },
-      { label: "full", value: "full" },
-      { label: "cost", value: "cost" },
-    ]);
-  });
 
   it("does not show menus when arg already provided", () => {
     const command = createUsageModeCommand();

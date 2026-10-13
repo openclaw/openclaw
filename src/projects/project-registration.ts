@@ -1,15 +1,8 @@
 import path from "node:path";
-import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
-import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js";
-import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
-import {
-  ProjectCheckoutError,
-  resolveProjectCheckout,
-  withProjectCheckoutLifecycle,
-} from "./project-checkout.js";
-import type { ProjectRegistryInsert, ProjectRegistryRecord } from "./project-registry.types.js";
+import { ProjectCheckoutError, resolveProjectCheckout } from "./project-checkout.js";
+import type { ProjectRegistryRecord } from "./project-registry.types.js";
 
 type ProjectRegistrationInput = {
   path: string;
@@ -18,14 +11,9 @@ type ProjectRegistrationInput = {
   source: "registered" | "cloned";
 };
 
-type PreparedProjectRegistration = {
-  requestedPath: string;
-  project: ProjectRegistryInsert;
-};
+type PreparedProjectRegistration = Awaited<ReturnType<typeof prepareProjectRegistration>>;
 
-export async function prepareProjectRegistration(
-  input: ProjectRegistrationInput,
-): Promise<PreparedProjectRegistration> {
+export async function prepareProjectRegistration(input: ProjectRegistrationInput) {
   const { path: requestedPath, name, originUrl, source } = input;
   const checkout = await resolveProjectCheckout(requestedPath);
   return {
@@ -69,19 +57,5 @@ export async function registerPreparedProjectRegistry(
       return project;
     },
     assertCurrent ? { assertCurrent, beforeCommit: assertCurrent } : undefined,
-  );
-}
-
-export async function registerResolvedProject(
-  input: ProjectRegistrationInput,
-  options: Pick<OpenClawStateDatabaseOptions, "path" | "env">,
-): Promise<ProjectRegistryRecord> {
-  const env = cloneEnvWithPlatformSemantics(options.env ?? process.env);
-  const context = captureOpenClawStateWorkerContext({ path: options.path, env });
-  const prepared = await prepareProjectRegistration(input);
-  return await withProjectCheckoutLifecycle(
-    prepared.project.repoRoot,
-    { path: context.admission.databasePath, env },
-    (lease) => registerPreparedProjectRegistry(prepared, lease, context),
   );
 }

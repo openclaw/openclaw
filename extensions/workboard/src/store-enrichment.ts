@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type {
+  WorkboardArtifact,
   WorkboardAttachment,
   WorkboardCard,
+  WorkboardMetadata,
   WorkboardNotification,
-  WorkboardWorkerLog,
+  WorkboardProof,
 } from "@openclaw/workboard-contract";
 import type { PersistedWorkboardAttachment } from "./persistence-types.js";
 import {
@@ -23,6 +25,7 @@ import { WorkboardCoreStore } from "./store-core.js";
 import type {
   WorkboardArtifactInput,
   WorkboardAttachmentInput,
+  WorkboardCardPatch,
   WorkboardMutationScope,
   WorkboardProofInput,
   WorkboardProtocolViolationInput,
@@ -35,28 +38,59 @@ import {
   normalizeAttachmentInput,
   normalizeBoundedString,
   normalizeProofInput,
+  workerLogEntry,
 } from "./store-normalizers.js";
 
 export class WorkboardEnrichmentStore extends WorkboardCoreStore {
+  protected finishRun(
+    card: WorkboardCard,
+    status: "done" | "blocked",
+    now: number,
+    reason?: string,
+  ): WorkboardCardPatch & { metadata: WorkboardMetadata } {
+    const execution =
+      card.execution?.status === "running"
+        ? { ...card.execution, status, updatedAt: now }
+        : card.execution;
+    return {
+      status,
+      ...(execution ? { execution } : {}),
+      metadata: {
+        ...card.metadata,
+        claim: undefined,
+        attempts: closeRunningAttempts(
+          card.metadata?.attempts,
+          now,
+          status === "done" ? "succeeded" : "blocked",
+          reason,
+        ),
+        failureCount: status === "done" ? 0 : (card.metadata?.failureCount ?? 0) + 1,
+      },
+    };
+  }
+
+  protected appendNotification(
+    metadata: WorkboardMetadata | undefined,
+    now: number,
+    notification: Omit<WorkboardNotification, "id" | "createdAt" | "sequence">,
+  ): WorkboardNotification[] {
+    return [
+      ...(metadata?.notifications ?? []),
+      {
+        id: randomUUID(),
+        createdAt: now,
+        sequence: this.nextNotificationSequence(now),
+        ...notification,
+      },
+    ].slice(-MAX_CARD_NOTIFICATIONS);
+  }
+
   async addProof(
     id: string,
     input: WorkboardProofInput,
     scope?: WorkboardMutationScope,
   ): Promise<WorkboardCard> {
-    const now = Date.now();
-    const proof = normalizeProofInput(input, now);
-    return await this.updateMetadata(
-      id,
-      (existing) => {
-        assertCanMutateClaimedCard(existing, scope);
-        const metadata = clearDiagnostics(existing.metadata, ["missing_proof"]);
-        return {
-          ...metadata,
-          proof: [...(metadata.proof ?? []), proof].slice(-MAX_CARD_PROOF),
-        };
-      },
-      { preserveProofId: proof.id },
-    );
+    return await this.addEvidence(id, scope, normalizeProofInput(input, Date.now()));
   }
 
   async addProofWithArtifact(
@@ -71,19 +105,7 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
     if (!artifact) {
       throw new Error("artifact url or path is required.");
     }
-    return await this.updateMetadata(
-      id,
-      (existing) => {
-        assertCanMutateClaimedCard(existing, scope);
-        const metadata = clearDiagnostics(existing.metadata, ["missing_proof"]);
-        return {
-          ...metadata,
-          proof: [...(metadata.proof ?? []), proof].slice(-MAX_CARD_PROOF),
-          artifacts: [...(metadata.artifacts ?? []), artifact].slice(-MAX_CARD_ARTIFACTS),
-        };
-      },
-      { preserveProofId: proof.id },
-    );
+    return await this.addEvidence(id, scope, proof, artifact);
   }
 
   async addArtifact(
@@ -95,14 +117,30 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
     if (!artifact) {
       throw new Error("artifact url or path is required.");
     }
-    return await this.updateMetadata(id, (existing) => {
-      assertCanMutateClaimedCard(existing, scope);
-      const metadata = clearDiagnostics(existing.metadata, ["missing_proof"]);
-      return {
-        ...metadata,
-        artifacts: [...(metadata.artifacts ?? []), artifact].slice(-MAX_CARD_ARTIFACTS),
-      };
-    });
+    return await this.addEvidence(id, scope, undefined, artifact);
+  }
+
+  private addEvidence(
+    id: string,
+    scope: WorkboardMutationScope | undefined,
+    proof?: WorkboardProof,
+    artifact?: WorkboardArtifact,
+  ): Promise<WorkboardCard> {
+    return this.updateMetadata(
+      id,
+      (existing) => {
+        assertCanMutateClaimedCard(existing, scope);
+        const metadata = { ...clearDiagnostics(existing.metadata, ["missing_proof"]) };
+        if (proof) {
+          metadata.proof = [...(metadata.proof ?? []), proof].slice(-MAX_CARD_PROOF);
+        }
+        if (artifact) {
+          metadata.artifacts = [...(metadata.artifacts ?? []), artifact].slice(-MAX_CARD_ARTIFACTS);
+        }
+        return metadata;
+      },
+      { preserveProofId: proof?.id },
+    );
   }
 
   async addAttachment(
@@ -197,20 +235,7 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
     if (!message) {
       throw new Error("worker log message is required.");
     }
-    const level =
-      input.level === "warning" || input.level === "error" || input.level === "info"
-        ? input.level
-        : "info";
-    const sessionKey = normalizeBoundedString(input.sessionKey, undefined, 240, "session key");
-    const runId = normalizeBoundedString(input.runId, undefined, 160, "run id");
-    const log: WorkboardWorkerLog = {
-      id: randomUUID(),
-      level,
-      message,
-      createdAt: now,
-      ...(sessionKey ? { sessionKey } : {}),
-      ...(runId ? { runId } : {}),
-    };
+    const log = workerLogEntry(input, message, now);
     return await this.updateMetadata(id, (existing) => {
       assertCanMutateClaimedCard(existing, scope);
       return {
@@ -232,49 +257,29 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
       const detail =
         normalizeBoundedString(input.detail, undefined, 800, "protocol violation detail") ??
         "Worker stopped without completing or blocking the card.";
-      const sessionKey = normalizeBoundedString(input.sessionKey, undefined, 240, "session key");
-      const runId = normalizeBoundedString(input.runId, undefined, 160, "run id");
-      const log: WorkboardWorkerLog = {
-        id: randomUUID(),
-        level: "error",
-        message: detail,
-        createdAt: now,
-        ...(sessionKey ? { sessionKey } : {}),
-        ...(runId ? { runId } : {}),
-      };
-      const execution =
-        card.execution?.status === "running"
-          ? { ...card.execution, status: "blocked" as const, updatedAt: now }
-          : card.execution;
-      const attempts = closeRunningAttempts(card.metadata?.attempts, now, "blocked", detail);
-      const notification: WorkboardNotification = {
-        id: randomUUID(),
+      const log = workerLogEntry({ ...input, level: "error" }, detail, now);
+      const { sessionKey, runId } = log;
+      const finished = this.finishRun(card, "blocked", now, detail);
+      const notifications = this.appendNotification(card.metadata, now, {
         kind: "failed",
-        createdAt: now,
-        sequence: this.nextNotificationSequence(now),
         message: capText(detail, 240) ?? "Worker protocol violation.",
         ...(sessionKey || cardSessionKey(card)
           ? { sessionKey: sessionKey ?? cardSessionKey(card) }
           : {}),
         ...(runId || cardRunId(card) ? { runId: runId ?? cardRunId(card) } : {}),
-      };
+      });
       return await this.updateCard(await this.requireCard(card.id), {
+        ...finished,
         status: card.status === "done" ? card.status : "blocked",
-        ...(execution ? { execution } : {}),
         metadata: {
-          ...card.metadata,
+          ...finished.metadata,
           workerLogs: [...(card.metadata?.workerLogs ?? []), log].slice(-MAX_CARD_WORKER_LOGS),
           workerProtocol: {
             state: "violated",
             updatedAt: now,
             detail,
           },
-          claim: undefined,
-          ...(attempts ? { attempts } : {}),
-          failureCount: (card.metadata?.failureCount ?? 0) + 1,
-          notifications: [...(card.metadata?.notifications ?? []), notification].slice(
-            -MAX_CARD_NOTIFICATIONS,
-          ),
+          notifications,
         },
       });
     });

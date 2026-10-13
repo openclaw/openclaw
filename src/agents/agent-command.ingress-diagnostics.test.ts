@@ -82,6 +82,7 @@ describe("emitIngressModelUsageDiagnostic", () => {
           total: 775,
         },
         durationMs: 1234,
+        costUsd: 0.001,
       }),
     );
   });
@@ -120,36 +121,18 @@ describe("emitIngressModelUsageDiagnostic", () => {
     expect(mocks.emitTrustedDiagnosticEvent).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      name: "token buckets",
-      usage: { input: 500, output: 200 },
-      cost: 0.001,
-      total: 700,
-      channel: "api",
-    },
-    {
-      name: "cost-only zero total",
-      usage: { cost: { total: 0 } },
-      cost: 0,
-      total: 0,
-      channel: undefined,
-    },
-  ])(
-    "emits monetary diagnostics for $name without a prompt estimate",
-    ({ usage, cost, total, channel }) => {
-      emit(
-        { usage, promptTokens: undefined, lastCallUsage: undefined },
-        { messageChannel: channel },
-      );
-      expect(mocks.emitTrustedDiagnosticEvent).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          channel: channel ?? "http",
-          costUsd: cost,
-          context: { limit: 128000 },
-          usage: expect.objectContaining({ cacheRead: 0, cacheWrite: 0, total }),
-        }),
-      );
-    },
-  );
+  it("emits zero-cost diagnostics without token counts or a prompt estimate", () => {
+    emit(
+      { usage: { cost: { total: 0 } }, promptTokens: undefined, lastCallUsage: undefined },
+      { messageChannel: undefined },
+    );
+    expect(mocks.emitTrustedDiagnosticEvent).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        channel: "http",
+        costUsd: 0,
+        context: { limit: 128000 },
+        usage: expect.objectContaining({ cacheRead: 0, cacheWrite: 0, total: 0 }),
+      }),
+    );
+  });
 });

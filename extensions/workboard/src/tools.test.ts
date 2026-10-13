@@ -102,9 +102,15 @@ describe("workboard tools", () => {
         board: { id: "sessions", kind: "sessions" },
         sessions: [],
       });
-      await update.execute("update-one", { scope: { includeArchived: true } });
+      const scope = { includeArchived: true, includeAutomation: true, includeHome: true };
+      expect(Value.Check(update.parameters, { scope })).toBe(true);
+      for (const field of ["includeAutomation", "includeHome"]) {
+        expect(Value.Check(update.parameters, { scope: { [field]: false } })).toBe(true);
+        expect(Value.Check(update.parameters, { scope: { [field]: "true" } })).toBe(false);
+      }
+      await update.execute("update-one", { scope });
       await expect(store.getSessionsBoard("sessions")).resolves.toMatchObject({
-        sessions: { scope: { includeArchived: true } },
+        sessions: { scope },
       });
       const columns = [
         {
@@ -123,7 +129,7 @@ describe("workboard tools", () => {
       ).toBe(false);
       await update.execute("update-any-of", { columns });
       await expect(store.getSessionsBoard("sessions")).resolves.toMatchObject({
-        sessions: { columns, scope: { includeArchived: true } },
+        sessions: { columns, scope },
       });
       await store.upsertBoard({ id: "another", kind: "sessions" });
       for (const [tool, input] of [
@@ -144,7 +150,7 @@ describe("workboard tools", () => {
       );
       await expect(read.execute("invalid", { boardId: 42 })).rejects.toThrow();
       await expect(store.getSessionsBoard("sessions")).resolves.toMatchObject({
-        sessions: { scope: { includeArchived: true } },
+        sessions: { scope },
       });
     } finally {
       await sessionsBoard.stop();
@@ -345,6 +351,39 @@ describe("workboard tools", () => {
     );
     expect(archivedList.cards).toEqual(
       expect.arrayContaining([expect.objectContaining({ id: "archived-1", archivedAt: 2 })]),
+    );
+  });
+
+  it("keeps the read card and context together and reads committed edits on the next call", async () => {
+    const { store, stores } = createWorkboardSqliteTestHarness();
+    const card = await store.create({ title: "Before edit", notes: "Original instructions" });
+    const read = expectDefined(
+      createWorkboardTools({ store }).find((tool) => tool.name === "workboard_read"),
+      "Workboard read",
+    );
+    const lookup = stores.cards.lookup.bind(stores.cards);
+    using concurrentEdit = vi.spyOn(stores.cards, "lookup");
+    concurrentEdit.mockImplementationOnce(async (id) => {
+      const captured = await lookup(id);
+      await store.update(card.id, { title: "After edit", notes: "Revised instructions" });
+      return captured;
+    });
+
+    const captured = readPayload(await read.execute("captured", { id: card.id }));
+    expect(captured.card).toMatchObject({
+      title: "Before edit",
+      notes: "Original instructions",
+    });
+    expect(captured.workerContext).toContain("Title: Before edit");
+    expect(captured.workerContext).toContain("Original instructions");
+    expect(captured.workerContext).not.toContain("Revised instructions");
+
+    const updated = readPayload(await read.execute("updated", { id: card.id }));
+    expect(updated.card).toMatchObject({ title: "After edit", notes: "Revised instructions" });
+    expect(updated.workerContext).toContain("Title: After edit");
+    expect(updated.workerContext).toContain("Revised instructions");
+    await expect(read.execute("missing", { id: "missing-card" })).rejects.toThrow(
+      "card not found: missing-card",
     );
   });
 

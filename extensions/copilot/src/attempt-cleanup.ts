@@ -1,6 +1,6 @@
 import {
   awaitAgentEndSideEffects,
-  runAgentEndSideEffects,
+  runAgentEndSideEffectsAsync,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { raceWithTimeout, withTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { toCopilotError } from "./attempt-config.js";
@@ -43,7 +43,7 @@ export async function finalizeCopilotAttempt(
   if (!params.messageChannel && !params.messageProvider) {
     await awaitAgentEndSideEffects(hookParams);
   } else {
-    runAgentEndSideEffects(hookParams);
+    await runAgentEndSideEffectsAsync(hookParams);
   }
   return result;
 }
@@ -118,18 +118,8 @@ async function awaitDeferredCleanupBeforeDeadline(params: {
     await params.bridge.awaitCompactionCompletion();
     return "completed" as const;
   })();
-  let resolveAbort: () => void = () => undefined;
-  const aborted = new Promise<"aborted">((resolve) => {
-    resolveAbort = () => resolve("aborted");
-    params.abortSignal?.addEventListener("abort", resolveAbort, { once: true });
+  return await raceWithTimeout(completion, params.timeoutMs, () => "deadline" as const, {
+    signal: params.abortSignal,
+    onAbort: () => "aborted" as const,
   });
-  try {
-    return await raceWithTimeout(
-      Promise.race([completion, aborted]),
-      params.timeoutMs,
-      () => "deadline" as const,
-    );
-  } finally {
-    params.abortSignal?.removeEventListener("abort", resolveAbort);
-  }
 }

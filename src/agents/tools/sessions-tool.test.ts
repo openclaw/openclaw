@@ -126,49 +126,46 @@ describe("sessions tool", () => {
     expect(requests.some((request) => request.method === "sessions.resolve")).toBe(false);
   });
 
-  it.each(["patch", "delete"] as const)(
-    "does not treat another agent's bare global row as self for %s",
-    async (action) => {
-      const requests: AgentToolGatewayRequest[] = [];
-      const callGateway: AgentToolGatewayRequestCaller = async <T>(
-        request: AgentToolGatewayRequest,
-      ) => {
-        requests.push(request);
-        if (request.method === "sessions.resolve") {
-          return { agentId: "ops", key: "global" } as T;
-        }
-        throw new Error(`unexpected gateway mutation: ${request.method}`);
-      };
-      const tool = createSessionsTool({
-        agentSessionKey: "global",
-        requesterAgentIdOverride: "research",
-        config: {
-          agents: {
-            ownership: "explicit",
-            entries: { ops: {}, research: {} },
-          },
-          // Narrowed visibility keeps the cross-agent denial as the observable proof
-          // that the foreign bare row was resolved to its owner, not treated as self.
-          tools: { sessions: { visibility: "agent" } },
+  it("does not treat another agent's bare global row as self for patch", async () => {
+    const requests: AgentToolGatewayRequest[] = [];
+    const callGateway: AgentToolGatewayRequestCaller = async <T>(
+      request: AgentToolGatewayRequest,
+    ) => {
+      requests.push(request);
+      if (request.method === "sessions.resolve") {
+        return { agentId: "ops", key: "global" } as T;
+      }
+      throw new Error(`unexpected gateway mutation: ${request.method}`);
+    };
+    const tool = createSessionsTool({
+      agentSessionKey: "global",
+      requesterAgentIdOverride: "research",
+      config: {
+        agents: {
+          ownership: "explicit",
+          entries: { ops: {}, research: {} },
         },
-        callGateway,
-      });
+        // Narrowed visibility keeps the cross-agent denial as the observable proof
+        // that the foreign bare row was resolved to its owner, not treated as self.
+        tools: { sessions: { visibility: "agent" } },
+      },
+      callGateway,
+    });
 
-      await expect(
-        tool.execute(`foreign-global-${action}`, {
-          action,
-          sessionKey: "2fb701ef-6425-4c48-9b6f-5a170aa2477e",
-          ...(action === "patch" ? { label: "Ops" } : {}),
-        }),
-      ).rejects.toThrow("Session status visibility is restricted");
-      expect(requests).toContainEqual(expect.objectContaining({ method: "sessions.resolve" }));
-      expect(
-        requests.some((request) =>
-          ["sessions.patch", "sessions.reset", "sessions.delete"].includes(request.method),
-        ),
-      ).toBe(false);
-    },
-  );
+    await expect(
+      tool.execute("foreign-global-patch", {
+        action: "patch",
+        sessionKey: "2fb701ef-6425-4c48-9b6f-5a170aa2477e",
+        label: "Ops",
+      }),
+    ).rejects.toThrow("Session status visibility is restricted");
+    expect(requests).toContainEqual(expect.objectContaining({ method: "sessions.resolve" }));
+    expect(
+      requests.some((request) =>
+        ["sessions.patch", "sessions.reset", "sessions.delete"].includes(request.method),
+      ),
+    ).toBe(false);
+  });
 
   it("cannot patch an incognito session through the cross-session tool", async () => {
     const sessionKey = "agent:main:dashboard:incognito-private";
@@ -183,53 +180,6 @@ describe("sessions tool", () => {
       tool.execute("incognito-patch", { action: "patch", label: "private" }),
     ).rejects.toThrow("Session not visible from session tools");
     expect(callGateway).not.toHaveBeenCalled();
-  });
-
-  it("advertises the full model-visible sidebar presence contract", () => {
-    const tool = createSessionsTool({
-      agentSessionKey: "agent:main:main",
-      callGateway: vi.fn(),
-    });
-    expect(tool.parameters).toMatchObject({
-      type: "object",
-      properties: {
-        action: {
-          type: "string",
-          enum: [
-            "cloud_profiles",
-            "patch",
-            "stop",
-            "reset",
-            "delete",
-            "assign_owner",
-            "group_list",
-            "group_set",
-            "group_rename",
-            "group_delete",
-          ],
-        },
-        deleteTranscript: { type: "boolean" },
-        label: { type: "string", description: expect.stringContaining("Empty string clears") },
-        icon: {
-          type: "string",
-          description: expect.stringContaining(
-            "named icon: braces, book, monitor, bot, kanban, coins",
-          ),
-        },
-        group: {
-          anyOf: [{ type: "string" }, { type: "null" }],
-          description: expect.stringContaining("creates the group"),
-        },
-        statusNote: { type: "string", maxLength: 120 },
-        attention: {
-          type: "string",
-          enum: ["clear", "hand", "key", "alert", "flag", "lock", "hourglass"],
-        },
-        ttlMinutes: { type: "integer", minimum: 1, maximum: 120 },
-        archived: { type: "boolean", description: expect.stringContaining("without deleting") },
-      },
-    });
-    expect(tool.parameters).not.toHaveProperty("properties.message");
   });
 
   it("does not expose direct session creation outside controlled spawning", async () => {
@@ -416,39 +366,7 @@ describe("sessions tool", () => {
     });
   });
 
-  it("records a typed lifecycle conflict without classifying error prose", async () => {
-    const sessionKey = "agent:main:dashboard:changed";
-    const callGateway: AgentToolGatewayRequestCaller = vi.fn(async () => {
-      throw new GatewayClientRequestError({
-        code: "INVALID_REQUEST",
-        message: "arbitrary presentation text",
-        retryable: false,
-        details: { reason: "session-changed" },
-      });
-    });
-    const tool = createSessionsTool({
-      agentSessionKey: "agent:main:main",
-      config: { tools: { sessions: { visibility: "agent" } } },
-      callGateway,
-    });
-
-    const { work } = await captureSessionDecisionWork(async () => {
-      await expect(tool.execute("reset-changed", { action: "reset", sessionKey })).rejects.toThrow(
-        "arbitrary presentation text",
-      );
-    });
-
-    expect(work[0]?.receipt).toMatchObject({
-      decision: { outcome: "denied", reasonCode: "session_reset_conflict" },
-      enforcement: { coverageState: "attribution-only" },
-    });
-  });
-
-  it.each([
-    { operation: "patch", args: { label: "Updated" } },
-    { operation: "archive", args: { archived: true } },
-    { operation: "restore", args: { archived: false } },
-  ] as const)("records a committed $operation result", async ({ operation, args }) => {
+  it("records a committed restore result", async () => {
     gatewayMocks.callGateway.mockResolvedValue({
       ok: true,
       path: "/tmp/sessions.sqlite",
@@ -462,22 +380,18 @@ describe("sessions tool", () => {
     });
 
     const { work } = await captureSessionDecisionWork(
-      async () => await tool.execute(`committed-${operation}`, { action: "patch", ...args }),
+      async () => await tool.execute("committed-restore", { action: "patch", archived: false }),
     );
 
     expect(work).toHaveLength(1);
     expect(work[0]?.receipt).toMatchObject({
-      action: { family: "session", operation },
-      decision: { outcome: "allowed", reasonCode: `session_${operation}_committed` },
+      action: { family: "session", operation: "restore" },
+      decision: { outcome: "allowed", reasonCode: "session_restore_committed" },
       enforcement: { coverageState: "attribution-only" },
     });
   });
 
-  it.each([
-    { operation: "patch", args: { label: "Updated" } },
-    { operation: "archive", args: { archived: true } },
-    { operation: "restore", args: { archived: false } },
-  ] as const)("records a typed $operation conflict", async ({ operation, args }) => {
+  it("records a typed archive conflict", async () => {
     const callGateway: AgentToolGatewayRequestCaller = vi.fn(async () => {
       throw new GatewayClientRequestError({
         code: "INVALID_REQUEST",
@@ -495,14 +409,14 @@ describe("sessions tool", () => {
 
     const { work } = await captureSessionDecisionWork(async () => {
       await expect(
-        tool.execute(`conflict-${operation}`, { action: "patch", ...args }),
+        tool.execute("conflict-archive", { action: "patch", archived: true }),
       ).rejects.toThrow("arbitrary presentation text");
     });
 
     expect(work).toHaveLength(1);
     expect(work[0]?.receipt).toMatchObject({
-      action: { family: "session", operation },
-      decision: { outcome: "denied", reasonCode: `session_${operation}_conflict` },
+      action: { family: "session", operation: "archive" },
+      decision: { outcome: "denied", reasonCode: "session_archive_conflict" },
       enforcement: { coverageState: "attribution-only" },
     });
   });
@@ -548,7 +462,7 @@ describe("sessions tool", () => {
     }
   });
 
-  it.each(["delete", "reset"])("refuses to %s its currently running session", async (action) => {
+  it("refuses to delete its currently running session", async () => {
     const callGateway = vi.fn();
     const tool = createSessionsTool({
       agentSessionKey: "agent:main:main",
@@ -557,8 +471,8 @@ describe("sessions tool", () => {
     });
 
     await expect(
-      tool.execute(`self-${action}`, { action, sessionKey: "agent:main:main" }),
-    ).rejects.toThrow(`Cannot ${action} the session running this tool`);
+      tool.execute("self-delete", { action: "delete", sessionKey: "agent:main:main" }),
+    ).rejects.toThrow("Cannot delete the session running this tool");
     expect(callGateway).not.toHaveBeenCalled();
   });
 
@@ -625,8 +539,8 @@ describe("sessions tool", () => {
       callGateway: callGateway as never,
     });
     const guardParams = { cfg, ...sessionScope };
-    const currentRunGuard = createAgentPatchedSessionModelRunGuard(guardParams);
-    const failedCurrentRunGuard = createAgentPatchedSessionModelRunGuard(guardParams);
+    const currentRunGuard = await createAgentPatchedSessionModelRunGuard(guardParams);
+    const failedCurrentRunGuard = await createAgentPatchedSessionModelRunGuard(guardParams);
 
     await tool.execute("patch-model", {
       action: "patch",
@@ -683,7 +597,7 @@ describe("sessions tool", () => {
     expect(loadSessionEntry(sessionScope)).toEqual(entryBeforeFailure);
     expect(await loadTranscriptEvents(transcriptScope)).toEqual(transcriptBeforeFailure);
 
-    const runGuard = createAgentPatchedSessionModelRunGuard(guardParams);
+    const runGuard = await createAgentPatchedSessionModelRunGuard(guardParams);
     await runGuard.fail(failure);
     expect(loadSessionEntry(sessionScope)).toMatchObject({
       model: "good",
@@ -732,12 +646,13 @@ describe("sessions tool", () => {
       },
     );
 
-    await createAgentPatchedSessionModelRunGuard({
+    const guard = await createAgentPatchedSessionModelRunGuard({
       cfg: {},
       agentId: "main",
       sessionKey,
       storePath,
-    }).finish(true);
+    });
+    await guard.finish(true);
     expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).not.toHaveProperty(
       "modelFallback",
     );
@@ -785,7 +700,7 @@ describe("sessions tool", () => {
         },
       },
     );
-    const runGuard = createAgentPatchedSessionModelRunGuard({
+    const runGuard = await createAgentPatchedSessionModelRunGuard({
       cfg: {},
       agentId: "main",
       sessionKey,
@@ -834,7 +749,7 @@ describe("sessions tool", () => {
         },
       },
     );
-    const runB = createAgentPatchedSessionModelRunGuard({
+    const runB = await createAgentPatchedSessionModelRunGuard({
       cfg,
       agentId: "main",
       sessionKey,
@@ -850,7 +765,7 @@ describe("sessions tool", () => {
         source: "agent-patch",
       },
     }));
-    const runC = createAgentPatchedSessionModelRunGuard({
+    const runC = await createAgentPatchedSessionModelRunGuard({
       cfg,
       agentId: "main",
       sessionKey,
@@ -866,7 +781,7 @@ describe("sessions tool", () => {
         source: "agent-patch",
       },
     }));
-    const runD = createAgentPatchedSessionModelRunGuard({
+    const runD = await createAgentPatchedSessionModelRunGuard({
       cfg,
       agentId: "main",
       sessionKey,

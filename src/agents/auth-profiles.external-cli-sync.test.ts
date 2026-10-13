@@ -34,7 +34,6 @@ describe("external CLI OAuth resolution", () => {
   it("does not bootstrap an OpenAI profile from retired Codex storage", () => {
     expect(
       readExternalCliBootstrapCredential({
-        store: store(),
         profileId: "openai:default",
         credential: oauth({ provider: "openai" }),
       }),

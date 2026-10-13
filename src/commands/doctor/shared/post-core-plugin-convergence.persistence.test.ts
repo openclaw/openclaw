@@ -5,14 +5,14 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withUpdateCommandExecutor } from "../../../cli/update-cli/update-command-executor.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
-import { cleanupRetainedPluginInstallGenerations } from "../../../gateway/server-retained-plugin-cleanup.js";
+import { cleanupGatewayRetiredPluginArtifacts } from "../../../gateway/server-retained-plugin-cleanup.js";
 import * as temporaryState from "../../../infra/tmp-openclaw-dir.js";
 import { createUpdateRun } from "../../../infra/update-run-ledger.js";
 import { commitPluginInstallRecordsWithConfig } from "../../../plugins/install-record-commit.js";
 import * as pluginInstaller from "../../../plugins/install.js";
 import {
   loadInstalledPluginIndexInstallRecords,
-  readPersistedInstalledPluginIndexInstallRecords,
+  readPersistedInstalledPluginIndexInstallRecordsAsync,
 } from "../../../plugins/installed-plugin-index-records.js";
 import { resolveRetainedManagedNpmInstallMarkerPath } from "../../../plugins/managed-npm-retention.js";
 import { withPluginLifecycleLease } from "../../../plugins/plugin-lifecycle-lease.js";
@@ -210,7 +210,9 @@ describe("post-core plugin persistence cancellation", () => {
       rmSpy.mockRestore();
       expect(restoredRow).toBeDefined();
       expect(readPersistedInstalledPluginIndexRowSync({ env: state.env })).toEqual(restoredRow);
-      expect(readPersistedInstalledPluginIndexInstallRecords({ env: state.env })).toEqual(records);
+      expect(
+        await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }),
+      ).toEqual(records);
       expect(fs.existsSync(firstMarker)).toBe(false);
       expect(fs.existsSync(secondMarker)).toBe(true);
       expect(fs.readFileSync(state.configPath, "utf8")).toBe(configBefore);
@@ -231,7 +233,12 @@ describe("post-core plugin persistence cancellation", () => {
         expect(result.installRecords).toEqual(records);
       });
       const log = { info: vi.fn(), warn: vi.fn() };
-      await cleanupRetainedPluginInstallGenerations({ log, startupInstallPaths: [] });
+      await cleanupGatewayRetiredPluginArtifacts({
+        log,
+        startupInstallPaths: [],
+        signal: new AbortController().signal,
+        assertCurrent: () => {},
+      });
       expect(controller.signal.aborted).toBe(true);
       for (const record of Object.values(records)) {
         expect(fs.readFileSync(path.join(record.installPath, "dist", "index.js"), "utf8")).toBe(
@@ -265,7 +272,9 @@ describe("post-core plugin persistence cancellation", () => {
         controller.abort(refusal);
         await expect(repair).rejects.toBe(refusal);
       });
-      expect(readPersistedInstalledPluginIndexInstallRecords({ env: state.env })).toEqual(previous);
+      expect(
+        await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }),
+      ).toEqual(previous);
     });
   });
 
@@ -320,7 +329,9 @@ describe("post-core plugin persistence cancellation", () => {
         },
       });
       await expect(repair).rejects.toBe(refusal);
-      expect(readPersistedInstalledPluginIndexInstallRecords({ env: state.env })).toEqual({});
+      expect(
+        await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }),
+      ).toEqual({});
     });
   });
 

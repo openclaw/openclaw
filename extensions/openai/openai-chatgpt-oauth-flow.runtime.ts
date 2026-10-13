@@ -10,6 +10,7 @@ import {
   type OAuthCredentials,
   type OAuthPrompt,
 } from "openclaw/plugin-sdk/provider-oauth-runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
 import {
   createOpenAIAuthorizationFlow,
   resolveOpenAICallbackHost,
@@ -31,28 +32,12 @@ const loadOAuthCallbackServer = createLazyRuntimeModule(() =>
 );
 
 function waitForManualPromptFallback(signal?: AbortSignal): Promise<null> {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(createOAuthLoginCancelledError());
-      return;
-    }
-
-    const cleanup = () => {
-      signal?.removeEventListener("abort", abort);
-    };
-    const abort = () => {
-      clearTimeout(timeout);
-      cleanup();
-      reject(createOAuthLoginCancelledError());
-    };
-    const timeout = setTimeout(() => {
-      cleanup();
-      resolve(null);
-    }, MANUAL_PROMPT_FALLBACK_MS);
-
-    signal?.addEventListener("abort", abort, { once: true });
-    timeout.unref?.();
-  });
+  return sleepWithAbort(MANUAL_PROMPT_FALLBACK_MS, signal, { ref: false }).then(
+    () => null,
+    () => {
+      throw createOAuthLoginCancelledError();
+    },
+  );
 }
 
 function parseAuthorizationCode(input: string, state: string): string | undefined {
@@ -154,19 +139,19 @@ export async function loginOpenAICodex(options: {
   const cancelledWait = new Promise<null>((resolve) => {
     cancelWait = () => resolve(null);
   });
+  const waitForLogin = <T>(promise: Promise<T>) =>
+    withOAuthLoginAbort(promise, options.signal, cancelWait);
   let code: string | undefined;
   try {
     options.assertCurrent?.();
     throwIfOAuthLoginAborted(options.signal);
-    await withOAuthLoginAbort(
+    await waitForLogin(
       Promise.resolve(
         options.onAuth({
           url,
           instructions: "A browser window should open. Complete login to finish.",
         }),
       ),
-      options.signal,
-      cancelWait,
     );
     throwIfOAuthLoginAborted(options.signal);
     const callbackPromise = Promise.race([
@@ -196,10 +181,10 @@ export async function loginOpenAICodex(options: {
           cancelWait();
         });
 
-      const result = await withOAuthLoginAbort(callbackPromise, options.signal, cancelWait);
+      const result = await waitForLogin(callbackPromise);
 
       if (!result?.code && !manualCode && !manualError) {
-        await withOAuthLoginAbort(manualPromise, options.signal, cancelWait);
+        await waitForLogin(manualPromise);
       }
       if (manualError) {
         throw manualError;
@@ -210,10 +195,8 @@ export async function loginOpenAICodex(options: {
         code = parseAuthorizationCode(manualCode, state);
       }
     } else {
-      const result = await withOAuthLoginAbort(
+      const result = await waitForLogin(
         Promise.race([callbackPromise, waitForManualPromptFallback(options.signal)]),
-        options.signal,
-        cancelWait,
       );
       if (result?.code) {
         code = result.code;
@@ -224,20 +207,14 @@ export async function loginOpenAICodex(options: {
             return promptCode;
           },
         );
-        code = await withOAuthLoginAbort(
+        code = await waitForLogin(
           Promise.race([callbackPromise.then((callback) => callback?.code), promptCodePromise]),
-          options.signal,
-          cancelWait,
         );
       }
     }
 
     if (!code) {
-      code = await withOAuthLoginAbort(
-        promptForAuthorizationCode(options.onPrompt, state),
-        options.signal,
-        cancelWait,
-      );
+      code = await waitForLogin(promptForAuthorizationCode(options.onPrompt, state));
     }
 
     if (!code) {

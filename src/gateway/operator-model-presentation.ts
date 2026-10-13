@@ -151,7 +151,7 @@ export function prepareOperatorModelPresentation(params: {
   cfg: OpenClawConfig;
   policyConfig: OpenClawConfig;
   client: GatewayClient | null;
-  metadataSnapshot?: PluginMetadataSnapshot;
+  metadataSnapshot?: PluginMetadataSnapshot | null;
 }) {
   const { cfg, policyConfig, client } = params;
   // Catalog facts retain their runtime owner; permissions exclude tentative config activation.
@@ -159,7 +159,10 @@ export function prepareOperatorModelPresentation(params: {
   if (!modelPolicy) {
     return undefined;
   }
-  const metadataSnapshot = params.metadataSnapshot ?? getGatewayPluginMetadataSnapshot();
+  const metadataSnapshot =
+    params.metadataSnapshot === undefined
+      ? getGatewayPluginMetadataSnapshot()
+      : params.metadataSnapshot;
   const manifestPlugins = metadataSnapshot ?? [];
   const policy = prepareOperatorModelPolicy({
     cfg: policyConfig,

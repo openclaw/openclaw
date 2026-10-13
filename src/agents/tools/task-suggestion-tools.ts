@@ -1,4 +1,3 @@
-/** Model tools for proposing and withdrawing operator-approved follow-up work. */
 import path from "node:path";
 import { Type } from "typebox";
 import type {
@@ -63,13 +62,11 @@ const DismissTaskToolSchema = Type.Object(
   { additionalProperties: false },
 );
 
-type GatewayCaller = typeof callGatewayTool;
-
 export function createTaskSuggestionTools(params: {
   sessionKey: string;
   agentId?: string;
   cwd: string;
-  callGateway?: GatewayCaller;
+  callGateway?: typeof callGatewayTool;
 }): AnyAgentTool[] {
   const gatewayCall = params.callGateway ?? callGatewayTool;
   return [

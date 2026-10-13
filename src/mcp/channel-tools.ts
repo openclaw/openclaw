@@ -73,7 +73,7 @@ export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChann
       limit: z.number().int().min(1).max(200).optional(),
     },
     async ({ session_key, limit }) => {
-      const messages = await bridge.readMessages(session_key, limit ?? 20);
+      const messages = await bridge.readMessages(session_key, limit);
       return {
         ...summarizeStructuredResult("messages", messages.length, { messages }),
         structuredContent: { messages },
@@ -115,7 +115,7 @@ export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChann
     async ({ after_cursor, session_key, limit }) => {
       const { events, nextCursor, gap } = bridge.pollEvents(
         { afterCursor: after_cursor ?? 0, sessionKey: toText(session_key) },
-        limit ?? 20,
+        limit,
       );
       return {
         ...summarizeResult("events", events.length),
@@ -139,7 +139,7 @@ export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChann
     async ({ after_cursor, session_key, timeout_ms }, extra) => {
       const { event, gap } = await bridge.waitForEvent(
         { afterCursor: after_cursor ?? 0, sessionKey: toText(session_key) },
-        timeout_ms ?? 30_000,
+        timeout_ms,
         extra.signal,
       );
       return {

@@ -1,6 +1,4 @@
-import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import type { ReactiveController, ReactiveControllerHost } from "lit";
-import type { ChatPendingInputsPage } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { registerControlUiReloadGuard } from "../../app/document-reload-guard.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
@@ -22,7 +20,7 @@ import {
   clearSessionWorkspacePreviews,
   clearWorkspaceTimer,
 } from "./components/chat-session-workspace-state.ts";
-import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.ts";
+import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.tsx";
 import {
   captureChatComposerOwner,
   isChatComposerOwnerCurrent,
@@ -30,12 +28,26 @@ import {
 } from "./composer-persistence-state.ts";
 import { ChatComposerPersistence, markChatComposerEdit } from "./composer-persistence.ts";
 import { activeQueuedMessageEdit } from "./queued-message-edit.ts";
-import type { AfterCommitEffect, RenderLifecycle } from "./render-lifecycle.ts";
-import { cancelChatScroll, lockChatScroll, scheduleCommittedChatScroll } from "./scroll.ts";
+import {
+  type AfterCommitEffect,
+  notifyRenderLifecycleForTest,
+  type RenderLifecycle,
+} from "./render-lifecycle.ts";
+import { cancelChatScroll, scheduleCommittedChatScroll } from "./scroll.ts";
 
-type ChatRenderLifecycleScope = {
-  cancellations: Set<() => void>;
-};
+type ChatRenderLifecycleScope = Set<() => void>;
+
+function transcriptSources(state: ChatPageHost): readonly unknown[] {
+  return [
+    getChatPendingInputs(state)?.page,
+    state.chatMessages,
+    state.chatToolMessages,
+    state.chatStreamSegments,
+    state.chatReasoning,
+    state.guardianNotices,
+    state.realtimeTalkConversationState.entries,
+  ];
+}
 
 export class ChatStateController<TState extends ChatPageHost> implements ReactiveController {
   private attachmentReadsValue: ChatAttachmentReadLifecycle;
@@ -43,22 +55,15 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   private stateValue: TState | undefined;
   private privateDraftReview: { controller: AbortController; isCurrent: () => boolean } | undefined;
   private previousChatLoading = false;
-  private previousChatMessages: unknown[] = [];
-  private previousPendingInputs: ChatPendingInputsPage | undefined;
-  private inputScope: { sessionKey: string; sessionId: string | null } | undefined;
-  private readonly seenInputKeys = new Set<string>();
-  private previousChatToolMessages: Record<string, unknown>[] = [];
-  private previousChatStreamSegments: ChatPageHost["chatStreamSegments"] = [];
-  private previousGuardianNotices: ChatPageHost["guardianNotices"] = [];
+  private previousTranscriptSources: readonly unknown[] = [];
   private previousChatStream: string | null = null;
-  private previousRealtimeConversation: ChatPageHost["realtimeTalkConversationState"]["entries"] =
-    [];
   private scrollAfterUpdate = false;
   private scrollContentChangedAfterUpdate = false;
   private forceScrollAfterUpdate = false;
   private readonly cleanups: Array<() => void> = [];
   private renderLifecycleConnected = false;
   private renderLifecycleScope: ChatRenderLifecycleScope | undefined;
+  private backgroundRenderFrame: number | undefined;
 
   constructor(
     private readonly host: ReactiveControllerHost,
@@ -117,9 +122,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
 
   createRenderLifecycle(): RenderLifecycle {
     this.cancelRenderLifecycleScope();
-    const scope: ChatRenderLifecycleScope = {
-      cancellations: new Set(),
-    };
+    const scope: ChatRenderLifecycleScope = new Set();
     this.renderLifecycleScope = scope;
     return {
       invalidate: () => {
@@ -140,22 +143,11 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
       cancelChatScroll(this.stateValue);
       stopChatRealtimeTalk(this.stateValue);
     }
-    if (this.stateValue !== state) {
-      this.inputScope = undefined;
-      this.seenInputKeys.clear();
-    }
     this.stateValue = state;
-    const pendingInputs = getChatPendingInputs(state)?.page;
-    this.observeInputArrivals(state, pendingInputs);
-    this.previousPendingInputs = pendingInputs;
+    this.previousTranscriptSources = transcriptSources(state);
     state.canRestoreComposer = () => this.stateValue === state && this.composerPersistence.active;
     this.previousChatLoading = state.chatLoading;
-    this.previousChatMessages = state.chatMessages;
-    this.previousChatToolMessages = state.chatToolMessages;
-    this.previousChatStreamSegments = state.chatStreamSegments;
-    this.previousGuardianNotices = state.guardianNotices;
     this.previousChatStream = state.chatStream;
-    this.previousRealtimeConversation = state.realtimeTalkConversationState.entries;
     const renderLifecycle = state.renderLifecycle;
     state.requestUpdate = () => renderLifecycle.invalidate();
     this.cleanups.push(
@@ -365,7 +357,20 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     return this.renderLifecycleConnected && this.renderLifecycleScope === scope;
   }
 
-  private requestUpdateForScope(scope: ChatRenderLifecycleScope): boolean {
+  requestBackgroundUpdate(): void {
+    if (this.renderLifecycleScope) {
+      this.requestUpdateForScope(this.renderLifecycleScope, true);
+    }
+  }
+
+  private cancelBackgroundRender(): void {
+    if (this.backgroundRenderFrame !== undefined) {
+      cancelAnimationFrame(this.backgroundRenderFrame);
+      this.backgroundRenderFrame = undefined;
+    }
+  }
+
+  private requestUpdateForScope(scope: ChatRenderLifecycleScope, background = false): boolean {
     if (!this.isRenderLifecycleScopeActive(scope)) {
       return false;
     }
@@ -375,17 +380,36 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     this.composerPersistence.persistChangedState();
     this.captureRenderLifecycleChanges();
     this.onStateChange?.();
-    this.host.requestUpdate();
+    notifyRenderLifecycleForTest(this.host, "invalidate");
+    // Only background producers opt in. Draft persistence and scroll ownership
+    // are captured above, and transcript changes still commit before paint.
+    if (
+      background &&
+      !this.scrollAfterUpdate &&
+      globalThis.document?.visibilityState !== "hidden" &&
+      typeof globalThis.requestAnimationFrame === "function"
+    ) {
+      this.backgroundRenderFrame ??= requestAnimationFrame(() => {
+        this.backgroundRenderFrame = undefined;
+        if (this.isRenderLifecycleScopeActive(scope)) {
+          this.host.requestUpdate();
+        }
+      });
+    } else {
+      this.cancelBackgroundRender();
+      this.host.requestUpdate();
+    }
     return true;
   }
 
   private cancelRenderLifecycleScope(): void {
+    this.cancelBackgroundRender();
     const scope = this.renderLifecycleScope;
     if (!scope) {
       return;
     }
     this.renderLifecycleScope = undefined;
-    for (const cancel of scope.cancellations) {
+    for (const cancel of scope) {
       cancel();
     }
   }
@@ -399,23 +423,20 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
       onCancel?.();
       return () => undefined;
     }
-    let active = true;
     let committed = false;
     let cleanup: (() => void) | undefined;
     const complete = () => {
-      if (!active) {
+      if (!scope.has(cancel)) {
         return;
       }
-      active = false;
       cleanup = undefined;
-      scope.cancellations.delete(cancel);
+      scope.delete(cancel);
     };
     const cancel = () => {
-      if (!active) {
+      if (!scope.has(cancel)) {
         return;
       }
-      active = false;
-      scope.cancellations.delete(cancel);
+      scope.delete(cancel);
       try {
         cleanup?.();
       } finally {
@@ -425,7 +446,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
         }
       }
     };
-    scope.cancellations.add(cancel);
+    scope.add(cancel);
     // Request first so updateComplete represents the render this effect needs.
     if (!this.requestUpdateForScope(scope)) {
       cancel();
@@ -433,7 +454,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     }
     const completion = this.host.updateComplete;
     void completion.then(() => {
-      if (!active) {
+      if (!scope.has(cancel)) {
         return;
       }
       if (!this.isRenderLifecycleScopeActive(scope)) {
@@ -444,7 +465,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
       try {
         const nextCleanup = effect(complete);
         if (typeof nextCleanup === "function") {
-          if (active && this.isRenderLifecycleScopeActive(scope)) {
+          if (scope.has(cancel) && this.isRenderLifecycleScopeActive(scope)) {
             cleanup = nextCleanup;
           } else {
             nextCleanup();
@@ -460,92 +481,22 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     return cancel;
   }
 
-  private observeInputArrivals(
-    state: TState,
-    pendingInputs: ChatPendingInputsPage | undefined,
-  ): boolean {
-    const sessionId = state.currentSessionId ?? null;
-    const changedScope =
-      this.inputScope?.sessionKey !== state.sessionKey || this.inputScope?.sessionId !== sessionId;
-    if (changedScope) {
-      this.inputScope = { sessionKey: state.sessionKey, sessionId };
-      this.seenInputKeys.clear();
-    }
-    // Only the local outbox proves submission in this viewer. Authorship alone
-    // cannot distinguish a send from another browser signed in as the same user.
-    for (const queued of state.chatQueue) {
-      if (queued.sendRunId) {
-        this.seenInputKeys.add("send:" + queued.sendRunId);
-      }
-    }
-    if (
-      !changedScope &&
-      this.previousChatMessages === state.chatMessages &&
-      this.previousPendingInputs === pendingInputs
-    ) {
-      return false;
-    }
-    let remoteInputArrived = false;
-    const observe = (message: unknown, sendId?: string) => {
-      const identity = readSessionMessageIdentity(message, { clientRunId: sendId });
-      if (identity?.role !== "user") {
-        return;
-      }
-      const key = identity.sendId
-        ? "send:" + identity.sendId
-        : identity.id
-          ? "entry:" + identity.id
-          : null;
-      if (!key || this.seenInputKeys.has(key)) {
-        return;
-      }
-      // Retain receipt identity through custody-to-history gaps and replay;
-      // retire this presentation cache with its pane or physical conversation.
-      this.seenInputKeys.add(key);
-      // Persisted rows for this browser's own speech keep the live caption's identity.
-      const entryId = identity.id;
-      if (
-        entryId &&
-        state.realtimeTalkConversationState.entries.some((entry) => entry.transcriptId === entryId)
-      ) {
-        return;
-      }
-      remoteInputArrived ||= !changedScope && state.chatHasAutoScrolled;
-    };
-    state.chatMessages.forEach((message) => observe(message));
-    pendingInputs?.items.forEach((input) => observe(input.message, input.runId));
-    return remoteInputArrived;
-  }
-
   private captureRenderLifecycleChanges() {
     const state = this.stateValue;
     if (!state) {
       return;
     }
-    const pendingInputs = getChatPendingInputs(state)?.page;
-    const remoteInputArrived = this.observeInputArrivals(state, pendingInputs);
-    const messagesChanged =
-      this.previousPendingInputs !== pendingInputs ||
-      this.previousChatMessages !== state.chatMessages ||
-      this.previousChatToolMessages !== state.chatToolMessages ||
-      this.previousChatStreamSegments !== state.chatStreamSegments ||
-      this.previousGuardianNotices !== state.guardianNotices ||
-      this.previousRealtimeConversation !== state.realtimeTalkConversationState.entries;
+    const sources = transcriptSources(state);
+    const messagesChanged = sources.some(
+      (source, index) => this.previousTranscriptSources[index] !== source,
+    );
     const streamChanged = this.previousChatStream !== state.chatStream;
     const loadingChanged = this.previousChatLoading !== state.chatLoading;
     const loadFinished = this.previousChatLoading && !state.chatLoading;
     const streamStarted = this.previousChatStream == null && typeof state.chatStream === "string";
-    this.previousPendingInputs = pendingInputs;
+    this.previousTranscriptSources = sources;
     this.previousChatLoading = state.chatLoading;
-    this.previousChatMessages = state.chatMessages;
-    this.previousChatToolMessages = state.chatToolMessages;
-    this.previousChatStreamSegments = state.chatStreamSegments;
-    this.previousGuardianNotices = state.guardianNotices;
     this.previousChatStream = state.chatStream;
-    this.previousRealtimeConversation = state.realtimeTalkConversationState.entries;
-    if (remoteInputArrived) {
-      lockChatScroll(state, "remote-input");
-    }
     if (!messagesChanged && !streamChanged && !loadingChanged) {
       return;
     }
@@ -567,6 +518,9 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   }
 
   hostUpdated() {
+    if (this.renderLifecycleScope && this.isRenderLifecycleScopeActive(this.renderLifecycleScope)) {
+      notifyRenderLifecycleForTest(this.host, "commit");
+    }
     const state = this.stateValue;
     if (!this.scrollAfterUpdate) {
       return;
@@ -580,6 +534,11 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
       return;
     }
     scheduleCommittedChatScroll(state, force, state.chatHasAutoScrolled, { contentChanged });
+  }
+
+  hostUpdate() {
+    // An immediate input/property update also renders the latest background facts.
+    this.cancelBackgroundRender();
   }
 
   private stopChatEffects() {
@@ -616,9 +575,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     this.composerPersistence.stop();
     this.stopChatEffects();
     this.stateValue = undefined;
-    this.inputScope = undefined;
-    this.seenInputKeys.clear();
-    this.previousPendingInputs = undefined;
+    this.previousTranscriptSources = [];
     this.scrollAfterUpdate = false;
     this.scrollContentChangedAfterUpdate = false;
     this.forceScrollAfterUpdate = false;

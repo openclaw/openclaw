@@ -159,6 +159,7 @@ describe.runIf(process.platform === "linux")("native watchdog lifecycle", () => 
     await f.runtime.processes.stopEnvironment({
       gatewayNamespace: identity.gatewayNamespace,
       environmentId: identity.environmentId,
+      sessionId: identity.sessionId,
       ownerEpoch: 1,
     });
     expect(f.runtime.processes.hasActiveWork()).toBe(false);
@@ -508,7 +509,7 @@ it.runIf(process.platform === "linux")(
   "preserves an older Gateway's detached lease on the new node-host command route",
   async () => {
     const f = fixture();
-    const retainedProcess = vi.spyOn(f.runtime.processes, "execute");
+    const managedSpawn = vi.spyOn(getProcessSupervisor(), "spawn");
     const quiesce = createWorkerWorkspaceQuiescence({
       ownerSignal: new AbortController().signal,
       sharedHost: true,
@@ -524,12 +525,14 @@ it.runIf(process.platform === "linux")(
     });
     const lease = await quiesce(f.workspaceDir);
     try {
-      await f.runtime.exec({
-        ...identity,
-        argv: [path.basename(process.execPath), "-e", "process.stdout.write('legacy-command')"],
-      });
+      await expect(
+        f.runtime.exec({
+          ...identity,
+          argv: [path.basename(process.execPath), "-e", "process.stdout.write('legacy-command')"],
+        }),
+      ).resolves.toMatchObject({ code: 0, stdout: "legacy-command" });
       await lease.assertActive();
-      expect(retainedProcess).not.toHaveBeenCalled();
+      expect(managedSpawn).not.toHaveBeenCalled();
       expect(f.runtime.quiescence.hasActiveWork()).toBe(false);
     } finally {
       await lease.resume();

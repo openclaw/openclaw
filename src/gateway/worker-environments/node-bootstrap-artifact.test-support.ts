@@ -123,6 +123,7 @@ export function useNodeBootstrapArtifactFixtures() {
     await write(packageRoot, "node-sqlite.mjs", "export const probe = true;");
     await write(packageRoot, "node-runtime-update.mjs", "export const update = true;");
     await write(packageRoot, "node-runtime-recovery.mjs", "export const recovery = true;");
+    await write(packageRoot, "node-runtime-env.mjs", "export {};");
     await write(packageRoot, "cli-root-options.mjs", "export {};");
     await write(packageRoot, "gateway-run-argv.mjs", "export {};");
     await write(packageRoot, "gateway-shutdown-budget.mjs", "export {};");
@@ -218,7 +219,7 @@ export function useNodeBootstrapArtifactFixtures() {
       plugins: [{ id: "remote-runtime", root: pluginRoot }],
     };
     const provider = createProvider(options);
-    return { root, packageRoot, provider, sourcePackage, pluginPackage, options };
+    return { root, packageRoot, pluginRoot, provider, sourcePackage, pluginPackage, options };
   }
   return { fixture, createProvider, tempDirs };
 }

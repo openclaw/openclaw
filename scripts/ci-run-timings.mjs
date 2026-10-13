@@ -4,6 +4,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { requireOptionArgument } from "./lib/arg-utils.runtime.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { execPlainGh } from "./lib/plain-gh.mjs";
@@ -101,6 +102,10 @@ function summarizeDistribution(values) {
     p90: percentile(values, 0.9),
     p95: percentile(values, 0.95),
   };
+}
+
+function summarizeMetric(rows, key) {
+  return summarizeDistribution(rows.map((row) => row[key]).filter((value) => value !== null));
 }
 
 function parseRunList(raw) {
@@ -527,15 +532,9 @@ function summarizeTrendCohort(runs, runSummaries) {
   return {
     criticalOwners: summarizeCriticalOwners(successfulRuns),
     jobMetrics: {
-      dependencyGatedSeconds: summarizeDistribution(
-        jobTimings.map((job) => job.dependencyGatedSeconds).filter((value) => value !== null),
-      ),
-      executionSeconds: summarizeDistribution(
-        jobTimings.map((job) => job.executionSeconds).filter((value) => value !== null),
-      ),
-      runnerQueueSeconds: summarizeDistribution(
-        jobTimings.map((job) => job.runnerQueueSeconds).filter((value) => value !== null),
-      ),
+      dependencyGatedSeconds: summarizeMetric(jobTimings, "dependencyGatedSeconds"),
+      executionSeconds: summarizeMetric(jobTimings, "executionSeconds"),
+      runnerQueueSeconds: summarizeMetric(jobTimings, "runnerQueueSeconds"),
     },
     outcomes: summarizeOutcomes(runs),
     samples: {
@@ -544,15 +543,9 @@ function summarizeTrendCohort(runs, runSummaries) {
       timedJobs: jobTimings.length,
     },
     runMetrics: {
-      admittedWallSeconds: summarizeDistribution(
-        successfulRuns.map((run) => run.admittedWallSeconds).filter((value) => value !== null),
-      ),
-      successfulWallSeconds: summarizeDistribution(
-        successfulRuns.map((run) => run.wallSeconds).filter((value) => value !== null),
-      ),
-      workflowAdmissionSeconds: summarizeDistribution(
-        successfulRuns.map((run) => run.workflowAdmissionSeconds).filter((value) => value !== null),
-      ),
+      admittedWallSeconds: summarizeMetric(successfulRuns, "admittedWallSeconds"),
+      successfulWallSeconds: summarizeMetric(successfulRuns, "wallSeconds"),
+      workflowAdmissionSeconds: summarizeMetric(successfulRuns, "workflowAdmissionSeconds"),
     },
   };
 }
@@ -589,12 +582,8 @@ function summarizeNamedJobComparison(runSummaries, priorWindow, comparisonWindow
   return [...new Set([...prior.keys(), ...comparison.keys()])]
     .map((name) => {
       const summarize = (timings) => ({
-        executionSeconds: summarizeDistribution(
-          (timings ?? []).map((job) => job.executionSeconds).filter((value) => value !== null),
-        ),
-        runnerQueueSeconds: summarizeDistribution(
-          (timings ?? []).map((job) => job.runnerQueueSeconds).filter((value) => value !== null),
-        ),
+        executionSeconds: summarizeMetric(timings ?? [], "executionSeconds"),
+        runnerQueueSeconds: summarizeMetric(timings ?? [], "runnerQueueSeconds"),
       });
       return {
         comparison: summarize(comparison.get(name)),
@@ -842,16 +831,21 @@ export function parseRunTimingArgs(args) {
     const numericFlag = numericFlags.find(([flag]) => arg === flag || arg.startsWith(`${flag}=`));
     if (numericFlag) {
       const [flag, key] = numericFlag;
-      const parsed = consumePositiveIntFlag(args, index, flag);
-      options[key] = parsed.value;
+      const value =
+        arg === flag ? requireOptionArgument(args, index++, flag) : arg.slice(flag.length + 1);
+      options[key] = parsePositiveInt(value, flag);
       specified.add(flag);
-      index = parsed.nextIndex;
       continue;
     }
-    const outputOption = consumeStringFlag(args, index, "--output");
-    if (outputOption) {
-      options.outputPath = outputOption.value;
-      index = outputOption.nextIndex;
+    if (arg === "--output" || arg.startsWith("--output=")) {
+      const value =
+        arg === "--output"
+          ? requireOptionArgument(args, index++, "--output")
+          : arg.slice("--output=".length);
+      if (!value) {
+        throw new Error("--output requires a value");
+      }
+      options.outputPath = value;
       continue;
     }
     if (arg.startsWith("-")) {
@@ -889,48 +883,6 @@ export function parseRunTimingArgs(args) {
   }
 
   return options;
-}
-
-function consumePositiveIntFlag(args, index, flag) {
-  const arg = args[index];
-  const inlinePrefix = `${flag}=`;
-  if (arg.startsWith(inlinePrefix)) {
-    return {
-      nextIndex: index,
-      value: parsePositiveInt(arg.slice(inlinePrefix.length), flag),
-    };
-  }
-  if (arg !== flag) {
-    return null;
-  }
-  const rawValue = args[index + 1];
-  if (!rawValue || rawValue.startsWith("-")) {
-    throw new Error(`${flag} requires a value`);
-  }
-  return {
-    nextIndex: index + 1,
-    value: parsePositiveInt(rawValue, flag),
-  };
-}
-
-function consumeStringFlag(args, index, flag) {
-  const arg = args[index];
-  const inlinePrefix = `${flag}=`;
-  if (arg.startsWith(inlinePrefix)) {
-    const value = arg.slice(inlinePrefix.length);
-    if (!value) {
-      throw new Error(`${flag} requires a value`);
-    }
-    return { nextIndex: index, value };
-  }
-  if (arg !== flag) {
-    return null;
-  }
-  const value = args[index + 1];
-  if (!value || value.startsWith("-")) {
-    throw new Error(`${flag} requires a value`);
-  }
-  return { nextIndex: index + 1, value };
 }
 
 function selectTrendDetailCandidates(runs, generatedAtMs, compareDurationMs, limit) {

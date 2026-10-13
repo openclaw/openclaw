@@ -15,16 +15,14 @@ export function withEmbeddedAttemptSteeringAdmission<T>(
   signal: AbortSignal,
   prepare: (admission: EmbeddedAttemptSteeringAdmission) => T,
 ): T {
-  let accepting = true;
-  let closed = false;
+  let phase: "accepting" | "paused" | "closed" = "accepting";
   let unsubscribeSteering: (() => void) | undefined;
   let unsubscribeStream: (() => void) | undefined;
   const stop = () => {
-    if (closed) {
+    if (phase === "closed") {
       return;
     }
-    closed = true;
-    accepting = false;
+    phase = "closed";
     signal.removeEventListener("abort", stop);
     unsubscribeSteering?.();
   };
@@ -49,14 +47,14 @@ export function withEmbeddedAttemptSteeringAdmission<T>(
     }
     return prepare({
       get closed() {
-        return closed;
+        return phase === "closed";
       },
       get accepting() {
-        return accepting;
+        return phase === "accepting";
       },
       set accepting(value) {
-        if (!closed) {
-          accepting = value;
+        if (phase !== "closed") {
+          phase = value ? "accepting" : "paused";
         }
       },
       stop,

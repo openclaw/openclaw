@@ -47,10 +47,6 @@ type StandaloneTicketActiveView = McpAppActiveView & {
 
 const ticketBindings = new Map<string, StandaloneTicketBinding>();
 
-export const mcpAppStandaloneTesting = {
-  clearTickets: () => ticketBindings.clear(),
-};
-
 function pruneTicketBindings(nowMs: number): void {
   for (const [nonce, binding] of ticketBindings) {
     if (binding.expiresAtMs <= nowMs) {
@@ -59,14 +55,14 @@ function pruneTicketBindings(nowMs: number): void {
   }
 }
 
-function signTicket(nonce: string, expiresAtMs: number, secret: Buffer): string {
-  return createHmac("sha256", secret)
+function signTicket(nonce: string, expiresAtMs: number): string {
+  return createHmac("sha256", ticketSecret)
     .update(`${MCP_APP_STANDALONE_TICKET_SCOPE}\0${nonce}\0${expiresAtMs}`)
     .digest("base64url");
 }
 
-function formatTicket(binding: StandaloneTicketBinding, secret: Buffer): StandaloneTicket {
-  const ticket = `v1.${binding.nonce}.${binding.expiresAtMs}.${signTicket(binding.nonce, binding.expiresAtMs, secret)}`;
+function formatTicket(binding: StandaloneTicketBinding): StandaloneTicket {
+  const ticket = `v1.${binding.nonce}.${binding.expiresAtMs}.${signTicket(binding.nonce, binding.expiresAtMs)}`;
   return { ticket, url: `${MCP_APP_STANDALONE_PATH}#${ticket}`, expiresAtMs: binding.expiresAtMs };
 }
 
@@ -75,7 +71,6 @@ export function createMcpAppStandaloneTicket(params: {
   view: Pick<McpAppViewLease, "viewId" | "sessionId" | "expiresAtMs" | "requesterId">;
   toolOperationsAuthorized: boolean;
   nowMs?: number;
-  secret?: Buffer;
 }): StandaloneTicket | undefined {
   // A bearer-only window cannot establish a named requester’s live authority.
   if (params.view.requesterId) {
@@ -109,7 +104,7 @@ export function createMcpAppStandaloneTicket(params: {
     (reusable.expiresAtMs >= expiresAtMs ||
       reusable.expiresAtMs - nowMs >= MCP_APP_STANDALONE_TICKET_MIN_REMAINING_MS)
   ) {
-    return formatTicket(reusable, params.secret ?? ticketSecret);
+    return formatTicket(reusable);
   }
   // Standalone issuance is additive to the existing authenticated view API.
   // At capacity, omit the link rather than failing that pre-existing path.
@@ -126,23 +121,13 @@ export function createMcpAppStandaloneTicket(params: {
     expiresAtMs,
   };
   ticketBindings.set(nonce, binding);
-  return formatTicket(binding, params.secret ?? ticketSecret);
+  return formatTicket(binding);
 }
 
-export function verifyMcpAppStandaloneTicket(
+function verifyMcpAppStandaloneTicket(
   value: string,
-  expected: {
-    sessionKey?: string;
-    sessionId?: string;
-    viewId?: string;
-    nowMs?: number;
-    secret?: Buffer;
-  } = {},
+  nowMs: number,
 ): StandaloneTicketBinding | undefined {
-  const nowMs = expected.nowMs ?? Date.now();
-  if (!Number.isSafeInteger(nowMs)) {
-    return undefined;
-  }
   const parts = value.split(".");
   if (parts.length !== 4 || parts[0] !== "v1") {
     return undefined;
@@ -155,18 +140,12 @@ export function verifyMcpAppStandaloneTicket(
   if (!Number.isSafeInteger(expiresAtMs) || expiresAtMs <= nowMs) {
     return undefined;
   }
-  const expectedSignature = signTicket(nonce, expiresAtMs, expected.secret ?? ticketSecret);
+  const expectedSignature = signTicket(nonce, expiresAtMs);
   if (!safeEqualSecret(signature, expectedSignature)) {
     return undefined;
   }
   const binding = ticketBindings.get(nonce);
-  if (
-    !binding ||
-    binding.expiresAtMs !== expiresAtMs ||
-    (expected.sessionKey !== undefined && binding.sessionKey !== expected.sessionKey) ||
-    (expected.sessionId !== undefined && binding.sessionId !== expected.sessionId) ||
-    (expected.viewId !== undefined && binding.viewId !== expected.viewId)
-  ) {
+  if (!binding || binding.expiresAtMs !== expiresAtMs) {
     return undefined;
   }
   return binding;
@@ -175,9 +154,8 @@ export function verifyMcpAppStandaloneTicket(
 function resolveTicketActiveView(
   value: string,
   nowMs: number,
-  secret: Buffer,
 ): StandaloneTicketActiveView | undefined {
-  const binding = verifyMcpAppStandaloneTicket(value, { nowMs, secret });
+  const binding = verifyMcpAppStandaloneTicket(value, nowMs);
   if (!binding) {
     return undefined;
   }
@@ -284,9 +262,6 @@ export async function handleMcpAppStandaloneHttpRequest(
     gatewayPort?: number;
     sandboxPort?: number;
     sandboxOrigin?: string;
-    now?: () => number;
-    nowMs?: number;
-    ticketSecret?: Buffer;
   } = {},
 ): Promise<boolean> {
   const url = URL.parse(req.url ?? "/", "http://localhost");
@@ -343,10 +318,7 @@ export async function handleMcpAppStandaloneHttpRequest(
 
   res.setHeader("Vary", "Authorization");
   const ticket = ticketFromRequest(req);
-  const now = options.now ?? (() => options.nowMs ?? Date.now());
-  const nowMs = now();
-  const secret = options.ticketSecret ?? ticketSecret;
-  const active = ticket ? resolveTicketActiveView(ticket, nowMs, secret) : undefined;
+  const active = ticket ? resolveTicketActiveView(ticket, Date.now()) : undefined;
   if (!active) {
     res.setHeader("WWW-Authenticate", "MCP-App");
     respondPlainText(res, 401, "Unauthorized");
@@ -370,7 +342,7 @@ export async function handleMcpAppStandaloneHttpRequest(
         }
         // Body parsing may consume meaningful ticket lifetime. Revalidate the
         // authoritative runtime and view immediately before privileged work.
-        const current = ticket ? resolveTicketActiveView(ticket, now(), secret) : undefined;
+        const current = ticket ? resolveTicketActiveView(ticket, Date.now()) : undefined;
         if (!current) {
           res.setHeader("WWW-Authenticate", "MCP-App");
           sendJson(res, 401, { ok: false, error: "Unauthorized" });

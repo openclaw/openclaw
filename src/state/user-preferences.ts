@@ -39,9 +39,6 @@ export async function getUserPreferenceValues(
     { type: "userPreferences.values", profileIds: ids, key },
     { context, current: true },
   );
-  if (reply && (!reply.ok || reply.type !== "userPreferences.values")) {
-    throw new Error(reply.ok ? "Unexpected user preference values reply" : reply.message);
-  }
   return { values: reply?.values ?? new Map(), isCurrent };
 }
 
@@ -82,7 +79,6 @@ export async function setCanonicalUserPreferences(
       {
         assertCurrent: options.assertCurrent,
         createAdmission: (operation) => {
-          let stage: "transaction" | "commit" | "complete" = "transaction";
           let pending:
             | {
                 facts: UserPreferenceCoauthorMutation;
@@ -93,19 +89,13 @@ export async function setCanonicalUserPreferences(
           const admission = createSqliteWorkerOperationAdmission((request, grant) => {
             context.admission.assertCurrent();
             options.assertCurrent?.();
-            if (
-              stage === "transaction" &&
-              request.stage === "transaction" &&
-              request.facts === undefined
-            ) {
-              stage = "commit";
+            if (request.stage === "transaction") {
               grant();
               return;
             }
-            if (stage !== "commit" || request.stage !== "commit") {
+            if (request.stage !== "commit") {
               throw new Error("Profile preference mutation requires transaction admission");
             }
-            stage = "complete";
             if (request.facts === undefined) {
               grant();
               return;

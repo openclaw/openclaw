@@ -2,7 +2,8 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { getRuntimeConfig } from "../../config/config.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import {
   loadSessionEntryReadOnly,
   patchSessionEntryCore,
@@ -13,12 +14,20 @@ import {
 import * as sessionEntryReads from "../../config/sessions/session-entry-read-runtime.js";
 import * as sessionCostUsage from "../../infra/session-cost-usage.js";
 import type { SessionsUsageResult } from "../../shared/usage-types.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { coreGatewayHandlers } from "./core-handlers.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
+import * as usageSessionSelection from "./usage-session-selection.js";
 
-it.for(["session reset", "incognito transition", "revocation during target read"] as const)(
+it.for([
+  "session reset",
+  "incognito transition",
+  "revocation during target read",
+  "revocation after context read",
+] as const)(
   "does not expose revoked usage context after %s",
   async (change, { signal, onTestFinished }) => {
     const state = await createOpenClawTestState({ label: "usage-context-lifecycle" });
@@ -32,12 +41,14 @@ it.for(["session reset", "incognito transition", "revocation during target read"
     let restoreSummaryLoader: (() => void) | undefined;
     let restoreTargetReader: (() => void) | undefined;
     let cleanupPromise: Promise<void> | undefined;
+    let releaseProfileCatalog: (() => void) | undefined;
     const releaseSummary = () => release.resolve();
     const cleanup = () =>
       (cleanupPromise ??= (async () => {
         releaseSummary();
         await Promise.allSettled(request ? [request] : []);
         try {
+          releaseProfileCatalog?.();
           await state.cleanup();
         } finally {
           restoreSummaryLoader?.();
@@ -61,7 +72,7 @@ it.for(["session reset", "incognito transition", "revocation during target read"
             default: "guest",
             definitions: {
               guest: {
-                sessions: { others: "none" },
+                sessions: { others: change === "revocation after context read" ? "view" : "none" },
                 agents: "*",
                 scopes: ["operator.read", "operator.write"],
               },
@@ -69,8 +80,9 @@ it.for(["session reset", "incognito transition", "revocation during target read"
           },
         },
       });
-      const config = getRuntimeConfig();
+      const config = await captureRuntimeConfigAsyncReader()();
       const viewer = ensureProfileForEmail("usage-viewer@example.com");
+      releaseProfileCatalog = (await prepareUserProfileCatalog()).release;
       const client: GatewayClient = {
         connect: {
           minProtocol: 1,
@@ -140,10 +152,23 @@ it.for(["session reset", "incognito transition", "revocation during target read"
         .mockImplementation(async (params) => {
           const result = await actualLoad(params);
           summaryLoaded.resolve(result);
-          await release.promise;
+          if (change !== "revocation after context read") {
+            await release.promise;
+          }
           return result;
         });
       restoreSummaryLoader = () => summaryLoader.mockRestore();
+      if (change === "revocation after context read") {
+        const actualRead = usageSessionSelection.loadUsageSessionContext;
+        const reader = vi
+          .spyOn(usageSessionSelection, "loadUsageSessionContext")
+          .mockImplementation(async (...args) => {
+            await actualRead(...args);
+            targetReadStarted.resolve();
+            await release.promise;
+          });
+        restoreTargetReader = () => reader.mockRestore();
+      }
       if (change === "revocation during target read") {
         const actualRead = sessionEntryReads.withSessionEntryReadOnlyInWorker;
         const reader = vi
@@ -176,7 +201,7 @@ it.for(["session reset", "incognito transition", "revocation during target read"
         }),
       );
       const loaded = await Promise.race([
-        change === "revocation during target read"
+        change === "revocation during target read" || change === "revocation after context read"
           ? targetReadStarted.promise
           : summaryLoaded.promise,
         request.then(() => {
@@ -214,8 +239,19 @@ it.for(["session reset", "incognito transition", "revocation during target read"
         ...(change === "session reset" ? {} : { incognito: true }),
       });
 
-      releaseSummary();
-      await request;
+      if (change === "revocation after context read") {
+        invalidateOperatorRolePolicy(viewer.id);
+      }
+      const sql = change === "revocation after context read" ? observeHostDataSql() : undefined;
+      try {
+        releaseSummary();
+        await request;
+        if (sql) {
+          expect(sql.queries).toEqual([]);
+        }
+      } finally {
+        sql?.restore();
+      }
       expect(respond).toHaveBeenCalledOnce();
       if (change === "revocation during target read") {
         expect(summaryLoader).not.toHaveBeenCalled();
@@ -226,7 +262,16 @@ it.for(["session reset", "incognito transition", "revocation during target read"
         ]);
         return;
       }
-      const [ok, payload] = expectDefined(respond.mock.calls[0], "usage response");
+      const [ok, payload, error] = expectDefined(respond.mock.calls[0], "usage response");
+      if (change === "revocation after context read") {
+        expect(ok).toBe(false);
+        expect(payload).toBeUndefined();
+        expect(error).toMatchObject({
+          code: "UNAVAILABLE",
+          message: expect.stringContaining("Refresh the usage view"),
+        });
+        return;
+      }
       expect(ok).toBe(true);
       const result = payload as SessionsUsageResult;
       expect(result.sessions).toHaveLength(1);

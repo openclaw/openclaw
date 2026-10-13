@@ -20,15 +20,7 @@ type AndroidVersionManifest = {
   versionCode: number;
 };
 
-type ResolvedAndroidVersion = {
-  canonicalVersion: string;
-  changelogPath: string;
-  releaseNotesPath: string;
-  versionCode: number;
-  wearVersionCode: number;
-  versionFilePath: string;
-  versionPropertiesPath: string;
-};
+type ResolvedAndroidVersion = ReturnType<typeof resolveAndroidVersion>;
 
 type SyncAndroidVersioningMode = "check" | "write";
 
@@ -93,11 +85,7 @@ export function normalizeAndroidVersionCode(rawVersionCode: number, version: str
   return rawVersionCode;
 }
 
-export function resolveGatewayVersionForAndroidRelease(rootDir = path.resolve(".")): {
-  packageVersion: string;
-  pinnedAndroidVersion: string;
-  versionCode: number;
-} {
+export function resolveGatewayVersionForAndroidRelease(rootDir = path.resolve(".")) {
   const packageVersion = readRootPackageVersion(rootDir);
   const pinnedAndroidVersion = normalizeGatewayVersionToPinnedMobileVersion(packageVersion);
   return {
@@ -127,7 +115,7 @@ export function writeAndroidVersionManifest(
   return versionFilePath;
 }
 
-export function resolveAndroidVersion(rootDir = path.resolve(".")): ResolvedAndroidVersion {
+export function resolveAndroidVersion(rootDir = path.resolve(".")) {
   const versionFilePath = path.join(rootDir, ANDROID_VERSION_FILE);
   const changelogPath = path.join(rootDir, ANDROID_CHANGELOG_FILE);
   const versionPropertiesPath = path.join(rootDir, ANDROID_VERSION_PROPERTIES_FILE);
@@ -235,9 +223,7 @@ function syncFile(params: {
 export function syncAndroidVersioning(params?: {
   mode?: SyncAndroidVersioningMode;
   rootDir?: string;
-}): {
-  updatedPaths: string[];
-} {
+}) {
   const mode = params?.mode ?? "write";
   const rootDir = path.resolve(params?.rootDir ?? ".");
   const version = resolveAndroidVersion(rootDir);

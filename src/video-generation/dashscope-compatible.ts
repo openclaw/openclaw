@@ -50,7 +50,7 @@ export const DEFAULT_VIDEO_RESOLUTION_TO_SIZE: Record<string, string> = {
 const DEFAULT_VIDEO_GENERATION_POLL_INTERVAL_MS = 2_500;
 const DEFAULT_VIDEO_GENERATION_MAX_POLL_ATTEMPTS = 120;
 
-export type DashscopeVideoGenerationResponse = {
+type DashscopeVideoGenerationResponse = {
   output?: {
     task_id?: string;
     task_status?: string;

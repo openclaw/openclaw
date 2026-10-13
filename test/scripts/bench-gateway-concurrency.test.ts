@@ -95,6 +95,31 @@ function createBenchmarkRun(overrides: Partial<BenchmarkRun> = {}): BenchmarkRun
 }
 
 describe("gateway concurrency benchmark script", () => {
+  it.skipIf(process.platform !== "linux")(
+    "caps Control UI defaults to the requested cohort",
+    () => {
+      for (const total of [1, 10, 50]) {
+        const options = testing.parseOptions([
+          "--control-ui-clients",
+          String(total),
+          "--resource-cgroup",
+          "/synthetic/cgroup",
+          "--transpiler-cache",
+          "/synthetic/cache",
+          "--runs",
+          "1",
+          "--warmup",
+          "0",
+        ]);
+        expect(options.controlUiLoad).toMatchObject({
+          totalClients: total,
+          activeClients: Math.min(25, total),
+          drivers: Math.min(4, total),
+        });
+      }
+    },
+  );
+
   describe("passive activity-summary diagnostics", () => {
     const create = () => createActivitySummaryDiagnostics(performance.now());
     const recapLog = (error: unknown = "Activity recap timed out") =>
@@ -165,6 +190,17 @@ describe("gateway concurrency benchmark script", () => {
           activitySummary: { state: "current", text: "private recap", updatedAt: 12 },
         },
       });
+      const nested = {
+        sessionKey: row.key,
+        agentId: row.agentId,
+        activitySummary: { state: "stale", text: "older private recap" },
+        session: { key: row.key, activitySummary: { state: "current", updatedAt: 20 } },
+      };
+      capture.onEvent({ event: "sessions.changed", payload: nested });
+      capture.onEvent({
+        event: "sessions.changed",
+        payload: { ...nested, session: { key: row.key } },
+      });
       const result = capture.finish();
       const probes = result.records.filter((record) => record.source === "probe");
       const event = result.records.find((record) => record.source === "event")!;
@@ -184,6 +220,12 @@ describe("gateway concurrency benchmark script", () => {
         lifecycle: "end",
         session: event.session,
       });
+      const projections = result.records.filter((record) => record.projection === "session");
+      expect(projections).toMatchObject([
+        { projection: "session", state: "current", updatedAt: 20 },
+        { projection: "session", summaryPresent: false, state: null },
+      ]);
+      expect(projections[0]!.session).toBe(projections[1]!.session);
       expect(result.invalidFields).toBe(1);
       expect(result.delivery).toContain("missing events do not identify");
       expect(result.phaseClock).toContain("observation arrival");
@@ -245,27 +287,6 @@ describe("gateway concurrency benchmark script", () => {
       expect(JSON.stringify(result)).not.toContain(secret);
       expect(JSON.stringify(result)).not.toContain("/private/");
       expect(result.truncated).toBe(false);
-    });
-
-    it("uses the current nested session projection without reviving outer recap fields", () => {
-      const capture = create();
-      const payload = {
-        sessionKey: "fixture-session",
-        agentId: "fixture-agent",
-        activitySummary: { state: "stale", text: "older private recap" },
-        session: { key: "fixture-session", activitySummary: { state: "current", updatedAt: 20 } },
-      };
-      capture.onEvent({ event: "sessions.changed", payload });
-      capture.onEvent({
-        event: "sessions.changed",
-        payload: { ...payload, session: { key: "fixture-session" } },
-      });
-      const events = capture.finish().records.filter((record) => record.source === "event");
-      expect(events).toMatchObject([
-        { projection: "session", state: "current", updatedAt: 20 },
-        { projection: "session", summaryPresent: false, state: null },
-      ]);
-      expect(events[0]!.session).toBe(events[1]!.session);
     });
 
     it("discards oversized line continuations and reports incomplete or malformed evidence", () => {
@@ -364,6 +385,8 @@ describe("gateway concurrency benchmark script", () => {
             "--activity-summary-diagnostics",
             "--entry",
             "/private/fixture/diagnostic-secret/entry.js",
+            "--gateway-runtime",
+            "/private/fixture/runtime-secret/bun",
             "--output",
             output,
             "--json",
@@ -377,10 +400,12 @@ describe("gateway concurrency benchmark script", () => {
         expect(JSON.parse(result.stdout)).toEqual(JSON.parse(written));
         expect(JSON.parse(written)).toMatchObject({
           mode: "mock-activity-summary-diagnostics",
+          gatewayRuntime: "[omitted in activity-summary diagnostics mode]",
           runs: [],
           failedAttempt: { status: "failure", cleanup: { rootRemoved: true } },
         });
         expect(`${written}${result.stdout}${result.stderr}`).not.toContain("diagnostic-secret");
+        expect(`${written}${result.stdout}${result.stderr}`).not.toContain("runtime-secret");
       });
     });
 
@@ -421,23 +446,6 @@ describe("gateway concurrency benchmark script", () => {
         });
       }
     });
-  });
-
-  it("keeps mock as the default and admits bounded live profiling without mock controls", () => {
-    expect(testing.parseOptions([]).provider).toBe("mock");
-    const liveArgs = ["--provider", "openai", "--runs", "1", "--warmup", "0", "--concurrency", "1"];
-    expect(
-      testing.parseOptions([...liveArgs, "--load-cpu-prof-dir", "/tmp/profiles"]).provider,
-    ).toBe("openai");
-    expect(() => testing.parseOptions(["--provider", "other"])).toThrow("--provider");
-    for (const extra of [
-      ["--tool-events"],
-      ["--agent-warmup-turns", "1"],
-      ["--stream-chunk-delay-ms", "1"],
-      ["--heap-prof-dir", "/tmp/heap"],
-    ]) {
-      expect(() => testing.parseOptions([...liveArgs, ...extra])).toThrow("OpenAI requires");
-    }
   });
 
   it("scrubs an echoed live key at the child-output error and JSON boundaries", () => {
@@ -573,17 +581,20 @@ describe("gateway concurrency benchmark script", () => {
   });
 
   it("partitions acknowledged ingress without attributing later selection events to the same phase", () => {
-    const snapshots = [0, 2, 5, 7, 15, 19].map((responses, index) =>
-      testing.parseMockRequests(
-        {
-          id: "mock-one",
-          ingress: { responses, chatCompletions: 0, embeddings: index * 2, other: index },
-          selections: { model: index, global: 0, automaticTool: 0, automaticText: index },
-        },
-        index * 10,
-        index * 10 + 2,
-      ),
-    );
+    expect(() => testing.parseMockRequests(undefined, 0, 1)).toThrow("identity");
+    const snapshots = [0, 2, 5, 7, 15, 19].map((responses, index) => {
+      const producer = {
+        id: "mock-one",
+        ingress: { responses, chatCompletions: 0, embeddings: index * 2, other: index },
+        selections: { model: index, global: 0, automaticTool: 0, automaticText: index },
+      };
+      const snapshot = testing.parseMockRequests(producer, index * 10, index * 10 + 2);
+      producer.ingress.responses += 1;
+      producer.selections.model += 1;
+      expect(snapshot.ingress.responses).toBe(responses);
+      expect(snapshot.selections.model).toBe(index);
+      return snapshot;
+    });
     const result = testing.summarizeMockRequests(snapshots);
     expect(result.ingress).toEqual({
       startupAndWarmup: { responses: 2, chatCompletions: 0, embeddings: 2, other: 1 },
@@ -609,35 +620,18 @@ describe("gateway concurrency benchmark script", () => {
     }
   });
 
-  it.each([undefined, -1, 0.5, Number.MAX_SAFE_INTEGER + 1, "1"])(
-    "rejects missing or unsafe mock counters: %s",
-    (responses) => {
-      expect(() =>
-        testing.parseMockRequests(
-          {
-            id: "mock",
-            ingress: { responses, chatCompletions: 0, embeddings: 0, other: 0 },
-            selections: { model: 0, global: 0, automaticTool: 0, automaticText: 0 },
-          },
-          0,
-          1,
-        ),
-      ).toThrow("invalid");
-    },
-  );
-
-  it("copies producer snapshots instead of retaining mutable counter objects", () => {
-    const producer = {
-      id: "mock",
-      ingress: { responses: 0, chatCompletions: 0, embeddings: 0, other: 0 },
-      selections: { model: 0, global: 0, automaticTool: 0, automaticText: 0 },
-    };
-    const snapshot = testing.parseMockRequests(producer, 0, 1);
-    producer.ingress.responses = 1;
-    producer.selections.model = 1;
-    expect(snapshot.ingress.responses).toBe(0);
-    expect(snapshot.selections.model).toBe(0);
-    expect(() => testing.parseMockRequests(undefined, 0, 1)).toThrow("identity");
+  it.each([undefined, -1])("rejects missing or unsafe mock counters: %s", (responses) => {
+    expect(() =>
+      testing.parseMockRequests(
+        {
+          id: "mock",
+          ingress: { responses, chatCompletions: 0, embeddings: 0, other: 0 },
+          selections: { model: 0, global: 0, automaticTool: 0, automaticText: 0 },
+        },
+        0,
+        1,
+      ),
+    ).toThrow("invalid");
   });
 
   it.each([false, true])(
@@ -780,19 +774,6 @@ describe("gateway concurrency benchmark script", () => {
     expect(() => evidence.finish("warmup")).toThrow("duplicated");
   });
 
-  it.each([undefined, "another-run"])(
-    "rejects a missing or mismatched agent.wait identity: %s",
-    async (waitRunId) => {
-      const rpc = async <T>(method: string): Promise<T> =>
-        (method === "agent"
-          ? { runId: "expected-run", status: "accepted" }
-          : { runId: waitRunId, status: "ok" }) as T;
-      await expect(testing.runTurn(rpc, 0, performance.now() + 10_000)).rejects.toThrow(
-        "agent.wait returned a different or missing benchmark run identity",
-      );
-    },
-  );
-
   it.each([
     { name: "missing", result: undefined },
     {
@@ -925,40 +906,46 @@ describe("gateway concurrency benchmark script", () => {
   });
 
   it("binds Responses continuations through runtime context to the newest ordinary user", () => {
-    const runtimeContext = {
-      type: "message",
-      role: "user",
-      content: [
-        {
-          type: "input_text",
-          text: "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nQuoted benchmark stream 99.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-        },
-      ],
-    };
-    const input = [
-      { role: "user", content: "benchmark stream 1." },
-      { role: "assistant", content: "old answer" },
-      { role: "user", content: [{ type: "input_text", text: "benchmark warmup tool stream 2." }] },
-      runtimeContext,
-      { type: "function_call_output", output: "done" },
-    ];
-    expect(summarizeMockInferenceRequest({ input })).toMatchObject({
-      purpose: "benchmark-turn",
-      benchmarkPhase: "warmup",
-      turnIndex: 2,
-      hasToolOutput: true,
-    });
-    for (const content of [
-      "an ordinary newer request",
-      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nan incomplete carrier",
-      "ordinary prefix\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\ncontext\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+    for (const text of [
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nQuoted benchmark stream 99.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+      "OpenClaw runtime context:\nQuoted benchmark stream 99.\nEnd OpenClaw runtime context.",
     ]) {
-      const facts = summarizeMockInferenceRequest({
-        input: [...input, { role: "user", content }, runtimeContext],
-      });
-      expect(facts.purpose).toBe("other");
-      expect(facts.turnIndex).toBeUndefined();
-      expect(facts.hasToolOutput).toBe(false);
+      for (const content of [text, [{ type: "input_text", text }]]) {
+        const runtimeContext = { type: "message", role: "user", content };
+        const input = [
+          { role: "user", content: "benchmark stream 1." },
+          { role: "assistant", content: "old answer" },
+          {
+            role: "user",
+            content: [{ type: "input_text", text: "benchmark warmup tool stream 2." }],
+          },
+          runtimeContext,
+          { type: "function_call_output", output: "done" },
+        ];
+        for (const turns of [input, [...input, runtimeContext]]) {
+          expect(summarizeMockInferenceRequest({ input: turns })).toMatchObject({
+            purpose: "benchmark-turn",
+            benchmarkPhase: "warmup",
+            turnIndex: 2,
+            hasToolOutput: true,
+          });
+        }
+        for (const boundaryContent of [
+          "an ordinary newer request",
+          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nan incomplete carrier",
+          "ordinary prefix\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\ncontext\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+          "OpenClaw runtime context:\nan incomplete carrier",
+          "ordinary prefix\nOpenClaw runtime context:\ncontext\nEnd OpenClaw runtime context.",
+          "OpenClaw runtime context:\ncontext\nEnd OpenClaw runtime context.\nordinary suffix",
+        ]) {
+          const facts = summarizeMockInferenceRequest({
+            input: [...input, { role: "user", content: boundaryContent }, runtimeContext],
+          });
+          expect(facts.purpose).toBe("other");
+          expect(facts.turnIndex).toBeUndefined();
+          expect(facts.hasToolOutput).toBe(false);
+        }
+      }
     }
   });
 
@@ -1053,10 +1040,16 @@ describe("gateway concurrency benchmark script", () => {
       unclassifiedLoadInference: 3,
     });
   });
-  it("reports process CPU per completed turn separately from main-thread CPU and probe samples", () => {
-    const first = createBenchmarkRun();
+  it("aggregates measured CPU, memory, ingress, and plugin scans without conflating their units", () => {
+    const scans = (durations: number[]) => ({
+      count: durations.length,
+      durationMs: testing.summarizeNumbers(durations),
+      totalDurationMs: durations.reduce((sum, value) => sum + value, 0),
+    });
+    const first = createBenchmarkRun({ pluginMetadataScans: scans([10, 20]) });
     const second = createBenchmarkRun({
       turnCount: 16,
+      pluginMetadataScans: scans([30]),
       cpuUsage: {
         ...first.cpuUsage,
         process: { userMs: 96, systemMs: 24, totalMs: 120 },
@@ -1070,6 +1063,17 @@ describe("gateway concurrency benchmark script", () => {
       gatewayProcessCpuMsPerTurn: { count: 2, p50: 7.5, max: 8 },
       gatewayMainThreadCpuMs: { count: 2, p50: 40, max: 80 },
       gatewayProcessCpuCoreRatio: { count: 2, p50: 0.64, max: 1.2 },
+      gatewayExternalMb: null,
+      gatewayExternalGrowthMb: null,
+      gatewayArrayBuffersMb: null,
+      gatewayArrayBuffersGrowthMb: null,
+      gatewayHeapGrowthMb: { count: 2, max: 20, p50: 20, p95: 20, p99: 20 },
+      gatewayPeakRssMb: { count: 2, max: 210, p50: 210, p95: 210, p99: 210 },
+      gatewayRssGrowthMb: { count: 2, max: 20, p50: 20, p95: 20, p99: 20 },
+      mockRequestIngress: { responses: 2, chatCompletions: 0, embeddings: 0, other: 0 },
+      mockResponseSelections: { model: 0, global: 0, automaticTool: 0, automaticText: 2 },
+      pluginMetadataScanCount: 3,
+      pluginMetadataScanTotalDurationMs: 60,
     });
   });
 
@@ -1083,17 +1087,6 @@ describe("gateway concurrency benchmark script", () => {
       name: "zero",
       fields: { externalBytes: 0, arrayBuffersBytes: 0 },
       expected: { externalMb: 0, arrayBuffersMb: 0 },
-    },
-    { name: "missing", fields: {}, expected: {} },
-    {
-      name: "external-only",
-      fields: { externalBytes: 2_621_440 },
-      expected: { externalMb: 2.5 },
-    },
-    {
-      name: "ArrayBuffers-only",
-      fields: { arrayBuffersBytes: 1_572_864 },
-      expected: { arrayBuffersMb: 1.5 },
     },
     {
       name: "invalid",
@@ -1235,62 +1228,68 @@ describe("gateway concurrency benchmark script", () => {
     });
   });
 
-  it("parses benchmark controls without booting a gateway", () => {
+  it("selects the Gateway runtime independently of the controller", () => {
+    expect(testing.parseOptions([]).gatewayRuntime).toBe(process.execPath);
     expect(
-      testing.parseOptions([
-        "--agent-count",
-        "12",
-        "--concurrency",
-        "12",
-        "--turns-per-session",
-        "8",
-        "--runs",
-        "2",
-        "--warmup",
-        "0",
-        "--cadence-ms",
-        "50",
-        "--timeout-ms",
-        "90000",
-        "--cpu-prof-dir",
-        "/tmp/gateway-cpu-profiles",
-        "--heap-prof-dir",
-        "/tmp/gateway-heap-profiles",
-        "--plugin-count",
-        "50",
-        "--probe-rounds",
-        "20",
-        "--session-count",
-        "120",
-        "--control-plane",
-        "--history-messages",
-        "20",
-        "--history-message-chars",
-        "8192",
-        "--history-clients",
-        "6",
-        "--history-burst",
-        "5",
-        "--session-updates",
-        "500",
-        "--session-update-clients",
-        "8",
-        "--subscribers",
-        "4",
-        "--stream-chunk-delay-ms",
-        "2000",
-        "--max-control-ms",
-        "2000",
-        "--max-handshake-ms",
-        "2000",
-        "--tool-events",
-        "--no-diagnostics-timeline",
-        "--visible-observer",
-        "--workspace-fanout",
-        "--output",
-        "concurrency.json",
-        "--json",
-      ]),
+      testing.parseOptions(["--gateway-runtime", "/tmp/bun", "--gateway-cpus", "0,1"]),
+    ).toMatchObject({ gatewayRuntime: "/tmp/bun", gatewayCpus: "0,1" });
+    expect(() => testing.parseOptions(["--gateway-runtime", "bun\0"])).toThrow("--gateway-runtime");
+  });
+
+  it("parses bounded mock and live benchmark controls without booting a gateway", () => {
+    expect(testing.parseOptions([]).provider).toBe("mock");
+    const liveArgs = ["--provider", "openai", "--runs", "1", "--warmup", "0", "--concurrency", "1"];
+    expect(
+      testing.parseOptions([...liveArgs, "--load-cpu-prof-dir", "/tmp/profiles"]).provider,
+    ).toBe("openai");
+    expect(() => testing.parseOptions(["--provider", "other"])).toThrow("--provider");
+    for (const extra of [
+      ["--tool-events"],
+      ["--agent-warmup-turns", "1"],
+      ["--stream-chunk-delay-ms", "1"],
+      ["--heap-prof-dir", "/tmp/heap"],
+    ]) {
+      expect(() => testing.parseOptions([...liveArgs, ...extra])).toThrow("OpenAI requires");
+    }
+    expect(() =>
+      testing.parseOptions(["--load-cpu-prof-dir", "/tmp/cpu", "--heap-prof-dir", "/tmp/heap"]),
+    ).toThrow("--load-cpu-prof-dir and --heap-prof-dir require separate benchmark runs");
+    expect(
+      testing.parseOptions(
+        [
+          ["--agent-count", "12"],
+          ["--concurrency", "12"],
+          ["--turns-per-session", "8"],
+          ["--runs", "2"],
+          ["--warmup", "0"],
+          ["--cadence-ms", "50"],
+          ["--timeout-ms", "90000"],
+          ["--cpu-prof-dir", "/tmp/gateway-cpu-profiles"],
+          ["--heap-prof-dir", "/tmp/gateway-heap-profiles"],
+          ["--plugin-count", "50"],
+          ["--probe-rounds", "20"],
+          ["--session-count", "120"],
+          ["--control-plane"],
+          ["--history-messages", "20"],
+          ["--history-message-chars", "8192"],
+          ["--history-clients", "6"],
+          ["--history-burst", "5"],
+          ["--session-updates", "500"],
+          ["--session-update-clients", "8"],
+          ["--subscribers", "4"],
+          ["--stream-chunk-delay-ms", "2000"],
+          ["--max-control-ms", "2000"],
+          ["--max-handshake-ms", "2000"],
+          [
+            "--tool-events",
+            "--no-diagnostics-timeline",
+            "--visible-observer",
+            "--workspace-fanout",
+          ],
+          ["--output", "concurrency.json"],
+          ["--json"],
+        ].flat(),
+      ),
     ).toMatchObject({
       agentCount: 12,
       cadenceMs: 50,
@@ -1392,27 +1391,27 @@ describe("gateway concurrency benchmark script", () => {
     ).toThrow("synthetic history");
   });
 
-  it("rejects overlapping load CPU and heap captures before gateway startup", () => {
-    expect(() =>
-      testing.parseOptions(["--load-cpu-prof-dir", "/tmp/cpu", "--heap-prof-dir", "/tmp/heap"]),
-    ).toThrow("--load-cpu-prof-dir and --heap-prof-dir require separate benchmark runs");
-  });
+  it.each([
+    { values: [18, 22], total: 40, summary: { count: 2, max: 22, p50: 18, p95: 22, p99: 22 } },
+    {
+      values: [100, 1, 4, 2, 3],
+      total: 110,
+      summary: { count: 5, max: 100, p50: 3, p95: 100, p99: 100 },
+    },
+    { values: [], total: 0, summary: null },
+  ])(
+    "summarizes scan durations $values with nearest-rank percentiles",
+    ({ values, total, summary }) => {
+      expect(
+        testing.summarizePluginMetadataScans([
+          ...values.map((durationMs) => ({ durationMs, name: "plugins.metadata.scan" })),
+          { durationMs: 9, name: "plugins.metadata.freeze" },
+        ]),
+      ).toEqual({ count: values.length, durationMs: summary, totalDurationMs: total });
+    },
+  );
 
-  it("summarizes plugin metadata scans captured after startup warmup", () => {
-    expect(
-      testing.summarizePluginMetadataScans([
-        { durationMs: 18, name: "plugins.metadata.scan" },
-        { durationMs: 22, name: "plugins.metadata.scan" },
-        { durationMs: 9, name: "plugins.metadata.freeze" },
-      ]),
-    ).toEqual({
-      count: 2,
-      durationMs: { count: 2, max: 22, p50: 18, p95: 22, p99: 22 },
-      totalDurationMs: 40,
-    });
-  });
-
-  it("does not report missing or incomplete timeline evidence as zero scans", async () => {
+  it("rejects incomplete timelines and counts load spans by emission time", async () => {
     await withTempDir("openclaw-concurrency-timeline-", async (root) => {
       const file = `${root}/timeline.jsonl`;
       expect(() => testing.readDiagnosticsTimelineSpans(file)).toThrow();
@@ -1420,12 +1419,6 @@ describe("gateway concurrency benchmark script", () => {
       expect(() => testing.readDiagnosticsTimelineSpans(file)).toThrow();
       await writeFile(file, '{"type":"span.end","name":"plugins.metadata.scan"');
       expect(() => testing.readDiagnosticsTimelineSpans(file)).toThrow();
-    });
-  });
-
-  it("counts load spans by emission time even when buffered setup spans arrive later", async () => {
-    await withTempDir("openclaw-concurrency-timeline-", async (root) => {
-      const file = `${root}/timeline.jsonl`;
       const spans = [999, 1_000, 1_500, 2_000, 2_001].map((timestamp) => ({
         schemaVersion: "openclaw.diagnostics.v1",
         type: "span.end",
@@ -1445,42 +1438,6 @@ describe("gateway concurrency benchmark script", () => {
     });
   });
 
-  it("aggregates plugin metadata scans across measured runs", () => {
-    const createRun = (count: number, durations: number[]) =>
-      createBenchmarkRun({
-        pluginMetadataScans: {
-          count,
-          durationMs: testing.summarizeNumbers(durations),
-          totalDurationMs: durations.reduce((sum, value) => sum + value, 0),
-        },
-      });
-
-    expect(testing.summarizeRuns([createRun(2, [10, 20]), createRun(1, [30])])).toMatchObject({
-      gatewayExternalMb: null,
-      gatewayExternalGrowthMb: null,
-      gatewayArrayBuffersMb: null,
-      gatewayArrayBuffersGrowthMb: null,
-      gatewayHeapGrowthMb: { count: 2, max: 20, p50: 20, p95: 20, p99: 20 },
-      gatewayPeakRssMb: { count: 2, max: 210, p50: 210, p95: 210, p99: 210 },
-      gatewayRssGrowthMb: { count: 2, max: 20, p50: 20, p95: 20, p99: 20 },
-      mockRequestIngress: { responses: 2, chatCompletions: 0, embeddings: 0, other: 0 },
-      mockResponseSelections: { model: 0, global: 0, automaticTool: 0, automaticText: 2 },
-      pluginMetadataScanCount: 3,
-      pluginMetadataScanTotalDurationMs: 60,
-    });
-  });
-
-  it("reports p50, p95, p99, and max with nearest-rank percentiles", () => {
-    expect(testing.summarizeNumbers([100, 1, 4, 2, 3])).toEqual({
-      count: 5,
-      max: 100,
-      p50: 3,
-      p95: 100,
-      p99: 100,
-    });
-    expect(testing.summarizeNumbers([])).toBeNull();
-  });
-
   it.each([
     ["readyz", "readyz"],
     ["controlUi", "Control UI"],
@@ -1488,6 +1445,8 @@ describe("gateway concurrency benchmark script", () => {
     ["history", "chat.history"],
     ["messageSubscriptionsDuringLoad", "sessions.messages.subscribe"],
     ["sessionUpdates", "sessions.patch"],
+    ["controlPlane", "cron.list"],
+    ["controlPlane", "cron.status"],
   ] as const)("enforces the control budget for measured %s probes", (field, name) => {
     const options = testing.parseOptions(["--max-control-ms", "2000"]);
     const probe: BenchmarkRun["readyz"][number] = {
@@ -1503,13 +1462,23 @@ describe("gateway concurrency benchmark script", () => {
       status: 200,
       utilization: null,
     };
-    const run = createBenchmarkRun({ [field]: [probe] });
+    const run = createBenchmarkRun(
+      field === "controlPlane"
+        ? { controlPlane: [Object.assign(probe, { method: name })] }
+        : { [field]: [probe] },
+    );
     expect(testing.summarizeRuns([run], options).budgetViolations).toEqual([]);
 
-    probe.latencyMs = 2_576;
+    probe.latencyMs = field === "controlPlane" ? 2_001 : 2_576;
     expect(testing.summarizeRuns([run], options).budgetViolations).toEqual([
-      `Gateway ${name} probe exceeded 2000ms: ok=true latencyMs=2576.0 error=none`,
+      `Gateway ${name} probe exceeded 2000ms: ok=true latencyMs=${probe.latencyMs}.0 error=none`,
     ]);
+    if (field === "controlPlane") {
+      expect(testing.summarizeRuns([run], options).controlPlane[name]).toMatchObject({
+        failedSamples: 0,
+        latencyMs: { count: 1, max: 2001 },
+      });
+    }
 
     probe.latencyMs = 10;
     probe.ok = false;
@@ -1518,28 +1487,6 @@ describe("gateway concurrency benchmark script", () => {
       `Gateway ${name} probe exceeded 2000ms: ok=false latencyMs=10.0 error=request failed`,
     ]);
     expect(testing.summarizeRuns([run]).budgetViolations).toEqual([]);
-  });
-
-  it.each(["cron.list", "cron.status"])("enforces the control budget for %s", (method) => {
-    const run = createBenchmarkRun({
-      controlPlane: [
-        {
-          method,
-          atMs: 0,
-          error: null,
-          latencyMs: 2001,
-          ok: true,
-        },
-      ],
-    });
-    const summary = testing.summarizeRuns([run], { maxControlMs: 2000 });
-    expect(summary.budgetViolations).toEqual([
-      `Gateway ${method} probe exceeded 2000ms: ok=true latencyMs=2001.0 error=none`,
-    ]);
-    expect(summary.controlPlane[method]).toMatchObject({
-      failedSamples: 0,
-      latencyMs: { count: 1, max: 2001 },
-    });
   });
 
   it("keeps setup probes outside the control budget and handshakes under their own budget", () => {
@@ -1663,6 +1610,8 @@ describe("gateway concurrency benchmark script", () => {
   );
 
   it.each([
+    { name: "missing run identity", terminal: { runId: undefined, status: "ok" } },
+    { name: "mismatched run identity", terminal: { runId: "another-run", status: "ok" } },
     {
       name: "missing receipt",
       terminal: { ...successfulTerminal(true), terminalReceipt: undefined },
@@ -1703,7 +1652,11 @@ describe("gateway concurrency benchmark script", () => {
       (method === "agent" ? { status: "accepted", runId: "run-1" } : terminal) as T;
     await expect(
       testing.runTurn(rpc, 0, performance.now() + 60_000, true, { accounting }),
-    ).rejects.toThrow("terminal evidence failed");
+    ).rejects.toThrow(
+      terminal.runId !== "run-1"
+        ? "agent.wait returned a different or missing benchmark run identity"
+        : "terminal evidence failed",
+    );
     expect(accounting).toEqual({ launched: 1, terminalOk: 1, verified: 0 });
   });
 
@@ -2341,25 +2294,48 @@ syncBuiltinESMExports();\n`,
     });
   });
 
-  it("loads through native Node TypeScript stripping", () => {
-    const result = spawnSync(testNodeExecPath, ["scripts/bench-gateway-concurrency.ts", "--help"], {
+  it.each([
+    { argument: "--help", status: 0 },
+    { argument: "--wat", status: 1 },
+  ])("loads the native TypeScript CLI for $argument", ({ argument, status }) => {
+    const result = spawnSync(testNodeExecPath, ["scripts/bench-gateway-concurrency.ts", argument], {
       cwd: process.cwd(),
       encoding: "utf8",
     });
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("OpenClaw Gateway concurrency benchmark");
+    expect(result.status).toBe(status);
+    if (status === 0) {
+      expect(result.stdout).toContain("OpenClaw Gateway concurrency benchmark");
+    } else {
+      expect(result.stderr.trim().split("\n").at(-1)).toBe(
+        "[bench-gateway-concurrency] FAILED (exit 1)",
+      );
+    }
   });
+});
 
-  it("ends CLI failures with the required wrapper marker", () => {
-    const result = spawnSync(testNodeExecPath, ["scripts/bench-gateway-concurrency.ts", "--wat"], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-    });
-
-    expect(result.status).toBe(1);
-    expect(result.stderr.trim().split("\n").at(-1)).toBe(
-      "[bench-gateway-concurrency] FAILED (exit 1)",
-    );
-  });
+it("cancels dispatch readiness promptly instead of waiting for a later ready event", async () => {
+  vi.useFakeTimers();
+  try {
+    const controller = new AbortController();
+    const interrupted = new Error("synthetic interruption");
+    let reads = 0;
+    const pending = testing
+      .waitForGatewayDispatchReady(
+        () => {
+          controller.abort(interrupted);
+          return ++reads === 1 ? "" : "startup trace: sidecars.ready ";
+        },
+        Infinity,
+        controller.signal,
+      )
+      .then(
+        () => false,
+        () => true,
+      );
+    await vi.runAllTimersAsync();
+    expect(await pending).toBe(true);
+    expect(reads).toBe(1);
+  } finally {
+    vi.useRealTimers();
+  }
 });

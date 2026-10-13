@@ -2,6 +2,7 @@ import path from "node:path";
 import type { WorkerOptions } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   listRegisteredAgentHarnesses,
@@ -11,11 +12,11 @@ import { restoreRegisteredAgentHarnesses } from "../../agents/harness/registry.t
 import * as completionOwner from "../../agents/subagents/registry/subagent-registry-lifecycle-completion.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
+import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import {
   cleanupSubagentRegistryPersistenceTest,
   settleSubagentRegistryPersistenceWork,
 } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
-import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import {
   registerSubagentRun,
   claimSubagentRunKill,
@@ -32,14 +33,19 @@ import {
 import { resolveSessionStorePathCore } from "../../config/sessions.js";
 import {
   loadSessionEntry,
+  replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
 import * as sessionLifecycleOwner from "../../config/sessions/session-accessor.sqlite-lifecycle.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  resolveIncognitoOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -136,7 +142,7 @@ async function request(
     context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
     respond: (ok, payload, error) => {
       if (!ok) {
-        throw new Error(error?.message ?? "request failed");
+        throw new GatewayClientRequestError(error ?? { message: "request failed" });
       }
       result = payload;
     },
@@ -179,9 +185,14 @@ async function registerCollector(id: string, childSessionKey = key, agentId = "m
   await registerSubagentRun({
     runId: id,
     childSessionKey,
+    childAgentId: agentId,
+    sessionEntry: loadSessionEntry({
+      storePath: cfg.session?.store,
+      agentId,
+      sessionKey: childSessionKey,
+    }),
     requesterSessionKey: "agent:main:main",
     requesterAgentId: "main",
-    agentId,
     requesterDisplayKey: "main",
     task: "failed collector launch",
     cleanup: "delete",
@@ -206,6 +217,13 @@ afterEach(async () => {
     stateDir,
     resetRegistry: () => resetSubagentRegistryForTests({ persist: false }),
     closeDatabases: () => {
+      memorySessionActorOwners.closeDatabase({
+        agentId: "worker",
+        path: resolveIncognitoOpenClawAgentSqlitePath({
+          agentId: "worker",
+          env: { OPENCLAW_STATE_DIR: stateDir },
+        }),
+      });
       closeOpenClawAgentDatabasesForTest();
       closeOpenClawStateDatabaseForTest();
     },
@@ -215,27 +233,24 @@ afterEach(async () => {
   env.restore();
 });
 
-test.each(["unchanged", "reset", "reset-reopen", "reopen-reset-reopen"])(
-  "collector cleanup retry: %s",
-  async (mode) => {
-    const reset = mode !== "unchanged";
-    if (mode === "reopen-reset-reopen") {
-      await reopen();
-    }
-    if (reset) {
-      await request("sessions.reset", { key });
-      expect(loadSessionEntry({ sessionKey: key })?.lifecycleRevision).not.toBe("original");
-    }
-    const beforeRetry = loadSessionEntry({ sessionKey: key });
-    if (mode.endsWith("reopen")) {
-      await reopen();
-    }
-    await testing.sweepOnceForTests();
-    expect(loadSessionEntry({ sessionKey: key })).toEqual(reset ? beforeRetry : undefined);
-    expect(attempts).toBe(reset ? 1 : 2);
-    await expectResultRetained();
-  },
-);
+test.each(["unchanged", "reopen-reset-reopen"])("collector cleanup retry: %s", async (mode) => {
+  const reset = mode !== "unchanged";
+  if (mode === "reopen-reset-reopen") {
+    await reopen();
+  }
+  if (reset) {
+    await request("sessions.reset", { key });
+    expect(loadSessionEntry({ sessionKey: key })?.lifecycleRevision).not.toBe("original");
+  }
+  const beforeRetry = loadSessionEntry({ sessionKey: key });
+  if (mode.endsWith("reopen")) {
+    await reopen();
+  }
+  await testing.sweepOnceForTests();
+  expect(loadSessionEntry({ sessionKey: key })).toEqual(reset ? beforeRetry : undefined);
+  expect(attempts).toBe(reset ? 1 : 2);
+  await expectResultRetained();
+});
 
 async function reopen() {
   await resetSubagentRegistryForTests({ persist: false });
@@ -327,9 +342,10 @@ async function startAnnouncingSubagent(id: string) {
   await registerSubagentRun({
     runId: id,
     childSessionKey: key,
+    childAgentId: "main",
+    sessionEntry: loadSessionEntry({ agentId: "main", sessionKey: key }),
     requesterSessionKey: "agent:main:main",
     requesterAgentId: "main",
-    agentId: "main",
     requesterDisplayKey: "main",
     task: "announced subagent",
     cleanup: "delete",
@@ -495,6 +511,8 @@ test("revocation rechecks terminal owners after awaited entry planning", async (
 test.each([false, true])(
   "custom-store reset revokes only its worker child (incognito: %s)",
   async (incognito) => {
+    await testing.sweepOnceForTests();
+    expect(loadSubagentRegistryFromSqlite().get(runId)?.collectorLaunchCleanupPending).toBe(false);
     const agentId = "worker";
     cfg = {
       agents: {
@@ -506,7 +524,9 @@ test.each([false, true])(
       session: { store: path.join(stateDir, "custom-sessions.json") },
     };
     setRuntimeConfigSnapshot(cfg);
-    const childSessionKey = `agent:${agentId}:${incognito ? "incognito" : "subagent"}:scoped-cleanup`;
+    const childSessionKey = incognito
+      ? `agent:${agentId}:dashboard:incognito-scoped-cleanup`
+      : `agent:${agentId}:subagent:scoped-cleanup`;
     const scope = {
       agentId,
       sessionKey: childSessionKey,
@@ -514,7 +534,7 @@ test.each([false, true])(
     };
     const id = "scoped-collector";
     const siblingKey = "agent:main:subagent:scoped-cleanup";
-    replaceSessionEntrySync(scope, {
+    await replaceSessionEntry(scope, {
       sessionId: "scoped-original",
       lifecycleRevision: "scoped-original",
       updatedAt: Date.now(),
@@ -533,7 +553,7 @@ test.each([false, true])(
     expect(loadSubagentRegistryFromSqlite().get(id)?.execution.suppressSessionEffects).toBe(true);
     if (incognito) {
       expect(loadSessionEntry(scope)).toBeUndefined();
-      replaceSessionEntrySync(scope, {
+      await replaceSessionEntry(scope, {
         sessionId: "private-successor",
         lifecycleRevision: "private-successor",
         updatedAt: Date.now(),

@@ -214,19 +214,7 @@ export function projectLiveAssistantBufferedText(
   suppress: boolean;
   pendingLeadFragment: boolean;
 } {
-  if (!rawText) {
-    return { text: "", suppress: true, pendingLeadFragment: false };
-  }
-  if (isSuppressedControlReplyText(rawText)) {
-    return { text: "", suppress: true, pendingLeadFragment: false };
-  }
-  if (options?.suppressLeadFragments !== false && isSuppressedControlReplyLeadFragment(rawText)) {
-    return { text: rawText, suppress: true, pendingLeadFragment: true };
-  }
   const withoutTrailingControlToken = stripSuppressedControlReplyToken(rawText);
-  if (!withoutTrailingControlToken) {
-    return { text: "", suppress: true, pendingLeadFragment: false };
-  }
   const text = startsWithSilentToken(withoutTrailingControlToken, SILENT_REPLY_TOKEN)
     ? stripLeadingSilentToken(withoutTrailingControlToken, SILENT_REPLY_TOKEN)
     : withoutTrailingControlToken;

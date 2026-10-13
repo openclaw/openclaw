@@ -7,6 +7,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { PluginRuntimeCloseRetainedError } from "../plugins/runtime-close-error.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { observeAgentRunApprovalWait } from "./agent-run-approval-wait.js";
 import { raceWithAbortSignal } from "./agent-tools.abort.js";
 import { runBridgeRequest } from "./code-mode-bridge.js";
@@ -19,26 +20,23 @@ import type {
 import type { CodeModeOutputState } from "./code-mode-json.js";
 import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import { CodeModeProgramDataInbox, type CodeModeReplyLease } from "./code-mode-program-data.js";
-import { createCodeModeResultsAccess, type CodeModeResultsAccess } from "./code-mode-results.js";
+import { createCodeModeResultsAccess } from "./code-mode-results.js";
 import type {
   CodeModeConfig,
   CodeModeSettlementMode,
   PendingBridgeRequest,
   SettledBridgeRequest,
 } from "./code-mode-runtime.js";
-import {
-  createCodeModeSessionStoreAccess,
-  type CodeModeSessionStoreAccess,
-} from "./code-mode-session-store.js";
+import { createCodeModeSessionStoreAccess } from "./code-mode-session-store.js";
 import { recordCodeModeToolOutcome } from "./code-mode-tool-outcome.js";
 import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
-import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import type { ToolSearchRuntime } from "./tool-search-runtime.js";
 import type { ToolSearchToolContext } from "./tool-search-types.js";
 import { ToolInputError } from "./tools/common.js";
 
 export type CodeModeBridgeDispatchState = {
   started: boolean;
+  workerId?: string;
 };
 
 export type PendingBridgeState = PendingBridgeRequest & {
@@ -295,13 +293,15 @@ function scheduleActiveRunExpiry(): void {
   if (!Number.isFinite(nextExpiresAt)) {
     return;
   }
-  activeRunExpiryTimer = setTimeout(
-    () => {
-      activeRunExpiryTimer = undefined;
-      removeExpiredRuns();
-      scheduleActiveRunExpiry();
-    },
-    Math.max(1, nextExpiresAt - Date.now()),
+  activeRunExpiryTimer = runInDetachedAsyncContext(() =>
+    setTimeout(
+      () => {
+        activeRunExpiryTimer = undefined;
+        removeExpiredRuns();
+        scheduleActiveRunExpiry();
+      },
+      Math.max(1, nextExpiresAt - Date.now()),
+    ),
   );
   activeRunExpiryTimer.unref?.();
 }
@@ -531,22 +531,10 @@ function isPendingBridgeRequestReplaySafe(
 
 export function createPendingBridgeStates(
   pendingRequests: PendingBridgeRequest[],
-  params: {
-    config: CodeModeConfig;
+  params: Omit<Parameters<typeof runBridgeRequest>[0], "request" | "reply" | "signal"> & {
     inbox: CodeModeProgramDataInbox;
-    results: CodeModeResultsAccess;
-    sessionStore?: CodeModeSessionStoreAccess;
-    runtime: ToolSearchRuntime;
-    catalogProjection: CodeModeCatalogProjection;
-    namespaceRuntime: CodeModeNamespaceRuntime;
-    parentToolCallId: string;
-    codeModeRunId: string;
-    remainingMs: number;
-    completionRequired?: boolean;
     activeRunId?: string;
-    ctx: ToolSearchToolContext;
     signal: AbortSignal;
-    onUpdate?: AgentToolUpdateCallback;
     bridgeDispatch: CodeModeBridgeDispatchState;
   },
 ): PendingBridgeState[] {
@@ -571,6 +559,8 @@ export function createPendingBridgeStates(
       params.bridgeDispatch.started = true;
     }
     const bridgeCall = runBridgeRequest({
+      activeRunId: params.activeRunId,
+      workerId: params.bridgeDispatch.workerId,
       runtime: params.runtime,
       results: params.results,
       sessionStore: params.sessionStore,

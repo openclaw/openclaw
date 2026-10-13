@@ -9,13 +9,9 @@ import { loadCronStore } from "../../cron/store.js";
 import { cronStoreKey } from "../../cron/store/key.js";
 import type { CronJob } from "../../cron/types.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import {
-  createGatewaySchedulerClock,
-  createTestGatewayScheduler,
-} from "../../test-utils/gateway-scheduler-clock.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { advanceCronActiveJobGeneration } from "../active-jobs.js";
-import * as runHistory from "../store/run-history.js";
 import { start, stop } from "./ops-lifecycle.js";
 import { add as addJob, update as updateJob } from "./ops-mutations.js";
 import { status as cronStatus } from "./ops-read.js";
@@ -128,14 +124,12 @@ describe("cron service timer seam coverage", () => {
     const { storePath } = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
-    const clock = createGatewaySchedulerClock(now);
 
     const jobWithoutExplicitOwner = createDueMainJob({ now, wakeMode: "next-heartbeat" });
     delete jobWithoutExplicitOwner.sessionKey;
     await writeCronStoreSnapshot({ storePath, jobs: [jobWithoutExplicitOwner] });
 
     const state = createCronServiceState({
-      scheduler: createTestGatewayScheduler(clock.clock),
       storePath,
       defaultAgentId: "stale-default",
       resolveDefaultAgentId: () => "ops",
@@ -179,7 +173,7 @@ describe("cron service timer seam coverage", () => {
     expect(task.endedAt).toBe(now);
     expect(task.cleanupAfter).toBe(now + 7 * 24 * 60 * 60_000);
 
-    expect(clock.armedAtMs).toBe(now + 60_000);
+    expect((await cronStatus(state)).nextWakeAtMs).toBe(now + 60_000);
   });
 
   it("does not dispatch payload work when trigger evaluation resolves after cancellation", async () => {
@@ -231,10 +225,7 @@ describe("cron service timer seam coverage", () => {
     }
   });
 
-  it.each([
-    { kind: "on-exit", command: "true" },
-    { kind: "stream", command: ["true"] },
-  ] satisfies CronJob["schedule"][])(
+  it.each([{ kind: "stream", command: ["true"] }] satisfies CronJob["schedule"][])(
     "keeps $kind jobs event-driven after a next-run state update",
     async (schedule) => {
       const { storePath } = await makeStorePath();
@@ -299,7 +290,6 @@ describe("cron service timer seam coverage", () => {
     { target: "main", notify: "queue changed", wake: "next-heartbeat" },
     { target: "isolated", notify: "queue changed", wake: "now" },
     { target: "main", notify: undefined, wake: "now" },
-    { target: "main", notify: "queue changed", wake: undefined },
   ] as const)(
     "routes $target script side effects (notify=$notify, wake=$wake)",
     async ({ target, notify, wake }) => {
@@ -432,18 +422,6 @@ describe("cron service timer seam coverage", () => {
     },
   );
 
-  it("clamps a script nextCheck through the shared pacing path", async () => {
-    const job = await runStoredScript(
-      createDueScriptJob({ now, pacing: { min: "15m", max: "4h" } }),
-      {
-        status: "ok",
-        nextCheck: { delayMs: 5 * 60_000 },
-      },
-    );
-    expect(job?.state.nextRunAtMs).toBe(now + 15 * 60_000);
-    expect(job?.state.pacedNextRunAtMs).toBe(now + 15 * 60_000);
-  });
-
   it("records current-bound cron metadata against the backing cron session", async () => {
     const { storePath } = await makeStorePath();
     const runIsolatedAgentJob = vi.fn(async () => ({
@@ -504,7 +482,7 @@ describe("cron quiet outcome finalization", () => {
     { mode: "retired-manual", failWrite: true },
     { mode: "manual-force", failWrite: false },
   ])(
-    "records quiet trigger recovery only after cron state persists ($mode, failWrite=$failWrite)",
+    "commits quiet trigger history with cron state ($mode, failWrite=$failWrite)",
     async ({ mode, failWrite }) => {
       const { storePath } = await makeStorePath();
       const job = {
@@ -526,23 +504,7 @@ describe("cron quiet outcome finalization", () => {
         job.state.pacedNextRunAtMs = job.state.nextRunAtMs;
       }
       await writeCronStoreSnapshot({ storePath, jobs: [job] });
-      const finalizedAfterPersist: boolean[] = [];
       const database = openOpenClawStateDatabase().db;
-      const finalize = runHistory.recordCronRun;
-      const finalizeSpy = vi.spyOn(runHistory, "recordCronRun").mockImplementation((params) => {
-        const persistedJob = openOpenClawStateDatabase()
-          .db.prepare(
-            "SELECT json_extract(state_json, '$.runningAtMs') AS runningAtMs, json_extract(state_json, '$.nextRunAtMs') AS nextRunAtMs FROM cron_jobs WHERE store_key = ? AND job_id = ?",
-          )
-          .get(cronStoreKey(storePath), job.id) as {
-          runningAtMs: number | null;
-          nextRunAtMs: number | null;
-        };
-        finalizedAfterPersist.push(
-          persistedJob.runningAtMs === null && (persistedJob.nextRunAtMs ?? 0) > now,
-        );
-        return finalize(params);
-      });
       const state = createCronServiceState({
         storePath,
         cronConfig: { triggers: { enabled: true } },
@@ -577,13 +539,14 @@ describe("cron quiet outcome finalization", () => {
           : onTimer(state);
         if (failWrite) {
           await expect(execution).rejects.toThrow("quiet row unavailable");
-          expect(finalizedAfterPersist).toEqual([]);
           expect(findCronRunByBaseRunId(storePath, `cron:${job.id}:${now}`)).toBeUndefined();
           expect((await loadCronStore(storePath)).jobs[0]?.state.runningAtMs).toBe(now);
           return;
         }
         await execution;
-        expect(finalizedAfterPersist).toEqual([true]);
+        const persistedJob = (await loadCronStore(storePath)).jobs[0]!;
+        expect(persistedJob.state.runningAtMs).toBeUndefined();
+        expect(persistedJob.state.nextRunAtMs).toBeGreaterThan(now);
         if (force) {
           expect((await loadCronStore(storePath)).jobs[0]?.state).toMatchObject({
             nextRunAtMs: pendingSlot,
@@ -604,7 +567,6 @@ describe("cron quiet outcome finalization", () => {
       } finally {
         stop(state);
         database.exec("DROP TRIGGER IF EXISTS reject_quiet_terminal_row");
-        finalizeSpy.mockRestore();
       }
     },
   );

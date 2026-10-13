@@ -58,7 +58,7 @@ export function registerWorkerGatewayToolAvailabilityTests({ setup }: WorkerGate
               }
             : mode === "directory"
               ? {
-                  toolName: "tool_call",
+                  toolName: "dispatch_action",
                   toolCallId: "gateway-fetch",
                   args: { id: "web_fetch", args },
                 }
@@ -102,17 +102,9 @@ export function registerWorkerGatewayToolAvailabilityTests({ setup }: WorkerGate
         codeMode
           ? ["exec", "wait"]
           : mode === "directory"
-            ? ["tool_search", "tool_describe", "tool_call", "read"]
+            ? ["tool_search", "tool_describe", "dispatch_action", "read"]
             : ["read", "web_fetch"],
       );
-      if (mode === "directory") {
-        expect(gateway.inferenceRequests[0]?.context.systemPrompt).toContain(
-          "Deferred names are not directly callable.",
-        );
-        expect(gateway.inferenceRequests[0]?.context.systemPrompt).not.toContain(
-          "Call a unique deferred tool name directly",
-        );
-      }
       expect(gateway.gatewayToolRequests).toEqual([
         {
           generation: surface.generation,

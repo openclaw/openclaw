@@ -152,41 +152,28 @@ export function resolveQaLiveCliAuthEnv(
       "Claude CLI API-key QA mode requires ANTHROPIC_API_KEY or OPENCLAW_LIVE_ANTHROPIC_KEY",
     );
   }
-  const preserveEnvValues = (() => {
-    if (!opts?.forwardHostHomeForClaudeCli) {
-      return undefined;
-    }
+  const claudeCliEnv: Record<string, string> = {};
+  if (opts?.forwardHostHomeForClaudeCli) {
     const values = parsePreservedCliEnv(baseEnv).filter((entry) => entry !== "ANTHROPIC_API_KEY");
     if (authMode === "api-key" || (authMode === "auto" && hasAnthropicKey)) {
       values.push("ANTHROPIC_API_KEY");
     }
-    return JSON.stringify(uniqueStrings(values));
-  })();
-  const claudeCliEnv = opts?.forwardHostHomeForClaudeCli
-    ? {
-        [QA_LIVE_CLI_BACKEND_AUTH_MODE_ENV]: authMode,
-        ...(preserveEnvValues ? { [QA_LIVE_CLI_BACKEND_PRESERVE_ENV]: preserveEnvValues } : {}),
-      }
-    : {};
-  const configuredCodexHome = baseEnv.CODEX_HOME?.trim();
-  if (configuredCodexHome) {
-    return {
-      CODEX_HOME: configuredCodexHome,
-      ...claudeCliEnv,
-      ...(opts?.forwardHostHomeForClaudeCli && baseEnv.HOME?.trim()
-        ? { HOME: baseEnv.HOME.trim() }
-        : {}),
-    };
+    claudeCliEnv[QA_LIVE_CLI_BACKEND_AUTH_MODE_ENV] = authMode;
+    claudeCliEnv[QA_LIVE_CLI_BACKEND_PRESERVE_ENV] = JSON.stringify(uniqueStrings(values));
   }
+  const configuredCodexHome = baseEnv.CODEX_HOME?.trim();
   const hostHome = baseEnv.HOME?.trim();
-  if (!hostHome) {
+  if (!configuredCodexHome && !hostHome) {
     return {};
   }
-  const codexHome = path.join(hostHome, ".codex");
+  const defaultCodexHome = hostHome && path.join(hostHome, ".codex");
+  const codexHome =
+    configuredCodexHome ||
+    (defaultCodexHome && existsSync(defaultCodexHome) ? defaultCodexHome : undefined);
   return {
-    ...(existsSync(codexHome) ? { CODEX_HOME: codexHome } : {}),
+    ...(codexHome ? { CODEX_HOME: codexHome } : {}),
     ...claudeCliEnv,
-    ...(opts?.forwardHostHomeForClaudeCli ? { HOME: hostHome } : {}),
+    ...(opts?.forwardHostHomeForClaudeCli && hostHome ? { HOME: hostHome } : {}),
   };
 }
 

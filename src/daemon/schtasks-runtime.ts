@@ -1,6 +1,5 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnOptions } from "node:child_process";
 import fs from "node:fs/promises";
-import { isDeepStrictEqual } from "node:util";
 import { hasErrnoCode } from "../infra/errno.js";
 import { findVerifiedGatewayListenerPidsOnPortSync } from "../infra/gateway-processes.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
@@ -30,8 +29,10 @@ import {
   findInstalledGatewayChildPid,
   findInstalledProcessPid,
   isNodeHostArgv,
-  probeProcessState,
   readWindowsProcessSnapshot,
+} from "./schtasks-process-snapshot.js";
+import {
+  probeProcessState,
   resolveGatewayListenerPids,
   readBoundedScheduledTaskProcess,
   resolveListenerBackedScheduledTaskRuntime,
@@ -201,65 +202,58 @@ export async function launchFallbackTaskScript(
   const scriptPath = resolveTaskScriptPath(env);
   const command =
     installedCommand === undefined ? await readScheduledTaskCommand(env) : installedCommand;
+  let argv: string[];
+  let options: SpawnOptions;
   if (command?.programArguments.length) {
-    // Task inspection intentionally hides the wrapper flag so it can match the
-    // inner Gateway. Direct fallback must restore that wrapper or it loses the
-    // Job Object owner that terminates the whole Gateway process tree.
-    const programArguments =
+    // Task inspection hides the wrapper flag; direct launches still need its process-tree owner.
+    argv =
       command.environment?.OPENCLAW_SERVICE_KIND === "gateway"
         ? [...command.programArguments, WINDOWS_TASK_SUPERVISOR_FLAG]
         : command.programArguments;
-    const { child } = await spawnWithFallback({
-      assertCurrent,
-      argv: programArguments,
-      options: {
-        cwd: command.workingDirectory || undefined,
-        detached: true,
-        env: mergeProcessEnv([process.env, command.environment]),
+    options = {
+      cwd: command.workingDirectory || undefined,
+      env: mergeProcessEnv([process.env, command.environment]),
+    };
+  } else {
+    // Preserve native missing-script errors before testing the actual cmd.exe access contract.
+    await (await fs.open(scriptPath, "r")).close();
+    // libuv uses backup semantics, so privileged Node opens can bypass the DACL that cmd enforces.
+    const scriptProbe = spawnSync(
+      getWindowsPowerShellExePath(),
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-EncodedCommand",
+        Buffer.from(
+          "$ErrorActionPreference='Stop'; [System.IO.File]::OpenRead($env:OPENCLAW_TASK_SCRIPT).Dispose()",
+          "utf16le",
+        ).toString("base64"),
+      ],
+      {
+        env: { ...resolveServiceManagerEnv(), OPENCLAW_TASK_SCRIPT: scriptPath },
         stdio: "ignore",
         windowsHide: true,
       },
-    });
-    child.unref();
-    return;
-  }
-  // Preserve native missing-script errors before testing the actual cmd.exe access contract.
-  await (await fs.open(scriptPath, "r")).close();
-  // libuv uses backup semantics, so privileged Node opens can bypass the DACL that cmd enforces.
-  const scriptProbe = spawnSync(
-    getWindowsPowerShellExePath(),
-    [
-      "-NoProfile",
-      "-NonInteractive",
-      "-EncodedCommand",
-      Buffer.from(
-        "$ErrorActionPreference='Stop'; [System.IO.File]::OpenRead($env:OPENCLAW_TASK_SCRIPT).Dispose()",
-        "utf16le",
-      ).toString("base64"),
-    ],
-    {
-      env: { ...resolveServiceManagerEnv(), OPENCLAW_TASK_SCRIPT: scriptPath },
-      stdio: "ignore",
-      windowsHide: true,
-    },
-  );
-  if (scriptProbe.error) {
-    throw scriptProbe.error;
-  }
-  if (scriptProbe.status !== 0) {
-    throw Object.assign(new Error("Windows login item script is not readable"), { code: "EACCES" });
+    );
+    if (scriptProbe.error) {
+      throw scriptProbe.error;
+    }
+    if (scriptProbe.status !== 0) {
+      throw Object.assign(new Error("Windows login item script is not readable"), {
+        code: "EACCES",
+      });
+    }
+    // Node's verbatim /s shell contract preserves inner quotes; percent expansion is nonrecursive.
+    argv = [getWindowsCmdExePath(), "/d", "/s", "/v:off", "/c", '""%OPENCLAW_TASK_SCRIPT%""'];
+    options = {
+      env: { ...process.env, OPENCLAW_TASK_SCRIPT: scriptPath },
+      windowsVerbatimArguments: true,
+    };
   }
   const { child } = await spawnWithFallback({
     assertCurrent,
-    // Node's verbatim /s shell contract preserves inner quotes; percent expansion is nonrecursive.
-    argv: [getWindowsCmdExePath(), "/d", "/s", "/v:off", "/c", '""%OPENCLAW_TASK_SCRIPT%""'],
-    options: {
-      detached: true,
-      env: { ...process.env, OPENCLAW_TASK_SCRIPT: scriptPath },
-      stdio: "ignore",
-      windowsHide: true,
-      windowsVerbatimArguments: true,
-    },
+    argv,
+    options: { detached: true, stdio: "ignore", windowsHide: true, ...options },
   });
   child.unref();
 }
@@ -270,57 +264,40 @@ export async function readStartupEntryState(
   args: ReadGatewayServiceStateArgs,
 ): Promise<GatewayServiceState> {
   const deadline = args.timeoutMs === undefined ? undefined : performance.now() + args.timeoutMs;
-  const capture = async () => {
-    const contents: string[] = [];
-    const command = await readStartupEntryCommand(startupEntryPath, {
-      deadline,
-      onLauncherContent: (content) => contents.push(content),
-    });
-    return { command, contents };
-  };
   let command: GatewayServiceCommandConfig | null = null;
   let env = args.env ?? process.env;
+  let runtime: GatewayServiceRuntime;
+  let loadState: GatewayServiceState["loadState"] = { status: "loaded" };
   try {
-    const captured = await capture();
-    command = captured.command;
+    command = await readStartupEntryCommand(startupEntryPath, { deadline });
     env = mergeGatewayServiceEnv(env, command);
     args.validateEnvBeforeStatusRead?.(env);
-    let runtime = await resolveFallbackRuntime(env, command, "control", deadline).catch(
+    runtime = await resolveFallbackRuntime(env, command, "control", deadline).catch(
       (error: unknown) => createServiceRuntimeInspectionFailure(error, args.timeoutMs),
     );
-    if (!isDeepStrictEqual(await capture(), captured)) {
-      throw new Error("Startup launcher changed during runtime inspection.");
-    }
     if (deadline !== undefined && performance.now() >= deadline) {
       runtime = createServiceRuntimeInspectionFailure(
         "Startup runtime inspection timed out.",
         args.timeoutMs,
       );
     }
-    return {
-      installed: true,
-      loadState: { status: "loaded" },
-      running: runtime.status === "running",
-      env,
-      command,
-      runtime,
-      ...(runtime.inspectionReason ? { inspectionReason: runtime.inspectionReason } : {}),
-    };
   } catch (error) {
     if (!(error instanceof ScheduledTaskInspectionError) || error.timeoutMs === undefined) {
       throw error;
     }
-    const runtime = createServiceRuntimeInspectionFailure(error, args.timeoutMs);
-    return {
-      installed: command !== null,
-      loadState: { status: "unknown", detail: runtime.inspectionFailure.detail },
-      running: false,
-      env,
-      command,
-      runtime,
-      ...(runtime.inspectionReason ? { inspectionReason: runtime.inspectionReason } : {}),
-    };
+    const failed = createServiceRuntimeInspectionFailure(error, args.timeoutMs);
+    runtime = failed;
+    loadState = { status: "unknown", detail: failed.inspectionFailure.detail };
   }
+  return {
+    installed: command !== null,
+    loadState,
+    running: runtime.status === "running",
+    env,
+    command,
+    runtime,
+    ...(runtime.inspectionReason ? { inspectionReason: runtime.inspectionReason } : {}),
+  };
 }
 
 export async function resolveFallbackRuntime(
@@ -534,7 +511,7 @@ export async function stopStartupEntry(
 ): Promise<void> {
   const runtime = await resolveControllableFallbackRuntime(env);
   if (runtime.pid) {
-    await terminateGatewayProcessTree(runtime.pid, 300, assertCurrent);
+    await terminateGatewayProcessTree(runtime.pid, assertCurrent);
   }
   onMutation?.();
   stdout.write(`${formatLine("Stopped Windows login item", resolveTaskName(env))}\n`);
@@ -543,13 +520,18 @@ export async function stopStartupEntry(
 export async function terminateInstalledStartupRuntime(
   env: GatewayServiceEnv,
   assertCurrent?: () => void,
+  beforeMutation?: () => Promise<void>,
 ): Promise<void> {
   if (!(await isStartupEntryInstalled(env))) {
     return;
   }
   const runtime = await resolveControllableFallbackRuntime(env);
   if (runtime.pid) {
-    await terminateGatewayProcessTree(runtime.pid, 300, assertCurrent);
+    if (beforeMutation) {
+      await beforeMutation();
+      assertCurrent?.();
+    }
+    await terminateGatewayProcessTree(runtime.pid, assertCurrent);
   }
 }
 
@@ -561,7 +543,7 @@ export async function restartStartupEntry(
 ): Promise<GatewayServiceRestartResult> {
   const runtime = await resolveControllableFallbackRuntime(env);
   if (runtime.pid) {
-    await terminateGatewayProcessTree(runtime.pid, 300, assertCurrent);
+    await terminateGatewayProcessTree(runtime.pid, assertCurrent);
     onMutation?.("stop");
   }
   await launchFallbackTaskScript(env, undefined, assertCurrent);
@@ -600,6 +582,9 @@ export async function readScheduledTaskRuntime(
   env: GatewayServiceEnv = process.env as GatewayServiceEnv,
   opts?: GatewayServiceReadOptions,
 ): Promise<GatewayServiceRuntime> {
+  if (opts?.commandInspection?.kind === "unavailable") {
+    throw opts.commandInspection.error;
+  }
   const deadlineMs = opts?.timeoutMs === undefined ? undefined : performance.now() + opts.timeoutMs;
   const probe = probeScheduledTaskState(resolveTaskName(env), opts?.timeoutMs);
   if (probe.status === "missing") {
@@ -618,12 +603,19 @@ export async function readScheduledTaskRuntime(
     probe.state === 4 ? "running" : probe.state === 1 || probe.state === 3 ? "stopped" : "unknown";
   // A detached/lingering process may outlive its task. Retain exact persisted-argv ownership
   // evidence (including PID) without treating it as proof of Scheduler supervision.
-  const installedCommand = opts?.requireLoaded
-    ? await readScheduledTaskCommand(env, {
-        ...opts,
-        timeoutMs: deadlineMs === undefined ? undefined : deadlineMs - performance.now(),
-      })
-    : undefined;
+  const readCommand = () =>
+    readScheduledTaskCommand(env, {
+      ...opts,
+      requireEffective: true,
+      requireLoaded: true,
+      timeoutMs: deadlineMs === undefined ? undefined : deadlineMs - performance.now(),
+    });
+  const installedCommand =
+    opts?.commandInspection?.kind === "absent"
+      ? null
+      : opts?.commandInspection?.kind === "present"
+        ? (opts.commandInspection.command ?? (await readCommand()))
+        : await readCommand();
   const observedRuntime = await resolveListenerBackedScheduledTaskRuntime(
     env,
     deadlineMs,
@@ -631,7 +623,16 @@ export async function readScheduledTaskRuntime(
   );
   return {
     ...observedRuntime,
-    status: status === "unknown" ? status : (observedRuntime?.status ?? status),
+    status:
+      status === "unknown"
+        ? status
+        : (observedRuntime?.status ?? (status === "running" ? "unknown" : status)),
+    ...(!observedRuntime && status === "running"
+      ? {
+          detail:
+            "Scheduled Task is running, but no process matching its current command could be verified.",
+        }
+      : {}),
     state: ["Unknown", "Disabled", "Queued", "Ready", "Running"][probe.state ?? 0],
     lastRunTime: probe.lastRunTime,
     lastRunResult: probe.lastRunResult,

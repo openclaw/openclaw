@@ -64,7 +64,9 @@ const unavailable = () => {
 };
 const context: PluginCapabilityCatalogHostContext = {
   isProviderApiKeyConfigured: unavailable,
+  isProviderApiKeyConfiguredAsync: unavailable,
   isProviderAuthProfileConfigured: unavailable,
+  isProviderAuthProfileConfiguredAsync: unavailable,
   resolveAgentDir: unavailable,
   createRealtimeTranscriptionWebSocketSession: unavailable,
   resolveProviderRequestHeaders: unavailable,

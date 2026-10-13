@@ -680,6 +680,51 @@ describe("resolveFollowupDeliveryDecision", () => {
 });
 
 describe("deliverFollowupDecision", () => {
+  it("retains the event source delivery owner through progress and final settlement", async () => {
+    const source = vi.fn(async () => {});
+    const laterDispatcher = vi.fn(async () => {});
+    const turn = createTurn();
+    turn.queued.run.internalEventExecution = { onStarted: vi.fn(), onTerminal: vi.fn() };
+    turn.queued.queuedFollowupReplyDisposition = { kind: "deliver", deliver: source };
+    deliveryState.routeReply.mockClear();
+    const params = {
+      turn,
+      defaults: createDefaults(laterDispatcher),
+      runId: "event-run",
+      runFollowup: vi.fn(async () => {}),
+    };
+    await deliverFollowupDecision({
+      ...params,
+      kind: "block",
+      decision: { kind: "deliver", payloads: [{ text: "progress" }] },
+    });
+    expect(source).toHaveBeenCalledExactlyOnceWith({
+      kind: "queued-followup",
+      runId: "event-run",
+      originatingChannel: "discord",
+      payloads: [{ text: "progress" }],
+      completion: { kind: "progress" },
+    });
+    const final = await deliverFollowupDecision({
+      ...params,
+      decision: { kind: "deliver", payloads: [{ text: "done" }] },
+    });
+    expect(final).toEqual({ kind: "completed", payloads: [{ text: "done" }] });
+    expect(source).toHaveBeenCalledOnce();
+    expect(deliveryState.routeReply).not.toHaveBeenCalled();
+    expect(laterDispatcher).not.toHaveBeenCalled();
+
+    turn.queued.queuedFollowupReplyDisposition = undefined;
+    await expect(
+      deliverFollowupDecision({
+        ...params,
+        decision: { kind: "deliver", payloads: [{ text: "must not reroute" }] },
+      }),
+    ).rejects.toThrow("Internal event lost its originating delivery owner");
+    expect(deliveryState.routeReply).not.toHaveBeenCalled();
+    expect(laterDispatcher).not.toHaveBeenCalled();
+  });
+
   it("keeps dispatcher-only delivery out of a routable origin", async () => {
     const onBlockReply = vi.fn(async (_payload: ReplyPayload) => {});
     deliveryState.followupRoute = { route: "dispatcher" };

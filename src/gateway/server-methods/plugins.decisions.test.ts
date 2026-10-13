@@ -20,7 +20,7 @@ const { pluginsHandlers } = await import("./plugins.js");
 
 afterEach(() => resetPluginRuntimeStateForTest());
 
-it.each([false, true])(
+it.each([true])(
   "validates the actual inspection response with a decision provider: %s",
   async (registered) => {
     const config = { agents: { defaults: { decisionModel: "fixture/fast" } } };

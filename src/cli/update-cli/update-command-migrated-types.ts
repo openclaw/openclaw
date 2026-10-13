@@ -22,18 +22,13 @@ export type UpdatePostCoreInput = {
   opts: Pick<UpdateCommandOptions, "json" | "restart" | "yes" | "acceptCapabilities" | "timeout">;
 };
 
-export type UpdateDoctorInput = {
-  executor: UpdateCommandChildGrant;
-  runId: string;
-  root: string;
+export type UpdateDoctorInput = Omit<UpdatePostCoreInput, "opts"> & {
   configInputHash: string;
-  requester?: UpdateRequester;
   repair: boolean;
   yes?: boolean;
   workspaceSuggestions?: boolean;
   postCoreSchemaRepair?: true;
   databaseGenerations?: UpdateDatabaseGenerations;
-  originalRecoveryCapture?: UpdateRecoveryBaselineRef;
 };
 
 export type MigratedUpdateFinalizationInput = Partial<UpdateTimeoutHandoff> & {

@@ -93,6 +93,7 @@ import { parsePermissiveBooleanToken } from "./lib/arg-utils.mts";
 import {
   getChangedPathFacts,
   isTestFileTarget,
+  isTestOnlyPath,
   isTestSupportFileTarget,
 } from "./lib/changed-path-facts.mjs";
 import {
@@ -107,9 +108,11 @@ import {
 } from "./lib/gateway-server-test-plan.mts";
 import { GIT_LS_FILES_MAX_BUFFER_BYTES } from "./lib/list-test-files.mts";
 import {
+  readRuntimeWorkerDescriptorReads,
   readTestSelectorExportNames,
   readTestSelectorImportNames,
   readTestSelectorSourceFacts,
+  runtimeWorkerSpecifier,
 } from "./lib/test-selector-source-facts.mts";
 // CI imports planning before dependency installation; execution owners stay outside this closure.
 import { resolveVitestCliEntry } from "./lib/vitest-build-prerequisites.mts";
@@ -211,6 +214,7 @@ type ImportGraph = {
 type ImportGraphEdges = {
   file: string;
   specifiers: string[];
+  workerExports: [string, string][];
   mocks: string[];
   typeOnlySpecifiers: Set<string>;
   imports: Set<string>;
@@ -759,6 +763,24 @@ const MERMAID_RENDERER_TEST_TARGETS = [
   "ui/src/components/markdown-mermaid.runtime.browser.test.ts",
   "ui/src/components/markdown-mermaid-native.browser.test.ts",
 ];
+// Channels reach the render-aware chunker through the Plugin SDK text-chunking
+// facade, deeper than bounded import walks follow; these suites pin chunk output.
+const MARKDOWN_RENDER_CHUNKING_TEST_TARGETS = [
+  "packages/markdown-core/src/ir.test.ts",
+  "packages/markdown-core/src/render-aware-chunking.test.ts",
+  "packages/markdown-core/src/render.annotations.test.ts",
+  "packages/markdown-core/src/render.crossing.test.ts",
+  "src/plugin-sdk/format-capabilities.test.ts",
+  "src/plugin-sdk/text-chunking.test.ts",
+  "extensions/googlechat/src/format.test.ts",
+  "extensions/signal/src/format.test.ts",
+  "extensions/slack/src/format.test.ts",
+  "extensions/sms/src/send.test.ts",
+  "extensions/telegram/src/format.test.ts",
+  "extensions/whatsapp/src/send.delivery-recovery.test.ts",
+  "extensions/whatsapp/src/send.test.ts",
+  "extensions/whatsapp/src/text-runtime.test.ts",
+];
 const SOURCE_TEST_TARGETS = new Map([
   ...PRECISE_SOURCE_TEST_TARGETS,
   [
@@ -798,6 +820,18 @@ const SOURCE_TEST_TARGETS = new Map([
     "packages/normalization-core/package.json",
     ["packages/normalization-core/src/package-exports.test.ts", ...MERMAID_RENDERER_TEST_TARGETS],
   ],
+  ...[
+    "ir",
+    "ir-annotations",
+    "ir-slice",
+    "ir-spans",
+    "render",
+    "render-attributed",
+    "render-aware-chunking",
+  ].map<[string, string[]]>((module) => [
+    `packages/markdown-core/src/${module}.ts`,
+    MARKDOWN_RENDER_CHUNKING_TEST_TARGETS,
+  ]),
   ["extensions/codex/package.json", CODEX_VERSION_CONTRACT_TEST_TARGETS],
   ["extensions/codex/src/app-server/version.ts", CODEX_VERSION_CONTRACT_TEST_TARGETS],
   ...["index", "harness"].map<[string, string[]]>((entry) => [
@@ -935,10 +969,6 @@ const SOURCE_TEST_TARGETS = new Map([
   [
     "src/secrets/provider-env-vars.ts",
     ["src/secrets/provider-env-vars.dynamic.test.ts", "src/secrets/provider-env-vars.test.ts"],
-  ],
-  [
-    "packages/memory-host-sdk/src/host/embedding-defaults.ts",
-    ["extensions/memory-core/src/memory/embeddings.test.ts"],
   ],
   ["src/auto-reply/reply/dispatch-from-config.ts", GROUP_VISIBLE_REPLY_TEST_TARGETS],
   ["src/auto-reply/reply/source-reply-delivery-mode.ts", GROUP_VISIBLE_REPLY_TEST_TARGETS],
@@ -1801,7 +1831,7 @@ function listImportGraphFiles(
   return files;
 }
 
-function resolveImportSpecifiers(
+export function resolveImportSpecifiers(
   importer: string,
   specifier: string,
   fileSet: ReadonlySet<string>,
@@ -1870,17 +1900,25 @@ function resolveImportSpecifiers(
     : resolved;
 }
 
+// Full-inventory facts reached 16 MiB on main in October 2026; this is not a Git inventory.
+const SOURCE_FACTS_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 const cachedImportGraphs = new Map<string, { graph: ImportGraph; additionalPaths: string }>();
 const cachedImportGraphFiles = new Map<string, string[]>();
 const cachedImportGraphGrepMatches = new Map<string, ImportGraphEdges[] | null>();
 const cachedImportGraphEdges = new Map<string, ImportGraphEdges>();
 const cachedImportGraphAliases = new Map<string, ImportGraphAlias[]>();
 
-function readImportGraphManifest(cwd: string, file: string): Record<string, unknown> {
-  if (!fs.existsSync(path.join(cwd, file))) {
+function readImportGraphManifest(
+  cwd: string,
+  file: string,
+  sources?: ReadonlyMap<string, string>,
+): Record<string, unknown> {
+  if (sources ? !sources.has(file) : !fs.existsSync(path.join(cwd, file))) {
     return {};
   }
-  const value: unknown = JSON.parse(fs.readFileSync(path.join(cwd, file), "utf8"));
+  const value: unknown = JSON.parse(
+    sources ? sources.get(file)! : fs.readFileSync(path.join(cwd, file), "utf8"),
+  );
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`Invalid test selector manifest: ${file}`);
   }
@@ -1888,24 +1926,31 @@ function readImportGraphManifest(cwd: string, file: string): Record<string, unkn
 }
 
 /** Read the maintained source mappings without loading a Vitest config or installed package. */
-function getImportGraphAliases(cwd: string): ImportGraphAlias[] {
-  const cached = cachedImportGraphAliases.get(cwd);
+export function getImportGraphAliases(
+  cwd: string,
+  sources?: ReadonlyMap<string, string>,
+): ImportGraphAlias[] {
+  const cached = sources ? undefined : cachedImportGraphAliases.get(cwd);
   if (cached) {
     return cached;
   }
   const aliases: ImportGraphAlias[] = [];
-  const files = listTrackedTestPlanFiles(cwd, [
-    "package.json",
-    ":(glob)packages/*/package.json",
-    ":(glob)extensions/*/package.json",
-  ]) ?? [
-    "package.json",
-    ...["packages", "extensions"].flatMap((root) =>
-      fs.existsSync(path.join(cwd, root))
-        ? fs.readdirSync(path.join(cwd, root)).map((entry) => `${root}/${entry}/package.json`)
-        : [],
-    ),
-  ];
+  const files = sources
+    ? [...sources.keys()].filter((file) =>
+        /^(?:(?:packages|extensions)\/[^/]+\/)?package\.json$/u.test(file),
+      )
+    : (listTrackedTestPlanFiles(cwd, [
+        "package.json",
+        ":(glob)packages/*/package.json",
+        ":(glob)extensions/*/package.json",
+      ]) ?? [
+        "package.json",
+        ...["packages", "extensions"].flatMap((root) =>
+          fs.existsSync(path.join(cwd, root))
+            ? fs.readdirSync(path.join(cwd, root)).map((entry) => `${root}/${entry}/package.json`)
+            : [],
+        ),
+      ]);
   const exportTargets = (value: unknown): string[] => {
     if (typeof value === "string") {
       return [value];
@@ -1913,7 +1958,7 @@ function getImportGraphAliases(cwd: string): ImportGraphAlias[] {
     return value && typeof value === "object" ? Object.values(value).flatMap(exportTargets) : [];
   };
   for (const file of files) {
-    const manifest = readImportGraphManifest(cwd, file);
+    const manifest = readImportGraphManifest(cwd, file, sources);
     if (typeof manifest.name !== "string" || !manifest.exports) {
       continue;
     }
@@ -1942,7 +1987,7 @@ function getImportGraphAliases(cwd: string): ImportGraphAlias[] {
       }
     }
   }
-  const config = readImportGraphManifest(cwd, "tsconfig.json");
+  const config = readImportGraphManifest(cwd, "tsconfig.json", sources);
   const compiler = config.compilerOptions;
   if (compiler && typeof compiler === "object" && "paths" in compiler) {
     const paths = compiler.paths;
@@ -1963,7 +2008,9 @@ function getImportGraphAliases(cwd: string): ImportGraphAlias[] {
       (leftStar >= 0 && rightStar >= 0 ? rightStar - leftStar : 0)
     );
   });
-  cachedImportGraphAliases.set(cwd, aliases);
+  if (!sources) {
+    cachedImportGraphAliases.set(cwd, aliases);
+  }
   return aliases;
 }
 
@@ -2108,12 +2155,13 @@ function readImportGraphEdges(
   const requests = files
     .map((file) => ({ file, parseImports: !cachedImportGraphEdges.has(cacheKey(file)) }))
     .filter(({ parseImports }) => parseImports || terms.length > 0);
-  return readTestSelectorSourceFacts(cwd, requests, terms, GIT_LS_FILES_MAX_BUFFER_BYTES, {
+  return readTestSelectorSourceFacts(cwd, requests, terms, SOURCE_FACTS_MAX_BUFFER_BYTES, {
     matchingOnly: terms.length > 0,
-  }).map(({ file, imports, typeOnlyImports, mocks, matches, references }) => {
+  }).map(({ file, imports, typeOnlyImports, mocks, matches, references, workerExports }) => {
     const edges = cachedImportGraphEdges.get(cacheKey(file)) ?? {
       file,
       specifiers: imports,
+      workerExports,
       mocks,
       typeOnlySpecifiers: new Set(typeOnlyImports),
       imports: resolve(file, imports),
@@ -2202,6 +2250,74 @@ function listImportGraphGrepMatches(
   return matches;
 }
 
+const cachedRuntimeWorkerReads = new Map<string, Map<string, string[]>>();
+
+function resolveRuntimeWorkerFixtures(
+  cwd: string,
+  consumer: string,
+  dependency: ImportGraphEdges,
+  fileSet: ReadonlySet<string>,
+  extensions: readonly string[],
+  aliases: readonly ImportGraphAlias[],
+  aliasResolutions: Map<string, string[]>,
+  runtimeOnly = false,
+) {
+  // Build manifests compile fixtures but do not execute them.
+  if (dependency.workerExports.length === 0 || !isTestOnlyPath(consumer)) {
+    return [];
+  }
+  const cacheKey = `${cwd}\0${consumer}`;
+  let reads = cachedRuntimeWorkerReads.get(cacheKey);
+  if (!reads) {
+    try {
+      reads = readRuntimeWorkerDescriptorReads(fs.readFileSync(path.join(cwd, consumer), "utf8"));
+    } catch {
+      reads = new Map();
+    }
+    cachedRuntimeWorkerReads.set(cacheKey, reads);
+  }
+  const paths = new Set<string>();
+  for (const [specifier, consumed] of reads) {
+    if (
+      resolveImportSpecifiers(
+        consumer,
+        specifier,
+        fileSet,
+        extensions,
+        aliases,
+        aliasResolutions,
+        runtimeOnly,
+      ).includes(dependency.file)
+    ) {
+      for (const workerPath of consumed) {
+        paths.add(workerPath);
+      }
+    }
+  }
+  const exportedPaths = new Set(dependency.workerExports.map(([workerPath]) => workerPath));
+  return dependency.workerExports.flatMap(([workerPath, sourceWorkerName]) =>
+    [...paths].some(
+      (read) =>
+        read === "*" ||
+        workerPath === read ||
+        workerPath.startsWith(`${read}.`) ||
+        (!exportedPaths.has(read) &&
+          !workerPath.includes(".") &&
+          read.startsWith(`${workerPath}.`)),
+    )
+      ? resolveImportSpecifiers(
+          dependency.file,
+          runtimeWorkerSpecifier(sourceWorkerName),
+          fileSet,
+          extensions,
+          aliases,
+          aliasResolutions,
+          runtimeOnly,
+        )
+      : [],
+  );
+}
+
 function findDirectImporters(
   importedFile: string,
   matches: ReadonlyMap<string, ImportGraphEdges[] | null>,
@@ -2227,6 +2343,22 @@ function findDirectImporters(
     }
     for (const edges of candidates) {
       const { file, imports } = edges;
+      if (
+        edges.workerExports.some(([, sourceWorkerName]) =>
+          resolveImportSpecifiers(
+            file,
+            runtimeWorkerSpecifier(sourceWorkerName),
+            resolution?.files ?? new Set([importedFile]),
+            extensions,
+            resolution?.aliases,
+            undefined,
+            resolution?.runtimeOnly,
+          ).includes(importedFile),
+        )
+      ) {
+        // Consumers name the descriptor, not its fixture; grep cannot close this frontier.
+        return null;
+      }
       const importsChanged = resolution
         ? edges.specifiers.some(
             (specifier) =>
@@ -2385,6 +2517,13 @@ function getImportGraph(
   const extensions = options.tooling
     ? TOOLING_IMPORTABLE_FILE_EXTENSIONS
     : IMPORTABLE_FILE_EXTENSIONS;
+  const workerModules = new Map<string, ImportGraphEdges>();
+  for (const file of files) {
+    const edges = cachedImportGraphEdges.get(`${cwd}\0${options.tooling === true}\0${file}`);
+    if (edges?.workerExports.length) {
+      workerModules.set(file, edges);
+    }
+  }
   for (const file of files) {
     const edges = cachedImportGraphEdges.get(`${cwd}\0${options.tooling === true}\0${file}`);
     if (!edges) {
@@ -2406,6 +2545,7 @@ function getImportGraph(
       }
     }
     // Re-resolve cached source facts against deleted paths and this query's alias policy.
+    const fixtures = new Set<string>();
     for (const specifier of edges.specifiers) {
       if (options.runtimeOnly && edges.typeOnlySpecifiers.has(specifier)) {
         continue;
@@ -2422,7 +2562,27 @@ function getImportGraph(
         const importers = reverseImports.get(imported) ?? [];
         importers.push(file);
         reverseImports.set(imported, importers);
+        const descriptors = workerModules.get(imported);
+        if (descriptors) {
+          for (const fixture of resolveRuntimeWorkerFixtures(
+            cwd,
+            file,
+            descriptors,
+            fileSet,
+            extensions,
+            aliases,
+            aliasResolutions,
+            options.runtimeOnly,
+          )) {
+            fixtures.add(fixture);
+          }
+        }
       }
+    }
+    for (const fixture of fixtures) {
+      const importers = reverseImports.get(fixture) ?? [];
+      importers.push(file);
+      reverseImports.set(fixture, importers);
     }
   }
 
@@ -2458,10 +2618,10 @@ export function hasImportGraphImpactOnTargets(
   let frontier = targets;
   while (frontier.length > 0) {
     readImportGraphEdges(cwd, frontier, fileSet, options.tooling);
-    const next: string[] = [];
+    const dependencies = new Map<string, Set<string>>();
     for (const file of frontier) {
       const edges = cachedImportGraphEdges.get(`${cwd}\0${options.tooling === true}\0${file}`);
-      // Resolve raw cached facts against this query's deleted-path identities too.
+      const resolved = new Set<string>();
       for (const specifier of edges?.specifiers ?? []) {
         if (options.runtimeOnly && edges?.typeOnlySpecifiers.has(specifier)) {
           continue;
@@ -2475,13 +2635,51 @@ export function hasImportGraphImpactOnTargets(
           aliasResolutions,
           options.runtimeOnly,
         )) {
-          if (changed.has(dependency)) {
-            return true;
+          resolved.add(dependency);
+        }
+      }
+      dependencies.set(file, resolved);
+    }
+    // Read the entire dependency frontier before attributing any consumer's fixtures.
+    const dependencyFiles = new Set<string>();
+    for (const resolved of dependencies.values()) {
+      for (const dependency of resolved) {
+        dependencyFiles.add(dependency);
+      }
+    }
+    readImportGraphEdges(cwd, [...dependencyFiles], fileSet, options.tooling);
+    const next: string[] = [];
+    for (const [file, resolved] of dependencies) {
+      const fixtures = new Set<string>();
+      for (const imported of resolved) {
+        const dependency = cachedImportGraphEdges.get(
+          `${cwd}\0${options.tooling === true}\0${imported}`,
+        );
+        if (dependency) {
+          for (const fixture of resolveRuntimeWorkerFixtures(
+            cwd,
+            file,
+            dependency,
+            fileSet,
+            extensions,
+            aliases,
+            aliasResolutions,
+            options.runtimeOnly,
+          )) {
+            fixtures.add(fixture);
           }
-          if (!options.direct && !seen.has(dependency)) {
-            seen.add(dependency);
-            next.push(dependency);
-          }
+        }
+      }
+      for (const fixture of fixtures) {
+        resolved.add(fixture);
+      }
+      for (const dependency of resolved) {
+        if (changed.has(dependency)) {
+          return true;
+        }
+        if (!options.direct && !seen.has(dependency)) {
+          seen.add(dependency);
+          next.push(dependency);
         }
       }
     }
@@ -2996,7 +3194,6 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
   [
     "scripts/lib/release-version.mjs",
     [
-      "test/release-version.test.ts",
       "test/npm-publish-plan.test.ts",
       "test/openclaw-npm-release-check.test.ts",
       npmPostpublish,
@@ -3434,7 +3631,6 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   [
     /^scripts\/lib\/guard-inventory-utils\.mjs$/u,
     [
-      "test/extension-import-boundaries.test.ts",
       "test/plugin-extension-import-boundary.test.ts",
       "test/architecture-smells.test.ts",
       "test/test-helper-extension-import-boundary.test.ts",
@@ -4778,10 +4974,7 @@ function classifyTarget(arg: string, cwd: string, beforeDatabaseWorkerOwnership 
   if (relative.endsWith(".e2e.test.ts")) {
     return "e2e";
   }
-  if (
-    relative === "src/gateway/gateway.test.ts" ||
-    relative === "src/gateway/server.startup-matrix-migration.integration.test.ts"
-  ) {
+  if (relative === "src/gateway/gateway.test.ts") {
     return "e2e";
   }
   const channelContractKind = resolveChannelContractTargetKind(relative);

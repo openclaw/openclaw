@@ -2,10 +2,7 @@ import { html, render, type LitElement } from "lit";
 import { onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { SessionWorkspaceGetResult, SessionWorkspaceListResult } from "../api/types.ts";
-import {
-  sidebarPanelDefinitions,
-  sidebarPanelTemplates,
-} from "../pages/chat/chat-pane-embedded-panels.ts";
+import { sidebarPanelDefinitions } from "../pages/chat/chat-pane-embedded-panels.ts";
 import { createChatPaneRails } from "../pages/chat/chat-pane-rails.ts";
 import { renderSidebarRegion } from "../pages/chat/chat-pane-sidebar-layout.ts";
 import {
@@ -16,12 +13,12 @@ import {
 import { createPageState } from "../pages/chat/chat-state-page.ts";
 import type { ChatProps } from "../pages/chat/chat-view.ts";
 import { renderChatDetailSlot } from "../pages/chat/components/chat-detail-slot.ts";
-import "../pages/chat/components/chat-detail-panel.ts";
+import "../pages/chat/components/chat-detail-panel.tsx";
 import {
   createSessionWorkspaceProps,
   renderSessionWorkspaceRail,
 } from "../pages/chat/components/chat-session-workspace.ts";
-import "../pages/chat/components/chat-sidebar-region.runtime.ts";
+import "../pages/chat/components/chat-sidebar-region.runtime.tsx";
 import { threadProps } from "../pages/chat/components/chat-transcript.test-support.ts";
 import type { SidebarLayout, SidebarSlotId } from "../pages/chat/sidebar-layout.ts";
 
@@ -35,7 +32,6 @@ export async function renderPanelFixture(
     renderSidebarRegion({
       presentationId: "sidebar-layout-fixture",
       availableWidth: 1400,
-      availableSlots: ["detail", "workspace"],
       callbacks: {
         activatePanel: vi.fn(),
         togglePanelExpanded: vi.fn(),
@@ -48,8 +44,6 @@ export async function renderPanelFixture(
       layout,
       narrow: false,
       panelDefinitions: definitions,
-      panelActions: {},
-      panelTemplates: sidebarPanelTemplates(definitions),
       primary: html`<main>Chat</main>`,
       requestUpdate: vi.fn(),
     }),

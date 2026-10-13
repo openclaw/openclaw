@@ -1,4 +1,5 @@
 import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
+import { readOfflineStorageScope } from "../../app/boot-record.ts";
 import type {
   ChatAttachment,
   ChatComposerDraftRetry,
@@ -7,7 +8,6 @@ import type {
   ChatQueueItem,
   HumanMention,
 } from "../../lib/chat/chat-types.ts";
-import { observeOutboxRecoveryOwner } from "../../lib/chat/outbox-payload-store.runtime.ts";
 import type { readDraftRevisionState } from "../../lib/chat/outbox-store-draft-state.ts";
 import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts";
 import {
@@ -92,7 +92,7 @@ export type ChatComposerDraftSnapshot = {
 export function captureChatComposerOwner(state: ChatComposerScope) {
   return {
     gatewayOwner: storageTargetForGateway(state.settings?.gatewayUrl).gatewayOwner,
-    recoveryScope: observeOutboxRecoveryOwner(state) ?? "",
+    recoveryScope: readOfflineStorageScope(state) ?? "",
     client: state.client,
   };
 }
@@ -103,19 +103,42 @@ export function isChatComposerOwnerCurrent(
 ): boolean {
   return (
     owner.gatewayOwner === storageTargetForGateway(state.settings?.gatewayUrl).gatewayOwner &&
-    owner.recoveryScope === (observeOutboxRecoveryOwner(state) ?? "") &&
+    owner.recoveryScope === (readOfflineStorageScope(state) ?? "") &&
     (owner.client === state.client || state.client?.recoveryScopeReady === true)
   );
+}
+
+// A canonical create key can arrive before its Incognito roster metadata.
+// The captured privacy fact belongs to this account and conversation only.
+const createdPrivateScopes = new WeakMap<
+  ChatComposerScope,
+  {
+    isCurrent: () => boolean;
+    key: string;
+  }
+>();
+
+export function retainCreatedIncognitoComposerScope(
+  state: ChatComposerScope & { sessionKey: string },
+  isCurrent?: () => boolean,
+): void {
+  const owner = captureChatComposerOwner(state);
+  createdPrivateScopes.set(state, {
+    isCurrent: isCurrent ?? (() => isChatComposerOwnerCurrent(state, owner)),
+    key: storedChatOutboxScopeKey(resolveUiConversationIdentity(state, state.sessionKey)),
+  });
 }
 
 export function isIncognitoComposerScope(
   state: ChatComposerScope & { sessionKey?: string },
   scope: StoredChatOutboxScope,
 ): boolean {
+  const created = createdPrivateScopes.get(state);
   // Keys classify private sessions before roster metadata arrives. A selected
   // session's metadata must never classify a delayed write to another scope.
   return (
     isIncognitoSessionKey(scope.sessionKey) ||
+    Boolean(created && created.key === storedChatOutboxScopeKey(scope) && created.isCurrent()) ||
     Boolean(
       state.selectedChatSessionIncognito &&
       state.sessionKey &&
@@ -129,7 +152,7 @@ export function resolveChatComposerDurableScope(
   state: DurableChatComposerPersistenceState,
   scope: StoredChatOutboxScope = resolveUiConversationIdentity(state, state.sessionKey),
 ) {
-  const recoveryScope = observeOutboxRecoveryOwner(state);
+  const recoveryScope = readOfflineStorageScope(state);
   if (!recoveryScope) {
     return null;
   }

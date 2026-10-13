@@ -276,10 +276,8 @@ export function resolveOfficialExternalPluginId(
 const OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_HOSTNAME_ALLOWLIST = ["clawhub.ai"];
 
 function resolveHostedCatalogFeedUrl(raw: string): URL {
-  let parsed: URL;
-  try {
-    parsed = new URL(raw.trim());
-  } catch {
+  const parsed = URL.parse(raw.trim());
+  if (!parsed) {
     throw new Error("hosted catalog feed URL is invalid");
   }
   if (parsed.protocol !== "https:") {
@@ -360,28 +358,20 @@ export function shouldRequireManifestInstallSourceRef(params: {
   feedProfile?: string;
   catalogConfig?: OfficialExternalPluginCatalogProfileConfig;
 }): boolean {
-  const feedUrl = normalizeOptionalString(params.feedUrl);
-  if (feedUrl) {
-    try {
-      return (
-        resolveHostedCatalogFeedUrl(feedUrl).href !==
-        resolveHostedCatalogFeedUrl(DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_URL).href
-      );
-    } catch {
+  let feedUrl = normalizeOptionalString(params.feedUrl);
+  if (!feedUrl) {
+    const profileName =
+      normalizeOptionalString(params.feedProfile) ??
+      DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE;
+    if (profileName !== DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE) {
       return true;
     }
+    const profileConfig = resolveOfficialExternalPluginCatalogProfileConfig(params.catalogConfig);
+    feedUrl = normalizeOptionalString(profileConfig.feeds[profileName]?.url);
   }
-  const profileName =
-    normalizeOptionalString(params.feedProfile) ??
-    DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE;
-  if (profileName !== DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE) {
-    return true;
-  }
-  const profileConfig = resolveOfficialExternalPluginCatalogProfileConfig(params.catalogConfig);
-  const profileUrl = normalizeOptionalString(profileConfig.feeds[profileName]?.url);
   try {
     return (
-      resolveHostedCatalogFeedUrl(profileUrl ?? DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_URL)
+      resolveHostedCatalogFeedUrl(feedUrl ?? DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_URL)
         .href !==
       resolveHostedCatalogFeedUrl(DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_URL).href
     );

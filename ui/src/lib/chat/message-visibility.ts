@@ -43,11 +43,7 @@ export function isSilentReplyStream(text: string): boolean {
 /** Client-side defense-in-depth: detect assistant messages whose text is purely NO_REPLY. */
 function isAssistantSilentReply(message: unknown): boolean {
   const entry = asNullableRecord(message);
-  if (!entry) {
-    return false;
-  }
-  const role = normalizeLowercaseStringOrEmpty(entry.role);
-  if (role !== "assistant") {
+  if (!entry || normalizeLowercaseStringOrEmpty(entry.role) !== "assistant") {
     return false;
   }
   // entry.text takes precedence — matches gateway extractAssistantTextForSilentCheck
@@ -60,11 +56,7 @@ function isAssistantSilentReply(message: unknown): boolean {
 
 function isSyntheticTranscriptRepairToolResult(message: unknown): boolean {
   const entry = asNullableRecord(message);
-  if (!entry) {
-    return false;
-  }
-  const role = normalizeLowercaseStringOrEmpty(entry.role);
-  if (role !== "toolresult") {
+  if (!entry || normalizeLowercaseStringOrEmpty(entry.role) !== "toolresult") {
     return false;
   }
   const text = extractText(message);

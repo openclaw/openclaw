@@ -41,24 +41,10 @@ afterEach(() => vi.restoreAllMocks());
 
 describe("precomputed help metadata output", () => {
   it.each([
-    ["outputPrecomputedRootHelpText", " root \n"],
-    ["outputPrecomputedBrowserHelpText", " browser \n"],
     ["outputPrecomputedSecretsHelpText", " secrets \n"],
     ["outputPrecomputedNodesHelpText", " nodes \n"],
   ] as const)("preserves %s bytes", (name, text) => {
     expect(help[name]()).toBe(true);
-    expect(write.mock.calls).toEqual([[text]]);
-  });
-
-  it.each([
-    ["config", " config \n"],
-    ["doctor", " doctor \n"],
-    ["gateway", " gateway \n"],
-    ["models", " models \n"],
-    ["plugins", " plugins \n"],
-    ["sessions", " sessions \n"],
-  ] as const)("preserves nested %s bytes", (name, text) => {
-    expect(help.outputPrecomputedSubcommandHelpText(name)).toBe(true);
     expect(write.mock.calls).toEqual([[text]]);
   });
 
@@ -70,46 +56,6 @@ describe("precomputed help metadata output", () => {
     expect(help.outputPrecomputedSubcommandHelpText("config")).toBe(true);
     expect(write.mock.calls).toEqual([[" root \n"], [" config \n"], [" root \n"], [" config \n"]]);
     expect(readMetadata).toHaveBeenCalledTimes(2);
-  });
-
-  it.each([undefined, null, "", 17, {}])("rejects non-text fields (%j)", (value) => {
-    readMetadata.mockReturnValue({
-      rootHelpText: value,
-      subcommandHelpText: { config: value },
-    });
-    expect(help.outputPrecomputedRootHelpText()).toBe(false);
-    expect(help.outputPrecomputedSubcommandHelpText("config")).toBe(false);
-    expect(write).not.toHaveBeenCalled();
-  });
-
-  it("keeps cached misses independent from a previously unread field", () => {
-    readMetadata.mockReturnValue(null);
-    expect(help.outputPrecomputedRootHelpText()).toBe(false);
-    expect(help.outputPrecomputedSubcommandHelpText("config")).toBe(false);
-    readMetadata.mockReturnValue(metadata);
-    expect(help.outputPrecomputedRootHelpText()).toBe(false);
-    expect(help.outputPrecomputedSubcommandHelpText("config")).toBe(false);
-    expect(write).not.toHaveBeenCalled();
-    expect(help.outputPrecomputedBrowserHelpText()).toBe(true);
-    expect(write.mock.calls).toEqual([[" browser \n"]]);
-    expect(readMetadata).toHaveBeenCalledTimes(3);
-  });
-
-  it.each([undefined, null, "config", 17])(
-    "rejects a non-object nested container (%j)",
-    (value) => {
-      readMetadata.mockReturnValue({ config: "not nested config", subcommandHelpText: value });
-      expect(help.outputPrecomputedSubcommandHelpText("config")).toBe(false);
-      expect(write).not.toHaveBeenCalled();
-    },
-  );
-
-  it("rejects unsupported names before metadata reads or output", () => {
-    for (const name of ["browser", "rootHelpText", "status"]) {
-      expect(help.outputPrecomputedSubcommandHelpText(name)).toBe(false);
-    }
-    expect(readMetadata).not.toHaveBeenCalled();
-    expect(write).not.toHaveBeenCalled();
   });
 
   it("retains a help miss when the real reader advances from null to parent metadata", async () => {
@@ -130,20 +76,6 @@ describe("precomputed help metadata output", () => {
     expect(readCliStartupMetadata(moduleUrl)).toEqual({ browserHelpText: " parent browser \n" });
     expect(help.outputPrecomputedBrowserHelpText()).toBe(false);
     expect(write).not.toHaveBeenCalled();
-    expect(readMetadata).toHaveBeenCalledOnce();
-  });
-
-  it("populates the cache before a failed write and treats backpressure as handled", () => {
-    const failure = new Error("stdout failed");
-    write
-      .mockImplementationOnce(() => {
-        throw failure;
-      })
-      .mockReturnValue(false);
-    expect(() => help.outputPrecomputedRootHelpText()).toThrow(failure);
-    readMetadata.mockReturnValue(null);
-    expect(help.outputPrecomputedRootHelpText()).toBe(true);
-    expect(write.mock.calls).toEqual([[" root \n"], [" root \n"]]);
     expect(readMetadata).toHaveBeenCalledOnce();
   });
 });

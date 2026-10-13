@@ -43,7 +43,6 @@ import {
 } from "./lab-server-ui.js";
 import type {
   QaLabLatestReport,
-  QaLabScenarioOutcome,
   QaLabScenarioRun,
   QaLabServerHandle,
   QaLabServerStartParams,
@@ -66,13 +65,6 @@ import {
   readQaSuiteFailedOrSkippedScenarioCountFromFile,
   resolveQaReportOnlyOptionalScenarioNames,
 } from "./suite-summary.js";
-
-type QaLabBootstrapDefaults = {
-  conversationKind: "direct" | "channel";
-  conversationId: string;
-  senderId: string;
-  senderName: string;
-};
 
 export type {
   QaLabLatestReport,
@@ -101,21 +93,17 @@ async function writeQaLabServerError(
   writeError(res, 500, error);
 }
 
-function countQaLabScenarioRun(scenarios: QaLabScenarioOutcome[]) {
-  return {
-    total: scenarios.length,
-    pending: scenarios.filter((scenario) => scenario.status === "pending").length,
-    running: scenarios.filter((scenario) => scenario.status === "running").length,
-    passed: scenarios.filter((scenario) => scenario.status === "pass").length,
-    failed: scenarios.filter((scenario) => scenario.status === "fail").length,
-    skipped: scenarios.filter((scenario) => scenario.status === "skip").length,
-  };
-}
-
 function withQaLabRunCounts(run: Omit<QaLabScenarioRun, "counts">): QaLabScenarioRun {
   return {
     ...run,
-    counts: countQaLabScenarioRun(run.scenarios),
+    counts: {
+      total: run.scenarios.length,
+      pending: run.scenarios.filter((scenario) => scenario.status === "pending").length,
+      running: run.scenarios.filter((scenario) => scenario.status === "running").length,
+      passed: run.scenarios.filter((scenario) => scenario.status === "pass").length,
+      failed: run.scenarios.filter((scenario) => scenario.status === "fail").length,
+      skipped: run.scenarios.filter((scenario) => scenario.status === "skip").length,
+    },
   };
 }
 
@@ -128,35 +116,6 @@ function parseQaEvidenceArtifactIndexText(value: string): number {
     throw new QaEvidenceGalleryError("Evidence artifact index is invalid.", 400);
   }
   return index;
-}
-
-function injectKickoffMessage(params: {
-  state: QaBusState;
-  defaults: QaLabBootstrapDefaults;
-  kickoffTask: string;
-}) {
-  return params.state.addInboundMessage({
-    conversation: {
-      id: params.defaults.conversationId,
-      kind: params.defaults.conversationKind,
-      ...(params.defaults.conversationKind === "channel"
-        ? { title: params.defaults.conversationId }
-        : {}),
-    },
-    senderId: params.defaults.senderId,
-    senderName: params.defaults.senderName,
-    text: params.kickoffTask,
-  });
-}
-
-function createBootstrapDefaults(autoKickoffTarget?: string): QaLabBootstrapDefaults {
-  const channel = autoKickoffTarget === "channel";
-  return {
-    conversationKind: channel ? "channel" : "direct",
-    conversationId: channel ? "qa-lab" : "qa-operator",
-    senderId: "qa-operator",
-    senderName: "QA Operator",
-  };
 }
 
 const CONTROL_UI_CREDENTIAL_QUERY_KEYS = new Set([
@@ -173,25 +132,14 @@ const CONTROL_UI_CREDENTIAL_QUERY_KEYS = new Set([
 const CONTROL_UI_CREDENTIAL_QUERY_PATTERN =
   /([?&])(?:access_token|api_?key|auth|deviceToken|id_token|password|refresh_token|token)=[^&#\s]*&?/gi;
 
-function stripSensitiveQueryParamsFromText(rawUrl: string): string {
-  let sanitized = rawUrl;
-  for (;;) {
-    const next = sanitized
-      .replace(CONTROL_UI_CREDENTIAL_QUERY_PATTERN, (match: string, separator: string) =>
-        match.endsWith("&") ? separator : "",
-      )
-      .replace(/[?&]$/, "")
-      .replace("?&", "?");
-    if (next === sanitized) {
-      return next;
-    }
-    sanitized = next;
+function sanitizeControlUiPublicUrl(rawUrl: string | null): string | null {
+  if (!rawUrl) {
+    return null;
   }
-}
-
-function stripSensitiveQueryParams(rawUrl: string): string {
+  const fragmentIndex = rawUrl.indexOf("#");
+  let sanitized = fragmentIndex === -1 ? rawUrl : rawUrl.slice(0, fragmentIndex);
   try {
-    const url = new URL(rawUrl);
+    const url = new URL(sanitized);
     for (const key of Array.from(url.searchParams.keys())) {
       if (CONTROL_UI_CREDENTIAL_QUERY_KEYS.has(key.toLowerCase())) {
         url.searchParams.delete(key);
@@ -199,17 +147,19 @@ function stripSensitiveQueryParams(rawUrl: string): string {
     }
     return url.toString();
   } catch {
-    return stripSensitiveQueryParamsFromText(rawUrl);
+    for (;;) {
+      const next = sanitized
+        .replace(CONTROL_UI_CREDENTIAL_QUERY_PATTERN, (match: string, separator: string) =>
+          match.endsWith("&") ? separator : "",
+        )
+        .replace(/[?&]$/, "")
+        .replace("?&", "?");
+      if (next === sanitized) {
+        return next;
+      }
+      sanitized = next;
+    }
   }
-}
-
-function sanitizeControlUiPublicUrl(url: string | null): string | null {
-  if (!url) {
-    return null;
-  }
-  const fragmentIndex = url.indexOf("#");
-  const withoutFragment = fragmentIndex === -1 ? url : url.slice(0, fragmentIndex);
-  return stripSensitiveQueryParams(withoutFragment);
 }
 
 const QA_EVIDENCE_CONTENT_TYPES: Record<string, string> = {
@@ -292,7 +242,25 @@ export async function startQaLabServer(
   const runnerChannels = [
     ...new Set(scenarioCatalog.scenarios.flatMap((scenario) => scenario.execution.channels ?? [])),
   ].toSorted();
-  const bootstrapDefaults = createBootstrapDefaults(params?.autoKickoffTarget);
+  const bootstrapDefaults = {
+    conversationKind: params?.autoKickoffTarget === "channel" ? "channel" : "direct",
+    conversationId: params?.autoKickoffTarget === "channel" ? "qa-lab" : "qa-operator",
+    senderId: "qa-operator",
+    senderName: "QA Operator",
+  } as const;
+  const injectKickoffMessage = () =>
+    state.addInboundMessage({
+      conversation: {
+        id: bootstrapDefaults.conversationId,
+        kind: bootstrapDefaults.conversationKind,
+        ...(bootstrapDefaults.conversationKind === "channel"
+          ? { title: bootstrapDefaults.conversationId }
+          : {}),
+      },
+      senderId: bootstrapDefaults.senderId,
+      senderName: bootstrapDefaults.senderName,
+      text: scenarioCatalog.kickoffTask,
+    });
   let runnerModelOptions: QaRunnerModelOption[] = [];
   let runnerModelCatalogStatus: "loading" | "ready" | "failed" = "loading";
   const resolveServerRunPlan = async (
@@ -670,11 +638,7 @@ export async function startQaLabServer(
         }
         if (req.method === "POST" && url.pathname === "/api/kickoff") {
           writeJson(res, 200, {
-            message: injectKickoffMessage({
-              state,
-              defaults: bootstrapDefaults,
-              kickoffTask: scenarioCatalog.kickoffTask,
-            }),
+            message: injectKickoffMessage(),
           });
           return;
         }
@@ -908,11 +872,7 @@ export async function startQaLabServer(
       gateway = await startQaGatewayLoop({ baseUrl: listenUrl });
     }
     if (params?.sendKickoffOnStart) {
-      injectKickoffMessage({
-        state,
-        defaults: bootstrapDefaults,
-        kickoffTask: scenarioCatalog.kickoffTask,
-      });
+      injectKickoffMessage();
     }
 
     server.on("upgrade", (req, socket, head) => {

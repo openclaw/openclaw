@@ -17,12 +17,45 @@ import { recordGatewayRestartTraceDetail, recordGatewayRestartTraceSpan } from "
 
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
 type Awaitable<T> = T | Promise<T>;
+const TIMELINE_NAMES = new Map([
+  ["config.snapshot", "config.load"],
+  ["config.auth", "config.normalize"],
+  ["runtime.config", "config.normalize"],
+  ["plugins.bootstrap", "plugins.load"],
+  ["runtime.post-attach", "gateway.ready"],
+  ["ready", "gateway.ready"],
+]);
 const STARTUP_PROGRESS_PHASES = new Set([
   "process.bootstrap",
   "state.schema-preflight",
   "config.auth",
-  "startup.maintenance",
+  "post-ready.startup-maintenance",
+  "startup.maintenance.channels",
+  "startup.maintenance.plugin-registry",
+  "state.desktop-approval-admission",
+  "sessions.admission",
+  "startup.maintenance.sessions",
+  "startup.maintenance.session-orphans",
+  "startup.maintenance.session-transcripts",
+  "startup.maintenance.pairing",
   "http.bound",
+  "runtime.early",
+  "runtime.early.discovery",
+  "runtime.early.lazy-runtime-imports",
+  "runtime.early.skills-listener",
+  "post-attach.system-ca",
+  "plugins.runtime-post-bind",
+  "plugins.runtime-attach",
+  "sidecars.worker-environments",
+  "sidecars.internal-hooks",
+  "sidecars.main-session-recovery",
+  "sidecars.model-runtime",
+  "sidecars.reply-runtime",
+  "sidecars.chat-metadata",
+  "sidecars.channels",
+  "sidecars.plugin-services",
+  "sidecars.subagent-recovery",
+  "runtime.worker-pool-metrics",
   "ready",
 ]);
 
@@ -32,7 +65,6 @@ export type GatewayStartupTrace = {
   measure: <T>(name: string, run: () => Awaitable<T>) => Promise<T>;
 };
 
-/** Measure a startup step when tracing is active, otherwise run it directly. */
 export async function measureStartup<T>(
   startupTrace: GatewayStartupTrace | undefined,
   name: string,
@@ -82,22 +114,7 @@ export function createGatewayStartupTrace(
   };
   const formatMetric = (key: string, value: number | string) =>
     `${key}=${typeof value === "number" ? value.toFixed(1) : value}`;
-  const mapTimelineName = (name: string) => {
-    switch (name) {
-      case "config.snapshot":
-        return "config.load";
-      case "config.auth":
-      case "runtime.config":
-        return "config.normalize";
-      case "plugins.bootstrap":
-        return "plugins.load";
-      case "runtime.post-attach":
-      case "ready":
-        return "gateway.ready";
-      default:
-        return name;
-    }
-  };
+  const mapTimelineName = (name: string) => TIMELINE_NAMES.get(name) ?? name;
   const takeEventLoopSample = () => {
     if (!eventLoopDelay) {
       return undefined;

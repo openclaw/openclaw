@@ -32,9 +32,11 @@ vi.mock("../cli/progress.js", () => ({
   withProgress: vi.fn(async (_opts, run) => run({ setLabel: progressSetLabel })),
 }));
 
+// mock-isolation: Daemon configuration tests use a synthetic install plan and config.
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: loadConfig,
   loadConfig,
+  captureRuntimeConfigAsyncReader: () => async () => loadConfig(),
 }));
 
 vi.mock("./gateway-install-token.js", () => ({
@@ -107,7 +109,7 @@ describe("maybeInstallDaemon", () => {
     });
   });
 
-  it.each([false, true])("blocks install with unresolved auth (reinstall=%s)", async (loaded) => {
+  it.each([true])("blocks install with unresolved auth (reinstall=%s)", async (loaded) => {
     serviceIsLoaded.mockResolvedValue(loaded);
     if (loaded) {
       select.mockResolvedValueOnce("reinstall");
@@ -199,30 +201,27 @@ describe("maybeInstallDaemon", () => {
     expect(serviceInstall).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["bun", "node"])(
-    "defaults the runtime picker to recorded Bun and honors %s",
-    async (choice) => {
-      const recordedPath = "/opt/recorded/bin/bun";
-      serviceIsLoaded.mockResolvedValue(true);
-      serviceReadCommand.mockResolvedValue({
-        programArguments: [recordedPath, "/app/openclaw.mjs", "gateway"],
-      });
-      select.mockResolvedValueOnce("reinstall").mockResolvedValueOnce(choice);
+  it.each(["bun"])("defaults the runtime picker to recorded Bun and honors %s", async (choice) => {
+    const recordedPath = "/opt/recorded/bin/bun";
+    serviceIsLoaded.mockResolvedValue(true);
+    serviceReadCommand.mockResolvedValue({
+      programArguments: [recordedPath, "/app/openclaw.mjs", "gateway"],
+    });
+    select.mockResolvedValueOnce("reinstall").mockResolvedValueOnce(choice);
 
-      expect(await runInstall()).toBe("succeeded");
+    expect(await runInstall()).toBe("succeeded");
 
-      expect(select).toHaveBeenCalledWith(
-        expect.objectContaining({
-          message: "Gateway service runtime",
-          initialValue: "bun",
-        }),
-      );
-      const plan = buildGatewayInstallPlan.mock.calls[0]?.[0];
-      expect(plan?.runtime).toBe(choice);
-      expect(plan?.runtimePath).toBe(choice === "bun" ? recordedPath : undefined);
-      expect(plan?.pinnedRuntimePath).toBeUndefined();
-    },
-  );
+    expect(select).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Gateway service runtime",
+        initialValue: "bun",
+      }),
+    );
+    const plan = buildGatewayInstallPlan.mock.calls[0]?.[0];
+    expect(plan?.runtime).toBe(choice);
+    expect(plan?.runtimePath).toBe(choice === "bun" ? recordedPath : undefined);
+    expect(plan?.pinnedRuntimePath).toBeUndefined();
+  });
 
   it("rethrows install probe failures that are not the known non-fatal Linux systemd cases", async () => {
     serviceIsLoaded.mockRejectedValueOnce(

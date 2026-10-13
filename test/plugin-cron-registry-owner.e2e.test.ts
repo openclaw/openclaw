@@ -4,6 +4,10 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../src/config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
 import { acquireGatewayE2ePortBlock } from "../src/gateway/test-helpers.listener.js";
@@ -79,6 +83,7 @@ afterEach(async () => {
   await Promise.all(portClaims.splice(0).map((claim) => claim.release()));
   await Promise.all(modelServers.splice(0).map((server) => server.stop()));
   await Promise.all(cleanupDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+  clearRuntimeConfigSnapshot();
 });
 
 async function readJsonRequest(req: IncomingMessage): Promise<Record<string, unknown>> {
@@ -206,7 +211,11 @@ async function writeBundledSchedulerPlugin(bundledRoot: string): Promise<void> {
   id: ${JSON.stringify(PLUGIN_ID)},
   register(api) {
     const scheduleSessionTurn = api.session.workflow.scheduleSessionTurn;
+    const cronReady = new Promise((resolve) => {
+      api.on("cron_reconciled", () => resolve());
+    });
     api.registerGatewayMethod(${JSON.stringify(SCHEDULE_METHOD)}, async ({ params, respond }) => {
+      await cronReady;
       const name = typeof params?.name === "string" ? params.name : "";
       const message = typeof params?.message === "string" ? params.message : "";
       const sessionKey = typeof params?.sessionKey === "string" ? params.sessionKey : "";
@@ -380,6 +389,7 @@ describe("plugin cron registry ownership e2e", () => {
       const sessionKey = "agent:main:subagent:provider-fallback";
       if (route === "subagent") {
         instance.state.applyEnv();
+        setRuntimeConfigSnapshot(config);
         await upsertSessionEntry({
           agentId: "main",
           sessionKey,

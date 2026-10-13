@@ -79,6 +79,9 @@ describeLive("Gateway visible worktree spawn (live)", () => {
           "-m",
           "Initialize fixture",
         ]);
+        const remote = instance.state.path("registered-project.git");
+        await git(["clone", "--bare", repository, remote]);
+        await git(["remote", "add", "origin", remote]);
         const config: OpenClawConfig = {
           gateway: {
             mode: "local",

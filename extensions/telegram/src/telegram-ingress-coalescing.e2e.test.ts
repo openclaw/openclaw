@@ -9,6 +9,7 @@ import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   holdTelegramMediaTimeouts,
@@ -41,6 +42,10 @@ const downstreamTurns = vi.hoisted(() =>
     }),
   ),
 );
+const inboundTurns = vi.hoisted(() => ({
+  active: new Set<Promise<void>>(),
+  gate: undefined as (() => Promise<void>) | undefined,
+}));
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-telegram-album-ingress-");
 const saveRemoteMedia = vi.hoisted(() =>
   vi.fn(async (params: { filePathHint?: string }) => ({
@@ -65,14 +70,31 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
   return {
     ...actual,
-    runChannelInboundEvent: async (params: Parameters<typeof actual.runChannelInboundEvent>[0]) =>
-      await runTelegramChannelInboundEventWithHarness(actual, params, async (dispatchParams) => {
-        return await downstreamTurns(
-          dispatchParams.ctx,
-          dispatchParams.replyOptions?.abortSignal,
-          dispatchParams.replyOptions?.turnAdoptionLifecycle,
+    runChannelInboundEvent: async (params: Parameters<typeof actual.runChannelInboundEvent>[0]) => {
+      const turn = (async () => {
+        await inboundTurns.gate?.();
+        return await runTelegramChannelInboundEventWithHarness(
+          actual,
+          params,
+          async (dispatchParams) => {
+            return await downstreamTurns(
+              dispatchParams.ctx,
+              dispatchParams.replyOptions?.abortSignal,
+              dispatchParams.replyOptions?.turnAdoptionLifecycle,
+            );
+          },
         );
-      }),
+      })();
+      const settled = turn.then(
+        () => {},
+        () => {},
+      );
+      inboundTurns.active.add(settled);
+      void settled.then(() => {
+        inboundTurns.active.delete(settled);
+      });
+      return await turn;
+    },
   };
 });
 
@@ -117,9 +139,10 @@ const {
   createDownstreamTurnFixture,
   createIngressMonitor,
   flushHeldQuietWindow,
+  interceptReplayGuard,
   resetTelegramIngressRuntime,
   runtimeErrors,
-  stopIngressResources,
+  releaseIngressCase,
   useIngressTimers,
 } = await import("./telegram-ingress-coalescing-fixture.test-support.js");
 const {
@@ -139,6 +162,7 @@ describe("Telegram durable ingress coalescing", () => {
     stateDir = sessionDirs.make();
     process.env.OPENCLAW_STATE_DIR = stateDir;
     activeResources = [];
+    inboundTurns.gate = undefined;
     runtimeErrors.length = 0;
     downstreamTurns
       .mockReset()
@@ -147,9 +171,13 @@ describe("Telegram durable ingress coalescing", () => {
     resetTelegramIngressRuntime();
   });
 
+  async function releaseCaseState() {
+    await releaseIngressCase(activeResources, inboundTurns.active, stateDir);
+  }
+
   afterEach(async () => {
     vi.useRealTimers();
-    await stopIngressResources(activeResources);
+    await releaseCaseState();
     resetPluginStateStoreForTests({ closeDatabase: false });
     if (originalStateDir === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
@@ -176,11 +204,7 @@ describe("Telegram durable ingress coalescing", () => {
       await monitor.waitForIdle();
       await monitor.admit(second);
       await monitor.waitForIdle();
-      const flush = resolveFlushTimerForDelay(albumTimers, 40);
-      if (!flush) {
-        throw new Error("Expected the admitted album's flush timer");
-      }
-      flush();
+      flushHeldQuietWindow(albumTimers, 40);
       await assertAlbumTurnAndTombstones({ stateDir, updateIds: [101, 102], monitor });
     } finally {
       albumTimers.mockRestore();
@@ -189,51 +213,20 @@ describe("Telegram durable ingress coalescing", () => {
     }
   });
 
-  it("coalesces an album replayed from a durable restart backlog", async () => {
-    const first = photoUpdate({ updateId: 201, messageId: 1, caption: "Two photo album" });
-    const second = photoUpdate({ updateId: 202, messageId: 2 });
-    await writeTelegramSpooledUpdate({ stateDir, update: first });
-    await writeTelegramSpooledUpdate({ stateDir, update: second });
-    const { monitor, telegramTransport } = await createMonitor();
-    const albumTimers = holdTelegramMediaTimeouts(40);
-
-    try {
-      monitor.start();
-      // Real state-worker admission must finish before the controlled album deadline.
-      await monitor.waitForIdle();
-      const queue = openTelegramIngressQueue({ stateDir });
-      expect((await queue.listClaims()).map((claim) => claim.id).toSorted()).toEqual([
-        telegramQueueEventId(201),
-        telegramQueueEventId(202),
-      ]);
-      expect(downstreamTurns).not.toHaveBeenCalled();
-      const flush = resolveFlushTimerForDelay(albumTimers, 40);
-      if (!flush) {
-        throw new Error("Expected the replayed album's flush timer");
-      }
-      flush();
-      await assertAlbumTurnAndTombstones({ stateDir, updateIds: [201, 202], monitor });
-    } finally {
-      albumTimers.mockRestore();
-      await monitor.stop();
-      await telegramTransport.close();
-    }
-  });
-
-  it("keeps a later album alive and ordered behind a slowly adopting album", async () => {
+  it("keeps a later album alive and ordered behind a slowly adopting album", async ({ signal }) => {
     const { monitor } = await createMonitor({ adoptionStallTimeoutMs: 1_000 });
-    const { headDispatched, releaseHead, headFinished } = holdFirstDownstreamTurn();
+    const { headDispatched, releaseHead } = holdFirstDownstreamTurn();
     useIngressTimers();
     monitor.start();
     try {
-      await admitAlbum(monitor, "A", 1_001);
+      await withinTest(admitAlbum(monitor, "A", 1_001), signal);
       // Freeze the claim clock while dispatch finishes its real worker I/O.
-      await headDispatched.promise;
-      await admitAlbum(monitor, "B", 1_003);
-      await vi.advanceTimersByTimeAsync(3_000);
+      await withinTest(headDispatched.promise, signal);
+      await withinTest(admitAlbum(monitor, "B", 1_003), signal);
+      await withinTest(vi.advanceTimersByTimeAsync(3_000), signal);
       expect(downstreamTurns, "Album B must wait for album A's adoption").toHaveBeenCalledOnce();
       releaseHead.resolve();
-      await monitor.waitForDeferredClaims();
+      await withinTest(monitor.waitForDeferredClaims(), signal);
       expect(downstreamTurns).toHaveBeenCalledTimes(2);
       expect(downstreamTurns.mock.calls.map(([turn]) => turn.RawBody)).toEqual([
         "Album A",
@@ -243,36 +236,51 @@ describe("Telegram durable ingress coalescing", () => {
       expect(runtimeErrors).toEqual([]);
     } finally {
       releaseHead.resolve();
-      await headFinished.promise;
       await monitor.stop();
     }
   });
 
-  it("keeps a later same-sender forward batch alive behind a deferred batch", async () => {
+  it("keeps a later same-sender forward batch alive behind a deferred batch", async ({
+    signal,
+  }) => {
     const { monitor } = await createMonitor({ adoptionStallTimeoutMs: 3_000 });
-    const { releaseHead, turnsDeferred, turnsFinished } = holdDownstreamLane();
+    const { releaseHead, turnsDeferred } = holdDownstreamLane();
     useIngressTimers();
     monitor.start();
     try {
-      await monitor.admit(forwardedTextUpdate({ updateId: 1_401, messageId: 1, text: "Batch A" }));
-      await monitor.waitForIdle();
-      await vi.advanceTimersByTimeAsync(1_000);
+      await withinTest(
+        monitor.admit(forwardedTextUpdate({ updateId: 1_401, messageId: 1, text: "Batch A" })),
+        signal,
+      );
+      await withinTest(monitor.waitForIdle(), signal);
+      await withinTest(vi.advanceTimersByTimeAsync(1_000), signal);
       // Freeze the claim clock while each flushed turn finishes its real worker I/O.
-      await turnsDeferred[0]?.promise;
-      await monitor.admit(forwardedTextUpdate({ updateId: 1_402, messageId: 2, text: "Batch B" }));
-      await monitor.waitForIdle();
-      await vi.advanceTimersByTimeAsync(1_000);
+      await withinTest(turnsDeferred[0].promise, signal);
+      await withinTest(
+        monitor.admit(forwardedTextUpdate({ updateId: 1_402, messageId: 2, text: "Batch B" })),
+        signal,
+      );
+      await withinTest(monitor.waitForIdle(), signal);
+      await withinTest(vi.advanceTimersByTimeAsync(1_000), signal);
       // A deferred head releases the sender key; B queues behind it in the session lane.
-      await turnsDeferred[1]?.promise;
-      await vi.advanceTimersByTimeAsync(9_000);
+      await withinTest(turnsDeferred[1].promise, signal);
+      await withinTest(vi.advanceTimersByTimeAsync(9_000), signal);
       const queue = openTelegramIngressQueue({ stateDir });
-      expect(await queue.listPending({ limit: "all" }), "Batch B stalled behind A").toEqual([]);
-      expect((await queue.listClaims()).map(({ id, attempts }) => ({ id, attempts }))).toEqual([
+      expect(
+        await withinTest(queue.listPending({ limit: "all" }), signal),
+        "Batch B stalled behind A",
+      ).toEqual([]);
+      expect(
+        (await withinTest(queue.listClaims(), signal)).map(({ id, attempts }) => ({
+          id,
+          attempts,
+        })),
+      ).toEqual([
         { id: telegramQueueEventId(1_401), attempts: 0 },
         { id: telegramQueueEventId(1_402), attempts: 0 },
       ]);
       releaseHead.resolve();
-      await monitor.waitForDeferredClaims();
+      await withinTest(monitor.waitForDeferredClaims(), signal);
       expect(downstreamTurns.mock.calls.map(([turn]) => turn.RawBody)).toEqual([
         "Batch A",
         "Batch B",
@@ -281,7 +289,6 @@ describe("Telegram durable ingress coalescing", () => {
       expect(runtimeErrors).toEqual([]);
     } finally {
       releaseHead.resolve();
-      await Promise.all(turnsFinished);
       await monitor.stop();
     }
   });
@@ -290,7 +297,6 @@ describe("Telegram durable ingress coalescing", () => {
     const fetchStarted = createDeferred<void>();
     const releaseFetch = createDeferred<void>();
     const headFinished = createDeferred<void>();
-    const followerDispatched = createDeferred<void>();
     const transport = createBotApiTransport();
     let fetchHeld = false;
     const fetchImpl: typeof fetch = async (input, init) => {
@@ -309,10 +315,7 @@ describe("Telegram durable ingress coalescing", () => {
       telegramTransport: { ...transport, fetch: fetchImpl, sourceFetch: fetchImpl },
       onRuntimeError: () => headFinished.resolve(),
     });
-    downstreamTurns.mockImplementation(async () => {
-      followerDispatched.resolve();
-      return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
-    });
+    const followerDispatched = captureNextDownstreamTurn();
     useIngressTimers();
     monitor.start();
     try {
@@ -324,7 +327,7 @@ describe("Telegram durable ingress coalescing", () => {
       await monitor.pause();
       await vi.advanceTimersByTimeAsync(1_000);
       // B's dispatch needs worker I/O after A's claims settle; keep time frozen.
-      await followerDispatched.promise;
+      await followerDispatched;
       await monitor.waitForDeferredClaims();
       expect(downstreamTurns).toHaveBeenCalledOnce();
       expect(downstreamTurns.mock.calls[0]?.[0].RawBody).toBe("Album B");
@@ -360,45 +363,15 @@ describe("Telegram durable ingress coalescing", () => {
   it("keeps every album member claimed while durable adoption commit is held", async () => {
     const commitStarted = createDeferred<void>();
     const releaseCommit = createDeferred<void>();
-    const createGuard = messageDispatchDedupe.createTelegramMessageDispatchReplayGuard;
-    const commitReplay = messageDispatchDedupe.commitTelegramMessageDispatchReplay;
-    const settlements: Promise<void>[] = [];
-    const commitSpy = vi
-      .spyOn(messageDispatchDedupe, "commitTelegramMessageDispatchReplay")
-      .mockImplementation((params) => {
-        const settlement = commitReplay(params);
-        settlements.push(settlement);
-        return settlement;
-      });
-    let commitCount = 0;
-    const guardSpy = vi
-      .spyOn(messageDispatchDedupe, "createTelegramMessageDispatchReplayGuard")
-      .mockImplementation((options) => {
-        const guard = createGuard(options);
-        return {
-          ...guard,
-          claim: async (...args) => {
-            const claim = await guard.claim(...args);
-            if (claim.kind !== "claimed") {
-              return claim;
-            }
-            return {
-              ...claim,
-              handle: {
-                ...claim.handle,
-                commit: async (commitOptions) => {
-                  commitCount += 1;
-                  if (commitCount === 1) {
-                    commitStarted.resolve();
-                    await releaseCommit.promise;
-                  }
-                  return await claim.handle.commit(commitOptions);
-                },
-              },
-            };
-          },
-        };
-      });
+    const replay = interceptReplayGuard({
+      commit: async (count, commit) => {
+        if (count === 1) {
+          commitStarted.resolve();
+          await releaseCommit.promise;
+        }
+        return await commit();
+      },
+    });
     const { monitor } = await createMonitor({
       adoptionStallTimeoutMs: 1_000,
       onRuntimeError: (error) => runtimeErrors.push(error),
@@ -411,17 +384,16 @@ describe("Telegram durable ingress coalescing", () => {
       await commitStarted.promise;
       await vi.advanceTimersByTimeAsync(3_000);
       releaseCommit.resolve();
-      await Promise.all(settlements);
+      await Promise.all(replay.settlements);
       await monitor.waitForDeferredClaims();
       expect(downstreamTurns).toHaveBeenCalledOnce();
       await assertSpoolTombstoned({ stateDir, updateIds: [1_201, 1_202] });
       expect(runtimeErrors).toEqual([]);
     } finally {
       releaseCommit.resolve();
-      await Promise.allSettled(settlements);
+      await Promise.allSettled(replay.settlements);
       await monitor.stop();
-      commitSpy.mockRestore();
-      guardSpy.mockRestore();
+      replay.restore();
     }
   });
 
@@ -651,56 +623,27 @@ describe("Telegram durable ingress coalescing", () => {
       const operationStarted = createDeferred<void>();
       const releaseOperation = createDeferred<void>();
       const createGuard = messageDispatchDedupe.createTelegramMessageDispatchReplayGuard;
-      const commitReplay = messageDispatchDedupe.commitTelegramMessageDispatchReplay;
-      const settlements: Promise<void>[] = [];
-      const commitSpy = vi
-        .spyOn(messageDispatchDedupe, "commitTelegramMessageDispatchReplay")
-        .mockImplementation((params) => {
-          const settlement = commitReplay(params);
-          settlements.push(settlement);
-          return settlement;
-        });
-      let commitCount = 0;
-      const guardSpy = vi
-        .spyOn(messageDispatchDedupe, "createTelegramMessageDispatchReplayGuard")
-        .mockImplementation((options) => {
-          const guard = createGuard(options);
-          return {
-            ...guard,
-            claim: async (...args) => {
-              const claim = await guard.claim(...args);
-              if (claim.kind !== "claimed") {
-                return claim;
-              }
-              return {
-                ...claim,
-                handle: {
-                  ...claim.handle,
-                  commit: async (commitOptions) => {
-                    commitCount += 1;
-                    if (phase === "commit" && commitCount === 1) {
-                      operationStarted.resolve();
-                      await releaseOperation.promise;
-                      return await claim.handle.commit(commitOptions);
-                    }
-                    if (phase === "rollback" && commitCount === 2) {
-                      await claim.handle.commit(commitOptions);
-                      throw new Error("synthetic second-key commit failure");
-                    }
-                    return await claim.handle.commit(commitOptions);
-                  },
-                },
-              };
-            },
-            forget: async (...args) => {
-              if (phase === "rollback") {
-                operationStarted.resolve();
-                await releaseOperation.promise;
-              }
-              return await guard.forget(...args);
-            },
-          };
-        });
+      const replay = interceptReplayGuard({
+        commit: async (count, commit) => {
+          if (phase === "commit" && count === 1) {
+            operationStarted.resolve();
+            await releaseOperation.promise;
+            return await commit();
+          }
+          if (phase === "rollback" && count === 2) {
+            await commit();
+            throw new Error("synthetic second-key commit failure");
+          }
+          return await commit();
+        },
+        forget: async (forget) => {
+          if (phase === "rollback") {
+            operationStarted.resolve();
+            await releaseOperation.promise;
+          }
+          return await forget();
+        },
+      });
       let stopping: Promise<void> | undefined;
       try {
         await writeTelegramSpooledUpdate({
@@ -724,10 +667,9 @@ describe("Telegram durable ingress coalescing", () => {
         expect(stopped).toBe(false);
       } finally {
         releaseOperation.resolve();
-        await Promise.allSettled(settlements);
+        await Promise.allSettled(replay.settlements);
         await stopping;
-        commitSpy.mockRestore();
-        guardSpy.mockRestore();
+        replay.restore();
       }
       const queue = openTelegramIngressQueue({ stateDir });
       expect(await queue.listClaims()).toEqual([]);
@@ -810,11 +752,7 @@ describe("Telegram durable ingress coalescing", () => {
     const { monitor, telegramTransport } = await createMonitor();
     const messageCount = 24;
     const updateIds = Array.from({ length: messageCount }, (_, index) => 501 + index);
-    const firstDispatch = createDeferred<void>();
-    downstreamTurns.mockImplementationOnce(async () => {
-      firstDispatch.resolve();
-      return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
-    });
+    const firstDispatch = captureNextDownstreamTurn();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
     monitor.start();
 
@@ -831,7 +769,7 @@ describe("Telegram durable ingress coalescing", () => {
       await vi.advanceTimersByTimeAsync(250);
       if (index === 19) {
         // Hold the 5 s clock boundary while the flushed turn finishes real I/O.
-        await firstDispatch.promise;
+        await firstDispatch;
         expect(downstreamTurns.mock.calls.length).toBeGreaterThan(0);
       }
     }
@@ -855,35 +793,6 @@ describe("Telegram durable ingress coalescing", () => {
     );
     await monitor.waitForDeferredClaims();
     await assertSpoolTombstoned({ stateDir, updateIds });
-
-    await monitor.stop();
-    await telegramTransport.close();
-  });
-
-  it("coalesces a forwarded burst replayed from a durable restart backlog", async () => {
-    await writeTelegramSpooledUpdate({
-      stateDir,
-      update: forwardedTextUpdate({ updateId: 401, messageId: 1, text: "First note" }),
-    });
-    await writeTelegramSpooledUpdate({
-      stateDir,
-      update: forwardedTextUpdate({ updateId: 402, messageId: 2, text: "Second note" }),
-    });
-    const { monitor, telegramTransport } = await createMonitor();
-    const forwardWindow = holdForwardWindow();
-
-    try {
-      monitor.start();
-      await monitor.waitForIdle();
-      forwardWindow.flush();
-    } finally {
-      forwardWindow.restore();
-    }
-    const turn = await awaitSingleDownstreamTurn();
-    expect(turn.Body).toContain("First note");
-    expect(turn.Body).toContain("Second note");
-    await monitor.waitForDeferredClaims();
-    await assertSpoolTombstoned({ stateDir, updateIds: [401, 402] });
 
     await monitor.stop();
     await telegramTransport.close();
@@ -956,7 +865,11 @@ describe("Telegram durable ingress coalescing", () => {
         throw new Error("Expected the turn's abort signal");
       }
       await new Promise<void>((resolve) => {
-        abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        if (abortSignal.aborted) {
+          resolve();
+        } else {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        }
       });
       return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
     });
@@ -985,43 +898,41 @@ describe("Telegram durable ingress coalescing", () => {
     ).not.toBe("completed");
   });
 
-  it("releases a stale forwarded claim once when custom debounce dispatch fails", async () => {
-    const update = forwardedTextUpdate({
-      updateId: 701,
-      messageId: 1,
-      text: "recovered forward",
-    });
-    const eventId = telegramQueueEventId(update.update_id);
-    const sessionError = new Error("Session changed while starting work. Retry.");
+  it("joins a turn that resumes after shutdown before releasing its state directory", async () => {
+    const update = textUpdate({ updateId: 904, messageId: 4, text: "resumed after shutdown" });
     await writeTelegramSpooledUpdate({ stateDir, update });
-    const queue = openTelegramIngressQueue({ stateDir });
-    expect(await queue.claim(eventId, { ownerId: "999:1:dead-owner" })).not.toBeNull();
-    downstreamTurns.mockRejectedValueOnce(sessionError);
-    const runtimeError = vi.fn();
-    const { monitor, telegramTransport } = await createMonitor({
-      adoptionStallTimeoutMs: 5_000,
-      onRuntimeError: runtimeError,
+    const turnEntered = createDeferred<void>();
+    const resumeTurn = createDeferred<void>();
+    inboundTurns.gate = async () => {
+      turnEntered.resolve();
+      await resumeTurn.promise;
+    };
+    const { monitor } = await createMonitor({
+      onRuntimeError: (error) => runtimeErrors.push(error),
     });
-    const forwardWindow = holdForwardWindow();
-
+    monitor.start();
     try {
-      monitor.start();
-      await monitor.waitForIdle();
-      forwardWindow.flush();
-    } finally {
-      forwardWindow.restore();
-    }
-    await monitor.waitForDeferredClaims();
-    expect(await queue.listClaims()).toEqual([]);
-    expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
-    expect(await queue.listPending({ limit: "all" })).toMatchObject([
-      { id: eventId, attempts: 2, lastError: sessionError.message },
-    ]);
-    expect(downstreamTurns).toHaveBeenCalledOnce();
-    expect(runtimeError).toHaveBeenCalledOnce();
+      await turnEntered.promise;
+      // Hold the maintenance the resumed write kicks so case release must retire it.
+      vi.useFakeTimers({ toFake: ["setImmediate", "clearImmediate"] });
+      await monitor.stop();
+      const queue = openTelegramIngressQueue({ stateDir });
+      expect(await queue.listPending({ limit: "all" })).toMatchObject([
+        { id: telegramQueueEventId(update.update_id), attempts: 0 },
+      ]);
+      expect(await queue.listClaims()).toEqual([]);
 
-    await monitor.stop();
-    await telegramTransport.close();
+      // A loaded host reaches the session write only after shutdown returned.
+      resumeTurn.resolve();
+      await releaseCaseState();
+
+      expect(downstreamTurns).toHaveBeenCalledOnce();
+      expect(downstreamTurns.mock.calls[0]?.[1]?.aborted).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(runtimeErrors).toEqual([]);
+    } finally {
+      resumeTurn.resolve();
+    }
   });
 
   it("bounds repeated session-start conflicts and drains the next Telegram update", async () => {

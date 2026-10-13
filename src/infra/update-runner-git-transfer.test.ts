@@ -6,10 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { gitNullConfigPath } from "./git-exec.js";
-import {
-  classifyPartialCloneGitFailure,
-  withGitTargetInspectionRoot,
-} from "./update-runner-git-target.js";
+import { withGitTargetInspectionRoot } from "./update-runner-git-target.js";
 import { prepareGitCandidateTransfer } from "./update-runner-git-transfer.js";
 import type { CommandRunner, RunStepOptions } from "./update-runner-types.js";
 import type { UpdateStepResult } from "./update-step-result.js";
@@ -39,16 +36,25 @@ it("rejects incomplete target inspection output even when Git exits zero", async
 it.each([
   { state: "unverified", expected: "did not verify repository corruption" },
   { state: "corrupt", expected: "verified repository corruption" },
+  { state: "promisor", expected: "promised objects in this partial clone" },
 ])(
-  "classifies Git's unverified corruption claim from repository evidence ($state)",
+  "classifies transfer failures using installed repository evidence ($state)",
   async ({ state, expected }) => {
-    const stderr =
-      "fatal: object is in the commit graph file but not in the object database. This is probably due to repo corruption.";
-    const runCommand: CommandRunner = async (argv) => {
+    const results: UpdateStepResult[] = [];
+    const inspectionRunCommand: CommandRunner = async () => ({
+      code: 128,
+      stdout: "",
+      stderr:
+        "fatal: object is in the commit graph file but not in the object database. " +
+        "This is probably due to repo corruption.",
+    });
+    let installedConfigProbed = false;
+    const installedRunCommand: CommandRunner = async (argv) => {
       if (argv.includes("--get-regexp")) {
+        installedConfigProbed = true;
         return {
-          code: 1,
-          stdout: "",
+          code: state === "promisor" ? 0 : 1,
+          stdout: state === "promisor" ? "remote.origin.promisor true\n" : "",
           stderr: "",
         };
       }
@@ -58,59 +64,34 @@ it.each([
         stderr: state === "corrupt" ? "missing blob 0123456789abcdef" : "",
       };
     };
-    const result = await classifyPartialCloneGitFailure({
-      result: { code: 128, stdout: "", stderr },
-      root: "/partial-clone",
-      runCommand,
-      timeoutMs: 1_000,
+
+    const transfer = await prepareGitCandidateTransfer({
+      candidateSha: "candidate",
+      beforeSha: null,
+      installedRoot: "/installed",
+      installedRunCommand,
+      probeTimeoutMs: 1_000,
+      step: {
+        runCommand: inspectionRunCommand,
+        cwd: "/inspection",
+        argv: [],
+        name: "transfer proof",
+        timeoutMs: 1_000,
+        stepIndex: 0,
+        totalSteps: 1,
+        results,
+      },
     });
-    expect(result.stderr).toContain(expected);
+
+    expect(transfer).toBeUndefined();
+    expect(installedConfigProbed).toBe(true);
+    expect(results.at(-1)?.stderrTail).toContain(expected);
+    if (state === "promisor") {
+      expect(results.at(-1)?.stderrTail).not.toContain("repo corruption");
+      expect(results.at(-1)?.stderrTail).toContain("sed -n 's/^?//p'");
+    }
   },
 );
-
-it("uses the installed checkout runner for partial-clone classification", async () => {
-  const results: UpdateStepResult[] = [];
-  const inspectionRunCommand: CommandRunner = async () => ({
-    code: 128,
-    stdout: "",
-    stderr:
-      "fatal: object is in the commit graph file but not in the object database. " +
-      "This is probably due to repo corruption.",
-  });
-  let installedConfigProbed = false;
-  const installedRunCommand: CommandRunner = async (argv) => {
-    installedConfigProbed = argv.includes("--get-regexp");
-    return {
-      code: 0,
-      stdout: "remote.origin.promisor true\n",
-      stderr: "",
-    };
-  };
-
-  const transfer = await prepareGitCandidateTransfer({
-    candidateSha: "candidate",
-    beforeSha: null,
-    installedRoot: "/installed",
-    installedRunCommand,
-    probeTimeoutMs: 1_000,
-    step: {
-      runCommand: inspectionRunCommand,
-      cwd: "/inspection",
-      argv: [],
-      name: "transfer proof",
-      timeoutMs: 1_000,
-      stepIndex: 0,
-      totalSteps: 1,
-      results,
-    },
-  });
-
-  expect(transfer).toBeUndefined();
-  expect(installedConfigProbed).toBe(true);
-  expect(results.at(-1)?.stderrTail).toContain("promised objects in this partial clone");
-  expect(results.at(-1)?.stderrTail).not.toContain("repo corruption");
-  expect(results.at(-1)?.stderrTail).toContain("sed -n 's/^?//p'");
-});
 
 // Windows forcibly terminates children instead of delivering the handled POSIX signal.
 it

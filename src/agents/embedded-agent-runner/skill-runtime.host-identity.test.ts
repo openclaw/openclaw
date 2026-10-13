@@ -135,7 +135,10 @@ it("isolates equal-root opposite-host caches through final delivered bytes", asy
   };
   try {
     const workspaceFirst = await resolveReusableWorkspaceSkillSnapshot(params);
-    const workspaceAgain = await resolveReusableWorkspaceSkillSnapshot(params);
+    const workspaceAgain = await resolveReusableWorkspaceSkillSnapshot({
+      ...params,
+      existingSnapshot: workspaceFirst.snapshot,
+    });
     const gatewayAfter = await resolveReusableWorkspaceSkillSnapshot({
       ...params,
       executionWorkspaceFileHost: "gateway",

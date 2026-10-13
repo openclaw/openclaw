@@ -18,7 +18,7 @@ import {
   getCliBackendPortBlock,
 } from "./gateway-cli-backend.live-helpers.js";
 import { restoreLiveEnv, snapshotLiveEnv, type LiveEnvSnapshot } from "./live-env-test-helpers.js";
-import { loadSessionEntry } from "./session-utils.js";
+import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
 import { extractPayloadText } from "./test-helpers.agent-results.js";
 
 const LIVE = isLiveTestEnabled();
@@ -540,7 +540,7 @@ describeLive("gateway live trajectory export", () => {
       logLiveStep("agent-turn:done", { firstReply });
       expect(firstReply.trim()).toBe(replyToken);
 
-      const { entry, storePath } = loadSessionEntry(sessionKey);
+      const { entry, storePath } = await loadSessionEntryAsync(sessionKey);
       if (!entry?.sessionId) {
         throw new Error(`live trajectory session was not persisted: ${sessionKey}`);
       }

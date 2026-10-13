@@ -10,7 +10,7 @@ import {
 } from "./slack-live.contracts.js";
 
 function validateSlackQaRuntimeEnv(runtimeEnv: SlackQaRuntimeEnv, label: string) {
-  if (!/^[A-Z][A-Z0-9]+$/.test(runtimeEnv.channelId.trim())) {
+  if (!/^[A-Z][A-Z0-9]+$/.test(runtimeEnv.channelId)) {
     throw new Error(`${label} channelId must be a Slack id like C123 or U123.`);
   }
   return runtimeEnv;
@@ -115,27 +115,25 @@ export function buildSlackQaConfig(
   const codexEntryConfig = asNonArrayRecord(codexEntry?.config);
   const codexAppServerConfig = asNonArrayRecord(codexEntryConfig.appServer);
   const approvalForwardingConfig = buildLiveQaApprovalForwardingConfig(baseCfg, approvalOverrides);
-  const codexAgentDefaults =
-    codexApprovalConfig && primaryModel
-      ? {
-          ...baseCfg.agents?.defaults,
-          models: {
-            ...baseCfg.agents?.defaults?.models,
-            [primaryModel]: {
-              ...baseCfg.agents?.defaults?.models?.[primaryModel],
-              agentRuntime: { id: "codex" as const },
-            },
-          },
-        }
-      : baseCfg.agents?.defaults;
-  const qaAgentDefaults = progressOverrides
-    ? {
-        ...codexAgentDefaults,
-        ...(progressOverrides.verboseDefault
-          ? { verboseDefault: progressOverrides.verboseDefault }
-          : {}),
-      }
-    : codexAgentDefaults;
+  let qaAgentDefaults = baseCfg.agents?.defaults;
+  if (codexApprovalConfig && primaryModel) {
+    qaAgentDefaults = {
+      ...qaAgentDefaults,
+      models: {
+        ...qaAgentDefaults?.models,
+        [primaryModel]: {
+          ...qaAgentDefaults?.models?.[primaryModel],
+          agentRuntime: { id: "codex" },
+        },
+      },
+    };
+  }
+  if (progressOverrides) {
+    qaAgentDefaults = { ...qaAgentDefaults };
+    if (progressOverrides.verboseDefault) {
+      qaAgentDefaults.verboseDefault = progressOverrides.verboseDefault;
+    }
+  }
   const qaAgentEntries = { ...baseCfg.agents?.entries };
   if (progressOverrides && qaAgentEntries.qa) {
     // Slack draft edits cannot preserve custom authorship. Remove the
@@ -150,33 +148,21 @@ export function buildSlackQaConfig(
         target: approvalOverrides.target ?? ("channel" as const),
       }
     : undefined;
-  const explicitToolAllow = baseCfg.tools?.allow;
-  const messageToolPolicy = params.overrides?.messageTool
-    ? explicitToolAllow && explicitToolAllow.length > 0
-      ? { allow: uniqueStrings([...explicitToolAllow, "message"]) }
-      : { alsoAllow: uniqueStrings([...(baseCfg.tools?.alsoAllow ?? []), "message"]) }
-    : {};
-  const toolsConfig =
-    codexApprovalConfig || params.overrides?.messageTool
-      ? {
-          tools: {
-            ...baseCfg.tools,
-            ...messageToolPolicy,
-            ...(codexApprovalConfig
-              ? {
-                  exec: {
-                    ...baseCfg.tools?.exec,
-                    mode: "ask" as const,
-                  },
-                }
-              : {}),
-          },
-        }
-      : {};
+  const tools = { ...baseCfg.tools };
+  if (params.overrides?.messageTool) {
+    if (tools.allow?.length) {
+      tools.allow = uniqueStrings([...tools.allow, "message"]);
+    } else {
+      tools.alsoAllow = uniqueStrings([...(tools.alsoAllow ?? []), "message"]);
+    }
+  }
+  if (codexApprovalConfig) {
+    tools.exec = { ...tools.exec, mode: "ask" };
+  }
   return {
     ...baseCfg,
     ...approvalForwardingConfig,
-    ...toolsConfig,
+    ...(codexApprovalConfig || params.overrides?.messageTool ? { tools } : {}),
     plugins: {
       ...baseCfg.plugins,
       allow: pluginAllow,

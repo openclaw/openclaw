@@ -3,7 +3,8 @@ import type { DiscordCommandDeployHashStore } from "../command-deploy-store.js";
 import { DiscordCommandDeployer } from "./command-deploy.js";
 import type { DiscordCommand } from "./commands.js";
 import { ComponentRegistry } from "./component-registry.js";
-import { BaseMessageInteractiveComponent, type Modal } from "./components.js";
+import { BaseMessageInteractiveComponent } from "./components.base.js";
+import type { Modal } from "./components.modal.js";
 import { DiscordEntityCache } from "./entity-cache.js";
 import { DiscordEventQueue, type DiscordEventQueueOptions } from "./event-queue.js";
 import { dispatchInteraction } from "./interaction-dispatch.js";
@@ -29,7 +30,6 @@ interface ClientOptions {
   requestOptions?: RequestClientOptions;
   commandDeployHashStore?: DiscordCommandDeployHashStore;
   eventQueue?: DiscordEventQueueOptions;
-  restCacheTtlMs?: number;
 }
 
 export class Client {
@@ -43,8 +43,6 @@ export class Client {
   private entityCache: DiscordEntityCache;
   private eventQueue?: DiscordEventQueue;
   modalHandler = new ComponentRegistry<Modal>();
-  shardId?: number;
-  totalShards?: number;
 
   constructor(
     options: ClientOptions,
@@ -72,7 +70,6 @@ export class Client {
     this.entityCache = new DiscordEntityCache({
       client: this,
       rest: () => this.rest,
-      ttlMs: this.options.restCacheTtlMs,
     });
     this.commandDeployer = new DiscordCommandDeployer({
       clientId: this.options.clientId,
@@ -82,11 +79,6 @@ export class Client {
     });
     for (const component of handlers.components ?? []) {
       this.componentHandler.register(component);
-    }
-    for (const command of this.commands) {
-      for (const component of command.components ?? []) {
-        this.componentHandler.register(component);
-      }
     }
     for (const modal of handlers.modals ?? []) {
       this.modalHandler.register(modal);
@@ -106,7 +98,6 @@ export class Client {
 
   getRuntimeMetrics() {
     return {
-      request: this.rest.getSchedulerMetrics(),
       eventQueue: this.eventQueue?.getMetrics(),
     };
   }

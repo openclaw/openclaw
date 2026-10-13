@@ -65,6 +65,7 @@ const WorkerInferenceMessageSchema = Type.Union([
     role: Type.Literal("user"),
     content: Type.Union([InferenceTextSchema, inferenceSchemas.userContent]),
     timestamp: LiveIntegerSchema,
+    operatorMessage: Type.Optional(inferenceSchemas.operatorMessage),
   }),
   inferenceSchemas.contextAssistant,
   inferenceSchemas.toolResult,

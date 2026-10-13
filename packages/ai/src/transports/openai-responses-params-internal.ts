@@ -130,11 +130,8 @@ function resolveOpenAIResponsesInstructions(
 // xAI /responses/compact needs the system prompt first in input, not instructions:
 // https://docs.x.ai/developers/advanced-api-usage/context-compaction
 export function buildOpenAIResponsesCompactSystemMessage(model: Model, instructions: string) {
-  // SAFETY: only reached from postOpenAIResponsesCompaction (Responses-API compact endpoint), so model is always OpenAI-mode here.
-  const compat = getCompat(model as OpenAIModeModel);
-  const supportsDeveloperRole =
-    typeof compat.supportsDeveloperRole === "boolean" ? compat.supportsDeveloperRole : undefined;
-  const role = model.reasoning && supportsDeveloperRole !== false ? "developer" : "system";
+  const compat = getCompat(model);
+  const role = model.reasoning && compat.supportsDeveloperRole ? "developer" : "system";
   return buildResponsesInputMessage(role, [{ type: "input_text", text: instructions }]);
 }
 
@@ -164,6 +161,7 @@ export function buildOpenAIResponsesParams(
   options: OpenAIResponsesOptions | undefined,
   metadata?: Record<string, string>,
   replayMode: OpenAIResponsesReplayMode = "checkpoint",
+  retainUserProvenance = false,
 ) {
   const payloadPolicy = resolveOpenAIResponsesPayloadPolicy(model, {
     storeMode: "transport-default",
@@ -180,6 +178,7 @@ export function buildOpenAIResponsesParams(
     authProfileId: options?.authProfileId,
     sessionId: options?.sessionId,
     replayMode,
+    retainUserProvenance,
   });
   ensureOpenAIResponsesNonEmptyInput(messages, context);
   const cacheRetention = resolveCacheRetention(options?.cacheRetention);
@@ -272,9 +271,6 @@ export function buildOpenAIResponsesParams(
       }
     }
   }
-  applyOpenAIResponsesPayloadPolicy(params as Record<string, unknown>, payloadPolicy);
-  return sanitizeOpenAICodexResponsesParams(
-    model,
-    params as Record<string, unknown>,
-  ) as typeof params;
+  applyOpenAIResponsesPayloadPolicy(params, payloadPolicy);
+  return sanitizeOpenAICodexResponsesParams(model, params);
 }

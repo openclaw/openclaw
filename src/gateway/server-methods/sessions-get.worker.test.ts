@@ -1,9 +1,8 @@
 import { expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import {
-  replaceSessionEntrySync,
-  replaceTranscriptEvents,
-} from "../../config/sessions/session-accessor.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { sessionByKeyReadHandlers } from "./sessions-read-by-key.js";
@@ -15,6 +14,8 @@ import {
 
 it("keeps warm, dirty, and archived keyed RPCs off host SQLite while preserving raw messages", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
     const scope = {
       agentId: "main",
       sessionKey: "agent:main:raw-worker-history",
@@ -40,7 +41,7 @@ it("keeps warm, dirty, and archived keyed RPCs off host SQLite while preserving 
         message,
       })),
     ]);
-    const context = requestContext({ agents: { entries: { main: {} } } });
+    const context = requestContext(cfg);
     const client = identifiedClient("synthetic-viewer");
     await initializeSessionReadContext(context);
     const read = async (method: "sessions.get" | "sessions.describe" = "sessions.get") => {

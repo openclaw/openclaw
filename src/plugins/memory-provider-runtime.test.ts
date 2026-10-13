@@ -522,3 +522,53 @@ describe("provider-neutral memory resolver", () => {
     expect(resume).toHaveBeenCalledTimes(1);
   });
 });
+
+it.each(["before", "during"] as const)(
+  "joins publications admitted %s provider open",
+  async (when) => {
+    const sessionKey = "agent:main:chat";
+    const grant = await ownerAudience(sessionKey);
+    const publication = createDeferredCore();
+    const entered = createDeferredCore();
+    const native = provider();
+    const admit = () => {
+      fakeSessionOwner.pendingKeys.add(sessionKey);
+      fakeSessionOwner.publications.set(sessionKey, publication.promise);
+    };
+    const openProvider = vi.fn(async () => {
+      if (when === "during") {
+        admit();
+      }
+      entered.resolve();
+      return { provider: native };
+    });
+    state.capability.providerRuntime = { open: openProvider };
+    const caller = context();
+    Reflect.set(caller.value.authority, "audience", grant.audience);
+    if (when === "before") {
+      admit();
+    }
+    const result = open(caller);
+    const observed = result.catch((error: unknown) => error);
+    try {
+      if (when === "before") {
+        expect(openProvider).not.toHaveBeenCalled();
+      } else {
+        await entered.promise;
+      }
+      fakeSessionOwner.pendingKeys.delete(sessionKey);
+      fakeSessionOwner.publications.delete(sessionKey);
+      publication.resolve();
+      const opened = await result;
+      expect(openProvider).toHaveBeenCalledOnce();
+      await expect(opened.provider!.health()).resolves.toMatchObject({ status: "ready" });
+      await opened.provider!.close();
+    } finally {
+      fakeSessionOwner.pendingKeys.delete(sessionKey);
+      fakeSessionOwner.publications.delete(sessionKey);
+      publication.resolve();
+      await observed;
+      grant.release();
+    }
+  },
+);

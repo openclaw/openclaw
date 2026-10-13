@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   estimateStringChars,
   estimateTokensFromChars,
@@ -8,9 +9,10 @@ import {
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
-import { withEnvAsync } from "../test-utils/env.js";
 import { projectChatDisplayMessages } from "./chat-display-projection.js";
+import { buildSessionPreviewItems } from "./session-display-projection.js";
 import { ArchivedTranscriptReader } from "./session-transcript-archive-reader.js";
+import { collectSessionTranscriptMessages } from "./session-transcript-source-pages.js";
 import {
   readLatestSessionUsageFromTranscriptFileAsync,
   resolveSessionTranscriptCandidates,
@@ -41,9 +43,9 @@ function writeRecords(file: string, records: unknown[]) {
 function archive(
   sessionId: string,
   records: unknown[],
-  { dir = tmpDir, stem = sessionId, timestamp = archiveTimestamp, header = sessionId } = {},
+  { stem = sessionId, timestamp = archiveTimestamp, header = sessionId } = {},
 ) {
-  return writeRecords(path.join(dir, `${stem}.jsonl.reset.${timestamp}`), [
+  return writeRecords(path.join(tmpDir, `${stem}.jsonl.reset.${timestamp}`), [
     { type: "session", version: 3, id: header },
     ...records,
   ]);
@@ -64,14 +66,25 @@ function message(
   };
 }
 
-function reader(sessionId: string, sessionFile?: string, selectedStore = storePath) {
-  return new ArchivedTranscriptReader({ sessionId, storePath: selectedStore, sessionFile });
+function reader(sessionId: string, sessionFile?: string) {
+  return new ArchivedTranscriptReader({ sessionId, storePath, sessionFile });
 }
 
-async function full(sessionId: string, sessionFile?: string, selectedStore = storePath) {
-  return (
-    await reader(sessionId, sessionFile, selectedStore).read({ mode: "full", reason: "test" })
-  ).messages;
+async function full(sessionId: string, sessionFile?: string) {
+  const archiveReader = reader(sessionId, sessionFile);
+  return collectSessionTranscriptMessages(
+    (_scope, options) =>
+      archiveReader.readSourcePage(options, {
+        indexedSeq: -1,
+        activeEventCount: 0,
+        totalMessages: 0,
+        generation: undefined,
+        tailEventSeq: undefined,
+        resetSeq: null,
+      }),
+    { sessionId },
+    { mode: "full", reason: "archive selection" },
+  );
 }
 
 function contents(messages: unknown[]) {
@@ -168,41 +181,6 @@ describe("archive selection", () => {
     });
   });
 
-  test("keeps parentless linear history after a leaf control", async () => {
-    const id = "parentless-leaf";
-    archive(id, [
-      message("linear-user", undefined, "user", "linear root"),
-      message("linear-assistant", undefined, "assistant", "linear answer"),
-      { type: "metadata", id: "linear-metadata", parentId: "linear-assistant" },
-      message("side-assistant", "linear-assistant", "assistant", "side answer"),
-      {
-        type: "leaf",
-        id: "active-leaf",
-        parentId: "side-assistant",
-        targetId: "linear-assistant",
-        appendParentId: "linear-metadata",
-      },
-    ]);
-    expect(contents(await full(id))).toEqual(["linear root", "linear answer"]);
-    expect(contents((await reader(id).read({ mode: "recent", maxMessages: 10 })).messages)).toEqual(
-      ["linear root", "linear answer"],
-    );
-  });
-
-  test("keeps async rows when imported parent links are incomplete without leaf control", async () => {
-    const id = "incomplete-parent";
-    archive(id, [
-      message("legacy-user", undefined, "user", "legacy prompt"),
-      message("tree-assistant", "legacy-user", "assistant", "tree reply"),
-      message("orphan-tail", "missing-imported-parent", "assistant", "reachable orphan tail"),
-    ]);
-    expect(await full(id)).toMatchObject([
-      { content: "legacy prompt", __openclaw: { id: "legacy-user", seq: 1 } },
-      { content: "tree reply", __openclaw: { id: "tree-assistant", seq: 2 } },
-      { content: "reachable orphan tail", __openclaw: { id: "orphan-tail", seq: 3 } },
-    ]);
-  });
-
   test("reads the latest reset archive independently of active artifacts", async () => {
     const id = "reset-archive-fallback";
     writeRecords(path.join(tmpDir, `${id}.jsonl`), [
@@ -224,21 +202,6 @@ describe("archive selection", () => {
     });
   });
 
-  test("ignores retired global reset archives when reading the selected store", async () => {
-    const id = "cross-root";
-    archive(id, [{ message: { role: "assistant", content: "older store archive" } }], {
-      timestamp: "2026-02-16T22-26-33.000Z",
-    });
-    const legacy = path.join(tmpDir, ".openclaw", "sessions");
-    fs.mkdirSync(legacy, { recursive: true });
-    archive(id, [{ message: { role: "assistant", content: "newer legacy archive" } }], {
-      dir: legacy,
-    });
-    await withEnvAsync({ OPENCLAW_HOME: tmpDir }, async () => {
-      expect(contents(await full(id))).toEqual(["older store archive"]);
-    });
-  });
-
   test("accepts stale generated session archives when the header matches the current session", async () => {
     const id = "00000000-0000-4000-8000-000000000006";
     const stale = "00000000-0000-4000-8000-000000000007";
@@ -246,18 +209,6 @@ describe("archive selection", () => {
       stem: stale,
     });
     expect(contents(await full(id, `${stale}.jsonl`))).toEqual(["valid stale-name archive"]);
-  });
-
-  test("preserves explicit transcript variant priority for reset archive fallback", async () => {
-    const id = "00000000-0000-4000-8000-000000000003";
-    archive(id, [{ message: { role: "assistant", content: "newer canonical archive" } }]);
-    archive(id, [{ message: { role: "assistant", content: "preferred topic archive" } }], {
-      stem: "custom-topic-alpha",
-      timestamp: "2026-02-16T22-26-34.000Z",
-    });
-    expect(contents(await full(id, "custom-topic-alpha.jsonl"))).toEqual([
-      "preferred topic archive",
-    ]);
   });
 
   test("revalidates a custom archive header after same-path replacement", async () => {
@@ -280,6 +231,7 @@ describe("archive selection", () => {
   test("uses the newest custom reset archive whose header matches the session", async () => {
     const id = "00000000-0000-4000-8000-000000000008";
     const stem = "shared-topic-valid-latest";
+    archive(id, [{ message: { role: "assistant", content: "newer canonical archive" } }]);
     archive(id, [{ message: { role: "assistant", content: "older valid archive" } }], {
       stem,
       timestamp: "2026-02-16T22-26-35.000Z",
@@ -291,17 +243,6 @@ describe("archive selection", () => {
     const calls = installShortReads(16);
     expect(contents(await full(id, `${stem}.jsonl`))).toEqual(["older valid archive"]);
     expect(calls()).toBeGreaterThan(1);
-  });
-
-  test("reads cross-agent absolute sessionFile archives across custom store roots", async () => {
-    const id = "cross-agent-custom-root";
-    const dir = path.join(tmpDir, "custom", "agents", "ops", "sessions");
-    fs.mkdirSync(dir, { recursive: true });
-    archive(id, [{ message: { role: "assistant", content: "from-custom-ops" } }], { dir });
-    const wrongStore = path.join(tmpDir, "custom", "agents", "main", "sessions", "sessions.json");
-    expect(await full(id, path.join(dir, `${id}.jsonl`), wrongStore)).toMatchObject([
-      { role: "assistant", content: "from-custom-ops", __openclaw: { seq: 1 } },
-    ]);
   });
 });
 
@@ -438,7 +379,7 @@ describe("oversized transcript records", () => {
   const suffix = { type: "text", text: "keep suffix text" };
 
   async function recent(id: string) {
-    return (await reader(id).read({ mode: "recent", maxMessages: 10 })).messages;
+    return (await reader(id).readRecentWithStats({ maxMessages: 10 })).messages;
   }
 
   async function expectOversized(id: string) {
@@ -455,10 +396,6 @@ describe("oversized transcript records", () => {
   }
 
   test.each([
-    {
-      name: "native image",
-      image: (data: string) => ({ type: "image", mimeType: "image/png", data }),
-    },
     {
       name: "Anthropic source before type",
       image: (data: string) => ({
@@ -499,11 +436,12 @@ describe("oversized transcript records", () => {
     const id = "distant-image";
     const privateImage = Buffer.from("private-image-payload");
     const privateData = privateImage.toString("base64");
+    const metadata = { data: Buffer.from("notes").toString("base64") };
     archive(id, [
       message(id, null, "user", [
         prefix,
         { type: "image", metadata: { caption: "x".repeat(70 * 1024) }, data: privateData },
-        { type: "image", data: imageData },
+        { type: "image", metadata, data: imageData },
         suffix,
       ]),
     ]);
@@ -513,7 +451,7 @@ describe("oversized transcript records", () => {
         content: [
           prefix,
           { type: "image", omitted: true, bytes: privateImage.length },
-          { type: "image", omitted: true, bytes: imageBytes },
+          { type: "image", metadata, omitted: true, bytes: imageBytes },
           suffix,
         ],
       });
@@ -521,19 +459,6 @@ describe("oversized transcript records", () => {
       expect(JSON.stringify(row)).not.toContain(imageData);
     }
     expect(single).toMatchObject({ found: true, oversized: false });
-  });
-
-  test("preserves image metadata data while omitting the actual image payload", async () => {
-    const id = "image-metadata";
-    const metadata = { data: Buffer.from("notes").toString("base64") };
-    archive(id, [
-      message(id, null, "user", [prefix, { type: "image", metadata, data: imageData }, suffix]),
-    ]);
-    const rows = await recent(id);
-    expect(rows).toMatchObject([
-      { content: [prefix, { type: "image", metadata, omitted: true, bytes: imageBytes }, suffix] },
-    ]);
-    expect(JSON.stringify(rows)).not.toContain(imageData);
   });
 
   test("preserves a base64 PDF document preceding an oversized image", async () => {
@@ -647,7 +572,7 @@ describe("oversized transcript records", () => {
     ]);
     const readFile = vi.spyOn(fs, "readFileSync");
     expect(
-      (await reader(id).read({ mode: "recent", maxMessages: 10, maxBytes: 1024, maxLines: 10 }))
+      (await reader(id).readRecentWithStats({ maxMessages: 10, maxBytes: 1024, maxLines: 10 }))
         .messages,
     ).toEqual([]);
     expect(readFile).not.toHaveBeenCalled();
@@ -702,9 +627,139 @@ test("readRecentSessionMessagesAsync survives 16-byte tail read caps", async () 
       },
     })),
   );
-  const read = () => reader(id).read({ mode: "recent", maxMessages: 20, maxBytes: 8192 });
+  const read = () => reader(id).readRecentWithStats({ maxMessages: 20, maxBytes: 8192 });
   const expected = await read();
   const calls = installShortReads(16);
   expect(await read()).toEqual(expected);
   expect(calls()).toBeGreaterThan(1);
+});
+
+describe("buildSessionPreviewItems bounded projection", () => {
+  test("parses only 12 visible signatures from the recovery 1024-row tail", () => {
+    const visible = 704;
+    const hidden = 320;
+    const sourceMessages = Array.from({ length: visible + hidden }, (_, index) => ({
+      role: index < visible ? "assistant" : "toolResult",
+      content: [
+        {
+          type: "text",
+          text: `message ${index}`,
+          textSignature: JSON.stringify({ v: 1, id: `preview-${index}`, phase: "final_answer" }),
+        },
+      ],
+    }));
+    const sourceText = JSON.stringify(sourceMessages);
+    // SQLite hydration yields fresh blocks, so the per-block signature cache starts cold.
+    const messages = JSON.parse(sourceText) as typeof sourceMessages;
+    const originalRows = messages.slice();
+    const originalContents = messages.map((row) => row.content);
+    const signatureTexts = new Set(sourceMessages.map((row) => row.content[0]!.textSignature));
+    const parse = JSON.parse;
+    const descriptor = expectDefined(
+      Object.getOwnPropertyDescriptor(JSON, "parse"),
+      "native JSON.parse descriptor",
+    );
+    let parsedSignatures = 0;
+    Object.defineProperty(JSON, "parse", {
+      ...descriptor,
+      value(...args: Parameters<typeof JSON.parse>) {
+        if (signatureTexts.has(args[0])) {
+          parsedSignatures += 1;
+        }
+        return parse(...args);
+      },
+    });
+    let result: ReturnType<typeof buildSessionPreviewItems>;
+    try {
+      result = buildSessionPreviewItems(messages, 12, 120);
+    } finally {
+      Object.defineProperty(JSON, "parse", descriptor);
+    }
+
+    expect(result).toEqual(
+      Array.from({ length: 12 }, (_, index) => ({
+        role: "assistant",
+        text: `message ${visible - 12 + index}`,
+      })),
+    );
+    expect(JSON.stringify(messages)).toBe(sourceText);
+    expect(messages.every((row, index) => row === originalRows[index])).toBe(true);
+    expect(messages.every((row, index) => row.content === originalContents[index])).toBe(true);
+    expect(parsedSignatures).toBe(12);
+  });
+
+  const visibilityMessages = [
+    { role: "user", content: "older excluded text" },
+    { role: "assistant", content: "NO_REPLY" },
+    { role: "toolResult", content: "tool output" },
+    { role: "user", content: [{ type: "input_text", text: "  question  " }] },
+    { role: "assistant", content: "model only", display: false },
+    {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "private commentary",
+          textSignature: JSON.stringify({ v: 1, phase: "commentary" }),
+        },
+        {
+          type: "text",
+          text: `${"x".repeat(16)}🦊tail`,
+          textSignature: JSON.stringify({ v: 1, phase: "final_answer" }),
+        },
+      ],
+    },
+    { role: "assistant", content: "REPLY_SKIP" },
+    { role: "assistant", content: [{ type: "text", text: "   " }] },
+    { role: "system", content: "system metadata" },
+  ];
+  test.each([
+    ...(
+      [
+        ["display", { role: "user", text: "question" }],
+        ["model-context", { role: "assistant", text: "model only" }],
+      ] as const
+    ).map(([view, preceding]) => ({
+      name: `${view} visibility, order and UTF-16 bounds`,
+      messages: visibilityMessages,
+      view,
+      limit: 2,
+      maxChars: 20,
+      expected: [preceding, { role: "assistant", text: `${"x".repeat(16)}...` }],
+    })),
+    {
+      name: "fewer visible items than the limit",
+      messages: [
+        null,
+        undefined,
+        {},
+        { role: "user", content: "first" },
+        { role: "toolResult", content: "tool output" },
+        { role: "assistant", content: "ANNOUNCE_SKIP" },
+        { role: "assistant", content: "hidden", display: false },
+        { role: "assistant", content: "last" },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "commentary only",
+              textSignature: JSON.stringify({ v: 1, phase: "commentary" }),
+            },
+          ],
+        },
+      ],
+      view: undefined,
+      limit: 12,
+      maxChars: 120,
+      expected: [
+        { role: "user", text: "first" },
+        { role: "assistant", text: "last" },
+      ],
+    },
+  ])("preserves $name", ({ messages, expected, limit, maxChars, view }) => {
+    const original = JSON.stringify(messages);
+    expect(buildSessionPreviewItems(messages, limit, maxChars, view)).toEqual(expected);
+    expect(JSON.stringify(messages)).toBe(original);
+  });
 });

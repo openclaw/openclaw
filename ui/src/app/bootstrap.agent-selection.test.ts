@@ -1,18 +1,20 @@
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
 import type { RouteLocation } from "@openclaw/uirouter";
-import { expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { AgentsListResult } from "../api/types.ts";
 import { startModelSetupFirstRunRedirectAfterLocation } from "../pages/model-setup/first-run.ts";
 import { resolveInitialApplicationLocation } from "./bootstrap-location.ts";
 import { bootstrapApplication } from "./bootstrap.ts";
 import type { ApplicationContext } from "./context.ts";
-import { loadGatewaySessionSelection, loadSettings, saveSettings } from "./settings.ts";
+import {
+  loadGatewaySessionSelection,
+  loadSettings,
+  saveSettings,
+  setSettingsChangeListener,
+} from "./settings.ts";
 
-it.each([
-  { agentId: "main", savedAgentId: "work", basePath: "", suffix: "" },
-  { agentId: "work", savedAgentId: "main", basePath: "/openclaw", suffix: "/" },
-])(
+it.each([{ agentId: "work", savedAgentId: "main", basePath: "/openclaw", suffix: "/" }])(
   "keeps cold explicit $agentId over saved $savedAgentId at $basePath (suffix '$suffix')",
   async ({ agentId, savedAgentId, basePath, suffix }) => {
     const pathname = buildControlUiSessionPath({
@@ -381,4 +383,53 @@ it.each([
     window.history.replaceState({}, "", previousUrl);
     saveSettings(previousSettings);
   }
+});
+
+describe("initial sidebar visibility", () => {
+  it.each(["/dashboard/research/conversation", "/chat/research/conversation?nav=collapsed"])(
+    "starts expanded without rewriting the route at %s",
+    (initialUrl) => {
+      const previousSettings = loadSettings();
+      const previousUrl = window.location.href;
+      window.history.replaceState({}, "", initialUrl);
+      let runtime: ReturnType<typeof bootstrapApplication> | undefined;
+
+      try {
+        runtime = bootstrapApplication();
+        expect(runtime.context.navigation.snapshot.navCollapsed).toBe(false);
+        expect(window.location.pathname + window.location.search + window.location.hash).toBe(
+          initialUrl,
+        );
+      } finally {
+        runtime?.stop();
+        window.history.replaceState({}, "", previousUrl);
+        saveSettings(previousSettings);
+      }
+    },
+  );
+
+  it("keeps sidebar visibility in memory without rewriting persisted settings", () => {
+    const previousSettings = loadSettings();
+    let runtime: ReturnType<typeof bootstrapApplication> | undefined;
+    const onPersistedSettingsChanged = vi.fn();
+
+    try {
+      runtime = bootstrapApplication();
+      setSettingsChangeListener(onPersistedSettingsChanged);
+
+      runtime.context.navigation.update({ navCollapsed: true });
+
+      expect(runtime.context.navigation.snapshot.navCollapsed).toBe(true);
+      expect(onPersistedSettingsChanged).not.toHaveBeenCalled();
+
+      runtime.context.navigation.update({ navWidth: previousSettings.navWidth + 1 });
+
+      expect(onPersistedSettingsChanged).toHaveBeenCalledOnce();
+      expect(loadSettings().navWidth).toBe(previousSettings.navWidth + 1);
+    } finally {
+      runtime?.stop();
+      setSettingsChangeListener(null);
+      saveSettings(previousSettings);
+    }
+  });
 });

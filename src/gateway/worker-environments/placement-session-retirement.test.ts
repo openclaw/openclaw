@@ -2,10 +2,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
-import { createPlacementSessionRetirement } from "./placement-session-retirement.js";
+import {
+  createPlacementSessionRetirement,
+  type PlacementSessionEvidence,
+  type PlacementSessionEvidenceResolver,
+} from "./placement-session-retirement.js";
 import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementRetirement,
@@ -91,9 +96,11 @@ function createHarness(records: WorkerSessionPlacementRecord[]) {
   );
   const retired: WorkerSessionPlacementRetirement[] = [];
   const resolveSessionEvidence = vi.fn(
-    async (_placement: WorkerSessionPlacementRecord) => "absent" as const,
+    async (_placement: WorkerSessionPlacementRecord): Promise<PlacementSessionEvidence> => "absent",
   );
-  const createSessionEvidenceResolver = vi.fn(async () => resolveSessionEvidence);
+  const createSessionEvidenceResolver = vi.fn(
+    async (): Promise<PlacementSessionEvidenceResolver> => resolveSessionEvidence,
+  );
   const forceDestroyEnvironment = vi.fn(async (environmentId: string) => {
     environments.set(environmentId, {
       environmentId,
@@ -106,34 +113,41 @@ function createHarness(records: WorkerSessionPlacementRecord[]) {
       }
     }
   });
+  const listAsync = vi.fn(async () => [...placements.values()]);
+  const retireSessionPlacementAsync = vi.fn(async (input: WorkerSessionPlacementRetirement) => {
+    const current = placements.get(input.sessionId);
+    if (
+      current?.state !== input.expectedState ||
+      current.generation !== input.expectedGeneration ||
+      current.turnClaim
+    ) {
+      throw new Error("placement changed");
+    }
+    placements.delete(input.sessionId);
+    retired.push(input);
+  });
   const retirement = createPlacementSessionRetirement({
     placements: {
-      get: (sessionId) => placements.get(sessionId),
-      list: () => [...placements.values()],
-      retireSessionPlacement: (input) => {
-        const current = placements.get(input.sessionId);
-        if (
-          current?.state !== input.expectedState ||
-          current.generation !== input.expectedGeneration ||
-          current.turnClaim
-        ) {
-          throw new Error("placement changed");
-        }
-        placements.delete(input.sessionId);
-        retired.push(input);
-      },
+      getAsync: async (sessionId) => placements.get(sessionId),
+      getManyAsync: async (sessionIds) =>
+        new Map([...placements].filter(([sessionId]) => sessionIds.includes(sessionId))),
+      listAsync,
+      retireSessionPlacementAsync,
     },
     environments: {
       get: (environmentId) => environments.get(environmentId) as never,
     },
     forceDestroyEnvironment,
     createSessionEvidenceResolver,
+    reportChanges: (operation) => operation(),
     warn: vi.fn(),
   });
   return {
     createSessionEvidenceResolver,
     forceDestroyEnvironment,
     placements,
+    listAsync,
+    retireSessionPlacementAsync,
     resolveSessionEvidence,
     retired,
     retirement,
@@ -141,6 +155,25 @@ function createHarness(records: WorkerSessionPlacementRecord[]) {
 }
 
 describe("placement session retirement", () => {
+  it("reuses local session evidence until invalidated, including a receipt during discovery", async () => {
+    const placement = localPlacement("session-current");
+    const harness = createHarness([placement]);
+    harness.resolveSessionEvidence.mockResolvedValue("current");
+    await harness.retirement.reconcile();
+    await harness.retirement.reconcile();
+    expect(harness.listAsync).toHaveBeenCalledTimes(1);
+
+    harness.retirement.invalidateAll();
+    harness.listAsync.mockImplementationOnce(async () => {
+      harness.retirement.invalidateAll();
+      return [placement];
+    });
+    await harness.retirement.reconcile();
+    harness.resolveSessionEvidence.mockResolvedValue("absent");
+    await harness.retirement.reconcile();
+    expect(harness.placements.has(placement.sessionId)).toBe(false);
+  });
+
   it("retires an exact local placement after its session disappears", async () => {
     const harness = createHarness([localPlacement("session-local")]);
 
@@ -180,19 +213,21 @@ describe("placement session retirement", () => {
     });
     const ownedRequested = await placements.startDispatch(ownedIdentity);
     const retireSessionPlacement = vi.fn((input: WorkerSessionPlacementRetirement) =>
-      placements.retireSessionPlacement(input),
+      placements.retireSessionPlacementAsync(input),
     );
     const forceDestroyEnvironment = vi.fn();
     const warn = vi.fn();
     const retirement = createPlacementSessionRetirement({
       placements: {
-        get: (sessionId) => placements.get(sessionId),
-        list: () => placements.list(),
-        retireSessionPlacement,
+        getAsync: (sessionId) => placements.getAsync(sessionId),
+        getManyAsync: (sessionIds) => placements.getManyAsync(sessionIds),
+        listAsync: () => placements.listAsync(),
+        retireSessionPlacementAsync: retireSessionPlacement,
       },
       environments: { get: () => undefined },
       forceDestroyEnvironment,
       createSessionEvidenceResolver: async () => async () => "absent",
+      reportChanges: (operation) => operation(),
       warn,
     });
 
@@ -243,42 +278,82 @@ describe("placement session retirement", () => {
     ]);
   });
 
-  it("retains current and unknown session evidence", async () => {
-    const current = localPlacement("session-current");
-    const unknown = localPlacement("session-unknown");
-    const harness = createHarness([current, unknown]);
-    const retirement = createPlacementSessionRetirement({
-      placements: {
-        get: (sessionId) => harness.placements.get(sessionId),
-        list: () => [...harness.placements.values()],
-        retireSessionPlacement: () => {
-          throw new Error("must not retire");
-        },
-      },
-      environments: { get: () => undefined },
-      forceDestroyEnvironment: async () => {
-        throw new Error("must not destroy");
-      },
-      createSessionEvidenceResolver: async () => async (placement) =>
-        placement.sessionId === current.sessionId ? "current" : "unknown",
-      warn: vi.fn(),
-    });
-
-    await retirement.reconcile();
-
-    expect(harness.placements.size).toBe(2);
-  });
-
-  it("creates one evidence resolver for the reconcile snapshot", async () => {
-    const placements = [localPlacement("session-one"), localPlacement("session-two")];
-    const harness = createHarness(placements);
+  it("skips clean placements and checks only the changed identity", async () => {
+    const first = localPlacement("session-one");
+    const second = localPlacement("session-two");
+    const harness = createHarness([first, second]);
+    harness.resolveSessionEvidence.mockResolvedValue("current");
 
     await harness.retirement.reconcile();
+    await harness.retirement.reconcile();
+    await harness.retirement.reconcile();
 
+    expect(harness.listAsync).toHaveBeenCalledOnce();
     expect(harness.createSessionEvidenceResolver).toHaveBeenCalledOnce();
-    expect(harness.createSessionEvidenceResolver).toHaveBeenCalledWith(placements);
-    expect(harness.resolveSessionEvidence.mock.calls.map(([placement]) => placement)).toEqual(
-      placements,
-    );
+    expect(harness.createSessionEvidenceResolver).toHaveBeenCalledWith([first, second]);
+
+    harness.resolveSessionEvidence.mockResolvedValue("absent");
+    harness.retirement.markPending(first.sessionId);
+    await harness.retirement.reconcile();
+
+    expect(harness.createSessionEvidenceResolver).toHaveBeenLastCalledWith([first]);
+    expect(harness.placements.has(first.sessionId)).toBe(false);
+    expect(harness.placements.has(second.sessionId)).toBe(true);
+    expect(harness.listAsync).toHaveBeenCalledOnce();
+  });
+
+  it.each(["unknown", "read", "write", "teardown"] as const)(
+    "retries %s failures without losing pending cleanup",
+    async (failure) => {
+      const placement =
+        failure === "teardown" ? activePlacement("session-retry") : localPlacement("session-retry");
+      const harness = createHarness([placement]);
+      if (failure === "unknown") {
+        harness.resolveSessionEvidence.mockResolvedValueOnce("unknown");
+      } else if (failure === "read") {
+        harness.listAsync.mockRejectedValueOnce(new Error("reader unavailable"));
+      } else if (failure === "write") {
+        harness.retireSessionPlacementAsync.mockRejectedValueOnce(new Error("writer unavailable"));
+      } else {
+        harness.forceDestroyEnvironment.mockRejectedValueOnce(new Error("provider unavailable"));
+      }
+
+      if (failure === "read") {
+        await expect(harness.retirement.reconcile()).rejects.toThrow("reader unavailable");
+      } else {
+        await harness.retirement.reconcile();
+      }
+      expect(harness.placements.has(placement.sessionId)).toBe(true);
+
+      await harness.retirement.reconcile();
+
+      expect(harness.placements.has(placement.sessionId)).toBe(false);
+      expect(harness.retired).toHaveLength(1);
+    },
+  );
+
+  it("keeps a changed identity queued while the previous evidence read settles", async () => {
+    const placement = localPlacement("session-changing");
+    const harness = createHarness([placement]);
+    const started = createDeferredCore();
+    const release = createDeferredCore();
+    harness.createSessionEvidenceResolver.mockImplementationOnce(async () => {
+      started.resolve();
+      await release.promise;
+      return async () => "current";
+    });
+
+    const reconciling = harness.retirement.reconcile();
+    try {
+      await started.promise;
+      harness.retirement.markPending(placement.sessionId);
+    } finally {
+      release.resolve();
+      await reconciling;
+    }
+    await harness.retirement.reconcile();
+
+    expect(harness.placements.has(placement.sessionId)).toBe(false);
+    expect(harness.retired).toHaveLength(1);
   });
 });

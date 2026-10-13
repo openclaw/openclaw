@@ -9,6 +9,7 @@ import {
 import { parseWindowsNativeCommandLine } from "../process/windows-command-line.js";
 import { isPidDefinitelyDead } from "../shared/pid-alive.js";
 import { escapeRegExp } from "../shared/regexp.js";
+import { isRosettaTranslatedProcess } from "../shared/rosetta-translation.js";
 import { getRootOptionAwareCommandPath } from "./cli-root-options.js";
 import { isContainerEnvironment } from "./container-environment.js";
 import {
@@ -63,10 +64,22 @@ function classifyProcessArtifactCustody(
     if (identity.kind === "unclassified" && identity.cause !== "runtime-syntax") {
       throw new Error(identity.reason);
     }
+    const { position, operands } = resolveRuntimeScriptPosition(argv);
     if (!cwd || !path.isAbsolute(cwd)) {
+      const inspectorUid = process.getuid?.();
+      if (
+        cwd === undefined &&
+        identity.kind === "other" &&
+        typeof position !== "number" &&
+        position.kind === "not-runtime" &&
+        command.uid !== undefined &&
+        inspectorUid !== undefined &&
+        command.uid !== inspectorUid
+      ) {
+        return { kind: "non-holder" };
+      }
       throw new Error("working directory is unavailable");
     }
-    const { position, operands } = resolveRuntimeScriptPosition(argv);
     if (typeof position !== "number" && position.kind === "not-runtime") {
       return { kind: "non-holder" };
     }
@@ -260,9 +273,11 @@ export function inspectOtherOpenClawProcesses(handoff?: HandoffReferences) {
     if (handoff && pid) {
       result.unverifiedPids.push(Number(pid[1]));
     }
-    result.error = handoff
-      ? "Host process census is incomplete; verify process-inspection permissions and retry update repair."
-      : `Could not inspect OpenClaw processes: ${String(error)}`;
+    result.error = !handoff
+      ? `Could not inspect OpenClaw processes: ${String(error)}`
+      : isRosettaTranslatedProcess()
+        ? "Host process census is unavailable under Rosetta; run openclaw update repair with native arm64 Node.js."
+        : "Host process census is incomplete; verify process-inspection permissions and retry update repair.";
   }
   return handoff ? result : result.error ? { error: result.error } : { pids: result.matchingPids };
 }

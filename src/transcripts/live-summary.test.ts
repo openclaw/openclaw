@@ -230,17 +230,10 @@ describe("live meeting summaries", () => {
     expect(await saved(fixture)).toMatchObject({ source: "model", transcript: ["Saved speech"] });
   });
 
-  it("continues under a new work owner after the starting caller closes", async () => {
+  it("publishes speech after its starting caller closes and skips unchanged intervals", async () => {
     const caller = new AsyncWorkScope();
     const fixture = await caller.track(() => capture());
     await caller.drain();
-    await fixture.source.onUtterance({ text: "Speech after the start request finished" });
-    await advanceSummaryInterval(fixture.updates);
-    expect(await saved(fixture)).toMatchObject({ source: "model", utteranceCount: 1 });
-    expect(fixture.ctx.logger.warn).not.toHaveBeenCalled();
-  });
-  it("publishes a captured speech prefix during continued speech and skips unchanged intervals", async () => {
-    const fixture = await capture();
     await advanceSummaryInterval(fixture.updates);
     expect(complete).not.toHaveBeenCalled();
     await fixture.source.onUtterance({ text: "First decision" });
@@ -258,6 +251,7 @@ describe("live meeting summaries", () => {
       utteranceCount: 1,
       transcript: ["First decision"],
     });
+    expect(fixture.ctx.logger.warn).not.toHaveBeenCalled();
     expect(complete.mock.calls[0]![0]).toMatchObject({
       provider: "test",
       model: "utility",
@@ -350,71 +344,61 @@ describe("live meeting summaries", () => {
     expect(activeSessions.size).toBe(0);
   });
 
-  it("serializes manual summaries with periodic inference and preserves a newer external write", async () => {
-    const fixture = await capture();
-    await fixture.source.onUtterance({ text: "Opening speech" });
-    const pending = holdCompletion();
-    await vi.advanceTimersByTimeAsync(fiveMinutes);
-    await pending.entered;
-    expect(complete).toHaveBeenCalledOnce();
-    const external = {
-      ...summarizeTranscripts({
-        session: fixture.source.session,
-        utterances: [{ text: "Opening speech" }],
-      }),
-      overview: "Operator-edited notes",
-    };
-    await fixture.store.writeSummary(external, fixture.source.session);
-    pending.resolve(modelNotes());
-    await settleSummaryUpdates(fixture.updates);
-    expect(gatewayWorkAdmission.getActiveGatewayRootWorkCount()).toBe(0);
-    expect((await saved(fixture))?.overview).toBe("Operator-edited notes");
-    await advanceSummaryInterval(fixture.updates);
-    expect(gatewayWorkAdmission.getActiveGatewayRootWorkCount()).toBe(0);
-    expect(complete).toHaveBeenCalledOnce();
-    expect((await saved(fixture))?.overview).toBe("Operator-edited notes");
+  it.each(["summary", "session"] as const)(
+    "preserves a newer %s write and serializes subsequent manual and periodic summaries",
+    async (changed) => {
+      const fixture = await capture();
+      const utterance = { text: "Opening speech" };
+      await fixture.source.onUtterance(utterance);
+      const external = {
+        ...summarizeTranscripts({ session: fixture.source.session, utterances: [utterance] }),
+        overview: "Operator-edited notes",
+      };
+      if (changed === "session") {
+        await fixture.store.writeSummary(external, fixture.source.session);
+      }
+      const pending = holdCompletion();
+      await vi.advanceTimersByTimeAsync(fiveMinutes);
+      await pending.entered;
+      expect(complete).toHaveBeenCalledOnce();
+      try {
+        if (changed === "summary") {
+          await fixture.store.writeSummary(external, fixture.source.session);
+        } else {
+          await fixture.store.writeSession({
+            ...fixture.source.session,
+            title: "Title changed while inference was pending",
+          });
+        }
+      } finally {
+        pending.resolve(modelNotes());
+        await settleSummaryUpdates(fixture.updates);
+      }
+      expect(gatewayWorkAdmission.getActiveGatewayRootWorkCount()).toBe(0);
+      expect(await saved(fixture)).toEqual(external);
+      expect(fixture.ctx.logger.warn).not.toHaveBeenCalled();
+      await advanceSummaryInterval(fixture.updates);
+      expect(gatewayWorkAdmission.getActiveGatewayRootWorkCount()).toBe(0);
+      expect(complete).toHaveBeenCalledOnce();
+      expect((await saved(fixture))?.overview).toBe("Operator-edited notes");
 
-    const next = holdCompletion();
-    await fixture.source.onUtterance({ text: "New speech" });
-    await vi.advanceTimersByTimeAsync(fiveMinutes);
-    await next.entered;
-    expect(complete).toHaveBeenCalledTimes(2);
-    const manual = execute(fixture, "manual", "summarize");
-    await vi.advanceTimersByTimeAsync(0);
-    expect(complete).toHaveBeenCalledTimes(2);
-    await fixture.source.onUtterance({ text: "Speech while the manual summary is queued" });
-    next.resolve(modelNotes());
-    await manual;
-    expect(complete).toHaveBeenCalledTimes(3);
-    expect(await saved(fixture)).toMatchObject({ utteranceCount: 3 });
-    await advanceSummaryInterval(fixture.updates);
-    expect(complete).toHaveBeenCalledTimes(3);
-  });
-
-  it("keeps prior notes without warning when session metadata changes during inference", async () => {
-    const fixture = await capture();
-    const utterance = { text: "Speech before the title changed" };
-    await fixture.source.onUtterance(utterance);
-    const previous = {
-      ...summarizeTranscripts({ session: fixture.source.session, utterances: [utterance] }),
-      overview: "Retained earlier notes",
-    };
-    await fixture.store.writeSummary(previous, fixture.source.session);
-    const pending = holdCompletion();
-    await vi.advanceTimersByTimeAsync(fiveMinutes);
-    await pending.entered;
-    try {
-      await fixture.store.writeSession({
-        ...fixture.source.session,
-        title: "Title changed while inference was pending",
-      });
-    } finally {
-      pending.resolve(modelNotes());
-      await settleSummaryUpdates(fixture.updates);
-    }
-    expect(await saved(fixture)).toEqual(previous);
-    expect(fixture.ctx.logger.warn).not.toHaveBeenCalled();
-  });
+      const next = holdCompletion();
+      await fixture.source.onUtterance({ text: "New speech" });
+      await vi.advanceTimersByTimeAsync(fiveMinutes);
+      await next.entered;
+      expect(complete).toHaveBeenCalledTimes(2);
+      const manual = execute(fixture, "manual", "summarize");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(complete).toHaveBeenCalledTimes(2);
+      await fixture.source.onUtterance({ text: "Speech while the manual summary is queued" });
+      next.resolve(modelNotes());
+      await manual;
+      expect(complete).toHaveBeenCalledTimes(3);
+      expect(await saved(fixture)).toMatchObject({ utteranceCount: 3 });
+      await advanceSummaryInterval(fixture.updates);
+      expect(complete).toHaveBeenCalledTimes(3);
+    },
+  );
 
   it("uses total speech sequence after the bounded summary window is full", async () => {
     const fixture = await capture();

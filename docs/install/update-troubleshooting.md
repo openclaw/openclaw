@@ -46,6 +46,15 @@ same attempt reports its final failure or cancellation. A newer recorded attempt
 can also replace it. Intentional cancellations, already-current installs, and
 updates still in progress do not start triage.
 
+When a managed-service update cannot hand off to its helper, the saved attempt
+includes a bounded failure kind and a next step: runtime or spawn failure,
+permission or service refusal, ownership refusal, payload/control-channel
+failure, timeout, early helper exit, or preparation failure. If the failure
+happens before ownership transfer, the recovery outcome records that the Gateway
+kept serving. A transfer error alone does not establish whether the helper
+accepted ownership; check `openclaw update status` and
+`openclaw gateway status --deep` before retrying.
+
 For a final failed attempt, **Report update failure** is separate from **Retry**
 and **Ask OpenClaw**. It previews a bounded report containing the OpenClaw
 version, platform, update target, failed phase, sanitized diagnostics, and
@@ -127,6 +136,14 @@ them. Preserve those facts when reporting the problem; task definitions and raw
 native output are excluded.
 
 ## Node and global install permissions
+
+If package recovery reports `nlink=2` (or another value above 1), let updater
+workers finish, then run `openclaw doctor --fix` from the affected installation.
+Doctor can reclaim an abandoned updater runtime, including one retained in an
+npm prefix's `lib/` directory, and release its extra journal link. Then retry
+the update. Do not weaken recovery permissions or delete the activation journal;
+if Doctor reports a live owner or cannot identify the runtime, follow that
+diagnostic before retrying.
 
 For `node-runtime-preflight`, upgrade the runtime named in the message to a
 version satisfying both the candidate's full engine range and the updater's
@@ -282,7 +299,7 @@ lint JSON report is needed to establish that lint finished before termination.
 
 Published OpenClaw 2026.9.4 can spend many minutes preparing model catalogs and
 chat metadata after its HTTP listener binds. In an instrumented 480-agent
-control with no update, HTTP probes remained unanswered during 944 seconds of
+control with no update, HTTP checks remained unanswered during 944 seconds of
 observation; the Gateway then logged `ready` at 947.5 seconds. Stopping that
 instance eventually required systemd's existing 5-minute-30-second stop limit.
 These are measurements of one synthetic fixture, not expected startup budgets.

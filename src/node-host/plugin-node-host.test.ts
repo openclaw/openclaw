@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { createPluginRecord } from "../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginNodeHostCommandRegistration } from "../plugins/registry-types.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -22,6 +23,16 @@ function registerCommands(...commands: Command[]) {
     source: "test",
     command,
   }));
+  registry.plugins = [...new Set(registry.nodeHostCommands.map(({ pluginId }) => pluginId))].map(
+    (id) =>
+      createPluginRecord({
+        id,
+        source: "test",
+        origin: "bundled",
+        enabled: true,
+        configSchema: true,
+      }),
+  );
   setActivePluginRegistry(registry);
   return registry;
 }
@@ -36,11 +47,9 @@ describe("plugin node-host registry", () => {
         return paramsJSON ?? "";
       });
       const registry = registerCommands({ command: "file.fetch", cap: "file", duplex, handle });
-      expect(
-        listRegisteredNodeHostCapsAndCommands(availabilityContext, { includeDuplex: false }),
-      ).toEqual({
-        caps: duplex === true ? [] : ["file"],
-        commands: duplex === true ? [] : ["file.fetch"],
+      expect(listRegisteredNodeHostCapsAndCommands(availabilityContext)).toEqual({
+        caps: ["file"],
+        commands: ["file.fetch"],
         nodePluginTools: [],
       });
       expect(isRegisteredNodeHostCommandDuplex("file.fetch")).toBe(duplex !== undefined);

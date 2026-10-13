@@ -44,7 +44,7 @@ test("sessions.create rejects direct outside project access but admits a managed
     if (worktree) {
       expect(created.ok, JSON.stringify(created.error)).toBe(true);
       const payload = expectDefined(created.payload, "managed sandbox session payload");
-      const record = managedWorktrees.findLiveByOwner("session", payload.key);
+      const record = await managedWorktrees.findLiveByOwner("session", payload.key);
       expect(record).toMatchObject({
         id: payload.worktree.id,
         path: payload.worktree.path,

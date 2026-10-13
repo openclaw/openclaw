@@ -1,6 +1,4 @@
-// Legacy audio config migrations for retired transcription command settings.
 import {
-  defineLegacyConfigMigration,
   ensureRecord,
   getRecord,
   mapLegacyAudioTranscription,
@@ -41,11 +39,9 @@ function applyLegacyAudioTranscriptionModel(
   changes.push("Removed audio.transcription (tools.media.models already set).");
 }
 
-/** Legacy config migration specs for audio/tool media config. */
 export const LEGACY_CONFIG_MIGRATIONS_AUDIO: LegacyConfigMigrationSpec[] = [
-  defineLegacyConfigMigration({
+  {
     id: "audio.transcription-v2",
-    describe: "Move audio.transcription to tools.media.models",
     legacyRules: [
       {
         path: ["audio", "transcription"],
@@ -64,5 +60,5 @@ export const LEGACY_CONFIG_MIGRATIONS_AUDIO: LegacyConfigMigrationSpec[] = [
         delete raw.audio;
       }
     },
-  }),
+  },
 ];

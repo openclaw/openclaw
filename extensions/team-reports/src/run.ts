@@ -1,3 +1,4 @@
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import { boundReportDocument } from "./aggregate.js";
 import type { TeamReportsConfig, resolveTeamReportsConfig } from "./config.js";
 import { renderMarkdown } from "./render/markdown.js";
@@ -29,21 +30,11 @@ export function createReportSources(runtime: SourceRuntime, discordEnabled: bool
 }
 
 function untilAborted<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const abort = () => {
-      const reason: unknown = signal.reason;
-      reject(
-        reason instanceof Error
-          ? reason
-          : new Error(typeof reason === "string" ? reason : "Team Reports run aborted"),
-      );
-    };
-    signal.addEventListener("abort", abort, { once: true });
-    if (signal.aborted) {
-      abort();
-    }
-    void work.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
-  });
+  return racePromiseWithAbortSignal(work, signal, ({ reason }) =>
+    reason instanceof Error
+      ? reason
+      : new Error(typeof reason === "string" ? reason : "Team Reports run aborted"),
+  );
 }
 
 export async function generateReportPeriods(params: {
@@ -112,7 +103,7 @@ export async function generateReportPeriods(params: {
       const discord =
         resolved.discord && sources.discord
           ? await untilAborted(
-              sources.discord.collect(resolved.discord, window, roster, async (entries) => {
+              sources.discord.collect(resolved.discord, window, async (entries) => {
                 runtime.signal.throwIfAborted();
                 await store.appendActivity({ source: "discord", entries });
               }),

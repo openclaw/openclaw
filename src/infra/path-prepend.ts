@@ -15,12 +15,7 @@ export function findPathKey(env: Record<string, string>): string {
   if ("PATH" in env) {
     return "PATH";
   }
-  for (const key of Object.keys(env)) {
-    if (key.toUpperCase() === "PATH") {
-      return key;
-    }
-  }
-  return "PATH";
+  return Object.keys(env).find((key) => key.toUpperCase() === "PATH") ?? "PATH";
 }
 
 /** Normalizes configured PATH prepends by trimming blanks and preserving first-seen order. */
@@ -49,7 +44,7 @@ export function removePathPrepend(
 
   const prependEntries = new Set<string>(normalizeStringEntries(prepend));
 
-  const remaining = normalizeStringEntries((existing ?? "").split(path.delimiter)).filter(
+  const remaining = normalizeStringEntries(existing.split(path.delimiter)).filter(
     (part) => !prependEntries.has(part),
   );
 

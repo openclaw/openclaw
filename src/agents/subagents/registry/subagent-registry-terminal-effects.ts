@@ -1,9 +1,11 @@
 import type { cleanupBrowserSessionsForLifecycleEnd } from "../../../browser-lifecycle-cleanup.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
+import { scopeLegacySessionKeyToAgent } from "../../../routing/session-key.js";
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
-import { retireSessionMcpRuntimeForSessionKey } from "../../agent-bundle-mcp-tools.js";
+import { retireSessionMcpRuntime } from "../../agent-bundle-mcp-tools.js";
 import { releaseSwarmRun } from "../swarm/swarm-scheduler.js";
+import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import {
   SUBAGENT_ENDED_REASON_KILLED,
   type SubagentLifecycleEndedReason,
@@ -20,8 +22,6 @@ import { SubagentRegistryWriteError } from "./subagent-registry-persistence.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 
-type BrowserCleanup = typeof cleanupBrowserSessionsForLifecycleEnd;
-
 export async function completeTerminalEffects(
   context: SubagentLifecycleCompletionContext,
   args: {
@@ -34,26 +34,31 @@ export async function completeTerminalEffects(
     terminalGeneration: number;
     stateContext: OpenClawStateWorkerContext;
     assertCurrent: () => void;
-    loadCleanupBrowserSessionsForLifecycleEnd(): Promise<BrowserCleanup>;
+    loadCleanupBrowserSessionsForLifecycleEnd(): Promise<
+      typeof cleanupBrowserSessionsForLifecycleEnd
+    >;
   },
 ): Promise<void> {
   const params = context.options;
   const { completeParams, completionReason, mutated } = args;
   let terminalGeneration = args.terminalGeneration;
   let entry = args.entry;
+  if (resolveSubagentChildAuthority(entry).status === "mismatch") {
+    return;
+  }
   let { sessionSuperseded, suppressSessionEffects } = args;
   const isCurrentTerminalCallback = () => {
-    if (!context.isTerminalCallbackCurrent(completeParams.runId, entry, terminalGeneration)) {
+    if (!context.isTerminalCallbackCurrent(entry, terminalGeneration)) {
       return false;
     }
     args.assertCurrent();
     entry = getCurrentSubagentRunOwner(params.runs, entry)!;
     return true;
   };
+  const isSessionEffectsOwnerCurrent = () =>
+    isCurrentTerminalCallback() && !context.newerGenerationOwnsSession(entry);
   const isCurrentSessionEffectsOwner = () =>
-    isCurrentTerminalCallback() &&
-    !context.newerGenerationOwnsSession(entry) &&
-    context.sessionEffectsHostCurrent(entry);
+    isSessionEffectsOwnerCurrent() && context.sessionEffectsHostCurrent(entry);
   const persistSessionEffectsSuppression = async () => {
     entry = await commitSubagentLifecycleMutation(context, {
       entry,
@@ -207,8 +212,6 @@ export async function completeTerminalEffects(
   await refreshSessionEffectsSuppression();
   // Cleanup also rejects newer session generations, but host custody is checked
   // at each resource dispatch rather than shared with terminal-signal admission.
-  const isSessionEffectsOwnerCurrent = () =>
-    isCurrentTerminalCallback() && !context.newerGenerationOwnsSession(entry);
   const refreshCleanupSuppression = async () => {
     if (
       suppressSessionEffects ||
@@ -225,7 +228,6 @@ export async function completeTerminalEffects(
   if (!completeParams.triggerCleanup || suppressedForSteerRestart) {
     return;
   }
-
   await refreshCleanupSuppression();
   if (!isCurrentTerminalCallback()) {
     return;
@@ -304,14 +306,18 @@ export async function completeTerminalEffects(
           throw error;
         }
         if (dispatchedBrowserCleanup) {
-          if (!isSessionEffectsOwnerCurrent() || !context.sessionEffectsHostCurrent(entry)) {
+          if (!isCurrentSessionEffectsOwner()) {
             return;
           }
           try {
             await cleanupBrowserSessions({
-              sessionKeys: [entry.childSessionKey],
-              isCurrent: () =>
-                isSessionEffectsOwnerCurrent() && context.sessionEffectsHostCurrent(entry),
+              sessionKeys: [
+                scopeLegacySessionKeyToAgent({
+                  agentId: entry.childAgentId,
+                  sessionKey: entry.childSessionKey,
+                }) ?? "",
+              ],
+              isCurrent: isCurrentSessionEffectsOwner,
               prepareCurrent: async () =>
                 !(await context.shouldSuppressSessionEffects(entry)) &&
                 isSessionEffectsOwnerCurrent(),
@@ -350,8 +356,8 @@ export async function completeTerminalEffects(
     try {
       if (entry.spawnMode !== "session") {
         const cleanupEntry = entry;
-        await retireSessionMcpRuntimeForSessionKey({
-          sessionKey: cleanupEntry.childSessionKey,
+        await retireSessionMcpRuntime({
+          sessionId: cleanupEntry.childSessionIdentity?.sessionId,
           reason: "subagent-run-complete",
           preserveActiveLeases: true,
           onError: (error, sessionId) => {
@@ -385,6 +391,6 @@ export async function completeTerminalEffects(
 
   await refreshCleanupSuppression();
   if (isCurrentTerminalCallback()) {
-    context.startSubagentAnnounceCleanupFlow(entry.runId, entry);
+    context.startSubagentAnnounceCleanupFlow(entry);
   }
 }

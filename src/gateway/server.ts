@@ -5,6 +5,7 @@
  * server types and helpers without paying the full startup dependency graph.
  */
 import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
+import { supportsSpawnBrokerCommandTransport } from "../process/spawn-broker/pipe.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { GatewayServer, GatewayServerOptions } from "./server-public.js";
 import { GatewayStartupCleanupError, rethrowGatewayStartupError } from "./server-shutdown.js";
@@ -91,8 +92,11 @@ async function startGatewayServerWithRuntime(
     const { withAgentDatabaseStartupAdmission } =
       await import("../state/agent-database-startup.js");
     try {
-      const server = await readOnlyWorkers.run(() =>
-        withAgentDatabaseStartupAdmission(
+      const { bindAuthProfileFileObservationReaders } =
+        await import("../agents/auth-profiles/file-state.js");
+      const server = await readOnlyWorkers.run(() => {
+        bindAuthProfileFileObservationReaders();
+        return withAgentDatabaseStartupAdmission(
           async (admission) => {
             stopDatabaseAdmission = () => admission.stop();
             const mod = await loadServerStart();
@@ -100,8 +104,8 @@ async function startGatewayServerWithRuntime(
             return mod.startGatewayServerCore(port, { ...opts, startupStartedAt });
           },
           { deferInspections: !opts.updateCanary },
-        ),
-      );
+        );
+      });
       return {
         ...server,
         close: (closeOptions: Parameters<typeof server.close>[0]) =>
@@ -117,8 +121,8 @@ async function startGatewayServerWithRuntime(
       return await rethrowGatewayStartupError(error, () => readOnlyWorkers.close());
     }
   };
-  // Transferable stdio sockets are a Node contract; Bun keeps its native transport.
-  if (process.platform !== "linux" || process.versions.bun) {
+  // Gateway brokerage targets Linux's page-table copy cost.
+  if (process.platform !== "linux" || !supportsSpawnBrokerCommandTransport()) {
     return await start();
   }
   const { startGatewaySpawnBroker, runWithSpawnBroker } =

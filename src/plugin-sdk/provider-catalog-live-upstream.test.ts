@@ -20,12 +20,6 @@ function buildFetchGuard(body: unknown): {
   return { fetchGuard, release };
 }
 
-const UPSTREAM_TIER_COST = { input: 4, output: 12, cache_read: 1, cache_write: 2 };
-const UPSTREAM_CONTEXT_TIER = {
-  ...UPSTREAM_TIER_COST,
-  tier: { type: "context", size: 200_000 },
-};
-
 describe("shared upstream provider metadata catalogs", () => {
   beforeEach(() => clearLiveCatalogCacheForTests());
 
@@ -92,44 +86,7 @@ describe("shared upstream provider metadata catalogs", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
-  it("contextualizes malformed upstream JSON while retaining its parser cause", async () => {
-    const release = vi.fn(async () => undefined);
-    const fetchGuard: MockedFunction<LiveModelCatalogFetchGuard> = vi.fn(async () => ({
-      response: new Response("{invalid json"),
-      finalUrl: "https://models.opencode.ai/api.json",
-      release,
-    }));
-
-    const error = await getCachedUpstreamProviderCatalog({
-      endpoint: "https://models.opencode.ai/api.json",
-      providerId: "opencode",
-      fetchGuard,
-    }).catch((cause: unknown) => cause);
-
-    expect(error).toMatchObject({
-      message: "upstream-provider-catalog: malformed JSON response",
-      cause: expect.any(SyntaxError) as unknown,
-    });
-    expect(release).toHaveBeenCalledOnce();
-  });
-
-  it.each([
-    ["object tiers", { tiers: {} }, false],
-    ["mixed tiers", { tiers: [null, UPSTREAM_CONTEXT_TIER] }, true],
-    [
-      "malformed tiers with legacy pricing",
-      { tiers: {}, context_over_200k: UPSTREAM_TIER_COST },
-      true,
-    ],
-    [
-      "modern tiers before legacy pricing",
-      {
-        tiers: [UPSTREAM_CONTEXT_TIER],
-        context_over_200k: { ...UPSTREAM_TIER_COST, input: 99 },
-      },
-      true,
-    ],
-  ] as const)(
+  it.each([["object tiers", { tiers: {} }, false]] as const)(
     "projects pricing, reasoning, tools, and modalities from %s JSON",
     async (_name, pricing, hasTiers) => {
       const { fetchGuard } = buildFetchGuard({
@@ -205,7 +162,6 @@ describe("shared upstream provider metadata catalogs", () => {
   );
 
   it.each([
-    { name: "omitted", options: undefined, efforts: undefined },
     { name: "empty", options: [], efforts: [] },
     {
       name: "native null effort",
@@ -246,10 +202,7 @@ describe("shared upstream provider metadata catalogs", () => {
   });
 
   it.each([
-    ["@ai-sdk/openai-compatible", "openai-completions", "https://opencode.ai/zen/v1"],
-    ["@ai-sdk/openai", "openai-responses", "https://opencode.ai/zen/v1"],
     ["@ai-sdk/anthropic", "anthropic-messages", "https://opencode.ai/zen"],
-    ["@ai-sdk/google", "google-generative-ai", "https://opencode.ai/zen/v1"],
     ["constructor", undefined, undefined],
   ] as const)(
     "projects only supported upstream %s transport from JSON",

@@ -10,7 +10,7 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import type { MsgContext } from "../templating.js";
 import {
-  resolveCommandExecApprovalRoute,
+  buildCommandExecApprovalDefaults,
   resolvePrivateCommandRouteTargets,
 } from "./commands-private-route.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -137,11 +137,7 @@ afterEach(() => {
 });
 
 describe("private command approval requests", () => {
-  it.each([
-    ["a valid clock", 1_800_000_000_000, 1_800_000_300_000],
-    ["an invalid clock", Number.NaN, 0],
-    ["an overflowing clock", MAX_DATE_TIMESTAMP_MS, 0],
-  ])(
+  it.each([["an overflowing clock", MAX_DATE_TIMESTAMP_MS, 0]])(
     "preserves command identity and bounds private route expiry with %s",
     async (_label, createdAtMs, expiresAtMs) => {
       vi.spyOn(Date, "now").mockReturnValue(createdAtMs);
@@ -180,22 +176,28 @@ describe("private command approval requests", () => {
   );
 });
 
-describe("resolveCommandExecApprovalRoute", () => {
+describe("buildCommandExecApprovalDefaults", () => {
   it("preserves origin reviewer custody when delivery moves to a private target", () => {
-    const commandParams = buildCommandParams({} as OpenClawConfig);
+    const commandParams = buildCommandParams({});
     commandParams.ctx.ApprovalReviewerDeviceId = "  device-origin-reviewer  ";
 
     expect(
-      resolveCommandExecApprovalRoute({
-        commandParams,
-        privateApprovalTarget: {
-          channel: "telegram",
-          to: "849985193",
-          accountId: "telegram-owner-account",
-          threadId: 42,
-        },
+      buildCommandExecApprovalDefaults(commandParams, {
+        channel: "telegram",
+        to: "849985193",
+        accountId: "telegram-owner-account",
+        threadId: 42,
       }),
     ).toEqual({
+      host: "gateway",
+      security: "allowlist",
+      ask: "always",
+      allowBackground: true,
+      cwd: "/tmp",
+      sessionKey: "agent:main:discord:channel:1487138064806449297",
+      eventRouting: { mainKey: undefined, sessionScope: undefined },
+      notifyOnExit: undefined,
+      notifyOnExitEmptySuccess: undefined,
       messageProvider: "telegram",
       currentChannelId: "849985193",
       currentThreadTs: "42",

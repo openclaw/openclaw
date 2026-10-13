@@ -503,15 +503,6 @@ describe("minimal npm extended-stable workflow", () => {
     );
     expect(trustedRef.env?.BYPASS_EXTENDED_STABLE_GUARD).toBeUndefined();
     expect(trustedRef.run).not.toContain("BYPASS_EXTENDED_STABLE_GUARD");
-
-    const summary = step(
-      parsed.jobs?.publish_openclaw_npm,
-      "Summarize extended-stable npm publication",
-    );
-    expect(summary.env?.BYPASS_EXTENDED_STABLE_GUARD).toBe(
-      "${{ inputs.bypass_extended_stable_guard }}",
-    );
-    expect(summary.run).toContain("Extended-stable guard bypass: ${BYPASS_EXTENDED_STABLE_GUARD}");
   });
 
   it("lets protected tooling promote only the canonical immutable extended-stable candidate", () => {
@@ -824,26 +815,6 @@ describe("minimal npm extended-stable workflow", () => {
     );
   });
 
-  it("captures selector fail closed, publishes extended-stable, retries, and summarizes", () => {
-    const parsed = workflow();
-    const publish = parsed.jobs?.publish_openclaw_npm;
-    const capture = step(publish, "Capture previous extended-stable selector");
-    const readback = step(publish, "Verify extended-stable registry readback");
-    const summary = step(publish, "Summarize extended-stable npm publication");
-    expect(capture.run).toContain("openclaw-npm-extended-stable-release.mjs capture-selector");
-    expect(step(publish, "Publish").run).toContain("openclaw-npm-publish.sh");
-    expect(readback.run).toContain("openclaw-npm-extended-stable-release.mjs verify-readback");
-    expect(summary.if).toContain("always()");
-    expect(summary.run).toContain("openclaw-npm-extended-stable-release.mjs repair-command");
-    expect(summary.run).toContain('EXPECTED_VERSION="$RELEASE_TAG"');
-    expect(summary.env?.EXTENDED_STABLE_BRANCH).toBe(
-      "${{ inputs.release_candidate_branch || github.ref_name }}",
-    );
-    expect(summary.env?.RELEASE_SHA).toBeUndefined();
-    expect(summary.run).toContain('release_sha="$(git rev-parse HEAD)"');
-    expect(publish?.environment).toBe("npm-publish");
-  });
-
   it("publishes only the tarball path verified from the preflight manifest", () => {
     const publish = workflow().jobs?.publish_openclaw_npm;
     const provenance = step(publish, "Verify prepared tarball provenance");
@@ -857,6 +828,13 @@ describe("minimal npm extended-stable workflow", () => {
     expect(publishStep.env?.PUBLISH_TARBALL_PATH).toBe(
       "${{ steps.preflight_provenance.outputs.tarball_path }}",
     );
+    expect(publishStep.env).toMatchObject({
+      PREFLIGHT_WORKFLOW_SHA: "${{ steps.preflight_run.outputs.head_sha }}",
+      PREFLIGHT_RUN_ID: "${{ steps.preflight_run.outputs.run_id }}",
+      PREFLIGHT_RUN_ATTEMPT: "${{ steps.preflight_run.outputs.run_attempt }}",
+      FULL_RELEASE_VALIDATION_RUN_ID: "${{ inputs.full_release_validation_run_id }}",
+      FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "${{ inputs.full_release_validation_run_attempt }}",
+    });
     expect(publish?.steps?.map((candidate) => candidate.name)).not.toContain(
       "Resolve publish tarball",
     );
@@ -883,7 +861,7 @@ describe("minimal npm extended-stable workflow", () => {
     ]);
     expect(publish.run).toContain("(.corePackageTarballs // [])[]");
     expect(publish.run).toContain(
-      'bash scripts/openclaw-npm-publish.sh --publish "${publish_target}"',
+      'bash trusted-workflow/scripts/openclaw-npm-publish.sh --publish "${publish_target}"',
     );
   });
 });

@@ -11,6 +11,7 @@ import {
   appendTranscriptMessage,
   loadSessionEntry,
   loadTranscriptEvents,
+  replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import {
@@ -21,13 +22,14 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { StateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import * as repositoryWorkspaces from "../state/session-repository-workspaces.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { prepareSessionRepositoryWorkspace } from "./server-methods/session-create-project.js";
 import { createGatewaySession } from "./session-create-service.js";
-import { resolveSessionMutationAuthorization } from "./session-sharing.js";
+import { resolveSessionMutationAuthorizationAsync } from "./session-sharing-authorization-async.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
-import { resolveGatewaySessionStoreTarget } from "./session-utils.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 
 describe("Gateway creation preparation", () => {
   it.each(["caller", "database"] as const)(
@@ -140,7 +142,10 @@ describe("Gateway creation preparation", () => {
         if (!first.ok) {
           throw new Error(first.error.message);
         }
-        const scope = { ...resolveGatewaySessionStoreTarget({ cfg: {}, key }), sessionKey: key };
+        const scope = {
+          ...(await resolveGatewaySessionStoreTargetInWorker({ cfg: {}, key })),
+          sessionKey: key,
+        };
         const transcriptScope = { ...scope, sessionId: first.entry.sessionId };
         for (const message of [
           { role: "user", content: "Keep this conversation when moving the workspace." },
@@ -241,7 +246,7 @@ describe("Gateway creation preparation", () => {
       if (!first.ok) {
         throw new Error(first.error.message);
       }
-      const target = resolveGatewaySessionStoreTarget({ cfg: {}, key });
+      const target = await resolveGatewaySessionStoreTargetInWorker({ cfg: {}, key });
       const scope = { agentId: target.agentId, sessionKey: key, storePath: target.storePath };
       const entered = createDeferredCore();
       const rotate = createDeferredCore();
@@ -311,7 +316,7 @@ describe("Gateway creation preparation", () => {
         expect(
           (await createGatewaySession({ ...common, key: "agent:main:sibling", label: "Taken" })).ok,
         ).toBe(true);
-        const target = resolveGatewaySessionStoreTarget({ cfg: {}, key });
+        const target = await resolveGatewaySessionStoreTargetInWorker({ cfg: {}, key });
         const scope = { agentId: target.agentId, sessionKey: key, storePath: target.storePath };
         const entered = createDeferredCore();
         const proceed = createDeferredCore();
@@ -384,20 +389,30 @@ describe("Gateway creation preparation", () => {
     },
   );
 
-  it.each(["sessions.send", "sessions.create", "generated-create"])(
+  it.each(["sessions.send", "sessions.create", "generated-create", "custom-store-send"])(
     "transfers only the creation owner's exact committed row into the original %s lease",
     async (method) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const client = roleClient("view", "creation-caller");
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         client.connect.scopes = ["operator.sessions.write"];
         const profileId = client.authenticatedUserProfile!.profileId;
         const cfg = rolePolicyConfig();
-        const key = "agent:main:created-handoff";
+        const customStore = method === "custom-store-send";
+        if (customStore) {
+          cfg.agents = { entries: { main: {}, orion: {} } };
+          cfg.session = { store: state.path("sessions.json") };
+          await replaceSessionEntry(
+            { agentId: "main", sessionKey: "agent:main:existing", storePath: cfg.session.store },
+            { sessionId: "existing-main", updatedAt: 1 },
+          );
+        }
+        const key = `agent:${customStore ? "orion" : "main"}:created-handoff`;
         const generated = method === "generated-create";
-        const captured = resolveSessionMutationAuthorization({
+        const captured = await resolveSessionMutationAuthorizationAsync({
           client,
           context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
-          method: generated ? "sessions.create" : method,
+          method: generated ? "sessions.create" : customStore ? "sessions.send" : method,
           requestParams: generated ? {} : { key },
           sessionScope: "operator.sessions.write",
         });
@@ -407,7 +422,11 @@ describe("Gateway creation preparation", () => {
           NonNullable<Parameters<typeof createGatewaySession>[0]["onCreatedSessionCommitted"]>
         >((created) => {
           expect(
-            loadSessionEntry({ agentId: created.agentId, sessionKey: created.key }),
+            loadSessionEntry({
+              agentId: created.agentId,
+              sessionKey: created.key,
+              storePath: created.storePath,
+            }),
           ).toMatchObject({
             sessionId: created.entry.sessionId,
             lifecycleRevision: created.entry.lifecycleRevision,
@@ -418,6 +437,7 @@ describe("Gateway creation preparation", () => {
             storePath: created.storePath,
             sessionId: created.entry.sessionId,
             lifecycleRevision: created.entry.lifecycleRevision,
+            entry: created.entry,
           });
         });
         const afterCreate = vi.fn<
@@ -438,6 +458,7 @@ describe("Gateway creation preparation", () => {
             storePath: created.storePath,
             sessionId: created.entry.sessionId,
             lifecycleRevision: "replacement",
+            entry: { ...created.entry, lifecycleRevision: "replacement" },
           });
           expect(() => authorization.assertCurrent()).toThrow("session changed");
         });
@@ -450,6 +471,8 @@ describe("Gateway creation preparation", () => {
           operatorRoleActor: { kind: "operator", profileId },
           creation: { via: "operator", actor: { type: "human", source: "profile", id: profileId } },
           commitGuard: authorization.assertCurrent,
+          bindSharingCreation: (operation) => authorization.bindCreation?.({ key }, operation),
+          followSharingRegistration: authorization.followRegistration,
           onCreatedSessionCommitted: notify,
           afterCreate,
         });

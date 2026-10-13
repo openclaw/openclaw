@@ -159,6 +159,7 @@ function main() {
           job.conclusion !== "success" ||
           !job.steps.some((step) => step.name === "Run Node test shard") ||
           job.name.startsWith("checks-node-compact-") ||
+          job.name.startsWith("checks-node-release-packed-") ||
           !job.labels.includes("ubuntu-24.04") ||
           job.labels.some(
             (label) =>

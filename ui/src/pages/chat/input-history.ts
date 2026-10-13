@@ -154,12 +154,6 @@ export function handleChatInputHistoryKey(
   ) {
     resetChatInputHistoryNavigation(state);
   }
-  const unhandled = {
-    handled: false,
-    preventDefault: false,
-    restoreCaret: null,
-  };
-
   if (
     state.chatLoading ||
     input.altKey ||
@@ -172,7 +166,7 @@ export function handleChatInputHistoryKey(
     (state.chatInputHistoryIndex === -1 &&
       (input.key === "ArrowDown" || input.selectionStart !== 0))
   ) {
-    return unhandled;
+    return { handled: false, preventDefault: false, restoreCaret: null };
   }
 
   const direction = input.key === "ArrowUp" ? "up" : "down";

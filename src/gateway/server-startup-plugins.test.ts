@@ -16,6 +16,8 @@ import type { PluginRegistry } from "../plugins/registry-types.js";
 import { disposePluginRegistryInstances } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import type { GatewayRequestHandler } from "./server-methods/types.js";
 
 const applyPluginAutoEnable = vi.hoisted(() =>
   vi.fn((params: { config: unknown }) => ({
@@ -127,8 +129,11 @@ const runChannelPluginStartupMaintenance = vi.hoisted(() =>
 const listAmbientOnlyConfiguredChannelIds = vi.hoisted(() =>
   vi.fn((_params: unknown) => [] as string[]),
 );
-const runStartupSessionMigration = vi.hoisted(() => vi.fn(async (_params: unknown) => undefined));
+const runGatewaySessionStartupMaintenance = vi.hoisted(() =>
+  vi.fn(async (_params: unknown) => undefined),
+);
 const listLegacyPairingStoreFiles = vi.hoisted(() => vi.fn(async () => [] as string[]));
+const refreshPluginRegistryAfterConfigMutation = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock("../agents/agent-scope.js", () => ({
   resolveAgentWorkspaceDir: () => "/workspace",
   resolveDefaultAgentId: () => "default",
@@ -172,6 +177,11 @@ vi.mock("../plugins/plugin-lookup-table.js", () => ({
 
 vi.mock("../plugins/registry.js", () => import("../plugins/registry-empty.js"));
 
+vi.mock("../plugins/registry-refresh.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/registry-refresh.js")>()),
+  refreshPluginRegistryAfterConfigMutation,
+}));
+
 vi.mock("../plugins/provider-public-artifacts.js", () => ({
   resolveProviderPolicySurfaceForOwner,
 }));
@@ -190,8 +200,10 @@ vi.mock("./server-plugin-bootstrap.js", () => ({
   prepareGatewayPluginLoad,
 }));
 
+// mock-isolation: Maintenance composition uses a controlled session repair lifetime.
 vi.mock("./server-startup-session-migration.js", () => ({
-  runStartupSessionMigration: (params: unknown) => runStartupSessionMigration(params),
+  runGatewaySessionStartupMaintenance: (params: unknown) =>
+    runGatewaySessionStartupMaintenance(params),
 }));
 
 function createLog() {
@@ -238,71 +250,92 @@ async function prepareBootstrapWithRuntimeConfig(
   });
 }
 
-describe("runGatewayStartupMaintenance", () => {
+describe("runGatewayPostReadyStartupMaintenance", () => {
   beforeEach(() => {
     runChannelPluginStartupMaintenance.mockClear();
-    runStartupSessionMigration.mockClear();
+    runGatewaySessionStartupMaintenance.mockReset().mockResolvedValue(undefined);
     listLegacyPairingStoreFiles.mockReset().mockResolvedValue([]);
+    refreshPluginRegistryAfterConfigMutation.mockReset().mockResolvedValue(undefined);
   });
 
-  it("runs channel and session maintenance for a normal gateway", async () => {
+  it("joins admitted registry refresh when the Gateway closes during maintenance", async () => {
+    await withOpenClawTestState({ label: "startup-registry-maintenance" }, async () => {
+      const { runGatewayPostReadyStartupMaintenance } = await import("./server-startup-plugins.js");
+      const started = createDeferred();
+      const release = createDeferred();
+      const controller = new AbortController();
+      refreshPluginRegistryAfterConfigMutation.mockImplementationOnce(async () => {
+        started.resolve();
+        await release.promise;
+      });
+      const log = createLog();
+      let settled = false;
+      const maintenance = runGatewayPostReadyStartupMaintenance({
+        getConfig: () => ({}),
+        getPluginRegistry: createEmptyPluginRegistry,
+        pluginMetadataSnapshot: { registrySource: "derived" },
+        databases: [],
+        signal: controller.signal,
+        log,
+      }).finally(() => {
+        settled = true;
+      });
+      try {
+        expect(
+          await Promise.race([
+            started.promise.then(() => "started"),
+            maintenance.then(() => "completed"),
+          ]),
+        ).toBe("started");
+        controller.abort(new Error("Gateway closing"));
+        await Promise.resolve();
+        expect(settled).toBe(false);
+      } finally {
+        release.resolve();
+        await maintenance;
+      }
+      expect(log.warn).not.toHaveBeenCalled();
+    });
+  });
+
+  it("reports failed session repair while completing the other maintenance owners", async () => {
     const log = createLog();
-    const { runGatewayStartupMaintenance } = await import("./server-startup-plugins.js");
-
-    await runGatewayStartupMaintenance({
-      cfgAtStart: {},
-      startupRuntimeConfig: {},
-      minimalTestGateway: false,
+    const { runGatewayPostReadyStartupMaintenance } = await import("./server-startup-plugins.js");
+    const cfg = slackConfig();
+    runGatewaySessionStartupMaintenance.mockRejectedValueOnce(
+      new Error("synthetic repair failure"),
+    );
+    listLegacyPairingStoreFiles.mockResolvedValueOnce(["synthetic-pairing.json"]);
+    await runGatewayPostReadyStartupMaintenance({
+      getConfig: () => cfg,
+      getPluginRegistry: createEmptyPluginRegistry,
+      databases: [],
+      signal: new AbortController().signal,
       log,
     });
-
-    expect(runChannelPluginStartupMaintenance).toHaveBeenCalledWith({
-      cfg: {},
-      env: process.env,
-      log,
-    });
-    expect(runStartupSessionMigration).toHaveBeenCalledWith({
-      cfg: {},
-      env: process.env,
-      log,
-    });
-    expect(log.warn).not.toHaveBeenCalled();
+    expect(runChannelPluginStartupMaintenance).toHaveBeenCalledWith({ cfg, env: process.env, log });
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("synthetic repair failure"));
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("synthetic-pairing.json"));
   });
 
-  it("skips maintenance for a minimal gateway without channel config", async () => {
-    const { runGatewayStartupMaintenance } = await import("./server-startup-plugins.js");
-
-    await runGatewayStartupMaintenance({
-      cfgAtStart: {},
-      startupRuntimeConfig: {},
-      minimalTestGateway: true,
-      log: createLog(),
+  it("does not start maintenance after its Gateway lifetime closes", async () => {
+    const { runGatewayPostReadyStartupMaintenance } = await import("./server-startup-plugins.js");
+    const controller = new AbortController();
+    controller.abort();
+    const log = createLog();
+    await runGatewayPostReadyStartupMaintenance({
+      getConfig: () => ({}),
+      getPluginRegistry: createEmptyPluginRegistry,
+      pluginMetadataSnapshot: { registrySource: "derived" },
+      databases: [],
+      signal: controller.signal,
+      log,
     });
-
     expect(runChannelPluginStartupMaintenance).not.toHaveBeenCalled();
-    expect(runStartupSessionMigration).not.toHaveBeenCalled();
+    expect(runGatewaySessionStartupMaintenance).not.toHaveBeenCalled();
     expect(listLegacyPairingStoreFiles).not.toHaveBeenCalled();
-  });
-
-  it("runs only channel maintenance for a minimal gateway with recovered channel config", async () => {
-    const log = createLog();
-    const recoveredConfig = slackConfig();
-    const { runGatewayStartupMaintenance } = await import("./server-startup-plugins.js");
-
-    await runGatewayStartupMaintenance({
-      cfgAtStart: {},
-      startupRuntimeConfig: recoveredConfig,
-      minimalTestGateway: true,
-      log,
-    });
-
-    expect(runChannelPluginStartupMaintenance).toHaveBeenCalledWith({
-      cfg: recoveredConfig,
-      env: process.env,
-      log,
-    });
-    expect(runStartupSessionMigration).not.toHaveBeenCalled();
-    expect(listLegacyPairingStoreFiles).not.toHaveBeenCalled();
+    expect(refreshPluginRegistryAfterConfigMutation).not.toHaveBeenCalled();
+    expect(log.warn).not.toHaveBeenCalled();
   });
 });
 
@@ -324,14 +357,14 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
     });
     resolveOpenClawPackageRootSync.mockClear().mockReturnValue("/package");
     runChannelPluginStartupMaintenance.mockClear();
-    runStartupSessionMigration.mockClear();
+    runGatewaySessionStartupMaintenance.mockClear();
     listLegacyPairingStoreFiles.mockReset().mockResolvedValue([]);
   });
   it("does not run startup maintenance", async () => {
     await prepareBootstrapWithRuntimeConfig({});
 
     expect(runChannelPluginStartupMaintenance).not.toHaveBeenCalled();
-    expect(runStartupSessionMigration).not.toHaveBeenCalled();
+    expect(runGatewaySessionStartupMaintenance).not.toHaveBeenCalled();
     expect(listLegacyPairingStoreFiles).not.toHaveBeenCalled();
   });
 
@@ -442,7 +475,7 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
       const { capturePluginRegistryLifecycleEpoch, markPluginRegistryActive } =
         await import("../plugins/registry-lifecycle.js");
       const ambientRegistry = createEmptyPluginRegistry();
-      ambientRegistry.gatewayHandlers.fixture = vi.fn();
+      ambientRegistry.gatewayHandlers.fixture = vi.fn<GatewayRequestHandler>();
       markPluginRegistryActive(ambientRegistry);
       const ambientEpoch = capturePluginRegistryLifecycleEpoch(ambientRegistry);
       getActivePluginRegistry.mockReturnValue(ambientRegistry);

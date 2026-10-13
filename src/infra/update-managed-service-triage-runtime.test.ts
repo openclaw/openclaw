@@ -6,7 +6,6 @@ import { useTriageLeaseDatabaseFixture } from "./triage-lease-fixture.test-suppo
 import { resolveManagedServiceCliArgv } from "./update-managed-service-handoff-command.js";
 import { createTriageBoundary } from "./update-managed-service-triage.test-support.js";
 
-useTriageLeaseDatabaseFixture();
 const boundaries: Awaited<ReturnType<typeof createTriageBoundary>>[] = [];
 afterEach(async () => {
   for (const boundary of boundaries.splice(0)) {
@@ -14,14 +13,15 @@ afterEach(async () => {
   }
 });
 
-describe("managed triage runtime admission (synthetic native boundary)", () => {
-  it.skipIf(process.platform === "win32").for([
-    { runtime: "node", updateResult: false },
-    { runtime: "bun", updateResult: false },
-    { runtime: "bun", updateResult: true },
-  ])(
-    "admits unsafe update triage on $runtime (updateResult=$updateResult) with preserved activation and deferred health",
-    async ({ runtime, updateResult }, { signal }) => {
+describe.each([
+  { runtime: "node", updateResult: false },
+  { runtime: "bun", updateResult: false },
+  { runtime: "bun", updateResult: true },
+])("managed triage runtime: $runtime/$updateResult", ({ runtime, updateResult }) => {
+  useTriageLeaseDatabaseFixture();
+  it.skipIf(process.platform === "win32")(
+    "admits unsafe update triage with preserved activation and deferred health",
+    async ({ signal }) => {
       const boundary = await createTriageBoundary("update", undefined, undefined, async (root) => {
         const node = resolveTestNodeExecPath();
         const executable = runtime === "bun" ? path.join(root, "bin", "bun") : node;

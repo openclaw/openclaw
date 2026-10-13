@@ -37,6 +37,11 @@ With config hot reload enabled, changes to `logging.level`, `logging.file`, and
 long-lived channel loggers. Queued records finish writing to their original file.
 Explicit logger-level overrides, such as Baileys verbosity, remain in effect.
 
+Startup guidance to keep local CLI/SDK and Gateway versions aligned uses `info`;
+it does not indicate that a version mismatch was detected. In-memory auth storage
+initialization does not emit synchronous-storage deprecation warnings. Explicit
+calls to deprecated storage APIs still warn with their replacements.
+
 Subsystem file logs omit call-site metadata (`_meta.path`) for `trace`, `debug`,
 `info`, and `warn` records, including `raw()` lines, to avoid capturing and parsing
 a stack on every routine message. `error` and `fatal` records retain it. All levels
@@ -50,14 +55,18 @@ Talk, realtime voice, and managed-room code paths use the shared file logger for
 
 Discord realtime voice keeps session lifecycle transitions at `info`; audio chunks
 and transcript deltas use `debug`. Model-fetch starts and successful responses
-under one second also use `debug`. Non-2xx responses and responses taking at least
-one second remain at `info`; transport failures remain warnings. The existing
+also use `debug`, regardless of duration. Non-2xx responses remain at `info`;
+transport failures remain warnings. The existing
 [model transport diagnostic flags](/logging#targeted-model-transport-diagnostics)
 promote transport details to `info` when enabled.
 
-Secret egress request audit records remain at `info`, including successful
-forwarding. Their structured fields record the proxy outcome without request
+Secret egress forwarding without credential substitution uses `debug`. Refusals
+and credential substitutions remain at `info`, and certificate failures remain
+warnings. Their structured fields record the proxy outcome without request
 payloads or credentials; see [secret egress proxy](/gateway/secrets/secret-store-and-egress#secret-egress-proxy).
+Code Mode and Tool Search catalog preparation summaries also use `debug`.
+[Prometheus metrics](/gateway/prometheus) count egress outcomes, catalog
+preparations, and model calls independently of log levels.
 
 The Control UI Logs tab tails this file via the gateway (`logs.tail`). The CLI does the same:
 
@@ -102,7 +111,7 @@ any driver waits, scheduling, and ownership revalidation. When admission uses a
 separate integrity Worker, its lifetime is included. This does not isolate
 native-check or CPU time.
 
-When canonical-index validation completes, `canonicalIndexMs` reports the
+When required-index validation completes, `canonicalIndexMs` reports the
 subsequent synchronous inspection and any repair or rechecks, and
 `repairedIndexCount` counts indexes successfully repaired by that operation.
 A healthy initial integrity check can still require an index-definition repair.
@@ -219,35 +228,34 @@ Tune console verbosity independently:
 
 ## Redaction
 
-OpenClaw masks sensitive tokens before log or transcript output leaves the process. This redaction policy applies at console, file-log, OTLP log-record, and session transcript text sinks. Matching secret values are masked before JSONL lines or messages are written to disk.
+File logs store raw records under the Gateway account with owner-only (`0600`)
+permissions. Redaction runs when logs widen their audience: `logs.tail` (including
+the CLI and Control UI), console output, diagnostic/support bundles, and remote
+or OTLP export. Each output redacts independently; direct reads of the file do
+not. Protect raw log files like the agent/state databases and review them before
+sharing.
 
-The OpenClaw harness masks finalized tool-result text after middleware, before
-it enters live model context, including exec output and tool errors. Media bytes
-and the original execution arguments stay intact; later replay reuses the masked
-result. Model-visible tool-result text preserves ambiguous source assignments such as
-`token = timeObserverToken`. Registered secrets and explicit credential forms,
-including structured fields, authorization headers, URL credentials, and known
-token formats, remain masked. Direct reads of `.env`
-files apply broader assignment masking before their content becomes a tool
-result. Other config and source reads preserve opaque values. Register actual
-secrets instead of relying on key-name matching. Other transcript fields and
-diagnostic sinks retain broad assignment matching.
+Tool arguments, tool results, and session transcripts are not secret-masked.
+This includes source-code output and direct reads of `.env` files. Tool payloads
+still receive size limits, image/base64 handling, and structural normalization.
+Configuration snapshots, audit output, command-line diagnostics, and
+credential-bearing URLs retain their masking.
 
-- Sensitive-value redaction is always enabled.
+- Egress log and diagnostic redaction is always enabled.
 - `logging.redactPatterns`: array of regex strings (replaces the default string list). Built-in structural protections for form bodies, structured authorization headers, and bare AWS secret access keys always apply.
   - Use raw regex strings (auto `gi`), or `/pattern/flags` for custom flags.
   - Matches are masked keeping the first 6 + last 4 chars (values >= 18 chars). Shorter values become `***`.
   - Defaults cover common key assignments, CLI flags, JSON fields, bearer headers, PEM blocks, popular vendor token prefixes, and payment credential field names (card number, CVC/CVV, shared payment token, payment credential).
 
-File and JSON console records finish masking before final JSON encoding. Rules run in order over decoded values, then serialized record context, with later rules seeing earlier masks. String matches retain their existing token hints so later rules can match those hints. Structured credential fields use full masks; matched numbers, booleans, and null become the JSON string `"***"`. File records retain built-in credential patterns when custom patterns are configured.
+JSON console output and log tails preserve valid JSON while masking decoded values and serialized record context. Later rules see earlier masks. Structured credential fields use full masks; matched numbers, booleans, and null become the JSON string `"***"`. Log tails retain built-in credential patterns when custom patterns are configured.
 
-Safety boundaries such as Control UI tool-call events, `sessions_history` output, diagnostics exports, provider errors, exec approval display, and Gateway WebSocket logs always redact. `logging.redactPatterns` adds deployment-specific patterns.
+Diagnostics exports and captured provider/WebSocket console output retain redaction. `logging.redactPatterns` supplies deployment-specific patterns at these egress boundaries. Log IDs, sizes, and outcomes rather than message text, prompts, tool arguments, or tool results. WebSocket agent-event summaries contain character counts instead of assistant text or tool metadata.
 
 ## Gateway WebSocket logs
 
 The gateway prints WebSocket protocol logs in two modes:
 
-- **Normal mode (no `--verbose`)**: only "interesting" RPC results print - errors (`ok=false`), slow calls (default threshold: `>= 50ms`), and parse errors.
+- **Normal mode (no `--verbose`)**: failed RPC results (`ok=false`), slow calls (`>= 1,000ms`), and parse errors remain visible at the default log level. Successful responses below one second, including large session lists, log at `debug`. Set `logging.level: "debug"` to retain them in file logs or `logging.consoleLevel: "debug"` to print them.
 - **Verbose mode (`--verbose`)**: prints all WS request/response traffic.
 
 With `diagnostics.enabled: true` and warning logging enabled, `sessions.list`
@@ -327,6 +335,30 @@ If a CPU counter read fails, all CPU fields are omitted for that request;
 its result and elapsed diagnostics are preserved. Existing activation and the
 one-second warning threshold are unchanged, so missing slow records do not account
 for CPU consumed by faster requests.
+
+`chat.send` records `slow chat send <N>ms stage=request` when authorization,
+input admission, and acknowledgement take at least one second. Phase durations
+appear in the message text, including authority, run admission, attachments,
+persistence, and response. A separate `stage=startup ack=<N>ms` record attributes
+post-acknowledgement preparation to workspace setup, reply initialization,
+skill preparation, and authoring. `worktree` covers pending workspace creation;
+ordinary sandbox readiness remains inside inclusive `preparation`.
+`replyInitialization` includes routing, admission-ticket waits, workspace bootstrap,
+media processing, and session initialization until the prepared-session callback.
+Initial session row-reader waits are included in that interval, rather than timed
+separately. `snapshot` measures the agent-run transcript-start reader preparation,
+nested inside `preparation`.
+Startup measurement ends when the agent run starts, or when dispatch exits before starting one.
+Accepted steering instead reports `stage=steer`; a deferred follow-up reports
+`stage=queued`. These records include waits for the active run to commit the input
+at its next boundary, including the steering receipt timeout. They use the same
+one-second threshold and emit at most one post-acknowledgement record per send;
+they are not startup latency. Rejected steering that starts a new run retains
+`stage=startup`.
+These records do not contain message text or session identifiers. Nested phases
+can overlap; their sum is not the request duration. The
+[Prometheus exporter](/gateway/prometheus) records the same fixed phases for fast
+and slow sends when diagnostics are enabled.
 
 Catalog lists additionally expose fixed request-stage observations through the
 existing diagnostic event stream and [Prometheus exporter](/gateway/prometheus#catalog-list-stages).

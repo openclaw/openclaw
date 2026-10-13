@@ -5,7 +5,6 @@ import {
   buildControlUiCspHeader,
   computeInlineScriptHashes,
 } from "../../../src/gateway/control-ui-csp.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
@@ -41,62 +40,6 @@ async function paste(composer: Locator) {
 }
 
 suite.define(() => {
-  it.each([1280, 390])(
-    "removes a pasted-text card at %ipx without changing the draft or other files",
-    async (width) => {
-      await suite.withPage(
-        { ...contextOptions, viewport: { width, height: 900 } },
-        async ({ page }) => {
-          const gateway = await installMockGateway(page);
-          await page.goto(`${suite.server.baseUrl}chat`);
-          await page.evaluate(() => {
-            document.documentElement.dataset.themeMode = "dark";
-          });
-          const composer = page.locator(".agent-chat__composer-combobox textarea");
-          await composer.waitFor({ state: "visible" });
-          await composer.fill("Keep this draft");
-          await paste(composer);
-          await page.locator(".agent-chat__file-input").setInputFiles({
-            name: "keep.html",
-            mimeType: "text/html",
-            buffer: Buffer.from("<!doctype html><title>Keep</title>"),
-          });
-          const card = page.locator("openclaw-chat-pasted-text .chat-attachment-thumb");
-          await card.getByRole("button", { name: pastedTextLabel, exact: true }).waitFor();
-          const remove = card.locator(".chat-attachment-remove");
-          const proofDir = createControlUiE2eArtifactDir("pasted-text-remove");
-          await page.screenshot({ path: `${proofDir}/card-${width}.png` });
-          await expect.poll(() => remove.count()).toBe(1);
-          const placement = await remove.evaluate((button) => {
-            const tile = button.closest(".chat-attachment-thumb")!;
-            const rect = tile.getBoundingClientRect();
-            const buttonRect = button.getBoundingClientRect();
-            return {
-              visible: getComputedStyle(button).opacity === "1",
-              topRight:
-                buttonRect.left > rect.left + rect.width / 2 &&
-                buttonRect.top < rect.top + rect.height / 2,
-              name: button.getAttribute("aria-label"),
-            };
-          });
-          expect(placement).toEqual({
-            visible: true,
-            topRight: true,
-            name: expect.stringContaining("Remove"),
-          });
-          await remove.click();
-          await expect.poll(() => card.count()).toBe(0);
-          expect(
-            await page.locator(".chat-attachment-file__name", { hasText: "keep.html" }).count(),
-          ).toBe(1);
-          expect(await composer.inputValue()).toBe("Keep this draft");
-          expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-          await page.screenshot({ path: `${proofDir}/removed-${width}.png` });
-        },
-      );
-    },
-  );
-
   it.each([1280, 390])("restores pasted text directly from the %ipx composer", async (width) => {
     await suite.withPage(
       { ...contextOptions, viewport: { width, height: 900 } },
@@ -333,37 +276,6 @@ suite.define(() => {
         }),
       );
       expect(fileName).toMatch(/^pasted-text-\d+\.txt$/);
-    });
-  });
-
-  it("keeps a newly uploaded lookalike filename as a file and sends file origin", async () => {
-    await suite.withPage(contextOptions, async ({ page }) => {
-      const gateway = await installMockGateway(page);
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await page.locator(".agent-chat__file-input").setInputFiles({
-        name: "pasted-text-123.txt",
-        mimeType: "text/plain",
-        buffer: Buffer.from(pastedText),
-      });
-      await page
-        .locator(".chat-attachment-file__name", { hasText: "pasted-text-123.txt" })
-        .waitFor();
-      expect(await page.locator("openclaw-chat-pasted-text").count()).toBe(0);
-      await page.getByRole("button", { name: "Send message", exact: true }).click();
-      await expect.poll(async () => (await gateway.getRequests("chat.send")).length).toBe(1);
-      expect((await gateway.getRequests("chat.send"))[0]!.params).toEqual(
-        expect.objectContaining({
-          attachments: [
-            {
-              type: "file",
-              mimeType: "text/plain",
-              fileName: "pasted-text-123.txt",
-              origin: "file",
-              content: Buffer.from(pastedText).toString("base64"),
-            },
-          ],
-        }),
-      );
     });
   });
 

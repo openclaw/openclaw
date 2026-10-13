@@ -24,16 +24,7 @@ function rankPromptDigestPage(page: MemoryWikiCompiledDigestPage): number {
 }
 
 function rankPromptClaimFreshness(level?: string): number {
-  switch (level) {
-    case "fresh":
-      return 3;
-    case "aging":
-      return 2;
-    case "stale":
-      return 1;
-    default:
-      return 0;
-  }
+  return ["stale", "aging", "fresh"].indexOf(level ?? "") + 1;
 }
 
 function sortPromptClaims(

@@ -2,16 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { CliThinkingProgress } from "./cli-output-contracts.js";
 import { createCliJsonlStreamingParser } from "./cli-output-stream.js";
-
-function joinJsonlFrames(...frames: unknown[]) {
-  return frames
-    .map((frame) => (typeof frame === "string" ? frame : JSON.stringify(frame)))
-    .join("\n");
-}
-
-function claudeStreamEvent(event: Record<string, unknown>) {
-  return { type: "stream_event", event };
-}
+import { claudeStreamEvent, claudeTextDelta, joinJsonlFrames } from "./cli-output.test-helpers.js";
 
 function claudeMessageStart(id?: string) {
   return claudeStreamEvent({ type: "message_start", ...(id ? { message: { id } } : {}) });
@@ -29,14 +20,6 @@ function claudeBlockStop(index?: number) {
   return claudeStreamEvent({
     type: "content_block_stop",
     ...(index === undefined ? {} : { index }),
-  });
-}
-
-function claudeTextDelta(text: string, index?: number) {
-  return claudeStreamEvent({
-    type: "content_block_delta",
-    ...(index === undefined ? {} : { index }),
-    delta: { type: "text_delta", text },
   });
 }
 
@@ -431,6 +414,30 @@ describe("createCliJsonlStreamingParser reasoning", () => {
         { text: "A", delta: "A", isReasoningSnapshot: true },
         { text: "AB", delta: "B", isReasoningSnapshot: true },
       ],
+    },
+    {
+      name: "resets per-index thinking state on a new message within the same turn (tool round-trip)",
+      frames: [
+        claudeMessageStart("msg-A"),
+        claudeThinkingDelta("Hello ", 0),
+        claudeThinkingDelta("world", 0),
+        claudeAssistantSnapshot("msg-A", [{ type: "thinking", thinking: "Hello world" }]),
+        claudeMessageStart("msg-B"),
+        claudeThinkingDelta("New ", 0),
+        claudeThinkingDelta("thought", 0),
+        claudeAssistantSnapshot("msg-B", [{ type: "thinking", thinking: "New thought" }]),
+      ],
+      expected: [
+        { text: "Hello ", delta: "Hello ", isReasoningSnapshot: true },
+        { text: "Hello world", delta: "world", isReasoningSnapshot: true },
+        { text: "New ", delta: "New ", isReasoningSnapshot: true },
+        { text: "New thought", delta: "thought", isReasoningSnapshot: true },
+      ],
+    },
+    {
+      name: "ignores indexless thinking deltas without content block framing",
+      frames: [claudeThinkingDelta("orphaned"), claudeThinkingDelta("also orphaned", "0")],
+      expected: [],
     },
   ])("$name", ({ frames, expected }) => {
     const thinking: Array<{ text: string; delta: string; isReasoningSnapshot?: boolean }> = [];

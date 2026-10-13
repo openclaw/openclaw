@@ -13,13 +13,13 @@ import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolu
 import { formatCliCommand } from "../../cli/command-format.js";
 import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
 import { formatUnsupportedChannelActionMessage } from "../../cli/error-format.js";
-import { getRuntimeConfig } from "../../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import { danger } from "../../globals.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { resolveInstallableChannelPlugin } from "../channel-setup/channel-plugin-resolution.js";
 
-export type ChannelsResolveOptions = {
+type ChannelsResolveOptions = {
   agent?: string;
   channel?: string;
   account?: string;
@@ -87,7 +87,7 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
     );
   }
 
-  const loadedRaw = getRuntimeConfig();
+  const loadedRaw = await captureRuntimeConfigAsyncReader()();
   const requestedAgent = opts.agent?.trim();
   if (opts.agent !== undefined && !requestedAgent) {
     throw new Error("--agent must not be blank");
@@ -163,28 +163,17 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
       })),
     );
   }
-  let results: ChannelResolveResult[];
-  if (preferredKind) {
-    results = resolved.map(({ input, resolved: isResolved, id, name, note }) => ({
-      input,
-      resolved: isResolved,
-      id,
-      name,
-      note,
-    }));
-  } else {
-    const byInput = new Map(resolved.map((entry) => [entry.input, entry]));
-    results = entries.map((input) => {
-      const entry = byInput.get(input);
-      return {
-        input,
-        resolved: entry?.resolved ?? false,
-        id: entry?.id,
-        name: entry?.name,
-        note: entry?.note,
-      };
-    });
-  }
+  const byInput = new Map(resolved.map((entry) => [entry.input, entry]));
+  const orderedResults: ChannelResolveResult[] = preferredKind
+    ? resolved
+    : entries.map((input) => byInput.get(input) ?? { input, resolved: false });
+  const results = orderedResults.map(({ input, resolved: isResolved, id, name, note }) => ({
+    input,
+    resolved: preferredKind ? isResolved : (isResolved ?? false),
+    id,
+    name,
+    note,
+  }));
 
   if (opts.json) {
     writeRuntimeJson(runtime, results);

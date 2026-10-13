@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { Client as TeamsApiClient } from "@microsoft/teams.api";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
-import { createSolidPngBuffer } from "openclaw/plugin-sdk/test-fixtures";
+import { awaitGateBeforeSettlement, createSolidPngBuffer } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { msteamsPlugin } from "./channel.js";
@@ -18,6 +18,17 @@ import { sendPollMSTeams } from "./send.js";
 const { resolveMSTeamsSendContext } = vi.hoisted(() => ({
   resolveMSTeamsSendContext: vi.fn(),
 }));
+type EffectAuthority = ReturnType<
+  typeof import("openclaw/plugin-sdk/fetch-runtime").captureEffectAuthority
+>;
+const effectInput = vi.hoisted(() => ({ current: undefined as EffectAuthority | undefined }));
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>();
+  return {
+    ...actual,
+    captureEffectAuthority: () => effectInput.current ?? actual.captureEffectAuthority(),
+  };
+});
 
 // Isolate the stored destination and credentials; keep registration, send preparation,
 // retries, Teams App/API/Common, and the Axios HTTP adapter on their real paths.
@@ -31,10 +42,11 @@ const destination = { cfg, to: `conversation:${conversationId}` };
 
 let fixture: Awaited<ReturnType<typeof createConnectorFixture>>;
 
-function pauseToken() {
+function pauseToken(onStart?: () => void) {
   const tokenStarted = createDeferred<void>();
   const releaseToken = createDeferred<void>();
   fixture.token.mockImplementationOnce(async () => {
+    onStart?.();
     tokenStarted.resolve();
     await releaseToken.promise;
     return fixtureToken;
@@ -156,12 +168,93 @@ afterEach(async () => {
   try {
     await fixture.close();
   } finally {
+    effectInput.current = undefined;
     resolveMSTeamsSendContext.mockReset();
     vi.restoreAllMocks();
   }
 });
 
 describe("registered Teams delivery handoff", () => {
+  it.each([false, true])(
+    "prepares the SDK continuation before token resolution (allowed=%s)",
+    async (allowed) => {
+      const preparing = createDeferred<void>();
+      const prepared = createDeferred<void>();
+      const accepted = createDeferred<ServerResponse>();
+      const refusal = new Error("message use refused");
+      let initiating = false;
+      const { tokenStarted, releaseToken } = pauseToken(() => expect(initiating).toBe(true));
+      let handedOff = false;
+      let pendingResponse: ServerResponse | undefined;
+      effectInput.current = {
+        active: true,
+        run: (run) => run(),
+        async initiate(effect) {
+          preparing.resolve();
+          await prepared.promise;
+          if (!allowed) {
+            throw refusal;
+          }
+          initiating = true;
+          try {
+            return effect();
+          } finally {
+            initiating = false;
+            handedOff = true;
+          }
+        },
+      };
+      fixture.setResponder((response) => {
+        pendingResponse = response;
+        accepted.resolve(response);
+      });
+      const onPlatformSendDispatch = vi.fn(async () => {});
+      const completion = sendMSTeamsMessages({
+        replyStyle: "top-level",
+        app: fixture.app,
+        conversationRef: fixture.context.ref,
+        messages: [{ text: "prepared SDK request" }],
+        onPlatformSendDispatch,
+      });
+      try {
+        await awaitGateBeforeSettlement(
+          preparing.promise,
+          Promise.race([completion, tokenStarted.promise]),
+          "SDK skipped preparation",
+        );
+        expect(fixture.token).not.toHaveBeenCalled();
+        expect(onPlatformSendDispatch).not.toHaveBeenCalled();
+        prepared.resolve();
+        if (!allowed) {
+          await expect(completion).rejects.toBe(refusal);
+          expect(fixture.token).not.toHaveBeenCalled();
+          expect(fixture.requests).toEqual([]);
+          return;
+        }
+        await awaitGateBeforeSettlement(tokenStarted.promise, completion, "SDK skipped token wait");
+        expect(handedOff).toBe(true);
+        expect(onPlatformSendDispatch).not.toHaveBeenCalled();
+        releaseToken.resolve();
+        const response = await awaitGateBeforeSettlement(
+          accepted.promise,
+          completion,
+          "SDK did not submit the message",
+        );
+        expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
+        acceptMessage(response, "prepared-sdk-request");
+        await expect(completion).resolves.toEqual(["prepared-sdk-request"]);
+      } finally {
+        fixture.setResponder((response) => acceptMessage(response, "cleanup"));
+        if (pendingResponse && !pendingResponse.writableEnded) {
+          acceptMessage(pendingResponse, "cleanup");
+        }
+        prepared.resolve();
+        releaseToken.resolve();
+        await completion.catch(() => {});
+      }
+    },
+  );
+
   it.each([true, false])(
     "preserves handoff through replay contexts with active authority=%s",
     async (keepActive) => {

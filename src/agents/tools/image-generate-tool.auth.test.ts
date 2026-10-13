@@ -1,13 +1,79 @@
-import { describe, expect, it } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
+import type { ImageGenerationProvider } from "../../image-generation/types.js";
+import * as mediaGenerationRegistry from "../../media-generation/registry.js";
 import { withEnv } from "../../test-utils/env.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   createApiKeyCredential,
   createAuthProfileStoreFixture,
   createOAuthRefreshCredential,
 } from "../auth-profiles/credential-fixtures.test-support.js";
+import {
+  clearRuntimeAuthProfileStoreSnapshotCore,
+  setRuntimeAuthProfileStoreSnapshot,
+} from "../auth-profiles/runtime-snapshots.js";
+import { hasAnyAuthProfileStoreSourceAsync } from "../auth-profiles/source-check.js";
 import { createImageGenerateTool } from "./image-generate-tool.js";
 
 describe("image generation credential availability", () => {
+  it("lists newly saved credentials through the same retained tool", async () => {
+    await withOpenClawTestState({ label: "image-list-auth-publication" }, async (state) => {
+      const agentDir = state.agentDir();
+      const provider: ImageGenerationProvider = {
+        id: "fixture-image",
+        defaultModel: "fixture-model",
+        capabilities: {
+          generate: { maxCount: 1 },
+          edit: { enabled: false, maxInputImages: 0 },
+        },
+        generateImage: async () => {
+          throw new Error("Provider listing must not generate images");
+        },
+      };
+      const providers = vi
+        .spyOn(mediaGenerationRegistry, "withImageGenerationProviders")
+        .mockImplementation(async (_config, run) => await run([provider]));
+      try {
+        setRuntimeAuthProfileStoreSnapshot(createAuthProfileStoreFixture({}), agentDir);
+        const authProfileStoreSource = await hasAnyAuthProfileStoreSourceAsync(agentDir);
+        expect(authProfileStoreSource).toBe(false);
+        const tool = createImageGenerateTool({
+          config: {
+            agents: {
+              defaults: { mediaModels: { image: { primary: "fixture-image/fixture-model" } } },
+            },
+          },
+          agentDir,
+          workspaceDir: state.workspaceDir,
+          authProfileStoreSource,
+        });
+        assert(tool);
+
+        const before = await tool.execute("list-before-auth-save", { action: "list" });
+        expect(before.details).toMatchObject({
+          providers: [{ id: "fixture-image", configured: false }],
+        });
+
+        await state.writeAuthProfiles(
+          createAuthProfileStoreFixture({
+            "fixture-image:default": createApiKeyCredential(
+              "fixture-image",
+              "synthetic-image-api-key",
+            ),
+          }),
+        );
+
+        const after = await tool.execute("list-after-auth-save", { action: "list" });
+        expect(after.details).toMatchObject({
+          providers: [{ id: "fixture-image", configured: true }],
+        });
+      } finally {
+        providers.mockRestore();
+        clearRuntimeAuthProfileStoreSnapshotCore(agentDir);
+      }
+    });
+  });
+
   it.each([
     {
       authFlow: "chatgpt-token-sharing",

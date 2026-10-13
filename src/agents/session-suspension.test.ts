@@ -15,7 +15,7 @@ const sessionAccessorMocks = vi.hoisted(() => ({
 vi.mock("../config/sessions/session-accessor.js", () => sessionAccessorMocks);
 
 const sessionKeyResolverMocks = vi.hoisted(() => ({
-  resolveStoredSessionKeyForSessionId: vi.fn(() => ({
+  resolveStoredSessionKeyForSessionId: vi.fn(async () => ({
     sessionKey: "session-key",
     storePath: "/tmp/openclaw-session-suspension-test/sessions.json",
   })),
@@ -81,15 +81,36 @@ describe("session suspension", () => {
     ).resolves.toBe("unrelated-provider-ok");
   });
 
-  it("keeps the shared lane runnable when marker persistence fails", async () => {
-    sessionAccessorMocks.patchSessionEntryCore.mockRejectedValueOnce(new Error("disk busy"));
+  it.each(["session lookup", "marker persistence"])(
+    "keeps the shared lane and later suspensions runnable when %s fails",
+    async (failure) => {
+      let storedMarker: QuotaSuspension | undefined;
+      sessionAccessorMocks.patchSessionEntryCore.mockImplementation(async (_scope, update) => {
+        const entry = update({});
+        storedMarker = entry.quotaSuspension;
+        return entry;
+      });
+      if (failure === "session lookup") {
+        sessionKeyResolverMocks.resolveStoredSessionKeyForSessionId.mockRejectedValueOnce(
+          new Error("Session history database read was revoked"),
+        );
+      } else {
+        sessionAccessorMocks.patchSessionEntryCore.mockRejectedValueOnce(new Error("disk busy"));
+      }
 
-    await recordSuspension();
-
-    await expect(enqueueCommandInLane(CommandLane.Main, async () => "still-runs")).resolves.toBe(
-      "still-runs",
-    );
-  });
+      await expect(recordSuspension()).resolves.toBeUndefined();
+      expect(storedMarker).toBeUndefined();
+      await expect(enqueueCommandInLane(CommandLane.Main, async () => "still-runs")).resolves.toBe(
+        "still-runs",
+      );
+      await recordSuspension();
+      expect(storedMarker).toMatchObject({
+        state: "suspended",
+        failedProvider: "openai",
+        failedModel: "gpt-5.6-sol",
+      });
+    },
+  );
 
   it("resolves the session store with the explicit agent id, never the agentDir basename", async () => {
     const { suspendSession } = await import("./session-suspension.js");

@@ -1,4 +1,5 @@
 import type { ContentBlock } from "@modelcontextprotocol/client";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isQuestionThumbnail } from "../../../packages/gateway-protocol/src/question-media.js";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import type { McpAppContextState } from "../components/mcp-app-security.ts";
@@ -73,13 +74,7 @@ export function mcpAppContextItemTitle(content: ContentBlock, fallback: string):
 }
 export function mcpAppContextThumbnail(content: ContentBlock): string | null {
   const thumbnail = content._meta?.["openai/thumbnail"];
-  if (
-    thumbnail &&
-    typeof thumbnail === "object" &&
-    !Array.isArray(thumbnail) &&
-    "src" in thumbnail &&
-    isQuestionThumbnail(thumbnail.src)
-  ) {
+  if (isRecord(thumbnail) && "src" in thumbnail && isQuestionThumbnail(thumbnail.src)) {
     return thumbnail.src;
   }
   return content.type === "image" &&

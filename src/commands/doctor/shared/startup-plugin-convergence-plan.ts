@@ -4,7 +4,7 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { listAgentEntries } from "../../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
-import { inspectBundledPluginStartupMetadata } from "../../../plugins/bundled-plugin-startup-metadata.js";
+import { hasBundledPluginStartupManifest } from "../../../plugins/bundled-plugin-startup-metadata.js";
 import { resolveConfiguredGenericEmbeddingProviderId } from "../../../plugins/embedding-provider-config.js";
 import { collectConfiguredSpeechProviderIds } from "../../../plugins/gateway-startup-speech-providers.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../../plugins/installed-plugin-index-record-reader.js";
@@ -36,7 +36,7 @@ function hasPotentialPluginConfig(config: OpenClawConfig, env: NodeJS.ProcessEnv
     ) {
       return false;
     }
-    return !inspectBundledPluginStartupMetadata({ pluginId, env });
+    return !hasBundledPluginStartupManifest({ pluginId, env });
   });
 }
 

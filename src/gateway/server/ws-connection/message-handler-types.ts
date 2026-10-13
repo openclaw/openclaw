@@ -20,6 +20,7 @@ import type { PluginNodeCapabilitySurface } from "../../plugin-node-capability.j
 import type { GatewayRole } from "../../role-policy.types.js";
 import type { GatewayConnectionWork } from "../../server-connection-work.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../../server-methods/types.js";
+import type { RemoteIngressPrincipalSnapshot } from "../client-identity-types.js";
 import type { GatewayClientRegistry } from "../client-registry.js";
 import type {
   GatewayConnectionTransport,
@@ -124,6 +125,7 @@ export type GatewayConnectPhaseContext = {
   sendFrame: (obj: unknown) => Promise<void>;
   /** Retire pre-auth ingress limits once hello-ok is accepted by the transport. */
   onHelloDelivered: () => void;
+  onPairingWait: () => void;
   isWebchatConnect: (params: ConnectParams | null | undefined) => boolean;
   runDetachedConnectWork: (run: () => Promise<void>, onError: (error: unknown) => void) => void;
   pendingNodePairingCleanup: {
@@ -136,6 +138,7 @@ export type GatewayConnectPhaseContext = {
 };
 
 export type AuthenticatedGatewayConnect = {
+  remoteIngressPrincipal?: RemoteIngressPrincipalSnapshot;
   authPolicy: GatewayAuthPolicy;
   resolvedAuth: ResolvedGatewayAuth;
   minProtocol: number;

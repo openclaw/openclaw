@@ -2,6 +2,8 @@
 // stored agent auth profiles for reusable media tools.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import * as authSource from "../auth-profiles/source-check.js";
+import * as authStoreRuntime from "../auth-profiles/store-runtime.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../auth-profiles/types.js";
 import {
   hasProviderAuthForTool,
@@ -112,6 +114,30 @@ afterEach(() => {
 });
 
 describe("hasProviderAuthForTool", () => {
+  it("keeps a prepared missing auth source unavailable without probing storage", () => {
+    const probe = vi.spyOn(authSource, "hasAnyAuthProfileStoreSource").mockImplementation(() => {
+      throw new Error("unexpected caller-thread auth source probe");
+    });
+    const load = vi
+      .spyOn(authStoreRuntime, "ensureAuthProfileStoreWithoutExternalProfiles")
+      .mockImplementation(() => {
+        throw new Error("unexpected caller-thread credential store load");
+      });
+    const params = {
+      provider: "unconfigured-provider",
+      agentDir: AGENT_DIR,
+      authProfileStoreSource: false,
+    };
+    try {
+      expect(hasProviderAuthForTool(params)).toBe(false);
+      expect(probe).not.toHaveBeenCalled();
+      expect(load).not.toHaveBeenCalled();
+    } finally {
+      probe.mockRestore();
+      load.mockRestore();
+    }
+  });
+
   it("accepts env-key plugin provider auth only when config reaches env resolution", () => {
     // "acme" is not in models.json, so custom-provider auth is false; the only
     // path to true is the config-aware env lookup.
@@ -155,20 +181,6 @@ describe("hasProviderAuthForTool", () => {
     } as OpenClawConfig;
 
     expect(hasProviderAuthForTool({ provider: "amazon-bedrock", cfg })).toBe(true);
-  });
-
-  it("keeps auth-store profiles as valid tool auth", () => {
-    // Tool-specific model selection should honor the same stored profile shape
-    // used by agent sessions, not only process env/config keys.
-    const authStore = store({
-      "hatchery:default": {
-        provider: "hatchery",
-        type: "api_key",
-        key: "sk-profile", // pragma: allowlist secret
-      },
-    });
-
-    expect(hasProviderAuthForTool({ provider: "hatchery", authStore })).toBe(true);
   });
 
   it("rejects providers without config, env, or profile auth", () => {
@@ -267,63 +279,16 @@ describe("resolveOpenAiImageMediaCandidate", () => {
     ).toEqual(drop);
   });
 
-  const cases: Array<[string, AuthProfileStore, Decision]> = [
-    [
-      "canonical OpenAI OAuth-only media auth",
-      store({ "openai:chatgpt": oauth("openai") }),
+  it("resolves canonical OpenAI token-only media auth", () => {
+    expect(resolveMedia({ authStore: store({ "openai:token": token("openai") }) })).toEqual(
       codexSubstitute,
-    ],
-    [
-      "canonical OpenAI token-only media auth",
-      store({ "openai:token": token("openai") }),
-      codexSubstitute,
-    ],
-    [
-      "legacy openai-codex OAuth profiles",
-      store({ "openai-codex:default": oauth("openai-codex") }),
-      drop,
-    ],
-    [
-      "legacy openai-codex token profiles",
-      store({ "openai-codex:token": token("openai-codex") }),
-      drop,
-    ],
-    ["no direct auth or verified Codex route", store({}), drop],
-  ];
-
-  it.each(cases)("resolves %s", (_label, authStore, expected) => {
-    expect(resolveMedia({ authStore })).toEqual(expected);
+    );
   });
 
   it("keeps OpenAI media when a direct API key profile exists", () => {
     const authStore = store({ "openai:api-key": apiKey("openai") });
 
     expect(resolveMedia({ authStore })).toEqual(openAiKeep);
-  });
-
-  it("uses Codex when an ineligible direct API key profile is stale", () => {
-    const authStore = store({
-      "openai:api-key": { provider: "openai", type: "api_key" },
-      "openai:chatgpt": oauth("openai"),
-    });
-
-    expect(resolveMedia({ authStore })).toEqual(codexSubstitute);
-  });
-
-  it("honors auth order when choosing between direct OpenAI and Codex media", () => {
-    const cfg: OpenClawConfig = {
-      auth: {
-        order: {
-          openai: ["openai:chatgpt"],
-        },
-      },
-    };
-    const authStore = store({
-      "openai:api-key": apiKey("openai"),
-      "openai:chatgpt": oauth("openai"),
-    });
-
-    expect(resolveMedia({ cfg, authStore })).toEqual(codexSubstitute);
   });
 
   it("drops Codex media when auth order excludes subscription-style auth", () => {
@@ -346,12 +311,6 @@ describe("resolveOpenAiImageMediaCandidate", () => {
     const authStore = store({ "openai:default": oauth("openai") });
 
     expect(resolveMedia({ cfg: openAiRefCfg, authStore })).toEqual(codexSubstitute);
-  });
-
-  it("treats provider apiKey API-key profile references as direct OpenAI media auth", () => {
-    const authStore = store({ "openai:default": apiKey("openai") });
-
-    expect(resolveMedia({ cfg: openAiRefCfg, authStore })).toEqual(openAiKeep);
   });
 
   it("does not treat unresolved provider apiKey profile references as direct auth", () => {

@@ -9,7 +9,7 @@ import {
   clearNativeGatewayTestState,
   setNativeGatewayTestState,
 } from "../test-helpers/native-gateways.ts";
-import "./app-sidebar.ts";
+import "./app-sidebar.tsx";
 
 setupSidebarTest();
 afterEach(clearNativeGatewayTestState);
@@ -31,10 +31,12 @@ describe("AppSidebar native Gateway menu", () => {
       ],
       currentId: "profile:team",
     };
-    const publish = () =>
+    const publish = () => {
+      Object.assign(window, { __OPENCLAW_NATIVE_GATEWAYS__: snapshot });
       window.dispatchEvent(
         new CustomEvent("openclaw:native-gateways-changed", { detail: snapshot }),
       );
+    };
     publish();
     const { sidebar } = await mountSidebar(
       createGatewayHarness({ instanceId: "self-instance" } as GatewayBrowserClient).gateway,

@@ -1,4 +1,3 @@
-// Matrix tests cover channel.message adapter plugin behavior.
 import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-outbound";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
@@ -61,47 +60,6 @@ describe("matrix channel message adapter", () => {
       accountId: "default",
     });
     mocks.sendMessageMatrix.mockReset();
-  });
-
-  it("declares Matrix markdown rendering support for shared reply payloads", () => {
-    expect(matrixPlugin.meta.markdownCapable).toBe(true);
-  });
-
-  it("opts ordinary durable text and media sends into Matrix reconciliation", () => {
-    expect(matrixPlugin.message?.durableFinal).toMatchObject({
-      automaticUnknownSendReconciliation: true,
-      capabilities: {
-        text: true,
-        media: true,
-        afterCommit: true,
-        reconcileUnknownSend: true,
-      },
-      reconcileUnknownSendKinds: { text: true, media: true },
-    });
-    expect(matrixPlugin.message?.durableFinal?.capabilities?.payload).not.toBe(true);
-    expect(matrixPlugin.message?.durableFinal?.capabilities?.batch).not.toBe(true);
-  });
-
-  it("forwards the exact durable part topology into Matrix sends", async () => {
-    const sendText = matrixPlugin.message?.send?.text;
-    if (!sendText) {
-      throw new Error("Expected Matrix message adapter text sender");
-    }
-    await sendText({
-      cfg,
-      to: "room:!room:example",
-      text: "durable",
-      accountId: "default",
-      deliveryQueueId: "queue-1",
-      deliveryPartIndex: 2,
-      deliveryPartCount: 3,
-    });
-
-    expect(lastMatrixSendOptions()).toMatchObject({
-      deliveryQueueId: "queue-1",
-      deliveryPartIndex: 2,
-      deliveryPartCount: 3,
-    });
   });
 
   it("keeps all owner-provided Matrix receipt parts across the message adapter boundary", async () => {
@@ -249,6 +207,9 @@ describe("matrix channel message adapter", () => {
         to: "room:!room:example",
         text: "hello",
         accountId: "default",
+        deliveryQueueId: "queue-1",
+        deliveryPartIndex: 2,
+        deliveryPartCount: 3,
       });
       expect(mocks.sendMessageMatrix).toHaveBeenCalledTimes(1);
       expect(mocks.sendMessageMatrix.mock.lastCall?.[0]).toBe("room:!room:example");
@@ -256,6 +217,11 @@ describe("matrix channel message adapter", () => {
       const options = lastMatrixSendOptions();
       expect(options.cfg).toBe(cfg);
       expect(options.accountId).toBe("default");
+      expect(options).toMatchObject({
+        deliveryQueueId: "queue-1",
+        deliveryPartIndex: 2,
+        deliveryPartCount: 3,
+      });
       expect(result.receipt.platformMessageIds).toEqual(["$event-1"]);
       expect(result.receipt.parts[0]?.kind).toBe("text");
     };
@@ -391,9 +357,5 @@ describe("matrix channel message adapter", () => {
         type: "message.presentation",
       },
     });
-  });
-
-  it("declares native blocks as the markdown table default", () => {
-    expect(matrixPlugin.messaging?.defaultMarkdownTableMode).toBe("block");
   });
 });

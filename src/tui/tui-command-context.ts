@@ -14,7 +14,7 @@ export type CommandHandlerContext = {
   state: TuiStateAccess;
   deliverDefault: boolean;
   openOverlay: (component: Component) => OverlayHandle;
-  closeOverlay: (handle?: OverlayHandle) => void;
+  closeOverlay: (handle: OverlayHandle) => void;
   refreshSessionInfo: () => Promise<void>;
   loadHistory: () => Promise<unknown>;
   setSession: (key: string, agentId?: string) => Promise<void>;

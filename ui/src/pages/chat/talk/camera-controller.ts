@@ -1,5 +1,6 @@
+import { openRealtimeTalkCamera } from "./input.ts";
+
 type RealtimeTalkCameraControllerOptions = {
-  acquire: (deviceId: string | undefined, signal: AbortSignal) => Promise<MediaStream>;
   getDeviceId: () => string | undefined;
   setDeviceId: (deviceId: string | undefined) => void;
   isClosed: () => boolean;
@@ -32,7 +33,9 @@ export class RealtimeTalkCameraController {
     this.setupController = controller;
     let stream: MediaStream;
     try {
-      stream = await this.options.acquire(this.options.getDeviceId(), controller.signal);
+      stream = await openRealtimeTalkCamera(this.options.getDeviceId(), {
+        signal: controller.signal,
+      });
     } catch (error) {
       if (this.options.isClosed() || controller.signal.aborted) {
         return;

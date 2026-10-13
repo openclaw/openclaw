@@ -55,12 +55,7 @@ function readExtraParam(
 }
 
 function resolveOpenRouterResponseCacheTtlSeconds(value: unknown): string | undefined {
-  const parsed =
-    typeof value === "number"
-      ? value
-      : typeof value === "string"
-        ? parseStrictFiniteNumber(value)
-        : undefined;
+  const parsed = parseStrictFiniteNumber(value);
   if (parsed === undefined) {
     return undefined;
   }

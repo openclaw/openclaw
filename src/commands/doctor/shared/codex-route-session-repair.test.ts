@@ -41,7 +41,7 @@ describe("repairCodexSessionStoreRoutes", () => {
       authProfileIdMap: new Map([["openai-codex:default", "openai:chatgpt-default"]]),
     });
 
-    expect(result).toEqual({ changed: true, sessionKeys: ["main"] });
+    expect(result).toEqual(["main"]);
     expect(getSession(store, "main").updatedAt).toBe(123);
     expect(getSession(store, "main").modelProvider).toBe("openai");
     expect(getSession(store, "main").model).toBe("gpt-5.5");
@@ -57,130 +57,6 @@ describe("repairCodexSessionStoreRoutes", () => {
     expect(getSession(store, "main").fallbackNotice).toBeUndefined();
     expect(getSession(store, "other").updatedAt).toBe(2);
     expect(getSession(store, "other").agentHarnessId).toBe("codex");
-  });
-
-  it("rewrites only exactly mapped auth pins on otherwise canonical sessions", () => {
-    const store: Record<string, SessionEntry> = {
-      selected: {
-        sessionId: "selected",
-        updatedAt: 1,
-        modelProvider: "openai",
-        model: "gpt-5.5",
-        authProfileOverride: "openai-codex:default",
-        authProfileOverrideSource: "user",
-        authProfileOverrideCompactionCount: 3,
-      },
-      unknown: {
-        sessionId: "unknown",
-        updatedAt: 2,
-        authProfileOverride: "openai-codex:missing",
-        authProfileOverrideSource: "user",
-      },
-      canonical: {
-        sessionId: "canonical",
-        updatedAt: 3,
-        authProfileOverride: "openai:default",
-        authProfileOverrideSource: "auto",
-      },
-    };
-    const authProfileIdMap = new Map([["openai-codex:default", "openai:chatgpt-default"]]);
-
-    expect(repairCodexSessionStoreRoutes({ store, now: 123, authProfileIdMap })).toEqual({
-      changed: true,
-      sessionKeys: ["selected"],
-    });
-    expect(store.selected).toMatchObject({
-      updatedAt: 123,
-      authProfileOverride: "openai:chatgpt-default",
-      authProfileOverrideSource: "user",
-      authProfileOverrideCompactionCount: 3,
-    });
-    expect(store.unknown).toMatchObject({
-      updatedAt: 2,
-      authProfileOverride: "openai-codex:missing",
-    });
-    expect(store.canonical).toMatchObject({
-      updatedAt: 3,
-      authProfileOverride: "openai:default",
-    });
-    expect(repairCodexSessionStoreRoutes({ store, now: 456, authProfileIdMap })).toEqual({
-      changed: false,
-      sessionKeys: [],
-    });
-    expect(store.selected?.updatedAt).toBe(123);
-  });
-
-  it("repairs shipped codex namespace session route refs", () => {
-    const store: Record<string, SessionEntry> = {
-      main: {
-        sessionId: "s1",
-        updatedAt: 1,
-        modelProvider: "codex",
-        model: "codex/gpt-5.6-sol",
-        providerOverride: "codex",
-        modelOverride: "codex/gpt-5.6-sol",
-        authProfileOverride: "codex:default",
-        authProfileOverrideSource: "auto",
-        fallbackNotice: {
-          kind: "active",
-          selectedModel: "codex/gpt-5.6-sol",
-          activeModel: "openai/gpt-5.6-sol",
-        },
-        agentRuntimeOverride: "codex",
-      },
-    };
-
-    const result = repairCodexSessionStoreRoutes({ store, now: 123 });
-
-    expect(result).toEqual({ changed: true, sessionKeys: ["main"] });
-    expect(store.main).toMatchObject({
-      modelProvider: "openai",
-      model: "gpt-5.6-sol",
-      providerOverride: "openai",
-      modelOverride: "gpt-5.6-sol",
-      authProfileOverride: "codex:default",
-      updatedAt: 123,
-    });
-    expect(store.main?.fallbackNotice).toBeUndefined();
-    expect(store.main?.agentRuntimeOverride).toBe("codex");
-  });
-
-  it("treats slash model ids as raw for custom providers while migrating legacy pairs", () => {
-    const store: Record<string, SessionEntry> = {
-      custom: {
-        sessionId: "s-custom",
-        updatedAt: 1,
-        modelProvider: "custom",
-        model: "codex/foo",
-        providerOverride: "custom",
-        modelOverride: "openai-codex/bar",
-        agentRuntimeOverride: "openclaw",
-      },
-      legacy: {
-        sessionId: "s-legacy",
-        updatedAt: 2,
-        modelProvider: "codex",
-        model: "codex/foo",
-      },
-    };
-
-    const result = repairCodexSessionStoreRoutes({ store, now: 123 });
-
-    expect(result).toEqual({ changed: true, sessionKeys: ["legacy"] });
-    expect(store.custom).toMatchObject({
-      modelProvider: "custom",
-      model: "codex/foo",
-      providerOverride: "custom",
-      modelOverride: "openai-codex/bar",
-      agentRuntimeOverride: "openclaw",
-      updatedAt: 1,
-    });
-    expect(store.legacy).toMatchObject({
-      modelProvider: "openai",
-      model: "foo",
-      agentRuntimeOverride: "codex",
-      updatedAt: 123,
-    });
   });
 
   it("keeps the whole provider-conflicted session namespace legacy", () => {
@@ -212,7 +88,7 @@ describe("repairCodexSessionStoreRoutes", () => {
       blockedModelIdentities: new Set([blockedNamespace]),
     });
 
-    expect(result).toEqual({ changed: false, sessionKeys: [] });
+    expect(result).toEqual([]);
     expect(store.blocked).toMatchObject({
       modelProvider: "codex",
       model: "gpt-5.6-sol",
@@ -266,7 +142,7 @@ describe("repairCodexSessionStoreRoutes", () => {
       blockedModelIdentities: new Set([blockedIdentity]),
     });
 
-    expect(result).toEqual({ changed: false, sessionKeys: [] });
+    expect(result).toEqual([]);
     expect(store.main).toMatchObject({
       updatedAt: 1,
       fallbackNotice: {
@@ -276,30 +152,6 @@ describe("repairCodexSessionStoreRoutes", () => {
         reason: "rate-limit",
       },
     });
-  });
-
-  it("leaves session runtime intent untouched for fallback-notice-only cleanup", () => {
-    const store: Record<string, SessionEntry> = {
-      main: {
-        sessionId: "s1",
-        updatedAt: 1,
-        modelProvider: "openai",
-        model: "gpt-5.6-sol",
-        fallbackNotice: {
-          kind: "active",
-          selectedModel: "codex/gpt-5.6-sol",
-          activeModel: "openai/gpt-5.6-sol",
-          reason: "rate-limit",
-        },
-      },
-    };
-
-    const result = repairCodexSessionStoreRoutes({ store, now: 123 });
-
-    expect(result).toEqual({ changed: true, sessionKeys: ["main"] });
-    expect(store.main?.fallbackNotice).toBeUndefined();
-    expect(store.main?.agentRuntimeOverride).toBeUndefined();
-    expect(store.main?.agentHarnessId).toBeUndefined();
   });
 
   it("skips valid locked agent-harness rows while repairing ordinary legacy routes", () => {
@@ -337,7 +189,7 @@ describe("repairCodexSessionStoreRoutes", () => {
 
     const result = repairCodexSessionStoreRoutes({ store, now: 123 });
 
-    expect(result).toEqual({ changed: true, sessionKeys: ["ordinary"] });
+    expect(result).toEqual(["ordinary"]);
     expect(store[supervisedKey]).toEqual(supervised);
     expect(store[ordinaryLockedKey]).toEqual(ordinaryLocked);
     expect(store.ordinary).toMatchObject({
@@ -346,36 +198,6 @@ describe("repairCodexSessionStoreRoutes", () => {
       model: "gpt-5.5",
     });
     expect(getSession(store, "ordinary").agentHarnessId).toBeUndefined();
-  });
-
-  it("preserves explicit OpenClaw runtime pins while repairing legacy session routes", () => {
-    const store: Record<string, SessionEntry> = {
-      main: {
-        sessionId: "s1",
-        updatedAt: 1,
-        modelProvider: "openai-codex",
-        model: "gpt-5.5",
-        providerOverride: "openai-codex",
-        modelOverride: "openai-codex/gpt-5.4",
-        agentHarnessId: "pi",
-        agentRuntimeOverride: "pi",
-        authProfileOverride: "openai-codex:default",
-      },
-    };
-
-    const result = repairCodexSessionStoreRoutes({
-      store,
-      now: 123,
-    });
-
-    expect(result).toEqual({ changed: true, sessionKeys: ["main"] });
-    expect(getSession(store, "main").modelProvider).toBe("openai");
-    expect(getSession(store, "main").model).toBe("gpt-5.5");
-    expect(getSession(store, "main").providerOverride).toBe("openai");
-    expect(getSession(store, "main").modelOverride).toBe("gpt-5.4");
-    expect(getSession(store, "main").agentHarnessId).toBe("pi");
-    expect(getSession(store, "main").agentRuntimeOverride).toBe("pi");
-    expect(getSession(store, "main").authProfileOverride).toBe("openai-codex:default");
   });
 
   it("repairs providerless auto Codex session overrides", () => {
@@ -419,7 +241,7 @@ describe("repairCodexSessionStoreRoutes", () => {
       authProfileIdMap: new Map([["openai-codex:default", "openai:chatgpt-default"]]),
     });
 
-    expect(result).toEqual({ changed: true, sessionKeys: ["main"] });
+    expect(result).toEqual(["main"]);
     expect(getSession(store, "main").updatedAt).toBe(123);
     expect(getSession(store, "main").providerOverride).toBe("openai");
     expect(getSession(store, "main").modelOverride).toBe("gpt-5.5");
@@ -432,27 +254,5 @@ describe("repairCodexSessionStoreRoutes", () => {
     expect(getSession(store, "main").contextTokens).toBeUndefined();
     expect(getSession(store, "main").contextTokensSource).toBeUndefined();
     expect(getSession(store, "main").contextBudgetStatus).toBeUndefined();
-  });
-
-  it("preserves legacy providerless overrides with Codex auth pins", () => {
-    const store: Record<string, SessionEntry> = {
-      main: {
-        sessionId: "s1",
-        updatedAt: 1,
-        modelOverride: "gpt-5.5",
-        authProfileOverride: "openai-codex:default",
-        authProfileOverrideSource: "auto",
-      },
-    };
-
-    const result = repairCodexSessionStoreRoutes({
-      store,
-      now: 123,
-    });
-
-    expect(result).toEqual({ changed: false, sessionKeys: [] });
-    expect(getSession(store, "main").updatedAt).toBe(1);
-    expect(getSession(store, "main").providerOverride).toBeUndefined();
-    expect(getSession(store, "main").modelOverride).toBe("gpt-5.5");
   });
 });

@@ -46,6 +46,20 @@ const closeoutAssets = (
     JSON.stringify(names),
   );
 
+const websiteDispatch = () =>
+  step(
+    "gh",
+    [
+      "api",
+      "--method",
+      "POST",
+      "-H",
+      "X-GitHub-Api-Version: 2022-11-28",
+      "repos/openclaw/openclaw.ai/actions/workflows/companion-downloads-deployed.yml/dispatches",
+    ],
+    "503",
+  );
+
 describe("release:stable post-publication CLI", () => {
   it.each(["already-synced", "parent", "manual"])("syncs beta using the %s path", (mode) => {
     const release = fixture();
@@ -350,45 +364,98 @@ describe("release:stable post-publication CLI", () => {
     },
   );
 
-  it("completes closeout from release assets without dispatching or waiting for a closeout run", () => {
-    const release = fixture();
-    release.seed(postState("closeout"));
-    const result = release.run([...closeoutMain(), closeoutAssets()]);
-    expect(result.status, result.output).toBe(0);
-    expect(release.readState().closeout).toMatchObject({
-      publishRunConclusion: "success",
-      verifiedAt: expect.any(String),
-    });
-    expect(release.readState().phases.closeout.status).toBe("completed");
-    expect(release.readState().closeout.runId).toBeUndefined();
-    expect(result.calls.some((call) => call.args[0] === "workflow")).toBe(false);
-    expect(result.stdout).not.toContain("OPENCLAW_FRV_LANE_WAIVER");
-  });
+  it.each([false, true])(
+    "completes closeout with immutable release assets (dispatch=%s)",
+    (dispatch) => {
+      const release = fixture();
+      release.seed(postState("closeout"));
+      const result = release.run([
+        ...closeoutMain(),
+        ...(dispatch
+          ? [
+              closeoutAssets([]),
+              ...workflowDispatch(
+                "openclaw-stable-main-closeout.yml",
+                REPOSITORY,
+                502,
+                "Stable main closeout",
+              ),
+              actionRun(REPOSITORY, 502),
+            ]
+          : []),
+        closeoutAssets(),
+        websiteDispatch(),
+        actionRun("openclaw/openclaw.ai", 503),
+      ]);
+      expect(result.status, result.output).toBe(0);
+      expect(release.readState().phases.closeout.status).toBe("completed");
+      expect(release.readState().closeout).toMatchObject({
+        publishRunConclusion: "success",
+        verifiedAt: expect.any(String),
+      });
+      if (dispatch) {
+        expect(result.calls.find((call) => call.args[0] === "workflow")?.args.slice(7)).toEqual([
+          "-f",
+          `tag=v${RELEASE}`,
+        ]);
+        expect(release.readState().closeout.runId).toBe("502");
+      } else {
+        expect(release.readState().closeout.runId).toBeUndefined();
+        expect(result.calls.filter((call) => call.args[0] === "workflow")).toHaveLength(0);
+        expect(release.readState().closeout.websiteRunId).toBe("503");
+        expect(result.stdout).not.toContain("OPENCLAW_FRV_LANE_WAIVER");
+      }
+    },
+  );
 
-  it("dispatches closeout using only its immutable tag", () => {
+  it("checks production again when a completed closeout is restarted", () => {
     const release = fixture();
     const state = postState("closeout");
+    state.closeout = { websiteRunId: "499", verifiedAt: state.startedAt };
     release.seed(state);
+    const result = release.run(
+      [
+        ...closeoutMain(),
+        closeoutAssets(),
+        websiteDispatch(),
+        actionRun("openclaw/openclaw.ai", 503),
+      ],
+      ["--from", "closeout"],
+    );
+    expect(result.status, result.output).toBe(0);
+    expect(release.readState().closeout.websiteRunId).toBe("503");
+    expect(
+      result.calls.some((call) =>
+        call.args.includes("repos/openclaw/openclaw.ai/actions/runs/499"),
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps closeout incomplete when the website verification fails despite existing receipts", () => {
+    const release = fixture();
+    release.seed(postState("closeout"));
     const result = release.run([
       ...closeoutMain(),
-      closeoutAssets([]),
-      ...workflowDispatch(
-        "openclaw-stable-main-closeout.yml",
-        REPOSITORY,
-        502,
-        "Stable main closeout",
-      ),
-      actionRun(REPOSITORY, 502),
       closeoutAssets(),
+      websiteDispatch(),
+      actionRun("openclaw/openclaw.ai", 503, "failure"),
     ]);
-    expect(result.status, result.output).toBe(0);
-    const dispatch = result.calls.find((call) => call.args[0] === "workflow");
-    expect(dispatch?.args.slice(7)).toEqual(["-f", `tag=v${RELEASE}`]);
+    expect(result.status, result.output).toBe(2);
+    expect(result.stderr).toContain("Website verification 503 concluded failure");
+    expect(release.readState().phases.closeout.status).toBe("refused");
+    expect(release.readState().closeout.verifiedAt).toBeUndefined();
+    expect(release.readState().closeout.websiteRunId).toBeUndefined();
+    const resumed = release.run(
+      [
+        ...closeoutMain(),
+        closeoutAssets(),
+        websiteDispatch(),
+        actionRun("openclaw/openclaw.ai", 503),
+      ],
+      ["--from", "closeout"],
+    );
+    expect(resumed.status, resumed.output).toBe(0);
     expect(release.readState().phases.closeout.status).toBe("completed");
-    expect(release.readState().closeout).toMatchObject({
-      runId: "502",
-      verifiedAt: expect.any(String),
-    });
   });
 
   it.each([

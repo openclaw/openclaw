@@ -14,6 +14,8 @@ import {
 
 export const gatewayOwnerKey = { scope: "gateway-owner", key: "global" } as const;
 
+export type GatewayOwnerLeaseRow = NonNullable<ReturnType<typeof readOpenClawStateLease>>;
+
 function parseSupervisor(value: unknown): GatewayOwnerSupervisor | null {
   if (value === null) {
     return null;
@@ -39,7 +41,13 @@ export function readGatewayOwnerLeaseFromDatabase(
   if (!tableExists(db, "state_leases")) {
     return undefined;
   }
-  const row = readOpenClawStateLease(db, gatewayOwnerKey);
+  return decodeGatewayOwnerLease(readOpenClawStateLease(db, gatewayOwnerKey), port);
+}
+
+export function decodeGatewayOwnerLease(
+  row: GatewayOwnerLeaseRow | undefined,
+  port?: number,
+): GatewayOwnerLeaseIdentity | undefined {
   if (!row) {
     return undefined;
   }

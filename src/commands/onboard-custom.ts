@@ -78,8 +78,7 @@ type VerificationResult = {
 };
 
 function isJsonVerificationResponse(res: Response): boolean {
-  const contentType =
-    typeof res.headers?.get === "function" ? (res.headers.get("content-type") ?? "") : "";
+  const contentType = res.headers.get("content-type") ?? "";
   if (!contentType.trim()) {
     return true;
   }
@@ -89,11 +88,9 @@ function isJsonVerificationResponse(res: Response): boolean {
   );
 }
 
-async function requestVerification(params: {
-  endpoint: string;
-  headers: Record<string, string>;
-  body: Record<string, unknown>;
-}): Promise<VerificationResult> {
+async function requestVerification(
+  params: ReturnType<typeof buildOpenAiVerificationProbeRequest>,
+): Promise<VerificationResult> {
   let res: Response | undefined;
   try {
     res = await fetchWithTimeout(
@@ -123,22 +120,6 @@ async function requestVerification(params: {
   } finally {
     await res?.body?.cancel().catch(() => undefined);
   }
-}
-
-async function verifyCustomApiCompatibility(params: {
-  baseUrl: string;
-  apiKey: string;
-  modelId: string;
-  compatibility: CustomApiCompatibility;
-}): Promise<VerificationResult> {
-  return await requestVerification(
-    params.compatibility === "anthropic"
-      ? buildAnthropicVerificationProbeRequest(params)
-      : buildOpenAiVerificationProbeRequest({
-          ...params,
-          responsesApi: params.compatibility === "openai-responses",
-        }),
-  );
 }
 
 async function promptBaseUrlAndKey(params: {
@@ -229,6 +210,19 @@ export async function promptCustomApiConfig(params: {
 
   let compatibility: CustomApiCompatibility | null =
     compatibilityChoice === "unknown" ? null : compatibilityChoice;
+  const verifyCompatibility = async (
+    candidate: CustomApiCompatibility,
+  ): Promise<VerificationResult> => {
+    const probeParams = { baseUrl, apiKey: resolvedApiKey, modelId, compatibility: candidate };
+    return await requestVerification(
+      candidate === "anthropic"
+        ? buildAnthropicVerificationProbeRequest(probeParams)
+        : buildOpenAiVerificationProbeRequest({
+            ...probeParams,
+            responsesApi: candidate === "openai-responses",
+          }),
+    );
+  };
 
   while (params.verification !== "deferred") {
     if (!compatibility) {
@@ -241,12 +235,7 @@ export async function promptCustomApiConfig(params: {
         anthropic: "wizard.customProvider.detectedAnthropic",
       };
       for (const candidate of ["openai", "openai-responses", "anthropic"] as const) {
-        const result = await verifyCustomApiCompatibility({
-          baseUrl,
-          apiKey: resolvedApiKey,
-          modelId,
-          compatibility: candidate,
-        });
+        const result = await verifyCompatibility(candidate);
         if (result.ok) {
           probeSpinner.stop(t(detectionMessages[candidate]));
           compatibility = candidate;
@@ -265,12 +254,7 @@ export async function promptCustomApiConfig(params: {
       // Explicit compatibility choices still get a live probe so setup does not
       // persist endpoints or models that fail the selected protocol.
       const verifySpinner = prompter.progress(t("wizard.customProvider.verifying"));
-      const result = await verifyCustomApiCompatibility({
-        baseUrl,
-        apiKey: resolvedApiKey,
-        modelId,
-        compatibility,
-      });
+      const result = await verifyCompatibility(compatibility);
       if (result.ok) {
         verifySpinner.stop(t("wizard.customProvider.verificationSuccessful"));
         break;

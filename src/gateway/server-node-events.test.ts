@@ -20,6 +20,7 @@ import type { HealthSummary } from "./health/types.js";
 import { NodeRegistry } from "./node-registry.js";
 import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
 import { handleNodeEvent } from "./server-node-events.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 
 const {
   buildSessionLookup,
@@ -179,9 +180,9 @@ describe("node exec events", () => {
     "preserves exec authorization and terminal consumption with suppressNotifyOnExit=%s",
     async (suppressNotifyOnExit) => {
       const registry = new NodeRegistry();
-      const connection = { connId: "conn-1" };
-      const runId = `run-seq-suppress-${suppressNotifyOnExit}`;
-      const sessionKey = "agent:main:main";
+      const connection = { connId: "conn-1" },
+        auth = registry.authorizeSystemRunEvent.bind(registry);
+      const [runId, sessionKey] = [`run-seq-suppress-${suppressNotifyOnExit}`, "agent:main:main"];
       const eventRouting = { sessionKey, contextKey: `exec:${runId}` };
       const startedPayload = { runId, sessionKey, command: "printf ok" };
       const finishedPayload = {
@@ -194,7 +195,7 @@ describe("node exec events", () => {
       const finishedEvent = nodeEvent("exec.finished", finishedPayload);
       const unmatchedEvent = eventResult("exec.finished", "unmatched_exec_event");
       const ctx = buildCtx({
-        authorizeNodeSystemRunEvent: (params) => registry.authorizeSystemRunEvent(params),
+        authorizeNodeSystemRunEvent: (p) => auth({ ...p, terminal: p.event !== "exec.started" }),
       });
       registry.register(makeNodeClient(connection.connId, "node-1"), {
         pairingIdentity: "identity-a",
@@ -322,7 +323,7 @@ describe("node exec events", () => {
       nodeId: "node-2",
       connId: "conn-1",
       sessionKey: "agent:main:main",
-      terminal: true,
+      event: "exec.finished",
     });
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
       "Exec finished (node=node-2, code 0)\ndone",
@@ -369,7 +370,7 @@ describe("node exec events", () => {
     async (mode) => {
       if (mode === "disabled notifications") {
         const cfg = {
-          session: { mainKey: "agent:main:main" },
+          session: { mainKey: "main" },
           tools: { exec: { notifyOnExit: false } },
         };
         runtimeMocks.getRuntimeConfig.mockReturnValueOnce(cfg);
@@ -581,6 +582,33 @@ describe("voice transcript events", () => {
 });
 
 describe("notifications changed events", () => {
+  it("does not enqueue a notification when pairing changes during session lookup", async () => {
+    const lookupStarted = createDeferred();
+    const lookup = createDeferred<ReturnType<typeof buildSessionLookup>>();
+    let connectionCurrent = true;
+    vi.mocked(loadGatewaySessionEntryReadOnlyInWorker).mockImplementationOnce(async () => {
+      lookupStarted.resolve();
+      return lookup.promise;
+    });
+    const request = handleNodeEvent(
+      buildCtx(),
+      "node-revoked-during-lookup",
+      nodeEvent("notifications.changed", {
+        change: "posted",
+        key: "notif-revoked",
+        sessionKey: "agent:main:notice",
+      }),
+      { isConnectionCurrent: async () => connectionCurrent },
+    );
+    await lookupStarted.promise;
+    connectionCurrent = false;
+    lookup.resolve(buildSessionLookup("agent:main:notice"));
+
+    await expect(request).resolves.toEqual(eventResult("notifications.changed", "pairing_changed"));
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatMock).not.toHaveBeenCalled();
+  });
+
   it("records non-delivery when a targetless notification has no system owner", async () => {
     const warn = vi.fn();
     runtimeMocks.resolveSystemMainSessionTarget.mockImplementationOnce(() => {
@@ -677,7 +705,6 @@ describe("notifications changed events", () => {
       }),
     );
 
-    expect(loadSessionEntryMock).toHaveBeenCalledWith("node-node-n5", { agentId: undefined });
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
       "Notification posted (node=node-n5 key=notif-5)",
       {
@@ -763,8 +790,6 @@ describe("agent request events", () => {
         }),
       );
 
-      expect(runtimeMocks.resolveSessionAgentId).not.toHaveBeenCalled();
-      expect(runtimeMocks.resolveSessionModelRef).not.toHaveBeenCalled();
       expect(runtimeMocks.resolveGatewayModelSupportsImages).not.toHaveBeenCalled();
       expect(parseMessageWithAttachmentsMock).not.toHaveBeenCalled();
       expect(upsertSessionEntryMock).not.toHaveBeenCalled();
@@ -1239,15 +1264,10 @@ describe("chat subscribe/unsubscribe events", () => {
         ...buildCtx(),
         [event === "chat.subscribe" ? "nodeSubscribe" : "nodeUnsubscribe"]: callback,
       };
-      loadSessionEntryMock.mockReturnValueOnce({
-        ...buildSessionLookup("Main"),
-        canonicalKey: "agent:main:main",
-      });
       await handleNodeEvent(ctx, "node-c1", nodeEvent(event, { sessionKey: "  Main  " }), {
         connId: "node-c1-connection",
       });
       expect(callback).toHaveBeenCalledWith("node-c1", "agent:main:main", "node-c1-connection");
-      expect(loadSessionEntryMock).toHaveBeenCalledWith("Main");
     },
   );
   it("skips the event when the payload is missing a session key", async () => {

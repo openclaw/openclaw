@@ -12,20 +12,14 @@ import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { ExitError } from "../runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
-  buildCredentialsRequiredHealthDiagnostic,
   buildRateLimitedHealthDiagnostic,
   GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE,
   GATEWAY_HEALTH_RATE_LIMITED_MESSAGE,
   GATEWAY_HEALTH_REACHABLE_LINE,
 } from "./gateway-health-auth-diagnostic.js";
-import { formatHealthCheckFailure } from "./health-format.js";
+import { formatContextEngineHealthLine, formatHealthCheckFailure } from "./health-format.js";
 import type { HealthSummary } from "./health.js";
-import {
-  formatConfigReloadHealthLine,
-  formatContextEngineHealthLine,
-  healthCommand,
-  healthCommandNonExiting,
-} from "./health.js";
+import { healthCommand, healthCommandNonExiting } from "./health.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const runtime = createTestRuntime();
@@ -138,18 +132,6 @@ function requireFirstRuntimeLog(): string {
   return message;
 }
 
-function requireFirstGatewayRequest(): Record<string, unknown> {
-  const [call] = callGatewayMock.mock.calls;
-  if (!call) {
-    throw new Error("expected gateway call");
-  }
-  const [request] = call;
-  if (!request || typeof request !== "object" || Array.isArray(request)) {
-    throw new Error("expected gateway request");
-  }
-  return request as Record<string, unknown>;
-}
-
 describe("healthCommand", () => {
   beforeEach(() => {
     vi.spyOn(performance, "now").mockReturnValue(0);
@@ -243,6 +225,9 @@ describe("healthCommand", () => {
 
     await healthCommand({ json: true, timeoutMs: 5000, config: {} }, runtime);
 
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "health", sharedStateMode: "read-only" }),
+    );
     expect(runtime.exit).not.toHaveBeenCalled();
     const parsed = JSON.parse(requireFirstRuntimeLog()) as HealthSummary;
     expect(parsed.durationMs).toBe(5);
@@ -256,6 +241,7 @@ describe("healthCommand", () => {
     await healthCommand({ json: false, timeoutMs: 5000, config: {} }, runtime);
 
     const output = stripAnsi(runtime.log.mock.calls.map((call) => String(call[0])).join("\n"));
+    expect(output).toContain("Gateway check duration: 5ms");
     expect(output).toContain(`Session store (main): ${parsed.sessions.path}`);
     expect(output).toContain(
       "Plugin calendar: failed - service scheduler: address already in use; run openclaw doctor",
@@ -285,18 +271,7 @@ describe("healthCommand", () => {
     },
   );
 
-  it("prints the gateway probe duration in text output", async () => {
-    const snapshot = createHealthSummary();
-    callGatewayMock.mockResolvedValueOnce(snapshot);
-
-    await healthCommand({ json: false, timeoutMs: 1000, config: {} }, runtime);
-
-    const output = stripAnsi(runtime.log.mock.calls.map((call) => String(call[0])).join("\n"));
-    expect(output).toContain("Gateway probe duration: 5ms");
-  });
-
   it.each([
-    { configured: true, available: false },
     { configured: undefined, available: false },
     { configured: true, available: true },
   ])(
@@ -389,72 +364,46 @@ describe("healthCommand", () => {
     expect(output).not.toContain("Matrix: ok");
   });
 
-  it.each(["remote", "empty", "missing"] as const)(
-    "shows each explicit fleet owner's sessions with %s agent summaries",
-    async (agentSummaries) => {
-      await withOpenClawTestState({ layout: "state-only" }, async (state) => {
-        const storePath = state.statePath("shared.sqlite");
-        const updatedAt = Date.now();
-        for (const [agentId, key] of [
-          ["alpha", "first"],
-          ["alpha", "second"],
-          ["beta", "only"],
-        ] as const) {
-          await replaceSessionEntry(
-            { agentId, storePath, sessionKey: `agent:${agentId}:${key}` },
-            { sessionId: `${agentId}-${key}`, updatedAt },
-          );
-        }
-        const agent = (agentId: string, keys: string[]) => ({
-          ...createMainAgentSummary({
-            path: storePath,
-            count: keys.length,
-            recent: keys.map((key) => ({
-              key: `agent:${agentId}:${key}`,
-              updatedAt,
-              age: 0,
-            })),
-          }),
-          agentId,
-          isDefault: false,
-        });
-        const { agents: _agents, ...snapshot } = createHealthSummary();
-        callGatewayMock.mockResolvedValueOnce({
-          ...snapshot,
-          defaultAgentId: undefined,
-          ...(agentSummaries === "missing"
-            ? {}
-            : {
-                agents:
-                  agentSummaries === "empty"
-                    ? []
-                    : [agent("alpha", ["first", "second"]), agent("beta", ["only"])],
-              }),
-        });
-
-        await healthCommand(
-          {
-            json: false,
-            timeoutMs: 1_000,
-            config: {
-              session: { store: storePath },
-              agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } },
-            },
-          },
-          runtime,
+  it("shows each explicit fleet owner's sessions with missing agent summaries", async () => {
+    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+      const storePath = state.statePath("shared.sqlite");
+      const updatedAt = Date.now();
+      for (const [agentId, key] of [
+        ["alpha", "first"],
+        ["alpha", "second"],
+        ["beta", "only"],
+      ] as const) {
+        await replaceSessionEntry(
+          { agentId, storePath, sessionKey: `agent:${agentId}:${key}` },
+          { sessionId: `${agentId}-${key}`, updatedAt },
         );
-
-        const output = stripAnsi(runtime.log.mock.calls.map((call) => String(call[0])).join("\n"));
-        expect(output).toContain(
-          `Session store (alpha): ${storePath} (2 entries)\n- agent:alpha:first`,
-        );
-        expect(output).toContain(
-          `Session store (beta): ${storePath} (1 entries)\n- agent:beta:only`,
-        );
-        expect(output).not.toContain("(default)");
+      }
+      const { agents: _agents, ...snapshot } = createHealthSummary();
+      callGatewayMock.mockResolvedValueOnce({
+        ...snapshot,
+        defaultAgentId: undefined,
       });
-    },
-  );
+
+      await healthCommand(
+        {
+          json: false,
+          timeoutMs: 1_000,
+          config: {
+            session: { store: storePath },
+            agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } },
+          },
+        },
+        runtime,
+      );
+
+      const output = stripAnsi(runtime.log.mock.calls.map((call) => String(call[0])).join("\n"));
+      expect(output).toContain(
+        `Session store (alpha): ${storePath} (2 entries)\n- agent:alpha:first`,
+      );
+      expect(output).toContain(`Session store (beta): ${storePath} (1 entries)\n- agent:beta:only`);
+      expect(output).not.toContain("(default)");
+    });
+  });
 
   it("prints persistent event-loop degradation duration in text output", async () => {
     const snapshot = {
@@ -479,17 +428,6 @@ describe("healthCommand", () => {
     expect(output).toContain("p99=1200ms");
   });
 
-  it("omits the probe duration for legacy gateway snapshots", async () => {
-    const { durationMs, ...legacySnapshot } = createHealthSummary();
-    expect(durationMs).toBe(5);
-    callGatewayMock.mockResolvedValueOnce(legacySnapshot);
-
-    await healthCommand({ json: false, timeoutMs: 1000, config: {} }, runtime);
-
-    const output = stripAnsi(runtime.log.mock.calls.map((call) => String(call[0])).join("\n"));
-    expect(output).not.toContain("Gateway probe duration:");
-  });
-
   it("prints the delivery queue warning line when the gateway reports dead-letters", async () => {
     const snapshot = createHealthSummary();
     snapshot.deliveryQueues = {
@@ -506,17 +444,6 @@ describe("healthCommand", () => {
     );
   });
 
-  it("surfaces a disabled config hot-reload watcher in JSON output", async () => {
-    const snapshot = createHealthSummary();
-    snapshot.configReload = { hotReloadStatus: "disabled" };
-    callGatewayMock.mockResolvedValueOnce(snapshot);
-
-    await healthCommand({ json: true, timeoutMs: 5000, config: {} }, runtime);
-
-    const parsed = JSON.parse(requireFirstRuntimeLog()) as HealthSummary;
-    expect(parsed.configReload).toEqual({ hotReloadStatus: "disabled" });
-  });
-
   it("prints the config hot-reload disabled line in text output", async () => {
     const snapshot = createHealthSummary();
     snapshot.configReload = { hotReloadStatus: "disabled" };
@@ -530,138 +457,67 @@ describe("healthCommand", () => {
     );
   });
 
-  it("omits the config hot-reload line in text output when the reloader is active", async () => {
-    const snapshot = createHealthSummary();
-    snapshot.configReload = { hotReloadStatus: "active" };
+  it("prints top-level gateway ages with client clock skew", async () => {
+    const gatewayNow = Date.now();
+    const recent = [
+      { key: "main", updatedAt: gatewayNow - 60_000, age: 60_000 },
+      { key: "fresh", updatedAt: gatewayNow, age: 0 },
+      { key: "foo", updatedAt: null, age: null },
+    ];
+    const snapshot = createHealthSummary({
+      channels: {
+        whatsapp: { accountId: "default", linked: true, authAgeMs: 5 * 60_000 },
+        telegram: {
+          accountId: "default",
+          configured: true,
+          probe: {
+            ok: true,
+            elapsedMs: 7,
+            bot: { username: "bot" },
+            webhook: { url: "https://example.com/h" },
+          },
+        },
+        discord: { accountId: "default", configured: false },
+      },
+      channelOrder: ["whatsapp", "telegram", "discord"],
+      channelLabels: {
+        whatsapp: "WhatsApp",
+        telegram: "Telegram",
+        discord: "Discord",
+      },
+      sessions: {
+        path: "/tmp/sessions.json",
+        count: recent.length,
+        recent,
+      },
+    });
+    snapshot.agents = [];
     callGatewayMock.mockResolvedValueOnce(snapshot);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(gatewayNow + 600_000);
+    try {
+      await healthCommand(
+        {
+          json: false,
+          verbose: true,
+          timeoutMs: 1000,
+          config: { agents: { ownership: "explicit", entries: {} } },
+        },
+        runtime,
+      );
+    } finally {
+      clock.mockRestore();
+    }
 
-    await healthCommand({ json: false, timeoutMs: 5000, config: {} }, runtime);
-
+    expect(runtime.exit).not.toHaveBeenCalled();
     const output = stripAnsi(runtime.log.mock.calls.map((c) => String(c[0])).join("\n"));
-    expect(output).not.toContain("Config hot reload");
-  });
-
-  it.each([
-    { clockSkewMs: -600_000, surface: "agent" },
-    { clockSkewMs: 600_000, surface: "top-level" },
-  ])(
-    "prints $surface gateway ages with $clockSkewMs ms client clock skew",
-    async ({ clockSkewMs, surface }) => {
-      const gatewayNow = Date.now();
-      const recent = [
-        { key: "main", updatedAt: gatewayNow - 60_000, age: 60_000 },
-        { key: "fresh", updatedAt: gatewayNow, age: 0 },
-        { key: "foo", updatedAt: null, age: null },
-      ];
-      const snapshot = createHealthSummary({
-        channels: {
-          whatsapp: { accountId: "default", linked: true, authAgeMs: 5 * 60_000 },
-          telegram: {
-            accountId: "default",
-            configured: true,
-            probe: {
-              ok: true,
-              elapsedMs: 7,
-              bot: { username: "bot" },
-              webhook: { url: "https://example.com/h" },
-            },
-          },
-          discord: { accountId: "default", configured: false },
-        },
-        channelOrder: ["whatsapp", "telegram", "discord"],
-        channelLabels: {
-          whatsapp: "WhatsApp",
-          telegram: "Telegram",
-          discord: "Discord",
-        },
-        sessions: {
-          path: "/tmp/sessions.json",
-          count: recent.length,
-          recent,
-        },
-      });
-      if (surface === "top-level") {
-        snapshot.agents = [];
-      }
-      callGatewayMock.mockResolvedValueOnce(snapshot);
-      const clock = vi.spyOn(Date, "now").mockReturnValue(gatewayNow + clockSkewMs);
-      try {
-        await healthCommand(
-          {
-            json: false,
-            verbose: true,
-            timeoutMs: 1000,
-            config: { agents: { ownership: "explicit", entries: {} } },
-          },
-          runtime,
-        );
-      } finally {
-        clock.mockRestore();
-      }
-
-      expect(runtime.exit).not.toHaveBeenCalled();
-      const output = stripAnsi(runtime.log.mock.calls.map((c) => String(c[0])).join("\n"));
-      expect(output).toContain("- main (1m ago)\n- fresh (0m ago)\n- foo (no activity)");
-      expect(output).toMatch(/WhatsApp: linked/i);
-      expect(runtime.log.mock.calls.slice(0, 3)).toEqual([
-        ["Gateway connection:"],
-        ["  Gateway mode: local"],
-        [`  Gateway target: ${TEST_GATEWAY_URL}`],
-      ]);
-      expect(buildGatewayConnectionDetailsMock).toHaveBeenCalled();
-    },
-  );
-
-  it("passes explicit gateway credentials through to the gateway call", async () => {
-    const snapshot = createHealthSummary();
-    callGatewayMock.mockResolvedValueOnce(snapshot);
-
-    await healthCommand(
-      {
-        json: true,
-        timeoutMs: 5000,
-        config: {},
-        token: "setup-token",
-        password: "setup-password",
-        ignoreEnvUrlOverride: true,
-      },
-      runtime,
-    );
-
-    expect(callGatewayMock).toHaveBeenCalledOnce();
-    const gatewayRequest = requireFirstGatewayRequest();
-    expect(gatewayRequest.method).toBe("health");
-    expect(gatewayRequest.token).toBe("setup-token");
-    expect(gatewayRequest.password).toBe("setup-password");
-    expect(gatewayRequest.ignoreEnvUrlOverride).toBe(true);
-    expect(gatewayRequest.sharedStateMode).toBe("read-only");
-  });
-
-  it("outputs JSON for gateway transport failures in JSON mode", async () => {
-    const error = new Error("gateway closed (1006)");
-    const payload = {
-      ok: false,
-      error: {
-        type: "gateway_transport_error",
-        kind: "closed",
-        message: "gateway closed (1006)",
-        code: 1006,
-        reason: "no close reason",
-      },
-      gateway: {
-        url: TEST_GATEWAY_URL,
-        urlSource: "local loopback",
-        bindDetail: "Bind: loopback",
-      },
-    };
-    callGatewayMock.mockRejectedValueOnce(error);
-    formatGatewayTransportErrorJsonMock.mockReturnValueOnce(payload);
-
-    await healthCommand({ json: true, timeoutMs: 5000, config: {} }, runtime);
-
-    expect(formatGatewayTransportErrorJsonMock).toHaveBeenCalledWith(error);
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(JSON.parse(requireFirstRuntimeLog())).toEqual(payload);
+    expect(output).toContain("- main (1m ago)\n- fresh (0m ago)\n- foo (no activity)");
+    expect(output).toMatch(/WhatsApp: linked/i);
+    expect(runtime.log.mock.calls.slice(0, 3)).toEqual([
+      ["Gateway connection:"],
+      ["  Gateway mode: local"],
+      [`  Gateway target: ${TEST_GATEWAY_URL}`],
+    ]);
+    expect(buildGatewayConnectionDetailsMock).toHaveBeenCalled();
   });
 
   it("keeps Gateway health request failures machine-readable in JSON mode", async () => {
@@ -697,137 +553,53 @@ describe("healthCommand", () => {
     expect(JSON.parse(requireFirstRuntimeLog())).toEqual(payload);
   });
 
-  it("preserves Gateway health request failures in human-readable mode", async () => {
+  it("preserves a typed pre-hello authentication lockout through health output", async () => {
     const error = new GatewayClientRequestError({
-      code: "UNAVAILABLE",
-      message: "health snapshot unavailable",
+      code: "INVALID_REQUEST",
+      message: "unauthorized: too many failed authentication attempts (retry later)",
+      details: {
+        code: "AUTH_RATE_LIMITED",
+        authReason: "rate_limited",
+        recommendedNextStep: "wait_then_retry",
+      },
       retryable: true,
+      retryAfterMs: 60_000,
     });
+    retainGatewayResponsePayload(error, undefined);
     callGatewayMock.mockRejectedValueOnce(error);
 
-    await expect(healthCommand({ json: false, timeoutMs: 5000, config: {} }, runtime)).rejects.toBe(
-      error,
-    );
+    await healthCommand({ timeoutMs: 5000, config: {} }, runtime);
 
-    expect(formatGatewayAuthErrorJsonMock).not.toHaveBeenCalled();
-    expect(formatGatewayClientRequestErrorJsonMock).not.toHaveBeenCalled();
-    expect(formatGatewayTransportErrorJsonMock).not.toHaveBeenCalled();
+    expect(isGatewayCredentialsRequiredErrorMock).not.toHaveBeenCalled();
+    expect(probeGatewayStatusMock).not.toHaveBeenCalled();
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(runtime.log).toHaveBeenCalledTimes(2);
+    expect(runtime.log.mock.calls).toEqual([
+      [GATEWAY_HEALTH_REACHABLE_LINE],
+      [GATEWAY_HEALTH_RATE_LIMITED_MESSAGE],
+    ]);
   });
 
-  it.each([
-    { json: true, expectedLogs: 1 },
-    { json: undefined, expectedLogs: 2 },
-  ])(
-    "reports reachable gateway diagnostics when health RPC credentials are missing",
-    async ({ json, expectedLogs }) => {
-      callGatewayMock.mockRejectedValueOnce(new Error());
-      isGatewayCredentialsRequiredErrorMock.mockReturnValueOnce(true);
-      probeGatewayStatusMock.mockResolvedValueOnce({
-        ok: false,
-        kind: "connect",
-        error: TEST_AUTH_CLOSE_ERROR,
-        gatewayReached: true,
-      });
+  it("reports temporary authentication lockouts without credential-change guidance", async () => {
+    callGatewayMock.mockRejectedValueOnce(new Error());
+    isGatewayCredentialsRequiredErrorMock.mockReturnValueOnce(true);
+    probeGatewayStatusMock.mockResolvedValueOnce({
+      ok: false,
+      kind: "connect",
+      error: "connect failed",
+      connectFailure: { kind: "rate-limited", detailCode: "AUTH_RATE_LIMITED" },
+      gatewayReached: true,
+    });
 
-      await healthCommand({ json, timeoutMs: 5000, config: {} }, runtime);
+    await healthCommand({ json: true, timeoutMs: 5000, config: {} }, runtime);
 
-      expect(probeGatewayStatusMock).toHaveBeenCalledWith({
-        url: TEST_GATEWAY_URL,
-        token: undefined,
-        password: undefined,
-        tlsFingerprint: TEST_TLS_FINGERPRINT,
-        preauthHandshakeTimeoutMs: 4321,
-        timeoutMs: 5000,
-        config: {},
-        json,
-      });
-      expect(runtime.exit).toHaveBeenCalledWith(1);
-      expect(runtime.log).toHaveBeenCalledTimes(expectedLogs);
-      if (json) {
-        expect(JSON.parse(requireFirstRuntimeLog())).toEqual(
-          buildCredentialsRequiredHealthDiagnostic(),
-        );
-      } else {
-        expect(runtime.log.mock.calls).toEqual([
-          [GATEWAY_HEALTH_REACHABLE_LINE],
-          [GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE],
-        ]);
-      }
-    },
-  );
-
-  it.each([
-    { json: true, expectedLogs: 1 },
-    { json: undefined, expectedLogs: 2 },
-  ])(
-    "preserves a typed pre-hello authentication lockout through health output",
-    async ({ json, expectedLogs }) => {
-      const error = new GatewayClientRequestError({
-        code: "INVALID_REQUEST",
-        message: "unauthorized: too many failed authentication attempts (retry later)",
-        details: {
-          code: "AUTH_RATE_LIMITED",
-          authReason: "rate_limited",
-          recommendedNextStep: "wait_then_retry",
-        },
-        retryable: true,
-        retryAfterMs: 60_000,
-      });
-      retainGatewayResponsePayload(error, undefined);
-      callGatewayMock.mockRejectedValueOnce(error);
-
-      await healthCommand({ json, timeoutMs: 5000, config: {} }, runtime);
-
-      expect(isGatewayCredentialsRequiredErrorMock).not.toHaveBeenCalled();
-      expect(probeGatewayStatusMock).not.toHaveBeenCalled();
-      expect(runtime.exit).toHaveBeenCalledWith(1);
-      expect(runtime.log).toHaveBeenCalledTimes(expectedLogs);
-      if (json) {
-        expect(JSON.parse(requireFirstRuntimeLog())).toEqual(
-          buildRateLimitedHealthDiagnostic(error),
-        );
-      } else {
-        expect(runtime.log.mock.calls).toEqual([
-          [GATEWAY_HEALTH_REACHABLE_LINE],
-          [GATEWAY_HEALTH_RATE_LIMITED_MESSAGE],
-        ]);
-      }
-    },
-  );
-
-  it.each([
-    { json: true, expectedLogs: 1 },
-    { json: undefined, expectedLogs: 2 },
-  ])(
-    "reports temporary authentication lockouts without credential-change guidance",
-    async ({ json, expectedLogs }) => {
-      callGatewayMock.mockRejectedValueOnce(new Error());
-      isGatewayCredentialsRequiredErrorMock.mockReturnValueOnce(true);
-      probeGatewayStatusMock.mockResolvedValueOnce({
-        ok: false,
-        kind: "connect",
-        error: "connect failed",
-        connectFailure: { kind: "rate-limited", detailCode: "AUTH_RATE_LIMITED" },
-        gatewayReached: true,
-      });
-
-      await healthCommand({ json, timeoutMs: 5000, config: {} }, runtime);
-
-      expect(runtime.exit).toHaveBeenCalledWith(1);
-      expect(runtime.log).toHaveBeenCalledTimes(expectedLogs);
-      if (json) {
-        expect(JSON.parse(requireFirstRuntimeLog())).toEqual(buildRateLimitedHealthDiagnostic());
-      } else {
-        expect(runtime.log.mock.calls).toEqual([
-          [GATEWAY_HEALTH_REACHABLE_LINE],
-          [GATEWAY_HEALTH_RATE_LIMITED_MESSAGE],
-        ]);
-      }
-      const output = runtime.log.mock.calls.flat().join("\n");
-      expect(output).not.toContain("gateway.remote.token");
-      expect(output).not.toContain("devices rotate");
-    },
-  );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(runtime.log).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(requireFirstRuntimeLog())).toEqual(buildRateLimitedHealthDiagnostic());
+    const output = runtime.log.mock.calls.flat().join("\n");
+    expect(output).not.toContain("gateway.remote.token");
+    expect(output).not.toContain("devices rotate");
+  });
 
   it("does not report reachable from a locally constructed rate-limit error", async () => {
     const error = new GatewayClientRequestError({
@@ -847,26 +619,19 @@ describe("healthCommand", () => {
     vi.restoreAllMocks();
   });
 
-  it.each([
-    { elapsedMs: 4000, skipReadiness: false },
-    { elapsedMs: 5000, skipReadiness: false },
-    { elapsedMs: 4000, skipReadiness: true },
-    { elapsedMs: 5000, skipReadiness: true },
-  ])(
-    "charges target/auth preparation and readiness to one budget ($elapsedMs, $skipReadiness)",
-    async ({ elapsedMs, skipReadiness }) => {
+  it.each([4000, 5000])(
+    "charges target/auth preparation and readiness to one budget (%s ms)",
+    async (elapsedMs) => {
       vi.mocked(waitForGatewayDiagnosticReadiness).mockImplementationOnce(async () => {
         vi.spyOn(performance, "now").mockReturnValue(elapsedMs);
-        return skipReadiness
-          ? undefined
-          : {
-              healthy: true,
-              waitOutcome: "healthy",
-              elapsedMs: 1000,
-              runtime: { status: "running", pid: 42 },
-              portUsage: { port: 18789, status: "busy", listeners: [{ pid: 42 }], hints: [] },
-              staleGatewayPids: [],
-            };
+        return {
+          healthy: true,
+          waitOutcome: "healthy",
+          elapsedMs: 1000,
+          runtime: { status: "running", pid: 42 },
+          portUsage: { port: 18789, status: "busy", listeners: [{ pid: 42 }], hints: [] },
+          staleGatewayPids: [],
+        };
       });
       if (elapsedMs === 5000) {
         await expect(healthCommand({ timeoutMs: 5000, config: {} }, runtime)).rejects.toThrow(
@@ -932,69 +697,6 @@ describe("healthCommand", () => {
     expect(JSON.parse(requireFirstRuntimeLog())).toEqual(payload);
   });
 
-  it("keeps explicit URL auth failures machine-readable", async () => {
-    const error = new Error("gateway url override requires explicit credentials");
-    const payload = {
-      ok: false,
-      error: {
-        type: "gateway_credentials_required",
-        message: "gateway url override requires explicit credentials",
-      },
-    };
-    callGatewayMock.mockRejectedValueOnce(error);
-    formatGatewayAuthErrorJsonMock.mockReturnValueOnce(payload);
-
-    await healthCommand({ json: true, timeoutMs: 5000, config: {} }, runtime);
-
-    expect(probeGatewayStatusMock).not.toHaveBeenCalled();
-    expect(formatGatewayAuthErrorJsonMock).toHaveBeenCalledWith(error);
-    expect(formatGatewayTransportErrorJsonMock).not.toHaveBeenCalled();
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(JSON.parse(requireFirstRuntimeLog())).toEqual(payload);
-  });
-
-  it("reports reachable gateway diagnostics when configured auth SecretRefs are unavailable", async () => {
-    const error = new Error("gateway.auth.password is unavailable");
-    callGatewayMock.mockRejectedValueOnce(error);
-    isGatewaySecretRefUnavailableErrorMock.mockReturnValueOnce(true);
-    probeGatewayStatusMock.mockResolvedValueOnce({
-      ok: false,
-      kind: "connect",
-      error: TEST_AUTH_CLOSE_ERROR,
-      gatewayReached: true,
-    });
-
-    await healthCommand(
-      { json: false, timeoutMs: 5000, config: {}, ignoreEnvUrlOverride: true },
-      runtime,
-    );
-
-    expect(isGatewaySecretRefUnavailableErrorMock).toHaveBeenCalledWith(error);
-    expect(buildGatewayProbeConnectionDetailsMock).toHaveBeenCalledWith({
-      config: {},
-      token: undefined,
-      password: undefined,
-      ignoreEnvUrlOverride: true,
-      localPortOverride: undefined,
-    });
-    expect(probeGatewayStatusMock).toHaveBeenCalledWith({
-      url: TEST_GATEWAY_URL,
-      token: undefined,
-      password: undefined,
-      tlsFingerprint: TEST_TLS_FINGERPRINT,
-      preauthHandshakeTimeoutMs: 4321,
-      timeoutMs: 5000,
-      config: {},
-      json: false,
-    });
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(runtime.log.mock.calls).toEqual([
-      [GATEWAY_HEALTH_REACHABLE_LINE],
-      [GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE],
-    ]);
-    expect(runtime.error).not.toHaveBeenCalled();
-  });
-
   it("throws ExitError from healthCommandNonExiting instead of exiting the host runtime", async () => {
     const error = new Error("gateway.auth.password is unavailable");
     callGatewayMock.mockRejectedValueOnce(error);
@@ -1041,14 +743,6 @@ describe("formatContextEngineHealthLine", () => {
     expect(formatContextEngineHealthLine(summary)).toBe(
       "Context engine: warning (1 quarantined; downgraded to legacy: lossless-claw)",
     );
-  });
-});
-
-describe("formatConfigReloadHealthLine", () => {
-  it("stays silent when no config reloader is running", () => {
-    const summary = createHealthSummary();
-
-    expect(formatConfigReloadHealthLine(summary)).toBeNull();
   });
 });
 

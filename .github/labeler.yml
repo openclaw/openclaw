@@ -161,6 +161,18 @@
           - "extensions/migrate-claude/**"
           - "docs/cli/migrate.md"
           - "docs/install/migrating-claude.md"
+"plugin: mcp-relay":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/mcp-relay/**"
+          - "docs/plugins/mcp-relay.md"
+          - "docs/plugins/reference/mcp-relay.md"
+"plugin: muse":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/muse/**"
+          - "docs/plugins/muse.md"
+          - "docs/plugins/reference/muse.md"
 "plugin: mxc":
   - changed-files:
       - any-glob-to-any-file:
@@ -287,6 +299,12 @@
       - any-glob-to-any-file:
           - "extensions/whatsapp/**"
           - "docs/channels/whatsapp.md"
+"channel: x":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/x/**"
+          - "docs/channels/x.md"
+          - "docs/plugins/reference/x.md"
 "channel: zalo":
   - changed-files:
       - any-glob-to-any-file:
@@ -349,14 +367,6 @@
           - "packages/gateway-protocol/src/**"
           - "src/daemon/**"
           - "docs/gateway/**"
-
-"fleet":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "src/fleet/**"
-          - "src/cli/fleet-cli/**"
-          - "docs/gateway/multi-tenant-hosting.md"
-          - "docs/cli/fleet.md"
 
 "docs":
   - changed-files:

@@ -21,36 +21,35 @@ function pipedChildFixture() {
 }
 
 describe("gateway benchmark child teardown", () => {
-  it("classifies a queued child failure before sending teardown signals", async () => {
+  it.each([
+    { queued: true, exitCode: 7 },
+    { queued: false, exitCode: 8 },
+  ])("classifies pre-teardown failure with queued=$queued", async ({ queued, exitCode }) => {
     const child = childFixture();
+    const exit = () => {
+      child.exitCode = exitCode;
+      child.emit("exit", exitCode, null);
+    };
+    if (!queued) {
+      child.kill.mockImplementation(() => {
+        setImmediate(exit);
+        return false;
+      });
+    }
     const stopped = stopChild(child as unknown as ChildProcess);
-    queueMicrotask(() => {
-      child.exitCode = 7;
-      child.emit("exit", 7, null);
-    });
+    if (queued) {
+      queueMicrotask(exit);
+    }
     await expect(stopped).resolves.toEqual({
       exitedBeforeTeardown: true,
-      exitCode: 7,
+      exitCode,
       signal: null,
     });
-    expect(child.kill).not.toHaveBeenCalled();
-  });
-
-  it("classifies failed teardown signaling as a pre-teardown child exit", async () => {
-    const child = childFixture();
-    child.kill.mockImplementation(() => {
-      setImmediate(() => {
-        child.exitCode = 8;
-        child.emit("exit", 8, null);
-      });
-      return false;
-    });
-    await expect(stopChild(child as unknown as ChildProcess)).resolves.toEqual({
-      exitedBeforeTeardown: true,
-      exitCode: 8,
-      signal: null,
-    });
-    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    if (queued) {
+      expect(child.kill).not.toHaveBeenCalled();
+    } else {
+      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    }
   });
 
   it("bounds teardown and releases IPC when the child ignores termination signals", async () => {

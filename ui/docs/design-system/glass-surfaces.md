@@ -42,7 +42,7 @@ Popovers and floating overlays reduce blur slightly:
 backdrop-filter: blur(
   8px
 ); /* components.css action menu, cron-quick-create.css modal backdrop, workboard.css modal backdrop */
-backdrop-filter: blur(10px); /* skill-workshop.css revision dialog, dreams.css media lightbox */
+backdrop-filter: blur(10px); /* dreams.css media lightbox */
 backdrop-filter: blur(14px); /* components.css markdown preview dialog backdrop */
 ```
 

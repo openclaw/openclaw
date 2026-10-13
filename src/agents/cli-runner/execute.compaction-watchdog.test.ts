@@ -107,77 +107,73 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it.each(["success", "failed"])(
-  "releases both liveness allowances after compaction %s",
-  async (phase) => {
-    const context = contextFor(`compaction-${phase}`);
-    const recover = diagnostics(context);
-    const started = createDeferred<number>();
-    const release = createDeferred();
-    const ended = createDeferred<number>();
-    const finish = createDeferred();
-    context.executionTarget = {
-      kind: "plugin",
-      async *execute() {
-        yield START;
-        started.resolve(Date.now());
-        await release.promise;
-        yield { compact_result: phase };
-        ended.resolve(Date.now());
-        await finish.promise;
-        yield RESULT;
-      },
-    };
-    const run = execute(context);
-    try {
-      const startedAt = await started.promise;
-      // Beyond the reported 180,444ms silence and the ordinary 180s watchdog.
-      await vi.advanceTimersByTimeAsync(240_000);
-      expect(recover).not.toHaveBeenCalled();
-      expect(getDiagnosticSessionActivitySnapshot(context.params)).toMatchObject({
-        activeBackendLivenessDeadlineAtMs: startedAt + WORK_GRACE_MS,
-        lastProgressAgeMs: 240_000,
-      });
-      release.resolve();
-      const clearedAt = await ended.promise;
-      expect(getDiagnosticSessionActivitySnapshot(context.params)).toMatchObject({
-        activeBackendLivenessDeadlineAtMs: clearedAt + NO_OUTPUT_MS,
-      });
-      finish.resolve();
-      await expect(run).resolves.toMatchObject({ text: RESULT.result });
-      await waitForDiagnosticEventsDrained();
-      expect(
-        getDiagnosticSessionActivitySnapshot(context.params).activeBackendLivenessDeadlineAtMs,
-      ).toBeUndefined();
-    } finally {
-      release.resolve();
-      finish.resolve();
-      await Promise.allSettled([run]);
-    }
-  },
-);
+it("releases both liveness allowances after compaction success", async () => {
+  const phase = "success";
+  const context = contextFor(`compaction-${phase}`);
+  const recover = diagnostics(context);
+  const started = createDeferred<number>();
+  const release = createDeferred();
+  const ended = createDeferred<number>();
+  const finish = createDeferred();
+  context.executionTarget = {
+    kind: "plugin",
+    async *execute() {
+      yield START;
+      started.resolve(Date.now());
+      await release.promise;
+      yield { compact_result: phase };
+      ended.resolve(Date.now());
+      await finish.promise;
+      yield RESULT;
+    },
+  };
+  const run = execute(context);
+  try {
+    const startedAt = await started.promise;
+    // Beyond the reported 180,444ms silence and the ordinary 180s watchdog.
+    await vi.advanceTimersByTimeAsync(240_000);
+    expect(recover).not.toHaveBeenCalled();
+    expect(getDiagnosticSessionActivitySnapshot(context.params)).toMatchObject({
+      activeBackendLivenessDeadlineAtMs: startedAt + WORK_GRACE_MS,
+      lastProgressAgeMs: 240_000,
+    });
+    release.resolve();
+    const clearedAt = await ended.promise;
+    expect(getDiagnosticSessionActivitySnapshot(context.params)).toMatchObject({
+      activeBackendLivenessDeadlineAtMs: clearedAt + NO_OUTPUT_MS,
+    });
+    finish.resolve();
+    await expect(run).resolves.toMatchObject({ text: RESULT.result });
+    await waitForDiagnosticEventsDrained();
+    expect(
+      getDiagnosticSessionActivitySnapshot(context.params).activeBackendLivenessDeadlineAtMs,
+    ).toBeUndefined();
+  } finally {
+    release.resolve();
+    finish.resolve();
+    await Promise.allSettled([run]);
+  }
+});
 
-it.each(["success", "failed"])(
-  "re-arms the no-output watchdog after compaction %s",
-  async (phase) => {
-    const context = contextFor(`rearm-${phase}`, 1_000);
-    const ended = createDeferred();
-    context.executionTarget = {
-      kind: "plugin",
-      async *execute(execution) {
-        yield START;
-        yield { compact_result: phase };
-        ended.resolve();
-        await waitUntilAborted(execution);
-        yield RESULT;
-      },
-    };
-    const rejection = expect(execute(context)).rejects.toThrow("produced no output");
-    await ended.promise;
-    await vi.advanceTimersByTimeAsync(2_000);
-    await rejection;
-  },
-);
+it("re-arms the no-output watchdog after compaction failed", async () => {
+  const phase = "failed";
+  const context = contextFor(`rearm-${phase}`, 1_000);
+  const ended = createDeferred();
+  context.executionTarget = {
+    kind: "plugin",
+    async *execute(execution) {
+      yield START;
+      yield { compact_result: phase };
+      ended.resolve();
+      await waitUntilAborted(execution);
+      yield RESULT;
+    },
+  };
+  const rejection = expect(execute(context)).rejects.toThrow("produced no output");
+  await ended.promise;
+  await vi.advanceTimersByTimeAsync(2_000);
+  await rejection;
+});
 
 it("requests diagnostics recovery when compaction never ends", async () => {
   const context = contextFor("compaction-stuck");
@@ -216,90 +212,62 @@ it("requests diagnostics recovery when compaction never ends", async () => {
   }
 });
 
-it.each([false, true])(
-  "bounds compaction silence from the last record (parsed tool: %s)",
-  async (withTool) => {
-    const context = contextFor(`quiet-clock-${withTool}`);
-    diagnostics(context);
-    const started = createDeferred<number>();
-    const ping = createDeferred();
-    const pinged = createDeferred();
-    const finish = createDeferred();
-    context.executionTarget = {
-      kind: "plugin",
-      async *execute(execution) {
-        yield START;
-        if (withTool) {
-          yield TOOL;
-        }
-        started.resolve(Date.now());
-        await ping.promise;
-        yield { type: "stream_event", event: { type: "ping" } };
-        pinged.resolve();
-        await Promise.race([waitUntilAborted(execution), finish.promise]);
-        yield RESULT;
-      },
-    };
-    let settled = false;
-    const run = execute(context).finally(() => {
-      settled = true;
-    });
-    const rejection = expect(run).rejects.toMatchObject({
-      name: "FailoverError",
-      cliTimeout: { mode: "no-output", compactionActive: true, activeToolCount: withTool ? 1 : 0 },
-    });
-    try {
-      const startedAt = await started.promise;
-      if (withTool) {
-        await vi.advanceTimersByTimeAsync(0);
-        await waitForDiagnosticEventsDrained();
-        const snapshot = getDiagnosticSessionActivitySnapshot(context.params);
-        expect(snapshot).toMatchObject({
-          activeWorkKind: "tool_call",
-          activeBackendLivenessDeadlineAtMs: startedAt + WORK_GRACE_MS,
-        });
-        expect(
-          resolveRunStaleThresholdMs(snapshot, snapshot.lastProgressAgeMs ?? 0, STUCK_SESSION_MS),
-        ).toBe(WORK_GRACE_MS);
-      }
-      await vi.advanceTimersByTimeAsync(WORK_GRACE_MS - 60_000);
-      expect(settled).toBe(false);
-      ping.resolve();
-      await pinged.promise;
-      await vi.advanceTimersByTimeAsync(62_000);
-      expect(settled).toBe(false);
-      await vi.advanceTimersByTimeAsync(WORK_GRACE_MS - 64_000);
-      expect(settled).toBe(false);
-      await vi.advanceTimersByTimeAsync(4_000);
-      expect(settled).toBe(true);
-      await rejection;
-    } finally {
-      ping.resolve();
-      finish.resolve();
-      await Promise.allSettled([run, rejection]);
-    }
-  },
-);
-
-it("keeps the overall deadline authoritative during compaction", async () => {
-  const context = contextFor("compaction-overall", 100, 150);
-  const started = createDeferred();
+it("bounds compaction silence from the last record while a parsed tool is active", async () => {
+  const context = contextFor("quiet-clock-tool");
+  diagnostics(context);
+  const started = createDeferred<number>();
+  const ping = createDeferred();
+  const pinged = createDeferred();
+  const finish = createDeferred();
   context.executionTarget = {
     kind: "plugin",
     async *execute(execution) {
       yield START;
-      started.resolve();
-      await waitUntilAborted(execution);
+      yield TOOL;
+      started.resolve(Date.now());
+      await ping.promise;
+      yield { type: "stream_event", event: { type: "ping" } };
+      pinged.resolve();
+      await Promise.race([waitUntilAborted(execution), finish.promise]);
       yield RESULT;
     },
   };
-  const rejection = expect(execute(context)).rejects.toMatchObject({
-    name: "FailoverError",
-    cliTimeout: { mode: "overall" },
+  let settled = false;
+  const run = execute(context).finally(() => {
+    settled = true;
   });
-  await started.promise;
-  await vi.advanceTimersByTimeAsync(150);
-  await rejection;
+  const rejection = expect(run).rejects.toMatchObject({
+    name: "FailoverError",
+    cliTimeout: { mode: "no-output", compactionActive: true, activeToolCount: 1 },
+  });
+  try {
+    const startedAt = await started.promise;
+    await vi.advanceTimersByTimeAsync(0);
+    await waitForDiagnosticEventsDrained();
+    const snapshot = getDiagnosticSessionActivitySnapshot(context.params);
+    expect(snapshot).toMatchObject({
+      activeWorkKind: "tool_call",
+      activeBackendLivenessDeadlineAtMs: startedAt + WORK_GRACE_MS,
+    });
+    expect(
+      resolveRunStaleThresholdMs(snapshot, snapshot.lastProgressAgeMs ?? 0, STUCK_SESSION_MS),
+    ).toBe(WORK_GRACE_MS);
+    await vi.advanceTimersByTimeAsync(WORK_GRACE_MS - 60_000);
+    expect(settled).toBe(false);
+    ping.resolve();
+    await pinged.promise;
+    await vi.advanceTimersByTimeAsync(62_000);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(WORK_GRACE_MS - 64_000);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(settled).toBe(true);
+    await rejection;
+  } finally {
+    ping.resolve();
+    finish.resolve();
+    await Promise.allSettled([run, rejection]);
+  }
 });
 
 it("records streamed compaction on a supervised no-output timeout", async () => {

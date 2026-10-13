@@ -1,12 +1,11 @@
 // Trajectory runtime records bounded session events into SQLite-backed storage.
 import { hash } from "node:crypto";
 import { isProxy } from "node:util/types";
+import { projectDiagnosticValue, type DiagnosticProjectionPolicy } from "@openclaw/ai/diagnostics";
 import { createDiagnosticRecord } from "@openclaw/ai/internal/shared";
-import { sanitizeDiagnosticPayload } from "../agents/payload-redaction.js";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { redactSecrets } from "../logging/redact.js";
-import { getSecretRedactionRegistryRevision } from "../logging/secret-redaction-registry.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
@@ -33,13 +32,6 @@ type TrajectoryRuntimeInit = {
   workspaceDir?: string;
 };
 
-type TrajectoryRuntimeRecorder = {
-  enabled: true;
-  recordEvent: (type: string, data?: Record<string, unknown>) => void;
-  flush: () => Promise<void>;
-  describeFlushState: () => string | undefined;
-};
-
 const TRAJECTORY_RUNTIME_DATA_STRING_MAX_CHARS = 32_768;
 const TRAJECTORY_RUNTIME_DATA_ARRAY_MAX_ITEMS = 64;
 const TRAJECTORY_RUNTIME_DATA_OBJECT_MAX_KEYS = 64;
@@ -48,7 +40,20 @@ const TRAJECTORY_RUNTIME_FINAL_PROMPT_MAX_BYTES = 4 * 1024;
 const TRAJECTORY_TOOL_CACHE_MAX_CHARS = 16_384;
 const TRAJECTORY_TOOL_CACHE_MAX_ENTRIES = 256;
 const toolParameterProjections = new Map<string, string>();
-let toolParameterSecretRevision = 0;
+const TRAJECTORY_PAYLOAD_PROJECTION = {
+  redactCredentials: false,
+  omitField: (key) => key === "providerReplay",
+  propertyScope: "enumerable",
+  projectBinary: (binary) => ({
+    redacted: "<redacted>",
+    bytes: binary.byteLength,
+    sha256: sha256Hex(binary),
+  }),
+  projectMedia: (key, media) => ({
+    [key]: "<redacted>",
+    ...(media.source === undefined ? {} : { bytes: media.bytes, sha256: sha256Hex(media.source) }),
+  }),
+} satisfies DiagnosticProjectionPolicy;
 
 // Oversized events first shed repeated conversation state while keeping the
 // rest of their schema-v1 payload. The compact fallback then preserves keys
@@ -218,27 +223,20 @@ function limitTrajectoryPayloadValue(
 
 function sanitizeTrajectoryPayload(data: Record<string, unknown>): Record<string, unknown> {
   const finalPromptText = data.finalPromptText;
-  const redactedFinalPromptText =
-    typeof finalPromptText === "string" ? (redactSecrets(finalPromptText) as string) : undefined;
-  const boundedData =
-    typeof finalPromptText === "string" &&
-    typeof redactedFinalPromptText === "string" &&
-    (Buffer.byteLength(finalPromptText, "utf8") > TRAJECTORY_RUNTIME_FINAL_PROMPT_MAX_BYTES ||
-      Buffer.byteLength(redactedFinalPromptText, "utf8") >
-        TRAJECTORY_RUNTIME_FINAL_PROMPT_MAX_BYTES)
-      ? {
-          ...data,
-          finalPromptText: truncateUtf8Prefix(
-            redactedFinalPromptText,
-            TRAJECTORY_RUNTIME_FINAL_PROMPT_MAX_BYTES,
-          ),
-          finalPromptTextOriginalLength: finalPromptText.length,
-        }
-      : typeof redactedFinalPromptText === "string"
-        ? { ...data, finalPromptText: redactedFinalPromptText }
-        : data;
-  return redactSecrets(
-    sanitizeDiagnosticPayload(limitTrajectoryPayloadValue(boundedData)),
+  let boundedData = data;
+  if (typeof finalPromptText === "string") {
+    boundedData = { ...data };
+    if (Buffer.byteLength(finalPromptText, "utf8") > TRAJECTORY_RUNTIME_FINAL_PROMPT_MAX_BYTES) {
+      boundedData.finalPromptText = truncateUtf8Prefix(
+        finalPromptText,
+        TRAJECTORY_RUNTIME_FINAL_PROMPT_MAX_BYTES,
+      );
+      boundedData.finalPromptTextOriginalLength = finalPromptText.length;
+    }
+  }
+  return projectDiagnosticValue(
+    limitTrajectoryPayloadValue(boundedData),
+    TRAJECTORY_PAYLOAD_PROJECTION,
   ) as Record<string, unknown>;
 }
 
@@ -280,16 +278,11 @@ function projectTrajectoryToolParameters(parameters: unknown): unknown {
   const bounded = limitTrajectoryPayloadValue(parameters);
   // Custom array operations can return opaque objects; preserve their diagnostic projection.
   if (!isTrajectoryJsonData(bounded)) {
-    return sanitizeDiagnosticPayload(bounded);
-  }
-  const revision = getSecretRedactionRegistryRevision();
-  if (revision !== toolParameterSecretRevision) {
-    toolParameterProjections.clear();
-    toolParameterSecretRevision = revision;
+    return projectDiagnosticValue(bounded, TRAJECTORY_PAYLOAD_PROJECTION);
   }
   const content = JSON.stringify(bounded);
   if (content.length > TRAJECTORY_TOOL_CACHE_MAX_CHARS) {
-    return sanitizeDiagnosticPayload(bounded);
+    return projectDiagnosticValue(bounded, TRAJECTORY_PAYLOAD_PROJECTION);
   }
   // Content owns invalidation: tools can be rebuilt or edited in place between requests.
   const key = hash("sha256", content);
@@ -297,8 +290,7 @@ function projectTrajectoryToolParameters(parameters: unknown): unknown {
   if (cached !== undefined) {
     return JSON.parse(cached);
   }
-  // This policy is fixed; the recorder still applies current configured/exact secret redaction.
-  const projected = sanitizeDiagnosticPayload(bounded);
+  const projected = projectDiagnosticValue(bounded, TRAJECTORY_PAYLOAD_PROJECTION);
   const serialized = JSON.stringify(projected);
   if (serialized.length <= TRAJECTORY_TOOL_CACHE_MAX_CHARS) {
     if (toolParameterProjections.size >= TRAJECTORY_TOOL_CACHE_MAX_ENTRIES) {
@@ -328,10 +320,13 @@ export function toTrajectoryToolDefinitions(
     .toSorted((left, right) => left.name.localeCompare(right.name));
 }
 
-export function createTrajectoryRuntimeRecorder(
-  params: TrajectoryRuntimeInit,
-): TrajectoryRuntimeRecorder | null {
-  const env = params.env ?? process.env;
+export async function createTrajectoryRuntimeRecorder(input: TrajectoryRuntimeInit) {
+  const params = {
+    ...input,
+    env: { ...(input.env ?? process.env) },
+    sessionTarget: input.sessionTarget && { ...input.sessionTarget },
+  };
+  const env = params.env;
   // Trajectory capture is now default-on. The env var remains as an explicit
   // override so operators can still disable recording with OPENCLAW_TRAJECTORY=0.
   const enabled = parseBooleanValue(env.OPENCLAW_TRAJECTORY) ?? true;
@@ -343,7 +338,7 @@ export function createTrajectoryRuntimeRecorder(
     1,
     Math.floor(params.maxRuntimeFileBytes ?? TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES),
   );
-  const sink = createSqliteTrajectoryRuntimeSink({
+  const sink = await createSqliteTrajectoryRuntimeSink({
     env,
     maxRuntimeFileBytes,
     sessionFile: params.sessionFile,
@@ -352,14 +347,15 @@ export function createTrajectoryRuntimeRecorder(
     sessionTarget: params.sessionTarget,
     assertCommitAllowed: params.assertCommitAllowed,
   });
+  params.assertCommitAllowed?.();
   if (!sink) {
     return null;
   }
   let seq = 0;
 
   return {
-    enabled: true,
-    recordEvent: (type, data) => {
+    enabled: true as const,
+    recordEvent: (type: string, data?: Record<string, unknown>) => {
       const nextSeq = seq + 1;
       const event: TrajectoryEvent = {
         traceSchema: "openclaw-trajectory",
@@ -387,13 +383,10 @@ export function createTrajectoryRuntimeRecorder(
       if (!boundedLine) {
         return;
       }
-      const boundedEvent = JSON.parse(boundedLine) as TrajectoryEvent;
       seq = nextSeq;
-      sink.write(boundedEvent, boundedLine);
+      sink.write(event, boundedLine);
     },
-    flush: async () => {
-      await sink.flush();
-    },
-    describeFlushState: () => sink.describeFlushState(),
+    flush: sink.flush,
+    describeFlushState: sink.describeFlushState,
   };
 }

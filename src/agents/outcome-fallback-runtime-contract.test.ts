@@ -6,14 +6,26 @@ import {
   OUTCOME_FALLBACK_RUNTIME_CONTRACT,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { applyInputProvenanceToUserMessage } from "../sessions/input-provenance.js";
 import {
   classifyEmbeddedAgentRunResultForModelFallback,
   mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
 } from "./embedded-agent-runner/result-fallback-classifier.js";
+import { resolveEmbeddedRunTerminal } from "./embedded-agent-runner/run/terminal-resolution.js";
+import {
+  emptyAssistant,
+  makeTerminalInput,
+} from "./embedded-agent-runner/run/terminal-resolution.test-support.js";
 import { runWithModelFallback } from "./model-fallback-runner.js";
+import {
+  createMockUsage,
+  makeEmbeddedRunnerAttempt,
+} from "./test-helpers/embedded-agent-runner-e2e-fixtures.js";
 
+// mock-isolation: Outcome classification skips auth runtime and must not initialize credential-source state.
 vi.mock("./auth-profiles/source-check.js", () => ({
-  hasAnyAuthProfileStoreSource: () => false,
+  hasAnyAuthProfileStoreSourceAsync: () => false,
 }));
 
 const contractFallbackOverride = [
@@ -41,6 +53,85 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
       skipAuthProfileRuntime: true,
     });
   });
+
+  it.each([
+    ["optional", undefined, 1, 1],
+    ["required", undefined, 1, 2],
+    ["required", "empty", 3, 6],
+    ["required", "reasoning-only", 3, 9],
+  ] as const)(
+    "resolves a normal stop for %s replies with harness classification %s",
+    async (expectation, classification, expectedModels, expectedRequests) => {
+      const prompt = "The result is already incorporated. No new update.";
+      const provenance = { kind: "inter_session" as const, sourceTool: "sessions_send" };
+      // Recorded shape: fresh inter-session input, response.completed, blank text,
+      // four output tokens, no tool calls or compaction. Content is synthetic.
+      const assistant = emptyAssistant({
+        ...(classification === "reasoning-only"
+          ? { content: [{ type: "thinking" as const, thinking: "checking" }] }
+          : {}),
+        stopReason: "stop",
+        usage: createMockUsage(89, 4),
+      });
+      let modelRequests = 0;
+      const run = vi.fn(async () => {
+        const attempt = makeEmbeddedRunnerAttempt({
+          assistantTexts: [],
+          agentHarnessResultClassification: classification,
+          messagesSnapshot: [
+            applyInputProvenanceToUserMessage(
+              { role: "user", content: prompt, timestamp: 0 },
+              provenance,
+            ),
+            assistant,
+          ],
+          lastAssistant: assistant,
+          currentAttemptAssistant: assistant,
+          currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+        });
+        const input = makeTerminalInput({
+          attempt,
+          runParams: {
+            prompt,
+            inputProvenance: provenance,
+            ...(expectation === "required" ? { terminalReplyExpectation: expectation } : {}),
+          },
+        });
+        for (;;) {
+          modelRequests += 1;
+          const terminal = await resolveEmbeddedRunTerminal(input);
+          if (terminal.action === "complete") {
+            return terminal.result;
+          }
+        }
+      });
+
+      const result = await runWithModelFallback({
+        cfg: undefined,
+        provider: "openai",
+        model: "gpt-5.6-sol",
+        fallbacksOverride: ["openai/gpt-5.6-terra", "openai/gpt-5.6-luna"],
+        skipAuthProfileRuntime: true,
+        classifyResult: classifyEmbeddedAgentRunResultForModelFallback,
+        run,
+      });
+
+      expect(run).toHaveBeenCalledTimes(expectedModels);
+      expect(modelRequests).toBe(expectedRequests);
+      expect(result.model).toBe(classification ? "gpt-5.6-luna" : "gpt-5.6-sol");
+      expect(result.attempts).toHaveLength(classification ? 3 : 0);
+      if (expectation === "optional") {
+        expect(result.result.meta.error).toBeUndefined();
+        expect(result.result.meta.terminalReplyKind).toBe("silent-empty");
+        expect(result.result.payloads).toEqual([{ text: SILENT_REPLY_TOKEN }]);
+      } else {
+        expect(result.result.meta.error?.kind).toBe("incomplete_turn");
+        expect(result.result.payloads).toEqual([
+          { text: "⚠️ Agent couldn't generate a response. Please try again.", isError: true },
+        ]);
+      }
+    },
+  );
 
   const fallbackClassificationCases = [
     ["empty", "empty_result"],

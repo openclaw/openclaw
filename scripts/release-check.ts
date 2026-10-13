@@ -33,7 +33,7 @@ import { importToolingTypeScript } from "./lib/import-tooling-typescript.mts";
 import { collectPackUnpackedSizeFindings } from "./lib/npm-pack-budget.mts";
 import { readPositiveEnvInt } from "./lib/numeric-options.mjs";
 import { isLegacyPluginDependencyInstallStagePath } from "./lib/package-dist-inventory.ts";
-import { collectBundledPluginPackageDependencySpecs } from "./lib/plugin-package-dependencies.mts";
+import { collectBundledPluginPackageDependencyErrors } from "./lib/plugin-package-dependencies.mts";
 import { runInstalledWorkspaceBootstrapSmoke } from "./lib/workspace-bootstrap-smoke.mts";
 import { resolveNpmRunner, type NpmRunnerParams } from "./npm-runner.mts";
 import {
@@ -259,20 +259,9 @@ function collectBundledExtensions(): BundledExtension[] {
 function checkBundledExtensionMetadata() {
   const extensions = collectBundledExtensions();
   const manifestErrors = collectBundledExtensionManifestErrors(extensions);
-  const bundledPackageDependencySpecs = collectBundledPluginPackageDependencySpecs(
-    resolve("extensions"),
-  );
-  const dependencyConflictErrors = [...bundledPackageDependencySpecs.entries()]
-    .flatMap(([dependencyName, record]) =>
-      record.conflicts.map(
-        (conflict) =>
-          `bundled plugin package dependency '${dependencyName}' has conflicting specs: ${record.pluginIds.join(", ")} use '${record.spec}', ${conflict.pluginId} uses '${conflict.spec}'.`,
-      ),
-    )
-    .toSorted((left, right) => left.localeCompare(right));
   checkValidationErrors("bundled extension manifest", [
     ...manifestErrors,
-    ...dependencyConflictErrors,
+    ...collectBundledPluginPackageDependencyErrors(resolve("extensions")),
   ]);
 }
 
@@ -293,30 +282,12 @@ export function resolveReleaseNpmCommand(
   return resolveNpmRunner({ ...params, npmArgs: args });
 }
 
-function execNpm(
-  args: string[],
-  options: {
-    cwd?: string;
-    encoding: BufferEncoding;
-    env?: NodeJS.ProcessEnv;
-    maxBuffer?: number;
-    stdio: "inherit" | ["ignore", "pipe", "pipe"];
-  },
-): string {
+function execNpm(args: string[], options: Parameters<typeof runReleaseCheckCommand>[1]): string {
   const invocation = resolveReleaseNpmCommand(args, { env: options.env ?? process.env });
   return runReleaseCheckCommand(invocation, options);
 }
 
-function execPnpm(
-  args: string[],
-  options: {
-    cwd?: string;
-    encoding: BufferEncoding;
-    env?: NodeJS.ProcessEnv;
-    maxBuffer?: number;
-    stdio: "inherit" | ["ignore", "pipe", "pipe"];
-  },
-): string {
+function execPnpm(args: string[], options: Parameters<typeof runReleaseCheckCommand>[1]): string {
   const invocation = resolvePnpmRunner({ env: options.env ?? process.env, pnpmArgs: args });
   return runReleaseCheckCommand(invocation, options);
 }
@@ -339,8 +310,6 @@ async function packRootPackage(packDestination: string): Promise<string> {
       new URL("./openclaw-prepack.ts", import.meta.url).href,
       import.meta.url,
     )) as typeof OpenClawPrepack;
-  // The canonical packer skips package hooks; retain prepared prepack's compatibility gate.
-  execPnpm(["update:compat:check"], { encoding: "utf8", stdio: "inherit" });
   const errors = collectPreparedPrepackErrorsFromDisk();
   if (errors.length > 0) {
     throw new Error(
@@ -813,6 +782,13 @@ export function writePackedBundledPluginActivationConfig(homeDir: string): void 
     configPath,
     `${JSON.stringify(
       {
+        agents: {
+          defaults: {
+            models: {
+              "openai/*": { agentRuntime: { id: "openclaw" } },
+            },
+          },
+        },
         channels: {
           telegram: {
             enabled: true,
@@ -888,24 +864,15 @@ function runPackedCliSmoke(params: {
   const trustedCmdPath = join(windowsRoot, "System32", "cmd.exe");
 
   for (const args of PACKED_CLI_SMOKE_COMMANDS) {
-    if (process.platform === "win32") {
-      runReleaseCheckCommand(
-        {
-          command: trustedCmdPath,
-          args: ["/d", "/s", "/c", buildCmdExeCommandLine(binaryPath, [...args])],
-          shell: false,
-          windowsVerbatimArguments: true,
-        },
-        {
-          cwd: params.cwd,
-          stdio: "inherit",
-          env,
-        },
-      );
-      continue;
-    }
     runReleaseCheckCommand(
-      { command: binaryPath, args: [...args], shell: false },
+      process.platform === "win32"
+        ? {
+            command: trustedCmdPath,
+            args: ["/d", "/s", "/c", buildCmdExeCommandLine(binaryPath, [...args])],
+            shell: false,
+            windowsVerbatimArguments: true,
+          }
+        : { command: binaryPath, args: [...args], shell: false },
       {
         cwd: params.cwd,
         stdio: "inherit",

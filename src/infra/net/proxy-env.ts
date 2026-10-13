@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 // Proxy environment helpers mirror undici EnvHttpProxyAgent selection while
 // adding OpenClaw NO_PROXY CIDR/wildcard bypass checks.
 import { readTrimmedStringAlias } from "../../utils/string-readers.js";
@@ -24,11 +25,7 @@ function readProxyEnvValue(
   // Empty lowercase env vars intentionally shadow uppercase values, matching
   // undici's EnvHttpProxyAgent precedence.
   const lower = env[key];
-  const value = typeof lower === "string" ? lower : env[key.toUpperCase()];
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  return value.trim() || undefined;
+  return normalizeOptionalString(typeof lower === "string" ? lower : env[key.toUpperCase()]);
 }
 
 /** Explicit proxy option shape accepted by undici EnvHttpProxyAgent. */
@@ -92,21 +89,11 @@ export function shouldUseEnvHttpProxyForUrl(
   targetUrl: string,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  let parsed: URL;
-  let protocol: "http" | "https";
-  try {
-    parsed = new URL(targetUrl);
-    if (parsed.protocol === "http:") {
-      protocol = "http";
-    } else if (parsed.protocol === "https:") {
-      protocol = "https";
-    } else {
-      return false;
-    }
-  } catch {
+  const parsed = URL.parse(targetUrl);
+  if (!parsed || (parsed.protocol !== "http:" && parsed.protocol !== "https:")) {
     return false;
   }
-
+  const protocol = parsed.protocol === "https:" ? "https" : "http";
   return hasEnvHttpProxyConfigured(protocol, env) && !matchesNoProxy(parsed, env);
 }
 
@@ -148,10 +135,8 @@ export function matchesNoProxy(
     return false;
   }
 
-  let parsed: URL;
-  try {
-    parsed = targetUrl instanceof URL ? targetUrl : new URL(targetUrl);
-  } catch {
+  const parsed = targetUrl instanceof URL ? targetUrl : URL.parse(targetUrl);
+  if (!parsed) {
     return false;
   }
 

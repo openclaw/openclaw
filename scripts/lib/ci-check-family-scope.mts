@@ -24,6 +24,8 @@ type CiCheckFamilyScope = {
   fastTasks: string[];
   additionalGroups: string[];
   baselineRatchets: boolean;
+  madgeImportCycles: boolean;
+  kyselyGuardrails: boolean;
   lint: boolean;
   types: boolean;
 };
@@ -35,7 +37,8 @@ export function resolveCiCheckFamilyScope(changedPaths: readonly string[]): CiCh
     (file) =>
       file === "openclaw.mjs" ||
       file === "test/openclaw-launcher.e2e.test.ts" ||
-      /^src\/plugins\/plugin-module-generation(?:\.|-)/u.test(file),
+      /^src\/plugins\/plugin-module-generation(?:\.|-)/u.test(file) ||
+      file.startsWith("src/infra/sqlite-existing-database."),
   );
   // Configuration and shared fixtures can change scanner inputs or arbitrary
   // consumers; path ownership alone cannot establish their import closure.
@@ -59,6 +62,8 @@ export function resolveCiCheckFamilyScope(changedPaths: readonly string[]): CiCh
       fastTasks: ["bundled-protocol", ...(bunLauncher ? ["bun-launcher"] : [])],
       additionalGroups: [...ADDITIONAL_GROUPS],
       baselineRatchets: true,
+      madgeImportCycles: true,
+      kyselyGuardrails: true,
       lint: true,
       types: true,
     };
@@ -120,6 +125,10 @@ export function resolveCiCheckFamilyScope(changedPaths: readonly string[]): CiCh
         (group === "runtime-topology-architecture" && (source || code || nativeStorage)),
     ),
     baselineRatchets: code || runtimeSource || inventoryDocs,
+    madgeImportCycles: matches(/\.(?:[cm]?ts|tsx)$/u),
+    kyselyGuardrails: paths.some(
+      (path) => SOURCE_PATH_RE.test(path) && /\.(?:[cm]?ts|tsx)$/u.test(path),
+    ),
     // The changed-lint row also owns formatting for YAML, JSON5, and other data.
     lint: true,
     types,

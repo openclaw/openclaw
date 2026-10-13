@@ -2,7 +2,10 @@ import { Buffer } from "node:buffer";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
+import {
+  evaluateControlUiContext,
+  getControlUiContextHandle,
+} from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   captureControlUiE2eFailureDiagnostics,
@@ -121,7 +124,7 @@ suite.define(() => {
       if (captureProofEnabled) {
         await page.waitForTimeout(400);
       }
-      await composer.press("Control+Enter");
+      await composer.press("Control+Shift+Enter");
 
       await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({
         params: { agentId: "main", message: `run this separately on ${label}` },
@@ -212,8 +215,28 @@ suite.define(() => {
     const gateway = await installMockGateway(page);
     try {
       await page.goto(`${suite.server.baseUrl}new`);
-      await page.locator(".new-session-page__message").fill("verify the default mock");
-      await page.getByRole("button", { name: "Start session" }).click();
+      const composer = page.locator(".new-session-page__message");
+      await composer.fill("verify the default mock");
+      const confirmationConsumed = await composer.evaluate((textarea) => {
+        textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+        const end = new CompositionEvent("compositionend", { bubbles: true });
+        textarea.dispatchEvent(end);
+        const confirm = new KeyboardEvent("keydown", {
+          key: "Enter",
+          keyCode: 13,
+          bubbles: true,
+          cancelable: true,
+        });
+        Object.defineProperty(confirm, "timeStamp", { value: end.timeStamp - 1 });
+        textarea.dispatchEvent(confirm);
+        return confirm.defaultPrevented;
+      });
+      expect(confirmationConsumed).toBe(false);
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+      expect(await composer.inputValue()).toBe("verify the default mock");
+      await captureProof(page, "ime-confirmation-retains-draft.png");
+      await composer.dispatchEvent("keyup", { key: "Enter" });
+      await composer.press("Enter");
 
       await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({
         params: { agentId: "main", message: "verify the default mock" },
@@ -230,11 +253,12 @@ suite.define(() => {
       }
       const firstKey = firstParams.key;
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(firstKey));
+      await captureProof(page, "ime-deliberate-enter-created.png");
 
       await page.getByRole("link", { name: "New conversation" }).first().click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
       await page.locator(".new-session-page__message").fill("verify another default mock");
-      await page.getByRole("button", { name: "Start session" }).click();
+      await page.locator(".new-session-page__message").press("Control+Enter");
       await expect.poll(async () => (await gateway.getRequests("sessions.create")).length).toBe(2);
       expect((await gateway.getRequests("sessions.create")).at(-1)).toMatchObject({
         params: { agentId: "main", message: "verify another default mock" },
@@ -406,7 +430,7 @@ suite.define(() => {
       await captureProof(page, "01-chat-route-preparing.png");
       await expectPendingNewSessionPresentation(page);
 
-      await page.evaluate(() => {
+      await evaluateControlUiContext(page, (application) => {
         const frames: SessionTransitionFrames = {
           invalid: 0,
           firstInvalid: null,
@@ -429,10 +453,7 @@ suite.define(() => {
             (!newSessionVisible && !chatVisible)
           ) {
             frames.invalid += 1;
-            const app = document.querySelector("openclaw-app") as HTMLElement & {
-              runtime?: { context: ApplicationContext };
-            };
-            const route = app.runtime?.context.router.getState().matches[0];
+            const route = application.router.getState().matches[0];
             frames.firstInvalid ??= {
               activeViewTransition: Boolean(document.activeViewTransition),
               handoffCover,
@@ -469,13 +490,15 @@ suite.define(() => {
       await gateway.deferNext("chat.startup");
       releaseChatModule();
       await pendingPreviewModule.request;
-      await page.waitForFunction(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime?: { context: ApplicationContext };
-        };
-        const route = app.runtime?.context.router.getState().matches[0];
-        return route?.routeId === "chat" && route.module && route.isFetching === "loader";
-      });
+      const applicationHandle = await getControlUiContextHandle(page);
+      try {
+        await page.waitForFunction((application) => {
+          const route = application.router.getState().matches[0];
+          return route?.routeId === "chat" && route.module && route.isFetching === "loader";
+        }, applicationHandle);
+      } finally {
+        await applicationHandle.dispose();
+      }
       await page.evaluate(
         () =>
           new Promise<void>((resolve) => {
@@ -675,12 +698,13 @@ suite.define(() => {
           });
           await page.goto(`${suite.server.baseUrl}new`);
           await page.locator(".new-session-page__message").waitFor();
-          await page.evaluate((nextMode) => {
-            const app = document.querySelector("openclaw-app") as HTMLElement & {
-              runtime: { context: ApplicationContext };
-            };
-            app.runtime.context.theme.setMode(nextMode);
-          }, mode);
+          await evaluateControlUiContext(
+            page,
+            (context, nextMode) => {
+              context.theme.setMode(nextMode);
+            },
+            mode,
+          );
           await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe(mode);
           await gateway.deferNext("sessions.create");
 
@@ -690,7 +714,7 @@ suite.define(() => {
           const startup = page.locator(".new-session-page__starting");
           const submittedPrompt = startup.locator(".chat-group.user");
           const announcement = page.locator(
-            '.new-session-page > [role="status"][aria-live="polite"], openclaw-pending-session-create > .chat > [role="status"][aria-live="polite"]',
+            '.new-session-page > [role="status"][aria-live="polite"], openclaw-pending-session-create .chat-main__conversation > [role="status"][aria-live="polite"]',
           );
           const draftImage = page.locator(".chat-attachment-thumb").getByRole("img", {
             name: imageFileName,
@@ -707,8 +731,6 @@ suite.define(() => {
           await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(2);
           await placeSummary.click();
           expect(await placeSelect.getAttribute("open")).not.toBeNull();
-          const scroll = page.locator(".new-session-page__scroll");
-          const initialScrollPadding = await scroll.evaluate((el) => getComputedStyle(el).padding);
           await page.getByRole("button", { name: "Start session" }).dblclick();
 
           const create = await gateway.waitForRequest("sessions.create");
@@ -777,10 +799,12 @@ suite.define(() => {
           expect(new URL(page.url()).pathname).toBe("/new");
           expect(await message.isVisible()).toBe(false);
           expect(await placeSelect.isVisible()).toBe(false);
-          // Pending chat classes must preserve New Session's native titlebar drag inset.
-          expect(await scroll.evaluate((el) => getComputedStyle(el).padding)).toBe(
-            initialScrollPadding,
-          );
+          // The visible chat header now owns the titlebar, not a second draft-scroll inset.
+          const pendingChat = page.locator("openclaw-pending-session-create");
+          expect(await pendingChat.locator(".chat-pane__header").isVisible()).toBe(true);
+          const followUpComposer = pendingChat.locator(".agent-chat__composer-combobox textarea");
+          expect(await followUpComposer.isEnabled()).toBe(true);
+          expect(await followUpComposer.inputValue()).toBe("");
           await captureUiProof(suite, page, `${proofName}-submitted.png`);
           const presentation = await expectPendingNewSessionPresentation(page);
           if (captureProofEnabled) {
@@ -789,9 +813,10 @@ suite.define(() => {
               JSON.stringify(presentation, null, 2),
             );
           }
-          await page.keyboard.press("Enter");
-          await page.keyboard.press("Control+Enter");
+          await followUpComposer.press("Enter");
+          await followUpComposer.press("Control+Enter");
           expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
+          expect(await gateway.getRequests("chat.send")).toHaveLength(0);
           await submittedPrompt.locator(".chat-message-image-button").click();
           const attachmentViewer = page.locator("openclaw-image-lightbox");
           await expectDecodedThumbnail(attachmentViewer.locator("img.image"));

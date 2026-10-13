@@ -80,7 +80,6 @@ export function createRequesterInitialTransferFixture(
       ...(params.release ? { release: wrap(params.release) } : {}),
       stateContext: captureOpenClawStateWorkerContext(),
       assertCurrent: options.assertCurrent ?? (() => {}),
-      scheduleRetry: () => {},
     });
   };
 }

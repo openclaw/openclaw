@@ -22,6 +22,7 @@ it("binds skill reads to a late sandbox and refuses reads after host closure", a
       source: "workspace",
     }),
     readContent: "Host content must not bypass the sandbox",
+    locationNote: "Run referenced commands inside the sandbox.",
   };
   const nodeSkill = {
     ...skill,
@@ -92,7 +93,16 @@ it("binds skill reads to a late sandbox and refuses reads after host closure", a
       expect.objectContaining({ filePath: runtimePath, maxBytes: 16 * 1024 }),
     );
     const result = await read.execute("read-guide", { name: "guide" });
-    expect(result.content).toEqual([{ type: "text", text: "Complete sandbox instructions" }]);
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text:
+          `Skill location: ${runtimePath}\n` +
+          "Resolve relative resource paths from the directory containing this SKILL.md.\n" +
+          `${skill.locationNote}\n\n` +
+          "Complete sandbox instructions",
+      },
+    ]);
     expect(readFile).toHaveBeenCalledWith(
       expect.objectContaining({ filePath: runtimePath, maxBytes: 256 * 1024 }),
     );
@@ -161,9 +171,13 @@ it("confines cached and retargeted skill instructions to the required root at re
       "admitted alias",
     );
     expect(skills.every((skill) => skill.source.readContent === undefined)).toBe(true);
-    await expect(readInstalledSkill(skills, "inside")).resolves.toBe("Inside instructions");
+    await expect(readInstalledSkill(skills, "inside")).resolves.toMatchObject({
+      content: "Inside instructions",
+    });
     await expect(readCodeModeSkill(aliasSkill)).resolves.toBe("Inside instructions");
-    await expect(readInstalledSkill(skills, "outside")).rejects.toThrow("Unknown installed skill");
+    await expect(readInstalledSkill(skills, "outside")).rejects.toThrow(
+      "is not available to this agent",
+    );
     await fs.unlink(alias);
     await fs.symlink(outside, alias);
     await expect(readInstalledSkill(skills, "alias")).rejects.toThrow();
@@ -232,10 +246,16 @@ it("keeps the host-owned skill root when plugin options widen placement or repla
       "skill reader",
     );
     expect((await read.execute("inside", { name: "inside" })).content).toEqual([
-      { type: "text", text: "Inside instructions" },
+      {
+        type: "text",
+        text:
+          `Skill location: ${inside}\n` +
+          "Resolve relative resource paths from the directory containing this SKILL.md.\n\n" +
+          "Inside instructions",
+      },
     ]);
     await expect(read.execute("outside", { name: "outside" })).rejects.toThrow(
-      "Unknown installed skill",
+      "is not available to this agent",
     );
     expect(() => createTools({ sessionPermissionPolicy: { root: parent, mode: "full" } })).toThrow(
       "escapes the captured required workspace",

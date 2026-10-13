@@ -156,16 +156,13 @@ export function sanitizeGoogleThinkingPayload(params: {
     return;
   }
   const payloadObj = params.payload as Record<string, unknown>;
-  sanitizeGoogleThinkingConfigContainer({
-    container: payloadObj.config,
-    modelId: params.modelId,
-    thinkingLevel: params.thinkingLevel,
-  });
-  sanitizeGoogleThinkingConfigContainer({
-    container: payloadObj.generationConfig,
-    modelId: params.modelId,
-    thinkingLevel: params.thinkingLevel,
-  });
+  for (const field of ["config", "generationConfig"]) {
+    sanitizeGoogleThinkingConfigContainer({
+      container: payloadObj[field],
+      modelId: params.modelId,
+      thinkingLevel: params.thinkingLevel,
+    });
+  }
 }
 
 function sanitizeGoogleThinkingConfigContainer(params: {

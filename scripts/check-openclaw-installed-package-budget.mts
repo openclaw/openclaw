@@ -3,7 +3,7 @@ import path from "node:path";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 
 // These caps and counting rules are frozen in already-published updaters
-// (2026.9.3-2026.9.7), which cannot be patched. They charge every regular file's
+// (2026.9.3-2026.9.8), which cannot be patched. They charge every regular file's
 // bytes, including npm's hidden node_modules/.package-lock.json; later readers
 // that skip it are more lenient. Do not follow src/infra/package-update-integrity.ts.
 const SHIPPED_DRIVER_CAP = { entries: 50_000, bytes: 1024 * 1024 * 1024 };

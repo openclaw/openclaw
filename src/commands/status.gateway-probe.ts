@@ -11,13 +11,7 @@ import {
 export async function resolveGatewayProbeAuthResolution(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
-): Promise<{
-  auth: {
-    token?: string;
-    password?: string;
-  };
-  warning?: string;
-}> {
+) {
   const target = resolveGatewayProbeTarget(cfg);
   // Probe auth resolution depends on local/remote mode because token/password sources differ.
   return resolveGatewayProbeAuthSafeWithSecretInputs({

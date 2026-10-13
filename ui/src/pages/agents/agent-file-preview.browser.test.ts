@@ -1,19 +1,22 @@
-import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { i18n } from "../../i18n/index.ts";
+import { getRenderedModalDialog } from "../../test-helpers/modal-dialog.ts";
 import "../../styles.css";
 import "../../styles/settings.css";
 import "../../styles/agents.css";
 import "../../styles/sidebar-markdown.css";
-import { i18n } from "../../i18n/index.ts";
-import { getRenderedModalDialog } from "../../test-helpers/modal-dialog.ts";
-import { renderAgentFiles } from "./panels-files.ts";
+import { mountSolid } from "../../test-helpers/solid-render.tsx";
+import { createAgentFileEditors } from "./agent-file-state.test-helpers.ts";
+import { AgentFiles } from "./panels-files.tsx";
 
 const browserMode = "__vitest_browser__" in globalThis;
 let container: HTMLDivElement;
+let mounted: ReturnType<typeof mountSolid<Parameters<typeof AgentFiles>[0]>> | undefined;
 let tooltipProvider: HTMLElement;
 let viewport: { width: number; height: number };
 
 beforeEach(() => {
+  mounted = undefined;
   viewport = { width: window.innerWidth, height: window.innerHeight };
   container = document.createElement("div");
   container.className = "settings-page";
@@ -23,7 +26,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  render(nothing, container);
+  mounted?.dispose();
   tooltipProvider.remove();
   await i18n.setLocale("en");
   if (browserMode) {
@@ -34,7 +37,7 @@ afterEach(async () => {
 
 function afterOwnTransition(
   dialog: HTMLElement,
-  eventName: "wa-after-show" | "wa-after-hide",
+  eventName: "overlay-after-show" | "overlay-after-hide",
 ): Promise<void> {
   return new Promise((resolve) => {
     const completed = (event: Event) => {
@@ -60,38 +63,46 @@ function requireButton(selector: string): HTMLButtonElement {
 function renderPreview(
   draft: string,
   onChange = (_name: string, _content: string) => {},
-  overrides: Partial<Parameters<typeof renderAgentFiles>[0]> = {},
+  overrides: Partial<Parameters<typeof AgentFiles>[0]> = {},
 ) {
-  render(
-    renderAgentFiles({
+  const props: Parameters<typeof AgentFiles>[0] = {
+    agentId: "main",
+    agentFilesList: {
       agentId: "main",
-      agentFilesList: {
-        agentId: "main",
-        workspace: "/synthetic/workspace",
-        files: [{ name: "AGENTS.md", path: "/synthetic/workspace/AGENTS.md", missing: false }],
+      workspace: "/synthetic/workspace",
+      files: [{ name: "AGENTS.md", path: "/synthetic/workspace/AGENTS.md", missing: false }],
+    },
+    agentFilesLoading: false,
+    agentFilesError: null,
+    agentFileActive: "AGENTS.md",
+
+    agentFileSaving: false,
+    agentFileConflict: null,
+    canWrite: true,
+    onLoadFiles: () => undefined,
+    onSelectFile: () => undefined,
+    onFileDraftChange: (name, content) => {
+      onChange(name, content);
+      renderPreview(content, onChange, overrides);
+    },
+    onFileReset: () => undefined,
+    onFileSave: () => undefined,
+    onFileReload: () => undefined,
+    onFileOverwrite: () => undefined,
+    ...overrides,
+    agentFileEditors: {
+      "AGENTS.md": {
+        content: "Saved instructions",
+        draft,
+        ...overrides.agentFileEditors?.["AGENTS.md"],
       },
-      agentFilesLoading: false,
-      agentFilesError: null,
-      agentFileActive: "AGENTS.md",
-      agentFileContents: { "AGENTS.md": "Saved instructions" },
-      agentFileDrafts: { "AGENTS.md": draft },
-      agentFileSaving: false,
-      agentFileConflict: null,
-      canWrite: true,
-      onLoadFiles: () => undefined,
-      onSelectFile: () => undefined,
-      onFileDraftChange: (name, content) => {
-        onChange(name, content);
-        renderPreview(content, onChange, overrides);
-      },
-      onFileReset: () => undefined,
-      onFileSave: () => undefined,
-      onFileReload: () => undefined,
-      onFileOverwrite: () => undefined,
-      ...overrides,
-    }),
-    container,
-  );
+    },
+  };
+  if (mounted) {
+    mounted.update(props);
+  } else {
+    mounted = mountSolid(AgentFiles, props, container);
+  }
 }
 
 describe.runIf(browserMode)("agent file preview", () => {
@@ -112,11 +123,13 @@ describe.runIf(browserMode)("agent file preview", () => {
           workspace: "/synthetic/workspace",
           files: [{ name: "AGENTS.md", path: "/synthetic/workspace/AGENTS.md", missing }],
         },
-        agentFileContents: { "AGENTS.md": draft },
+        agentFileEditors: createAgentFileEditors({
+          content: { "AGENTS.md": draft },
+        }),
         agentFileConflict: conflict,
       });
-      const { webAwesomeDialog } = await getRenderedModalDialog(container);
-      const shown = afterOwnTransition(webAwesomeDialog, "wa-after-show");
+      const { modal } = await getRenderedModalDialog(container);
+      const shown = afterOwnTransition(modal, "overlay-after-show");
       await userEvent.click(requireButton(".agent-file-header .agent-file-actions button"));
       await shown;
       expect(container.querySelector(".md-preview-dialog__path")?.textContent?.trim()).toBe(
@@ -142,7 +155,7 @@ describe.runIf(browserMode)("agent file preview", () => {
         "Close preview",
       ]);
       expect(actions.map((button) => button.textContent?.trim())).toEqual(["", "", ""]);
-      const closed = afterOwnTransition(webAwesomeDialog, "wa-after-hide");
+      const closed = afterOwnTransition(modal, "overlay-after-hide");
       await userEvent.keyboard("{Escape}");
       await closed;
     },
@@ -159,7 +172,7 @@ describe.runIf(browserMode)("agent file preview", () => {
         throw new Error("Missing agent file editor");
       }
       const preview = requireButton(".agent-file-header .agent-file-actions button");
-      const { modal, webAwesomeDialog, dialog } = await getRenderedModalDialog(container);
+      const { modal, dialog } = await getRenderedModalDialog(container);
       expect(dialog.open).toBe(false);
       expect(textarea.value).toBe(expectedDraft);
       let hiddenMutations = 0;
@@ -174,7 +187,7 @@ describe.runIf(browserMode)("agent file preview", () => {
         textarea.setSelectionRange(textarea.value.length, textarea.value.length);
         preview.focus();
         // Opening animations may start after dialog.open becomes true.
-        const shown = afterOwnTransition(webAwesomeDialog, "wa-after-show");
+        const shown = afterOwnTransition(modal, "overlay-after-show");
         await userEvent.keyboard("{Enter}");
         await shown;
         expect(dialog.open).toBe(true);
@@ -191,7 +204,7 @@ describe.runIf(browserMode)("agent file preview", () => {
         expect(panel.getBoundingClientRect().bottom).toBeLessThanOrEqual(bounds.bottom + 1);
         expect(body.clientHeight).toBeGreaterThan(0);
         expect(body.scrollHeight).toBeGreaterThan(body.clientHeight);
-        const closed = afterOwnTransition(webAwesomeDialog, "wa-after-hide");
+        const closed = afterOwnTransition(modal, "overlay-after-hide");
         await userEvent.click(
           requireButton(
             action === "edit" ? '[aria-label="Edit file"]' : '[aria-label="Close preview"]',
@@ -233,8 +246,8 @@ describe.runIf(browserMode)("agent file preview", () => {
         "# Workspace operating instructions\n\n" + "Readable document content.\n\n".repeat(80),
       );
       const preview = requireButton(".agent-file-header .agent-file-actions button");
-      const { webAwesomeDialog, dialog } = await getRenderedModalDialog(container);
-      const shown = afterOwnTransition(webAwesomeDialog, "wa-after-show");
+      const { modal, dialog } = await getRenderedModalDialog(container);
+      const shown = afterOwnTransition(modal, "overlay-after-show");
       await userEvent.click(preview);
       await shown;
       expect(dialog.open).toBe(true);
@@ -281,7 +294,7 @@ describe.runIf(browserMode)("agent file preview", () => {
           await expect.element(metadata).toBeVisible();
         }
       }
-      const closed = afterOwnTransition(webAwesomeDialog, "wa-after-hide");
+      const closed = afterOwnTransition(modal, "overlay-after-hide");
       await userEvent.keyboard("{Escape}");
       await closed;
       expect(dialog.open).toBe(false);

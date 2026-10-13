@@ -9,6 +9,7 @@ import {
   normalizeOptionalSqliteNumber,
   rowToSessionStateEvent,
 } from "./session-state-events.kernel.js";
+import { isSessionStateWatchAddress } from "./session-state-events.watch-address.js";
 
 export function readSessionStateSequence(
   db: DatabaseSync,
@@ -27,6 +28,23 @@ export function readSessionStateSequence(
 }
 
 export const sessionStateReadOperations = {
+  "sessionState.pendingNotices": (_input: undefined, db) => ({
+    type: "sessionState.pendingNotices" as const,
+    cursors: executeSqliteQuerySync(
+      db,
+      getSessionStateKysely(db)
+        .selectFrom("session_watch_cursors")
+        // Older admitted stores omit watcher_store_path until the first feature write.
+        .selectAll()
+        .whereRef("material_sequence", ">", "last_seen_sequence"),
+    )
+      .rows.map((row) => ({
+        watcherSessionKey: row.watcher_session_key,
+        targetSessionKey: row.target_session_key,
+        watcherStorePath: row.watcher_store_path ?? null,
+      }))
+      .filter(isSessionStateWatchAddress),
+  }),
   "sessionState.ambientTargets": (input: { watcherSessionKey: string }, db) => ({
     type: "sessionState.ambientTargets" as const,
     targets: executeSqliteQuerySync(
@@ -36,7 +54,14 @@ export const sessionStateReadOperations = {
         .select("target_session_key")
         .where("watcher_session_key", "=", input.watcherSessionKey)
         .where("provenance", "=", SESSION_WATCH_PROVENANCE_AMBIENT_GROUP),
-    ).rows.map((row) => row.target_session_key),
+    )
+      .rows.map((row) => row.target_session_key)
+      .filter((targetSessionKey) =>
+        isSessionStateWatchAddress({
+          watcherSessionKey: input.watcherSessionKey,
+          targetSessionKey,
+        }),
+      ),
   }),
   "sessionState.versions": (refs: ReadonlyArray<{ sessionKey: string; agentId: string }>, db) => {
     const keys = [...new Set(refs.map((ref) => ref.sessionKey).filter(Boolean))];

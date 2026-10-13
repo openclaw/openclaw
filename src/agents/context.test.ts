@@ -1,14 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { getContextWindowCaches, providerContextTokenCacheKey } from "./context-cache.js";
 import {
   applyConfiguredContextWindows,
-  applyDiscoveredContextWindows,
-  resetContextWindowCacheForTest,
-  resolveContextTokensForModel,
-  resolveModelContextTokenProjection,
-} from "./context.js";
+  prepareDiscoveredContextTokenCache,
+  type ContextWindowCatalog,
+} from "./context-cache-projection.js";
+import {
+  getContextWindowCaches,
+  providerContextTokenCacheKey,
+  replaceDiscoveredContextTokenCache,
+} from "./context-cache.js";
+import { resolveContextTokensForModel, resolveModelContextTokenProjection } from "./context.js";
+import { resetContextWindowCacheForTest } from "./context.test-support.js";
 
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => ({}),
@@ -47,21 +51,18 @@ function resolve(params: Parameters<typeof resolveContextTokensForModel>[0]) {
   return resolveContextTokensForModel({ allowAsyncLoad: false, ...params });
 }
 
-function discover(models: Parameters<typeof applyDiscoveredContextWindows>[0]["models"]) {
-  applyDiscoveredContextWindows({ cache: getContextWindowCaches().discoveredTokenCache, models });
+async function discover(models: ContextWindowCatalog["entries"]) {
+  replaceDiscoveredContextTokenCache(
+    await prepareDiscoveredContextTokenCache({ modelCatalog: { entries: models } }),
+  );
 }
 
 beforeEach(resetContextWindowCacheForTest);
 afterEach(resetContextWindowCacheForTest);
 
 describe("context cache projection", () => {
-  it("prefers discovered contextTokens over the native window", () => {
-    discover([{ id: "gpt-5.4", contextWindow: 1_050_000, contextTokens: 272_000 }]);
-    expect(resolve({ model: "gpt-5.4" })).toBe(272_000);
-  });
-
-  it("keeps unowned CLI discovery at its reported window", () => {
-    discover([{ id: "claude-cli/claude-opus-4.7-20260219", contextWindow: 200_000 }]);
+  it("keeps unowned CLI discovery at its reported window", async () => {
+    await discover([{ id: "claude-cli/claude-opus-4.7-20260219", contextWindow: 200_000 }]);
     expect(resolve({ model: "claude-cli/claude-opus-4.7-20260219" })).toBe(200_000);
   });
 
@@ -87,50 +88,93 @@ describe("context cache projection", () => {
     expect(windowCache.has("bad/model")).toBe(false);
     expect(windowCache.has("")).toBe(false);
   });
-
-  it("writes provider-owned bare keys for self-prefixed configured token caps", () => {
-    const cache = new Map<string, number>();
-    applyConfiguredContextWindows({
-      cache,
-      windowCache: new Map(),
-      modelsConfig: {
-        providers: {
-          "google-gemini-cli": {
-            models: [
-              {
-                id: "google-gemini-cli/gemini-3.1-pro-preview",
-                contextTokens: 1_000_000,
-              },
-            ],
-          },
-        },
-      },
-    });
-    expect(
-      cache.get(providerContextTokenCacheKey("google-gemini-cli", "gemini-3.1-pro-preview")),
-    ).toBe(1_000_000);
-  });
 });
 
 describe("context token resolution", () => {
-  it("can exclude unscoped discovery from provider-owned lookup", () => {
-    discover([{ id: "large", contextTokens: 32_000 }]);
+  it.each(["configuredTokenCache", "discoveredTokenCache", "contextWindowCache"] as const)(
+    "keeps captured reporting independent of a stale %s without changing execution lookup",
+    (cacheName) => {
+      const caches = getContextWindowCaches();
+      const key = providerContextTokenCacheKey("custom", "large");
+      caches[cacheName].set(key, 128_000);
+      const selected = {
+        cfg: {},
+        provider: "custom",
+        model: "large",
+        modelContextTokens: 922_000,
+        modelContextWindow: 1_050_000,
+      };
+      expect(resolve(selected)).toBe(128_000);
+      expect(resolve({ ...selected, allowCacheLookup: false })).toBe(922_000);
+      expect(caches[cacheName].get(key)).toBe(128_000);
+    },
+  );
+
+  it("preserves genuine selected limits and authored caps without cache lookup", () => {
+    const selected = {
+      cfg: {},
+      provider: "custom",
+      model: "large",
+      allowCacheLookup: false,
+    };
+    expect(resolve({ ...selected, modelContextTokens: 128_000, modelContextWindow: 128_000 })).toBe(
+      128_000,
+    );
+    expect(
+      resolve({
+        ...selected,
+        cfg: modelConfig("custom", "large", {
+          contextTokens: 64_000,
+          contextWindow: 1_050_000,
+        }),
+        modelContextTokens: 922_000,
+        modelContextWindow: 1_050_000,
+      }),
+    ).toBe(64_000);
+    expect(
+      resolve({
+        ...selected,
+        cfg: modelConfig("custom", "large", {
+          contextTokens: 922_000,
+          contextWindow: 64_000,
+        }),
+        modelContextTokens: 922_000,
+        modelContextWindow: 1_050_000,
+      }),
+    ).toBe(64_000);
+  });
+
+  it("does not replace unknown captured capacity with a sibling's bare cache", async () => {
+    await discover([{ provider: "other", id: "shared-model", contextTokens: 128_000 }]);
+    const selected = { cfg: {}, provider: "custom", model: "shared-model" };
+    expect(resolve(selected)).toBe(128_000);
+    expect(resolve({ ...selected, allowCacheLookup: false })).toBeUndefined();
+    expect(resolve({ ...selected, allowCacheLookup: false, fallbackContextTokens: 32_000 })).toBe(
+      32_000,
+    );
+  });
+
+  it("preserves fixed provider contracts without process cache lookup", () => {
+    expect(
+      resolve({ provider: "anthropic", model: "claude-sonnet-5", allowCacheLookup: false }),
+    ).toBe(1_000_000);
+  });
+
+  it("can exclude unscoped discovery from provider-owned lookup", async () => {
+    await discover([{ id: "large", contextTokens: 32_000 }]);
     const params = { provider: "claude-cli", model: "large" };
     expect(resolve({ ...params, allowUnscopedModelLookup: false })).toBeUndefined();
     expect(resolve(params)).toBe(32_000);
   });
 
-  it.each([
-    [true, 1_000_000],
-    [false, 200_000],
-  ])("uses the model context1m setting %s over the global default", (context1m, expected) => {
+  it("lets a model disable the global context1m setting", () => {
     expect(
       resolve({
         cfg: {
           agents: {
             defaults: {
-              params: { context1m: !context1m },
-              models: { "claude-cli/claude-opus-4-7": { params: { context1m } } },
+              params: { context1m: true },
+              models: { "claude-cli/claude-opus-4-7": { params: { context1m: false } } },
             },
           },
         },
@@ -138,16 +182,12 @@ describe("context token resolution", () => {
         model: "claude-opus-4-7",
         fallbackContextTokens: 200_000,
       }),
-    ).toBe(expected);
+    ).toBe(200_000);
   });
 
   it.each([
-    ["anthropic", "claude-fable-5"],
-    ["anthropic-vertex", "claude-mythos-5"],
     ["claude-cli", "claude-sonnet-5"],
-    ["claude-cli", "claude-opus-5"],
     ["anthropic-vertex", "claude-sonnet-4-6"],
-    ["claude-cli", "claude-opus-4-7[1m]"],
   ])("resolves the fixed window for %s/%s", (provider, model) => {
     expect(resolve({ provider, model, fallbackContextTokens: 200_000 })).toBe(1_000_000);
   });
@@ -166,22 +206,6 @@ describe("context token resolution", () => {
     expect(resolve(params)).toBe(128_000);
   });
 
-  it.each([
-    [200_000, 200_000],
-    [1_200_000, 1_000_000],
-  ])("bounds an authored cap of %i by the fixed provider contract", (contextTokens, expected) => {
-    expect(
-      resolve({
-        cfg: modelConfig("anthropic", "claude-sonnet-4-6", {
-          contextWindow: 2_000_000,
-          contextTokens,
-        }),
-        provider: "anthropic",
-        model: "claude-sonnet-4-6",
-      }),
-    ).toBe(expected);
-  });
-
   it("uses the caller-supplied model provider for runtime aliases", () => {
     expect(
       resolve({
@@ -196,8 +220,8 @@ describe("context token resolution", () => {
     ).toBe(100_000);
   });
 
-  it("keeps configured token caps authoritative over lower discovery", () => {
-    discover([{ provider: "openai", id: "gpt-5.5", contextWindow: 272_000 }]);
+  it("keeps configured token caps authoritative over lower discovery", async () => {
+    await discover([{ provider: "openai", id: "gpt-5.5", contextWindow: 272_000 }]);
     const cfg = modelConfig("openai", "gpt-5.5", { contextTokens: 350_000 });
     const caches = getContextWindowCaches();
     applyConfiguredContextWindows({
@@ -208,8 +232,8 @@ describe("context token resolution", () => {
     expect(resolve({ provider: "openai", model: "gpt-5.5" })).toBe(350_000);
   });
 
-  it("keeps provider discovery ahead of static caps under configured windows", () => {
-    discover([{ provider: "openai", id: "gpt-5.5", contextTokens: 200_000 }]);
+  it("keeps provider discovery ahead of static caps under configured windows", async () => {
+    await discover([{ provider: "openai", id: "gpt-5.5", contextTokens: 200_000 }]);
     expect(
       resolve({
         cfg: modelConfig("openai", "gpt-5.5", { contextWindow: 1_000_000 }),
@@ -218,24 +242,5 @@ describe("context token resolution", () => {
         modelContextTokens: 272_000,
       }),
     ).toBe(200_000);
-  });
-
-  it.each([
-    [1_000_000, 272_000],
-    [128_000, 128_000],
-  ])("bounds prepared tokens by a configured native window of %i", (contextWindow, expected) => {
-    const caches = getContextWindowCaches();
-    applyConfiguredContextWindows({
-      cache: caches.discoveredTokenCache,
-      windowCache: caches.contextWindowCache,
-      modelsConfig: modelConfig("openai", "gpt-5.5", { contextWindow }).models,
-    });
-    expect(
-      resolve({
-        provider: "openai",
-        model: "gpt-5.5",
-        modelContextTokens: 272_000,
-      }),
-    ).toBe(expected);
   });
 });

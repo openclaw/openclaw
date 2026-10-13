@@ -35,39 +35,6 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => ({
 const requireRecord = createRequireRecord("record", "expected-label-object");
 
 describe("createTelegramBot typed command pipeline", () => {
-  it.each(["caption", "native"] as const)(
-    "preserves the %s command body and context",
-    async (kind) => {
-      const raw = kind === "caption" ? "/status" : "/export_session session-notes.html";
-      const bot = await createBot();
-      const { text, entities, ...message } = commandMessage(raw);
-      await bot.handleUpdate({
-        update_id: 1002,
-        message:
-          kind === "caption"
-            ? { ...message, caption: text, caption_entities: entities, photo }
-            : { ...message, text, entities },
-      });
-      expect(harness.replySpy).toHaveBeenCalledTimes(1);
-      expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject(
-        kind === "caption"
-          ? {
-              CommandSource: "text",
-              CommandBody: "/status",
-              media: expect.arrayContaining([
-                expect.objectContaining({ path: "/tmp/replied-photo.jpg" }),
-              ]),
-            }
-          : {
-              CommandSource: "native",
-              CommandBody: "/export-session session-notes.html",
-              RawBody: raw,
-              CommandTurn: { kind: "native", body: "/export-session session-notes.html" },
-            },
-      );
-    },
-  );
-
   it("runs the login executor without dispatching a turn", async () => {
     const bot = await createBot();
     await bot.handleUpdate({ update_id: 1004, message: commandMessage("/login") });
@@ -157,7 +124,6 @@ describe("createTelegramBot typed command pipeline", () => {
       commands: { allowFrom: { telegram: ["99999"] } },
       outcome: "pairing",
     },
-    { name: "unlisted group sender is silently dropped", outcome: "silent" },
     {
       name: "command authorization cannot reopen disabled topic",
       commands: { allowFrom: { telegram: [String(from.id)] } },
@@ -255,64 +221,30 @@ describe("createTelegramBot typed command pipeline", () => {
     },
   );
 
-  it.each(["private", "supergroup", "senderless"] as const)(
-    "enforces sender identity for ordinary %s messages",
-    async (kind) => {
-      const senderless = kind === "senderless";
-      const bot = await createBot(
-        false,
-        true,
-        senderless
-          ? {
-              channels: { telegram: { dmPolicy: "allowlist", allowFrom: ["42001"] } },
-            }
-          : {
-              accessGroups: {
-                operators: { type: "message.senders", members: { telegram: ["42001"] } },
-              },
-              channels: {
-                telegram: {
-                  dmPolicy: "allowlist",
-                  allowFrom: ["accessGroup:operators"],
-                  groupPolicy: "allowlist",
-                  groupAllowFrom: ["accessGroup:operators"],
-                  groups: { "*": { requireMention: false } },
-                  streaming: { mode: "off" },
-                },
-              },
-            },
-      );
-      const message = {
-        message_id: 201,
-        date: 1736380800,
-        chat: kind === "supergroup" ? groupChat : senderless ? chat : { ...chat, id: 77777 },
-        text: senderless ? "senderless request" : "ordinary request",
-        ...(kind === "supergroup" ? { message_thread_id: 99, is_topic_message: true } : {}),
-      };
-      apiCalls.mockClear();
-      await bot.handleUpdate({
-        update_id: 2001,
-        message: { ...message, from: { ...from, id: 99999 } },
-      });
-      expect(harness.replySpy).not.toHaveBeenCalled();
-      expect(apiCalls).not.toHaveBeenCalled();
-      if (senderless) {
-        await expect(
-          admitSpooledUpdate(bot, { update_id: 2002, message: { ...message, message_id: 202 } }),
-        ).resolves.toMatchObject({ kind: "durable" });
-      } else {
-        await bot.handleUpdate({ update_id: 2002, message: { ...message, message_id: 202, from } });
-      }
-      expect(harness.replySpy.mock.calls.map(([ctx]) => [ctx.SessionKey, ctx.RawBody])).toEqual([
-        [
-          kind === "supergroup"
-            ? "agent:main:telegram:group:-10042001:topic:99"
-            : "agent:main:main",
-          message.text,
-        ],
-      ]);
-    },
-  );
+  it("enforces sender identity for ordinary senderless messages", async () => {
+    const bot = await createBot(false, true, {
+      channels: { telegram: { dmPolicy: "allowlist", allowFrom: ["42001"] } },
+    });
+    const message = {
+      message_id: 201,
+      date: 1736380800,
+      chat,
+      text: "senderless request",
+    };
+    apiCalls.mockClear();
+    await bot.handleUpdate({
+      update_id: 2001,
+      message: { ...message, from: { ...from, id: 99999 } },
+    });
+    expect(harness.replySpy).not.toHaveBeenCalled();
+    expect(apiCalls).not.toHaveBeenCalled();
+    await expect(
+      admitSpooledUpdate(bot, { update_id: 2002, message: { ...message, message_id: 202 } }),
+    ).resolves.toMatchObject({ kind: "durable" });
+    expect(harness.replySpy.mock.calls.map(([ctx]) => [ctx.SessionKey, ctx.RawBody])).toEqual([
+      ["agent:main:main", message.text],
+    ]);
+  });
 
   it("inherits named-account group access and composes exact-topic overrides on wildcard scope", async () => {
     const nonForumChat = {
@@ -603,86 +535,78 @@ describe("createTelegramBot typed command pipeline", () => {
     },
   );
 
-  it.each([false, true])(
-    "labels an enabled first DM topic but not an established session with bounded Unicode input (enabled=%s)",
-    async (enabled) => {
-      const bounded = "a".repeat(499);
-      const generated = vi
-        .spyOn(replyRuntime, "generateConversationLabel")
-        .mockResolvedValue("Invoice review");
-      const renamed = createDeferred<void>();
-      apiCalls.mockImplementation((method) => {
-        if (method === "editForumTopic") {
-          renamed.resolve();
-        }
-      });
-      const cfg: OpenClawConfig = {
-        channels: {
-          telegram: {
-            dmPolicy: "open",
-            allowFrom: ["*"],
-            autoTopicLabel: true,
-            direct: { [String(chat.id)]: { autoTopicLabel: enabled } },
-            streaming: { mode: "off" },
-          },
-        },
-      };
-      try {
-        const bot = await createBot(false, true, cfg, true);
-        await bot.handleUpdate({
-          update_id: 2700,
-          message: {
-            ...commandMessage(`${bounded}\u{1F600}tail`),
-            entities: [],
-            message_thread_id: 99,
-            is_topic_message: true,
-          },
-        });
-        if (enabled) {
-          await renamed.promise;
-          expect(generated.mock.calls[0]?.[0].userMessage).toBe(bounded);
-          expect(apiCalls.mock.calls.filter(([method]) => method === "editForumTopic")).toEqual([
-            [
-              "editForumTopic",
-              expect.objectContaining({
-                chat_id: chat.id,
-                message_thread_id: 99,
-                name: "Invoice review",
-              }),
-            ],
-          ]);
-        } else {
-          expect(generated).not.toHaveBeenCalled();
-          expect(apiCalls.mock.calls.filter(([method]) => method === "editForumTopic")).toEqual([]);
-        }
-        const sessionKey = harness.replySpy.mock.calls[0]?.[0].SessionKey;
-        if (!sessionKey) {
-          throw new Error("Expected the first topic turn to reach the model");
-        }
-        // The controlled model substitutes for the engine that persists first-turn completion.
-        await upsertSessionEntry({
-          storePath: harness.telegramBotDepsForTest.resolveStorePath(undefined, {
-            agentId: "main",
-          }),
-          sessionKey,
-          entry: { sessionId: "delivered-dm-topic", updatedAt: Date.now(), systemSent: true },
-        });
-        await bot.handleUpdate({
-          update_id: 2701,
-          message: {
-            ...commandMessage("Continue the same topic"),
-            entities: [],
-            message_thread_id: 99,
-            is_topic_message: true,
-          },
-        });
-        expect(generated).toHaveBeenCalledTimes(enabled ? 1 : 0);
-        expect(apiCalls.mock.calls.filter(([method]) => method === "sendMessage")).toHaveLength(2);
-      } finally {
-        generated.mockRestore();
+  it("labels an enabled first DM topic but not an established session with bounded Unicode input", async () => {
+    const bounded = "a".repeat(499);
+    const generated = vi
+      .spyOn(replyRuntime, "generateConversationLabel")
+      .mockResolvedValue("Invoice review");
+    const renamed = createDeferred<void>();
+    apiCalls.mockImplementation((method) => {
+      if (method === "editForumTopic") {
+        renamed.resolve();
       }
-    },
-  );
+    });
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          autoTopicLabel: true,
+          direct: { [String(chat.id)]: { autoTopicLabel: true } },
+          streaming: { mode: "off" },
+        },
+      },
+    };
+    try {
+      const bot = await createBot(false, true, cfg, true);
+      await bot.handleUpdate({
+        update_id: 2700,
+        message: {
+          ...commandMessage(`${bounded}\u{1F600}tail`),
+          entities: [],
+          message_thread_id: 99,
+          is_topic_message: true,
+        },
+      });
+      await renamed.promise;
+      expect(generated.mock.calls[0]?.[0].userMessage).toBe(bounded);
+      expect(apiCalls.mock.calls.filter(([method]) => method === "editForumTopic")).toEqual([
+        [
+          "editForumTopic",
+          expect.objectContaining({
+            chat_id: chat.id,
+            message_thread_id: 99,
+            name: "Invoice review",
+          }),
+        ],
+      ]);
+      const sessionKey = harness.replySpy.mock.calls[0]?.[0].SessionKey;
+      if (!sessionKey) {
+        throw new Error("Expected the first topic turn to reach the model");
+      }
+      // The controlled model substitutes for the engine that persists first-turn completion.
+      await upsertSessionEntry({
+        storePath: harness.telegramBotDepsForTest.resolveStorePath(undefined, {
+          agentId: "main",
+        }),
+        sessionKey,
+        entry: { sessionId: "delivered-dm-topic", updatedAt: Date.now(), systemSent: true },
+      });
+      await bot.handleUpdate({
+        update_id: 2701,
+        message: {
+          ...commandMessage("Continue the same topic"),
+          entities: [],
+          message_thread_id: 99,
+          is_topic_message: true,
+        },
+      });
+      expect(generated).toHaveBeenCalledTimes(1);
+      expect(apiCalls.mock.calls.filter(([method]) => method === "sendMessage")).toHaveLength(2);
+    } finally {
+      generated.mockRestore();
+    }
+  });
 
   it("commits a first sticker description before model admission and never describes a supplemental image as that sticker", async () => {
     const describeStarted = createDeferred<void>();

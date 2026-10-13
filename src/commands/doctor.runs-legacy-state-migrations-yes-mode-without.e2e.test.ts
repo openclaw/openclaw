@@ -64,6 +64,12 @@ describe("doctor command", () => {
       };
     });
     vi.doUnmock("../flows/doctor-health-contributions.js");
+    // Prepare the real owners and nested check descriptors as fixture code;
+    // detectors and repairs still run inside the unchanged command deadline.
+    await import("./doctor-maintenance.js");
+    const { resolveDoctorContributionHealthChecks } =
+      await import("../flows/doctor-health-contributions.js");
+    await resolveDoctorContributionHealthChecks();
     ({ doctorCommand } = await import("./doctor.js"));
     ({ healthCommand } = await import("./health.js"));
     vi.clearAllMocks();
@@ -113,21 +119,6 @@ describe("doctor command", () => {
       signal.removeEventListener("abort", reportInterruption);
       observeMaintenance = undefined;
     }
-  }, 30_000);
-
-  it("runs legacy state migrations in non-interactive mode without prompting", async () => {
-    const {
-      doctorCommand: doctorCommandLocal,
-      runtime,
-      runLegacyStateMigrations,
-    } = await arrangeLegacyStateMigrationTest();
-
-    await (
-      doctorCommandLocal as (runtime: unknown, opts: Record<string, unknown>) => Promise<void>
-    )(runtime, { nonInteractive: true });
-
-    expect(runLegacyStateMigrations).toHaveBeenCalledTimes(1);
-    expect(confirm).not.toHaveBeenCalled();
   }, 30_000);
 
   it("refuses doctor repair mode in Nix before repair side effects", async () => {

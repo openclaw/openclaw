@@ -45,28 +45,25 @@ export async function probeTwitch(
               return;
             }
             settled = true;
-            connectListener?.unbind();
-            disconnectListener?.unbind();
-            authFailListener?.unbind();
+            connectListener.unbind();
+            disconnectListener.unbind();
+            authFailListener.unbind();
           };
 
-          const connectListener: ReturnType<ChatClient["onConnect"]> | undefined =
-            client?.onConnect(() => {
-              cleanup();
-              resolve();
-            });
+          const connectListener = probeClient.onConnect(() => {
+            cleanup();
+            resolve();
+          });
 
-          const disconnectListener: ReturnType<ChatClient["onDisconnect"]> | undefined =
-            client?.onDisconnect((_manually, reason) => {
-              cleanup();
-              reject(reason || new Error("Disconnected"));
-            });
+          const disconnectListener = probeClient.onDisconnect((_manually, reason) => {
+            cleanup();
+            reject(reason || new Error("Disconnected"));
+          });
 
-          const authFailListener: ReturnType<ChatClient["onAuthenticationFailure"]> | undefined =
-            client?.onAuthenticationFailure(() => {
-              cleanup();
-              reject(new Error("Authentication failed"));
-            });
+          const authFailListener = probeClient.onAuthenticationFailure(() => {
+            cleanup();
+            reject(new Error("Authentication failed"));
+          });
         });
 
         await raceWithTimeout(

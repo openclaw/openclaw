@@ -29,13 +29,13 @@ async function collectInstallPolicyHealthLines(
     lines.push(`- ${issue.severity.toUpperCase()}: ${sanitizeTerminalText(issue.message)}`);
   }
   if (validation.issues.some((issue) => issue.severity === "error")) {
-    lines.push("- Installs and updates for covered targets will fail closed until this is fixed.");
+    lines.push("- Installs and updates for covered targets will be blocked until this is fixed.");
     return lines;
   }
 
   if (!options.deep) {
     lines.push(
-      `- Static checks passed. Run ${formatCliCommand("openclaw doctor --deep")} to execute a synthetic policy probe.`,
+      `- Static checks passed. Run ${formatCliCommand("openclaw doctor --deep")} to execute a synthetic policy check.`,
     );
     return lines;
   }
@@ -49,34 +49,32 @@ async function collectInstallPolicyHealthLines(
       sourcePath: probeDir,
     });
     if (result?.warning) {
-      lines.push(`- Deep probe returned a warning: ${sanitizeTerminalText(result.warning.reason)}`);
+      lines.push(`- Deep check returned a warning: ${sanitizeTerminalText(result.warning.reason)}`);
       lines.push(
         "- Covered installs require explicit acknowledgement when this warning is returned.",
       );
       return lines;
     }
     if (!result?.blocked) {
-      lines.push("- Deep probe allowed the synthetic install request.");
+      lines.push("- Deep check allowed the synthetic install request.");
       return lines;
     }
     if (result.blocked.code === "security_scan_blocked") {
       lines.push(
-        `- Deep probe reached the policy command and the policy blocked the synthetic request: ${sanitizeTerminalText(result.blocked.reason)}`,
+        `- Deep check reached the policy command and the policy blocked the synthetic request: ${sanitizeTerminalText(result.blocked.reason)}`,
       );
       return lines;
     }
-    lines.push(`- ERROR: Deep probe failed closed: ${sanitizeTerminalText(result.blocked.reason)}`);
-    lines.push("- Installs and updates for covered targets will fail closed until this is fixed.");
-    return lines;
+    lines.push(`- ERROR: Deep check failed closed: ${sanitizeTerminalText(result.blocked.reason)}`);
   } catch (err) {
     lines.push(
-      `- ERROR: Deep probe could not run: ${sanitizeTerminalText(formatErrorMessage(err))}`,
+      `- ERROR: Deep check could not run: ${sanitizeTerminalText(formatErrorMessage(err))}`,
     );
-    lines.push("- Installs and updates for covered targets will fail closed until this is fixed.");
-    return lines;
   } finally {
     await fs.rm(probeDir, { recursive: true, force: true });
   }
+  lines.push("- Installs and updates for covered targets will be blocked until this is fixed.");
+  return lines;
 }
 
 export async function noteInstallPolicyHealth(

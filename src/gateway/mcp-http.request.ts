@@ -148,10 +148,8 @@ export function validateMcpLoopbackRequest(params: {
     params.res.end(JSON.stringify(body));
     return null;
   };
-  let url: URL;
-  try {
-    url = new URL(params.req.url ?? "/", `http://${params.req.headers.host ?? "localhost"}`);
-  } catch {
+  const url = URL.parse(params.req.url ?? "/", `http://${params.req.headers.host ?? "localhost"}`);
+  if (!url) {
     logMcpLoopbackTraffic("reject", { reason: "bad_request_url", method: params.req.method ?? "" });
     return reply(400, { error: "bad_request" });
   }

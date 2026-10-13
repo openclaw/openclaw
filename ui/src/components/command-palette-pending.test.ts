@@ -32,52 +32,52 @@ describe("CommandPalette pending searches", () => {
     vi.restoreAllMocks();
   });
 
-  it("keeps text immediate and results stable until 200 ms after the last key", async () => {
-    const request = vi.fn(async (_method: string) => ({ sessions: [], results: [], models: [] }));
-    const { gateway } = createGateway(true, { methods: ["sessions.search"], request });
-    const list = vi.fn(async () => null);
-    const { palette } = await mountPalette(createContext(gateway, list));
-    await enterQuery(palette, "");
-    const original = palette.querySelector(".cmd-palette__search")!.textContent;
-    const input = palette.querySelector<HTMLTextAreaElement>(".cmd-palette__input")!;
-    for (const query of ["p", "pl", "plu", "plug", "plugi", "plugin", "plugins"]) {
-      input.value = query;
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-      await palette.updateComplete;
-      expect(input.value).toBe(query);
-      expect(palette.querySelector(".cmd-palette__search")!.textContent).toBe(original);
-      await vi.advanceTimersByTimeAsync(100);
+  it.each([false, true])(
+    "debounces input until the final key or IME commit: %s",
+    async (composing) => {
+      const request = vi.fn(async (_method: string) => ({ sessions: [], results: [], models: [] }));
+      const { gateway } = createGateway(true, { methods: ["sessions.search"], request });
+      const list = vi.fn(async () => null);
+      const { palette } = await mountPalette(createContext(gateway, list));
+      await enterQuery(palette, composing ? "plugins" : "");
+      const original = palette.querySelector(".cmd-palette__search")!.textContent;
+      const input = palette.querySelector<HTMLTextAreaElement>(".cmd-palette__input")!;
+      if (composing) {
+        input.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+      }
+      for (const query of composing
+        ? ["plugin"]
+        : ["p", "pl", "plu", "plug", "plugi", "plugin", "plugins"]) {
+        input.value = query;
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        await palette.updateComplete;
+        expect(input.value).toBe(query);
+        expect(palette.querySelector(".cmd-palette__search")!.textContent).toBe(original);
+        await vi.advanceTimersByTimeAsync(100);
+        expect(list).not.toHaveBeenCalled();
+        expect(request).not.toHaveBeenCalled();
+      }
+      if (composing) {
+        await vi.advanceTimersByTimeAsync(200);
+        expect(list).not.toHaveBeenCalled();
+        input.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+        await vi.advanceTimersByTimeAsync(100);
+      }
+      await vi.advanceTimersByTimeAsync(99);
       expect(list).not.toHaveBeenCalled();
-      expect(request).not.toHaveBeenCalled();
-    }
-    await vi.advanceTimersByTimeAsync(99);
-    expect(list).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    await palette.updateComplete;
-    expect(list).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ search: "plugins" }));
-    expect(request.mock.calls.filter(([method]) => method === "sessions.search")).toHaveLength(1);
-    expect(request).toHaveBeenCalledWith(
-      "sessions.search",
-      expect.objectContaining({ query: "plugins" }),
-    );
-    expect(findPaletteOption(palette, "Plugins", true)).toBeDefined();
-  });
-
-  it("waits for an IME commit before searching", async () => {
-    const { gateway } = createGateway(true);
-    const list = vi.fn(async () => null);
-    const { palette } = await mountPalette(createContext(gateway, list));
-    await enterQuery(palette, "plugins");
-    const input = palette.querySelector<HTMLTextAreaElement>(".cmd-palette__input")!;
-    input.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
-    input.value = "plugin";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    await vi.advanceTimersByTimeAsync(200);
-    expect(list).not.toHaveBeenCalled();
-    input.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
-    await vi.advanceTimersByTimeAsync(200);
-    expect(list).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ search: "plugin" }));
-  });
+      await vi.advanceTimersByTimeAsync(1);
+      await palette.updateComplete;
+      expect(list).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ search: composing ? "plugin" : "plugins" }),
+      );
+      expect(request.mock.calls.filter(([method]) => method === "sessions.search")).toHaveLength(1);
+      expect(request).toHaveBeenCalledWith(
+        "sessions.search",
+        expect.objectContaining({ query: composing ? "plugin" : "plugins" }),
+      );
+      expect(findPaletteOption(palette, "Plugins", true)).toBeDefined();
+    },
+  );
 
   it("cancels a pending search when the query becomes a multiline prompt", async () => {
     const request = vi.fn(async (method: string) =>
@@ -193,14 +193,14 @@ describe("CommandPalette pending searches", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
-  it.each(["match", "empty", "failure"])(
+  it.each(["match", "empty", "failure", "static command"])(
     "announces session search through debounce and deferred settlement: %s",
     async (outcome) => {
       const deferred = createDeferred<SessionsListResult | null>();
       const { gateway } = createGateway(true);
       const list = vi.fn(() => deferred.promise);
       const { palette } = await mountPalette(createContext(gateway, list));
-      await enterQuery(palette, "zzfixtureunique");
+      await enterQuery(palette, outcome === "static command" ? "plugins" : "zzfixtureunique");
       const results = palette.querySelector('[role="listbox"]')!;
       expect(results.getAttribute("aria-busy")).toBe("true");
       expect(palette.textContent).not.toContain("Searching sessions");
@@ -213,6 +213,11 @@ describe("CommandPalette pending searches", () => {
         "Searching sessions",
       );
       expect(results.getAttribute("aria-busy")).toBe("true");
+      if (outcome === "static command") {
+        findPaletteOption(palette, "Plugins")!.click();
+        expect(palette.onNavigate).toHaveBeenCalledWith("plugins");
+        return;
+      }
       expect(palette.querySelectorAll('[role="option"]')).toHaveLength(0);
       if (outcome === "failure") {
         deferred.reject(new Error("Search failed"));
@@ -317,6 +322,7 @@ describe("CommandPalette pending searches", () => {
 
   it.each([
     { name: "partial", result: {}, notice: "Transcript search unavailable" },
+    { name: "model failure", result: {}, notice: "Model search unavailable" },
     {
       name: "indexing",
       result: { indexing: true },
@@ -331,6 +337,9 @@ describe("CommandPalette pending searches", () => {
         methods: ["sessions.search"],
         request: (method) => {
           if (method !== "sessions.search") {
+            if (name === "model failure") {
+              throw new Error("Model source unavailable");
+            }
             return { models: [] };
           }
           if (name === "partial") {
@@ -357,42 +366,6 @@ describe("CommandPalette pending searches", () => {
       expect(list).toHaveBeenCalledOnce();
     },
   );
-
-  it("does not announce empty success when the model source fails", async () => {
-    const { gateway } = createGateway(true, {
-      request: () => {
-        throw new Error("Model source unavailable");
-      },
-    });
-    const empty = { ...createSessionResult("agent:main:fixture", "Unused"), sessions: [] };
-    const { palette } = await mountPalette(
-      createContext(
-        gateway,
-        vi.fn(async () => empty),
-      ),
-    );
-    await enterQuery(palette, "zzfixtureunique");
-    await vi.advanceTimersByTimeAsync(200);
-    await palette.updateComplete;
-    expect(palette.textContent).toContain("Model search unavailable");
-    expect(palette.querySelector(".cmd-palette__no-results")).toBeNull();
-    const input = palette.querySelector<HTMLTextAreaElement>(".cmd-palette__input")!;
-    input.value = "zzfixtureunique\nStart a new task without searching models.";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    await vi.advanceTimersByTimeAsync(200);
-    await palette.updateComplete;
-    expectPalettePromptMode(palette);
-  });
-
-  it("keeps static commands usable while session search is pending", async () => {
-    const { gateway } = createGateway(true);
-    const { palette } = await mountPalette(createContext(gateway, () => new Promise(() => {})));
-    await enterQuery(palette, "plugins");
-    await vi.advanceTimersByTimeAsync(200);
-    expect(palette.textContent).toContain("Searching sessions");
-    findPaletteOption(palette, "Plugins")!.click();
-    expect(palette.onNavigate).toHaveBeenCalledWith("plugins");
-  });
 
   it("does not let an old query settle or select rows during a newer debounce", async () => {
     const old = createDeferred<SessionsListResult | null>();

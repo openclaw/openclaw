@@ -130,19 +130,10 @@ export async function throwWebSearchApiError(
 }
 
 export function resolveSiteName(url: string | undefined): string | undefined {
-  if (!url) {
-    return undefined;
-  }
-  try {
-    return new URL(url).hostname;
-  } catch {
-    return undefined;
-  }
+  return URL.parse(url ?? "")?.hostname;
 }
 
-const BRAVE_FRESHNESS_SHORTCUTS = new Set(["pd", "pw", "pm", "py"]);
 const BRAVE_FRESHNESS_RANGE = /^(\d{4}-\d{2}-\d{2})to(\d{4}-\d{2}-\d{2})$/;
-const PERPLEXITY_RECENCY_VALUES = new Set(["day", "week", "month", "year"]);
 
 type WebSearchFreshnessProvider = "brave" | "perplexity";
 type WebSearchRecencyFreshness = "day" | "week" | "month" | "year";
@@ -155,12 +146,11 @@ export const FRESHNESS_TO_RECENCY: Record<string, string> = {
   pm: "month",
   py: "year",
 };
-const RECENCY_TO_FRESHNESS: Record<string, string> = {
-  day: "pd",
-  week: "pw",
-  month: "pm",
-  year: "py",
-};
+const RECENCY_TO_FRESHNESS: Record<string, string> = Object.fromEntries(
+  Object.entries(FRESHNESS_TO_RECENCY).map(([freshness, recency]) => [recency, freshness]),
+);
+const BRAVE_FRESHNESS_SHORTCUTS = new Set(Object.keys(FRESHNESS_TO_RECENCY));
+const PERPLEXITY_RECENCY_VALUES = new Set(Object.values(FRESHNESS_TO_RECENCY));
 
 const ISO_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
 const PERPLEXITY_DATE_PATTERN = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/;

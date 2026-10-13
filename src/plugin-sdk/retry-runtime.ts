@@ -1,4 +1,4 @@
-// Public retry helpers for plugins that need retry config or policy runners.
+// Retry config and policy helpers for official plugin runtimes.
 
 /** Transient failures that prove the request did not reach the remote server. */
 const PRE_CONNECT_NETWORK_ERROR_CODES: ReadonlySet<string> = new Set([
@@ -43,7 +43,6 @@ export { isTransientNetworkError } from "../infra/retryable-network-errors.js";
 export { sleepWithAbort } from "../infra/backoff.js";
 export {
   createChannelApiRetryRunner,
-  createRateLimitRetryRunner,
   /** @deprecated Use createChannelApiRetryRunner. */
   createChannelApiRetryRunner as createTelegramRetryRunner,
   CHANNEL_API_RETRY_DEFAULTS as TELEGRAM_RETRY_DEFAULTS,

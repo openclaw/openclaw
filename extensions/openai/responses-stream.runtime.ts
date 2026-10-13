@@ -1,8 +1,9 @@
 import { streamSimple, type SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asOptionalRecord, normalizeFastMode } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createOpenAINativeWebSearchWrapper } from "./native-web-search.js";
+import { resolveOpenAIModelServiceTiers } from "./service-tier-policy.js";
 import { TOKEN_SHARING_AUTH_FLOW } from "./token-sharing.js";
 
 const { wrapStreamFn } = buildProviderStreamFamilyHooks("openai-responses-defaults");
@@ -10,12 +11,36 @@ const SIWC_SERVICE_TIERS = ["default", "priority", "ultrafast", "slow"];
 
 export function wrapOpenAIResponsesStream(ctx: ProviderWrapStreamFnContext) {
   let streamContext = ctx;
-  if (ctx.auth?.mode === "oauth" && ctx.auth.authFlow === TOKEN_SHARING_AUTH_FLOW) {
-    const underlying = ctx.streamFn ?? streamSimple;
+  const serviceTiers = ctx.model
+    ? resolveOpenAIModelServiceTiers({
+        modelId: ctx.model.id,
+        api: ctx.model.api,
+        baseUrl: ctx.model.baseUrl,
+      })
+    : undefined;
+  if (serviceTiers) {
+    // Resolve each call so timed Auto still expires; explicit API tiers remain operator-owned.
     streamContext = {
       ...ctx,
       extraParams: {
         ...ctx.extraParams,
+        fastMode: () => {
+          if (!serviceTiers.includes("priority")) {
+            return false;
+          }
+          const raw = ctx.extraParams?.fastMode ?? ctx.extraParams?.fast_mode;
+          const requested = normalizeFastMode(typeof raw === "function" ? raw() : raw);
+          return requested === "ultrafast" ? true : requested;
+        },
+      },
+    };
+  }
+  if (ctx.auth?.mode === "oauth" && ctx.auth.authFlow === TOKEN_SHARING_AUTH_FLOW) {
+    const underlying = streamContext.streamFn ?? streamSimple;
+    streamContext = {
+      ...streamContext,
+      extraParams: {
+        ...streamContext.extraParams,
         transport: "sse",
         responsesServerCompaction: false,
       },

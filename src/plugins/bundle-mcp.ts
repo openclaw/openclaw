@@ -22,40 +22,23 @@ import {
   CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH,
   resolveBundleComponentPaths,
 } from "./bundle-manifest.js";
+import type {
+  BundleMcpConfig,
+  BundleMcpDataDirOwnership,
+  BundleMcpServerConfig,
+  EnabledBundleMcpConfigResult,
+} from "./bundle-mcp.types.js";
 import { encodePluginInstallDirName } from "./install-paths.js";
 import { resolveActivePluginInstallRoots } from "./install-root-context.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginBundleFormat } from "./manifest-types.js";
 import { pluginCacheExistsSync, pluginCacheRealpathSync } from "./plugin-cache-files.js";
 
-export type BundleMcpServerConfig = Record<string, unknown>;
-
-export type BundleMcpConfig = {
-  mcpServers: Record<string, BundleMcpServerConfig>;
-};
-
-export type BundleMcpDataDirOwnership = {
-  pluginId: string;
-  dataDir: string;
-};
-
 type BundleMcpRuntimeConfig = BundleMcpConfig & {
   prepareDataDirsByServer: Record<string, BundleMcpDataDirOwnership | null>;
 };
 
-export type BundleMcpDiagnostic = {
-  pluginId: string;
-  message: string;
-};
-
-type EnabledBundleMcpConfigResult = {
-  config: BundleMcpConfig;
-  diagnostics: BundleMcpDiagnostic[];
-  prepareDataDirsByServer: Record<string, BundleMcpDataDirOwnership>;
-  pluginIdsByServer: Record<string, string>;
-};
 type BundleMcpRuntimeSupport = {
-  hasSupportedStdioServer: boolean;
   supportedServerNames: string[];
   stdioServerNames: string[];
   unsupportedServerNames: string[];
@@ -530,7 +513,6 @@ function inspectMcpServerRuntimeSupport(loaded: {
     unsupportedServerNames.push(serverName);
   }
   return {
-    hasSupportedStdioServer: stdioServerNames.length > 0,
     supportedServerNames,
     stdioServerNames,
     unsupportedServerNames,

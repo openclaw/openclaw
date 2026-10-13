@@ -405,7 +405,7 @@ describe("runDoctorSessionSqlite", () => {
   );
 
   it.each(["untrusted target", "unreadable manifest", "missing restore markers"] as const)(
-    "refuses %s without changing current state or restored originals",
+    "reconciles %s without replaying current state or losing restored originals",
     async (receiptFailure) => {
       const { store, imported } = await createVerifiedRecoveryStore();
       const scope = {
@@ -421,6 +421,7 @@ describe("runDoctorSessionSqlite", () => {
         history: loadTranscriptEventsSync(transcriptScope),
       });
       expect(current.entry?.label).toBe("Current metadata after import");
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
       const restored = await runDoctorSessionSqlite({
         env: store.env,
@@ -446,17 +447,29 @@ describe("runDoctorSessionSqlite", () => {
         writeSessionSqliteMigrationManifest({ manifest, manifestPath });
       }
 
-      await expect(importLegacyStore(store)).rejects.toThrow(
-        receiptFailure === "unreadable manifest"
-          ? "Session recovery history cannot be verified"
-          : "Restored session index evidence cannot be verified",
-      );
+      const reconciled = await importLegacyStore(store);
+      const manifest = readMigrationManifest(reconciled.migrationRun?.manifestPath);
+      if (receiptFailure === "unreadable manifest") {
+        expect(reconciled.targets[0]?.issues).toEqual([]);
+      } else {
+        expect(reconciled.targets[0]?.issues).toContainEqual(
+          expect.objectContaining({
+            code: "legacy_import_deferred",
+            message: expect.stringContaining("Restored session index evidence cannot be verified"),
+          }),
+        );
+      }
       expect({
         entry: loadSessionEntry(scope),
         history: loadTranscriptEventsSync(transcriptScope),
       }).toEqual(current);
       for (const original of originals) {
-        expect(fs.readFileSync(original.sourcePath)).toEqual(original.bytes);
+        const archived = manifest.targets[0]?.completedMoves.find(
+          (move) => move.sourcePath === original.sourcePath,
+        );
+        expect(fs.readFileSync(archived?.archivePath ?? original.sourcePath)).toEqual(
+          original.bytes,
+        );
       }
     },
   );

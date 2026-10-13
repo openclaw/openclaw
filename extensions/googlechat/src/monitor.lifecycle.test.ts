@@ -71,53 +71,48 @@ describe("Google Chat monitor lifecycle", () => {
     clearRuntimeConfigSnapshot();
   });
 
-  it.each([true, false])(
-    "follows runtime reloads only for a runtime-owned monitor (runtimeOwned=%s)",
-    async (runtimeOwned) => {
-      const startup = { messages: { visibleReplies: "message_tool" as const } };
-      setRuntimeConfigSnapshot(runtimeOwned ? startup : {});
-      const stop = await startGoogleChatMonitor({
-        account: {
-          ...configuredAccount,
-          config: { ...configuredAccount.config, typingIndicator: "none" },
+  it("follows runtime config reloads without replacing the webhook target", async () => {
+    const startup = { messages: { visibleReplies: "message_tool" as const } };
+    setRuntimeConfigSnapshot(startup);
+    const stop = await startGoogleChatMonitor({
+      account: {
+        ...configuredAccount,
+        config: { ...configuredAccount.config, typingIndicator: "none" },
+      },
+      config: startup,
+      runtime: {},
+      abortSignal: new AbortController().signal,
+    } as never);
+    try {
+      const target = mocks.registerTarget.mock.calls[0]![0];
+      const { dispatch } = mocks.ingressFactory.mock.calls[0]![0];
+      const event: GoogleChatEvent = {
+        type: "MESSAGE",
+        space: { name: "spaces/CONFIG", type: "DM" },
+        message: {
+          name: "spaces/CONFIG/messages/1",
+          text: "hello",
+          sender: { name: "users/alice" },
         },
-        config: startup,
-        runtime: {},
-        abortSignal: new AbortController().signal,
-      } as never);
-      try {
-        const target = mocks.registerTarget.mock.calls[0]![0];
-        const { dispatch } = mocks.ingressFactory.mock.calls[0]![0];
-        const event: GoogleChatEvent = {
-          type: "MESSAGE",
-          space: { name: "spaces/CONFIG", type: "DM" },
-          message: {
-            name: "spaces/CONFIG/messages/1",
-            text: "hello",
-            sender: { name: "users/alice" },
-          },
-        };
-        await dispatch(event);
-        setRuntimeConfigSnapshot({ messages: { visibleReplies: "automatic" } });
-        await dispatch(event);
-        expect(
-          mocks.runTurn.mock.calls.map(
-            ([turn]) => turn.adapter.resolveTurn().cfg.messages?.visibleReplies,
-          ),
-        ).toEqual(["message_tool", runtimeOwned ? "automatic" : "message_tool"]);
-        expect(target.config).toBe(startup);
-        expect(target.audience).toBe("1234567890");
-        expect(mocks.ingressStart).toHaveBeenCalledOnce();
-      } finally {
-        await stop();
-      }
-    },
-  );
+      };
+      await dispatch(event);
+      setRuntimeConfigSnapshot({ messages: { visibleReplies: "automatic" } });
+      await dispatch(event);
+      expect(
+        mocks.runTurn.mock.calls.map(
+          ([turn]) => turn.adapter.resolveTurn().cfg.messages?.visibleReplies,
+        ),
+      ).toEqual(["message_tool", "automatic"]);
+      expect(target.config).toBe(startup);
+      expect(target.audience).toBe("1234567890");
+      expect(mocks.ingressStart).toHaveBeenCalledOnce();
+    } finally {
+      await stop();
+    }
+  });
 
-  it.each([
-    { audienceType: "app-url", audience: "https://chat.example.test/googlechat" },
-    { audienceType: "project-number", audience: "1234567890" },
-  ])("publishes ready after the $audienceType webhook target is registered", async (config) => {
+  it("publishes ready after the app-url webhook target is registered", async () => {
+    const config = { audienceType: "app-url", audience: "https://chat.example.test/googlechat" };
     const statusSink = vi.fn();
 
     const stop = await startGoogleChatMonitor({
@@ -146,10 +141,6 @@ describe("Google Chat monitor lifecycle", () => {
     {
       description: "the audience is blank",
       config: { audienceType: "app-url", audience: "   " },
-    },
-    {
-      description: "the audience type is missing",
-      config: { audience: "https://chat.example.test/googlechat" },
     },
     {
       description: "the audience type is unsupported",

@@ -1,8 +1,10 @@
 import {
   escapeRuntimeContextFooter,
   hasRuntimeContextMarker,
+  isRuntimeContextMessage,
   labelRuntimeContextText,
   RUNTIME_CONTEXT_HEADER,
+  setRuntimeContextRetention,
   type Context,
 } from "../../../llm/types.js";
 import {
@@ -43,13 +45,17 @@ export type RuntimeContextCustomMessage = {
   timestamp: number;
 };
 
-/** Appends turn additions to both full and resumed projections without changing their provenance. */
+/** Adds turn context without separating an inline prompt header from its user text. */
 export function appendCurrentInboundContext(
   context: CurrentInboundPromptContext | undefined,
   fragments: RuntimeContextFragment[],
   legacyText = fragments.map((fragment) => fragment.text).join("\n\n"),
 ): CurrentInboundPromptContext {
-  const append = (text?: string) => [text, legacyText].filter(Boolean).join("\n\n");
+  // A space joiner binds the existing context's trailing header to the user body.
+  // Later additions must precede that context in both full and resumed prompts.
+  const inline = context?.promptJoiner === " ";
+  const append = (text?: string) =>
+    (inline ? [legacyText, text] : [text, legacyText]).filter(Boolean).join("\n\n");
   return {
     ...context,
     text: append(context?.text),
@@ -77,40 +83,33 @@ export function buildCurrentInboundPrompt(params: {
   return [prefix, params.prompt].filter(Boolean).join(params.context?.promptJoiner ?? "\n\n");
 }
 
-/** Attach context to this queued turn, not the active run's original prompt owner. */
-function buildCurrentInboundRuntimeContext(
-  context: CurrentInboundPromptContext | undefined,
-): RuntimeContextCustomMessage | undefined {
-  if (!context) {
-    return undefined;
-  }
-  const fragments = (
-    context.fragments ?? [{ kind: "conversation-data" as const, text: context.text }]
-  ).filter((fragment) => fragment.text.trim());
-  return buildRuntimeContextCustomMessage(projectRuntimeContextFragments(fragments), fragments);
-}
-
 /** Bind context to its queued user turn without changing user-authored bytes. */
 export function attachSteeringRuntimeContext(
   message: AgentMessage,
   context: CurrentInboundPromptContext | undefined,
 ): void {
-  const runtimeContext = buildCurrentInboundRuntimeContext(context);
+  if (!context) {
+    return;
+  }
+  const fragments = (
+    context.fragments ?? [{ kind: "conversation-data" as const, text: context.text }]
+  ).filter((fragment) => fragment.text.trim());
+  const runtimeContext = buildRuntimeContextCustomMessage(
+    projectRuntimeContextFragments(fragments),
+    fragments,
+  );
   if (!runtimeContext) {
     return;
   }
   // The enumerable symbol survives in-memory message copies but never enters
   // transcript JSON or provider payloads. Queue cancellation stays atomic.
-  Object.defineProperty(runtimeContext, STEERING_RUNTIME_CONTEXT, {
-    configurable: true,
-    enumerable: true,
-    value: runtimeContext,
-  });
-  Object.defineProperty(message, STEERING_RUNTIME_CONTEXT, {
-    configurable: true,
-    enumerable: true,
-    value: runtimeContext,
-  });
+  for (const target of [runtimeContext, message]) {
+    Object.defineProperty(target, STEERING_RUNTIME_CONTEXT, {
+      configurable: true,
+      enumerable: true,
+      value: runtimeContext,
+    });
+  }
 }
 
 /** Materialize an attached carrier immediately before its owning user turn. */
@@ -162,6 +161,17 @@ export function resolveRuntimeContextPromptParts(params: {
   };
 }
 
+export function applyRuntimeContextCarrierRetention(
+  messages: Context["messages"],
+  appendOnlyRuntimeContext: boolean | undefined,
+): void {
+  for (const message of messages) {
+    if (isRuntimeContextMessage(message)) {
+      setRuntimeContextRetention(message, appendOnlyRuntimeContext);
+    }
+  }
+}
+
 export function buildRuntimeContextCustomMessage(
   runtimeContext: string | undefined,
   fragments?: RuntimeContextFragment[],
@@ -178,18 +188,11 @@ export function buildRuntimeContextCustomMessage(
       true,
     );
   }
-  return {
-    role: "custom",
-    customType: OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
-    content: trimmedRuntimeContext,
-    display: false,
-    details: {
-      source: "openclaw-runtime-context",
-      runtimeContextCarrier: true,
-      ...(fragments?.length ? { fragments } : {}),
-    },
-    timestamp: Date.now(),
-  };
+  return buildContextCustomMessage(trimmedRuntimeContext, OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE, {
+    source: "openclaw-runtime-context",
+    runtimeContextCarrier: true,
+    ...(fragments?.length ? { fragments } : {}),
+  });
 }
 
 export function buildSystemUpdateMessage(
@@ -197,14 +200,18 @@ export function buildSystemUpdateMessage(
   kind: "prompt-update" | "runtime-context",
   turnScoped: boolean,
 ): RuntimeContextCustomMessage {
-  return {
-    role: "custom",
-    customType: SYSTEM_UPDATE_MESSAGE_CUSTOM_TYPE,
-    content,
-    display: false,
-    details: { kind, turnScoped },
-    timestamp: Date.now(),
-  };
+  return buildContextCustomMessage(content, SYSTEM_UPDATE_MESSAGE_CUSTOM_TYPE, {
+    kind,
+    turnScoped,
+  });
+}
+
+function buildContextCustomMessage(
+  content: string,
+  customType: string,
+  details: RuntimeContextCustomMessage["details"],
+): RuntimeContextCustomMessage {
+  return { role: "custom", customType, content, display: false, details, timestamp: Date.now() };
 }
 
 /** Project per-request instructions into the transient carrier without changing history. */
@@ -245,9 +252,5 @@ export function prependRuntimeContextForModel(
               ? Object.assign({}, part, { text: prepend(part.text) })
               : part,
           );
-  const updated = {
-    ...carrier,
-    content: updatedContent,
-  };
-  return messages.with(carrierIndex, updated);
+  return messages.with(carrierIndex, { ...carrier, content: updatedContent });
 }

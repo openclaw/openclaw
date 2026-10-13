@@ -63,13 +63,6 @@ function createPolicyFetch(initialTargets: Array<string | number> = []) {
   const controls = { failWrites: false, loseWriteResponse: false };
   const fetcher = vi.fn<typeof fetch>(async (input, init) => {
     const url = requestUrl(input);
-    if (
-      url.origin === "https://api.github.com" &&
-      url.pathname === "/users/invitation-login" &&
-      (init?.method ?? "GET") === "GET"
-    ) {
-      return Response.json({ id: 42, login: "invitation-login", email: null });
-    }
     if (!url.href.startsWith(policiesUrl)) {
       throw new Error(`Unexpected test request: ${url}`);
     }

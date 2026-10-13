@@ -210,9 +210,14 @@ describe("skill upload transaction kernels", () => {
     },
   );
 
-  it.each(["chunk", "claim"] as const)(
-    "rejects %s when upload expiry is crossed during native admission",
-    async (operation) => {
+  it.each([
+    { operation: "chunk", leased: false },
+    { operation: "claim", leased: false },
+    { operation: "commit", leased: false },
+    { operation: "commit", leased: true },
+  ] as const)(
+    "rejects $operation across native admission expiry with external lease=$leased",
+    async ({ operation, leased }) => {
       const { databasePath } = await makeStore();
       const database = openOpenClawStateDatabase({ path: databasePath });
       const options = { database, path: databasePath };
@@ -234,21 +239,53 @@ describe("skill upload transaction kernels", () => {
       if (operation === "claim") {
         commitSkillUploadInDatabase({ uploadId: begun.uploadId }, options);
       }
+      if (leased) {
+        database.db
+          .prepare(
+            "INSERT INTO state_leases (scope, lease_key, owner, expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+          )
+          .run(
+            "skill-upload-install",
+            begun.uploadId,
+            "external-install",
+            begun.expiresAt + 60_000,
+            begun.expiresAt - 1,
+            begun.expiresAt - 1,
+          );
+      }
       const admitted = advanceClockAtAdmission(database, begun.expiresAt - 1, begun.expiresAt);
-      expect(() =>
-        operation === "chunk"
-          ? appendSkillUploadChunkInDatabase(
-              { uploadId: begun.uploadId, offset: 1, decoded: archive },
-              options,
-            )
-          : claimSkillUploadInDatabase(
-              { uploadId: begun.uploadId, leaseOwner: "admission-proof", installLeaseMs: 60_000 },
-              options,
-            ),
-      ).toThrow("upload has expired");
+      expect(() => {
+        if (operation === "chunk") {
+          return appendSkillUploadChunkInDatabase(
+            { uploadId: begun.uploadId, offset: 1, decoded: archive },
+            options,
+          );
+        }
+        if (operation === "claim") {
+          return claimSkillUploadInDatabase(
+            { uploadId: begun.uploadId, leaseOwner: "admission-proof", installLeaseMs: 60_000 },
+            options,
+          );
+        }
+        return commitSkillUploadInDatabase({ uploadId: begun.uploadId }, options);
+      }).toThrow("upload has expired");
       expect(admitted).toHaveBeenCalledOnce();
-      expect(chunkCount(databasePath, begun.uploadId)).toBe(operation === "chunk" ? 1 : 0);
-      expect(installLeaseCount(databasePath, begun.uploadId)).toBe(0);
+      expect(chunkCount(databasePath, begun.uploadId)).toBe(
+        operation === "chunk" || leased ? 1 : 0,
+      );
+      expect(installLeaseCount(databasePath, begun.uploadId)).toBe(leased ? 1 : 0);
+      if (operation === "commit") {
+        expect(uploadExists(databasePath, begun.uploadId)).toBe(leased);
+      }
+      if (leased) {
+        expect(
+          database.db
+            .prepare(
+              "SELECT committed, length(archive_blob) AS bytes FROM skill_uploads WHERE upload_id = ?",
+            )
+            .get(begun.uploadId),
+        ).toEqual({ committed: 0, bytes: 0 });
+      }
     },
   );
 
@@ -496,66 +533,6 @@ describe("skill upload transaction kernels", () => {
       expect(rereadObserved).toBe(true);
       expect(uploadExists(databasePath, begin.uploadId)).toBe(outcome !== "expired committed");
       expect(chunkCount(databasePath, begin.uploadId)).toBe(0);
-    },
-  );
-
-  it("rejects publication when the upload expires after chunk assembly", async () => {
-    const { databasePath } = await makeStore();
-    const archive = Buffer.from("expires-during-commit");
-    const begin = stageUpload(databasePath, "expires-during-commit", archive);
-    const database = openOpenClawStateDatabase({ path: databasePath });
-    let now = begin.expiresAt - 1;
-    vi.spyOn(Date, "now").mockImplementation(() => now);
-    uploadSqliteMocks.readSkillUploadArchiveChunks.mockImplementationOnce((uploadId, options) => {
-      const chunks = uploadSqliteMocks.defaultReadSkillUploadArchiveChunks!(uploadId, options);
-      now = begin.expiresAt;
-      return chunks;
-    });
-    expect(() =>
-      commitSkillUploadInDatabase({ uploadId: begin.uploadId }, { database, path: databasePath }),
-    ).toThrow("upload has expired");
-    expect(uploadExists(databasePath, begin.uploadId)).toBe(false);
-    expect(chunkCount(databasePath, begin.uploadId)).toBe(0);
-  });
-
-  it.each([false, true])(
-    "rechecks expiry after transaction admission with external install lease=%s",
-    async (leased) => {
-      const { databasePath } = await makeStore();
-      const archive = Buffer.from("expires-during-admission");
-      const begin = stageUpload(databasePath, "admission-expiry", archive);
-      const database = openOpenClawStateDatabase({ path: databasePath });
-      if (leased) {
-        database.db
-          .prepare(
-            "INSERT INTO state_leases (scope, lease_key, owner, expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-          )
-          .run(
-            "skill-upload-install",
-            begin.uploadId,
-            "external-install",
-            begin.expiresAt + 60_000,
-            begin.expiresAt - 1,
-            begin.expiresAt - 1,
-          );
-      }
-      const admitted = advanceClockAtAdmission(database, begin.expiresAt - 1, begin.expiresAt);
-      expect(() =>
-        commitSkillUploadInDatabase({ uploadId: begin.uploadId }, { database, path: databasePath }),
-      ).toThrow("upload has expired");
-      expect(admitted).toHaveBeenCalledOnce();
-      expect(uploadExists(databasePath, begin.uploadId)).toBe(leased);
-      expect(chunkCount(databasePath, begin.uploadId)).toBe(leased ? 1 : 0);
-      if (leased) {
-        expect(
-          database.db
-            .prepare(
-              "SELECT committed, length(archive_blob) AS bytes FROM skill_uploads WHERE upload_id = ?",
-            )
-            .get(begin.uploadId),
-        ).toEqual({ committed: 0, bytes: 0 });
-        expect(installLeaseCount(databasePath, begin.uploadId)).toBe(1);
-      }
     },
   );
 });

@@ -1,4 +1,3 @@
-/** Core Canvas document materialization and hosted-path resolution. */
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -73,7 +72,6 @@ export function resolveCanvasDocumentsDir(stateDir = resolveStateDir()): string 
   return path.resolve(stateDir, "canvas", "documents");
 }
 
-/** Reads the managed HTML entrypoint for a core Canvas document. */
 export async function readCanvasDocumentHtmlSource(
   documentId: string,
   options?: { stateDir?: string; maxBytes?: number },
@@ -144,7 +142,6 @@ async function pruneCanvasDocumentsForScope(params: {
   );
 }
 
-/** Maps a Canvas hosted document URL path back to its managed local file. */
 export function resolveCanvasHttpPathToLocalPath(
   requestPath: string,
   options?: { stateDir?: string },
@@ -156,25 +153,14 @@ export function resolveCanvasHttpPathToLocalPath(
   }
   const pathWithoutQuery = trimmed.replace(/[?#].*$/, "");
   const relative = pathWithoutQuery.slice(prefix.length);
-  const segments: string[] = [];
-  for (const segment of relative.split("/")) {
-    if (!segment) {
-      continue;
-    }
-    try {
-      segments.push(decodeURIComponent(segment));
-    } catch {
+  try {
+    const [rawDocumentId, ...entrySegments] = relative
+      .split("/")
+      .filter(Boolean)
+      .map(decodeURIComponent);
+    if (!rawDocumentId || entrySegments.length === 0) {
       return null;
     }
-  }
-  if (segments.length < 2) {
-    return null;
-  }
-  const [rawDocumentId, ...entrySegments] = segments;
-  if (!rawDocumentId) {
-    return null;
-  }
-  try {
     const documentId = normalizeCanvasDocumentId(rawDocumentId);
     const normalizedEntrypoint = normalizeLogicalPath(entrySegments.join("/"));
     const documentsDir = resolveCanvasDocumentsDir(options?.stateDir);
@@ -188,7 +174,6 @@ export function resolveCanvasHttpPathToLocalPath(
   }
 }
 
-/** Persists the inline widget's HTML bytes and its Canvas manifest. */
 export async function createCanvasDocument(
   input: CanvasDocumentCreateInput,
   options?: {

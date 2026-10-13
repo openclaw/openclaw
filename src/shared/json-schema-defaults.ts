@@ -661,7 +661,7 @@ function schemaMatches(
 }
 
 function countSchemaNodes(schema: JsonSchemaValue, seen = new Set<object>()): number {
-  if (typeof schema === "boolean" || !isRecord(schema) || seen.has(schema)) {
+  if (!isRecord(schema) || seen.has(schema)) {
     return 1;
   }
   seen.add(schema);

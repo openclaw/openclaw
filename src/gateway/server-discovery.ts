@@ -1,5 +1,5 @@
-import fs from "node:fs";
 import path from "node:path";
+import { isRegularFile } from "../infra/executable-path.js";
 import { getTailnetHostname } from "../infra/tailscale.js";
 import { runExec } from "../process/exec.js";
 
@@ -22,36 +22,21 @@ export function resolveBonjourCliPath(): string | undefined {
     return envPath;
   }
 
-  const isFile = (candidate: string) => {
-    try {
-      return fs.statSync(candidate).isFile();
-    } catch {
-      return false;
-    }
-  };
-
   const execDir = path.dirname(process.execPath);
   const siblingCli = path.join(execDir, "openclaw");
-  if (isFile(siblingCli)) {
+  if (isRegularFile(siblingCli)) {
     return siblingCli;
   }
 
   const argvPath = process.argv[1];
-  if (argvPath && isFile(argvPath)) {
+  if (argvPath && isRegularFile(argvPath)) {
     return argvPath;
   }
 
   const cwd = process.cwd();
-  const distCli = path.join(cwd, "dist", "index.js");
-  if (isFile(distCli)) {
-    return distCli;
-  }
-  const binCli = path.join(cwd, "bin", "openclaw");
-  if (isFile(binCli)) {
-    return binCli;
-  }
-
-  return undefined;
+  return [path.join(cwd, "dist", "index.js"), path.join(cwd, "bin", "openclaw")].find(
+    isRegularFile,
+  );
 }
 
 /** Resolves a Tailnet DNS hint from env or the local tailscale CLI when enabled. */

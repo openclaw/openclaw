@@ -7,7 +7,6 @@ import { hasUsableOAuthCredential } from "./credential-state.js";
 import { isOAuthRefreshFence } from "./oauth-refresh-marker.js";
 import {
   isSafeToAdoptBootstrapOAuthIdentity,
-  shouldBootstrapFromExternalCliCredential,
   type RuntimeExternalOAuthProfile,
 } from "./oauth-shared.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
@@ -18,6 +17,8 @@ type ExternalCliAuthProfileOptions = {
   providerIds?: Iterable<string>;
   profileIds?: Iterable<string>;
 };
+
+type PersistedExternalCliAuthProfile = RuntimeExternalOAuthProfile & { persistence: "persisted" };
 
 const PERSISTED_EXTERNAL_CLI_AUTH_FLOW = "external-cli";
 const MINIMAX_PROVIDER = "minimax-portal";
@@ -30,11 +31,12 @@ function isMiniMaxCliProfile(params: { profileId: string; credential?: OAuthCred
   );
 }
 
-function readMiniMaxCredential(env?: NodeJS.ProcessEnv): OAuthCredential | null {
-  return readMiniMaxCliCredentialsCached({
+function readMiniMaxCredential(env?: NodeJS.ProcessEnv, provider?: string): OAuthCredential | null {
+  const credential = readMiniMaxCliCredentialsCached({
     ttlMs: EXTERNAL_CLI_SYNC_TTL_MS,
     ...(env ? { homeDir: resolveRequiredOsHomeDir(env) } : {}),
   });
+  return credential && provider !== undefined ? { ...credential, provider } : credential;
 }
 
 /** True when durable metadata assigns this stored profile to an external CLI owner. */
@@ -59,28 +61,15 @@ export function listExternalCliSyncProviderIds(): string[] {
   return [...MINIMAX_PROVIDER_IDS];
 }
 
-function normalizeExternalCliCredentialProvider(
-  credential: OAuthCredential | null,
-  provider: string,
-): OAuthCredential | null {
-  return credential ? { ...credential, provider } : null;
-}
-
 /** Read a CLI credential only for safe bootstrap of an unusable local profile. */
 export function readExternalCliBootstrapCredential(params: {
-  store: AuthProfileStore;
   profileId: string;
   credential: OAuthCredential;
-  allowInlineOAuthTokenMaterial?: boolean;
-  allowKeychainPrompt?: boolean;
 }): OAuthCredential | null {
   if (!isMiniMaxCliProfile(params)) {
     return null;
   }
-  const imported = normalizeExternalCliCredentialProvider(
-    readMiniMaxCredential(),
-    params.credential.provider,
-  );
+  const imported = readMiniMaxCredential(undefined, params.credential.provider);
   if (imported && isOAuthRefreshFence(params.credential)) {
     // An external snapshot has no generation ordering proof. It must not clear
     // a fence and make an older single-use refresh token replayable.
@@ -90,22 +79,9 @@ export function readExternalCliBootstrapCredential(params: {
 }
 
 function normalizeProviderScope(values: Iterable<string> | undefined): Set<string> | undefined {
-  if (values === undefined) {
-    return undefined;
-  }
-  const out = new Set<string>();
-  for (const value of values) {
-    const raw = value.trim();
-    if (!raw) {
-      continue;
-    }
-    out.add(raw.toLowerCase());
-    const normalized = normalizeProviderId(raw);
-    if (normalized) {
-      out.add(normalized);
-    }
-  }
-  return out;
+  return values === undefined
+    ? undefined
+    : new Set(Array.from(values, normalizeProviderId).filter(Boolean));
 }
 
 function isMiniMaxCliInScope(params: {
@@ -129,65 +105,17 @@ function isMiniMaxCliInScope(params: {
   ) {
     return true;
   }
-  if (!providerScope || providerScope.size === 0) {
-    return false;
-  }
-  return MINIMAX_PROVIDER_IDS.some((alias) => {
-    const raw = alias.trim().toLowerCase();
-    const normalized = normalizeProviderId(alias);
-    return providerScope.has(raw) || (normalized ? providerScope.has(normalized) : false);
-  });
+  return MINIMAX_PROVIDER_IDS.some((alias) => providerScope?.has(alias));
 }
 
-/** True when a previously resolved built-in CLI profile belongs to this refresh scope. */
+/** True when the built-in CLI owns a refreshable profile slot. */
 export function isExternalCliAuthProfileInScope(params: {
   store: AuthProfileStore;
   profileId: string;
-  providerIds?: Iterable<string>;
-  profileIds?: Iterable<string>;
 }): boolean {
-  const credential = params.store.profiles[params.profileId];
-  const miniMaxProfile = isMiniMaxCliProfile({
-    profileId: params.profileId,
-    ...(credential?.type === "oauth" ? { credential } : {}),
-  });
-  if (!miniMaxProfile) {
-    // A retired reader still has to release its tagged runtime overlay on refresh.
-    return (
-      Array.from(params.profileIds ?? []).includes(params.profileId) ||
-      (credential !== undefined &&
-        normalizeProviderScope(params.providerIds)?.has(
-          normalizeProviderId(credential.provider),
-        ) === true)
-    );
-  }
-  return isMiniMaxCliInScope({
-    store: params.store,
-    options: {
-      ...(params.providerIds ? { providerIds: params.providerIds } : {}),
-      ...(params.profileIds ? { profileIds: params.profileIds } : {}),
-    },
-  });
-}
-
-function listScopedExternalCliProfileIds(params: {
-  store: AuthProfileStore;
-  options?: ExternalCliAuthProfileOptions;
-}): string[] {
-  const { options, store } = params;
-  const requestedProfileIds = Array.from(options?.profileIds ?? [])
-    .map((value) => value.trim())
-    .filter((value) => value.length > 0);
-  const matchingRequestedProfileIds = requestedProfileIds.filter(
-    (profileId) => MINIMAX_CLI_PROFILE_ID === profileId,
+  return (
+    params.profileId === MINIMAX_CLI_PROFILE_ID && isMiniMaxCliInScope({ store: params.store })
   );
-  if (matchingRequestedProfileIds.length > 0) {
-    return matchingRequestedProfileIds;
-  }
-
-  return Object.hasOwn(store.profiles, MINIMAX_CLI_PROFILE_ID) || options?.providerIds
-    ? [MINIMAX_CLI_PROFILE_ID]
-    : [];
 }
 
 function backfillExternalCliIdentity(params: {
@@ -215,99 +143,78 @@ function backfillExternalCliIdentity(params: {
 export function resolveExternalCliAuthProfiles(
   store: AuthProfileStore,
   options?: ExternalCliAuthProfileOptions,
-): RuntimeExternalOAuthProfile[] {
-  const profiles: RuntimeExternalOAuthProfile[] = [];
+): PersistedExternalCliAuthProfile[] {
   const now = Date.now();
   if (!isMiniMaxCliInScope({ store, options })) {
-    return profiles;
+    return [];
   }
-  const scopedProfileIds = listScopedExternalCliProfileIds({
-    store,
-    options,
-  });
-  for (const profileId of scopedProfileIds) {
-    const existing = store.profiles[profileId];
-    const existingOAuth =
-      existing?.type === "oauth" && MINIMAX_PROVIDER_IDS.includes(existing.provider)
-        ? existing
-        : undefined;
-    if (existing && !existingOAuth) {
-      authProfilesLog.debug("kept explicit local auth over external cli bootstrap", {
-        profileId,
-        provider: MINIMAX_PROVIDER,
-        localType: existing.type,
-        localProvider: existing.provider,
-      });
-      continue;
-    }
-    if (existingOAuth && hasUsableOAuthCredential(existingOAuth, { now })) {
-      // Profiles synced before identity capture carry no email; backfill the
-      // non-secret metadata once the CLI read proves it is the same login.
-      const backfilled = backfillExternalCliIdentity({
-        existingOAuth,
-        env: options?.env,
-      });
-      if (backfilled) {
-        profiles.push({
-          profileId,
-          credential: backfilled,
-          persistence: "persisted",
-        });
-      }
-      continue;
-    }
-    const creds = normalizeExternalCliCredentialProvider(
-      readMiniMaxCredential(options?.env),
-      existingOAuth?.provider ?? MINIMAX_PROVIDER,
-    );
-    if (!creds) {
-      continue;
-    }
-    if (existingOAuth && isOAuthRefreshFence(existingOAuth)) {
-      authProfilesLog.warn("refused unordered external cli oauth recovery for a fenced profile", {
-        profileId,
-        provider: MINIMAX_PROVIDER,
-      });
-      continue;
-    }
-    if (existingOAuth && !isSafeToAdoptBootstrapOAuthIdentity(existingOAuth, creds)) {
-      authProfilesLog.warn("refused external cli oauth bootstrap: identity mismatch", {
-        profileId,
-        provider: MINIMAX_PROVIDER,
-      });
-      continue;
-    }
-    if (
-      !shouldBootstrapFromExternalCliCredential({
-        existing: existingOAuth,
-        imported: creds,
-        now,
-      })
-    ) {
-      if (existingOAuth) {
-        authProfilesLog.debug("kept usable local oauth over external cli bootstrap", {
-          profileId,
-          provider: MINIMAX_PROVIDER,
-          localExpires: existingOAuth.expires,
-          externalExpires: creds.expires,
-        });
-      }
-      continue;
-    }
-    authProfilesLog.debug(
-      "used external cli oauth bootstrap because local oauth was missing or unusable",
-      {
-        profileId,
-        provider: MINIMAX_PROVIDER,
-        localExpires: existingOAuth?.expires,
-        externalExpires: creds.expires,
-      },
-    );
-    profiles.push({
+  const profileId = MINIMAX_CLI_PROFILE_ID;
+  const existing = store.profiles[profileId];
+  const existingOAuth =
+    existing?.type === "oauth" && MINIMAX_PROVIDER_IDS.includes(existing.provider)
+      ? existing
+      : undefined;
+  if (existing && !existingOAuth) {
+    authProfilesLog.debug("kept explicit local auth over external cli bootstrap", {
+      profileId,
+      provider: MINIMAX_PROVIDER,
+      localType: existing.type,
+      localProvider: existing.provider,
+    });
+    return [];
+  }
+  if (existingOAuth && hasUsableOAuthCredential(existingOAuth, { now })) {
+    // Profiles synced before identity capture carry no email; backfill the
+    // non-secret metadata once the CLI read proves it is the same login.
+    const backfilled = backfillExternalCliIdentity({
+      existingOAuth,
+      env: options?.env,
+    });
+    return backfilled
+      ? [
+          {
+            profileId,
+            credential: backfilled,
+            persistence: "persisted",
+          },
+        ]
+      : [];
+  }
+  const creds = readMiniMaxCredential(options?.env, existingOAuth?.provider ?? MINIMAX_PROVIDER);
+  if (!creds) {
+    return [];
+  }
+  if (existingOAuth && isOAuthRefreshFence(existingOAuth)) {
+    authProfilesLog.warn("refused unordered external cli oauth recovery for a fenced profile", {
+      profileId,
+      provider: MINIMAX_PROVIDER,
+    });
+    return [];
+  }
+  if (existingOAuth && !isSafeToAdoptBootstrapOAuthIdentity(existingOAuth, creds)) {
+    authProfilesLog.warn("refused external cli oauth bootstrap: identity mismatch", {
+      profileId,
+      provider: MINIMAX_PROVIDER,
+    });
+    return [];
+  }
+  if (!hasUsableOAuthCredential(creds, { now })) {
+    return [];
+  }
+  authProfilesLog.debug(
+    "used external cli oauth bootstrap because local oauth was missing or unusable",
+    {
+      profileId,
+      provider: MINIMAX_PROVIDER,
+      localExpires: existingOAuth?.expires,
+      externalExpires: creds.expires,
+    },
+  );
+  return [
+    {
       profileId,
       credential: markPersistedExternalCliCredential(creds),
       persistence: "persisted",
-    });
-  }
-  return profiles;
+    },
+  ];
 }

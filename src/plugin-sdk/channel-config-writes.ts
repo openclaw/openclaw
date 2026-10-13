@@ -1,11 +1,1 @@
-export {
-  authorizeConfigWrite,
-  canBypassConfigWritePolicy,
-  formatConfigWriteDeniedMessage,
-  resolveChannelConfigWrites,
-} from "./channel-config-helpers.js";
-export type {
-  ConfigWriteAuthorizationResult,
-  ConfigWriteScope,
-  ConfigWriteTarget,
-} from "./channel-config-helpers.js";
+export { resolveChannelConfigWrites } from "./channel-config-helpers.js";

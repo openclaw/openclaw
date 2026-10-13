@@ -69,6 +69,7 @@ const catalogSuite = createControlUiE2eSuite({
       env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined, VITEST: undefined },
       config: {
         gateway: { controlUi: { enabled: true } },
+        plugins: { enabled: false },
         cron: { enabled: false },
         agents: { defaults: { model: "fixture/anchor" } },
         models: {
@@ -185,16 +186,18 @@ catalogSuite.define(() => {
           await page.locator("#cron-payload-text").fill("Do not submit this draft");
           const picker = page.locator("openclaw-select-picker:has(#cron-payload-model-picker)");
           await expect
-            .poll(() => picker.locator('[role="option"][data-value="retiring"]').count())
+            .poll(() => picker.locator('[role="option"][data-value="fixture/retiring"]').count())
             .toBe(1);
           if (captureEnabled) {
             await page.screenshot({ path: path.join(catalogSuite.artifactDir, "initial.png") });
           }
           await publish("published");
           await expect
-            .poll(() => picker.locator('[role="option"][data-value="published"]').count())
+            .poll(() => picker.locator('[role="option"][data-value="fixture/published"]').count())
             .toBe(1);
-          expect(await picker.locator('[role="option"][data-value="retiring"]').count()).toBe(0);
+          expect(
+            await picker.locator('[role="option"][data-value="fixture/retiring"]').count(),
+          ).toBe(0);
           if (captureEnabled) {
             await page.screenshot({ path: path.join(catalogSuite.artifactDir, "published.png") });
           }
@@ -205,7 +208,9 @@ catalogSuite.define(() => {
           const error = page.locator(".cron-error-banner");
           await error.waitFor({ state: "visible" });
           expect(await error.textContent()).toContain("Catalog transport unavailable");
-          expect(await picker.locator('[role="option"][data-value="published"]').count()).toBe(1);
+          expect(
+            await picker.locator('[role="option"][data-value="fixture/published"]').count(),
+          ).toBe(1);
           if (captureEnabled) {
             await page.screenshot({
               path: path.join(catalogSuite.artifactDir, "read-failure.png"),
@@ -215,7 +220,7 @@ catalogSuite.define(() => {
           rejectCatalogReplies = false;
           await publish("recovered");
           await expect
-            .poll(() => picker.locator('[role="option"][data-value="recovered"]').count())
+            .poll(() => picker.locator('[role="option"][data-value="fixture/recovered"]').count())
             .toBe(1);
           await error.waitFor({ state: "hidden" });
           expect(await page.locator("#cron-name").inputValue()).toBe("Retain this draft");
@@ -620,9 +625,9 @@ suite.define(() => {
         const saved = await submitCronForm(evidence, cliJson, "cron.update");
         const savedFields = await readAlertFields(page);
         await capture(page, "real-alert-saved", { ...saved, savedFields });
-        const menu = page.locator(".cron-detail-actions wa-dropdown");
-        await menu.locator('button[slot="trigger"]').click();
-        await menu.locator('wa-dropdown-item[value="clone"]').click();
+        const menu = page.locator(".cron-detail-actions .cron-job-menu");
+        await menu.locator(".cron-job-menu__trigger").click();
+        await menu.locator('[data-value="clone"]').click();
         await page.locator("#cron-name").fill("Cloned partial failure policy");
         const cloned = await submitCronForm(evidence, cliJson, "cron.add");
         const cloneId = cronJobId(cloned.stored);
@@ -784,9 +789,9 @@ suite.define(() => {
             original,
             servedDocumentSha256,
           });
-          const menu = page.locator(".cron-detail-actions wa-dropdown");
-          await menu.locator('button[slot="trigger"]').click();
-          await menu.locator('wa-dropdown-item[value="clone"]').click();
+          const menu = page.locator(".cron-detail-actions .cron-job-menu");
+          await menu.locator(".cron-job-menu__trigger").click();
+          await menu.locator('[data-value="clone"]').click();
           await page.locator('.cron-page[data-panel-mode="create"]').waitFor();
           await expect
             .poll(() => page.locator("#cron-name").inputValue())

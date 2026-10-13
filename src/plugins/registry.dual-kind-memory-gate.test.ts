@@ -142,42 +142,6 @@ describe("memory capability ownership", () => {
     });
   });
 
-  it("keeps sidecar consolidation while dropping its indexing runtime", () => {
-    const { config, registry, add, selected } = fixture();
-    add("memory-core", {
-      runtime: createStubMemoryRuntime(),
-      promptBuilder: () => ["memory prompt"],
-      flushPlanResolver: () => null,
-    });
-    const sidecar = selected();
-    expect(sidecar?.capability.runtime).toBeUndefined();
-    expect(sidecar?.pluginId).toBe("memory-core");
-    expect(sidecar?.memorySlotSelected).toBe(false);
-    expect(sidecar?.capability.promptBuilder?.({ availableTools: new Set() })).toEqual([
-      "memory prompt",
-    ]);
-    expect(sidecar?.capability.flushPlanResolver?.({ cfg: config })).toBeNull();
-    expect(registry.registry.diagnostics.filter(({ level }) => level === "warn")).toHaveLength(1);
-  });
-
-  it("strips the provider runtime from an unselected consolidation sidecar", () => {
-    const { registry, add, selected } = fixture();
-    add("memory-sidecar", {
-      providerRuntime: {
-        async open() {
-          return { provider: null };
-        },
-      },
-      promptBuilder: () => ["consolidation"],
-    });
-    const sidecar = selected();
-    expect(sidecar?.capability.providerRuntime).toBeUndefined();
-    expect(sidecar?.capability.promptBuilder?.({ availableTools: new Set() })).toEqual([
-      "consolidation",
-    ]);
-    expect(registry.registry.diagnostics.filter(({ level }) => level === "warn")).toHaveLength(1);
-  });
-
   it("merges sidecar consolidation without lending its recall authorization to the slot owner", async () => {
     const { config, add, selected } = fixture();
     add(
@@ -186,6 +150,12 @@ describe("memory capability ownership", () => {
       { memorySlotSelected: true },
     );
     add("memory-core", {
+      runtime: createStubMemoryRuntime(),
+      providerRuntime: {
+        async open() {
+          return { provider: null };
+        },
+      },
       recallToolNames: ["memory_search", "memory_get"],
       deterministicRecallToolName: "memory_search",
       supportsPrivateTranscriptRecall: true,
@@ -196,6 +166,7 @@ describe("memory capability ownership", () => {
     const owner = selected();
     expect(owner?.pluginId).toBe("acme-memory");
     expect(owner?.memorySlotSelected).toBe(true);
+    expect(owner?.capability.providerRuntime).toBeUndefined();
     expect(owner?.capability.deterministicRecallToolName).toBeUndefined();
     expect(owner?.capability.recallToolNames).toEqual(["acme_recall"]);
     expect(owner?.capability.supportsPrivateTranscriptRecall).toBeUndefined();

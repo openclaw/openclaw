@@ -1,7 +1,7 @@
 // Mattermost delivery trace goldens: replayable wire-level lifecycle recordings.
 //
 // Wires the real draft-stream path the monitor uses (createMattermostDraftStream,
-// preview boundary controller, deliverMattermostReplyWithDraftPreview,
+// its forceNewMessage boundary, deliverMattermostReplyWithDraftPreview,
 // deliverMattermostReplyPayload) against a recording MattermostClient, so OUT
 // events are the raw REST calls (POST/PUT/DELETE /posts). The monitor's
 // per-activity glue (partial dedupe, boundary rotation) is replicated inline in
@@ -31,10 +31,7 @@ import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { describe, it, vi } from "vitest";
 import { createMattermostPost, type MattermostClient } from "./mattermost/client.js";
-import {
-  createMattermostDraftPreviewBoundaryController,
-  createMattermostDraftStream,
-} from "./mattermost/draft-stream.js";
+import { createMattermostDraftStream } from "./mattermost/draft-stream.js";
 import { resolveMattermostReplyRootId } from "./mattermost/monitor-context.js";
 import { deliverMattermostReplyWithDraftPreview } from "./mattermost/monitor-draft-delivery.js";
 import {
@@ -117,12 +114,6 @@ function setupMattermostTrace(recorder: WireRecorder) {
     throttleMs: DRAFT_THROTTLE_MS,
     chunkText: (value) =>
       chunkMarkdownTextWithMode(convertMarkdownTables(value, tableMode), textLimit, chunkMode),
-  });
-  const previewBoundary = createMattermostDraftPreviewBoundaryController({
-    enabled: true,
-    forceNewMessage: async () => {
-      await draftStream.forceNewMessage();
-    },
   });
   const previewLifecycle = createLivePreviewLifecycle<ReplyPayload, string>({
     draft: { ...draftStream, id: draftStream.postId },
@@ -255,14 +246,15 @@ function setupMattermostTrace(recorder: WireRecorder) {
         }
         lastPartialText = cleaned;
         draftStream.updateAssistantText(cleaned);
-        previewBoundary.noteUpdate();
         break;
       }
       case "block-final":
         // Block boundary = assistant message boundary: partial snapshots reset
         // and the block-mode preview rotates to a fresh post.
-        lastPartialText = "";
-        await previewBoundary.noteBoundary();
+        if (lastPartialText) {
+          lastPartialText = "";
+          await draftStream.forceNewMessage();
+        }
         break;
       case "final":
         // Final resolution may edit the confirmed preview post in place; join

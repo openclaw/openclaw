@@ -37,12 +37,8 @@ export type {
   PluginBlobStore,
 } from "./plugin-blob-store.types.js";
 
-type BlobStoreOptionSignature = {
-  maxEntries: number;
-  maxBytesPerEntry: number;
-  maxBytesPerNamespace: number;
+type BlobStoreOptionSignature = Omit<OpenBlobStoreOptions, "namespace" | "overflowPolicy"> & {
   overflowPolicy: PluginBlobOverflowPolicy;
-  defaultTtlMs?: number;
 };
 
 function invalidInput(

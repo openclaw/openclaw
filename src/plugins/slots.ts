@@ -31,10 +31,7 @@ function normalizeKinds(kind?: PluginKind | PluginKind[]): PluginKind[] {
 
 /** Check whether a plugin's kind field includes a specific kind. */
 export function hasKind(kind: PluginKind | PluginKind[] | undefined, target: PluginKind): boolean {
-  if (!kind) {
-    return false;
-  }
-  return Array.isArray(kind) ? kind.includes(target) : kind === target;
+  return normalizeKinds(kind).includes(target);
 }
 
 /** Order-insensitive equality check for two kind values (string or array). */

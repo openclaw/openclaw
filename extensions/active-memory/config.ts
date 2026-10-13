@@ -61,7 +61,7 @@ function resolveChoice<T extends string>(value: unknown, choices: readonly T[], 
 }
 
 function normalizeTranscriptDir(value: unknown): string {
-  const raw = typeof value === "string" ? value.trim() : "";
+  const raw = normalizeOptionalString(value);
   if (!raw) {
     return DEFAULT_TRANSCRIPT_DIR;
   }
@@ -145,10 +145,7 @@ export function isMissingRegisteredMemoryToolsError(
     return false;
   }
   const sources = message.slice(prefix.length, -suffix.length);
-  const sourceParts = sources
-    .split(";")
-    .map((source) => source.trim())
-    .filter(Boolean);
+  const sourceParts = normalizeStringEntries(sources.split(";"));
   return sourceParts.includes(`runtime toolsAllow: ${toolsAllow.join(", ")}`);
 }
 

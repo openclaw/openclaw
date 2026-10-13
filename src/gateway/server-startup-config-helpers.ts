@@ -1,4 +1,3 @@
-// Shared validation, auth-surface, and config-load helpers for Gateway startup.
 import { isDeepStrictEqual } from "node:util";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import {
@@ -55,7 +54,6 @@ export type GatewayStartupConfigSnapshotLoadResult = {
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
 };
 
-/** Throw a formatted startup error when the loaded config snapshot is invalid. */
 function assertValidGatewayStartupConfigSnapshot(
   snapshot: ConfigFileSnapshot,
   options: { includeDoctorHint?: boolean } = {},
@@ -69,7 +67,7 @@ function assertValidGatewayStartupConfigSnapshot(
       : "Unknown validation issue.";
   if (isConfigReadFailure(snapshot)) {
     throw createConfigReadError(
-      snapshot.path,
+      snapshot,
       `${issues}\nResolve the read error shown above, then retry.`,
     );
   }
@@ -196,9 +194,7 @@ export function logGatewayAuthSurfaceDiagnostics(
       continue;
     }
     const stateLabel = state.active ? "active" : "inactive";
-    const inactiveDetails =
-      !state.active && inactiveWarnings.get(path) ? inactiveWarnings.get(path) : undefined;
-    const details = inactiveDetails ?? state.reason;
+    const details = (!state.active && inactiveWarnings.get(path)) || state.reason;
     logSecrets.info(`[SECRETS_GATEWAY_AUTH_SURFACE] ${path} is ${stateLabel}. ${details}`);
   }
 }
@@ -229,7 +225,6 @@ export function applyGatewayAuthOverridesForStartupPreflight(
   return next;
 }
 
-/** Prepare the effective Gateway startup config after auth, overrides, and secrets activation. */
 export async function prepareGatewayStartupConfig(params: {
   configSnapshot: ConfigFileSnapshot;
   authOverride?: GatewayAuthConfig;
@@ -284,11 +279,13 @@ export async function prepareGatewayStartupConfig(params: {
       return await params.activateRuntimeSecrets.activatePreparedSnapshot(preflightPrepared, {
         reason: "startup",
         activate: true,
+        runtimeSourceConfig: params.configSnapshot.sourceConfig,
       });
     }
     return await params.activateRuntimeSecrets(config, {
       reason: "startup",
       activate: true,
+      runtimeSourceConfig: params.configSnapshot.sourceConfig,
     });
   };
   const preflightAuthOverride = await measure("config.auth.preflight-override", () => {

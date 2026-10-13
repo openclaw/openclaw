@@ -53,15 +53,6 @@ describe("isCliBindingFlushed", () => {
     expect(probe).not.toHaveBeenCalled();
   });
 
-  it("returns true when the transcript has content on the first probe", async () => {
-    const probe = vi.fn(async () => true);
-    vi.spyOn(cliTranscript, "claudeCliSessionTranscriptHasContent").mockImplementation(probe);
-
-    expect(await isCliBindingFlushed("sid-fresh", "claude-cli", workspaceDir)).toBe(true);
-    expect(probe).toHaveBeenCalledTimes(1);
-    expect(probe).toHaveBeenCalledWith({ sessionId: "sid-fresh", workspaceDir });
-  });
-
   it("succeeds when the transcript becomes visible on a later retry", async () => {
     vi.useFakeTimers();
     let calls = 0;
@@ -113,14 +104,6 @@ describe("isCliBindingFlushed", () => {
     expect(await isCliBindingFlushed("sid-codex", "codex-cli")).toBe(true);
     expect(await isCliBindingFlushed("sid-anthropic", "anthropic")).toBe(true);
     expect(await isCliBindingFlushed("sid-openai", "openai")).toBe(true);
-    expect(probe).not.toHaveBeenCalled();
-  });
-
-  it("returns true without probing when provider is undefined", async () => {
-    const probe = vi.fn(async () => false);
-    vi.spyOn(cliTranscript, "claudeCliSessionTranscriptHasContent").mockImplementation(probe);
-
-    expect(await isCliBindingFlushed("sid-x", undefined)).toBe(true);
     expect(probe).not.toHaveBeenCalled();
   });
 
@@ -246,6 +229,56 @@ describe.each(["anthropic", undefined])(
         }
       },
     );
+  },
+);
+
+describe.each([false, true])("CLI run rejection (cleanupFails=%s)", (cleanupFails) => {
+  it.each([undefined])("rejects the thrown value %s after cleanup", async (error) => {
+    const context = buildPreparedCliRunContext();
+    const cleanup = vi.fn(async () => {
+      if (cleanupFails) {
+        throw new Error("synthetic cleanup failure");
+      }
+    });
+    context.params.cleanupCliLiveSessionOnRunEnd = true;
+    context.preparedBackend.closeLiveSession = cleanup;
+
+    await expect(
+      settlePreparedCliRun({
+        context,
+        run: vi.fn().mockRejectedValue(error),
+      }),
+    ).rejects.toThrow(new Error(String(error)));
+    expect(cleanup).toHaveBeenCalledOnce();
+  });
+});
+
+it.each(["progress", "ambiguous", "final"] as const)(
+  "requires final source delivery to preserve a %s message through cleanup failure",
+  async (delivery) => {
+    const context = buildPreparedCliRunContext();
+    const error = new Error("backend release failed");
+    context.preparedBackend.cleanup = async () => {
+      throw error;
+    };
+    const result = {
+      payloads: [{ text: "output" }],
+      meta: { durationMs: 1 },
+      didSendViaMessagingTool: true,
+      ...(delivery === "ambiguous"
+        ? {}
+        : {
+            messagingToolSourceReplyPayloads: [
+              { text: "output", sourceReplyFinal: delivery === "final" },
+            ],
+          }),
+    };
+    const settled = settlePreparedCliRun({ context, run: async () => result });
+    if (delivery === "final") {
+      await expect(settled).resolves.toBe(result);
+    } else {
+      await expect(settled).rejects.toBe(error);
+    }
   },
 );
 

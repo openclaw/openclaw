@@ -11,6 +11,27 @@ export const activeManagedServiceUpdateHandoffs = new Map<
   ActiveManagedServiceUpdateHandoff
 >();
 
+/** A detached helper still shares the system unit's cgroup until it settles. */
+export function waitForSystemServiceUpdateHandoffs(): Promise<void> | undefined {
+  const updates = [...activeManagedServiceUpdateHandoffs.values()].filter(
+    (owner) => owner.operatorRestartWarning && !owner.settled,
+  );
+  if (!updates.length) {
+    return undefined;
+  }
+  return (async () => {
+    await Promise.all(
+      updates.map(async (owner) => {
+        await owner.flight;
+        await owner.closed;
+        if (!owner.settled) {
+          throw new Error("System-service updater settlement could not be confirmed.");
+        }
+      }),
+    );
+  })();
+}
+
 /** A transferred updater may manage its serving ancestor only under its current lease. */
 export async function isCurrentManagedServiceUpdateHandoffProcess(params: {
   root: string;

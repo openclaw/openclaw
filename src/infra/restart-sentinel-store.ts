@@ -23,12 +23,9 @@ export type RestartSentinelPayload = SchemaContract<
   stats?: RestartSentinelStats | null;
 };
 
-export type RestartSentinelEnvelope = {
+export type RestartSentinel = {
   version: 1;
   payload: RestartSentinelPayload;
-};
-
-export type RestartSentinel = RestartSentinelEnvelope & {
   /** Optimistic-concurrency revision backed by gateway_restart_sentinel.updated_at_ms. */
   revision: number;
 };
@@ -148,14 +145,6 @@ const restartSentinelPayloadSchema = z
 function parseRestartSentinelPayload(value: unknown): RestartSentinelPayload | null {
   const parsed = restartSentinelPayloadSchema.safeParse(value);
   return parsed.success ? parsed.data : null;
-}
-
-export function parseRestartSentinelEnvelope(value: unknown): RestartSentinelEnvelope | null {
-  if (!isPlainRecord(value) || value.version !== 1) {
-    return null;
-  }
-  const payload = parseRestartSentinelPayload(value.payload);
-  return payload ? { version: 1, payload } : null;
 }
 
 function parseRequiredJson(value: string | null): unknown {

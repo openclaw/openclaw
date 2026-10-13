@@ -12,6 +12,7 @@ import {
   readUpdateCompatibilityInventory,
   type UpdateCompatibilityInventory,
 } from "./lib/update-compat-chunks.mts";
+import { supportsUpdateSchemas } from "./lib/update-compat-contract.mjs";
 
 const DEFAULT_OUTPUT = "scripts/lib/update-compat-inventory.json";
 const INTEGRITY = /^sha512-[A-Za-z0-9+/]{86}==$/;
@@ -55,9 +56,20 @@ function checkRegistryCoverage(inventory: UpdateCompatibilityInventory, output: 
     }
     taggedVersions.push(version);
   }
-  const missing = [...new Set(taggedVersions)].filter(
-    (version) => !inventory.releases.some((release) => release.version === version),
-  );
+  const target = JSON.parse(fs.readFileSync("package.json", "utf8")).openclaw?.schemaVersions;
+  const missing = [...new Set(taggedVersions)].filter((version) => {
+    if (inventory.releases.some((release) => release.version === version)) {
+      return false;
+    }
+    const [schemas] = resolveNpmJsonEntries(
+      npmView(`openclaw@${version}`, "openclaw.schemaVersions"),
+    );
+    const supported = supportsUpdateSchemas(schemas, target);
+    if (!supported) {
+      console.log(`Accounted unsupported first-hop source ${version}`);
+    }
+    return supported;
+  });
   if (missing.length === 0) {
     return;
   }

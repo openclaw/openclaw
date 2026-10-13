@@ -83,7 +83,7 @@ test("emits the recoverable double-wrapped Tool Search shape", async (context) =
   const response = await post({ model: "gpt-5.5", input: [] });
   const text = await response.text();
   assert.equal(response.status, 200);
-  assert.match(text, /"name":"tool_call"/u);
+  assert.match(text, /"name":"dispatch_action"/u);
   assert.match(text, /\\"args\\":\{\\"id\\":\\"session_status\\"/u);
 });
 

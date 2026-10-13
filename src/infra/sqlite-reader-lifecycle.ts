@@ -55,7 +55,10 @@ export type SqliteReaderDiagnostics = {
 
 const readerOwners = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteReaderOwners"),
-  () => new AsyncLocalStorage<SqliteReaderOwner>(),
+  () =>
+    new AsyncLocalStorage<
+      SqliteReaderOwner & { timing: { preparedAtMs: number; hostAdmissionWaitMs: number } }
+    >(),
 );
 
 const activeReaders = resolveGlobalSingleton(Symbol.for("openclaw.sqliteActiveReaders"), () => ({
@@ -82,12 +85,28 @@ function boundedOperation(operation: string): string {
 }
 
 export function withSqliteReaderOwner<T>(owner: SqliteReaderOwner, operation: () => T): T {
-  return readerOwners.run({ ...owner, operation: boundedOperation(owner.operation) }, operation);
+  return readerOwners.run(
+    {
+      ...owner,
+      operation: boundedOperation(owner.operation),
+      timing: { preparedAtMs: Date.now(), hostAdmissionWaitMs: 0 },
+    },
+    operation,
+  );
 }
 
 export function captureSqliteReaderOwner(): SqliteReaderOwner | undefined {
   const owner = readerOwners.getStore();
-  return owner ? { ...owner } : undefined;
+  if (!owner) {
+    return undefined;
+  }
+  const { timing: _, ...identity } = owner;
+  return identity;
+}
+
+/** Mutable diagnostic counters only; never source or write authority. */
+export function currentSqliteOperationTiming() {
+  return readerOwners.getStore()?.timing;
 }
 
 function currentOwner(
@@ -175,19 +194,16 @@ export function retainSqliteReader(
   if (databasePath && pathReaders) {
     activeReaders.byPath.set(databasePath, pathReaders);
   }
-  let released = false;
   return {
     progress() {
-      if (!released) {
+      if (databaseReaders.has(token)) {
         reader.lastProgressAtMs = Date.now();
       }
     },
     release() {
-      if (released) {
+      if (!databaseReaders.delete(token)) {
         return;
       }
-      released = true;
-      databaseReaders.delete(token);
       if (
         databaseReaders.size === 0 &&
         activeReaders.byDatabase.get(database) === databaseReaders

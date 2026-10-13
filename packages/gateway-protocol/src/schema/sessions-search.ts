@@ -22,6 +22,7 @@ export const SessionsSearchParamsSchema = Object.assign(
           "excludeSubagents",
           "excludeCron",
           "excludeSystem",
+          "excludeDock",
           "configuredAgentsOnly",
           "label",
           "projectId",

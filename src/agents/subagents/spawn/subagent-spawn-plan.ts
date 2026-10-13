@@ -1,5 +1,6 @@
 import { resolveNonNegativeIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { formatThinkingLevels } from "../../../auto-reply/thinking.js";
+import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { FastMode } from "../../../shared/fast-mode.js";
 import type { ResolvedAgentConfig } from "../../agent-scope-config.js";
@@ -148,7 +149,11 @@ export async function resolveSubagentModelAndThinkingPlan(params: {
     modelApplied: true,
     thinkingOverride: thinkingPlan.thinkingOverride,
     initialSessionPatch: {
-      model: resolvedModel,
+      model: choice.ref.model,
+      modelProvider: choice.ref.provider,
+      modelOverride: choice.ref.model,
+      providerOverride: choice.ref.provider,
+      modelOverrideRouteResolution: "resolved" as const,
       modelOverrideSource,
       ...(modelOrigin
         ? {
@@ -166,6 +171,6 @@ export async function resolveSubagentModelAndThinkingPlan(params: {
         : {}),
       ...thinkingPlan.initialSessionPatch,
       ...(params.fastMode !== undefined ? { fastMode: params.fastMode } : {}),
-    },
+    } satisfies Partial<InternalSessionEntry>,
   };
 }

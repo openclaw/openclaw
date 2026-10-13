@@ -1,26 +1,49 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createCodexTestBindingStore } from "./app-server/session-binding.test-helpers.js";
+import {
+  createCodexTestBindingStore,
+  createConversationInspection,
+} from "./app-server/session-binding.test-helpers.js";
 import { handleCodexConversationInboundClaim } from "./conversation-binding-hooks.js";
 
 const publicBindingMocks = vi.hoisted(() => ({
-  resolveByConversation: vi.fn<() => { bindingId: string } | null>(),
+  readBinding: vi.fn<() => { bindingId: string } | null>(),
 }));
 
-vi.mock("openclaw/plugin-sdk/conversation-binding-runtime", () => ({
-  getSessionBindingService: () => ({
-    resolveByConversation: publicBindingMocks.resolveByConversation,
+const sandboxMocks = vi.hoisted(() => ({
+  assertCurrent: vi.fn<() => Promise<void>>(),
+}));
+
+vi.mock("openclaw/plugin-sdk/conversation-binding-inspection-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("openclaw/plugin-sdk/conversation-binding-inspection-runtime")
+    >();
+  return {
+    ...actual,
+    inspectConversationBinding: (
+      conversation: Parameters<typeof actual.inspectConversationBinding>[0],
+    ) => createConversationInspection(conversation, publicBindingMocks.readBinding()?.bindingId),
+  };
+});
+
+// This boundary consumes prepared policy; policy selection has its own owner tests.
+vi.mock("./app-server/sandbox-guard.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./app-server/sandbox-guard.js")>()),
+  prepareCodexNativeSandboxBlock: async () => ({
+    block: undefined,
+    assertCurrent: sandboxMocks.assertCurrent,
+    release() {},
   }),
 }));
 
 describe("Codex node conversation bindings", () => {
   beforeEach(() => {
-    publicBindingMocks.resolveByConversation
-      .mockReset()
-      .mockReturnValue({ bindingId: "binding-1" });
+    publicBindingMocks.readBinding.mockReset().mockReturnValue({ bindingId: "binding-1" });
+    sandboxMocks.assertCurrent.mockReset().mockResolvedValue();
   });
 
-  it.each(["unchanged", "detached", "replaced"])(
+  it.each(["unchanged", "detached", "replaced", "policy-refused"])(
     "revalidates a queued node binding that is %s",
     async (bindingState) => {
       const firstTurn = createDeferred<void>();
@@ -75,8 +98,12 @@ describe("Codex node conversation bindings", () => {
       const running = claim();
       await vi.waitFor(() => expect(resumeCodexCliSessionOnNode).toHaveBeenCalledOnce());
       const queued = claim();
-      if (bindingState !== "unchanged") {
-        publicBindingMocks.resolveByConversation.mockReturnValue(
+      if (bindingState === "policy-refused") {
+        sandboxMocks.assertCurrent.mockRejectedValueOnce(
+          new Error("Native execution policy changed"),
+        );
+      } else if (bindingState !== "unchanged") {
+        publicBindingMocks.readBinding.mockReturnValue(
           bindingState === "detached" ? null : { bindingId: "replacement-binding" },
         );
       }
@@ -88,7 +115,9 @@ describe("Codex node conversation bindings", () => {
           text:
             bindingState === "unchanged"
               ? "done"
-              : "This Codex conversation was detached or changed before its message could run.",
+              : bindingState === "policy-refused"
+                ? "Codex CLI node turn failed: Native execution policy changed"
+                : "This Codex conversation was detached or changed before its message could run.",
         },
       });
       expect(resumeCodexCliSessionOnNode).toHaveBeenCalledTimes(

@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/server-capabilities.js";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { HealthSummary } from "../health/types.js";
 import { GatewayConnectionWork } from "../server-connection-work.js";
@@ -22,6 +23,7 @@ describe("Gateway connection transport", () => {
       await withOpenClawTestState(
         { label: "gateway-connection-transport", layout: "state-only" },
         async () => {
+          setRuntimeConfigSnapshot({});
           const incoming = new EventEmitter();
           const frames: Array<{
             event?: string;

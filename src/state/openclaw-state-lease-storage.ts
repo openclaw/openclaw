@@ -1,10 +1,9 @@
-import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { setTimeout as sleep } from "node:timers/promises";
 import { computeBackoff } from "../infra/backoff.js";
-import { runWithSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
+import type { SqliteTransactionOptions } from "../infra/sqlite-transaction.js";
 import { runExistingOpenClawStateWriteTransaction } from "./openclaw-state-db-existing-write.js";
 import { withOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
 import {
@@ -13,7 +12,7 @@ import {
   runWithOpenClawStateBusyTimeout,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+import { resolveDatabasePath } from "./openclaw-state-db.paths.js";
 import {
   createOpenClawStateLeaseLostError,
   toOpenClawStateLeaseVerificationError,
@@ -53,7 +52,7 @@ export function prepareLeaseDatabase(database: OpenClawStateLeaseDatabase): void
 
 export function resolveLeaseDatabasePath(database: OpenClawStateLeaseDatabase): string {
   return database.schemaPolicy === "existing"
-    ? path.resolve(database.options?.path ?? resolveOpenClawStateSqlitePath(database.options?.env))
+    ? resolveDatabasePath(database.options)
     : openOpenClawStateDatabase(database.options).path;
 }
 function readLeaseDatabase<T>(
@@ -71,21 +70,24 @@ export function withLeaseWriteTransaction<T>(
   operation: (db: DatabaseSync) => T,
   busyTimeoutMs = 0,
 ): T {
+  const transactionOptions = {
+    operationLabel,
+    busyTimeoutMs,
+    beginLockFailureReporting: busyTimeoutMs === 0 ? "suppress" : undefined,
+  } satisfies SqliteTransactionOptions;
   if (database.schemaPolicy === "existing") {
     return runExistingOpenClawStateWriteTransaction(
       ({ db }) => operation(db),
       database.options ?? {},
-      { operationLabel, busyTimeoutMs, schemaSql: leaseSchema },
+      { ...transactionOptions, schemaSql: leaseSchema },
     );
   }
-  const stateDatabase = openOpenClawStateDatabase(database.options);
-  const run = () =>
-    runOpenClawStateWriteTransaction(
-      ({ db }) => operation(db),
-      { ...database.options, database: stateDatabase },
-      { operationLabel, busyTimeoutMs },
-    );
-  return runWithSqliteBusyTimeout(stateDatabase.db, busyTimeoutMs, run);
+  const stateDatabase = database.options?.database ?? openOpenClawStateDatabase(database.options);
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => operation(db),
+    { ...database.options, database: stateDatabase },
+    transactionOptions,
+  );
 }
 
 export const STATE_LEASE_WRITE_BACKOFF = {
@@ -104,13 +106,17 @@ export function renewOpenClawStateLease(
     leaseMs: number;
   },
 ): number {
-  return withLeaseWriteTransaction(params.database, params.operationLabel, (db) => {
-    const expiresAt = renewOpenClawStateLeaseInTransaction(db, params, params.leaseMs);
-    if (expiresAt === undefined) {
-      throw createOpenClawStateLeaseLostError(params);
-    }
-    return expiresAt;
-  });
+  return withLeaseWriteTransaction(
+    params.database,
+    params.operationLabel === "state.lease" ? "state.lease.renew" : params.operationLabel,
+    (db) => {
+      const expiresAt = renewOpenClawStateLeaseInTransaction(db, params, params.leaseMs);
+      if (expiresAt === undefined) {
+        throw createOpenClawStateLeaseLostError(params);
+      }
+      return expiresAt;
+    },
+  );
 }
 
 function assertOpenClawStateLeaseOwnedInDatabase(
@@ -151,8 +157,10 @@ export function releaseOpenClawStateLease(
     operationLabel: string;
   },
 ): void {
-  withLeaseWriteTransaction(params.database, params.operationLabel, (db) =>
-    releaseOpenClawStateLeaseInTransaction(db, params),
+  withLeaseWriteTransaction(
+    params.database,
+    params.operationLabel === "state.lease" ? "state.lease.release" : params.operationLabel,
+    (db) => releaseOpenClawStateLeaseInTransaction(db, params),
   );
 }
 

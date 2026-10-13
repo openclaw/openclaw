@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { raceWithTimeout } from "@openclaw/retry";
+import { racePromiseWithAbortSignal, raceWithTimeout } from "@openclaw/retry";
 import { toErrorObject } from "../../infra/errors.js";
 import { resolveExecutablePath } from "../../infra/executable-path.js";
 import { mergePathPrepend } from "../../infra/path-prepend.js";
@@ -12,18 +12,20 @@ import {
 } from "../../plugin-sdk/windows-spawn.js";
 import type {
   CliBackendExecute,
+  CliBackendMessageInjection,
   CliBackendToolPermissionRequest,
   CliBackendToolPermissionResult,
   CliBackendUserInputRequest,
   CliBackendUserInputResult,
 } from "../../plugins/cli-backend.types.js";
 import type { RunExit, TerminationReason } from "../../process/supervisor/types.js";
+import { runWithAgentToolSourceExecutionScope } from "../agent-tool-source-execution-guard.js";
 import {
   recordAdjustedParamsForToolCall,
   runBeforeToolCallHook,
 } from "../agent-tools.before-tool-call.js";
 import type { CliTerminalInterruption } from "../cli-output-contracts.js";
-import { resolveExecDefaults } from "../exec-defaults.js";
+import { resolveExecDefaultsAsync } from "../exec-defaults.js";
 import { FailoverError, isSignalTimeoutReason } from "../failover-error.js";
 import { withAgentQuestionAnswerAuthority } from "../harness/host-private-capabilities.js";
 import { runStructuredInput } from "../harness/structured-input-execution.js";
@@ -42,6 +44,7 @@ import {
 } from "./cli-native-tool-approval.js";
 import { createCliAbortError } from "./execute-node-claude.js";
 import { createCliPluginWatchdog, type CliWatchdogClock } from "./execute-plugin-watchdog.js";
+import { createSteeredCliMessageInjection } from "./execute-plugin.steered-transcript.js";
 import { attachCliReplyBackend, createCliRunCurrentAssertion } from "./execution-target.js";
 import { createCliFailoverError as failover } from "./exit-error.js";
 import * as noOutputPolicy from "./no-output-timeout-policy.js";
@@ -54,14 +57,14 @@ function denyTool(message: string): CliBackendToolPermissionResult {
   return { behavior: "deny", message };
 }
 
-function createPluginToolPermissionHandler(params: {
+async function createPluginToolPermissionHandler(params: {
   context: PreparedCliRunContext;
   abortSignal: AbortSignal;
   onPendingApproval: (delta: 1 | -1) => void;
   env: NodeJS.ProcessEnv;
-}): (request: CliBackendToolPermissionRequest) => Promise<CliBackendToolPermissionResult> {
+}): Promise<(request: CliBackendToolPermissionRequest) => Promise<CliBackendToolPermissionResult>> {
   const run = params.context.params;
-  const permission = resolveExecDefaults({
+  const permission = await resolveExecDefaultsAsync({
     cfg: run.config,
     sessionEntry: run.sessionEntry,
     execOverrides: run.execOverrides,
@@ -372,24 +375,14 @@ function waitForIteratorValue<T>(
   iterator: AsyncIterator<T>,
   signal: AbortSignal,
 ): Promise<IteratorResult<T>> {
-  if (signal.aborted) {
-    return Promise.reject(toErrorObject(signal.reason, "CLI plugin execution was aborted."));
-  }
-  return new Promise((resolve, reject) => {
-    const rejectAborted = () =>
-      reject(toErrorObject(signal.reason, "CLI plugin execution was aborted."));
-    signal.addEventListener("abort", rejectAborted, { once: true });
-    void iterator.next().then(
-      (value) => {
-        signal.removeEventListener("abort", rejectAborted);
-        resolve(value);
-      },
-      (error: unknown) => {
-        signal.removeEventListener("abort", rejectAborted);
-        reject(toErrorObject(error, "CLI plugin execution stream failed."));
-      },
-    );
-  });
+  return racePromiseWithAbortSignal(
+    () =>
+      iterator.next().catch((error: unknown) => {
+        throw toErrorObject(error, "CLI plugin execution stream failed.");
+      }),
+    signal,
+    () => toErrorObject(signal.reason, "CLI plugin execution was aborted."),
+  );
 }
 
 async function closePluginIterator(
@@ -500,50 +493,76 @@ export async function executePluginOwnedProcess(params: {
     outstanding.approvals = Math.max(0, outstanding.approvals + delta);
     reportOutstandingWork();
   };
-  const watchdog = createCliPluginWatchdog(
-    {
-      provider: run.provider,
-      model: params.context.modelId,
-      sessionId: run.sessionId,
-      lane: run.lane,
-      overallTimeoutMs: clampPositiveTimerTimeoutMs(run.timeoutMs),
-      noOutputTimeoutMs: clampPositiveTimerTimeoutMs(params.noOutputTimeoutMs),
-      useResume: params.useResume,
-      getActiveAskUserDeadline: params.getActiveLoopbackAskUserDeadline,
-      activeToolCount: () => Math.max(params.activeToolCount?.() ?? 0, outstanding.approvals),
-      backgroundTaskCount: () => outstanding.background,
-      compactionActive: () => params.compactionActive?.() ?? false,
-      hasObservedActivity: () => outstanding.observed,
-      hasReplayUnsafeActivity: () => outstanding.replayUnsafe,
-      onNoOutputTimeout: (error) => {
-        termination.reason = "no-output-timeout";
-        params.onNoOutputTimeout?.(error);
-        controller.abort(error);
-      },
-      onOverallTimeout: () => {
-        termination.reason = "overall-timeout";
-        controller.abort(new Error("CLI plugin runtime exceeded its execution timeout."));
-      },
-    },
-    params.watchdogClock,
-  );
-  const stopAskUserDeadlineListener = params.onActiveLoopbackAskUserDeadlineChange?.(() =>
-    watchdog.reset(),
-  );
-  const stopCompactionWorkListener = params.onCompactionActiveChange?.(() =>
-    reportOutstandingWork(),
-  );
+  let watchdog: ReturnType<typeof createCliPluginWatchdog> | undefined;
+  let stopAskUserDeadlineListener: (() => void) | undefined;
+  let stopCompactionWorkListener: (() => void) | undefined;
 
-  const detachReplyBackend = attachCliReplyBackend(run, () => {
-    termination.reason = "manual-cancel";
-    controller.abort(createCliAbortError());
-  });
+  let messageInjection: CliBackendMessageInjection | undefined;
+  const detachReplyBackend = attachCliReplyBackend(
+    run,
+    () => {
+      termination.reason = "manual-cancel";
+      controller.abort(createCliAbortError());
+    },
+    {
+      messageInjectionV2: createSteeredCliMessageInjection({
+        getInjection: () => messageInjection,
+        signal,
+        assertCurrent,
+        cwd: run.cwd ?? run.workspaceDir,
+      }),
+    },
+  );
 
   let iterator: AsyncIterator<Record<string, unknown>> | undefined;
   let liveSession: ReturnType<typeof createCliLiveSessionCapability> | undefined;
   let terminalResult: "none" | "success" | "error" = "none";
   try {
+    // Host policy preparation cannot produce CLI output; start execution clocks after it.
+    const requestToolPermission = await racePromiseWithAbortSignal(
+      () =>
+        createPluginToolPermissionHandler({
+          context: params.context,
+          abortSignal: signal,
+          onPendingApproval: updatePendingApproval,
+          env: params.env,
+        }),
+      signal,
+      createCliAbortError,
+    );
     assertCurrent();
+    watchdog = createCliPluginWatchdog(
+      {
+        provider: run.provider,
+        model: params.context.modelId,
+        sessionId: run.sessionId,
+        lane: run.lane,
+        overallTimeoutMs: clampPositiveTimerTimeoutMs(run.timeoutMs),
+        noOutputTimeoutMs: clampPositiveTimerTimeoutMs(params.noOutputTimeoutMs),
+        useResume: params.useResume,
+        getActiveAskUserDeadline: params.getActiveLoopbackAskUserDeadline,
+        activeToolCount: () => Math.max(params.activeToolCount?.() ?? 0, outstanding.approvals),
+        backgroundTaskCount: () => outstanding.background,
+        compactionActive: () => params.compactionActive?.() ?? false,
+        hasObservedActivity: () => outstanding.observed,
+        hasReplayUnsafeActivity: () => outstanding.replayUnsafe,
+        onNoOutputTimeout: (error) => {
+          termination.reason = "no-output-timeout";
+          params.onNoOutputTimeout?.(error);
+          controller.abort(error);
+        },
+        onOverallTimeout: () => {
+          termination.reason = "overall-timeout";
+          controller.abort(new Error("CLI plugin runtime exceeded its execution timeout."));
+        },
+      },
+      params.watchdogClock,
+    );
+    stopAskUserDeadlineListener = params.onActiveLoopbackAskUserDeadlineChange?.(() =>
+      watchdog?.reset(),
+    );
+    stopCompactionWorkListener = params.onCompactionActiveChange?.(() => reportOutstandingWork());
+
     watchdog.reset();
     if (
       params.liveSession &&
@@ -572,44 +591,53 @@ export async function executePluginOwnedProcess(params: {
     } else {
       params.mcpCapture?.beginCapture(params.mcpCapture.captureKey, assertCaptureCurrent);
     }
+    await params.context.cliHistoryWriter?.assertReadable();
     assertCurrent();
-    const execution = params.execute({
-      command,
-      argv0: params.executionArgv0,
-      args: executionArgs,
-      cwd,
-      env: params.env,
-      prompt: params.prompt,
-      ...(params.promptContext ? { promptContext: params.promptContext } : {}),
-      modelId: params.context.normalizedModel,
-      systemPrompt: stripSystemPromptCacheBoundary(params.context.systemPrompt).trim(),
-      ...(params.sessionId ? { sessionId: params.sessionId } : {}),
-      useResume: params.useResume,
-      abortSignal: signal,
-      assertCurrent,
-      timeoutMs: run.timeoutMs,
-      ...(run.executionMode ? { executionMode: run.executionMode } : {}),
-      ...(run.cliToolAvailability ? { toolAvailability: run.cliToolAvailability } : {}),
-      ...(liveSession ? { liveSession } : {}),
-      // Warm transports retain their first turn's async context across plugin refreshes.
-      requestToolPermission: AsyncLocalStorage.bind(
-        createPluginToolPermissionHandler({
+    const started = await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+      assertCurrent();
+      const execution = params.execute({
+        command,
+        argv0: params.executionArgv0,
+        args: executionArgs,
+        cwd,
+        env: params.env,
+        prompt: params.prompt,
+        ...(params.promptContext ? { promptContext: params.promptContext } : {}),
+        modelId: params.context.normalizedModel,
+        systemPrompt: stripSystemPromptCacheBoundary(params.context.systemPrompt).trim(),
+        ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+        useResume: params.useResume,
+        abortSignal: signal,
+        assertCurrent,
+        timeoutMs: run.timeoutMs,
+        ...(run.executionMode ? { executionMode: run.executionMode } : {}),
+        ...(run.cliToolAvailability ? { toolAvailability: run.cliToolAvailability } : {}),
+        ...(liveSession ? { liveSession } : {}),
+        ...(detachReplyBackend
+          ? {
+              registerMessageInjection: (injection: CliBackendMessageInjection) => {
+                messageInjection = injection;
+              },
+            }
+          : {}),
+        // Warm transports retain their first turn's async context across plugin refreshes.
+        requestToolPermission: AsyncLocalStorage.bind(requestToolPermission),
+        requestUserInput: createPluginUserInputHandler({
           context: params.context,
           abortSignal: signal,
-          onPendingApproval: updatePendingApproval,
-          env: params.env,
+          onPendingInput: updatePendingApproval,
         }),
-      ),
-      requestUserInput: createPluginUserInputHandler({
-        context: params.context,
-        abortSignal: signal,
-        onPendingInput: updatePendingApproval,
-      }),
+      });
+      const executionIterator = execution[Symbol.asyncIterator]();
+      iterator = executionIterator;
+      return {
+        iterator: executionIterator,
+        next: await waitForIteratorValue(executionIterator, signal),
+      };
     });
-    iterator = execution[Symbol.asyncIterator]();
+    let next = started.next;
 
     for (;;) {
-      const next = await waitForIteratorValue(iterator, signal);
       if (next.done) {
         break;
       }
@@ -642,6 +670,7 @@ export async function executePluginOwnedProcess(params: {
         outstanding.replayUnsafe = true;
       }
       watchdog.noteOutput();
+      next = await waitForIteratorValue(started.iterator, signal);
     }
 
     if (terminalResult === "none") {
@@ -676,7 +705,7 @@ export async function executePluginOwnedProcess(params: {
       throw error;
     }
   } finally {
-    watchdog.dispose();
+    watchdog?.dispose();
     stopAskUserDeadlineListener?.();
     stopCompactionWorkListener?.();
     params.onOutstandingWorkChange?.(false);

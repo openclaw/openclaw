@@ -41,6 +41,16 @@ on:
         required: false
         default: ""
         type: string
+      full_release_validation_run_id:
+        description: Exact Full Release Validation parent authorizing prepared bytes
+        required: false
+        default: ""
+        type: string
+      full_release_validation_run_attempt:
+        description: Exact qualification parent attempt
+        required: false
+        default: ""
+        type: string
       prepared_run_id:
         description: Exact prepared Docker producer run; omitted to prepare in this publication
         required: false
@@ -213,6 +223,7 @@ jobs:
     outputs:
       vcr_source_digests: ${{ steps.promote.outputs.vcr_source_digests }}
     env:
+      FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
       GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: ${{ inputs.tag }}
       RELEASE_SHA: ${{ inputs.release_sha }}
@@ -342,6 +353,16 @@ jobs:
             --producer-workflow-full-ref "${PRODUCER_WORKFLOW_FULL_REF}" \
             --producer-workflow-sha "${PRODUCER_WORKFLOW_SHA}"
 
+      - name: Download immutable full release qualification
+        if: ${{ inputs.full_release_validation_run_id != '' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: full-release-validation-${{ inputs.full_release_validation_run_id }}-${{ inputs.full_release_validation_run_attempt }}
+          path: ${{ runner.temp }}/docker-qualification
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.full_release_validation_run_id }}
+          github-token: ${{ github.token }}
+
       - name: Download prepared Docker manifest
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
@@ -354,7 +375,11 @@ jobs:
         id: prepared
         run: |
           set -euo pipefail
-          node workflow-source/scripts/docker-release-artifacts.mjs verify \
+          qualification_args=()
+          if [[ -n "${FULL_RELEASE_VALIDATION_RUN_ID}" ]]; then
+            qualification_args+=(--full-release-manifest "${RUNNER_TEMP}/docker-qualification/full-release-validation-manifest.json")
+          fi
+          node workflow-source/scripts/docker-release-artifacts.mjs verify "${qualification_args[@]}" \
             --manifest "${RUNNER_TEMP}/docker-release/manifest.json" \
             --manifest-sha256 "${PREPARED_MANIFEST_SHA256}" \
             --artifact-name "${PREPARED_ARTIFACT_NAME}" \
@@ -402,7 +427,11 @@ jobs:
         id: promote
         run: |
           set -euo pipefail
-          node workflow-source/scripts/docker-release-artifacts.mjs publish \
+          qualification_args=()
+          if [[ -n "${FULL_RELEASE_VALIDATION_RUN_ID}" ]]; then
+            qualification_args+=(--full-release-manifest "${RUNNER_TEMP}/docker-qualification/full-release-validation-manifest.json")
+          fi
+          node workflow-source/scripts/docker-release-artifacts.mjs publish "${qualification_args[@]}" \
             --manifest "${RUNNER_TEMP}/docker-release/manifest.json" \
             --manifest-sha256 "${PREPARED_MANIFEST_SHA256}" \
             --artifact-name "${PREPARED_ARTIFACT_NAME}" \

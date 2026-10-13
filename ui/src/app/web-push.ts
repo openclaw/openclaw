@@ -20,17 +20,12 @@ export type WebPushSnapshot = {
   preferences?: WebPushPreferencesResult | null;
 };
 
-export type WebPushCapability = {
-  readonly snapshot: WebPushSnapshot;
-  subscribe: (listener: () => void) => () => void;
-  run: (action: WebPushCapabilityAction) => Promise<void>;
-  dispose: () => void;
-};
+export type WebPushCapability = ReturnType<typeof createWebPushCapability>;
 
 export function createWebPushCapability(
   gateway: ApplicationGateway,
   options: { connectionBootstrap?: ConnectionBootstrapCoordinator } = {},
-): WebPushCapability {
+) {
   const nav = globalThis.navigator;
   const ios = isIosBrowserPlatform();
   // SAFETY: iOS Safari's non-standard standalone flag is optional and read-only.
@@ -80,9 +75,10 @@ export function createWebPushCapability(
     : null;
   return {
     snapshot,
-    subscribe: (listener) => registerListener(listeners, listener),
-    run: (action) => (runtime ? runtime.then((owner) => owner?.run(action)) : Promise.resolve()),
-    dispose() {
+    subscribe: (listener: () => void) => registerListener(listeners, listener),
+    run: (action: WebPushCapabilityAction) =>
+      runtime ? runtime.then((owner) => owner?.run(action)) : Promise.resolve(),
+    dispose(this: void) {
       void runtime?.then((owner) => owner?.dispose());
       listeners.clear();
     },

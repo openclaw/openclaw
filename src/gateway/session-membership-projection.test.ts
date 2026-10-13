@@ -1,4 +1,9 @@
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { SessionMembershipFacts } from "../config/sessions/session-membership-facts.types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createSessionMembershipProjection } from "./session-membership-projection.js";
@@ -11,7 +16,12 @@ vi.mock("../config/sessions/session-transcript-worker-runtime.js", () => ({
   ) => consume(targets.map(() => ({ readMembershipFacts: readFacts }))),
 }));
 
-afterEach(() => readFacts.mockReset());
+afterEach(() => {
+  readFacts.mockReset();
+  vi.restoreAllMocks();
+  syncBuiltinESMExports();
+});
+const directories = useAutoCleanupTempDirTracker(afterEach);
 
 const target = {
   agentId: "main",
@@ -37,6 +47,93 @@ const snapshot = (
     ],
   ],
 });
+
+it.each([false, true])(
+  "publishes after a delayed reader on Linux without statx only for the admitted file (replaced=%s)",
+  async (replaced) => {
+    // Evaluate the real identity owner's process-stable Linux policy on every test host.
+    vi.resetModules();
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    try {
+      await import("../infra/sqlite-worker-identity.js");
+    } finally {
+      platform.mockRestore();
+    }
+    const { registerOpenClawAgentDatabaseIdentity, readOpenClawAgentDatabaseIdentity } =
+      await import("../state/openclaw-agent-db-identity.js");
+    const { readSessionMembershipFactsInDatabase } =
+      await import("../config/sessions/session-membership-facts.js");
+    const directory = directories.make("membership-no-statx-");
+    const filename = path.join(directory, "agent.sqlite");
+    using admitted = new DatabaseSync(filename);
+    admitted.exec("CREATE TABLE payload(value TEXT)");
+    const stat = fs.statSync;
+    let metadataRevision = 0n;
+    vi.spyOn(fs, "statSync").mockImplementation((...args) => {
+      if (!args[1]?.bigint || String(args[0]) !== filename) {
+        return stat(...args);
+      }
+      const file =
+        args[1].throwIfNoEntry === false
+          ? stat(args[0], { bigint: true, throwIfNoEntry: false })
+          : stat(args[0], { bigint: true });
+      if (file) {
+        file.ctimeNs += metadataRevision;
+        file.birthtimeNs = file.ctimeNs;
+      }
+      return file;
+    });
+    syncBuiltinESMExports();
+    registerOpenClawAgentDatabaseIdentity(admitted);
+    const original = readOpenClawAgentDatabaseIdentity({ db: admitted });
+    const before = fs.statSync(filename, { bigint: true });
+    const pendingRead = createDeferredCore();
+    readFacts.mockImplementationOnce(async () => {
+      await pendingRead.promise;
+      using reader = new DatabaseSync(filename, { readOnly: true });
+      registerOpenClawAgentDatabaseIdentity(reader);
+      return readSessionMembershipFactsInDatabase({ agentId: "main", db: reader }, []);
+    });
+    const projection = createSessionMembershipProjection({
+      env: { OPENCLAW_STATE_DIR: directory },
+    });
+    projection.updateTargets([{ ...target, ...original, storePath: filename, filename }]);
+    const prepared = projection.prepare();
+    try {
+      // Hold the reader across the write/link retirement window that reclamation can open.
+      admitted.exec("INSERT INTO payload VALUES ('retained')");
+      admitted.close();
+      const link = path.join(directory, "retained.sqlite");
+      fs.linkSync(filename, link);
+      if (replaced) {
+        fs.unlinkSync(filename);
+        using replacement = new DatabaseSync(filename);
+        replacement.exec("CREATE TABLE payload(value TEXT)");
+      }
+      fs.unlinkSync(link);
+      metadataRevision = 1_000_000_000n;
+      const after = fs.statSync(filename, { bigint: true });
+      expect(after.birthtimeNs).not.toBe(before.birthtimeNs);
+      expect(after.dev).toBe(before.dev);
+      expect(after.ino === before.ino).toBe(!replaced);
+      pendingRead.resolve();
+      if (replaced) {
+        await expect(prepared).rejects.toThrow(
+          "Session membership store changed before publication",
+        );
+      } else {
+        await prepared;
+        expect(projection.ready(filename, sessionKey)).toBe(true);
+        expect(projection.membership(filename, sessionKey)).toEqual([]);
+      }
+    } finally {
+      pendingRead.resolve();
+      projection.dispose();
+      await Promise.allSettled([prepared]);
+      vi.resetModules();
+    }
+  },
+);
 
 it.each(["member revocation", "owner reassignment"] as const)(
   "coalesces viewer preparation without replaying stale membership after %s",

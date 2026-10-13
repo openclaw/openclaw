@@ -2,9 +2,23 @@ import type { WorkerOperationHandlers } from "../state/worker-operation-registry
 import * as approval from "./device-pairing-approval.kernel.js";
 import * as core from "./device-pairing-core.kernel.js";
 import { devicePairingMutation } from "./device-pairing-dispatch.worker.js";
+import {
+  registerDevicePairingJoinCodeInWorker,
+  redeemDevicePairingJoinCodeInWorker,
+} from "./device-pairing-join-code.worker.js";
 import * as tokens from "./device-pairing-tokens.kernel.js";
 
 export const devicePairingOperations = {
+  "devicePairing.registerJoinCode": devicePairingMutation(
+    (input: Parameters<typeof registerDevicePairingJoinCodeInWorker>[1], { database }) =>
+      registerDevicePairingJoinCodeInWorker(database.db, input),
+    { publishPairing: false },
+  ),
+  "devicePairing.redeemJoinCode": devicePairingMutation(
+    (input: Parameters<typeof redeemDevicePairingJoinCodeInWorker>[1], { database }) =>
+      redeemDevicePairingJoinCodeInWorker(database.db, input),
+    { publishPairing: false },
+  ),
   "devicePairing.request": devicePairingMutation(
     (input: { request: Parameters<typeof core.requestDevicePairingInWorker>[0]; nowMs: number }) =>
       core.requestDevicePairingInWorker(input.request, input.nowMs),

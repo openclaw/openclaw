@@ -1,8 +1,10 @@
 // Control UI tests cover the responsive disconnected login gate.
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, expect, it } from "vitest";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { assert, beforeEach, expect, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
+import { openChatLayoutMenu, selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
@@ -10,8 +12,12 @@ import {
   controlUiSessionUrl,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { closeContext, renderLoginGate } from "./login-gate-e2e.test-support.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
+import {
+  createControlUiE2eSuite,
+  holdModuleResponse,
+} from "./control-ui-e2e-suite.test-support.ts";
+import { closeContext, mountLoginGate, renderLoginGate } from "./login-gate-e2e.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI responsive login gate E2E",
@@ -159,10 +165,7 @@ suite.define(() => {
       await expect
         .poll(() =>
           page.evaluate(() => {
-            const app = document.querySelector("openclaw-app") as HTMLElement & {
-              runtime?: { context: { gateway: { snapshot: { phase: string } } } };
-            };
-            return app.runtime?.context.gateway.snapshot.phase;
+            return window.openclawControlUi?.snapshot().gatewayPhase;
           }),
         )
         .toBe("reload-required");
@@ -237,17 +240,14 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
       const header = page.locator(".chat-pane__header");
       await header.waitFor({ state: "visible" });
-      await header.locator(".chat-side-panel-toggle").click();
-      await header.getByRole("button", { name: "Focus", exact: true }).click();
+      await selectChatLayoutAction(header, /^(Side panel|Minimize side panel)$/);
+      await selectChatLayoutAction(header, "Focus");
       await gateway.setOnline(false);
 
       await expect
         .poll(() =>
           page.evaluate(() => {
-            const app = document.querySelector("openclaw-app") as HTMLElement & {
-              runtime?: { context: { gateway: { snapshot: { phase: string } } } };
-            };
-            return app.runtime?.context.gateway.snapshot.phase;
+            return window.openclawControlUi?.snapshot().gatewayPhase;
           }),
         )
         .toBe("reconnecting");
@@ -263,20 +263,18 @@ suite.define(() => {
       expect(await outlet.getAttribute("aria-disabled")).toBeNull();
       expect(await header.isVisible()).toBe(true);
 
-      const headerActions = header.locator("fieldset.chat-pane__actions");
-      expect(
-        await headerActions.evaluate((element) => (element as HTMLFieldSetElement).disabled),
-      ).toBe(true);
-      const actionButtons = headerActions.getByRole("button");
-      expect(await actionButtons.count()).toBeGreaterThan(0);
-      for (const button of await actionButtons.all()) {
-        expect(await button.isDisabled()).toBe(true);
-      }
-      const restore = header.getByRole("button", { name: "Restore split", exact: true });
-      expect(await restore.isEnabled()).toBe(true);
-      await restore.click();
+      expect(await header.getByRole("button", { name: "Layout", exact: true }).isEnabled()).toBe(
+        true,
+      );
+      const layoutMenu = await openChatLayoutMenu(header);
+      const split = layoutMenu.getByRole("menuitem", { name: "Open split view", exact: true });
+      expect(await split.isDisabled()).toBe(true);
+      await page.keyboard.press("Escape");
+      await split.waitFor({ state: "hidden" });
+      await selectChatLayoutAction(header, "Restore split");
       await page.locator(".side-panel-empty--selector").waitFor();
-      expect(await header.locator(".chat-side-panel-toggle").isEnabled()).toBe(true);
+      await selectChatLayoutAction(header, "Minimize side panel");
+      await page.locator(".side-panel-empty--selector").waitFor({ state: "hidden" });
     } finally {
       await closeContext(context);
     }
@@ -484,6 +482,67 @@ suite.define(() => {
     }
   });
 
+  it.each(["rejected", "expired"])(
+    "shows a terminal pairing %s until Request again",
+    async (decision) => {
+      const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
+      const page = await context.newPage();
+      await page.clock.install();
+      const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
+      try {
+        await page.goto(suite.server.baseUrl);
+        const request = await gateway.waitForRequest("connect");
+        assert(isRecord(request.params) && isRecord(request.params.device));
+        const deviceId = request.params.device.id;
+        assert(typeof deviceId === "string");
+        await gateway.rejectDeferred("connect", {
+          code: "NOT_PAIRED",
+          message: "pairing required",
+          details: {
+            code: "PAIRING_REQUIRED",
+            requestId: "waiting-request",
+            deviceId,
+            waitForResolution: true,
+            pauseReconnect: false,
+          },
+        });
+        await page.getByRole("button", { name: "Check now", exact: true }).waitFor();
+        await page.clock.runFor(60_000);
+        expect(await gateway.getRequests("connect")).toHaveLength(1);
+        await gateway.emitGatewayEvent("device.pair.resolved", {
+          requestId: "waiting-request",
+          deviceId,
+          decision,
+          ts: Date.now(),
+        });
+        await page
+          .getByText(
+            decision === "rejected" ? "Access request declined" : "Access request expired",
+            { exact: true },
+          )
+          .waitFor();
+        await page.evaluate(() => {
+          window.dispatchEvent(new Event("online"));
+          window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true }));
+        });
+        await page.clock.runFor(60_000);
+        expect(await gateway.getRequests("connect")).toHaveLength(1);
+        expect(await page.getByText("Waiting for approval", { exact: false }).count()).toBe(0);
+        await page.screenshot({
+          path: path.join(RECOVERY_ARTIFACT_DIR, `pairing-${decision}.png`),
+          fullPage: true,
+        });
+        await gateway.deferNext("connect");
+        await page.getByRole("button", { name: "Request again", exact: true }).click();
+        await gateway.waitForRequest("connect", { after: 1 });
+        await gateway.resolveDeferred("connect");
+        await page.locator("openclaw-app-shell").waitFor();
+      } finally {
+        await closeContext(context);
+      }
+    },
+  );
+
   it("copies an exact recovery command from the application gateway snapshot", async () => {
     const context = await suite.browser.newContext({
       permissions: ["clipboard-read", "clipboard-write"],
@@ -573,17 +632,10 @@ suite.define(() => {
       expect(await gatewayInput.getAttribute("spellcheck")).toBe("false");
       expect(await gatewayInput.getAttribute("enterkeyhint")).toBe("go");
 
-      // App renders must retain the real connection action, not a fixture-owned callback.
-      await page.evaluate(async () => {
-        const app = document.querySelector<
-          HTMLElement & { requestUpdate(): void; updateComplete: Promise<unknown> }
-        >("openclaw-app")!;
-        app.requestUpdate();
-        await app.updateComplete;
-        await document.querySelector<HTMLElement & { updateComplete: Promise<unknown> }>(
-          "openclaw-login-gate",
-        )!.updateComplete;
-      });
+      // Editing the production form rerenders the root while preserving its connection action.
+      const originalUrl = await gatewayInput.inputValue();
+      await gatewayInput.fill(`${originalUrl}/edited`);
+      await gatewayInput.fill(originalUrl);
       await gateway.deferNext("connect");
       await gatewayInput.press("Enter");
       await gateway.waitForRequest("connect", { after: 1 });
@@ -594,6 +646,13 @@ suite.define(() => {
         details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING },
       });
       await page.locator('.login-gate__failure[data-kind="auth-required"]').waitFor();
+
+      const failure = page.locator(".login-gate__failure");
+      expect(await failure.evaluate((element) => element.tagName)).toBe("SECTION");
+      expect(await page.locator(".login-gate__failure-summary").isVisible()).toBe(true);
+      expect(await page.locator(".login-gate__failure-steps").isVisible()).toBe(true);
+      expect(await page.locator(".login-gate__failure-docs").isVisible()).toBe(true);
+      expect(await page.locator(".login-gate__help").count()).toBe(0);
 
       const metrics = await page.evaluate(() => {
         const gate = document.querySelector<HTMLElement>(".login-gate");
@@ -667,29 +726,23 @@ suite.define(() => {
     }
   });
 
-  it("keeps failure recovery visible without generic help", async () => {
-    const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
-    const page = await context.newPage();
-
-    try {
-      await renderLoginGate(page, suite.server.baseUrl);
-      const failure = page.locator(".login-gate__failure");
-      expect(await failure.evaluate((element) => element.tagName)).toBe("SECTION");
-      expect(await page.locator(".login-gate__failure-summary").isVisible()).toBe(true);
-      expect(await page.locator(".login-gate__failure-steps").isVisible()).toBe(true);
-      expect(await page.locator(".login-gate__failure-docs").isVisible()).toBe(true);
-      expect(await page.locator(".login-gate__help").count()).toBe(0);
-    } finally {
-      await closeContext(context);
-    }
-  });
-
   it("keeps generic help collapsed until requested when there is no failure", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
     const page = await context.newPage();
+    const chatModule = await holdModuleResponse(
+      page,
+      controlUiE2eBuiltModuleRequest("ui/src/pages/chat/route-entry.ts"),
+    );
 
     try {
-      await renderLoginGate(page, suite.server.baseUrl, { lastError: null });
+      await renderLoginGate(page, suite.server.baseUrl);
+      await chatModule.request;
+      const mounting = mountLoginGate(page, null);
+      void mounting.catch(() => {});
+      // The held route cannot have mounted while the login presentation is changed.
+      expect(await page.locator("openclaw-chat-page").count()).toBe(0);
+      chatModule.release();
+      await mounting;
       expect(await page.locator(".login-gate__failure").count()).toBe(0);
 
       const help = page.locator(".login-gate__help");
@@ -699,6 +752,8 @@ suite.define(() => {
       await help.locator("summary").click();
       expect(await page.locator(".login-gate__steps").isVisible()).toBe(true);
     } finally {
+      chatModule.release();
+      await page.unrouteAll({ behavior: "wait" });
       await closeContext(context);
     }
   });
@@ -784,14 +839,6 @@ suite.define(() => {
         expect(inputBounds!.y + inputBounds!.height).toBeLessThanOrEqual(300);
         expect(await resizeViewport(500)).toEqual({ height: 500, bottomInset: "" });
         expect(await input.evaluate((element) => document.activeElement === element)).toBe(true);
-        await resizeViewport(300);
-        const cleaned = await page.evaluate(() => {
-          document.querySelector("openclaw-app")!.remove();
-          return ["--shell-viewport-height", "--shell-safe-area-bottom"].map((name) =>
-            document.documentElement.style.getPropertyValue(name),
-          );
-        });
-        expect(cleaned).toEqual(["", ""]);
       } finally {
         await closeContext(context);
       }

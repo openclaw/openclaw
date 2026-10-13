@@ -4,6 +4,7 @@ import path from "node:path";
 import process from "node:process";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { execa } from "execa";
+import { withNodeRuntimePath } from "../../node-runtime-env.mjs";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
 import { mergeProcessEnv } from "../infra/process-env.js";
 import { getFileLockProcessStartTime, getProcessInstanceStartTime } from "../shared/pid-alive.js";
@@ -25,6 +26,32 @@ import { recordChildProcessSpawn } from "./spawn-diagnostics.js";
 import { resolveSafeChildProcessInvocation } from "./windows-command.js";
 
 export const COMMAND_PROCESS_TREE_KILL_GRACE_MS = 300;
+/**
+ * Post-SIGKILL teardown and orphan reaping, not cooperative grace. macOS reports
+ * EPERM, not ESRCH, while only unreaped zombies remain, and loaded hosts have
+ * exceeded 300 ms. Polling ends at extinction, so only surviving groups wait.
+ */
+export const COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS = 10_000;
+
+/** The single owner for confirming that a force-killed command group is gone. */
+export async function waitForCommandProcessGroupExit(
+  pid: number,
+  isOriginalProcess: () => boolean,
+): Promise<"exited" | "replaced" | "alive"> {
+  const deadline = Date.now() + COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS;
+  while (isChildProcessTreeAlive({ pid })) {
+    if (!isOriginalProcess()) {
+      return "replaced";
+    }
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      return isChildProcessTreeAlive({ pid }) ? "alive" : "exited";
+    }
+    await sleep(Math.min(25, remaining));
+  }
+  return "exited";
+}
+
 const commandAdmissions = new WeakMap<ChildProcess, Promise<void>>();
 
 /** Remote PID and pipes arrive together before admission or stream subscription. */
@@ -191,17 +218,17 @@ function retainCommandProcess(
   let startedAt: number | null = null;
   let stopped = false;
   let groupExtinct = false;
-  let bindingFailed = false;
+  let settlementFailed = false;
   let custodySettled = false;
   const settleCustody = () => {
-    if (!reservation || bindingFailed || custodySettled) {
+    if (!reservation || settlementFailed || custodySettled) {
       return;
     }
     try {
       reservation.settled();
       custodySettled = true;
     } catch (error) {
-      bindingFailed = true;
+      settlementFailed = true;
       throw error;
     }
   };
@@ -245,7 +272,6 @@ function retainCommandProcess(
           stop();
         }
       } catch (error) {
-        bindingFailed = true;
         scope.failure ??= { error };
         stop();
         throw error;
@@ -306,14 +332,13 @@ function retainCommandProcess(
         settleCustody();
         return;
       }
-      const deadline = Date.now() + COMMAND_PROCESS_TREE_KILL_GRACE_MS;
-      while (isChildProcessTreeAlive({ pid })) {
-        const currentStart = getFileLockProcessStartTime(pid);
-        const remaining = deadline - Date.now();
-        if ((currentStart !== null && currentStart !== startedAt) || remaining <= 0) {
-          throw new CommandProcessCleanupError();
-        }
-        await sleep(Math.min(25, remaining));
+      const groupPid = pid;
+      const exit = await waitForCommandProcessGroupExit(groupPid, () => {
+        const current = getFileLockProcessStartTime(groupPid);
+        return current === null || current === startedAt;
+      });
+      if (exit !== "exited") {
+        throw new CommandProcessCleanupError();
       }
       settleCustody();
     },
@@ -420,7 +445,12 @@ export function spawnCommandWithInvocation<
           remoteOptions,
         )
       : execa(invocation.command, invocation.args, commandOptions);
-  recordChildProcessSpawn(invocation.command, child.nodeChildProcess);
+  // nice execs Git in the same child; retain its family and operation attribution.
+  const diagnosticCommand =
+    argv[0] === "nice" && argv[1] === "-n" && argv[2] === "10" && argv[3] === "git"
+      ? "git"
+      : invocation.command;
+  recordChildProcessSpawn(diagnosticCommand, child.nodeChildProcess);
   if (scope) {
     retainCommandProcess(scope, child, reservation);
   }
@@ -450,7 +480,16 @@ export function resolveCommandEnv(params: {
     cmd === "npm.exe" ||
     ((cmd === "node" || cmd === "node.exe") && (params.argv[1] ?? "").includes("npm-cli.js"));
 
-  const resolvedEnv = mergeProcessEnv([baseEnv, params.env], platform);
+  const runtime = params.argv[0] ?? "";
+  const paths = platform === "win32" ? path.win32 : path.posix;
+  const explicitPackageManager =
+    paths.isAbsolute(runtime) &&
+    /^(?:node|node\.exe)$/iu.test(paths.basename(runtime)) &&
+    /^(?:npm-cli\.js|npx-cli\.js|pnpm\.(?:cjs|js))$/iu.test(paths.basename(params.argv[1] ?? ""));
+  const mergedEnv = mergeProcessEnv([baseEnv, params.env], platform);
+  const resolvedEnv = explicitPackageManager
+    ? withNodeRuntimePath(mergedEnv, runtime, platform)
+    : mergedEnv;
   if (shouldSuppressNpmFund) {
     resolvedEnv.NPM_CONFIG_FUND ??= "false";
     resolvedEnv.npm_config_fund ??= "false";

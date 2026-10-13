@@ -24,6 +24,11 @@ export type CompactionRequestConstraints = Readonly<{
 
 const promptRequestBudgets = new WeakMap<PromptOptions, CompactionRequestBudget>();
 
+function estimateVariableRequestTokens(messages: AgentMessage[], prompt: string): number {
+  const estimateTokens = createFreshLlmBoundaryTokenEstimator({});
+  return estimateTokens({ messages, prompt }) - estimateTokens({ messages: [], prompt: "" });
+}
+
 /** Bind prepared foreground facts to the exact owned prompt invocation, outside public options. */
 export function attachPromptCompactionRequestBudget(
   options: PromptOptions,
@@ -77,15 +82,9 @@ export function createCompactionRequestBudget(params: {
   const additionalContextTokens =
     estimateCompactionHistoryTokens(params.pendingContextMessages ?? []) +
     pendingQueuedContextTokens;
-  let additiveTokens = 0;
-  if (params.pendingAdditivePrompt) {
-    const estimateAdditiveTokens = createFreshLlmBoundaryTokenEstimator({});
-    additiveTokens =
-      estimateAdditiveTokens({
-        messages: [],
-        prompt: params.pendingAdditivePrompt,
-      }) - estimateAdditiveTokens({ messages: [], prompt: "" });
-  }
+  const additiveTokens = params.pendingAdditivePrompt
+    ? estimateVariableRequestTokens([], params.pendingAdditivePrompt)
+    : 0;
   return {
     contextWindow: params.contextWindow,
     reserveTokens: params.reserveTokens,
@@ -139,12 +138,7 @@ export function estimateCompactionHistoryTokens(
         budget?.pendingUserTokens ?? budget?.pendingTokens ?? 0,
       )
     : 0;
-  const estimateTokens = createFreshLlmBoundaryTokenEstimator({});
-  return (
-    estimateTokens({ messages, prompt: "" }) -
-    estimateTokens({ messages: [], prompt: "" }) -
-    overlap
-  );
+  return estimateVariableRequestTokens(messages, "") - overlap;
 }
 
 export function estimateCompactedRequestTokens(

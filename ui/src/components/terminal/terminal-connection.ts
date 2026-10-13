@@ -197,11 +197,11 @@ export class TerminalConnection {
   }
 
   /** Opens a session and registers its output/exit sinks before returning. */
-  async open(params: TerminalOpenParams, sink: SessionSink): Promise<TerminalOpenResult> {
+  open(params: TerminalOpenParams, sink: SessionSink): Promise<TerminalOpenResult> {
     return this.openRequest("terminal.open", params, sink);
   }
 
-  async start(
+  start(
     params: SessionsCatalogStartTerminalParams,
     sink: SessionSink,
   ): Promise<TerminalOpenResult> {
@@ -284,7 +284,7 @@ export class TerminalConnection {
       return result;
     }
     stream.recovering = false;
-    this.flushPending(sessionId, stream, offset, true);
+    this.flushPending(sessionId, stream, offset);
     this.scheduleLivenessCheck();
     return result;
   }
@@ -378,7 +378,7 @@ export class TerminalConnection {
           return;
         }
         stream.recovering = false;
-        this.flushPending(sessionId, stream, offset, true);
+        this.flushPending(sessionId, stream, offset);
       })
       .catch(() => {
         if (signal.aborted) {
@@ -407,12 +407,7 @@ export class TerminalConnection {
       });
   }
 
-  private flushPending(
-    sessionId: string,
-    stream: StreamState,
-    coveredThroughSeq?: number,
-    discardPreAttachDetachedExit = false,
-  ): void {
+  private flushPending(sessionId: string, stream: StreamState, coveredThroughSeq?: number): void {
     const pending = this.pending.get(sessionId);
     if (!pending) {
       return;
@@ -426,7 +421,7 @@ export class TerminalConnection {
       // A successful attach reestablishes ownership after earlier events. A
       // preceding detach notice is stale and must not kill the rebound stream.
       if (
-        discardPreAttachDetachedExit &&
+        coveredThroughSeq !== undefined &&
         event.kind === "exit" &&
         event.info.reason === "detached"
       ) {
@@ -572,12 +567,12 @@ export class TerminalConnection {
       });
   }
 
-  async input(sessionId: string, data: string): Promise<void> {
-    await this.requestAction("terminal.input", sessionId, { sessionId, data });
+  input(sessionId: string, data: string): Promise<void> {
+    return this.requestAction("terminal.input", sessionId, { sessionId, data });
   }
 
-  async resize(sessionId: string, cols: number, rows: number): Promise<void> {
-    await this.requestAction("terminal.resize", sessionId, { sessionId, cols, rows });
+  resize(sessionId: string, cols: number, rows: number): Promise<void> {
+    return this.requestAction("terminal.resize", sessionId, { sessionId, cols, rows });
   }
 
   private async requestAction(method: string, sessionId: string, params: unknown): Promise<void> {
@@ -594,7 +589,6 @@ export class TerminalConnection {
     });
   }
 
-  /** Closes a session server-side and drops its local stream state. */
   async close(sessionId: string): Promise<void> {
     this.removeStream(sessionId);
     this.pending.delete(sessionId);

@@ -2,6 +2,7 @@ import {
   asMeetingBrowserTabs,
   readMeetingBrowserTab,
   type MeetingBrowserCandidateTab,
+  type MeetingBrowserRequestParams,
 } from "openclaw/plugin-sdk/meeting-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
@@ -25,15 +26,6 @@ const GOOGLE_MEET_BROWSER_NAVIGATION_RETRY_MS = 1_000;
 const GOOGLE_MEET_BROWSER_POLL_MS = 500;
 
 type GoogleMeetBrowserManualActionState = NonNullable<GoogleMeetChromeHealth["manualAction"]>;
-
-type BrowserCreateStepResult = {
-  meetingUri?: string;
-  browserUrl?: string;
-  browserTitle?: string;
-  manualAction?: GoogleMeetBrowserManualActionState;
-  notes?: string[];
-  retryAfterMs?: number;
-};
 
 type GoogleMeetBrowserCreateResult = {
   meetingUri: string;
@@ -84,7 +76,7 @@ function readBrowserManualAction(value: unknown): GoogleMeetBrowserManualActionS
     : undefined;
 }
 
-function readBrowserCreateResult(result: unknown): BrowserCreateStepResult {
+function readBrowserCreateResult(result: unknown) {
   const record = asRecord(result);
   const nested = asOptionalObjectRecord(record.result) ?? record;
   return {
@@ -180,24 +172,25 @@ export async function createMeetWithBrowserProxyOnNode(params: {
     params.config.chrome.joinTimeoutMs,
   );
   const stepTimeoutMs = Math.min(timeoutMs, GOOGLE_MEET_BROWSER_STEP_TIMEOUT_MS);
-  let openedByPlugin = false;
-  let tab = asMeetingBrowserTabs(
-    await callBrowserProxyOnNode({
+  const callBrowser = (request: Omit<MeetingBrowserRequestParams, "timeoutMs">) =>
+    callBrowserProxyOnNode({
+      ...request,
       runtime: params.runtime,
       nodeId,
+      timeoutMs: stepTimeoutMs,
+    });
+  let openedByPlugin = false;
+  let tab = asMeetingBrowserTabs(
+    await callBrowser({
       method: "GET",
       path: "/tabs",
-      timeoutMs: stepTimeoutMs,
     }),
   ).find(isGoogleMeetCreateTab);
   if (tab?.targetId) {
-    await callBrowserProxyOnNode({
-      runtime: params.runtime,
-      nodeId,
+    await callBrowser({
       method: "POST",
       path: "/tabs/focus",
       body: { targetId: tab.targetId },
-      timeoutMs: stepTimeoutMs,
     });
     // Meet automation scripts match English UI labels; a reused tab may have
     // been opened by the browser/profile in a non-English locale. Only force
@@ -212,25 +205,19 @@ export async function createMeetWithBrowserProxyOnNode(params: {
     if (englishUrl && englishUrl !== reusedUrl) {
       tab =
         readMeetingBrowserTab(
-          await callBrowserProxyOnNode({
-            runtime: params.runtime,
-            nodeId,
+          await callBrowser({
             method: "POST",
             path: "/navigate",
             body: { targetId: tab.targetId, url: englishUrl },
-            timeoutMs: stepTimeoutMs,
           }),
         ) ?? tab;
     }
   } else {
     tab = readMeetingBrowserTab(
-      await callBrowserProxyOnNode({
-        runtime: params.runtime,
-        nodeId,
+      await callBrowser({
         method: "POST",
         path: "/tabs/open",
         body: { url: forceMeetEnglishUi(GOOGLE_MEET_NEW_URL) },
-        timeoutMs: stepTimeoutMs,
       }),
     );
     openedByPlugin = Boolean(tab?.targetId);
@@ -240,14 +227,12 @@ export async function createMeetWithBrowserProxyOnNode(params: {
     throw new Error("Browser fallback opened Google Meet but did not return a targetId.");
   }
   const notes = new Set<string>();
-  let lastResult: BrowserCreateStepResult | undefined;
+  let lastResult: ReturnType<typeof readBrowserCreateResult> | undefined;
   let lastError: unknown;
   const deadline = Date.now() + timeoutMs;
   while (Date.now() <= deadline) {
     try {
-      const evaluated = await callBrowserProxyOnNode({
-        runtime: params.runtime,
-        nodeId,
+      const evaluated = await callBrowser({
         method: "POST",
         path: "/act",
         body: {
@@ -255,7 +240,6 @@ export async function createMeetWithBrowserProxyOnNode(params: {
           targetId,
           fn: CREATE_MEET_FROM_BROWSER_SCRIPT,
         },
-        timeoutMs: stepTimeoutMs,
       });
       const result = readBrowserCreateResult(evaluated);
       lastResult = result;

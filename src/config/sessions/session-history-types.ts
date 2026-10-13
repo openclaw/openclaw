@@ -1,13 +1,16 @@
-import type { TranscriptRedactionSnapshot } from "../../agents/transcript-redact-text.js";
 import type {
   SessionArtifactReadQuery,
   SessionArtifactReadResult,
 } from "../../gateway/session-artifact-read.js";
+import type { SessionTranscriptUsageSnapshot } from "../../gateway/session-transcript-derived-readers.js";
 import type {
   ReadRecentSessionMessagesResult,
   ReadSessionMessageByIdResult,
   ReadSessionMessagesAroundIdResult,
   ReadSessionMessagesResult,
+  SessionTranscriptDisplayDeltaResult,
+  SessionTranscriptMessageByIdOptions,
+  SessionTranscriptPageOptions,
   SessionTranscriptReader,
 } from "../../gateway/session-transcript-read.types.js";
 import type {
@@ -18,12 +21,9 @@ import type { AgentHistoryActivity } from "../../infra/agent-activity-events.js"
 import type { ConversationRecord } from "./conversation-registry.types.js";
 import type { LegacyCompactionMetrics } from "./legacy-compaction-history.js";
 import type {
-  SessionTranscriptDisplayDeltaResult,
-  SessionTranscriptMessageByIdOptions,
-} from "./session-accessor.sqlite-history-query.js";
-import type {
   SessionTranscriptBoundedMessageTailOptions,
   SessionTranscriptBoundedMessageTailPage,
+  SessionTranscriptMessageEventPage,
 } from "./session-accessor.sqlite-projection-read.js";
 import type {
   SessionTranscriptRawDeltaLimits,
@@ -35,6 +35,10 @@ import type {
   SessionTranscriptAccountingSnapshot,
 } from "./session-transcript-accounting.types.js";
 import type { SessionTranscriptWorkerReadError } from "./session-transcript-worker-error.types.js";
+import type {
+  ReadRecentSessionConversationTextOptions,
+  SessionRecentConversationText,
+} from "./transcript-recent-text.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
 export type ChatHistoryResponsePage<Messages extends unknown[] | Uint8Array = unknown[]> = {
@@ -42,10 +46,28 @@ export type ChatHistoryResponsePage<Messages extends unknown[] | Uint8Array = un
   activity?: AgentHistoryActivity[];
   messagesBytes: number;
   responseHistoryBytes: number;
-  omission?: { omittedCount: number; normalizedBytes: number };
+  omission?: { omittedCount: number; normalizedBytes: number; byteLimited?: true };
   nextOffset?: number;
+  olderCursor?: string;
+  newerCursor?: string;
   hasMore?: boolean;
   totalMessages?: number;
+};
+
+export type ChatHistoryPageCursor = {
+  sessionId: string;
+  source: string;
+  messageId: string;
+  direction: "older" | "newer";
+};
+
+export type ChatHistoryPageAnchor = Pick<ChatHistoryPageCursor, "sessionId" | "source"> & {
+  direction?: ChatHistoryPageCursor["direction"];
+  hasOlder: boolean;
+  hasNewer: boolean;
+  oldestMessageId?: string;
+  newestMessageId?: string;
+  messageSequences?: Record<string, number>;
 };
 
 export type ChatHistoryPage = {
@@ -56,9 +78,9 @@ export type ChatHistoryPage = {
   messages: unknown[];
   activity?: AgentHistoryActivity[];
   responseOffset?: number;
-  // Absent only for anchored (messageId) reads: the anchor may resolve a
-  // reset-archive transcript that numeric offset cursors cannot address, so
-  // anchored responses expose no paging metadata.
+  anchor?: ChatHistoryPageAnchor;
+  // Numeric offsets cannot address a retained transcript; anchored pages carry
+  // source-bound message cursors instead.
   pagination?: {
     offset: number;
     totalMessages: number;
@@ -78,12 +100,14 @@ export type ChatHistoryPageParams = {
   canonicalKey: string;
   max: number;
   maxHistoryBytes: number;
+  responseHistoryBytes?: number;
   effectiveMaxChars: number;
+  toolResultMaxChars?: number;
   offset: number | undefined;
   messageId: string | undefined;
+  pageCursor?: ChatHistoryPageCursor;
   ignoreCliSessionImports?: boolean;
   cliHistoryHomeDir?: string;
-  cliHistoryRedaction?: TranscriptRedactionSnapshot;
 };
 
 type SessionHistoryTranscriptMeta = {
@@ -161,6 +185,24 @@ export type ChatHistoryDisplayResult =
   | { kind: "rpc-message"; result: ReadSessionMessageByIdResult };
 
 export type SessionHistoryWorkerRequest =
+  | {
+      kind: "recent-usage";
+      params: { target: SessionTranscriptReadScope; maxBytes: number };
+    }
+  | {
+      kind: "history-event-page";
+      params: {
+        target: SessionTranscriptReadScope;
+        options: SessionTranscriptPageOptions;
+      };
+    }
+  | {
+      kind: "recent-text";
+      params: {
+        target: SessionTranscriptReadScope;
+        options: ReadRecentSessionConversationTextOptions;
+      };
+    }
   | {
       kind: "active-accounting";
       params: { target: SessionTranscriptReadScope; options: SessionTranscriptAccountingOptions };
@@ -252,6 +294,9 @@ export type SessionHistoryWorkerRequest =
   | { kind: "http"; params: SessionHistoryReadParams };
 
 export type SessionHistoryWorkerResult =
+  | { kind: "recent-usage"; result: SessionTranscriptUsageSnapshot | null }
+  | { kind: "history-event-page"; result: SessionTranscriptMessageEventPage }
+  | { kind: "recent-text"; result: SessionRecentConversationText[] }
   | { kind: "active-accounting"; result: SessionTranscriptAccountingSnapshot }
   | { kind: "bounded-tail"; result: SessionTranscriptBoundedMessageTailPage }
   | { kind: "inline-visibility"; subagentCoordination: SessionHistorySubagentFacts }

@@ -15,6 +15,7 @@ import {
   type SkillResourceDelivery,
 } from "../../packages/gateway-protocol/src/schema/skill-resources.js";
 import {
+  WorkerRuntimeContextFragmentsSchema,
   type WorkerConnectParams,
   type WorkerConnectRequestFrame,
   WorkerConnectRequestFrameSchema,
@@ -22,6 +23,7 @@ import {
   WorkerTranscriptMessageSchema,
   WorkerTranscriptUserMessageSchema,
   WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH,
+  WORKER_LOCAL_INFERENCE_PROTOCOL_FEATURE,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type {
   WorkerInferenceModelRef,
@@ -33,6 +35,7 @@ import {
   WorkerInferenceOptionsSchema,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
+import type { RuntimeContextFragment } from "../agents/internal-runtime-context.js";
 import {
   ComputerUseCapabilityDescriptorSchema,
   type ComputerUseCapabilityDescriptor,
@@ -221,10 +224,18 @@ const AssignmentSchema = workerProtocolObject({
   modelRef: z.custom<WorkerInferenceModelRef>((value) =>
     Value.Check(WorkerInferenceModelRefSchema, value),
   ),
+  inference: z.literal("runtime-local").optional(),
   inferenceOptions: z.custom<WorkerInferenceOptions>((value) =>
     Value.Check(WorkerInferenceOptionsSchema, value),
   ),
   systemPrompt: z.string().optional(),
+  inHistorySystemUpdates: z.boolean().optional(),
+  includeEmptySnapshots: z.boolean().optional(),
+  runtimeContext: z
+    .custom<RuntimeContextFragment[]>((value) =>
+      Value.Check(WorkerRuntimeContextFragmentsSchema, value),
+    )
+    .optional(),
   initialMessages: z.custom<WorkerTranscriptMessage[]>(
     (value) =>
       Array.isArray(value) &&
@@ -284,6 +295,10 @@ function validateWorkerLaunchPlan(candidate: WorkerLaunchPlan): WorkerLaunchPlan
     !Value.Check(WorkerConnectRequestFrameSchema, frame) ||
     candidate.admission.sessionId === null ||
     candidate.admission.ownerEpoch < 1 ||
+    (candidate.assignment.inference === "runtime-local" &&
+      !candidate.admission.handshake.protocolFeatures.includes(
+        WORKER_LOCAL_INFERENCE_PROTOCOL_FEATURE,
+      )) ||
     !isWorkerTranscriptMessageFrameSafe({
       role: "user",
       content:
@@ -321,18 +336,6 @@ export function parseWorkerLaunchPlan(value: unknown): WorkerLaunchPlan {
   });
 }
 
-export function completeWorkerLaunchDescriptor(
-  plan: WorkerLaunchPlan,
-  connectionEndpoint: WorkerConnectionEndpoint,
-): WorkerLaunchDescriptor {
-  const parsedPlan = parseWorkerLaunchPlan(plan);
-  const parsedEndpoint = parseWorkerConnectionEndpoint(connectionEndpoint);
-  if (!parsedEndpoint) {
-    throw new Error("invalid worker launch descriptor");
-  }
-  return { ...parsedPlan, connectionEndpoint: parsedEndpoint };
-}
-
 export function parseWorkerLaunchDescriptor(value: unknown): WorkerLaunchDescriptor {
   if (
     !isRecord(value) ||
@@ -340,12 +343,14 @@ export function parseWorkerLaunchDescriptor(value: unknown): WorkerLaunchDescrip
   ) {
     throw new Error("invalid worker launch descriptor");
   }
-  return completeWorkerLaunchDescriptor(
-    {
-      version: value.version as 4,
-      admission: value.admission as WorkerLaunchAdmission,
-      assignment: value.assignment as WorkerLaunchAssignment,
-    },
-    value.connectionEndpoint as WorkerConnectionEndpoint,
-  );
+  const plan = parseWorkerLaunchPlan({
+    version: value.version,
+    admission: value.admission,
+    assignment: value.assignment,
+  });
+  const connectionEndpoint = parseWorkerConnectionEndpoint(value.connectionEndpoint);
+  if (!connectionEndpoint) {
+    throw new Error("invalid worker launch descriptor");
+  }
+  return { ...plan, connectionEndpoint };
 }

@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { setImmediate } from "node:timers/promises";
 import { promiseHooks } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
 import { createDeferredCore } from "../shared/deferred.js";
+import { collectForRetentionCheck } from "../test-utils/retention.js";
+import type { CodeModeConfig } from "./code-mode-runtime.js";
 import {
   activeRuns,
+  createCodeModeRunOwner,
   disposeAllCodeModeRuns,
   waitForPendingBridgeSettlement,
   type PendingBridgeState,
@@ -57,6 +61,16 @@ function unownedControl() {
   return new WeakRef({ unowned: true });
 }
 const control = unownedControl();
+const callerContext = new AsyncLocalStorage<object>();
+class CodeModeExpiryCaller {
+  readonly prompt = Buffer.alloc(1024 * 1024, 1);
+}
+async function closeUnrelatedOwner(runConfig: CodeModeConfig) {
+  const caller = new CodeModeExpiryCaller();
+  const references = [new WeakRef(caller), new WeakRef(caller.prompt)];
+  await callerContext.run(caller, () => createCodeModeRunOwner(ctx, runConfig).close());
+  return references;
+}
 let pending: PendingBridgeState[] = [];
 try {
   const response = await exec.execute("park-inputs", {
@@ -84,14 +98,17 @@ try {
   assert.ok(completed);
   release.done.resolve();
   await waitForPendingBridgeSettlement([completed], { kind: "awaiting" });
+  // Closing a different cell rearms expiry, but must not lend its caller to this parked cell.
+  const expiryCaller = await closeUnrelatedOwner(state.config);
   // A parked cell still owns responses; completed inputs must not ride along.
-  for (let pass = 0; pass < 8; pass += 1) {
-    await setImmediate();
-    gc();
-  }
+  await collectForRetentionCheck("code-mode-expiry-timer");
   assert.equal(control.deref(), undefined, "Unowned control must collect");
   assert.equal(inputs.get("done")?.deref(), undefined, "Settled input must be released");
   assert.ok(inputs.get("pending")?.deref(), "Pending input must remain usable");
+  assert.ok(
+    expiryCaller.every((reference) => reference.deref() === undefined),
+    "The parked cell's expiry timer must release an unrelated completed caller",
+  );
   const retainedPromises: number[] = [];
   for (const count of [100, 2_000]) {
     const promises: WeakRef<Promise<unknown>>[] = [];

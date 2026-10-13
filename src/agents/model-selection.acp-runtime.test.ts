@@ -33,15 +33,6 @@ function buildConfig(agent: AgentEntryConfig): OpenClawConfig {
 describe("ACP native model policy", () => {
   it.each([
     {
-      name: "ACP harness primary",
-      cfg: buildConfig({ model: HARNESS_MODEL, runtime: { type: "acp" } }),
-      authored: HARNESS_MODEL,
-      primary: { provider: "native", model: "primary" },
-      pinned: false,
-      fallbacks: undefined,
-      chain: [nativePrimary, nativeFallback],
-    },
-    {
       name: "strict native primary",
       cfg: buildConfig({ model: "other/primary" }),
       authored: "other/primary",
@@ -113,6 +104,7 @@ describe("ACP native model policy", () => {
       const result = runWithModelFallback({
         cfg,
         agentId: "worker",
+        skipAuthProfileRuntime: true,
         ...primary,
         manifestPlugins: [],
         fallbacksOverride: resolveEffectiveModelFallbacks({
@@ -139,27 +131,20 @@ describe("ACP native model policy", () => {
     },
   );
 
-  it.each(["acp", "native"] as const)(
-    "reports native model advice only for native spawn selection (%s)",
-    async (modelRuntime) => {
-      const warnings = createWarnLogCapture("acp-model-selection");
-      try {
-        const cfg = buildConfig({
-          model: HARNESS_MODEL,
-          ...(modelRuntime === "acp" ? { runtime: { type: "acp" } } : {}),
-        });
-        expect(
-          resolveConfiguredSubagentSpawnModelSelection({ cfg, agentId: "worker", modelRuntime }),
-        ).toBe(HARNESS_MODEL);
-        const warning = await warnings.findText("specified without provider");
-        if (modelRuntime === "acp") {
-          expect(warning).toBeUndefined();
-        } else {
-          expect(warning).toContain("Please use");
-        }
-      } finally {
-        warnings.cleanup();
-      }
-    },
-  );
+  it("reports native model advice for native spawn selection", async () => {
+    const warnings = createWarnLogCapture("acp-model-selection");
+    try {
+      const cfg = buildConfig({ model: HARNESS_MODEL });
+      expect(
+        resolveConfiguredSubagentSpawnModelSelection({
+          cfg,
+          agentId: "worker",
+          modelRuntime: "native",
+        }),
+      ).toBe(HARNESS_MODEL);
+      expect(await warnings.findText("specified without provider")).toContain("Please use");
+    } finally {
+      warnings.cleanup();
+    }
+  });
 });

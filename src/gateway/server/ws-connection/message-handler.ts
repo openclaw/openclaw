@@ -30,6 +30,7 @@ import {
   runWithDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
 import { isGatewaySuspendControlAvailable } from "../../../infra/gateway-suspend-coordinator.js";
+import { runWithMainThreadTask } from "../../../infra/main-thread-stall.js";
 import { rawDataByteLength } from "../../../infra/ws.js";
 import { logRejectedLargePayload } from "../../../logging/diagnostic-payload.js";
 import {
@@ -40,6 +41,10 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
 import { isWebchatClient } from "../../../utils/message-channel.js";
+import {
+  assertRemoteControlUiIngressCurrent,
+  getRemoteControlUiIngressContext,
+} from "../../ingress-attribution.js";
 import { isLocalishHost, isLoopbackAddress } from "../../net.js";
 import { resolveNodePairingClientIpSource } from "../../node-pairing-auto-approve.js";
 import {
@@ -75,6 +80,8 @@ function claimsWorkerConnectionIdentity(value: unknown): boolean {
 }
 
 export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerParams) {
+  const remoteIngress = getRemoteControlUiIngressContext(params.upgradeReq);
+  let waitingForPairing = false;
   const {
     socket,
     ingressAttribution,
@@ -101,6 +108,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
 
   const sendFrame = async (obj: unknown): Promise<void> =>
     await new Promise<void>((resolve, reject) => {
+      assertRemoteControlUiIngressCurrent(remoteIngress);
       socket.send(JSON.stringify(obj), (err) => {
         if (err) {
           reject(err);
@@ -198,7 +206,19 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
       return;
     }
 
-    const text = rawDataToString(data);
+    let decoded: unknown;
+    try {
+      decoded = JSON.parse(rawDataToString(data));
+    } catch (err) {
+      setHandshakeState("failed");
+      setCloseCause("parse-error", { error: formatForLog(err) });
+      logGateway.error(`parse error: ${formatForLog(err)}`);
+      logWs("out", "parse-error", { connId, error: formatForLog(err) });
+      close(1007, "invalid JSON");
+      return;
+    }
+    const parsed = decoded;
+    let helloDelivered = false;
     // Connect phases share cleanup ownership; the outer catch must release
     // any claim installed before a later phase fails.
     const pendingNodePairingCleanup: { value?: NodePairingCleanupClaim } = {};
@@ -239,7 +259,6 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     };
     const client = getClient();
     try {
-      const parsed: unknown = JSON.parse(text);
       const frameRecord = asOptionalObjectRecord(parsed);
       if (!client && claimsWorkerConnectionIdentity(frameRecord?.params)) {
         setHandshakeState("failed");
@@ -347,6 +366,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             origin: requestOrigin,
             isLocalClient,
             enforceOriginCheckForAnyClient,
+            remoteControlUiIngress: remoteIngress,
           }),
           browserRateLimitClientIp,
           authRateLimiter,
@@ -355,7 +375,14 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           markHandshakeFailure,
           sendHandshakeErrorResponse,
           sendFrame,
-          onHelloDelivered: flushQueuedHandshakeFrames,
+          onHelloDelivered: () => {
+            helloDelivered = true;
+            flushQueuedHandshakeFrames();
+          },
+          onPairingWait: () => {
+            waitingForPairing = true;
+            params.clearHandshakeTimer();
+          },
           isWebchatConnect,
           runDetachedConnectWork,
           pendingNodePairingCleanup,
@@ -386,11 +413,15 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
       );
     } catch (err) {
       await releasePendingNodePairingCleanup();
-      logGateway.error(`parse/handle error: ${String(err)}`);
-      logWs("out", "parse-error", { connId, error: formatForLog(err) });
-      // Failed connect frames close even after registration.
-      if (!client) {
-        close();
+      logGateway.error(`frame handler failed conn=${connId}: ${formatForLog(err)}`);
+      logWs("out", "handler-error", { connId, error: formatForLog(err) });
+      if (!helloDelivered && validateRequestFrame(parsed) && !isClosed()) {
+        send({
+          type: "res",
+          id: parsed.id,
+          ok: false,
+          error: errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
+        });
       }
     }
   };
@@ -516,7 +547,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     void params.connectionWork
       .track(() =>
         runWithDiagnosticTraceContext(createDiagnosticTraceContext(), () =>
-          handleIncomingMessage(data, admission),
+          runWithMainThreadTask("gateway:ws:frame", () => handleIncomingMessage(data, admission)),
         ),
       )
       .catch((error: unknown) => {
@@ -538,7 +569,17 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
   }
 
   const onMessage = (data: GatewayConnectionFrame): void => {
+    try {
+      assertRemoteControlUiIngressCurrent(remoteIngress);
+    } catch {
+      close(1008, "remote Control UI ingress closed");
+      return;
+    }
     if (isClosed()) {
+      return;
+    }
+    if (waitingForPairing) {
+      close(1008, "pairing approval pending; reconnect to request again");
       return;
     }
     if (queuedHandshakeFrames) {

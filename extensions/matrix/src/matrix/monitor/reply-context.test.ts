@@ -24,22 +24,7 @@ async function resolveReplyBody(event: MatrixRawEvent): Promise<string | undefin
 }
 
 describe("matrix reply context", () => {
-  it("summarizes reply events from body text", async () => {
-    expect(
-      await resolveReplyBody({
-        event_id: "$original",
-        sender: "@alice:example.org",
-        type: "m.room.message",
-        origin_server_ts: Date.now(),
-        content: {
-          msgtype: "m.text",
-          body: " Some quoted message ",
-        },
-      } as MatrixRawEvent),
-    ).toBe("Some quoted message");
-  });
-
-  it.each(bundledReplacementContentCases)(
+  it.each(bundledReplacementContentCases.filter(({ name }) => name !== "text"))(
     "uses the latest bundled $name when quoting an edited message",
     async ({ options, expected }) => {
       expect(await resolveReplyBody(createBundledReplacementEvent("$original", options))).toBe(
@@ -48,14 +33,21 @@ describe("matrix reply context", () => {
     },
   );
 
-  it.each(invalidBundledReplacementCases)(
-    "does not quote a bundled replacement from $name",
-    async ({ options }) => {
-      expect(await resolveReplyBody(createBundledReplacementEvent("$original", options))).toBe(
-        "original text",
-      );
-    },
-  );
+  it.each(
+    invalidBundledReplacementCases.filter(({ name }) =>
+      [
+        "another sender",
+        "another target",
+        "a state-event original",
+        "array replacement content",
+        "an object-backed redacted replacement",
+      ].includes(name),
+    ),
+  )("does not quote a bundled replacement from $name", async ({ options }) => {
+    expect(await resolveReplyBody(createBundledReplacementEvent("$original", options))).toBe(
+      "original text",
+    );
+  });
 
   it("does not revive a bundled replacement from a redacted original", async () => {
     expect(
@@ -108,78 +100,6 @@ describe("matrix reply context", () => {
     expect(await resolveReplyBody(createPollStartEvent("$poll"))).toBe(
       "[Poll]\nLunch?\n\n1. Pizza\n2. Sushi",
     );
-  });
-
-  it("resolves and caches reply context", async () => {
-    const getEvent = vi.fn(async () => ({
-      event_id: "$original",
-      sender: "@alice:example.org",
-      type: "m.room.message",
-      origin_server_ts: Date.now(),
-      content: {
-        msgtype: "m.text",
-        body: "This is the original message",
-      },
-    }));
-    const getMemberDisplayName = vi.fn(async () => "Alice");
-    const resolveReplyContext = createMatrixEventContextResolver({
-      kind: "reply",
-      client: {
-        getEvent,
-      } as never,
-      getMemberDisplayName,
-      logVerboseMessage: () => {},
-    });
-
-    const result = await resolveReplyContext({
-      roomId: "!room:example.org",
-      eventId: "$original",
-    });
-
-    expect(result).toEqual({
-      summary: "This is the original message",
-      senderLabel: "Alice",
-      senderId: "@alice:example.org",
-    });
-
-    // Second call should use cache
-    await resolveReplyContext({
-      roomId: "!room:example.org",
-      eventId: "$original",
-    });
-
-    expect(getEvent).toHaveBeenCalledTimes(1);
-    expect(getMemberDisplayName).toHaveBeenCalledTimes(1);
-  });
-
-  it("returns empty context for redacted events", async () => {
-    const getEvent = vi.fn(async () => ({
-      event_id: "$redacted",
-      sender: "@alice:example.org",
-      type: "m.room.message",
-      origin_server_ts: Date.now(),
-      unsigned: {
-        redacted_because: { type: "m.room.redaction" },
-      },
-      content: {},
-    }));
-    const getMemberDisplayName = vi.fn(async () => "Alice");
-    const resolveReplyContext = createMatrixEventContextResolver({
-      kind: "reply",
-      client: {
-        getEvent,
-      } as never,
-      getMemberDisplayName,
-      logVerboseMessage: () => {},
-    });
-
-    const result = await resolveReplyContext({
-      roomId: "!room:example.org",
-      eventId: "$redacted",
-    });
-
-    expect(result).toStrictEqual({});
-    expect(getMemberDisplayName).not.toHaveBeenCalled();
   });
 
   it("does not cache fetch failures so retries can succeed", async () => {

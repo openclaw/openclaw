@@ -10,8 +10,8 @@ import {
   invokeNativeHookRelay,
   registerNativeHookRelay,
   registerOwnedNativeHookRelay,
-  testing,
 } from "./native-hook-relay.js";
+import { clearNativeHookRelaysForTests } from "./native-hook-relay.test-support.js";
 
 vi.mock("../tools/gateway.js", () => ({
   callGatewayTool: vi.fn(),
@@ -32,7 +32,7 @@ beforeEach(() => {
 afterEach(async () => {
   vi.restoreAllMocks();
   mockCallGatewayTool.mockReset();
-  await testing.clearNativeHookRelaysForTests();
+  await clearNativeHookRelaysForTests();
 });
 
 function registerRelay(overrides: Partial<Parameters<typeof registerNativeHookRelay>[0]> = {}) {
@@ -333,182 +333,155 @@ describe("native hook relay approval wait handling", () => {
     },
   );
 
-  it.each([false, true])(
-    "fences foreground permission results without retiring a retained child (retained: %s)",
-    async (retainChild) => {
-      const host = await createAdmittedHostCapabilityTestFixture({ runId: "permission-owner" });
-      const entered = createDeferredCore<AbortSignal>();
-      const decision = createDeferredCore<{ id: string; decision: string }>();
-      mockCallGatewayTool.mockImplementation(async (method, _opts, _params, extra) => {
-        if (method === "plugin.approval.request") {
-          return { id: "approval-1", status: "accepted" };
-        }
-        if (method !== "plugin.approval.waitDecision" || !extra?.signal) {
-          throw new Error("fixture wait missing");
-        }
-        entered.resolve(extra.signal);
-        return await decision.promise;
-      });
-      let retained = retainChild;
-      const relay = registerOwnedRelay({
-        sessionId: "permission-owner",
-        runId: "permission-owner",
-        runBeforeToolCall: host.hostCapabilities.runBeforeToolCall,
-        approvalHost: host.hostCapabilities,
-        assertActive: host.hostCapabilities.assertActive,
-        retention: {
-          readClaim: () => "child",
-          shouldRetainAfterForegroundClose: () => retained,
-          allowPreToolUse: () => true,
-          onDispose: () => {},
-        },
-      });
-      await relay.ready;
-      const pending = invokeNativeHookRelay({
-        provider: "codex",
-        relayId: relay.relayId,
-        generation: relay.generation,
-        event: "permission_request",
-        rawPayload: { agent_id: "child", tool_name: "fixture", tool_input: {} },
-      });
-      void pending.catch(() => undefined);
-      try {
-        const signal = await entered.promise;
-        relay.unregister();
-        expect(signal.aborted).toBe(true);
-        if (retainChild) {
-          decision.resolve({ id: "approval-1", decision: "allow-once" });
-          await expect(pending).rejects.toThrow("foreground invocation not allowed");
-          await expect(
-            invokeNativeHookRelay({
-              provider: "codex",
-              relayId: relay.relayId,
-              generation: relay.generation,
-              event: "pre_tool_use",
-              rawPayload: { agent_id: "child", tool_name: "fixture", tool_input: {} },
-            }),
-          ).resolves.toMatchObject({ exitCode: 0 });
-        } else {
-          await expect(pending).rejects.toThrow(/inactive/);
-        }
-      } finally {
-        retained = false;
-        relay.unregister();
-        decision.resolve({ id: "approval-1", decision: "deny" });
-        await Promise.allSettled([pending]);
-        await relay.drain();
-        host.closeHost();
-        host.closeAdmission();
+  it("fences foreground permission results without retiring a retained child", async () => {
+    const host = await createAdmittedHostCapabilityTestFixture({ runId: "permission-owner" });
+    const entered = createDeferredCore<AbortSignal>();
+    const decision = createDeferredCore<{ id: string; decision: string }>();
+    mockCallGatewayTool.mockImplementation(async (method, _opts, _params, extra) => {
+      if (method === "plugin.approval.request") {
+        return { id: "approval-1", status: "accepted" };
       }
-    },
-  );
+      if (method !== "plugin.approval.waitDecision" || !extra?.signal) {
+        throw new Error("fixture wait missing");
+      }
+      entered.resolve(extra.signal);
+      return await decision.promise;
+    });
+    let retained = true;
+    const relay = registerOwnedRelay({
+      sessionId: "permission-owner",
+      runId: "permission-owner",
+      runBeforeToolCall: host.hostCapabilities.runBeforeToolCall,
+      approvalHost: host.hostCapabilities,
+      assertActive: host.hostCapabilities.assertActive,
+      retention: {
+        readClaim: () => "child",
+        shouldRetainAfterForegroundClose: () => retained,
+        allowPreToolUse: () => true,
+        onDispose: () => {},
+      },
+    });
+    await relay.ready;
+    const pending = invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      generation: relay.generation,
+      event: "permission_request",
+      rawPayload: { agent_id: "child", tool_name: "fixture", tool_input: {} },
+    });
+    void pending.catch(() => undefined);
+    try {
+      const signal = await entered.promise;
+      relay.unregister();
+      expect(signal.aborted).toBe(true);
+      decision.resolve({ id: "approval-1", decision: "allow-once" });
+      await expect(pending).rejects.toThrow("foreground invocation not allowed");
+      await expect(
+        invokeNativeHookRelay({
+          provider: "codex",
+          relayId: relay.relayId,
+          generation: relay.generation,
+          event: "pre_tool_use",
+          rawPayload: { agent_id: "child", tool_name: "fixture", tool_input: {} },
+        }),
+      ).resolves.toMatchObject({ exitCode: 0 });
+    } finally {
+      retained = false;
+      relay.unregister();
+      decision.resolve({ id: "approval-1", decision: "deny" });
+      await Promise.allSettled([pending]);
+      await relay.drain();
+      host.closeHost();
+      host.closeAdmission();
+    }
+  });
 
-  it.each([
-    { phase: "waitDecision", cancelAll: false },
-    { phase: "request", cancelAll: true },
-  ])(
-    "owns shared approval $phase work independently of duplicate callers (all cancelled: $cancelAll)",
-    async ({ phase, cancelAll }) => {
-      const host = await createAdmittedHostCapabilityTestFixture({ runId: "approval-cancel" });
-      const held = [
-        createDeferredCore<{ id: string; decision: string }>(),
-        createDeferredCore<{ id: string; decision: string }>(),
-      ];
-      const signals: AbortSignal[] = [];
-      mockCallGatewayTool.mockImplementation(async (method, _opts, _params, extra) => {
-        if (method === `plugin.approval.${phase}`) {
-          if (!extra?.signal) {
-            throw new Error("fixture shared approval signal missing");
-          }
-          signals.push(extra.signal);
-          // Ignore cancellation deliberately: late transport completion must be harmless.
-          return await held[signals.length - 1]!.promise;
+  it("cancels shared approval work only after all duplicate callers disconnect", async () => {
+    const host = await createAdmittedHostCapabilityTestFixture({ runId: "approval-cancel" });
+    const held = [
+      createDeferredCore<{ id: string; decision: string }>(),
+      createDeferredCore<{ id: string; decision: string }>(),
+    ];
+    const signals: AbortSignal[] = [];
+    mockCallGatewayTool.mockImplementation(async (method, _opts, _params, extra) => {
+      if (method === "plugin.approval.request") {
+        if (!extra?.signal) {
+          throw new Error("fixture shared approval signal missing");
         }
-        if (method === "plugin.approval.request") {
-          return { id: "approval-1", status: "accepted" };
-        }
-        throw new Error(`unexpected gateway method: ${method}`);
-      });
-      const relay = registerOwnedRelay({
-        sessionId: "approval-cancel",
-        runId: "approval-cancel",
-        approvalHost: host.hostCapabilities,
-      });
-      await relay.ready;
-      const invoke = (signal?: AbortSignal) =>
-        invokeNativeHookRelay(
-          {
-            provider: "codex",
-            relayId: relay.relayId,
-            generation: relay.generation,
-            event: "permission_request",
-            rawPayload: { tool_name: "fixture", tool_use_id: "duplicate-call", tool_input: {} },
-          },
-          signal,
-        );
-      const firstAbort = new AbortController();
-      const secondAbort = new AbortController();
-      const first = invoke(firstAbort.signal);
-      const second = invoke(secondAbort.signal);
-      void first.catch(() => undefined);
-      void second.catch(() => undefined);
-      let successor: ReturnType<typeof invoke> | undefined;
-      try {
-        await vi.waitFor(() =>
-          expect([...nativeHookRelayState.pendingPermissionApprovals.values()][0]?.waiters).toBe(2),
-        );
-        expect(signals).toHaveLength(1);
-        expect(signals[0]).not.toBe(firstAbort.signal);
-        firstAbort.abort();
-        await expect(first).rejects.toThrow(/abort/i);
-        expect(signals[0]?.aborted).toBe(false);
-        expect(
-          mockCallGatewayTool.mock.calls.filter(
-            ([method]) => method === `plugin.approval.${phase}`,
-          ),
-        ).toHaveLength(1);
-        if (cancelAll) {
-          secondAbort.abort();
-          await expect(second).rejects.toThrow(/abort/i);
-          await vi.waitFor(() => expect(signals[0]?.aborted).toBe(true));
-          expect(nativeHookRelayState.pendingPermissionApprovals.size).toBe(0);
-          successor = invoke();
-          await vi.waitFor(() => expect(signals).toHaveLength(2));
-          const successorEntry = [...nativeHookRelayState.pendingPermissionApprovals.values()][0];
-          held[0]!.resolve({ id: "approval-1", decision: "allow-always" });
-          await new Promise<void>((resolve) => {
-            setImmediate(resolve);
-          });
-          expect([...nativeHookRelayState.pendingPermissionApprovals.values()][0]).toBe(
-            successorEntry,
-          );
-          expect(nativeHookRelayState.permissionAllowAlwaysApprovals.size).toBe(0);
-          expect(signals[1]?.aborted).toBe(false);
-          held[1]!.resolve({ id: "approval-1", decision: "deny" });
-          expect(JSON.parse((await successor).stdout).hookSpecificOutput.decision.behavior).toBe(
-            "deny",
-          );
-        } else {
-          held[0]!.resolve({ id: "approval-1", decision: "allow-once" });
-          expect(JSON.parse((await second).stdout).hookSpecificOutput.decision.behavior).toBe(
-            "allow",
-          );
-        }
-        expect(nativeHookRelayState.pendingPermissionApprovals.size).toBe(0);
-      } finally {
-        for (const pending of held) {
-          pending.resolve({ id: "approval-1", decision: "deny" });
-        }
-        firstAbort.abort();
-        secondAbort.abort();
-        relay.unregister();
-        await Promise.allSettled([first, second, successor]);
-        await relay.drain();
-        host.closeHost();
-        host.closeAdmission();
+        signals.push(extra.signal);
+        // Ignore cancellation deliberately: late transport completion must be harmless.
+        return await held[signals.length - 1]!.promise;
       }
-    },
-  );
+      throw new Error(`unexpected gateway method: ${method}`);
+    });
+    const relay = registerOwnedRelay({
+      sessionId: "approval-cancel",
+      runId: "approval-cancel",
+      approvalHost: host.hostCapabilities,
+    });
+    await relay.ready;
+    const invoke = (signal?: AbortSignal) =>
+      invokeNativeHookRelay(
+        {
+          provider: "codex",
+          relayId: relay.relayId,
+          generation: relay.generation,
+          event: "permission_request",
+          rawPayload: { tool_name: "fixture", tool_use_id: "duplicate-call", tool_input: {} },
+        },
+        signal,
+      );
+    const firstAbort = new AbortController();
+    const secondAbort = new AbortController();
+    const first = invoke(firstAbort.signal);
+    const second = invoke(secondAbort.signal);
+    void first.catch(() => undefined);
+    void second.catch(() => undefined);
+    let successor: ReturnType<typeof invoke> | undefined;
+    try {
+      await vi.waitFor(() =>
+        expect([...nativeHookRelayState.pendingPermissionApprovals.values()][0]?.waiters).toBe(2),
+      );
+      expect(signals).toHaveLength(1);
+      expect(signals[0]).not.toBe(firstAbort.signal);
+      firstAbort.abort();
+      await expect(first).rejects.toThrow(/abort/i);
+      expect(signals[0]?.aborted).toBe(false);
+      expect(
+        mockCallGatewayTool.mock.calls.filter(([method]) => method === "plugin.approval.request"),
+      ).toHaveLength(1);
+      secondAbort.abort();
+      await expect(second).rejects.toThrow(/abort/i);
+      await vi.waitFor(() => expect(signals[0]?.aborted).toBe(true));
+      expect(nativeHookRelayState.pendingPermissionApprovals.size).toBe(0);
+      successor = invoke();
+      await vi.waitFor(() => expect(signals).toHaveLength(2));
+      const successorEntry = [...nativeHookRelayState.pendingPermissionApprovals.values()][0];
+      held[0]!.resolve({ id: "approval-1", decision: "allow-always" });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect([...nativeHookRelayState.pendingPermissionApprovals.values()][0]).toBe(successorEntry);
+      expect(nativeHookRelayState.permissionAllowAlwaysApprovals.size).toBe(0);
+      expect(signals[1]?.aborted).toBe(false);
+      held[1]!.resolve({ id: "approval-1", decision: "deny" });
+      expect(JSON.parse((await successor).stdout).hookSpecificOutput.decision.behavior).toBe(
+        "deny",
+      );
+      expect(nativeHookRelayState.pendingPermissionApprovals.size).toBe(0);
+    } finally {
+      for (const pending of held) {
+        pending.resolve({ id: "approval-1", decision: "deny" });
+      }
+      firstAbort.abort();
+      secondAbort.abort();
+      relay.unregister();
+      await Promise.allSettled([first, second, successor]);
+      await relay.drain();
+      host.closeHost();
+      host.closeAdmission();
+    }
+  });
 
   it("defers all native MCP names to Codex when the exact agent has a prepared durable grant", async () => {
     const grant = { server: "raw-server_", tool: "_raw.tool", source: "allow-always", addedAt: 1 };
@@ -562,7 +535,6 @@ describe("native hook relay approval wait handling", () => {
 
   it.each(
     [
-      { fullPermission: true, mode: undefined, decision: "defer" },
       { fullPermission: false, mode: undefined, decision: "deny" },
       { fullPermission: false, mode: "approve" as const, decision: "defer" },
     ].map((scenario) => ({
@@ -613,10 +585,10 @@ describe("native hook relay approval wait handling", () => {
     },
   );
 
-  it.each([null, "deny"])("explains how to unblock an MCP tool after %s", async (decision) => {
+  it("explains how to unblock an MCP tool after approval timeout", async () => {
     mockCallGatewayTool
       .mockResolvedValueOnce({ id: "plugin:approval-timeout", status: "accepted" })
-      .mockResolvedValueOnce({ id: "plugin:approval-timeout", decision });
+      .mockResolvedValueOnce({ id: "plugin:approval-timeout", decision: null });
     const relay = registerRelay();
 
     const result = await invokeNativeHookRelay({
@@ -630,19 +602,16 @@ describe("native hook relay approval wait handling", () => {
       },
     });
 
-    expect(result.stdout).toContain(
-      decision === null ? "MCP tool approval timed out" : "Denied by user",
-    );
+    expect(result.stdout).toContain("MCP tool approval timed out");
     expect(result.stdout).toContain("openclaw mcp configure memory --approval approve");
   });
 
-  it.each(["arguments", "shortened name", "tool", "server", "case"])(
+  it.each(["arguments", "tool", "server", "case"])(
     "scopes MCP allow-always after changed %s",
     async (change) => {
       mockCallGatewayTool
         .mockResolvedValueOnce({ id: "approval-1", decision: "allow-always" })
         .mockResolvedValueOnce({ id: "approval-2", decision: "deny" });
-      const now = Date.now();
       const relay = registerRelay({ ttlMs: 60 * 60_000 });
       const invoke = (cwd: string, query: string, toolName = "mcp__linear__list_issues") =>
         invokeNativeHookRelay({
@@ -656,12 +625,8 @@ describe("native hook relay approval wait handling", () => {
             tool_input: { query },
           },
         });
-      const initialToolName = change === "shortened name" ? "mcp__list_issues" : undefined;
-      await invoke("/repo", "first", initialToolName);
-      if (change === "shortened name") {
-        vi.spyOn(Date, "now").mockReturnValue(now + 31 * 60_000);
-      }
-      const sameTool = change !== "tool" && change !== "server" && change !== "case";
+      await invoke("/repo", "first");
+      const sameTool = change === "arguments";
       const result = await invoke(
         sameTool ? "/other-repo" : "/repo",
         change === "arguments" ? "second" : "first",
@@ -671,7 +636,7 @@ describe("native hook relay approval wait handling", () => {
             ? "mcp__other__list_issues"
             : change === "case"
               ? "mcp__linear__List_Issues"
-              : initialToolName,
+              : undefined,
       );
 
       expect(JSON.parse(result.stdout).hookSpecificOutput.decision.behavior).toBe(

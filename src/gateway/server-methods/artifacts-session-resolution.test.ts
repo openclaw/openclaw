@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { SessionRowProjection } from "../session-row-projection.js";
@@ -65,9 +67,23 @@ describe("artifact session authorization", () => {
     const unavailable = new Error("session projection is unavailable");
     const projection: Pick<
       SessionRowProjection,
-      "ensureMaterialized" | "findBySessionId" | "sharingRevision"
+      | "ensureMaterialized"
+      | "findBySessionId"
+      | "sharingRevision"
+      | "sharingTarget"
+      | "sharingTargetState"
+      | "readSource"
+      | "readMembership"
+      | "needsMembershipPreparation"
+      | "prepareMembership"
     > = {
       sharingRevision: undefined,
+      sharingTarget: vi.fn(),
+      sharingTargetState: vi.fn(),
+      readSource: vi.fn(),
+      readMembership: vi.fn(),
+      needsMembershipPreparation: vi.fn(),
+      prepareMembership: vi.fn(),
       ensureMaterialized: vi
         .fn<SessionRowProjection["ensureMaterialized"]>()
         .mockRejectedValue(unavailable),
@@ -90,6 +106,7 @@ describe("artifact session authorization", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:dashboard:incognito-artifacts";
       const cfg = { agents: { entries: { main: {} } } };
+      setRuntimeConfigSnapshot(cfg);
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
         {
@@ -151,8 +168,10 @@ describe("artifact session authorization", () => {
     "hides $name artifacts behind direct and run selectors",
     async ({ visibility, cfg, role }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        setRuntimeConfigSnapshot(cfg ?? {});
         const viewerProfile = ensureProfileForEmail("viewer@example.com");
         const ownerProfile = ensureProfileForEmail("owner@example.com");
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         const sessionKey = "agent:main:foreign-artifacts";
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey },
@@ -202,8 +221,10 @@ describe("artifact session authorization", () => {
     "allows reading foreign %s artifacts without participation",
     async (visibility) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        setRuntimeConfigSnapshot({});
         const owner = ensureProfileForEmail("artifact-owner@example.test");
         const viewer = roleClient("view", "artifact-reader");
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         const sessionKey = "agent:main:readable-artifacts";
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey },
@@ -226,6 +247,7 @@ describe("artifact session authorization", () => {
 
   it("preserves solo and system reads while denying identityless reads with roles", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const sessionKey = "agent:main:solo-artifacts";
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey },

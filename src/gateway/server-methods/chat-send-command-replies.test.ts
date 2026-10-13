@@ -14,7 +14,9 @@ import {
   createStructuredOutboundPayloadPlan,
 } from "../../infra/outbound/payloads.js";
 import { collectReplyMediaEntries } from "../../infra/outbound/reply-media-entries.js";
+import { buildAssistantReplyContent } from "./chat-assistant-content.js";
 import {
+  buildTranscriptReplyTextFromInputs,
   selectChatSendFinalReplyInputs,
   readChatSendReplyPayload,
 } from "./chat-send-command-replies.js";
@@ -221,5 +223,64 @@ describe("selectChatSendFinalReplyInputs", () => {
       attachments: [{ ...attachment, path: mediaUrl, height: 480 }],
     });
     expect(deliveredReplies).toEqual(originalReplies);
+  });
+});
+
+function buildRawTranscriptReplyText(payloads: ReplyPayload[]): string {
+  return buildTranscriptReplyTextFromInputs(payloads.map((payload) => ({ kind: "raw", payload })));
+}
+
+describe("buildTranscriptReplyTextFromInputs", () => {
+  it.each([
+    ...["NO_REPLY", "ANNOUNCE_SKIP", "REPLY_SKIP"].map((controlText) => ({
+      name: `suppressed ${controlText}`,
+      payloads: [{ text: "First instruction" }, { text: controlText }, { text: "Done" }],
+      expected: "First instruction\n\nDone",
+      project: true,
+    })),
+    {
+      name: "split fenced-code indentation",
+      payloads: [
+        { text: "Here is the YAML:\n\n```yaml\nroot:\n" },
+        { text: "  nested:\n    value: true\n```" },
+      ],
+      expected: "Here is the YAML:\n\n```yaml\nroot:\n  nested:\n    value: true\n```",
+      project: false,
+    },
+    {
+      name: "CRLF boundaries and whitespace-only chunks",
+      payloads: [
+        { text: "```yaml\r\nroot:\r\n" },
+        { text: "  \t\n" },
+        { text: "  nested: true\r\n```" },
+      ],
+      expected: "```yaml\r\nroot:\r\n  nested: true\r\n```",
+      project: false,
+    },
+    {
+      name: "reply directives and safe media without reasoning",
+      payloads: [
+        { text: "hidden", isReasoning: true },
+        { text: "Hello", replyToId: "message-1", mediaUrls: ["https://example.test/photo.png"] },
+        { text: "Listen", audioAsVoice: true, mediaUrl: "https://example.test/clip.mp3" },
+        { text: "private", sensitiveMedia: true, mediaUrl: "https://example.test/private.png" },
+      ],
+      expected: [
+        "[[reply_to:message-1]]\nHello\nAttachment: https://example.test/photo.png",
+        "Listen\nAttachment: https://example.test/clip.mp3\n[[audio_as_voice]]",
+        "private",
+      ].join("\n\n"),
+      project: false,
+    },
+  ])("preserves $name in transcript reply text", async ({ payloads, expected, project }) => {
+    expect(buildRawTranscriptReplyText(payloads)).toBe(expected);
+    if (project) {
+      const { assistantContent } = await buildAssistantReplyContent({
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        payloads,
+      });
+      expect(assistantContent).toEqual([{ type: "text", text: expected }]);
+    }
   });
 });

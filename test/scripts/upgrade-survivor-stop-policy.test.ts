@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import vm from "node:vm";
@@ -46,6 +47,36 @@ function fixture() {
   return { home, env, unit, systemctl, manager };
 }
 
+function virtualClock() {
+  const timers = new Map<number, { at: number; callback: () => void }>();
+  let now = 0;
+  let serial = 0;
+  return {
+    timers,
+    get now() {
+      return now;
+    },
+    setTimeout: (callback: () => void, delay: number) => {
+      const id = ++serial;
+      timers.set(id, { at: now + delay, callback });
+      return id;
+    },
+    clearTimeout: (id: number) => timers.delete(id),
+    advance(this: void, until: number) {
+      while (true) {
+        const next = [...timers].toSorted((a, b) => a[1].at - b[1].at)[0];
+        if (!next || next[1].at > until) {
+          break;
+        }
+        now = next[1].at;
+        timers.delete(next[0]);
+        next[1].callback();
+      }
+      now = until;
+    },
+  };
+}
+
 describe.skipIf(process.platform === "win32")("survivor loaded stop policy", () => {
   it("reports the loaded stop policy until daemon-reload", () => {
     const { unit, systemctl, manager } = fixture();
@@ -64,6 +95,18 @@ describe.skipIf(process.platform === "win32")("survivor loaded stop policy", () 
     expect(query()).toMatchObject({
       status: 0,
       stdout: "LoadState=loaded\nTimeoutStopUSec=330s\n",
+    });
+    expect(
+      systemctl(
+        "show",
+        "openclaw-gateway.service",
+        "--no-page",
+        "--property",
+        "TimeoutStopUSec,InvocationID,LoadState",
+      ),
+    ).toMatchObject({
+      status: 0,
+      stdout: "LoadState=loaded\nTimeoutStopUSec=330s\nInvocationID=\n",
     });
     expect(manager("stop-timeout-ms").stdout).toBe("330000\n");
     writeFileSync(unit, content.replace("TimeoutStopSec=330", "TimeoutStopSec=30"));
@@ -95,25 +138,28 @@ describe.skipIf(process.platform === "win32")("survivor loaded stop policy", () 
     { policy: "", value: "90000", display: "90s" },
     { policy: "TimeoutStopSec=0", value: "Infinity", display: "infinity" },
     { policy: "TimeoutStopSec=infinity", value: "Infinity", display: "infinity" },
-  ])("handles generated stop policy $policy deliberately", ({ policy, value, display }) => {
+    ...["-1", "bogus", "1ms", "2147484", "9".repeat(400), "30\nTimeoutStopSec=330"].map(
+      (policy) => ({
+        policy: "TimeoutStopSec=" + policy,
+        value: "",
+        display: "",
+      }),
+    ),
+  ])("admits only supported generated stop policy $policy", ({ policy, value, display }) => {
     const { unit, systemctl, manager } = fixture();
     writeFileSync(unit, "[Service]\nExecStart=/usr/bin/true\n" + policy + "\n");
-    expect(systemctl("daemon-reload").status).toBe(0);
+    const loaded = systemctl("daemon-reload");
+    if (!value) {
+      expect(loaded.status).not.toBe(0);
+      expect(existsSync(unit + ".loaded-unit")).toBe(false);
+      return;
+    }
+    expect(loaded.status).toBe(0);
     expect(manager("stop-timeout-ms")).toMatchObject({ status: 0, stdout: value + "\n" });
     expect(
       systemctl("show", "openclaw-gateway.service", "--property=LoadState,TimeoutStopUSec").stdout,
     ).toBe("LoadState=loaded\nTimeoutStopUSec=" + display + "\n");
   });
-
-  it.each(["-1", "bogus", "1ms", "2147484", "9".repeat(400), "30\nTimeoutStopSec=330"])(
-    "refuses unsupported stop policy %j at load",
-    (policy) => {
-      const { unit, systemctl } = fixture();
-      writeFileSync(unit, "[Service]\nExecStart=/usr/bin/true\nTimeoutStopSec=" + policy + "\n");
-      expect(systemctl("daemon-reload").status).not.toBe(0);
-      expect(existsSync(unit + ".loaded-unit")).toBe(false);
-    },
-  );
 
   // Execute the unchanged supervisor body with native boundaries substituted. The
   // virtual clock advances policy-sized deadlines without launching or killing PIDs.
@@ -133,12 +179,9 @@ describe.skipIf(process.platform === "win32")("survivor loaded stop policy", () 
       const body = source.split("<<'SUPERVISOR'\n")[1]?.split("\nSUPERVISOR")[0];
       expect(body).toBeDefined();
       const signals: Array<string | number> = [];
-      const handlers = new Map<string, () => void>();
-      const timers = new Map<number, { at: number; callback: () => void }>();
-      let now = 0;
-      let serial = 0;
+      const clock = virtualClock();
+      const { timers, advance } = clock;
       let alive = true;
-      const exit = vi.fn();
       const fs = {
         openSync: () => 1,
         closeSync: () => {},
@@ -146,7 +189,10 @@ describe.skipIf(process.platform === "win32")("survivor loaded stop policy", () 
         renameSync: () => {},
         writeSync: () => {},
       };
+      const handlers = new Map<string, () => void>();
+      const exit = vi.fn();
       vm.runInNewContext(body!.replace(/^import .*;\n/gm, ""), {
+        randomUUID,
         fs,
         spawn: () => ({ pid: 42, on: () => {}, once: () => {} }),
         execFileSync: (_binary: string, args: string[]) => {
@@ -178,25 +224,10 @@ describe.skipIf(process.platform === "win32")("survivor loaded stop policy", () 
             }
           },
         },
-        setTimeout: (callback: () => void, delay: number) => {
-          const id = ++serial;
-          timers.set(id, { at: now + delay, callback });
-          return id;
-        },
-        clearTimeout: (id: number) => timers.delete(id),
+        setTimeout: clock.setTimeout,
+        clearTimeout: clock.clearTimeout,
       });
-      const advance = (until: number) => {
-        while (true) {
-          const next = [...timers].toSorted((a, b) => a[1].at - b[1].at)[0];
-          if (!next || next[1].at > until) {
-            break;
-          }
-          now = next[1].at;
-          timers.delete(next[0]);
-          next[1].callback();
-        }
-        now = until;
-      };
+
       if (seconds === 330) {
         // Repair the manager policy after supervisor launch, before its stop.
         writeFileSync(f.unit, "[Service]\nExecStart=/usr/bin/true\nTimeoutStopSec=330\n");
@@ -274,17 +305,14 @@ describe.skipIf(process.platform === "win32")("survivor loaded stop policy", () 
         .split("<<'SUPERVISOR'\n")[1]
         ?.split("\nSUPERVISOR")[0];
       expect(body).toBeDefined();
-      const handlers = new Map<string, () => void>();
       const files = new Map<string, string>();
       const signals: Array<[number, string | number]> = [];
-      const timers = new Map<number, { at: number; callback: () => void }>();
+      const clock = virtualClock();
+      const { timers, advance } = clock;
       let closeChild: ((code: number, signal: string | null) => void) | undefined;
       let groupAlive = true;
       let descendantAlive = true;
       let lateDescendantAlive = false;
-      let now = 0;
-      let serial = 0;
-      const exit = vi.fn();
       const spawn = vi.fn(() => ({
         pid: 42,
         on: () => {},
@@ -292,7 +320,10 @@ describe.skipIf(process.platform === "win32")("survivor loaded stop policy", () 
           closeChild = callback;
         },
       }));
+      const handlers = new Map<string, () => void>();
+      const exit = vi.fn();
       vm.runInNewContext(body!.replace(/^import .*;\n/gm, ""), {
+        randomUUID,
         fs: {
           openSync: () => 1,
           closeSync: () => {},
@@ -355,81 +386,44 @@ describe.skipIf(process.platform === "win32")("survivor loaded stop policy", () 
             }
           },
         },
-        setTimeout: (callback: () => void, delay: number) => {
-          const id = ++serial;
-          timers.set(id, { at: now + delay, callback });
-          return id;
-        },
-        clearTimeout: (id: number) => timers.delete(id),
+        setTimeout: clock.setTimeout,
+        clearTimeout: clock.clearTimeout,
       });
-      const advance = (until: number) => {
-        while (true) {
-          const next = [...timers].toSorted((a, b) => a[1].at - b[1].at)[0];
-          if (!next || next[1].at > until) {
-            break;
-          }
-          now = next[1].at;
-          timers.delete(next[0]);
-          next[1].callback();
-        }
-        now = until;
-      };
+
       const runtime = () => JSON.parse(files.get("/fixture/log.runtime.json")!);
+      const expectedSignals: Array<[number, string]> = [[42, "SIGTERM"]];
       handlers.get("SIGTERM")!();
-      expect(signals).toEqual([[42, "SIGTERM"]]);
+      expect(signals).toEqual(expectedSignals);
       expect(timers.size).toBe(2);
       if (trigger === "deadline") {
         advance(29_999);
-        expect(signals).toEqual([[42, "SIGTERM"]]);
+        expect(signals).toEqual(expectedSignals);
         expect(exit).not.toHaveBeenCalled();
         advance(30_000);
-        expect(signals).toEqual([
-          [42, "SIGTERM"],
-          [42, "SIGKILL"],
-          [44, "SIGKILL"],
-        ]);
+        expectedSignals.push([42, "SIGKILL"], [44, "SIGKILL"]);
+        expect(signals).toEqual(expectedSignals);
         expect(exit).not.toHaveBeenCalled();
       }
       groupAlive = false;
       closeChild!(0, null);
-      advance(now + 25);
-      expect(signals).toEqual(
-        trigger === "deadline"
-          ? [
-              [42, "SIGTERM"],
-              [42, "SIGKILL"],
-              [44, "SIGKILL"],
-            ]
-          : [
-              [42, "SIGTERM"],
-              [44, "SIGKILL"],
-            ],
-      );
+      advance(clock.now + 25);
+      if (trigger === "main-exit") {
+        expectedSignals.push([44, "SIGKILL"]);
+      }
+      expect(signals).toEqual(expectedSignals);
       expect(exit).not.toHaveBeenCalled();
       expect(runtime()).toMatchObject({ pid: 0, groupPid: 42, supervisorPid: 43 });
       // A fork first observed during settlement is owned work too. The previous
       // member stays live, but must not receive a second signal attempt.
       lateDescendantAlive = true;
-      advance(now + 25);
-      expect(signals).toEqual(
-        trigger === "deadline"
-          ? [
-              [42, "SIGTERM"],
-              [42, "SIGKILL"],
-              [44, "SIGKILL"],
-              [46, "SIGKILL"],
-            ]
-          : [
-              [42, "SIGTERM"],
-              [44, "SIGKILL"],
-              [46, "SIGKILL"],
-            ],
-      );
+      advance(clock.now + 25);
+      expectedSignals.push([46, "SIGKILL"]);
+      expect(signals).toEqual(expectedSignals);
       expect(exit).not.toHaveBeenCalled();
       expect(runtime()).toMatchObject({ pid: 0, groupPid: 42, supervisorPid: 43 });
       descendantAlive = false;
       lateDescendantAlive = false;
-      advance(now + 25);
+      advance(clock.now + 25);
       expect(exit).toHaveBeenCalledExactlyOnceWith(0);
       expect(runtime()).toMatchObject({ pid: 0, groupPid: 0, supervisorPid: 0 });
       expect(spawn).toHaveBeenCalledOnce();
@@ -443,12 +437,10 @@ describe.skipIf(process.platform === "win32")("survivor loaded stop policy", () 
       const source = readFileSync(owner, "utf8");
       const body = source.split("<<'SUPERVISOR'\n")[1]?.split("\nSUPERVISOR")[0];
       expect(body).toBeDefined();
-      const handlers = new Map<string, () => void>();
       let closeChild: ((code: number, signal: string | null) => void) | undefined;
       const timers: Array<() => void> = [];
       const signals: Array<string | number> = [];
       let alive = true;
-      const exit = vi.fn();
       const log = vi.fn();
       const files = new Map<string, string>();
       const spawn = vi.fn(() => ({
@@ -458,7 +450,10 @@ describe.skipIf(process.platform === "win32")("survivor loaded stop policy", () 
           closeChild = callback;
         },
       }));
+      const handlers = new Map<string, () => void>();
+      const exit = vi.fn();
       vm.runInNewContext(body!.replace(/^import .*;\n/gm, ""), {
+        randomUUID,
         fs: {
           openSync: () => 1,
           closeSync: () => {},

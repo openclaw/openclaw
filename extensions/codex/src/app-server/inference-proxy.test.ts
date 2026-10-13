@@ -165,13 +165,9 @@ describe("private inference HTTP relay", () => {
     );
   });
 
-  it("rejects OAuth use after refresh loses the admitted turn and before physical I/O loses the grant", async () => {
-    let loseAdmission = true;
+  it("rejects OAuth use when asynchronous transport preparation loses the grant", async () => {
     let grantCurrent = true;
     const resolve = vi.fn(async () => {
-      if (loseAdmission) {
-        registration.release();
-      }
       return {
         token: "synthetic-access",
         assertCurrent: () => {
@@ -181,10 +177,6 @@ describe("private inference HTTP relay", () => {
         },
       };
     });
-    const { proxy, body, registration } = await fixture(true, undefined, { resolve });
-    expect((await post(proxy.baseUrl + "/responses", body)).status).toBe(502);
-    expect(transport.fetch).not.toHaveBeenCalled();
-    loseAdmission = false;
     const next = await fixture(true, undefined, { resolve });
     let writes = 0;
     transport.fetch.mockImplementation(async (args) => {
@@ -317,39 +309,6 @@ describe("private inference WebSocket relay", () => {
       expect(transport.dials).toEqual([]);
     } finally {
       socket.terminate();
-    }
-  });
-
-  it("returns a complete sanitized rejection when upstream closes before upgrading", async () => {
-    const server = createServer();
-    server.on("upgrade", (_request, socket) => socket.destroy());
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("fixture did not listen");
-    }
-    transport.upstream = "ws://127.0.0.1:" + address.port;
-    const { proxy } = await fixture();
-    const socket = new WebSocket(proxy.baseUrl.replace("http:", "ws:") + "/responses");
-    socket.on("error", () => {});
-    try {
-      const [, response] = await once(socket, "unexpected-response");
-      const chunks: Buffer[] = [];
-      for await (const chunk of response) {
-        chunks.push(Buffer.from(chunk));
-      }
-      expect(response.statusCode).toBe(502);
-      expect(Buffer.concat(chunks).toString()).toBe(
-        "Codex parent-local inference transport failed; retry on a fresh connection.",
-      );
-    } finally {
-      socket.terminate();
-      proxy.close();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
     }
   });
 

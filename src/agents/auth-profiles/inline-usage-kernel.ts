@@ -3,9 +3,16 @@ import { isDeepStrictEqual } from "node:util";
 import type { OpenClawStateWorkerErrorPayload } from "../../state/openclaw-state-worker-error.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
 import { mergePersistedAuthProfileState } from "./persisted.js";
-import { inspectAuthProfileJsonCell, writeAuthProfileJsonCell } from "./sqlite-json.js";
+import { writeAuthProfileJsonCell } from "./sqlite-json-write.js";
+import { inspectAuthProfileJsonCell } from "./sqlite-json.js";
 import { prepareAuthProfileStateMutation } from "./store-mutation.js";
 import { AuthProfileStoreUnreadableError } from "./store-unreadable-error.js";
+import type {
+  AuthProfileUsageInput,
+  AuthProfileUsageReceipt,
+  AuthProfileUsageResult,
+  AuthStoreUpdateOperations,
+} from "./store.worker-contract.js";
 import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
 import { computeNextProfileUsageStats } from "./usage-failure-state.js";
 import { resolveInlineProviderApiKeyUsageId } from "./usage-state.js";
@@ -23,25 +30,20 @@ export type InlineAuthFailureReceipt = {
   previousStats?: ProfileUsageStats;
   nextStats: ProfileUsageStats;
   now: number;
-  publication: {
-    credentialsChanged: boolean;
-    profileSetChanged: boolean;
-    stateChanged: boolean;
-    selectionChanged: boolean;
-    profileIds: string[];
-  };
+  publication: AuthProfileUsageReceipt["publication"];
 };
 
-export type InlineAuthFailureResult =
+type InlineAuthFailureResult =
   | { ok: true; receipt: InlineAuthFailureReceipt }
   | { ok: false; error: OpenClawStateWorkerErrorPayload };
 
-export type InlineAuthFailureOperations = {
+export type InlineAuthFailureOperations = AuthStoreUpdateOperations & {
   "authProfiles.inlineSnapshot": {
     input: undefined;
     output: import("./types.js").AuthProfileRowRead;
   };
   "authProfiles.inlineFailure": { input: InlineAuthFailureInput; output: InlineAuthFailureResult };
+  "authProfiles.usage": { input: AuthProfileUsageInput; output: AuthProfileUsageResult };
 };
 
 /** The admitted agent transaction owns the fresh read, health reduction, and durable cells. */

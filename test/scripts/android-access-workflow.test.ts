@@ -122,15 +122,8 @@ ${guard}`,
     }
   });
 
-  it("accepts an executed passing native vector and all four packaged ABIs", () => {
-    const result = verifyReports("passed");
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout.trim()).toBe(
-      "apps/android/app/build/outputs/apk/play/debug/openclaw-2099.1.2-play-debug.apk",
-    );
-  });
-
   it.each([
+    "passed",
     "empty",
     "wrong-class",
     "failed",
@@ -139,8 +132,15 @@ ${guard}`,
     "wrong-variant",
     "ambiguous-output",
     "outside-output",
-  ])("rejects %s evidence even when Gradle returned success", (mode) => {
+  ])("validates %s native evidence independently of Gradle's exit code", (mode) => {
     const result = verifyReports(mode);
-    expect(result.status, result.stderr).not.toBe(0);
+    if (mode === "passed") {
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trim()).toBe(
+        "apps/android/app/build/outputs/apk/play/debug/openclaw-2099.1.2-play-debug.apk",
+      );
+    } else {
+      expect(result.status, result.stderr).not.toBe(0);
+    }
   });
 });

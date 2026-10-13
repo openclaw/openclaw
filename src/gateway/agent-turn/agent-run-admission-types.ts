@@ -25,7 +25,8 @@ export type PreparedAgentRunModelRuntime =
       acquireWorkspaceModelRuntime?: never;
     }
   | {
-      preparedModelRuntimeLease?: never;
+      /** Retains the dispatch generation until deferred workspace preparation selects its lease. */
+      preparedModelRuntimeLease: PreparedModelRuntimeLease;
       acquireWorkspaceModelRuntime: (
         workspaceDir: string | undefined,
       ) => Promise<PreparedModelRuntimeLease>;
@@ -71,6 +72,7 @@ export type PrepareAgentRunDispatchParams = Omit<
   assertAdmissionCurrent?: () => void;
   hasCurrentClientAuthority?: () => boolean;
   promptedAt: number;
+  lifecycleStorePath: string;
   requestedSessionKey?: string;
   preAcceptedReservedSessionKey?: string;
   delivery: AgentDeliveryPhaseResult;

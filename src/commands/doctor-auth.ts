@@ -13,7 +13,6 @@ import {
   hasLocalAuthProfileStoreSource,
   loadAuthProfileStoreForRuntime,
   resolveApiKeyForProfile,
-  resolveProfileUnusableUntilForDisplay,
 } from "../agents/auth-profiles.js";
 import { formatAuthDoctorHint } from "../agents/auth-profiles/doctor.js";
 import {
@@ -41,6 +40,7 @@ import { updateConfigMachineState } from "../state/config-machine-state-write.js
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { isRecord } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
+import { listUnavailableAuthProfiles } from "./models/auth-unavailability.js";
 
 const OPENAI_PROVIDER_ID = "openai";
 const LEGACY_CODEX_PROVIDER_ID = "openai-codex";
@@ -261,7 +261,7 @@ async function resolveAuthIssueHint(
   issue: AuthIssue,
   cfg: OpenClawConfig,
   store: ReturnType<typeof ensureAuthProfileStore>,
-): Promise<string | null> {
+): Promise<string> {
   if (issue.reasonCode === "invalid_expires") {
     return "Invalid token expires metadata. Set a future Unix ms timestamp or remove expires.";
   }
@@ -282,42 +282,25 @@ async function resolveAuthIssueHint(
   }).replace(/^Run /, "Re-auth via ");
 }
 
-type AuthProfileCooldown = {
-  profileId: string;
-  kind: string;
-  remaining: string;
-  hint: string;
-};
-
 function collectAuthProfileCooldowns(store: ReturnType<typeof ensureAuthProfileStore>) {
-  const cooldowns: AuthProfileCooldown[] = [];
-  const now = Date.now();
-  for (const profileId of Object.keys(store.usageStats ?? {})) {
-    const until = resolveProfileUnusableUntilForDisplay(store, profileId);
-    if (!until || now >= until) {
-      continue;
-    }
-    const stats = store.usageStats?.[profileId];
-    const disabledActive = typeof stats?.disabledUntil === "number" && now < stats.disabledUntil;
-    const reason = disabledActive ? stats?.disabledReason : stats?.cooldownReason;
-    const displayReason = disabledActive ? reason : (stats?.cooldownClassification ?? reason);
-    cooldowns.push({
-      profileId,
-      kind: `${disabledActive ? "disabled" : "cooldown"}${displayReason ? `:${displayReason}` : ""}`,
-      remaining: formatRemainingShort(until - now),
-      hint: buildAuthProfileUnusableHint({
-        kind: disabledActive ? "disabled" : "cooldown",
-        reason,
-        // Local cooldowns can refer to shared credentials, whose expiry is checked separately.
-        provider:
-          store.profiles[profileId]?.provider ??
-          findPersistedAuthProfileCredential({ profileId })?.provider ??
-          profileId,
+  return listUnavailableAuthProfiles(store).map(
+    ({ profileId, provider, kind, reason, classification, remainingMs }) => {
+      const displayReason = classification ?? reason;
+      return {
         profileId,
-      }),
-    });
-  }
-  return cooldowns;
+        kind: `${kind}${displayReason ? `:${displayReason}` : ""}`,
+        remaining: formatRemainingShort(remainingMs),
+        hint: buildAuthProfileUnusableHint({
+          kind,
+          reason,
+          // Local cooldowns can refer to shared credentials, whose expiry is checked separately.
+          provider:
+            provider ?? findPersistedAuthProfileCredential({ profileId })?.provider ?? profileId,
+          profileId,
+        }),
+      };
+    },
+  );
 }
 
 function isAuthProfileHealthIssue(profile: AuthHealthSummary["profiles"][number]): boolean {
@@ -362,7 +345,6 @@ function loadAuthProfileHealth(params: {
       store: { ...store, profiles },
       cfg: params.cfg,
       warnAfterMs: DEFAULT_OAUTH_WARN_MS,
-      allowKeychainPrompt: params.allowKeychainPrompt,
     }),
   };
 }
@@ -405,11 +387,7 @@ export async function collectAuthProfileHealthFindings(params: {
         path: resolveAuthStorePathForDisplay(target.agentDir),
         target: issue.profileId,
         ...(issue.reasonCode ? { requirement: issue.reasonCode } : {}),
-        fixHint:
-          hint ??
-          (issue.status === "expiring"
-            ? "Run `openclaw doctor --fix` to refresh expiring OAuth profiles, or re-authenticate static tokens."
-            : "Run `openclaw doctor --fix` to refresh OAuth profiles, or re-authenticate this provider."),
+        fixHint: hint,
       });
     }
   }

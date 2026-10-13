@@ -1,5 +1,6 @@
 import {
   createOperationalRunInstanceRef,
+  getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
   type AdmittedRunContext,
   type AdmittedRunOperatorAuthority,
@@ -11,6 +12,7 @@ import {
   recordChannelAdmissionDecision,
   type ChannelAdmissionEvidence,
 } from "../../channels/message-access/admission-evidence.js";
+import { admitChildSessionPublication } from "../../channels/message-access/child-session-publication.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   readGatewayLocalUserIngressFacts,
@@ -73,6 +75,7 @@ function consumeChannelRunAdmission(
 /** Defer evidence consumption until the selected runtime actually admits the run. */
 export function prepareChannelRunAdmission(params: {
   cfg: OpenClawConfig;
+  sourceContext?: object;
   runId: string;
   agentId: string;
   ingressKind: ExecutionIdentityAdmissionFacts["ingress"]["kind"];
@@ -130,6 +133,17 @@ export function prepareChannelRunAdmission(params: {
           },
           onAdmitted: (context) => {
             channelAdmission.onAdmitted(context);
+            if (params.sourceContext) {
+              admitChildSessionPublication(
+                params.sourceContext,
+                context.operationalRunInstance,
+                () => {
+                  if (!getAdmittedRunDelegatedAuthority(context)) {
+                    throw new Error("Public ingress run is no longer active.");
+                  }
+                },
+              );
+            }
             params.onAdmitted?.(context);
           },
         });

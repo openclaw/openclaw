@@ -6,6 +6,10 @@ import type {
   TranscriptEvent,
 } from "../config/sessions/session-accessor.types.js";
 import type {
+  ReadRecentSessionConversationTextOptions,
+  SessionRecentConversationText,
+} from "../config/sessions/transcript-recent-text.js";
+import type {
   TranscriptAnchorPageOptions,
   TranscriptRecentReadLimits,
 } from "../sessions/transcript-anchor-page.js";
@@ -55,6 +59,8 @@ export type ReadRecentSessionMessagesResult = {
 export type ReadSessionMessagesResult = {
   messages: unknown[];
   transcriptPath?: string;
+  nextCursor?: SessionTranscriptSourceCursor;
+  snapshot?: SessionTranscriptSourceSnapshot;
 };
 
 export type ReadSessionMessageByIdResult = {
@@ -71,6 +77,27 @@ export type ReadSessionMessageByIdResult = {
 export type SessionTranscriptReadOptions = {
   allowResetArchiveFallback?: boolean;
   readOnly?: boolean;
+};
+
+export type SessionTranscriptSourceSnapshot = {
+  indexedSeq: number;
+  activeEventCount: number;
+  totalMessages: number;
+  generation: string | undefined;
+  tailEventSeq: number | undefined;
+  resetSeq: number | null;
+};
+
+export type SessionTranscriptSourceCursor = {
+  snapshot: SessionTranscriptSourceSnapshot;
+  position: number;
+  messageSeq: number;
+} & ({ kind: "kept" | "active" | "off-path" } | { kind: "archive"; path: string; source: string });
+
+export type SessionTranscriptSourcePageOptions = SessionTranscriptReadOptions & {
+  mode: "page";
+  includeOffPathMessages?: boolean;
+  cursor?: SessionTranscriptSourceCursor;
 };
 
 export type ReadSessionMessagesAroundIdResult = ReadRecentSessionMessagesResult & {
@@ -92,18 +119,16 @@ export type SessionTranscriptPageOptions = TranscriptReadWindowOptions &
 export type SessionTranscriptReader = {
   subagentCoordination?: SubagentCoordinationDisplayResolver;
   readSessionMessageCountAsync(scope: SessionTranscriptReadScope): Promise<number>;
-  readSessionMessagesAsync(
-    scope: SessionTranscriptReadScope,
-    options: ReadSessionMessagesAsyncOptions & SessionTranscriptReadOptions,
-  ): Promise<unknown[]>;
   readSessionMessagesWithSourceAsync(
     scope: SessionTranscriptReadScope,
-    options: ReadSessionMessagesAsyncOptions & SessionTranscriptReadOptions,
+    options: SessionTranscriptSourcePageOptions,
+    signal?: AbortSignal,
   ): Promise<ReadSessionMessagesResult>;
   readSessionMessageByIdAsync(
     scope: SessionTranscriptReadScope,
     messageId: string,
     options?: SessionTranscriptMessageByIdOptions & { allowResetArchiveFallback?: boolean },
+    signal?: AbortSignal,
   ): Promise<ReadSessionMessageByIdResult>;
   readSessionMessagesMatchingIdAsync(
     scope: SessionTranscriptReadScope,
@@ -118,10 +143,12 @@ export type SessionTranscriptReader = {
   readSessionMessagesPageWithStatsAsync(
     scope: SessionTranscriptReadScope,
     options: SessionTranscriptPageOptions,
+    signal?: AbortSignal,
   ): Promise<ReadRecentSessionMessagesResult>;
   readSessionMessagesAroundIdWithStatsAsync(
     scope: SessionTranscriptReadScope,
     options: TranscriptAnchorPageOptions & SessionTranscriptReadOptions,
+    signal?: AbortSignal,
   ): Promise<ReadSessionMessagesAroundIdResult>;
 };
 
@@ -142,6 +169,7 @@ export type SessionTranscriptVisitor = {
 };
 
 export type SessionTranscriptProjectionSelection =
+  | { kind: "recent-text"; options: ReadRecentSessionConversationTextOptions }
   | { kind: "delta"; options: SessionTranscriptRawDeltaLimits }
   | { kind: "count" }
   | {
@@ -157,17 +185,21 @@ export type SessionTranscriptProjectionSelection =
       messageId: string;
       options?: SessionTranscriptMessageByIdOptions & { allowResetArchiveFallback?: boolean };
     }
-  | { kind: "source"; options: ReadSessionMessagesAsyncOptions & SessionTranscriptReadOptions }
+  | {
+      kind: "source";
+      options: Parameters<SessionTranscriptReader["readSessionMessagesWithSourceAsync"]>[1];
+    }
   | { kind: "lookup"; messageId: string };
 
 export type SessionTranscriptProjectionSelectionResults = {
+  "recent-text": SessionRecentConversationText[];
   delta: SessionTranscriptDisplayDeltaResult;
   count: number;
   recent: ReadRecentSessionMessagesResult;
   page: ReadRecentSessionMessagesResult;
   "around-id": ReadSessionMessagesAroundIdResult;
   "by-id": ReadSessionMessageByIdResult;
-  source: ReadSessionMessagesResult & { offPathMessages?: unknown[] };
+  source: ReadSessionMessagesResult;
   lookup: { hasDisplayMessages: boolean; messages: unknown[] };
 };
 

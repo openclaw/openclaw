@@ -1,9 +1,5 @@
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
-  asDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "openclaw/plugin-sdk/number-runtime";
-import {
   isRealtimeVoiceAudioAudible,
   isRealtimeVoiceWakeNameRequired,
   matchRealtimeVoiceActivationName,
@@ -371,13 +367,9 @@ export class DiscordRealtimeTurns {
       );
       return;
     }
-    const expiresAt = resolveExpiresAtMsFromDurationMs(DISCORD_REALTIME_WAKE_NAME_FOLLOWUP_TTL_MS);
-    if (expiresAt === undefined) {
-      return;
-    }
     this.pendingWakeNameFollowup = {
       context,
-      expiresAt,
+      expiresAt: Date.now() + DISCORD_REALTIME_WAKE_NAME_FOLLOWUP_TTL_MS,
     };
     logger.info(
       `discord voice: realtime wake-name follow-up armed speaker=${context.speakerLabel} voiceSession=${this.params.entry.voiceSessionKey} agent=${this.params.entry.route.agentId}`,
@@ -387,9 +379,7 @@ export class DiscordRealtimeTurns {
   private consumePendingWakeNameFollowup(): DiscordRealtimeSpeakerContext | undefined {
     const pending = this.pendingWakeNameFollowup;
     this.pendingWakeNameFollowup = undefined;
-    const now = asDateTimestampMs(Date.now());
-    const expiresAt = pending ? asDateTimestampMs(pending.expiresAt) : undefined;
-    if (!pending || now === undefined || expiresAt === undefined || now > expiresAt) {
+    if (!pending || Date.now() > pending.expiresAt) {
       return undefined;
     }
     this.consumePendingSpeakerContext();

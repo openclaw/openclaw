@@ -21,8 +21,6 @@ import {
   resolveAgentTurnAttachments,
 } from "./agent-turn-attachments.js";
 
-type CurrentImageAttachment = MediaAttachment & { path: string };
-
 type OrderedTurnImage = {
   image?: ImageContent;
   imageOrder: PromptImageOrderEntry;
@@ -39,19 +37,18 @@ export type CurrentTurnImages = {
   mediaImageLayout?: MediaImageLayout;
 };
 
-function collectCurrentImageAttachments(ctx: MsgContext): CurrentImageAttachment[] {
+function collectCurrentImageAttachments(ctx: MsgContext): MediaAttachment[] {
   const hydrationSuppressedIndexes = new Set(
     normalizeMediaFacts(ctx.media).flatMap((fact, index) =>
       fact.hydrationSuppressed === true ? [index] : [],
     ),
   );
-  return normalizeAttachments(ctx).flatMap((attachment) => {
-    if (hydrationSuppressedIndexes.has(attachment.index)) {
-      return [];
-    }
-    const mediaPath = normalizeOptionalString(attachment.path);
-    return mediaPath && isImageAttachment(attachment) ? [{ ...attachment, path: mediaPath }] : [];
-  });
+  return normalizeAttachments(ctx).filter(
+    (attachment) =>
+      !hydrationSuppressedIndexes.has(attachment.index) &&
+      normalizeOptionalString(attachment.path) !== undefined &&
+      isImageAttachment(attachment),
+  );
 }
 
 function appendOrderedImages(params: {
@@ -62,21 +59,19 @@ function appendOrderedImages(params: {
 }) {
   const images = params.images ?? [];
   let inlineIndex = 0;
-  for (const imageOrder of params.imageOrder ?? []) {
+  const appendImage = (imageOrder: PromptImageOrderEntry) => {
     params.entries.push({
       image: imageOrder === "inline" ? images[inlineIndex++] : undefined,
       imageOrder,
       sourceIndex: params.sourceIndex,
       sequence: params.entries.length,
     });
+  };
+  for (const imageOrder of params.imageOrder ?? []) {
+    appendImage(imageOrder);
   }
   while (inlineIndex < images.length) {
-    params.entries.push({
-      image: images[inlineIndex++],
-      imageOrder: "inline",
-      sourceIndex: params.sourceIndex,
-      sequence: params.entries.length,
-    });
+    appendImage("inline");
   }
 }
 

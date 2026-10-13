@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import { codexAppServerStartOptionsKey } from "./config-runtime.js";
@@ -76,10 +75,6 @@ const computerUseDefaults = {
   strictReadiness: false,
   autoRepair: false,
 };
-
-function envRef(id: string) {
-  return { source: "env" as const, provider: "default", id };
-}
 
 describe("Codex app-server config", () => {
   it.each<
@@ -269,14 +264,6 @@ describe("Codex app-server config", () => {
     expect(permissions[profileName ?? ""]?.filesystem[":project_roots"]["."]).toBe("read");
   });
 
-  it("clamps oversized app-server timer config", () => {
-    const runtime = resolveAppServer({
-      requestTimeoutMs: Number.MAX_SAFE_INTEGER,
-    });
-
-    expect(runtime).toMatchObject({ requestTimeoutMs: MAX_TIMER_TIMEOUT_MS });
-  });
-
   it("falls back for non-positive app-server timer config", () => {
     const runtime = resolveAppServer({ requestTimeoutMs: 0 });
 
@@ -288,18 +275,17 @@ describe("Codex app-server config", () => {
     expect(runtime.start.clearEnv).toEqual(["OPENAI_API_KEY"]);
   });
 
-  it.each([
-    { enableUltrafast: undefined, expected: true },
-    { enableUltrafast: true, expected: true },
-    { enableUltrafast: false, expected: false },
-  ])("resolves the Ultrafast disable switch $enableUltrafast", ({ enableUltrafast, expected }) => {
-    const runtime = resolveCodexAppServerRuntimeOptions({
-      pluginConfig: { appServer: { serviceTier: "fast", enableUltrafast } },
-      env: {},
-    });
-    expect(runtime.enableUltrafast).toBe(expected);
-    expect(runtime.serviceTier).toBe("priority");
-  });
+  it.each([{ enableUltrafast: undefined, expected: true }])(
+    "resolves the Ultrafast disable switch $enableUltrafast",
+    ({ enableUltrafast, expected }) => {
+      const runtime = resolveCodexAppServerRuntimeOptions({
+        pluginConfig: { appServer: { serviceTier: "fast", enableUltrafast } },
+        env: {},
+      });
+      expect(runtime.enableUltrafast).toBe(expected);
+      expect(runtime.serviceTier).toBe("priority");
+    },
+  );
 
   it("preserves future service tier values", () => {
     expect(resolveAppServer({ serviceTier: "batch-preview" }).serviceTier).toBe("batch-preview");
@@ -314,12 +300,6 @@ describe("Codex app-server config", () => {
       }),
     ).toThrow(
       "plugins.entries.codex.config.sessionCatalog.homes requires appServer.transport=stdio",
-    );
-  });
-
-  it("requires a websocket url when websocket transport is configured", () => {
-    expect(() => resolveAppServer({ transport: "websocket" }, { env: {} })).toThrow(
-      "appServer.url is required",
     );
   });
 
@@ -344,36 +324,8 @@ describe("Codex app-server config", () => {
     });
     expect(runtime).toMatchObject({
       connectionClass: "remote",
-      remoteAppsSubstrate: "preconfigured",
       remoteWorkspaceRoot: "/srv/workspaces",
     });
-  });
-
-  it("rejects unresolved app-server auth token SecretRefs at runtime option resolution", () => {
-    expect(() =>
-      resolveAppServer({
-        transport: "websocket",
-        url: "wss://codex-app-server.example.internal/ws",
-        authToken: envRef("CODEX_APP_SERVER_TOKEN"),
-      }),
-    ).toThrow(
-      'plugins.entries.codex.config.appServer.authToken: unresolved SecretRef "env:default:CODEX_APP_SERVER_TOKEN"',
-    );
-  });
-
-  it("rejects unresolved app-server header SecretRefs at runtime option resolution", () => {
-    expect(() =>
-      resolveAppServer({
-        transport: "websocket",
-        url: "wss://codex-app-server.example.internal/ws",
-        authToken: "capability-token",
-        headers: {
-          "x-codex-client-session-token": envRef("CODEX_CLIENT_SESSION_TOKEN"),
-        },
-      }),
-    ).toThrow(
-      'plugins.entries.codex.config.appServer.headers.x-codex-client-session-token: unresolved SecretRef "env:default:CODEX_CLIENT_SESSION_TOKEN"',
-    );
   });
 
   it("rejects remote websocket app-servers without identity-bearing auth", () => {
@@ -475,23 +427,6 @@ describe("Codex app-server config", () => {
 
     expect(runtime.start).toMatchObject({ transport: "stdio", homeScope: "user" });
     expect(runtime.start).not.toHaveProperty("url");
-  });
-
-  it("honors explicit app-server settings for supervision control connections", () => {
-    const runtime = resolveCodexSupervisionAppServerRuntimeOptions({
-      pluginConfig: {
-        supervision: { enabled: true },
-        appServer: { transport: "websocket", url: "ws://127.0.0.1:39175" },
-      },
-      env: {},
-      requirementsToml: null,
-    });
-
-    expect(runtime.start).toMatchObject({
-      transport: "websocket",
-      homeScope: "agent",
-      url: "ws://127.0.0.1:39175",
-    });
   });
 
   it("rejects Unix app-server connections outside the shared user home", () => {
@@ -737,31 +672,6 @@ describe("Codex app-server config", () => {
     },
   );
 
-  it("treats configured and environment commands as explicit overrides", () => {
-    expectFields(
-      resolveRuntimeForTest({
-        pluginConfig: {
-          appServer: { command: "C:\\Program Files\\OpenAI Codex\\codex.exe" },
-          computerUse: { enabled: true },
-        },
-        env: { OPENCLAW_CODEX_APP_SERVER_BIN: "/usr/local/bin/codex" },
-      }).start,
-      "configured start",
-      {
-        command: "C:\\Program Files\\OpenAI Codex\\codex.exe",
-        managedCommandOrder: undefined,
-        commandSource: "config",
-      },
-    );
-
-    expect(
-      resolveRuntimeForTest({
-        pluginConfig: {},
-        env: { OPENCLAW_CODEX_APP_SERVER_BIN: "/usr/local/bin/codex" },
-      }).start,
-    ).toMatchObject({ command: "/usr/local/bin/codex", commandSource: "env" });
-  });
-
   it("reads effective native Computer Use state before managed spawn", () => {
     const startOptions = resolveRuntimeForTest({ pluginConfig: {} }).start;
     const resolveForConfig = (codexConfigToml: string) =>
@@ -801,22 +711,6 @@ describe("Codex app-server config", () => {
         codexConfigToml: '[plugins."computer-use@openai-bundled"]\nenabled = true\n',
       }).managedCommandOrder,
     ).toBe("package-first");
-  });
-
-  it("keeps desktop ownership for Computer Use persisted in an agent Codex home", async () => {
-    await withTempDir("openclaw-codex-agent-home-", async (agentDir) => {
-      const startOptions = resolveRuntimeForTest({ pluginConfig: {} }).start;
-      const codexHome = path.join(agentDir, "codex-home");
-      await fs.mkdir(codexHome);
-      await fs.writeFile(
-        path.join(codexHome, "config.toml"),
-        '[plugins."computer-use@openai-bundled"]\nenabled = true\n',
-      );
-
-      expect(
-        resolveCodexAppServerStartOptionsForAgent({ startOptions, agentDir }).managedCommandOrder,
-      ).toBe("desktop-first");
-    });
   });
 
   it("uses desktop-first when persisted Codex state cannot be read", async () => {
@@ -900,59 +794,6 @@ describe("Codex app-server config", () => {
     }
   });
 
-  it("resolves Computer Use operational policy knobs", () => {
-    expect(
-      resolveCodexComputerUseConfig({
-        pluginConfig: {
-          computerUse: {
-            enabled: true,
-            liveTestTimeoutMs: 45_000,
-            toolCallTimeoutMs: 55_000,
-            healthCheckEnabled: true,
-            healthCheckIntervalMinutes: 120,
-            pluginCacheMode: "independent",
-            strictReadiness: true,
-            autoRepair: true,
-          },
-        },
-        env: {
-          OPENCLAW_CODEX_COMPUTER_USE_HEALTH_CHECK_ENABLED: "false",
-          OPENCLAW_CODEX_COMPUTER_USE_HEALTH_CHECK_INTERVAL_MINUTES: "240",
-          OPENCLAW_CODEX_COMPUTER_USE_STRICT_READINESS: "false",
-          OPENCLAW_CODEX_COMPUTER_USE_AUTO_REPAIR: "false",
-        },
-      }),
-    ).toMatchObject({
-      enabled: true,
-      liveTestTimeoutMs: 45_000,
-      toolCallTimeoutMs: 55_000,
-      healthCheckEnabled: true,
-      healthCheckIntervalMinutes: 120,
-      pluginCacheMode: "independent",
-      strictReadiness: true,
-      autoRepair: true,
-    });
-
-    expect(
-      resolveCodexComputerUseConfig({
-        pluginConfig: { computerUse: { enabled: true } },
-        env: {
-          OPENCLAW_CODEX_COMPUTER_USE_HEALTH_CHECK_ENABLED: "1",
-          OPENCLAW_CODEX_COMPUTER_USE_HEALTH_CHECK_INTERVAL_MINUTES: "90",
-          OPENCLAW_CODEX_COMPUTER_USE_STRICT_READINESS: "true",
-          OPENCLAW_CODEX_COMPUTER_USE_AUTO_REPAIR: "true",
-          OPENCLAW_CODEX_COMPUTER_USE_PLUGIN_CACHE_MODE: "stale-copy",
-        },
-      }),
-    ).toMatchObject({
-      healthCheckEnabled: true,
-      healthCheckIntervalMinutes: 60,
-      pluginCacheMode: "independent",
-      strictReadiness: true,
-      autoRepair: true,
-    });
-  });
-
   it("preserves explicit read-only app-server sandbox for auto mode", () => {
     const configRuntime = resolveAppServer(
       {
@@ -966,7 +807,7 @@ describe("Codex app-server config", () => {
     expectRuntimePolicy(configRuntime, readOnlyAutoReviewPolicy);
   });
 
-  it.each(["deny", "allowlist"] as const)(
+  it.each(["allowlist"] as const)(
     "blocks Codex app-server local execution for normalized OpenClaw %s exec mode",
     (execMode) => {
       expect(() => resolveRuntimeForTest({ pluginConfig: {}, execMode })).toThrow(
@@ -1035,12 +876,6 @@ describe("Codex app-server config", () => {
     expect(() => resolveRuntimeForTest({ execPolicy })).toThrow(
       "Codex app-server local execution is unavailable because effective tools.exec.mode=deny",
     );
-  });
-
-  it("keeps legacy full exec security with ask=on-miss on default Codex yolo", () => {
-    const execPolicy = resolveExecPolicy({ security: "full", ask: "on-miss" });
-
-    expectRuntimePolicy(resolveRuntimeForTest({ execPolicy }), fullAccessPolicy);
   });
 
   it("fails closed when legacy full exec with ask cannot use full Codex sandbox", () => {

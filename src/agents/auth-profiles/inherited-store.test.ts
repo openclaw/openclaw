@@ -13,6 +13,7 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { createExternalAuthRuntime } from "./external-auth.js";
+import { refreshAuthProfileFileState } from "./file-state.js";
 import {
   loadInheritedAuthProfileStore,
   readRuntimeAuthProfileStoreFromSnapshots,
@@ -142,7 +143,11 @@ it.each([
   };
   expect((await read())?.profiles).toMatchObject({ ...inherited.profiles, ...local.profiles });
   closeAuthProfileReadPool();
-  fs.writeFileSync(mainPath, "not a SQLite database");
+  // A replacement receives fresh admission; in-place foreign writes are not a runtime contract.
+  const replacementPath = `${mainPath}.replacement`;
+  fs.writeFileSync(replacementPath, "not a SQLite database");
+  fs.renameSync(replacementPath, mainPath);
+  await refreshAuthProfileFileState();
   await expect(read()).rejects.toThrow(AuthProfileStoreUnreadableError);
   recordAgentDatabaseAdmissions(
     [
@@ -166,7 +171,9 @@ it.each([
     ),
   ).toThrow(unrelatedError);
   closeAuthProfileReadPool();
-  fs.writeFileSync(mainPath, original);
+  fs.writeFileSync(replacementPath, original);
+  fs.renameSync(replacementPath, mainPath);
+  await refreshAuthProfileFileState();
   expect((await read())?.profiles).toMatchObject({ ...inherited.profiles, ...local.profiles });
 });
 

@@ -112,4 +112,25 @@ describe("automatic session refresh pacing", () => {
       coordinator.dispose();
     }
   });
+
+  it("keeps one minute fallback under row traffic and absorbs it on an authoritative read", async () => {
+    vi.useFakeTimers();
+    const refresh = vi.fn(async () => {});
+    const coordinator = createSessionEventRefreshCoordinator({ active: true, refresh });
+    try {
+      for (let second = 0; second < 60; second += 1) {
+        coordinator.scheduleFallback();
+        await vi.advanceTimersByTimeAsync(1_000);
+      }
+      expect(refresh).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(refresh).toHaveBeenCalledOnce();
+      coordinator.scheduleFallback();
+      coordinator.absorb();
+      await vi.advanceTimersByTimeAsync(65_000);
+      expect(refresh).toHaveBeenCalledOnce();
+    } finally {
+      coordinator.dispose();
+    }
+  });
 });

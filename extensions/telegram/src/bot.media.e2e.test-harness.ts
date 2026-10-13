@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { finalizeInboundContext, resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawStateDatabaseAsync,
@@ -122,6 +123,7 @@ type ApiStub = {
   getChat: Mock;
   sendChatAction: Mock;
   sendMessage: Mock;
+  deleteMyCommands: () => Promise<void>;
   setMyCommands: (commands: Array<{ command: string; description: string }>) => Promise<void>;
 };
 
@@ -130,6 +132,7 @@ const apiStub: ApiStub = {
   getChat: vi.fn(async () => undefined),
   sendChatAction: sendChatActionSpy,
   sendMessage: vi.fn(async () => ({ message_id: 1 })),
+  deleteMyCommands: vi.fn(async () => undefined),
   setMyCommands: vi.fn(async () => undefined),
 };
 
@@ -228,11 +231,14 @@ export const telegramBotDepsForTest: TelegramBotDeps = {
     modelNames: new Map<string, string>(),
     modelCatalog: [],
   })) as TelegramBotDeps["buildModelsProviderData"],
-  listSkillCommandsForAgents: vi.fn(() => []) as TelegramBotDeps["listSkillCommandsForAgents"],
+  prepareSkillCommandsForAgents: vi.fn(
+    async () => [],
+  ) as TelegramBotDeps["prepareSkillCommandsForAgents"],
   wasSentByBot: vi.fn(() => false) as TelegramBotDeps["wasSentByBot"],
 };
 
 beforeEach(() => {
+  clearRuntimeConfigSnapshot();
   // Gateway starts the bot after registering this hook; direct harness construction must
   // preserve that boundary so topic routing does not bootstrap bundled plugins mid-turn.
   setActivePluginRegistry(
@@ -275,6 +281,7 @@ afterEach(async () => {
   } else {
     process.env.OPENCLAW_STATE_DIR = originalStateDir;
   }
+  clearRuntimeConfigSnapshot();
 });
 
 vi.doMock("./bot.runtime.js", () => ({
@@ -330,7 +337,7 @@ vi.doMock("./bot-message-context.session.runtime.js", async () => {
   );
   return {
     ...actual,
-    readSessionUpdatedAt: () => undefined,
+    readSessionUpdatedAtAsync: async () => undefined,
     resolveStorePath: (storePath?: string) =>
       storePath ?? path.join(ensureMediaHarnessStoreRoot(), "sessions.json"),
   };

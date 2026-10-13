@@ -2,10 +2,16 @@ import { renameSync } from "node:fs";
 import { setImmediate } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { callInProcessGatewayTool } from "../agents/tools/in-process-gateway.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
-import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import {
+  loadSessionEntryReadOnly,
+  patchSessionEntryCore,
+  replaceSessionEntry,
+  replaceSessionEntrySync,
+} from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -118,13 +124,15 @@ function fixture(scopes = ["operator.write"], creator = "someone-else") {
     },
     prepare: async () =>
       hold(
-        await prepareGatewaySessionAccessAuthority({
-          policy: { mode: "write", requiredTool: "browser", allowOwnSessionScope: true },
-          requestParams: { sessionKey: key, agentId: "main" },
-          context,
-          client,
-          ownSessionOnly: false,
-        }),
+        (
+          await prepareGatewaySessionAccessAuthority({
+            policy: { mode: "write", requiredTool: "browser", allowOwnSessionScope: true },
+            requestParams: { sessionKey: key, agentId: "main" },
+            context,
+            client,
+            ownSessionOnly: false,
+          })
+        ).authority,
       ),
   };
 }
@@ -314,15 +322,16 @@ describe("session resource admission", () => {
     using capture = vi
       .spyOn(sessionAccess, "prepareGatewaySessionAccessAuthority")
       .mockImplementation(async (params) => {
-        const authority = await prepare(params);
+        const prepared = await prepare(params);
+        const authority = prepared.authority;
         release.mockImplementation(authority.release);
         return {
-          ...authority,
-          assertCurrent: () => {
-            authority.assertCurrent();
+          ...prepared,
+          assertPreparationCurrent: () => {
+            prepared.assertPreparationCurrent();
             test.client.connect.scopes = scopes;
           },
-          release,
+          authority: { ...authority, release },
         };
       });
     const handler = vi.fn<GatewayRequestHandler>();
@@ -412,46 +421,124 @@ describe("session resource admission", () => {
   it.each(["receipt", "profile selection"])(
     "fences %s expiry without attaching it to retained actor or session lifetime",
     async (kind) => {
-      const test = fixture();
-      let invocationActive = true;
-      let viewer: ReturnType<Awaited<ReturnType<typeof test.prepare>>["retain"]> | undefined;
-      let resource: typeof viewer;
-      const handler: GatewayRequestHandler = async ({ sessionAccessAuthority, respond }) => {
-        const authority = sessionAccessAuthority!;
-        viewer = hold(authority.retain());
-        resource = hold(authority.retainSession());
-        await Promise.resolve();
-        invocationActive = false;
-        expect(() => authority.assertCurrent()).toThrow("receipt expired");
-        expect(() => authority.retain()).toThrow("receipt expired");
-        expect(() => authority.retainSession()).toThrow("receipt expired");
-        expect(() => viewer!.assertCurrent()).not.toThrow();
-        expect(() => resource!.assertCurrent()).not.toThrow();
-        respond(true, {});
-      };
-      await dispatchSession(test, handler, {
-        sessionMutationCommitGuard: () => {
-          if (kind === "receipt" && !invocationActive) {
-            throw new Error("receipt expired");
-          }
-        },
-        ...(kind === "profile selection"
-          ? {
-              expectedProfileBinding: {
-                assertCurrent: () => {
-                  if (!invocationActive) {
-                    throw new Error("receipt expired");
-                  }
-                },
-                assertMatchesResolvedProfile: () => {},
-                markInvoked: () => {},
-                guardResponse: (respond) => respond,
-              },
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+        const scope = { agentId: "main", sessionKey: key, storePath };
+        const cfg = { agents: { entries: { main: {} } }, session: { store: storePath } };
+        setRuntimeConfigSnapshot(cfg);
+        await replaceSessionEntry(scope, {
+          sessionId: "session-1",
+          lifecycleRevision: "incarnation-1",
+          updatedAt: 1,
+          visibility: "shared",
+          createdActor: { type: "human", source: "profile", id: "alice" },
+        });
+        const test = fixture();
+        const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+        const context = bindSessionRowProjection(
+          { ...test.context, getRuntimeConfig: () => cfg },
+          () => projection,
+        );
+        let invocationActive = true;
+        let viewer: ReturnType<sessionAccess.GatewaySessionAccessAuthority["retain"]> | undefined;
+        let resource: typeof viewer;
+        let committed: ReturnType<typeof loadSessionEntryReadOnly>;
+        let outcome: unknown;
+        const expiryErrors: unknown[] = [];
+        const response = vi.fn();
+        const handler: GatewayRequestHandler = async ({ sessionAccessAuthority, respond }) => {
+          const authority = expectDefined(sessionAccessAuthority, "registered session authority");
+          viewer = authority.retain();
+          resource = authority.retainSession();
+          const options = { assertCommitAllowed: authority.assertCurrent, skipMaintenance: true };
+          await patchSessionEntryCore(
+            scope,
+            () => ({ label: "allowed invocation write" }),
+            options,
+          );
+          committed = structuredClone(loadSessionEntryReadOnly(scope));
+          await projection.prepareMembership();
+          const entered = createDeferredCore();
+          const resume = createDeferredCore();
+          // The canonical writer owns this awaited updater and checks authority before SQL commit.
+          const pending = patchSessionEntryCore(
+            scope,
+            async () => {
+              entered.resolve();
+              await resume.promise;
+              return { label: "expired invocation write" };
+            },
+            options,
+          );
+          const settled = pending.then(
+            (entry) => ({ entry }),
+            (error: unknown) => ({ error }),
+          );
+          try {
+            await awaitGateBeforeSettlement(
+              entered.promise,
+              pending,
+              "Session mutation settled before invocation expiry",
+            );
+            invocationActive = false;
+            resume.resolve();
+            outcome = await settled;
+            for (const retain of [() => authority.retain(), () => authority.retainSession()]) {
+              try {
+                retain().release();
+                expiryErrors.push(undefined);
+              } catch (error) {
+                expiryErrors.push(error);
+              }
             }
-          : {}),
+            respond(true, {});
+          } finally {
+            resume.resolve();
+            await settled;
+          }
+        };
+        try {
+          await projection.ensureMaterialized();
+          await dispatchSession({ ...test, context, projection }, handler, {
+            respond: response,
+            sessionMutationCommitGuard: () => {
+              if (kind === "receipt" && !invocationActive) {
+                throw new Error("receipt expired");
+              }
+            },
+            ...(kind === "profile selection"
+              ? {
+                  expectedProfileBinding: {
+                    assertCurrent: () => {
+                      if (!invocationActive) {
+                        throw new Error("receipt expired");
+                      }
+                    },
+                    assertMatchesResolvedProfile: () => {},
+                    markInvoked: () => {},
+                    guardResponse: (respond) => respond,
+                  },
+                }
+              : {}),
+          });
+          expect(response).toHaveBeenCalledExactlyOnceWith(true, {});
+          expect(committed).toMatchObject({ label: "allowed invocation write" });
+          expect(loadSessionEntryReadOnly(scope)).toEqual(committed);
+          expect(outcome).toMatchObject({
+            error: expect.objectContaining({ message: "receipt expired" }),
+          });
+          expect(expiryErrors).toMatchObject([
+            { message: "receipt expired" },
+            { message: "receipt expired" },
+          ]);
+          expect(() => viewer!.assertCurrent()).not.toThrow();
+          expect(() => resource!.assertCurrent()).not.toThrow();
+        } finally {
+          viewer?.release();
+          resource?.release();
+          projection.dispose();
+        }
       });
-      expect(() => viewer!.assertCurrent()).not.toThrow();
-      expect(() => resource!.assertCurrent()).not.toThrow();
     },
   );
 
@@ -482,13 +569,15 @@ describe("session resource admission", () => {
       try {
         await projection.ensureMaterialized();
         const authority = hold(
-          await prepareGatewaySessionAccessAuthority({
-            context,
-            client: test.client,
-            requestParams: { sessionKey: key },
-            policy: { mode: "write", requiredTool: "browser" },
-            ownSessionOnly: false,
-          }),
+          (
+            await prepareGatewaySessionAccessAuthority({
+              context,
+              client: test.client,
+              requestParams: { sessionKey: key },
+              policy: { mode: "write", requiredTool: "browser" },
+              ownSessionOnly: false,
+            })
+          ).authority,
         );
         const resource = hold(authority.retainSession());
         const viewer = hold(authority.retain());

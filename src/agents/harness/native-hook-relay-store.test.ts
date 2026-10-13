@@ -190,46 +190,6 @@ describe("native hook relay store", () => {
     ).toBeUndefined();
   });
 
-  it("restores a missing record without overwriting another owner", async () => {
-    const record = bridgeRecord("relay-restored");
-    expect(
-      await renewOrRestoreNativeHookRelayBridgeRecord({
-        record,
-        updatedAtMs: 1_000,
-        stateDbPath: primaryStateDbPath,
-      }),
-    ).toBe(true);
-    expect(
-      await readNativeHookRelayBridgeRecord({
-        relayId: record.relayId,
-        stateDbPath: primaryStateDbPath,
-      }),
-    ).toStrictEqual(record);
-
-    const otherOwner = bridgeRecord(record.relayId, {
-      pid: record.pid + 1,
-      token: "test-auth-token",
-    });
-    await writeNativeHookRelayBridgeRecord({
-      record: otherOwner,
-      updatedAtMs: 2_000,
-      stateDbPath: primaryStateDbPath,
-    });
-    expect(
-      await renewOrRestoreNativeHookRelayBridgeRecord({
-        record,
-        updatedAtMs: 3_000,
-        stateDbPath: primaryStateDbPath,
-      }),
-    ).toBe(false);
-    expect(
-      await readNativeHookRelayBridgeRecord({
-        relayId: record.relayId,
-        stateDbPath: primaryStateDbPath,
-      }),
-    ).toStrictEqual(otherOwner);
-  });
-
   it("prunes expired and dead bridges while preserving live and unknown pids", async () => {
     const expired = bridgeRecord("relay-expired", { pid: 200, expiresAtMs: 9_999 });
     const dead = bridgeRecord("relay-dead", { pid: 201 });

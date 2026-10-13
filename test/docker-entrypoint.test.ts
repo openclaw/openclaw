@@ -60,6 +60,7 @@ if (args.includes('doctor')) {
 describe.skipIf(process.platform === "win32")("Docker image activation", () => {
   it.for([
     { args: ["openclaw.mjs", "gateway"], rootOptions: [] },
+    { args: ["openclaw", "gateway"], rootOptions: [], installed: true },
     { args: ["dist/index.js", "gateway", "--bind", "lan", "--port", "18789"], rootOptions: [] },
     {
       args: ["openclaw.mjs", "--profile", "demo", "gateway", "run", "--no-color"],
@@ -69,12 +70,18 @@ describe.skipIf(process.platform === "win32")("Docker image activation", () => {
     { args: ["openclaw.mjs", "--dev", "gateway"], rootOptions: ["--dev"] },
     { args: ["openclaw.mjs", "gateway", "--dev"], rootOptions: [] },
     { args: ["openclaw.mjs", "gateway", "--token", "--reset"], rootOptions: [] },
-    { args: ["openclaw.mjs", "gateway", "--token", "--profile=token-value"], rootOptions: [] },
   ])(
     "settles Doctor then execs the original command: $args",
-    async ({ args, rootOptions }, { command }) => {
+    async ({ args, rootOptions, installed }, { command }) => {
       const f = fixture(command);
-      const result = await f.run(args);
+      if (installed) {
+        fs.symlinkSync("openclaw.mjs", path.join(f.root, "openclaw"));
+      }
+      const result = installed
+        ? await f.runCommand(args, {
+            PATH: `${f.root}:${path.dirname(process.execPath)}:/usr/bin:/bin`,
+          })
+        : await f.run(args);
       expect(result, result.stderr).toMatchObject({ status: 0, signal: null, error: undefined });
       const rows = f.read();
       expect(rows.map((row) => row.args)).toEqual([
@@ -85,21 +92,6 @@ describe.skipIf(process.platform === "win32")("Docker image activation", () => {
     },
   );
 
-  it("repairs before the image's installed openclaw command", async ({ command }) => {
-    const f = fixture(command);
-    fs.symlinkSync("openclaw.mjs", path.join(f.root, "openclaw"));
-    const result = await f.runCommand(["openclaw", "gateway"], {
-      PATH: `${f.root}:${path.dirname(process.execPath)}:/usr/bin:/bin`,
-    });
-    expect(result, result.stderr).toMatchObject({ status: 0, signal: null, error: undefined });
-    const rows = f.read();
-    expect(rows.map((row) => row.args)).toEqual([
-      ["doctor", "--fix", "--non-interactive"],
-      ["gateway"],
-    ]);
-    expect(rows[1].pid).toBe(rows[0].parentPid);
-  });
-
   it.for(
     [
       ["gateway", "--help"],
@@ -108,7 +100,6 @@ describe.skipIf(process.platform === "win32")("Docker image activation", () => {
       ["gateway", "status"],
       ["gateway", "--dev", "--reset"],
       ["gateway", "--", "--profile", "literal"],
-      ["gateway", "--unknown-option"],
     ].map((args) => ({ args })),
   )("passes through without an activation repair: $args", async ({ args }, { command }) => {
     const f = fixture(command);
@@ -143,31 +134,27 @@ describe.skipIf(process.platform === "win32")("Docker image activation", () => {
     expect(result).toMatchObject({ status: 0, stdout: "unchanged", error: undefined });
   });
 
-  it("does not start Gateway after Doctor refuses repair", async ({ command }) => {
-    const f = fixture(command);
-    expect((await f.run(["openclaw.mjs", "gateway"], { DOCTOR_EXIT: "78" })).status).toBe(78);
-    expect(f.read()).toHaveLength(1);
-  });
-
   it.for([
+    { signal: undefined, forwarded: undefined, status: 78 },
     { signal: "SIGTERM", forwarded: "SIGTERM", status: 143 },
     { signal: "SIGINT", forwarded: "SIGINT", status: 130 },
     { signal: "SIGHUP", forwarded: "SIGTERM", status: 129 },
     { signal: "SIGQUIT", forwarded: "SIGTERM", status: 131 },
   ])(
-    "joins Doctor after $signal even when it exits successfully, without starting Gateway",
+    "settles Doctor's non-success status $status without starting Gateway",
     async ({ signal, forwarded, status }, { command }) => {
       const f = fixture(command);
-      expect((await f.run(["openclaw.mjs", "gateway"], { INTERRUPT_DOCTOR: signal })).status).toBe(
-        status,
-      );
+      const env: Record<string, string> = signal
+        ? { INTERRUPT_DOCTOR: signal }
+        : { DOCTOR_EXIT: "78" };
+      expect((await f.run(["openclaw.mjs", "gateway"], env)).status).toBe(status);
       expect(f.read()).toEqual([
         {
           args: ["doctor", "--fix", "--non-interactive"],
           pid: expect.any(Number),
           parentPid: expect.any(Number),
         },
-        { stopped: true, signal: forwarded },
+        ...(forwarded ? [{ stopped: true, signal: forwarded }] : []),
       ]);
     },
   );

@@ -2,6 +2,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { normalizePluginId, normalizePluginTargetConfig } from "./config-state.js";
 import { resetPluginSlotsToDefaults } from "./slots.js";
 
 export type PluginConfigUninstallActions = {
@@ -103,25 +104,26 @@ export function removePluginRuntimePolicyFromConfig(
   opts?: { channelIds?: string[]; loadPaths?: string[] },
 ): { config: OpenClawConfig; actions: PluginConfigUninstallActions } {
   const actions = createEmptyConfigUninstallActions();
-  const pluginsConfig = cfg.plugins ?? {};
+  const policyPluginId = normalizePluginId(pluginId);
+  const pluginsConfig = normalizePluginTargetConfig(cfg, pluginId).plugins ?? {};
 
-  let entries = pluginsConfig.entries;
-  if (entries && Object.hasOwn(entries, pluginId)) {
-    const { [pluginId]: _, ...rest } = entries;
+  let entries = cfg.plugins?.entries ? pluginsConfig.entries : undefined;
+  if (entries && Object.hasOwn(entries, policyPluginId)) {
+    const { [policyPluginId]: _, ...rest } = entries;
     entries = Object.keys(rest).length > 0 ? rest : undefined;
     actions.entry = true;
   }
 
   let allow = pluginsConfig.allow;
-  if (Array.isArray(allow) && allow.includes(pluginId)) {
-    allow = allow.filter((id) => id !== pluginId);
+  if (Array.isArray(allow) && allow.includes(policyPluginId)) {
+    allow = allow.filter((id) => id !== policyPluginId);
     allow = allow.length > 0 ? allow : undefined;
     actions.allowlist = true;
   }
 
   let deny = pluginsConfig.deny;
-  if (Array.isArray(deny) && deny.includes(pluginId)) {
-    deny = deny.filter((id) => id !== pluginId);
+  if (Array.isArray(deny) && deny.includes(policyPluginId)) {
+    deny = deny.filter((id) => id !== policyPluginId);
     deny = deny.length > 0 ? deny : undefined;
     actions.denylist = true;
   }

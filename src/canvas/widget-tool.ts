@@ -1,7 +1,7 @@
-/** Agent-facing inline chat widget tool. */
 import { createHash } from "node:crypto";
 import { truncateCodePoints } from "@openclaw/normalization-core/code-points";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import type { Result } from "@openclaw/normalization-core/result";
 import { Type } from "typebox";
 import type { BoardWidgetPutResult } from "../../packages/gateway-protocol/src/index.js";
 import { WIDGET_HTML_MAX_UTF8_BYTES } from "../../packages/gateway-protocol/src/schema/canvas.js";
@@ -161,9 +161,7 @@ type ShowWidgetToolOptions = {
   presenterContext?: WidgetPresenterContext;
 };
 
-type WidgetPresentationAttempt =
-  | { ok: true; value: WidgetPresentationSuccess }
-  | { ok: false; error: WidgetPresentationError };
+type WidgetPresentationAttempt = Result<WidgetPresentationSuccess, WidgetPresentationError>;
 
 async function presentWidget(params: {
   presenter?: WidgetPresenter;
@@ -259,11 +257,6 @@ function generatedWidgetIdentity(title: string, preferredName: string) {
   };
 }
 
-function boardWidgetTitle(title: string): string | undefined {
-  const normalized = title.trim();
-  return normalized ? truncateCodePoints(normalized, 80) : undefined;
-}
-
 function resolveRetentionScope(options: ShowWidgetToolOptions): string {
   const scope = options.sessionId
     ? `session:${options.sessionId}`
@@ -279,7 +272,6 @@ function assertPinnedWidgetDocumentSize(html: string): void {
   }
 }
 
-/** Creates a self-contained widget hosted by OpenClaw core. */
 export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAgentTool {
   const gatewayCall = options.callGateway ?? callInProcessGatewayTool;
   const pinnedOnly = options.pinnedOnly === true;
@@ -465,10 +457,10 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
         const size = readToolStringParam(params, "size");
         const frame = readToolStringParam(presentation ?? {}, "frame");
         const after = readToolStringParam(params, "after");
-        const pinnedTitle = boardWidgetTitle(title);
+        const pinnedTitle = truncateCodePoints(title, 80);
         if (!registration && !isReport) {
           assertPinnedWidgetDocumentSize(
-            buildWidgetDocument(pinnedTitle ?? name, widgetCode, {
+            buildWidgetDocument(pinnedTitle, widgetCode, {
               connectOrigins: capabilities?.netOrigins,
             }),
           );
@@ -482,7 +474,7 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
           sessionKey: pinSessionKey,
           agentId: options.agentId,
           name,
-          ...(pinnedTitle ? { title: pinnedTitle } : {}),
+          title: pinnedTitle,
           // The Gateway owns the board document shell so agent-authored bytes
           // can never run before its user-activation and bridge bootstrap.
           content: report

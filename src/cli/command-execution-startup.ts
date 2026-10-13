@@ -1,4 +1,3 @@
-// CLI startup presentation and config-before-plugin bootstrap.
 import type { StartupConfigPreflightOptions } from "../commands/startup-config-preflight.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -58,7 +57,9 @@ export async function ensureCliExecutionBootstrap(params: {
   const validateConfigOnly = params.validateConfigOnly ?? startupPolicy.validateConfigOnly;
   if (!skipConfigGuard) {
     await measureCliCommandStartup("config-ready", async () => {
-      const { ensureConfigReady } = await configGuardModuleLoader.load();
+      const { ensureConfigReady } = await measureCliCommandStartup("config-guard-import", () =>
+        configGuardModuleLoader.load(),
+      );
       const runConfigGuard = () =>
         ensureConfigReady({
           runtime,

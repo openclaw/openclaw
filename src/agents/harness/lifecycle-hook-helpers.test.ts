@@ -6,14 +6,8 @@ import {
   awaitAgentHarnessAgentEndHook,
   runAgentHarnessAgentEndHook,
   runAgentHarnessBeforeAgentFinalizeHook,
-  runAgentHarnessLlmInputHook,
-  runAgentHarnessLlmOutputHook,
 } from "./lifecycle-hook-helpers.js";
 import { bindAgentHarnessHookMessages } from "./lifecycle-hook-messages.js";
-
-const createLegacyHookRunner = () => ({
-  hasHooks: vi.fn(() => true),
-});
 
 const EVENT = {
   runId: "run-1",
@@ -73,36 +67,6 @@ describe("agent harness lifecycle hook helpers", () => {
     },
   );
 
-  it("ignores legacy hook runners that advertise llm_input without a runner method", () => {
-    const hookRunner = createLegacyHookRunner();
-    runAgentHarnessLlmInputHook({
-      ctx: {},
-      event: {},
-      hookRunner,
-    } as never);
-    expect(hookRunner.hasHooks).toHaveBeenCalledWith("llm_input");
-  });
-
-  it("ignores legacy hook runners that advertise llm_output without a runner method", () => {
-    const hookRunner = createLegacyHookRunner();
-    runAgentHarnessLlmOutputHook({
-      ctx: {},
-      event: {},
-      hookRunner,
-    } as never);
-    expect(hookRunner.hasHooks).toHaveBeenCalledWith("llm_output");
-  });
-
-  it("ignores legacy hook runners that advertise agent_end without a runner method", () => {
-    const hookRunner = createLegacyHookRunner();
-    runAgentHarnessAgentEndHook({
-      ctx: {},
-      event: {},
-      hookRunner,
-    } as never);
-    expect(hookRunner.hasHooks).toHaveBeenCalledWith("agent_end");
-  });
-
   it("resolves after agent_end hooks settle", async () => {
     let releaseHook: () => void = () => undefined;
     const agentEndSettled = new Promise<void>((resolve) => {
@@ -154,16 +118,6 @@ describe("agent harness lifecycle hook helpers", () => {
       expect.objectContaining({ runId: "run-1", sessionKey: "agent:main:session-1" }),
       { unrefTimeout: true },
     );
-  });
-
-  it("continues when legacy hook runners advertise before_agent_finalize without a runner method", async () => {
-    await expect(
-      runAgentHarnessBeforeAgentFinalizeHook({
-        ctx: {},
-        event: {},
-        hookRunner: createLegacyHookRunner(),
-      } as never),
-    ).resolves.toEqual({ action: "continue" });
   });
 
   it("keys finalize retry budgets by context run id when the event omits run id", async () => {

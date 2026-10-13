@@ -1,4 +1,5 @@
 .sidebar-zone-entry {
+  position: relative;
   display: flex;
   align-items: center;
 }
@@ -48,7 +49,6 @@
     opacity: 0;
   }
 
-  .sidebar-zone-entry:where(:hover, :focus-within) .sidebar-reorder-trigger,
   .sidebar-recent-sessions__head:where(:hover, :focus-within) .sidebar-reorder-trigger,
   .sidebar-reorder-menu[open] .sidebar-reorder-trigger {
     opacity: 1;

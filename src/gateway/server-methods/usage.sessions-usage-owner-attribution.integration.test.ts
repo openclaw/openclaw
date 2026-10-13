@@ -3,9 +3,9 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, onTestFinished, vi } from "vitest";
-import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
-import { getRuntimeConfig } from "../../config/config.js";
+import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../config/config.js";
 import { encodeSessionArchiveContent } from "../../config/sessions/archive-compression.js";
 import { loadCombinedSessionStoreForGatewayCore } from "../../config/sessions/combined-store-gateway.js";
 import {
@@ -16,13 +16,18 @@ import {
   replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
+import {
+  historyLane,
+  projectionLane,
+  targetDiscoveryLane,
+} from "../../config/sessions/session-transcript-worker-resources.js";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import { createPersistCronSessionEntry } from "../../cron/isolated-agent/run-session-state.js";
 import { prepareCronSession } from "../../cron/isolated-agent/session.js";
+import { refreshCostUsageCacheForAgent } from "../../infra/session-cost-usage-aggregation.js";
 import { discoverAllSessions, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
 import type { AssistantMessage } from "../../llm/types.js";
-import type { SessionsUsageResult } from "../../shared/usage-types.js";
+import type { SessionsUsageResult, UsageOverviewSession } from "../../shared/usage-types.js";
 import { unregisterOpenClawAgentDatabase } from "../../state/openclaw-agent-db-registry.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -33,6 +38,8 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import type { RespondFn } from "./types.js";
+import { loadUsageOverview } from "./usage-overview.js";
+import * as usageSessionSelection from "./usage-session-selection.js";
 import { usageHandlers } from "./usage.js";
 
 function usageMessage(tokens: number, timestamp: number): AssistantMessage {
@@ -82,6 +89,7 @@ async function withUsageState(run: (state: OpenClawTestState) => Promise<void>) 
       agents: { ownership: "explicit", entries: { main: {}, opus: {} } },
       plugins: { enabled: false },
     });
+    await captureRuntimeConfigAsyncReader()();
     await run(state);
   });
 }
@@ -100,6 +108,142 @@ function contextReport(generatedAt: number, ordinal = 0): SessionSystemPromptRep
     tools: { listChars: ordinal, schemaChars: 0, entries: [] },
   };
 }
+
+it("preserves global session addition order across agents before overview pagination", async () => {
+  await withUsageState(async (state) => {
+    const config = getRuntimeConfig();
+    const startMs = Date.UTC(2026, 8, 18);
+    const sessions: UsageOverviewSession[] = [];
+    for (const [index, cost] of [0.2, 0.1, 0.3].entries()) {
+      const agentId = index === 1 ? "opus" : "main";
+      const sessionId = `ordered-${index}`;
+      const sessionFile = state.path(`${sessionId}.jsonl`);
+      await fs.writeFile(
+        sessionFile,
+        `${JSON.stringify({
+          type: "message",
+          id: sessionId,
+          parentId: null,
+          message: {
+            role: "assistant",
+            timestamp: startMs,
+            provider: "fixture",
+            model: "same-model",
+            usage: {
+              input: 1,
+              totalTokens: 1,
+              cost: { total: cost, input: cost, output: 0, cacheRead: 0, cacheWrite: 0 },
+            },
+          },
+        })}\n`,
+      );
+      sessions.push({
+        key: sessionId,
+        agentId,
+        channel: "same-channel",
+        creatorKey: "same-creator",
+        updatedAt: 30 - index * 10,
+        instances: [{ sessionId, sessionFile }],
+      });
+    }
+    for (const agentId of ["main", "opus"]) {
+      await refreshCostUsageCacheForAgent({
+        config,
+        agentId,
+        sessionFiles: sessions
+          .filter((session) => session.agentId === agentId)
+          .flatMap((session) => session.instances.map((instance) => instance.sessionFile)),
+      });
+    }
+    const result = await loadUsageOverview({
+      sessions,
+      config,
+      startMs,
+      endMs: startMs + 86_400_000 - 1,
+      options: { offset: 1 },
+      dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+      projection: "overview",
+    });
+    expect(result.cacheStatus?.status).toBe("fresh");
+    const expectedCost = 0.6000000000000001;
+    expect(result.totals.totalCost).toBe(expectedCost);
+    expect(result.aggregates.byModel[0]?.totals.totalCost).toBe(expectedCost);
+    expect(result.aggregates.byChannel[0]?.totals.totalCost).toBe(expectedCost);
+    expect(result.aggregates.byCreator?.[0]?.totals.totalCost).toBe(expectedCost);
+    expect(result.aggregates.costDaily?.[0]?.totalCost).toBe(expectedCost);
+    expect(result.aggregates.daily[0]?.cost).toBe(expectedCost);
+    expect(result.overview.tableTotals.cost).toBe(expectedCost);
+    expect(result.sessions.map((session) => session.key)).toEqual(["ordered-1", "ordered-2"]);
+    expect(result.overview).toMatchObject({ total: 3, offset: 1, limit: 50 });
+  });
+});
+
+it("keeps same-key overview context reports with their selected agent", async () => {
+  await withUsageState(async (state) => {
+    const config = getRuntimeConfig();
+    const timestamp = Date.now() - 60_000;
+    const candidates: usageSessionSelection.UsageSessionSelection[] = [];
+    const reports = [contextReport(timestamp, 1), contextReport(timestamp, 2)];
+    for (const [index, agentId] of ["main", "opus"].entries()) {
+      const sessionId = `${agentId}-global-context`;
+      const scope = {
+        agentId,
+        sessionId,
+        sessionKey: "global",
+        storePath: path.join(state.sessionsDir(agentId), "sessions.json"),
+      };
+      await upsertSessionEntryCore(scope, {
+        sessionId,
+        updatedAt: timestamp,
+        systemPromptReport: reports[index],
+      });
+      await persistSessionTranscriptTurn(scope, {
+        cwd: state.workspaceDir,
+        updateMode: "none",
+        messages: [{ message: usageMessage(index + 1, timestamp), now: timestamp }],
+      });
+      await loadSessionCostSummary({ agentId, sessionId, sessionTarget: scope, config });
+      candidates.push(
+        ...(await usageSessionSelection.selectUsageSessions({
+          config,
+          agentId,
+          specificKey: null,
+          groupingMode: "instance",
+          startMs: 0,
+          endMs: Date.now(),
+        })),
+      );
+    }
+    expect(candidates.map(({ agentId, key }) => [agentId, key])).toEqual([
+      ["main", "global"],
+      ["opus", "global"],
+    ]);
+    // Federation picks one public sentinel today; assembly must retain each physical owner supplied by selection.
+    const selection = vi
+      .spyOn(usageSessionSelection, "selectUsageSessions")
+      .mockResolvedValueOnce(candidates);
+    try {
+      const result = await readUsage({
+        agentScope: "all",
+        range: "all",
+        projection: "overview",
+        includeContextWeight: true,
+      });
+      expect(result.sessions).toHaveLength(2);
+      for (const [index, agentId] of ["main", "opus"].entries()) {
+        expect(result.sessions.find((row) => row.agentId === agentId)).toMatchObject({
+          key: "global",
+          agentId,
+          sessionId: `${agentId}-global-context`,
+          hasContextWeight: true,
+          contextWeight: reports[index],
+        });
+      }
+    } finally {
+      selection.mockRestore();
+    }
+  });
+});
 
 it("keeps prior cron runs attributed through guarded replacement and the real usage handler", async () => {
   await withUsageState(async (state) => {
@@ -147,7 +291,14 @@ it("keeps prior cron runs attributed through guarded replacement and the real us
       await loadSessionCostSummary({ agentId: "main", sessionId, sessionFile, config });
     }
     for (const groupBy of ["instance", "family"]) {
-      const result = await readUsage({ range: "all", agentId: "main", groupBy });
+      const sql = observeHostDataSql();
+      let result: SessionsUsageResult;
+      try {
+        result = await readUsage({ range: "all", agentId: "main", groupBy });
+        expect(sql.queries).toEqual([]);
+      } finally {
+        sql.restore();
+      }
       expect(result.totals.totalTokens).toBe(60);
       expect(result.totals.totalCost).toBeCloseTo(0.03);
       expect(result.sessions).toHaveLength(groupBy === "instance" ? 3 : 1);
@@ -155,6 +306,21 @@ it("keeps prior cron runs attributed through guarded replacement and the real us
       expect(result.aggregates.byCreator).toMatchObject([
         { actor: { type: "system" }, totals: { totalTokens: 60, totalCost: 0.03 } },
       ]);
+    }
+    for (const method of ["sessions.usage.timeseries", "sessions.usage.logs"]) {
+      const sql = observeHostDataSql();
+      try {
+        const [ok, payload] = await requestUsage({ key: sessionKey }, method);
+        expect(ok).toBe(true);
+        expect(payload).toMatchObject(
+          method === "sessions.usage.timeseries"
+            ? { points: [expect.objectContaining({ totalTokens: 30 })] }
+            : { logs: [expect.objectContaining({ role: "assistant", tokens: 30 })] },
+        );
+        expect(sql.queries).toEqual([]);
+      } finally {
+        sql.restore();
+      }
     }
   });
 });
@@ -234,15 +400,20 @@ it("hydrates context metadata only for emitted usage rows while aggregating ever
       { selected: [adaNewest], includeContextWeight: true, creatorKey: adaCreatorKey },
     ]) {
       let payload: unknown;
-      const reads = ["main", "opus"].map((agentId) =>
-        trackSqliteStatementExecutions(
-          openOpenClawAgentDatabase({ agentId }).db,
-          ["entries"],
-          (sql) => (/from\s+"session_nodes"/i.test(sql) ? "entries" : null),
-        ),
-      );
-      const parse = vi.spyOn(JSON, "parse");
-      let parsedPrompts: string[];
+      const transferredPrompts = new Set<string>();
+      const transfers = [historyLane, projectionLane, targetDiscoveryLane].map(({ pool }) => {
+        const run = pool.run.bind(pool);
+        return vi.spyOn(pool, "run").mockImplementation(async (...args) => {
+          const reply = await run(...args);
+          const bytes = JSON.stringify(reply);
+          for (const fixture of fixtures) {
+            if (bytes.includes(fixture.promptMarker)) {
+              transferredPrompts.add(fixture.promptMarker);
+            }
+          }
+          return reply;
+        });
+      });
       try {
         payload = await readUsage({
           ...(scenario.key ? { key: scenario.key } : { agentScope: "all" }),
@@ -251,18 +422,9 @@ it("hydrates context metadata only for emitted usage rows while aggregating ever
           includeContextWeight: scenario.includeContextWeight,
           creatorKey: scenario.creatorKey,
         });
-        parsedPrompts = fixtures
-          .filter((fixture) =>
-            parse.mock.calls.some(([json]) => json.includes(fixture.promptMarker)),
-          )
-          .map((fixture) => fixture.promptMarker);
-        expect(reads.reduce((bytes, read) => bytes + read.textBytes.entries, 0)).toBeLessThan(
-          65_536 * scenario.selected.length * 4,
-        );
       } finally {
-        parse.mockRestore();
-        for (const read of reads) {
-          read.restore();
+        for (const transfer of transfers) {
+          transfer.mockRestore();
         }
       }
       const matches = scenario.key
@@ -290,8 +452,8 @@ it("hydrates context metadata only for emitted usage rows while aggregating ever
       const emittedPrompts = new Set(scenario.selected.map((fixture) => fixture.promptMarker));
       expect
         .soft(
-          parsedPrompts.filter((marker) => !emittedPrompts.has(marker)),
-          "large saved prompts outside the emitted usage page must remain unparsed",
+          [...transferredPrompts].filter((marker) => !emittedPrompts.has(marker)),
+          "large saved prompts outside the emitted usage page must not cross the worker boundary",
         )
         .toEqual([]);
     }
@@ -310,30 +472,32 @@ it("reads selected reports from the physical owner of shared-store sentinels and
       session: { store: storePath },
       plugins: { enabled: false },
     });
-    const config = getRuntimeConfig();
+    const config = await captureRuntimeConfigAsyncReader()();
     openOpenClawAgentDatabase({ agentId: "main", path: storePath });
     const unrelated = openOpenClawAgentDatabase({ agentId: "unrelated", env: state.env });
     let changeRegistryAfterInventory = false;
     let registryChanges = 0;
-    const run = historyLane.pool.run.bind(historyLane.pool);
-    const inventory = vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
-      const reply = await run(...args);
-      if (
-        changeRegistryAfterInventory &&
-        reply.ok &&
-        isRecord(reply.value) &&
-        reply.value.kind === "session-target-inventory"
-      ) {
-        changeRegistryAfterInventory = false;
-        registryChanges++;
-        unregisterOpenClawAgentDatabase({
-          agentId: unrelated.agentId,
-          path: unrelated.path,
-          env: state.env,
-        });
-      }
-      return reply;
-    });
+    const run = targetDiscoveryLane.pool.run.bind(targetDiscoveryLane.pool);
+    const inventory = vi
+      .spyOn(targetDiscoveryLane.pool, "run")
+      .mockImplementation(async (...args) => {
+        const reply = await run(...args);
+        if (
+          changeRegistryAfterInventory &&
+          reply.ok &&
+          isRecord(reply.value) &&
+          reply.value.kind === "session-target-inventory"
+        ) {
+          changeRegistryAfterInventory = false;
+          registryChanges++;
+          unregisterOpenClawAgentDatabase({
+            agentId: unrelated.agentId,
+            path: unrelated.path,
+            env: state.env,
+          });
+        }
+        return reply;
+      });
     onTestFinished(() => inventory.mockRestore());
     for (const [agentId, key] of [
       ["ops", "global"],

@@ -26,18 +26,17 @@ import {
   transferManagedServiceUpdateHandoff,
 } from "./update-managed-service-handoff.js";
 import { buildUpdateRestartSentinelPayload } from "./update-restart-sentinel-payload.js";
-import {
-  createUpdateRun,
-  finishUpdateRun,
-  getUpdateRun,
-  listUpdateRunsAsync,
-  recordUpdateRunPhase,
-  recordUpdateRunDiagnostics,
-  recordUpdateRunStep,
-} from "./update-run-ledger.js";
+import { getUpdateRunAsync as getUpdateRun, listUpdateRunsAsync } from "./update-run-reader.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 import { AUTO_UPDATE_STEP_TIMEOUT_MS } from "./update-run-timeouts.js";
+import {
+  createUpdateRunAsync as createUpdateRun,
+  finishUpdateRunAsync as finishUpdateRun,
+  recordUpdateRunPhaseAsync as recordUpdateRunPhase,
+  recordUpdateRunDiagnosticsAsync as recordUpdateRunDiagnostics,
+  recordUpdateRunStepAsync as recordUpdateRunStep,
+} from "./update-run-write.async.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
 
 export type AutoUpdateRunResult =
@@ -99,20 +98,20 @@ export async function runAutoUpdateCommand(
       "skipped",
     );
   }
-  recordUpdateRunPhase(params.runId, "requested", {
+  await recordUpdateRunPhase(params.runId, "requested", {
     target: { installationMethod: "managed-service" },
   });
-  const handoffFailure = (error: unknown): AutoUpdateRunResult => {
+  const handoffFailure = async (error: unknown): Promise<AutoUpdateRunResult> => {
     log.info("automatic update handoff failed", { error: formatErrorMessage(error) });
     const reason = "managed-service-handoff-failed";
     const fact = createUpdateErrorFact("managed-service", error);
     // Cancellation may finish the run; retain its cause before that ownership transition.
     try {
-      recordUpdateRunStep(params.runId, { step: "requested", status: "failed", reason });
+      await recordUpdateRunStep(params.runId, { step: "requested", status: "failed", reason });
     } catch {
       log.info("Update failure state could not be recorded; preserving the original error.");
     }
-    recordUpdateRunDiagnostics(
+    await recordUpdateRunDiagnostics(
       params.runId,
       { failure: { step: "managed-service", detail: fact.message, failureFacts: [fact] } },
       (message) => log.info(message),
@@ -183,13 +182,13 @@ export async function runAutoUpdateCommand(
         }
         params.signal?.throwIfAborted();
       } catch (error) {
-        const outcome = handoffFailure(error);
+        const outcome = await handoffFailure(error);
         await cancelManagedServiceUpdateHandoff(successorOwner);
         return outcome;
       }
     } else {
       // A joined helper owns another run; it cannot complete this campaign's admission.
-      finishUpdateRun(params.runId, {
+      await finishUpdateRun(params.runId, {
         status: "skipped",
         reason: "managed-service-handoff-already-running",
       });
@@ -314,7 +313,7 @@ export async function runCampaignUpdate(params: {
     );
     return "failed";
   }
-  const run = createUpdateRun({
+  const run = await createUpdateRun({
     trigger: "campaign",
     origin: { campaignId },
     target: {
@@ -359,7 +358,7 @@ export async function runCampaignUpdate(params: {
     });
     if (outcome.status === "handoff") {
       terminal = undefined;
-      recordUpdateRunStep(runId, {
+      await recordUpdateRunStep(runId, {
         step: "managed-service update handoff",
         status: "completed",
         endedAtMs: Date.now(),
@@ -379,22 +378,18 @@ export async function runCampaignUpdate(params: {
       reason: outcome.result.reason,
       after: outcome.result.after,
     };
-    recordUpdateRunDiagnostics(
+    await recordUpdateRunDiagnostics(
       runId,
-      (recorded) => ({
-        recovery: outcome.result.recovery && (recorded.recovery ?? outcome.result.recovery),
-        rollbackOutcome:
-          outcome.result.rollbackOutcome &&
-          (recorded.rollbackOutcome ?? outcome.result.rollbackOutcome),
-      }),
+      { recovery: outcome.result.recovery, rollbackOutcome: outcome.result.rollbackOutcome },
       (message) => params.log.info(message),
+      { preserveRecovery: true },
     );
-    recordUpdateRunPhase(runId, "requested", {
+    await recordUpdateRunPhase(runId, "requested", {
       before: outcome.result.before,
       origin: { nextAction: outcome.message },
     });
     for (const step of outcome.result.steps.flatMap(updateRunStepsFromResultStep)) {
-      recordUpdateRunStep(runId, { ...step, endedAtMs: Date.now() });
+      await recordUpdateRunStep(runId, { ...step, endedAtMs: Date.now() });
     }
     if (!isCurrent()) {
       return "failed";
@@ -414,7 +409,7 @@ export async function runCampaignUpdate(params: {
       });
       if (triage.status !== "cancelled") {
         triageHint = triage.hint;
-        recordUpdateRunPhase(runId, "requested", { origin: { doctorHint: triageHint } });
+        await recordUpdateRunPhase(runId, "requested", { origin: { doctorHint: triageHint } });
       }
     }
     if (!isCurrent()) {
@@ -446,7 +441,7 @@ export async function runCampaignUpdate(params: {
       ...(triageHint ? { triage: triageHint } : {}),
     });
     if (skipped) {
-      finishUpdateRun(runId, terminal);
+      await finishUpdateRun(runId, terminal);
       terminal = undefined;
       params.campaign.clear();
     }
@@ -460,7 +455,7 @@ export async function runCampaignUpdate(params: {
       terminal.reason = extractErrorCode(error) || "unexpected-error";
       let current = run;
       try {
-        current = getUpdateRun(runId) ?? run;
+        current = (await getUpdateRun(runId)) ?? run;
       } catch {
         params.log.info(
           "Update history could not be read; preserving the original automatic update failure with captured admission facts.",
@@ -469,26 +464,27 @@ export async function runCampaignUpdate(params: {
       const step =
         current.steps.findLast((entry) => entry.status === "in_progress")?.step ?? current.phase;
       const fact = createUpdateErrorFact(step, error);
-      recordUpdateRunDiagnostics(
+      await recordUpdateRunDiagnostics(
         runId,
         { failure: { step, detail: fact.message, failureFacts: [fact] } },
         (message) => params.log.info(message),
       );
-      recordUpdateRunDiagnostics(
+      await recordUpdateRunDiagnostics(
         runId,
-        (recorded) => ({
-          rollbackOutcome: recorded.rollbackOutcome ?? {
+        {
+          rollbackOutcome: {
             status: "not-attempted",
             reason: "The startup campaign does not roll back a failed automatic update handoff",
           },
-        }),
+        },
         (message) => params.log.info(message),
+        { preserveRecovery: true },
       );
     }
     throw error;
   } finally {
     if (terminal) {
-      finishUpdateRun(runId, terminal);
+      await finishUpdateRun(runId, terminal);
     }
   }
 }

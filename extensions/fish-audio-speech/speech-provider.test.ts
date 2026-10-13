@@ -44,13 +44,6 @@ describe("Fish Audio speech provider", () => {
     vi.restoreAllMocks();
   });
 
-  it("defaults to S2.1 Pro and accepts an environment key without a voice id", () => {
-    vi.stubEnv("FISH_API_KEY", "fish-test");
-    expect(provider.defaultModel).toBe("s2.1-pro");
-    expect(provider.models).toEqual(["s2.1-pro-free", "s2.1-pro", "s2-pro", "s1"]);
-    expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 1_000 })).toBe(true);
-  });
-
   it("preserves Talk setting precedence and explicit blank-key clearing", () => {
     const params = {
       modelId: " ",
@@ -78,48 +71,52 @@ describe("Fish Audio speech provider", () => {
     });
   });
 
-  it("maps hosted synthesis and preserves Fish expression tags", async () => {
-    globalThis.fetch = vi.fn(async (url: string, init?: RequestInit) => {
-      expect(url).toBe("https://api.fish.audio/v1/tts");
-      expect(new Headers(init?.headers).get("model")).toBe("s2.1-pro");
-      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer fish-test");
-      expect(init?.body).toBe(
-        '{"text":"[whisper] Keep this quiet. [excited] Now celebrate!","format":"mp3","reference_id":"voice-123","sample_rate":44100,"latency":"normal","prosody":{"speed":1.1},"temperature":0.6,"top_p":0.8,"normalize":false}',
-      );
-      return new Response(new Uint8Array([1, 2, 3]), {
-        headers: { "content-type": "audio/mpeg" },
+  it.each([undefined, "s2.1-pro", "drama-3-preview"])(
+    "maps hosted model %s and preserves Fish expression tags",
+    async (model) => {
+      globalThis.fetch = vi.fn(async (url: string, init?: RequestInit) => {
+        expect(url).toBe("https://api.fish.audio/v1/tts");
+        expect(new Headers(init?.headers).get("model")).toBe(model ?? "s2.1-pro");
+        expect(new Headers(init?.headers).get("authorization")).toBe("Bearer fish-test");
+        expect(init?.body).toBe(
+          '{"text":"[barely holding it together] Keep this quiet. <whisper>Now celebrate!</whisper>","format":"mp3","reference_id":"voice-123","sample_rate":44100,"latency":"normal","prosody":{"speed":1.1},"temperature":0.6,"top_p":0.8,"normalize":false}',
+        );
+        return new Response(new Uint8Array([1, 2, 3]), {
+          headers: { "content-type": "audio/mpeg" },
+        });
+      }) as unknown as typeof fetch;
+      const result = await provider.synthesize({
+        ...request,
+        text: "[barely holding it together] Keep this quiet. <whisper>Now celebrate!</whisper>",
+        providerConfig: {
+          apiKey: "fish-test",
+          model,
+          speakerVoiceId: "voice-123",
+          latency: "normal",
+          speed: 1.1,
+          temperature: 0.6,
+          topP: 0.8,
+          normalize: false,
+        },
+        target: "audio-file",
+        timeoutMs: 12_345,
       });
-    }) as unknown as typeof fetch;
-    const result = await provider.synthesize({
-      ...request,
-      text: "[whisper] Keep this quiet. [excited] Now celebrate!",
-      providerConfig: {
-        apiKey: "fish-test",
-        model: "s2.1-pro",
-        speakerVoiceId: "voice-123",
-        latency: "normal",
-        speed: 1.1,
-        temperature: 0.6,
-        topP: 0.8,
-        normalize: false,
-      },
-      target: "audio-file",
-      timeoutMs: 12_345,
-    });
-    expect(result).toMatchObject({
-      audioBuffer: Buffer.from([1, 2, 3]),
-      outputFormat: "mp3",
-      fileExtension: ".mp3",
-      voiceCompatible: false,
-    });
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({ timeoutMs: 12_345, auditContext: "fish-audio.tts" }),
-    );
-  });
+      expect(result).toMatchObject({
+        audioBuffer: Buffer.from([1, 2, 3]),
+        outputFormat: "mp3",
+        fileExtension: ".mp3",
+        voiceCompatible: false,
+      });
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+        expect.objectContaining({ timeoutMs: 12_345, auditContext: "fish-audio.tts" }),
+      );
+    },
+  );
 
   it("uses native Opus for streamed voice notes and releases the response", async () => {
     globalThis.fetch = vi.fn(async (_url: string, init?: RequestInit) => {
       expect(requestBody(init)).toMatchObject({ format: "opus", sample_rate: 48000 });
+      expect(new Headers(init?.headers).get("model")).toBe("drama-3-preview");
       return new Response(new Uint8Array([4, 5, 6]), {
         headers: { "content-type": "audio/opus" },
       });
@@ -127,6 +124,7 @@ describe("Fish Audio speech provider", () => {
     const result = await provider.streamSynthesize?.({
       ...request,
       target: "voice-note",
+      providerOverrides: { model: "drama-3-preview" },
     });
     expect(result).toMatchObject({
       outputFormat: "opus",
@@ -141,9 +139,19 @@ describe("Fish Audio speech provider", () => {
   it("requests raw 8 kHz PCM for telephony", async () => {
     globalThis.fetch = vi.fn(async (_url: string, init?: RequestInit) => {
       expect(requestBody(init)).toMatchObject({ format: "pcm", sample_rate: 8000 });
+      expect(new Headers(init?.headers).get("model")).toBe("drama-3-preview");
       return new Response(new Uint8Array([7, 8]));
     }) as unknown as typeof fetch;
-    const result = await provider.synthesizeTelephony?.(request);
+    const providerConfig = provider.resolveTalkConfig?.({
+      cfg: {},
+      baseTtsConfig: { providers: { "fish-audio": request.providerConfig } },
+      talkProviderConfig: { modelId: "drama-3-preview" },
+      timeoutMs: request.timeoutMs,
+    });
+    if (!providerConfig) {
+      throw new Error("expected Fish Audio Talk configuration");
+    }
+    const result = await provider.synthesizeTelephony?.({ ...request, providerConfig });
     expect(result).toEqual({
       audioBuffer: Buffer.from([7, 8]),
       outputFormat: "pcm",
@@ -193,6 +201,17 @@ describe("Fish Audio speech provider", () => {
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(3);
   });
 
+  it("rejects unknown models instead of silently falling back at Fish Audio", async () => {
+    await expect(
+      provider.synthesize({
+        ...request,
+        providerConfig: { ...request.providerConfig, model: "drama-3-typo" },
+        target: "audio-file",
+      }),
+    ).rejects.toThrow('invalid Fish Audio model "drama-3-typo"');
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
+
   it("fails closed on blank credentials before network access", async () => {
     vi.stubEnv("FISH_API_KEY", "   ");
     vi.stubEnv("FISH_AUDIO_API_KEY", "   ");
@@ -209,12 +228,9 @@ describe("Fish Audio speech provider", () => {
   });
 
   it.each([
-    { key: "temperature", value: "0", overrides: { temperature: 0 } },
-    { key: "fish_temperature", value: "-0", overrides: { temperature: -0 } },
-    { key: "top_p", value: "0", overrides: { topP: 0 } },
+    { key: "model", value: "drama-3-preview", overrides: { model: "drama-3-preview" } },
     { key: "topp", value: "1", overrides: { topP: 1 } },
     { key: "speed", value: "0.5", overrides: { speed: 0.5 } },
-    { key: "fish_speed", value: "2", overrides: { speed: 2 } },
   ])("accepts the $key=$value directive boundary", ({ key, value, overrides }) => {
     expect(
       provider.parseDirectiveToken?.({

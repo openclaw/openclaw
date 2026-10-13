@@ -218,10 +218,8 @@ type ZaloCtor = new (options?: {
   ): Promise<API>;
 };
 
-export async function createZalo(
-  options?: ConstructorParameters<ZaloCtor>[0],
-): Promise<InstanceType<ZaloCtor>> {
+export async function createZalo(): Promise<InstanceType<ZaloCtor>> {
   const zcaJs = await loadZcaJsRuntime();
   const Zalo = zcaJs.Zalo as ZaloCtor;
-  return new Zalo({ ...options, polyfill: fetchWithZaloSendContext });
+  return new Zalo({ logging: false, selfListen: false, polyfill: fetchWithZaloSendContext });
 }

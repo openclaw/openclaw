@@ -19,18 +19,7 @@ export type FileEditorDecorations = {
   currentMatch?: number | null;
 };
 
-export type FileEditorViewHandle = {
-  destroy: () => void;
-  setContent: (content: string) => void;
-  contentEquals: (content: string) => boolean;
-  setEditable: (editable: boolean) => void;
-  setLineWrapping: (wrap: boolean) => void;
-  setDecorations: (decorations: FileEditorDecorations) => void;
-  scrollToLine: (line: number, center: boolean) => void;
-  getContent: () => string;
-  onDocChanged: (callback: (content: string) => void) => void;
-  focus: () => void;
-};
+export type FileEditorViewHandle = Awaited<ReturnType<typeof createFileEditorView>>;
 
 const setLineDecorations = StateEffect.define<DecorationSet>();
 const lineDecorations = StateField.define<DecorationSet>({
@@ -53,7 +42,7 @@ export async function createFileEditorView(params: {
   editable?: boolean;
   wrap?: boolean;
   onSave: () => void;
-}): Promise<FileEditorViewHandle> {
+}) {
   const editable = new Compartment();
   const wrapping = new Compartment();
   const language = await loadCodeLanguage(params.name);
@@ -116,10 +105,6 @@ export async function createFileEditorView(params: {
     state: initialState,
   });
 
-  const clampLine = (line: number) => Math.max(1, Math.min(Math.floor(line), view.state.doc.lines));
-  // Compare logical lines without treating a read-only mixed-ending preview as an edit.
-  const contentEquals = (content: string) => view.state.toText(content).eq(view.state.doc);
-
   return {
     destroy: () => {
       if (!destroyed) {
@@ -127,7 +112,7 @@ export async function createFileEditorView(params: {
         view.destroy();
       }
     },
-    setContent: (content) => {
+    setContent: (content: string) => {
       if (destroyed) {
         return;
       }
@@ -144,8 +129,9 @@ export async function createFileEditorView(params: {
       }
       view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: content } });
     },
-    contentEquals,
-    setEditable: (nextEditable) => {
+    // Compare logical lines without treating a read-only mixed-ending preview as an edit.
+    contentEquals: (content: string) => view.state.toText(content).eq(view.state.doc),
+    setEditable: (nextEditable: boolean) => {
       if (destroyed) {
         return;
       }
@@ -158,7 +144,7 @@ export async function createFileEditorView(params: {
         ]),
       });
     },
-    setLineWrapping: (wrap) => {
+    setLineWrapping: (wrap: boolean) => {
       if (destroyed || wrap === isWrapped) {
         return;
       }
@@ -166,20 +152,16 @@ export async function createFileEditorView(params: {
       isWrapped = wrap;
       view.dispatch({ effects: wrapping.reconfigure(wrap ? EditorView.lineWrapping : []) });
     },
-    setDecorations: ({ targetLine, matches = [], currentMatch }) => {
+    setDecorations: ({ targetLine, matches = [], currentMatch }: FileEditorDecorations) => {
       if (destroyed) {
         return;
       }
       const matchingLines = new Set(matches);
-      const lineNumbersToDecorate = new Set(matches);
-      if (targetLine != null) {
-        lineNumbersToDecorate.add(targetLine);
-      }
-      if (currentMatch != null) {
-        lineNumbersToDecorate.add(currentMatch);
-      }
-      const decorations = [...lineNumbersToDecorate]
-        .filter((line) => Number.isInteger(line) && line >= 1 && line <= view.state.doc.lines)
+      const decorations = [...new Set([...matches, targetLine, currentMatch])]
+        .filter(
+          (line): line is number =>
+            line != null && Number.isInteger(line) && line >= 1 && line <= view.state.doc.lines,
+        )
         .toSorted((a, b) => a - b)
         .map((line) => {
           const classes: string[] = [];
@@ -199,12 +181,13 @@ export async function createFileEditorView(params: {
         });
       view.dispatch({ effects: setLineDecorations.of(Decoration.set(decorations)) });
     },
-    scrollToLine: (line, center) => {
+    scrollToLine: (line: number, center: boolean) => {
       if (destroyed) {
         return;
       }
+      const targetLine = Math.max(1, Math.min(Math.floor(line), view.state.doc.lines));
       view.dispatch({
-        effects: EditorView.scrollIntoView(view.state.doc.line(clampLine(line)).from, {
+        effects: EditorView.scrollIntoView(view.state.doc.line(targetLine).from, {
           y: center ? "center" : "nearest",
         }),
       });
@@ -212,7 +195,7 @@ export async function createFileEditorView(params: {
     // Preserve exact source bytes before edits and after undo; changed text
     // adopts the loaded file's separator, including pasted multiline input.
     getContent: () => readContent(view.state),
-    onDocChanged: (callback) => {
+    onDocChanged: (callback: (content: string) => void) => {
       docChanged = callback;
     },
     focus: () => view.focus(),

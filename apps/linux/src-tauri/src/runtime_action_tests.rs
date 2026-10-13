@@ -127,9 +127,11 @@ impl Drop for Fixture {
 }
 
 #[test]
-fn fresh_install_carries_null_definition_and_bundled_path() {
+fn fresh_install_with_unknown_mutation_capability_carries_null_definition_and_bundled_path() {
     let fixture = Fixture::new();
-    fixture.write_state(&fixture.absent());
+    let mut absent = fixture.absent();
+    absent["service"]["definitionMutation"] = "unknown".into();
+    fixture.write_state(&absent);
     fresh(&fixture.cli(), &fixture.runtime(), &|| true).unwrap();
     assert_eq!(fixture.installs(), 1);
     assert_eq!(
@@ -435,7 +437,7 @@ fn read_only_inspection_offers_current_runtime_without_installing() {
     let cli = fixture.cli();
     let before = inspect(&cli).unwrap();
     assert!(before.current_runtime().contains("/operator/node"));
-    assert!(!before.is_current(&fixture.runtime()));
+    assert!(!before.uses_runtime_path(&fixture.runtime().bun));
     fixture.write_state(&fixture.healthy());
     assert!(inspect(&cli)
         .unwrap()

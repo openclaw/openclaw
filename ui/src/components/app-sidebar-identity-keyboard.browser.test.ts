@@ -14,7 +14,7 @@ afterEach(() => {
 
 describe.runIf("__vitest_browser__" in globalThis)("identity menu keyboard navigation", () => {
   it("traverses the actual item order and both footer controls in each direction", async () => {
-    await import("./app-sidebar.ts");
+    await import("./app-sidebar.tsx");
     const { createGatewayHarness, createSessions, mountSidebar } =
       await import("../test-helpers/app-sidebar.ts");
     const { page, userEvent } = await import("vitest/browser");
@@ -28,15 +28,20 @@ describe.runIf("__vitest_browser__" in globalThis)("identity menu keyboard navig
 
     const identity = sidebar.querySelector<HTMLButtonElement>(".sidebar-identity-card");
     expect(identity).not.toBeNull();
-    const name = sidebar.querySelector<HTMLElement>(".sidebar-identity-card__name")!;
-    await page.elementLocator(name).hover();
-    expect(document.querySelector("body > openclaw-tooltip")).toBeNull();
+    const tooltip = () =>
+      document.querySelector<HTMLElementTagNameMap["openclaw-tooltip"]>("body > openclaw-tooltip");
+    // The retained rail is icon-only: pointer and keyboard users need its identity hint.
+    await page.elementLocator(identity!).hover();
+    expect(tooltip()?.anchor).toBe(identity);
+    expect(tooltip()?.content).toContain("Identity and app menu for Owner");
+    expect(identity?.getAttribute("title")).toBe("");
     expect(page.getByRole("button", { name: /Owner/ }).elements()).toContain(identity);
     expect(identity?.getAttribute("aria-expanded")).toBe("false");
     // A pointer left over the footer can open Help as the keyboard menu appears.
     await page.elementLocator(document.body).hover({ position: { x: 0, y: 0 } });
     identity?.focus();
-    expect(document.querySelector("body > openclaw-tooltip")).toBeNull();
+    expect(tooltip()?.anchor).toBe(identity);
+    expect(tooltip()?.content).toContain("Identity and app menu for Owner");
     await userEvent.keyboard("{Enter}");
 
     const menu = sidebar.querySelector<HTMLElement>(".sidebar-identity-menu");
@@ -53,6 +58,7 @@ describe.runIf("__vitest_browser__" in globalThis)("identity menu keyboard navig
     build.textContent = "Build details";
     menu?.querySelector(".sidebar-mode-switch")?.insertAdjacentElement("beforebegin", build);
     await expect.poll(() => document.activeElement).toBe(items[0]);
+    expect(tooltip()).toBeNull();
 
     for (const expected of items.slice(1)) {
       await userEvent.keyboard("{ArrowDown}");

@@ -12,7 +12,6 @@ import type { AuthChoice, OnboardOptions } from "../commands/onboard-types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { t } from "./i18n/index.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
 
@@ -22,20 +21,10 @@ export type SetupModelAuthCandidate = {
   persistAuthProfiles: PreparedAuthChoiceResult["persistAuthProfiles"];
 };
 
-const loadAuthChoiceModule = createLazyRuntimeModule(
-  () => import("../commands/auth-choice.apply.js"),
-);
-const loadModelCheckModule = createLazyRuntimeModule(
-  () => import("../commands/auth-choice.model-check.js"),
-);
-
-const loadModelPickerModule = createLazyRuntimeModule(() => import("../flows/model-picker.js"));
-
 async function resolveAuthChoiceModelSelectionPolicy(params: {
   authChoice: string;
   config: OpenClawConfig;
   workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
   resolvePreferredProviderForAuthChoice: (typeof import("../plugins/provider-auth-choice-preference.js"))["resolvePreferredProviderForAuthChoice"];
 }): Promise<{
   preferredProvider?: string;
@@ -46,7 +35,6 @@ async function resolveAuthChoiceModelSelectionPolicy(params: {
     choice: params.authChoice,
     config: params.config,
     workspaceDir: params.workspaceDir,
-    env: params.env,
   });
 
   const [{ resolveManifestProviderAuthChoice }, { resolvePluginSetupProviderCore }] =
@@ -57,7 +45,6 @@ async function resolveAuthChoiceModelSelectionPolicy(params: {
   const manifestChoice = resolveManifestProviderAuthChoice(params.authChoice, {
     config: params.config,
     workspaceDir: params.workspaceDir,
-    env: params.env,
     includeUntrustedWorkspacePlugins: false,
   });
   if (manifestChoice) {
@@ -65,7 +52,6 @@ async function resolveAuthChoiceModelSelectionPolicy(params: {
       provider: manifestChoice.providerId,
       config: params.config,
       workspaceDir: params.workspaceDir,
-      env: params.env,
       pluginIds: [manifestChoice.pluginId],
     });
     const setupMethod = setupProvider?.auth.find(
@@ -85,7 +71,6 @@ async function resolveAuthChoiceModelSelectionPolicy(params: {
   const providers = resolvePluginProviders({
     config: params.config,
     workspaceDir: params.workspaceDir,
-    env: params.env,
     mode: "setup",
   });
   const resolvedChoice = resolveProviderPluginChoice({
@@ -224,12 +209,11 @@ export async function runSetupModelAuthStep(params: {
       // Explicit skip should stay cold: do not bootstrap auth/profile machinery
       // or run model/auth checks when the caller already chose to skip setup.
       if (authChoiceFromPrompt) {
-        const { promptDefaultModel } = await loadModelPickerModule();
+        const { promptDefaultModel } = await import("../flows/model-picker.js");
         const modelSelection = await promptDefaultModel({
           config: nextConfig,
           prompter,
           allowKeep: true,
-          ignoreAllowlist: true,
           includeProviderPluginSetups: false,
           loadCatalog: false,
           agentId: target.agentId,
@@ -244,7 +228,8 @@ export async function runSetupModelAuthStep(params: {
           nextConfig = applyOnboardingPrimaryModel(nextConfig, target, modelSelection.model);
         }
 
-        const { warnIfModelConfigLooksOff } = await loadModelCheckModule();
+        const { warnIfModelConfigLooksOff } =
+          await import("../commands/auth-choice.model-check.js");
         await warnIfModelConfigLooksOff(nextConfig, prompter, {
           agentId: target.agentId,
           agentDir: target.agentDir,
@@ -259,10 +244,10 @@ export async function runSetupModelAuthStep(params: {
       { resolvePreferredProviderForAuthChoice },
       { promptDefaultModel },
     ] = await Promise.all([
-      loadAuthChoiceModule(),
-      loadModelCheckModule(),
+      import("../commands/auth-choice.apply.js"),
+      import("../commands/auth-choice.model-check.js"),
       import("../plugins/provider-auth-choice-preference.js"),
-      loadModelPickerModule(),
+      import("../flows/model-picker.js"),
     ]);
     prompter.disableBackNavigation?.();
     const agentScopedModels = nextConfig.agents?.ownership === "explicit";
@@ -333,7 +318,6 @@ export async function runSetupModelAuthStep(params: {
         config: nextConfig,
         prompter,
         allowKeep: authChoiceModelSelectionPolicy.allowKeepCurrent,
-        ignoreAllowlist: true,
         includeProviderPluginSetups: true,
         preferredProvider: authChoiceModelSelectionPolicy.preferredProvider,
         browseCatalogOnDemand: true,

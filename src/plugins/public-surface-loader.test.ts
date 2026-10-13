@@ -618,7 +618,7 @@ describe("bundled plugin public surface loader", () => {
         return stat;
       }
       return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, {
-        ino: Number(stat.ino) + 1,
+        ino: typeof stat.ino === "bigint" ? stat.ino + 1n : stat.ino + 1,
       });
     });
 

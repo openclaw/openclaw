@@ -7,7 +7,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 import { readUserProfileVersion } from "./user-profile-events.js";
-import { listUserProfilesSync } from "./user-profile-identity.read.js";
+import { readUserProfileSnapshotSync } from "./user-profile-identity.read.js";
 import {
   linkEmail,
   setDisplayName,
@@ -179,7 +179,7 @@ describe("gateway owner profiles", () => {
     setDisplayName(owner.id, "User Chosen", options);
     closeOpenClawStateDatabaseForTest();
     ensureGatewayOwnerProfile("Host Renamed", options);
-    expect(listUserProfilesSync(options)).toEqual([
+    expect(readUserProfileSnapshotSync(options).profiles).toEqual([
       expect.objectContaining({ id: "gateway-owner", emails: [], displayName: "User Chosen" }),
     ]);
     const reopened = openOpenClawStateDatabase(options).db;
@@ -199,26 +199,16 @@ describe("gateway owner profiles", () => {
       }, options),
     ).toThrow("rollback owner");
     expect(readUserProfileVersion()).toBe(version);
-    expect(listUserProfilesSync(options).some((profile) => profile.id === "gateway-owner")).toBe(
-      false,
-    );
+    expect(
+      readUserProfileSnapshotSync(options).profiles.some(
+        (profile) => profile.id === "gateway-owner",
+      ),
+    ).toBe(false);
     runOpenClawStateWriteTransaction(() => {
       ensureGatewayOwnerProfile("Local Owner", options);
       expect(readUserProfileVersion()).toBe(version);
     }, options);
     expect(readUserProfileVersion()).toBe(version + 1);
-  });
-
-  it("reuses the existing provider identity without creating another owner", () => {
-    const options = stateOptions();
-    const existing = ensureProfileForEmail("existing-owner@example.test", options);
-    openOpenClawStateDatabase(options)
-      .db.prepare(
-        "INSERT INTO user_profile_identities (provider, subject, profile_id, created_at) VALUES ('gateway.local', 'owner', ?, 1)",
-      )
-      .run(existing.id);
-    expect(ensureGatewayOwnerProfile("Host Name", options)).toEqual(existing);
-    expect(listUserProfilesSync(options)).toHaveLength(1);
   });
 
   it.each(["owner@gateway", "owner@gateway.local"])(

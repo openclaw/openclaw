@@ -1,9 +1,10 @@
 import { normalizeUsage, type UsageLike } from "../agents/usage.js";
-import { persistSessionUsageUpdate } from "../auto-reply/reply/session-usage.js";
+import { prepareSessionUsageUpdate } from "../auto-reply/reply/session-usage.js";
 import {
-  loadSessionEntry,
+  patchSessionEntryCore,
   persistSessionTranscriptTurn,
 } from "../config/sessions/session-accessor.js";
+import { projectSessionEntryUsageUpdate } from "../config/sessions/session-entry-usage.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { writeSessionStore } from "./test-helpers.server.js";
 
@@ -39,18 +40,21 @@ export async function seedCompletedSessionTranscript<T extends CompletedReply>(p
     updateMode: "none",
   });
   const usage = normalizeUsage(params.message.usage);
-  await persistSessionUsageUpdate({
-    ...scope,
-    expectedSession: {
-      sessionId: params.sessionId,
-      lifecycleRevision: loadSessionEntry(scope)?.lifecycleRevision,
-    },
+  const prepared = prepareSessionUsageUpdate({
     usage,
     lastCallUsage: usage,
     providerUsed: params.message.provider,
     modelUsed: params.message.model,
     preserveRuntimeModel: true,
   });
+  if (prepared) {
+    await patchSessionEntryCore(scope, (entry) =>
+      projectSessionEntryUsageUpdate(entry, {
+        ...prepared.update,
+        estimatedCostUsd: prepared.estimateCost(entry),
+      }),
+    );
+  }
   return params.message;
 }
 

@@ -113,8 +113,8 @@ function resolveProviderStreamApi(model: Model): Api {
 function applyProviderSimpleCompletionWrapper(
   registry: ApiRegistry,
   model: Model,
-  cfg?: unknown,
-  hookSourceApi: Api = model.api,
+  cfg: unknown,
+  hookSourceApi: Api,
   auth?: AiProviderStreamHookContext["auth"],
   agentId?: string,
 ): Model {

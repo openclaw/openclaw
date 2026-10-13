@@ -26,7 +26,7 @@ import {
   isSessionCostUsageRefreshRunning,
   prepareSessionCostUsageRefreshLock,
 } from "../infra/session-cost-usage-cache.sqlite.js";
-import { listUsageCountedTranscriptStats } from "../infra/session-cost-usage-collection.js";
+import { listUsageCountedTranscriptStats } from "../infra/session-cost-usage-collection.test-support.js";
 import { runExec } from "../process/exec.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";

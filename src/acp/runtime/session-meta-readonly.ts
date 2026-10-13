@@ -1,10 +1,12 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core";
+import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
 import type {
   AcpSessionRuntimeOptions,
   SessionAcpIdentity,
   SessionAcpMeta,
 } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   executeExistingOpenClawStateRead,
   withExistingOpenClawStateDatabaseReadOnly,
@@ -12,8 +14,6 @@ import {
 } from "../../state/openclaw-state-db-readonly.js";
 import {
   buildAcpDatabaseSessionKey,
-  legacyAcpDatabaseSessionKeys,
-  resolveLegacyFreeAcpSessionKey,
   resolveReadableAcpSessionRow,
   selectAcpSessionRowForStoreEntry,
 } from "./session-meta-keys.js";
@@ -24,21 +24,25 @@ export async function readAcpSessionMetaForEntries(
   params: {
     entries: readonly {
       sessionKey: string;
-      agentId: string;
+      agentId?: string;
       entry: AcpSessionEntryBinding | undefined;
     }[];
-    cfg: OpenClawConfig;
+    cfg?: OpenClawConfig;
     env?: NodeJS.ProcessEnv;
     databasePath?: string;
   },
-  options: { current?: true } = {},
+  options: { current?: true; signal?: AbortSignal } = {},
 ): Promise<Array<SessionAcpMeta | null>> {
   if (params.entries.length === 0) {
     return [];
   }
   const entries = params.entries.map((item) => ({
-    sessionKey: item.sessionKey,
-    agentId: item.agentId,
+    keys: [
+      buildAcpDatabaseSessionKey(
+        normalizeStoreSessionKey(item.sessionKey),
+        item.agentId ?? parseAgentSessionKey(item.sessionKey)?.agentId,
+      ),
+    ],
     entry: item.entry
       ? {
           lifecycleRevision: item.entry.lifecycleRevision,
@@ -51,14 +55,7 @@ export async function readAcpSessionMetaForEntries(
     { env: params.env, path: params.databasePath },
     {
       type: "acpSessions.metadata",
-      entries: entries.map(({ sessionKey, agentId, entry }) => ({
-        keys: [
-          buildAcpDatabaseSessionKey(sessionKey, agentId),
-          ...legacyAcpDatabaseSessionKeys(sessionKey, agentId, params.cfg),
-        ],
-        legacyKey: resolveLegacyFreeAcpSessionKey(sessionKey),
-        entry,
-      })),
+      entries,
     },
     options,
   );
@@ -66,18 +63,33 @@ export async function readAcpSessionMetaForEntries(
     return entries.map(() => null);
   }
   if (result.ok && result.type === "acpSessions.metadata") {
-    return result.rows.map((row, index) => {
-      const readable = resolveReadableAcpSessionRow({
-        row: row ?? undefined,
-        entry: entries[index]?.entry,
-      });
-      return readable ? rowToAcpSessionMeta(readable) : null;
-    });
+    return result.rows.map((row) => (row ? rowToAcpSessionMeta(row) : null));
   }
   throw new Error("Unexpected ACP session metadata read result");
 }
 
-export function rowToAcpSessionMeta(row: AcpSessionRow): SessionAcpMeta {
+/** Read metadata for an already selected entry without loading its session row again. */
+export async function readAcpSessionMetaForEntryAsync(
+  params: {
+    sessionKey: string;
+    agentId?: string;
+    cfg?: OpenClawConfig;
+    entry: AcpSessionEntryBinding | undefined;
+    env?: NodeJS.ProcessEnv;
+    databasePath?: string;
+  },
+  options: { current?: true; signal?: AbortSignal } = {},
+): Promise<SessionAcpMeta | undefined> {
+  if (!params.sessionKey.trim()) {
+    return undefined;
+  }
+  const [metadata] = await readAcpSessionMetaForEntries({ ...params, entries: [params] }, options);
+  return metadata ?? undefined;
+}
+
+export function rowToAcpSessionMeta(
+  row: Omit<AcpSessionRow, "resume_agent_session_id" | "resume_acpx_session_id">,
+): SessionAcpMeta {
   // SAFETY: These JSON columns are written from the typed ACP metadata by its storage owner.
   const identity = safeParseJsonRecord(row.identity_json ?? "") as SessionAcpIdentity | undefined;
   // SAFETY: Runtime options share the same typed persisted metadata contract.
@@ -119,13 +131,7 @@ export function readAcpSessionMetaForEntry(
   const row = read(
     ({ db }) =>
       resolveReadableAcpSessionRow({
-        row: selectAcpSessionRowForStoreEntry(
-          db,
-          sessionKey,
-          params.agentId,
-          params.cfg,
-          params.entry,
-        ),
+        row: selectAcpSessionRowForStoreEntry(db, sessionKey, params.agentId, params.entry),
         entry: params.entry,
       }),
     { env: params.env, path: params.databasePath },

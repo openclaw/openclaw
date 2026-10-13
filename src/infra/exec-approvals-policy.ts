@@ -1,7 +1,9 @@
+import { isDeepStrictEqual } from "node:util";
 import type { AllowAlwaysPersistenceDecision } from "./exec-approvals-contracts.js";
 // Resolves exec approval requirements and approval-decision availability.
 import {
   normalizeExecAsk,
+  type ExecApprovalsFile,
   type ExecApprovalDecision,
   type ExecApprovalUnavailableDecision,
   type ExecAsk,
@@ -85,4 +87,23 @@ export function resolveExecApprovalRequestAllowedDecisions(params?: {
     return policyDecisions;
   }
   return policyDecisions.filter((decision) => !unavailableDecisions.has(decision));
+}
+
+/** These worker commands may change grants/usage, never host execution floors. */
+export function assertExecApprovalsHostPolicyUnchanged(
+  before: ExecApprovalsFile,
+  after: ExecApprovalsFile,
+): void {
+  const fields = (file: ExecApprovalsFile) => ({
+    security: file.defaults?.security,
+    ask: file.defaults?.ask,
+    agents: Object.fromEntries(
+      Object.entries(file.agents ?? {})
+        .filter(([, agent]) => agent.security !== undefined || agent.ask !== undefined)
+        .map(([id, agent]) => [id, { security: agent.security, ask: agent.ask }]),
+    ),
+  });
+  if (!isDeepStrictEqual(fields(before), fields(after))) {
+    throw new Error("Exec grant workers cannot change host security or ask policy");
+  }
 }

@@ -18,6 +18,7 @@ import {
   parseShardRunnerArgs,
 } from "../../scripts/run-oxlint-shards.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { copyOxlintConfigFixture } from "./test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -178,7 +179,7 @@ describe("CI changed lint", () => {
       }),
     );
     mkdirSync(path.join(cwd, "config/tsconfig"), { recursive: true });
-    copyFileSync(".oxlintrc.json", path.join(cwd, ".oxlintrc.json"));
+    copyOxlintConfigFixture(cwd);
     copyFileSync(
       "config/tsconfig/oxlint.core.json",
       path.join(cwd, "config/tsconfig/oxlint.core.json"),
@@ -311,6 +312,7 @@ describe("CI changed lint", () => {
         ...paths.toSorted(),
       ]);
       expect(central.some(({ args }) => args[0] === "lint:ui:i18n")).toBe(true);
+      expect(central.some(({ args }) => args[0] === "check:control-ui-lit-ratchet")).toBe(true);
       expect(
         central.some(
           ({ args }) =>
@@ -420,6 +422,50 @@ describe("CI changed lint", () => {
     ).toBeNull(),
   );
 
+  it.each(["ui/src/app.ts", ".oxlintrc.json"])(
+    "retains the Lit ratchet and its Git scope when CI splits lint for %s",
+    (file) => {
+      const result = detectChangedLanes([file]);
+      for (const { base, staged, expectedBase } of [
+        { base: "fixture-base", staged: false, expectedBase: "fixture-base" },
+        { base: "fixture-base", staged: true, expectedBase: "fixture-base" },
+        { base: undefined, staged: false, expectedBase: "ci-base" },
+        { base: undefined, staged: true, expectedBase: "HEAD" },
+      ]) {
+        if (file === ".oxlintrc.json") {
+          expect(
+            createChangedCheckPlan(detectChangedLanes(["pnpm-lock.yaml"]), {
+              base,
+              staged,
+            }).commands.find(({ args }) => args[0] === "lint")?.args,
+          ).toEqual(["lint", ...(staged ? ["--staged"] : []), ...(base ? ["--base", base] : [])]);
+        }
+        const commands = createChangedCheckPlan(result, {
+          lintOnly: true,
+          base,
+          staged,
+          env: { ...process.env, CHECKOUT_BASE_SHA: "ci-base" },
+          lintSelection: {
+            files: [],
+            coreStripes: [],
+            extensionStripes: [],
+            groups: [],
+            fullGroups: ["scripts"],
+            central: true,
+          },
+        }).commands;
+        expect(
+          commands.find(({ args }) => args[0] === "check:control-ui-lit-ratchet")?.args,
+        ).toEqual([
+          "check:control-ui-lit-ratchet",
+          ...(staged ? ["--staged"] : []),
+          "--base",
+          expectedBase,
+        ]);
+      }
+    },
+  );
+
   it("uses the owning compiler configs for changed files without unrelated lint or type checks", () => {
     const paths = [
       "src/utils.ts",
@@ -464,21 +510,24 @@ describe("CI changed lint", () => {
     }
   });
 
-  it("retains full semantic lint when lint configuration changes", () => {
-    const commands = createChangedCheckPlan(detectChangedLanes([".oxlintrc.json"]), {
+  it.each([
+    {
+      file: ".oxlintrc.json",
+      expected: [
+        ["format:check", "--no-error-on-unmatched-pattern", "--", ".oxlintrc.json"],
+        ["lint"],
+      ],
+      exact: true,
+    },
+    {
+      file: "extensions/telegram/deleted-ci-fixture.ts",
+      expected: [["lint:extensions"]],
+      exact: false,
+    },
+  ])("retains the full owning lint lane for $file", ({ file, expected, exact }) => {
+    const commands = createChangedCheckPlan(detectChangedLanes([file]), {
       lintOnly: true,
-    }).commands;
-    expect(commands.map(({ args }) => args)).toEqual([
-      ["format:check", "--no-error-on-unmatched-pattern", "--", ".oxlintrc.json"],
-      ["lint"],
-    ]);
-  });
-
-  it("retains the full owning lint lane for a deleted source", () => {
-    const commands = createChangedCheckPlan(
-      detectChangedLanes(["extensions/telegram/deleted-ci-fixture.ts"]),
-      { lintOnly: true },
-    ).commands;
-    expect(commands.map(({ args }) => args)).toContainEqual(["lint:extensions"]);
+    }).commands.map(({ args }) => args);
+    expect(commands).toEqual(exact ? expected : expect.arrayContaining(expected));
   });
 });

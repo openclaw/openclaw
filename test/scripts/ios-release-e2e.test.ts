@@ -104,46 +104,40 @@ describe("iOS release test identity", () => {
   });
 
   it.each([
-    ["basename", { nodeIdentifier: IOS_RELEASE_TESTS[0].split("/").at(-1) }],
-    ["skipped", { result: "Skipped" }],
-    ["failed", { result: "Failed" }],
-    ["failed child", { children: [{ nodeType: "Test Case Run", result: "Failed" }] }],
+    ["basename", result(undefined, { nodeIdentifier: IOS_RELEASE_TESTS[0].split("/").at(-1) })],
+    ["skipped", result(undefined, { result: "Skipped" })],
+    ["failed", result(undefined, { result: "Failed" })],
+    [
+      "failed child",
+      result(undefined, { children: [{ nodeType: "Test Case Run", result: "Failed" }] }),
+    ],
     [
       "retry to green",
-      {
+      result(undefined, {
         children: [
           { nodeType: "Repetition", result: "Passed" },
           { nodeType: "Repetition", result: "Passed" },
         ],
-      },
+      }),
     ],
     [
       "multiple runs",
-      {
+      result(undefined, {
         children: [
           { nodeType: "Test Case Run", result: "Passed" },
           { nodeType: "Test Case Run", result: "Passed" },
         ],
-      },
+      }),
     ],
-  ])("rejects %s", (_name, overrides) => {
-    expect(() =>
-      requireExactTestResult(result(undefined, overrides), IOS_RELEASE_TESTS[0]),
-    ).toThrow();
-  });
-
-  it("rejects a wrong target or a unit bundle even with the exact class/method", () => {
-    const wrongTarget = result(undefined, {}, { name: "OtherUITests" });
-    expect(() => requireExactTestResult(wrongTarget, IOS_RELEASE_TESTS[0])).toThrow();
-    const unitBundle = result(undefined, {}, { nodeType: "Unit test bundle" });
-    expect(() => requireExactTestResult(unitBundle, IOS_RELEASE_TESTS[0])).toThrow();
-  });
-
-  it("rejects missing and extra tests", () => {
-    expect(() => requireExactTestResult({ testNodes: [] }, IOS_RELEASE_TESTS[0])).toThrow();
-    const extra = result();
-    extra.testNodes.push(...result(IOS_RELEASE_TESTS[1]).testNodes);
-    expect(() => requireExactTestResult(extra, IOS_RELEASE_TESTS[0])).toThrow();
+    ["wrong target", result(undefined, {}, { name: "OtherUITests" })],
+    ["unit bundle", result(undefined, {}, { nodeType: "Unit test bundle" })],
+    ["missing tests", { testNodes: [] }],
+    [
+      "extra tests",
+      { testNodes: [...result().testNodes, ...result(IOS_RELEASE_TESTS[1]).testNodes] },
+    ],
+  ])("rejects %s", (_name, value) => {
+    expect(() => requireExactTestResult(value, IOS_RELEASE_TESTS[0])).toThrow();
   });
 });
 

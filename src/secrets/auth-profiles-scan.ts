@@ -63,25 +63,6 @@ const AUTH_PROFILE_FIELD_SPEC_BY_TYPE = (() => {
   return defaults;
 })();
 
-function toSecretCredentialVisit(params: {
-  kind: AuthProfileCredentialType;
-  profileId: string;
-  provider: string;
-  profile: Record<string, unknown>;
-}): StaticCredentialVisit {
-  const spec = AUTH_PROFILE_FIELD_SPEC_BY_TYPE[params.kind];
-  return {
-    kind: params.kind,
-    profileId: params.profileId,
-    provider: params.provider,
-    profile: params.profile,
-    valueField: spec.valueField,
-    refField: spec.refField,
-    value: params.profile[spec.valueField],
-    refValue: params.profile[spec.refField],
-  };
-}
-
 /** Iterates credential-bearing auth profiles with normalized field metadata for audit/apply. */
 export function* iterateAuthProfileCredentials(
   profiles: Record<string, unknown>,
@@ -92,12 +73,17 @@ export function* iterateAuthProfileCredentials(
     }
     const provider = value.provider;
     if (value.type === "api_key" || value.type === "token") {
-      yield toSecretCredentialVisit({
+      const spec = AUTH_PROFILE_FIELD_SPEC_BY_TYPE[value.type];
+      yield {
         kind: value.type,
         profileId,
         provider,
         profile: value,
-      });
+        valueField: spec.valueField,
+        refField: spec.refField,
+        value: value[spec.valueField],
+        refValue: value[spec.refField],
+      };
       continue;
     }
     if (value.type === "oauth") {

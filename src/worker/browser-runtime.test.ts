@@ -20,7 +20,7 @@ const options = {
     cdpUrl: "http://127.0.0.1:9222",
     launcherPath: "/usr/local/bin/openclaw-worker-browser",
   },
-  sessionKey: "worker:session-1",
+  sessionKey: "agent:worker-agent:worker:session-1",
   stateDir: "/tmp/worker-state",
   workspaceDir: "/tmp/workspace",
 };
@@ -71,7 +71,7 @@ describe("worker Browser runtime", () => {
       expect(createAttachedBrowserToolRuntime).toHaveBeenCalledWith({
         cdpUrl: "http://127.0.0.1:9222",
         ensureAttachTarget: expect.any(Function),
-        agentSessionKey: "worker:session-1",
+        agentSessionKey: "agent:worker-agent:worker:session-1",
         agentDir: "/tmp/worker-state",
         workspaceDir: "/tmp/workspace",
       });

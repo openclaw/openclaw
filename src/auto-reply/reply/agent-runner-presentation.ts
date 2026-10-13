@@ -3,6 +3,7 @@ import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sani
 import { renderUserFacingText } from "../../agents/embedded-agent-helpers/user-facing-text.js";
 import { logVerbose } from "../../globals.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
+import type { PartialReplyPayload } from "../get-reply-options.types.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import {
   HEARTBEAT_TOKEN,
@@ -57,10 +58,8 @@ export function createAgentTurnPresentation(params: {
       }
       text = stripped.text;
     }
-    if (isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
-      return { skip: true };
-    }
     if (
+      isSilentReplyText(text, SILENT_REPLY_TOKEN) ||
       isSilentReplyPrefixText(text, SILENT_REPLY_TOKEN) ||
       isSilentReplyPrefixText(text, HEARTBEAT_TOKEN)
     ) {
@@ -145,6 +144,40 @@ export function createAgentTurnPresentation(params: {
     return result;
   };
 
+  const presentPartialReply = async (payload: ReplyPayload, runtime: "cli" | "embedded") => {
+    const classified = classifyStreamingPartial(payload);
+    if (classified.skip || !classified.text) {
+      return runtime === "embedded" ? false : undefined;
+    }
+    const textForTyping = classified.text;
+    let didMaterialize = false;
+    let materializedText: string | undefined;
+    const materializeText = () => {
+      if (!didMaterialize) {
+        const sanitized = sanitizeStreamingText(textForTyping, false);
+        materializedText = sanitized.skip ? undefined : sanitized.text;
+        didMaterialize = true;
+      }
+      return materializedText;
+    };
+    // Embedded drafts consume cumulative text lazily; CLI previews arrive already paced.
+    const partialPayload: PartialReplyPayload =
+      runtime === "cli"
+        ? { text: materializeText() }
+        : {
+            get text() {
+              return materializeText();
+            },
+            mediaUrls: payload.mediaUrls,
+          };
+    const onPartialReply = params.turn.opts?.onPartialReply;
+    return await presentWithTyping(params.turn.typingSignals.signalTextDelta(textForTyping), () =>
+      !onPartialReply || (runtime === "cli" && !partialPayload.text)
+        ? false
+        : onPartialReply(partialPayload),
+    );
+  };
+
   const blockReplyPipeline = params.turn.blockReplyPipeline;
   // One handler owns threading and direct-send dedupe for this fallback cycle.
   const blockReplyHandler =
@@ -168,8 +201,7 @@ export function createAgentTurnPresentation(params: {
       : undefined;
 
   return {
-    classifyStreamingPartial,
-    sanitizeStreamingText,
+    presentPartialReply,
     normalizeStreamingText,
     presentWithTyping,
     blockReplyHandler,

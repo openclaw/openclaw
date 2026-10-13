@@ -5,10 +5,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withDoctorSqliteMaintenanceLock } from "../commands/doctor-sqlite-maintenance-lock.js";
 import * as pidAlive from "../shared/pid-alive.js";
-import { recordOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.js";
+import {
+  readOpenClawDatabaseQuarantineFailure,
+  recordOpenClawDatabaseQuarantine,
+} from "../state/openclaw-quarantine-store.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
   repairOpenClawStateDatabaseSchema,
   withOpenClawStateStartupMigrationCheckpointDatabase,
 } from "../state/openclaw-state-db.js";
@@ -28,6 +33,10 @@ import {
 import * as ownerLeaseRead from "./gateway-owner-lease.read.js";
 import * as stateOwners from "./gateway-state-owner.js";
 import { acquireGatewayStateOwner, tryAcquireGatewayStateOwner } from "./gateway-state-owner.js";
+import { requireNodeSqlite } from "./node-sqlite.js";
+import { readSqliteDatabaseCleanClose } from "./sqlite-database-admission.js";
+import { corruptSqliteIndexKey } from "./sqlite-index-corruption.test-support.js";
+import * as snapshotSource from "./sqlite-snapshot-source.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import * as bootReader from "./update-managed-service-handoff-boot.js";
 
@@ -285,16 +294,25 @@ describe("Gateway owner lease", () => {
     },
   );
 
-  it.each([false, true])(
-    "Doctor refuses a fresh foreign lease with quarantine=%s",
-    async (quarantined) => {
+  it.each(["current", "quarantined", "newer"] as const)(
+    "Doctor refuses a fresh foreign lease with %s state",
+    async (condition) => {
       let env: NodeJS.ProcessEnv;
       {
         await using owner = fixture();
         env = owner.env;
         seedOwner(env, { host: "previous-container" });
+        if (condition === "newer") {
+          withOpenClawStateStartupMigrationCheckpointDatabase(
+            (db) => db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1};`),
+            { env },
+          );
+        }
       }
-      if (quarantined) {
+      await closeOpenClawStateDatabaseAsync();
+      const databasePath = resolveOpenClawStateSqlitePath(env);
+      const before = fs.readFileSync(databasePath);
+      if (condition === "quarantined") {
         expect(
           recordOpenClawDatabaseQuarantine({
             env,
@@ -309,11 +327,124 @@ describe("Gateway owner lease", () => {
         withDoctorSqliteMaintenanceLock({ env, operation: "state repair", run }),
       ).rejects.toThrow("wait up to 90 seconds");
       expect(run).not.toHaveBeenCalled();
-      if (quarantined) {
+      expect(fs.readFileSync(databasePath)).toEqual(before);
+      if (condition === "quarantined") {
         expect(() => readGatewayOwnerLease({ env })).toThrow("synthetic index damage");
-      } else {
+      } else if (condition === "current") {
         expect(readGatewayOwnerLease({ env })?.owner).toBe("previous-generation");
       }
+    },
+  );
+
+  it.each(["hidden", "ambiguous"] as const)(
+    "Doctor refuses quarantined %s lease claims after lookup-index corruption",
+    async (kind) => {
+      const ambiguous = kind === "ambiguous";
+      let env: NodeJS.ProcessEnv;
+      {
+        await using owner = fixture();
+        env = owner.env;
+        seedOwner(
+          env,
+          ambiguous
+            ? { pid: 2_147_483_647, startedAt: 1, expiresAt: null }
+            : { host: "previous-container", expiresAt: null },
+        );
+      }
+      await closeOpenClawStateDatabaseAsync();
+      const databasePath = resolveOpenClawStateSqlitePath(env);
+      corruptSqliteIndexKey(
+        databasePath,
+        "sqlite_autoindex_state_leases_1",
+        "gateway-owner",
+        "gateway-owneX",
+      );
+      const damaged = new (requireNodeSqlite().DatabaseSync)(databasePath, {
+        readOnly: !ambiguous,
+      });
+      try {
+        if (ambiguous) {
+          const now = Date.now();
+          // The damaged unique index admits a fresh rival beside the dead table row.
+          damaged
+            .prepare(
+              `INSERT INTO state_leases
+              (scope, lease_key, owner, expires_at, heartbeat_at, payload_json, created_at, updated_at)
+              SELECT scope, lease_key, 'fresh-rival', expires_at, ?,
+                json_set(payload_json, '$.owner.host', 'previous-container'), ?, ?
+              FROM state_leases NOT INDEXED WHERE scope = ? AND lease_key = ?`,
+            )
+            .run(now, now, now, "gateway-owner", "global");
+        }
+        expect(ownerLeaseRead.readGatewayOwnerLeaseFromDatabase(damaged)?.owner).toBe(
+          ambiguous ? "fresh-rival" : undefined,
+        );
+        expect(
+          damaged
+            .prepare("SELECT owner FROM state_leases NOT INDEXED WHERE scope = ? AND lease_key = ?")
+            .all("gateway-owner", "global"),
+        ).toEqual(
+          expect.arrayContaining([
+            { owner: "previous-generation" },
+            ...(ambiguous ? [{ owner: "fresh-rival" }] : []),
+          ]),
+        );
+      } finally {
+        damaged.close();
+      }
+      const before = fs.readFileSync(databasePath);
+      const reason = "fixture Gateway lease index quarantine";
+      expect(
+        recordOpenClawDatabaseQuarantine({ env, kind: "state", path: databasePath, reason }),
+      ).toBe(true);
+      const run = vi.fn();
+      await expect(
+        withDoctorSqliteMaintenanceLock({ env, operation: "state repair", run }),
+      ).rejects.toThrow(ambiguous ? "ambiguous during maintenance" : "wait up to 90 seconds");
+      expect(run).not.toHaveBeenCalled();
+      expect(fs.readFileSync(databasePath)).toEqual(before);
+      expect(
+        readOpenClawDatabaseQuarantineFailure("state", databasePath, { env })?.message,
+      ).toContain(reason);
+    },
+  );
+
+  it.each(["dead", "stale foreign"] as const)(
+    "Doctor can inspect quarantined state with a %s owner without clearing its lease or quarantine",
+    async (kind) => {
+      let env: NodeJS.ProcessEnv;
+      {
+        await using owner = fixture();
+        env = owner.env;
+        seedOwner(env, {
+          pid: 2_147_483_647,
+          startedAt: 1,
+          expiresAt: null,
+          ...(kind === "stale foreign"
+            ? {
+                host: "previous-container",
+                heartbeatAt: Date.now() - GATEWAY_OWNER_HEARTBEAT_STALE_MS - 1,
+              }
+            : {}),
+        });
+      }
+      await closeOpenClawStateDatabaseAsync();
+      const databasePath = resolveOpenClawStateSqlitePath(env);
+      const before = fs.readFileSync(databasePath);
+      const reason = "fixture audit index quarantine";
+      expect(
+        recordOpenClawDatabaseQuarantine({ env, kind: "state", path: databasePath, reason }),
+      ).toBe(true);
+      const run = vi.fn(() => "inspected");
+      await expect(
+        withDoctorSqliteMaintenanceLock({ env, operation: "state repair", run }),
+      ).resolves.toBe("inspected");
+      expect(run).toHaveBeenCalledOnce();
+      expect(fs.readFileSync(databasePath)).toEqual(before);
+      expect(
+        readOpenClawDatabaseQuarantineFailure("state", databasePath, { env })?.message,
+      ).toContain(reason);
+      expect(() => readGatewayOwnerLease({ env, current: true })).toThrow(reason);
     },
   );
 
@@ -431,8 +562,18 @@ describe("Gateway owner lease", () => {
     });
   });
 
-  it("records the Gateway owner before listening and releases its identity with the lock", async () => {
-    const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-gateway-owner-publication-") };
+  it("admits existing state without copying it and records the owner before listening", async () => {
+    let env: NodeJS.ProcessEnv;
+    {
+      await using owner = fixture();
+      env = owner.env;
+      seedOwner(env, { pid: 2_147_483_647 });
+    }
+    await closeOpenClawStateDatabaseAsync();
+    const snapshot = vi.spyOn(snapshotSource, "prepareSqliteReadOnlyLocationSync");
+    snapshot.mockImplementation(() => {
+      throw new Error("Gateway custody must not copy shared state for lease inspection");
+    });
     const lock = await acquireGatewayLock({
       env,
       allowInTests: true,
@@ -442,6 +583,7 @@ describe("Gateway owner lease", () => {
     if (!lock) {
       throw new Error("Expected gateway lock");
     }
+    snapshot.mockRestore();
     try {
       expect(readGatewayOwnerLease({ env })).toMatchObject({
         pid: process.pid,
@@ -541,45 +683,53 @@ describe("Gateway owner lease", () => {
     expect(existsSync(resolveOpenClawStateSqlitePath(env))).toBe(false);
   });
 
-  it("publishes a readable owner while holding the physical process owner and releases its publication", async () => {
-    await using owner = fixture();
-    const { env } = owner;
-    const lease = owner.acquire({ owner: "gateway-generation" });
-    await lease.ready;
-    expect(tryAcquireGatewayStateOwner(resolveOpenClawStateSqlitePath(env))).toBeNull();
-    expect(readGatewayOwnerLease({ env })).toEqual({
-      owner: "gateway-generation",
-      pid: process.pid,
-      host: hostname(),
-      processNamespace: readGatewayLockProcessNamespace(),
-      heartbeatAt: expect.any(Number),
-      startedAt: pidAlive.getFileLockProcessStartTime(process.pid),
-      port: 19483,
-      mode: "foreground",
-      supervisor: null,
-      state: "live",
-      expired: false,
-    });
-    expect(readGatewayOwnerLease({ env, port: 19484 })).toBeUndefined();
-    const heartbeat = withOpenClawStateStartupMigrationCheckpointDatabase(
-      (db) =>
-        db
-          .prepare(
-            "SELECT created_at, heartbeat_at FROM state_leases WHERE scope = 'gateway-owner'",
-          )
-          .get(),
-      { env },
-    );
-    expect(Number(heartbeat?.heartbeat_at)).toBeGreaterThan(Number(heartbeat?.created_at));
+  it.each([false, true])(
+    "publishes and releases its owner with cached state=%s",
+    async (cached) => {
+      await using owner = fixture();
+      const { env } = owner;
+      const lease = owner.acquire({ owner: "gateway-generation" });
+      await lease.ready;
+      expect(tryAcquireGatewayStateOwner(resolveOpenClawStateSqlitePath(env))).toBeNull();
+      expect(readGatewayOwnerLease({ env })).toEqual({
+        owner: "gateway-generation",
+        pid: process.pid,
+        host: hostname(),
+        processNamespace: readGatewayLockProcessNamespace(),
+        heartbeatAt: expect.any(Number),
+        startedAt: pidAlive.getFileLockProcessStartTime(process.pid),
+        port: 19483,
+        mode: "foreground",
+        supervisor: null,
+        state: "live",
+        expired: false,
+      });
+      expect(readGatewayOwnerLease({ env, port: 19484 })).toBeUndefined();
+      const heartbeat = withOpenClawStateStartupMigrationCheckpointDatabase(
+        (db) =>
+          db
+            .prepare(
+              "SELECT created_at, heartbeat_at FROM state_leases WHERE scope = 'gateway-owner'",
+            )
+            .get(),
+        { env },
+      );
+      expect(Number(heartbeat?.heartbeat_at)).toBeGreaterThan(Number(heartbeat?.created_at));
 
-    expect(repairOpenClawStateDatabaseSchema({ env }).warnings).toEqual([]);
-    await closeOpenClawStateDatabaseAsync();
-    expect(readGatewayOwnerLease({ env })?.owner).toBe("gateway-generation");
+      expect(repairOpenClawStateDatabaseSchema({ env }).warnings).toEqual([]);
+      const held = cached ? openOpenClawStateDatabase({ env }) : undefined;
+      if (!cached) {
+        await closeOpenClawStateDatabaseAsync();
+      }
+      expect(readGatewayOwnerLease({ env })?.owner).toBe("gateway-generation");
 
-    await lease.release();
-    expect(readGatewayOwnerLease({ env })).toBeUndefined();
-    await closeOpenClawStateDatabaseAsync();
-  });
+      await lease.release();
+      expect(held?.db.isOpen ?? false).toBe(false);
+      expect(readGatewayOwnerLease({ env })).toBeUndefined();
+      expect(readSqliteDatabaseCleanClose(resolveOpenClawStateSqlitePath(env))).toBe(true);
+      await closeOpenClawStateDatabaseAsync();
+    },
+  );
 
   it.each([
     { label: "dead", pid: 2_147_483_647, startedAt: 1 },

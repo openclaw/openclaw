@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { nullChannelDirectorySelf } from "../channels/plugins/directory-adapters.js";
 import { createTestConfigSnapshot } from "../commands/test-runtime-config-helpers.js";
+import { captureEnv } from "../test-utils/env.js";
 import { mockCall } from "../test-utils/mock-call-assertions.js";
 import { registerDirectoryCli } from "./directory-cli.js";
 
@@ -35,9 +36,14 @@ vi.mock("./command-secret-targets.js", () => ({
   getScopedChannelsCommandSecretTargets: mocks.getScopedChannelsCommandSecretTargets,
 }));
 
+// mock-isolation: Directory commands read and mutate synthetic channel config, never host config.
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: mocks.loadConfig,
   loadConfig: mocks.loadConfig,
+  captureRuntimeConfigAsyncReader:
+    (...args: Parameters<typeof mocks.loadConfig>) =>
+    async () =>
+      mocks.loadConfig(...args),
   readConfigFileSnapshot: mocks.readConfigFileSnapshot,
   readConfigFileSnapshotForWrite: async () => {
     const snapshot = await mocks.readConfigFileSnapshot();
@@ -679,7 +685,7 @@ describe("registerDirectoryCli", () => {
   ])("$title output", ({ args, method, title }) => {
     it.each([60, 80])("preserves table bytes and raw JSON at width %i", async (columns) => {
       const originalColumns = Object.getOwnPropertyDescriptor(process.stdout, "columns");
-      const originalTerm = process.env.TERM;
+      const originalEnv = captureEnv(["TERM"]);
       Object.defineProperty(process.stdout, "columns", { configurable: true, value: columns });
       process.env.TERM = "xterm";
       try {
@@ -742,11 +748,7 @@ describe("registerDirectoryCli", () => {
         } else {
           Reflect.deleteProperty(process.stdout, "columns");
         }
-        if (originalTerm === undefined) {
-          delete process.env.TERM;
-        } else {
-          process.env.TERM = originalTerm;
-        }
+        originalEnv.restore();
       }
     });
   });

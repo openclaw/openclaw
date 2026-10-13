@@ -1,112 +1,50 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
-import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import {
-  openSqliteWorkerStore,
-  runSqliteWorkerStoreOperation,
-} from "openclaw/plugin-sdk/sqlite-runtime";
+  resolveDatabaseEngineInput,
+  openEngineWorkerStore,
+  runEngineStoreOperation,
+} from "openclaw/plugin-sdk/database-engine-runtime";
+import { readSqliteDatabaseWriteTokenForPath } from "openclaw/plugin-sdk/sqlite-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
-import type {
-  PersistedWorkboardAttachment,
-  PersistedWorkboardBoard,
-  WorkboardCardStore,
-  WorkboardKeyedStore,
-  WorkboardSessionsBoardStore,
-  WorkboardSubscriptionStore,
-  WorkboardWriteAuthority,
-} from "./persistence-types.js";
+import type { WorkboardPersistence, WorkboardWriteAuthority } from "./persistence-types.js";
 import type {
   WorkboardSqliteOperations,
   WorkboardSqliteWorkerOperations,
 } from "./sqlite-store-contract.js";
 import { unwrapWorkboardSqliteResult } from "./sqlite-store-errors.js";
 
-type WorkboardSqliteStores = {
-  cards: WorkboardCardStore;
-  boards: WorkboardKeyedStore<PersistedWorkboardBoard>;
-  sessionsBoard: WorkboardSessionsBoardStore;
-  subscriptions: WorkboardSubscriptionStore;
-  attachments: WorkboardKeyedStore<PersistedWorkboardAttachment>;
-  ready: Promise<number>;
-  dataVersion(this: void): Promise<number>;
+type WorkboardSqliteStores = WorkboardPersistence & {
+  ready: Promise<void>;
+  readWriteToken(this: void): string | undefined;
   close(this: void): Promise<void>;
   runWithWriteAuthority: WorkboardWriteAuthority;
 };
 
 export function createWorkboardSqliteStores(options: {
+  config?: Parameters<typeof resolveDatabaseEngineInput>[0];
   dbPath?: string;
   workerModuleUrl: URL;
 }): WorkboardSqliteStores {
   const databasePath = path.resolve(
     options.dbPath ?? path.join(resolveStateDir(), "plugins", "workboard", "workboard.sqlite"),
   );
-  const worker = openSqliteWorkerStore<WorkboardSqliteWorkerOperations>({
-    moduleUrl: options.workerModuleUrl,
-    databasePath,
-    input: undefined,
-  });
-  let ownedConnection: number | undefined;
-  let brokerClosed = false;
-  let brokerCleanup = false;
+  const selectedDatabase = resolveDatabaseEngineInput(options.config ?? {});
+  const worker = selectedDatabase.then((input) =>
+    openEngineWorkerStore<WorkboardSqliteWorkerOperations>(
+      {
+        moduleUrl: options.workerModuleUrl,
+        databasePath,
+        input,
+      },
+      input,
+    ),
+  );
   let sealed = false;
-  let openingFailure: { error: unknown } | undefined;
   let closing: Promise<void> | undefined;
   const operations = new Set<Promise<unknown>>();
   const writeAuthority = new AsyncLocalStorage<{ active: boolean; assertCurrent?: () => void }>();
-  async function cleanup() {
-    // Rejected admission stays broker-owned; this facade received no lease to release.
-    const store = await worker.catch(() => undefined);
-    if (!store) {
-      return;
-    }
-    if (ownedConnection !== undefined && !brokerCleanup) {
-      const result = await store
-        .execute({ type: "connection.close", input: { connection: ownedConnection } })
-        .catch((error: unknown) => {
-          const code = extractErrorCode(error);
-          if (code === "closed" || code === "unavailable" || code === "outcome-unknown") {
-            // Terminal transport cleanup belongs to the broker's joined retirement.
-            brokerCleanup = true;
-            return undefined;
-          }
-          throw error;
-        });
-      if (result !== undefined) {
-        unwrapWorkboardSqliteResult(result);
-        ownedConnection = undefined;
-      }
-    }
-    if (!brokerClosed) {
-      await store.close();
-      brokerClosed = true;
-      ownedConnection = undefined;
-    }
-  }
-  const opened = worker
-    .then(async (store) => {
-      const result = await store.execute({ type: "connection.open", input: undefined });
-      if (result.ok) {
-        ownedConnection = result.value.connection;
-        return result.value;
-      }
-      ownedConnection = result.failure.cleanupConnection;
-      return unwrapWorkboardSqliteResult<WorkboardSqliteOperations["connection.open"]["output"]>(
-        result,
-      );
-    })
-    .catch(async (error: unknown) => {
-      openingFailure = { error };
-      sealed = true;
-      if (ownedConnection === undefined) {
-        try {
-          await cleanup();
-        } catch {
-          /* Explicit close retains the failed broker cleanup. */
-        }
-      }
-      throw error;
-    });
-  const ready = opened.then((value) => value.dataVersion);
+  const ready = worker.then(() => undefined);
   void ready.catch(() => {});
   async function execute<K extends keyof WorkboardSqliteOperations>(
     type: K,
@@ -115,40 +53,35 @@ export function createWorkboardSqliteStores(options: {
   ): Promise<WorkboardSqliteOperations[K]["output"]> {
     const authority = writes ? writeAuthority.getStore() : undefined;
     const store = await worker;
-    if (!authority) {
-      return unwrapWorkboardSqliteResult(await store.execute({ type, input }));
-    }
     const result = unwrapWorkboardSqliteResult(
-      await runSqliteWorkerStoreOperation(
+      await runEngineStoreOperation(
         store,
+        await selectedDatabase,
+        writes,
         (scope) => scope.execute({ type, input }),
-        undefined,
-        () => {
-          if (!authority.active) {
-            throw new Error("Workboard mutation authority has settled.");
-          }
-          authority.assertCurrent?.();
-        },
+        authority
+          ? () => {
+              if (!authority.active) {
+                throw new Error("Workboard mutation authority has settled.");
+              }
+              authority.assertCurrent?.();
+            }
+          : undefined,
+        databasePath,
       ),
     );
     // A rejected comparison has accepted no mutation; a retry still needs authority.
-    if (result !== false && result !== "conflict" && result !== "owner_busy") {
+    if (authority && result !== false && result !== "conflict" && result !== "owner_busy") {
       authority.assertCurrent = undefined;
     }
     return result;
   }
-  async function run<Args, T>(
-    args: Args,
-    operation: (connection: number, captured: Args) => Promise<T>,
-  ): Promise<T> {
-    if (openingFailure) {
-      throw openingFailure.error;
-    }
+  async function run<Args, T>(args: Args, operation: (captured: Args) => Promise<T>): Promise<T> {
     if (sealed) {
       throw new Error("Workboard SQLite connection is closed.");
     }
     const captured = structuredClone(args);
-    const pending = opened.then(({ connection }) => operation(connection, captured));
+    const pending = operation(captured);
     operations.add(pending);
     try {
       return await pending;
@@ -157,10 +90,9 @@ export function createWorkboardSqliteStores(options: {
     }
   }
   function bindOperation<Args extends unknown[], Result>(
-    operation: (input: { connection: number; args: Args }) => Promise<Result>,
+    operation: (input: { args: Args }) => Promise<Result>,
   ): (...args: Args) => Promise<Result> {
-    return (...args) =>
-      run(args, (connection, captured) => operation({ connection, args: captured }));
+    return (...args) => run(args, (captured) => operation({ args: captured }));
   }
   return {
     async runWithWriteAuthority(assertCurrent, operation) {
@@ -175,7 +107,7 @@ export function createWorkboardSqliteStores(options: {
       }
     },
     ready,
-    dataVersion: () => run(undefined, (connection) => execute("dataVersion", { connection })),
+    readWriteToken: () => readSqliteDatabaseWriteTokenForPath(databasePath),
     cards: {
       register: bindOperation((input) => execute("cards.register", input, true)),
       registerIfAbsent: bindOperation((input) => execute("cards.registerIfAbsent", input, true)),
@@ -230,8 +162,8 @@ export function createWorkboardSqliteStores(options: {
           while (operations.size) {
             await Promise.allSettled(operations);
           }
-          await opened.catch(() => undefined);
-          await cleanup();
+          const store = await worker.catch(() => undefined);
+          await store?.close();
         })
         .catch((error: unknown) => {
           closing = undefined;

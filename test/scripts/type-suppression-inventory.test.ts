@@ -125,6 +125,7 @@ describe("type suppression inventory", () => {
     ).toEqual(
       [
         "extensions/openai/realtime-quicksilver-session-lifecycle.test.ts:@ts-expect-error JavaScript callers must still fail before reserving a native session.",
+        "scripts/lib/managed-cleanup-handoff.mts:@ts-expect-error Bun supports connect({ fd }); Node types only describe path/port connects.",
         "test/type-contracts/kysely-sync.ts:@ts-expect-error Kysely checks selected column string literals.",
         "test/type-contracts/kysely-sync.ts:@ts-expect-error Kysely checks table string literals.",
         "test/type-contracts/kysely-sync.ts:@ts-expect-error Kysely checks where-reference string literals.",
@@ -132,6 +133,8 @@ describe("type suppression inventory", () => {
         "test/type-contracts/kysely-sync.ts:@ts-expect-error Kysely checks order references and selected aliases.",
         "src/infra/net/fetch-guard.socks.test.ts:@ts-expect-error Undici's Node TLS intersection rejects its runtime-valid null timeout.",
         "src/infra/net/fetch-guard.socks.test.ts:@ts-expect-error Undici's Node TLS intersection rejects its runtime-valid null timeout.",
+        "src/plugin-sdk/plugin-config-runtime.test.ts:@ts-expect-error Arrays are also invalid persisted plugin config objects.",
+        "src/plugin-sdk/plugin-config-runtime.test.ts:@ts-expect-error Exercise malformed persisted config at the runtime boundary.",
         "test/type-contracts/plugin-entry-hook-options.ts:@ts-expect-error Trigger eligibility is only supported for before_agent_reply.",
         "test/type-contracts/plugin-entry-hook-options.ts:@ts-expect-error An empty trigger list cannot prove that a hook is inactive.",
         "test/type-contracts/plugin-entry-hook-options.ts:@ts-expect-error Tool authority is only supported for before_prompt_build.",

@@ -1,8 +1,5 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { Value } from "typebox/value";
 import { describe, expect, it, vi } from "vitest";
-import { SessionsListParamsSchema } from "../../../../packages/gateway-protocol/src/schema/sessions-list.js";
-import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-list-limits.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   GatewayRequestError,
@@ -171,82 +168,6 @@ describe("session list requests", () => {
     }
   });
 
-  it("refreshes complete owner counts after a held-row run snapshot instead of patching the facet", async () => {
-    vi.useFakeTimers();
-    const row = {
-      key: "agent:main:owned",
-      sessionId: "owned-session",
-      kind: "direct" as const,
-      updatedAt: 1,
-      hasActiveRun: false,
-      status: "done" as const,
-    };
-    const query = { includeOwnerSessionCounts: true, limit: 1 };
-    let running = 0;
-    const summaryRequest = vi.fn();
-    const request = vi.fn(async (method: string, params?: unknown) => {
-      expect(method).toBe("sessions.list");
-      if (!Value.Check(SessionsListParamsSchema, params)) {
-        throw new Error("Invalid sessions.list request");
-      }
-      if (!params.includeOwnerSessionCounts) {
-        return sessionsResult([], 1);
-      }
-      summaryRequest(params);
-      return {
-        ...sessionsResult([row], 1),
-        ownerSessionCounts: [{ profileId: "ada", open: 8, running }],
-        totalCount: 8,
-        hasMore: true,
-        nextOffset: 1,
-      } satisfies SessionsListResult;
-    });
-    const { gateway, emitEvent } = createGatewayHarness(createTestGatewayClient(request));
-    const sessions = createTestSessionCapability(gateway);
-    const listener = vi.fn();
-    const observation = sessions.observeList(query, listener);
-    try {
-      await observation.refresh();
-      expect(sessions.state.result).toBeNull();
-      expect(sessions.listSnapshot(query).result?.ownerSessionCounts).toEqual([
-        { profileId: "ada", open: 8, running: 0 },
-      ]);
-      running = 1;
-      emitEvent({
-        type: "event",
-        event: "sessions.changed",
-        payload: {
-          sessionKey: row.key,
-          agentId: "main",
-          reason: "agent.run.started",
-          phase: "start",
-          runId: "new-run",
-          ts: 2,
-          session: {
-            ...row,
-            updatedAt: 2,
-            hasActiveRun: true,
-            status: "running",
-            activeRunIds: ["new-run"],
-          },
-        },
-      });
-      expect(summaryRequest).toHaveBeenCalledOnce();
-      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
-      expect(summaryRequest).toHaveBeenCalledTimes(2);
-      expect(summaryRequest).toHaveBeenLastCalledWith(expect.objectContaining(query));
-      expect(sessions.listSnapshot(query).result?.ownerSessionCounts).toEqual([
-        { profileId: "ada", open: 8, running: 1 },
-      ]);
-      expect(sessions.state.result?.sessions).toEqual([]);
-      expect(sessions.state.result?.ownerSessionCounts).toBeUndefined();
-    } finally {
-      observation.dispose();
-      sessions.dispose();
-      vi.useRealTimers();
-    }
-  });
-
   it("keeps an observed active query independent and retires its disposed handle", async () => {
     const pending = createDeferred<SessionsListResult>();
     let holdRefresh = false;
@@ -282,6 +203,8 @@ describe("session list requests", () => {
         expect.objectContaining({ agentId: "writer", limit: 2 }),
       );
       expect(listener).toHaveBeenLastCalledWith({
+        readSucceeded: true,
+        pagination: { count: 2, totalCount: 3, hasMore: true, nextOffset: 2 },
         result: listResult(["agent:writer:0", "agent:writer:1"], 3),
         agentId: "writer",
         loading: false,
@@ -526,19 +449,6 @@ describe("session list requests", () => {
     },
   );
 
-  it("forwards a trimmed parent key when listing child sessions", async () => {
-    const request = vi.fn(async (_method: string, _params?: unknown) => listResult());
-    const { sessions } = sessionHarness(request);
-    const options = { agentId: "main", limit: 20, includeGlobal: false, includeUnknown: false };
-    await sessions.list({ ...options, spawnedBy: "  agent:main:parent  " });
-    expect(request).toHaveBeenCalledWith("sessions.list", {
-      ...options,
-      configuredAgentsOnly: true,
-      spawnedBy: "agent:main:parent",
-    });
-    sessions.dispose();
-  });
-
   it("maps archived status filters to the tri-state wire contract", async () => {
     const request = vi.fn(async (_method: string, _params?: unknown) => listResult());
     const { sessions } = sessionHarness(request);
@@ -551,20 +461,6 @@ describe("session list requests", () => {
     expect(request.mock.calls[1]?.[1]).not.toHaveProperty("activeMinutes");
     expect(request.mock.calls[2]?.[1]).toMatchObject({ archived: "all" });
     expect(request.mock.calls[2]?.[1]).not.toHaveProperty("activeMinutes");
-    sessions.dispose();
-  });
-
-  it("forwards the server-side face filter", async () => {
-    const request = vi.fn(async () => listResult());
-    const { sessions } = sessionHarness(request);
-    await sessions.list({ boardFace: "dashboard" });
-    expect(request).toHaveBeenCalledWith("sessions.list", {
-      configuredAgentsOnly: true,
-      boardFace: "dashboard",
-      includeGlobal: true,
-      includeUnknown: true,
-      limit: SIDEBAR_SESSION_ROSTER_LIMIT,
-    });
     sessions.dispose();
   });
 
@@ -814,66 +710,6 @@ describe("session list requests", () => {
     }
   });
 
-  it("keeps dashboard and sidebar queries distinct without inventing a dashboard agent", async () => {
-    const request = vi.fn(async (_method: string, params?: ListParams) =>
-      listResult([
-        params?.hasBoard === true ? "agent:main:dashboard-result" : "agent:main:sidebar-result",
-      ]),
-    );
-    const { sessions } = sessionHarness(request);
-    const dashboardQuery = {
-      limit: 50,
-      hasBoard: true,
-      archivedFilter: "all" as const,
-    };
-    const sidebarQuery = {
-      agentId: "main",
-      limit: 60,
-      includeDerivedTitles: true,
-      includeLastMessage: true,
-      archivedFilter: "all" as const,
-    };
-    const stopDashboard = sessions.subscribeList(dashboardQuery, () => undefined);
-    const stopSidebar = sessions.subscribeList(sidebarQuery, () => undefined);
-
-    await sessions.refreshList({
-      ...dashboardQuery,
-      includeGlobal: true,
-      includeUnknown: true,
-      configuredAgentsOnly: true,
-      includeDerivedTitles: false,
-      includeLastMessage: false,
-      force: true,
-    });
-    await sessions.refreshList({ ...sidebarQuery, force: true });
-
-    expect(sessions.listSnapshot(dashboardQuery).result?.sessions[0]?.key).toBe(
-      "agent:main:dashboard-result",
-    );
-    expect(sessions.listSnapshot(sidebarQuery).result?.sessions[0]?.key).toBe(
-      "agent:main:sidebar-result",
-    );
-    expect(request.mock.calls[0]?.[1]).toEqual({
-      includeGlobal: true,
-      includeUnknown: true,
-      configuredAgentsOnly: true,
-      limit: 50,
-      archived: "all",
-      hasBoard: true,
-    });
-    expect(request.mock.calls[0]?.[1]).not.toHaveProperty("agentId");
-    expect(request.mock.calls[1]?.[1]).toMatchObject({
-      agentId: "main",
-      archived: "all",
-      includeDerivedTitles: true,
-      includeLastMessage: true,
-      limit: 60,
-    });
-    stopDashboard();
-    stopSidebar();
-    sessions.dispose();
-  });
-
   it("keeps explicit unenriched page queries independent from the primary roster", async () => {
     const request = vi
       .fn()
@@ -898,41 +734,15 @@ describe("session list requests", () => {
     expect(sessions.state.result).toBe(primaryResult);
     expect(sessions.listSnapshot(pageQuery).result?.sessions[0]?.key).toBe("agent:main:page");
     expect(request.mock.calls[1]?.[1]).toEqual({
+      rowMode: "compact",
+      source: "chat-pane",
+      excludeDock: true,
       agentId: "main",
       configuredAgentsOnly: true,
       includeGlobal: true,
       includeUnknown: true,
       limit: 50,
     });
-    unsubscribe();
-    sessions.dispose();
-  });
-
-  it("keeps involving-me queries independent from the primary roster", async () => {
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce(listResult(["agent:main:primary"]))
-      .mockResolvedValueOnce(listResult(["agent:main:involving-me"]));
-    const { sessions } = sessionHarness(request);
-    const involvingMeQuery = {
-      agentId: "main",
-      limit: 50,
-      includeGlobal: true,
-      includeUnknown: true,
-      configuredAgentsOnly: true,
-      involvingMe: true,
-    };
-    const unsubscribe = sessions.subscribeList(involvingMeQuery, () => undefined);
-
-    await sessions.refreshList({ agentId: "main", limit: 50, force: true });
-    const primaryResult = sessions.state.result;
-    await sessions.refreshList({ ...involvingMeQuery, force: true });
-
-    expect(sessions.state.result).toBe(primaryResult);
-    expect(sessions.listSnapshot(involvingMeQuery).result?.sessions[0]?.key).toBe(
-      "agent:main:involving-me",
-    );
-    expect(request.mock.calls[1]?.[1]).toMatchObject({ involvingMe: true });
     unsubscribe();
     sessions.dispose();
   });

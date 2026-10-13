@@ -17,7 +17,7 @@ import {
 import { flushLogger, setLoggerOverride } from "../logging/logger.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
-import { SQLITE_SESSION_WRITER_QUEUES } from "../state/openclaw-agent-write-admission.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "../state/openclaw-agent-write-admission-state.js";
 import { captureEnv } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
@@ -190,26 +190,19 @@ test("an authenticated metadata patch completes while another session awaits cat
         const row = expectDefined(
           records.find(
             (record) =>
-              record.message === "slow session patch" &&
+              typeof record.message === "string" &&
+              record.message.startsWith("slow session patch ") &&
               record.traceId === expectedTrace.traceId &&
               record.spanId === expectedTrace.spanId,
           ),
           "correlated patch timing record",
         );
-        return expectDefined(
-          Object.values(row).find(
-            (value): value is Record<string, unknown> =>
-              isRecord(value) && value.method === "sessions.patch",
-          ),
-          "patch timing metadata",
-        );
+        return row.message;
       };
       const catalogTiming = findPatchTiming(catalogTrace);
-      expect(catalogTiming).toMatchObject({ phaseCounts: { catalog: 1 } });
-      expect(isRecord(catalogTiming.phaseDurationsMs)).toBe(true);
-      if (isRecord(catalogTiming.phaseDurationsMs)) {
-        expect(catalogTiming.phaseDurationsMs.catalog).toBeGreaterThanOrEqual(1_000);
-      }
+      expect(catalogTiming).toEqual(expect.stringContaining("method=sessions.patch "));
+      const catalogDuration = / catalog=(\d+)ms(?: |$)/.exec(String(catalogTiming))?.[1];
+      expect(Number(catalogDuration)).toBeGreaterThanOrEqual(1_000);
       const writerTiming = findPatchTiming(writerTrace);
       expect(writerTrace?.traceId).not.toBe(catalogTrace?.traceId);
       const sqliteRow = expectDefined(

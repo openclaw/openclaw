@@ -1,19 +1,9 @@
-// Channels page view contracts.
-import type {
-  ChannelAccountSnapshot,
-  ChannelsPairingRequest,
-  ChannelStatus,
-  NostrProfile,
-  NostrStatus,
-  WhatsAppStatus,
-} from "../../api/types.ts";
+import type { ChannelsPairingRequest, NostrProfile } from "../../api/types.ts";
 import type { ChannelsState } from "../../lib/channels/index.ts";
 import type { RuntimeConfigState } from "../../lib/config/config-state-model.ts";
 import type { ChannelPluginPresentationController } from "./plugin-presentation-controller.ts";
-import type { NostrProfileFormState } from "./view.nostr-profile-form.ts";
+import type { NostrProfileFormState } from "./view.nostr-profile-form.tsx";
 import type { ChannelWizardHost } from "./wizard-host.ts";
-
-export type ChannelKey = string;
 
 export type ChannelPairingPrompt = {
   kind: "approve" | "dismiss";
@@ -64,16 +54,4 @@ export type ChannelsProps = {
   onNostrProfileSave: () => void;
   onNostrProfileImport: () => void;
   onNostrProfileToggleAdvanced: () => void;
-};
-
-export type ChannelsChannelData = {
-  whatsapp?: WhatsAppStatus;
-  telegram?: ChannelStatus;
-  discord?: ChannelStatus | null;
-  googlechat?: ChannelStatus | null;
-  slack?: ChannelStatus | null;
-  signal?: ChannelStatus | null;
-  imessage?: ChannelStatus | null;
-  nostr?: NostrStatus | null;
-  channelAccounts?: Record<string, ChannelAccountSnapshot[]> | null;
 };

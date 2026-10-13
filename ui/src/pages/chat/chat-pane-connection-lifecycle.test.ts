@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 /* @vitest-environment jsdom */
 /* @vitest-environment-options {"url":"http://chat-pane-connection-lifecycle.test/"} */
+import { GATEWAY_OWNER_PROFILE_ID } from "../../../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -11,7 +12,7 @@ import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { chatHistoryRequests } from "./chat-history-state.ts";
-import { applyChatAgentsList } from "./chat-history.ts";
+import { applyChatAgentsList, loadChatHistory } from "./chat-history.ts";
 import { makeRequestMock } from "./chat-host.test-support.ts";
 import { ChatPaneBase } from "./chat-pane-base.ts";
 import {
@@ -31,6 +32,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   chatThread.resetThreadPresentation();
   window.localStorage.removeItem("openclaw:skip-rewind-confirm");
+  document.documentElement.removeAttribute("data-openclaw-remote-ingress");
   vi.unstubAllGlobals();
 });
 
@@ -65,6 +67,25 @@ function disconnect(pane: TestChatPane) {
 }
 
 describe("chat pane connection lifecycle", () => {
+  it("keeps the initial transcript pending while the first client connects", async () => {
+    const client = createTestGatewayClient(createReconnectRequest({ messages: [] }));
+    const { pane, state } = createTestChatPane({ client });
+    state.connected = false;
+    state.client = null;
+    await loadChatHistory(state, { startup: true });
+    expect(state.chatLoading).toBe(true);
+
+    pane.applyGatewaySnapshot({
+      ...pane.context.gateway.snapshot,
+      client,
+      phase: "connecting",
+      hello: null,
+    });
+
+    expect(chatHistoryRequests(state).historyLoad.phase).toBe("pending-connection");
+    expect(state.chatLoading).toBe(true);
+  });
+
   it("notifies the owning shell after a pane leaves its DOM subtree", async () => {
     const { pane } = createTestChatPane({
       client: { request: vi.fn() } as unknown as GatewayBrowserClient,
@@ -159,12 +180,29 @@ describe("chat pane connection lifecycle", () => {
     );
   });
 
-  it("fully tears down realtime Talk when the gateway disconnects", () => {
+  it("retires connection-owned work and fully tears down realtime Talk on disconnect", () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const retireModelOverride = vi.fn();
     const { pane, state } = createTestChatPane({
       client,
-      sessions: createSessionCapabilityFixture(),
+      sessions: createSessionCapabilityFixture({ retireModelOverride }),
     });
+    state.sessionKey = "global";
+    state.chatModelSwitchPromises = { global: new Promise<boolean>(() => {}) };
+    state.chatSending = true;
+    state.chatSendingScopeKey = "agent:main";
+    state.guardianNotices = [
+      {
+        key: "guardian:old-run:review:denied",
+        runId: "old-run",
+        timestamp: 1,
+        kind: "denied",
+        command: "private command",
+      },
+    ];
+    const cancelCommit = vi.fn();
+    state.renderLifecycle.afterCommit = () => cancelCommit;
+    scheduleChatScroll(state);
     const stop = vi.fn(() => {
       expect(state.realtimeTalkSession).toBeNull();
     });
@@ -184,6 +222,12 @@ describe("chat pane connection lifecycle", () => {
 
     disconnect(pane);
 
+    expect(cancelCommit).toHaveBeenCalledOnce();
+    expect(state.chatModelSwitchPromises).toEqual({});
+    expect(retireModelOverride).toHaveBeenCalledWith("global");
+    expect(state.guardianNotices).toEqual([]);
+    expect(state.chatSending).toBe(false);
+    expect(state.chatSendingScopeKey).toBeNull();
     expect(stop).toHaveBeenCalledOnce();
     expect(state.realtimeTalkActive).toBe(false);
     expect(state.realtimeTalkStatus).toBe("idle");
@@ -195,122 +239,6 @@ describe("chat pane connection lifecycle", () => {
     expect(state.realtimeTalkVideoCapable).toBe(false);
     expect(state.realtimeTalkVideoPending).toBe(false);
     expect(state.realtimeTalkCameraError).toBe(false);
-  });
-
-  it("advances session ownership once per same-client connection transition", async () => {
-    const request = createReconnectRequest({
-      messages: [],
-      sessionId: "current-session",
-      sessionInfo: {
-        key: "agent:main:current",
-        sessionId: "current-session",
-        kind: "direct",
-        updatedAt: 1,
-      },
-    });
-    const client = createTestGatewayClient(request);
-    const { pane, state } = createTestChatPane({ client });
-    state.loadAssistantIdentity = vi.fn(async () => undefined);
-    const deferHydration = vi.spyOn(pane, "deferSessionHydrationUntilTranscript");
-    const initialGeneration = pane.connectionGeneration;
-    const snapshot = { ...pane.context.gateway.snapshot, client };
-
-    state.chatLoading = true;
-    pane.applyGatewaySnapshot({ ...snapshot, phase: "reconnecting", hello: null });
-
-    expect(pane.connectionGeneration).toBe(initialGeneration + 1);
-    expect(state.connectionEpoch).toBe(initialGeneration + 1);
-    expect(state.chatLoading).toBe(false);
-
-    state.chatLoading = true;
-    pane.applyGatewaySnapshot({ ...snapshot, phase: "reconnecting", hello: null });
-
-    expect(pane.connectionGeneration).toBe(initialGeneration + 1);
-    expect(state.connectionEpoch).toBe(initialGeneration + 1);
-    expect(state.chatLoading).toBe(true);
-
-    expect(pane.connectedClient).toBeNull();
-    pane.applyGatewaySnapshot({ ...snapshot, phase: "connected" });
-
-    expect(pane.connectionGeneration).toBe(initialGeneration + 2);
-    expect(state.connectionEpoch).toBe(initialGeneration + 2);
-    expect(deferHydration).toHaveBeenCalledOnce();
-    await expect(deferHydration.mock.calls[0]![1]).resolves.toBe(true);
-    expect(state.chatLoading).toBe(false);
-
-    state.chatLoading = true;
-    pane.applyGatewaySnapshot({ ...snapshot, phase: "connected" });
-
-    expect(pane.connectionGeneration).toBe(initialGeneration + 2);
-    expect(state.connectionEpoch).toBe(initialGeneration + 2);
-    expect(state.chatLoading).toBe(true);
-  });
-
-  it("cancels scroll work owned by the prior Gateway connection", () => {
-    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({
-      client,
-      sessions: createSessionCapabilityFixture(),
-    });
-    const cancelCommit = vi.fn();
-    state.renderLifecycle.afterCommit = () => cancelCommit;
-    scheduleChatScroll(state);
-
-    disconnect(pane);
-
-    expect(cancelCommit).toHaveBeenCalledOnce();
-  });
-
-  it("retires pending model selection state when the Gateway owner changes", () => {
-    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const retireModelOverride = vi.fn();
-    const sessions = createSessionCapabilityFixture({ retireModelOverride });
-    const { pane, state } = createTestChatPane({ client, sessions });
-    state.sessionKey = "global";
-    state.chatModelSwitchPromises = {
-      global: new Promise<boolean>(() => {}),
-    };
-
-    disconnect(pane);
-
-    expect(state.chatModelSwitchPromises).toEqual({});
-    expect(retireModelOverride).toHaveBeenCalledWith("global");
-  });
-
-  it("discards Guardian and system notices when Gateway ownership changes", () => {
-    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({
-      client,
-      sessions: createSessionCapabilityFixture(),
-    });
-    state.guardianNotices = [
-      {
-        key: "guardian:old-run:review:denied",
-        runId: "old-run",
-        timestamp: 1,
-        kind: "denied",
-        command: "private command",
-      },
-    ];
-
-    disconnect(pane);
-
-    expect(state.guardianNotices).toEqual([]);
-  });
-
-  it("releases sending state when the Gateway owner changes", () => {
-    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({
-      client,
-      sessions: createSessionCapabilityFixture(),
-    });
-    state.chatSending = true;
-    state.chatSendingScopeKey = "agent:main";
-
-    disconnect(pane);
-
-    expect(state.chatSending).toBe(false);
-    expect(state.chatSendingScopeKey).toBeNull();
   });
 
   it("preserves owner-qualified model and identity state when global selection changes", () => {
@@ -333,66 +261,140 @@ describe("chat pane connection lifecycle", () => {
     expect(state.loadAssistantIdentity).not.toHaveBeenCalled();
   });
 
-  it("refreshes the transcript before secondary hydration after a same-client reconnect", async () => {
-    const transcript = createDeferred<{
-      messages: [];
-      sessionId: string;
-      sessionInfo: { key: string; sessionId: string; kind: "direct"; updatedAt: number };
-    }>();
-    const request = createReconnectRequest(transcript.promise);
-    const client = createTestGatewayClient(request);
-    const { pane, state } = createTestChatPane({ client });
-    state.loadAssistantIdentity = vi.fn(async () => undefined);
-    const deferHydration = vi.spyOn(pane, "deferSessionHydrationUntilTranscript");
-    const branches = vi.spyOn(state.sessions, "listBranches");
-    const commitEffects: AfterCommitEffect[] = [];
-    state.renderLifecycle.afterCommit = (effect) => {
-      commitEffects.push(effect);
-      return () => undefined;
-    };
-    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
-      callback(0);
-      return 1;
-    });
-    const snapshot = { ...pane.context.gateway.snapshot, client };
+  it.each([
+    { surface: "direct", remoteIngress: false, profileId: undefined, full: false, questions: 1 },
+    {
+      surface: "unresolved ingress",
+      remoteIngress: true,
+      profileId: undefined,
+      full: false,
+      questions: 0,
+    },
+    {
+      surface: "owner ingress",
+      remoteIngress: true,
+      profileId: GATEWAY_OWNER_PROFILE_ID,
+      full: false,
+      questions: 0,
+    },
+    {
+      surface: "full owner ingress",
+      remoteIngress: true,
+      profileId: GATEWAY_OWNER_PROFILE_ID,
+      full: true,
+      questions: 1,
+    },
+    {
+      surface: "person ingress",
+      remoteIngress: true,
+      profileId: "verified-person",
+      full: false,
+      questions: 1,
+    },
+  ])(
+    "refreshes the transcript before secondary hydration after a $surface reconnect",
+    async ({ remoteIngress, profileId, full, questions }) => {
+      if (remoteIngress) {
+        document.documentElement.setAttribute("data-openclaw-remote-ingress", "true");
+      }
+      const transcript = createDeferred<{
+        messages: [];
+        sessionId: string;
+        sessionInfo: { key: string; sessionId: string; kind: "direct"; updatedAt: number };
+      }>();
+      const request = createReconnectRequest(transcript.promise);
+      const client = createTestGatewayClient(request);
+      const { pane, state } = createTestChatPane({ client });
+      state.loadAssistantIdentity = vi.fn(async () => undefined);
+      const deferHydration = vi.spyOn(pane, "deferSessionHydrationUntilTranscript");
+      const branches = vi.spyOn(state.sessions, "listBranches");
+      const commitEffects: AfterCommitEffect[] = [];
+      state.renderLifecycle.afterCommit = (effect) => {
+        commitEffects.push(effect);
+        return () => undefined;
+      };
+      vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+        callback(0);
+        return 1;
+      });
+      const hello = sessionMutationGatewayHello(
+        full ? ["operator.admin"] : ["operator.read", "operator.write"],
+      );
+      const snapshot = {
+        ...pane.context.gateway.snapshot,
+        client,
+        selfUser: profileId
+          ? { id: profileId, identity: { type: "profile" as const, id: profileId } }
+          : undefined,
+        hello: {
+          ...hello,
+          features: { methods: [...(hello.features?.methods ?? []), "question.list"] },
+        },
+      };
+      const initialGeneration = pane.connectionGeneration;
 
-    pane.applyGatewaySnapshot({ ...snapshot, phase: "reconnecting", hello: null });
-    expect(state.connected).toBe(false);
-    expect(pane.connectedClient).toBeNull();
-    pane.applyGatewaySnapshot({ ...snapshot, phase: "connected" });
-    pane.applyGatewaySnapshot({ ...snapshot, phase: "connected" });
+      state.chatLoading = true;
+      pane.applyGatewaySnapshot({ ...snapshot, phase: "reconnecting", hello: null });
+      expect(pane.connectionGeneration).toBe(initialGeneration + 1);
+      expect(state.connectionEpoch).toBe(initialGeneration + 1);
+      expect(state.chatLoading).toBe(false);
+      state.chatLoading = true;
+      pane.applyGatewaySnapshot({ ...snapshot, phase: "reconnecting", hello: null });
+      expect(pane.connectionGeneration).toBe(initialGeneration + 1);
+      expect(state.connectionEpoch).toBe(initialGeneration + 1);
+      expect(state.chatLoading).toBe(true);
+      expect(state.connected).toBe(false);
+      expect(pane.connectedClient).toBeNull();
+      pane.applyGatewaySnapshot({ ...snapshot, phase: "connected" });
+      expect(pane.connectionGeneration).toBe(initialGeneration + 2);
+      expect(state.connectionEpoch).toBe(initialGeneration + 2);
+      state.chatLoading = true;
+      pane.applyGatewaySnapshot({ ...snapshot, phase: "connected" });
+      expect(pane.connectionGeneration).toBe(initialGeneration + 2);
+      expect(state.connectionEpoch).toBe(initialGeneration + 2);
+      expect(state.chatLoading).toBe(true);
 
-    await expect(chatHistoryRequests(state).subscriptionReady).resolves.toBe(true);
-    expect(request.mock.calls.filter(([method]) => method === "chat.startup")).toHaveLength(1);
-    expect(request).toHaveBeenCalledWith(
-      "chat.startup",
-      expect.objectContaining({ limit: 80, maxBytes: 256 * 1024, sessionKey: state.sessionKey }),
-      { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
-    );
-    expect(deferHydration).toHaveBeenCalledExactlyOnceWith(state.sessionKey, expect.any(Promise));
-    expect(branches).not.toHaveBeenCalled();
-    expect(commitEffects).toEqual([]);
+      await expect(chatHistoryRequests(state).subscriptionReady).resolves.toBe(true);
+      expect(request.mock.calls.filter(([method]) => method === "chat.startup")).toHaveLength(1);
+      expect(request.mock.calls.filter(([method]) => method === "question.list")).toHaveLength(
+        questions,
+      );
+      expect(request).toHaveBeenCalledWith(
+        "chat.startup",
+        expect.objectContaining({ limit: 80, maxBytes: 256 * 1024, sessionKey: state.sessionKey }),
+        { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
+      );
+      expect(deferHydration).toHaveBeenCalledExactlyOnceWith(state.sessionKey, expect.any(Promise));
+      expect(branches).not.toHaveBeenCalled();
+      expect(commitEffects).toEqual([]);
 
-    transcript.resolve({
-      messages: [],
-      sessionId: "reconnected-session",
-      sessionInfo: {
-        key: state.sessionKey,
+      transcript.resolve({
+        messages: [],
         sessionId: "reconnected-session",
-        kind: "direct",
-        updatedAt: 1,
-      },
-    });
-    await expect(deferHydration.mock.calls[0]![1]).resolves.toBe(true);
-    expect(branches).not.toHaveBeenCalled();
-    expect(commitEffects.length).toBeGreaterThan(0);
-    for (const effect of commitEffects) {
-      effect(() => undefined);
-    }
-    expect(branches).toHaveBeenCalledOnce();
-    await branches.mock.results[0]!.value;
-    expect(request.mock.calls.filter(([method]) => method === "chat.startup")).toHaveLength(1);
-  });
+        sessionInfo: {
+          key: state.sessionKey,
+          sessionId: "reconnected-session",
+          kind: "direct",
+          updatedAt: 1,
+        },
+      });
+      await expect(deferHydration.mock.calls[0]![1]).resolves.toBe(true);
+      expect(state.chatLoading).toBe(false);
+      expect(branches).not.toHaveBeenCalled();
+      expect(commitEffects.length).toBeGreaterThan(0);
+      for (const effect of commitEffects) {
+        effect(() => undefined);
+      }
+      expect(branches).toHaveBeenCalledOnce();
+      await branches.mock.results[0]!.value;
+      expect(request.mock.calls.filter(([method]) => method === "chat.startup")).toHaveLength(1);
+      state.chatLoading = true;
+      pane.applyGatewaySnapshot({ ...snapshot, phase: "connected" });
+      expect(pane.connectionGeneration).toBe(initialGeneration + 2);
+      expect(state.connectionEpoch).toBe(initialGeneration + 2);
+      expect(state.chatLoading).toBe(true);
+    },
+  );
 
   it.each([
     { mode: "online", outcome: "no-active-run", change: "default agent" },

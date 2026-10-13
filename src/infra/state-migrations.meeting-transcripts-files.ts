@@ -22,7 +22,6 @@ const LEGACY_UTTERANCE_STAGE_BATCH_SIZE = 256;
 export type LegacyMeetingTranscriptSnapshot = {
   sourceDir: string;
   relativeDir: string;
-  stageKey: string;
   session: TranscriptSessionDescriptor;
   utteranceCount: number;
   summary?: TranscriptsSummary;
@@ -160,7 +159,7 @@ function legacyTranscriptRelativeDir(session: TranscriptSessionDescriptor): stri
   }
   const legacySegment =
     session.sessionId.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "session";
-  return path.normalize(path.join(date, legacySegment));
+  return path.join(date, legacySegment);
 }
 
 async function optionalRegularFile(filePath: string): Promise<boolean> {
@@ -287,13 +286,12 @@ export function readStagedMeetingTranscriptUtterances(params: {
   stageDatabase: DatabaseSync;
   stageKey: string;
   start: number;
-  limit: number;
 }): TranscriptUtterance[] {
   return params.stageDatabase
     .prepare(
       "SELECT utterance_json FROM staged_utterances WHERE stage_key = ? AND sequence >= ? ORDER BY sequence ASC LIMIT ?",
     )
-    .all(params.stageKey, params.start, params.limit)
+    .all(params.stageKey, params.start, LEGACY_UTTERANCE_INSERT_CHUNK_SIZE)
     .map((row) => JSON.parse(String(row.utterance_json)) as TranscriptUtterance);
 }
 
@@ -378,7 +376,6 @@ export async function snapshotLegacyMeetingTranscriptSession(params: {
   return {
     sourceDir,
     relativeDir: params.relativeDir,
-    stageKey: params.relativeDir,
     session,
     utteranceCount,
     summary,
@@ -591,6 +588,27 @@ export class LegacyMeetingTranscriptArchiveMovedError extends Error {
   }
 }
 
+async function assertCanonicalExportDirectory(
+  rootDir: string,
+  targetPath: string,
+  role: "source" | "destination",
+  cause?: unknown,
+): Promise<void> {
+  const stat = await fs.lstat(targetPath);
+  if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    throw new Error(
+      `canonical transcript export ${role} is not a directory: ${targetPath}`,
+      cause === undefined ? undefined : { cause },
+    );
+  }
+  await assertNoSymlinkParents({
+    rootDir,
+    targetPath,
+    allowMissing: false,
+    messagePrefix: `Canonical transcript export ${role}`,
+  });
+}
+
 export async function restoreCanonicalMeetingTranscriptExports(params: {
   sourceRoot: string;
   archiveRoot: string;
@@ -608,21 +626,11 @@ export async function restoreCanonicalMeetingTranscriptExports(params: {
     ),
   );
   for (const relativeDir of params.canonicalRelativeDirs) {
-    const archiveRelative = path.relative(
-      path.resolve(params.archiveRoot),
-      path.resolve(params.archiveRoot, relativeDir),
-    );
-    const sourceRelative = path.relative(
-      path.resolve(params.sourceRoot),
-      path.resolve(params.sourceRoot, relativeDir),
-    );
     if (
-      !archiveRelative ||
-      archiveRelative.startsWith("..") ||
-      path.isAbsolute(archiveRelative) ||
-      !sourceRelative ||
-      sourceRelative.startsWith("..") ||
-      path.isAbsolute(sourceRelative)
+      [params.archiveRoot, params.sourceRoot].some((rootDir) => {
+        const relative = path.relative(path.resolve(rootDir), path.resolve(rootDir, relativeDir));
+        return !relative || relative.startsWith("..") || path.isAbsolute(relative);
+      })
     ) {
       throw new Error(`canonical transcript export path escaped its root: ${relativeDir}`);
     }
@@ -632,48 +640,16 @@ export async function restoreCanonicalMeetingTranscriptExports(params: {
     const source = path.join(params.archiveRoot, relativeDir);
     const destination = path.join(params.sourceRoot, relativeDir);
     try {
-      const sourceStat = await fs.lstat(source);
-      if (sourceStat.isSymbolicLink() || !sourceStat.isDirectory()) {
-        throw new Error(`canonical transcript export source is not a directory: ${source}`);
-      }
-      await assertNoSymlinkParents({
-        rootDir: params.archiveRoot,
-        targetPath: source,
-        allowMissing: false,
-        messagePrefix: "Canonical transcript export source",
-      });
+      await assertCanonicalExportDirectory(params.archiveRoot, source, "source");
     } catch (error) {
       if (!(isRecord(error) && error.code === "ENOENT")) {
         throw error;
       }
-      const destinationStat = await fs.lstat(destination);
-      if (destinationStat.isSymbolicLink() || !destinationStat.isDirectory()) {
-        throw new Error(
-          `canonical transcript export destination is not a directory: ${destination}`,
-          { cause: error },
-        );
-      }
-      await assertNoSymlinkParents({
-        rootDir: params.sourceRoot,
-        targetPath: destination,
-        allowMissing: false,
-        messagePrefix: "Canonical transcript export destination",
-      });
+      await assertCanonicalExportDirectory(params.sourceRoot, destination, "destination", error);
       continue;
     }
     try {
-      const destinationStat = await fs.lstat(destination);
-      if (destinationStat.isSymbolicLink() || !destinationStat.isDirectory()) {
-        throw new Error(
-          `canonical transcript export destination is not a directory: ${destination}`,
-        );
-      }
-      await assertNoSymlinkParents({
-        rootDir: params.sourceRoot,
-        targetPath: destination,
-        allowMissing: false,
-        messagePrefix: "Canonical transcript export destination",
-      });
+      await assertCanonicalExportDirectory(params.sourceRoot, destination, "destination");
       const readMetadata = async (directory: string) =>
         parseSession(
           JSON.parse(await fs.readFile(path.join(directory, "metadata.json"), "utf8")),

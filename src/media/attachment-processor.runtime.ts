@@ -1,6 +1,8 @@
+import { classifyAttachmentBytes } from "@openclaw/media-core/attachment-classify";
 import { inspectBase64 } from "@openclaw/media-core/base64";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { mimeTypeFromFilePath, normalizeMimeType } from "@openclaw/media-core/mime";
+import { readImageMetadataFromHeader } from "./image-ops.js";
 import { sniffMimeFromBase64 } from "./sniff-mime-from-base64.js";
 
 export const ATTACHMENT_OFFLOAD_THRESHOLD_BYTES = 2_000_000;
@@ -16,6 +18,8 @@ export type PreparedAttachment = {
   sizeBytes: number;
   mime: string;
   buffer?: Uint8Array<ArrayBuffer>;
+  width?: number;
+  height?: number;
 };
 
 export function isGenericContainerMime(mime?: string): boolean {
@@ -35,7 +39,7 @@ export async function prepareAttachment(input: AttachmentInput): Promise<Prepare
       ? Buffer.from(input.base64, "base64")
       : undefined;
   const hints = [normalizeMimeType(input.mime), mimeTypeFromFilePath(input.label)];
-  const mime =
+  let mime =
     (await sniffMimeFromBase64(
       { ...facts, buffer },
       {
@@ -45,5 +49,22 @@ export async function prepareAttachment(input: AttachmentInput): Promise<Prepare
   if (!buffer && !mime.startsWith("image/")) {
     buffer = Buffer.from(input.base64, "base64");
   }
-  return { sizeBytes: facts.decodedBytes, mime, buffer };
+  if (
+    buffer &&
+    mime.startsWith("text/") &&
+    (!normalizeMimeType(input.mime) || normalizeMimeType(input.mime) === "application/octet-stream")
+  ) {
+    const classification = await classifyAttachmentBytes({ buffer, name: input.label });
+    if (classification.class === "text" && classification.charset) {
+      // Inferred MIME becomes a persisted content type; retain its byte-derived encoding.
+      mime = `${mime}; charset=${classification.charset}`;
+    }
+  }
+  // The existing attachment worker owns large base64 decodes and header scans.
+  // Preserve displayed axes (including EXIF rotation) without decoding pixels.
+  const dimensions =
+    mime.startsWith("image/") && facts.decodedBytes <= MAX_IMAGE_BYTES
+      ? readImageMetadataFromHeader(buffer ?? Buffer.from(input.base64, "base64"))
+      : null;
+  return { sizeBytes: facts.decodedBytes, mime, buffer, ...dimensions };
 }

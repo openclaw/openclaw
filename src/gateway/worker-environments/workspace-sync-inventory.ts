@@ -47,7 +47,7 @@ async function writeInventory(
       ),
       onInventoryChunk: async (bytes, context) => {
         context.signal.throwIfAborted();
-        await output.writeFile(bytes);
+        await output.writeFile(bytes, { signal: context.signal });
         context.signal.throwIfAborted();
       },
     });
@@ -94,6 +94,7 @@ export async function runWorkspaceInventoryCommandToFile(params: {
   let terminationTimer: ReturnType<typeof setTimeout> | undefined;
   let abort: (() => void) | undefined;
   let abortedCommand = false;
+  let timedOut = false;
   let outputError: Error | undefined;
   let outputBytes = 0;
   let outputWrite = Promise.resolve();
@@ -193,7 +194,10 @@ export async function runWorkspaceInventoryCommandToFile(params: {
         terminate();
       };
       params.signal.addEventListener("abort", abort, { once: true });
-      timer = setTimeout(terminate, params.timeoutMs);
+      timer = setTimeout(() => {
+        timedOut = !terminationStarted && child.exitCode === null && child.signalCode === null;
+        terminate();
+      }, params.timeoutMs);
       timer.unref?.();
       if (params.signal.aborted) {
         abort();
@@ -209,10 +213,11 @@ export async function runWorkspaceInventoryCommandToFile(params: {
     if (abortedCommand) {
       params.signal.throwIfAborted();
     }
-    if (result.code !== 0) {
+    if (result.code !== 0 || timedOut) {
+      const detail = timedOut ? `timed out after ${params.timeoutMs}ms` : stderr.trim();
       throw new Error(
-        stderr.trim()
-          ? `Worker workspace file enumeration failed: ${stderr.trim()}`
+        detail
+          ? `Worker workspace file enumeration failed: ${detail}`
           : "Worker workspace file enumeration failed",
       );
     }

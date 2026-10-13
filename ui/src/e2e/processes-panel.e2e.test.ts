@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -10,7 +11,13 @@ const capture = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 suite.define(() => {
   it("discovers background work and stops only the inspected process without consuming its output", async () => {
     await suite.withPage(
-      { viewport: { width: 1440, height: 900 }, colorScheme: "dark" },
+      {
+        viewport: { width: 1440, height: 900 },
+        colorScheme: "dark",
+        ...(capture
+          ? { recordVideo: { dir: suite.artifactDir, size: { width: 1440, height: 900 } } }
+          : {}),
+      },
       async ({ page }) => {
         const key = "agent:main:process-review";
         const process = {
@@ -23,9 +30,20 @@ suite.define(() => {
           truncated: false,
           canStop: true,
         };
+        const finishedProcess = {
+          ...process,
+          processId: "lint-process",
+          instanceId: "lint-incarnation",
+          name: "npm run lint",
+          status: "completed",
+          endedAt: process.startedAt + 5_000,
+          exitCode: 0,
+          tail: "Lint passed.",
+          canStop: false,
+        };
         const result = {
           sessionId: "process-review-session",
-          processes: [process],
+          processes: [process, finishedProcess],
           truncated: false,
         };
         const gateway = await installMockGateway(page, {
@@ -52,7 +70,7 @@ suite.define(() => {
         const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
         const draft = pane.locator(".agent-chat__composer-combobox textarea");
         await draft.fill("Keep my next instruction");
-        await pane.getByRole("button", { name: "Side panel", exact: true }).click();
+        await selectChatLayoutAction(pane, "Side panel");
         const choices = pane.locator(".side-panel-empty__type");
         await choices.first().waitFor();
         if (capture) {
@@ -69,6 +87,23 @@ suite.define(() => {
         await panel.getByText(process.name, { exact: true }).waitFor();
         const request = await gateway.waitForRequest("sessions.processes.list");
         expect(request.params).toMatchObject({ key });
+        const finishedToggle = panel.getByRole("button", { name: "Finished (1)", exact: true });
+        const finishedRow = panel.getByRole("button", { name: finishedProcess.name, exact: true });
+        await finishedToggle.waitFor();
+        if (capture) {
+          await page.screenshot({
+            animations: "disabled",
+            path: path.join(suite.artifactDir, "finished-default.png"),
+          });
+        }
+        expect(await finishedToggle.getAttribute("aria-expanded")).toBe("false");
+        expect(await finishedRow.count()).toBe(0);
+        await finishedToggle.click();
+        await finishedRow.waitFor();
+        expect(await finishedToggle.getAttribute("aria-expanded")).toBe("true");
+        await finishedToggle.click();
+        await finishedRow.waitFor({ state: "detached" });
+        expect(await finishedToggle.getAttribute("aria-expanded")).toBe("false");
         await panel.getByText(process.name, { exact: true }).click();
         await panel.getByText(process.tail, { exact: true }).waitFor();
         await openChatSidePanelType(page, "Subagents");
@@ -105,7 +140,12 @@ suite.define(() => {
         await draft.waitFor();
         expect(await draft.inputValue()).toBe("Keep my next instruction");
         await selectTab("Processes");
-        await panel.getByText(process.name, { exact: true }).waitFor();
+        await finishedToggle.waitFor();
+        const stoppedRow = panel.getByRole("button", { name: process.name, exact: true });
+        expect(await finishedToggle.getAttribute("aria-expanded")).toBe("false");
+        expect(await stoppedRow.count()).toBe(0);
+        await finishedToggle.click();
+        await stoppedRow.waitFor();
       },
     );
   });

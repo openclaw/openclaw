@@ -1,10 +1,7 @@
 import { resolveGlobalDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 // Mattermost tests cover thread participation cache plugin behavior.
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
-import {
-  createPluginStateKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import * as initialStateRuntime from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -13,26 +10,33 @@ const threadParticipationMemory = resolveGlobalDedupeCache(
   { ttlMs: 7 * 24 * 60 * 60 * 1000, maxSize: 5000 },
 );
 
+let stateRuntime = initialStateRuntime;
 let setMattermostRuntime: typeof import("../runtime.js").setMattermostRuntime;
 let hasMattermostThreadParticipationWithPersistence: typeof import("./thread-participation.js").hasMattermostThreadParticipationWithPersistence;
 let recordMattermostThreadParticipation: typeof import("./thread-participation.js").recordMattermostThreadParticipation;
 
-function setRuntime(openKeyedStore: (options: OpenKeyedStoreOptions) => unknown): void {
+function setRuntime(openKeyedStoreV2: (options: OpenKeyedStoreOptions) => unknown): void {
   setMattermostRuntime({
-    state: { openKeyedStore },
+    state: { openKeyedStoreV2 },
     logging: { getChildLogger: () => ({ warn() {} }) },
   } as unknown as PluginRuntime);
 }
 
 function setPersistentRuntime(): void {
-  setRuntime((options) => createPluginStateKeyedStoreForTests("mattermost", options));
+  setRuntime((options) =>
+    stateRuntime.createPluginStateKeyedStoreV2ForTests("mattermost", options, {
+      assertCurrent() {},
+    }),
+  );
 }
 
 describe("mattermost thread participation", () => {
   beforeEach(async () => {
-    resetPluginStateStoreForTests();
+    stateRuntime.resetPluginStateStoreForTests();
     threadParticipationMemory.clear();
     vi.resetModules();
+    // Store factories and their lazy worker admissions must share one module generation.
+    stateRuntime = await import("openclaw/plugin-sdk/plugin-state-test-runtime");
     ({ setMattermostRuntime } = await import("../runtime.js"));
     ({ hasMattermostThreadParticipationWithPersistence, recordMattermostThreadParticipation } =
       await import("./thread-participation.js"));
@@ -41,7 +45,7 @@ describe("mattermost thread participation", () => {
 
   afterEach(() => {
     threadParticipationMemory.clear();
-    resetPluginStateStoreForTests();
+    stateRuntime.resetPluginStateStoreForTests();
     vi.restoreAllMocks();
   });
 

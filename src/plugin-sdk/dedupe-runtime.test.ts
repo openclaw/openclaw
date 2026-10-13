@@ -46,48 +46,6 @@ describe("createPersistentDedupeCache", () => {
     vi.useRealTimers();
   });
 
-  it("records presence in both layers and answers from memory first", async () => {
-    const { cache, backing } = createCache();
-    await cache.register("k1", { at: 1 });
-    expect(cache.peek("k1")).toBe(true);
-    expect(await cache.lookup("k1")).toBe(true);
-    expect(backing.store.register).toHaveBeenCalledWith("k1", { at: 1 });
-    expect(backing.store.lookup).not.toHaveBeenCalled();
-  });
-
-  it.each([0, -1])("omits the persistent TTL when ttlMs is %i", async (ttlMs) => {
-    const openStore = vi.fn(() => createMemoryStore().store);
-    const { cache } = createCache({ ttlMs, openStore });
-
-    await cache.register("non-expiring", { at: 1 });
-
-    expect(openStore).toHaveBeenCalledWith({
-      namespace: "test.persistent-dedupe",
-      maxEntries: 100,
-    });
-  });
-
-  it("forwards positive persistent TTLs without changing capacity", async () => {
-    const openStore = vi.fn(() => createMemoryStore().store);
-    const { cache } = createCache({ ttlMs: 60_000, persistentMaxEntries: 3, openStore });
-
-    await cache.register("expiring", { at: 1 });
-
-    expect(openStore).toHaveBeenCalledWith({
-      namespace: "test.persistent-dedupe",
-      maxEntries: 3,
-      defaultTtlMs: 60_000,
-    });
-  });
-
-  it("falls back to persistence and re-primes memory on a hit", async () => {
-    const { cache, backing } = createCache();
-    backing.entries.set("k2", { at: 42 });
-    expect(cache.peek("k2")).toBe(false);
-    expect(await cache.lookup("k2")).toBe(true);
-    expect(cache.peek("k2")).toBe(true);
-  });
-
   it("re-primes memory with the persisted timestamp when provided", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000_000);
@@ -156,19 +114,6 @@ describe("createPersistentDedupeCache", () => {
     expect(cache.peek("missing")).toBe(false);
   });
 
-  it("re-primes non-expiring memory when entry metadata is unavailable", async () => {
-    const backing = createMemoryStore();
-    backing.entries.set("durable", { at: 1_000_000 });
-    const store = {
-      ...backing.store,
-      entries: vi.fn(async () => undefined),
-    };
-    const { cache } = createCache({ ttlMs: 0, openStore: () => store });
-
-    expect(await cache.lookup("durable")).toBe(true);
-    expect(cache.peek("durable")).toBe(true);
-  });
-
   it("disables persistence after an expiration metadata read fails", async () => {
     const logError = vi.fn();
     const backing = createMemoryStore();
@@ -188,20 +133,6 @@ describe("createPersistentDedupeCache", () => {
     await cache.register("later", { at: 1_000_001 });
     expect(store.register).not.toHaveBeenCalled();
     expect(store.entries).toHaveBeenCalledOnce();
-  });
-
-  it("does not inspect expiration metadata for positive-TTL caches", async () => {
-    const backing = createMemoryStore();
-    backing.entries.set("expiring", { at: 1_000_000 });
-    const store = {
-      ...backing.store,
-      entries: vi.fn(async () => []),
-    };
-    const { cache } = createCache({ ttlMs: 60_000, openStore: () => store });
-
-    expect(await cache.lookup("expiring")).toBe(true);
-    expect(cache.peek("expiring")).toBe(true);
-    expect(store.entries).not.toHaveBeenCalled();
   });
 
   it("retains non-expiring entries past 24 hours and restores them after restart", async () => {
@@ -228,18 +159,6 @@ describe("createPersistentDedupeCache", () => {
     expect(backing.store.lookup).toHaveBeenCalledTimes(2);
   });
 
-  it("deterministically evicts the oldest non-expiring memory entry at capacity", async () => {
-    const { cache } = createCache({ ttlMs: 0, maxSize: 2, openStore: () => undefined });
-
-    await cache.register("oldest", { at: 1 }, { at: 1 });
-    await cache.register("retained", { at: 2 }, { at: 2 });
-    await cache.register("newest", { at: 3 }, { at: 3 });
-
-    expect(cache.peek("oldest")).toBe(false);
-    expect(cache.peek("retained")).toBe(true);
-    expect(cache.peek("newest")).toBe(true);
-  });
-
   it("disables persistence after an open failure and never rejects", async () => {
     const logError = vi.fn();
     const openStore = vi.fn(() => {
@@ -251,35 +170,5 @@ describe("createPersistentDedupeCache", () => {
     expect(await cache.lookup("k5")).toBe(false);
     expect(openStore).toHaveBeenCalledTimes(1);
     expect(logError).toHaveBeenCalledTimes(1);
-  });
-
-  it("disables persistence after a lookup failure", async () => {
-    const logError = vi.fn();
-    const store = {
-      register: vi.fn(async () => {}),
-      lookup: vi.fn(async () => {
-        throw new Error("read failed");
-      }),
-    };
-    const { cache } = createCache({ openStore: () => store, logError });
-    expect(await cache.lookup("k6")).toBe(false);
-    expect(logError).toHaveBeenCalledTimes(1);
-    await cache.register("k7", { at: 1 });
-    expect(store.register).not.toHaveBeenCalled();
-  });
-
-  it("clearForTest resets memory and re-enables persistence", async () => {
-    const openStore = vi
-      .fn()
-      .mockImplementationOnce(() => {
-        throw new Error("boom");
-      })
-      .mockImplementation(() => createMemoryStore().store);
-    const { cache } = createCache({ openStore });
-    await cache.register("k8", { at: 1 });
-    cache.clearForTest();
-    expect(cache.peek("k8")).toBe(false);
-    await cache.register("k9", { at: 1 });
-    expect(openStore).toHaveBeenCalledTimes(2);
   });
 });

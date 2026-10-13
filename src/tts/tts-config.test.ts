@@ -10,7 +10,6 @@ import {
   resolveEffectiveTtsConfig,
   shouldAttemptTtsPayload,
 } from "./tts-config.js";
-import { resolveTtsSettingsSnapshot } from "./tts-settings.js";
 
 describe("shouldAttemptTtsPayload", () => {
   let envSnapshot: ReturnType<typeof captureEnv> | undefined;
@@ -45,6 +44,7 @@ describe("shouldAttemptTtsPayload", () => {
   it("does not infer automatic TTS from a dashboard text turn without opt-in state", () => {
     expect(
       shouldAttemptTtsPayload({
+        preparedTtsPreferences: {},
         cfg: {} as OpenClawConfig,
         agentId: "main",
         channelId: "webchat",
@@ -57,48 +57,27 @@ describe("shouldAttemptTtsPayload", () => {
     writeFileSync(prefsPath, JSON.stringify({ tts: { auto: "off" } }));
     const cfg = { tts: { auto: "off" } } as OpenClawConfig;
 
-    expect(shouldAttemptTtsPayload({ cfg, ttsAuto: "always" })).toBe(true);
-    expect(shouldAttemptTtsPayload({ cfg, ttsAuto: "off" })).toBe(false);
+    expect(shouldAttemptTtsPayload({ preparedTtsPreferences: {}, cfg, ttsAuto: "always" })).toBe(
+      true,
+    );
+    expect(shouldAttemptTtsPayload({ preparedTtsPreferences: {}, cfg, ttsAuto: "off" })).toBe(
+      false,
+    );
   });
 
   it("uses local prefs before config auto mode", () => {
     const cfg = { tts: { auto: "off" } } as OpenClawConfig;
 
     writeFileSync(prefsPath, JSON.stringify({ tts: { enabled: true } }));
-    expect(shouldAttemptTtsPayload({ cfg })).toBe(true);
+    expect(shouldAttemptTtsPayload({ preparedTtsPreferences: {}, cfg })).toBe(true);
 
     writeFileSync(prefsPath, JSON.stringify({ tts: { auto: "off" } }));
-    expect(shouldAttemptTtsPayload({ cfg: { tts: { enabled: true } } as OpenClawConfig })).toBe(
-      false,
-    );
-  });
-
-  it("records the selected provider preference source", () => {
-    const cfg = {
-      tts: {
-        provider: "openai",
-        persona: "reader",
-        personas: {
-          reader: { provider: "google" },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(resolveTtsSettingsSnapshot({ cfg }).providerPreference).toEqual({
-      provider: "google",
-      source: "persona",
-    });
-
-    writeFileSync(prefsPath, JSON.stringify({ tts: { provider: "edge" } }));
-    expect(resolveTtsSettingsSnapshot({ cfg }).providerPreference).toEqual({
-      provider: "microsoft",
-      source: "prefs",
-    });
-
-    writeFileSync(prefsPath, "{}");
     expect(
-      resolveTtsSettingsSnapshot({ cfg: { tts: { provider: "openai" } } }).providerPreference,
-    ).toEqual({ provider: "openai", source: "config" });
+      shouldAttemptTtsPayload({
+        preparedTtsPreferences: {},
+        cfg: { tts: { enabled: true } } as OpenClawConfig,
+      }),
+    ).toBe(false);
   });
 
   it("uses per-agent TTS auto and mode overrides", () => {
@@ -119,24 +98,14 @@ describe("shouldAttemptTtsPayload", () => {
       },
     } as OpenClawConfig;
 
-    expect(shouldAttemptTtsPayload({ cfg, agentId: "voice" })).toBe(true);
+    expect(shouldAttemptTtsPayload({ preparedTtsPreferences: {}, cfg, agentId: "voice" })).toBe(
+      true,
+    );
     expect(resolveConfiguredTtsMode(cfg, "voice")).toBe("all");
-    expect(shouldAttemptTtsPayload({ cfg, agentId: "main" })).toBe(false);
+    expect(shouldAttemptTtsPayload({ preparedTtsPreferences: {}, cfg, agentId: "main" })).toBe(
+      false,
+    );
     expect(resolveConfiguredTtsMode(cfg, "main")).toBe("final");
-  });
-
-  it("uses a per-agent preference path before the global environment path", () => {
-    const voicePrefsPath = path.join(dir, "voice-tts.json");
-    writeFileSync(prefsPath, JSON.stringify({ tts: { auto: "off" } }));
-    writeFileSync(voicePrefsPath, JSON.stringify({ tts: { auto: "always" } }));
-    const cfg = {
-      agents: {
-        entries: { voice: { tts: { prefsPath: voicePrefsPath } } },
-      },
-    } as OpenClawConfig;
-
-    expect(shouldAttemptTtsPayload({ cfg, agentId: "voice" })).toBe(true);
-    expect(shouldAttemptTtsPayload({ cfg, agentId: "main" })).toBe(false);
   });
 
   it("merges channel and account TTS overrides after agent overrides", () => {

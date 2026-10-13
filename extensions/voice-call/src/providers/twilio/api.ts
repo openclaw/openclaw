@@ -1,6 +1,7 @@
 import { asNullableObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
-import { guardedJsonApiRequest } from "../shared/guarded-json-api.js";
+import { isProviderStatusTerminal, normalizeProviderStatus } from "../shared/call-status.js";
+import { createCarrierApi } from "../shared/carrier-api.js";
 import { requireSupportedTwilioApiHostname } from "../twilio-region.js";
 
 export class TwilioApiError extends Error {
@@ -19,42 +20,42 @@ export class TwilioApiError extends Error {
   }
 }
 
-/** POST a form-encoded Twilio REST API request through the SSRF guard. */
-export async function twilioApiRequest<T = unknown>(params: {
+export function createTwilioApi(params: {
   baseUrl: string;
   accountSid: string;
   authToken: string;
-  endpoint: string;
-  body: URLSearchParams | Record<string, string | string[]>;
-  allowNotFound?: boolean;
-}): Promise<T> {
-  const bodyParams =
-    params.body instanceof URLSearchParams
-      ? params.body
-      : Object.entries(params.body).reduce((acc, [key, value]) => {
-          if (Array.isArray(value)) {
-            for (const entry of value) {
-              acc.append(key, entry);
-            }
-          } else if (typeof value === "string") {
-            acc.append(key, value);
-          }
-          return acc;
-        }, new URLSearchParams());
-
-  return guardedJsonApiRequest<T>({
-    url: `${params.baseUrl}${params.endpoint}`,
-    method: "POST",
-    headers: {
-      Authorization: `Basic ${Buffer.from(`${params.accountSid}:${params.authToken}`).toString("base64")}`,
-      "Content-Type": "application/x-www-form-urlencoded",
+}) {
+  requireSupportedTwilioApiHostname(params.baseUrl);
+  const api = createCarrierApi(
+    "Twilio",
+    params.baseUrl,
+    `Basic ${Buffer.from(`${params.accountSid}:${params.authToken}`).toString("base64")}`,
+    {
+      contentType: "application/x-www-form-urlencoded",
+      malformedJsonMessage: "Twilio API returned malformed JSON.",
+      createError: (status, text) => new TwilioApiError(status, text),
     },
-    body: bodyParams,
-    allowNotFound: params.allowNotFound,
-    allowedHostnames: [requireSupportedTwilioApiHostname(params.baseUrl)],
-    auditContext: "voice-call.twilio.api",
-    errorPrefix: "Twilio API error",
-    malformedJsonMessage: "Twilio API returned malformed JSON.",
-    createError: (status, text) => new TwilioApiError(status, text),
-  });
+  );
+  return {
+    request: <T = unknown>(
+      endpoint: string,
+      body: URLSearchParams | Record<string, string | string[]>,
+      options?: { allowNotFound?: boolean },
+    ): Promise<T> => {
+      const form = body instanceof URLSearchParams ? body : new URLSearchParams();
+      if (!(body instanceof URLSearchParams)) {
+        for (const [key, value] of Object.entries(body)) {
+          for (const entry of Array.isArray(value) ? value : [value]) {
+            form.append(key, entry);
+          }
+        }
+      }
+      return api.request<T>(endpoint, form, options);
+    },
+    getCallStatus: ({ providerCallId }: { providerCallId: string }) =>
+      api.getCallStatus<{ status?: string }>(`/Calls/${providerCallId}.json`, (data) => {
+        const status = normalizeProviderStatus(data.status);
+        return { status, isTerminal: isProviderStatusTerminal(status) };
+      }),
+  };
 }

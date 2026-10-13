@@ -26,6 +26,7 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { removeCanonicalValidationFromHistoricalAgentFixture } from "../state/openclaw-agent-db.test-support.js";
 import { restoreEmptyV21StorageForHistoricalFixture } from "../state/openclaw-agent-schema-v21.test-support.js";
+import { OPENCLAW_AGENT_SCHEMA_V24_SQL } from "../state/openclaw-agent-schema-v24.test-support.js";
 import {
   createOpenClawDatabaseMaintenanceScope,
   getOpenClawDatabaseMaintenanceScope,
@@ -39,7 +40,7 @@ import { backupRestoreCommand } from "./backup-restore.js";
 import { buildBackupArchivePath } from "./backup-shared.js";
 import * as backupVerify from "./backup-verify.js";
 import { prepareDoctorDatabasePreflight } from "./doctor-database-preflight.js";
-import type { DoctorMaintenance, DoctorMaintenanceParams } from "./doctor-maintenance-types.js";
+import type { DoctorMaintenanceParams } from "./doctor-maintenance-types.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 import { guardUpdateDoctorSchemaUpgrade } from "./doctor-update-schema-guard.js";
 
@@ -115,11 +116,36 @@ async function legacyAgentFixture(postCore: boolean) {
   };
 }
 
+it("rehearses shared-only schema changes before the shipped package rollback is discarded", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const f = await legacyAgentFixture(false);
+    const pathname = resolveOpenClawStateSqlitePath();
+    const database = new DatabaseSync(pathname);
+    try {
+      database.exec(`PRAGMA user_version = 15;
+        DELETE FROM config_machine_state WHERE state_key = 'state.schema.contentVersion';`);
+    } finally {
+      database.close();
+    }
+    const schemas = await prepareDoctorDatabasePreflight({ scope: "state" });
+    expect(schemas.pendingMigrations).toContainEqual(
+      expect.objectContaining({ kind: "state", path: pathname, foundVersion: 15 }),
+    );
+    const before = fs.readFileSync(pathname);
+    expect(await guardUpdateDoctorSchemaUpgrade({ schemas })).toMatchObject({
+      updateSchemaRehearsal: { runId: f.runId, updaterVersion: "2026.9.2" },
+    });
+    expect(fs.readFileSync(pathname)).toEqual(before);
+  });
+});
+
 const runtime = () => ({ log: vi.fn(), error: vi.fn(), exit: vi.fn() });
 
 async function withDoctorMaintenance(
   options: Partial<Pick<DoctorMaintenanceParams, "runtime" | "assertCurrent">>,
-  run: (maintenance: DoctorMaintenance) => Promise<void>,
+  run: (
+    maintenance: NonNullable<Awaited<ReturnType<typeof beginDoctorMaintenance>>>,
+  ) => Promise<void>,
 ) {
   const maintenance = await beginDoctorMaintenance({
     root: null,
@@ -227,7 +253,7 @@ it("retains a verified canonical backup before permitting the normal schema migr
           });
           expect(fs.readFileSync(f.pathname)).toEqual(f.bytes);
           expect(verify).toHaveBeenCalledTimes(1);
-          const identity = fs.statSync(f.pathname);
+          const identity = fs.statSync(f.pathname, { bigint: true });
           expect(onVerifiedBackup).toHaveBeenCalledExactlyOnceWith([
             expect.objectContaining({
               role: "agent",
@@ -352,8 +378,9 @@ it("revalidates the update owner after integrity work before committing an agent
         active = false;
       }
     });
-    await withDoctorMaintenance({ assertCurrent }, async (maintenance) => {
-      const result = await Promise.allSettled([
+    let result: PromiseSettledResult<void>[] = [];
+    const settled = withDoctorMaintenance({ assertCurrent }, async (maintenance) => {
+      result = await Promise.allSettled([
         maintenance.run(() =>
           withAgentDatabaseMaintenanceLease({ env: state.env }, (lease) =>
             migrateOpenClawAgentDatabaseForMaintenance(
@@ -363,13 +390,16 @@ it("revalidates the update owner after integrity work before committing an agent
           ),
         ),
       ]);
-      const outcome = expectDefined(result[0], "migration outcome");
-      expect(outcome.status).toBe("rejected");
-      if (outcome.status !== "rejected") {
-        throw new Error("Expected retired owner refusal");
-      }
-      expect(collectNestedErrorCandidates(outcome.reason)).toContain(retired);
     });
+    await expect(settled).rejects.toSatisfy((error: unknown) =>
+      collectNestedErrorCandidates(error).includes(retired),
+    );
+    const outcome = expectDefined(result[0], "migration outcome");
+    expect(outcome.status).toBe("rejected");
+    if (outcome.status !== "rejected") {
+      throw new Error("Expected retired owner refusal");
+    }
+    expect(collectNestedErrorCandidates(outcome.reason)).toContain(retired);
     expect(fs.readFileSync(f.pathname)).toEqual(f.bytes);
   });
 });
@@ -400,7 +430,7 @@ it("refuses early unregistered WAL state and admits post-core repair after verif
       const before = files.map((file) => fs.readFileSync(file));
       const schemas = await prepareDoctorDatabasePreflight();
       await expect(guardUpdateDoctorSchemaUpgrade({ schemas })).rejects.toThrow(
-        "Missing recoverable canonical backup coverage",
+        "Missing recoverable database backup coverage",
       );
       expect(
         files.map((file) => fs.readFileSync(file)),
@@ -498,13 +528,13 @@ it("requires the captured agent path and owner to be verified canonical archive 
         archive.archivePath,
         agents.map((fact) => Object.assign({}, fact, { sourcePath: `${fact.sourcePath}.missing` })),
       ),
-    ).rejects.toThrow("lacks verified canonical SQLite coverage");
+    ).rejects.toThrow("lacks verified SQLite database coverage");
     await expect(
       backupVerify.verifyBackupArchive(
         archive.archivePath,
         agents.map((fact) => Object.assign({}, fact, { agentId: "another-agent" })),
       ),
-    ).rejects.toThrow("lacks verified canonical SQLite coverage");
+    ).rejects.toThrow("lacks verified SQLite database coverage");
     expect(fs.readFileSync(f.pathname)).toEqual(f.bytes);
   });
 });
@@ -637,12 +667,13 @@ it("retains disposable coverage through the real migration of a mixed backed-up 
     }).path;
     await closeOpenClawAgentDatabasesAsync();
     await closeStateDatabaseForTest();
+    fs.unlinkSync(external);
     const database = new DatabaseSync(external);
     try {
-      database.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION - 1};`);
-      database
-        .prepare("UPDATE schema_meta SET schema_version = ? WHERE meta_key = 'primary'")
-        .run(OPENCLAW_AGENT_SCHEMA_VERSION - 1);
+      database.exec(OPENCLAW_AGENT_SCHEMA_V24_SQL);
+      database.exec(`PRAGMA user_version = 24;
+        INSERT INTO schema_meta(meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
+        VALUES ('primary', 'agent', 24, 'external', '2026.9.9', 1, 1)`);
     } finally {
       database.close();
     }

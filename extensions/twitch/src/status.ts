@@ -41,17 +41,11 @@ export function collectTwitchStatusIssues(
         accountId,
         kind: "runtime",
         message: `Last error: ${entry.lastError}`,
-        fix: "Check your token validity and network connection. Ensure the bot has the required OAuth scopes.",
+        fix: "Check your token validity and network connection. Check that the bot has the required OAuth scopes.",
       });
     }
 
-    if (
-      entry.configured &&
-      !entry.running &&
-      !entry.lastStartAt &&
-      !entry.lastInboundAt &&
-      !entry.lastOutboundAt
-    ) {
+    if (!entry.running && !entry.lastStartAt && !entry.lastInboundAt && !entry.lastOutboundAt) {
       issues.push({
         channel: "twitch",
         accountId,

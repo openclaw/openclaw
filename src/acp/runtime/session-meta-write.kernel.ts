@@ -1,18 +1,26 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { Insertable } from "kysely";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
-import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import type { SessionRowFacts } from "../../sessions/session-row-changes.js";
 import {
-  acpSessionRowMatchesEntry,
   buildAcpDatabaseSessionKey,
-  getAcpSessionKysely,
-  resolveLegacyFreeAcpSessionKey,
-  selectAcpSessionRow,
-  selectLegacyFreeAcpSessionRows,
+  deleteAcpSessionMetaRows,
   upsertAcpSessionMetaRow,
 } from "./session-meta-keys.js";
-import type { AcpSessionsTable } from "./session-meta-read.types.js";
+import type { AcpSessionRow } from "./session-meta-read.types.js";
+import { rowToAcpSessionMeta } from "./session-meta-readonly.js";
 import type { AcpSessionMutationCommit } from "./session-meta-write.types.js";
+
+export function bindAcpSessionIdentity(identity: SessionAcpMeta["identity"]) {
+  return {
+    identity_json: identity ? JSON.stringify(identity) : null,
+    // JavaScript trim uses the same 25 code points as the legacy SQLite resume expressions.
+    resume_agent_session_id:
+      typeof identity?.agentSessionId === "string" ? identity.agentSessionId.trim() : null,
+    resume_acpx_session_id:
+      typeof identity?.acpxSessionId === "string" ? identity.acpxSessionId.trim() : null,
+  };
+}
 
 export function bindAcpSessionMeta(params: {
   sessionKey: string;
@@ -20,7 +28,7 @@ export function bindAcpSessionMeta(params: {
   lifecycleRevision?: string;
   meta: SessionAcpMeta;
   updatedAt: number;
-}): Insertable<AcpSessionsTable> {
+}): AcpSessionRow {
   return {
     session_key: params.sessionKey,
     // Kept in the existing column for schema neutrality. New rows prefer the
@@ -29,7 +37,7 @@ export function bindAcpSessionMeta(params: {
     backend: params.meta.backend,
     agent: params.meta.agent,
     runtime_session_name: params.meta.runtimeSessionName,
-    identity_json: params.meta.identity ? JSON.stringify(params.meta.identity) : null,
+    ...bindAcpSessionIdentity(params.meta.identity),
     mode: params.meta.mode,
     runtime_options_json: params.meta.runtimeOptions
       ? JSON.stringify(params.meta.runtimeOptions)
@@ -46,10 +54,11 @@ export function bindAcpSessionMeta(params: {
 export function applyAcpSessionMutation(
   db: DatabaseSync,
   input: Omit<AcpSessionMutationCommit, "agentId" | "source" | "updatedAt"> & { agentId?: string },
-): void {
+): Extract<SessionRowFacts, { kind: "acp" }> {
   const initialKey = buildAcpDatabaseSessionKey(input.storageSessionKey, input.agentId);
   const finalKey = buildAcpDatabaseSessionKey(input.sessionKey, input.agentId);
   const keys = new Set<string>();
+  let written: AcpSessionRow | undefined;
   if (input.decision.kind === "clear") {
     keys.add(initialKey);
     keys.add(finalKey);
@@ -57,48 +66,35 @@ export function applyAcpSessionMutation(
     if (!input.entry) {
       throw new Error("ACP metadata publication lost its canonical entry");
     }
-    upsertAcpSessionMetaRow(
-      db,
-      bindAcpSessionMeta({
-        sessionKey: finalKey,
-        sessionId: input.entry.sessionId,
-        lifecycleRevision: input.entry.lifecycleRevision,
-        meta: input.decision.meta,
-        updatedAt: input.entry.updatedAt,
-      }),
+    written = expectDefined(
+      upsertAcpSessionMetaRow(
+        db,
+        bindAcpSessionMeta({
+          sessionKey: finalKey,
+          sessionId: input.entry.sessionId,
+          lifecycleRevision: input.entry.lifecycleRevision,
+          meta: input.decision.meta,
+          updatedAt: input.entry.updatedAt,
+        }),
+      ),
+      "committed ACP metadata",
     );
     if (initialKey !== finalKey) {
       keys.add(initialKey);
     }
-    if (finalKey !== input.sessionKey && !resolveLegacyFreeAcpSessionKey(input.sessionKey)) {
-      const row = selectAcpSessionRow(db, input.sessionKey);
-      if (row && acpSessionRowMatchesEntry(row, input.entry)) {
-        keys.add(input.sessionKey);
-      }
-    }
   }
   if (
     input.currentRowKey &&
-    (input.decision.kind === "clear" || input.currentRowKey !== finalKey) &&
-    !resolveLegacyFreeAcpSessionKey(input.currentRowKey)
+    (input.decision.kind === "clear" || input.currentRowKey !== finalKey)
   ) {
     keys.add(input.currentRowKey);
   }
-  // Aliases are reread after the awaited entry change; a rebound lifecycle keeps its row.
-  for (const aliases of selectLegacyFreeAcpSessionRows(db, [
-    input.storageSessionKey,
-    input.sessionKey,
-  ]).values()) {
-    for (const alias of aliases) {
-      if (acpSessionRowMatchesEntry(alias, input.entry)) {
-        keys.add(alias.session_key);
-      }
-    }
-  }
-  for (const key of keys) {
-    executeSqliteQuerySync(
-      db,
-      getAcpSessionKysely(db).deleteFrom("acp_sessions").where("session_key", "=", key),
-    );
-  }
+  deleteAcpSessionMetaRows(db, [...keys]);
+  return {
+    kind: "acp",
+    sessionId: input.entry?.sessionId,
+    lifecycleRevision: input.entry?.lifecycleRevision ?? null,
+    sessionStartedAt: input.entry?.sessionStartedAt,
+    acp: written ? rowToAcpSessionMeta(written) : null,
+  };
 }

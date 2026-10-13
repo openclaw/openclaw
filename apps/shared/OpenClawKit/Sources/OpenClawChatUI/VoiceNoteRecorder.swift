@@ -174,7 +174,8 @@ public final class OpenClawVoiceNoteRecorder {
             return false
         }
 
-        let fileURL = self.makeTemporaryFileURL()
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("voice-note-\(UUID().uuidString).m4a")
         self.onRecordingActiveChanged?(true)
         do {
             try self.capture.start(url: fileURL)
@@ -276,11 +277,6 @@ public final class OpenClawVoiceNoteRecorder {
         self.capture.cancel()
         try? FileManager.default.removeItem(at: fileURL)
         self.fail(message: String(localized: "Recording was interrupted. Try again."))
-    }
-
-    private func makeTemporaryFileURL() -> URL {
-        FileManager.default.temporaryDirectory
-            .appendingPathComponent("voice-note-\(UUID().uuidString).m4a")
     }
 }
 

@@ -1,7 +1,11 @@
 /**
  * Session lifecycle state derivation tests.
  */
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 
@@ -21,13 +25,16 @@ vi.mock("../plugins/loader-runtime-load.js", () => {
   throw new Error("Session lifecycle presentation imported plugin runtime ownership");
 });
 
+// mock-isolation: Exercise lifecycle reducers without native persistence or transcript writes.
 vi.mock("../config/sessions/session-accessor.js", () => ({
-  patchSessionEntryCore: persistenceMocks.updateSessionEntry,
+  patchSessionEntryTarget: persistenceMocks.updateSessionEntry,
   appendSessionTranscriptReport: vi.fn(async () => ({ ok: true, value: undefined })),
 }));
 
-vi.mock("./session-utils.js", () => ({
-  loadSessionEntry: persistenceMocks.loadSessionEntry,
+// mock-isolation: Controlled entries isolate lifecycle projection from database admission.
+vi.mock("./session-utils-store-worker.js", () => ({
+  loadGatewaySessionEntryReadOnlyInWorker: async (...args: unknown[]) =>
+    persistenceMocks.loadSessionEntry(...args),
 }));
 
 vi.mock("../logging/subsystem.js", () => ({
@@ -54,7 +61,6 @@ function cronSessionEntry(
   return {
     sessionId: "cron-session-id",
     updatedAt: 1_000,
-    status: "running",
     cronRunContinuation: {
       lifecycleRevision: "revision-1",
       phase,
@@ -68,15 +74,21 @@ function persistLifecycle(
   event: LifecycleEvent,
   sessionKey = "agent:main:main",
 ): Promise<SessionEntry> {
-  return persistLifecycleThroughMockedStore(persistenceMocks, { sessionKey, entry, event });
+  return persistLifecycleThroughMockedStore(persistenceMocks, {
+    sessionKey,
+    entry,
+    event: { lifecycleGeneration: getAgentEventLifecycleGeneration(), ...event },
+  });
 }
 
 describe("session lifecycle state", () => {
+  beforeEach(() => setRuntimeConfigSnapshot({}));
+  afterEach(clearRuntimeConfigSnapshot);
+
   const goalEntry: SessionEntry = {
     sessionId: "goal-session",
     updatedAt: 1_000,
     startedAt: 1_000,
-    status: "running",
     lifecycleRunId: "goal-run",
     goal: {
       schemaVersion: 1,
@@ -242,7 +254,8 @@ describe("session lifecycle state", () => {
         },
       });
 
-      expect(afterOlderTerminal).toMatchObject({ status: "running", startedAt: 2_000 });
+      expect(afterOlderTerminal).toMatchObject({ startedAt: 2_000 });
+      expect(afterOlderTerminal.status).toBeUndefined();
       expect(afterOlderTerminal.lifecycleRunId).toBe("run-b");
       expect(afterOlderTerminal.endedAt).toBeUndefined();
       expect(afterOlderTerminal.lastRunError).toBeUndefined();
@@ -328,6 +341,10 @@ describe("session lifecycle state", () => {
       },
     );
     expect(started.lifecycleRunId).toBe("provider-run");
+    expect(started.status).toBeUndefined();
+    expect(started.restartRecoveryRuns).toEqual([
+      { runId: "provider-run", lifecycleGeneration: getAgentEventLifecycleGeneration() },
+    ]);
 
     const completed = await persistLifecycle(started, {
       ts: 2_000,
@@ -339,6 +356,7 @@ describe("session lifecycle state", () => {
 
     expect(completed.lifecycleRunId).toBeUndefined();
     expect(completed.lastRunId).toBe("client-run");
+    expect(completed.restartRecoveryRuns).toBeUndefined();
   });
 
   it("clears inherited run ownership when a start event has no run id", async () => {
@@ -346,7 +364,6 @@ describe("session lifecycle state", () => {
       {
         sessionId: "session-id",
         updatedAt: 900,
-        status: "running",
         startedAt: 900,
         lifecycleRunId: "old-run",
         lastRunId: "old-run",
@@ -425,7 +442,6 @@ describe("session lifecycle state", () => {
         sessionId: "session-id",
         updatedAt: 1_000,
         startedAt: 1_050,
-        status: "running",
       },
       { ts: 2_000, sessionId: "session-id", data },
     );
@@ -452,7 +468,6 @@ describe("session lifecycle state", () => {
           updatedAt: 1_000,
           lastActivityAt: 1_000,
           startedAt: 1_050,
-          status: "running",
         },
         {
           ts: 2_000,
@@ -473,7 +488,6 @@ describe("session lifecycle state", () => {
         sessionId: "session-id",
         updatedAt: 1_000,
         startedAt: 1_050,
-        status: "running",
       },
       {
         ts: 2_000,
@@ -496,12 +510,13 @@ describe("session lifecycle state", () => {
       sessionId: "session-id",
       data: { phase: "start", startedAt: 2_100 },
     });
-    expect(restarted.status).toBe("running");
+    expect(restarted.status).toBeUndefined();
     expect(restarted.lastRunError).toBeUndefined();
   });
 
-  it("keeps an explicitly yielded parent pending until continuation starts", async () => {
+  it("retains yielded continuation custody without recording a terminal outcome", async () => {
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const restartRecoveryRuns = [{ runId: "yielded-recovery-run", lifecycleGeneration }];
     loggerMocks.info.mockClear();
     loggerMocks.warn.mockClear();
     const yielded = await persistLifecycle(
@@ -509,7 +524,8 @@ describe("session lifecycle state", () => {
         sessionId: "session-id",
         updatedAt: 1_000,
         startedAt: 1_050,
-        status: "running",
+        lifecycleRunId: "yielded-recovery-run",
+        restartRecoveryRuns,
       },
       {
         ts: 2_000,
@@ -528,11 +544,13 @@ describe("session lifecycle state", () => {
     );
 
     expect(yielded).toMatchObject({
-      status: "running",
       endedAt: 1_800,
       runtimeMs: 750,
       abortedLastRun: false,
+      lifecycleRunId: "yielded-recovery-run",
+      restartRecoveryRuns,
     });
+    expect(yielded.status).toBeUndefined();
     expect(loggerMocks.info).not.toHaveBeenCalled();
     expect(loggerMocks.warn).not.toHaveBeenCalled();
 
@@ -541,7 +559,7 @@ describe("session lifecycle state", () => {
       sessionId: "session-id",
       data: { phase: "start", startedAt: 2_100 },
     });
-    expect(resumed.status).toBe("running");
+    expect(resumed.status).toBeUndefined();
     expect(resumed.endedAt).toBeUndefined();
   });
 
@@ -551,7 +569,6 @@ describe("session lifecycle state", () => {
         sessionId: "session-id",
         updatedAt: 1_000,
         startedAt: 1_050,
-        status: "running",
       },
       {
         ts: 2_000,
@@ -588,21 +605,21 @@ describe("session lifecycle state", () => {
       entry: cronSessionEntry("ready"),
       eventRunId: "continuation-run",
       eventSessionId: "cron-session-id",
-      expectedStatus: "running",
+      expectedStatus: undefined,
     },
     {
       name: "ignores a stale continuation owner",
       entry: cronSessionEntry("continuing", "current-owner"),
       eventRunId: "stale-owner",
       eventSessionId: "cron-session-id",
-      expectedStatus: "running",
+      expectedStatus: undefined,
     },
     {
       name: "ignores a stale session id",
       entry: cronSessionEntry("continuing", "continuation-run"),
       eventRunId: "continuation-run",
       eventSessionId: "stale-session-id",
-      expectedStatus: "running",
+      expectedStatus: undefined,
     },
   ])("direct persistence $name", async (testCase) => {
     const persisted = await persistLifecycle(
@@ -620,7 +637,7 @@ describe("session lifecycle state", () => {
     // One exact-row write only. Continuation settlement owns base projection.
     expect(persistenceMocks.updateSessionEntry).toHaveBeenCalledTimes(1);
     expect(persistenceMocks.updateSessionEntry.mock.calls[0]?.[0]).toMatchObject({
-      sessionKey: exactCronSessionKey,
+      target: { canonicalKey: exactCronSessionKey },
     });
     expect(persistenceMocks.updateSessionEntry.mock.calls[0]?.[2]).toMatchObject({
       requireWriteSuccess: true,
@@ -632,7 +649,6 @@ describe("session lifecycle state", () => {
       sessionId: "terminal-authority-session",
       updatedAt: 1_000,
       startedAt: 1_000,
-      status: "running",
       lifecycleRunId: "terminal-authority-run",
     };
     let storedEntry = structuredClone(entry);
@@ -647,7 +663,7 @@ describe("session lifecycle state", () => {
         const patch = await update(structuredClone(storedEntry), {
           existingEntry: structuredClone(storedEntry),
         });
-        options?.assertCommitAllowed?.();
+        options?.workerGuard?.source?.();
         if (patch) {
           storedEntry = { ...storedEntry, ...patch };
         }
@@ -669,7 +685,7 @@ describe("session lifecycle state", () => {
         },
       }),
     ).rejects.toThrow("terminal authority retired");
-    expect(storedEntry.status).toBe("running");
+    expect(storedEntry.status).toBeUndefined();
   });
 });
 
@@ -678,7 +694,7 @@ it("keeps a suppressed lifecycle projection empty while preserving intentional f
     sessionId: "projection-recovery",
     updatedAt: 1_000,
     startedAt: 900,
-    status: "running",
+    status: "interrupted",
     lifecycleRunId: "foreground-run",
     abortedLastRun: true,
     restartRecoveryRuns: [{ runId: "restart-run", lifecycleGeneration: "pre-restart" }],
@@ -692,13 +708,15 @@ it("keeps a suppressed lifecycle projection empty while preserving intentional f
   expect(suppressed).toStrictEqual({});
 
   const next = deriveGatewaySessionLifecycleProjectionPatch({
-    entry: { status: "done", endedAt: 1_800, runtimeMs: 900 },
+    entry: { endedAt: 1_800, runtimeMs: 900 },
     event: { ts: 2_100, runId: "new-run", data: { phase: "start", startedAt: 2_100 } },
   });
-  expect(next.status).toBe("running");
+  expect(next.status).toBeUndefined();
+  expect(Object.hasOwn(next, "status")).toBe(true);
   expect(Object.hasOwn(next, "endedAt")).toBe(true);
   expect(Object.hasOwn(next, "runtimeMs")).toBe(true);
-  expect({ endedAt: 1_800, runtimeMs: 900, ...next }).toMatchObject({
+  expect({ status: "done", endedAt: 1_800, runtimeMs: 900, ...next }).toMatchObject({
+    status: undefined,
     endedAt: undefined,
     runtimeMs: undefined,
   });

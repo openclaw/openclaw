@@ -3,6 +3,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import { isValidBase64 } from "@openclaw/media-core/base64";
+import type {
+  SkillsUploadBeginParams,
+  SkillsUploadChunkParams,
+  SkillsUploadCommitParams,
+} from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { DEFAULT_MAX_ARCHIVE_BYTES_ZIP } from "../../infra/archive.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -42,26 +47,6 @@ const uploads = new KeyedAsyncQueue();
 type SkillUploadRecord = ReturnType<typeof toSkillUploadRecord>;
 
 export type SkillUploadStore = ReturnType<typeof createSkillUploadStore>;
-
-type BeginParams = {
-  kind: "skill-archive";
-  slug: string;
-  sizeBytes: number;
-  sha256?: string;
-  force?: boolean;
-  idempotencyKey?: string;
-};
-
-type ChunkParams = {
-  uploadId: string;
-  offset: number;
-  dataBase64: string;
-};
-
-type CommitParams = {
-  uploadId: string;
-  sha256?: string;
-};
 
 export function normalizeSkillUploadSha256(value: string | undefined): string | undefined {
   if (value === undefined) {
@@ -158,21 +143,10 @@ async function cleanupExpiredUploads(
 
 function toSkillUploadRecord(row: SkillUploadMetadataRow, archivePath: string) {
   return {
-    version: 1 as const,
-    kind: "skill-archive" as const,
-    uploadId: row.upload_id,
     slug: row.slug,
     force: row.force === 1,
-    sizeBytes: row.size_bytes,
-    ...(row.sha256 ? { sha256: row.sha256 } : {}),
     ...(row.actual_sha256 ? { actualSha256: row.actual_sha256 } : {}),
-    receivedBytes: row.received_bytes,
     archivePath,
-    createdAt: row.created_at,
-    expiresAt: row.expires_at,
-    committed: row.committed === 1,
-    ...(row.committed_at !== null ? { committedAt: row.committed_at } : {}),
-    ...(row.idempotency_key_hash ? { idempotencyKeyHash: row.idempotency_key_hash } : {}),
   };
 }
 
@@ -193,7 +167,7 @@ function createSkillUploadStore(options?: SkillUploadStoreOptions) {
   );
 
   return {
-    async begin(params: BeginParams, assertCommitAllowed?: () => void) {
+    async begin(params: SkillsUploadBeginParams, assertCommitAllowed?: () => void) {
       const request = { ...params };
       const context = captureOpenClawStateWorkerContext(stateOptions);
       const root = context.admission.databasePath;
@@ -231,7 +205,7 @@ function createSkillUploadStore(options?: SkillUploadStoreOptions) {
       });
     },
 
-    async chunk(params: ChunkParams, assertCommitAllowed?: () => void) {
+    async chunk(params: SkillsUploadChunkParams, assertCommitAllowed?: () => void) {
       const uploadId = validateUploadId(params.uploadId);
       const offset = validateOffset(params.offset);
       const decoded = decodeBase64Chunk(params.dataBase64);
@@ -254,7 +228,7 @@ function createSkillUploadStore(options?: SkillUploadStoreOptions) {
       );
     },
 
-    async commit(params: CommitParams, assertCommitAllowed?: () => void) {
+    async commit(params: SkillsUploadCommitParams, assertCommitAllowed?: () => void) {
       const uploadId = validateUploadId(params.uploadId);
       const requestedSha = normalizeSkillUploadSha256(params.sha256);
       const context = captureOpenClawStateWorkerContext(stateOptions);

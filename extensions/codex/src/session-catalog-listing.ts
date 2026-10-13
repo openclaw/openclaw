@@ -40,7 +40,6 @@ import type {
 } from "./session-catalog-types.js";
 import { listVisiblePage } from "./session-catalog-visible-page.js";
 
-/** Builds the node-local read-only Codex app-server catalog command. */
 export function createCodexSessionCatalogNodeHostCommands(
   controlFactory: CodexSessionCatalogControlFactory,
   bindingStore?: CodexAppServerBindingStore,
@@ -186,7 +185,6 @@ function readNodeTranscriptParams(
   return { threadId, limit, ...(cursor ? { cursor } : {}) };
 }
 
-/** Reads the persisted transcript for a Gateway-local or paired-node Codex session. */
 export async function readCodexSessionTranscript(params: {
   agentId: string;
   runtime: PluginRuntime;

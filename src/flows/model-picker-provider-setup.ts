@@ -4,14 +4,12 @@ import { resolveManifestProviderAuthChoice } from "../plugins/provider-auth-choi
 import { buildProviderPluginMethodChoice } from "../plugins/provider-plugin-choice.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
 import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
 
-export const loadResolvedModelPickerRuntime = createLazyRuntimeNamedExport(
-  () => import("../commands/model-picker.runtime.js"),
-  "modelPickerRuntime",
-);
+export async function loadResolvedModelPickerRuntime() {
+  return (await import("../commands/model-picker.runtime.js")).modelPickerRuntime;
+}
 
 export async function resolveProviderPluginSetupOptions(params: {
   cfg: OpenClawConfig;

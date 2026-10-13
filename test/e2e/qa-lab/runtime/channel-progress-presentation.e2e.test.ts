@@ -12,20 +12,28 @@ import { startOpenClawCrablineAdapter } from "@openclaw/crabline";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import {
   createQaGatewayChild,
   startQaMockOpenAiServer,
 } from "../../../../extensions/qa-lab/api.js";
 import {
-  listSessionEntriesReadOnly,
-  loadSessionEntryReadOnly,
-  updateSessionEntry,
-} from "../../../../src/config/sessions/session-accessor.js";
+  normalizeResponsesInput,
+  resolveMockSubagentTurn,
+} from "../../../../extensions/qa-lab/test-api.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
 } from "../../../../src/gateway/test-helpers.e2e.js";
+import {
+  deliveryQueueEntriesQuery,
+  inflateDeliveryQueueRow,
+} from "../../../../src/infra/delivery-queue-sqlite-bound.js";
+import { executeSqliteQuerySync } from "../../../../src/infra/kysely-sync.js";
+import { OUTBOUND_EXECUTABLE_QUEUE_NAMES } from "../../../../src/infra/outbound/delivery-queue-namespaces.js";
+import { projectOutboundDelivery } from "../../../../src/infra/outbound/delivery-queue-projection.js";
+import { withOpenClawStateDatabaseReadOnly } from "../../../../src/state/openclaw-state-db-readonly.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { readQaSubagentRuns } from "../../../helpers/qa-subagent-runs.js";
 
@@ -34,10 +42,10 @@ const FINAL_MARKER = "TOOL-PROGRESS-FINAL";
 const HEADLINE = "Checking the requested work";
 // Draft progress uses compact tool rows; the Slack Block Kit card uses plain
 // "Exec — detail" rows; native Slack uses task_update chunks.
-const toolRow = /🛠️ (?:Exec|Bash)\b/u;
+const toolRow = /\b(?:Exec|Bash)\b/u;
 const slackCardToolRow = /\b(?:Exec|Bash) — /u;
 const nativeToolTitle = /^(?:Exec|Bash)\b/u;
-const failedToolRow = /🛠️ (?:Exec|Bash): failed\b/u;
+const failedToolRow = /\b(?:Exec|Bash): failed\b/u;
 type WireWrite = {
   at: number;
   method: string;
@@ -262,7 +270,12 @@ async function startPresentationApi(
       }
       response.writeHead(upstream.status, { "content-type": "application/json" });
       response.end(responseText);
-    })().catch(() => {
+    })().catch((error: unknown) => {
+      process.stderr.write(
+        `presentation fixture request failed: ${redactSensitiveText(
+          error instanceof Error ? (error.stack ?? error.message) : String(error),
+        )}\n`,
+      );
       if (!response.headersSent) {
         response.writeHead(500);
       }
@@ -364,39 +377,6 @@ async function startPresentationApi(
       });
     },
   };
-}
-
-function isCompletionUserText(text: string): boolean {
-  return (
-    text.includes("Internal task completion event") ||
-    text.includes("[Subagent Context] Every subagent in this batch has now settled")
-  );
-}
-
-function readCurrentProviderUserText(body: Record<string, unknown>): string {
-  // Ignore trailing context carriers, but a protected task completion is
-  // itself a new request. Older prompts cannot override a newer user turn.
-  const userTexts = Array.isArray(body.input)
-    ? body.input
-        .map(asRecord)
-        .filter((item) => item.role === "user")
-        .map((item) =>
-          Array.isArray(item.content)
-            ? item.content.map((part) => readStringValue(asRecord(part).text) ?? "").join("\n")
-            : (readStringValue(item.content) ?? ""),
-        )
-    : [];
-  const currentText =
-    userTexts.findLast(
-      (text) =>
-        text.trim() &&
-        (isCompletionUserText(text) ||
-          !(
-            text.includes("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>") &&
-            text.trimEnd().endsWith("<<<END_OPENCLAW_INTERNAL_CONTEXT>>>")
-          )),
-    ) ?? "";
-  return currentText;
 }
 
 function sendCompletionResponse(response: ServerResponse, marker: string, sequence: number) {
@@ -532,6 +512,47 @@ async function startTablePresentationFixture(
     path.join(await fs.realpath(os.tmpdir()), "channel-progress-"),
   );
   cleanups.push(() => fs.rm(directory, { recursive: true, force: true }));
+  const mutationPluginId = "qa-progress-mutation";
+  const mutationPluginDir = path.join(directory, mutationPluginId);
+  if (rejectStop) {
+    await fs.mkdir(mutationPluginDir);
+    await fs.writeFile(
+      path.join(mutationPluginDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: mutationPluginId,
+        activation: { onStartup: true },
+        configSchema: { type: "object", additionalProperties: false, properties: {} },
+      }),
+    );
+    // Mutate through the running Gateway so its session owner publishes the route loss.
+    await fs.writeFile(
+      path.join(mutationPluginDir, "index.mjs"),
+      `import { applySessionEntryPatch, getSessionEntryAsync, listSessionEntriesAsync, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+export default {
+  id: "${mutationPluginId}",
+  register(api) {
+    api.registerGatewayMethod("${mutationPluginId}.clearOrigin", async ({ params, respond }) => {
+      const scope = { agentId: "qa", storePath: resolveStorePath(api.config.session?.store, { agentId: "qa" }) };
+      const sessions = (await listSessionEntriesAsync(scope)).filter(({ entry }) =>
+        entry.delivery?.kind === "external" && entry.delivery.context.channel === "slack" &&
+        entry.delivery.context.to?.includes(params.conversationId));
+      if (sessions.length !== 1) {
+        respond(true, { count: sessions.length });
+        return;
+      }
+      const { sessionKey, entry } = sessions[0];
+      const target = { ...scope, sessionKey };
+      await applySessionEntryPatch({ ...target, expected: { sessionId: entry.sessionId },
+        patch: { delivery: { kind: "none" }, updatedAt: Date.now() },
+        skipMaintenance: true, requireWriteSuccess: true });
+      const after = await getSessionEntryAsync({ ...target, readConsistency: "latest" });
+      respond(true, { count: sessions.length, beforeSessionId: entry.sessionId,
+        afterSessionId: after?.sessionId, delivery: after?.delivery });
+    }, { scope: "operator.admin" });
+  },
+};`,
+    );
+  }
   const writes: WireWrite[] = [];
   const adapter = await startOpenClawCrablineAdapter({
     channel,
@@ -577,6 +598,17 @@ async function startTablePresentationFixture(
     runtimeEnvPatch: environment,
     mutateConfig: (config) => {
       const configured = progressConfig(config, channel, native, tools, compact);
+      if (rejectStop) {
+        configured.plugins = {
+          ...configured.plugins,
+          allow: [...(configured.plugins?.allow ?? []), mutationPluginId],
+          load: {
+            ...configured.plugins?.load,
+            paths: [...(configured.plugins?.load?.paths ?? []), mutationPluginDir],
+          },
+          entries: { ...configured.plugins?.entries, [mutationPluginId]: { enabled: true } },
+        };
+      }
       if (channel === "discord") {
         configured.channels!.discord!.proxy = api.proxyUrl;
         const qa = configured.agents!.entries!.qa!;
@@ -595,7 +627,7 @@ async function startTablePresentationFixture(
       Array.isArray(accounts) &&
       accounts.some((account) => {
         const state = asRecord(account);
-        return state.running === true && (channel !== "discord" || state.connected === true);
+        return state.running === true && state.connected === true;
       })
     );
   }, `${channel} ready`);
@@ -746,7 +778,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
       headers: inbound.providerHeaders,
       body: JSON.stringify(inbound.providerBody),
     });
-    expect(injected.ok).toBe(true);
+    expect(injected.ok, await injected.clone().text()).toBe(true);
     if (adapter.manifest.provider !== "slack") {
       throw new Error("expected Slack fixture");
     }
@@ -784,11 +816,11 @@ describe("channel progress presentation through an isolated Gateway", () => {
     const remainingMessages = [...api.messages.values()].map((message) => message.text);
     expect(remainingMessages).toEqual([finalText]);
     const modelRequests = (await fs.readFile(requestLog, "utf8")).trim().split("\n").map(parseBody);
-    const toolResultCounts = modelRequests.map(
-      (request) =>
-        (Array.isArray(request.messages) ? request.messages : [])
-          .map(asRecord)
-          .filter((message) => message.role === "tool").length,
+    // The shared provider log also records requests outside Chat Completions.
+    const toolResultCounts = modelRequests.flatMap((request) =>
+      Array.isArray(request.messages)
+        ? [request.messages.map(asRecord).filter((message) => message.role === "tool").length]
+        : [],
     );
     expect(toolResultCounts).toEqual([0, 1, 2]);
     const evidenceDir = path.join(process.cwd(), ".artifacts", "channel-progress-presentation");
@@ -900,8 +932,9 @@ describe("channel progress presentation through an isolated Gateway", () => {
         }
         const raw = Buffer.concat(buffers).toString("utf8");
         const body = parseBody(raw);
-        const currentText = readCurrentProviderUserText(body);
-        const completion = isCompletionUserText(currentText);
+        const turn = resolveMockSubagentTurn(normalizeResponsesInput(body.input));
+        const currentText = turn?.text ?? "";
+        const completion = turn?.kind === "completion" || turn?.kind === "settled";
         providerRequests.push({
           model: body.model,
           requester: currentText.includes("Subagent terminal reply QA check:"),
@@ -1212,11 +1245,11 @@ describe("channel progress presentation through an isolated Gateway", () => {
       ),
     ).toHaveLength(1);
     expect(new Set(observerFailures().map((failure) => failure.runId)).size).toBe(4);
-    // Isolated completion rejects an error stop reason before observer logging;
-    // its bounded owner error, not the provider's raw body, is the recorded cause.
+    // Isolated completion rejects an error stop reason before observer logging and
+    // records the provider's formatted diagnostic as the cause.
     expect(
       observerFailures().every((failure) =>
-        String(failure.error).includes("Isolated completion failed with stop reason error"),
+        String(failure.error).startsWith("400 synthetic observer failure"),
       ),
     ).toBe(true);
     // The observer warning carries its run-owned consecutive-failure count;
@@ -1289,8 +1322,9 @@ describe("channel progress presentation through an isolated Gateway", () => {
           buffers.push(Buffer.from(chunk));
         }
         const raw = Buffer.concat(buffers).toString("utf8");
-        const currentText = readCurrentProviderUserText(parseBody(raw));
-        const completion = isCompletionUserText(currentText);
+        const turn = resolveMockSubagentTurn(normalizeResponsesInput(parseBody(raw).input));
+        const currentText = turn?.text ?? "";
+        const completion = turn?.kind === "completion" || turn?.kind === "settled";
         const worker =
           !completion && /Subagent terminal reply QA worker:\s*visible/i.test(currentText);
         const requester =
@@ -1503,8 +1537,6 @@ describe("channel progress presentation through an isolated Gateway", () => {
       body: JSON.stringify(inbound.providerBody),
     });
     expect(injected.ok, await injected.text()).toBe(true);
-    const { loadUnfinishedDeliveries } =
-      await import("../../../../src/infra/outbound/delivery-queue-storage.js");
     const stateDir = gateway.runtimeEnv.OPENCLAW_STATE_DIR;
     if (!stateDir) {
       throw new Error("isolated Gateway state directory missing");
@@ -1531,7 +1563,22 @@ describe("channel progress presentation through an isolated Gateway", () => {
               lastError: run.delivery.lastError,
             }
           : undefined;
-      const pendingRows = await loadUnfinishedDeliveries(stateDir);
+      // The child Gateway cannot invalidate this process's physical-database queue cache.
+      // Read committed rows directly, retaining the canonical filters and projection.
+      const pendingRows = withOpenClawStateDatabaseReadOnly(
+        (database) =>
+          executeSqliteQuerySync(
+            database.db,
+            deliveryQueueEntriesQuery(database, OUTBOUND_EXECUTABLE_QUEUE_NAMES, "unfinished")
+              .select("queue_name")
+              .orderBy("enqueued_at", "asc")
+              .orderBy("id", "asc"),
+          ).rows.flatMap((row) => {
+            const entry = inflateDeliveryQueueRow(row);
+            return entry ? [projectOutboundDelivery(row.queue_name, entry)] : [];
+          }),
+        { env: gateway.runtimeEnv },
+      );
       queueRows = pendingRows.map(({ id, channel, to, recoveryState, lastError }) => ({
         id,
         channel,
@@ -1669,29 +1716,12 @@ describe("channel progress presentation through an isolated Gateway", () => {
           (message) => !sharedSlack || message.channel === conversationId,
         );
       const clearOrigin = async () => {
-        const scope = {
-          agentId: "qa",
-          env: gateway.runtimeEnv,
-          readConsistency: "latest" as const,
-        };
-        const sessions = listSessionEntriesReadOnly(scope).filter(
-          ({ entry }) =>
-            entry.delivery?.kind === "external" &&
-            entry.delivery.context.channel === "slack" &&
-            entry.delivery.context.to?.includes(conversationId),
+        const result = asRecord(
+          await gateway.call("qa-progress-mutation.clearOrigin", { conversationId }),
         );
-        expect(sessions).toHaveLength(1);
-        const { sessionKey, entry } = sessions[0]!;
-        const target = { ...scope, sessionKey };
-        await updateSessionEntry(
-          target,
-          (current) => {
-            expect(current.sessionId).toBe(entry.sessionId);
-            return { delivery: { kind: "none" }, updatedAt: Date.now() };
-          },
-          { skipMaintenance: true, requireWriteSuccess: true },
-        );
-        expect(loadSessionEntryReadOnly(target)?.delivery).toEqual({ kind: "none" });
+        expect(result.count).toBe(1);
+        expect(result.afterSessionId).toBe(result.beforeSessionId);
+        expect(result.delivery).toEqual({ kind: "none" });
       };
       let expectedThreadTs: unknown;
       const injectProviderMessage = async (text: string, threadId?: string) => {
@@ -1750,7 +1780,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
           },
           body,
         });
-        expect(delivered.ok, await delivered.text()).toBe(true);
+        expect(delivered.ok, `HTTP ${delivered.status}: ${await delivered.text()}`).toBe(true);
       } else {
         await injected.arrayBuffer();
       }
@@ -1767,19 +1797,39 @@ describe("channel progress presentation through an isolated Gateway", () => {
       if (!rejectStop) {
         await waitForFact(() => finalMessages().length > 0, "accepted final answer");
       }
-      await waitForFact(
-        () =>
-          channel === "discord"
-            ? caseWrites().some(
-                (write) => write.method === "DELETE" && !write.route.includes("/reactions/"),
-              )
-            : native
-              ? caseWrites().some((write) => write.route.endsWith("chat.stopStream"))
-              : caseWrites().some((write) =>
-                  write.route.endsWith(compact ? "chat.delete" : "chat.update"),
-                ),
-        "progress finalization",
-      );
+      try {
+        await waitForFact(
+          () =>
+            channel === "discord"
+              ? caseWrites().some(
+                  (write) => write.method === "DELETE" && !write.route.includes("/reactions/"),
+                )
+              : native
+                ? caseWrites().some((write) => write.route.endsWith("chat.stopStream"))
+                : caseWrites().some((write) =>
+                    write.route.endsWith(compact ? "chat.delete" : "chat.update"),
+                  ),
+          "progress finalization",
+        );
+      } catch (error) {
+        process.stderr.write(
+          `${redactSensitiveText(
+            JSON.stringify({
+              originCleared,
+              writes: caseWrites()
+                .slice(-80)
+                .map(({ at, method, route, accepted, rejected }) => ({
+                  at,
+                  method,
+                  route: route.slice(0, 250),
+                  accepted: accepted && { id: accepted.id, action: accepted.action },
+                  rejected,
+                })),
+            }),
+          )}\n`,
+        );
+        throw error;
+      }
 
       const progressWrites = caseWrites().filter(
         (write) =>
@@ -1805,7 +1855,15 @@ describe("channel progress presentation through an isolated Gateway", () => {
       expect(progressText).toContain(HEADLINE);
       const slackCard = channel === "slack" && !native && !compact;
       const expectedToolRow = slackCard ? slackCardToolRow : toolRow;
-      if (!tools) {
+      if (!tools && channel === "discord") {
+        // Quiet progress retains bounded operation status without command details.
+        const updates = progressWrites.map(({ body }) => body.content);
+        const running = `${HEADLINE}\n\nExec: running`;
+        expect(updates).toContain(running);
+        for (const update of updates) {
+          expect([HEADLINE, running, `${HEADLINE}\n\nLast activity: Exec`]).toContain(update);
+        }
+      } else if (!tools) {
         expect(progressText).not.toMatch(expectedToolRow);
       } else if (channel !== "slack" || !native) {
         expect(progressText).toMatch(expectedToolRow);

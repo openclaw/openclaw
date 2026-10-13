@@ -61,6 +61,16 @@ function cancelledRootCandidate(source = workflow) {
   return { ...f, evidence };
 }
 
+const workflowVariants: Record<string, string> = {
+  "different runner": workflow.replace('time -p node --import tsx "$runner"', "exit 1"),
+  "ignored job failures": workflow.replace("    needs:", "    continue-on-error: true\n    needs:"),
+  "ignored test failures": workflow.replace(
+    "        shell:",
+    "        continue-on-error: true\n        shell:",
+  ),
+  "unbound matrix": workflow.replace("checks_node_core_nondist_matrix", "another_matrix"),
+};
+
 describePosix("attributed test failure in a cancelled job", () => {
   it("retains a cancelled Node test root separately from unrun collateral", () => {
     const f = cancelledRootCandidate();
@@ -78,6 +88,7 @@ describePosix("attributed test failure in a cancelled job", () => {
   });
 
   it.each([
+    ...Object.keys(workflowVariants),
     "missing binding",
     "wrong workflow owner",
     "wrong step number",
@@ -86,8 +97,6 @@ describePosix("attributed test failure in a cancelled job", () => {
     "duplicate test step",
     "incomplete step",
     "cleanup failure",
-    "security failure",
-    "other test failure",
     "cancelled test without deadline",
     "missing cleanup",
     "missing step timestamp",
@@ -101,7 +110,7 @@ describePosix("attributed test failure in a cancelled job", () => {
     "missing independent proof",
     "changed source input",
   ])("refuses %s before dispatch", (fault) => {
-    const f = cancelledRootCandidate();
+    const f = cancelledRootCandidate(workflowVariants[fault]);
     const state = f.state();
     const job = state.priorCi.jobs![0]!;
     const check = state.priorCi.deadline.check;
@@ -137,7 +146,7 @@ describePosix("attributed test failure in a cancelled job", () => {
     if (fault === "incomplete step") {
       job.steps![0]!.status = "in_progress";
     }
-    if (["cleanup failure", "security failure", "other test failure"].includes(fault)) {
+    if (fault === "cleanup failure") {
       job.steps!.splice(2, 0, {
         number: 20,
         name: fault,
@@ -178,26 +187,9 @@ describePosix("attributed test failure in a cancelled job", () => {
     f.save(state);
     const result = f.verifyPriorCi(f.path);
     expect(result.status, result.output).not.toBe(0);
-    expect(result.output).toContain("Prior-CI admin admission:");
-    expect(f.state().mutations).toBe(0);
-  });
-
-  it.each([
-    ["different runner", workflow.replace('time -p node --import tsx "$runner"', "exit 1")],
-    [
-      "ignored job failures",
-      workflow.replace("    needs:", "    continue-on-error: true\n    needs:"),
-    ],
-    [
-      "ignored test failures",
-      workflow.replace("        shell:", "        continue-on-error: true\n        shell:"),
-    ],
-    ["unbound matrix", workflow.replace("checks_node_core_nondist_matrix", "another_matrix")],
-  ])("refuses %s in the workflow contract", (_fault, source) => {
-    const f = cancelledRootCandidate(source);
-    const result = f.verifyPriorCi(f.path);
-    expect(result.status, result.output).not.toBe(0);
-    expect(result.output).toContain("canonical Node shard workflow owner");
+    expect(result.output).toContain(
+      workflowVariants[fault] ? "canonical Node shard workflow owner" : "Prior-CI admin admission:",
+    );
     expect(f.state().mutations).toBe(0);
   });
 });

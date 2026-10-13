@@ -1,7 +1,7 @@
+import type { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { ensureExecutionOwnerLifecycleBindingSchema } from "../audit/execution-owner-lifecycle-binding-store.js";
-import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -12,12 +12,23 @@ import { cronStoreKey } from "./store/key.js";
 import { readCronRunRecords } from "./store/read-only.js";
 import { recordCronRun, maintainCronRunHistory } from "./store/run-history.js";
 import {
-  pruneCronRunHistoryInDatabase,
+  applyCronRunHistoryMaintenanceInDatabase,
+  planCronRunHistoryMaintenance,
   readCronRunRecordsInDatabase,
   recordCronRunInDatabase,
 } from "./store/run-history.kernel.js";
 import type { CronRunHistoryWrite, CronRunRecord } from "./store/run-history.types.js";
-import { prepareCronRunReceiptWriteSchema } from "./store/run-receipt-write-admission.js";
+import {
+  prepareCronRunReceiptWriteSchema,
+  type CronRunReceiptWriteSchema,
+} from "./store/run-receipt-write-admission.js";
+
+function pruneHistory(db: DatabaseSync, now: number, schema: CronRunReceiptWriteSchema) {
+  const records = readCronRunRecordsInDatabase(db);
+  const activeJobs = new Set(records.flatMap((row) => (row.jobId ? [row.jobId] : [])));
+  const plan = planCronRunHistoryMaintenance(records, now, activeJobs);
+  return applyCronRunHistoryMaintenanceInDatabase(db, plan, now, schema).pruned;
+}
 
 async function readCronRunHistoryPage(options: ReadCronRunHistoryPageOptions) {
   return projectCronRunHistoryPage(
@@ -77,6 +88,64 @@ it.each(["asc", "desc"] as const)("orders history timestamps and ties %s", (sort
   expect(page.entries.map((entry) => entry.runId)).toEqual(
     sortDir === "desc" ? newestFirst : newestFirst.toReversed(),
   );
+});
+
+it("seeks linked runs before pagination without confusing public ids or ambiguous aliases", () => {
+  const record = (
+    id: string,
+    sessionId: string,
+    runAtMs: number,
+    jobId = "job",
+  ): CronRunRecord => ({
+    id,
+    jobId,
+    status: "succeeded",
+    createdAt: runAtMs,
+    endedAt: runAtMs + 1,
+    detail: { kind: "cron-run", storeKey: "store", status: "ok", runId: id, sessionId, runAtMs },
+  });
+  const target = record("target", "target-session", 10);
+  const records = [
+    target,
+    ...Array.from({ length: 50 }, (_, i) => record(`recent-${i}`, `session-${i}`, 100 + i)),
+  ];
+  const seek = (runId: string, rows = records) =>
+    projectCronRunHistoryPage(rows, {
+      storeKey: "store",
+      jobId: "job",
+      runId,
+      limit: 1,
+    }).entries.map((entry) => entry.runId);
+  for (const alias of ["target", "target-session", "cron:job:10"]) {
+    expect(seek(alias)).toEqual(["target"]);
+  }
+  expect(seek("cron:other:10")).toEqual([]);
+  expect(seek("target-session", [...records, record("collision", "target-session", 20)])).toEqual(
+    [],
+  );
+  expect(seek("cron:job:10", [...records, record("same-start", "another-session", 10)])).toEqual(
+    [],
+  );
+  expect(
+    projectCronRunHistoryPage([...records, record("hidden", "target-session", 20)], {
+      storeKey: "store",
+      jobId: "job",
+      runId: "target-session",
+      entryFilter: (entry) => entry.runId === "target",
+    }).entries,
+  ).toEqual([]);
+  expect(seek("target", [...records, record("alias-collision", "target", 20)])).toEqual(["target"]);
+  expect(
+    seek("target-session", [...records, record("other-job", "target-session", 20, "other")]),
+  ).toEqual(["target"]);
+  expect(
+    projectCronRunHistoryPage(records, {
+      storeKey: "store",
+      jobId: "job",
+      runId: "target",
+      entryFilter: () => false,
+    }).entries,
+  ).toEqual([]);
 });
 
 it("retains history across worker reads, isolates stores, and recovers only an exact receipt", async () => {
@@ -165,7 +234,7 @@ it("bounds quiet evaluations separately without evicting payload history or acti
               row.detail === undefined ? null : JSON.stringify(row.detail),
             );
           }
-          pruneCronRunHistoryInDatabase(db, now, schema);
+          pruneHistory(db, now, schema);
           const remaining = new Set(readCronRunRecordsInDatabase(db).map((row) => row.id));
           return new Set(records.filter((row) => !remaining.has(row.id)).map((row) => row.id));
         };
@@ -225,44 +294,35 @@ it("bounds quiet evaluations separately without evicting payload history or acti
   );
 });
 
-it("admits actual worker writes and rolls back history pruning when commit is refused", async () => {
+it("retains history when worker pruning fails and retries after storage recovers", async () => {
   await withOpenClawTestState(
-    { layout: "state-only", prefix: "cron-history-worker-admission-" },
+    { layout: "state-only", prefix: "cron-history-worker-pruning-" },
     async (state) => {
       const storeKey = cronStoreKey(state.statePath("cron/jobs.json"));
-      const stages: string[] = [];
-      let refuseCommit = false;
-      const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
-      const admissionSpy = vi
-        .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((admit, attachment) =>
-          createAdmission((request, grant) => {
-            stages.push(request.stage);
-            if (refuseCommit && request.stage === "commit") {
-              throw new Error("Cron history commit refused");
-            }
-            admit(request, grant);
-          }, attachment),
-        );
+      await recordCronRun(outcome(storeKey, "worker"));
+      const before = await readCronRunHistoryPage({ storeKey });
+      expect(before.total).toBe(1);
+      const context = captureOpenClawStateWorkerContext();
+      const maintain = () => maintainCronRunHistory(context, context.admission.assertCurrent);
+      runOpenClawStateWriteTransaction(({ db }) => {
+        db.exec(`
+          CREATE TRIGGER reject_cron_history_pruning
+          BEFORE DELETE ON task_runs
+          BEGIN
+            SELECT RAISE(ABORT, 'Cron history pruning refused');
+          END;
+        `);
+      });
       try {
-        await recordCronRun(outcome(storeKey, "worker"));
-        expect(stages).toEqual(["transaction", "commit"]);
-        expect((await readCronRunHistoryPage({ storeKey })).total).toBe(1);
-        stages.length = 0;
-        refuseCommit = true;
-        const context = captureOpenClawStateWorkerContext();
-        const maintain = () => maintainCronRunHistory(context, context.admission.assertCurrent);
-        await expect(maintain()).rejects.toThrow("Cron history commit refused");
-        expect(stages).toEqual(["transaction", "commit"]);
-        expect((await readCronRunHistoryPage({ storeKey })).total).toBe(1);
-        stages.length = 0;
-        refuseCommit = false;
-        await maintain();
-        expect(stages).toEqual(["transaction", "commit"]);
-        expect((await readCronRunHistoryPage({ storeKey })).entries).toEqual([]);
+        await expect(maintain()).rejects.toThrow("Cron history pruning refused");
+        expect(await readCronRunHistoryPage({ storeKey })).toEqual(before);
       } finally {
-        admissionSpy.mockRestore();
+        runOpenClawStateWriteTransaction(({ db }) => {
+          db.exec("DROP TRIGGER reject_cron_history_pruning");
+        });
       }
+      await maintain();
+      expect((await readCronRunHistoryPage({ storeKey })).entries).toEqual([]);
     },
   );
 });
@@ -301,7 +361,7 @@ it("retains legacy identities and raw details without inventing a store partitio
         expect(projectCronRunHistoryPage(records, { storeKey: "current-store" }).entries).toEqual(
           [],
         );
-        expect(pruneCronRunHistoryInDatabase(db, 11, prepareCronRunReceiptWriteSchema(db))).toBe(0);
+        expect(pruneHistory(db, 11, prepareCronRunReceiptWriteSchema(db))).toBe(0);
         expect(
           db.prepare("SELECT detail_json FROM task_runs WHERE task_id = ?").get("legacy-null"),
         ).toEqual({ detail_json: rawDetail });
@@ -317,11 +377,7 @@ it("retains legacy identities and raw details without inventing a store partitio
         insertBinding.run("cron", "legacy-null");
         insertBinding.run("flow", "legacy-null");
         expect(
-          pruneCronRunHistoryInDatabase(
-            db,
-            10 + 7 * 24 * 60 * 60_000,
-            prepareCronRunReceiptWriteSchema(db),
-          ),
+          pruneHistory(db, 10 + 7 * 24 * 60 * 60_000, prepareCronRunReceiptWriteSchema(db)),
         ).toBe(3);
         expect(readCronRunRecordsInDatabase(db)).toEqual([]);
         expect(db.prepare("SELECT task_id FROM task_runs").all()).toEqual([
@@ -411,9 +467,9 @@ it("normalizes released lifecycle rows before history, recovery, and retention",
           ),
         ).toEqual([200, 200, 200, 200, 200]);
         const schema = prepareCronRunReceiptWriteSchema(db);
-        expect(pruneCronRunHistoryInDatabase(db, 200 + 24 * 60 * 60_000, schema)).toBe(1);
+        expect(pruneHistory(db, 200 + 24 * 60 * 60_000, schema)).toBe(1);
         expect(readCronRunRecordsInDatabase(db).map((row) => row.id)).not.toContain("lost");
-        expect(pruneCronRunHistoryInDatabase(db, 200 + 7 * 24 * 60 * 60_000, schema)).toBe(5);
+        expect(pruneHistory(db, 200 + 7 * 24 * 60 * 60_000, schema)).toBe(5);
         expect(readCronRunRecordsInDatabase(db).map((row) => row.id)).toEqual(["running"]);
       });
     },
@@ -441,11 +497,7 @@ it("rejects corrupt released enums before reading or pruning history", async () 
             `Invalid persisted task ${label}: "invalid"`,
           );
           expect(() =>
-            pruneCronRunHistoryInDatabase(
-              db,
-              7 * 24 * 60 * 60_000,
-              prepareCronRunReceiptWriteSchema(db),
-            ),
+            pruneHistory(db, 7 * 24 * 60 * 60_000, prepareCronRunReceiptWriteSchema(db)),
           ).toThrow(`Invalid persisted task ${label}: "invalid"`);
           db.prepare(`UPDATE task_runs SET ${column} = ?`).run(original!);
         }

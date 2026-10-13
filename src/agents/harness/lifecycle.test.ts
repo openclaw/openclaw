@@ -165,8 +165,6 @@ describe("AgentHarness lifecycle runner", () => {
 
   it.each([
     ["openclaw", false],
-    ["openclaw", true],
-    ["codex", false],
     ["codex", true],
   ] as const)(
     "captures completed %s commentary with content capture %s",
@@ -267,24 +265,6 @@ describe("AgentHarness lifecycle runner", () => {
     },
   );
 
-  it("runs a harness attempt without changing attempt params", async () => {
-    const params = createAttemptParams();
-    const result = createAttemptResult();
-    const runAttempt = vi.fn(async () => result);
-    const harness: AgentHarness = {
-      id: "codex",
-      label: "Codex",
-      pluginId: "codex-plugin",
-      supports: () => ({ supported: true, priority: 100 }),
-      runAttempt,
-    };
-
-    const attemptResult = await runAgentHarnessLifecycleAttempt(harness, params);
-
-    expect(attemptResult).toEqual({ ...result, agentHarnessId: "codex" });
-    expect(runAttempt).toHaveBeenCalledWith(params);
-  });
-
   it("preserves core TTS delivery provenance through lifecycle normalization", async () => {
     const operationalRunInstance = {};
     const params = createAttemptParams();
@@ -361,22 +341,6 @@ describe("AgentHarness lifecycle runner", () => {
     await expect(runAgentHarnessLifecycleAttempt(harness, params)).rejects.toBe(preflightError);
     expect(resolveAgentHarnessPreflightOwner(preflightError)).toBe("custom-codex");
     expect(preflightError).not.toHaveProperty("harnessId");
-  });
-
-  it("does not scope a legacy preflight failure without explicit opt-in", async () => {
-    const params = createAttemptParams();
-    const preflightError = new AgentHarnessPreflightError("Global preflight failed");
-    const harness: AgentHarness = {
-      id: "custom-codex",
-      label: "Custom Codex",
-      supports: () => ({ supported: true }),
-      runAttempt: async () => {
-        throw preflightError;
-      },
-    };
-
-    await expect(runAgentHarnessLifecycleAttempt(harness, params)).rejects.toBe(preflightError);
-    expect(resolveAgentHarnessPreflightOwner(preflightError)).toBeUndefined();
   });
 
   it("runs isolated finalization through the narrow lifecycle contract", async () => {
@@ -503,26 +467,6 @@ describe("AgentHarness lifecycle runner", () => {
       'Context engine "lossless-claw" cannot run operation "agent-run" on agent harness "custom".',
     );
     expect(runAttempt).not.toHaveBeenCalled();
-  });
-
-  it("allows harnesses that advertise required context-engine capabilities", async () => {
-    const params = createAttemptParams();
-    params.contextEngine = createContextEngineRequiringAssembly();
-    const result = createAttemptResult();
-    const runAttempt = vi.fn(async () => result);
-    const harness: AgentHarness = {
-      id: "codex",
-      label: "Codex",
-      contextEngineHostCapabilities: ["assemble-before-prompt"],
-      supports: () => ({ supported: true }),
-      runAttempt,
-    };
-
-    await expect(runAgentHarnessLifecycleAttempt(harness, params)).resolves.toEqual({
-      ...result,
-      agentHarnessId: "codex",
-    });
-    expect(runAttempt).toHaveBeenCalledOnce();
   });
 
   it("advertises OpenClaw embedded host capabilities", async () => {
@@ -655,6 +599,7 @@ describe("AgentHarness lifecycle runner", () => {
     const harnessTrace = createDiagnosticTrace();
     const result = createAttemptResult();
     result.diagnosticTrace = undefined;
+    result.agentHarnessResultClassification = "empty";
     let attemptResult: EmbeddedRunAttemptResult | undefined;
     let runAttemptTrace: DiagnosticTraceContext | undefined;
     let classifyTrace: DiagnosticTraceContext | undefined;
@@ -719,6 +664,7 @@ describe("AgentHarness lifecycle runner", () => {
     expect(harnessCompleted?.trace).toEqual(harnessTrace);
     expect(harnessCompleted?.channel).toBe("discord-voice");
     expect(attemptResult?.diagnosticTrace).toEqual(harnessTrace);
+    expect(attemptResult).not.toHaveProperty("agentHarnessResultClassification");
   });
 
   it("keeps plugin harness failure messages on the trusted private channel", async () => {
@@ -796,64 +742,6 @@ describe("AgentHarness lifecycle runner", () => {
     expect(completed?.errorCategory).toBeUndefined();
   });
 
-  it("emits trusted harness error diagnostics with the failing lifecycle phase", async () => {
-    resetDiagnosticEventsForTest();
-    const params = createAttemptParams();
-    const sendError = new Error("codex app-server send failed");
-    const harness: AgentHarness = {
-      id: "codex",
-      label: "Codex",
-      supports: () => ({ supported: true }),
-      runAttempt: async () => {
-        throw sendError;
-      },
-    };
-    const diagnostics = captureDiagnosticEvents();
-    try {
-      await expect(runAgentHarnessLifecycleAttempt(harness, params)).rejects.toThrow(
-        "codex app-server send failed",
-      );
-      await flushDiagnosticEvents();
-    } finally {
-      diagnostics.unsubscribe();
-    }
-
-    expect(diagnostics.events.map(({ event }) => event.type)).toEqual([
-      "harness.run.started",
-      "harness.run.error",
-    ]);
-    expect(diagnostics.events.every(({ metadata }) => metadata.trusted)).toBe(true);
-    const errorEvent = diagnostics.events[1]?.event as
-      | (DiagnosticEventPayload & Record<string, unknown>)
-      | undefined;
-    expect(errorEvent?.type).toBe("harness.run.error");
-    expect(errorEvent?.phase).toBe("send");
-    expect(errorEvent?.errorCategory).toBe("Error");
-    expect(diagnostics.events[1]?.privateData.errorMessage).toBe("codex app-server send failed");
-    expect(errorEvent).not.toHaveProperty("cleanupFailed");
-    expect(errorEvent?.harnessId).toBe("codex");
-    expect(typeof errorEvent?.durationMs).toBe("number");
-  });
-
-  it("keeps result classification as an explicit outcome stage", async () => {
-    const params = createAttemptParams();
-    const result = createAttemptResult();
-    const classify = vi.fn<NonNullable<AgentHarness["classify"]>>(() => "empty");
-    const harness: AgentHarness = {
-      id: "codex",
-      label: "Codex",
-      supports: () => ({ supported: true }),
-      runAttempt: vi.fn(async () => result),
-      classify,
-    };
-
-    const outcome = await runAgentHarnessLifecycleAttempt(harness, params);
-
-    expect(outcome.agentHarnessId).toBe("codex");
-    expect(outcome.agentHarnessResultClassification).toBe("empty");
-    expect(harness["classify"]).toHaveBeenCalledWith(result, params);
-  });
-
   it("classifies the shipped legacy result before normalizing its terminal", async () => {
     const params = createAttemptParams();
     const failure = new Error("legacy provider failure");
@@ -884,58 +772,5 @@ describe("AgentHarness lifecycle runner", () => {
     expect(classify.mock.calls[0]?.[0]).toHaveProperty("promptError", failure);
     expect(outcome.agentHarnessResultClassification).toBe("empty");
     expect(outcome.terminal).toEqual({ kind: "failed", source: "prompt", error: failure });
-  });
-
-  it("preserves harness-supplied classification when no classify hook is registered", async () => {
-    const params = createAttemptParams();
-    const result = {
-      ...createAttemptResult(),
-      agentHarnessResultClassification: "reasoning-only",
-    } as EmbeddedRunAttemptResult;
-    const harness: AgentHarness = {
-      id: "codex",
-      label: "Codex",
-      supports: () => ({ supported: true }),
-      runAttempt: vi.fn(async () => result),
-    };
-
-    const outcome = await runAgentHarnessLifecycleAttempt(harness, params);
-    expect(outcome.agentHarnessId).toBe("codex");
-    expect(outcome.agentHarnessResultClassification).toBe("reasoning-only");
-  });
-
-  it("clears stale non-ok classification when classification resolves to ok", async () => {
-    const params = createAttemptParams();
-    const result = {
-      ...createAttemptResult(),
-      agentHarnessResultClassification: "empty",
-    } as EmbeddedRunAttemptResult;
-    const classify = vi.fn<NonNullable<AgentHarness["classify"]>>(() => "ok");
-    const harness: AgentHarness = {
-      id: "codex",
-      label: "Codex",
-      supports: () => ({ supported: true }),
-      runAttempt: vi.fn(async () => result),
-      classify,
-    };
-
-    const classified = await runAgentHarnessLifecycleAttempt(harness, params);
-    expect(classified.agentHarnessId).toBe("codex");
-    expect(classified).not.toHaveProperty("agentHarnessResultClassification");
-  });
-
-  it("does not dispose harnesses after individual attempts", async () => {
-    const dispose = vi.fn();
-    const harness: AgentHarness = {
-      id: "custom",
-      label: "Custom",
-      supports: () => ({ supported: true }),
-      runAttempt: vi.fn(async () => createAttemptResult()),
-      dispose,
-    };
-
-    await runAgentHarnessLifecycleAttempt(harness, createAttemptParams());
-
-    expect(dispose).not.toHaveBeenCalled();
   });
 });

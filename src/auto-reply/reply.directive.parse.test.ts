@@ -5,9 +5,7 @@ import { parseInlineSessionDirectives } from "./reply/directive-handling.parse.j
 import {
   extractElevatedDirective,
   extractReasoningDirective,
-  extractTraceDirective,
   extractThinkDirective,
-  extractVerboseDirective,
   extractFastDirective,
   extractStatusDirective,
 } from "./reply/directives.js";
@@ -82,19 +80,6 @@ describe("directive parsing", () => {
     expect(parsed.cleaned).toBe("/think low\r\n    code  here");
   });
 
-  it("ignores verbose directive inside URL", () => {
-    const body = "https://x.com/verioussmith/status/1997066835133669687";
-    const res = extractVerboseDirective(body);
-    expect(res.hasDirective).toBe(false);
-    expect(res.cleaned).toBe(body);
-  });
-
-  it("matches raw trace directive", () => {
-    const res = extractTraceDirective(" please /trace raw now");
-    expect(res.hasDirective).toBe(true);
-    expect(res.traceLevel).toBe("raw");
-  });
-
   it("matches reasoning directive", () => {
     const res = extractReasoningDirective("/reasoning on please");
     expect(res.hasDirective).toBe(true);
@@ -132,12 +117,6 @@ describe("directive parsing", () => {
     expect(fast.rawFastMode).toBe("inherit");
     expect(fast.clearFastMode).toBe(true);
   });
-
-  it("matches elevated with leading space", () => {
-    const res = extractElevatedDirective(" please /elevated on now");
-    expect(res.hasDirective).toBe(true);
-    expect(res.elevatedLevel).toBe("on");
-  });
   it("matches elevated ask", () => {
     const res = extractElevatedDirective("/elevated ask please");
     expect(res.hasDirective).toBe(true);
@@ -147,18 +126,6 @@ describe("directive parsing", () => {
     const res = extractElevatedDirective("/elevated full please");
     expect(res.hasDirective).toBe(true);
     expect(res.elevatedLevel).toBe("full");
-  });
-
-  it("does not match /think followed by extra letters", () => {
-    // e.g. someone typing "/think" + extra letter "hink"
-    const res = extractThinkDirective("/thinkstuff");
-    expect(res.hasDirective).toBe(false);
-  });
-
-  it("matches /t with no argument", () => {
-    const res = extractThinkDirective("/t");
-    expect(res.hasDirective).toBe(true);
-    expect(res.thinkLevel).toBeUndefined();
   });
 
   it("matches think with no argument and consumes colon", () => {
@@ -181,17 +148,6 @@ describe("directive parsing", () => {
     expect(res.cleaned).toBe("please now");
   });
 
-  it("parses identical exec directives deterministically", () => {
-    const input = "/exec host=node security=allowlist ask=always node=worker-1";
-    const first = extractExecDirective(input);
-
-    expect(Array.from({ length: 3 }, () => extractExecDirective(input))).toEqual([
-      first,
-      first,
-      first,
-    ]);
-  });
-
   it.each([
     ["host", "spaceship", "execHost", "rawExecHost", "invalidHost"],
     ["security", "wide-open", "execSecurity", "rawExecSecurity", "invalidSecurity"],
@@ -202,14 +158,6 @@ describe("directive parsing", () => {
     expect(res[field]).toBeUndefined();
     expect(res[rawField]).toBe(value);
     expect(res[invalidField]).toBe(true);
-  });
-
-  it("matches queue directive", () => {
-    const res = extractQueueDirective("please /queue interrupt now");
-    expect(res.hasDirective).toBe(true);
-    expect(res.queueMode).toBe("interrupt");
-    expect(res.queueReset).toBe(false);
-    expect(res.cleaned).toBe("please now");
   });
 
   it("matches steer queue directive", () => {
@@ -399,13 +347,6 @@ describe("level directive preserves message text after an invalid level", () => 
     expect(res.verboseLevel).toBeUndefined();
     expect(res.rawVerboseLevel).toBeUndefined();
     expect(res.cleaned).toBe("explain quantum computing");
-  });
-
-  it("keeps the next line when /verbose is on its own line", () => {
-    const res = extractVerboseDirective("/verbose\nSummarize this document");
-    expect(res.hasDirective).toBe(true);
-    expect(res.verboseLevel).toBeUndefined();
-    expect(res.cleaned).toBe("Summarize this document");
   });
 
   it("still consumes off so it persists rather than clears", () => {

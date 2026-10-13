@@ -28,9 +28,8 @@ export async function verifyImportedMeetingTranscriptSnapshots(params: {
     ) {
       const expected = readStagedMeetingTranscriptUtterances({
         stageDatabase: params.stageDatabase,
-        stageKey: snapshot.stageKey,
+        stageKey: snapshot.relativeDir,
         start,
-        limit: LEGACY_UTTERANCE_INSERT_CHUNK_SIZE,
       });
       const actual = executeSqliteQuerySync(
         params.database,

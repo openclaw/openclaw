@@ -88,7 +88,7 @@ export async function waitForReachableMatrixBaseUrl(params: {
       // Race both network paths so neither stalled probe can starve or delay
       // a healthy peer. The outer deadline also bounds injected fetch fakes.
       reachableCandidate = await withMatrixQaHarnessTimeout(
-        "Matrix health probes",
+        "Matrix health checks",
         remainingMs,
         Promise.any(
           candidateBaseUrls.map(async (baseUrl) => {

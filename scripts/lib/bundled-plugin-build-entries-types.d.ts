@@ -27,7 +27,4 @@ export function collectRootPackageExcludedExtensionDirs(
 export function collectBundledPluginBuildEntries(
   params?: BundledPluginBuildEntryParams,
 ): BundledPluginBuildEntry[];
-export function listBundledPluginBuildEntries(
-  params?: BundledPluginBuildEntryParams,
-): Record<string, string>;
 export function listBundledPluginPackArtifacts(params?: BundledPluginBuildEntryParams): string[];

@@ -4,10 +4,7 @@
  */
 import { parseStrictInteger } from "@openclaw/normalization-core/number-coercion";
 import { sliceUtf16Safe } from "../utils.js";
-import type {
-  SandboxBackendExecSpec,
-  SandboxBackendHandle,
-} from "./sandbox/backend-handle.types.js";
+import type { SandboxBackendHandle } from "./sandbox/backend-handle.types.js";
 
 const CHUNK_LIMIT = 8 * 1024;
 
@@ -29,12 +26,7 @@ export type BashSandboxConfig = {
   readOnlyWorkspaceSkillMounts?: readonly BashSandboxWorkdirMount[];
   env?: Record<string, string>;
   prepareProcessCleanup?: SandboxBackendHandle["prepareProcessCleanup"];
-  buildExecSpec?: (params: {
-    command: string;
-    workdir?: string;
-    env: Record<string, string>;
-    usePty: boolean;
-  }) => Promise<SandboxBackendExecSpec>;
+  buildExecSpec?: SandboxBackendHandle["buildExecSpec"];
   finalizeExec?: SandboxBackendHandle["finalizeExec"];
 };
 

@@ -61,10 +61,11 @@ vi.mock("../runtime.js", () => ({
   ExitError: class ExitError extends Error {},
   writeRuntimeJson: vi.fn(),
 }));
-vi.mock("./config-cli-input.js", () => ({ formatPluginInstallConfigSetError: vi.fn() }));
+// mock-isolation: Keep metadata discovery outside this ordered path-intent runner boundary.
 vi.mock("./config-cli-model-normalization.js", () => ({
   normalizeConfigMutationModelRefs: (value: unknown) => value,
   normalizeConfigMutationExplicitSetPath: (path: string[]) => path,
+  shouldNormalizeConfigMutationProviderCatalogs: () => true,
 }));
 vi.mock("./config-set-dryrun.js", () => ({
   ConfigSetDryRunValidationError: class extends Error {},

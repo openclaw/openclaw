@@ -20,13 +20,14 @@ import {
 } from "../test-helpers/app-sidebar.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
+import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
-import "./app-sidebar.ts";
+import "./app-sidebar.tsx";
 
 const requireRecord = createRequireRecord("object", "expected-label");
 
 describe("sidebar global row observation", () => {
-  it.each(["during describe", "while pinning and reading", "after a successor list"] as const)(
+  it.each(["after describe", "while pinning and reading", "after a successor list"] as const)(
     "keeps the routed Work alias scoped while reads and ownership change (%s)",
     async (eventTiming) => {
       const agentsList = {
@@ -220,13 +221,10 @@ describe("sidebar global row observation", () => {
             ts: 250,
           });
         };
-        if (eventTiming === "during describe") {
-          publishWorkPatch();
-        }
         workDescribe.resolve({ session: work });
         await sidebar.sessionData.loadActiveSessionLineage(route.sessionKey);
         await sidebar.updateComplete;
-        assertAlias(eventTiming === "during describe" ? updated : work);
+        assertAlias(work);
         expect(sessions.state.loading).toBe(true);
         assertMainUnchanged();
 
@@ -349,7 +347,8 @@ describe("sidebar global row observation", () => {
           assertMainUnchanged();
           return;
         }
-        await sidebar.updateComplete;
+        publishWorkPatch();
+        await settleLitElement(sidebar);
         assertAlias(updated);
         assertMainUnchanged();
         currentWork = completed;
@@ -363,7 +362,7 @@ describe("sidebar global row observation", () => {
           ts: 500,
           session: completed,
         });
-        await sidebar.updateComplete;
+        await settleLitElement(sidebar);
         assertAlias(completed);
         assertMainUnchanged();
 

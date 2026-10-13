@@ -6,6 +6,7 @@ import {
   fetchWithSsrFGuard,
 } from "../infra/net/fetch-guard.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { VERSION } from "../version.js";
 import { bundledCatalogGeneratedAt } from "./bundled-catalog-stamp.js";
 import {
@@ -14,9 +15,9 @@ import {
 } from "./remote-bundle.js";
 import { isRemoteModelCatalogRefreshEnabled, resolveRemoteCatalogUrl } from "./remote-config.js";
 import {
-  markRemoteModelCatalogChecked,
-  readRemoteModelCatalog,
-  writeRemoteModelCatalog,
+  markRemoteModelCatalogCheckedAsync,
+  readRemoteModelCatalogAsync,
+  writeRemoteModelCatalogAsync,
 } from "./remote-store.js";
 
 export const REMOTE_MODEL_CATALOG_TTL_MS = 6 * 60 * 60_000;
@@ -81,7 +82,7 @@ export async function refreshRemoteModelCatalog(params: {
   force?: boolean;
   signal?: AbortSignal;
   fetchImpl?: typeof fetch;
-  databaseOptions?: OpenClawStateDatabaseOptions;
+  databaseOptions?: Pick<OpenClawStateDatabaseOptions, "path" | "env" | "initializationAgentPaths">;
   now?: () => number;
   bundledGeneratedAt?: () => number | undefined;
 }): Promise<RemoteModelCatalogRefreshResult> {
@@ -91,8 +92,11 @@ export async function refreshRemoteModelCatalog(params: {
   const databaseOptions = params.databaseOptions ?? {};
   const now = (params.now ?? Date.now)();
   try {
+    const context = captureOpenClawStateWorkerContext(databaseOptions);
     const url = resolveRemoteCatalogUrl(params.config);
-    const stored = readRemoteModelCatalog(databaseOptions);
+    params.signal?.throwIfAborted();
+    const stored = await readRemoteModelCatalogAsync(context);
+    params.signal?.throwIfAborted();
     const activeStored = stored?.source_url === url ? stored : undefined;
     if (
       !params.force &&
@@ -139,7 +143,8 @@ export async function refreshRemoteModelCatalog(params: {
         if (!activeStored) {
           throw new Error("remote catalog returned 304 without a stored bundle");
         }
-        const marked = markRemoteModelCatalogChecked(
+        params.signal?.throwIfAborted();
+        const marked = await markRemoteModelCatalogCheckedAsync(
           now,
           {
             expected: activeStored,
@@ -147,9 +152,9 @@ export async function refreshRemoteModelCatalog(params: {
             lastModified:
               guarded.response.headers.get("last-modified") ?? activeStored.last_modified,
           },
-          databaseOptions,
+          context,
         );
-        const current = marked ? activeStored : readRemoteModelCatalog(databaseOptions);
+        const current = marked ? activeStored : await readRemoteModelCatalogAsync(context);
         return {
           status: "unchanged",
           ...storedCounts(current?.bundle_json ?? activeStored.bundle_json),
@@ -167,7 +172,9 @@ export async function refreshRemoteModelCatalog(params: {
       assertCompatibleMinVersion(bundle);
       const bundleJson = JSON.stringify(bundle);
       const unchanged = activeStored?.bundle_json === bundleJson;
-      const writeResult = writeRemoteModelCatalog(
+      params.signal?.throwIfAborted();
+      // Download cancellation fences new work; accepted persistence settles before lifecycle close.
+      const writeResult = await writeRemoteModelCatalogAsync(
         {
           bundle_json: bundleJson,
           generated_at: bundle.generatedAt,
@@ -177,7 +184,7 @@ export async function refreshRemoteModelCatalog(params: {
           last_modified: guarded.response.headers.get("last-modified"),
           checked_at: now,
         },
-        databaseOptions,
+        context,
       );
       if (writeResult.status === "retained-newer") {
         return { status: "unchanged", ...storedCounts(writeResult.row.bundle_json) };

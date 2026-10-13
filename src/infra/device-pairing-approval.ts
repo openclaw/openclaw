@@ -8,13 +8,13 @@ import type {
   DevicePairingForbiddenResult,
 } from "./device-pairing-core.types.js";
 import { withDevicePairingLock } from "./device-pairing-lock.js";
+import { publishDevicePairingResolution } from "./device-pairing-resolution.js";
 import { resolvePairingRequestExpiry } from "./device-pairing-state.kernel.js";
 import {
   DevicePairingAuthorityRefusedError,
   executeDevicePairingMutation,
 } from "./device-pairing-worker.js";
 
-/** Format a device-pairing authorization failure for CLI/API callers. */
 export function formatDevicePairingForbiddenMessage(result: DevicePairingForbiddenResult): string {
   switch (result.reason) {
     case "caller-scopes-required":
@@ -81,7 +81,7 @@ export async function approveDevicePairing(
   const { isApprovalCurrent: _isApprovalCurrent, ...wireOptions } = options ?? {};
   return await withDevicePairingLock(async () => {
     const admission = approvalAdmission(options);
-    return await executeDevicePairingMutation(
+    const result = await executeDevicePairingMutation(
       {
         type: "devicePairing.approve",
         input: { requestId, options: wireOptions, nowMs: Date.now() },
@@ -92,6 +92,14 @@ export async function approveDevicePairing(
         admit: admission.admit,
       },
     );
+    if (result?.status === "approved") {
+      publishDevicePairingResolution(
+        { requestId, deviceId: result.device.deviceId },
+        "approved",
+        baseDir,
+      );
+    }
+    return result;
   });
 }
 
@@ -133,6 +141,13 @@ export async function approveBootstrapDevicePairing(
         admit: admission.admit,
       },
     );
+    if (result?.status === "approved") {
+      publishDevicePairingResolution(
+        { requestId, deviceId: result.device.deviceId },
+        "approved",
+        baseDir,
+      );
+    }
     return result;
   });
 }

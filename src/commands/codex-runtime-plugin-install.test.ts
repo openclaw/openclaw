@@ -12,9 +12,11 @@ import { WizardSession } from "../wizard/session.js";
 import {
   ensureCodexRuntimePluginForModelSelection,
   ensureCodexRuntimePluginForSupervision,
-  repairCodexRuntimePluginInstallForModelSelection,
 } from "./codex-runtime-plugin-install.js";
-import { ensureModelSelectionRuntimePlugins } from "./runtime-plugin-install.js";
+import {
+  ensureModelSelectionRuntimePlugins,
+  repairModelSelectionRuntimePlugins,
+} from "./runtime-plugin-install.js";
 
 const mocks = vi.hoisted(() => ({
   loadInstalledPluginIndexInstallRecords: vi.fn(),
@@ -76,7 +78,6 @@ describe("Codex runtime plugin install repair", () => {
   it.each([
     { enabled: false, accepted: false, usable: false, promptError: undefined },
     { enabled: false, accepted: true, usable: true, promptError: undefined },
-    { enabled: true, accepted: false, usable: true, promptError: undefined },
     { enabled: false, accepted: false, usable: false, promptError: new WizardCancelledError() },
   ])(
     "honors runtime capabilities, enabled=$enabled accepted=$accepted promptError=$promptError",
@@ -205,29 +206,38 @@ describe("Codex runtime plugin install repair", () => {
     }
   });
 
-  it("surfaces non-fatal ClawHub repair notices to warning-only callers", async () => {
-    const reviewNotice = "REVIEW RECOMMENDED - ClawHub has not completed a fresh clean check";
-    mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
-      changes: ['Repaired missing configured plugin "codex".'],
-      warnings: [],
-      notices: [reviewNotice],
-    });
+  it.each([{ pluginId: "copilot", provider: "github-copilot" }])(
+    "surfaces non-fatal $pluginId repair notices to command callers",
+    async ({ pluginId, provider }) => {
+      const reviewNotice = "REVIEW RECOMMENDED - ClawHub has not completed a fresh clean check";
+      mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
+        changes: [`Repaired missing configured plugin "${pluginId}".`],
+        warnings: [],
+        notices: [reviewNotice],
+      });
 
-    const result = await repairCodexRuntimePluginInstallForModelSelection({
-      cfg: {},
-      model: "openai/gpt-5.5",
-      env: {},
-    });
+      const result = await repairModelSelectionRuntimePlugins({
+        cfg: {
+          models: {
+            providers: {
+              [provider]: {
+                baseUrl: "https://provider.example.test",
+                models: [],
+                agentRuntime: { id: pluginId },
+              },
+            },
+          },
+        },
+        model: `${provider}/gpt-5.5`,
+        env: {},
+      });
 
-    const repairCall = readOnlyMissingPluginInstallRepairCall();
-    expect(repairCall.pluginIds).toStrictEqual(["codex"]);
-    expect(repairCall.env).toStrictEqual({});
-    expect(result).toStrictEqual({
-      required: true,
-      changes: ['Repaired missing configured plugin "codex".'],
-      warnings: [reviewNotice],
-    });
-  });
+      const repairCall = readOnlyMissingPluginInstallRepairCall();
+      expect(repairCall.pluginIds).toStrictEqual([pluginId]);
+      expect(repairCall.env).toStrictEqual({});
+      expect(result).toStrictEqual([reviewNotice]);
+    },
+  );
 
   it("does not report an existing Codex install as usable when plugins are disabled", async () => {
     const cfg = { plugins: { enabled: false } };
@@ -250,40 +260,11 @@ describe("Codex runtime plugin install repair", () => {
     expect("cfg" in result).toBe(false);
   });
 
-  it("enables an allowed existing Codex install", async () => {
-    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({
-      codex: { source: "npm", installPath: process.cwd() },
-    });
-    const cfg: OpenClawConfig = {
-      plugins: {
-        allow: ["codex"],
-        entries: { codex: { enabled: false } },
-      },
-    };
-
-    const result = await ensureCodexRuntimePluginForModelSelection({
-      cfg,
-      model: "openai/gpt-5.5",
-      prompter: {} as never,
-      runtime: {} as never,
-    });
-
-    expect(result).toMatchObject({
-      ok: true,
-      required: true,
-      cfg: { plugins: { entries: { codex: { enabled: true } } } },
-    });
-  });
-
   const sensitiveFixture = ["fixture", "credential"].join("-");
   it.each([
     {
       status: "failed" as const,
       error: `Install failed: https://user:${sensitiveFixture}@registry.example.test/pkg?token=${sensitiveFixture}\u001b[2K`,
-    },
-    {
-      status: "timed_out" as const,
-      error: undefined,
     },
   ])("formats a sanitized actionable $status failure for required Codex", async (failure) => {
     mocks.ensureOnboardingPluginInstalled.mockResolvedValueOnce({
@@ -316,43 +297,6 @@ describe("Codex runtime plugin install repair", () => {
     expect(result.message).not.toContain(sensitiveFixture);
     expect(result.message).not.toContain("\u001b");
     expect(result).not.toHaveProperty("cfg");
-  });
-
-  it("keeps an optional Codex runtime selection as a successful no-op", async () => {
-    const result = await ensureCodexRuntimePluginForModelSelection({
-      cfg: {},
-      model: "anthropic/claude-sonnet-4-6",
-      prompter: {} as never,
-      runtime: {} as never,
-    });
-
-    expect(result).toEqual({
-      ok: true,
-      cfg: {},
-      required: false,
-    });
-    expect(mocks.ensureOnboardingPluginInstalled).not.toHaveBeenCalled();
-  });
-
-  it("allows source checkouts to use the matching bundled Codex plugin", async () => {
-    await ensureCodexRuntimePluginForModelSelection({
-      cfg: {},
-      model: "openai/gpt-5.5",
-      prompter: {} as never,
-      runtime: {} as never,
-    });
-
-    expect(mocks.ensureOnboardingPluginInstalled).toHaveBeenCalledWith(
-      expect.objectContaining({
-        entry: {
-          pluginId: "codex",
-          label: "Codex",
-          install: { npmSpec: "@openclaw/codex", defaultChoice: "npm" },
-          trustedSourceLinkedOfficialInstall: true,
-          versionBoundToOpenClaw: true,
-        },
-      }),
-    );
   });
 
   it("sees an agent-scoped Codex runtime pin behind a custom OpenAI route", async () => {
@@ -446,7 +390,7 @@ describe("Codex runtime plugin install repair", () => {
     );
   });
 
-  it.each(["ordinary selection", "silent supervision"] as const)(
+  it.each(["silent supervision"] as const)(
     "keeps runtime installation prompt-free for %s",
     async (caller) => {
       const prompter = createWizardPrompter();

@@ -154,8 +154,7 @@ extension GatewayProcessManager {
             change.recoveryFailure = error.localizedDescription
             if error.localizedDescription.contains(GatewayLaunchAgentManager.runtimePinSelectionChanged) {
                 self.desiredActive = false
-                self.status = .failed(error.localizedDescription)
-                self.lastFailureReason = error.localizedDescription
+                self.fail(error.localizedDescription)
                 self.appendLog("[gateway] \(error.localizedDescription)\n")
             }
             throw error
@@ -236,7 +235,7 @@ extension GatewayProcessManager {
             generation: change.generation,
             runtimeForUpdate: cli == nil ? selectedRuntime : nil,
             runtimeEnvironment: cli == nil ? self.appHostedEnvironment(runtime: selectedRuntime) : nil,
-            serviceForRestoration: cli,
+            serviceForRestoration: cli.map { ServiceRestoration(retained: $0, installer: runtime) },
             expectedServiceAuthority: change.expectedService.serviceAuthority(),
             mutationCheck: { try await self.checkHostingChange(change, requiresActive: true) })
         if let failure = result.error, failure.contains(GatewayLaunchAgentManager.runtimePinSelectionChanged) {

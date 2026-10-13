@@ -11,6 +11,7 @@
  */
 
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { containsAsciiControlCharacter as hasControlChar } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { OcEmitSentinelError, REDACTED_SENTINEL } from "./sentinel.js";
 
@@ -22,18 +23,6 @@ const MAX_SUB_SEGMENTS_PER_SLOT = 64;
 export const MAX_TRAVERSAL_DEPTH = 256;
 
 const BOM = "﻿";
-
-// Walk by char code rather than regex — the no-control-regex lint rule
-// rejects character classes covering U+0000–U+001F + U+007F.
-function hasControlChar(s: string): boolean {
-  for (let i = 0; i < s.length; i++) {
-    const cc = s.charCodeAt(i);
-    if (cc <= 0x1f || cc === 0x7f) {
-      return true;
-    }
-  }
-  return false;
-}
 
 const RESERVED_CHARS_RE = /[?&%]/;
 
@@ -127,7 +116,6 @@ function validateSessionSlot(session: string, contextInput: string): void {
   }
 }
 
-/** Parse an `oc://` path string into a structured `OcPath`. */
 export function parseOcPath(input: string): OcPath {
   if (typeof input !== "string") {
     fail("oc:// path must be a string", String(input), "OC_PATH_NOT_STRING");
@@ -243,9 +231,8 @@ function normalizeDeepJsonPathSegments(
   ];
 }
 
-/** Format an `OcPath` struct into its canonical string form. */
 export function formatOcPath(path: OcPath): string {
-  if (!path.file || path.file.length === 0) {
+  if (!path.file) {
     fail("oc:// path requires a file", "", "OC_PATH_FILE_REQUIRED");
   }
   validateFileSlot(path.file, path.file);
@@ -261,13 +248,11 @@ export function formatOcPath(path: OcPath): string {
   // (quoted, predicate, union, sentinel). Plain concatenation would
   // silently split a raw `foo/bar` slot into two segments at parse.
   const formatSubSegment = (sub: string): string => {
-    if (isQuotedSeg(sub)) {
-      return sub;
-    }
-    if (sub.startsWith("[") && sub.endsWith("]")) {
-      return sub;
-    }
-    if (sub.startsWith("{") && sub.endsWith("}")) {
+    if (
+      isQuotedSeg(sub) ||
+      (sub.startsWith("[") && sub.endsWith("]")) ||
+      (sub.startsWith("{") && sub.endsWith("}"))
+    ) {
       return sub;
     }
     return quoteSeg(sub);
@@ -373,7 +358,6 @@ interface PositionalContainer {
   readonly keys?: readonly string[];
 }
 
-// Resolve `$first` / `$last` against a container; null when empty.
 export function resolvePositionalSeg(seg: string, container: PositionalContainer): string | null {
   if (container.size === 0) {
     return null;
@@ -414,13 +398,12 @@ export function isPattern(path: OcPath): boolean {
     // Quote-aware split — `slot.split('.')` would shred quoted keys
     // containing literal `*` and falsely flag them as wildcards.
     for (const sub of splitRespectingBrackets(slot, ".")) {
-      if (sub === WILDCARD_SINGLE || sub === WILDCARD_RECURSIVE) {
-        return true;
-      }
-      if (isUnionSeg(sub)) {
-        return true;
-      }
-      if (isPredicateSeg(sub)) {
+      if (
+        sub === WILDCARD_SINGLE ||
+        sub === WILDCARD_RECURSIVE ||
+        isUnionSeg(sub) ||
+        isPredicateSeg(sub)
+      ) {
         return true;
       }
     }
@@ -591,7 +574,6 @@ function scanBracketAware(s: string, onChar: ScanCallback, onUnbalanced: () => n
   }
 }
 
-/** First top-level occurrence of `ch` in `s`; -1 when absent. */
 function indexOfTopLevel(s: string, ch: string): number {
   let result = -1;
   const failLocal = (): never => {
@@ -645,7 +627,6 @@ export function splitOcPathSlots(...slots: readonly (string | undefined)[]): str
   );
 }
 
-/** True iff `seg` is `"..."`. */
 function isQuotedSeg(seg: string): boolean {
   return seg.length >= 2 && seg.startsWith('"') && seg.endsWith('"');
 }
@@ -708,7 +689,7 @@ function validateSubSegment(sub: string, input: string): void {
         "OC_PATH_RESERVED_CHAR",
       );
     }
-    if (sub !== sub.trim() || /\s/.test(sub)) {
+    if (/\s/.test(sub)) {
       fail(
         `Whitespace in oc:// segment "${sub}": ${printable(input)}`,
         input,
@@ -739,7 +720,7 @@ function validateSubSegment(sub: string, input: string): void {
     const hasOp = ["!=", "<=", ">=", "<", ">", "="].some((op) => inner.includes(op));
     if (hasOp) {
       const parsed = parsePredicateSeg(sub);
-      if (parsed === null || parsed.key.length === 0 || parsed.value.length === 0) {
+      if (parsed === null) {
         fail(
           `Malformed predicate "${sub}" — must be \`[key<op>value]\` with non-empty key and value: ${printable(input)}`,
           input,

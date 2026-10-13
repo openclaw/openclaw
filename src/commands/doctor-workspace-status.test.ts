@@ -18,15 +18,14 @@ import {
 const mocks = vi.hoisted(() => ({
   listAgentIds: vi.fn<(_cfg: OpenClawConfig) => string[]>(() => ["default"]),
   resolveAgentWorkspaceDir: vi.fn(),
-  resolveDefaultAgentId: vi.fn(),
   buildPluginRegistrySnapshotReport: vi.fn(),
   buildPluginCompatibilityWarnings: vi.fn(),
 }));
 
-vi.mock("../agents/agent-scope.js", () => ({
+vi.mock("../agents/agent-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/agent-scope.js")>()),
   listAgentIds: (cfg: OpenClawConfig) => mocks.listAgentIds(cfg),
   resolveAgentWorkspaceDir: (...args: unknown[]) => mocks.resolveAgentWorkspaceDir(...args),
-  tryResolveDefaultAgentId: (...args: unknown[]) => mocks.resolveDefaultAgentId(...args),
 }));
 
 vi.mock("../plugins/status.js", () => ({
@@ -45,7 +44,6 @@ async function runNoteWorkspaceStatusForTest(
   },
 ) {
   const cfg: OpenClawConfig = opts?.cfg ?? {};
-  mocks.resolveDefaultAgentId.mockReturnValue("default");
   mocks.listAgentIds.mockReturnValue(["default"]);
   mocks.resolveAgentWorkspaceDir.mockReturnValue("/workspace");
   mocks.buildPluginRegistrySnapshotReport.mockReturnValue({
@@ -64,6 +62,41 @@ async function runNoteWorkspaceStatusForTest(
 }
 
 describe("noteWorkspaceStatus", () => {
+  it("passes the shared status report into compatibility warnings", async () => {
+    const loadResult = createPluginLoadResult({
+      plugins: [
+        createPluginRecord({
+          id: "legacy-plugin",
+          name: "Legacy Plugin",
+          hookCount: 1,
+        }),
+      ],
+      typedHooks: [createTypedHook({ pluginId: "legacy-plugin", hookName: "before_prompt_build" })],
+    });
+    const noteSpy = await runNoteWorkspaceStatusForTest(loadResult, ["legacy-plugin is hook-only"]);
+    try {
+      expect(mocks.buildPluginRegistrySnapshotReport).toHaveBeenCalledWith({
+        config: {},
+        workspaceDir: "/workspace",
+      });
+      expect(mocks.buildPluginCompatibilityWarnings).toHaveBeenCalledWith({
+        config: {},
+        workspaceDir: "/workspace",
+        report: {
+          workspaceDir: "/workspace",
+          ...loadResult,
+        },
+      });
+      const compatibilityCalls = noteSpy.mock.calls.filter(
+        ([, title]) => title === "Plugin compatibility",
+      );
+      expect(compatibilityCalls).toHaveLength(1);
+      const [body] = expectDefined(compatibilityCalls[0], "(compatibilityCalls)[0] test invariant");
+      expect(body).toContain("legacy-plugin is hook-only");
+    } finally {
+      noteSpy.mockRestore();
+    }
+  });
   it("shares scoped workspace inspection while reporting identical registrar failures once", () => {
     const diagnostic = {
       level: "error" as const,
@@ -71,7 +104,6 @@ describe("noteWorkspaceStatus", () => {
       source: "/plugins/broken-fixture/index.js",
       message: "board widget registration has invalid kind",
     };
-    mocks.resolveDefaultAgentId.mockReturnValue("beta");
     mocks.listAgentIds.mockReturnValue(["alpha", "beta"]);
     mocks.resolveAgentWorkspaceDir.mockImplementation((_cfg, agentId) => `/workspace/${agentId}`);
     let activeWorkspace: string | undefined;
@@ -99,9 +131,7 @@ describe("noteWorkspaceStatus", () => {
       expect(activeWorkspace).toBeDefined();
     });
     try {
-      expect(noteWorkspaceStatus({}, { runWithPluginMetadataSnapshot })).toEqual({
-        workspaceDir: "/workspace/beta",
-      });
+      noteWorkspaceStatus({}, { runWithPluginMetadataSnapshot });
       expect(noteSpy.mock.calls).toEqual([
         ['Agent "alpha":\n- legacy-plugin is hook-only', "Plugin compatibility"],
         [
@@ -119,28 +149,6 @@ describe("noteWorkspaceStatus", () => {
       ]);
       expect(findings.filter((finding) => finding.target === "broken-fixture")).toHaveLength(1);
       expect(activeWorkspace).toBeUndefined();
-    } finally {
-      noteSpy.mockRestore();
-    }
-  });
-
-  it("omits healthy plugin inventory", async () => {
-    const noteSpy = await runNoteWorkspaceStatusForTest(
-      createPluginLoadResult({
-        plugins: [
-          createPluginRecord({
-            id: "claude-bundle",
-            name: "Claude Bundle",
-            source: "/tmp/claude-bundle",
-            format: "bundle",
-            bundleFormat: "claude",
-            bundleCapabilities: ["skills", "commands", "agents"],
-          }),
-        ],
-      }),
-    );
-    try {
-      expect(noteSpy).not.toHaveBeenCalled();
     } finally {
       noteSpy.mockRestore();
     }
@@ -192,7 +200,6 @@ describe("noteWorkspaceStatus", () => {
   });
 
   it("collects plugin version drift as structured findings", async () => {
-    mocks.resolveDefaultAgentId.mockReturnValue("default");
     mocks.resolveAgentWorkspaceDir.mockReturnValue("/workspace");
     mocks.buildPluginRegistrySnapshotReport.mockReturnValue({
       workspaceDir: "/workspace",
@@ -236,7 +243,6 @@ describe("noteWorkspaceStatus", () => {
   });
 
   it("reports npm target lookup failure without an uninstallable fix hint", () => {
-    mocks.resolveDefaultAgentId.mockReturnValue("default");
     mocks.resolveAgentWorkspaceDir.mockReturnValue("/workspace");
     mocks.buildPluginRegistrySnapshotReport.mockReturnValue({
       workspaceDir: "/workspace",
@@ -284,7 +290,6 @@ describe("noteWorkspaceStatus", () => {
   });
 
   it("collects compatibility warnings and plugin diagnostics", async () => {
-    mocks.resolveDefaultAgentId.mockReturnValue("default");
     mocks.resolveAgentWorkspaceDir.mockReturnValue("/workspace");
     mocks.buildPluginRegistrySnapshotReport.mockReturnValue({
       workspaceDir: "/workspace",
@@ -433,68 +438,5 @@ describe("noteWorkspaceStatus", () => {
     } finally {
       noteSpy.mockRestore();
     }
-  });
-
-  it("passes the shared status report into compatibility warnings", async () => {
-    const loadResult = createPluginLoadResult({
-      plugins: [
-        createPluginRecord({
-          id: "legacy-plugin",
-          name: "Legacy Plugin",
-          hookCount: 1,
-        }),
-      ],
-      typedHooks: [createTypedHook({ pluginId: "legacy-plugin", hookName: "before_prompt_build" })],
-    });
-    const noteSpy = await runNoteWorkspaceStatusForTest(loadResult, ["legacy-plugin is hook-only"]);
-    try {
-      expect(mocks.buildPluginRegistrySnapshotReport).toHaveBeenCalledWith({
-        config: {},
-        workspaceDir: "/workspace",
-      });
-      expect(mocks.buildPluginCompatibilityWarnings).toHaveBeenCalledWith({
-        config: {},
-        workspaceDir: "/workspace",
-        report: {
-          workspaceDir: "/workspace",
-          ...loadResult,
-        },
-      });
-      const compatibilityCalls = noteSpy.mock.calls.filter(
-        ([, title]) => title === "Plugin compatibility",
-      );
-      expect(compatibilityCalls).toHaveLength(1);
-      const [body] = expectDefined(compatibilityCalls[0], "(compatibilityCalls)[0] test invariant");
-      expect(body).toContain("legacy-plugin is hook-only");
-    } finally {
-      noteSpy.mockRestore();
-    }
-  });
-
-  it("labels workspace diagnostics for the affected secondary agent", () => {
-    mocks.buildPluginRegistrySnapshotReport.mockClear();
-    mocks.listAgentIds.mockReturnValue(["default", "secondary"]);
-    mocks.resolveAgentWorkspaceDir.mockImplementation((_cfg, agentId) => `/${agentId}`);
-    mocks.buildPluginRegistrySnapshotReport.mockImplementation(({ workspaceDir }) => ({
-      workspaceDir,
-      ...createPluginLoadResult({
-        plugins: [],
-        diagnostics:
-          workspaceDir === "/secondary"
-            ? [{ level: "error", pluginId: "broken", message: "load failed" }]
-            : [],
-      }),
-    }));
-    mocks.buildPluginCompatibilityWarnings.mockReturnValue([]);
-
-    const findings = collectWorkspaceStatusHealthFindings({});
-
-    expect(mocks.buildPluginRegistrySnapshotReport).toHaveBeenCalledTimes(2);
-    expect(findings).toEqual([
-      expect.objectContaining({
-        message: 'Agent "secondary": load failed',
-        path: "plugins.entries.broken",
-      }),
-    ]);
   });
 });

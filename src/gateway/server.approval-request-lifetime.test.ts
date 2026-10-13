@@ -156,6 +156,7 @@ describe("public Gateway close approval lifetime", () => {
         expect(emergencyResolution).toBe(false);
         expect(completions.request?.status).toBe("rejected");
         expect(completions.wait?.status).toBe("rejected");
+        // Closing request observers must leave the persisted pending approval unchanged.
         expect(await getOperatorApprovalDetailed({ id })).toEqual(beforeClose);
       } finally {
         clearTimeout(releaseTimer);

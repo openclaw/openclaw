@@ -439,8 +439,9 @@ export async function handleQaBusRequest(params: {
   }
 }
 
-function createQaBusServer(state: QaBusState): Server {
-  return createServer((req, res) => {
+export async function startQaBusServer(params: { state: QaBusState; port?: number }) {
+  const { state } = params;
+  const server = createServer((req, res) => {
     dispatchQaHttpRequest(res, async () => {
       const handled = await handleQaBusRequest({ req, res, state });
       if (!handled) {
@@ -448,10 +449,6 @@ function createQaBusServer(state: QaBusState): Server {
       }
     });
   });
-}
-
-export async function startQaBusServer(params: { state: QaBusState; port?: number }) {
-  const server = createQaBusServer(params.state);
   await once(server.listen(params.port ?? 0, "127.0.0.1"), "listening");
   const address = server.address();
   if (!address || typeof address === "string") {

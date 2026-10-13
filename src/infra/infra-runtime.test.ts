@@ -1105,7 +1105,7 @@ describe("infra runtime", () => {
       }
     });
 
-    it("bypasses restart cooldown when requested", async () => {
+    it("admits another restart after its cooldown expires", async () => {
       const emitSpy = vi.spyOn(process, "emit");
       const handler = () => {};
       process.on("SIGUSR2", handler);
@@ -1114,16 +1114,16 @@ describe("infra runtime", () => {
         await vi.advanceTimersByTimeAsync(0);
         expect(consumeGatewayRestartAuthorization()).toBe(true);
         markGatewayRestartHandled();
+        await vi.advanceTimersByTimeAsync(30_000);
 
-        const forced = scheduleGatewayRestart({
+        const next = scheduleGatewayRestart({
           delayMs: 0,
           reason: "update.run",
-          skipCooldown: true,
         });
 
-        expect(forced.coalesced).toBe(false);
-        expect(forced.delayMs).toBe(0);
-        expect(forced.cooldownMsApplied).toBe(0);
+        expect(next.coalesced).toBe(false);
+        expect(next.delayMs).toBe(0);
+        expect(next.cooldownMsApplied).toBe(0);
 
         await vi.advanceTimersByTimeAsync(0);
         expect(countRestartSignalEmits(emitSpy.mock.calls)).toBe(2);

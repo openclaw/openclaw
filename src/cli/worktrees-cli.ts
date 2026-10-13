@@ -6,6 +6,7 @@ import type { ManagedWorktreeService } from "../agents/worktrees/service.js";
 import type {
   CreateManagedWorktreeParams,
   ManagedWorktreeGcResult,
+  ManagedWorktreeGcReceipt,
   ManagedWorktreeRecord,
   ManagedWorktreeRunEndCleanup,
   RemoveManagedWorktreeResult,
@@ -73,12 +74,51 @@ export function registerWorktreesCli(program: Command): void {
     .description("List active and restorable managed worktrees")
     .option("--json", "Output JSON", false)
     .action(async (opts: JsonOption) => {
-      const { managedWorktrees } = await import("../agents/worktrees/service.js");
-      const records = await managedWorktrees.list();
+      const result = await runWithLocalStateOwner<{
+        worktrees: ManagedWorktreeRecord[];
+        retirementCandidates?: string[];
+      }>({
+        method: "worktrees.list",
+        params: {},
+        target: "managed worktrees",
+        recoveryCommand: "openclaw worktrees list --json",
+        onForeignOwner: async ({ env, signal, assertCurrent }) => {
+          const [{ readExistingRegistryWorktrees }, { worktreePathExists }] = await Promise.all([
+            import("../agents/worktrees/registry-read.js"),
+            import("../agents/worktrees/git.js"),
+          ]);
+          assertCurrent();
+          const records = await readExistingRegistryWorktrees(env, signal);
+          const visible = records.filter(
+            (record) => record.removedAt === undefined || record.snapshotRef,
+          );
+          const retirementCandidates: string[] = [];
+          for (const record of visible) {
+            assertCurrent();
+            if (record.removedAt === undefined && !(await worktreePathExists(record.path))) {
+              retirementCandidates.push(record.id);
+            }
+          }
+          assertCurrent();
+          return { worktrees: visible, retirementCandidates };
+        },
+        runLocal: async ({ env, config, assertCurrent }) => {
+          const { ManagedWorktreeService } = await import("../agents/worktrees/service.js");
+          assertCurrent();
+          const listed = await new ManagedWorktreeService({
+            env,
+            getConfig: () => config,
+          }).list();
+          assertCurrent();
+          return { worktrees: listed };
+        },
+      });
       if (opts.json) {
-        defaultRuntime.writeJson({ worktrees: records });
+        defaultRuntime.writeJson(result);
         return;
       }
+      const { worktrees: records } = result;
+      const retirementCandidates = new Set(result.retirementCandidates);
       if (records.length === 0) {
         defaultRuntime.log("No managed worktrees.");
         return;
@@ -96,7 +136,11 @@ export function registerWorktreesCli(program: Command): void {
             ID: record.id,
             Repo: record.repoRoot,
             Branch: record.branch,
-            Status: record.removedAt ? "restorable" : "active",
+            Status: retirementCandidates.has(record.id)
+              ? "missing (retirement candidate)"
+              : record.removedAt
+                ? "restorable"
+                : "active",
           })),
         }).trimEnd(),
       );
@@ -318,22 +362,30 @@ export function registerWorktreesCli(program: Command): void {
 
   worktrees
     .command("gc")
-    .description("Run managed worktree cleanup now")
+    .description("Queue background managed worktree cleanup or inspect its progress")
+    .option("--job <id>", "Show progress for a previously queued cleanup job")
+    .option("--retry-deferred", "Reinspect deferred checkouts and retry Git maintenance", false)
     .option("--json", "Output JSON", false)
-    .action(async (opts: JsonOption) => {
+    .action(async (opts: JsonOption & { job?: string; retryDeferred?: boolean }) => {
       const { formatWorktreeGcResult } = await import("../agents/worktrees/gc-result.js");
-      const result = await mutateWorktree<ManagedWorktreeGcResult>(
+      const result = await mutateWorktree<ManagedWorktreeGcResult | ManagedWorktreeGcReceipt>(
         "worktrees.gc",
         GATEWAY_SERVER_CAPS.WORKTREES_GC_OWNER,
-        {},
+        {
+          ...(opts.job ? { jobId: opts.job } : {}),
+          ...(opts.retryDeferred ? { retryDeferred: true } : {}),
+        },
         async (service, guard, config) => {
+          if (opts.job) {
+            throw new Error(
+              "Cleanup progress belongs to the running Gateway; start it before querying this job.",
+            );
+          }
           const { createManagedWorktreeOwnerPolicy } =
             await import("../agents/worktrees/owner-protection.js");
-          const { resolveWorktreeCleanupLimits } = await import("../agents/worktrees/service.js");
           return service.gc({
             ...guard,
-            limits: resolveWorktreeCleanupLimits(),
-            retryDeferred: true,
+            retryDeferred: opts.retryDeferred,
             ...createManagedWorktreeOwnerPolicy(config),
           });
         },
@@ -341,9 +393,13 @@ export function registerWorktreesCli(program: Command): void {
       if (opts.json) {
         defaultRuntime.writeJson(result);
       } else {
-        defaultRuntime.log(formatWorktreeGcResult(result));
+        defaultRuntime.log(
+          "jobId" in result
+            ? `Worktree cleanup ${result.state}: ${result.jobId}. ${formatWorktreeGcResult(result)}\nProgress: openclaw worktrees gc --job ${result.jobId}${result.error ? `\n${result.error}` : ""}`
+            : formatWorktreeGcResult(result),
+        );
       }
-      if (result.outcome === "partial") {
+      if (result.outcome === "partial" || ("state" in result && result.state === "failed")) {
         const { exitCliAfterOutput } = await import("./one-shot-exit.js");
         exitCliAfterOutput(defaultRuntime, 1);
       }

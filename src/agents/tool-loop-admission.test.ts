@@ -19,7 +19,7 @@ import {
 import type { HookContext } from "./agent-tools.before-tool-call.types.js";
 import { createToolLoopBatchAdmission } from "./embedded-agent-runner/run/tool-loop-recovery.js";
 import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
-import { admitToolCallBatch } from "./tool-loop-admission.js";
+import { admitSingleToolCallLoop, admitToolCallBatch } from "./tool-loop-admission.js";
 import { recordToolCall, recordToolCallOutcome } from "./tool-loop-detection.js";
 
 const ctx = {
@@ -158,6 +158,37 @@ describe("whole-batch tool-loop admission", () => {
     resetDiagnosticEventsForTest();
     resetAdjustedParamsByToolCallIdForTests();
   });
+
+  it.each([undefined, { enabled: false }])(
+    "admits existing loops without recording when detection is disabled (%j)",
+    async (loopDetection) => {
+      const state = getDiagnosticSessionState(ctx);
+      const args = { action: "poll", sessionId: "process-1" };
+      for (let index = 0; index < 30; index++) {
+        recordToolCallOutcome(state, {
+          toolName: "process",
+          toolParams: args,
+          toolCallId: `prior-${index}`,
+          result: {
+            content: [{ type: "text", text: "(no new output)\n\nProcess still running." }],
+            details: { status: "running" },
+          },
+          runId: ctx.runId,
+        });
+      }
+      const candidate = call("next", "process", args);
+      await expect(admitToolCallBatch([candidate], ctx)).resolves.toMatchObject({
+        intervention: { kind: "critical-tool-loop" },
+      });
+      const history = [...(state.toolCallHistory ?? [])];
+      const disabled = { ...ctx, loopDetection };
+      await expect(admitToolCallBatch([candidate], disabled)).resolves.toEqual({});
+      await expect(
+        admitSingleToolCallLoop({ toolName: "process", params: args }, disabled),
+      ).resolves.toBeUndefined();
+      expect(state.toolCallHistory).toEqual(history);
+    },
+  );
 
   it.each([
     ["read", { path: "/tmp/repeated" }, "generic_repeat"],
@@ -307,11 +338,11 @@ describe("whole-batch tool-loop admission", () => {
     expectRecoveryStop(messages);
   });
 
-  it("runs a corrected call after repeated argument-validation failures", async () => {
+  it("runs a corrected call before the repeated-error retry budget is exhausted", async () => {
     const { messages, execExecute } = await runComposedLoop("run-corrected", (turn) =>
-      turn <= 12
+      turn <= 2
         ? [{ type: "toolCall", id: `exec-${turn}`, name: "exec", arguments: {} }]
-        : turn === 13
+        : turn === 3
           ? [{ type: "toolCall", id: "exec-fixed", name: "exec", arguments: { command: "ls" } }]
           : [],
     );
@@ -330,7 +361,7 @@ describe("whole-batch tool-loop admission", () => {
     const pollArgs = { action: "poll", sessionId: "process-1" };
     for (let index = 0; index < priorCount; index++) {
       const toolCallId = `prior-${index}`;
-      recordToolCall(state, "process", pollArgs, toolCallId, ctx.loopDetection, {
+      recordToolCall(state, "process", pollArgs, toolCallId, {
         runId: ctx.runId,
       });
       recordToolCallOutcome(state, {
@@ -341,7 +372,6 @@ describe("whole-batch tool-loop admission", () => {
           content: [{ type: "text", text: "(no new output)\n\nProcess still running." }],
           details: { status: "running" },
         },
-        config: ctx.loopDetection,
         runId: ctx.runId,
       });
     }

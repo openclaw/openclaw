@@ -2,21 +2,14 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import {
-  getRuntimeConfig,
   getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
   selectApplicableRuntimeConfig,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import {
-  createNonExitingRuntime,
-  logVerbose,
-  type RuntimeEnv,
-} from "openclaw/plugin-sdk/runtime-env";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { resolveLineAccount } from "./accounts.js";
 import { handleLineWebhookEvents } from "./bot-handlers.js";
-import type { LineInboundContext } from "./bot-message-context.js";
-import type { ResolvedLineAccount } from "./types.js";
-import { createLineWebhookSpool, type LineWebhookTurnAdoptionLifecycle } from "./webhook-spool.js";
+import { createLineWebhookSpool } from "./webhook-spool.js";
 
 const DEFAULT_MEDIA_MAX_MB = 10;
 type BuildChannelInboundContext =
@@ -24,29 +17,14 @@ type BuildChannelInboundContext =
 
 interface LineBotOptions {
   accountId?: string;
-  runtime?: RuntimeEnv;
+  runtime: RuntimeEnv;
   buildContext?: BuildChannelInboundContext;
-  config?: OpenClawConfig;
-  mediaMaxMb?: number;
-  onMessage?: (
-    ctx: LineInboundContext,
-    control: {
-      cfg: OpenClawConfig;
-      turnAdoptionLifecycle?: LineWebhookTurnAdoptionLifecycle;
-    },
-  ) => Promise<void>;
+  config: OpenClawConfig;
+  onMessage: Parameters<typeof handleLineWebhookEvents>[1]["processMessage"];
 }
 
-interface LineBot {
-  handleWebhook: ReturnType<typeof createLineWebhookSpool>["accept"];
-  account: ResolvedLineAccount;
-  stop: () => Promise<void>;
-}
-
-export function createLineBot(opts: LineBotOptions): LineBot {
-  const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
-
-  const startupConfig = opts.config ?? getRuntimeConfig();
+export function createLineBot(opts: LineBotOptions) {
+  const { runtime, config: startupConfig } = opts;
   // LINE monitors outlive reloads outside `channels.line`. Bind snapshot ownership
   // once at startup; checking after reload would compare against the replaced source
   // and pin a process-owned monitor to stale config.
@@ -55,7 +33,6 @@ export function createLineBot(opts: LineBotOptions): LineBot {
   // A snapshot without its source cannot prove that a distinct supplied config is
   // process-owned, so keep scoped monitors pinned through later global reloads.
   const followsRuntimeConfig =
-    opts.config === undefined ||
     startupRuntimeConfig === startupConfig ||
     (startupRuntimeSourceConfig !== null &&
       selectApplicableRuntimeConfig({
@@ -76,17 +53,13 @@ export function createLineBot(opts: LineBotOptions): LineBot {
   // link. `??` alone keeps a configured 0 or negative and turns every inbound
   // media download into a 0-byte budget the media core rejects, which degrades
   // the attachment to an unavailable notice without naming the setting.
+  const configuredMediaMaxMb = account.config.mediaMaxMb;
   const effectiveMediaMaxMb =
-    [opts.mediaMaxMb, account.config.mediaMaxMb].find(
-      (value) => typeof value === "number" && value > 0,
-    ) ?? DEFAULT_MEDIA_MAX_MB;
+    typeof configuredMediaMaxMb === "number" && configuredMediaMaxMb > 0
+      ? configuredMediaMaxMb
+      : DEFAULT_MEDIA_MAX_MB;
   const mediaMaxBytes = effectiveMediaMaxMb * 1024 * 1024;
 
-  const processMessage =
-    opts.onMessage ??
-    (async () => {
-      logVerbose("line: no message handler configured");
-    });
   const groupHistories = new Map<string, HistoryEntry[]>();
   const spool = createLineWebhookSpool({
     accountId: account.accountId,
@@ -99,7 +72,7 @@ export function createLineBot(opts: LineBotOptions): LineBot {
         runtime,
         buildContext: opts.buildContext,
         mediaMaxBytes,
-        processMessage,
+        processMessage: opts.onMessage,
         ...(control.turnAdoptionLifecycle
           ? { turnAdoptionLifecycle: control.turnAdoptionLifecycle }
           : {}),

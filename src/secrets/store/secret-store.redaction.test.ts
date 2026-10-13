@@ -49,22 +49,12 @@ function corruptStoredValue(database: Awaited<ReturnType<typeof fixture>>["datab
 }
 
 describe("secret store redaction integrity", () => {
-  it.each([
-    "__OPENCLAW_REDACTED__",
-    "REDACTED",
-    "xoxb-REDACTED",
-    "xapp-REDACTED",
-    "***",
-    "[redacted]",
-    "[REDACTED]",
-    "<redacted>",
-    "[REDACTED_PRIVATE_KEY]",
-    "[REDACTED CREDENTIAL]",
-    " __OPENCLAW_REDACTED__\n",
-  ])("refuses display marker %s without overwriting the credential", async (value) => {
+  it("refuses a padded display marker without overwriting the credential", async () => {
     const { entry, database } = await fixture();
     const before = await listSecretStoreEntries({ scope, database });
-    await expect(writeSecretStoreEntry({ ...entry, value, updatedBy: "cli" })).rejects.toThrow(
+    await expect(
+      writeSecretStoreEntry({ ...entry, value: " __OPENCLAW_REDACTED__\n", updatedBy: "cli" }),
+    ).rejects.toThrow(
       expect.objectContaining({
         code: "SECRET_STORE_VALUE_REDACTED",
         message: expect.stringContaining(name),

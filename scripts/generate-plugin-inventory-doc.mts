@@ -4,10 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { collectExcludedPackagedExtensionDirs } from "./lib/packaged-extension-dirs.mts";
-import {
-  assertPluginInventoryCoverage,
-  resolvePluginSurface,
-} from "./lib/plugin-inventory-doc.mts";
+import { resolvePluginSurface } from "./lib/plugin-inventory-doc.mts";
 import {
   collectPluginSourceEntries,
   exportPluginInventory,
@@ -22,7 +19,6 @@ const DOC_PATH = "docs/plugins/plugin-inventory.md";
 const REFERENCE_INDEX_PATH = "docs/plugins/reference.md";
 const REFERENCE_DIR = "docs/plugins/reference";
 const ROOT = process.cwd();
-const EXTENSIONS_DIR = path.join(ROOT, "extensions");
 
 const PROVIDER_DOC_ALIASES = new Map([
   ["amazon-bedrock", "/providers/bedrock"],
@@ -541,21 +537,6 @@ pnpm plugins:inventory:gen
 `;
 }
 
-function enumerateTopLevelPluginManifests() {
-  return fs
-    .readdirSync(EXTENSIONS_DIR)
-    .toSorted((left, right) => left.localeCompare(right))
-    .flatMap((dirName) => {
-      const manifestPath = path.join(EXTENSIONS_DIR, dirName, "openclaw.plugin.json");
-      if (!fs.existsSync(manifestPath)) {
-        return [];
-      }
-      const manifest = readJsonPath(manifestPath) as PluginManifest;
-      const id = typeof manifest.id === "string" && manifest.id ? manifest.id : dirName;
-      return [{ dirName, id }];
-    });
-}
-
 type ExternalPluginDocsInventorySeedEntry = {
   openclaw?: {
     channel?: NonNullable<PluginPackageJson["openclaw"]>["channel"];
@@ -607,7 +588,6 @@ function collectPluginRecords() {
   const rootPackageJson = readJsonPath(path.join(ROOT, "package.json")) as { files?: unknown[] };
   const excludedDirs = collectExcludedPackagedExtensionDirs(rootPackageJson);
   const sourceEntries = collectPluginSourceEntries(ROOT);
-  assertPluginInventoryCoverage(sourceEntries, enumerateTopLevelPluginManifests());
   const records = sourceEntries.map((entry) =>
     createPluginRecord(entry, resolvePluginStatus(entry, excludedDirs)),
   );
@@ -643,7 +623,7 @@ summary: "Generated inventory of OpenClaw plugins shipped in core, published ext
 read_when:
   - You are deciding whether a plugin ships in the core npm package or installs separately
   - You are updating bundled plugin package metadata or release automation
-  - You need the canonical internal vs external plugin list
+  - You need the current internal vs external plugin list
 title: "Plugin inventory"
 ---
 

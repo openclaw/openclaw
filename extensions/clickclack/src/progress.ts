@@ -87,12 +87,6 @@ function createLineIdResolver(): (payload: ClickClackItemEventPayload) => string
   };
 }
 
-type ClickClackAgentProgressPublisher = {
-  start(): void;
-  onItemEvent(payload: ClickClackItemEventPayload): false;
-  finalize(): Promise<void>;
-};
-
 type QueuedProgressFrame = {
   lineId?: string;
   payload: Record<string, unknown>;
@@ -107,7 +101,7 @@ export function createClickClackAgentProgressPublisher(params: {
   turnId: string;
   agentLabel?: string;
   onError?: (error: unknown) => void;
-}): ClickClackAgentProgressPublisher {
+}) {
   let sequence = 0;
   const queue: QueuedProgressFrame[] = [];
   const queuedLines = new Map<string, QueuedProgressFrame>();
@@ -177,18 +171,6 @@ export function createClickClackAgentProgressPublisher(params: {
     queue.splice(0, queue.length, ...controlFrames);
   };
 
-  const waitForDrainWithinFinalizeGrace = async (pending: Promise<void>): Promise<boolean> => {
-    let drained = false;
-    await raceWithTimeout(
-      pending.then(() => {
-        drained = true;
-      }),
-      CLICKCLACK_PROGRESS_FINALIZE_GRACE_MS,
-      () => undefined,
-    );
-    return drained;
-  };
-
   const scheduleLineDrain = (): void => {
     if (lineDrainTimer) {
       return;
@@ -235,7 +217,7 @@ export function createClickClackAgentProgressPublisher(params: {
         },
       });
     },
-    onItemEvent(payload) {
+    onItemEvent(payload: ClickClackItemEventPayload): false {
       if (!started || cleared) {
         return false;
       }
@@ -291,7 +273,11 @@ export function createClickClackAgentProgressPublisher(params: {
       }
       flushQueuedLines();
       enqueue({ op: "clear" });
-      const drained = await waitForDrainWithinFinalizeGrace(drain());
+      const drained = await raceWithTimeout(
+        drain().then(() => true),
+        CLICKCLACK_PROGRESS_FINALIZE_GRACE_MS,
+        () => false,
+      );
       if (!drained) {
         // Once the durable reply has been sent and the grace period expires,
         // stale detail frames no longer help the user. Keep only control frames

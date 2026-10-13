@@ -16,11 +16,11 @@ import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.j
 import { withEnvAsync } from "../../test-utils/env.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { seedCanonicalAcpSessionMeta } from "./session-meta-fixture.test-support.js";
 import { buildAcpDatabaseSessionKey } from "./session-meta-keys.js";
 import { readAcpSessionEntryAsync, readAcpSessionMetaAsync } from "./session-meta-read.js";
 import * as metadataReads from "./session-meta-readonly.js";
-import * as storeReads from "./session-meta-store.js";
-import { writeAcpSessionMetaForMigration } from "./session-meta.js";
+import { upsertAcpSessionMeta } from "./session-meta-write.js";
 
 const meta: SessionAcpMeta = {
   backend: "acpx",
@@ -57,27 +57,13 @@ it.each(["cold-file", "incognito"] as const)(
       };
       await replaceSessionEntry({ agentId: "main", storePath, sessionKey, env: state.env }, entry);
       const databaseKey = buildAcpDatabaseSessionKey(sessionKey, "main");
-      writeAcpSessionMetaForMigration({
+      seedCanonicalAcpSessionMeta({
         env: state.env,
         sessionKey: databaseKey,
         lifecycleRevision: "original",
         meta,
       });
-      if (incognito) {
-        const read = storeReads.readSessionEntryFromStore;
-        vi.spyOn(storeReads, "readSessionEntryFromStore").mockImplementationOnce((input) => {
-          const result = read(input);
-          queueMicrotask(() => {
-            writeAcpSessionMetaForMigration({
-              env: state.env,
-              sessionKey: databaseKey,
-              lifecycleRevision: "replacement",
-              meta: { ...meta, runtimeSessionName: "replacement-runtime" },
-            });
-          });
-          return result;
-        });
-      } else {
+      if (!incognito) {
         await closeOpenClawAgentDatabasesAsync();
         await closeOpenClawStateDatabaseAsync();
         resetConfigRuntimeState();
@@ -112,8 +98,26 @@ it.each(["cold-file", "incognito"] as const)(
           ).toBe(false);
         } else {
           expect(await readAcpSessionMetaAsync({ sessionKey, agentId: "main" })).toEqual(meta);
-          sql.expectIdle();
+          expect(
+            await metadataReads.readAcpSessionMetaForEntryAsync({ sessionKey, entry }),
+          ).toEqual(meta);
+          await upsertAcpSessionMeta({
+            cfg,
+            env: state.env,
+            sessionKey,
+            mutate: () => ({ ...meta, runtimeSessionName: "updated-runtime" }),
+          });
+          expect(
+            await metadataReads.readAcpSessionMetaForEntryAsync({ sessionKey, entry }),
+          ).toMatchObject({ runtimeSessionName: "updated-runtime" });
+          expect(
+            await metadataReads.readAcpSessionMetaForEntryAsync({
+              sessionKey,
+              entry: { ...entry, lifecycleRevision: "retired" },
+            }),
+          ).toBeUndefined();
         }
+        sql.expectIdle();
       } finally {
         sql.restore();
       }
@@ -121,12 +125,12 @@ it.each(["cold-file", "incognito"] as const)(
   },
 );
 
-it("preserves missing-entry alias precedence and unreadable-store results without creating stores", async () => {
+it("preserves missing-entry binding fences and unreadable-store results without creating stores", async () => {
   await withOpenClawTestState({ label: "acp-singular-missing" }, async (state) => {
     const storePath = state.path("absent", "custom.sqlite");
     const sessionKey = "agent:main:acp:missing";
     const input = { cfg: { session: { store: storePath } }, env: state.env, sessionKey };
-    writeAcpSessionMetaForMigration({ env: state.env, sessionKey, meta });
+    seedCanonicalAcpSessionMeta({ env: state.env, sessionKey, meta });
     expect(await readAcpSessionEntryAsync(input)).toMatchObject({
       sessionKey,
       entry: undefined,
@@ -135,8 +139,8 @@ it("preserves missing-entry alias precedence and unreadable-store results withou
     expect(fs.existsSync(path.dirname(storePath))).toBe(false);
 
     // A bound primary row wins selection, then fails its missing-entry fence.
-    // An empty binding object would incorrectly skip it and reveal the raw alias.
-    writeAcpSessionMetaForMigration({
+    // Missing entries must not make a bound canonical row readable.
+    seedCanonicalAcpSessionMeta({
       env: state.env,
       sessionKey: buildAcpDatabaseSessionKey(sessionKey, "main"),
       lifecycleRevision: "old-lifecycle",
@@ -154,7 +158,7 @@ it("preserves missing-entry alias precedence and unreadable-store results withou
     expect(fs.readFileSync(storePath, "utf8")).toBe("Not a SQLite store");
 
     const legacyKey = "agent:main:acp:unbound";
-    writeAcpSessionMetaForMigration({ env: state.env, sessionKey: legacyKey, meta });
+    seedCanonicalAcpSessionMeta({ env: state.env, sessionKey: legacyKey, meta });
     expect(await readAcpSessionEntryAsync({ ...input, sessionKey: legacyKey })).toMatchObject({
       storeReadFailed: true,
       entry: undefined,
@@ -178,7 +182,7 @@ it.each(["caller", "store", "config"] as const)(
         { agentId: "main", storePath, sessionKey, env: state.env },
         { sessionId: "held", lifecycleRevision: "original", updatedAt: 100 },
       );
-      writeAcpSessionMetaForMigration({
+      seedCanonicalAcpSessionMeta({
         env: state.env,
         sessionKey: buildAcpDatabaseSessionKey(sessionKey, "main"),
         lifecycleRevision: "original",

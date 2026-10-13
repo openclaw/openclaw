@@ -9,15 +9,27 @@ import type {
 import type { SessionEntryPatchReceipt } from "./session-entry-patch.types.js";
 import type { SessionEntry } from "./types.js";
 
-export type SessionNativeBindingDeletion = {
+export type SessionNativeBindingParticipants = {
   operationId: string;
   sharedSource: DatabasePathIdentity;
-  plan: Extract<SqliteSessionReclamationPlan, { kind: "entry" }>;
   participants: readonly {
     sessionKey: string;
     entry: SessionEntry;
     binding?: PluginStateNativeBindingPlan;
   }[];
+};
+
+export type SessionNativeBindingDeletion = SessionNativeBindingParticipants & {
+  plan: Extract<
+    SqliteSessionReclamationPlan,
+    {
+      kind:
+        | "entry"
+        | "lifecycle-artifacts"
+        | "maintenance-finalize"
+        | "lifecycle-projection-commit";
+    }
+  >;
 };
 
 export type SessionNativeBindingReceipt = {
@@ -31,6 +43,9 @@ export type SessionNativeBindingReceipt = {
 
 export type SessionNativeBindingCandidate = {
   kind: "session-native-binding-deletion";
-  result: Extract<SqliteSessionReclamationResult, { kind: "entry" }>;
+  result: Extract<
+    SqliteSessionReclamationResult,
+    { kind: SessionNativeBindingDeletion["plan"]["kind"] }
+  >;
   publication?: SessionEntryReplacementPublication;
 };

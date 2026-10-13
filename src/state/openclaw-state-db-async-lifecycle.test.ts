@@ -41,20 +41,26 @@ function databasePath(name = "state") {
 }
 
 describe("canonical shared-state resource drainage", () => {
-  it.each(["ordinary", "existing"] as const)(
-    "reuses prepared %s source facts without resolving or re-admitting the schema",
-    (scope) => {
+  it.each(["ordinary", "existing", "admission"] as const)(
+    "reuses warm %s facts without resolving paths or allocating replacement tokens",
+    (kind) => {
       const pathname = databasePath();
       writeFileSync(pathname, "");
       const consume = () => {
+        const lifecycle = createOpenClawStateDatabaseAsyncLifecycle();
         const source = prepareOpenClawStateReadSource({ path: pathname });
-        const context = source.current();
+        const capture = kind === "admission" ? () => lifecycle.capture(pathname) : source.current;
+        const retained = capture();
         const resolve = vi.spyOn(path, "resolve");
         let reused = true;
         let resolutions: number;
         try {
           for (let index = 0; index < 100; index++) {
-            reused &&= source.current() === context;
+            const current = capture();
+            if ("assertCurrent" in current) {
+              current.assertCurrent();
+            }
+            reused &&= current === retained;
           }
           resolutions = resolve.mock.calls.length;
         } finally {
@@ -62,8 +68,15 @@ describe("canonical shared-state resource drainage", () => {
         }
         expect(resolutions).toBe(0);
         expect(reused).toBe(true);
+        if ("assertCurrent" in retained) {
+          lifecycle.invalidate(pathname);
+          expect(retained.assertCurrent).toThrow(/admission changed/);
+          const renewed = lifecycle.capture(pathname);
+          expect(renewed).not.toBe(retained);
+          renewed.assertCurrent();
+        }
       };
-      if (scope === "existing") {
+      if (kind === "existing") {
         withExistingOpenClawStateSchema({ path: pathname }, consume);
       } else {
         consume();
@@ -75,10 +88,19 @@ describe("canonical shared-state resource drainage", () => {
     const pathname = databasePath();
     const source = prepareOpenClawStateReadSource({ path: pathname });
     const absent = source.current();
+    const precreationProof = structuredClone(absent.admission.captureIntegrity?.());
+    expect(precreationProof?.identity.key).toMatch(/^path:/);
     const coordinationKey = absent.admission.coordinationKey;
     writeFileSync(pathname, "");
     const created = source.current();
     expect(created.admission.identity.key).toMatch(/^file:/);
+    expect(created.admission.captureIntegrity?.()?.identity.key).toBe(
+      created.admission.identity.key,
+    );
+    expect(precreationProof?.identity.key).toMatch(/^path:/);
+    expect(Atomics.load(new BigInt64Array(precreationProof!.revision), 0)).not.toBe(
+      precreationProof!.epoch,
+    );
     expect(created.admission.coordinationKey).toBe(coordinationKey);
     absent.admission.assertCurrent();
     await closeOpenClawStateDatabaseByPathAsync(pathname);
@@ -92,33 +114,6 @@ describe("canonical shared-state resource drainage", () => {
     expect(replacement.admission.identity.key).not.toBe(created.admission.identity.key);
     expect(source.current).toThrow(/identity changed/);
     expect(source.workerContext).toThrow(/identity changed/);
-  });
-
-  it("reuses warm admission without resolving paths or allocating replacement tokens", () => {
-    const lifecycle = createOpenClawStateDatabaseAsyncLifecycle();
-    const pathname = databasePath();
-    writeFileSync(pathname, "");
-    const retained = lifecycle.capture(pathname);
-    const resolve = vi.spyOn(path, "resolve");
-    let reused = true;
-    let resolutions: number;
-    try {
-      for (let index = 0; index < 100; index++) {
-        const admission = lifecycle.capture(pathname);
-        admission.assertCurrent();
-        reused &&= admission === retained;
-      }
-      resolutions = resolve.mock.calls.length;
-    } finally {
-      resolve.mockRestore();
-    }
-    expect(resolutions).toBe(0);
-    expect(reused).toBe(true);
-    lifecycle.invalidate(pathname);
-    expect(retained.assertCurrent).toThrow(/admission changed/);
-    const renewed = lifecycle.capture(pathname);
-    expect(renewed).not.toBe(retained);
-    renewed.assertCurrent();
   });
 
   it("keeps captured schema scope lifetime separate from shared physical admission", async () => {
@@ -181,11 +176,13 @@ describe("canonical shared-state resource drainage", () => {
     const original = lifecycle.capture(pathname);
     expect(original.identity.key).toMatch(/^path:/);
     const coordinationKey = original.coordinationKey;
+    const precreation = original.captureIntegrity!();
     expect(coordinationKey).toBe(original.identity.key);
     writeFileSync(pathname, "");
     linkSync(pathname, alias);
     const observed = lifecycle.capture(alias);
     expect(original.identity.key).toBe(observed.identity.key);
+    expect(Atomics.load(new BigInt64Array(precreation.revision), 0)).not.toBe(precreation.epoch);
     expect(original.coordinationKey).toBe(coordinationKey);
     expect(observed.coordinationKey).toBe(coordinationKey);
     lifecycle.publish(pathname);

@@ -1,6 +1,7 @@
 import { META_FIELD_HELP } from "./schema.meta.js";
 import { describeTalkSilenceTimeoutDefaults } from "./talk-defaults.js";
 import { CLOUD_WORKER_FIELD_HELP } from "./zod-schema.cloud-workers.js";
+import { DATABASE_FIELD_HELP } from "./zod-schema.database.js";
 import { DESKTOP_FIELD_HELP } from "./zod-schema.desktop.js";
 import { STORAGE_FIELD_HELP } from "./zod-schema.storage.js";
 import { TELEMETRY_FIELD_HELP } from "./zod-schema.telemetry.js";
@@ -10,6 +11,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Global directory for new managed worktrees. Use an absolute path or ~ for your home directory; defaults to <state-dir>/worktrees. Existing worktrees keep their recorded paths when this changes.",
   worktreeAcceleration:
     "Use filesystem acceleration for new managed worktrees when supported (default: true). Set false to use normal Git checkout and file copying. Applies only to new worktrees.",
+  worktreeMaxCount:
+    "Maximum live managed worktrees across all agents and repositories (default: 4096). Evicts merged or squashed branches first, then oldest idle worktrees, including unsaved data. Live runs are protected; raise this value if they occupy the cap. Disk-space admission still applies.",
   ...META_FIELD_HELP,
   env: "Environment import and override settings used to supply runtime variables to the gateway process. Use this section to control shell-env loading and explicit variable injection behavior.",
   "env.shellEnv":
@@ -68,7 +71,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "logging.consoleStyle":
     'Console output format style: "pretty" or "json". Use json for machine parsing pipelines and pretty for human-first terminal workflows.',
   "logging.redactPatterns":
-    "Custom regex strings replace the default string list for log/transcript output and add to safety-boundary UI/tool/diagnostic rules. Built-in form-body, structured-auth, and AWS bare-key protections always apply. Use this to mask deployment-specific tokens and identifiers.",
+    "Custom regex strings replace the default string list for logs and diagnostics. Built-in form-body, structured-auth, and AWS bare-key protections always apply. Tool arguments, results, and session transcripts are not redacted. Use this to mask deployment-specific tokens and identifiers in diagnostic output.",
   update:
     "Update-channel and startup-check behavior for keeping OpenClaw runtime versions current. Use conservative channels in production and more experimental channels only in controlled environments.",
   "update.channel":
@@ -83,6 +86,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   cloudWorkers:
     "Opt-in cloud worker profiles for disposable remote environments. When this section is omitted or has no profiles, cloud worker creation remains unavailable and existing gateway/node status behavior is unchanged.",
   ...CLOUD_WORKER_FIELD_HELP,
+  ...DATABASE_FIELD_HELP,
   ...STORAGE_FIELD_HELP,
   ...DESKTOP_FIELD_HELP,
   gateway:
@@ -313,6 +317,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Optional default skill allowlist inherited by agents that omit agents.entries.*.skills. Omit for unrestricted skills, set [] to give inheriting agents no skills, and remember explicit agents.entries.*.skills replaces this default instead of merging with it.",
   "agents.defaults.subagents.delegationMode":
     'Prompt-only sub-agent delegation strength. Defaults to "prefer" in each agent\'s main session and "suggest" elsewhere; "prefer" strongly instructs the agent to delegate non-trivial work via sessions_spawn.',
+  "agents.entries.*.subagents.delegateToolsTo":
+    "Exact configured native target agents that may omit this requester agent’s tools.deny at spawn. Requires allowAgents independently. Deny-only handoffs preserve all nonlocal restrictions; restrictive initial profiles/allowlists or unsupported transports refuse the handoff instead of widening them. Same-target native helpers preserve their own additional ceilings. Sender-restricted and ACP requests never use this grant. Revocation restores the original requester snapshot.",
   "agents.entries.*.subagents.delegationMode":
     'Per-agent override for sub-agent delegation strength. Omit to use "prefer" in this agent\'s main session and "suggest" elsewhere; explicit "prefer" or "suggest" always wins.',
   "agents.entries.*.contextInjection":

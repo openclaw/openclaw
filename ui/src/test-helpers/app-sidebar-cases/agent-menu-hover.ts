@@ -1,15 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createGateway, createSessions, mountSidebar, TWO_AGENTS } from "../app-sidebar.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 
 function pointerEvent(
   type: "pointerenter" | "pointerleave" | "pointermove",
   pointerType = "mouse",
 ) {
-  const event = new Event(type);
-  Object.defineProperty(event, "pointerType", { value: pointerType });
-  return event;
+  return new PointerEvent(type, { bubbles: type === "pointermove", pointerType });
 }
 
 describe("AppSidebar agent menu hover", () => {
@@ -30,12 +28,7 @@ describe("AppSidebar agent menu hover", () => {
         );
         sidebar.sidebarAgentsMode = mode;
         await sidebar.updateComplete;
-        const menus = (
-          sidebar as unknown as {
-            sidebarMenus: { preloadMenuRenderer: () => Promise<unknown> };
-          }
-        ).sidebarMenus;
-        await menus.preloadMenuRenderer();
+        await sidebar.sidebarMenus.preloadMenuRenderer();
         const input = document.createElement("input");
         document.body.append(input);
         input.focus();

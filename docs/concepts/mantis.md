@@ -11,7 +11,7 @@ read_when:
 
 Mantis publishes visual CI evidence and a PR comment for OpenClaw behavior.
 Live transport scenarios compare a known-bad baseline with a candidate ref;
-focused browser lanes may instead prove one candidate against a deterministic
+focused browser lanes may instead prove one candidate against a fixed-response
 mocked transport. Discord shipped first with real bot auth, guild channels, reactions, threads,
 and a browser witness. Slack and focused Control UI chat lanes exist too;
 WhatsApp and Matrix are unimplemented.
@@ -151,7 +151,7 @@ The GitHub workflow prefers a persistent viewer profile via
 `MANTIS_DISCORD_VIEWER_CHROME_PROFILE_DIR` (full profile archives can outgrow
 GitHub's secret size limit); for small/bootstrap profiles it can restore a
 base64 `.tgz` from `MANTIS_DISCORD_VIEWER_CHROME_PROFILE_TGZ_B64` instead. With
-neither source configured, the workflow still publishes the deterministic
+neither source configured, the workflow still publishes the generated
 baseline/candidate screenshots and logs that the logged-in witness was
 skipped.
 
@@ -271,7 +271,7 @@ relative to the configured R2/S3 artifact prefix. `scripts/mantis/publish-pr-evi
 rejects path traversal and skips entries with `"required": false` when the
 file is missing.
 
-Artifact kinds: `timeline` (deterministic before/after screenshot),
+Artifact kinds: `timeline` (generated before/after comparison screenshot),
 `desktopScreenshot` (VNC/browser screenshot), `motionPreview` (inline animated
 GIF from the recording), `motionClip` (motion-trimmed MP4), `fullVideo` (full
 recording), `metadata` (JSON/log sidecar), `report` (Markdown report).
@@ -309,7 +309,7 @@ path. Mantis does not recursively delete a worktree after Git no longer owns
 its registration: if cleanup fails, inspect the retained unique directory
 under `<output-dir>.worktrees/` together with the reported `error.txt`, then
 remove it through Git after resolving the failure. If an owned path disappears
-while its Git registration remains, cleanup fails closed instead of recreating
+while its Git registration remains, cleanup stops instead of recreating
 the path. At startup, Mantis also checks the exact historical
 `<output-dir>/worktrees/baseline` and `<output-dir>/worktrees/candidate` paths
 and removes them through Git when they are still registered and present. Other
@@ -433,7 +433,7 @@ the result is evaluated in that review rather than generating a second review.
 The automatic surfaces are:
 
 - Telegram Test Server: a bounded, data-only plan of tester messages and button
-  clicks, deterministic model replies, streaming/native-command settings, and
+  clicks, fixed model replies, streaming/native-command settings, and
   the behavior the reviewer needs to observe. This can cover more than a generic
   greeting, including selected formatting or command behavior.
 - Control UI: the existing fixed chat smoke recipe against a mocked Gateway.
@@ -460,7 +460,7 @@ These safeguards do not claim that native TDLib background traffic is zero.
 
 The Telegram artifact contains the bounded complete timeline, provider requests,
 formatting entities, and button labels with known private values redacted.
-Oversized or incomplete observations fail closed. Its assertion outcome stays
+Oversized or incomplete observations are rejected. Its assertion outcome stays
 `inconclusive`: the original reviewer must assess the observations against the
 claim. A green process exit, canned reply, or video does not automatically clear
 proof or other readiness blockers. Bot registration/webhook operations are
@@ -532,7 +532,7 @@ ref policy, candidate ref policy, OpenClaw config patch, setup/stimulus steps,
 expected baseline and candidate oracle, visual capture targets, timeout
 budget, and cleanup steps.
 
-Focused candidate-only browser proof can use a dedicated deterministic E2E test
+Focused candidate-only browser proof can use a dedicated repeatable E2E test
 and workflow. Keep its scope explicit, validate the candidate ref before
 execution, isolate secret-backed publishing, and emit the same evidence
 manifest contract.

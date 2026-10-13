@@ -128,24 +128,38 @@ describe("Crabbox PR-derived gate plan", () => {
     );
   });
 
-  it.each(["ui/src/presenter.ts", "ui/src/theme.css", "extensions/example/browser/view.ts"])(
-    "materializes the whole UI owner and host consumers for %s",
-    (changedPath) => {
-      expect(planFixture(createUiFixture(), [changedPath]).targets).toEqual([
-        ordinaryUiTests[0],
-        "src/ui-consumer.test.ts",
-        ...ordinaryUiTests.slice(1),
-      ]);
+  it.each([
+    ...["ui/src/presenter.ts", "ui/src/theme.css", "extensions/example/browser/view.ts"].map(
+      (file) => ({
+        paths: [file],
+        readers: ["src/ui-consumer.test.ts"],
+        explicit: false,
+      }),
+    ),
+    {
+      paths: ["ui/src/catalog.json"],
+      readers: ["src/ui-consumer.test.ts", "test/scripts/ui-catalog-reader.test.ts"],
+      explicit: false,
     },
-  );
-
-  it("retains changed-source readers for UI data files", () => {
-    expect(planFixture(createUiFixture(), ["ui/src/catalog.json"]).targets).toEqual([
-      ordinaryUiTests[0],
-      "src/ui-consumer.test.ts",
-      "test/scripts/ui-catalog-reader.test.ts",
-      ...ordinaryUiTests.slice(1),
-    ]);
+    ...["ui/src/presenter.test.ts", "ui/src/e2e/example.e2e.test.ts"].map((file) => ({
+      paths: [file],
+      readers: [],
+      explicit: true,
+    })),
+    {
+      paths: [
+        "ui/src/presenter.ts",
+        "ui/src/theme.css",
+        "ui/src/presenter.test.ts",
+        "ui/src/e2e/example.e2e.test.ts",
+      ],
+      readers: ["src/ui-consumer.test.ts", "ui/src/e2e/example.e2e.test.ts"],
+      explicit: false,
+    },
+  ])("materializes precise UI coverage for $paths", ({ paths, readers, explicit }) => {
+    expect(planFixture(createUiFixture(), paths).targets).toEqual(
+      explicit ? paths : [...ordinaryUiTests, ...readers].toSorted(),
+    );
   });
 
   it("uses the E2E helper's whole family, including native QA fixtures", () => {
@@ -173,12 +187,8 @@ describe("Crabbox PR-derived gate plan", () => {
     ]);
   });
 
-  it.each([
-    "extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts",
-    "extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts",
-    "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
-    "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts",
-  ])("routes the explicit native QA fixture to its browser owner: %s", (target) => {
+  it("routes an explicit native QA fixture to its browser owner", () => {
+    const target = "extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts";
     const cwd = createTrackedFixture({ [target]: "export {};\n" });
     const plan = planFixture(cwd, [target]);
     expect(plan.targets).toEqual([target]);
@@ -192,60 +202,45 @@ describe("Crabbox PR-derived gate plan", () => {
     ]);
   });
 
-  it.each(["ui/src/presenter.test.ts", "ui/src/e2e/example.e2e.test.ts"])(
-    "keeps an explicit test target precise: %s",
-    (changedPath) => {
-      expect(planFixture(createUiFixture(), [changedPath]).targets).toEqual([changedPath]);
-    },
-  );
-
-  it("unions explicit E2E targets with deduplicated whole-UI coverage", () => {
-    expect(
-      planFixture(createUiFixture(), [
-        "ui/src/presenter.ts",
-        "ui/src/theme.css",
-        "ui/src/presenter.test.ts",
-        "ui/src/e2e/example.e2e.test.ts",
-      ]).targets,
-    ).toEqual([
-      ordinaryUiTests[0],
-      "src/ui-consumer.test.ts",
-      "ui/src/app/bootstrap.test.ts",
-      "ui/src/components/markdown.progress.node.test.ts",
-      "ui/src/e2e/example.e2e.test.ts",
+  it.each([
+    ["missing family", "ui/src/presenter.ts", /no complete Control UI test inventory/u],
+    [
+      "missing family",
+      "ui/src/test-helpers/control-ui-e2e.ts",
+      /no complete Control UI test inventory/u,
+    ],
+    [
+      "missing tracked test",
       "ui/src/presenter.test.ts",
-      "ui/src/unrelated.browser.test.ts",
-    ]);
-  });
-
-  it.each(["ui/src/presenter.ts", "ui/src/test-helpers/control-ui-e2e.ts"])(
-    "refuses missing family coverage even with a host consumer: %s",
-    (changedPath) => {
-      const cwd = createTrackedFixture({
-        [changedPath]: "export {};\n",
-        "src/ui-consumer.test.ts": `import ${JSON.stringify(`../${changedPath.replace(/\.ts$/u, ".js")}`)};\n`,
-      });
-      expect(() => planFixture(cwd, [changedPath])).toThrow(
-        /no complete Control UI test inventory/u,
-      );
-    },
-  );
-
-  it("refuses tracked tests that disappeared from the selected checkout", () => {
-    const cwd = createUiFixture();
-    unlinkSync(path.join(cwd, "ui/src/presenter.test.ts"));
-    expect(() => planFixture(cwd, ["ui/src/presenter.ts"])).toThrow(
       /broad or unmatched target ui\/src\/presenter\.test\.ts/u,
-    );
-  });
-
-  it("does not let valid UI coverage authorize missing or uncovered executable paths", () => {
-    const cwd = createUiFixture();
-    expect(() => planFixture(cwd, ["ui/src/presenter.ts", "ui/src/missing.ts"])).toThrow(
+    ],
+    [
+      "missing source",
+      "ui/src/missing.ts",
       /deleted or missing executable path ui\/src\/missing\.ts/u,
-    );
-    writeFileSync(path.join(cwd, "src/uncovered.ts"), "export {};\n");
-    expect(() => planFixture(cwd, ["ui/src/presenter.ts", "src/uncovered.ts"])).toThrow();
+    ],
+    ["uncovered source", "src/uncovered.ts", undefined],
+  ] as const)("refuses %s: %s", (kind, file, error) => {
+    const cwd =
+      kind === "missing family"
+        ? createTrackedFixture({
+            [file]: "export {};\n",
+            "src/ui-consumer.test.ts": `import ${JSON.stringify(`../${file.replace(/\.ts$/u, ".js")}`)};\n`,
+          })
+        : createUiFixture();
+    if (kind === "missing tracked test") {
+      unlinkSync(path.join(cwd, file));
+    }
+    if (kind === "uncovered source") {
+      writeFileSync(path.join(cwd, file), "export {};\n");
+    }
+    const paths =
+      kind === "missing family"
+        ? [file]
+        : kind === "missing tracked test"
+          ? ["ui/src/presenter.ts"]
+          : ["ui/src/presenter.ts", file];
+    expect(() => planFixture(cwd, paths)).toThrow(error);
   });
 
   it("keeps the tracked inventory local to each plan's checkout", () => {
@@ -261,40 +256,37 @@ describe("Crabbox PR-derived gate plan", () => {
     expect(planFixture(second, ["ui/src/another.ts"]).targets).toEqual(["ui/src/another.test.ts"]);
   });
 
-  it("requires every executable changed path to contribute precise test targets", () => {
-    expect(() =>
-      createCrabboxGatePlan({
-        baseSha,
-        changedPaths: [
-          { path: "scripts/pr", status: "M" },
-          { path: "scripts/pr-lib/gates.sh", status: "M" },
-        ],
-        headSha,
-        resolvePathPlan: (changedPath) =>
-          changedPath === "scripts/pr"
-            ? { mode: "targets", targets: ["test/scripts/pr-merge.test.ts"] }
-            : { mode: "targets", targets: [] },
-      }),
-    ).toThrow(/no complete targeted test plan for scripts\/pr-lib\/gates\.sh/u);
-  });
-
   it.each([
-    { mode: "broad", targets: [] },
+    {
+      mode: "targets",
+      targets: [],
+      error: /no complete targeted test plan for scripts\/pr-lib\/gates\.sh/u,
+    },
+    { mode: "broad", targets: [], error: undefined },
     {
       mode: "targets",
       skippedBroadFallbackPaths: ["scripts/pr"],
       targets: ["test/scripts/pr-merge.test.ts"],
+      error: undefined,
     },
-    { mode: "targets", targets: ["test/vitest/vitest.tooling.config.ts"] },
-  ])("rejects incomplete or broad authorization plan %#", (pathPlan) => {
+    { mode: "targets", targets: ["test/vitest/vitest.tooling.config.ts"], error: undefined },
+  ])("rejects incomplete or broad authorization plan %#", ({ error, ...pathPlan }) => {
     expect(() =>
       createCrabboxGatePlan({
         baseSha,
-        changedPaths: [{ path: "scripts/pr", status: "M" }],
         headSha,
-        resolvePathPlan: () => pathPlan,
+        changedPaths: error
+          ? [
+              { path: "scripts/pr", status: "M" },
+              { path: "scripts/pr-lib/gates.sh", status: "M" },
+            ]
+          : [{ path: "scripts/pr", status: "M" }],
+        resolvePathPlan: (file) =>
+          error && file === "scripts/pr"
+            ? { mode: "targets", targets: ["test/scripts/pr-merge.test.ts"] }
+            : pathPlan,
       }),
-    ).toThrow();
+    ).toThrow(error);
   });
 
   it("allows zero test targets only for explicit docs and instruction surfaces", () => {

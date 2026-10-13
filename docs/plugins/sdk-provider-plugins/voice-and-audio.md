@@ -132,8 +132,8 @@ Register each capability inside `register(api)` alongside your existing
     to `listRealtimeVoiceProviders(cfg, providerIds)`. Omit the argument for
     ordinary catalog discovery; per-call candidates do not change that catalog.
     Automatic realtime voice and Voice Call transcription selection uses declared alias config as
-    defaults, with earlier aliases preferred and canonical values taking precedence.
-    An explicitly selected alias still overrides canonical config without inheriting
+    defaults, with earlier aliases preferred and primary-provider values taking precedence.
+    An explicitly selected alias still overrides primary-provider config without inheriting
     settings from other aliases.
 
     `resolveConfig` receives optional host context alongside `cfg` and `rawConfig`:
@@ -148,7 +148,9 @@ Register each capability inside `register(api)` alongside your existing
     when Gateway relay policy controls responses. `talk.catalog` resolves the
     provider's discovery default for the configured Talk agent and provider
     settings, excluding an explicit model; readiness and capabilities use the
-    effective model overrides.
+    effective model overrides. Within one catalog request, the selected realtime
+    provider's resolved configuration, readiness, and capabilities are reused for
+    its catalog entry. Each new request checks availability again.
     Consumers adding a new transport without changing existing model defaults
     can pass `useProviderDefaultModel: true` to
     `resolveConfiguredRealtimeVoiceProvider(...)`. This fills an absent model
@@ -292,6 +294,12 @@ Register each capability inside `register(api)` alongside your existing
     modules retain their input queues, readiness policy, authentication, and
     reconnect behavior; module caching stays with the lazy-runtime helpers.
 
+    WebSocket voice bridges can use `RealtimeVoiceWebSocketTransport` from
+    that same private-local surface. It shares socket startup, capture, sends,
+    reconnect scheduling, and terminal cleanup over a supplied
+    `RealtimeVoiceSessionLifecycle`. Providers retain credentials, socket
+    construction, session initialization, event handling, and replay policy.
+
     That private-local surface also exports the host's internal browser-session
     request, capability, and provider API types. Official plugins should import
     those types instead of redeclaring the process-private hook contract. These
@@ -409,15 +417,27 @@ Register each capability inside `register(api)` alongside your existing
     Return `{ ok: true, value: { text, model } }` after transcription. Return
     `{ ok: false, error }` only for authentication or configuration rejected
     **before uploading audio**. The host records that error and automatic
-    selection may try the next provider or local backend. Canonical missing
-    provider auth leaves the automatic candidate unavailable without a failed
-    attempt. Upload and HTTP failures must throw: automatic selection then
+    selection may try the next provider or local backend. A `ProviderAuthError`
+    with code `missing-provider-auth` leaves any automatic candidate unavailable
+    without a failed-attempt record. Other returned errors are recorded as failed
+    attempts. Upload and HTTP failures must throw: automatic selection then
     stops without sending the recording to another provider. Explicit model
     lists retain their authored fallback order.
 
     Return the model when known; otherwise the host retains the requested
     model in its result. `transcribeAudio` remains available for providers
     using host-owned API-key resolution and rotation.
+
+    Providers can implement optional `isAudioConfigured(context)` to report
+    audio readiness using their own credential and endpoint rules. It returns
+    a boolean or `Promise<boolean>`. The exported `AudioTranscriptionConfigContext`
+    includes configuration, profile selectors, model, agent/workspace directories,
+    and effective base URL, headers, and request overrides; it contains no audio.
+    Gateway Talk checks this hook before advertising or admitting file transcription.
+    Share credential preparation with transcription, but resolve credentials again
+    for the actual upload. Readiness does not authorize a later request.
+    Without this hook, context providers retain their existing readiness behavior;
+    providers using `transcribeAudio` retain host-owned credential checks.
 
     Bundled media providers can use `openProviderWebSocket(...)` from the
     private-local `openclaw/plugin-sdk/provider-http` entrypoint. Resolve

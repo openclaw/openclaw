@@ -219,6 +219,26 @@ function servicePrincipal(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function verifyProof(
+  overrides: {
+    events?: ReturnType<typeof brokerEvents>;
+    log?: string;
+    now?: number;
+    run?: ReturnType<typeof brokerRun>;
+  } = {},
+) {
+  return validateBrokerProof({
+    bootstrap,
+    context: context(),
+    events: brokerEvents(),
+    log: retainedLog(),
+    now: Date.parse("2026-08-28T02:00:00Z"),
+    principal: servicePrincipal(),
+    run: brokerRun(),
+    ...overrides,
+  });
+}
+
 function crabboxRunner() {
   return vi.fn(
     async ({
@@ -323,19 +343,11 @@ describe("Crabbox gate request and broker proof", () => {
   });
 
   it.each([
-    ["at the two-hour limit", proofEndedAt + 2 * 60 * 60 * 1000, false],
-    ["one millisecond past the limit", proofEndedAt + 2 * 60 * 60 * 1000 + 1, true],
-  ])("%s proof freshness", (_label, now, rejected) => {
-    const verify = () =>
-      validateBrokerProof({
-        bootstrap,
-        context: context(),
-        events: brokerEvents(),
-        log: retainedLog(),
-        now,
-        principal: servicePrincipal(),
-        run: brokerRun(),
-      });
+    ["at the two-hour limit", proofEndedAt + 2 * 60 * 60 * 1000, retainedLog(), false],
+    ["one millisecond past the limit", proofEndedAt + 2 * 60 * 60 * 1000 + 1, retainedLog(), true],
+    ["empty retained log", Date.parse("2026-08-28T02:00:00Z"), "", false],
+  ])("validates %s proof", (_label, now, log, rejected) => {
+    const verify = () => verifyProof({ now, log });
     if (rejected) {
       expect(verify).toThrow(/fresh completed proof/u);
     } else {
@@ -392,79 +404,38 @@ describe("Crabbox gate request and broker proof", () => {
     ],
     ["marker", {}, brokerEvents(), retainedLog().replace("test:ok", "missing")],
   ] as const)("rejects mismatched %s", (_label, runOverrides, events, log) => {
-    expect(() =>
-      validateBrokerProof({
-        bootstrap,
-        context: context(),
-        events,
-        log,
-        now: Date.parse("2026-08-28T02:00:00Z"),
-        principal: servicePrincipal(),
-        run: brokerRun(runOverrides),
-      }),
-    ).toThrow();
-  });
-
-  it("accepts empty retained logs when command and events are complete", () => {
-    expect(() =>
-      validateBrokerProof({
-        bootstrap,
-        context: context(),
-        events: brokerEvents(),
-        log: "",
-        now: Date.parse("2026-08-28T02:00:00Z"),
-        principal: servicePrincipal(),
-        run: brokerRun(),
-      }),
-    ).not.toThrow();
-  });
-
-  it("recomputes the transport from the complete plan, even without retained logs", () => {
-    expect(() =>
-      validateBrokerProof({
-        bootstrap,
-        context: { ...context(), plan: { ...gatePlan(), targets: [] } },
-        events: brokerEvents(),
-        log: "",
-        now: Date.parse("2026-08-28T02:00:00Z"),
-        principal: servicePrincipal(),
-        run: brokerRun(),
-      }),
-    ).toThrow(/canonical exact-head gate/u);
+    expect(() => verifyProof({ events, log, run: brokerRun(runOverrides) })).toThrow();
   });
 });
 
 describe("protected main ancestry", () => {
   it.each([
-    [workflowSha, mainAncestry(workflowSha)],
-    [mainSha, mainAncestry(mainSha)],
-  ])("accepts live-shape identical or forward main %s", (candidateMainSha, comparison) => {
-    expect(comparison).not.toHaveProperty("head_commit");
-    expect(
-      validateForwardAncestry(
-        comparison,
-        { baseSha: workflowSha, headSha: candidateMainSha },
-        "protected main",
-      ),
-    ).toEqual({ baseSha: workflowSha, headSha: candidateMainSha });
-  });
-
-  it.each([
-    ["behind", { behind_by: 1, status: "behind" }],
-    ["diverged", { status: "diverged" }],
-    ["wrong base", { base_commit: { sha: baseSha } }],
-    ["wrong merge base", { merge_base_commit: { sha: baseSha } }],
-    ["malformed ahead count", { ahead_by: "4" }],
-    ["malformed behind count", { behind_by: "0" }],
-  ])("rejects %s protected main comparison", (_label, override) => {
-    expect(() =>
-      validateForwardAncestry(
-        mainAncestry(mainSha, override),
-        { baseSha: workflowSha, headSha: mainSha },
-        "protected main",
-      ),
-    ).toThrow(/protected main/u);
-  });
+    ["identical", workflowSha, {}, true],
+    ["forward", mainSha, {}, true],
+    ["behind", mainSha, { behind_by: 1, status: "behind" }, false],
+    ["diverged", mainSha, { status: "diverged" }, false],
+    ["wrong base", mainSha, { base_commit: { sha: baseSha } }, false],
+    ["wrong merge base", mainSha, { merge_base_commit: { sha: baseSha } }, false],
+    ["malformed ahead count", mainSha, { ahead_by: "4" }, false],
+    ["malformed behind count", mainSha, { behind_by: "0" }, false],
+  ] as const)(
+    "validates %s protected main comparison",
+    (_label, candidateMainSha, override, valid) => {
+      const comparison = mainAncestry(candidateMainSha, override);
+      const validate = () =>
+        validateForwardAncestry(
+          comparison,
+          { baseSha: workflowSha, headSha: candidateMainSha },
+          "protected main",
+        );
+      if (valid) {
+        expect(comparison).not.toHaveProperty("head_commit");
+        expect(validate()).toEqual({ baseSha: workflowSha, headSha: candidateMainSha });
+      } else {
+        expect(validate).toThrow(/protected main/u);
+      }
+    },
+  );
 });
 
 describe("Crabbox gate publisher boundary", () => {
@@ -571,6 +542,28 @@ describe("Crabbox gate publisher boundary", () => {
     return { broker, github, orderedCalls, organization, runCrabbox: crabboxRunner() };
   }
 
+  function runPhase(
+    values: ReturnType<typeof harness>,
+    phase: "proof" | "publish",
+    overrides: {
+      clock?: () => number;
+      env?: NodeJS.ProcessEnv;
+      organization?: { request: () => Promise<ReturnType<typeof activeMembership>> };
+      resolvePlan?: () => ReturnType<typeof gatePlan>;
+      runCrabbox?: ReturnType<typeof crabboxRunner>;
+    } = {},
+  ) {
+    return runPublisher({
+      ...values,
+      phase,
+      clock: () => proofEndedAt,
+      env: phaseEnv(phase),
+      event: event(),
+      resolvePlan: () => gatePlan(),
+      ...overrides,
+    });
+  }
+
   it("uses fresh membership authority after a proof outlives the initial token", async () => {
     const values = harness();
     let clockNow = Date.parse("2026-08-28T00:00:00Z");
@@ -591,16 +584,13 @@ describe("Crabbox gate publisher boundary", () => {
     });
     const resolvePlan = vi.fn(() => gatePlan());
     await expect(
-      runPublisher({
-        ...values,
-        phase: "proof",
+      runPhase(values, "proof", {
         clock: () => clockNow,
         env: phaseEnv("proof", {
           AWS_PROFILE: "must-not-leak",
           GH_TOKEN: "job-token",
           GH_APP_TOKEN: "initial-token",
         }),
-        event: event(),
         organization: initialOrganization,
         resolvePlan,
         runCrabbox,
@@ -615,12 +605,8 @@ describe("Crabbox gate publisher boundary", () => {
     values.broker.request.mockClear();
     values.runCrabbox.mockClear();
     await expect(
-      runPublisher({
-        ...values,
-        phase: "publish",
+      runPhase(values, "publish", {
         clock: () => clockNow,
-        env: phaseEnv("publish"),
-        event: event(),
         resolvePlan,
       }),
     ).resolves.toMatchObject({
@@ -645,17 +631,7 @@ describe("Crabbox gate publisher boundary", () => {
       const result = await values.runCrabbox(input);
       return input.args[0] === "run" ? { ...result, exitCode } : result;
     });
-    await expect(
-      runPublisher({
-        ...values,
-        phase: "proof",
-        clock: () => proofEndedAt,
-        env: phaseEnv("proof"),
-        event: event(),
-        resolvePlan: () => gatePlan(),
-        runCrabbox,
-      }),
-    ).rejects.toThrow(failure);
+    await expect(runPhase(values, "proof", { runCrabbox })).rejects.toThrow(failure);
     expect(existsSync(outputPath)).toBe(false);
     expect(values.github.request.mock.calls.some(([method]) => method === "POST")).toBe(false);
   });
@@ -685,13 +661,8 @@ describe("Crabbox gate publisher boundary", () => {
   it("propagates output-write failure after joined proof without publishing", async () => {
     const values = harness();
     await expect(
-      runPublisher({
-        ...values,
-        phase: "proof",
-        clock: () => proofEndedAt,
+      runPhase(values, "proof", {
         env: phaseEnv("proof", { GITHUB_OUTPUT: outputRoot }),
-        event: event(),
-        resolvePlan: () => gatePlan(),
       }),
     ).rejects.toThrow(/EISDIR/u);
     expect(values.runCrabbox).toHaveBeenCalledTimes(2);
@@ -707,12 +678,8 @@ describe("Crabbox gate publisher boundary", () => {
   ] as const)("rejects %s before external work", async (_label, phase, overrides) => {
     const values = harness();
     await expect(
-      runPublisher({
-        ...values,
-        phase,
+      runPhase(values, phase, {
         env: phaseEnv(phase, overrides),
-        event: event(),
-        resolvePlan: () => gatePlan(),
       }),
     ).rejects.toThrow();
     expect(values.orderedCalls).toEqual([]);
@@ -732,13 +699,8 @@ describe("Crabbox gate publisher boundary", () => {
   ])("revalidates %s in the publication phase", async (_label, overrides) => {
     const values = harness(overrides);
     await expect(
-      runPublisher({
-        ...values,
-        phase: "publish",
+      runPhase(values, "publish", {
         clock: () => Date.parse("2026-08-28T03:00:00.001Z"),
-        env: phaseEnv("publish"),
-        event: event(),
-        resolvePlan: () => gatePlan(),
       }),
     ).rejects.toThrow();
     expect(values.runCrabbox).not.toHaveBeenCalled();
@@ -751,28 +713,14 @@ describe("Crabbox gate publisher boundary", () => {
       ...activeMembership(),
       role: "member",
     });
-    await expect(
-      runPublisher({
-        ...values,
-        phase: "publish",
-        clock: () => proofEndedAt,
-        env: phaseEnv("publish"),
-        event: event(),
-        resolvePlan: () => gatePlan(),
-      }),
-    ).rejects.toThrow(/not an active/u);
+    await expect(runPhase(values, "publish")).rejects.toThrow(/not an active/u);
     expect(values.github.request.mock.calls.some(([method]) => method === "POST")).toBe(false);
   });
 
   it("recomputes the publication plan instead of trusting output metadata", async () => {
     const values = harness();
     await expect(
-      runPublisher({
-        ...values,
-        phase: "publish",
-        clock: () => proofEndedAt,
-        env: phaseEnv("publish"),
-        event: event(),
+      runPhase(values, "publish", {
         resolvePlan: () => ({ ...gatePlan(), targets: [] }),
       }),
     ).rejects.toThrow(/canonical exact-head gate/u);
@@ -787,15 +735,7 @@ describe("Crabbox gate publisher boundary", () => {
       { ancestry: { behind_by: 1, status: "diverged" } },
     ]) {
       const values = harness(overrides);
-      await expect(
-        runPublisher({
-          phase: "proof",
-          ...values,
-          env: phaseEnv("proof"),
-          event: event(),
-          resolvePlan: () => gatePlan(),
-        }),
-      ).rejects.toThrow();
+      await expect(runPhase(values, "proof")).rejects.toThrow();
       expect(values.runCrabbox).not.toHaveBeenCalled();
     }
   });
@@ -805,13 +745,8 @@ describe("Crabbox gate publisher boundary", () => {
       mainShas: [mainSha, mainSha, laterMainSha, "f".repeat(40)],
     });
     await expect(
-      runPublisher({
-        phase: "publish",
-        ...values,
+      runPhase(values, "publish", {
         clock: () => Date.parse("2026-08-28T02:00:00Z"),
-        env: phaseEnv("publish"),
-        event: event(),
-        resolvePlan: () => gatePlan(),
       }),
     ).rejects.toThrow(/protected main moved/u);
     expect(values.github.request).not.toHaveBeenCalledWith(
@@ -831,13 +766,8 @@ describe("Crabbox gate publisher boundary", () => {
     ]) {
       const values = harness(overrides);
       await expect(
-        runPublisher({
-          phase: "publish",
-          ...values,
+        runPhase(values, "publish", {
           clock: () => Date.parse("2026-08-28T02:00:00Z"),
-          env: phaseEnv("publish"),
-          event: event(),
-          resolvePlan: () => gatePlan(),
         }),
       ).rejects.toThrow(/service principal|ownership/u);
     }
@@ -848,7 +778,8 @@ describe("Crabbox broker authentication", () => {
   it.each([
     ["with Access", "access-id", "access-secret"],
     ["without Access", "", ""],
-  ])("sends bearer authentication %s", async (_label, accessClientId, accessClientSecret) => {
+    ["with an invalid Access half-pair", "id", undefined],
+  ])("validates bearer authentication %s", async (_label, accessClientId, accessClientSecret) => {
     const fetchImpl = vi.fn<typeof fetch>(async (_input, init) => {
       expect(init?.headers).toEqual({
         Authorization: "Bearer coordinator-token",
@@ -861,36 +792,29 @@ describe("Crabbox broker authentication", () => {
       });
       return new Response('{"owner":"service"}', { status: 200 });
     });
-    const api = createJsonApi({
-      accessClientId,
-      accessClientSecret,
-      baseUrl: "https://broker.example/",
-      fetchImpl,
-      token: "coordinator-token",
-    });
-    await expect(api.request("/v1/whoami")).resolves.toEqual({ owner: "service" });
-  });
-
-  it("rejects a Cloudflare Access half-pair", () => {
-    expect(() =>
+    const createApi = () =>
       createJsonApi({
-        accessClientId: "id",
+        accessClientId,
+        accessClientSecret,
         baseUrl: "https://broker.example/",
+        fetchImpl,
         token: "coordinator-token",
-      }),
-    ).toThrow(/provided together/u);
+      });
+    if (accessClientSecret === undefined) {
+      expect(createApi).toThrow(/provided together/u);
+    } else {
+      await expect(createApi().request("/v1/whoami")).resolves.toEqual({ owner: "service" });
+    }
   });
 });
 
 describe("Crabbox gate workflow", () => {
-  it("refreshes membership only after proof and never falls back to its old token", () => {
-    const {
-      jobs: {
-        publish: { steps },
-      },
-    } = parseYaml(
+  it("pins proof to protected main and publishes with fresh membership authority", () => {
+    const workflow = parseYaml(
       readFileSync(".github/workflows/pr-crabbox-gate-publisher.yml", "utf8"),
     ) as PublisherWorkflow;
+    const job = workflow.jobs.publish;
+    const { steps } = job;
     const proofIndex = steps.findIndex((step) => step.id === "proof");
     const proof = steps[proofIndex];
     const fresh = steps[proofIndex + 1];
@@ -925,13 +849,6 @@ describe("Crabbox gate workflow", () => {
     });
     expect(publish?.["continue-on-error"]).toBeUndefined();
     expect(steps.at(-1)).toBe(publish);
-  });
-
-  it("pins the publisher-owned run to protected main", () => {
-    const workflow = parseYaml(
-      readFileSync(".github/workflows/pr-crabbox-gate-publisher.yml", "utf8"),
-    ) as PublisherWorkflow;
-    const job = workflow.jobs.publish;
     expect(workflow["run-name"]).toBe(
       "PR Crabbox gate #${{ inputs.pr_number }} / ${{ inputs.head_sha }}",
     );

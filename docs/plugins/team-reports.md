@@ -34,7 +34,7 @@ Fine-grained GitHub tokens are supported. Issue searches always specify
 Model-written summaries use an agent's configured model and credentials. The
 evidence sent to that model can include repository activity and opted-in
 Discord excerpts. Set `summaries.enabled: false` to generate reports with
-deterministic text and no summary model calls.
+fixed-template text and no summary model calls.
 
 ## Install and enable Team Reports
 
@@ -87,14 +87,12 @@ openclaw team-reports status --json
 openclaw dashboard
 ```
 
-On startup, yesterday triggers a catch-up run after 60 seconds unless a
-successful run started at or after that day's closing UTC midnight and includes
-that day. A completed manual run after close also satisfies catch-up, including
-one that finishes during the startup delay or deferred wait. A successful run
-that started while the day was still open does not satisfy closed-day catch-up.
-When retrying a partially failed run, catch-up reuses healthy closed daily reports
-from the same organization scope and collects the remaining days. Manual generation
-still refreshes the requested day. Week and month reports use stored daily activity.
+Startup does not trigger a report job. The first scheduled run collects yesterday's
+closed report and today's partial report, plus the day before startup when that run
+falls after the next UTC midnight, reusing healthy closed daily reports from
+the same organization scope. This also recovers partially failed runs without
+recollecting accepted closed days. Manual generation still refreshes the requested
+day. Week and month reports use stored daily activity.
 Collection and aggregation run in workers, with bounded batches staged in the
 plugin's SQLite connection. Scratch activity disappears when that connection closes;
 accepted report history and retention are unchanged.
@@ -145,7 +143,7 @@ filtered to that member before pagination.
 
 Members are matched case-insensitively using their configured and report GitHub
 aliases against linked GitHub identities on Gateway profiles. Merged profiles
-resolve to their canonical owner. Unlinked or ambiguous identities are labeled
+resolve to their primary owner. Unlinked or ambiguous identities are labeled
 separately from a linked member with no sessions visible to you. Display names
 are never used to infer ownership.
 
@@ -293,7 +291,7 @@ people: [
 
 | Key                   | Default | Behavior                                                                                                                                                    |
 | --------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `summaries.enabled`   | `true`  | Generate model-written overview, highlights, and per-person summaries. `false` uses deterministic fallback text.                                            |
+| `summaries.enabled`   | `true`  | Generate model-written overview, highlights, and per-person summaries. `false` uses fixed-template fallback text.                                           |
 | `summaries.model`     | unset   | Requested `provider/model` reference; otherwise use the target agent's default model. Requires the host policy below to take effect.                        |
 | `summaries.reasoning` | unset   | Requested thinking level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `adaptive`, `max`, or `ultra`. The host normalizes it for the selected model. |
 | `summaries.agentId`   | unset   | Agent whose model and credentials are used. Cross-agent selection is subject to the host's `llm.allowAgentIdOverride` policy.                               |
@@ -310,7 +308,7 @@ is a sibling of `config`, not a field inside it:
     // Keep your github and identity configuration here.
     summaries: {
       enabled: true,
-      model: "openai/gpt-6-astra",
+      model: "openai/gpt-5.6-sol",
       reasoning: "high",
     },
   },
@@ -328,7 +326,7 @@ or private facts. Quiet members remain in the report with a low-activity note.
 
 The plugin validates the model's JSON response and retries once to repair
 invalid output or missing members. If the retry fails, it keeps the collected
-report and shows deterministic summaries with a visible fallback banner.
+report and shows fixed-template summaries with a visible fallback banner.
 The output budget scales with roster size; failed model attempts include a bounded, credential-free reason in the report, Markdown export, latest-day status, and Gateway logs.
 Unchanged evidence reuses the stored summary instead of making another model
 call. Collection is stored before summarization, which may take several minutes.
@@ -345,7 +343,10 @@ call. Collection is stored before summarization, which may take several minutes.
 
 Only one run executes at a time. Scheduled work waits for an active run;
 manual generation is rejected while another run is active. Runs have a
-45-minute deadline. Stopping the service cancels its timers and waits up to
+45-minute deadline. Automatic collection waits at least five minutes after the
+service starts. Intraday boundaries inside that window are skipped; a closed-day
+run due inside the window waits until its end. Later runs keep their usual cadence.
+Stopping the service cancels its timers and waits up to
 30 seconds for active work, then cancels remote collection and summarization.
 Any database operation already in progress and the final run outcome finish
 before storage closes.
@@ -381,7 +382,7 @@ count is nonzero.
 
 Reports keep at most 200 GitHub items and eight Discord excerpts per person,
 with at most 80 aggregate top items. Stored report JSON is capped at 2 MiB;
-item lists are truncated deterministically, keeping newest items first, and
+item lists are truncated using fixed rules, keeping newest items first, and
 the report indicates truncation. Counts can therefore exceed displayed items.
 
 ## CLI and exports
@@ -440,8 +441,8 @@ allowed by `plugins.allow` if present, and the Control UI session has
 unavailable after fixing its configuration, run `openclaw plugins reload team-reports`.
 For an unavailable frame, check HTTPS or trusted loopback access and third-party-cookie policy.
 
-**There are no reports yet.** Run `openclaw team-reports status --json`. Startup
-catch-up waits 60 seconds, and collection or model calls may still be running.
+**There are no reports yet.** Run `openclaw team-reports status --json`. The first
+automatic collection waits for its scheduled time, and collection or model calls may still be running.
 Use `generate --intraday` for today's partial report. `/latest/` requires at
 least one closed daily report.
 
@@ -475,7 +476,7 @@ message content.
 
 **A member is missing or Discord activity is unmatched.** Check the GitHub
 team roster and identity entries. Put aliases in the same `github` array,
-use the person's Discord user ID, and ensure the entry is not archived.
+use the person's Discord user ID, and check that the entry is not archived.
 `discordUsername` alone does not map messages to a person.
 
 **Summaries show a fallback banner or ignore the requested model.** Check the

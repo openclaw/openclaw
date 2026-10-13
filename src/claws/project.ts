@@ -1,8 +1,9 @@
 import { lstat, mkdir, readdir, realpath, rmdir, unlink, writeFile } from "node:fs/promises";
-import { basename, dirname, isAbsolute, parse, relative, resolve, sep } from "node:path";
+import { basename, dirname, parse, resolve } from "node:path";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
+import { clawContainedRelativePath } from "./path-containment.js";
 import { readClawManifestFile } from "./reader.js";
 import { isCanonicalClawHubPackageName, portableClawPathKey } from "./schema-portability.js";
 import type { ClawDiagnostic, ClawReadResult } from "./types.js";
@@ -96,19 +97,11 @@ async function isConfinedManifestFile(root: string): Promise<boolean> {
   if (!rootReal || !targetReal) {
     return false;
   }
-  const targetRelative = relative(rootReal, targetReal);
-  if (
-    targetRelative === "" ||
-    targetRelative === ".." ||
-    targetRelative.startsWith(`..${sep}`) ||
-    isAbsolute(targetRelative) ||
-    isExcludedProjectSource(targetRelative)
-  ) {
+  const targetRelative = clawContainedRelativePath(rootReal, targetReal);
+  if (!targetRelative || isExcludedProjectSource(targetRelative)) {
     return false;
   }
-  return lstat(targetReal)
-    .then((target) => target.isFile())
-    .catch(() => false);
+  return isFile(targetReal);
 }
 
 async function discoverClawProjectRoot(projectPath: string): Promise<string> {
@@ -228,7 +221,7 @@ export async function createClawProject(
   if (!isCanonicalClawHubPackageName(name)) {
     throw new ClawProjectError(
       "invalid_package_name",
-      `Package name ${JSON.stringify(name)} must be a canonical ClawHub package name.`,
+      `Package name ${JSON.stringify(name)} must be a valid ClawHub package name.`,
     );
   }
 
