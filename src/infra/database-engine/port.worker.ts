@@ -137,6 +137,7 @@ async function* readBatches(
       table.columns.forEach(({ name }, i) => {
         let value = raw[name]!;
         if (endpoint.engine === "sqlite" && typeof value === "string") {
+          // SAFETY: escapedSqliteText uses json_quote for every SQLite TEXT cell.
           value = JSON.parse(value) as string;
           const original = raw[`__port_bytes_${i}`];
           if (!(original instanceof Uint8Array) || !Buffer.from(value).equals(original)) {
