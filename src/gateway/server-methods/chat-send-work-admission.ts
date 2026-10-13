@@ -205,21 +205,16 @@ export function admitChatSendUploads({
   }
 }
 
-/** Caller and physical target custody end together when admitted work settles. */
+/** Release caller authority when admitted work settles. */
 export function releaseChatSendCallerAuthority(params: {
   operator: { release?: () => void };
   request: Pick<NormalizedChatSendRequest, "providerReviewAcknowledgment">;
-  session: Pick<PreparedChatSendSession, "releaseSessionTarget">;
 }): void {
   try {
     params.operator.release?.();
   } finally {
-    try {
-      if (params.request.providerReviewAcknowledgment) {
-        retireProviderReviewAcknowledgment(params.request.providerReviewAcknowledgment);
-      }
-    } finally {
-      params.session.releaseSessionTarget();
+    if (params.request.providerReviewAcknowledgment) {
+      retireProviderReviewAcknowledgment(params.request.providerReviewAcknowledgment);
     }
   }
 }

@@ -571,6 +571,50 @@ it("installs a cold command and stale preimage without a separate read request",
   });
 });
 
+it("keeps concurrent commands in FIFO order across a rolled-back mutation", async () => {
+  await withActor(async ({ actor, readEntry }) => {
+    const initial = await actor.read(authority);
+    const preimages = new Map<number, number | undefined>();
+    const patch = (updatedAt: number, reject = false) =>
+      actor.patch(
+        {
+          commandId: `concurrent-${updatedAt}`,
+          phaseId: "turn",
+          reducers: [{ kind: "activity", updatedAt }],
+        },
+        {
+          assertCurrent() {},
+          authorize(stage, snapshot) {
+            if (stage === "transaction" && !preimages.has(updatedAt)) {
+              preimages.set(updatedAt, snapshot.entry?.updatedAt);
+            }
+            if (stage === "commit" && reject) {
+              throw new Error("Concurrent command rejected");
+            }
+          },
+        },
+      );
+    const [first, rejected, last] = await Promise.all([patch(601), patch(602, true), patch(603)]);
+    expect(rejected).toMatchObject({
+      kind: "rolled-back",
+      error: { message: "Concurrent command rejected" },
+    });
+    if (first.kind !== "committed" || last.kind !== "committed") {
+      throw new Error("Expected adjacent concurrent commands to commit");
+    }
+    expect(first.receipt.beforeVersion).toEqual(initial.version);
+    expect(first.receipt.postimage.entry?.updatedAt).toBe(601);
+    expect([...preimages]).toEqual([
+      [601, initial.entry?.updatedAt],
+      [602, 601],
+      [603, 601],
+    ]);
+    expect(last.receipt.afterVersion.sequence).toBe(last.receipt.beforeVersion.sequence + 1);
+    expect(actor.snapshot(authority)).toEqual(last.receipt.postimage);
+    expect(readEntry()?.updatedAt).toBe(603);
+  });
+});
+
 it("installs the full append receipt and releases FIFO before retained follow-up work", async () => {
   await withActor(async ({ actor, fault }) => {
     const before = await actor.read(authority);

@@ -467,7 +467,7 @@ export function publishSessionEntryCacheParticipantUpdate(
       database,
       sessionKey,
       database.agentId,
-      { kind: "participants" },
+      { kind: "participants", projectionChanged: false },
       { kind: "marker", sharingChange: "unchanged" },
     );
     return;

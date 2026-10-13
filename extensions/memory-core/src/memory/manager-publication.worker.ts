@@ -532,6 +532,26 @@ function createPublicationBackend(
           ),
         );
       }
+      if (command.type === "source.replace.group") {
+        const outcome = write(() => {
+          const kernel = new MemorySourceIndexKernel(db, command.input.state);
+          for (const { header, fragments } of command.input.sources) {
+            if (
+              header.source === "sessions" &&
+              hasMemorySessionTombstone(db, header.agentId, header.sessionId)
+            ) {
+              throw new Error(
+                "A session was forgotten while memory indexing was running; retry the memory index.",
+              );
+            }
+            kernel.replaceRows(header, readPublicationRows<MemorySourceIndexRow>(fragments));
+          }
+          return true;
+        });
+        return outcome.ok
+          ? { ...outcome, facts: readMemoryDatabaseFacts(db, command.input.state.hasVectorTable) }
+          : outcome;
+      }
       let header: MemorySourceIndexHeader;
       let rows: Iterable<MemorySourceIndexRow>;
       if (command.type === "source.replace.inline") {

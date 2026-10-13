@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import type { LitElement } from "lit";
 import { beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { ApplicationOverlaySnapshot } from "../app/overlays-types.ts";
@@ -279,13 +280,17 @@ describe("sidebar projection memo", () => {
     },
   );
 
-  it("updates roster selection and menu state without reprojecting rows or sections", async () => {
+  it("updates roster selection without rebuilding an unchanged new-session menu", async () => {
     const mounted = await mountRoster();
     const sidebar = mounted.sidebar as unknown as Sidebar;
     sidebar.sidebarAgentsMode = "roster";
     await settleRoster(mounted.sidebar);
+    const newSession = sidebar.querySelector<LitElement>("openclaw-sidebar-new-session-menu")!;
+    await newSession.updateComplete;
     await rosterActivityStore(mounted.context).refresh();
     await settleRoster(mounted.sidebar);
+    await newSession.updateComplete;
+    const menuUpdate = vi.spyOn(newSession, "performUpdate");
     const sessionKey = "agent:main:recent";
     const row = () => sidebar.querySelector(`[data-session-key="${sessionKey}"]`);
     expect(row()).not.toBeNull();
@@ -308,6 +313,7 @@ describe("sidebar projection memo", () => {
     );
     expect(projectRows).not.toHaveBeenCalled();
     expect(sections).not.toHaveBeenCalled();
+    expect(menuUpdate).not.toHaveBeenCalled();
   });
 
   it("invalidates live attention, expiry, outbox snapshots, and store-owned PR and archive facts", async () => {

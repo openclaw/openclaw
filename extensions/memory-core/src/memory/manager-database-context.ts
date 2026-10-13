@@ -582,7 +582,7 @@ export class MemoryIndexDatabase {
   }
 
   async replaceSource(
-    replacement: MemorySourceIndexReplacement,
+    replacement: MemorySourceIndexReplacement | MemorySourceIndexReplacement[],
     assertCurrent: () => void,
     prepare: () => Promise<boolean>,
   ) {

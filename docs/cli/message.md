@@ -175,6 +175,10 @@ the command explains the outcome and exits nonzero. Partial delivery keeps any
 confirmed message ID. JSON failures include `ok: false`, `deliveryStatus`, and
 `error`; successful JSON responses retain their existing shape.
 
+Session transcript mirrors show attachment filenames while retaining their media
+references. Different attachments with the same filename and caption remain
+distinct; repeating the same text and media at the transcript tail is deduplicated.
+
 ```bash
 openclaw message send --channel discord \
   --target channel:123 --message "Choose:" \

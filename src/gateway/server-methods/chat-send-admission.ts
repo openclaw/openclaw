@@ -41,10 +41,7 @@ import {
   createAdmittedChatSendCleanup,
   finishAbortedChatSend,
 } from "./chat-send-admission-cleanup.js";
-import {
-  assertChatSendSessionTargetOrRespond,
-  prepareChatSendAdmissionContext,
-} from "./chat-send-admission-context.js";
+import { prepareChatSendAdmissionContext } from "./chat-send-admission-context.js";
 import { prepareGoalChatSendRetry } from "./chat-send-goal-retry.js";
 import {
   resolveChatSendRequestConflict,
@@ -97,7 +94,6 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
     expectedLeafEntryId,
   } = session;
   const cachedMeta = { cached: true, runId: clientRunId };
-  const assertSessionTargetCurrent = session.assertSessionTargetCurrent;
   const { chatSendTraceAttributes, originatingRoute } = prepareChatSendAdmissionContext(params);
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
   const pendingAttemptId = randomUUID();
@@ -115,7 +111,6 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
   const preparedRetry = pendingRetry instanceof Promise ? await pendingRetry : pendingRetry;
   const reserve = () => {
     params.assertCurrent?.();
-    assertSessionTargetCurrent();
     const goalRetry = inspectGoalChatSendRetry({ ...params, prepared: preparedGoalRetry });
     if (goalRetry.kind !== "new") {
       if (goalRetry.kind === "replay") {
@@ -401,7 +396,6 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
       isSettling: () => admittedRunAbort?.entry?.terminalOutcomeObserved === true,
       identities: [sessionKey, backingSessionId],
       storeWriterIdentities: [sessionKey, session.sessionTarget.storeKey],
-      assertAllowed: assertSessionTargetCurrent,
       revalidateAllowed: async () => {
         if (!restartSafeRequest) {
           return commitChatWorkAdmission(null);
@@ -538,21 +532,12 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
       abortSession,
     });
     releaseCallerAuthority = () =>
-      releaseChatSendCallerAuthority({ operator: capturedOperator, request, session });
+      releaseChatSendCallerAuthority({ operator: capturedOperator, request });
     // Authority stays fresh per segment; effects check cancellation themselves.
     // A cancelled admission callback must still reach the handler's abort settlement.
     const consumeCurrent = <T>(consume: () => T): Promise<T | undefined> =>
       consumeChatSendCurrent(params, () => {
         capturedOperator.authority?.assertCurrent();
-        if (
-          !assertChatSendSessionTargetOrRespond({
-            session,
-            cleanup: cleanupPreDispatchAdmission,
-            respond,
-          })
-        ) {
-          return undefined;
-        }
         return consume();
       });
     if (runInterruptTarget || p.queueMode === "interrupt") {
@@ -693,7 +678,6 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
       admittedSessionEntry,
       chatSendTraceAttributes,
       assertInitialSkillSelection,
-      assertSessionTargetCurrent,
       cleanupAdmittedRun,
       finishAbortedChatSend: finishAborted,
       gatewayWorkAdmission,

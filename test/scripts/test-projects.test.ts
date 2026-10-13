@@ -2218,7 +2218,7 @@ export const single = {
       );
 
       expect(result.status).toBe(0);
-      expect(result.stdout).toContain("Usage: node --import tsx scripts/test-projects.mts");
+      expect(result.stdout).toContain("Usage: node scripts/test-projects.mts");
       expect(result.stderr).not.toContain("[test] starting");
     });
   });

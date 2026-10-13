@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { SessionManager } from "../../agents/sessions/session-manager.js";
@@ -50,6 +51,7 @@ import type {
   SessionLifecycleRevisionExpectation,
   SessionTranscriptTurnLifecyclePatch,
 } from "./session-transcript-turn-lifecycle.types.js";
+import { projectAssistantTranscriptMirrorIdentity } from "./transcript-assistant-delivery-read.js";
 import {
   projectAssistantTranscriptText,
   recordAssistantManagedMediaUrls,
@@ -622,31 +624,12 @@ async function readLatestVisibleTranscriptMessage(scope: {
   }
 }
 
-function extractAssistantMessageText(message: AgentMessage): string | null {
-  if (message.role !== "assistant" || !Array.isArray(message.content)) {
-    return null;
-  }
-
-  const parts = message.content
-    .filter(
-      (
-        part,
-      ): part is {
-        type: "text";
-        text: string;
-      } => part.type === "text" && typeof part.text === "string" && part.text.trim().length > 0,
-    )
-    .map((part) => part.text.trim());
-
-  return parts.length > 0 ? parts.join("\n").trim() : null;
-}
-
 async function findLatestEquivalentAssistantMessageId(
   target: SessionTranscriptTurnWriteContext,
   message: SessionTranscriptAssistantMessage,
 ): Promise<string | undefined> {
-  const expectedText = extractAssistantMessageText(sanitizeTranscriptMessage(message));
-  if (!expectedText) {
+  const expected = projectAssistantTranscriptMirrorIdentity(sanitizeTranscriptMessage(message));
+  if (!expected) {
     return undefined;
   }
 
@@ -657,14 +640,12 @@ async function findLatestEquivalentAssistantMessageId(
       sessionKey: target.sessionKey,
       storePath: target.storePath,
     });
-    const latestMessage = latest?.message as { role?: unknown } | undefined;
-    if (latestMessage?.role !== "assistant") {
-      return undefined;
-    }
-    const candidateText = latest
-      ? extractAssistantMessageText(sanitizeTranscriptMessage(latest.message as AgentMessage))
+    const candidate = latest
+      ? projectAssistantTranscriptMirrorIdentity(
+          sanitizeTranscriptMessage(latest.message as AgentMessage),
+        )
       : undefined;
-    return candidateText === expectedText ? latest?.id : undefined;
+    return isDeepStrictEqual(candidate, expected) ? latest?.id : undefined;
   }
 
   return undefined;

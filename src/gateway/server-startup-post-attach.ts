@@ -209,36 +209,49 @@ export async function startGatewaySidecars(params: {
 
   const skipChannels = isChannelStartupSuppressedByEnvironment();
   const getModelRuntimeConfig = params.getModelRuntimeConfig ?? (() => params.cfg);
-  // Agent RPC remains available when transports are disabled. Publish configured/static facts before
-  // accepting work; live provider catalogs stay advisory and never enter the Gateway lifecycle.
-  if ((await params.pluginRuntimeClaim?.waitForUnblocked()) !== false) {
-    await measureStartup(params.startupTrace, "sidecars.model-runtime", () =>
-      withPluginRuntimeRegistryScope(params.pluginRegistry, () =>
-        publishConfiguredModelRuntimeSnapshots({
-          cfg: params.cfg,
-          getConfig: () =>
-            measureStartup(params.startupTrace, "sidecars.model-auth", () =>
-              hydrateConfiguredExternalCliAuth({
-                getConfig: getModelRuntimeConfig,
-                log: params.log,
-              }),
-            ),
-          isCurrent: params.pluginRuntimeClaim?.isCurrent,
-          ...(params.pluginMetadataSnapshot
-            ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
-            : {}),
-          workspaceDir: params.defaultWorkspaceDir,
-          startupTrace: params.startupTrace,
-        }),
-      ),
-    );
+  // Join independent preparation even after a failure so startup cleanup retains every import.
+  const prepared = await Promise.allSettled([
+    (async () => {
+      // Agent RPC remains available when transports are disabled. Publish configured/static facts
+      // before accepting work; live provider catalogs remain advisory.
+      if ((await params.pluginRuntimeClaim?.waitForUnblocked()) !== false) {
+        await measureStartup(params.startupTrace, "sidecars.model-runtime", () =>
+          withPluginRuntimeRegistryScope(params.pluginRegistry, () =>
+            publishConfiguredModelRuntimeSnapshots({
+              cfg: params.cfg,
+              getConfig: () =>
+                measureStartup(params.startupTrace, "sidecars.model-auth", () =>
+                  hydrateConfiguredExternalCliAuth({
+                    getConfig: getModelRuntimeConfig,
+                    log: params.log,
+                  }),
+                ),
+              isCurrent: params.pluginRuntimeClaim?.isCurrent,
+              ...(params.pluginMetadataSnapshot
+                ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
+                : {}),
+              workspaceDir: params.defaultWorkspaceDir,
+              startupTrace: params.startupTrace,
+            }),
+          ),
+        );
+      }
+    })(),
+    // Readiness owns process-stable request imports so the first turn and connection do not.
+    measureStartup(params.startupTrace, "sidecars.reply-runtime", async () => {
+      const { prewarmConfigDrivenReplyRuntime } = await loadGetReplyFromConfigRuntime();
+      await prewarmConfigDrivenReplyRuntime();
+    }),
+    measureStartup(
+      params.startupTrace,
+      "sidecars.connection-runtime",
+      () => import("./server/ws-connection/message-handler.js"),
+    ),
+  ]);
+  const failed = prepared.find((outcome) => outcome.status === "rejected");
+  if (failed?.status === "rejected") {
+    throw failed.reason;
   }
-  // Gateway readiness owns process-stable reply module activation so the first operator turn
-  // does not become the module loader under contention.
-  await measureStartup(params.startupTrace, "sidecars.reply-runtime", async () => {
-    const { prewarmConfigDrivenReplyRuntime } = await loadGetReplyFromConfigRuntime();
-    await prewarmConfigDrivenReplyRuntime();
-  });
   await measureStartup(params.startupTrace, "sidecars.chat-metadata", async () => {
     await params.refreshChatMetadata?.();
   });

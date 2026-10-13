@@ -12,6 +12,7 @@ import {
   isArtifactPreservingStateRead,
 } from "../../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { captureAuthProfileCredentialAuthority } from "../../state/user-model-account-authority.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import type { ExternalCliOverlayOptions } from "./external-auth.js";
 import {
@@ -246,6 +247,38 @@ export function createAuthProfileStoreRuntimeReader({
         }),
       ]),
     );
+    // Capture every selected source before yielding, including an absent inherited database.
+    const credentialProfileId =
+      !scope.isolated && profileId && !isUserModelAuthProfileId(profileId) ? profileId : undefined;
+    const credentialAuthorities = new Map(
+      credentialProfileId
+        ? [...agentReads].map(([databasePath, reader]) => {
+            let authority: Result<ReturnType<typeof reader.captureCredentialAuthority>, unknown>;
+            try {
+              authority = {
+                ok: true,
+                value: reader.captureCredentialAuthority(credentialProfileId),
+              };
+            } catch (error) {
+              authority = { ok: false, error };
+            }
+            return [databasePath, authority] as const;
+          })
+        : [],
+    );
+    if (credentialProfileId && sharedContext) {
+      credentialAuthorities.set(sharedContext.admission.databasePath, {
+        ok: true,
+        value: captureAuthProfileCredentialAuthority(
+          sharedContext,
+          {
+            identity: `${sharedContext.admission.identity.key}:${sharedContext.admission.identity.birthtime ?? ""}`,
+            databasePath: sharedContext.admission.databasePath,
+          },
+          credentialProfileId,
+        ),
+      });
+    }
     const inCapturedScope = <Value>(run: () => Value): Value =>
       scope.run(effectiveAgentDir, env, run);
     const rowsByPath = new Map<string, AuthProfileRowRead>();
@@ -283,6 +316,11 @@ export function createAuthProfileStoreRuntimeReader({
         rowReaders.get(databasePath) ??
         (reusePersistedRows ? runtimeAuthProfileRowsCache.prepare(databasePath, reader) : reader);
       rowReaders.set(databasePath, preparedReader);
+      const capturedAuthority = credentialAuthorities.get(databasePath);
+      if (capturedAuthority && !capturedAuthority.ok) {
+        throw capturedAuthority.error;
+      }
+      const credentialAuthority = capturedAuthority?.value;
       const rows = rowsByPath.get(databasePath) ?? (await preparedReader.read());
       preparedReader.assertCurrent();
       rowsByPath.set(databasePath, rows);
@@ -294,6 +332,9 @@ export function createAuthProfileStoreRuntimeReader({
         candidates,
         readStore: () => loadPersistedAuthProfileStoreFromRows(rows, databasePath),
       };
+      if (credentialAuthority && credentialProfileId) {
+        credentialAuthority.observe(demand.owner.readStore()?.profiles[credentialProfileId]);
+      }
       stores.set(databasePath, { ok: true, value: store });
       return store;
     };

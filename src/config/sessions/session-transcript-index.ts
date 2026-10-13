@@ -19,7 +19,10 @@ import {
   withoutSqliteDatabaseWriteScope,
 } from "../../infra/sqlite-database-admission.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
-import { readSessionActorTransactionState } from "./session-actor-transaction.js";
+import {
+  readSessionActorTransactionState,
+  writableSessionActorMap,
+} from "./session-actor-transaction.js";
 import {
   createSessionTranscriptFtsInserter,
   deleteSessionTranscriptFtsRowsInTransaction,
@@ -319,6 +322,9 @@ export function createTranscriptIndexAppenderInTransaction(
     if (append.activeRow) {
       insertActiveEvent ??= createActiveEventInserter(db, sessionId);
       insertActiveEvent(append.activeRow);
+      if (actor) {
+        actor.transcript.active = writableSessionActorMap(actor.transcript.active);
+      }
       actor?.transcript.active.set(params.seq, {
         session_id: sessionId,
         active_position: append.activeRow.activePosition,

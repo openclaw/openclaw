@@ -26,6 +26,12 @@ optional tools. Set `tools.toolSearch: false` to restore direct schemas. Engaged
 [Code Mode](/tools/code-mode) takes precedence, and Codex keeps its native surface.
 This automatic default does not rewrite the configuration file.
 
+Embedded runs with a local model on the native Ollama transport keep
+policy-approved `web_search` and `web_fetch` schemas directly visible by default.
+Other optional tools still use Tool Search. Any explicit `tools.toolSearch` value
+keeps its configured behavior, including `true`, an object, or `false`. Known
+hosted Ollama routes and the OpenAI-compatible transport keep the general default.
+
 When enabled for OpenClaw runs, the model automatically receives a bounded
 directory of the available trusted tool names and descriptions, plus the
 structured `tool_search`, `tool_describe`, and `dispatch_action` controls. Setting
