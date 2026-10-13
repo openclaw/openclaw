@@ -13,12 +13,14 @@ export async function readMemoryIndexSource({
   source,
   suppliedContent,
   memoryFiles,
+  artifactProvenance,
 }: {
   absolutePath: string;
   workspaceDir: string;
   source: MemorySource;
   suppliedContent?: string;
   memoryFiles?: MemoryWorkspaceFiles;
+  artifactProvenance?: Parameters<typeof resolveMemoryPathClassification>[0]["artifactProvenance"];
 }) {
   const remoteRead =
     source === "memory" && memoryFiles
@@ -40,6 +42,7 @@ export async function readMemoryIndexSource({
     source,
     workspaceDir,
     readSource: remoteRead,
+    artifactProvenance,
   });
   const content =
     remoteRead?.content ??

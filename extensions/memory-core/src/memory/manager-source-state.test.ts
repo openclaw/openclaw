@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { ensureMemoryIndexSchema } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { refreshMemorySourceOrigin } from "./manager-source-origin.worker.js";
 import { inspectMemorySourceState, loadMemorySourceFileState } from "./manager-source-state.js";
 
 describe("memory source state", () => {
@@ -34,6 +35,87 @@ describe("memory source state", () => {
     ]);
     db.prepare("DELETE FROM memory_index_sources WHERE source = ?").run("memory");
     expect(loadMemorySourceFileState({ db, source: "memory" })).toEqual([]);
+  });
+
+  it("distinguishes empty sources from missing chunk provenance", () => {
+    db.prepare(
+      "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, 1, 1, 'chunk', 'model', 'text', ?, 100)",
+    ).run("chunk-1", "memory/one.md", "memory", new Uint8Array());
+    expect(loadMemorySourceFileState({ db, source: "memory", includeOrigin: true })).toEqual([
+      {
+        path: "memory/one.md",
+        hash: "hash-1",
+        mtime: 100.25,
+        size: 10,
+        origin: null,
+        hasChunks: true,
+      },
+      {
+        path: "memory/two.md",
+        hash: "hash-2",
+        mtime: 200.5,
+        size: 20,
+        origin: null,
+        hasChunks: false,
+      },
+    ]);
+    // A session's first chunk cannot summarize its per-message provenance.
+    expect(loadMemorySourceFileState({ db, source: "sessions", includeOrigin: true })).toEqual([
+      { path: "memory/one.md", hash: "session-hash", mtime: 300.75, size: 30 },
+    ]);
+  });
+
+  it("refreshes only matching memory origins while retaining content, time, and lineage", () => {
+    const insert = db.prepare(
+      "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, 'memory/one.md', ?, 1, 1, 'chunk', 'model', 'text', ?, 100)",
+    );
+    for (const [id, source] of [
+      ["one", "memory"],
+      ["two", "memory"],
+      ["session", "sessions"],
+    ] as const) {
+      insert.run(id, source, new Uint8Array());
+      db.prepare(
+        "INSERT INTO memory_index_chunk_provenance VALUES (?, 'agent', 'unknown', 90, 'previous')",
+      ).run(id);
+    }
+    const chunks = db.prepare("SELECT * FROM memory_index_chunks ORDER BY id").all();
+    const input = {
+      path: "memory/one.md",
+      expectedHash: "stale",
+      originClass: "untrusted" as const,
+    };
+    expect(refreshMemorySourceOrigin(db, input)).toBe(false);
+    expect(
+      db.prepare("SELECT DISTINCT origin_class FROM memory_index_chunk_provenance").all(),
+    ).toEqual([{ origin_class: "agent" }]);
+    expect(refreshMemorySourceOrigin(db, { ...input, expectedHash: "hash-1" })).toBe(true);
+    expect(
+      db.prepare("SELECT * FROM memory_index_chunk_provenance ORDER BY chunk_id").all(),
+    ).toEqual([
+      {
+        chunk_id: "one",
+        origin_class: "untrusted",
+        session_kind: "unknown",
+        observed_at: 90,
+        supersedes_key: "previous",
+      },
+      {
+        chunk_id: "session",
+        origin_class: "agent",
+        session_kind: "unknown",
+        observed_at: 90,
+        supersedes_key: "previous",
+      },
+      {
+        chunk_id: "two",
+        origin_class: "untrusted",
+        session_kind: "unknown",
+        observed_at: 90,
+        supersedes_key: "previous",
+      },
+    ]);
+    expect(db.prepare("SELECT * FROM memory_index_chunks ORDER BY id").all()).toEqual(chunks);
   });
 
   it.each([

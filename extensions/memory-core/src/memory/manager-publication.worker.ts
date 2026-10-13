@@ -59,6 +59,7 @@ import {
   type MemorySourceIndexHeader,
   type MemorySourceIndexRow,
 } from "./manager-source-index-kernel.js";
+import { refreshMemorySourceOrigin } from "./manager-source-origin.worker.js";
 import { refreshMemorySessionSourceState } from "./manager-source-state.js";
 
 type PublicationConnection =
@@ -392,6 +393,9 @@ function createPublicationBackend(
         return withFacts(
           writeSingleStatement(() => refreshMemorySessionSourceState(db, command.input)),
         );
+      }
+      if (command.type === "source.refreshOrigin") {
+        return withFacts(write(() => refreshMemorySourceOrigin(db, command.input)));
       }
       if (command.type === "stage.start" || command.type === "cache.stage.start") {
         staged =
