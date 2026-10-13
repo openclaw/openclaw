@@ -24,6 +24,7 @@ import {
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import { getSessionWorkAdmissionRelease } from "../sessions/session-lifecycle-admission.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   resolveOpenClawAgentSqlitePath,
@@ -162,9 +163,10 @@ beforeEach(async () => {
       return;
     }
     publications.push(
-      publish(update).catch((error: unknown) => {
-        publicationErrors.push(error);
-      }),
+      // Match production subscription ownership: committed broadcasts outlive the producer.
+      runOutsideAsyncWorkScope(() => publish(update)).catch(
+        (error: unknown) => void publicationErrors.push(error),
+      ),
     );
   });
   voiceSessionId = createOrResumeClientVoiceSession({
