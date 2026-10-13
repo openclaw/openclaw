@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { ensureSqliteLibrarySelected } from "../../infra/bun-sqlite-library.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
+import { throwSqliteLifecycleErrors } from "../../infra/sqlite-lifecycle-errors.js";
 import {
   removeTempDirectoryAsync,
   SqliteSnapshotCleanupError,
@@ -151,6 +152,7 @@ async function readCronState({
   const unregister = registerOpenClawStateDatabaseAsyncResource(resource);
   const run = async () => {
     let loaded: Extract<CronReadOnlyResult, { ok: true }> = { ok: true };
+    const failures: unknown[] = [];
     try {
       maintenance?.own(resource, "shared-resources", () => resource.close());
       if (preserveArtifacts) {
@@ -189,10 +191,17 @@ async function readCronState({
       }
       loaded = result;
       readSucceeded = true;
+    } catch (error) {
+      failures.push(error);
     } finally {
       producerSettled.resolve();
-      await cleanup();
+      try {
+        await cleanup();
+      } catch (error) {
+        failures.push(error);
+      }
     }
+    throwSqliteLifecycleErrors(failures, "Cron read-only state inspection and cleanup failed.");
     controller.signal.throwIfAborted();
     admission.assertCurrent();
     return loaded;
