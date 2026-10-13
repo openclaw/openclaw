@@ -241,6 +241,7 @@ describe("utility completion with an unavailable implicit harness", () => {
   it("reserves mandatory adaptive thinking once through Anthropic transport shaping for observer digests", async () => {
     const { resolveAnthropicTransportOptions } =
       await import("../../packages/ai/src/transports/anthropic-transport-options.js");
+    const { resolveProviderThinkingLevel } = await import("../auto-reply/thinking.js");
     const mandatoryModel = {
       provider: "anthropic",
       id: "claude-opus-5-5",
@@ -261,9 +262,21 @@ describe("utility completion with an unavailable implicit harness", () => {
     const transport = vi
       .spyOn(simpleCompletionExecution, "completeWithPreparedSimpleCompletionModel")
       .mockImplementation(async (params) => {
+        const { reasoning: rawReasoning, ...restOptions } = params.options ?? {};
+        const providerReasoning = resolveProviderThinkingLevel({
+          provider: params.model.provider,
+          model: params.model.id,
+          catalog: [params.model],
+          agentRuntime: "openclaw",
+          level: rawReasoning,
+        });
+        const reasoning = providerReasoning === "adaptive" ? "medium" : providerReasoning;
         shapedOptions = resolveAnthropicTransportOptions(
-          params.model as typeof mandatoryModel,
-          params.options,
+          mandatoryModel,
+          {
+            ...restOptions,
+            ...(reasoning ? { reasoning } : {}),
+          },
           params.auth.apiKey ?? "synthetic-utility-key",
         );
         return makeAssistantMessageFixture({
