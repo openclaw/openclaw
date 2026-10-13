@@ -275,7 +275,8 @@ export async function settlePreparedCliRun(params: {
     } catch (error) {
       recordCleanupError(error);
     }
-    const delivered = "result" in outcome && hasCompletedSourceReplyDeliveryEvidence(outcome.result);
+    const delivered =
+      "result" in outcome && hasCompletedSourceReplyDeliveryEvidence(outcome.result);
     if (cleanupError) {
       if (completed || "error" in outcome || delivered) {
         log.warn(`cli run cleanup failed after completion: ${formatErrorMessage(cleanupError)}`);
