@@ -1,6 +1,9 @@
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
-import { isSessionNodePayloadSelect } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  isSessionNodePayloadSelect,
+  observeSqliteReadSql,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   appendTranscriptMessage,
   readLatestSessionTranscriptMessageEvent,
@@ -9,13 +12,25 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { readActiveTranscriptEntryAnchor } from "../config/sessions/session-accessor.sqlite-transcript-anchor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { hydrateSessionActorState } from "../config/sessions/session-actor-hydration.worker.js";
+import {
+  createSessionActorReplica,
+  readSessionActorProjectionReceipt,
+} from "../config/sessions/session-actor-replica.js";
 import {
   markCanonicalSessionValidationPending,
   setCanonicalSqliteSessionMainKey,
 } from "../config/sessions/session-canonical-key.js";
+import { withSessionTranscriptProjectionReceipt } from "../config/sessions/session-transcript-projection-facts-scope.js";
 import { runWithSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
+import { collectSessionEntryLookupKeys } from "../config/sessions/store-entry.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
+import {
+  readSqliteDatabaseScopedWriteToken,
+  sqliteSessionIdWriteScope,
+} from "../infra/sqlite-database-admission.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import { readOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import {
   OpenClawAgentDatabaseReadOnlyScope,
   withScopedOpenClawAgentDatabaseReadOnly,
@@ -69,6 +84,89 @@ async function withHistory(
     });
   });
 }
+
+it("reuses complete accounting facts and reloads them after a transcript write", async () => {
+  await withHistory(async ({ target, database }) => {
+    const identity = readOpenClawAgentDatabaseIdentity(database);
+    if (typeof identity.identity !== "string") {
+      throw new Error("Accounting receipt proof requires a physical database");
+    }
+    const actorTarget = {
+      sessionKey: target.transcript.sessionKey,
+      database: {
+        kind: "file" as const,
+        physicalIdentity: identity.identity,
+        birthtime: identity.birthtime,
+        nativeLocation: database.path,
+      },
+    };
+    const token = readSqliteDatabaseScopedWriteToken(database.db, [
+      ...collectSessionEntryLookupKeys(actorTarget.sessionKey),
+      sqliteSessionIdWriteScope(target.transcript.sessionId),
+    ]);
+    if (!token) {
+      throw new Error("Accounting receipt proof requires a write token");
+    }
+    const replica = createSessionActorReplica({
+      target: actorTarget,
+      lifetime: { assertCurrent() {}, assertReadable() {} },
+      currentGeneration: () => identity.incarnation,
+    });
+    const owner = new OpenClawAgentDatabaseReadOnlyScope();
+    const reader = createReadonlySessionHistoryReader(target);
+    const options = { includeByteSize: true, includeUsage: false };
+    const read = () => owner.run(target.database, () => reader.readTranscriptAccounting(options));
+    try {
+      const before = read();
+      expect(
+        replica
+          .beginRead()
+          .install(
+            hydrateSessionActorState(
+              database,
+              actorTarget,
+              { epoch: "accounting", sequence: 0 },
+              token,
+            ).hot,
+          ),
+      ).toBe(true);
+      const receipt = readSessionActorProjectionReceipt({
+        path: database.path,
+        sessionKey: actorTarget.sessionKey,
+        sessionId: target.transcript.sessionId,
+      });
+      expect(receipt).toBeDefined();
+      const observed = observeSqliteReadSql(Object.getPrototypeOf(database.db.prepare("SELECT 1")));
+      const redundant = () =>
+        observed.queries.filter(
+          (sql) =>
+            sql.includes('from "session_nodes"') ||
+            sql.includes('from "session_participants"') ||
+            sql.includes('"reset_active_position"'),
+        );
+      try {
+        expect(withSessionTranscriptProjectionReceipt(receipt, read)).toEqual(before);
+        expect(redundant()).toEqual([]);
+        await appendTranscriptMessage(target.transcript, {
+          eventId: "accounting-next",
+          parentId: "requested-message",
+          message: { role: "user", content: "Updated accounting" },
+        });
+        await waitForSessionTranscriptProjection(target.transcript);
+        observed.queries.length = 0;
+        expect(withSessionTranscriptProjectionReceipt(receipt, read).eventCount).toBe(
+          before.eventCount! + 1,
+        );
+        expect(redundant().length).toBeGreaterThan(0);
+      } finally {
+        observed.restore();
+      }
+    } finally {
+      replica.close();
+      owner.close();
+    }
+  });
+});
 
 it("reuses artifact summaries without payload reads and invalidates after transcript writes", async () => {
   await withHistory(async ({ target, database }) => {

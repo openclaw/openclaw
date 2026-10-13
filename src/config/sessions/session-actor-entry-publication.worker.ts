@@ -2,10 +2,11 @@ import type { DatabaseSync } from "node:sqlite";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
 import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
+import type { SessionActorHotState } from "./session-actor-contract.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
+import type { readSessionEntryPatchPredicate } from "./session-entry-patch-guard.js";
 import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
 import type { SessionParticipantRecord } from "./session-membership-facts.types.js";
-import type { SessionTranscriptWatermark } from "./session-transcript-context-version.types.js";
 
 type PrepareEntryPatch = (
   database: OpenClawAgentDatabase,
@@ -13,7 +14,9 @@ type PrepareEntryPatch = (
 ) =>
   | {
       snapshot(): SqliteLifecycleTargetSnapshot[number];
-      transcript: { sessionId: string; watermark: SessionTranscriptWatermark };
+      readPredicate: (
+        predicate: Parameters<typeof readSessionEntryPatchPredicate>[2],
+      ) => ReturnType<typeof readSessionEntryPatchPredicate>;
       publish(
         postimages: SessionEntryWritePostimages,
         publication: SessionEntryReplacementPublication,
@@ -32,7 +35,12 @@ type ParticipantOwner = {
     database: ParticipantDatabase,
     sessionKey: string,
     singleStatement?: boolean,
-  ) => ((participants: SessionParticipantRecord[]) => void) | undefined;
+  ) =>
+    | {
+        version: SessionActorHotState["version"];
+        publish(participants: SessionParticipantRecord[]): void;
+      }
+    | undefined;
 };
 const participantOwners = new WeakMap<DatabaseSync, ParticipantOwner>();
 

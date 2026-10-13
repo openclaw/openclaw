@@ -287,6 +287,7 @@ it("keeps transcript residency across entry patches without losing either owner'
     try {
       entryPatch({ label: "entry owner committed", model: "updated-model" });
       expect(reads.counts.watermark).toBe(0);
+      expect(reads.counts.select).toBe(0);
       runSqliteImmediateTransactionSync(f.database.db, () =>
         recordSessionParticipantFromWorker(f.database, f.scope, {
           identity: { type: "agent", id: "peer" },
