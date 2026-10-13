@@ -25,6 +25,7 @@ import {
   UserProfileNotFoundError,
   UserProfileOwnerError,
 } from "./user-profiles-schema.js";
+import type { UserProfile } from "./user-profiles.types.js";
 import type { UserProfileWriteOperations } from "./user-profiles.worker.js";
 
 type ProfileWriteOptions = Pick<OpenClawStateDatabaseOptions, "path" | "env"> & {
@@ -264,7 +265,7 @@ export async function syncCanonicalGitHubIdentity(
 export async function ensureCanonicalGatewayOwnerProfile(
   displayName: string | null | (() => Promise<string | null>),
   options: ProfileWriteOptions = {},
-) {
+): Promise<UserProfile> {
   const owner = readResidentGatewayOwnerProfile(resolveDatabasePath(options));
   if (
     owner &&
@@ -273,6 +274,8 @@ export async function ensureCanonicalGatewayOwnerProfile(
     options.assertCurrent?.();
     return owner;
   }
-  const resolvedName = typeof displayName === "function" ? await displayName() : displayName;
-  return unwrap(await write("userProfiles.ensureOwner", { displayName: resolvedName }, options));
+  if (typeof displayName === "function") {
+    return ensureCanonicalGatewayOwnerProfile(await displayName(), options);
+  }
+  return unwrap(await write("userProfiles.ensureOwner", { displayName }, options));
 }
