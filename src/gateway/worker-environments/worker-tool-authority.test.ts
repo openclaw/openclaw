@@ -179,6 +179,7 @@ describe("resolveWorkerToolAuthority", () => {
     });
     expect((await read.execute("read", { name: skill.name })).details).toEqual({
       name: skill.name,
+      location: skill.filePath,
       content: skill.readContent,
     });
     current = false;
