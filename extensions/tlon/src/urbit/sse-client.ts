@@ -181,13 +181,11 @@ export class UrbitSSEClient {
     await this.createCurrentChannel();
 
     await this.openStream();
-    this.reconnectAbortController.signal.throwIfAborted();
     this.isConnected = true;
     this.reconnectAttempts = 0;
   }
 
   async openStream() {
-    this.reconnectAbortController.signal.throwIfAborted();
     // Use AbortController with manual timeout so we only abort during initial connection,
     // not after the SSE stream is established and actively streaming.
     const controller = new AbortController();
@@ -221,9 +219,9 @@ export class UrbitSSEClient {
     }
 
     const { response, release } = stream;
-    if (this.aborted) {
+    if (this.reconnectAbortController.signal.aborted) {
       await release();
-      return;
+      this.reconnectAbortController.signal.throwIfAborted();
     }
     this.streamRelease = release;
 
@@ -489,10 +487,6 @@ export class UrbitSSEClient {
       if (this.onReconnect) {
         await this.onReconnect(this);
       }
-      // Authentication can finish after the monitor has stopped this client.
-      if (this.aborted) {
-        return;
-      }
 
       try {
         // Reopen the same Eyre channel. Its queue retains every unacked event;
@@ -507,9 +501,6 @@ export class UrbitSSEClient {
         this.resetChannelIdentity();
         await this.createCurrentChannel();
         await this.openStream();
-      }
-      if (this.aborted) {
-        return;
       }
       this.isConnected = true;
       this.reconnectAttempts = 0;
