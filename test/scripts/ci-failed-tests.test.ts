@@ -1,3 +1,5 @@
+import type { SpawnSyncOptions } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import {
   collectFailures,
@@ -8,6 +10,7 @@ import {
   rerunArgs,
   resolveRun,
 } from "../../scripts/ci-failed-tests.mts";
+import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
 
 const run = {
   id: 100,
@@ -29,6 +32,87 @@ const failure = (file: string, tests: string[] = [], classification = "new") => 
 const file = "src/gateway/server.sessions.abort-authorization.test.ts";
 
 describe("CI failed-test reruns", () => {
+  it("opts --run into collecting ordinary failures outside CI", async () => {
+    const invoked = Promise.withResolvers<{
+      command: string;
+      args: string[];
+      options: SpawnSyncOptions;
+    }>();
+    const argv = process.argv;
+    const exitCode = process.exitCode;
+    const fixtureEnv = testRunnerFixtureEnv({ OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE: "0" });
+    for (const key of ["CI", "GITHUB_ACTIONS", "OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE"]) {
+      vi.stubEnv(key, fixtureEnv[key]);
+    }
+    const output = vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.resetModules();
+    vi.doMock("node:child_process", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("node:child_process")>()),
+      spawnSync: (command: string, args: string[], options: SpawnSyncOptions) => {
+        invoked.resolve({ command, args, options });
+        return { status: 1 };
+      },
+    }));
+    vi.doMock("../../scripts/lib/plain-gh.mjs", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../../scripts/lib/plain-gh.mjs")>()),
+      execGhReadAsync: async (args: string[]) => {
+        const route = args[1]!;
+        if (route.endsWith("/actions/runs/100")) {
+          return JSON.stringify(run);
+        }
+        if (route.includes("/actions/runs/100/")) {
+          return JSON.stringify({
+            total_count: 1,
+            jobs: [
+              {
+                id: 1,
+                name: "checks-node",
+                run_id: 100,
+                run_attempt: 1,
+                status: "completed",
+                conclusion: "failure",
+                html_url: "job-1",
+              },
+            ],
+          });
+        }
+        if (route.includes("/actions/workflows/")) {
+          return JSON.stringify({ workflow_runs: [] });
+        }
+        if (route.endsWith("/logs")) {
+          return `FAIL gateway-server ${file} > native session > denies`;
+        }
+        throw new Error(`Unexpected route ${route}`);
+      },
+    }));
+    try {
+      process.argv = [
+        process.execPath,
+        fileURLToPath(new URL("../../scripts/ci-failed-tests.mts", import.meta.url)),
+        run.html_url,
+        "--run",
+      ];
+      await import("../../scripts/ci-failed-tests.mts");
+      const child = await invoked.promise;
+      expect(child.command).toBe("pnpm");
+      expect(child.args).toEqual(["test", file, "--", "-t", "native session > denies"]);
+      expect(child.options.env).toMatchObject({
+        OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE: "1",
+      });
+      expect(child.options.env?.CI).toBeUndefined();
+      expect(child.options.env?.GITHUB_ACTIONS).toBeUndefined();
+      expect(process.exitCode).toBe(1);
+    } finally {
+      process.argv = argv;
+      process.exitCode = exitCode;
+      output.mockRestore();
+      vi.unstubAllEnvs();
+      vi.doUnmock("node:child_process");
+      vi.doUnmock("../../scripts/lib/plain-gh.mjs");
+      vi.resetModules();
+    }
+  });
+
   it("resolves PR head runs, skipping queued and older heads", async () => {
     const api = vi.fn(async (route: string) =>
       route.startsWith("/pulls/")

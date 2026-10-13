@@ -91,12 +91,9 @@ it
   "$route wrapper joins $phase work before honoring $shutdownSignal",
   ({ route, phase, shutdownSignal }, { workerArtifacts, signal, onTestFinished }) =>
     workerArtifacts.fixtureLifetime.run(async () => {
+      // Canceling the sole CI compiler still rejects disposal; settled signals retain their status.
       const expectedExitCode =
-        route.startsWith("ci") && phase !== "deletion"
-          ? 1
-          : shutdownSignal === "SIGINT"
-            ? 130
-            : 143;
+        route === "ci" && phase === "compilation" ? 1 : shutdownSignal === "SIGINT" ? 130 : 143;
       const root = workerArtifacts.fixtureDirectory();
       const input = writeFixture(root, "input", "owned verification input");
       const released = path.join(root, "release");

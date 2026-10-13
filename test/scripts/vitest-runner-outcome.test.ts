@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../helpers/promise.ts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.ts";
+import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
 
 const lifecycle = vi.hoisted(() => ({
   prepare: vi.fn(),
@@ -47,11 +48,10 @@ vi.mock("../../scripts/lib/vitest-shard-timings.mts", async (original) => ({
 const { runVitest } = await import("../../scripts/run-vitest.mts");
 const { runVitestCli } = await import("../../scripts/lib/vitest-process.mts");
 const target = "test/scripts/run-vitest.test.ts";
-const environment = {
-  ...process.env,
+const environment = testRunnerFixtureEnv({
   OPENCLAW_TEST_PROJECTS_SERIAL: "1",
   OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "0",
-};
+});
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let originalExitCode: typeof process.exitCode;
 let outcome: { code: number | null; signal: NodeJS.Signals | null; groupJoined: boolean };

@@ -28,7 +28,7 @@ function isTestCommand(command: Command) {
   );
 }
 
-type Step = { name?: string; run?: string; if?: string };
+type Step = { id?: string; name?: string; run?: string; if?: string };
 const workflow: {
   jobs: Record<
     string,
@@ -67,6 +67,7 @@ function runSimulatorStep(mode = "ready", steps = [watchStep], env: Record<strin
   copyFileSync("scripts/lib/swift-toolchain.sh", path.join(harnessLib, "swift-toolchain.sh"));
   copyFileSync("scripts/lib/ci-ios-smoke-plan.mjs", path.join(harnessLib, "ci-ios-smoke-plan.mjs"));
   copyFileSync("scripts/ci-xcodebuild.py", path.join(harnessLib, "..", "ci-xcodebuild.py"));
+  copyFileSync("scripts/ci-collect-checks.sh", path.join(harnessLib, "..", "ci-collect-checks.sh"));
   mkdirSync(product, { recursive: true });
   const runner = path.join(root, "tools.mjs");
   writeFileSync(
@@ -538,7 +539,7 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
   });
 
   it.each(["smoke", "tests"])(
-    "propagates auth test errors without later UI tests (%s)",
+    "retains auth test errors after completing independent restart and UI checks (%s)",
     (phase) => {
       const { result, commands } = runSimulatorStep(
         "voice-tests-failed",
@@ -547,9 +548,10 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
           IOS_CI_PHASE: phase,
         },
       );
-      expect(result.status).toBe(25);
-      expect(commands.filter(isTestCommand)).toHaveLength(1);
-      expect(commands.some((command) => command.tool === "python3")).toBe(false);
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain("[apple-command] Exit 25");
+      expect(commands.filter(isTestCommand)).toHaveLength(phase === "smoke" ? 1 : 2);
+      expect(commands.filter((command) => command.tool === "python3")).toHaveLength(1);
     },
   );
 });
@@ -634,6 +636,15 @@ function admittedSimulatorSteps(
   phase = "smoke",
   compatibility = false,
 ) {
+  const outcomes: Record<
+    string,
+    { outputs: Record<string, string>; outcome: "success" | "skipped" }
+  > = Object.fromEntries(
+    ["select-xcode", "node-env", "ios-swift-tools", "watch-rust-toolchain"].map((id) => [
+      id,
+      { outputs: {}, outcome: "success" },
+    ]),
+  );
   return [configureStep, prepareStep, buildStep, voiceStep, iosStep].filter((step) => {
     if (!step) {
       throw new Error("Missing iOS simulator workflow step");
@@ -642,17 +653,22 @@ function admittedSimulatorSteps(
       return true;
     }
     const expression = step.if.startsWith("${{") ? step.if : `\${{ ${step.if} }}`;
-    return evaluateWorkflowExpression(expression, {
+    const selected = evaluateWorkflowExpression(expression, {
       repository: "openclaw/openclaw",
       eventName: "pull_request",
       runAttempt: 1,
       matrix: { phase },
+      steps: outcomes,
       preflightOutputs: {
         compatibility_target: String(compatibility),
         run_ios_voice_cleanup_tests: String(selection.voice.selected),
         run_ios_lifecycle_tests: String(selection.lifecycle.selected),
       },
     });
+    if (step.id) {
+      outcomes[step.id] = { outputs: {}, outcome: selected ? "success" : "skipped" };
+    }
+    return selected;
   });
 }
 

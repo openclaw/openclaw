@@ -16,6 +16,7 @@ import { createDeferred, withTestTimeout } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createInfraVitestConfig } from "../vitest/vitest.infra.config.ts";
 import { createToolingVitestConfig } from "../vitest/vitest.tooling.config.ts";
+import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
 import { createControlledWorkerCompiler } from "./vitest-worker-artifacts.test-support.js";
 
 const commands = vi.hoisted(() => ({
@@ -75,6 +76,10 @@ const testProjectsUrl = new URL("../../scripts/test-projects.mts", import.meta.u
 let startCount = 0;
 
 beforeEach(() => {
+  const env = testRunnerFixtureEnv();
+  for (const name of ["CI", "GITHUB_ACTIONS", "OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE"]) {
+    vi.stubEnv(name, env[name]);
+  }
   commands.prepare.mockReset().mockResolvedValue(0);
   commands.prepareE2e.mockReset().mockResolvedValue({ OPENCLAW_E2E_USE_PREBUILT_DIST: "1" });
   commands.uiAssets.mockReset().mockReturnValue({ kind: "ready", indexPath: "fixture-index" });
@@ -104,7 +109,6 @@ beforeEach(() => {
   originalExitCode = process.exitCode;
   process.exitCode = 0;
   vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", "");
-  vi.stubEnv("OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE", "");
   vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", "");
   vi.stubEnv("OPENCLAW_E2E_SKIP_BUILD", "");
   vi.stubEnv("OPENCLAW_E2E_USE_PREBUILT_DIST", "");
@@ -205,6 +209,7 @@ syncFixtureBuiltinExports();\n`,
           runCliCommand({
             bin: process.execPath,
             args: ["--import", preload, "scripts/run-vitest.mts", ...configArgs, ...args],
+            env: testRunnerFixtureEnv(),
             stdio: "ignore",
             signal,
             requireProcessTreeExit: true,
@@ -308,7 +313,7 @@ syncFixtureBuiltinExports();\n`,
             const preload = path.join(root, "preload.mjs");
             const workerCompiler = createControlledWorkerCompiler(
               root,
-              { ...process.env, OPENCLAW_EXTENSION_BATCH_PARALLEL: "2" },
+              testRunnerFixtureEnv({ OPENCLAW_EXTENSION_BATCH_PARALLEL: "2" }),
               process.versions.bun ? "bun" : "node",
             );
             fs.writeFileSync(
@@ -559,24 +564,31 @@ describe("full-suite timing metadata", () => {
   );
 });
 
-describe("packed CI config continuation", () => {
+describe("packed config continuation", () => {
   const configs = ["test/vitest/vitest.logging.config.ts", "test/vitest/vitest.process.config.ts"];
   it.each([
-    { name: "default failure", enabled: false, code: 1, expected: 1 },
-    { name: "requested ordinary failure", enabled: true, code: 1, expected: 2 },
-    { name: "unknown exit", enabled: true, code: null, expected: 1 },
-    { name: "timeout", enabled: true, code: 1, timeout: true, expected: 1 },
-    { name: "signal", enabled: true, code: 1, signaled: true, expected: 1 },
-    { name: "unjoined child", enabled: true, code: 1, unjoined: true, expected: 1 },
-    { name: "rejected child", enabled: true, code: 1, rejected: true, expected: 1 },
+    { name: "ordinary Linux failure", platform: "linux", code: 1, expected: 2 },
+    { name: "ordinary Windows failure", platform: "win32", code: 1, expected: 2 },
+    { name: "local default failure", ci: "", code: 1, expected: 1 },
+    { name: "local opt-out failure", ci: "", optIn: "0", code: 1, expected: 1 },
+    { name: "local opted-in failure", ci: "", optIn: "1", code: 1, expected: 2 },
+    { name: "CI ignores local opt-out", optIn: "0", code: 1, expected: 2 },
+    { name: "local opted-in infrastructure", ci: "", optIn: "1", code: 2, expected: 1 },
+    { name: "unknown exit", code: null, expected: 1 },
+    { name: "timeout", code: 1, timeout: true, expected: 1 },
+    { name: "signal", code: 1, signaled: true, expected: 1 },
+    { name: "unjoined child", code: 1, unjoined: true, expected: 1 },
+    { name: "rejected child", code: 1, rejected: true, expected: 1 },
   ])("preserves complete selection and failure status for $name", async (scenario) => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    vi.stubEnv("CI", "1");
+    vi.spyOn(process, "platform", "get").mockReturnValue(
+      scenario.platform === "win32" ? "win32" : "linux",
+    );
+    vi.stubEnv("CI", scenario.ci ?? "1");
     vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", "1");
     vi.stubEnv("OPENCLAW_VITEST_SHARD_NAME", "serial-fixture");
     vi.stubEnv("OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT", "");
     vi.stubEnv("OPENCLAW_VITEST_FS_MODULE_CACHE_PATH", "");
-    vi.stubEnv("OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE", scenario.enabled ? "1" : "");
+    vi.stubEnv("OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE", scenario.optIn ?? "");
     const { runTestProjects } = await import("../../scripts/test-projects-run.mts");
     const selected: string[] = [];
     commands.reader.mockImplementation(({ pnpmArgs, onNoOutputTimeout }) => {
@@ -592,7 +604,7 @@ describe("packed CI config continuation", () => {
             : Promise.resolve({
                 code: first ? scenario.code : 0,
                 signal: first && scenario.signaled ? "SIGTERM" : null,
-                groupJoined: !(first && scenario.unjoined),
+                groupJoined: scenario.platform !== "win32" && !(first && scenario.unjoined),
               }),
         getForwardedSignal: () => undefined,
       };
@@ -604,12 +616,14 @@ describe("packed CI config continuation", () => {
     } else {
       await running;
     }
-    expect(console.error).toHaveBeenCalledWith("[test] inner parallelism 1");
+    if (scenario.ci !== "") {
+      expect(console.error).toHaveBeenCalledWith("[test] inner parallelism 1");
+    }
     expect(selected).toEqual(configs.slice(0, scenario.expected));
     if (scenario.signaled) {
       expect(exit).toHaveBeenCalledWith("SIGTERM");
     } else if (!scenario.rejected) {
-      expect(process.exitCode).toBe(scenario.code === null || scenario.timeout ? 2 : 1);
+      expect(process.exitCode).toBe(scenario.code === null || scenario.timeout ? 2 : scenario.code);
     }
   });
 });
@@ -827,7 +841,7 @@ describe("automatic exact-target admission", () => {
           expect(events).not.toContain("dispose");
           releases[index]!.resolve();
         }
-        if (outcome === "success") {
+        if (outcome !== "SIGTERM") {
           await withTestTimeout(
             Promise.race([admissions[2]!.promise, running]),
             5_000,
@@ -839,9 +853,9 @@ describe("automatic exact-target admission", () => {
         releases.forEach((release) => release.resolve());
         await running;
       }
-      expect(selected).toEqual(outcome === "success" ? configs : configs.slice(0, 2));
+      expect(selected).toEqual(outcome === "SIGTERM" ? configs.slice(0, 2) : configs);
       expect(events.slice(-3)).toEqual([
-        `joined:${outcome === "success" ? 2 : 1}`,
+        `joined:${outcome === "SIGTERM" ? 1 : 2}`,
         "dispose",
         "disposed",
       ]);
@@ -851,7 +865,7 @@ describe("automatic exact-target admission", () => {
   );
 
   it.each(["failure", "unjoined", "rejection", "signal"])(
-    "drains peers and stops later exact-target specs after %s",
+    "drains peers and admits later exact-target specs only after an ordinary %s",
     async (outcome) => {
       const { runTestProjects } = await import("../../scripts/test-projects-run.mts");
       const first = createDeferred<{
@@ -895,17 +909,17 @@ describe("automatic exact-target admission", () => {
           });
         }
         await nextTurn();
-        expect(commands.reader).toHaveBeenCalledTimes(2);
+        expect(commands.reader).toHaveBeenCalledTimes(outcome === "failure" ? 3 : 2);
         expect(settled).toBe(false);
       } finally {
         first.resolve({ code: 0, signal: null, groupJoined: true });
         peer.resolve({ code: 0, signal: null, groupJoined: true });
         await checked;
       }
-      expect(commands.reader).toHaveBeenCalledTimes(2);
+      expect(commands.reader).toHaveBeenCalledTimes(outcome === "failure" ? 3 : 2);
       if (outcome === "failure") {
         expect(process.exitCode).toBe(1);
-        expect(console.error).toHaveBeenCalledWith(expect.stringMatching(/^\[test\] failed 2 /u));
+        expect(console.error).toHaveBeenCalledWith(expect.stringMatching(/^\[test\] failed 3 /u));
       }
       if (outcome === "signal") {
         expect(process.exitCode).toBe(143);
@@ -1107,14 +1121,13 @@ describe("cache lease completion", () => {
     { outcome: "infrastructure", scope: "ci-continued", expected: 2 },
     { outcome: "signal", scope: "local", expected: 2 },
     { outcome: "rejection", scope: "local", expected: 2 },
-    { outcome: "failure", scope: "ci-focused", expected: 2 },
-    { outcome: "failure", scope: "ci-continued", expected: process.platform === "win32" ? 2 : 3 },
+    { outcome: "failure", scope: "ci-focused", expected: 3 },
     { outcome: "failure", scope: "ci-full-suite", expected: 3 },
   ])(
     "joins admitted work after $outcome without confusing failure with cleanup ($scope)",
     async ({ outcome, scope, expected }) => {
       const groupJoined = process.platform !== "win32";
-      const focused = scope === "ci-focused" || scope === "ci-continued";
+      const focused = scope === "ci-focused";
       const configs = [
         "test/vitest/vitest.unit-fast.config.ts",
         "test/vitest/vitest.unit-fast-fake-timers.config.ts",
@@ -1130,10 +1143,7 @@ describe("cache lease completion", () => {
       vi.stubEnv("GITHUB_ACTIONS", "");
       vi.stubEnv("OPENCLAW_VITEST_SHARD_NAME", scope === "local" ? "" : "selected-envelope");
       vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", "2");
-      vi.stubEnv(
-        "OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE",
-        scope === "ci-continued" ? "1" : "",
-      );
+      vi.stubEnv("OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE", "");
       if (focused) {
         vi.stubEnv(
           "OPENCLAW_VITEST_INCLUDE_FILE",

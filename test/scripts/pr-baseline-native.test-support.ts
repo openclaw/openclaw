@@ -8,7 +8,7 @@ import { copyPrWrapperSources, linkPrWrapperDependencies } from "./pr-wrapper.te
 
 // This fixture owns a real canonical wrapper, registered PR checkout, signing key,
 // local Git remote, and credential-free GitHub adapter. No owner entry is mocked.
-export function createBaselineFixture(root: string) {
+export function createBaselineFixture(root: string, productCount = 16) {
   const repo = join(root, "repo");
   const home = join(root, "home");
   const bin = join(root, "bin");
@@ -59,7 +59,7 @@ export function createBaselineFixture(root: string) {
   }
   writeFileSync(join(repo, ".gitignore"), ".worktrees/\n.local/\nnode_modules/\n");
   mkdirSync(join(repo, "docs"), { recursive: true });
-  const product = Array.from({ length: 16 }, (_, i) => `docs/fix-${i}.md`);
+  const product = Array.from({ length: productCount }, (_, i) => `docs/fix-${i}.md`);
   for (const path of product) {
     writeFileSync(join(repo, path), "base\n");
   }
@@ -92,7 +92,7 @@ if (args[0] === 'api' && args[1] === 'user') {
  const overrides = path.join(root,'.local','live.json');
  console.log(JSON.stringify({number:42,node_id:'PR_fixture',html_url:'https://github.com/fixture/repo/pull/42',state:'open',draft:false,
   user:{login:'fixture'},base:{ref:'main',sha:git('rev-parse','main'),repo},
-  head:{ref:'topic',sha:git('rev-parse','topic'),repo}, changed_files:16,
+  head:{ref:'topic',sha:git('rev-parse','topic'),repo}, changed_files:${productCount},
   ...(fs.existsSync(overrides) ? JSON.parse(fs.readFileSync(overrides,'utf8')) : {})}));
 } else if (args.some(a => a.startsWith('repos/fixture/repo/collaborators/'))) {
  console.log('{"permission":"write"}');
@@ -242,5 +242,7 @@ if (args[0] === 'api' && args[1] === 'user') {
     manifest,
     successor,
     product,
+    incoming,
+    meta,
   };
 }
