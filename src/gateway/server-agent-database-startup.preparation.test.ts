@@ -151,6 +151,7 @@ function createFleet(
     run: (
       run: (admission: StartupAdmission) => Promise<void>,
       preparationReady: Promise<void> = Promise.resolve(),
+      postReadyWork: Promise<void> = Promise.resolve(),
     ) =>
       withAgentDatabaseStartupAdmission(async (admission) => {
         const refusals = admission.defer({
@@ -178,6 +179,7 @@ function createFleet(
         activateGatewayAgentDatabaseStartup({
           admission,
           preparationReady,
+          waitForPostReadyWork: () => postReadyWork,
           getConfig: () => cfg,
           getPluginRegistry: vi.fn(),
           getPluginMetadataSnapshot: () => undefined,
@@ -202,31 +204,39 @@ it("admits agents before transcript repair and joins repair on shutdown", async 
   const fleet = createFleet();
   const entered = createDeferredCore();
   const release = fleet.hold();
+  const postReady = fleet.hold();
   mocks.maintain.mockImplementation(async ({ assertCurrent }) => {
     assertCurrent();
     entered.resolve();
     await release.promise;
     assertCurrent();
   });
-  await fleet.run(async (admission) => {
-    fleet.inspect(0);
-    await withinTest(entered.promise, signal);
-    expect(readAgentDatabaseAdmissionRefusal("large", fleet)).toBeUndefined();
-    expect(admission.waitForAgentPreparation("large", fleet)).toBeUndefined();
-    fleet.inspect(1);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(readAgentDatabaseAdmissionRefusal("small", fleet)).toBeUndefined();
-    expect(mocks.refreshModels).toHaveBeenCalledTimes(2);
-    let stopped = false;
-    const stopping = admission.stop().then(() => {
-      stopped = true;
-    });
-    await Promise.resolve();
-    expect(stopped).toBe(false);
-    release.resolve();
-    await stopping;
-    expect(mocks.warn).not.toHaveBeenCalled();
-  });
+  await fleet.run(
+    async (admission) => {
+      fleet.inspect(0);
+      await withinTest(admission.waitForAgentPreparation("large", fleet)!, signal);
+      expect(readAgentDatabaseAdmissionRefusal("large", fleet)).toBeUndefined();
+      expect(admission.waitForAgentPreparation("large", fleet)).toBeUndefined();
+      expect(mocks.maintain).not.toHaveBeenCalled();
+      postReady.resolve();
+      await withinTest(entered.promise, signal);
+      fleet.inspect(1);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(readAgentDatabaseAdmissionRefusal("small", fleet)).toBeUndefined();
+      expect(mocks.refreshModels).toHaveBeenCalledTimes(2);
+      let stopped = false;
+      const stopping = admission.stop().then(() => {
+        stopped = true;
+      });
+      await Promise.resolve();
+      expect(stopped).toBe(false);
+      release.resolve();
+      await stopping;
+      expect(mocks.warn).not.toHaveBeenCalled();
+    },
+    Promise.resolve(),
+    postReady.promise,
+  );
 });
 
 it("admits a small deferred agent while an earlier agent's session migration is blocked", async ({

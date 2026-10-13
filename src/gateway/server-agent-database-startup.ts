@@ -29,6 +29,7 @@ function assertAgentDatabaseConfiguration(
 export function activateGatewayAgentDatabaseStartup(params: {
   admission: ReturnType<typeof getAgentDatabaseStartupAdmission>;
   preparationReady: Promise<void>;
+  waitForPostReadyWork: () => Promise<void>;
   getConfig: () => OpenClawConfig;
   getPluginRegistry: () => PluginRegistry;
   getPluginMetadataSnapshot: () => PluginMetadataSnapshot | undefined;
@@ -102,6 +103,7 @@ export function activateGatewayAgentDatabaseStartup(params: {
         return {
           maintain: () =>
             runWithSpawnBroker(broker, async () => {
+              await params.waitForPostReadyWork();
               const { runGatewaySessionStartupMaintenance } =
                 await import("./server-startup-session-migration.js");
               await runGatewaySessionStartupMaintenance({
