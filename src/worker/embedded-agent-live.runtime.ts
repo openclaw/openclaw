@@ -195,7 +195,7 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
         ...(stopReason ? { stopReason } : {}),
         ...(terminal.aborted ? { aborted: true } : {}),
         ...(replayInvalid ? { replayInvalid: true } : {}),
-        ...(!terminal.aborted && typeof terminal.promptError === "string"
+        ...(typeof terminal.promptError === "string"
           ? { error: redactLiveText(terminal.promptError) }
           : {}),
       },
@@ -205,8 +205,12 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
   let streamedPhase: AssistantPhase | undefined;
   let assistantMessageIndex = 0;
   let streamedThinking = "";
-  const emitAssistantSnapshot = (message: AgentMessage) => {
+  const emitAssistantSnapshot = (message: AgentMessage, complete = false) => {
     const { text, phase } = readAssistantSnapshot(message);
+    // Cancellation can synthesize an empty final after checked text was streamed.
+    if (complete && !text && message.role === "assistant" && message.stopReason === "aborted") {
+      return;
+    }
     if (text === streamedText && phase === streamedPhase) {
       return;
     }
@@ -262,7 +266,7 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
       return;
     }
     if (event.type === "message_end" && event.message.role === "assistant") {
-      emitAssistantSnapshot(event.message);
+      emitAssistantSnapshot(event.message, true);
       const finalThinking = readAssistantThinking(event.message);
       if (finalThinking !== streamedThinking) {
         enqueueLive({

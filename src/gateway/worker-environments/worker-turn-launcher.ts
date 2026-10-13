@@ -20,7 +20,6 @@ import type {
   WorkerSessionTurnClaim,
 } from "./placement-store.js";
 import { ActiveTurnClaimError } from "./placement-turn-claims.js";
-import { findPendingWorkerWorkspaceResult } from "./placement-workspace-result.js";
 import { WorkerRuntimeRefreshPendingError } from "./provider-runtime-refresh.js";
 import type { WorkerSessionWorkspace } from "./session-workspace.js";
 import {
@@ -40,10 +39,12 @@ import {
 } from "./worker-turn-admission.js";
 import {
   failHandedOffTurn,
+  prepareWorkerTurnFailure,
   WorkerTurnExecutionError,
   WorkerWorkspaceReconciliationError,
   type ActiveWorkerPlacement,
   type WorkerTurnEnvironmentService,
+  type WorkerTurnPartialIdentity,
 } from "./worker-turn-failure.js";
 import { createWorkerTurnRunOwner, type ActiveWorkerTurn } from "./worker-turn-run-owner.js";
 import type { WorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
@@ -82,6 +83,7 @@ type WorkerTurnLauncherOptions = {
   ) => Promise<ActiveWorkerPlacement>;
   prepareAcceptedWorkspacePublication?: (claim: WorkerSessionTurnClaim) => Promise<void>;
   publishAcceptedWorkspace?: (claim: WorkerSessionTurnClaim) => Promise<void>;
+  persistAbandonedPartial?: (claim: WorkerTurnPartialIdentity) => Promise<void>;
 };
 
 export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLauncherOptions) {
@@ -644,9 +646,10 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
               requireActivePlacement(reconciled);
             }
           }
-          const pendingWorkspaceResult = findPendingWorkerWorkspaceResult(
+          const pendingWorkspaceResult = await prepareWorkerTurnFailure(
             options.placements,
-            turnClaim,
+            { ...identity, ...turnClaim },
+            handedOff && !remoteExec ? options.persistAbandonedPartial : undefined,
           );
           if (pendingWorkspaceResult) {
             if (turnClaim.owner.kind === "local") {
