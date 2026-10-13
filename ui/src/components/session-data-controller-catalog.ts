@@ -8,6 +8,7 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import type { PresencePayload } from "../app/user-profile.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { readSessionMethodScopeAccess } from "../lib/session-method-access.ts";
 import {
@@ -45,6 +46,8 @@ export interface SessionDataControllerHost extends SolidControllerHost {
   readonly isConnected: boolean;
   readonly connected: boolean;
   readonly activeRouteId?: string;
+  readonly sessionCatalogRowsVisible: boolean;
+  samePresence(previous: PresencePayload | undefined, next: PresencePayload | undefined): boolean;
   getRouteSessionKey(): string;
   readonly sessionDataContext: ApplicationContext | undefined;
   dismissTransientMenus(): boolean;
@@ -61,6 +64,7 @@ export interface SessionCatalogDataOwner {
   readonly context: ApplicationContext | undefined;
   readonly isSessionDataHostConnected: boolean;
   readonly sessionDataHostConnected: boolean;
+  readonly sessionCatalogRowsVisible: boolean;
   sessionCatalogs: SessionCatalog[];
   sessionCatalogRefreshStatus: PanelRefreshStatus;
   loadingMoreSessionCatalogIds: ReadonlySet<string>;
@@ -264,7 +268,9 @@ export function applySessionCatalogHostEvent(
     return;
   }
   owner.sessionCatalogs = update.catalogs;
-  owner.requestSessionDataUpdate();
+  if (owner.sessionCatalogRowsVisible) {
+    owner.requestSessionDataUpdate();
+  }
 }
 
 export function applySessionCatalogContinuation(

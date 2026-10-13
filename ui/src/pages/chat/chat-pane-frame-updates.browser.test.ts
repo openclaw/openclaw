@@ -38,7 +38,7 @@ async function mountPane(presented = true) {
   // Use the existing lifecycle harness, with a small render to isolate cadence.
   Object.assign(pane, {
     render: () => ({
-      layout: html`<span>${pane.presentationTitle}</span><span>${pane.paneId}</span>`,
+      layout: html`<span>${pane.paneLabel}</span><span>${pane.paneId}</span>`,
     }),
     presentedChanged: () => {},
   });
@@ -69,7 +69,7 @@ it.each([false, true])(
     pane.presented = false;
     for (let index = 0; index < 6; index++) {
       await task(() => {
-        pane.presentationTitle = `hidden revision ${index}`;
+        pane.paneLabel = `hidden revision ${index}`;
         pane.paneId = `parked-pane-${index}`;
         pane.requestUpdate();
       });
@@ -102,7 +102,7 @@ it.each(["request", "property", "state"] as const)(
     const lifecycle = pane.chatState.createRenderLifecycle();
     await task(() => {
       if (trigger === "property") {
-        pane.presentationTitle = "immediate property";
+        pane.paneLabel = "immediate property";
       } else if (trigger === "state") {
         lifecycle.invalidate();
       } else {
@@ -147,7 +147,7 @@ it("releases a disconnected pane's parked update and renders after reconnect", a
   await pane.updateComplete;
   expect(pane.textContent).toContain(pane.paneId);
   updates.mockClear();
-  pane.presentationTitle = "reconnected revision";
+  pane.paneLabel = "reconnected revision";
   await pane.updateComplete;
   expect(updates).toHaveBeenCalledTimes(1);
   expect(pane.textContent).toContain("reconnected revision");

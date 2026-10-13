@@ -195,7 +195,26 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
           return () => snapshot.disconnect();
         },
       )
-      .watchStore(() => this.sidebarSnapshotController)
+      .watch(
+        () => this.sidebarSnapshotController,
+        (snapshot, notify) => {
+          let pending = snapshot.pending;
+          let model = this.sidebarSnapshot;
+          return snapshot.subscribe(() => {
+            if (pending !== snapshot.pending || model !== this.sidebarSnapshot) {
+              pending = snapshot.pending;
+              model = this.sidebarSnapshot;
+              notify();
+            } else {
+              // Persistence completion changes only the capture receipt, not the shell.
+              this.querySelector("aside.sidebar")?.setAttribute(
+                "data-snapshot-saved",
+                String(snapshot.saved),
+              );
+            }
+          });
+        },
+      )
       .effect(
         () => this.context?.gateway,
         (gateway) => gateway.subscribeEvents((event) => this.narration?.handleEvent(event)),

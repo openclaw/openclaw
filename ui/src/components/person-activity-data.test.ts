@@ -9,7 +9,7 @@ import {
 import type { SessionListSnapshot } from "../lib/sessions/session-capability.ts";
 import { createContext, createGatewayHarness } from "../test-helpers/app-sidebar.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
-import { observePersonActivityData } from "./person-activity-data.ts";
+import { observePersonActivityData, PersonActivityDataController } from "./person-activity-data.ts";
 
 function fixture() {
   const gateway = createGatewayHarness(createTestGatewayClient(async () => ({})));
@@ -27,6 +27,7 @@ function fixture() {
   const changed = vi.fn();
   const activity = observePersonActivityData(context, changed);
   return {
+    context,
     gateway,
     refresh,
     dispose,
@@ -36,6 +37,40 @@ function fixture() {
     publish: (result: SessionListSnapshot) => publish({ readSucceeded: true, ...result }),
   };
 }
+
+it("keeps live and late-open cards current without a sidebar rendering publication", () => {
+  const f = fixture();
+  const context = f.context;
+  const initial = { presence: [{ ts: 1, user: { id: "ada", name: "Ada" } }] };
+  const data = { presencePayload: initial };
+  const publisher = new PersonActivityDataController(
+    {
+      isConnected: true,
+      addController: () => undefined,
+      removeController: () => undefined,
+      requestUpdate: () => undefined,
+      updateComplete: Promise.resolve(true),
+    },
+    () => context,
+    data,
+  );
+  publisher.hostUpdated();
+  const changed = vi.fn();
+  const first = observePersonActivityData(context, changed);
+  expect(first.data?.presencePayload).toBe(initial);
+  const next = { presence: [{ ts: 2, user: { id: "ada", name: "Ada" }, host: "Second device" }] };
+  data.presencePayload = next;
+  f.gateway.publishEvent("presence", next);
+  expect(changed).toHaveBeenCalledOnce();
+  expect(first.data?.presencePayload).toEqual(next);
+  const reopened = observePersonActivityData(context, () => undefined);
+  expect(reopened.data?.presencePayload).toBe(next);
+  first.dispose();
+  reopened.dispose();
+  publisher.hostDisconnected();
+  f.activity.dispose();
+  context.sessions.dispose();
+});
 
 it("admits only a refreshed cross-agent roster, retains rows on read failure, and applies removal", async () => {
   const f = fixture();

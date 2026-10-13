@@ -159,6 +159,7 @@ function createFilteredSessionController(
     },
     connected: true,
     activeRouteId: "sessions",
+    sessionCatalogRowsVisible: true,
     getRouteSessionKey: () => context.gateway.snapshot.sessionKey.trim(),
     sessionDataContext: context,
     addController: () => undefined,
@@ -173,6 +174,7 @@ function createFilteredSessionController(
     sidebarSessionOwnerFilter: () => membership,
     sessionCatalogIdsWithoutVisibleRows: () => [],
     querySelector: () => null,
+    samePresence: () => false,
   } satisfies SessionDataControllerHost;
   const controller = new SessionDataController(host);
 
@@ -245,6 +247,19 @@ function createFilteredSessionController(
 }
 
 describe("filtered sidebar session event refresh", () => {
+  it("does not invalidate filtered sidebar rows for unrelated session publications", async () => {
+    const { controller, context, host } = createFilteredSessionController("archived");
+    controller.hostConnected();
+    await controller.refreshSidebarSessions();
+    host.requestUpdate.mockClear();
+    const displayed = controller.sessionsResult;
+
+    context.sessions.reconcile({ key: "agent:main:another-window", kind: "direct", updatedAt: 2 });
+
+    expect(controller.sessionsResult).toBe(displayed);
+    expect(host.requestUpdate).not.toHaveBeenCalled();
+    controller.hostDisconnected();
+  });
   it.each(["active", "all"] as const)(
     "coalesces %s session and presence publications while preserving immediate state",
     async (statusFilter) => {

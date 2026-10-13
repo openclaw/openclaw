@@ -1,4 +1,3 @@
-import { flush } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { mergeChatPageChrome, mobileNavLayoutMediaQuery } from "../../app/mobile-nav-layout.ts";
 import { nativeEmbedHost } from "../../app/native-web-chrome.ts";
@@ -137,20 +136,23 @@ export class ChatPageState extends ControllerHost {
     super();
     this.layout = this.nativeConversation ? undefined : loadSettings().chatSplitLayout;
     new SubscriptionsController(this)
-      .watchStore(
-        () => this.context?.sessions,
-        undefined,
-        () => {
-          this.performUpdate();
-          flush();
-        },
-      )
       .watch(
         () => this.context?.chatSubmissions,
         (submissions, notify) => submissions.subscribeCreate(notify),
       )
       .watchStore(() => this.context?.placementStartup)
-      .watchStore(() => this.context?.gateway)
+      .watch(
+        () => this.context?.gateway,
+        (gateway, notify) => {
+          let hello = gateway.snapshot.hello;
+          return gateway.subscribe((snapshot) => {
+            if (snapshot.hello !== hello) {
+              hello = snapshot.hello;
+              notify();
+            }
+          });
+        },
+      )
       .watchStore(() => this.context?.nativeConversation);
     this.prefetch = new SessionPrefetchController(
       this.host,

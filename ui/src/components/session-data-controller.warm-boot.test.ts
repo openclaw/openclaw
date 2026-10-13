@@ -111,6 +111,7 @@ describe("sidebar live roster publication", () => {
           return gateway.gateway.snapshot.phase === "connected";
         },
         activeRouteId: "sessions",
+        sessionCatalogRowsVisible: true,
         getRouteSessionKey: () => context.gateway.snapshot.sessionKey.trim(),
         sessionDataContext: context,
         addController: () => undefined,
@@ -125,6 +126,7 @@ describe("sidebar live roster publication", () => {
         sidebarSessionOwnerFilter: () => ({ ownerId: null, involvingMe: false }),
         sessionCatalogIdsWithoutVisibleRows: () => [],
         querySelector: () => null,
+        samePresence: () => false,
       } satisfies SessionDataControllerHost;
       const controller = new SessionDataController(host);
       try {

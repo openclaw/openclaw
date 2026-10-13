@@ -108,6 +108,7 @@ export class SessionDataController implements SolidController, SessionCatalogDat
   private unsubscribeFilteredSessions: (() => void) | null = null;
   childSessionScope = {};
   private childSessionCanonicalListRevision: number | null = null;
+  private sessionCatalogInputs: readonly unknown[] = [];
   private readonly childSessionQueries = new Map<string, ChildSessionQuery>();
   private stopCatalogBrowserEvents: (() => void) | null = null;
   private gatewaySource: ApplicationContext["gateway"] | null = null;
@@ -157,13 +158,19 @@ export class SessionDataController implements SolidController, SessionCatalogDat
       requestUpdate: () => this.requestSessionDataUpdate(),
     });
     this.subscriptions
-      .watchStore(
+      .effect(
         () => this.context?.gateway,
-        (gateway) => this.synchronizeGateway(gateway),
+        (gateway) => {
+          this.synchronizeGateway(gateway);
+          return gateway.subscribe(() => this.synchronizeGateway(gateway));
+        },
       )
-      .watchStore(
+      .effect(
         () => this.context?.sessions,
-        (sessions) => this.synchronizeSessions(sessions),
+        (sessions) => {
+          this.synchronizeSessions(sessions);
+          return sessions.subscribe(() => this.synchronizeSessions(sessions));
+        },
       )
       .effect(
         () => this.context?.sessions,
@@ -199,12 +206,27 @@ export class SessionDataController implements SolidController, SessionCatalogDat
     return this.host.connected;
   }
 
+  get sessionCatalogRowsVisible(): boolean {
+    return this.host.sessionCatalogRowsVisible;
+  }
+
   expandedAgentId = (): string => this.host.expandedAgentId();
 
   sessionCatalogIdsWithoutVisibleRows = (): readonly string[] =>
     this.host.sessionCatalogIdsWithoutVisibleRows();
 
   readonly requestSessionDataUpdate = () => this.invalidateRender?.();
+
+  publishPresence(payload: unknown): void {
+    const presence = readPresenceEntries(payload);
+    const next = presence ? { presence } : undefined;
+    const previous = this.presencePayload;
+    this.presencePayload = next;
+    this.synchronizeOwnerSessionCounts();
+    if (!this.host.samePresence(previous, next)) {
+      this.requestSessionDataUpdate();
+    }
+  }
 
   sessionListQuery = (agentId: string) => sidebarSessionListQuery(this.host, agentId);
 
@@ -389,10 +411,21 @@ export class SessionDataController implements SolidController, SessionCatalogDat
   }
 
   private readonly updateSessions = (sessions: SessionCapability) => {
+    const snapshot = sessions.state;
+    const catalogInputs = [
+      snapshot.groups,
+      snapshot.groupSettings,
+      snapshot.sectionOrder,
+      snapshot.error,
+      sessions.eventSubscriptionError,
+    ];
+    if (catalogInputs.some((value, index) => value !== this.sessionCatalogInputs[index])) {
+      this.sessionCatalogInputs = catalogInputs;
+      this.requestSessionDataUpdate();
+    }
     if (sessions.presentation.resultCached) {
       return;
     }
-    const snapshot = sessions.state;
     if (this.childSessionCanonicalListRevision !== sessions.canonicalListRevision) {
       this.childSessionCanonicalListRevision = sessions.canonicalListRevision;
       // Observed child queries own their freshness. Only unobserved, collapsed
@@ -406,10 +439,19 @@ export class SessionDataController implements SolidController, SessionCatalogDat
     if (hasSidebarListFilter(this.host)) {
       return;
     }
+    const presentation = sessions.presentation;
+    if (
+      this.sessionsResult === presentation.result &&
+      this.sessionsAgentId === presentation.agentId &&
+      this.sessionsLoading === snapshot.loading &&
+      this.sessionsStartupPending === (snapshot.startupPending === true)
+    ) {
+      return;
+    }
     if (!sessions.presentation.result && this.sessionsResult) {
       this.clearSessionCache();
     }
-    publishSidebarSessionList(this, { ...snapshot, ...sessions.presentation });
+    publishSidebarSessionList(this, { ...snapshot, ...presentation });
     this.sessionsLoading = snapshot.loading;
     this.requestSessionDataUpdate();
   };

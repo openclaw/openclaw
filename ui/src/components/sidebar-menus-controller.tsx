@@ -403,7 +403,7 @@ export class SidebarMenusController {
     });
   }
 
-  toggleAgentMenu(trigger: HTMLElement) {
+  toggleAgentMenu = (trigger: HTMLElement) => {
     this.clearAgentMenuHoverTimers();
     if (this.agentMenuInteractionState === "open-click") {
       this.closeAgentMenu();
@@ -429,7 +429,7 @@ export class SidebarMenusController {
       return;
     }
     this.openAgentMenu(trigger, "open-click");
-  }
+  };
 
   private openAgentMenu(trigger: HTMLElement, interactionState: "open-hover" | "open-click") {
     this.clearAgentMenuHoverTimers();
@@ -456,7 +456,7 @@ export class SidebarMenusController {
     });
   }
 
-  scheduleAgentMenuHoverOpen(trigger: HTMLElement, event: PointerEvent) {
+  scheduleAgentMenuHoverOpen = (trigger: HTMLElement, event: PointerEvent) => {
     globalThis.clearTimeout(this.agentMenuHoverCloseTimer ?? undefined);
     this.agentMenuHoverCloseTimer = null;
     // Pointer motion establishes intent; layout-only entry must not open the menu.
@@ -476,9 +476,9 @@ export class SidebarMenusController {
         this.openAgentMenu(trigger, "open-hover");
       }
     }, AGENT_MENU_HOVER_OPEN_DELAY_MS);
-  }
+  };
 
-  handleAgentMenuTriggerPointerLeave() {
+  handleAgentMenuTriggerPointerLeave = () => {
     globalThis.clearTimeout(this.agentMenuHoverOpenTimer ?? undefined);
     this.agentMenuHoverOpenTimer = null;
     if (this.agentMenuInteractionState === "hover-pending") {
@@ -486,7 +486,7 @@ export class SidebarMenusController {
       return;
     }
     this.scheduleAgentMenuHoverClose();
-  }
+  };
 
   handleAgentMenuPointerEnter() {
     globalThis.clearTimeout(this.agentMenuHoverCloseTimer ?? undefined);

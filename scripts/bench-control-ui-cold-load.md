@@ -38,6 +38,27 @@ The Online run also requires the saved sidebar view to survive the reload. If it
 returns to Sessions, the run fails instead of reporting Sessions measurements as
 Online measurements.
 `--runs` accepts 1–20 reloads. `--output` selects the artifact parent.
+`--bundle-dir` serves an already built production bundle instead of rebuilding it;
+keep its build identity equal to the checkout head. This preserves a baseline
+bundle while production sources are edited.
+
+`--live-events` adds 125 synthetic live frames over 20 seconds after each reload
+settles. The stream mixes full presence snapshots, session patches for displayed,
+held-but-hidden, and outside-window rows, open-session messages and assistant
+streaming, changing catalog hosts, and unrelated cron/run-state activity. The live
+phase runs after tracing and CPU sampling stop. Its `run-N.live.json` records Lit
+updates and bounded `requestUpdate` scheduling stacks per event label, plus DOM
+snapshots of the affected rows, chat viewers, and streaming text; `run-N.live.png`
+shows the synthetic final state. Row attachment and viewport visibility distinguish
+an absent row from a rendered row below the fold.
+
+Live updates are attributed to the most recently delivered event label. Paced
+refreshes and clock-driven presence updates may finish during a later event's
+interval; inspect their scheduling stacks before treating a per-label count as
+causal. Compare total steady-state render counts and renders per second as well.
+Wall-clock durations and frame coalescing vary on a loaded host. The benchmark's
+static RPC responses are not authority for live title/run-state correctness; use
+focused browser contracts with updated authoritative mock responses for that proof.
 
 Each invocation keeps its exact Git head and dirty-tree inventory, raw Chrome trace,
 CPU profile, settled screenshot, and JSON summary in a fresh timestamped directory.

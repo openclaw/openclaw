@@ -45,6 +45,7 @@ import { runControlUiPluginAction } from "../../plugins/control-ui-actions.ts";
 import { ChatPaneContext } from "./chat-pane-context.ts";
 import { ChatPaneHeaderMemo } from "./chat-pane-header-memo.ts";
 import { headerSessionMetadataPatch } from "./chat-pane-session-metadata-patch.ts";
+import { chatSessionPresentationTitle } from "./chat-pane-session-presentation.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import type { HeaderMenuAction } from "./components/chat-header-session-menu.ts";
 import type { ChatPaneHeaderAction } from "./components/chat-pane-header.ts";
@@ -55,7 +56,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
   protected resolveHeaderSessionTitle(row: GatewaySessionRow | undefined): string {
     // The roster owns accepted titles; pane metadata fills absent cross-agent rows.
     return (
-      this.presentationTitle ??
+      (this.state ? chatSessionPresentationTitle(this.state) : undefined) ??
       resolveSessionDisplayName(row?.key ?? this.state?.sessionKey ?? this.sessionKey, row)
     );
   }

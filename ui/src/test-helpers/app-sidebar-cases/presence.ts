@@ -363,13 +363,14 @@ describe("AppSidebar viewer presence", () => {
     vi.useFakeTimers();
     const now = Date.now();
     const project = presenceUsers.presenceViewerActivity;
+    gateway.publishEvent("presence", {
+      presence: [{ user: { id: "alice", name: "Alice" }, ts: now, lastActivityAt: now - 119_999 }],
+    });
+    // Event admission may read activity too; advance the clock only in the queued render.
     vi.spyOn(presenceUsers, "presenceViewerActivity").mockImplementationOnce((user) => {
       const state = project(user);
       vi.setSystemTime(now + 2);
       return state;
-    });
-    gateway.publishEvent("presence", {
-      presence: [{ user: { id: "alice", name: "Alice" }, ts: now, lastActivityAt: now - 119_999 }],
     });
     await sidebar.updateComplete;
     const row = sidebar.querySelector<HTMLElement>('[data-online-user-id="alice"]')!;
