@@ -886,6 +886,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/openclaw-agent-execution.integrity.test.ts",
   "src/state/openclaw-agent-execution.schema-admission.test.ts",
   "src/state/openclaw-agent-execution.creation-witness.test.ts",
+  "src/state/openclaw-agent-execution.alias.test.ts",
   "src/state/openclaw-agent-execution.close-wedge.test.ts",
   "src/state/openclaw-agent-execution-cleanup.test.ts",
   "src/sessions/session-diff-baseline.test.ts",

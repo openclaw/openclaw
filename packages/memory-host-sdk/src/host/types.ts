@@ -439,7 +439,8 @@ export interface MemorySearchManager {
   readFile(params: { relPath: string; from?: number; lines?: number }): Promise<MemoryReadResult>;
   /** @deprecated Prefer statusAsync when available to keep storage reads off the caller thread. */
   status(): MemoryProviderStatus;
-  statusAsync?(): Promise<MemoryProviderStatus>;
+  /** Set includeCounts to false for query-path facts without database diagnostics. */
+  statusAsync?(options?: { includeCounts?: boolean }): Promise<MemoryProviderStatus>;
   sync?(params?: MemorySyncParams): Promise<void>;
   getCachedEmbeddingAvailability?(): MemoryEmbeddingProbeResult | null;
   probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult>;
@@ -449,9 +450,12 @@ export interface MemorySearchManager {
 }
 
 /** Preserve synchronous third-party managers while built-in status reads run in their worker. */
-export async function readMemorySearchManagerStatus<Status>(manager: {
-  status(): Status;
-  statusAsync?(): Promise<Status>;
-}): Promise<Status> {
-  return manager.statusAsync ? manager.statusAsync() : manager.status();
+export async function readMemorySearchManagerStatus<Status>(
+  manager: {
+    status(): Status;
+    statusAsync?(options?: { includeCounts?: boolean }): Promise<Status>;
+  },
+  options?: { includeCounts?: boolean },
+): Promise<Status> {
+  return manager.statusAsync ? manager.statusAsync(options) : manager.status();
 }

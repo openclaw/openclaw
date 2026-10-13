@@ -66,7 +66,12 @@ change chart totals. Selecting sessions narrows the charts while retaining the
 comparison table. JSON export loads the full matching report.
 
 The overview uses a rebuildable usage projection maintained after committed
-transcript changes. A restart or pricing change can require background backfill;
+transcript changes. Background refresh waits for 30 seconds without new usage
+or an active agent turn. After five minutes of pending work, it can start in the
+next idle gap without another quiet period. Explicit cost and overview reads
+flush and await pending updates, so a completed turn does not need to wait for
+that timer. This display batching does not delay Goal budgets or provider billing
+limits. A restart or pricing change can require background backfill;
 the page shows partial totals while it advances. Sessions without a cached
 projection remain pending without waiting for transcript statistics. Transcripts
 remain the source of truth. Detailed reports retain exact timestamp boundaries and the recorded
