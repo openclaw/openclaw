@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui.chat
 
+import ai.openclaw.app.chat.ChatAgentActivity
 import ai.openclaw.app.chat.ChatToolActivity
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -9,53 +10,27 @@ import org.junit.Test
 
 class ToolActivityPresentationTest {
   @Test
-  fun `matches web group summary grammar`() {
+  fun `summaries consume prepared titles and outcomes instead of tool names`() {
+    val quiet =
+      ai.openclaw.app.chat
+        .ChatAgentActivity("wait", "tool", "end", "Wait", status = "completed", hideFromChannelProgress = true)
+    val failed =
+      ai.openclaw.app.chat
+        .ChatAgentActivity("failed", "tool", "end", "Check process", status = "failed")
+    val unknown =
+      ai.openclaw.app.chat
+        .ChatAgentActivity("unknown", "tool", "end", "Outcome unknown")
+    val skipped = ChatAgentActivity("skipped", "tool", "end", "Read draft", status = "skipped")
     val tools =
       listOf(
-        tool("exec"),
-        tool("bash"),
-        tool("progress_card"),
-        tool("progress_card"),
+        tool("process").copy(activity = quiet, activityPrepared = true),
+        tool("arbitrary_name").copy(activity = failed, activityPrepared = true),
+        tool("read").copy(activity = unknown, activityPrepared = true),
+        tool("read").copy(activity = skipped, activityPrepared = true),
       )
-
-    assertEquals("Ran 2 commands, used Progress Card ×2", completedToolGroupSummary(tools))
-  }
-
-  @Test
-  fun `group summaries preserve category grammar and ordering`() {
-    val categories =
-      listOf(
-        Triple("exec", "Ran a command", "Ran 2 commands"),
-        Triple("read", "Read a file", "Read 2 files"),
-        Triple("edit", "Edited a file", "Edited 2 files"),
-        Triple("write", "Created a file", "Created 2 files"),
-        Triple("grep", "Ran a search", "Ran 2 searches"),
-        Triple("web_fetch", "Fetched a page", "Fetched 2 pages"),
-      )
-    for ((name, single, multiple) in categories) {
-      assertEquals(single, completedToolGroupSummary(listOf(tool(name))))
-      assertEquals(multiple, completedToolGroupSummary(listOf(tool(name), tool(name))))
-    }
-    assertEquals(
-      "Ran a command, read a file, edited a file, created a file, ran a search, fetched a page",
-      completedToolGroupSummary(categories.reversed().map { tool(it.first) }),
-    )
-  }
-
-  @Test
-  fun `other tool summaries preserve first occurrence order and distinct names`() {
-    val cases =
-      listOf(
-        emptyList<String>() to "Ran 0 tool calls",
-        listOf("progress_card") to "Used Progress Card",
-        listOf("progress_card", "progress_card") to "Used Progress Card ×2",
-        listOf("cua_repl", "progress_card") to "Used Cua Repl.js, Progress Card",
-        listOf("cua_repl", "progress_card", "cua_repl") to "Used Cua Repl.js, Progress Card ×3",
-        listOf("cua_repl", "progress_card", "other") to "Used 3 tools",
-      )
-    for ((names, expected) in cases) {
-      assertEquals(expected, completedToolGroupSummary(names.map { tool(it) }))
-    }
+    assertEquals("Check process (failed), Outcome unknown, Read draft (skipped)", completedToolGroupSummary(tools))
+    assertEquals("Tool details", completedToolGroupSummary(listOf(tools.first())))
+    assertEquals("Tool details", completedToolGroupSummary(emptyList()))
   }
 
   @Test
@@ -142,6 +117,36 @@ class ToolActivityPresentationTest {
     assertEquals("Tool error", presentation.outputLabel)
     assertEquals("permission denied", presentation.output)
     assertEquals("Failed", presentation.outcome)
+  }
+
+  @Test
+  fun `prepared outcomes override raw errors in result and progress presentation`() {
+    val outcomes =
+      listOf(
+        Triple("skipped", "Skipped", false),
+        Triple("blocked", "Blocked", false),
+        Triple("failed", "Failed", true),
+        Triple("completed", null, false),
+        Triple(null, null, false),
+      )
+    for ((status, outcome, failed) in outcomes) {
+      for (rawError in listOf(false, true)) {
+        for (result in listOf(null, "Result detail")) {
+          val call =
+            tool("exec", result = result, isError = rawError).copy(
+              activity = ChatAgentActivity("exec-id", "tool", "end", "Check draft", status = status),
+              activityPrepared = true,
+            )
+          val presentation = completedToolResultPresentation(call)
+          assertEquals(result != null || failed, presentation.expandable)
+          assertEquals(if (failed) "Tool error" else null, presentation.outputLabel)
+          assertEquals(result ?: if (failed) "No output — tool failed." else null, presentation.output)
+          assertEquals(outcome, presentation.outcome)
+          val receipt = if (failed) "Progress update failed" else outcome ?: "Progress cleared"
+          assertEquals(receipt, progressReceiptLabel(call.copy(name = "progress_card")))
+        }
+      }
+    }
   }
 
   @Test

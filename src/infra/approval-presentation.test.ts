@@ -1,7 +1,6 @@
 // Canonical durable approval presentation safety tests.
 import { describe, expect, it } from "vitest";
 import { buildApprovalPresentation } from "./approval-presentation.js";
-import { PLUGIN_APPROVAL_DETAIL_MAX_LENGTH } from "./plugin-approvals.js";
 
 const allowedDecisions = ["allow-once", "deny"] as const;
 
@@ -78,7 +77,7 @@ describe("buildApprovalPresentation", () => {
       host: "gate\\u{A}way\\u{202E}",
       nodeId: "node\\u{0}id",
     });
-    expect(JSON.stringify(presentation)).not.toContain(githubToken);
+    expect(presentation).toMatchObject({ agentId: githubToken });
     expect(
       buildExecPresentation({
         command: "printf safe",
@@ -110,8 +109,8 @@ describe("buildApprovalPresentation", () => {
     });
   });
 
-  it("redacts secret-like content before applying presentation length limits", () => {
-    const githubToken = `ghp_${"a".repeat(100)}`;
+  it("preserves secret-shaped content within presentation length limits", () => {
+    const githubToken = `ghp_${"a".repeat(48)}`;
     const openAiToken = "sk-abc123456789012345678";
     const presentation = buildPluginPresentation({
       title: githubToken,
@@ -121,13 +120,13 @@ describe("buildApprovalPresentation", () => {
       agentId: `operator-${githubToken}`,
     });
 
-    expect(presentation).not.toBeNull();
-    const serialized = JSON.stringify(presentation);
-    expect(serialized).not.toContain(githubToken);
-    expect(serialized).not.toContain(openAiToken);
     expect(presentation).toMatchObject({
       kind: "plugin",
-      description: expect.stringContaining("Token:\n"),
+      title: githubToken,
+      description: `Token:\n${openAiToken}`,
+      pluginId: githubToken,
+      toolName: openAiToken,
+      agentId: `operator-${githubToken}`,
     });
   });
 
@@ -158,7 +157,7 @@ describe("buildApprovalPresentation", () => {
     const presentation = buildPluginPresentation({
       title: "Review tool input",
       description: "Bounded channel summary",
-      detail: "x".repeat(PLUGIN_APPROVAL_DETAIL_MAX_LENGTH + 1),
+      detail: "x".repeat(16_385),
     });
 
     expect(presentation).toMatchObject({
@@ -168,7 +167,7 @@ describe("buildApprovalPresentation", () => {
     if (presentation?.kind !== "plugin" || !presentation.detail) {
       throw new Error("expected plugin detail");
     }
-    expect(Array.from(presentation.detail)).toHaveLength(PLUGIN_APPROVAL_DETAIL_MAX_LENGTH);
+    expect(Array.from(presentation.detail)).toHaveLength(16_384);
   });
 
   it("projects only bounded reviewer-safe external verification metadata", () => {

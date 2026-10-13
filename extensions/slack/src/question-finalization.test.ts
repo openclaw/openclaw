@@ -382,14 +382,18 @@ describe("Slack question finalization", () => {
       }
       return { ok: true, channel: "C123", ts };
     });
-    const sendSlack: typeof sendMessageSlack = async (to, text, options) =>
-      await sendMessageSlack(to, text, {
+    const sendSlack: typeof sendMessageSlack = async (to, text, options) => {
+      const sendOptions = {
         ...options,
         cfg,
         token: "xoxb-test",
         client,
         textLimit: 72,
-      });
+      };
+      // This presentation test uses method mocks rather than the real request boundary.
+      delete sendOptions.assertDirectAdapterHandoff;
+      return await sendMessageSlack(to, text, sendOptions);
+    };
 
     const batch = await sendDurableMessageBatch({
       cfg,

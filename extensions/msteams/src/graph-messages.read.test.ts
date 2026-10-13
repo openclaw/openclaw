@@ -1,4 +1,3 @@
-// Msteams tests cover graph messages.read plugin behavior.
 import { beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import {
@@ -16,10 +15,40 @@ installGraphMessagesMockDefaults();
 let getMessageMSTeams: GraphMessagesTestModule["getMessageMSTeams"];
 let listPinsMSTeams: GraphMessagesTestModule["listPinsMSTeams"];
 let listReactionsMSTeams: GraphMessagesTestModule["listReactionsMSTeams"];
+let pinMessageMSTeams: GraphMessagesTestModule["pinMessageMSTeams"];
+let reactMessageMSTeams: GraphMessagesTestModule["reactMessageMSTeams"];
+let unpinMessageMSTeams: GraphMessagesTestModule["unpinMessageMSTeams"];
+let unreactMessageMSTeams: GraphMessagesTestModule["unreactMessageMSTeams"];
+let searchMessagesMSTeams: GraphMessagesTestModule["searchMessagesMSTeams"];
+
+const NAMED_ACCOUNT_CFG = {
+  channels: {
+    msteams: {
+      appId: "default-app-id",
+      appPassword: "default-secret",
+      tenantId: "tenant-id",
+      accounts: {
+        secondary: {
+          appId: "secondary-app-id",
+          appPassword: "secondary-secret",
+          webhook: { path: "/api/messages/secondary" },
+        },
+      },
+    },
+  },
+} as OpenClawConfig;
 
 beforeAll(async () => {
-  ({ getMessageMSTeams, listPinsMSTeams, listReactionsMSTeams } =
-    await loadGraphMessagesTestModule());
+  ({
+    getMessageMSTeams,
+    listPinsMSTeams,
+    listReactionsMSTeams,
+    pinMessageMSTeams,
+    reactMessageMSTeams,
+    unpinMessageMSTeams,
+    unreactMessageMSTeams,
+    searchMessagesMSTeams,
+  } = await loadGraphMessagesTestModule());
 });
 
 describe("getMessageMSTeams", () => {
@@ -73,27 +102,7 @@ describe("getMessageMSTeams", () => {
     ).rejects.toThrow("Bot Framework ID");
   });
 
-  it("strips conversation: prefix from target", async () => {
-    mockState.fetchGraphJson.mockResolvedValue({
-      id: "msg-1",
-      body: { content: "Hello" },
-      from: undefined,
-      createdDateTime: "2026-03-23T10:00:00Z",
-    });
-
-    await getMessageMSTeams({
-      cfg: {} as OpenClawConfig,
-      to: `conversation:${CHAT_ID}`,
-      messageId: "msg-1",
-    });
-
-    expect(mockState.fetchGraphJson).toHaveBeenCalledWith({
-      token: TOKEN,
-      path: `/chats/${encodeURIComponent(CHAT_ID)}/messages/msg-1`,
-    });
-  });
-
-  it("reads a message from a chat conversation", async () => {
+  it("reads a message from a conversation-prefixed chat target", async () => {
     mockState.fetchGraphJson.mockResolvedValue({
       id: "msg-1",
       body: { content: "Hello world", contentType: "text" },
@@ -103,7 +112,7 @@ describe("getMessageMSTeams", () => {
 
     const result = await getMessageMSTeams({
       cfg: {} as OpenClawConfig,
-      to: CHAT_ID,
+      to: `conversation:${CHAT_ID}`,
       messageId: "msg-1",
     });
 
@@ -144,38 +153,27 @@ describe("getMessageMSTeams", () => {
       path: "/teams/team-id-1/channels/channel-id-1/messages/msg-2",
     });
   });
+
+  it("resolves Graph tokens with the named account id", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({
+      id: "msg-1",
+      body: { content: "Hello world" },
+    });
+
+    await getMessageMSTeams({
+      cfg: NAMED_ACCOUNT_CFG,
+      accountId: "secondary",
+      to: CHAT_ID,
+      messageId: "msg-1",
+    });
+
+    expect(mockState.resolveGraphToken).toHaveBeenCalledWith(NAMED_ACCOUNT_CFG, {
+      accountId: "secondary",
+    });
+  });
 });
 
 describe("listPinsMSTeams", () => {
-  it("lists pinned messages in a chat", async () => {
-    mockState.fetchGraphJson.mockResolvedValue({
-      value: [
-        {
-          id: "pinned-1",
-          message: { id: "msg-1", body: { content: "Pinned msg" } },
-        },
-        {
-          id: "pinned-2",
-          message: { id: "msg-2", body: { content: "Another pin" } },
-        },
-      ],
-    });
-
-    const result = await listPinsMSTeams({
-      cfg: {} as OpenClawConfig,
-      to: CHAT_ID,
-    });
-
-    expect(result.pins).toEqual([
-      { id: "pinned-1", pinnedMessageId: "pinned-1", messageId: "msg-1", text: "Pinned msg" },
-      { id: "pinned-2", pinnedMessageId: "pinned-2", messageId: "msg-2", text: "Another pin" },
-    ]);
-    expect(mockState.fetchGraphJson).toHaveBeenCalledWith({
-      token: TOKEN,
-      path: `/chats/${encodeURIComponent(CHAT_ID)}/pinnedMessages?$expand=message`,
-    });
-  });
-
   it("returns empty array when no pins exist", async () => {
     mockState.fetchGraphJson.mockResolvedValue({ value: [] });
 
@@ -209,6 +207,10 @@ describe("listPinsMSTeams", () => {
     expect(mockState.fetchGraphAbsoluteUrl).toHaveBeenCalledWith({
       token: TOKEN,
       url: "https://graph.microsoft.com/v1.0/chats/19%3Aabc%40thread.tacv2/pinnedMessages?$expand=message&$skiptoken=page2",
+    });
+    expect(mockState.fetchGraphJson).toHaveBeenCalledWith({
+      token: TOKEN,
+      path: `/chats/${encodeURIComponent(CHAT_ID)}/pinnedMessages?$expand=message`,
     });
   });
 
@@ -244,6 +246,20 @@ describe("listPinsMSTeams", () => {
         to: CHANNEL_TO,
       }),
     ).rejects.toThrow("not supported for channels");
+  });
+
+  it("resolves Graph tokens with the named account id", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({ value: [] });
+
+    await listPinsMSTeams({
+      cfg: NAMED_ACCOUNT_CFG,
+      accountId: "secondary",
+      to: CHAT_ID,
+    });
+
+    expect(mockState.resolveGraphToken).toHaveBeenCalledWith(NAMED_ACCOUNT_CFG, {
+      accountId: "secondary",
+    });
   });
 });
 
@@ -364,5 +380,346 @@ describe("listReactionsMSTeams", () => {
       token: TOKEN,
       path: "/teams/team-id-1/channels/channel-id-1/messages/msg-2",
     });
+  });
+
+  it("resolves Graph tokens with the named account id", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({
+      id: "msg-1",
+      body: { content: "Hello" },
+      reactions: [],
+    });
+
+    await listReactionsMSTeams({
+      cfg: NAMED_ACCOUNT_CFG,
+      accountId: "secondary",
+      to: CHAT_ID,
+      messageId: "msg-1",
+    });
+
+    expect(mockState.resolveGraphToken).toHaveBeenCalledWith(NAMED_ACCOUNT_CFG, {
+      accountId: "secondary",
+    });
+  });
+});
+
+describe("MSTeams reaction validation", () => {
+  it("rejects empty reaction types", async () => {
+    await expect(
+      reactMessageMSTeams({
+        cfg: {},
+        to: CHAT_ID,
+        messageId: "msg-1",
+        reactionType: "   ",
+      }),
+    ).rejects.toThrow(/Reaction type is required/);
+  });
+});
+
+describe("pinMessageMSTeams", () => {
+  it("pins a message in a chat via message@odata.bind body", async () => {
+    mockState.mutateGraphJson.mockResolvedValue({ id: "pinned-1" });
+
+    const result = await pinMessageMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHAT_ID,
+      messageId: "msg-1",
+    });
+
+    expect(result).toEqual({ ok: true, pinnedMessageId: "pinned-1" });
+    expect(mockState.mutateGraphJson).toHaveBeenCalledWith({
+      token: TOKEN,
+      path: `/chats/${encodeURIComponent(CHAT_ID)}/pinnedMessages`,
+      method: "POST",
+      body: {
+        "message@odata.bind": `https://graph.microsoft.com/v1.0/chats/${encodeURIComponent(
+          CHAT_ID,
+        )}/messages/${encodeURIComponent("msg-1")}`,
+      },
+    });
+  });
+
+  it("rejects pinning a message in a channel on Graph v1.0", async () => {
+    await expect(
+      pinMessageMSTeams({
+        cfg: {} as OpenClawConfig,
+        to: CHANNEL_TO,
+        messageId: "msg-2",
+      }),
+    ).rejects.toThrow(/Pin\/unpin is not supported for channel messages/);
+    expect(mockState.mutateGraphJson).not.toHaveBeenCalled();
+  });
+});
+
+describe("unpinMessageMSTeams", () => {
+  it("unpins a message from a chat", async () => {
+    mockState.deleteGraphRequest.mockResolvedValue(undefined);
+
+    const result = await unpinMessageMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHAT_ID,
+      pinnedMessageId: "pinned-1",
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(mockState.deleteGraphRequest).toHaveBeenCalledWith({
+      token: TOKEN,
+      path: `/chats/${encodeURIComponent(CHAT_ID)}/pinnedMessages/${encodeURIComponent("pinned-1")}`,
+    });
+  });
+
+  it("rejects unpinning a message from a channel on Graph v1.0", async () => {
+    await expect(
+      unpinMessageMSTeams({
+        cfg: {} as OpenClawConfig,
+        to: CHANNEL_TO,
+        pinnedMessageId: "pinned-2",
+      }),
+    ).rejects.toThrow(/Pin\/unpin is not supported for channel messages/);
+    expect(mockState.deleteGraphRequest).not.toHaveBeenCalled();
+  });
+});
+
+describe("MSTeams reactions", () => {
+  it.each([
+    {
+      operation: "react",
+      to: CHAT_ID,
+      path: `/chats/${encodeURIComponent(CHAT_ID)}`,
+      reactionType: " LAUGH ",
+      expected: "😆",
+      action: "setReaction",
+    },
+
+    {
+      operation: "unreact",
+      to: CHANNEL_TO,
+      path: "/teams/team-id-1/channels/channel-id-1",
+      reactionType: " 🎉 ",
+      expected: "🎉",
+      action: "unsetReaction",
+    },
+  ])(
+    "$operation normalizes $reactionType for $to",
+    async ({ operation, to, path, reactionType, expected, action }) => {
+      mockState.mutateGraphJson.mockResolvedValue(undefined);
+      const invoke = operation === "react" ? reactMessageMSTeams : unreactMessageMSTeams;
+      await expect(invoke({ cfg: {}, to, messageId: "msg-1", reactionType })).resolves.toEqual({
+        ok: true,
+      });
+      expect(mockState.resolveGraphToken).toHaveBeenCalledWith(
+        {},
+        { preferDelegated: true, accountId: undefined },
+      );
+      expect(mockState.mutateGraphJson).toHaveBeenCalledWith({
+        token: TOKEN,
+        path: `${path}/messages/msg-1/${action}`,
+        method: "POST",
+        body: { reactionType: expected },
+        beta: true,
+      });
+    },
+  );
+});
+
+function readFirstGraphPath(): string {
+  const request = mockState.fetchGraphJson.mock.calls[0]?.[0];
+  if (!request || typeof request.path !== "string") {
+    throw new Error("Expected Graph fetch request path");
+  }
+  return request.path;
+}
+
+describe("searchMessagesMSTeams", () => {
+  it("searches with the selected account token", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({ value: [] });
+    await searchMessagesMSTeams({
+      cfg: NAMED_ACCOUNT_CFG,
+      accountId: "secondary",
+      to: CHAT_ID,
+      query: "hello",
+    });
+    expect(mockState.resolveGraphToken).toHaveBeenCalledWith(NAMED_ACCOUNT_CFG, {
+      accountId: "secondary",
+    });
+  });
+
+  it("filters chat messages locally and normalizes HTML content", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({
+      value: [
+        {
+          id: "msg-1",
+          body: { content: "<p>Meeting <b>notes</b> from Monday</p>", contentType: "html" },
+          from: { user: { id: "u1", displayName: "Alice" } },
+          createdDateTime: "2026-03-25T10:00:00Z",
+        },
+        {
+          id: "msg-2",
+          body: { content: "Unrelated update", contentType: "text" },
+        },
+      ],
+    });
+
+    const result = await searchMessagesMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHAT_ID,
+      query: "meeting notes",
+    });
+
+    expect(result).toEqual({
+      messages: [
+        {
+          id: "msg-1",
+          text: "<p>Meeting <b>notes</b> from Monday</p>",
+          from: { user: { id: "u1", displayName: "Alice" } },
+          createdAt: "2026-03-25T10:00:00Z",
+        },
+      ],
+      truncated: false,
+    });
+    expect(readFirstGraphPath()).toBe(`/chats/${encodeURIComponent(CHAT_ID)}/messages?$top=50`);
+  });
+
+  it("keeps channel search scoped to the selected channel", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({
+      value: [{ id: "msg-2", body: { content: "Sprint review" } }],
+    });
+
+    const result = await searchMessagesMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHANNEL_TO,
+      query: "sprint",
+    });
+
+    expect(result.messages).toHaveLength(1);
+    expect(readFirstGraphPath()).toBe("/teams/team-id-1/channels/channel-id-1/messages?$top=50");
+  });
+
+  it("follows target-scoped pagination and applies sender matching locally", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({
+      value: [
+        {
+          id: "wrong-sender",
+          body: { content: "budget update" },
+          from: { user: { id: "u1", displayName: "Bob" } },
+        },
+      ],
+      "@odata.nextLink": "https://graph.microsoft.com/v1.0/next-page",
+    });
+    mockState.fetchGraphAbsoluteUrl.mockResolvedValue({
+      value: [
+        {
+          id: "right-sender",
+          body: { content: "Budget update" },
+          from: { application: { id: "app-1", displayName: "Finance Bot" } },
+        },
+      ],
+    });
+
+    const result = await searchMessagesMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHAT_ID,
+      query: "BUDGET",
+      from: "finance bot",
+    });
+
+    expect(mockState.fetchGraphAbsoluteUrl).toHaveBeenCalledWith({
+      token: TOKEN,
+      url: "https://graph.microsoft.com/v1.0/next-page",
+    });
+    expect(result).toEqual({
+      messages: [
+        {
+          id: "right-sender",
+          text: "Budget update",
+          from: { application: { id: "app-1", displayName: "Finance Bot" } },
+          createdAt: undefined,
+        },
+      ],
+      truncated: false,
+    });
+  });
+
+  it("matches the sender by stable ID", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({
+      value: [
+        {
+          id: "msg-1",
+          body: { content: "hello" },
+          from: { user: { id: "aad-user-1", displayName: "Alice" } },
+        },
+      ],
+    });
+
+    const result = await searchMessagesMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHAT_ID,
+      query: "hello",
+      from: "AAD-USER-1",
+    });
+
+    expect(result.messages).toHaveLength(1);
+  });
+
+  it("stops at the requested result limit and reports remaining pages", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({
+      value: [
+        { id: "msg-1", body: { content: "match" } },
+        { id: "msg-2", body: { content: "match" } },
+      ],
+      "@odata.nextLink": "https://graph.microsoft.com/v1.0/next-page",
+    });
+
+    const result = await searchMessagesMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHAT_ID,
+      query: "match",
+      limit: 1,
+    });
+
+    expect(result.messages.map((message) => message.id)).toEqual(["msg-1"]);
+    expect(result.truncated).toBe(true);
+    expect(mockState.fetchGraphAbsoluteUrl).not.toHaveBeenCalled();
+  });
+
+  it("clamps a non-finite limit to the default", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({
+      value: Array.from({ length: 30 }, (_, index) => ({
+        id: `msg-${index}`,
+        body: { content: "match" },
+      })),
+    });
+
+    const result = await searchMessagesMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHAT_ID,
+      query: "match",
+      limit: Number.POSITIVE_INFINITY,
+    });
+
+    expect(result.messages).toHaveLength(25);
+    expect(result.truncated).toBe(true);
+  });
+
+  it("reports truncation after the bounded ten-page scan", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({
+      value: [],
+      "@odata.nextLink": "https://graph.microsoft.com/v1.0/page-2",
+    });
+    mockState.fetchGraphAbsoluteUrl.mockImplementation(async ({ url }: { url: string }) => {
+      const page = Number(url.match(/page-(\d+)/)?.[1] ?? "2");
+      return {
+        value: [],
+        "@odata.nextLink": `https://graph.microsoft.com/v1.0/page-${page + 1}`,
+      };
+    });
+
+    const result = await searchMessagesMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHAT_ID,
+      query: "missing",
+    });
+
+    expect(mockState.fetchGraphAbsoluteUrl).toHaveBeenCalledTimes(9);
+    expect(result).toEqual({ messages: [], truncated: true });
   });
 });

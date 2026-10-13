@@ -1,29 +1,24 @@
 import { html, nothing } from "lit";
 import { titleForRoute, visibleSettingsNavigationGroups } from "../app-navigation.ts";
+import type { LazyRenderer } from "../app/lazy-renderer.ts";
+import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { t } from "../i18n/index.ts";
 import { icons } from "./icons.ts";
 
-export type SettingsSidebarModule = typeof import("./settings-sidebar.ts");
+type SettingsSidebarModule = typeof import("./settings-sidebar.ts");
 type SettingsSidebarProps = Parameters<SettingsSidebarModule["renderSettingsSidebar"]>[0];
 
-type LazySettingsSidebarHost = {
-  readonly settingsSidebarRenderer: SettingsSidebarModule["renderSettingsSidebar"] | null;
-  readonly settingsSidebarLoadFailed: boolean;
-  loadSettingsSidebarRenderer(): void;
-  retrySettingsSidebarRenderer(): void;
-};
-
 export function renderLazySettingsSidebar(
-  host: LazySettingsSidebarHost,
+  loader: LazyRenderer<SettingsSidebarModule["renderSettingsSidebar"]>,
   props: SettingsSidebarProps,
 ) {
-  const renderer = host.settingsSidebarRenderer;
+  const renderer = loader.renderer;
   if (renderer) {
     return renderer(props);
   }
-  const failed = host.settingsSidebarLoadFailed;
+  const failed = loader.failed;
   if (!failed) {
-    host.loadSettingsSidebarRenderer();
+    loader.load();
   }
   if (props.presentation === "embed-list" || props.presentation === "embed-page") {
     return html`<section
@@ -37,11 +32,11 @@ export function renderLazySettingsSidebar(
       <p role=${failed ? "alert" : "status"}>
         ${t(failed ? "nav.settingsLoadFailed" : "common.loading")}
       </p>
-      ${failed ? html`<button class="btn" @click=${() => host.retrySettingsSidebarRenderer()}>${t("common.retry")}</button>` : nothing}
+      ${failed ? html`<button class="btn" @click=${() => loader.retry()}>${t("common.retry")}</button>` : nothing}
     </section>`;
   }
   return html`<aside class="settings-sidebar" aria-busy=${failed ? nothing : "true"}>
-    <header class="settings-sidebar__header">
+    <header class="settings-sidebar__header" @mousedown=${beginNativeWindowDragFromTopInset}>
       <button type="button" class="settings-sidebar__back" @click=${props.onExit}>
         <span class="settings-sidebar__back-icon" aria-hidden="true">${icons.arrowLeft}</span>
         ${t("nav.exitSettings")}
@@ -52,11 +47,7 @@ export function renderLazySettingsSidebar(
       failed
         ? html`<div class="settings-sidebar__empty" role="alert">
             ${t("nav.settingsLoadFailed")}
-            <button
-              class="btn btn--sm"
-              type="button"
-              @click=${() => host.retrySettingsSidebarRenderer()}
-            >
+            <button class="btn btn--sm" type="button" @click=${() => loader.retry()}>
               ${t("common.retry")}
             </button>
           </div>`
@@ -65,7 +56,7 @@ export function renderLazySettingsSidebar(
   </aside>`;
 }
 
-// Mirrors renderSettingsSidebar: search field, then the same navigation groups
+// Mirrors renderSettingsSidebar: agent selector, search, then the same navigation groups
 // (label + icon/label rows) the loaded sidebar will draw, so nothing shifts once
 // the module lands.
 function renderSettingsSidebarSkeleton(props: SettingsSidebarProps) {
@@ -73,10 +64,13 @@ function renderSettingsSidebarSkeleton(props: SettingsSidebarProps) {
     Boolean(props.canAdmin),
     props.nativeDeviceSettings ?? null,
   );
-  return html`<div class="settings-sidebar__search" aria-hidden="true">
+  return html`<div class="settings-sidebar__agent" aria-hidden="true">
+      <span class="skeleton settings-sidebar__loading-agent"></span>
+    </div>
+    <div class="settings-sidebar__search" aria-hidden="true">
       <span class="skeleton settings-sidebar__loading-search"></span>
     </div>
-    <nav
+    <div
       class="settings-sidebar__nav settings-loading-skeleton settings-sidebar__loading"
       role="status"
       aria-busy="true"
@@ -97,5 +91,5 @@ function renderSettingsSidebarSkeleton(props: SettingsSidebarProps) {
           )}
         </div>`,
       )}
-    </nav>`;
+    </div>`;
 }

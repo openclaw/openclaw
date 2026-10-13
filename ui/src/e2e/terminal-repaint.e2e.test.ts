@@ -42,7 +42,8 @@ suite.define(() => {
     await suite.withPage(
       {
         serviceWorkers: "block",
-        viewport: { width: 1180, height: 520 },
+        // Preserve the original terminal content width alongside the new 52px navigation rail.
+        viewport: { width: 1232, height: 520 },
       },
       async ({ page }) => {
         await page.addInitScript(() => {
@@ -81,10 +82,11 @@ suite.define(() => {
         const terminalCanvas = page.locator(".tp-host canvas");
         await terminalCanvas.waitFor({ state: "visible" });
         const blankCanvasDigest = await terminalCanvasDigest(terminalCanvas);
+        const terminalOutput = "\u001b[?25lterminal repaint sentinel\r\n$ ";
         await gateway.emitGatewayEvent("terminal.data", {
           sessionId: "terminal-repaint-e2e",
-          seq: 0,
-          data: "\u001b[?25lterminal repaint sentinel\r\n$ ",
+          seq: terminalOutput.length,
+          data: terminalOutput,
         });
         await expect.poll(() => terminalCanvasDigest(terminalCanvas)).not.toBe(blankCanvasDigest);
         const renderedCanvasDigest = await terminalCanvasDigest(terminalCanvas);

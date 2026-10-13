@@ -1,7 +1,9 @@
 #!/usr/bin/env node
-import { runTsxCliShim } from "./lib/tsx-cli-shim.mjs";
+import { runNodeCliShim } from "./lib/tsx-cli-shim.mjs";
 
-await runTsxCliShim(import.meta.url, {
+await runNodeCliShim(import.meta.url, {
   implementation: "./run-vitest-child.mts",
   failureTool: "test",
+  failureExitCode: 2,
+  terminationOwner: "implementation",
 });

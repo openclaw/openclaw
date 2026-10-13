@@ -366,6 +366,11 @@ export async function deliverClickClackQuestionPrompt(params: {
       replyToId: params.replyToId,
       provenance: params.provenance,
       correlationId: params.correlationId,
+      assertDirectAdapterHandoff: () => {
+        if (lifetime.abortSignal.aborted) {
+          throw new Error("ClickClack question delivery belongs to a stopped account");
+        }
+      },
     });
   } catch (error) {
     // The server rejected the card itself; the text prompt still works.

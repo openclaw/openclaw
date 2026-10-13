@@ -1,19 +1,43 @@
 import { vi } from "vitest";
 import type { DoctorHealthFlowContext } from "../flows/doctor-health-contribution-types.js";
+import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
-import { createDoctorPrompter, type DoctorOptions } from "./doctor-prompter.js";
+import {
+  createDoctorPrompter,
+  type DoctorOptions,
+  type DoctorPrompter,
+} from "./doctor-prompter.js";
+
+export async function withDoctorConfigMaintenance<T>(run: () => Promise<T>): Promise<T> {
+  const database = openOpenClawStateDatabase();
+  const owner = acquireGatewayStateOwner({ databasePath: database.path });
+  const maintenance = createOpenClawDatabaseMaintenanceScope({
+    schemaMaintenance: true,
+    assertOwnerCurrent: owner.assertCurrent,
+    assertDatabaseAccess: owner.assertDatabaseAccess,
+  });
+  try {
+    return await maintenance.run(run);
+  } finally {
+    await maintenance.close();
+    owner.release();
+  }
+}
 
 export async function prepareDoctorContext(
   configPath: string,
   params: {
     options?: DoctorOptions;
     confirm?: Parameters<typeof loadAndMaybeMigrateDoctorConfig>[0]["confirm"];
+    prompter?: DoctorPrompter;
   } = {},
-): Promise<DoctorHealthFlowContext> {
+): Promise<DoctorHealthFlowContext & AsyncDisposable> {
   const runtime: RuntimeEnv = { error: vi.fn(), exit: vi.fn(), log: vi.fn() };
   const options: DoctorOptions = params.options ?? { nonInteractive: true, repair: true };
-  const prompter = createDoctorPrompter({ runtime, options });
+  const prompter = params.prompter ?? createDoctorPrompter({ runtime, options });
   const configResult = await loadAndMaybeMigrateDoctorConfig({
     options,
     confirm: params.confirm ?? ((confirmation) => prompter.confirm(confirmation)),
@@ -21,6 +45,7 @@ export async function prepareDoctorContext(
     prompter,
   });
   return {
+    [Symbol.asyncDispose]: () => configResult[Symbol.asyncDispose](),
     runtime,
     options,
     prompter,

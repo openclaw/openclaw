@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements loggers behavior.
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 
 export const whatsappLog = createSubsystemLogger("gateway/channels/whatsapp");

@@ -5,6 +5,7 @@
     "onStartup": false
   },
   "enabledByDefault": true,
+  "providerCatalogEntry": "./provider-discovery.ts",
   "providers": ["groq"],
   "providerEndpoints": [
     {

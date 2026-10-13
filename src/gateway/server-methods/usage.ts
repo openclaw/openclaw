@@ -1,4 +1,3 @@
-// Gateway usage methods validate requests and assemble owner-scoped usage reports.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   GATEWAY_CLIENT_CAPS,
@@ -9,21 +8,40 @@ import {
   errorShape,
   validateSessionsUsageParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { sessionCreatorProfileId } from "../../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadSessionLogs, loadSessionUsageTimeSeries } from "../../infra/session-cost-usage.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { createUsageAggregateAccumulator } from "../../shared/usage-aggregates.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
+import {
+  createUsageAggregateAccumulator,
+  UNKNOWN_USAGE_CREATOR_KEY,
+} from "../../shared/usage-aggregates.js";
+import { extractQueryTerms } from "../../shared/usage-query.js";
 import type {
   SessionUsageEntry,
+  SessionUsageCreator,
   SessionsUsageAggregates,
   SessionsUsageResult,
+  UsageOverviewOptions,
+  UsageOverviewSession,
 } from "../../shared/usage-types.js";
 import {
   sessionDeliveryChannel,
   sessionDeliveryOrigin,
-} from "../../utils/delivery-context.shared.js";
+} from "../../utils/delivery-context.read.js";
+import { readGatewayAccessRevision } from "../gateway-access-revision.js";
 import { operatorSessionCap } from "../operator-role-policy.js";
+import { projectSessionActor } from "../session-identity-projection.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import {
+  prepareSessionMutationFacts,
+  SessionMutationFactsUnavailableError,
+} from "../session-sharing-preparation.js";
+import {
+  prepareProjectedSessionSharing,
+  prepareSessionSharingProfiles,
+} from "../session-sharing-read.js";
 import { createSessionListEntryFilter, isGatewayAdmin } from "../session-sharing.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { loadUsageStatusStaleWhileRevalidate } from "./models-auth-status-usage-cache.js";
@@ -36,17 +54,20 @@ import {
   type DateInterpretation,
   type DateRange,
 } from "./usage-date-range.js";
+import { loadUsageOverview } from "./usage-overview.js";
 import { loadCostUsageSummaryCached, loadSessionsUsageResultCached } from "./usage-result-cache.js";
 import { loadUsageSessionSummaries } from "./usage-session-loading.js";
 import {
+  loadUsageSessionContext,
   resolveSessionUsageTarget,
   selectUsageSessions,
   UsageSessionInvalidRequestError,
   type UsageGroupingMode,
+  type UsageSessionSelection,
 } from "./usage-session-selection.js";
 import { assertValidParams } from "./validation.js";
 
-function resolveSessionUsageFileOrRespond(
+async function resolveSessionUsageFileOrRespond(
   params: { key?: unknown; agentId?: unknown } | undefined,
   detail: "timeseries" | "logs",
   respond: RespondFn,
@@ -70,10 +91,11 @@ function resolveSessionUsageFileOrRespond(
     respond(false, undefined, sessionOwner.error);
     return null;
   }
-  let resolved: NonNullable<ReturnType<typeof resolveSessionUsageTarget>> | undefined;
+  let resolved: Awaited<ReturnType<typeof resolveSessionUsageTarget>>;
   try {
-    resolved = resolveSessionUsageTarget(key, config, sessionOwner.agentId);
+    resolved = await resolveSessionUsageTarget(key, config, sessionOwner.agentId);
   } catch {
+    getAsyncWorkSignal()?.throwIfAborted();
     resolved = undefined;
   }
   if (!resolved) {
@@ -106,6 +128,49 @@ function resolveUsageDateRangeOrRespond(
 }
 
 export type { SessionUsageEntry, SessionsUsageAggregates, SessionsUsageResult };
+
+function projectUsageCreator(
+  session: UsageSessionSelection,
+  profiles: Parameters<typeof projectSessionActor>[1],
+  config: OpenClawConfig,
+): SessionUsageCreator {
+  const entry = session.storeEntry ?? session.creatorEntry;
+  const actor = entry?.createdActor;
+  if (!actor) {
+    return { key: UNKNOWN_USAGE_CREATOR_KEY };
+  }
+  const projected = projectSessionActor(
+    actor,
+    profiles,
+    config,
+    Boolean(sessionCreatorProfileId(actor)),
+  );
+  if (!projected?.id && actor.type !== "system") {
+    return { key: UNKNOWN_USAGE_CREATOR_KEY };
+  }
+  const identity = projected?.identity;
+  const origin = sessionDeliveryOrigin(entry);
+  const channel = sessionDeliveryChannel(entry);
+  if (actor.type === "human" && actor.source !== "profile" && !channel) {
+    return { key: UNKNOWN_USAGE_CREATOR_KEY };
+  }
+  const key =
+    identity?.type === "profile"
+      ? JSON.stringify(["profile", identity.id])
+      : actor.type === "human"
+        ? JSON.stringify([
+            "human",
+            actor.source,
+            session.agentId,
+            channel ?? null,
+            origin?.accountId ?? null,
+            projected?.id,
+          ])
+        : actor.type === "agent"
+          ? JSON.stringify([identity?.type ?? "agent", identity?.id ?? projected?.id])
+          : JSON.stringify(["system", projected?.id ?? null]);
+  return { key, ...(projected ? { actor: projected } : {}) };
+}
 
 export const usageHandlers: GatewayRequestHandlers = {
   "usage.status": async ({ respond, context, client }) => {
@@ -187,6 +252,7 @@ export const usageHandlers: GatewayRequestHandlers = {
     const { interpretation: dateInterpretation, range } = dateRange;
     const config = context.getRuntimeConfig();
     const sessionCap = operatorSessionCap(client ?? null, config);
+    const accessRevision = readGatewayAccessRevision();
     const visibilityFilter =
       sessionCap === "none"
         ? createSessionListEntryFilter({ client: client ?? null, cfg: config })
@@ -195,8 +261,32 @@ export const usageHandlers: GatewayRequestHandlers = {
     const visibilityIdentity = sessionCap && profileId ? `${profileId}:${sessionCap}` : undefined;
     const { startMs, endMs, includeUntimestamped } = range;
     const dayBucket = resolveDayBucket(dateInterpretation);
-    const limit = typeof p.limit === "number" && Number.isFinite(p.limit) ? p.limit : 50;
+    const limit = p.projection === "overview" ? 50 : (p.limit ?? 50);
+    const hasOverviewOptions =
+      p.projection === "overview" ||
+      p.query !== undefined ||
+      p.selectedDays !== undefined ||
+      p.selectedHours !== undefined ||
+      p.selectedSessions !== undefined ||
+      p.recentKeys !== undefined ||
+      p.sort !== undefined ||
+      p.sortDirection !== undefined ||
+      p.offset !== undefined;
+    const overviewOptions: UsageOverviewOptions | undefined = hasOverviewOptions
+      ? {
+          limit,
+          offset: p.offset,
+          query: p.query,
+          selectedDays: p.selectedDays,
+          selectedHours: p.selectedHours,
+          selectedSessions: p.selectedSessions,
+          recentKeys: p.recentKeys,
+          sort: p.sort,
+          sortDirection: p.sortDirection,
+        }
+      : undefined;
     const includeContextWeight = p.includeContextWeight ?? false;
+    const creatorKey = normalizeOptionalString(p.creatorKey);
     const specificKey = normalizeOptionalString(p.key) ?? null;
     const requestedAgentId = normalizeOptionalString(p.agentId);
     const requestedAllAgents = p.agentScope === "all";
@@ -247,10 +337,14 @@ export const usageHandlers: GatewayRequestHandlers = {
         groupingMode,
         specificKey,
         includeContextWeight,
+        creatorKey,
+        ...(overviewOptions
+          ? { overviewKey: JSON.stringify([p.projection, overviewOptions]) }
+          : {}),
         ...(visibilityIdentity ? { visibilityIdentity } : {}),
         load: async () => {
           const now = Date.now();
-          const mergedEntries = await selectUsageSessions({
+          const visibleEntries = await selectUsageSessions({
             config,
             agentId: effectiveAgentId,
             specificKey,
@@ -259,8 +353,84 @@ export const usageHandlers: GatewayRequestHandlers = {
             endMs,
             visibilityFilter,
           });
+          const profiles: Parameters<typeof projectSessionActor>[1] = new Map();
+          const creatorOptions = new Map<string, SessionUsageCreator>();
+          const matchedEntries = visibleEntries.flatMap((entry) => {
+            const creator = projectUsageCreator(entry, profiles, config);
+            creatorOptions.set(creator.key, creator);
+            return !creatorKey || creator.key === creatorKey ? [{ entry, creator }] : [];
+          });
+          const mergedEntries = matchedEntries.map(({ entry }) => entry);
 
-          // Load usage for each session
+          if (overviewOptions) {
+            // Context is normally hydrated only for the page. An explicit context
+            // filter needs that authoritative fact for every candidate before filtering.
+            if (
+              extractQueryTerms(overviewOptions.query ?? "").some(
+                (term) =>
+                  term.key?.toLowerCase() === "has" && term.value.toLowerCase() === "context",
+              )
+            ) {
+              await loadUsageSessionContext(mergedEntries, visibilityFilter);
+            }
+            const metadata: UsageOverviewSession[] = matchedEntries.map(({ entry, creator }) => ({
+              key: entry.key,
+              label: entry.label,
+              sessionId: entry.sessionId,
+              scope: entry.scope ?? "instance",
+              sessionFamilyKey: entry.sessionFamilyKey,
+              currentSessionId: entry.currentSessionId,
+              includedSessionIds: entry.includedSessionIds,
+              historicalInstanceCount: entry.includedSessionIds?.length,
+              updatedAt: entry.updatedAt,
+              agentId: entry.agentId,
+              creatorKey: creator.key,
+              createdActor: creator.actor,
+              channel: sessionDeliveryChannel(entry.storeEntry),
+              chatType:
+                entry.storeEntry?.chatType ?? sessionDeliveryOrigin(entry.storeEntry)?.chatType,
+              origin: sessionDeliveryOrigin(entry.storeEntry),
+              modelOverride: entry.storeEntry?.modelOverride,
+              providerOverride: entry.storeEntry?.providerOverride,
+              modelProvider: entry.storeEntry?.modelProvider,
+              model: entry.storeEntry?.model,
+              hasContextWeight: Boolean(entry.contextWeight),
+              instances: entry.instances,
+            }));
+            const overview = await loadUsageOverview({
+              sessions: metadata,
+              options: overviewOptions,
+              config,
+              startMs,
+              endMs,
+              includeUntimestamped,
+              dayBucket,
+              projection: p.projection,
+            });
+            const entriesByKey = new Map(
+              mergedEntries.map((entry) => [JSON.stringify([entry.agentId, entry.key]), entry]),
+            );
+            const page = overview.sessions.flatMap((row) => {
+              const entry = entriesByKey.get(JSON.stringify([row.agentId, row.key]));
+              return entry ? [entry] : [];
+            });
+            await loadUsageSessionContext(page, visibilityFilter);
+            return {
+              ...overview,
+              updatedAt: now,
+              startDate: formatDateLabel(startMs, dateInterpretation),
+              endDate: formatDateLabel(endMs, dateInterpretation),
+              creatorOptions: [...creatorOptions.values()],
+              sessions: overview.sessions.map((row) => {
+                const entry = entriesByKey.get(JSON.stringify([row.agentId, row.key]));
+                return Object.assign({}, row, {
+                  hasContextWeight: Boolean(entry?.contextWeight),
+                  contextWeight: includeContextWeight ? (entry?.contextWeight ?? null) : undefined,
+                });
+              }),
+            };
+          }
+
           const sessions: SessionUsageEntry[] = [];
           const accumulator = createUsageAggregateAccumulator();
           const { summaries: usageByEntryIndex, cacheStatus } = await loadUsageSessionSummaries({
@@ -271,15 +441,22 @@ export const usageHandlers: GatewayRequestHandlers = {
             includeUntimestamped,
             dayBucket,
           });
+          await loadUsageSessionContext(mergedEntries.slice(0, limit), visibilityFilter);
 
-          for (const [entryIndex, merged] of mergedEntries.entries()) {
+          for (const [entryIndex, { entry: merged, creator }] of matchedEntries.entries()) {
             const agentId = merged.agentId;
             const usage = usageByEntryIndex[entryIndex] ?? null;
             const channel = sessionDeliveryChannel(merged.storeEntry);
             const origin = sessionDeliveryOrigin(merged.storeEntry);
             const chatType = merged.storeEntry?.chatType ?? origin?.chatType;
             // Aggregate every matched row before limiting the visible list.
-            accumulator.add({ usage, agentId, channel });
+            accumulator.add({
+              usage,
+              agentId,
+              channel,
+              creatorKey: creator.key,
+              createdActor: creator.actor,
+            });
 
             if (entryIndex < limit) {
               sessions.push({
@@ -293,6 +470,8 @@ export const usageHandlers: GatewayRequestHandlers = {
                 historicalInstanceCount: merged.includedSessionIds?.length,
                 updatedAt: merged.updatedAt,
                 agentId,
+                creatorKey: creator.key,
+                createdActor: creator.actor,
                 channel,
                 chatType,
                 origin,
@@ -301,10 +480,9 @@ export const usageHandlers: GatewayRequestHandlers = {
                 modelProvider: merged.storeEntry?.modelProvider,
                 model: merged.storeEntry?.model,
                 usage,
-                hasContextWeight: Boolean(merged.storeEntry?.systemPromptReport),
-                contextWeight: includeContextWeight
-                  ? (merged.storeEntry?.systemPromptReport ?? null)
-                  : undefined,
+                ...(!usage ? { computing: true } : {}),
+                hasContextWeight: Boolean(merged.contextWeight),
+                contextWeight: includeContextWeight ? (merged.contextWeight ?? null) : undefined,
               });
             }
           }
@@ -316,6 +494,7 @@ export const usageHandlers: GatewayRequestHandlers = {
             sessions,
             totals: accumulator.totals,
             aggregates: accumulator.finish(),
+            creatorOptions: Array.from(creatorOptions.values()),
             cacheStatus,
           };
         },
@@ -327,10 +506,83 @@ export const usageHandlers: GatewayRequestHandlers = {
       }
       throw err;
     }
-    respond(true, result, undefined);
+    const contextReads = new Map<
+      SessionUsageEntry,
+      Awaited<ReturnType<typeof prepareSessionMutationFacts>>
+    >();
+    try {
+      // Cached reports are data, not authority. Retain current sharing through response publication.
+      for (const session of result.sessions) {
+        if (!session.hasContextWeight || !session.agentId) {
+          continue;
+        }
+        try {
+          contextReads.set(
+            session,
+            await prepareSessionMutationFacts({
+              cfg: context.getRuntimeConfig(),
+              sessionKey: session.key,
+              agentId: session.agentId,
+            }),
+          );
+        } catch (error) {
+          if (!(error instanceof SessionMutationFactsUnavailableError)) {
+            throw error;
+          }
+        }
+      }
+      const profiles = await prepareSessionSharingProfiles(client ?? null);
+      const currentConfig = context.getRuntimeConfig();
+      const { entryFilter: currentFilter } = prepareProjectedSessionSharing({
+        cfg: currentConfig,
+        client: client ?? null,
+        profiles,
+        isMember: () => false,
+      });
+      const sessions = result.sessions.map((session) => {
+        if (!session.hasContextWeight) {
+          return session;
+        }
+        try {
+          const current = contextReads.get(session)?.readCurrent(currentConfig).target.entry;
+          if (
+            current &&
+            current.sessionId === session.sessionId &&
+            (!currentFilter || currentFilter(session.key, current))
+          ) {
+            return session;
+          }
+        } catch (error) {
+          if (!(error instanceof SessionMutationFactsUnavailableError)) {
+            throw error;
+          }
+        }
+        return {
+          ...session,
+          hasContextWeight: false,
+          contextWeight: includeContextWeight ? null : undefined,
+        };
+      });
+      if (config !== context.getRuntimeConfig() || accessRevision !== readGatewayAccessRevision()) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.UNAVAILABLE,
+            "Session access changed while loading usage. Refresh the usage view to try again.",
+          ),
+        );
+        return;
+      }
+      respond(true, { ...result, sessions }, undefined);
+    } finally {
+      for (const read of contextReads.values()) {
+        read.release();
+      }
+    }
   },
   "sessions.usage.timeseries": async ({ respond, params, context }) => {
-    const resolved = resolveSessionUsageFileOrRespond(
+    const resolved = await resolveSessionUsageFileOrRespond(
       params,
       "timeseries",
       respond,
@@ -339,14 +591,8 @@ export const usageHandlers: GatewayRequestHandlers = {
     if (!resolved) {
       return;
     }
-    const { config, key, entry, agentId, sessionId, sessionFile } = resolved;
-
     const timeseries = await loadSessionUsageTimeSeries({
-      sessionId,
-      sessionEntry: entry,
-      sessionFile,
-      config,
-      agentId,
+      ...resolved,
       maxPoints: 200,
     });
 
@@ -354,7 +600,7 @@ export const usageHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `No transcript found for session: ${key}`),
+        errorShape(ErrorCodes.INVALID_REQUEST, `No transcript found for session: ${resolved.key}`),
       );
       return;
     }
@@ -367,7 +613,7 @@ export const usageHandlers: GatewayRequestHandlers = {
         ? Math.min(params.limit, 1000)
         : 200;
 
-    const resolved = resolveSessionUsageFileOrRespond(
+    const resolved = await resolveSessionUsageFileOrRespond(
       params,
       "logs",
       respond,
@@ -376,16 +622,7 @@ export const usageHandlers: GatewayRequestHandlers = {
     if (!resolved) {
       return;
     }
-    const { config, entry, agentId, sessionId, sessionFile } = resolved;
-
-    const logs = await loadSessionLogs({
-      sessionId,
-      sessionEntry: entry,
-      sessionFile,
-      config,
-      agentId,
-      limit,
-    });
+    const logs = await loadSessionLogs({ ...resolved, limit });
 
     respond(true, { logs: logs ?? [] }, undefined);
   },

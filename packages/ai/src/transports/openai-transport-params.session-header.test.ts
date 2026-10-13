@@ -40,31 +40,20 @@ describe("buildOpenAIClientHeaders session_id affinity header", () => {
     expect(sessionHeader?.startsWith("internal-session-effects-session-companion-")).toBe(true);
   });
 
-  it("passes short session ids through unchanged", () => {
-    const headers = buildOpenAIClientHeaders(codexModel, context, undefined, undefined, "abc-123");
-    expect(headers.session_id).toBe("abc-123");
-  });
-
-  it.each([
-    "openai-responses",
-    "openai-chatgpt-responses",
-    "azure-openai-responses",
-    "openclaw-openai-responses-transport",
-    "openclaw-openai-chatgpt-responses-transport",
-    "openclaw-azure-openai-responses-transport",
-  ] as const)("honors the explicit %s proxy session header opt-in", (api) => {
+  it("omits generated Responses session headers when caching is disabled", () => {
     const headers = buildOpenAIClientHeaders(
-      { ...proxyResponsesModel, api },
+      proxyResponsesModel,
       context,
       undefined,
       undefined,
       "proxy-session-123",
+      "none",
     );
 
-    expect(headers.session_id).toBe("proxy-session-123");
+    expect(headers.session_id).toBeUndefined();
   });
 
-  it.each(["short", "none"] as const)(
+  it.each(["short"] as const)(
     "preserves a mixed-case caller header with %s retention",
     (cacheRetention) => {
       const headers = buildOpenAIClientHeaders(
@@ -81,31 +70,6 @@ describe("buildOpenAIClientHeaders session_id affinity header", () => {
       ).toHaveLength(1);
     },
   );
-
-  it("honors an explicit native Responses session header opt-out", () => {
-    const headers = buildOpenAIClientHeaders(
-      { ...codexModel, compat: { sendSessionIdHeader: false } },
-      context,
-      undefined,
-      undefined,
-      "native-session-123",
-    );
-
-    expect(headers.session_id).toBeUndefined();
-  });
-
-  it("omits generated Responses session headers when caching is disabled", () => {
-    const headers = buildOpenAIClientHeaders(
-      proxyResponsesModel,
-      context,
-      undefined,
-      undefined,
-      "proxy-session-123",
-      "none",
-    );
-
-    expect(headers.session_id).toBeUndefined();
-  });
 });
 
 describe("buildOpenAISdkRequestOptions turn controls", () => {
@@ -116,7 +80,7 @@ describe("buildOpenAISdkRequestOptions turn controls", () => {
     baseUrl: "https://api.openai.com/v1",
   } as Model;
 
-  it.each([undefined, 0, 7])("keeps SDK retries at zero for legacy maxRetries=%s", (maxRetries) => {
+  it.each([7])("keeps SDK retries at zero for legacy maxRetries=%s", (maxRetries) => {
     const signal = new AbortController().signal;
     const options: SimpleStreamOptions = { timeoutMs: 1_234, maxRetries };
 

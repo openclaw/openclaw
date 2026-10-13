@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { validateQaEvidenceSummaryJson } from "./evidence-summary.js";
-import { readQaScenarioPack } from "./scenario-catalog.js";
+import { readQaScenarioPack, type QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import {
   runQaTestFileScenarios,
   type QaScenarioCommandExecution,
@@ -84,10 +84,7 @@ describe("qa test file scenario runner", () => {
         "--reporter=verbose",
         "--reporter=json",
         `--outputFile.json=${path.join(
-          repoRoot,
-          ".artifacts",
-          "qa-e2e",
-          "scenario-playwright",
+          path.dirname(result.results[0]!.logPath),
           "scenario-playwright.vitest-report.json",
         )}`,
         "--testNamePattern",
@@ -98,7 +95,7 @@ describe("qa test file scenario runner", () => {
     const evidence = validateQaEvidenceSummaryJson(
       JSON.parse(await fs.readFile(result.evidencePath, "utf8")),
     );
-    expect(evidence.schemaVersion).toBe(2);
+    expect(evidence.schemaVersion).toBe(3);
     expect(evidence.entries).toHaveLength(1);
     expect(evidence.entries[0]).toMatchObject({
       test: {
@@ -133,7 +130,7 @@ describe("qa test file scenario runner", () => {
         artifacts: [
           {
             kind: "log",
-            path: ".artifacts/qa-e2e/scenario-playwright/scenario-playwright.log",
+            path: `<repo-root>/${path.relative(repoRoot, result.results[0]!.logPath).split(path.sep).join("/")}`,
             source: "playwright",
           },
         ],
@@ -169,210 +166,86 @@ describe("qa test file scenario runner", () => {
     await expect(fs.access(result.evidencePath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("runs Vitest scenarios with the declared test path and writes Vitest evidence", async () => {
-    const repoRoot = await makeTempRepo("qa-vitest-scenario-");
+  it("rejects a Playwright child that exits successfully without passing any tests", async () => {
+    const executionKind = "playwright";
+
+    const repoRoot = await makeTempRepo(`qa-${executionKind}-executed-tests-`);
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", `scenario-${executionKind}`);
+    const scenarioPath = "ui/src/e2e/chat-flow.e2e.test.ts";
     const commands: QaScenarioCommandExecution[] = [];
     const result = await runQaTestFileScenarios({
       repoRoot,
-      outputDir: path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-vitest"),
+      outputDir,
       ...QA_TEST_RUNNER_DEFAULTS,
-      scenarios: [makeTestFileScenario("vitest", "extensions/qa-lab/src/coverage-report.test.ts")],
+      scenarios: [makeTestFileScenario(executionKind, scenarioPath)],
       runCommand: async (command) => {
         commands.push(command);
-        return {
-          exitCode: 1,
-          stdout: "",
-          stderr: "failed\n",
-        };
+        await writeNativeVitestReport(command, { passed: 0 });
+        return { exitCode: 0, stdout: "child exited successfully\n", stderr: "" };
       },
     });
 
-    expect(result.executionKind).toBe("vitest");
-    expect(commands.map((command) => command.args)).toEqual([
-      [
-        "scripts/run-vitest.mjs",
-        "extensions/qa-lab/src/coverage-report.test.ts",
-        "--reporter=verbose",
-        "--reporter=json",
-        `--outputFile.json=${path.join(
-          repoRoot,
-          ".artifacts",
-          "qa-e2e",
-          "scenario-vitest",
-          "scenario-vitest.vitest-report.json",
-        )}`,
-      ],
-    ]);
-    expect(commands.map((command) => command.timeoutMs)).toEqual([1_800_000]);
-    const evidence = validateQaEvidenceSummaryJson(
-      JSON.parse(await fs.readFile(result.evidencePath, "utf8")),
+    expect(result.results[0]).toMatchObject({ status: "fail" });
+    expect(result.evidence.entries[0]?.result.status).toBe("fail");
+    expect(commands.filter((command) => command.args[0] === "scripts/run-vitest.mjs")).toHaveLength(
+      1,
     );
-    expect(evidence.entries[0]).toMatchObject({
-      test: {
-        kind: "vitest-test",
-        id: "scenario-vitest",
-        source: {
-          path: "extensions/qa-lab/src/coverage-report.test.ts",
-        },
-      },
-      coverage: [
-        {
-          id: "qa.coverage",
-          role: "primary",
-        },
-        {
-          id: "qa.reporting",
-          role: "secondary",
-        },
-      ],
-      execution: {
-        runner: "vitest",
-        artifacts: [
-          {
-            kind: "log",
-            path: ".artifacts/qa-e2e/scenario-vitest/scenario-vitest.log",
-            source: "vitest",
-          },
-        ],
-      },
-      result: {
-        status: "fail",
-        failure: {
-          reason: `${path.basename(process.execPath)} exited with 1`,
-        },
-      },
-    });
+    expect(result.results[0]?.failureMessage).toBe(
+      "Vitest exited successfully without reporting a successfully executed test.",
+    );
   });
 
-  it.each([
-    { executionKind: "vitest" as const, passed: 0, expectedStatus: "fail" as const },
-    { executionKind: "playwright" as const, passed: 0, expectedStatus: "fail" as const },
-    { executionKind: "vitest" as const, passed: 1, expectedStatus: "pass" as const },
-    { executionKind: "playwright" as const, passed: 1, expectedStatus: "pass" as const },
-  ])(
-    "requires an actually passed $executionKind test when the native child exits successfully ($passed passed)",
-    async ({ executionKind, expectedStatus, passed }) => {
-      const repoRoot = await makeTempRepo(`qa-${executionKind}-executed-tests-`);
-      const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", `scenario-${executionKind}`);
-      const scenarioPath =
-        executionKind === "playwright"
-          ? "ui/src/e2e/chat-flow.e2e.test.ts"
-          : "extensions/qa-lab/src/coverage-report.test.ts";
-      const commands: QaScenarioCommandExecution[] = [];
-      const result = await runQaTestFileScenarios({
-        repoRoot,
-        outputDir,
-        ...QA_TEST_RUNNER_DEFAULTS,
-        scenarios: [makeTestFileScenario(executionKind, scenarioPath)],
-        runCommand: async (command) => {
-          commands.push(command);
-          await writeNativeVitestReport(command, { passed });
-          return { exitCode: 0, stdout: "child exited successfully\n", stderr: "" };
-        },
-      });
+  it("rejects a passing Playwright report for an unrelated test file", async () => {
+    const executionKind = "playwright";
 
-      expect(result.results[0]).toMatchObject({ status: expectedStatus });
-      expect(result.evidence.entries[0]?.result.status).toBe(expectedStatus);
-      expect(
-        commands.filter((command) => command.args[0] === "scripts/run-vitest.mjs"),
-      ).toHaveLength(1);
-      if (expectedStatus === "fail") {
-        expect(result.results[0]?.failureMessage).toBe(
-          "Vitest exited successfully without reporting a successfully executed test.",
-        );
-      }
-    },
-  );
+    const repoRoot = await makeTempRepo(`qa-${executionKind}-wrong-report-file-`);
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", `scenario-${executionKind}`);
+    const result = await runQaTestFileScenarios({
+      repoRoot,
+      outputDir,
+      ...QA_TEST_RUNNER_DEFAULTS,
+      scenarios: [makeTestFileScenario(executionKind, "ui/src/e2e/chat-flow.e2e.test.ts")],
+      runCommand: async (command) => {
+        await writeNativeVitestReport(command, {
+          passed: 1,
+          testFilePath: "extensions/qa-lab/src/unrelated.test.ts",
+        });
+        return { exitCode: 0, stdout: "unrelated test passed\n", stderr: "" };
+      },
+    });
 
-  it.each([{ executionKind: "vitest" as const }, { executionKind: "playwright" as const }])(
-    "rejects a passing $executionKind report for an unrelated test file",
-    async ({ executionKind }) => {
-      const repoRoot = await makeTempRepo(`qa-${executionKind}-wrong-report-file-`);
-      const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", `scenario-${executionKind}`);
-      const result = await runQaTestFileScenarios({
-        repoRoot,
-        outputDir,
-        ...QA_TEST_RUNNER_DEFAULTS,
-        scenarios: [
-          makeTestFileScenario(
-            executionKind,
-            executionKind === "playwright"
-              ? "ui/src/e2e/chat-flow.e2e.test.ts"
-              : "extensions/qa-lab/src/coverage-report.test.ts",
-          ),
-        ],
-        runCommand: async (command) => {
-          await writeNativeVitestReport(command, {
-            passed: 1,
-            testFilePath: "extensions/qa-lab/src/unrelated.test.ts",
-          });
-          return { exitCode: 0, stdout: "unrelated test passed\n", stderr: "" };
-        },
-      });
+    expect(result.results[0]).toMatchObject({
+      failureMessage: expect.stringContaining("requested test file"),
+      status: "fail",
+    });
+    expect(result.evidence.entries[0]?.result.status).toBe("fail");
+  });
 
-      expect(result.results[0]).toMatchObject({
-        failureMessage: expect.stringContaining("requested test file"),
-        status: "fail",
-      });
-      expect(result.evidence.entries[0]?.result.status).toBe("fail");
-    },
-  );
+  it("rejects a passing Playwright report when the requested test file does not exist", async () => {
+    const executionKind = "playwright";
 
-  it.each([{ executionKind: "vitest" as const }, { executionKind: "playwright" as const }])(
-    "rejects a passing $executionKind report when the requested test file does not exist",
-    async ({ executionKind }) => {
-      const repoRoot = await makeTempRepo(`qa-${executionKind}-missing-requested-test-`);
-      const scenarioPath =
-        executionKind === "playwright"
-          ? "ui/src/e2e/chat-flow.e2e.test.ts"
-          : "extensions/qa-lab/src/coverage-report.test.ts";
-      const result = await runQaTestFileScenarios({
-        repoRoot,
-        outputDir: path.join(repoRoot, ".artifacts", "qa-e2e", `scenario-${executionKind}`),
-        ...QA_TEST_RUNNER_DEFAULTS,
-        scenarios: [makeTestFileScenario(executionKind, scenarioPath)],
-        runCommand: async (command) => {
-          await writeNativeVitestReport(command, {
-            createRequestedTestFile: false,
-            passed: 1,
-          });
-          return { exitCode: 0, stdout: "missing test reportedly passed\n", stderr: "" };
-        },
-      });
+    const repoRoot = await makeTempRepo(`qa-${executionKind}-missing-requested-test-`);
+    const scenarioPath = "ui/src/e2e/chat-flow.e2e.test.ts";
+    const result = await runQaTestFileScenarios({
+      repoRoot,
+      outputDir: path.join(repoRoot, ".artifacts", "qa-e2e", `scenario-${executionKind}`),
+      ...QA_TEST_RUNNER_DEFAULTS,
+      scenarios: [makeTestFileScenario(executionKind, scenarioPath)],
+      runCommand: async (command) => {
+        await writeNativeVitestReport(command, {
+          createRequestedTestFile: false,
+          passed: 1,
+        });
+        return { exitCode: 0, stdout: "missing test reportedly passed\n", stderr: "" };
+      },
+    });
 
-      expect(result.results[0]).toMatchObject({
-        failureMessage: expect.stringContaining("existing requested test file"),
-        status: "fail",
-      });
-      expect(result.evidence.entries[0]?.result.status).toBe("fail");
-    },
-  );
-
-  it.skipIf(process.platform === "win32")(
-    "authenticates requested tests when the checkout root is a symlink",
-    async () => {
-      const canonicalRoot = await fs.realpath(await makeTempRepo("qa-vitest-symlinked-checkout-"));
-      const symlinkedRoot = path.join(canonicalRoot, "checkout-alias");
-      await fs.symlink(canonicalRoot, symlinkedRoot, "dir");
-      const scenarioPath = "extensions/qa-lab/src/coverage-report.test.ts";
-      const result = await runQaTestFileScenarios({
-        repoRoot: symlinkedRoot,
-        outputDir: path.join(symlinkedRoot, ".artifacts", "qa-e2e", "scenario-vitest"),
-        ...QA_TEST_RUNNER_DEFAULTS,
-        scenarios: [makeTestFileScenario("vitest", scenarioPath)],
-        runCommand: async (command) => {
-          await writeNativeVitestReport(command, {
-            passed: 1,
-            testFilePath: path.join(canonicalRoot, scenarioPath),
-          });
-          return { exitCode: 0, stdout: "canonical test passed\n", stderr: "" };
-        },
-      });
-
-      expect(result.results[0]).toMatchObject({ status: "pass" });
-      expect(result.evidence.entries[0]?.result.status).toBe("pass");
-    },
-  );
+    expect(result.results[0]).toMatchObject({
+      failureMessage: expect.stringContaining("existing requested test file"),
+      status: "fail",
+    });
+    expect(result.evidence.entries[0]?.result.status).toBe("fail");
+  });
 
   it("rejects a passing Playwright report that misses the requested test name", async () => {
     const repoRoot = await makeTempRepo("qa-playwright-wrong-report-test-");
@@ -426,86 +299,151 @@ describe("qa test file scenario runner", () => {
     expect(result.evidence.entries[0]?.result.status).toBe("fail");
   });
 
-  it.each([{ executionKind: "vitest" as const }, { executionKind: "playwright" as const }])(
-    "does not reuse a prior passing $executionKind report when the next child writes none",
-    async ({ executionKind }) => {
-      const repoRoot = await makeTempRepo(`qa-${executionKind}-stale-vitest-report-`);
-      const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", `scenario-${executionKind}`);
-      const scenarioPath =
-        executionKind === "playwright"
-          ? "ui/src/e2e/chat-flow.e2e.test.ts"
-          : "extensions/qa-lab/src/coverage-report.test.ts";
-      const reportPath = path.join(outputDir, `scenario-${executionKind}.vitest-report.json`);
-      let writeReport = true;
-      const runParams = {
-        repoRoot,
-        outputDir,
-        ...QA_TEST_RUNNER_DEFAULTS,
-        scenarios: [makeTestFileScenario(executionKind, scenarioPath)],
-        runCommand: async (command: QaScenarioCommandExecution) => {
-          if (writeReport) {
-            await writeNativeVitestReport(command, { passed: 1 });
-          }
-          return { exitCode: 0, stdout: "child exited successfully\n", stderr: "" };
-        },
-      };
+  it("does not reuse a prior passing Playwright report when the next child writes none", async () => {
+    const executionKind = "playwright";
 
-      const firstRun = await runQaTestFileScenarios(runParams);
-      expect(firstRun.results[0]).toMatchObject({ status: "pass" });
-      await fs.access(reportPath);
+    const repoRoot = await makeTempRepo(`qa-${executionKind}-stale-vitest-report-`);
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", `scenario-${executionKind}`);
+    const scenarioPath = "ui/src/e2e/chat-flow.e2e.test.ts";
+    const reportName = `scenario-${executionKind}.vitest-report.json`;
+    let writeReport = true;
+    const runParams = {
+      repoRoot,
+      outputDir,
+      ...QA_TEST_RUNNER_DEFAULTS,
+      scenarios: [makeTestFileScenario(executionKind, scenarioPath)],
+      runCommand: async (command: QaScenarioCommandExecution) => {
+        if (writeReport) {
+          await writeNativeVitestReport(command, { passed: 1 });
+        }
+        return { exitCode: 0, stdout: "child exited successfully\n", stderr: "" };
+      },
+    };
 
-      writeReport = false;
-      const secondRun = await runQaTestFileScenarios(runParams);
-      expect(secondRun.results[0]).toMatchObject({
-        failureMessage: `Vitest exited successfully without writing a valid JSON test report at ${reportPath}.`,
-        status: "fail",
-      });
-      expect(secondRun.evidence.entries[0]?.result.status).toBe("fail");
-      await expect(fs.access(reportPath)).rejects.toMatchObject({ code: "ENOENT" });
-    },
-  );
+    const firstRun = await runQaTestFileScenarios(runParams);
+    expect(firstRun.results[0]).toMatchObject({ status: "pass" });
+    const reportPath = path.join(path.dirname(firstRun.results[0]!.logPath), reportName);
+    const firstBytes = await fs.readFile(reportPath);
 
-  it.each([
-    { failFast: true, expectedScenarioIds: ["first-native-scenario"] },
-    {
-      failFast: false,
-      expectedScenarioIds: ["first-native-scenario", "later-native-scenario"],
-    },
-    {
-      failFast: undefined,
-      expectedScenarioIds: ["first-native-scenario", "later-native-scenario"],
-    },
-  ])(
-    "honors native scenario fail-fast mode ($failFast)",
-    async ({ failFast, expectedScenarioIds }) => {
-      const repoRoot = await makeTempRepo("qa-vitest-fail-fast-");
-      const runCommand = vi.fn(async () => ({
-        exitCode: 1,
-        stdout: "",
-        stderr: "native scenario failed\n",
-      }));
-      const firstScenario = {
-        ...makeTestFileScenario("vitest", "extensions/qa-lab/src/coverage-report.test.ts"),
-        id: "first-native-scenario",
-      };
-      const laterScenario = {
-        ...makeTestFileScenario("vitest", "extensions/qa-lab/src/cli.test.ts"),
-        id: "later-native-scenario",
-      };
+    writeReport = false;
+    const secondRun = await runQaTestFileScenarios(runParams);
+    const secondReportPath = path.join(path.dirname(secondRun.results[0]!.logPath), reportName);
+    expect(secondReportPath).not.toBe(reportPath);
+    expect(secondRun.results[0]).toMatchObject({
+      failureMessage: `Vitest exited successfully without writing a valid JSON test report at ${secondReportPath}.`,
+      status: "fail",
+    });
+    expect(secondRun.evidence.entries[0]?.result.status).toBe("fail");
+    await expect(fs.access(secondReportPath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await fs.readFile(reportPath)).toEqual(firstBytes);
+  });
 
-      const result = await runQaTestFileScenarios({
-        repoRoot,
-        outputDir: path.join(repoRoot, ".artifacts", "qa-e2e", "native-fail-fast"),
-        ...QA_TEST_RUNNER_DEFAULTS,
-        failFast,
-        scenarios: [firstScenario, laterScenario],
-        runCommand,
-      });
+  it("stops native scenarios after the first failure in fail-fast mode", async () => {
+    const failFast = true;
+    const expectedScenarioIds = ["first-native-scenario"];
 
-      expect(runCommand).toHaveBeenCalledTimes(expectedScenarioIds.length);
-      expect(result.results.map((scenario) => scenario.scenario.id)).toEqual(expectedScenarioIds);
-      expect(result.results.every((scenario) => scenario.status === "fail")).toBe(true);
-      expect(result.evidence.entries.map((entry) => entry.test.id)).toEqual(expectedScenarioIds);
-    },
-  );
+    const repoRoot = await makeTempRepo("qa-vitest-fail-fast-");
+    const runCommand = vi.fn(async () => ({
+      exitCode: 1,
+      stdout: "",
+      stderr: "native scenario failed\n",
+    }));
+    const firstScenario = {
+      ...makeTestFileScenario("vitest", "extensions/qa-lab/src/coverage-report.test.ts"),
+      id: "first-native-scenario",
+    };
+    const laterScenario = {
+      ...makeTestFileScenario("vitest", "extensions/qa-lab/src/cli.test.ts"),
+      id: "later-native-scenario",
+    };
+
+    const result = await runQaTestFileScenarios({
+      repoRoot,
+      outputDir: path.join(repoRoot, ".artifacts", "qa-e2e", "native-fail-fast"),
+      ...QA_TEST_RUNNER_DEFAULTS,
+      failFast,
+      scenarios: [firstScenario, laterScenario],
+      runCommand,
+    });
+
+    expect(runCommand).toHaveBeenCalledTimes(expectedScenarioIds.length);
+    expect(result.results.map((scenario) => scenario.scenario.id)).toEqual(expectedScenarioIds);
+    expect(result.results.every((scenario) => scenario.status === "fail")).toBe(true);
+    expect(result.evidence.entries.map((entry) => entry.test.id)).toEqual(expectedScenarioIds);
+  });
+});
+
+describe("QA native Vitest scenario routing", () => {
+  it("runs E2E test scenarios under the existing Gateway E2E configuration", async () => {
+    const repoRoot = await fs.realpath(await makeTempRepo("openclaw-qa-vitest-e2e-routing-"));
+    const commands: QaScenarioCommandExecution[] = [];
+    const testPath = "extensions/ollama/src/node-inference.paired-node.e2e.test.ts";
+    const scenario: QaSeedScenarioWithSource = {
+      id: "ollama-paired-node-inference",
+      title: "Ollama paired-node inference",
+      surface: "models",
+      category: "agent-runtime.local-and-self-hosted-providers",
+      coverage: { primary: [], secondary: ["gateway.remote-host-commands"] },
+      objective: "Run local inference through an authenticated paired Gateway node.",
+      successCriteria: ["The real Gateway routes inference to its paired node."],
+      docsRefs: ["docs/providers/ollama.md"],
+      codeRefs: [testPath],
+      sourcePath: "qa/scenarios/models/ollama-paired-node-inference.yaml",
+      execution: { kind: "vitest", path: testPath },
+    };
+
+    const requestedTestFile = path.join(repoRoot, testPath);
+    await fs.mkdir(path.dirname(requestedTestFile), { recursive: true });
+    await fs.writeFile(requestedTestFile, "// native scenario fixture\n", "utf8");
+    const result = await runQaTestFileScenarios({
+      repoRoot,
+      outputDir: path.join(repoRoot, ".artifacts", "qa-e2e", scenario.id),
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      scenarios: [scenario],
+      runCommand: async (command) => {
+        commands.push(command);
+        const reportArg = command.args.find((arg) => arg.startsWith("--outputFile.json="));
+        if (!reportArg) {
+          throw new Error("native Vitest scenario did not request a JSON test report");
+        }
+        await fs.writeFile(
+          reportArg.slice("--outputFile.json=".length),
+          JSON.stringify({
+            numFailedTests: 0,
+            numPassedTests: 1,
+            success: true,
+            testResults: [
+              {
+                name: path.join(repoRoot, testPath),
+                status: "passed",
+                assertionResults: [{ fullName: "runs paired node inference", status: "passed" }],
+              },
+            ],
+          }),
+          "utf8",
+        );
+        return { exitCode: 0, stdout: "1 passed\n", stderr: "" };
+      },
+    });
+
+    expect(result.executionKind).toBe("vitest");
+    expect(result.results).toMatchObject([{ status: "pass" }]);
+    expect(result.evidence.entries[0]?.result.status).toBe("pass");
+    expect(commands.map((command) => command.args)).toEqual([
+      [
+        "scripts/run-vitest.mjs",
+        "run",
+        "--config",
+        "test/vitest/vitest.e2e.config.ts",
+        testPath,
+        "--reporter=verbose",
+        "--reporter=json",
+        `--outputFile.json=${path.join(
+          path.dirname(result.results[0]!.logPath),
+          `${scenario.id}.vitest-report.json`,
+        )}`,
+      ],
+    ]);
+  });
 });

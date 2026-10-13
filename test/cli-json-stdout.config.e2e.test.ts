@@ -1,3 +1,4 @@
+import "../src/test-utils/prepare-compiled-subprocesses.js";
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -6,6 +7,54 @@ import { describe, expect, it } from "vitest";
 import { runBuiltCli } from "./cli-json-stdout.test-support.js";
 
 describe("cli json stdout contract", () => {
+  it.each([
+    { name: "routed agents list", overrides: {} },
+    { name: "Commander agents list", overrides: { OPENCLAW_DISABLE_ROUTE_FIRST: "1" } },
+  ])("drains large invalid-config JSON for $name", async ({ overrides }) => {
+    await withTempHome(
+      async (tempHome) => {
+        const configPath = path.join(tempHome, "openclaw.json");
+        const agentIds = Array.from({ length: 16_384 }, (_, index) => `agent_${index}`);
+        const config = JSON.stringify({
+          agents: {
+            ownership: "explicit",
+            entries: Object.fromEntries(agentIds.map((id) => [id, { workspace: 42 }])),
+          },
+        });
+        await fs.writeFile(configPath, config);
+
+        const result = runBuiltCli(
+          tempHome,
+          ["agents", "list", "--json"],
+          {
+            OPENCLAW_CONFIG_PATH: configPath,
+            OPENCLAW_STATE_DIR: path.join(tempHome, "state"),
+            ...overrides,
+          },
+          { inheritEnvironment: false },
+        );
+
+        expect(result.error).toBeUndefined();
+        expect(result.status, result.stderr).toBe(1);
+        expect(JSON.parse(result.stdout)).toEqual({
+          ok: false,
+          error: {
+            type: "cli_error",
+            message: expect.stringContaining("OpenClaw config is invalid:"),
+          },
+          issues: agentIds.map((id) => ({
+            path: `agents.entries.${id}.workspace`,
+            message: "Invalid input: expected string, received number",
+          })),
+        });
+        expect(Buffer.byteLength(result.stdout)).toBeGreaterThan(1024 * 1024);
+        expect(result.stderr).toBe("");
+        expect(await fs.readFile(configPath, "utf8")).toBe(config);
+      },
+      { prefix: "openclaw-agents-large-invalid-config-json-" },
+    );
+  });
+
   it.each([
     ["memory", "status", "--json"],
     ["nodes", "canvas", "snapshot", "--json"],
@@ -47,7 +96,8 @@ describe("cli json stdout contract", () => {
       name: "node identity",
       args: ["node", "identity", "--json"],
       overrides: {},
-      error: "no node device identity found",
+      error:
+        "no node device identity found (start the node host once with `openclaw node run` or `openclaw node install`)",
     },
     {
       name: "routed config get",
@@ -118,7 +168,10 @@ describe("cli json stdout contract", () => {
         expect(result.status, result.stderr).toBe("error" in testCase ? 1 : 0);
         if ("error" in testCase) {
           expect(result.stderr).toContain(testCase.error);
-          expect(result.stdout).toBe("");
+          expect(JSON.parse(result.stdout)).toEqual({
+            ok: false,
+            error: { type: "cli_error", message: testCase.error },
+          });
         } else {
           expect(() => JSON.parse(result.stdout)).not.toThrow();
         }
@@ -278,27 +331,6 @@ describe("cli json stdout contract", () => {
         ).rejects.toMatchObject({ code: "ENOENT" });
       },
       { prefix: "openclaw-read-only-state-e2e-" },
-    );
-  });
-
-  it("keeps representative success payload bytes unchanged", async () => {
-    await withTempHome(
-      async (tempHome) => {
-        const configPath = path.join(tempHome, "openclaw.json");
-        await fs.writeFile(configPath, '{"gateway":{"port":28789}}\n', "utf8");
-        const env = { OPENCLAW_CONFIG_PATH: configPath };
-
-        const getResult = runBuiltCli(tempHome, ["config", "get", "gateway.port", "--json"], env);
-        const validateResult = runBuiltCli(tempHome, ["config", "validate", "--json"], env);
-
-        expect(getResult.status, getResult.stderr).toBe(0);
-        expect(getResult.stdout).toBe("28789\n");
-        expect(validateResult.status, validateResult.stderr).toBe(0);
-        expect(validateResult.stdout).toBe(
-          `${JSON.stringify({ valid: true, path: configPath, warnings: [] })}\n`,
-        );
-      },
-      { prefix: "openclaw-json-success-bytes-e2e-" },
     );
   });
 

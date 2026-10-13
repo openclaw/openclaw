@@ -2,11 +2,16 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { createModalDialogTestFixture } from "../../test-helpers/modal-dialog.ts";
-import { createTestChatPane } from "./chat-pane.test-support.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
+import {
+  createTestChatPane,
+  createGatewayBrowserClientFixture,
+  createSessionCapabilityFixture,
+} from "./chat-pane.test-support.ts";
 
 let dialogs: ReturnType<typeof createModalDialogTestFixture>;
 
@@ -51,20 +56,18 @@ describe("chat pane placement restart", () => {
         }
         return { ok: true };
       });
-      const refreshReplacement = vi.fn(async () => undefined);
+      const reconcileMutation = vi.fn(async () => ({ status: "refreshed" as const }));
       const { pane, state } = createTestChatPane({
-        client: { request } as unknown as GatewayBrowserClient,
-        sessions: { refreshReplacement } as unknown as SessionCapability,
+        client: createGatewayBrowserClientFixture({ request }),
+        sessions: createSessionCapabilityFixture({ reconcileMutation }),
       });
-      pane.context.gateway.snapshot.hello = {
-        features: { methods: ["sessions.dispatch", "sessions.reclaim"] },
-        auth: {
-          role: "operator",
-          scopes: ["operator.admin", "operator.read", "operator.write"],
-        },
-      } as never;
+      pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
+        ["sessions.dispatch", "sessions.reclaim"],
+        ["operator.admin", "operator.read", "operator.write"],
+      );
       const session: GatewaySessionRow = {
         key: "agent:main:failed-worker",
+        sessionId: "failed-worker-session",
         label: "Failed worker session",
         kind: "direct",
         updatedAt: 0,
@@ -78,10 +81,13 @@ describe("chat pane placement restart", () => {
           recoveryAction: "restart",
         },
       };
+      state.sessionKey = session.key;
+      state.currentSessionId = session.sessionId;
+      state.sessionsResult = { ...createSessionsListResult(), sessions: [session] };
       state.chatRunError = { summary: "Previous worker failed" };
       state.lastError = state.chatError = "Previous restart failed";
 
-      const restarting = dialogs.track(pane.restartHeaderPlacement(session));
+      const restarting = dialogs.track(pane.changeHeaderPlacement(session, "recover"));
       try {
         await dialogs.waitFor(() => {
           expect(document.body.querySelector('[data-value="cloud:aws"]')).not.toBeNull();
@@ -91,12 +97,16 @@ describe("chat pane placement restart", () => {
         );
         if (target === "cloud") {
           document.body.querySelector<HTMLButtonElement>('[data-value="cloud:aws"]')?.click();
+          flush();
           document.body.querySelector<HTMLButtonElement>('[data-value="os:windows/wsl2"]')?.click();
+          flush();
           document.body.querySelector<HTMLButtonElement>('[data-value="machine:fast"]')?.click();
+          flush();
         } else {
           const local = document.body.querySelector<HTMLButtonElement>('[data-value="gateway"]');
           expect(local?.textContent).toContain("Gateway · local");
           local?.click();
+          flush();
         }
         const restartButton = [...document.body.querySelectorAll<HTMLButtonElement>("button")].find(
           (button) => button.textContent?.trim() === "Restart session",
@@ -141,7 +151,7 @@ describe("chat pane placement restart", () => {
           expect(request.mock.calls.some(([method]) => method === "sessions.dispatch")).toBe(false);
         }
         expect(request.mock.calls.some(([method]) => method === "sessions.create")).toBe(false);
-        expect(refreshReplacement).toHaveBeenCalledWith("main");
+        expect(reconcileMutation).toHaveBeenCalledWith("main");
       } finally {
         recovery.resolve({ ok: true });
       }

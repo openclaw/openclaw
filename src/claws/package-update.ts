@@ -1,6 +1,7 @@
-import { createHash } from "node:crypto";
-import { coerceErrorMessage, stableStringify } from "@openclaw/normalization-core";
+import { coerceErrorMessage } from "@openclaw/normalization-core";
 import { preflightPluginInstall } from "../plugins/plugin-install-preflight.js";
+import { clawPackageKey } from "./application-provenance.js";
+import { digestClawValue as digest } from "./digest.js";
 import {
   digestClawPackageRef,
   replaceClawPackageRefExpected,
@@ -12,7 +13,7 @@ import {
   readClawPackageRefs,
   type PersistedClawPackageRef,
 } from "./provenance.js";
-import type { ClawAddPlan, ClawManifest, ClawPackage } from "./types.js";
+import type { ClawAddPlan, ClawPackage } from "./types.js";
 import type { ClawUpdatePlan } from "./update-plan.js";
 import { collectClawRollbackFailures } from "./update-rollback.js";
 
@@ -36,17 +37,8 @@ export class ClawPackageUpdateError extends Error {
   }
 }
 
-function digest(value: unknown): string {
-  return `sha256:${createHash("sha256").update(stableStringify(value)).digest("hex")}`;
-}
-
-function packageKey(value: Pick<ClawPackage, "kind" | "ref">): string {
-  return `${value.kind}:${value.ref}`;
-}
-
 export async function applyClawPackageUpdate(
   updatePlan: ClawUpdatePlan,
-  _targetManifest: ClawManifest,
   targetAddPlan: ClawAddPlan,
   options: ClawPluginRuntimeOptions & {
     installPackages?: typeof installClawPackages;
@@ -66,7 +58,7 @@ export async function applyClawPackageUpdate(
   const readRefs = options.readRefs ?? readClawPackageRefs;
   const replaceExpected = options.replaceExpected ?? replaceClawPackageRefExpected;
   const currentRefs = new Map(
-    readRefs({ ...options, agentId: updatePlan.agentId }).map((ref) => [packageKey(ref), ref]),
+    readRefs({ ...options, agentId: updatePlan.agentId }).map((ref) => [clawPackageKey(ref), ref]),
   );
   const allRefs = readRefs(options);
   const undo: Array<() => Promise<void>> = [];
@@ -137,17 +129,16 @@ export async function applyClawPackageUpdate(
           false,
         );
       }
-      if (
-        target.kind === "plugin" &&
-        allRefs.some(
+      const hasConflictingPin = (refs: PersistedClawPackageRef[]) =>
+        refs.some(
           (ref) =>
             ref.agentId !== updatePlan.agentId &&
             ref.kind === "plugin" &&
             ref.source === target.source &&
             ref.ref === target.ref &&
             ref.version !== target.version,
-        )
-      ) {
+        );
+      if (target.kind === "plugin" && hasConflictingPin(allRefs)) {
         throw new ClawPackageUpdateError(
           `Plugin ${JSON.stringify(target.ref)} has another Claw owner pinned to a different version.`,
           false,
@@ -189,6 +180,11 @@ export async function applyClawPackageUpdate(
       };
       replaceExpected(previous, claimed, options);
       undo.push(async () => replaceExpected(claimed, previous, options));
+      const recordClaim = (next: PersistedClawPackageRef) => {
+        replaceExpected(claimed, next, options);
+        claimed = next;
+        return next;
+      };
       const refs = await installPackages(
         { ...targetAddPlan, actions: [targetAction] },
         {
@@ -200,14 +196,7 @@ export async function applyClawPackageUpdate(
               const preflight = await (
                 options.packageDeps?.preflightPlugin ?? preflightPluginInstall
               )(params);
-              const conflictingOwner = readRefs(options).some(
-                (ref) =>
-                  ref.agentId !== updatePlan.agentId &&
-                  ref.kind === "plugin" &&
-                  ref.source === target.source &&
-                  ref.ref === target.ref &&
-                  ref.version !== target.version,
-              );
+              const conflictingOwner = hasConflictingPin(readRefs(options));
               return !preflight.ok &&
                 preflight.code === "plugin_version_conflict" &&
                 !conflictingOwner &&
@@ -218,8 +207,8 @@ export async function applyClawPackageUpdate(
                 ? { ok: true, action: "install", request: preflight.request }
                 : preflight;
             },
-            persistPackageRef: (_plan, _pkg, persistOptions) => {
-              const next = {
+            persistPackageRef: (_plan, _pkg, persistOptions) =>
+              recordClaim({
                 ...claimed,
                 status: persistOptions?.status ?? "complete",
                 relationship: preservesExistingEdge
@@ -232,17 +221,9 @@ export async function applyClawPackageUpdate(
                   ? claimed.independentOwner
                   : (persistOptions?.independentOwner ?? claimed.independentOwner),
                 updatedAtMs: nowMs,
-              };
-              replaceExpected(claimed, next, options);
-              claimed = next;
-              return next;
-            },
-            completePackageRef: (ref, status) => {
-              const next = { ...ref, status, updatedAtMs: nowMs };
-              replaceExpected(claimed, next, options);
-              claimed = next;
-              return next;
-            },
+              }),
+            completePackageRef: (ref, status) =>
+              recordClaim({ ...ref, status, updatedAtMs: nowMs }),
           },
           onExternalMutation: () => {
             externalMutations.push(`${target.kind}:${target.ref}@${target.version}`);
@@ -250,7 +231,7 @@ export async function applyClawPackageUpdate(
         },
       );
       const installed = refs.find(
-        (ref) => packageKey(ref) === action.id && ref.version === target.version,
+        (ref) => clawPackageKey(ref) === action.id && ref.version === target.version,
       );
       if (!installed) {
         throw new ClawPackageUpdateError(
@@ -259,8 +240,7 @@ export async function applyClawPackageUpdate(
         );
       }
       if (digest(installed) !== digest(claimed)) {
-        replaceExpected(claimed, installed, options);
-        claimed = installed;
+        recordClaim(installed);
       }
       appliedIds.push(action.id);
     }

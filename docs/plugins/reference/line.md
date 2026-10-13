@@ -15,7 +15,7 @@ OpenClaw LINE channel plugin for LINE Bot API chats.
 ## Distribution
 
 - Package: `@openclaw/line`
-- Install route: npm or ClawHub
+- Install route: npm or ClawHub: `clawhub:@openclaw/line`
 
 ## Surface
 

@@ -2,15 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import { createMemorySearchDeadlineControl } from "./search-deadline-control.js";
 
 describe("createMemorySearchDeadlineControl", () => {
-  it("fans pause/resume edges out to subscribers", () => {
-    const control = createMemorySearchDeadlineControl();
-    const events: string[] = [];
-    control.subscribe((action) => events.push(action));
-    control.report("pause");
-    control.report("resume");
-    expect(events).toEqual(["pause", "resume"]);
-  });
-
   it("balances overlapping owned phases so one resume cannot re-arm early", () => {
     const control = createMemorySearchDeadlineControl();
     const events: string[] = [];

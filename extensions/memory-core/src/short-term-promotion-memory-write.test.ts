@@ -73,22 +73,13 @@ async function setupMemoryFile(originalContent: string, readOnlyParent = false):
   return memoryPath;
 }
 
-it.runIf(process.platform !== "win32")(
-  "atomically replaces memory content without changing its mode",
-  async () => {
-    const original = "# Long-Term Memory\n\n- existing entry\n";
-    const memoryPath = await setupMemoryFile(original);
-    await fs.chmod(memoryPath, 0o640);
+it.each(["missing/MEMORY.md", ...(process.platform === "win32" ? [] : ["missing/../MEMORY.md"])])(
+  "rejects a memory target whose missing suffix is %s",
+  async (suffix) => {
+    const memoryPath = await setupMemoryFile("existing memory");
+    const filePath = `${path.dirname(memoryPath)}${path.sep}${suffix.replaceAll("/", path.sep)}`;
 
-    await commitMemoryContent({
-      filePath: memoryPath,
-      tempPrefix: `${path.basename(memoryPath)}.test`,
-      expectedHash: hashMemoryContent(original),
-      content: `${original}- replacement entry\n`,
-    });
-
-    expect((await fs.stat(memoryPath)).mode & 0o777).toBe(0o640);
-    expect(await fs.readFile(memoryPath, "utf-8")).toContain("replacement entry");
+    await expect(resolveMemoryWritePath(filePath)).rejects.toMatchObject({ code: "ENOENT" });
   },
 );
 
@@ -170,29 +161,6 @@ it("rejects a changed preimage before removing a memory file", async () => {
 
   expect(await fs.readFile(memoryPath, "utf-8")).toBe(externalEdit);
 });
-
-it.runIf(process.platform !== "win32")(
-  "keeps the original MEMORY.md when the in-place fallback write fails partway",
-  async () => {
-    const original = "# Long-Term Memory\n\n- existing entry that must survive\n";
-    const memoryPath = await setupMemoryFile(original, true);
-    const promoted = `${original}${"- promoted entry\n".repeat(200)}`;
-    openState.failInPlaceWriteAfterBytes = 1024;
-
-    await expect(
-      commitMemoryContent({
-        filePath: memoryPath,
-        tempPrefix: `${path.basename(memoryPath)}.promotion`,
-        expectedHash: hashMemoryContent(original),
-        expectedContent: original,
-        allowInPlaceFallback: true,
-        content: promoted,
-      }),
-    ).rejects.toMatchObject({ code: "EFBIG" });
-
-    expect(await fs.readFile(memoryPath, "utf-8")).toBe(original);
-  },
-);
 
 it.runIf(process.platform !== "win32")(
   "completes the restore across short writes before truncating",

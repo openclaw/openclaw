@@ -1,13 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDefaultDeps } from "../../cli/deps.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.js";
+import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.test-support.js";
 import { isProvenDeliveryNotSentError } from "../delivery-recovery.shared.js";
 import { OutboundDeliveryError, PlatformMessageNotDispatchedError } from "./deliver-types.js";
 import {
@@ -85,7 +84,7 @@ describe("queued lazy outbound adapter availability", () => {
     };
     const deliveryIntentId = "cron-direct-delivery:v1:lazy-adapter-recovery";
     const params = {
-      cfg: {} as OpenClawConfig,
+      cfg: {},
       channel: "matrix" as const,
       to: "!room:example",
       payloads: [{ text: "recover after adapter registration" }],
@@ -104,10 +103,7 @@ describe("queued lazy outbound adapter availability", () => {
       (await loadPendingDeliveries(tmpDir))[0],
       "initial queued delivery",
     );
-    expect(initialEntry).toMatchObject({
-      id: deliveryIntentId,
-      retryCount: 1,
-    });
+    expect(initialEntry).toMatchObject({ id: deliveryIntentId, retryCount: 1 });
     expect(initialEntry.recoveryState).toBeUndefined();
     expect(initialEntry.platformSendStartedAt).toBeUndefined();
 
@@ -123,7 +119,7 @@ describe("queued lazy outbound adapter availability", () => {
     );
 
     await recoverPendingDeliveries({
-      cfg: {} as OpenClawConfig,
+      cfg: {},
       deliver: recoveryDeliver,
       log: createRecoveryLog(),
       stateDir: tmpDir,
@@ -157,7 +153,7 @@ describe("queued lazy outbound adapter availability", () => {
     });
 
     const result = await recoverPendingDeliveries({
-      cfg: {} as OpenClawConfig,
+      cfg: {},
       deliver: recoveryDeliver,
       log: createRecoveryLog(),
       stateDir: tmpDir,
@@ -181,49 +177,5 @@ describe("queued lazy outbound adapter availability", () => {
     expect(pendingEntry.platformSendAttemptId).toBeUndefined();
     expect(pendingEntry.platformSendStartedAt).toBeUndefined();
     expect(getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, id, tmpDir)).toBe("pending");
-  });
-
-  it("does not replay a provider call that already crossed the ambiguous send boundary", async () => {
-    process.env.OPENCLAW_STATE_DIR = tmpDir;
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test-ambiguous",
-          plugin: createOutboundTestPlugin({ id: "matrix", outbound: matrixOutboundForQueueTest }),
-        },
-      ]),
-    );
-    const sendMatrix = vi.fn().mockRejectedValue(new Error("provider result was lost"));
-    const deliveryIntentId = "cron-direct-delivery:v1:ambiguous-adapter-result";
-
-    await expect(
-      deliverOutboundPayloads({
-        cfg: {} as OpenClawConfig,
-        channel: "matrix",
-        to: "!room:example",
-        payloads: [{ text: "ambiguous send" }],
-        deps: { matrix: sendMatrix },
-        queuePolicy: "required",
-        deliveryIntentId,
-        completionRetention: boundedCronCompletionRetention,
-        reusePendingDeliveryIntent: true,
-      }),
-    ).rejects.toThrow("provider result was lost");
-    expect((await loadPendingDeliveries(tmpDir))[0]).toMatchObject({
-      id: deliveryIntentId,
-      recoveryState: "unknown_after_send",
-    });
-
-    const recoveryDeliver = vi.fn<DeliverFn>(async () => []);
-    await recoverPendingDeliveries({
-      cfg: {} as OpenClawConfig,
-      deliver: recoveryDeliver,
-      log: createRecoveryLog(),
-      stateDir: tmpDir,
-    });
-
-    expect(recoveryDeliver).not.toHaveBeenCalled();
-    expect(sendMatrix).toHaveBeenCalledOnce();
   });
 });

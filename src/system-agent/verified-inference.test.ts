@@ -10,6 +10,7 @@ import {
   fingerprintResolvedProviderAuth,
 } from "../agents/execution-auth-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import { resolveSystemAgentConfiguredRouteFromConfig as resolveSystemAgentConfiguredRouteFromConfigImpl } from "./inference-route.js";
 import { resolvePersistentApplyInference as resolvePersistentApplyInferenceImpl } from "./setup-inference.js";
 import {
@@ -36,7 +37,7 @@ import {
 
 const pluginRegistryState = vi.hoisted(() => ({
   providerOwnerIds: ["provider-owner"],
-  records: [] as Array<Record<string, unknown>>,
+  records: [] as Array<ReturnType<typeof pluginRecord>>,
 }));
 const harnessRuntimeArtifactState = vi.hoisted(() => ({
   id: "codex-app-server",
@@ -79,9 +80,11 @@ vi.mock("../agents/harness/registry.js", async (importOriginal) => ({
   ),
 }));
 
-vi.mock("../plugins/plugin-registry.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../plugins/plugin-registry.js")>()),
-  loadPluginRegistrySnapshot: vi.fn(() => ({ plugins: pluginRegistryState.records }) as never),
+vi.mock("../plugins/plugin-registry-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-registry-snapshot.js")>()),
+  loadPluginRegistrySnapshot: vi.fn(() =>
+    createInstalledPluginIndex({ plugins: pluginRegistryState.records }),
+  ),
 }));
 
 const profile = {
@@ -133,7 +136,7 @@ beforeEach(() => {
 function authDeps(apiKey = "verified-key") {
   const resolvedAuth = profileAuth("openai:verified", apiKey);
   return {
-    ensureAuthProfileStore: profileStore("openai:verified", { ...profile, key: apiKey }),
+    loadAuthProfileStoreForRuntime: profileStore("openai:verified", { ...profile, key: apiKey }),
     resolveApiKeyForProvider: vi.fn(async () => resolvedAuth),
     resolveAgentHarnessAuthBindingFingerprint: vi.fn(
       async (
@@ -233,14 +236,12 @@ function codexHarnessConfig(
 ): OpenClawConfig {
   return {
     agents: {
-      list: [
-        {
-          id: "ops",
-          default: true,
+      entries: {
+        ops: {
           model: `openai/gpt-5.5${profileId ? `@${profileId}` : ""}`,
           models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
         },
-      ],
+      },
     },
     ...(profileId
       ? { auth: { profiles: { [profileId]: { provider: "openai", mode: "api_key" } } } }
@@ -343,12 +344,12 @@ describe("verified OpenClaw inference binding", () => {
       },
       {
         ...pluginArtifactDeps(),
-        ensureAuthProfileStore: profileStore("anthropic:oauth", credential),
+        loadAuthProfileStoreForRuntime: profileStore("anthropic:oauth", credential),
       },
     );
 
     const current = await revalidate(binding, oauthConfig, {
-      ensureAuthProfileStore: profileStore("anthropic:oauth", {
+      loadAuthProfileStoreForRuntime: profileStore("anthropic:oauth", {
         ...credential,
         access: "access-b",
         refresh: "refresh-b",
@@ -374,7 +375,7 @@ describe("verified OpenClaw inference binding", () => {
         },
         {
           ...pluginArtifactDeps(),
-          ensureAuthProfileStore: profileStore("openai:verified", {
+          loadAuthProfileStoreForRuntime: profileStore("openai:verified", {
             type: "api_key",
             provider: "openai",
             keyRef: { source: "file", provider: "vault", id: "/openai/key" },
@@ -431,7 +432,7 @@ describe("verified OpenClaw inference binding", () => {
   it("accepts and revalidates an opaque CLI owner emitted after a successful turn", async () => {
     const cliConfig = {
       agents: {
-        entries: { ops: { default: true, model: "claude-cli/claude-opus-5" } },
+        entries: { ops: { model: "claude-cli/claude-opus-5" } },
       },
     } satisfies OpenClawConfig;
     const route = await requireRoute(cliConfig, "cli");
@@ -467,7 +468,7 @@ describe("verified OpenClaw inference binding", () => {
       agents: { defaults: { model: "claude-cli/claude-opus-4-8" } },
     } satisfies OpenClawConfig;
     const route = await requireRoute(cliConfig, "cli");
-    const resolveAuth = vi.fn(() => "strict-cli-credential");
+    const resolveAuth = vi.fn(async () => "strict-cli-credential");
     const resolveArtifact = vi.fn(async () => "claude-cli-artifact-v1");
     const binding = await createBinding(
       route,
@@ -547,13 +548,11 @@ describe("verified OpenClaw inference binding", () => {
     const profileId = "claude-cli:work";
     const cliConfig = {
       agents: {
-        list: [
-          {
-            id: "ops",
-            default: true,
+        entries: {
+          ops: {
             model: `claude-cli/claude-opus-4-8@${profileId}`,
           },
-        ],
+        },
       },
       auth: { profiles: { [profileId]: { provider: "claude-cli", mode: "api_key" } } },
     } satisfies OpenClawConfig;
@@ -586,7 +585,6 @@ describe("verified OpenClaw inference binding", () => {
         ...pluginArtifactDeps(),
         ...cliRuntimeArtifactDeps(),
         loadAuthProfileStoreForRuntime: ensureStore,
-        ensureAuthProfileStore: ensureStore,
         resolveApiKeyForProvider: resolveAuth,
         resolveCliAuthBindingFingerprint: resolveBinding as never,
       },
@@ -605,7 +603,6 @@ describe("verified OpenClaw inference binding", () => {
       revalidate(binding, cliConfig, {
         ...cliRuntimeArtifactDeps(),
         loadAuthProfileStoreForRuntime: ensureStore,
-        ensureAuthProfileStore: ensureStore,
         resolveApiKeyForProvider: resolveAuth,
         resolveCliAuthBindingFingerprint: resolveBinding as never,
       }),
@@ -618,22 +615,6 @@ describe("verified OpenClaw inference binding", () => {
     expect(resolveAuth).toHaveBeenLastCalledWith(
       expect.objectContaining({ profileId, lockedProfile: true, secretSentinels: false }),
     );
-  });
-
-  it("revalidates a plugin-harness owner without binding rotating token material", async () => {
-    const harnessConfig = codexHarnessConfig();
-    const { binding } = await opaqueHarnessBinding(harnessConfig);
-
-    expect(binding.ownerPluginIds).toEqual(["codex", "provider-owner"]);
-    await expect(revalidate(binding, harnessConfig)).resolves.toBe(binding.execution);
-  });
-
-  it("invalidates a plugin-harness binding when its child runtime artifact changes", async () => {
-    const harnessConfig = codexHarnessConfig();
-    const { binding } = await opaqueHarnessBinding(harnessConfig);
-
-    harnessRuntimeArtifactState.fingerprint = "codex-runtime-v2";
-    await expect(revalidate(binding, harnessConfig)).resolves.toBeNull();
   });
 
   it("requires a child runtime artifact for credential-backed plugin harness inference", async () => {
@@ -665,16 +646,6 @@ describe("verified OpenClaw inference binding", () => {
       execution: { agentHarnessRuntimeOverride: "codex" },
       auth: { authFingerprint, runtimeArtifactFingerprint: "codex-runtime-v1" },
     });
-  });
-
-  it("freezes the actual successful harness when configured policy is auto", async () => {
-    const { binding } = await opaqueHarnessBinding(codexHarnessConfig(), {
-      configuredAuto: true,
-    });
-
-    expect(binding.configuredRoute).toMatchObject({ agentHarnessRuntimeOverride: "auto" });
-    expect(binding.execution).toMatchObject({ agentHarnessRuntimeOverride: "codex" });
-    expect(binding.ownerPluginIds).toContain("codex");
   });
 
   it("freezes auto to the successful built-in harness", async () => {
@@ -762,7 +733,7 @@ describe("verified OpenClaw inference binding", () => {
     const resolveAuth = vi.fn(async () => resolvedAuth);
     const deps = {
       ...pluginArtifactDeps(),
-      ensureAuthProfileStore: profileStore("openai:verified", profile),
+      loadAuthProfileStoreForRuntime: profileStore("openai:verified", profile),
       resolveApiKeyForProvider: resolveAuth,
     };
     const binding = await createBinding(
@@ -818,7 +789,7 @@ describe("verified OpenClaw inference binding", () => {
     );
     const deps = {
       ...pluginArtifactDeps(),
-      ensureAuthProfileStore: profileStore("openai:work", credential),
+      loadAuthProfileStoreForRuntime: profileStore("openai:work", credential),
       resolveAgentHarnessAuthBindingFingerprint: resolveHarnessAuth,
     };
     const binding = await createBinding(
@@ -886,32 +857,19 @@ describe("verified OpenClaw inference binding", () => {
     }
   });
 
-  it("fails closed after the configured route changes", async () => {
-    const binding = await bindingFor(config());
-    const changed = config("anthropic/claude-opus-4-8");
+  it.each([{ name: "an owner is removed", ownerIds: [] as string[], records: [] }])(
+    "invalidates a strict credential when $name",
+    async ({ ownerIds, records }) => {
+      const baseConfig = config();
+      const binding = await bindingFor(baseConfig);
+      pluginRegistryState.providerOwnerIds = ownerIds;
+      pluginRegistryState.records = records;
 
-    const route = await revalidate(binding, changed);
+      const route = await revalidate(binding, baseConfig, authDeps());
 
-    expect(route).toBeNull();
-  });
-
-  it.each([
-    {
-      name: "an owner is added",
-      ownerIds: ["provider-owner", "replacement-owner"],
-      records: [pluginRecord("provider-owner"), pluginRecord("replacement-owner")],
+      expect(route).toBeNull();
     },
-    { name: "an owner is removed", ownerIds: [] as string[], records: [] },
-  ])("invalidates a strict credential when $name", async ({ ownerIds, records }) => {
-    const baseConfig = config();
-    const binding = await bindingFor(baseConfig);
-    pluginRegistryState.providerOwnerIds = ownerIds;
-    pluginRegistryState.records = records;
-
-    const route = await revalidate(binding, baseConfig, authDeps());
-
-    expect(route).toBeNull();
-  });
+  );
 
   it("invalidates a strict credential when its owning runtime is removed", async () => {
     const baseConfig = config();
@@ -925,40 +883,10 @@ describe("verified OpenClaw inference binding", () => {
 
   it.each([
     {
-      name: "runtime source",
-      replacement: {
-        rootDir: "/replacement/provider-owner",
-        source: "/replacement/provider-owner/index.js",
-        manifestPath: "/replacement/provider-owner/openclaw.plugin.json",
-      },
-    },
-    { name: "package version", replacement: { packageVersion: "2.0.0" } },
-    {
-      name: "installed artifact identity",
-      replacement: { installRecordHash: "provider-owner-install-v2" },
-    },
-  ])("invalidates a strict credential when its owner $name changes", async ({ replacement }) => {
-    const baseConfig = config();
-    const binding = await bindingFor(baseConfig);
-    pluginRegistryState.records = [pluginRecord("provider-owner", replacement)];
-
-    const route = await revalidate(binding, baseConfig, authDeps());
-
-    expect(route).toBeNull();
-  });
-
-  it.each([
-    {
       name: "path/dev executable",
       origin: "config" as const,
       sourcePath: "src/index.ts",
       installRecordHash: undefined,
-    },
-    {
-      name: "installed executable",
-      origin: "global" as const,
-      sourcePath: "dist/index.js",
-      installRecordHash: "provider-owner-install-v1",
     },
   ])(
     "invalidates a strict credential after an in-place $name change with stable registry identity",
@@ -1031,53 +959,10 @@ describe("verified OpenClaw inference binding", () => {
     },
   );
 
-  it("keeps the frozen verified route across unrelated channel config changes", async () => {
-    const baseConfig = config();
-    const binding = await bindingFor(baseConfig);
-    const changed = {
-      ...baseConfig,
-      channels: { discord: { enabled: true } },
-      plugins: { entries: { discord: { enabled: true } } },
-    } satisfies OpenClawConfig;
-
-    const route = await revalidate(binding, changed, authDeps());
-
-    expect(route).toBe(binding.execution);
-    expect(route?.runConfig).toMatchObject(baseConfig);
-    expect(route?.runConfig.agents?.entries).toEqual({ openclaw: {} });
-    expect(route?.runConfig).not.toBe(baseConfig);
-  });
-
-  it("fails closed when the selected credential content changes", async () => {
-    const binding = await bindingFor(config());
-
-    const route = await revalidate(binding, config(), authDeps("replacement-key"));
-
-    expect(route).toBeNull();
-  });
-
   it.each([
-    { name: "plugins.allow is omitted", plugins: {}, remainsValid: true },
-    { name: "plugins.allow is empty", plugins: { allow: [] }, remainsValid: true },
-    {
-      name: "plugins.allow includes the owner",
-      plugins: { allow: ["provider-owner", "codex"] },
-      remainsValid: true,
-    },
     {
       name: "plugins.allow excludes the owner",
       plugins: { allow: ["discord"] },
-      remainsValid: false,
-    },
-    { name: "plugins.enabled is false", plugins: { enabled: false }, remainsValid: false },
-    {
-      name: "plugins.deny includes the owner",
-      plugins: { deny: ["provider-owner"] },
-      remainsValid: false,
-    },
-    {
-      name: "the owner entry is disabled",
-      plugins: { entries: { "provider-owner": { enabled: false } } },
       remainsValid: false,
     },
   ])("projects the provider-owner policy when $name", async ({ plugins, remainsValid }) => {

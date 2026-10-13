@@ -1,4 +1,3 @@
-// Line plugin module implements channel behavior.
 import {
   buildDmGroupAccountAllowlistAdapter,
   createFlatAllowlistOverrideResolver,
@@ -19,13 +18,13 @@ import { resolveLineAccount } from "./accounts.js";
 import { lineBindingsAdapter } from "./bindings.js";
 import { lineChannelPluginCommon } from "./channel-shared.js";
 import { lineConfigAdapter } from "./config-adapter.js";
+import { lineDoctor } from "./doctor.js";
 import { lineGatewayAdapter } from "./gateway.js";
 import { resolveLineGroupLookupIds } from "./group-keys.js";
 import { resolveLineGroupRequireMention } from "./group-policy.js";
 import { inferLineTargetChatType, normalizeLineMessagingTarget } from "./messaging-target.js";
 import { lineMessageAdapter, lineOutboundAdapter } from "./outbound.js";
 import { lineMessageActions } from "./rich-messages.js";
-import { getLineRuntime } from "./runtime.js";
 import { lineSetupContract } from "./setup-core.js";
 import { lineSetupWizard } from "./setup-surface.js";
 import { lineStatusAdapter } from "./status.js";
@@ -144,6 +143,7 @@ export const linePlugin: LineChannelPlugin = createChatChannelPlugin({
     }),
     setupContract: lineSetupContract,
     status: lineStatusAdapter,
+    doctor: lineDoctor,
     gateway: lineGatewayAdapter,
     heartbeat: {
       sendTyping: async ({ cfg, to, accountId }) => {
@@ -180,16 +180,14 @@ export const linePlugin: LineChannelPlugin = createChatChannelPlugin({
       message: "OpenClaw: your access has been approved.",
       normalizeAllowEntry: createPairingPrefixStripper(/^line:(?:user:)?/i),
       notify: async ({ cfg, id, message, accountId }) => {
-        const account = (getLineRuntime().channel.line?.resolveLineAccount ?? resolveLineAccount)({
+        const account = resolveLineAccount({
           cfg,
           accountId,
         });
         if (!account.channelAccessToken) {
           throw new Error("LINE channel access token not configured");
         }
-        const pushMessageLine =
-          getLineRuntime().channel.line?.pushMessageLine ??
-          (await loadLineChannelRuntime()).pushMessageLine;
+        const { pushMessageLine } = await loadLineChannelRuntime();
         await pushMessageLine(id, message, {
           cfg,
           accountId: account.accountId,

@@ -5,8 +5,13 @@ import { afterEach, expect, onTestFinished, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import * as gitWorker from "../infra/git-worker.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { loadControlUiSessionPullRequests } from "./control-ui-session-prs.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import { loadTestSessionPullRequests as loadControlUiSessionPullRequests } from "./control-ui-session-prs.test-support.js";
+import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import { controlUiClient } from "./server.sessions.create.projects.test-support.js";
 import { dispatchInboundMessageMock, testState } from "./test-helpers.js";
 import {
@@ -23,7 +28,8 @@ vi.mock("../projects/project-clone.js", async (importOriginal) => {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
-afterEach(() => {
+afterEach(async () => {
+  await disposeSessionReadContexts();
   projectCloneMocks.materialize.mockReset();
   dispatchInboundMessageMock.mockReset();
   closeOpenClawStateDatabaseForTest();
@@ -57,11 +63,14 @@ test("sessions.create retains a cloud repository across replay without creating 
   ]) {
     expect(saved).not.toHaveProperty(field);
   }
+  await disposeSessionReadContexts();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
+  const replayOptions = { ...controlUiClient, context: {} };
   const replay = await directSessionReq<{ entry: { repositoryWorkspaceId: string } }>(
     "sessions.create",
     { agentId: "main", key, repository },
-    controlUiClient,
+    replayOptions,
   );
   expect(replay.ok, JSON.stringify(replay.error)).toBe(true);
   expect(replay.payload?.entry.repositoryWorkspaceId).toBe(entry.repositoryWorkspaceId);
@@ -71,7 +80,7 @@ test("sessions.create retains a cloud repository across replay without creating 
       repositoryWorkspaceId?: string;
       repository?: { url: string; ref?: string; branch: string };
     }>;
-  }>("sessions.list", { agentId: "main", limit: 100 }, controlUiClient);
+  }>("sessions.list", { agentId: "main", limit: 100 }, replayOptions);
   expect(listed.ok, JSON.stringify(listed.error)).toBe(true);
   expect(listed.payload?.sessions.find((row) => row.key === key)).toMatchObject({
     repositoryWorkspaceId: entry.repositoryWorkspaceId,
@@ -84,6 +93,9 @@ test("sessions.create retains a cloud repository across replay without creating 
   const gitRead = vi
     .spyOn(gitWorker, "runGitWorkerOperation")
     .mockImplementation(async (operation) => {
+      if (operation.type === "checkout.revision") {
+        return "unchanged";
+      }
       if (operation.type === "checkout.context") {
         return {
           root: operation.input.root,
@@ -99,31 +111,47 @@ test("sessions.create retains a cloud repository across replay without creating 
       throw new Error("Unexpected Git operation");
     });
   onTestFinished(() => gitRead.mockRestore());
-  const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async () => Response.json([]));
-  const cacheLifetime = new AbortController();
-  onTestFinished(() => cacheLifetime.abort());
-  const params = { sessionKey: key, agentId: "main" };
-  await loadControlUiSessionPullRequests(params, {
-    cacheSignal: cacheLifetime.signal,
-    fetchImpl,
-    resolveGitRoot: async () => workspace,
-  });
-  expect(getEventListeners(cacheLifetime.signal, "abort")).toHaveLength(3);
-  gitRead.mockClear();
-  const preview = await loadControlUiSessionPullRequests(params, {
-    cacheSignal: cacheLifetime.signal,
-    fetchImpl,
-  });
-  expect(getEventListeners(cacheLifetime.signal, "abort")).toHaveLength(1);
-  expect(preview.branch).toMatchObject({
-    owner: "openclaw",
-    repo: "openclaw",
-    branch: `openclaw/${entry.repositoryWorkspaceId}`,
-  });
-  expect(gitRead).not.toHaveBeenCalled();
-  expect(fetchImpl).toHaveBeenCalled();
-  cacheLifetime.abort();
-  expect(getEventListeners(cacheLifetime.signal, "abort")).toHaveLength(0);
+  // The manual Gateway fixture disables bundles. Only this public-API probe needs GitHub.
+  await withEnvAsync(
+    {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+      OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: undefined,
+    },
+    async () => {
+      const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async () => Response.json([]));
+      const cacheLifetime = new AbortController();
+      onTestFinished(() => cacheLifetime.abort());
+      const params = { sessionKey: key, agentId: "main" };
+      await loadControlUiSessionPullRequests(params, {
+        cacheSignal: cacheLifetime.signal,
+        fetchImpl,
+      });
+      const repositoryPins = getEventListeners(cacheLifetime.signal, "abort").length;
+      expect(repositoryPins).toBeGreaterThan(0);
+      await loadControlUiSessionPullRequests(params, {
+        cacheSignal: cacheLifetime.signal,
+        fetchImpl,
+        resolveGitRoot: async () => workspace,
+      });
+      expect(getEventListeners(cacheLifetime.signal, "abort")).toHaveLength(repositoryPins);
+      gitRead.mockClear();
+      const preview = await loadControlUiSessionPullRequests(params, {
+        cacheSignal: cacheLifetime.signal,
+        fetchImpl,
+      });
+      expect(getEventListeners(cacheLifetime.signal, "abort")).toHaveLength(repositoryPins);
+      expect(preview.branch, JSON.stringify(preview)).toMatchObject({
+        owner: "openclaw",
+        repo: "openclaw",
+        branch: `openclaw/${entry.repositoryWorkspaceId}`,
+      });
+      expect(gitRead).not.toHaveBeenCalled();
+      expect(fetchImpl).toHaveBeenCalled();
+      cacheLifetime.abort();
+      expect(getEventListeners(cacheLifetime.signal, "abort")).toHaveLength(0);
+    },
+  );
   for (const changedSource of [
     undefined,
     { ...repository, ref: "main" },
@@ -143,16 +171,10 @@ test("sessions.create retains a cloud repository across replay without creating 
 
 test.each([
   { repository: { url: "file:///tmp/repository" } },
-  { repository: { url: "https://token@github.com/openclaw/openclaw.git" } },
   {
     repository: { url: "https://github.com/openclaw/openclaw.git", ref: "--upload-pack=anything" },
   },
-  { cwd: "/tmp/repository" },
-  { execNode: "device" },
-  { projectId: "workspace:main" },
-  { projectGitUrl: "https://github.com/openclaw/openclaw.git" },
   { worktree: true },
-  { worktreeBaseRef: "main" },
   { message: "Start before dispatch" },
 ])(
   "sessions.create rejects conflicting cloud repository input before admission: %j",

@@ -208,6 +208,14 @@ suite.define(() => {
         const sidebar = page.locator("openclaw-app-sidebar");
         await pollLocatorText(sidebar.locator(".sidebar-agent-card__name")).toContain("Pacino");
         await hero.waitFor();
+        const welcomeEmoji = page.locator(".agent-chat__welcome-avatar .identity-avatar__text");
+        await expect.poll(() => welcomeEmoji.getAttribute("data-avatar")).toBe("🎬");
+        await expect
+          .poll(() => welcomeEmoji.evaluate((element) => getComputedStyle(element).fontSize))
+          .toBe("56px");
+        if (theme === "dark") {
+          await capture(page, "dark-welcome-emoji.png");
+        }
         await picker.locator(".agent-select__label").waitFor();
         await page.waitForLoadState("networkidle");
         const identityRequests = await gateway.getRequests("agent.identity.get");

@@ -242,7 +242,7 @@ suite.define(() => {
         await deferClipboard(page);
         await copy.click();
         expect(await copy.isDisabled()).toBe(true);
-        const picker = page.locator("openclaw-agents-page openclaw-agent-select");
+        const picker = page.locator(".settings-sidebar__agent openclaw-agent-select");
         await picker.locator(".agent-select__trigger").click();
         await picker
           .locator("wa-dropdown-item[data-agent-option]")

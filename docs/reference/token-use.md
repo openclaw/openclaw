@@ -16,7 +16,8 @@ OpenClaw assembles its own system prompt on every run. It includes:
 - Tool list + short descriptions
 - Skills list (metadata only; instructions load on demand with `read`). Native
   Codex turns on the managed bundled app-server get the compact skills block
-  in parent-local model request instructions; other harnesses get it in the normal prompt surface.
+  in parent-local model request instructions. Connections without that relay use
+  thread developer instructions; other harnesses get it in the normal prompt surface.
   Bounded by `skills.limits.maxSkillsPromptChars`, with optional per-agent
   override at `agents.entries.*.skillsLimits.maxSkillsPromptChars`.
 - Self-update instructions
@@ -220,8 +221,10 @@ Pricing updates ship in the hosted model catalog alongside model metadata. Its
 publisher reads public pricing sources, including OpenCode's official catalog
 and Venice's public model API when the provider declares the native source.
 Base rates and context tiers come from the same source; usage rendering makes no
-network requests. Hosted updates activate after
-the next Gateway restart. Set `models.catalogRefresh.enabled: false` to disable
+network requests. Hosted updates activate with the Gateway's next prepared
+catalog generation, without restarting. Each estimation operation captures one
+pricing context, so a publication cannot change its rates halfway through.
+Set `models.catalogRefresh.enabled: false` to disable
 hosted catalog traffic on offline or restricted networks; bundled pricing still
 works. Agent-local `models.json` prices take precedence over explicit
 `models.providers.*.models[].cost` entries, and both override catalog estimates,

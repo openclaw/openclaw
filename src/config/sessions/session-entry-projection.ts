@@ -6,8 +6,9 @@ import {
   type SessionEntry,
 } from "./types.js";
 
-type RetiredThinkingSelectionQuarantine = {
+type RetiredSessionMetadata = {
   thinkingLevelSelection?: unknown;
+  compactionCheckpoints?: unknown;
   modelFallback?: AgentPatchedSessionModelFallback & { prevThinkingLevelSelection?: unknown };
 };
 
@@ -16,6 +17,7 @@ export const SESSION_ENTRY_PRIVATE_CLEAR_PATCH = {
   lastRunId: undefined,
   lifecycleRunId: undefined,
   mainRestartRecovery: undefined,
+  restartRecoveryOperatorSource: undefined,
   pendingProjectGitUrl: undefined,
   pendingWorktree: undefined,
   sessionDiffBaselineCapture: undefined,
@@ -23,42 +25,36 @@ export const SESSION_ENTRY_PRIVATE_CLEAR_PATCH = {
 } satisfies Partial<InternalSessionEntry>;
 
 const PRIVATE_SESSION_ENTRY_KEYS = [
+  "inheritedGitContributorProfileIds",
+  "profileInvolvement",
   "cliHistoryBoundary",
   "publicShare",
   "activeWriterRunId",
   "lastRunId",
   "lifecycleRunId",
   "mainRestartRecovery",
+  "restartRecoveryOperatorSource",
   "pendingProjectGitUrl",
   "pendingWorktree",
   "sessionDiffBaselineCapture",
   "transcriptByteCompactionLatch",
 ] as const satisfies readonly (keyof InternalSessionEntry)[];
 
-function projectPublicModelFallback(
-  fallback: RetiredThinkingSelectionQuarantine["modelFallback"],
-): AgentPatchedSessionModelFallback | undefined {
-  if (!fallback) {
-    return undefined;
-  }
-  const { prevThinkingLevelSelection: _privateSelection, ...publicFallback } = fallback;
-  return publicFallback;
-}
-
 function stripPrivateSessionEntryFields(entry: InternalSessionEntry): SessionEntry;
 function stripPrivateSessionEntryFields(
   entry: Partial<InternalSessionEntry>,
 ): Partial<SessionEntry>;
 function stripPrivateSessionEntryFields(
-  entry: Partial<InternalSessionEntry> & RetiredThinkingSelectionQuarantine,
+  entry: Partial<InternalSessionEntry> & RetiredSessionMetadata,
 ): Partial<SessionEntry> {
   const projected = { ...entry };
   for (const key of PRIVATE_SESSION_ENTRY_KEYS) {
     delete projected[key];
   }
   delete projected.thinkingLevelSelection;
-  const modelFallback = projectPublicModelFallback(entry.modelFallback);
-  if (modelFallback) {
+  delete projected.compactionCheckpoints;
+  if (entry.modelFallback) {
+    const { prevThinkingLevelSelection: _privateSelection, ...modelFallback } = entry.modelFallback;
     projected.modelFallback = modelFallback;
   } else {
     delete projected.modelFallback;
@@ -92,9 +88,8 @@ export function projectCompactionAccountingPatch(
     compactionKind?: "context-engine" | "native-harness" | "server-endpoint";
     now?: number;
     tokensAfter?: number;
-    transcriptByteCompactionLatch?: NonNullable<
-      InternalSessionEntry["transcriptByteCompactionLatch"]
-    >;
+    /** Omission preserves host suppression; null clears it across the worker boundary. */
+    transcriptByteCompactionLatch?: InternalSessionEntry["transcriptByteCompactionLatch"] | null;
   },
 ): Partial<InternalSessionEntry> {
   const incrementBy = Math.max(0, params.amount ?? 1);
@@ -106,8 +101,10 @@ export function projectCompactionAccountingPatch(
       : undefined;
   const patch: Partial<InternalSessionEntry> = {
     compactionCount: (current.compactionCount ?? 0) + incrementBy,
-    transcriptByteCompactionLatch: params.transcriptByteCompactionLatch,
     updatedAt: params.now ?? Date.now(),
+    ...(params.transcriptByteCompactionLatch !== undefined
+      ? { transcriptByteCompactionLatch: params.transcriptByteCompactionLatch ?? undefined }
+      : {}),
     ...(incrementBy > 0 || tokensAfter !== undefined ? COMPACTION_RUN_USAGE_CLEAR_PATCH : {}),
     ...(incrementBy > 0 ? { contextBudgetStatus: undefined } : {}),
   };

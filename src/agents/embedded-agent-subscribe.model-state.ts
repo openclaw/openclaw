@@ -1,4 +1,11 @@
-import { emitAgentRunOutputTokens } from "../infra/agent-events.js";
+import { isProviderRefusalAssistantError } from "@openclaw/llm-core/diagnostics";
+import { applyAssistantDeliveryDirectives } from "../config/sessions/transcript-assistant-delivery.js";
+import {
+  emitAgentEvent,
+  emitAgentEventForRunContext,
+  emitAgentRunOutputTokens,
+} from "../infra/agent-events.js";
+import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import type { AssistantMessage, Usage } from "../llm/types.js";
 import {
   createUsageAccumulator,
@@ -66,6 +73,36 @@ export function createEmbeddedModelState(
   let lastUsage: NormalizedUsage | undefined;
   let retryUsage: NormalizedUsage | undefined;
   let completed: AssistantMessage | undefined;
+  let successfulModelResponse = false;
+  let publishedMessageModel: string | undefined;
+  const runContext = getAgentRunContext(params.runId);
+
+  const publishMessageModel = (message: AssistantMessage, reset: boolean) => {
+    if (reset) {
+      publishedMessageModel = undefined;
+    }
+    const provider = message.provider?.trim();
+    const model = message.responseModel?.trim() || message.model?.trim();
+    const identity = provider && model ? `${provider}\0${model}` : undefined;
+    if (!identity || identity === publishedMessageModel) {
+      return;
+    }
+    const event = {
+      runId: params.runId,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+      agentId: params.agentId,
+      lifecycleGeneration: params.lifecycleGeneration,
+      stream: "lifecycle",
+      data: { phase: "model", provider, model },
+    } as const;
+    if (runContext) {
+      emitAgentEventForRunContext(event, runContext);
+    } else {
+      emitAgentEvent(event);
+    }
+    publishedMessageModel = identity;
+  };
 
   const recordPendingUsage = (raw: Usage) => {
     const usage = normalizeUsage(raw);
@@ -105,6 +142,12 @@ export function createEmbeddedModelState(
       });
     }
   };
+  const recordContextAccounting = (message: AssistantMessage, successful: boolean) =>
+    params.onContextAccountingEvent?.({
+      kind: "model",
+      contextTokens: deriveSessionTotalTokens({ lastCallUsage: normalizeUsage(message.usage) }),
+      successful,
+    });
 
   return {
     captureModelEvent: (evt: AgentSessionEvent): void => {
@@ -120,7 +163,8 @@ export function createEmbeddedModelState(
       if (
         evt.type !== "message_start" &&
         evt.type !== "message_update" &&
-        evt.type !== "message_end"
+        evt.type !== "message_end" &&
+        evt.type !== "turn_end"
       ) {
         return;
       }
@@ -131,7 +175,19 @@ export function createEmbeddedModelState(
       ) {
         return;
       }
+      publishMessageModel(message, evt.type === "message_start");
       switch (evt.type) {
+        case "turn_end":
+          // message_end may describe an async tool fragment, not a completed provider response.
+          if (
+            !successfulModelResponse &&
+            (message.stopReason === "stop" || message.stopReason === "toolUse") &&
+            !isProviderRefusalAssistantError(message)
+          ) {
+            successfulModelResponse = true;
+            recordContextAccounting(message, true);
+          }
+          return;
         case "message_start":
           pending = undefined;
           return;
@@ -151,24 +207,24 @@ export function createEmbeddedModelState(
           runBestEffortCallback({
             label: "model usage observation",
             log,
-            callback: () => params.onModelUsage?.(pending),
+            callback: () =>
+              params.onModelUsage?.(pending, {
+                responseId: message.responseId,
+                turnId: message.turnId,
+              }),
           });
           pending = undefined;
           // Context-engine projection can later mutate transcript objects; retain this run's result.
-          completed = structuredClone(message);
+          completed = applyAssistantDeliveryDirectives(structuredClone(message));
           lastUsage ??= message.stopReason === "error" ? retryUsage : undefined;
           retryUsage = undefined;
-          params.onContextAccountingEvent?.({
-            kind: "model",
-            contextTokens: deriveSessionTotalTokens({
-              lastCallUsage: normalizeUsage(message.usage),
-            }),
-          });
+          recordContextAccounting(message, false);
       }
     },
     recordAuxiliaryUsage: (usage: Usage) => recordModelUsage(normalizeUsage(usage)),
     getUsageTotals: () => toNormalizedUsage(totals),
     getLastAssistantUsage: () => normalizeUsage(lastUsage),
     getCurrentAttemptAssistant: () => (completed ? structuredClone(completed) : undefined),
+    hasSuccessfulModelResponse: () => successfulModelResponse,
   };
 }

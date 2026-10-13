@@ -8,6 +8,165 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+// Reviewed public SKILL.md from @steipete/gifgrep 1.0.1; data, never executed.
+const maintainedSkillText = [
+  "---",
+  "name: gifgrep",
+  "description: Search GIF providers with CLI/TUI, download results, and extract stills/sheets.",
+  "homepage: https://gifgrep.com",
+  'metadata: {"clawdbot":{"emoji":"\u{1f9f2}","requires":{"bins":["gifgrep"]},"install":[{"id":"brew","kind":"brew","formula":"steipete/tap/gifgrep","bins":["gifgrep"],"label":"Install gifgrep (brew)"},{"id":"go","kind":"go","module":"github.com/steipete/gifgrep/cmd/gifgrep@latest","bins":["gifgrep"],"label":"Install gifgrep (go)"}]}}',
+  "---",
+  "",
+  "# gifgrep",
+  "",
+  "Use `gifgrep` to search GIF providers (Tenor/Giphy), browse in a TUI, download results, and extract stills or sheets.",
+  "",
+  "GIF-Grab (gifgrep workflow)",
+  "- Search \u2192 preview \u2192 download \u2192 extract (still/sheet) for fast review and sharing.",
+  "",
+  "Quick start",
+  "- `gifgrep cats --max 5`",
+  "- `gifgrep cats --format url | head -n 5`",
+  "- `gifgrep search --json cats | jq '.[0].url'`",
+  '- `gifgrep tui "office handshake"`',
+  "- `gifgrep cats --download --max 1 --format url`",
+  "",
+  "TUI + previews",
+  '- TUI: `gifgrep tui "query"`',
+  "- CLI still previews: `--thumbs` (Kitty/Ghostty only; still frame)",
+  "",
+  "Download + reveal",
+  "- `--download` saves to `~/Downloads`",
+  "- `--reveal` shows the last download in Finder",
+  "",
+  "Stills + sheets",
+  "- `gifgrep still ./clip.gif --at 1.5s -o still.png`",
+  "- `gifgrep sheet ./clip.gif --frames 9 --cols 3 -o sheet.png`",
+  "- Sheets = single PNG grid of sampled frames (great for quick review, docs, PRs, chat).",
+  "- Tune: `--frames` (count), `--cols` (grid width), `--padding` (spacing).",
+  "",
+  "Providers",
+  "- `--source auto|tenor|giphy`",
+  "- `GIPHY_API_KEY` required for `--source giphy`",
+  "- `TENOR_API_KEY` optional (Tenor demo key used if unset)",
+  "",
+  "Output",
+  "- `--json` prints an array of results (`id`, `title`, `url`, `preview_url`, `tags`, `width`, `height`)",
+  "- `--format` for pipe-friendly fields (e.g., `url`)",
+  "",
+  "Environment tweaks",
+  "- `GIFGREP_SOFTWARE_ANIM=1` to force software animation",
+  "- `GIFGREP_CELL_ASPECT=0.5` to tweak preview geometry",
+  "",
+].join("\n");
+
+const maintainedRawRow = {
+  slug: "gifgrep",
+  ownerHandle: "steipete",
+  source: "clawhub",
+  install: { kind: "clawhub", reference: "steipete/gifgrep" },
+};
+const maintainedMappedRow = {
+  slug: "gifgrep",
+  ownerHandle: "steipete",
+  installRef: "@steipete/gifgrep",
+};
+
+async function runClawhubInstallProof(options: {
+  results: Record<string, unknown>[];
+  overrides?: Record<string, string>;
+  origin?: Record<string, unknown>;
+  lock?: Record<string, unknown>;
+  skillText?: string;
+  refusal?: boolean;
+}) {
+  const root = tempDirs.make("openclaw-clawhub-maintained-");
+  const bin = path.join(root, "bin");
+  const scratch = path.join(root, "scratch");
+  const callsPath = path.join(root, "calls.jsonl");
+  const fixturePath = path.join(root, "fixture.json");
+  const redactorPath = path.join(root, "redactor.mjs");
+  await mkdir(bin);
+  await mkdir(scratch);
+  await writeFile(redactorPath, "export const redactSensitiveText = (value) => value;\n");
+  await writeFile(
+    path.join(bin, "node"),
+    `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} "$@"\n`,
+    { mode: 0o755 },
+  );
+  await writeFile(fixturePath, JSON.stringify({ skillText: maintainedSkillText, ...options }));
+  await writeFile(
+    path.join(bin, "pnpm"),
+    `#!${process.execPath}
+const fs = require("node:fs");
+const path = require("node:path");
+const fixture = JSON.parse(fs.readFileSync(${JSON.stringify(fixturePath)}, "utf8"));
+const args = process.argv.slice(2);
+if (args[0] === "--silent") args.shift();
+if (args[0] === "openclaw") args.shift();
+fs.appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify(args) + "\\n");
+const workspace = path.join(process.env.HOME, ".openclaw/workspace");
+const slug = (args[2] || "").split("/").at(-1);
+const skillDir = path.join(workspace, "skills", slug);
+if (args[0] !== "skills") process.exit(64);
+switch (args[1]) {
+  case "search":
+    console.log(JSON.stringify({ results: fixture.results }));
+    break;
+  case "install": {
+    if (fixture.refusal) {
+      console.error("ClawHub found security risks in gifgrep@1.0.1");
+      console.error("Update cancelled; rerun with --acknowledge-clawhub-risk");
+      process.exit(1);
+    }
+    const versionIndex = args.indexOf("--version");
+    const version = versionIndex < 0 ? "9.9.9" : args[versionIndex + 1];
+    fs.mkdirSync(path.join(skillDir, ".clawhub"), { recursive: true });
+    fs.mkdirSync(path.join(workspace, ".clawhub"), { recursive: true });
+    fs.writeFileSync(path.join(skillDir, "SKILL.md"), fixture.skillText);
+    fs.writeFileSync(path.join(skillDir, ".clawhub/origin.json"), JSON.stringify({
+      slug, registry: "https://clawhub.ai", ownerHandle: "steipete",
+      installedVersion: version, ...fixture.origin,
+    }));
+    fs.writeFileSync(path.join(workspace, ".clawhub/lock.json"), JSON.stringify({
+      skills: { [slug]: { version, ownerHandle: "steipete", ...fixture.lock } },
+    }));
+    break;
+  }
+  case "info":
+    console.log(JSON.stringify({ skillKey: slug, baseDir: skillDir }));
+    break;
+  default: process.exit(64);
+}
+`,
+    { mode: 0o755 },
+  );
+  const result = spawnSync(
+    process.platform === "darwin" ? "/bin/bash" : "bash",
+    ["scripts/e2e/lib/skills/clawhub-install-proof.sh"],
+    {
+      encoding: "utf8",
+      timeout: 10_000,
+      env: {
+        PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`,
+        HOME: root,
+        TMPDIR: scratch,
+        OPENCLAW_E2E_REDACTOR_MODULE: redactorPath,
+        ...options.overrides,
+      },
+    },
+  );
+  expect(result.error).toBeUndefined();
+  expect(
+    (await readdir(scratch)).filter((entry) => entry.startsWith("openclaw-skill-install")),
+  ).toEqual([]);
+  const calls = (await readFile(callsPath, "utf8"))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as string[]);
+  return { ...result, calls };
+}
+
 async function listShellScripts(dir: string): Promise<string[]> {
   const entries = await readdir(dir, { withFileTypes: true });
   const scripts: string[] = [];
@@ -27,7 +186,7 @@ async function listShellScripts(dir: string): Promise<string[]> {
 async function extractClawhubSkillInstallVerifier(): Promise<string> {
   const script = await readFile("scripts/e2e/lib/skills/clawhub-install-proof.sh", "utf8");
   const marker =
-    'node --input-type=module - "$OPENCLAW_CONFIG_PATH" "$skill_dir" "$origin_json" "$lock_json" "$info_json" "$slug" <<\'NODE\'\n';
+    'run_node_module "$OPENCLAW_CONFIG_PATH" "$skill_dir" "$origin_json" "$lock_json" "$info_json" "$slug" "$maintained_fixture" <<\'NODE\'\n';
   const start = script.indexOf(marker);
   if (start === -1) {
     throw new Error("ClawHub skill install verifier heredoc was not found");
@@ -43,7 +202,7 @@ async function extractClawhubSkillInstallVerifier(): Promise<string> {
 async function extractClawhubSkillInstallSelector(): Promise<string> {
   const script = await readFile("scripts/e2e/lib/skills/clawhub-install-proof.sh", "utf8");
   const marker =
-    'node --input-type=module - "$search_json" "$resolve_json" "$requested_slug" "$preferred_slug" <<\'NODE\'\n';
+    'run_node_module "$search_json" "$resolve_json" "$requested_slug" "$preferred_slug" "$maintained_fixture" <<\'NODE\'\n';
   const start = script.indexOf(marker);
   if (start === -1) {
     throw new Error("ClawHub skill install selector heredoc was not found");
@@ -175,6 +334,44 @@ run_wizard_cmd failing-wizard fake-state "node fake-wizard" send_noop false
     } finally {
       await rm(tempRoot, { force: true, recursive: true });
     }
+  });
+
+  it("delivers wizard input and EOF without retaining an inherited writer", async () => {
+    const tempRoot = tempDirs.make("openclaw-onboard-fifo-eof-");
+    const fixturePath = path.join(tempRoot, "wizard-eof.sh");
+    await writeFile(
+      fixturePath,
+      `#!/usr/bin/env bash
+set -euo pipefail
+export OPENCLAW_ONBOARD_SCENARIO_SOURCE_ONLY=1
+export OPENCLAW_ONBOARD_E2E_TMPDIR=${JSON.stringify(tempRoot)}
+OPENCLAW_ENTRY=node
+openclaw_test_state_create() { :; }
+source scripts/e2e/lib/onboard/scenario.sh
+
+openclaw_e2e_run_script_with_pty() { cat >"$2"; }
+send_and_close() {
+  printf 'wizard input\\n' >&3
+  exec 3>&-
+}
+run_wizard_cmd eof-wizard fake-state cat send_and_close false
+printf 'recorded input:'
+cat "$WIZARD_LOG_PATH"
+test -z "$(find "$ONBOARD_TMP_DIR" -name '*.fifo.*')"
+cleanup_onboard_artifacts
+test ! -e "$ONBOARD_TMP_DIR"
+`,
+    );
+
+    const result = spawnSync("bash", [fixturePath], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      timeout: 10_000,
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stdout).toContain("recorded input:wizard input\n");
   });
 
   it("does not wait for a skills prompt after the ready state renders", async () => {
@@ -410,6 +607,18 @@ exit 42
             slug: "homeassistant-safe",
             trust: { clawHubVerdict: null, installability: "installable" },
           },
+          {
+            installRef: "@owner/fallback-two",
+            slug: "fallback-two",
+          },
+          {
+            installRef: "@owner/fallback-three",
+            slug: "fallback-three",
+          },
+          {
+            installRef: "@owner/fallback-four",
+            slug: "fallback-four",
+          },
         ],
       })}\n`,
     );
@@ -426,6 +635,18 @@ exit 42
           {
             installRef: "@owner/safe",
             slug: "homeassistant-safe",
+          },
+          {
+            installRef: "@owner/fallback-two",
+            slug: "fallback-two",
+          },
+          {
+            installRef: "@owner/fallback-three",
+            slug: "fallback-three",
+          },
+          {
+            installRef: "@owner/fallback-four",
+            slug: "fallback-four",
           },
         ],
       });
@@ -474,10 +695,13 @@ case "\${1:-} \${2:-}" in
         printf '%s\n' 'network connection reset' >&2
         exit 1
       fi
-      printf '%s\n' '╭─ ClawHub Security Audit ─────────────────────────────────────────────╮' >&2
-      printf '%s\n' '│ risky@1.0.0                                                         │' >&2
-      printf '%s\n' '│ Outcome: Blocked                                                    │' >&2
-      printf '%s\n' '╰──────────────────────────────────────────────────────────────────────╯' >&2
+      if [ "\${FAKE_RISK_MODE:-current}" = frozen ]; then
+        printf '%s\n' '╭─ ClawHub Security Audit ─╮' >&2
+        printf '%s\n' '│ Outcome: Blocked        │' >&2
+      else
+        printf '%s\n' 'ClawHub found security risks in risky@1.0.0' >&2
+        printf '%s\n' 'Update cancelled; rerun with --acknowledge-clawhub-risk' >&2
+      fi
       exit 1
     fi
     skill_dir="$HOME/.openclaw/workspace/skills/safe"
@@ -514,6 +738,23 @@ esac
         "Skipping live ClawHub skill with current security findings: risky",
       );
       expect(result.stdout).toContain("E2E_OK installed=safe version=1.0.0");
+      expect((await readFile(attemptsPath, "utf8")).trim().split("\n")).toEqual(["risky", "safe"]);
+
+      await rm(attemptsPath, { force: true });
+      const frozenResult = spawnSync("bash", ["scripts/e2e/lib/skills/clawhub-install-proof.sh"], {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          FAKE_RISK_MODE: "frozen",
+          OPENCLAW_CURRENT_PACKAGE_TGZ: "",
+          OPENCLAW_SKILL_INSTALL_E2E_PREFERRED_SLUG: "risky",
+          OPENCLAW_TEST_STATE_SCRIPT_B64: "",
+          PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+          TMPDIR: scratchRoot,
+        },
+      });
+      expect(frozenResult.status, `${frozenResult.stdout}\n${frozenResult.stderr}`).toBe(0);
       expect((await readFile(attemptsPath, "utf8")).trim().split("\n")).toEqual(["risky", "safe"]);
 
       await rm(attemptsPath, { force: true });
@@ -559,6 +800,189 @@ esac
     } finally {
       await rm(tempRoot, { force: true, recursive: true });
     }
+  });
+
+  it.each([
+    { shape: "raw", row: maintainedRawRow },
+    { shape: "mapped", row: maintainedMappedRow },
+    { shape: "consistent hybrid", row: { ...maintainedRawRow, ...maintainedMappedRow } },
+  ])("pins the maintained $shape ClawHub fixture", async ({ row }) => {
+    const result = await runClawhubInstallProof({
+      results: [
+        {
+          ...maintainedMappedRow,
+          ownerHandle: "another-owner",
+          installRef: "@another-owner/gifgrep",
+        },
+        {
+          ...maintainedRawRow,
+          source: "skills.sh",
+          install: { kind: "github", reference: "elsewhere/gifgrep" },
+        },
+        row,
+      ],
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.calls).toEqual([
+      ["skills", "search", "gifgrep", "--limit", "8", "--json"],
+      ["skills", "install", "@steipete/gifgrep", "--version", "1.0.1", "--force"],
+      ["skills", "info", "gifgrep", "--json"],
+    ]);
+    expect(result.stdout).toContain("E2E_OK installed=gifgrep version=1.0.1");
+  });
+
+  it("keeps the maintained fixture when all overrides are explicitly empty", async () => {
+    const result = await runClawhubInstallProof({
+      results: [maintainedRawRow],
+      overrides: {
+        OPENCLAW_SKILL_INSTALL_E2E_QUERY: "",
+        OPENCLAW_SKILL_INSTALL_E2E_SLUG: "",
+        OPENCLAW_SKILL_INSTALL_E2E_PREFERRED_SLUG: "",
+      },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.calls[1]).toEqual([
+      "skills",
+      "install",
+      "@steipete/gifgrep",
+      "--version",
+      "1.0.1",
+      "--force",
+    ]);
+  });
+
+  it.each([
+    ["wrong owner", { ...maintainedMappedRow, ownerHandle: "other" }],
+    ["wrong ref", { ...maintainedMappedRow, installRef: "@other/gifgrep" }],
+    ["null ref", { ...maintainedRawRow, installRef: null }],
+    ["empty ref", { ...maintainedRawRow, installRef: "" }],
+    ["external source", { ...maintainedRawRow, source: "skills.sh" }],
+    [
+      "external kind",
+      { ...maintainedRawRow, install: { kind: "github", reference: "steipete/gifgrep" } },
+    ],
+    [
+      "wrong raw ref",
+      { ...maintainedRawRow, install: { kind: "clawhub", reference: "other/gifgrep" } },
+    ],
+    ["missing install", { ...maintainedMappedRow, source: "clawhub" }],
+    ["missing source", { ...maintainedMappedRow, install: maintainedRawRow.install }],
+    ["null source", { ...maintainedMappedRow, source: null }],
+    ["empty source", { ...maintainedMappedRow, source: "" }],
+    ["null install", { ...maintainedRawRow, install: null }],
+    ["partial install", { ...maintainedRawRow, install: { kind: "clawhub" } }],
+    ["contradictory hybrid", { ...maintainedRawRow, installRef: "@other/gifgrep" }],
+  ] as const)("rejects maintained fixture search identity: %s", async (_name, row) => {
+    const result = await runClawhubInstallProof({ results: [row] });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Maintained ClawHub fixture");
+    expect(result.calls).toEqual([["skills", "search", "gifgrep", "--limit", "8", "--json"]]);
+  });
+
+  it.each([
+    {
+      marker: "mapped trust verdict",
+      row: { ...maintainedMappedRow, trust: { clawHubVerdict: "suspicious" } },
+    },
+    {
+      marker: "native suspicious flag",
+      row: { ...maintainedRawRow, native: { skill: { isSuspicious: true } } },
+    },
+  ])("rejects maintained fixture risk before install: $marker", async ({ row }) => {
+    const result = await runClawhubInstallProof({ results: [row] });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Maintained ClawHub fixture");
+    expect(result.calls).toEqual([["skills", "search", "gifgrep", "--limit", "8", "--json"]]);
+  });
+
+  it.each([
+    { name: "origin owner", origin: { ownerHandle: "other" } },
+    { name: "lock owner", lock: { ownerHandle: "other" } },
+    {
+      name: "agreed wrong version",
+      origin: { installedVersion: "9.9.9" },
+      lock: { version: "9.9.9" },
+    },
+    { name: "changed source", skillText: "name: gifgrep\nchanged: true\n" },
+    { name: "security refusal", refusal: true },
+  ])("rejects maintained fixture $name without an alternate install", async (fault) => {
+    const result = await runClawhubInstallProof({ results: [maintainedRawRow], ...fault });
+    expect(result.status).toBe(1);
+    expect(`${result.stdout}\n${result.stderr}`).not.toContain("E2E_OK");
+    expect(result.calls.filter((args) => args[1] === "install")).toEqual([
+      ["skills", "install", "@steipete/gifgrep", "--version", "1.0.1", "--force"],
+    ]);
+    expect(result.stdout).not.toContain("Skipping live ClawHub skill");
+  });
+
+  it.each([
+    "OPENCLAW_SKILL_INSTALL_E2E_QUERY",
+    "OPENCLAW_SKILL_INSTALL_E2E_SLUG",
+    "OPENCLAW_SKILL_INSTALL_E2E_PREFERRED_SLUG",
+  ])("preserves custom behavior for %s alone", async (key) => {
+    const result = await runClawhubInstallProof({
+      results: [{ slug: "custom", installRef: "@another-owner/custom" }],
+      overrides: { [key]: "custom" },
+      origin: { ownerHandle: "another-owner" },
+      lock: { ownerHandle: "another-owner" },
+      skillText: "name: Custom\n",
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.calls).toEqual([
+      [
+        "skills",
+        "search",
+        key.endsWith("_QUERY") ? "custom" : "homeassistant",
+        "--limit",
+        "8",
+        "--json",
+      ],
+      ["skills", "install", "@another-owner/custom", "--force"],
+      ["skills", "info", "custom", "--json"],
+    ]);
+  });
+
+  it.each(["", "custom"])("forwards raw Docker skill overrides: %j", (value) => {
+    const result = spawnSync(
+      process.platform === "darwin" ? "/bin/bash" : "bash",
+      [
+        "-c",
+        `
+set -euo pipefail
+source() { :; }
+docker_e2e_resolve_image() { printf '%s' fixture-image; }
+docker_e2e_cleanup_package_tgz() { :; }
+docker_e2e_prepare_package_tgz() { printf '%s' fixture-package.tgz; }
+docker_e2e_test_state_shell_b64() { printf '%s' fixture-state; }
+docker_e2e_package_mount_args() { DOCKER_E2E_PACKAGE_ARGS=(-v fixture-package.tgz:/tmp/openclaw.tgz:ro); }
+docker_e2e_build_or_reuse() { :; }
+run_logged_print() { shift; "$@"; }
+docker_e2e_run_with_harness() { printf '%s\\n' "$@"; }
+. scripts/e2e/skill-install-docker.sh
+`,
+      ],
+      {
+        encoding: "utf8",
+        timeout: 5_000,
+        env: {
+          PATH: "/usr/bin:/bin",
+          OPENCLAW_SKILL_INSTALL_E2E_QUERY: value,
+          OPENCLAW_SKILL_INSTALL_E2E_SLUG: value,
+          OPENCLAW_SKILL_INSTALL_E2E_PREFERRED_SLUG: value,
+        },
+      },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    const args = result.stdout.trim().split("\n");
+    for (const key of ["QUERY", "SLUG", "PREFERRED_SLUG"]) {
+      expect(args).toContain(`OPENCLAW_SKILL_INSTALL_E2E_${key}=${value}`);
+    }
+    expect(args.slice(-3)).toEqual([
+      "fixture-image",
+      "bash",
+      "scripts/e2e/lib/skills/clawhub-install-proof.sh",
+    ]);
   });
 
   it("rejects ClawHub skill info paths that only share a resolved prefix", async () => {

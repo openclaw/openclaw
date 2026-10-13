@@ -2,8 +2,22 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
-import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
+import {
+  getRuntimeAuthProfileStoreCredentialsRevision,
+  setRuntimeAuthProfileStoreSnapshot,
+} from "../agents/auth-profiles/runtime-snapshots.js";
+import {
+  loadAuthProfileStoreWithoutExternalProfiles,
+  loadAuthProfileStoreWithoutExternalProfilesAsync,
+  updateAuthProfileStoreWithLock,
+} from "../agents/auth-profiles/store-runtime.js";
+import {
+  captureAuthProfileStorePersistenceSnapshot,
+  resolvePersistedAuthProfileOwnerAgentDir,
+} from "../agents/auth-profiles/store.js";
+import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
@@ -11,6 +25,10 @@ import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-l
 import { createNonExitingRuntime } from "../runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  activateSavedSetupCredential,
+  type SetupCredentialActivationReceipt,
+} from "./setup-inference-credential-access.js";
 import { stageProviderAuthCandidate } from "./setup-inference-credentials.js";
 
 afterEach(() => {
@@ -18,14 +36,12 @@ afterEach(() => {
 });
 
 describe("setup inference credential provider lifetime", () => {
-  it.each(
-    (["managed wizard", "app-guided auth"] as const).flatMap((flow) =>
-      (["empty", "matching-last", "missing-match"] as const).map((profileCase) => ({
-        flow,
-        profileCase,
-      })),
-    ),
-  )(
+  it.each([
+    { flow: "managed wizard", profileCase: "matching-last" },
+    { flow: "managed wizard", profileCase: "missing-match" },
+    { flow: "app-guided auth", profileCase: "empty" },
+    { flow: "app-guided auth", profileCase: "missing-match" },
+  ] as const)(
     "materializes $flow model normalization with $profileCase profiles before retiring the provider",
     async ({ flow, profileCase }) => {
       await withOpenClawTestState({ label: "setup-plan-lifetime" }, async (state) => {
@@ -35,31 +51,14 @@ describe("setup inference credential provider lifetime", () => {
         const observationEvent = `${id}-observation`;
         const rawModelRef = `${id}/preview`;
         const canonicalModelRef = `${id}/canonical`;
+        const profile = (provider: string) => ({
+          profileId: `${provider}:default`,
+          credential: { type: "api_key", provider, key: `synthetic-${provider}-key` },
+        });
         const profiles =
           profileCase === "empty"
             ? []
-            : [
-                {
-                  profileId: "unrelated:default",
-                  credential: {
-                    type: "api_key",
-                    provider: "unrelated",
-                    key: "synthetic-unrelated-key",
-                  },
-                },
-                ...(profileCase === "matching-last"
-                  ? [
-                      {
-                        profileId: `${id}:default`,
-                        credential: {
-                          type: "api_key",
-                          provider: id,
-                          key: "synthetic-selected-key",
-                        },
-                      },
-                    ]
-                  : []),
-              ];
+            : [profile("unrelated"), ...(profileCase === "matching-last" ? [profile(id)] : [])];
         const nativeBefore = process.listenerCount(nativeEvent);
         const observations: Array<{ phase: string; value: unknown }> = [];
         const observe = (phase: string, value: unknown) => {
@@ -156,7 +155,7 @@ describe("setup inference credential provider lifetime", () => {
             routeAgentId: "main",
             workspace: state.workspaceDir,
             agentDir: state.agentDir(),
-            credentialsSaved: false,
+            effects: { credentialsSaved: false },
             beforePersistentEffect: async () => {},
             deps: {},
             params: {
@@ -200,8 +199,10 @@ describe("setup inference credential provider lifetime", () => {
           expect(process.listenerCount(nativeEvent)).toBe(nativeBefore);
           expect(cfg).toEqual(originalConfig);
           expect(structuredClone(plan)).toEqual(plan);
+          const saved = loadAuthProfileStoreWithoutExternalProfiles(state.agentDir()).profiles;
           if (profileCase === "missing-match") {
             expect(plan).toEqual({ error: expect.stringContaining("did not return credentials") });
+            expect(saved).toEqual({});
             expect(observations[0]).toEqual({ phase: "auth-result", value: rawModelRef });
             expect(observations.at(-1)).toEqual({ phase: "dispose", value: undefined });
             return;
@@ -228,9 +229,9 @@ describe("setup inference credential provider lifetime", () => {
           if ("error" in plan) {
             throw new Error(plan.error);
           }
-          const saved = loadAuthProfileStoreWithoutExternalProfiles(state.agentDir()).profiles;
           if (profileCase === "matching-last") {
             expect(plan.authProfileId).toBeDefined();
+            expect(Object.keys(saved)).toEqual([plan.authProfileId]);
             expect(saved[plan.authProfileId!]).toMatchObject(
               expectDefined(profiles[1]?.credential, "Expected the selected fixture credential"),
             );
@@ -249,4 +250,67 @@ describe("setup inference credential provider lifetime", () => {
       });
     },
   );
+});
+
+it("activates and restores setup credentials off-thread while preserving later neighboring writes", async () => {
+  await withOpenClawTestState({ label: "setup-auth-publication" }, async (state) => {
+    const profileId = "fixture:setup";
+    const source: AuthProfileCredential = {
+      type: "api_key",
+      provider: "fixture",
+      keyRef: { source: "env", provider: "default", id: "FIXTURE_KEY" },
+    };
+    const credential = {
+      ...source,
+      setup: { replacement: true, modelRef: "fixture/model", configJson: "{}" },
+    };
+    await state.writeAuthProfiles({ version: 1, profiles: { [profileId]: credential } });
+    const agentDir = resolvePersistedAuthProfileOwnerAgentDir({
+      agentDir: state.agentDir(),
+      profileId,
+    });
+    await loadAuthProfileStoreWithoutExternalProfilesAsync(state.agentDir());
+    const observation = observeHostDataSql();
+    let receipt: SetupCredentialActivationReceipt;
+    try {
+      receipt = expectDefined(
+        await activateSavedSetupCredential({ agentDir: state.agentDir(), profileId, credential }),
+        "Expected activation receipt",
+      );
+      expect(
+        observation.queries.filter((sql) => /\bauth_profile_(?:store|state)\b/iu.test(sql)),
+      ).toEqual([]);
+    } finally {
+      observation.restore();
+    }
+    const persisted = captureAuthProfileStorePersistenceSnapshot(agentDir).credentialsRaw;
+    expect(persisted).not.toHaveProperty(["profiles", profileId, "setup"]);
+    expect(persisted).not.toHaveProperty(["profiles", profileId, "key"]);
+    const revision = getRuntimeAuthProfileStoreCredentialsRevision();
+    setRuntimeAuthProfileStoreSnapshot(
+      { version: 1, profiles: { [profileId]: { ...source, key: "materialized-fixture-key" } } },
+      state.agentDir(),
+    );
+    expect(getRuntimeAuthProfileStoreCredentialsRevision()).toBeGreaterThan(revision);
+    expect(captureAuthProfileStorePersistenceSnapshot(agentDir).credentialsRaw).toEqual(persisted);
+    expect(() => receipt.assertCurrent()).not.toThrow();
+    await updateAuthProfileStoreWithLock({
+      agentDir,
+      saveOptions: { filterExternalAuthProfiles: false, syncExternalCli: false },
+      updater(store) {
+        store.profiles.neighbor = { type: "api_key", provider: "neighbor", key: "fixture-next" };
+        store.usageStats = { neighbor: { lastUsed: 42 } };
+        return true;
+      },
+    });
+    await receipt.rollback();
+    const restored = await loadAuthProfileStoreWithoutExternalProfilesAsync(state.agentDir());
+    expect(restored.profiles[profileId]).toMatchObject(credential);
+    expect(restored.profiles.neighbor).toEqual({
+      type: "api_key",
+      provider: "neighbor",
+      key: "fixture-next",
+    });
+    expect(restored.usageStats?.neighbor?.lastUsed).toBe(42);
+  });
 });

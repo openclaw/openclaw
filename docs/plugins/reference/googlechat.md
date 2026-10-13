@@ -15,7 +15,7 @@ OpenClaw Google Chat channel plugin for spaces and direct messages.
 ## Distribution
 
 - Package: `@openclaw/googlechat`
-- Install route: npm or ClawHub
+- Install route: npm or ClawHub: `clawhub:@openclaw/googlechat`
 
 ## Surface
 

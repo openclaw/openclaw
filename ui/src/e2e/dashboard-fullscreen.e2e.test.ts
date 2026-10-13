@@ -5,6 +5,7 @@ import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/inde
 import { SANDBOX_HOST_PATH } from "../../../src/agents/sandbox-host.js";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
@@ -566,16 +567,17 @@ suite.define(() => {
             left: inner.left - outer.left,
             right: outer.right - inner.right,
             top: inner.top - outer.top,
+            bottom: outer.bottom - inner.bottom,
           };
         });
-      await expect.poll(frameInsets).toEqual({ left: 0, right: 0, top: 0 });
+      await expect.poll(frameInsets).toEqual({ left: 12, right: 12, top: 12, bottom: 12 });
       expect(await widget.evaluate((element) => getComputedStyle(element).borderTopWidth)).toBe(
         "0px",
       );
       expect(await widget.evaluate((element) => getComputedStyle(element).borderRadius)).toBe(
         "0px",
       );
-      await page.getByRole("button", { name: "Restore split", exact: true }).click();
+      await selectChatLayoutAction(page, "Restore split");
       await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
       await page.locator('.sidebar-region__primary[data-region="side"] .chat-thread').waitFor();
       await page.locator('[data-panel-slot="dashboard"][data-region="main"]').waitFor();
@@ -586,9 +588,9 @@ suite.define(() => {
         true,
       );
       expect(await note.inputValue()).toBe("Keep this draft");
-      await page.getByRole("button", { name: "Focus", exact: true }).click();
+      await selectChatLayoutAction(page, "Focus");
       await frame.waitFor({ state: "visible" });
-      await expect.poll(frameInsets).toEqual({ left: 0, right: 0, top: 0 });
+      await expect.poll(frameInsets).toEqual({ left: 12, right: 12, top: 12, bottom: 12 });
       await gateway.setMethodResponse("board.get", {
         ...singleWidget,
         revision: 2,

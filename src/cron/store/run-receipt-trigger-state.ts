@@ -6,9 +6,9 @@ import {
 } from "../../infra/kysely-sync.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateDatabase } from "../../state/openclaw-state-db.generated.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
+import { getOpenClawStateFeatureSchemaSql } from "../../state/openclaw-state-feature-schema.js";
 import { loadedCronStoreFromRows, loadCronRows } from "./row-codec.js";
-import type { CronRunReceiptHandle } from "./run-receipt-store.js";
+import type { CronRunReceiptHandle } from "./run-receipt.types.js";
 
 type CronRunTriggerStateDatabase = Pick<
   OpenClawStateDatabase,
@@ -37,16 +37,12 @@ function ensureRetirementsTable(database: DatabaseSync): void {
   if (tableExists(database, RETIREMENTS_TABLE)) {
     return;
   }
-  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
-    `CREATE TABLE IF NOT EXISTS ${RETIREMENTS_TABLE} (`,
-  );
-  const endMarker = "\n) STRICT;";
-  const end = OPENCLAW_STATE_SCHEMA_SQL.indexOf(endMarker, start);
-  if (start < 0 || end < start) {
-    throw new Error("OpenClaw cron run trigger-state retirement schema is missing.");
-  }
   // sqlite-allow-raw -- Canonical first-use DDL rolls back with the owning edit.
-  database.exec(OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + endMarker.length));
+  database.exec(
+    getOpenClawStateFeatureSchemaSql(RETIREMENTS_TABLE, {
+      errorMessage: "OpenClaw cron run trigger-state retirement schema is missing.",
+    }),
+  );
 }
 
 /** Retires the exact pending state writer in the acknowledged edit's transaction. */

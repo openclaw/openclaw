@@ -157,6 +157,7 @@ export function resolveLocalVitestScheduling(
       : constrainedMemoryBytes;
   }
   const totalMemoryGb = totalMemoryBytes / 1024 ** 3;
+  const ci = isCiLikeEnv(env);
 
   let inferred =
     cpuCount <= 2
@@ -166,9 +167,18 @@ export function resolveLocalVitestScheduling(
         : cpuCount <= 8
           ? 4
           : Math.max(1, Math.floor(cpuCount * 0.75));
+  if (ci && cpuCount >= 8) {
+    inferred = Math.max(inferred, 8);
+  }
 
   if (totalMemoryGb <= 16) {
     inferred = Math.min(inferred, 2);
+  } else if (ci && totalMemoryGb >= 28 && totalMemoryGb <= 128) {
+    // Two measured 8-worker Gateway envelopes need 20.16 GiB; reserve 25%.
+    inferred = Math.min(inferred, 8);
+  } else if (ci && totalMemoryGb >= 24 && totalMemoryGb < 28) {
+    // Two measured 6-worker envelopes need 16.97 GiB, fitting 75% of 24 GiB.
+    inferred = Math.min(inferred, 6);
   } else if (totalMemoryGb <= 32) {
     inferred = Math.min(inferred, 4);
   } else if (totalMemoryGb <= 64) {
@@ -224,13 +234,13 @@ export function resolveLocalVitestScheduling(
   }
 
   if (loadRatio >= 0.75) {
-    const loadWorkers = Math.max(2, Math.ceil(inferred * 0.75));
+    const loadWorkers = Math.ceil(inferred * 0.75);
     const maxWorkers =
       memoryPressureLimit === null ? loadWorkers : Math.min(loadWorkers, memoryPressureLimit);
     return {
       maxWorkers,
       fileParallelism: maxWorkers > 1,
-      throttledBySystem: maxWorkers < inferred || maxWorkers < loadWorkers,
+      throttledBySystem: maxWorkers < inferred || memoryPressureLimit === 1,
     };
   }
 

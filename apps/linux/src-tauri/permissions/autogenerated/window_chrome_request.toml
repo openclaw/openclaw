@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-window-chrome-request"
+description = "Enables the window_chrome_request command without any pre-configured scope."
+commands.allow = ["window_chrome_request"]
+
+[[permission]]
+identifier = "deny-window-chrome-request"
+description = "Denies the window_chrome_request command without any pre-configured scope."
+commands.deny = ["window_chrome_request"]

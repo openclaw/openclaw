@@ -6,6 +6,7 @@ import {
   type Server,
   type ServerResponse,
 } from "node:http";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleSlackHttpRequest } from "../http/registry.js";
 import { getSlackTestState, resetSlackTestState } from "../monitor.test-helpers.js";
@@ -26,8 +27,8 @@ vi.mock("./ingress.js", () => ({
 
 const { monitorSlackProvider } = await import("./provider.js");
 
-beforeEach(() => {
-  resetSlackTestState();
+beforeEach(async () => {
+  await resetSlackTestState();
   ingressStartMock.mockReset();
   ingressStopMock.mockReset().mockResolvedValue(undefined);
 });
@@ -68,6 +69,7 @@ describe("Slack ingress startup cleanup", () => {
     };
     const controller = new AbortController();
     const run = monitorSlackProvider({
+      scheduler: createTestPluginServiceScheduler(),
       botToken: "bot-token",
       abortSignal: controller.signal,
       config: state.config,
@@ -149,6 +151,7 @@ describe("Slack ingress startup cleanup", () => {
 
     await expect(
       monitorSlackProvider({
+        scheduler: createTestPluginServiceScheduler(),
         botToken: "bot-token",
         appToken: "app-token",
         config: getSlackTestState().config,

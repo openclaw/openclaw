@@ -1,19 +1,14 @@
-/**
- * HTML visibility sanitizers for web_fetch.
- *
- * Removes hidden or invisible content before readable-text extraction.
- */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
 import {
   readRawTextBounds,
-  isAsciiWhitespace,
   readTagToken,
   skipHtmlComment,
   startsLikeHtmlTag,
-} from "./web-fetch-html-tag.js";
+} from "../../../packages/markdown-core/src/html-scanner.js";
+import { readHtmlAttribute } from "./web-fetch-attributes.js";
 
 // Compile property matchers once: this list is checked for every styled element.
 const HIDDEN_STYLE_PATTERNS = (
@@ -26,13 +21,17 @@ const HIDDEN_STYLE_PATTERNS = (
     ["color", /^\s*transparent\s*$/i],
     ["color", /^\s*rgba\s*\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*0(?:\.0+)?\s*\)\s*$/i],
     ["color", /^\s*hsla\s*\(\s*[\d.]+\s*,\s*[\d.]+%?\s*,\s*[\d.]+%?\s*,\s*0(?:\.0+)?\s*\)\s*$/i],
+    // clip-path: none and inset(0%) remain visible.
+    ["clip-path", /inset\s*\(\s*(?:0*\.\d+|[1-9]\d*(?:\.\d+)?)%/i],
+    ["transform", /scale\s*\(\s*0\s*\)|translate[XY]\s*\(\s*-\d{4,}px\s*\)/i],
+    ["left", /^\s*-\d{4,}px\s*$/i],
+    ["top", /^\s*-\d{4,}px\s*$/i],
   ] satisfies Array<[string, RegExp]>
 ).map(([prop, valuePattern]) => {
   const escapedProp = prop.replace(/-/g, "\\-");
   return [new RegExp(`(?:^|;)\\s*${escapedProp}\\s*:\\s*([^;]+)`, "i"), valuePattern] as const;
 });
 
-// Class names associated with visually hidden content
 const HIDDEN_CLASS_NAMES = new Set([
   "sr-only",
   "visually-hidden",
@@ -73,125 +72,19 @@ function isStyleHidden(style: string): boolean {
     }
   }
 
-  // clip-path: none is not hidden, but positive percentage inset() clipping hides content.
-  const clipPath = style.match(/(?:^|;)\s*clip-path\s*:\s*([^;]+)/i);
-  const clipPathValue = clipPath?.at(1);
-  if (clipPathValue && !/^\s*none\s*$/i.test(clipPathValue)) {
-    if (/inset\s*\(\s*(?:0*\.\d+|[1-9]\d*(?:\.\d+)?)%/i.test(clipPathValue)) {
-      return true;
-    }
-  }
-
-  // transform: scale(0)
-  const transform = style.match(/(?:^|;)\s*transform\s*:\s*([^;]+)/i);
-  const transformValue = transform?.at(1);
-  if (transformValue) {
-    if (/scale\s*\(\s*0\s*\)/i.test(transformValue)) {
-      return true;
-    }
-    if (/translateX\s*\(\s*-\d{4,}px\s*\)/i.test(transformValue)) {
-      return true;
-    }
-    if (/translateY\s*\(\s*-\d{4,}px\s*\)/i.test(transformValue)) {
-      return true;
-    }
-  }
-
-  // width:0 + height:0 + overflow:hidden
   const width = style.match(/(?:^|;)\s*width\s*:\s*([^;]+)/i);
   const height = style.match(/(?:^|;)\s*height\s*:\s*([^;]+)/i);
   const overflow = style.match(/(?:^|;)\s*overflow\s*:\s*([^;]+)/i);
-  if (
+  return Boolean(
     width &&
     /^\s*0(px)?\s*$/i.test(width.at(1) ?? "") &&
     height &&
     /^\s*0(px)?\s*$/i.test(height.at(1) ?? "") &&
     overflow &&
-    /^\s*hidden\s*$/i.test(overflow.at(1) ?? "")
-  ) {
-    return true;
-  }
-
-  // Offscreen positioning: left/top far negative
-  const left = style.match(/(?:^|;)\s*left\s*:\s*([^;]+)/i);
-  const top = style.match(/(?:^|;)\s*top\s*:\s*([^;]+)/i);
-  if (left && /^\s*-\d{4,}px\s*$/i.test(left.at(1) ?? "")) {
-    return true;
-  }
-  if (top && /^\s*-\d{4,}px\s*$/i.test(top.at(1) ?? "")) {
-    return true;
-  }
-
-  return false;
+    /^\s*hidden\s*$/i.test(overflow.at(1) ?? ""),
+  );
 }
 
-// Consume complete attributes so quoted values and framework names cannot become visibility names.
-function createAttributeReader(
-  attribute: "aria-hidden" | "class" | "hidden" | "style" | "type" | "encoding",
-) {
-  return (attrs: string): string | undefined => {
-    let pos = 0;
-    while (pos < attrs.length) {
-      while (
-        pos < attrs.length &&
-        (isAsciiWhitespace(attrs.charAt(pos)) || attrs.charAt(pos) === "/")
-      ) {
-        pos += 1;
-      }
-      const nameStart = pos;
-      // A leading equals sign is part of a malformed name, not a new value boundary.
-      if (attrs.charAt(pos) === "=") {
-        pos += 1;
-      }
-      while (
-        pos < attrs.length &&
-        !isAsciiWhitespace(attrs.charAt(pos)) &&
-        attrs.charAt(pos) !== "/" &&
-        attrs.charAt(pos) !== "="
-      ) {
-        pos += 1;
-      }
-      if (pos === nameStart) {
-        break;
-      }
-      const name = attrs.slice(nameStart, pos).toLowerCase();
-      while (pos < attrs.length && isAsciiWhitespace(attrs.charAt(pos))) {
-        pos += 1;
-      }
-      let value = "";
-      if (attrs.charAt(pos) === "=") {
-        pos += 1;
-        while (pos < attrs.length && isAsciiWhitespace(attrs.charAt(pos))) {
-          pos += 1;
-        }
-        const quote = attrs.charAt(pos);
-        if (quote === '"' || quote === "'") {
-          const valueStart = pos + 1;
-          const valueEnd = attrs.indexOf(quote, valueStart);
-          value = valueEnd === -1 ? attrs.slice(valueStart) : attrs.slice(valueStart, valueEnd);
-          pos = valueEnd === -1 ? attrs.length : valueEnd + 1;
-        } else {
-          const valueStart = pos;
-          while (pos < attrs.length && !isAsciiWhitespace(attrs.charAt(pos))) {
-            pos += 1;
-          }
-          value = attrs.slice(valueStart, pos);
-        }
-      }
-      if (name === attribute) {
-        return value;
-      }
-    }
-    return undefined;
-  };
-}
-
-const readType = createAttributeReader("type");
-const readAriaHidden = createAttributeReader("aria-hidden");
-const readHidden = createAttributeReader("hidden");
-const readClass = createAttributeReader("class");
-const readStyle = createAttributeReader("style");
-const readEncoding = createAttributeReader("encoding");
 const VISIBILITY_ATTRIBUTE_HINT = /hidden|class|style|type|[\u0080-\uffff]/i;
 
 function shouldRemoveElement(tagName: string, attrs: string): boolean {
@@ -204,14 +97,15 @@ function shouldRemoveElement(tagName: string, attrs: string): boolean {
     return false;
   }
   if (
-    (tagName === "input" && normalizeOptionalLowercaseString(readType(attrs)) === "hidden") ||
-    normalizeOptionalLowercaseString(readAriaHidden(attrs)) === "true" ||
-    readHidden(attrs) !== undefined ||
-    hasHiddenClass(readClass(attrs) ?? "")
+    (tagName === "input" &&
+      normalizeOptionalLowercaseString(readHtmlAttribute(attrs, "type")) === "hidden") ||
+    normalizeOptionalLowercaseString(readHtmlAttribute(attrs, "aria-hidden")) === "true" ||
+    readHtmlAttribute(attrs, "hidden") !== undefined ||
+    hasHiddenClass(readHtmlAttribute(attrs, "class") ?? "")
   ) {
     return true;
   }
-  const style = readStyle(attrs) ?? "";
+  const style = readHtmlAttribute(attrs, "style") ?? "";
   return style ? isStyleHidden(style) : false;
 }
 
@@ -230,22 +124,14 @@ const OPAQUE_TEXT_ELEMENTS = new Set([
 ]);
 const MATH_TEXT_INTEGRATION_POINTS = new Set(["mi", "mo", "mn", "ms", "mtext"]);
 const SVG_HTML_INTEGRATION_POINTS = new Set(["foreignobject", "desc", "title"]);
-// HTML's li start-tag rule stops at special elements other than address, div, and p.
-// Foreign-content containers also retain scope; void elements never enter the stack.
-const LIST_ITEM_BOUNDARIES = new Set([
-  "applet",
+// These block starts both close paragraphs and bound omitted list items.
+const SHARED_SCOPE_BOUNDARIES = [
   "article",
   "aside",
   "blockquote",
-  "body",
-  "button",
-  "caption",
-  "center",
-  "colgroup",
   "dd",
   "details",
   "dialog",
-  "dir",
   "dl",
   "dt",
   "fieldset",
@@ -253,110 +139,79 @@ const LIST_ITEM_BOUNDARIES = new Set([
   "figure",
   "footer",
   "form",
-  "frameset",
   "h1",
   "h2",
   "h3",
   "h4",
   "h5",
   "h6",
-  "head",
   "header",
   "hgroup",
-  "html",
-  "iframe",
   "listing",
   "main",
-  "marquee",
-  "math",
   "menu",
   "nav",
-  "noembed",
-  "noframes",
-  "noscript",
-  "object",
   "ol",
   "plaintext",
   "pre",
-  "script",
   "search",
   "section",
+  "table",
+  "ul",
+  "xmp",
+];
+// HTML's li start-tag rule stops at special elements other than address, div, and p.
+// Foreign-content containers also retain scope; void elements never enter the stack.
+const LIST_ITEM_BOUNDARIES = new Set([
+  ...SHARED_SCOPE_BOUNDARIES,
+  ...OPAQUE_TEXT_ELEMENTS,
+  "applet",
+  "body",
+  "button",
+  "caption",
+  "center",
+  "colgroup",
+  "dir",
+  "frameset",
+  "head",
+  "html",
+  "marquee",
+  "math",
+  "object",
   "select",
-  "style",
   "summary",
   "svg",
-  "table",
   "tbody",
   "td",
   "template",
-  "textarea",
   "tfoot",
   "th",
   "thead",
-  "title",
   "tr",
-  "ul",
-  "xmp",
 ]);
 
 const DEFINITION_ITEMS = new Set(["dt", "dd"]);
 const LIST_ITEMS = new Set(["li"]);
 const DEFINITION_CONTAINERS = new Set(["dl"]);
 const PARAGRAPH_CLOSE_START = new Set([
+  ...SHARED_SCOPE_BOUNDARIES,
   "address",
-  "article",
-  "aside",
-  "blockquote",
-  "dd",
-  "details",
-  "dialog",
   "div",
-  "dl",
-  "dt",
-  "fieldset",
-  "figcaption",
-  "figure",
-  "footer",
-  "form",
-  "h1",
-  "h2",
-  "h3",
-  "h4",
-  "h5",
-  "h6",
-  "header",
-  "hgroup",
   "hr",
   "li",
-  "listing",
-  "main",
-  "menu",
-  "nav",
-  "ol",
   "p",
-  "plaintext",
-  "pre",
-  "search",
-  "section",
-  "table",
-  "ul",
-  "xmp",
 ]);
+const TABLE_SCOPE_BOUNDARIES = new Set(["html", "math", "svg", "table", "template"]);
 const BUTTON_SCOPE_BOUNDARIES = new Set([
+  ...TABLE_SCOPE_BOUNDARIES,
   "applet",
   "button",
   "caption",
-  "html",
   "marquee",
-  "math",
   "object",
-  "svg",
-  "table",
   "td",
-  "template",
   "th",
 ]);
-const TABLE_SCOPE_BOUNDARIES = new Set(["html", "math", "svg", "table", "template"]);
 const PARAGRAPH_REQUIRED_END_PARENTS = new Set([
   "a",
   "audio",
@@ -379,7 +234,7 @@ type OpenElement = {
   childNamespace: "html" | "math" | "svg";
 };
 
-function removeMarkedElements(html: string): string {
+export async function sanitizeHtml(html: string): Promise<string> {
   let output = "";
   let cursor = 0;
   // Scope facts belong to each open frame and restore when it closes. Indexed names
@@ -557,7 +412,7 @@ function removeMarkedElements(html: string): string {
     const foreign = name === "math" || name === "svg";
     const encoding =
       namespace === "math" && name === "annotation-xml"
-        ? readEncoding(attrs)?.toLowerCase()
+        ? readHtmlAttribute(attrs, "encoding")?.toLowerCase()
         : undefined;
     const htmlChildren =
       (namespace === "math" &&
@@ -692,8 +547,4 @@ function removeMarkedElements(html: string): string {
   }
 
   return output;
-}
-
-export async function sanitizeHtml(html: string): Promise<string> {
-  return removeMarkedElements(html);
 }

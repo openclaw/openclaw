@@ -1,6 +1,8 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-// Xai plugin entrypoint registers its OpenClaw integration.
-import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
+import type {
+  OpenClawPluginToolContext,
+  ProviderFailoverErrorContext,
+} from "openclaw/plugin-sdk/plugin-entry";
 import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
@@ -29,13 +31,10 @@ import {
   isXaiGrokProxyBaseUrl,
 } from "./provider-catalog.js";
 import { isXaiProviderId } from "./provider-id.js";
-import {
-  isModernXaiModel,
-  normalizeXaiResolvedModel,
-  resolveXaiForwardCompatModel,
-} from "./provider-models.js";
+import { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
 import { resolveXaiTransport } from "./provider-routing.js";
+import { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
 import {
   readPluginCodeExecutionConfig,
   resolveCodeExecutionEnabled,
@@ -64,23 +63,33 @@ const PROVIDER_ID = "xai";
 const XAI_CREDIT_OR_SPENDING_LIMIT_RE =
   /\b(?:used all available credits|run out of credits|monthly spending limit|purchase more credits|raise your spending limit|need a Grok subscription)\b/i;
 const XAI_RATE_LIMIT_RE = /\b(?:rate limit exceeded|too many requests)\b/i;
+const XAI_PROVIDER_INTERNAL_ERROR_RE = /\binternal error during token generation\b/i;
 
 const loadCodeExecutionModule = createLazyRuntimeModule(() => import("./code-execution.js"));
 
 const loadXSearchModule = createLazyRuntimeModule(() => import("./x-search.js"));
 
-function classifyXaiFailoverReason(errorMessage: string) {
+function classifyXaiFailoverReason({
+  errorMessage,
+  status,
+  code,
+  errorType,
+}: ProviderFailoverErrorContext) {
   if (XAI_CREDIT_OR_SPENDING_LIMIT_RE.test(errorMessage)) {
     return "billing" as const;
   }
   if (XAI_RATE_LIMIT_RE.test(errorMessage)) {
     return "rate_limit" as const;
   }
+  if (
+    status === undefined &&
+    code === undefined &&
+    errorType === undefined &&
+    XAI_PROVIDER_INTERNAL_ERROR_RE.test(errorMessage)
+  ) {
+    return "server_error" as const;
+  }
   return undefined;
-}
-
-function hasResolvableXaiApiKey(config: unknown, auth?: XaiToolAuthContext): boolean {
-  return isXaiToolEnabled({ sourceConfig: config as never, auth });
 }
 
 function isCodeExecutionEnabled(config: unknown, auth?: XaiToolAuthContext): boolean {
@@ -100,7 +109,7 @@ function isXSearchEnabled(config: unknown, auth?: XaiToolAuthContext): boolean {
   if (resolved?.enabled === false) {
     return false;
   }
-  return hasResolvableXaiApiKey(config, auth);
+  return isXaiToolEnabled({ sourceConfig: config as never, auth });
 }
 
 function shouldExposeXaiBilledTool(params: {
@@ -294,7 +303,7 @@ export default defineSingleProviderPluginEntry({
         mode: "api-key" as const,
       };
     },
-    normalizeResolvedModel: ({ model }) => normalizeXaiResolvedModel(model),
+    normalizeResolvedModel: ({ model }) => applyXaiRuntimeModelCompat(model),
     normalizeTransport: ({ provider, api, baseUrl }) =>
       resolveXaiTransport({ provider, api, baseUrl }),
     normalizeModelId: ({ modelId }) => normalizeNativeXaiModelId(modelId),
@@ -307,7 +316,7 @@ export default defineSingleProviderPluginEntry({
     fetchUsageSnapshot: async (ctx) => await fetchXaiUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),
     resolveThinkingProfile,
     isModernModelRef: ({ modelId }) => isModernXaiModel(modelId),
-    classifyFailoverReason: ({ errorMessage }) => classifyXaiFailoverReason(errorMessage),
+    classifyFailoverReason: classifyXaiFailoverReason,
   }),
   register(api) {
     api.registerWebSearchProvider(createXaiWebSearchProvider());

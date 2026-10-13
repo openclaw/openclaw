@@ -1,4 +1,3 @@
-// Skill Workshop diagnostics explain which effective policy layer hides its agent tool.
 import { listAgentEntriesWithSource, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   resolveConversationCapabilityProfile,
@@ -24,11 +23,6 @@ type SkillWorkshopToolPolicyDiagnostic = {
   detail: string;
   fix: string;
   message: string;
-};
-
-type AgentToolsLocation = {
-  path: string;
-  tools: AgentToolsConfig;
 };
 
 function findAgent(config: OpenClawConfig, agentId: string) {
@@ -69,40 +63,6 @@ function providerPolicyPath(params: {
     : undefined;
 }
 
-function profileAlsoAllowPath(params: {
-  config: OpenClawConfig;
-  agent: AgentToolsLocation | undefined;
-  profileOwnerPath: string;
-}): string {
-  if (Array.isArray(params.agent?.tools.alsoAllow)) {
-    return `${params.agent.path}.alsoAllow`;
-  }
-  if (Array.isArray(params.config.tools?.alsoAllow)) {
-    return "tools.alsoAllow";
-  }
-  return `${params.profileOwnerPath}.alsoAllow`;
-}
-
-function providerProfileAlsoAllowPath(params: {
-  globalProvider: ReturnType<typeof providerPolicyPath>;
-  agentProvider: ReturnType<typeof providerPolicyPath>;
-  profileOwnerPath: string;
-}): string {
-  if (params.agentProvider?.ownsAlsoAllow) {
-    return `${params.agentProvider.path}.alsoAllow`;
-  }
-  if (params.globalProvider?.ownsAlsoAllow) {
-    return `${params.globalProvider.path}.alsoAllow`;
-  }
-  return `${params.profileOwnerPath}.alsoAllow`;
-}
-
-function policyDeniesWorkshop(event: ToolPolicyFilterEvent): boolean {
-  return !isToolAllowedByPolicyName(SKILL_WORKSHOP_TOOL_NAME, {
-    deny: event.policy.deny,
-  });
-}
-
 function describeExclusion(params: {
   config: OpenClawConfig;
   agentId: string;
@@ -112,7 +72,11 @@ function describeExclusion(params: {
   const label = params.event.step.label;
   const listed = findAgent(params.config, params.agentId);
   const agent = listed?.entry.tools
-    ? { path: `${listed.path}.tools`, tools: listed.entry.tools }
+    ? {
+        path: `${listed.path}.tools`,
+        profile: listed.entry.tools.profile,
+        ownsAlsoAllow: Array.isArray(listed.entry.tools.alsoAllow),
+      }
     : undefined;
   const globalProvider = providerPolicyPath({
     tools: params.config.tools,
@@ -120,42 +84,35 @@ function describeExclusion(params: {
     capabilityProfile: params.capabilityProfile,
   });
   const agentProvider = providerPolicyPath({
-    tools: agent?.tools,
+    tools: listed?.entry.tools,
     basePath: agent?.path ?? "agents.entries.*.tools",
     capabilityProfile: params.capabilityProfile,
   });
 
-  if (label.startsWith("tools.profile")) {
-    const policyPath = agent?.tools.profile ? agent.path : "tools";
-    const source = `${policyPath}.profile`;
-    const grant = profileAlsoAllowPath({
-      config: params.config,
-      agent,
-      profileOwnerPath: policyPath,
-    });
-    return {
-      source,
-      detail: `${source}: ${JSON.stringify(params.capabilityProfile.policy.profile ?? "unknown")} does not include ${JSON.stringify(SKILL_WORKSHOP_TOOL_NAME)}.`,
-      fix: `Add ${grant}: [${JSON.stringify(SKILL_WORKSHOP_TOOL_NAME)}].`,
-    };
-  }
-
-  if (label.startsWith("tools.byProvider.profile")) {
-    const policyPath = agentProvider?.profile ? agentProvider.path : globalProvider?.path;
+  const providerProfile = label.startsWith("tools.byProvider.profile");
+  if (providerProfile || label.startsWith("tools.profile")) {
+    const scopes = providerProfile
+      ? [agentProvider, globalProvider]
+      : [
+          agent,
+          {
+            path: "tools",
+            profile: params.config.tools?.profile,
+            ownsAlsoAllow: Array.isArray(params.config.tools?.alsoAllow),
+          },
+        ];
+    const policyPath = scopes[0]?.profile ? scopes[0].path : scopes[1]?.path;
     const source = policyPath ? `${policyPath}.profile` : "tools.byProvider.profile";
-    const grant = policyPath
-      ? providerProfileAlsoAllowPath({
-          globalProvider,
-          agentProvider,
-          profileOwnerPath: policyPath,
-        })
-      : "the matching tools.byProvider alsoAllow";
+    const grantOwner = scopes.find((scope) => scope?.ownsAlsoAllow)?.path ?? policyPath;
+    const profile = providerProfile
+      ? params.capabilityProfile.policy.providerProfile
+      : params.capabilityProfile.policy.profile;
     return {
       source,
-      detail: `${source}: ${JSON.stringify(params.capabilityProfile.policy.providerProfile ?? "unknown")} does not include ${JSON.stringify(SKILL_WORKSHOP_TOOL_NAME)}.`,
+      detail: `${source}: ${JSON.stringify(profile ?? "unknown")} does not include ${JSON.stringify(SKILL_WORKSHOP_TOOL_NAME)}.`,
       fix: policyPath
-        ? `Add ${grant}: [${JSON.stringify(SKILL_WORKSHOP_TOOL_NAME)}].`
-        : `Add ${JSON.stringify(SKILL_WORKSHOP_TOOL_NAME)} to ${grant} list.`,
+        ? `Add ${grantOwner}.alsoAllow: [${JSON.stringify(SKILL_WORKSHOP_TOOL_NAME)}].`
+        : `Add ${JSON.stringify(SKILL_WORKSHOP_TOOL_NAME)} to the matching tools.byProvider alsoAllow list.`,
     };
   }
 
@@ -169,7 +126,7 @@ function describeExclusion(params: {
       : label
           .replace(`agents.${params.agentId}.tools`, agent?.path ?? "agents.entries.*.tools")
           .replace("agent tools", agent?.path ?? "agents.entries.*.tools");
-  if (policyDeniesWorkshop(params.event)) {
+  if (!isToolAllowedByPolicyName(SKILL_WORKSHOP_TOOL_NAME, { deny: params.event.policy.deny })) {
     const source = normalizedLabel.replace(/\.allow$/, ".deny");
     return {
       source,
@@ -193,7 +150,7 @@ function makeSkillWorkshopPolicyProbe(): AnyAgentTool {
   return {
     name: SKILL_WORKSHOP_TOOL_NAME,
     label: SKILL_WORKSHOP_TOOL_NAME,
-    description: "Skill Workshop policy availability probe.",
+    description: "Skill Workshop policy availability check.",
     parameters: { type: "object", properties: {} },
     execute: async () => ({ content: [], details: {} }),
   } as AnyAgentTool;
@@ -226,7 +183,6 @@ export function resolveSkillWorkshopToolPolicyAvailability(params: {
   };
 }
 
-/** Returns an actionable diagnostic when an active Workshop tool is policy-hidden. */
 export function detectSkillWorkshopToolPolicyDiagnostic(params: {
   config: OpenClawConfig;
   workshopEnabled: boolean;

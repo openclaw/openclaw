@@ -1,3 +1,4 @@
+import { isRuntimeToolAllowed } from "../../agents/tool-policy-match.js";
 import { formatSystemTurnPrompt } from "../../sessions/system-turn-prompt.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import {
@@ -64,10 +65,28 @@ export function resolveStrandedReplyRecovery(params: {
   }
   return {
     kind: "retry",
-    run: buildStrandedReplyRetryFollowupRun(params.base, {
-      finalText: params.finalText,
-      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-    }),
+    run: {
+      ...params.base,
+      prompt: buildStrandedReplyRetryPrompt(params.finalText),
+      summaryLine: STRANDED_REPLY_RETRY_MARKER,
+      strandedReplyRetry: true,
+      disableCollectBatching: true,
+      toolsAllow: isRuntimeToolAllowed("message", params.base.toolsAllow) ? ["message"] : [],
+      transcriptPrompt: undefined,
+      userTurnTranscriptRecorder: undefined,
+      currentInboundContext: undefined,
+      // Internally generated system turn: the client turn's lifecycle (gateway cancel
+      // identity) completes with the parent run. turnAdoptionLifecycle is one-shot
+      // WeakSet-tracked, so a shared object would be double-owned and free cancel
+      // while the retry still runs.
+      turnAdoptionLifecycle: undefined,
+      replyOperationRunStates: undefined,
+      run: {
+        ...params.base.run,
+        sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+        suppressNextUserMessagePersistence: true,
+      },
+    },
   };
 }
 
@@ -79,35 +98,4 @@ function buildStrandedReplyRetryPrompt(finalText: string): string {
       `Please deliver this reply now by calling message(action=send). ` +
       `Do not add any extra commentary; just deliver the original reply.`,
   );
-}
-
-/** Build the one-shot recovery followup that re-prompts message(action=send). */
-function buildStrandedReplyRetryFollowupRun(
-  base: FollowupRun,
-  params: {
-    finalText: string;
-    sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined;
-  },
-): FollowupRun {
-  return {
-    ...base,
-    prompt: buildStrandedReplyRetryPrompt(params.finalText),
-    summaryLine: STRANDED_REPLY_RETRY_MARKER,
-    strandedReplyRetry: true,
-    disableCollectBatching: true,
-    transcriptPrompt: undefined,
-    userTurnTranscriptRecorder: undefined,
-    currentInboundContext: undefined,
-    // Internally generated system turn: the client turn's lifecycle (gateway cancel
-    // identity) completes with the parent run. turnAdoptionLifecycle is one-shot
-    // WeakSet-tracked, so a shared object would be double-owned and free cancel
-    // while the retry still runs.
-    turnAdoptionLifecycle: undefined,
-    replyOperationRunStates: undefined,
-    run: {
-      ...base.run,
-      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-      suppressNextUserMessagePersistence: true,
-    },
-  };
 }

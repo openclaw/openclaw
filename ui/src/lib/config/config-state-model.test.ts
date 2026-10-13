@@ -160,7 +160,7 @@ describe("config state model", () => {
       expect(canReloadControlUiDocument()).toBe(true);
       runtimeConfig.patchForm(["count"], 3);
       expect(canReloadControlUiDocument()).toBe(false);
-      runtimeConfig.resetDraft();
+      await runtimeConfig.discardDraft();
       expect(canReloadControlUiDocument()).toBe(true);
       runtimeConfig.setRaw('{"count":4}');
       expect(canReloadControlUiDocument()).toBe(false);
@@ -194,7 +194,7 @@ describe("config state model", () => {
     expect(runtimeConfig.state.configDraftBaseHash).toBe("hash-1");
     expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-2");
 
-    await runtimeConfig.refresh({ discardPendingChanges: true });
+    await runtimeConfig.discardDraft({ reloadOnly: true });
     expect(runtimeConfig.state.configForm).toEqual({ count: 3 });
     expect(runtimeConfig.state.configFormDirty).toBe(false);
     expect(runtimeConfig.state.configDraftBaseHash).toBe("hash-2");
@@ -268,7 +268,7 @@ describe("config state model", () => {
     // Discarding local edits does not undo the already-saved file: the
     // restart banner must survive until apply.
     runtimeConfig.patchForm(["count"], 9);
-    await runtimeConfig.refresh({ discardPendingChanges: true });
+    await runtimeConfig.discardDraft({ reloadOnly: true });
     expect(runtimeConfig.state.configFormDirty).toBe(false);
     expect(runtimeConfig.state.configNeedsApply).toBe(true);
 

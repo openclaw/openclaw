@@ -1,8 +1,17 @@
 import type { PluginDiscoveryResult } from "../plugins/discovery.js";
+import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../plugins/installed-plugin-index-install-records.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import type {
+  PluginMetadataSnapshot,
+  ResolvePluginMetadataSnapshotParams,
+} from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
-import { setPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
+import {
+  createPluginRuntimeLoaderLogger,
+  getPluginRuntimeLoadContext,
+  getReusablePluginRuntimeActivation,
+  setPluginRuntimeLoadContext,
+} from "../plugins/runtime/load-context.js";
 import { resolvePluginRuntimeLoadContext } from "../plugins/runtime/load-context.resolve.js";
 import { createAgentRuntimeMetadataPluginIdScope } from "./harness/runtime-plugin-load-plan.js";
 import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
@@ -14,6 +23,28 @@ type PreparedPluginContextInput = Pick<
 
 const emptyPluginDiscovery: PluginDiscoveryResult = { candidates: [], diagnostics: [] };
 
+export function prepareOwnedPluginMetadataSnapshotParams(
+  input: PreparedPluginContextInput,
+  env: NodeJS.ProcessEnv,
+): ResolvePluginMetadataSnapshotParams {
+  return {
+    config: input.config,
+    env,
+    ...(input.workspaceDir
+      ? { workspaceDir: input.workspaceDir, allowWorkspaceScopedCurrent: true }
+      : {}),
+    ...(input.loadRuntimePlugins && input.runtimePluginSelections && input.workspaceDir
+      ? {
+          pluginIdScope: createAgentRuntimeMetadataPluginIdScope({
+            config: input.config,
+            workspaceDir: input.workspaceDir,
+            selections: input.runtimePluginSelections,
+          }),
+        }
+      : {}),
+  };
+}
+
 /** Resolves and attaches the plugin facts owned by one prepared workspace generation. */
 export function prepareOwnedPluginLoadContext(
   input: PreparedPluginContextInput,
@@ -21,30 +52,38 @@ export function prepareOwnedPluginLoadContext(
   registry: PluginRegistry | undefined,
   preparedMetadataSnapshot?: PluginMetadataSnapshot,
   preferBuiltPluginArtifacts = false,
+  preparedRegistry?: PluginRegistry,
 ): PluginMetadataSnapshot {
   const metadataSnapshot =
     preparedMetadataSnapshot ??
-    resolvePluginMetadataSnapshot({
-      config: input.config,
-      env,
-      ...(input.workspaceDir
-        ? { workspaceDir: input.workspaceDir, allowWorkspaceScopedCurrent: true }
-        : {}),
-      ...(input.loadRuntimePlugins && input.runtimePluginSelections && input.workspaceDir
-        ? {
-            pluginIdScope: createAgentRuntimeMetadataPluginIdScope({
-              config: input.config,
-              workspaceDir: input.workspaceDir,
-              selections: input.runtimePluginSelections,
-            }),
-          }
-        : {}),
-    });
+    resolvePluginMetadataSnapshot(prepareOwnedPluginMetadataSnapshotParams(input, env));
   if (!registry) {
     return metadataSnapshot;
   }
   const { config } = input;
   const workspaceDir = metadataSnapshot.workspaceDir ?? input.workspaceDir;
+  const preparedActivation = getReusablePluginRuntimeActivation(preparedRegistry ?? registry, {
+    config,
+    env,
+    workspaceDir,
+    metadataSnapshot,
+  });
+  if (preparedActivation) {
+    const targetContext = getPluginRuntimeLoadContext(registry);
+    setPluginRuntimeLoadContext(registry, {
+      ...preparedActivation,
+      rawConfig: config,
+      env,
+      workspaceDir,
+      metadataSnapshot,
+      manifestRegistry: metadataSnapshot.manifestRegistry,
+      installRecords: extractPluginInstallRecordsFromInstalledPluginIndex(metadataSnapshot.index),
+      logger: targetContext?.logger ?? createPluginRuntimeLoaderLogger(),
+      expectedSourceDigests: targetContext?.expectedSourceDigests,
+      preferBuiltPluginArtifacts,
+    });
+    return metadataSnapshot;
+  }
   // The prepared owner already selected the exact metadata generation for this runtime.
   // Missing discovery facts stay empty here instead of reopening cold plugin discovery.
   const discoverySnapshot = metadataSnapshot.discovery

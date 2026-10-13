@@ -9,6 +9,7 @@ import type {
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CHECK_IDS, type POLICY_CHECK_IDS } from "./check-ids.js";
 import { POLICY_FIX_METADATA_BY_CHECK_ID } from "./fix-metadata.js";
+import { workspaceRepairsEnabled } from "./policy-runtime.js";
 
 type PolicyCheckId = (typeof POLICY_CHECK_IDS)[number];
 type ConfigRecord = Record<string, unknown>;
@@ -18,16 +19,28 @@ type RepairPatch = {
   readonly warnings?: readonly string[];
 };
 
-const AUTOMATIC_REPAIR_CHECK_IDS = new Set<PolicyCheckId>([
-  CHECK_IDS.policyAgentsToolNotDenied,
-  CHECK_IDS.policyToolsElevatedEnabled,
-  CHECK_IDS.policyToolsRequiredDenyMissing,
-  CHECK_IDS.policyGatewayControlUiInsecure,
-  CHECK_IDS.policyGatewayHttpEndpointEnabled,
-  CHECK_IDS.policyGatewayRemoteEnabled,
-  CHECK_IDS.policyIngressOpenGroupsDenied,
-  CHECK_IDS.policyIngressGroupMentionRequired,
-  CHECK_IDS.policyDataHandlingTelemetryContentCapture,
+const AUTOMATIC_REPAIRS = new Map<
+  PolicyCheckId,
+  (cfg: OpenClawConfig, findings: readonly HealthFinding[]) => RepairPatch
+>([
+  [CHECK_IDS.policyAgentsToolNotDenied, mergeRequiredDenyTools],
+  [CHECK_IDS.policyToolsElevatedEnabled, disableElevatedTools],
+  [CHECK_IDS.policyToolsRequiredDenyMissing, mergeRequiredDenyTools],
+  [CHECK_IDS.policyGatewayControlUiInsecure, disableInsecureControlUi],
+  [
+    CHECK_IDS.policyGatewayHttpEndpointEnabled,
+    (cfg, findings) => setFindingConfigValues(cfg, findings, "enabled", false),
+  ],
+  [CHECK_IDS.policyGatewayRemoteEnabled, disableRemoteGatewayMode],
+  [
+    CHECK_IDS.policyIngressOpenGroupsDenied,
+    (cfg, findings) => setFindingConfigValues(cfg, findings, "groupPolicy", "allowlist"),
+  ],
+  [
+    CHECK_IDS.policyIngressGroupMentionRequired,
+    (cfg, findings) => setFindingConfigValues(cfg, findings, "requireMention", true),
+  ],
+  [CHECK_IDS.policyDataHandlingTelemetryContentCapture, disableTelemetryContentCapture],
 ]);
 
 export function repairPolicyAutomaticNarrower(
@@ -38,7 +51,8 @@ export function repairPolicyAutomaticNarrower(
   if (!workspaceRepairsEnabled(ctx)) {
     return Promise.resolve(workspaceRepairsDisabledResult());
   }
-  if (!AUTOMATIC_REPAIR_CHECK_IDS.has(checkId)) {
+  const repair = AUTOMATIC_REPAIRS.get(checkId);
+  if (repair === undefined) {
     return Promise.resolve({
       status: "skipped",
       reason: "policy finding is not an automatic narrowing repair",
@@ -60,7 +74,7 @@ export function repairPolicyAutomaticNarrower(
     });
   }
 
-  const patch = applyAutomaticPatch(ctx.cfg, findings, checkId);
+  const patch = repair(ctx.cfg, findings);
   if (patch.changes.length === 0) {
     return Promise.resolve({
       status: "skipped",
@@ -75,47 +89,6 @@ export function repairPolicyAutomaticNarrower(
     changes: patch.changes,
     ...(patch.warnings !== undefined ? { warnings: patch.warnings } : {}),
   });
-}
-
-function applyAutomaticPatch(
-  cfg: OpenClawConfig,
-  findings: readonly HealthFinding[],
-  checkId: PolicyCheckId,
-): RepairPatch {
-  switch (checkId) {
-    case CHECK_IDS.policyAgentsToolNotDenied:
-      return mergeRequiredDenyTools(cfg, findings);
-    case CHECK_IDS.policyToolsElevatedEnabled:
-      if (hasScopedPolicyRequirement(findings)) {
-        return skippedUnsafeScopedRepair(
-          cfg,
-          "Skipped scoped tools repair. Scoped elevated-tools policy findings are detect-only because automatic repair cannot safely choose between shared and agent-local config targets.",
-        );
-      }
-      return disableElevatedTools(cfg, findings);
-    case CHECK_IDS.policyToolsRequiredDenyMissing:
-      return mergeRequiredDenyTools(cfg, findings);
-    case CHECK_IDS.policyGatewayControlUiInsecure:
-      return disableInsecureControlUi(cfg, findings);
-    case CHECK_IDS.policyGatewayHttpEndpointEnabled:
-      return setFindingConfigValues(cfg, findings, "enabled", false);
-    case CHECK_IDS.policyGatewayRemoteEnabled:
-      return disableRemoteGatewayMode(cfg, findings);
-    case CHECK_IDS.policyIngressOpenGroupsDenied:
-      return setFindingConfigValues(cfg, findings, "groupPolicy", "allowlist");
-    case CHECK_IDS.policyIngressGroupMentionRequired:
-      return setFindingConfigValues(cfg, findings, "requireMention", true);
-    case CHECK_IDS.policyDataHandlingTelemetryContentCapture:
-      if (hasScopedPolicyRequirement(findings)) {
-        return skippedUnsafeScopedRepair(
-          cfg,
-          "Skipped scoped data-handling repair. The finding reports shared telemetry config, so changing it would affect more than the scoped policy target.",
-        );
-      }
-      return disableTelemetryContentCapture(cfg);
-    default:
-      return { config: cfg, changes: [] };
-  }
 }
 
 function mergeRequiredDenyTools(
@@ -152,52 +125,35 @@ function disableElevatedTools(
   cfg: OpenClawConfig,
   findings: readonly HealthFinding[],
 ): RepairPatch {
+  if (hasScopedPolicyRequirement(findings)) {
+    return skippedUnsafeScopedRepair(
+      cfg,
+      "Skipped scoped tools repair. Scoped elevated-tools policy findings are detect-only because automatic repair cannot safely choose between shared and agent-local config targets.",
+    );
+  }
   if (
     !findings.some((finding) => finding.ocPath === "oc://openclaw.config/tools/elevated/enabled")
   ) {
     return { config: cfg, changes: [] };
   }
-  const next = cloneConfig(cfg);
-  const tools = ensureRecord(next, "tools");
-  const elevated = ensureRecord(tools, "elevated");
-  if (elevated.enabled === false) {
-    return { config: cfg, changes: [] };
-  }
-  elevated.enabled = false;
-  return {
-    config: next as OpenClawConfig,
-    changes: ["Set tools.elevated.enabled=false for policy conformance."],
-  };
+  return setFixedConfigFields(cfg, ["tools", "elevated"], { enabled: false });
 }
 
 function disableInsecureControlUi(
   cfg: OpenClawConfig,
   findings: readonly HealthFinding[],
 ): RepairPatch {
-  const next = cloneConfig(cfg);
-  const gateway = ensureRecord(next, "gateway");
-  const controlUi = ensureRecord(gateway, "controlUi");
-  const changes: string[] = [];
-  const fields = [
-    [
-      "dangerouslyDisableDeviceAuth",
-      "oc://openclaw.config/gateway/controlUi/dangerouslyDisableDeviceAuth",
-    ],
-    [
-      "dangerouslyAllowHostHeaderOriginFallback",
-      "oc://openclaw.config/gateway/controlUi/dangerouslyAllowHostHeaderOriginFallback",
-    ],
-  ] as const;
+  const fields = ["dangerouslyDisableDeviceAuth", "dangerouslyAllowHostHeaderOriginFallback"];
   const findingPaths = new Set(findings.map((finding) => finding.ocPath));
-  for (const [field, ocPath] of fields) {
-    if (findingPaths.has(ocPath) && controlUi[field] !== false) {
-      controlUi[field] = false;
-      changes.push(`Set gateway.controlUi.${field}=false for policy conformance.`);
-    }
-  }
-  return changes.length > 0
-    ? { config: next as OpenClawConfig, changes }
-    : { config: cfg, changes };
+  return setFixedConfigFields(
+    cfg,
+    ["gateway", "controlUi"],
+    Object.fromEntries(
+      fields
+        .filter((field) => findingPaths.has(`oc://openclaw.config/gateway/controlUi/${field}`))
+        .map((field) => [field, false]),
+    ),
+  );
 }
 
 function disableRemoteGatewayMode(
@@ -207,30 +163,42 @@ function disableRemoteGatewayMode(
   if (!findings.some((finding) => finding.ocPath === "oc://openclaw.config/gateway/mode")) {
     return { config: cfg, changes: [] };
   }
-  const next = cloneConfig(cfg);
-  const gateway = ensureRecord(next, "gateway");
-  const changes: string[] = [];
-  if (gateway.mode === "remote") {
-    gateway.mode = "local";
-    changes.push("Set gateway.mode=local for policy conformance.");
-  }
-  return changes.length > 0
-    ? { config: next as OpenClawConfig, changes }
-    : { config: cfg, changes };
+  return setFixedConfigFields(cfg, ["gateway"], { mode: "local" }, "remote");
 }
 
-function disableTelemetryContentCapture(cfg: OpenClawConfig): RepairPatch {
-  const next = cloneConfig(cfg);
-  const diagnostics = ensureRecord(next, "diagnostics");
-  const otel = ensureRecord(diagnostics, "otel");
-  if (otel.captureContent === false) {
-    return { config: cfg, changes: [] };
+function disableTelemetryContentCapture(
+  cfg: OpenClawConfig,
+  findings: readonly HealthFinding[],
+): RepairPatch {
+  if (hasScopedPolicyRequirement(findings)) {
+    return skippedUnsafeScopedRepair(
+      cfg,
+      "Skipped scoped data-handling repair. The finding reports shared telemetry config, so changing it would affect more than the scoped policy target.",
+    );
   }
-  otel.captureContent = false;
-  return {
-    config: next as OpenClawConfig,
-    changes: ["Set diagnostics.otel.captureContent=false for policy conformance."],
-  };
+  return setFixedConfigFields(cfg, ["diagnostics", "otel"], { captureContent: false });
+}
+
+function setFixedConfigFields(
+  cfg: OpenClawConfig,
+  path: readonly string[],
+  values: Readonly<Record<string, unknown>>,
+  requiredCurrentValue?: string,
+): RepairPatch {
+  const next = cloneConfig(cfg);
+  const parent = path.reduce(ensureRecord, next);
+  const changes: string[] = [];
+  for (const [field, value] of Object.entries(values)) {
+    if (
+      parent[field] === value ||
+      (requiredCurrentValue !== undefined && parent[field] !== requiredCurrentValue)
+    ) {
+      continue;
+    }
+    parent[field] = value;
+    changes.push(`Set ${[...path, field].join(".")}=${String(value)} for policy conformance.`);
+  }
+  return { config: changes.length > 0 ? (next as OpenClawConfig) : cfg, changes };
 }
 
 function setFindingConfigValues(
@@ -272,31 +240,8 @@ function mergeStringArrayAtOcPath(cfg: ConfigRecord, ocPath: string, entry: stri
   if (segments.length === 0 || segments.at(-1) !== "deny") {
     return false;
   }
-  let current: unknown = cfg;
-  for (let index = 0; index < segments.length - 1; index += 1) {
-    const segment = segments[index];
-    if (segment === undefined) {
-      return false;
-    }
-    if (segment.startsWith("#")) {
-      const arrayIndex = Number.parseInt(segment.slice(1), 10);
-      if (!Array.isArray(current) || !Number.isInteger(arrayIndex) || arrayIndex < 0) {
-        return false;
-      }
-      current = current[arrayIndex];
-      continue;
-    }
-    if (!isRecord(current)) {
-      return false;
-    }
-    const nextSegment = segments[index + 1];
-    const existing = current[segment];
-    if (existing === undefined) {
-      current[segment] = nextSegment?.startsWith("#") ? [] : {};
-    }
-    current = current[segment];
-  }
-  if (!isRecord(current)) {
+  const current = configPathParent(cfg, segments, true);
+  if (current === undefined) {
     return false;
   }
   const existing = current.deny;
@@ -374,25 +319,8 @@ function setValueAtOcPath(cfg: ConfigRecord, ocPath: string, value: unknown): bo
   if (segments.length === 0) {
     return false;
   }
-  let current: unknown = cfg;
-  for (let index = 0; index < segments.length - 1; index += 1) {
-    const segment = segments[index];
-    if (segment === undefined || segment.startsWith("#")) {
-      return false;
-    }
-    if (!isRecord(current)) {
-      return false;
-    }
-    const existing = current[segment];
-    if (existing !== undefined && !isRecord(existing)) {
-      return false;
-    }
-    if (existing === undefined) {
-      current[segment] = {};
-    }
-    current = current[segment];
-  }
-  if (!isRecord(current)) {
+  const current = configPathParent(cfg, segments, false);
+  if (current === undefined) {
     return false;
   }
   const last = segments.at(-1);
@@ -403,12 +331,43 @@ function setValueAtOcPath(cfg: ConfigRecord, ocPath: string, value: unknown): bo
   return true;
 }
 
-function workspaceRepairsEnabled(ctx: HealthRepairContext): boolean {
-  const plugins = isRecord(ctx.cfg.plugins) ? ctx.cfg.plugins : {};
-  const entries = isRecord(plugins.entries) ? plugins.entries : {};
-  const policy = isRecord(entries.policy) ? entries.policy : {};
-  const config = isRecord(policy.config) ? policy.config : {};
-  return config.workspaceRepairs === true;
+function configPathParent(
+  cfg: ConfigRecord,
+  segments: readonly string[],
+  allowArrays: boolean,
+): ConfigRecord | undefined {
+  let current: unknown = cfg;
+  for (let index = 0; index < segments.length - 1; index += 1) {
+    const segment = segments[index];
+    if (segment === undefined) {
+      return undefined;
+    }
+    if (segment.startsWith("#")) {
+      const arrayIndex = Number.parseInt(segment.slice(1), 10);
+      if (
+        !allowArrays ||
+        !Array.isArray(current) ||
+        !Number.isInteger(arrayIndex) ||
+        arrayIndex < 0
+      ) {
+        return undefined;
+      }
+      current = current[arrayIndex];
+      continue;
+    }
+    if (!isRecord(current)) {
+      return undefined;
+    }
+    const existing = current[segment];
+    if (!allowArrays && existing !== undefined && !isRecord(existing)) {
+      return undefined;
+    }
+    if (existing === undefined) {
+      current[segment] = allowArrays && segments[index + 1]?.startsWith("#") ? [] : {};
+    }
+    current = current[segment];
+  }
+  return isRecord(current) ? current : undefined;
 }
 
 function workspaceRepairsDisabledResult(): HealthRepairResult {

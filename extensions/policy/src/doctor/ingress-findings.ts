@@ -1,13 +1,10 @@
 import type { HealthFinding } from "openclaw/plugin-sdk/health";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeLowercaseStringOrEmpty as normalizePolicyChannelId } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { PolicyEvidence, PolicyIngressEvidence } from "../policy-state.js";
-import { ingressPolicyShapeFinding } from "./access-shapes.js";
 import { CHECK_IDS } from "./check-ids.js";
-import { policyEvidenceFinding as ingressFinding } from "./policy-evidence-finding.js";
-import { normalizePolicyChannelId } from "./policy-runtime.js";
-import { channelScopedPolicyTargets } from "./policy-scope.js";
-import { hasValidScopedPolicy } from "./scoped-policy-shape.js";
-import { ocPathSegment, readPolicyBoolean, readPolicyPathString, readStringList } from "./utils.js";
+import { policyEvidenceRuleFindings, type PolicyEvidenceRule } from "./policy-evidence-finding.js";
+import { policySectionTargets } from "./policy-section-targets.js";
+import { readPolicyBoolean, readPolicyPathString, readStringList } from "./utils.js";
 
 export function ingressFindings(
   policy: unknown,
@@ -15,185 +12,79 @@ export function ingressFindings(
   policyDocName: string,
   evidence: PolicyEvidence,
 ): readonly HealthFinding[] {
-  if (!isRecord(policy)) {
-    return [];
-  }
   const findings: HealthFinding[] = [];
-  const ingressPolicy = policy.ingress;
-  if (
-    ingressPolicyShapeFinding(ingressPolicy, { policyDocName, policyPath }) === undefined &&
-    isRecord(ingressPolicy)
-  ) {
+  for (const target of policySectionTargets(policy, policyPath, policyDocName, "ingress")) {
     findings.push(
-      ...ingressFindingsForRule(ingressPolicy, policyDocName, "ingress", evidence, () => true),
+      ...ingressFindingsForRule(
+        target.policy,
+        policyDocName,
+        target.requirementBase,
+        evidence,
+        (entry) =>
+          target.selectorId === undefined || scopedIngressChannelMatches(entry, target.selectorId),
+      ),
     );
-  }
-  if (hasValidScopedPolicy(policy, policyPath, policyDocName)) {
-    for (const target of channelScopedPolicyTargets(policy)) {
-      if (
-        ingressPolicyShapeFinding(target.overlay.ingress, {
-          policyDocName,
-          policyPath,
-          targetPrefix: `scopes/${ocPathSegment(target.scopeName)}/ingress`,
-          propertyPrefix: `scopes.${target.scopeName}.ingress`,
-          allowSession: false,
-        }) !== undefined ||
-        !isRecord(target.overlay.ingress)
-      ) {
-        continue;
-      }
-      findings.push(
-        ...ingressFindingsForRule(
-          target.overlay.ingress,
-          policyDocName,
-          `scopes/${ocPathSegment(target.scopeName)}/ingress`,
-          evidence,
-          (entry) => scopedIngressChannelMatches(entry, target.channelId),
-        ),
-      );
-    }
   }
   return findings;
 }
 
 function ingressFindingsForRule(
-  ingressPolicy: Record<string, unknown> | undefined,
-  policyDocName: string,
-  requirementBase: string,
-  evidence: PolicyEvidence,
-  evidenceFilter: (entry: PolicyIngressEvidence) => boolean,
-): readonly HealthFinding[] {
-  if (!isRecord(ingressPolicy)) {
-    return [];
-  }
-  return [
-    ...ingressDmScopeFindings(
-      ingressPolicy,
-      policyDocName,
-      requirementBase,
-      evidence,
-      evidenceFilter,
-    ),
-    ...ingressDmPolicyFindings(
-      ingressPolicy,
-      policyDocName,
-      requirementBase,
-      evidence,
-      evidenceFilter,
-    ),
-    ...ingressOpenGroupFindings(
-      ingressPolicy,
-      policyDocName,
-      requirementBase,
-      evidence,
-      evidenceFilter,
-    ),
-    ...ingressRequireMentionFindings(
-      ingressPolicy,
-      policyDocName,
-      requirementBase,
-      evidence,
-      evidenceFilter,
-    ),
-  ];
-}
-
-function ingressDmScopeFindings(
   ingressPolicy: Record<string, unknown>,
   policyDocName: string,
   requirementBase: string,
   evidence: PolicyEvidence,
   evidenceFilter: (entry: PolicyIngressEvidence) => boolean,
 ): readonly HealthFinding[] {
-  const required = readPolicyPathString(ingressPolicy, ["session", "requireDmScope"]);
-  if (required === undefined) {
-    return [];
-  }
-  return ingressEntries(evidence, "sessionDmScope")
-    .filter(evidenceFilter)
-    .filter((entry) => entry.value !== required)
-    .map((entry) =>
-      ingressFinding(entry, {
-        checkId: CHECK_IDS.policyIngressDmScopeUnapproved,
-        message: `session.dmScope '${entry.value ?? ""}' does not match policy.`,
-        requirement: `oc://${policyDocName}/${requirementBase}/session/requireDmScope`,
-        fixHint:
-          "Set session.dmScope to the required isolation scope or update policy after review.",
-      }),
-    );
-}
-
-function ingressDmPolicyFindings(
-  ingressPolicy: Record<string, unknown>,
-  policyDocName: string,
-  requirementBase: string,
-  evidence: PolicyEvidence,
-  evidenceFilter: (entry: PolicyIngressEvidence) => boolean,
-): readonly HealthFinding[] {
-  const allowed = new Set(readStringList(ingressPolicy, ["channels", "allowDmPolicies"]));
-  if (allowed.size === 0) {
-    return [];
-  }
-  return ingressEntries(evidence, "channelDmPolicy")
-    .filter(evidenceFilter)
-    .filter((entry) => typeof entry.value === "string" && !allowed.has(entry.value.toLowerCase()))
-    .map((entry) =>
-      ingressFinding(entry, {
-        checkId: CHECK_IDS.policyIngressDmPolicyUnapproved,
-        message: `${ingressLabel(entry)} uses unapproved DM policy '${entry.value ?? ""}'.`,
-        requirement: `oc://${policyDocName}/${requirementBase}/channels/allowDmPolicies`,
-        fixHint: "Set the channel DM policy to an allowed value or update policy after review.",
-      }),
-    );
-}
-
-function ingressOpenGroupFindings(
-  ingressPolicy: Record<string, unknown>,
-  policyDocName: string,
-  requirementBase: string,
-  evidence: PolicyEvidence,
-  evidenceFilter: (entry: PolicyIngressEvidence) => boolean,
-): readonly HealthFinding[] {
-  if (readPolicyBoolean(ingressPolicy, ["channels", "denyOpenGroups"]) !== true) {
-    return [];
-  }
-  return ingressEntries(evidence, "channelGroupPolicy")
-    .filter(evidenceFilter)
-    .filter((entry) => entry.value !== "allowlist" && entry.value !== "disabled")
-    .map((entry) =>
-      ingressFinding(entry, {
-        checkId: CHECK_IDS.policyIngressOpenGroupsDenied,
-        message: `${ingressLabel(entry)} allows open group ingress.`,
-        requirement: `oc://${policyDocName}/${requirementBase}/channels/denyOpenGroups`,
-        fixHint: "Set groupPolicy to allowlist or disabled, or update policy after review.",
-      }),
-    );
-}
-
-function ingressRequireMentionFindings(
-  ingressPolicy: Record<string, unknown>,
-  policyDocName: string,
-  requirementBase: string,
-  evidence: PolicyEvidence,
-  evidenceFilter: (entry: PolicyIngressEvidence) => boolean,
-): readonly HealthFinding[] {
-  if (readPolicyBoolean(ingressPolicy, ["channels", "requireMentionInGroups"]) !== true) {
-    return [];
-  }
-  const groupPolicies = ingressEntries(evidence, "channelGroupPolicy").filter(evidenceFilter);
-  return ingressEntries(evidence, "channelRequireMention")
-    .filter(evidenceFilter)
-    .filter((entry) => !isGroupIngressDisabled(entry, groupPolicies))
-    .filter((entry) => entry.value !== true)
-    .map((entry) =>
-      ingressFinding(entry, {
-        checkId: CHECK_IDS.policyIngressGroupMentionRequired,
-        message: `${ingressLabel(entry)} does not require group mentions.`,
-        requirement: `oc://${policyDocName}/${requirementBase}/channels/requireMentionInGroups`,
-        fixHint:
-          "Set requireMention=true for the channel/group entry or update policy after review.",
-      }),
-    );
+  const requiredDmScope = readPolicyPathString(ingressPolicy, ["session", "requireDmScope"]);
+  const allowedDmPolicies = new Set(readStringList(ingressPolicy, ["channels", "allowDmPolicies"]));
+  const entries = (evidence.ingress ?? []).filter(evidenceFilter);
+  const groupPolicies = entries.filter((entry) => entry.kind === "channelGroupPolicy");
+  const rules = [
+    {
+      kind: "sessionDmScope",
+      enabled: requiredDmScope !== undefined,
+      violates: (entry) => entry.value !== requiredDmScope,
+      checkId: CHECK_IDS.policyIngressDmScopeUnapproved,
+      message: (entry) => `session.dmScope '${entry.value ?? ""}' does not match policy.`,
+      path: ["session", "requireDmScope"],
+      fixHint: "Set session.dmScope to the required isolation scope or update policy after review.",
+    },
+    {
+      kind: "channelDmPolicy",
+      enabled: allowedDmPolicies.size > 0,
+      violates: (entry) =>
+        typeof entry.value === "string" && !allowedDmPolicies.has(entry.value.toLowerCase()),
+      checkId: CHECK_IDS.policyIngressDmPolicyUnapproved,
+      message: (entry) =>
+        `${ingressLabel(entry)} uses unapproved DM policy '${entry.value ?? ""}'.`,
+      path: ["channels", "allowDmPolicies"],
+      fixHint: "Set the channel DM policy to an allowed value or update policy after review.",
+    },
+    {
+      kind: "channelGroupPolicy",
+      enabled: readPolicyBoolean(ingressPolicy, ["channels", "denyOpenGroups"]) === true,
+      violates: (entry) => entry.value !== "allowlist" && entry.value !== "disabled",
+      checkId: CHECK_IDS.policyIngressOpenGroupsDenied,
+      message: (entry) => `${ingressLabel(entry)} allows open group ingress.`,
+      path: ["channels", "denyOpenGroups"],
+      fixHint: "Set groupPolicy to allowlist or disabled, or update policy after review.",
+    },
+    {
+      kind: "channelRequireMention",
+      enabled: readPolicyBoolean(ingressPolicy, ["channels", "requireMentionInGroups"]) === true,
+      violates: (entry) => !isGroupIngressDisabled(entry, groupPolicies) && entry.value !== true,
+      checkId: CHECK_IDS.policyIngressGroupMentionRequired,
+      message: (entry) => `${ingressLabel(entry)} does not require group mentions.`,
+      path: ["channels", "requireMentionInGroups"],
+      fixHint: "Set requireMention=true for the channel/group entry or update policy after review.",
+    },
+  ] satisfies readonly (PolicyEvidenceRule<PolicyIngressEvidence> & { enabled: boolean })[];
+  return policyEvidenceRuleFindings(
+    entries,
+    rules.filter((rule) => rule.enabled),
+    policyDocName,
+    requirementBase,
+  );
 }
 
 function isGroupIngressDisabled(
@@ -221,13 +112,6 @@ function isGroupIngressDisabled(
 
 function ocPathParent(source: string): string {
   return source.slice(0, Math.max(0, source.lastIndexOf("/")));
-}
-
-function ingressEntries(
-  evidence: PolicyEvidence,
-  kind: PolicyIngressEvidence["kind"],
-): readonly PolicyIngressEvidence[] {
-  return (evidence.ingress ?? []).filter((entry) => entry.kind === kind);
 }
 
 function scopedIngressChannelMatches(

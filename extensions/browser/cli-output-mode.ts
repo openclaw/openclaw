@@ -13,22 +13,17 @@ function isValueToken(arg: string | undefined): boolean {
   return Boolean(arg && arg !== "--" && (!arg.startsWith("-") || /^-\d+(?:\.\d+)?$/.test(arg)));
 }
 
-function consumeOption(
-  args: readonly string[],
-  index: number,
-  booleanOptions: ReadonlySet<string>,
-  valueOptions: ReadonlySet<string>,
-): number {
+function consumeOption(args: readonly string[], index: number): number {
   const arg = args[index];
   if (!arg || arg === "--" || !arg.startsWith("-")) {
     return 0;
   }
   const equalsIndex = arg.indexOf("=");
   const flag = equalsIndex === -1 ? arg : arg.slice(0, equalsIndex);
-  if (booleanOptions.has(flag)) {
+  if (BROWSER_BOOLEAN_OPTIONS.has(flag)) {
     return equalsIndex === -1 ? 1 : 0;
   }
-  if (!valueOptions.has(flag)) {
+  if (!BROWSER_VALUE_OPTIONS.has(flag)) {
     return 0;
   }
   if (equalsIndex !== -1) {
@@ -46,23 +41,18 @@ function resolveBrowserCommandPath(argv: readonly string[]): string[] {
     if (!arg || arg === "--") {
       break;
     }
-    if (!sawBrowser) {
-      const consumed = consumeRootOptionToken(args, index);
-      if (consumed > 0) {
-        index += consumed - 1;
-        continue;
-      }
-      if (arg === "browser") {
-        sawBrowser = true;
-      }
-      continue;
-    }
     const rootConsumed = consumeRootOptionToken(args, index);
     if (rootConsumed > 0) {
       index += rootConsumed - 1;
       continue;
     }
-    const consumed = consumeOption(args, index, BROWSER_BOOLEAN_OPTIONS, BROWSER_VALUE_OPTIONS);
+    if (!sawBrowser) {
+      if (arg === "browser") {
+        sawBrowser = true;
+      }
+      continue;
+    }
+    const consumed = consumeOption(args, index);
     if (consumed > 0) {
       index += consumed - 1;
       continue;
@@ -89,7 +79,7 @@ export function isBrowserMachineOutput(params: { argv: readonly string[] }): boo
     (path[0] === "storage" && ["local", "session"].includes(path[1] ?? "") && path[2] === "get") ||
     (path[0] === "extension" && path[1] === "native-host") ||
     (path[0] === "extension" &&
-      ["install", "status", "uninstall-host", "pair", "cdp"].includes(path[1] ?? "") &&
+      ["setup", "install", "status", "uninstall-host", "pair", "cdp"].includes(path[1] ?? "") &&
       params.argv.includes("--json"))
   );
 }

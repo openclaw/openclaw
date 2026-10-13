@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import type { QaLabServerHandle } from "./lab-server.types.js";
@@ -98,7 +99,11 @@ function serializeError(error: unknown): unknown {
     : String(error);
 }
 
-async function reproduce(denyGroupSignals: boolean, surface: "gateway" | "bootstrap") {
+async function reproduce(
+  denyGroupSignals: boolean,
+  surface: "gateway" | "bootstrap",
+  testSignal: AbortSignal,
+) {
   await fs.mkdir(artifactRoot, { recursive: true });
   const root = await fs.mkdtemp(path.join(artifactRoot, denyGroupSignals ? "fault-" : "control-"));
   const eventsPath = path.join(root, "events.jsonl");
@@ -131,6 +136,7 @@ async function reproduce(denyGroupSignals: boolean, surface: "gateway" | "bootst
     };
   };
   const releases: ReturnType<typeof snapshot>[] = [];
+  let onHeartbeat: (() => void) | undefined;
   let stopHeartbeat: (() => Promise<void>) | undefined;
   let suiteError: unknown;
   let groupProbeCount = 0;
@@ -162,6 +168,7 @@ async function reproduce(denyGroupSignals: boolean, surface: "gateway" | "bootst
       );
     } else if (request.url === "/qa-credentials/v1/heartbeat") {
       record("lease-heartbeat");
+      onHeartbeat?.();
       response.end('{"status":"ok"}');
     } else if (request.url === "/qa-credentials/v1/release") {
       const observation = snapshot();
@@ -316,12 +323,9 @@ async function reproduce(denyGroupSignals: boolean, surface: "gateway" | "bootst
       record("suite-rejected", { error: serializeError(error), ...snapshot() });
     }
     if (denyGroupSignals) {
-      const before = readFileSync(eventsPath, "utf8").match(/lease-heartbeat/g)?.length ?? 0;
-      await vi.waitFor(() =>
-        expect(
-          readFileSync(eventsPath, "utf8").match(/lease-heartbeat/g)?.length ?? 0,
-        ).toBeGreaterThan(before),
-      );
+      const nextHeartbeat = Promise.withResolvers<void>();
+      onHeartbeat = () => nextHeartbeat.resolve();
+      await withinTest(nextHeartbeat.promise, testSignal);
     }
   } finally {
     killSpy.mockRestore();
@@ -399,7 +403,7 @@ async function reproduce(denyGroupSignals: boolean, surface: "gateway" | "bootst
 describe.skipIf(process.platform === "win32")(
   "gateway startup lease lifetime (real process group)",
   () => {
-    it.each([
+    it.for([
       { surface: "gateway", denyGroupSignals: false },
       { surface: "gateway", denyGroupSignals: true },
       { surface: "bootstrap", denyGroupSignals: false },
@@ -407,8 +411,8 @@ describe.skipIf(process.platform === "win32")(
     ] as const)(
       "$surface startup releases only after descendant exit (denied=$denyGroupSignals)",
       { timeout: 45_000 },
-      async ({ denyGroupSignals, surface }) => {
-        const result = await reproduce(denyGroupSignals, surface);
+      async ({ denyGroupSignals, surface }, { signal }) => {
+        const result = await reproduce(denyGroupSignals, surface, signal);
         expect(result.scenarioCalls).toBe(0);
         const repaired = result.events.findIndex(
           (event) => event.kind === "plugin-repair-completed",

@@ -1,7 +1,6 @@
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
-import { MemorySyncKeyedStore } from "./src/memory-store.test-support.js";
 
 describe("onepassword plugin", () => {
   it("opens bounded grant, audit, and pending stores", () => {
@@ -12,7 +11,6 @@ describe("onepassword plugin", () => {
       entries: vi.fn(async () => []),
     };
     const openKeyedStore = vi.fn(() => store);
-    const openSyncKeyedStore = vi.fn(() => new MemorySyncKeyedStore());
     const registerCli = vi.fn();
     const registerTool = vi.fn();
 
@@ -25,7 +23,6 @@ describe("onepassword plugin", () => {
         runtime: {
           state: {
             openKeyedStore,
-            openSyncKeyedStore,
             resolveStateDir: () => "/tmp/openclaw-onepassword-test",
           },
         } as never,
@@ -44,7 +41,7 @@ describe("onepassword plugin", () => {
       maxEntries: 40_000,
       overflowPolicy: "evict-oldest",
     });
-    expect(openSyncKeyedStore).toHaveBeenCalledWith({
+    expect(openKeyedStore).toHaveBeenNthCalledWith(3, {
       namespace: "pending",
       maxEntries: 512,
       overflowPolicy: "evict-oldest",
@@ -95,7 +92,6 @@ describe("onepassword plugin", () => {
           config: { current },
           state: {
             openKeyedStore: () => store,
-            openSyncKeyedStore: () => new MemorySyncKeyedStore(),
             resolveStateDir: () => "/tmp/openclaw-onepassword-test",
           },
         } as never,

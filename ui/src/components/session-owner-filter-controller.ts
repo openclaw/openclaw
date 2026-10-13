@@ -1,97 +1,74 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
+import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
+import type { ApplicationGateway } from "../app/gateway.ts";
+import type { SessionListSnapshot } from "../lib/sessions/session-capability.ts";
 import {
   loadStoredSidebarSessionOwnerFilter,
   storeSidebarSessionOwnerFilter,
+  type SidebarSessionOwnerFilter,
 } from "./app-sidebar-session-types.ts";
 
 type SessionOwnerFilterContext = {
-  gateway: {
-    connection: { gatewayUrl: string };
-    snapshot: { selfUser?: { id: string } | null };
-  };
+  gateway: ApplicationGateway;
 };
 
+/** Owns the saved owner filter and invalidates changes to the effective list query. */
 export class SessionOwnerFilterController implements ReactiveController {
   ownerId: string | null = null;
   involvingMe = false;
   private scope: string | null = null;
-  private ownerFacetResolved = false;
-  private ownerOptions: readonly { id: string }[] = [];
+  private previous?: SidebarSessionOwnerFilter & { scope: string | null };
   private pendingFacetRefresh: Promise<void> | null = null;
+  private userIntent = false;
+  private ownerFacet: { agentId: string; multiple: boolean } | null = null;
 
   constructor(
     private readonly host: ReactiveControllerHost & {
-      sessionData: { resetSessionList(): void; refreshSidebarSessions(): Promise<void> };
+      isConnected: boolean;
+      sidebarSessionOwnerFilter(): SidebarSessionOwnerFilter;
+      sessionData: {
+        resetSessionList(): void;
+        refreshSidebarSessions(): Promise<void>;
+        scheduleSidebarSessions(): Promise<void>;
+      };
     },
     private readonly getContext: () => SessionOwnerFilterContext | undefined,
+    private readonly getFacet: () => SessionListSnapshot | undefined,
   ) {
     host.addController(this);
   }
 
-  hostUpdated(): void {
+  hostConnected(): void {
+    // Restore before SessionDataController subscribes its initial list; its queue
+    // owns automatic reads while selected-chat startup remains unresolved.
     this.restore();
-    if (this.pendingFacetRefresh) {
+  }
+
+  hostUpdate(): void {
+    this.restore();
+  }
+
+  hostUpdated(): void {
+    if (!this.host.isConnected) {
       return;
     }
+    const previous = this.previous;
+    const current = { ...this.host.sidebarSessionOwnerFilter(), scope: this.scope };
+    this.previous = current;
+    const userIntent = this.userIntent;
+    this.userIntent = false;
     if (
-      this.ownerFacetResolved &&
-      this.ownerId &&
-      !this.ownerOptions.some((owner) => owner.id === this.ownerId)
+      !previous ||
+      previous.ownerId !== current.ownerId ||
+      previous.involvingMe !== current.involvingMe ||
+      previous.scope !== current.scope
     ) {
-      this.set(null);
-    }
-  }
-
-  observeOwnerFacet(resolved: boolean, options: readonly { id: string }[]): void {
-    if (this.pendingFacetRefresh) {
-      return;
-    }
-    this.ownerFacetResolved = resolved;
-    this.ownerOptions = options;
-  }
-
-  set(ownerId: string | null, involvingMe = false): void {
-    this.pendingFacetRefresh = null;
-    this.ownerId = involvingMe ? null : ownerId?.trim() || null;
-    this.involvingMe = involvingMe;
-    const context = this.getContext();
-    const selfUserId = context?.gateway.snapshot.selfUser?.id.trim();
-    if (context && selfUserId) {
-      storeSidebarSessionOwnerFilter(
-        context.gateway.connection.gatewayUrl,
-        selfUserId,
-        this.currentFilter(),
-      );
-    }
-    this.host.requestUpdate();
-    void this.refresh();
-  }
-
-  private restore(): void {
-    const context = this.getContext();
-    const selfUserId = context?.gateway.snapshot.selfUser?.id.trim();
-    if (!context || !selfUserId) {
-      return;
-    }
-    const gatewayUrl = context.gateway.connection.gatewayUrl;
-    const nextScope = `${gatewayUrl}\0${selfUserId}`;
-    if (nextScope === this.scope) {
-      return;
-    }
-    const previousScope = this.scope;
-    this.scope = nextScope;
-    if (previousScope === null && (this.ownerId || this.involvingMe)) {
-      storeSidebarSessionOwnerFilter(gatewayUrl, selfUserId, this.currentFilter());
-    } else {
-      const stored = loadStoredSidebarSessionOwnerFilter(gatewayUrl, selfUserId);
-      this.ownerId = stored.ownerId;
-      this.involvingMe = stored.involvingMe;
-    }
-    this.host.requestUpdate();
-    if (previousScope !== null || this.ownerId || this.involvingMe) {
-      this.ownerFacetResolved = false;
-      this.ownerOptions = [];
-      const pending = this.refresh();
+      if (previous) {
+        this.host.sessionData.resetSessionList();
+      }
+      const pending = userIntent
+        ? this.host.sessionData.refreshSidebarSessions()
+        : this.host.sessionData.scheduleSidebarSessions();
       this.pendingFacetRefresh = pending;
       void pending.finally(() => {
         if (this.pendingFacetRefresh === pending) {
@@ -99,15 +76,86 @@ export class SessionOwnerFilterController implements ReactiveController {
           this.host.requestUpdate();
         }
       });
+      return;
+    }
+    const facet = this.getFacet();
+    if (
+      !this.pendingFacetRefresh &&
+      facet &&
+      !facet.loading &&
+      !facet.startupPending &&
+      !facet.error &&
+      facet.readSucceeded !== false &&
+      facet.result?.owners &&
+      this.ownerId &&
+      this.ownerId !== this.selfUserId &&
+      !facet.result.owners.some((owner) => owner.id === this.ownerId)
+    ) {
+      this.set(null, false, { automatic: true });
     }
   }
 
-  private refresh(): Promise<void> {
-    this.host.sessionData.resetSessionList();
-    return this.host.sessionData.refreshSidebarSessions();
+  hostDisconnected(): void {
+    this.previous = undefined;
+    this.pendingFacetRefresh = null;
+    this.userIntent = false;
   }
 
-  private currentFilter() {
-    return { ownerId: this.ownerId, involvingMe: this.involvingMe };
+  hasMultipleOwners(agentId: string): boolean {
+    this.restore();
+    return this.ownerFacet?.agentId === agentId && this.ownerFacet.multiple;
+  }
+
+  observeOwnerFacet(agentId: string, visibility: { filters: boolean } | undefined): void {
+    this.restore();
+    // Pending replacement rows must not reverse the query their owner inventory selected.
+    if (visibility !== undefined) {
+      this.ownerFacet = { agentId, multiple: visibility.filters };
+    }
+  }
+
+  set(ownerId: string | null, involvingMe = false, options?: { automatic: true }): void {
+    this.restore();
+    this.ownerId = involvingMe ? null : ownerId?.trim() || null;
+    this.involvingMe = involvingMe;
+    if (!options?.automatic) {
+      this.userIntent = true;
+    }
+    const context = this.getContext();
+    const selfUserId = this.selfUserId;
+    if (context && selfUserId) {
+      storeSidebarSessionOwnerFilter(context.gateway.connection.gatewayUrl, selfUserId, {
+        ownerId: this.ownerId,
+        involvingMe: this.involvingMe,
+      });
+    }
+    this.host.requestUpdate();
+  }
+
+  private restore(): void {
+    const context = this.getContext();
+    const selfUserId = this.selfUserId;
+    const nextScope =
+      context && selfUserId
+        ? JSON.stringify([context.gateway.connection.gatewayUrl, selfUserId])
+        : null;
+    if (nextScope === this.scope) {
+      return;
+    }
+    this.scope = nextScope;
+    this.userIntent = false;
+    this.ownerFacet = null;
+    const stored =
+      context && selfUserId
+        ? loadStoredSidebarSessionOwnerFilter(context.gateway.connection.gatewayUrl, selfUserId)
+        : { ownerId: null, involvingMe: false };
+    this.ownerId = stored.ownerId;
+    this.involvingMe = stored.involvingMe;
+    this.host.requestUpdate();
+  }
+
+  private get selfUserId(): string | undefined {
+    const context = this.getContext();
+    return context ? gatewayPresentationScope(context.gateway).displayUser?.id.trim() : undefined;
   }
 }

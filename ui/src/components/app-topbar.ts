@@ -6,6 +6,7 @@ import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import { t } from "../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { icons } from "./icons.ts";
+import { renderKbd, renderShortcutText } from "./kbd.ts";
 import "./tooltip.ts";
 
 /** Narrow-viewport header: drawer toggle, brand, and command-palette search.
@@ -40,6 +41,7 @@ class AppTopbar extends OpenClawLightDomContentsElement {
               <img
                 class="topbar-brand__logo"
                 src=${controlUiPublicAssetPath("apple-touch-icon.png", this.resourceBasePath)}
+                loading="lazy"
                 alt=""
                 aria-hidden="true"
               />
@@ -51,7 +53,10 @@ class AppTopbar extends OpenClawLightDomContentsElement {
             </div>
           </div>
           <div class="topnav-shell__actions">
-            <openclaw-tooltip .content=${t("chat.commandPaletteTitle")}>
+            <openclaw-tooltip
+              .content=${t("chat.commandPaletteTitle")}
+              .contentTemplate=${renderShortcutText(t("chat.commandPaletteTitle").replace("⌘K", "{shortcut}"), renderKbd(["⌘", "K"], { inline: true }))}
+            >
               <button
                 class="topbar-search"
                 @click=${this.onOpenPalette}

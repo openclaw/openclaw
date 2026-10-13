@@ -58,6 +58,7 @@ export const transcribeOpenAiAudioWithContext: NonNullable<
       : context.cfg;
   const params = {
     provider: "openai",
+    capability: "audio-transcription",
     cfg,
     agentDir: context.agentDir,
     workspaceDir: context.workspaceDir,

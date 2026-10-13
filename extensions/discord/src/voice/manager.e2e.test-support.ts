@@ -19,6 +19,7 @@ export type TestRealtimeBridgeParams = {
   cfg?: unknown;
   instructions?: string;
   interruptResponseOnInputAudio?: boolean;
+  providerConfig: RealtimeVoiceBridgeCreateRequest["providerConfig"];
   onEvent?: (event: RealtimeVoiceBridgeEvent) => void;
   onClose?: RealtimeVoiceBridgeCreateRequest["onClose"];
   onReady?: () => void;
@@ -103,7 +104,9 @@ export function createDiscordVoiceTestHelpers(updateVoiceStateMock: ReturnType<t
     ),
     fetchGuild: vi.fn(async (guildId: string) => ({ id: guildId, name: "Guild One" })),
     getPlugin: vi.fn((_id?: string): unknown => ({
-      getGatewayAdapterCreator: vi.fn(() => vi.fn() as Mock),
+      getGatewayAdapterCreator: vi.fn(() =>
+        vi.fn(() => ({ sendPayload: vi.fn(() => true), destroy: vi.fn() })),
+      ),
       getGateway: vi.fn(() => ({ updateVoiceState: updateVoiceStateMock })),
     })),
     fetchMember: vi.fn() as Mock,
@@ -134,7 +137,9 @@ export function createDiscordVoiceTestHelpers(updateVoiceStateMock: ReturnType<t
         return { listVoiceChannelStates: vi.fn(listVoiceChannelStates) };
       }
       return {
-        getGatewayAdapterCreator: vi.fn(() => vi.fn() as Mock),
+        getGatewayAdapterCreator: vi.fn(() =>
+          vi.fn(() => ({ sendPayload: vi.fn(() => true), destroy: vi.fn() })),
+        ),
         getGateway: vi.fn(() => ({ updateVoiceState: updateVoiceStateMock })),
       };
     });

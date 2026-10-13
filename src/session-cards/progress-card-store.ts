@@ -1,63 +1,57 @@
-import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
 import type { ProgressCard, ProgressCardStep } from "../../packages/gateway-protocol/src/index.js";
-import {
-  clearNodeSqliteKyselyCacheForDatabase,
-  executeSqliteQuerySync,
-  getNodeSqliteKysely,
-} from "../infra/kysely-sync.js";
-import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { ensureOpenClawAgentProgressCardSchemaInTransaction } from "../state/openclaw-agent-progress-card-schema.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
+import { normalizeProgressCardWrite } from "./progress-card-values.js";
 
 type ProgressCardDatabase = Pick<OpenClawAgentKyselyDatabase, "session_progress_cards">;
-type ProgressCardDatabaseInput = string | DatabaseSync;
 type StoredProgressCardRow = Selectable<ProgressCardDatabase["session_progress_cards"]>;
-
-function withProgressCardDatabase<T>(
-  input: ProgressCardDatabaseInput,
-  readOnly: boolean,
-  operation: (db: DatabaseSync, label: string) => T,
-): T {
-  if (typeof input !== "string") {
-    return operation(input, "openclaw-agent.sqlite");
-  }
-  const db = openNodeSqliteDatabase(input, { readOnly });
-  try {
-    if (!readOnly) {
-      db.exec("PRAGMA foreign_keys = ON;"); // sqlite-allow-raw -- Connection bootstrap before Kysely queries.
-    }
-    return operation(db, input);
-  } finally {
-    clearNodeSqliteKyselyCacheForDatabase(db);
-    db.close();
-  }
-}
-
-function progressCardTablePresent(db: DatabaseSync): boolean {
-  return Boolean(
-    db // sqlite-allow-raw -- Catalog probe before Kysely table access on a read-only connection.
-      .prepare(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_progress_cards'",
-      )
-      .get(),
-  );
-}
 
 function selectProgressCard(db: DatabaseSync, sessionKey: string): StoredProgressCardRow | null {
   const kysely = getNodeSqliteKysely<ProgressCardDatabase>(db);
   return (
-    executeSqliteQuerySync(
+    executeSqliteQueryTakeFirstSync(
       db,
       kysely
         .selectFrom("session_progress_cards")
         .select(["session_key", "markdown", "steps_json", "revision", "created_at", "updated_at"])
         .where("session_key", "=", sessionKey)
         .limit(1),
-    ).rows[0] ?? null
+    ) ?? null
+  );
+}
+
+function clearProgressCardInTransaction(
+  db: DatabaseSync,
+  sessionKey: string,
+  expectedRevision?: number,
+): boolean {
+  const query = getNodeSqliteKysely<ProgressCardDatabase>(db)
+    .updateTable("session_progress_cards")
+    .set((eb) => ({
+      markdown: null,
+      steps_json: null,
+      revision: eb("revision", "+", 1),
+      updated_at: Date.now(),
+    }))
+    .where("session_key", "=", sessionKey);
+  return (
+    executeSqliteQueryTakeFirstSync(
+      db,
+      (expectedRevision === undefined
+        ? query
+        : query
+            .where("revision", "=", expectedRevision)
+            .where((eb) =>
+              eb.or([eb("markdown", "is not", null), eb("steps_json", "is not", null)]),
+            )
+      ).returning(["revision", "created_at"]),
+    ) !== undefined
   );
 }
 
@@ -96,111 +90,102 @@ function readStoredSteps(value: string): ProgressCardStep[] {
   });
 }
 
-export function readSessionProgressCard(
-  dbPathOrDb: ProgressCardDatabaseInput,
-  sessionKey: string,
-): ProgressCard | null {
-  if (typeof dbPathOrDb === "string" && !fs.existsSync(dbPathOrDb)) {
+export function readSessionProgressCard(db: DatabaseSync, sessionKey: string): ProgressCard | null {
+  if (!tableExists(db, "session_progress_cards")) {
     return null;
   }
-  return withProgressCardDatabase(dbPathOrDb, true, (db) => {
-    if (!progressCardTablePresent(db)) {
-      return null;
-    }
-    const row = selectProgressCard(db, sessionKey);
-    return row ? rowToProgressCard(row) : null;
-  });
+  const row = selectProgressCard(db, sessionKey);
+  return row ? rowToProgressCard(row) : null;
 }
 
 /** Retain revision tombstones, but keep never-used lazy storage dormant during reset. */
 export function clearSessionProgressCardForReset(db: DatabaseSync, sessionKey: string): boolean {
-  if (!progressCardTablePresent(db) || !selectProgressCard(db, sessionKey)) {
+  if (!tableExists(db, "session_progress_cards")) {
     return false;
   }
-  writeSessionProgressCard(db, sessionKey, {});
-  return true;
+  return db.isTransaction
+    ? clearProgressCardInTransaction(db, sessionKey)
+    : runSqliteImmediateTransactionSync(db, () => clearProgressCardInTransaction(db, sessionKey), {
+        operationLabel: "progress-card.reset",
+      });
 }
 
 export function writeSessionProgressCard(
-  dbPathOrDb: ProgressCardDatabaseInput,
+  db: DatabaseSync,
   sessionKey: string,
   input: { markdown?: string; steps?: ProgressCardStep[]; expectedRevision?: number },
 ): { card: ProgressCard | null } | { cleared: true } {
-  return withProgressCardDatabase(dbPathOrDb, false, (db, label) => {
-    const write = (): { card: ProgressCard | null } | { cleared: true } => {
-      ensureOpenClawAgentProgressCardSchemaInTransaction(db);
-      const kysely = getNodeSqliteKysely<ProgressCardDatabase>(db);
-      const markdown = input.markdown?.trim() ? input.markdown : undefined;
-      const steps = input.steps && input.steps.length > 0 ? input.steps : undefined;
-      if (!markdown && !steps) {
-        const previous = selectProgressCard(db, sessionKey);
-        if (input.expectedRevision !== undefined) {
-          const current = previous ? rowToProgressCard(previous) : null;
-          if (
-            !previous ||
-            previous.revision !== input.expectedRevision ||
-            !current?.steps?.length ||
-            current.steps.some((step) => step.status !== "completed")
-          ) {
-            return { card: current };
-          }
-        }
-        if (previous) {
-          executeSqliteQuerySync(
-            db,
-            kysely
-              .updateTable("session_progress_cards")
-              .set({
-                markdown: null,
-                steps_json: null,
-                revision: previous.revision + 1,
-                updated_at: Date.now(),
-              })
-              .where("session_key", "=", sessionKey),
-          );
-        }
-        return { cleared: true };
+  return writePreparedSessionProgressCard(db, sessionKey, prepareSessionProgressCardWrite(input));
+}
+
+export function prepareSessionProgressCardWrite(input: {
+  markdown?: string;
+  steps?: ProgressCardStep[];
+  expectedRevision?: number;
+}) {
+  const { markdown, steps } = normalizeProgressCardWrite(input);
+  return {
+    markdown,
+    steps,
+    stepsJson: steps ? JSON.stringify(steps) : null,
+    expectedRevision: input.expectedRevision,
+  };
+}
+
+export function writePreparedSessionProgressCard(
+  db: DatabaseSync,
+  sessionKey: string,
+  input: ReturnType<typeof prepareSessionProgressCardWrite>,
+): { card: ProgressCard | null } | { cleared: true } {
+  const write = (): { card: ProgressCard | null } | { cleared: true } => {
+    ensureOpenClawAgentProgressCardSchemaInTransaction(db);
+    const kysely = getNodeSqliteKysely<ProgressCardDatabase>(db);
+    const { markdown, steps, stepsJson } = input;
+    if (!markdown && !steps) {
+      if (
+        !clearProgressCardInTransaction(db, sessionKey, input.expectedRevision) &&
+        input.expectedRevision !== undefined
+      ) {
+        return { card: readSessionProgressCard(db, sessionKey) };
       }
-      const previous = selectProgressCard(db, sessionKey);
-      const now = Date.now();
-      const revision = (previous?.revision ?? 0) + 1;
-      const stepsJson = steps ? JSON.stringify(steps) : null;
-      executeSqliteQuerySync(
-        db,
-        kysely
-          .insertInto("session_progress_cards")
-          .values({
-            session_key: sessionKey,
+      return { cleared: true };
+    }
+    const now = Date.now();
+    const written = executeSqliteQueryTakeFirstSync(
+      db,
+      kysely
+        .insertInto("session_progress_cards")
+        .values({
+          session_key: sessionKey,
+          markdown: markdown ?? null,
+          steps_json: stepsJson,
+          revision: 1,
+          created_at: now,
+          updated_at: now,
+        })
+        .onConflict((conflict) =>
+          conflict.column("session_key").doUpdateSet((eb) => ({
             markdown: markdown ?? null,
             steps_json: stepsJson,
-            revision,
-            created_at: previous?.created_at ?? now,
+            revision: eb("session_progress_cards.revision", "+", 1),
             updated_at: now,
-          })
-          .onConflict((conflict) =>
-            conflict.column("session_key").doUpdateSet({
-              markdown: markdown ?? null,
-              steps_json: stepsJson,
-              revision,
-              updated_at: now,
-            }),
-          ),
-      );
-      return {
-        card: {
-          sessionKey,
-          revision,
-          updatedAt: now,
-          ...(markdown ? { markdown } : {}),
-          ...(steps ? { steps } : {}),
-        },
-      };
+          })),
+        )
+        .returning(["revision", "created_at"]),
+    );
+    return {
+      card: {
+        sessionKey,
+        revision: written!.revision,
+        updatedAt: now,
+        ...(markdown ? { markdown } : {}),
+        ...(steps ? { steps } : {}),
+      },
     };
-    return db.isTransaction
-      ? write()
-      : runSqliteImmediateTransactionSync(db, write, {
-          databaseLabel: label,
-          operationLabel: "progress-card.write",
-        });
-  });
+  };
+  return db.isTransaction
+    ? write()
+    : runSqliteImmediateTransactionSync(db, write, {
+        operationLabel: "progress-card.write",
+      });
 }

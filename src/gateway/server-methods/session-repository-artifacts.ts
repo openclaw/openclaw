@@ -11,7 +11,7 @@ import { populateSessionFilePreview } from "./workspace-files.js";
 import { normalizeRelativePath, sortWorkspaceEntries } from "./workspace-fs.js";
 
 type StoredRepository = Extract<
-  ReturnType<typeof resolveRepositoryWorkspaceAccess>,
+  Awaited<ReturnType<typeof resolveRepositoryWorkspaceAccess>>,
   { kind: "stored" }
 >;
 
@@ -42,7 +42,7 @@ function fileEntry(filePath: string, size: number | undefined): SessionFileEntry
   };
 }
 
-function artifactPath(requested: string): string | undefined {
+export function resolveRepositoryArtifactPath(requested: string): string | undefined {
   const normalized = normalizeRelativePath(requested);
   return path.posix.isAbsolute(requested) ||
     path.win32.isAbsolute(requested) ||
@@ -64,37 +64,27 @@ export async function listRepositoryArtifacts(
   );
   const files =
     snapshot?.changes.map((entry) => fileEntry(entry.path, changed.get(entry.path)?.size)) ?? [];
-  const folder = artifactPath(request.path ?? "");
+  const folder = resolveRepositoryArtifactPath(request.path ?? "");
   if (folder === undefined) {
     return { gitCheckout: true, files };
   }
   const entries = new Map<string, SessionFileBrowserEntry>();
   const query = request.search?.trim().toLowerCase();
+  const prefix = folder ? `${folder}/` : "";
   for (const [filePath, entry] of changed) {
-    if (query) {
-      if (filePath.toLowerCase().includes(query)) {
-        entries.set(filePath, {
-          path: filePath,
-          name: path.posix.basename(filePath),
-          kind: "file",
-          size: entry.size,
-          sessionKind: "modified",
-        });
-      }
-      continue;
-    }
-    const prefix = folder ? `${folder}/` : "";
-    if (!filePath.startsWith(prefix)) {
+    if (query ? !filePath.toLowerCase().includes(query) : !filePath.startsWith(prefix)) {
       continue;
     }
     const remainder = filePath.slice(prefix.length);
-    const name = remainder.split("/")[0]!;
-    entries.set(`${prefix}${name}`, {
-      path: `${prefix}${name}`,
+    const name = query ? path.posix.basename(filePath) : remainder.split("/")[0]!;
+    const selectedPath = query ? filePath : `${prefix}${name}`;
+    const directory = !query && remainder.includes("/");
+    entries.set(selectedPath, {
+      path: selectedPath,
       name,
-      kind: remainder.includes("/") ? "directory" : "file",
+      kind: directory ? "directory" : "file",
       sessionKind: "modified",
-      ...(remainder.includes("/") ? {} : { size: entry.size }),
+      ...(directory ? {} : { size: entry.size }),
     });
   }
   const limit = query ? 500 : 250;
@@ -119,7 +109,7 @@ export async function getRepositoryArtifact(
   access: StoredRepository,
   requestedPath: string,
 ): Promise<{ file?: SessionFileEntry }> {
-  const selected = artifactPath(requestedPath);
+  const selected = resolveRepositoryArtifactPath(requestedPath);
   const snapshot = await readArtifacts(access, selected);
   const entry = snapshot?.changedEntries.find((candidate) => candidate.path === selected);
   if (!snapshot || entry?.type !== "file") {

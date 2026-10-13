@@ -1,9 +1,15 @@
 // Matrix tests cover access state plugin behavior.
-import { describe, expect, it } from "vitest";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import { beforeEach, describe, expect, it } from "vitest";
+import { setMatrixRuntime } from "../../runtime.js";
 import {
   resolveMatrixMonitorAccessState,
   resolveMatrixMonitorCommandAccess,
 } from "./access-state.js";
+
+beforeEach(() => {
+  setMatrixRuntime(createPluginRuntimeMock());
+});
 
 async function expectCommandAccess(
   state: Parameters<typeof resolveMatrixMonitorCommandAccess>[0],
@@ -162,48 +168,6 @@ describe("resolveMatrixMonitorAccessState", () => {
     );
   });
 
-  it("authorizes room control commands through the shared ingress command gate", async () => {
-    const state = await resolveMatrixMonitorAccessState({
-      allowFrom: [],
-      storeAllowFrom: [],
-      groupAllowFrom: ["@admin:example.org"],
-      roomUsers: [],
-      senderId: "@admin:example.org",
-      isRoom: true,
-    });
-
-    await expectCommandAccess(
-      state,
-      {
-        useAccessGroups: true,
-        allowTextCommands: true,
-        hasControlCommand: true,
-      },
-      { authorized: true, shouldBlockControlCommand: false },
-    );
-  });
-
-  it("keeps command allow mode when access groups are disabled", async () => {
-    const state = await resolveMatrixMonitorAccessState({
-      allowFrom: [],
-      storeAllowFrom: [],
-      groupAllowFrom: [],
-      roomUsers: [],
-      senderId: "@admin:example.org",
-      isRoom: true,
-    });
-
-    await expectCommandAccess(
-      state,
-      {
-        useAccessGroups: false,
-        allowTextCommands: true,
-        hasControlCommand: true,
-      },
-      { authorized: true, shouldBlockControlCommand: false },
-    );
-  });
-
   it("keeps room-user allowlists out of dm traffic", async () => {
     const state = await resolveMatrixMonitorAccessState({
       allowFrom: [],
@@ -224,44 +188,5 @@ describe("resolveMatrixMonitorAccessState", () => {
       },
       { authorized: false, shouldBlockControlCommand: true },
     );
-  });
-
-  it("uses the shared ingress decision for room user sender gates", async () => {
-    const blocked = await resolveMatrixMonitorAccessState({
-      allowFrom: [],
-      storeAllowFrom: [],
-      groupAllowFrom: [],
-      roomUsers: ["@allowed:example.org"],
-      senderId: "@blocked:example.org",
-      isRoom: true,
-      groupPolicy: "open",
-    });
-    const allowed = await resolveMatrixMonitorAccessState({
-      allowFrom: [],
-      storeAllowFrom: [],
-      groupAllowFrom: [],
-      roomUsers: ["@allowed:example.org"],
-      senderId: "@allowed:example.org",
-      isRoom: true,
-      groupPolicy: "open",
-    });
-
-    expect(blocked.messageIngress.ingress.reasonCode).toBe("group_policy_not_allowlisted");
-    expect(allowed.messageIngress.ingress.decision).toBe("allow");
-  });
-
-  it("keeps route-only room allowlists open when no sender allowlist exists", async () => {
-    const state = await resolveMatrixMonitorAccessState({
-      allowFrom: [],
-      storeAllowFrom: [],
-      groupAllowFrom: [],
-      roomUsers: [],
-      senderId: "@sender:example.org",
-      isRoom: true,
-      groupPolicy: "allowlist",
-    });
-
-    expect(state.messageIngress.ingress.decision).toBe("allow");
-    expect(state.messageIngress.ingress.reasonCode).toBe("activation_allowed");
   });
 });

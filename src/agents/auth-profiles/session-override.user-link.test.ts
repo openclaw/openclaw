@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { applyMixedDirectives } from "../../auto-reply/reply/directive-handling.mixed-inline.test-helpers.js";
 import { createModelSelectionState } from "../../auto-reply/reply/model-selection.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
@@ -16,7 +17,18 @@ import {
   withOpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createApiKeyCredential } from "./credential-fixtures.test-support.js";
-import { resolveSessionAuthSelection } from "./session-override.js";
+import { resolveSessionAuthSelection, resolveUserLinkedAuthProfile } from "./session-override.js";
+
+// Runtime eligibility has separate owner coverage; account ownership stays real here.
+vi.mock("../model-runtime-choice.js", () => ({
+  preparePublishedModelRuntimeChoice: vi.fn<
+    typeof import("../model-runtime-choice.js").preparePublishedModelRuntimeChoice
+  >(async ({ runtimeId, preferredRuntimeId }) => ({
+    kind: "ready",
+    runtimeId: runtimeId ?? preferredRuntimeId ?? "codex",
+    validate: () => undefined,
+  })),
+}));
 
 const DEFAULT_PROFILE_ID = "openai:shared";
 const SESSION_KEY = "agent:main:main";
@@ -56,6 +68,7 @@ async function selectForRequester(
     hasModelDirective: false,
   });
   return resolveSessionAuthSelection({
+    agentId: "main",
     cfg: {},
     provider: model.provider,
     modelId: model.model,
@@ -73,6 +86,33 @@ function withAuthState(run: (state: OpenClawTestState) => Promise<void>) {
 }
 
 describe("person-linked session auth", () => {
+  it("reads changed personal defaults through workers without querying on the host", async () => {
+    await withAuthState(async (state) => {
+      const alice = ensureProfileForEmail("alice@example.test");
+      const first = connectAccount(alice.id, "first");
+      const select = () =>
+        resolveUserLinkedAuthProfile({
+          cfg: {},
+          agentDir: state.agentDir(),
+          provider: "openai",
+          requesterProfileId: alice.id,
+        });
+      expect((await select())?.profileId).toBe(first);
+      const second = connectAccount(alice.id, "second");
+      const sql = observeHostDataSql();
+      try {
+        expect((await select())?.profileId).toBe(second);
+        expect(
+          sql.queries.filter((query) => /\b(?:user_profiles|secret_store_entries)\b/i.test(query)),
+        ).toEqual([]);
+      } finally {
+        sql.restore();
+      }
+      clearUserProfileAuthLink({ profileId: alice.id, provider: "openai" });
+      expect(await select()).toBeUndefined();
+    });
+  });
+
   it.each(
     ["owner", "another person", "unidentified"].flatMap((requester) => [
       { requester, form: "model-only", prefix: "" },
@@ -106,7 +146,7 @@ describe("person-linked session auth", () => {
         });
 
         if (requester === "owner") {
-          expect(sessionEntry.authProfileOverride).toBe(personalId);
+          expect(sessionEntry.authProfileOverride, JSON.stringify(result)).toBe(personalId);
           expect(sessionEntry.authProfileOverrideSource).toBe("user");
         } else {
           expect(sessionEntry.authProfileOverride).toBeUndefined();
@@ -154,6 +194,7 @@ describe("person-linked session auth", () => {
 
       await expect(
         resolveSessionAuthSelection({
+          agentId: "main",
           cfg: {},
           provider: "openai",
           modelId: "gpt-5.6-luna",

@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import {
   createControlUiE2eContextOptions,
   tooltipTitleText,
@@ -127,7 +128,7 @@ suite.define(() => {
       await page.keyboard.press("Escape");
 
       await modelSelect.click();
-      await page.locator('[data-chat-model-option="openai/gpt-5.6-sol"]').click();
+      await selectChatModelOption(page.locator('[data-chat-model-option="openai/gpt-5.6-sol"]'));
       await expect.poll(() => modelSelect.textContent()).toContain("GPT-5.6 Sol");
       await whereTrigger.click();
       await expect.poll(() => device.isEnabled()).toBe(true);
@@ -150,7 +151,9 @@ suite.define(() => {
       await page.keyboard.press("Escape");
 
       await modelSelect.click();
-      await page.locator('[data-chat-model-option="anthropic/claude-opus-4-6"]').click();
+      await selectChatModelOption(
+        page.locator('[data-chat-model-option="anthropic/claude-opus-4-6"]'),
+      );
       await expect.poll(() => modelSelect.textContent()).toContain("Claude Opus 4.6");
       await whereTrigger.click();
       await expect.poll(() => device.isDisabled()).toBe(true);
@@ -162,7 +165,9 @@ suite.define(() => {
       await page.keyboard.press("Escape");
 
       await modelSelect.click();
-      await page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]').click();
+      await selectChatModelOption(
+        page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]'),
+      );
       await whereTrigger.click();
       await expect.poll(() => device.isDisabled()).toBe(true);
       await expect.poll(() => restrictedDevice.isEnabled()).toBe(true);
@@ -203,7 +208,7 @@ suite.define(() => {
             {
               id: "node:saturated",
               type: "node",
-              label: "Busy runner",
+              label: "Already busy runner",
               status: "available",
               sessionHost: true,
               workerSlots: { total: 2, available: 0 },
@@ -339,6 +344,12 @@ suite.define(() => {
         ],
         profiles: [],
       });
+      const selectedControl = await selectedRow.elementHandle();
+      if (!selectedControl) {
+        throw new Error("Selected device control is unavailable");
+      }
+      await page.keyboard.press("Tab");
+      await selectedRow.focus();
       await gateway.deferNext("environments.list");
       await gateway.emitGatewayEvent("node.runnerInventory.changed", { nodeId: "alpha-device" });
       await gateway.waitForRequest("environments.list", { after: beforeRefresh });
@@ -347,6 +358,17 @@ suite.define(() => {
       }
       expect(await gateway.getRequests("environments.list")).toHaveLength(beforeRefresh + 1);
       await expect.poll(() => selectedRow.isDisabled()).toBe(true);
+      await captureDeviceRuntimeUiProof(suite, page, "04-device-refresh-focus.png");
+      expect(
+        await selectedControl.evaluate((element) => ({
+          connected: element.isConnected,
+          focused: element === document.activeElement,
+          device: element.getAttribute("data-value"),
+        })),
+      ).toEqual({ connected: true, focused: true, device: "device:alpha-device" });
+      await page.keyboard.press("Enter");
+      expect(await place.getAttribute("open")).not.toBeNull();
+      expect(await selectedRow.getAttribute("aria-pressed")).toBe("true");
       for (let cycle = 1; cycle <= 4; cycle += 1) {
         await gateway.deferNext("environments.list");
         await gateway.resolveDeferred(
@@ -373,6 +395,8 @@ suite.define(() => {
         .poll(() => details("alpha-device").textContent())
         .toContain("No worker slots are available");
       expect(await selectedRow.getAttribute("aria-pressed")).toBe("true");
+      expect(await selectedControl.evaluate((element) => element.isConnected)).toBe(true);
+      await selectedControl.dispose();
 
       // Nodes without a worker-supervisor proof still publish connection presence.
       for (const connected of [false, true]) {

@@ -1,4 +1,3 @@
-// Resolves and checks packaged Control UI assets.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,8 +7,11 @@ import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { quoteCliArg, quotePowerShellArg } from "../cli/quote-cli-arg.js";
 import { CONTROL_UI_BUILD_ID_ATTRIBUTE } from "../gateway/control-ui-root-assets.js";
+import { selectControlUiRoutePreloads } from "../gateway/control-ui-route-preloads.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { openRootFileSync, readFileDescriptorBoundedSync } from "./boundary-file-read.js";
+import { FsSafeError } from "./fs-safe.js";
 import { resolveOpenClawPackageRoot, resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 
 export function formatControlUiSourceCommand(root: string, action: "build" | "dev"): string {
@@ -69,25 +71,29 @@ function resolveControlUiRepoRoot(opts: {
   );
 }
 
+function tryRealpath(value: string): string | null {
+  try {
+    return fs.realpathSync(value);
+  } catch {
+    return null;
+  }
+}
+
+function resolveControlUiEntrypointPaths(argv1: string): string[] {
+  const normalized = path.resolve(argv1);
+  const realpath = tryRealpath(normalized);
+  return realpath && realpath !== normalized ? [normalized, realpath] : [normalized];
+}
+
 async function resolveControlUiDistIndexPath(
-  argv1OrOpts?: string | { argv1?: string; moduleUrl?: string },
+  opts: ControlUiRootResolveOptions,
 ): Promise<string | null> {
-  const argv1 =
-    typeof argv1OrOpts === "string" ? argv1OrOpts : (argv1OrOpts?.argv1 ?? process.argv[1]);
-  const moduleUrl = typeof argv1OrOpts === "object" ? argv1OrOpts?.moduleUrl : undefined;
+  const argv1 = opts.argv1 ?? process.argv[1];
+  const moduleUrl = opts.moduleUrl;
   if (!argv1) {
     return null;
   }
-  const normalized = path.resolve(argv1);
-  const entrypointCandidates = [normalized];
-  try {
-    const realpathEntrypoint = fs.realpathSync(normalized);
-    if (realpathEntrypoint !== normalized) {
-      entrypointCandidates.push(realpathEntrypoint);
-    }
-  } catch {
-    // Ignore missing/non-realpath argv1 and keep path-based candidates.
-  }
+  const entrypointCandidates = resolveControlUiEntrypointPaths(argv1);
 
   // Case 1: entrypoint is directly inside dist/ (e.g., dist/entry.js).
   // Include symlink-resolved argv1 so global wrappers (e.g. Bun) still map to dist/control-ui.
@@ -98,7 +104,10 @@ async function resolveControlUiDistIndexPath(
     }
   }
 
-  const packageRoot = await resolveOpenClawPackageRoot({ argv1: normalized, moduleUrl });
+  const packageRoot = await resolveOpenClawPackageRoot({
+    argv1: path.resolve(argv1),
+    moduleUrl,
+  });
   if (packageRoot) {
     return path.join(packageRoot, "dist", "control-ui", "index.html");
   }
@@ -146,26 +155,7 @@ type ControlUiRootResolveOptions = {
 };
 
 function pathsMatchByRealpathOrResolve(left: string, right: string): boolean {
-  let realLeft: string;
-  let realRight: string;
-  try {
-    realLeft = fs.realpathSync(left);
-  } catch {
-    realLeft = path.resolve(left);
-  }
-  try {
-    realRight = fs.realpathSync(right);
-  } catch {
-    realRight = path.resolve(right);
-  }
-  return realLeft === realRight;
-}
-
-function addCandidate(candidates: Set<string>, value: string | null) {
-  if (!value) {
-    return;
-  }
-  candidates.add(path.resolve(value));
+  return (tryRealpath(left) ?? path.resolve(left)) === (tryRealpath(right) ?? path.resolve(right));
 }
 
 export function resolveControlUiRootOverrideSync(rootOverride: string): string | null {
@@ -187,59 +177,38 @@ export function resolveControlUiRootOverrideSync(rootOverride: string): string |
 
 export function resolveControlUiRootSync(opts: ControlUiRootResolveOptions = {}): string | null {
   const candidates = new Set<string>();
+  const addCandidate = (value: string | null) => {
+    if (value) {
+      candidates.add(path.resolve(value));
+    }
+  };
   const argv1 = opts.argv1 ?? process.argv[1];
   const cwd = opts.cwd ?? process.cwd();
   const moduleDir = opts.moduleUrl ? path.dirname(fileURLToPath(opts.moduleUrl)) : null;
-  const argv1Dir = argv1 ? path.dirname(path.resolve(argv1)) : null;
-  const argv1RealpathDir = (() => {
-    if (!argv1) {
-      return null;
-    }
-    try {
-      return path.dirname(fs.realpathSync(path.resolve(argv1)));
-    } catch {
-      return null;
-    }
-  })();
-  const execDir = (() => {
-    try {
-      const execPath = opts.execPath ?? process.execPath;
-      return path.dirname(fs.realpathSync(execPath));
-    } catch {
-      return null;
-    }
-  })();
+  const entrypointPaths = argv1 ? resolveControlUiEntrypointPaths(argv1) : [];
+  const execPath = tryRealpath(opts.execPath ?? process.execPath);
   const packageRoot = resolveOpenClawPackageRootSync({
     argv1,
     moduleUrl: opts.moduleUrl,
     cwd,
   });
 
-  // Packaged app: prefer bundled resources, then support legacy alongside-executable layout.
-  addCandidate(candidates, execDir ? path.join(execDir, "../Resources/control-ui") : null);
-  addCandidate(candidates, execDir ? path.join(execDir, "control-ui") : null);
+  // Support legacy packaged runtimes that place assets alongside the executable.
+  addCandidate(execPath ? path.join(path.dirname(execPath), "control-ui") : null);
   if (moduleDir) {
-    // dist/<bundle>.js -> dist/control-ui
-    addCandidate(candidates, path.join(moduleDir, "control-ui"));
-    // dist/gateway/control-ui.js -> dist/control-ui
-    addCandidate(candidates, path.join(moduleDir, "../control-ui"));
-    // src/gateway/control-ui.ts -> dist/control-ui
-    addCandidate(candidates, path.join(moduleDir, "../../dist/control-ui"));
+    // Bundle, nested Gateway bundle, then source Gateway module.
+    for (const relative of ["control-ui", "../control-ui", "../../dist/control-ui"]) {
+      addCandidate(path.join(moduleDir, relative));
+    }
   }
-  if (argv1Dir) {
-    // openclaw.mjs or dist/<bundle>.js
-    addCandidate(candidates, path.join(argv1Dir, "dist", "control-ui"));
-    addCandidate(candidates, path.join(argv1Dir, "control-ui"));
+  // Keep the lexical launcher before its target for symlinked global wrappers.
+  for (const entrypoint of entrypointPaths) {
+    const directory = path.dirname(entrypoint);
+    addCandidate(path.join(directory, "dist", "control-ui"));
+    addCandidate(path.join(directory, "control-ui"));
   }
-  if (argv1RealpathDir && argv1RealpathDir !== argv1Dir) {
-    // Symlinked wrappers (e.g. ~/.bun/bin/openclaw -> .../dist/index.js)
-    addCandidate(candidates, path.join(argv1RealpathDir, "dist", "control-ui"));
-    addCandidate(candidates, path.join(argv1RealpathDir, "control-ui"));
-  }
-  if (packageRoot) {
-    addCandidate(candidates, path.join(packageRoot, "dist", "control-ui"));
-  }
-  addCandidate(candidates, path.join(cwd, "dist", "control-ui"));
+  addCandidate(packageRoot ? path.join(packageRoot, "dist", "control-ui") : null);
+  addCandidate(path.join(cwd, "dist", "control-ui"));
 
   for (const dir of candidates) {
     const indexPath = path.join(dir, "index.html");
@@ -297,34 +266,62 @@ function inspectControlUiAssetHealth(
   }
   let html: string;
   try {
-    if (fs.statSync(indexPath).size > 256 * 1024) {
+    const opened = openRootFileSync({
+      absolutePath: indexPath,
+      rootPath: path.dirname(indexPath),
+      boundaryLabel: "control ui root",
+      rejectSymlinks: false,
+      rejectHardlinks: false,
+      maxBytes: 256 * 1024,
+    });
+    if (!opened.ok) {
+      if (opened.error instanceof FsSafeError && opened.error.code === "too-large") {
+        throw opened.error;
+      }
+      return { kind: "missing-index", indexPath };
+    }
+    try {
+      html = readFileDescriptorBoundedSync(opened.fd, 256 * 1024).toString("utf8");
+    } finally {
+      fs.closeSync(opened.fd);
+    }
+  } catch (error) {
+    if (
+      error instanceof RangeError ||
+      (error instanceof FsSafeError && error.code === "too-large")
+    ) {
       return { kind: "incomplete", indexPath, missingAsset: "index.html exceeds its size limit" };
     }
-    html = fs.readFileSync(indexPath, "utf8");
-  } catch {
     return { kind: "missing-index", indexPath };
   }
-  let references = 0;
-  for (const tag of html.matchAll(/<(?:link|script)\b[^>]*>/giu)) {
-    const attribute = tag[0].match(/\s(?:href|src)\s*=\s*["']([^"']+)["']/iu);
-    const reference = attribute?.[1]?.split(/[?#]/u, 1)[0]?.replace(/\\/gu, "/");
-    if (!reference || /^(?:[a-z][a-z\d+.-]*:|\/\/|#)/iu.test(reference)) {
-      continue;
-    }
-    const marker = reference.lastIndexOf("assets/");
-    if (marker === -1 || !/\.(?:css|js)$/iu.test(reference)) {
-      continue;
-    }
-    const asset = reference.slice(marker);
-    if (++references > 128 || reference.split("/").includes("..")) {
-      return {
-        kind: "incomplete",
-        indexPath,
-        missingAsset: references > 128 ? "too many startup assets" : asset,
-      };
-    }
-    if (!fs.existsSync(path.join(path.dirname(indexPath), asset))) {
-      return { kind: "incomplete", indexPath, missingAsset: asset };
+  // Route templates are mutually exclusive. Inspect the same documents the
+  // Gateway serves, retaining the reference limit and integrity checks per page.
+  const documents = new Set(
+    ([null, "chat", "new"] as const).map((route) => selectControlUiRoutePreloads(html, route)),
+  );
+  for (const document of documents) {
+    let references = 0;
+    for (const tag of document.matchAll(/<(?:link|script)\b[^>]*>/giu)) {
+      const attribute = tag[0].match(/\s(?:href|src)\s*=\s*["']([^"']+)["']/iu);
+      const reference = attribute?.[1]?.split(/[?#]/u, 1)[0]?.replace(/\\/gu, "/");
+      if (!reference || /^(?:[a-z][a-z\d+.-]*:|\/\/|#)/iu.test(reference)) {
+        continue;
+      }
+      const marker = reference.lastIndexOf("assets/");
+      if (marker === -1 || !/\.(?:css|js)$/iu.test(reference)) {
+        continue;
+      }
+      const asset = reference.slice(marker);
+      if (++references > 128 || reference.split("/").includes("..")) {
+        return {
+          kind: "incomplete",
+          indexPath,
+          missingAsset: references > 128 ? "too many startup assets" : asset,
+        };
+      }
+      if (!fs.existsSync(path.join(path.dirname(indexPath), asset))) {
+        return { kind: "incomplete", indexPath, missingAsset: asset };
+      }
     }
   }
   const publicAssetBuildId = new RegExp(

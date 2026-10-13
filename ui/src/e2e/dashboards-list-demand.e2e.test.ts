@@ -3,7 +3,9 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 // Control UI E2E proves dashboard tabs do not multiply server-owned session-list demand.
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
+import { dashboardSessionListQuery } from "../lib/sessions/session-requests.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { getControlUiContextHandle } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   installMockGateway,
   waitForControlUiRoute,
@@ -18,10 +20,13 @@ const suite = createControlUiE2eSuite({
 const DASHBOARD_REQUEST_PARAMS = {
   archived: "all",
   configuredAgentsOnly: true,
+  excludeDock: true,
   hasBoard: true,
   includeGlobal: true,
   includeUnknown: true,
   limit: SIDEBAR_SESSION_ROSTER_LIMIT,
+  rowMode: "dashboard",
+  source: "dashboard",
 } as const;
 
 function sessionsResult(key: string, label: string, updatedAt: number) {
@@ -103,31 +108,19 @@ suite.define(() => {
         retryable: true,
       });
       // Confirm the real store consumed the failed wire response before capturing the UI.
-      // The predicate runs in the page, so the limit crosses as an argument.
-      await page.waitForFunction((rosterLimit) => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime?: {
-            context: {
-              agentSelection: { state: { scopeId: string | null } };
-              sessions: {
-                listSnapshot: (query: Record<string, unknown>) => {
-                  error: string | null;
-                  loading: boolean;
-                };
-              };
-            };
-          };
-        };
-        const appContext = app.runtime?.context;
-        return (
-          appContext?.sessions.listSnapshot({
-            limit: rosterLimit,
-            hasBoard: true,
-            archivedFilter: "all",
-            agentId: appContext.agentSelection.state.scopeId ?? undefined,
-          }).error === "Dashboard refresh unavailable"
+      const appContext = await getControlUiContextHandle(page);
+      try {
+        await page.waitForFunction(
+          ({ context: current, query }) =>
+            current.sessions.listSnapshot({
+              ...query,
+              agentId: current.agentSelection.state.scopeId ?? undefined,
+            }).error === "Dashboard refresh unavailable",
+          { context: appContext, query: dashboardSessionListQuery() },
         );
-      }, SIDEBAR_SESSION_ROSTER_LIMIT);
+      } finally {
+        await appContext.dispose();
+      }
       await page.screenshot({ path: path.join(artifactDir, "refresh-failed.png") });
       expect(await dashboards.getByText("Deploy monitor", { exact: true }).isVisible()).toBe(true);
       expect(await page.locator("openclaw-router-outlet").getAttribute("inert")).toBeNull();
@@ -166,6 +159,7 @@ suite.define(() => {
       const page = await context.newPage();
       try {
         const gateway = await installMockGateway(page, {
+          awaitInitialRoster: !suspending,
           gatewaySuspensionPhase: suspending ? "draining" : "accepting",
           methodResponses: {
             "sessions.list": {
@@ -280,40 +274,32 @@ suite.define(() => {
           expect(canonical.params).toEqual({
             agentId: "main",
             configuredAgentsOnly: true,
+            excludeDock: true,
             includeDerivedTitles: true,
             includeGlobal: true,
             includeLastMessage: true,
             includeUnknown: true,
             limit: SIDEBAR_SESSION_ROSTER_LIMIT,
+            rowMode: "sidebar",
+            source: "sidebar",
           });
           await waitForControlUiRoute(page, { pathname: "/new", routeId: "new-session" });
-          await page.waitForFunction(() => {
-            const app = document.querySelector("openclaw-app") as HTMLElement & {
-              runtime?: { context: { agents: { state: { agentsList: unknown } } } };
-            };
-            return app.runtime?.context.agents.state.agentsList != null;
-          });
-          await page.evaluate(() => {
-            const app = document.querySelector("openclaw-app") as HTMLElement & {
-              runtime?: {
-                context: {
-                  navigate: (routeId: string) => void;
-                  agentSelection: {
-                    state: { scopeId: string | null };
-                    setScope: (agentId: string | null) => void;
-                  };
-                };
-              };
-            };
-            if (!app.runtime) {
-              throw new Error("OpenClaw application runtime is unavailable");
-            }
-            app.runtime.context.agentSelection.setScope(null);
-            if (app.runtime.context.agentSelection.state.scopeId !== null) {
-              throw new Error("Control UI did not enter all-agent scope");
-            }
-            app.runtime.context.navigate("dashboards");
-          });
+          const appContext = await getControlUiContextHandle(page);
+          try {
+            await page.waitForFunction(
+              (current) => current.agents.state.agentsList != null,
+              appContext,
+            );
+            await appContext.evaluate((current) => {
+              current.agentSelection.setScope(null);
+              if (current.agentSelection.state.scopeId !== null) {
+                throw new Error("Control UI did not enter all-agent scope");
+              }
+              current.navigate("dashboards");
+            });
+          } finally {
+            await appContext.dispose();
+          }
           await waitForControlUiRoute(page, { pathname: "/dashboards", routeId: "dashboards" });
         }),
       );
@@ -340,7 +326,16 @@ suite.define(() => {
             "sessions.list",
             sessionsResult(`agent:main:canonical-${index + 1}`, canonicalLabel, 10 + index),
           );
-          await page.getByText(canonicalLabel, { exact: true }).first().waitFor();
+          const sidebar = page.locator("openclaw-app-sidebar");
+          // The profileless roster has no ownership identities, so its title stays plain.
+          await expect
+            .poll(() =>
+              sidebar
+                .locator(".sidebar-session-toolbar .sidebar-recent-sessions__label-text")
+                .textContent(),
+            )
+            .toBe("Sessions");
+          await sidebar.getByText(canonicalLabel, { exact: true }).waitFor();
         }),
       );
 

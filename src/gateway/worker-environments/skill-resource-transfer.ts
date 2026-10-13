@@ -105,6 +105,7 @@ try {
 /** Stages private turn inputs in the workspace generation, excluded from Git and reconciliation. */
 export async function transferSkillResources(params: {
   snapshot?: SkillSnapshot;
+  workspaceDir?: string;
   tunnel: Pick<WorkerWorkspaceTunnelHandle, "runWorkspaceCommand">;
   remoteWorkspaceDir: string;
   // Placement ownership authorizes cleanup even after the run closes.
@@ -122,6 +123,7 @@ export async function transferSkillResources(params: {
     params.snapshot,
     check,
     params.explicitSelections,
+    params.workspaceDir,
   );
   const execute = async (operation: ResourceOperation) => {
     const cleanup = operation.op === "cleanup";

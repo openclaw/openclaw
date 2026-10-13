@@ -78,14 +78,14 @@ suite.define(() => {
       async ({ page }) => {
         const gateway = await installMockGateway(page, { methodResponses: enumMocks() });
         await page.goto(`${suite.server.baseUrl}settings/advanced?section=laboratory`);
-        const second = page.locator(".cfg-array wa-radio-group").nth(1);
+        const second = page.locator('.cfg-array [role="radiogroup"]').nth(1);
         const selected = () =>
           second
-            .locator("wa-radio")
+            .getByRole("radio")
             .evaluateAll((radios) =>
               radios
-                .filter((radio) => (radio as HTMLElement & { checked: boolean }).checked)
-                .map((radio) => radio.textContent?.trim()),
+                .filter((radio) => (radio as HTMLInputElement).checked)
+                .map((radio) => radio.closest("label")?.textContent?.trim()),
             );
         await expect.poll(selected).toEqual(["beta"]);
         await second.getByRole("radio", { name: "alpha", exact: true }).click();

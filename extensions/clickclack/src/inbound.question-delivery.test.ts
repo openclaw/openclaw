@@ -1,10 +1,7 @@
 // Covers ask_user prompts leaving an inbound ClickClack turn as question cards.
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
-import type { PluginRuntime } from "openclaw/plugin-sdk/core";
-import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { buildAgentSessionKey, resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { expect, it, vi } from "vitest";
 import { handleClickClackInbound } from "./inbound.js";
+import { createInboundRuntime, publishInboundAccountConfig } from "./inbound.test-support.js";
 import { setClickClackRuntime } from "./runtime.js";
 import type { ClickClackMessage, CoreConfig, ResolvedClickClackAccount } from "./types.js";
 
@@ -17,34 +14,6 @@ const hoisted = vi.hoisted(() => ({
 
 vi.mock("./outbound.js", () => ({ sendClickClackText: hoisted.sendText }));
 vi.mock("./questions.js", () => ({ deliverClickClackQuestionPrompt: hoisted.deliverQuestion }));
-
-function createRuntime(): PluginRuntime {
-  const runtime = createPluginRuntimeMock({
-    channel: {
-      routing: {
-        resolveAgentRoute: vi.fn(resolveAgentRoute),
-        buildAgentSessionKey: vi.fn(buildAgentSessionKey),
-      },
-    },
-  } as unknown as PluginRuntime);
-  const stores = new Map<string, PluginStateSyncKeyedStore<unknown>>();
-  runtime.state.openSyncKeyedStore = vi.fn((options: { namespace: string }) => {
-    const values = new Map<string, unknown>();
-    const store = stores.get(options.namespace) ?? {
-      register: (key: string, value: unknown) => values.set(key, value),
-      registerIfAbsent: (key: string, value: unknown) =>
-        values.has(key) ? false : Boolean(values.set(key, value)),
-      lookup: (key: string) => values.get(key),
-      consume: (key: string) => values.get(key),
-      delete: (key: string) => values.delete(key),
-      entries: () => [],
-      clear: () => values.clear(),
-    };
-    stores.set(options.namespace, store as PluginStateSyncKeyedStore<unknown>);
-    return store;
-  }) as unknown as PluginRuntime["state"]["openSyncKeyedStore"];
-  return runtime;
-}
 
 const account = {
   accountId: "default",
@@ -90,8 +59,9 @@ const message: ClickClackMessage = {
 };
 
 it("sends ask_user prompts as question cards and other replies as text", async () => {
-  const runtime = createRuntime();
+  const runtime = createInboundRuntime(true);
   setClickClackRuntime(runtime);
+  publishInboundAccountConfig(runtime, account);
   const questionLifetime = {
     cfg: {} as CoreConfig,
     account,

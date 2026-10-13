@@ -1,4 +1,3 @@
-// Mattermost plugin module implements thread participation cache behavior.
 import { createPersistentDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 import { createPluginStateErrorReporter } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getOptionalMattermostRuntime } from "../runtime.js";
@@ -8,7 +7,7 @@ import { getOptionalMattermostRuntime } from "../runtime.js";
  * to thread follow-ups without a re-mention after its first visible reply.
  */
 
-const TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+const TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_ENTRIES = 5000;
 const PERSISTENT_MAX_ENTRIES = 1000;
 const PERSISTENT_NAMESPACE = "mattermost.thread-participation";
@@ -46,16 +45,16 @@ function makeKey(accountId: string, channelId: string, threadRootId: string): st
   return `${accountId}:${channelId}:${threadRootId}`;
 }
 
-export function recordMattermostThreadParticipation(
+export async function recordMattermostThreadParticipation(
   accountId: string,
   channelId: string,
   threadRootId: string,
   opts?: { agentId?: string },
-): void {
+): Promise<void> {
   if (!accountId || !channelId || !threadRootId) {
     return;
   }
-  void threadParticipation.register(makeKey(accountId, channelId, threadRootId), {
+  await threadParticipation.register(makeKey(accountId, channelId, threadRootId), {
     // Stored for future per-agent thread routing; current reads only need presence.
     ...(opts?.agentId ? { agentId: opts.agentId } : {}),
     repliedAt: Date.now(),

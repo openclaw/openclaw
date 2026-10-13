@@ -1,5 +1,9 @@
 import { appendAssistantThinking } from "@openclaw/llm-core/event-stream";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeStringifiedOptionalString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 import type { ResponseOutputItem } from "openai/resources/responses/responses.js";
 import {
   AZURE_RESPONSES_TEXT_CONTENT_PART_TYPE,
@@ -39,7 +43,6 @@ import {
   resolveCompletedResponsesToolCall,
   resolveResponsesToolCallId,
   type ResponsesEventSink,
-  type ResponsesThinkingBlock,
   type TextBlockReference,
 } from "./openai-responses-stream-terminal-internal.js";
 import type {
@@ -47,14 +50,14 @@ import type {
   ResponsesStreamOptions,
   ResponsesStreamOutputMessage,
 } from "./openai-responses-stream-types-internal.js";
-import { IncompleteToolCallError, transportAbortError } from "./transport-stream-shared.js";
+import { transportAbortError } from "./transport-stream-shared.js";
 
 export type { OpenAIResponsesStreamEvent } from "./openai-responses-stream-types-internal.js";
 
 export async function processResponsesStream<TApi extends Api>(
   openaiStream: AsyncIterable<unknown>,
   output: AssistantMessage,
-  stream: ResponsesEventSink,
+  sink: ResponsesEventSink,
   model: Model<TApi>,
   options?: ResponsesStreamOptions,
 ) {
@@ -74,90 +77,69 @@ export async function processResponsesStream<TApi extends Api>(
   type TextOutputSlot = Extract<ResponsesOutputSlot, { type: "text" }>;
   const streamingToolCalls = createResponsesToolCallTracker<StreamingToolCallState>();
   const outputSlots = createResponsesOutputSlotTracker<ResponsesOutputSlot>();
-  const outputs = createResponsesOutputTracker();
+  const outputs = createResponsesOutputTracker({
+    output,
+    canRetryIdentityConflict: options?.canRetryIdentityConflict,
+  });
+  const stream = outputs.trackStream(sink);
   let terminalResponse: CompletedResponse | null | undefined;
-  let incompleteToolCall: CompletedToolCall | undefined;
+  let rejectedToolCall: { error: unknown } | undefined;
   let lastTextBlock: TextBlockReference | null = null;
   const blocks = output.content;
   const compactionTracker = createCompactionTracker(output, model, options);
+  const createTextBlock = (item: ResponsesStreamOutputMessage, text: string): TextContent => ({
+    type: "text",
+    text,
+    ...(item.phase ? { textSignature: encodeTextSignatureV1(item.id, item.phase) } : {}),
+  });
   const createOutputSlot = (
     event: object,
     item: ResponseOutputItem | ResponsesStreamOutputMessage,
   ): ResponsesOutputSlot | undefined => {
+    let slot: ThinkingOutputSlot | TextOutputSlot;
     if (item.type === "reasoning") {
-      const block: ResponsesThinkingBlock = { type: "thinking", thinking: "" };
-      const slot = {
+      slot = {
         type: "thinking",
         item,
-        block,
+        block: { type: "thinking", thinking: "" },
         contentIndex: blocks.length,
         outputIndex: readResponsesOutputIndex(event),
-      } satisfies ResponsesOutputSlot;
-      blocks.push(block);
-      outputs.set(item, slot.contentIndex, slot.outputIndex);
-      outputSlots.register(event, slot);
-      stream.push({ type: "thinking_start", contentIndex: slot.contentIndex, partial: output });
-      return slot;
-    }
-    if (item.type === "message") {
-      const messageItem = item as ResponsesStreamOutputMessage;
+      };
+    } else if (item.type === "message") {
       const collapseCandidate = lastTextBlock;
-      const block: TextContent | null = collapseCandidate
-        ? null
-        : {
-            type: "text",
-            text: "",
-            ...(messageItem.phase
-              ? { textSignature: encodeTextSignatureV1(messageItem.id, messageItem.phase) }
-              : {}),
-          };
-      const slot = {
+      const block = collapseCandidate ? null : createTextBlock(item, "");
+      slot = {
         type: "text",
-        item: messageItem,
+        item,
         block,
         contentIndex: block ? blocks.length : undefined,
         outputIndex: readResponsesOutputIndex(event),
         pendingText: collapseCandidate ? "" : null,
         collapseCandidate,
-      } satisfies ResponsesOutputSlot;
-      if (block) {
-        blocks.push(block);
-        outputs.set(messageItem, slot.contentIndex ?? blocks.length - 1, slot.outputIndex);
-      }
-      outputSlots.register(event, slot);
-      if (slot.contentIndex !== undefined) {
-        stream.push({ type: "text_start", contentIndex: slot.contentIndex, partial: output });
-      }
-      return slot;
+      };
+    } else {
+      return undefined;
     }
-    return undefined;
+    if (slot.block) {
+      blocks.push(slot.block);
+      outputs.set(slot.item, slot.contentIndex ?? blocks.length - 1, slot.outputIndex);
+    }
+    outputSlots.register(event, slot);
+    if (slot.contentIndex !== undefined) {
+      stream.push({
+        type: slot.type === "thinking" ? "thinking_start" : "text_start",
+        contentIndex: slot.contentIndex,
+        partial: output,
+      });
+    }
+    return slot;
   };
-  const resolveOutputItemSlot = (
-    event: object,
-    item: ResponseOutputItem | ResponsesStreamOutputMessage,
-  ): ResponsesOutputSlot | undefined => {
-    if (item.type === "reasoning") {
-      return outputSlots.resolve(event, "thinking");
-    }
-    if (item.type === "message") {
-      return outputSlots.resolve(event, "text");
-    }
-    return readResponsesOutputIndex(event) === undefined ? undefined : outputSlots.get(event);
-  };
-  const materializeDeferredTextSlot = (
-    slot: Extract<ResponsesOutputSlot, { type: "text" }>,
-  ): void => {
+  const materializeDeferredTextSlot = (slot: TextOutputSlot): void => {
     if (slot.block || slot.pendingText === null) {
       return;
     }
     const text = slot.pendingText;
-    slot.block = {
-      type: "text",
-      text,
-      ...(slot.item.phase
-        ? { textSignature: encodeTextSignatureV1(slot.item.id, slot.item.phase) }
-        : {}),
-    };
+    slot.block = createTextBlock(slot.item, text);
     blocks.push(slot.block);
     slot.contentIndex = blocks.length - 1;
     outputs.set(slot.item, slot.contentIndex, slot.outputIndex);
@@ -210,6 +192,7 @@ export async function processResponsesStream<TApi extends Api>(
     model,
     options,
     outputs,
+    toolCalls: streamingToolCalls,
     getLastTextBlock: () => lastTextBlock,
     setLastTextBlock: (block) => {
       lastTextBlock = block;
@@ -318,6 +301,7 @@ export async function processResponsesStream<TApi extends Api>(
   );
   try {
     for await (const event of guardedStream) {
+      outputs.observeEvent(event);
       // Bookkeeping-only SSE events (in_progress, *.done echoes) are still
       // provider progress; keep the idle watchdog alive without exposing them,
       // matching the completions and anthropic transports.
@@ -325,14 +309,21 @@ export async function processResponsesStream<TApi extends Api>(
       if (
         event.type === "response.output_item.done" &&
         event.item.type === "function_call" &&
-        event.item.status === "incomplete"
+        event.item.status &&
+        event.item.status !== "completed" &&
+        !rejectedToolCall
       ) {
-        incompleteToolCall ??= event.item;
+        try {
+          resolveCompletedResponsesToolCall(event.item);
+        } catch (error) {
+          terminal.recordIncompleteToolCall(event, event.item);
+          rejectedToolCall = { error };
+        }
       }
-      // An incomplete call closes output admission; only drain terminal facts.
+      // A rejected call closes output admission; only drain terminal facts.
       // Later async tool completions must not authorize side effects.
       if (
-        incompleteToolCall &&
+        rejectedToolCall &&
         event.type !== "response.completed" &&
         event.type !== "response.incomplete" &&
         event.type !== "response.failed" &&
@@ -385,36 +376,25 @@ export async function processResponsesStream<TApi extends Api>(
         }
         slot.item.summary = slot.item.summary || [];
         slot.item.summary.push(event.part);
-      } else if (event.type === "response.reasoning_summary_text.delta") {
+      } else if (
+        event.type === "response.reasoning_summary_text.delta" ||
+        event.type === "response.reasoning_summary_part.done" ||
+        event.type === "response.reasoning_text.delta"
+      ) {
         const slot = outputSlots.resolve(event, "thinking");
         if (!slot) {
           continue;
         }
-        slot.item.summary = slot.item.summary || [];
-        const lastPart = slot.item.summary[slot.item.summary.length - 1];
-        if (!lastPart) {
-          continue;
+        const delta = event.type === "response.reasoning_summary_part.done" ? "\n\n" : event.delta;
+        if (event.type !== "response.reasoning_text.delta") {
+          slot.item.summary = slot.item.summary || [];
+          const lastPart = slot.item.summary[slot.item.summary.length - 1];
+          if (!lastPart) {
+            continue;
+          }
+          lastPart.text += delta;
         }
-        lastPart.text += event.delta;
-        appendThinkingDelta(slot, event.delta);
-      } else if (event.type === "response.reasoning_summary_part.done") {
-        const slot = outputSlots.resolve(event, "thinking");
-        if (!slot) {
-          continue;
-        }
-        slot.item.summary = slot.item.summary || [];
-        const lastPart = slot.item.summary[slot.item.summary.length - 1];
-        if (!lastPart) {
-          continue;
-        }
-        lastPart.text += "\n\n";
-        appendThinkingDelta(slot, "\n\n");
-      } else if (event.type === "response.reasoning_text.delta") {
-        const slot = outputSlots.resolve(event, "thinking");
-        if (!slot) {
-          continue;
-        }
-        appendThinkingDelta(slot, event.delta);
+        appendThinkingDelta(slot, delta);
       } else if (event.type === "response.content_part.added") {
         const slot = outputSlots.resolve(event, "text");
         if (!slot) {
@@ -428,48 +408,50 @@ export async function processResponsesStream<TApi extends Api>(
         ) {
           slot.item.content.push(event.part);
         }
-      } else if (event.type === "response.output_text.delta") {
+      } else if (
+        event.type === "response.output_text.delta" ||
+        isAzureResponsesTextDeltaEvent(event) ||
+        event.type === "response.refusal.delta"
+      ) {
         const slot = outputSlots.resolve(event, "text");
         if (!slot) {
           continue;
         }
         slot.item.content ||= [];
         let lastPart = slot.item.content[slot.item.content.length - 1];
-        if (!isResponsesTextContentPartType(lastPart?.type)) {
-          lastPart = { type: "output_text", text: "", annotations: [] };
-          slot.item.content.push(lastPart);
+        if (event.type === "response.refusal.delta") {
+          if (lastPart?.type !== "refusal") {
+            lastPart = { type: "refusal", refusal: "" };
+            slot.item.content.push(lastPart);
+          }
+          lastPart.refusal += event.delta;
+        } else {
+          const azure = isAzureResponsesTextDeltaEvent(event);
+          if (
+            !isResponsesTextContentPartType(lastPart?.type) ||
+            (azure && lastPart.type !== "text")
+          ) {
+            lastPart = azure
+              ? { type: "text", text: "" }
+              : { type: "output_text", text: "", annotations: [] };
+            slot.item.content.push(lastPart);
+          }
+          lastPart.text += event.delta;
         }
-        lastPart.text += event.delta;
         projectTextDelta(slot, event.delta);
-      } else if (isAzureResponsesTextDeltaEvent(event)) {
-        const slot = outputSlots.resolve(event, "text");
-        if (!slot) {
-          continue;
-        }
-        slot.item.content = slot.item.content || [];
-        let lastPart = slot.item.content[slot.item.content.length - 1];
-        if (lastPart?.type !== "text") {
-          lastPart = { type: "text", text: "" };
-          slot.item.content.push(lastPart);
-        }
-        lastPart.text += event.delta;
-        projectTextDelta(slot, event.delta);
-      } else if (event.type === "response.refusal.delta") {
-        const slot = outputSlots.resolve(event, "text");
-        if (!slot) {
-          continue;
-        }
-        slot.item.content ||= [];
-        let lastPart = slot.item.content[slot.item.content.length - 1];
-        if (lastPart?.type !== "refusal") {
-          lastPart = { type: "refusal", refusal: "" };
-          slot.item.content.push(lastPart);
-        }
-        lastPart.refusal += event.delta;
-        projectTextDelta(slot, event.delta);
-      } else if (event.type === "response.function_call_arguments.delta") {
+      } else if (
+        event.type === "response.function_call_arguments.delta" ||
+        event.type === "response.function_call_arguments.done"
+      ) {
         const toolCall = streamingToolCalls.resolve(event);
-        if (toolCall) {
+        if (!toolCall) {
+          if (streamingToolCalls.hasActive()) {
+            streamingToolCalls.markArgumentsUnreliable();
+          }
+          continue;
+        }
+        let delta: string | undefined;
+        if (event.type === "response.function_call_arguments.delta") {
           toolCall.block.partialJson += event.delta;
           toolCall.argumentsStreamed = true;
           // Preview refresh is geometric; the done event and terminal finalize
@@ -477,18 +459,8 @@ export async function processResponsesStream<TApi extends Api>(
           if (toolCall.previewSchedule(toolCall.block.partialJson.length)) {
             toolCall.block.arguments = parseStreamingJson(toolCall.block.partialJson);
           }
-          stream.push({
-            type: "toolcall_delta",
-            contentIndex: toolCall.contentIndex,
-            delta: event.delta,
-            partial: output,
-          });
-        } else if (streamingToolCalls.hasActive()) {
-          streamingToolCalls.markArgumentsUnreliable();
-        }
-      } else if (event.type === "response.function_call_arguments.done") {
-        const toolCall = streamingToolCalls.resolve(event);
-        if (toolCall) {
+          delta = event.delta;
+        } else {
           const previousPartialJson = toolCall.block.partialJson;
           const doneArguments = typeof event.arguments === "string" ? event.arguments : undefined;
 
@@ -503,18 +475,16 @@ export async function processResponsesStream<TApi extends Api>(
           }
 
           if (doneArguments?.startsWith(previousPartialJson)) {
-            const delta = doneArguments.slice(previousPartialJson.length);
-            if (delta.length > 0) {
-              stream.push({
-                type: "toolcall_delta",
-                contentIndex: toolCall.contentIndex,
-                delta,
-                partial: output,
-              });
-            }
+            delta = doneArguments.slice(previousPartialJson.length) || undefined;
           }
-        } else if (streamingToolCalls.hasActive()) {
-          streamingToolCalls.markArgumentsUnreliable();
+        }
+        if (delta !== undefined) {
+          stream.push({
+            type: "toolcall_delta",
+            contentIndex: toolCall.contentIndex,
+            delta,
+            partial: output,
+          });
         }
       } else if (event.type === "response.output_item.done") {
         const item = event.item;
@@ -522,7 +492,7 @@ export async function processResponsesStream<TApi extends Api>(
           lastTextBlock = null;
         }
 
-        const existingOutputSlot = resolveOutputItemSlot(event, item);
+        const existingOutputSlot = outputSlots.resolveOutputItem(event, item);
         materializeDeferredTextSlots(existingOutputSlot);
         const outputSlot = existingOutputSlot ?? createOutputSlot(event, item);
         compactionTracker.completed(item, blocks.length);
@@ -601,11 +571,7 @@ export async function processResponsesStream<TApi extends Api>(
             if (!outputSlot.block) {
               // Deferred distinct message: open its block now, balanced with the
               // text_end below.
-              outputSlot.block = {
-                type: "text",
-                text: "",
-                ...(phase ? { textSignature: encodeTextSignatureV1(item.id, phase) } : {}),
-              };
+              outputSlot.block = createTextBlock(item, "");
               blocks.push(outputSlot.block);
               outputSlot.contentIndex = blocks.length - 1;
               stream.push({
@@ -664,38 +630,34 @@ export async function processResponsesStream<TApi extends Api>(
           // unreliable by an unrouteable delta), and parses as complete JSON;
           // otherwise fall back to the done snapshot.
           const streamedArguments = streamingToolCall?.block.partialJson || "";
-          const preferredArguments =
+          const parsedStreamedArguments =
             streamingToolCall?.argumentStreamReliable &&
             streamingToolCall?.argumentsStreamed &&
             streamedArguments.length > 0 &&
             completedArguments !== undefined &&
-            streamedArguments !== completedArguments &&
-            parseJsonObjectPreservingUnsafeIntegers(streamedArguments) !== null
-              ? streamedArguments
-              : completedArguments || streamedArguments;
-          const validated = resolveCompletedResponsesToolCall(item, {
-            name: streamingToolCall?.block.name,
-            arguments: preferredArguments,
-          });
+            streamedArguments !== completedArguments
+              ? parseJsonObjectPreservingUnsafeIntegers(streamedArguments)
+              : null;
+          let validated: Pick<ToolCall, "name" | "arguments">;
+          try {
+            validated = resolveCompletedResponsesToolCall(item, {
+              name: streamingToolCall?.block.name,
+              arguments: parsedStreamedArguments ?? (completedArguments || streamedArguments),
+            });
+          } catch (error) {
+            // Preserve the original validation code and bounded argument diagnostics.
+            // Draining must neither repair this call nor admit a later sibling.
+            rejectedToolCall = { error };
+            continue;
+          }
 
           finalizeToolCall(item, readResponsesOutputIndex(event), streamingToolCall, validated);
         }
       } else if (event.type === "response.completed" || event.type === "response.incomplete") {
         // Preserve reported accounting before rejecting unfinished tool calls.
-        terminal.finalizeResponse(event.response, event.type);
-        if (incompleteToolCall) {
-          if (output.errorMessage) {
-            throw new Error(output.errorMessage);
-          }
-          resolveCompletedResponsesToolCall(incompleteToolCall);
-        }
-        if (event.type === "response.incomplete" && streamingToolCalls.hasActive()) {
-          if (output.errorMessage) {
-            throw new Error(output.errorMessage);
-          }
-          throw new IncompleteToolCallError(
-            "Responses stream completed with unresolved tool calls",
-          );
+        terminal.finalizeResponse(event.response, event.type, Boolean(rejectedToolCall));
+        if (rejectedToolCall) {
+          throw output.errorMessage ? new Error(output.errorMessage) : rejectedToolCall.error;
         }
         if (event.type === "response.completed" || output.stopReason === "length") {
           const items = event.response.output ?? [];
@@ -712,8 +674,14 @@ export async function processResponsesStream<TApi extends Api>(
         }
         break;
       } else if (event.type === "error") {
-        throw new Error(
-          event.message ? `Error Code ${event.code}: ${event.message}` : "Unknown error",
+        const details = isRecord(event) && isRecord(event.error) ? event.error : event;
+        const message = readStringValue(details.message);
+        const code = normalizeStringifiedOptionalString(details.code);
+        throw Object.assign(
+          new Error(
+            message ? (code ? `Error Code ${code}: ${message}` : message) : "Unknown error",
+          ),
+          { code: details.code, error: details },
         );
       } else if (event.type === "response.failed") {
         const failure = normalizeResponsesFailedEvent(isRecord(event) ? event : {}, model);
@@ -726,6 +694,9 @@ export async function processResponsesStream<TApi extends Api>(
     if (options?.signal?.aborted) {
       throw transportAbortError(options.signal);
     }
+    if (rejectedToolCall) {
+      throw rejectedToolCall.error;
+    }
     if (streamingToolCalls.hasActive()) {
       throw new Error("Responses stream ended with unresolved tool calls");
     }
@@ -735,7 +706,9 @@ export async function processResponsesStream<TApi extends Api>(
     return terminalResponse ?? undefined;
   } finally {
     for (const block of output.content) {
-      delete (block as { partialJson?: string }).partialJson;
+      if (block.type === "toolCall") {
+        delete block.partialJson;
+      }
     }
   }
 }

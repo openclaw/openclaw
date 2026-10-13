@@ -1,6 +1,6 @@
 // OpenClaw audit helpers persist approved local-state changes.
 import { randomUUID } from "node:crypto";
-import { createSqliteAuditRecordStore } from "../infra/sqlite-audit-record-store.js";
+import { registerSqliteAuditRecordAsync } from "../infra/sqlite-audit-record-store.async.js";
 import { redactSecrets } from "../logging/redact.js";
 
 /**
@@ -24,14 +24,6 @@ export const SYSTEM_AGENT_AUDIT_MAX_ENTRIES = 50_000;
 export const SYSTEM_AGENT_AUDIT_STORE_LABEL =
   "SQLite diagnostic_events/system-agent-audit state (latest 50000 rows)";
 
-function openSystemAgentAuditStore(env?: NodeJS.ProcessEnv) {
-  return createSqliteAuditRecordStore<SystemAgentAuditEntry>({
-    scope: SYSTEM_AGENT_AUDIT_SCOPE,
-    maxEntries: SYSTEM_AGENT_AUDIT_MAX_ENTRIES,
-    ...(env ? { env } : {}),
-  });
-}
-
 /** Append one OpenClaw audit entry and return its SQLite owner label. */
 export async function appendSystemAgentAuditEntry(
   entry: Omit<SystemAgentAuditEntry, "timestamp">,
@@ -41,10 +33,17 @@ export async function appendSystemAgentAuditEntry(
     timestamp: new Date().toISOString(),
     ...entry,
   } satisfies SystemAgentAuditEntry);
-  openSystemAgentAuditStore(opts.env).register(
-    `${record.timestamp}:${randomUUID()}`,
-    record,
-    Date.parse(record.timestamp),
+  await registerSqliteAuditRecordAsync(
+    {
+      scope: SYSTEM_AGENT_AUDIT_SCOPE,
+      maxEntries: SYSTEM_AGENT_AUDIT_MAX_ENTRIES,
+      env: opts.env,
+    },
+    {
+      key: `${record.timestamp}:${randomUUID()}`,
+      value: record,
+      createdAt: Date.parse(record.timestamp),
+    },
   );
   return SYSTEM_AGENT_AUDIT_STORE_LABEL;
 }

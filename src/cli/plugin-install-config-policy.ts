@@ -4,10 +4,6 @@ import {
   type PluginInstallRequestContext,
 } from "../plugins/install-config.js";
 
-function isPluginInstallCommand(commandPath: string[]): boolean {
-  return commandPath[0] === "plugins" && commandPath[1] === "install";
-}
-
 function resolvePluginInstallArgvTokens(commandPath: string[], argv: string[]): string[] {
   const args = argv.slice(2);
   let cursor = 0;
@@ -24,9 +20,6 @@ function resolvePluginInstallArgvTokens(commandPath: string[], argv: string[]): 
 }
 
 function resolvePluginInstallArgvRequest(commandPath: string[], argv: string[]) {
-  if (!isPluginInstallCommand(commandPath)) {
-    return null;
-  }
   const tokens = resolvePluginInstallArgvTokens(commandPath, argv);
   let rawSpec: string | null = null;
   let marketplace: string | undefined;
@@ -61,7 +54,7 @@ export function resolvePluginInstallPreactionRequest(params: {
   commandPath: string[];
   argv: string[];
 }): PluginInstallRequestContext | null {
-  if (!isPluginInstallCommand(params.commandPath)) {
+  if (params.commandPath[0] !== "plugins" || params.commandPath[1] !== "install") {
     return null;
   }
   const argvRequest = resolvePluginInstallArgvRequest(params.commandPath, params.argv);

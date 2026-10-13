@@ -1,12 +1,13 @@
 import path from "node:path";
 import { expect, it } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
+import { getControlUiContextHandle } from "../test-helpers/control-ui-e2e-context.ts";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { expectRequestCountStable } from "./chat-flow.test-support.ts";
 import {
   captureUiProof,
   captureUiProofEnabled,
+  activateSelfRemovingControl,
   createSessionManagementE2eSuite,
   installMockGateway,
   sessionsListResponse,
@@ -15,9 +16,98 @@ import {
 
 const suite = createSessionManagementE2eSuite(true);
 
-type DraftDeletionTestApp = HTMLElement & { runtime?: { context: ApplicationContext } };
-
 suite.define(() => {
+  it.each(["delete", "archive"] as const)(
+    "recovers an offline workspace for sidebar %s only after loss consent",
+    async (action) => {
+      const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+      const page = await context.newPage();
+      const main = sessionRow("agent:main:main", "Main", 2);
+      const target = sessionRow("agent:main:offline-workspace", "Offline workspace", 1);
+      const method = action === "delete" ? "sessions.delete" : "sessions.patch";
+      const gateway = await installMockGateway(page, {
+        featureMethods: [...defaultControlUiFeatureMethods, "sessions.move"],
+        methodResponses: {
+          "sessions.delete": { ok: true, deleted: true },
+          "sessions.list": sessionsListResponse([main, target]),
+        },
+        sessionArchiveFiltering: true,
+        sessionKey: main.key,
+      });
+      const row = page.locator(`.sidebar-recent-session[data-session-key="${target.key}"]`);
+      const openRecovery = async (after: number) => {
+        await gateway.deferNext(method, { key: target.key });
+        await row.waitFor({ state: "visible" });
+        await row.hover();
+        await row.click({ button: "right" });
+        if (action === "delete") {
+          await page.getByRole("menuitem", { name: "Advanced", exact: true }).click();
+        }
+        await activateSelfRemovingControl(
+          page.locator("openclaw-session-menu").getByRole("menuitem", {
+            name: action === "delete" ? "Delete…" : "Archive session",
+          }),
+        );
+        if (action === "delete") {
+          const confirmation = await waitForConfirmModal(page);
+          await confirmation.getByRole("button", { name: "Delete", exact: true }).click();
+        }
+        await gateway.waitForRequest(method, { after, match: { key: target.key } });
+        await gateway.rejectDeferred(method, {
+          code: "UNAVAILABLE",
+          message: "Reconnect the device to preserve its workspace.",
+          details: {
+            code: "SESSION_WORKSPACE_RECOVERY_REQUIRED",
+            cause: "device_offline",
+            recoveryAction: "continue_on_gateway",
+            sessionId: target.sessionId,
+            source: { generation: 5, environmentId: "offline-device", ownerEpoch: 70 },
+          },
+        });
+        const recovery = await waitForConfirmModal(page);
+        await recovery.getByRole("button", { name: `Discard changes and ${action}` }).waitFor();
+        await expect
+          .poll(() => recovery.textContent())
+          .toContain("Reconnect it to keep those changes");
+        return recovery;
+      };
+      try {
+        await page.goto(`${suite.server.baseUrl}chat`);
+        const cancelled = await openRecovery(0);
+        await cancelled.getByRole("button", { name: "Cancel", exact: true }).click();
+        await cancelled.waitFor({ state: "detached" });
+        await row.waitFor({ state: "visible" });
+        expect(await gateway.getRequests("sessions.move")).toEqual([]);
+        await expectRequestCountStable(gateway, method, 1, undefined, { key: target.key });
+
+        const confirmed = await openRecovery(1);
+        await gateway.deferNext("sessions.move");
+        await confirmed.getByRole("button", { name: `Discard changes and ${action}` }).click();
+        expect(await gateway.waitForRequest("sessions.move")).toMatchObject({
+          params: {
+            key: target.key,
+            agentId: "main",
+            expected: { generation: 5, environmentId: "offline-device", ownerEpoch: 70 },
+            target: { kind: "gateway" },
+            abandonSource: true,
+          },
+        });
+        await expectRequestCountStable(gateway, method, 2, undefined, { key: target.key });
+        if (action === "delete") {
+          await gateway.setSessionsListResponse(sessionsListResponse([main]));
+        }
+        await gateway.resolveDeferred("sessions.move", { ok: true });
+        await gateway.waitForRequest(method, { after: 2, match: { key: target.key } });
+        await row.waitFor({ state: "detached" });
+        await expectRequestCountStable(gateway, method, 3, undefined, { key: target.key });
+        expect(await gateway.getRequests("sessions.move")).toHaveLength(1);
+        expect(await page.locator("openclaw-modal-dialog").count()).toBe(0);
+      } finally {
+        await context.close();
+      }
+    },
+  );
+
   it("retires confirmed single and batch drafts in both stores without touching siblings or no-ops", async () => {
     const retired = [
       "agent:main:single",
@@ -43,26 +133,27 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}sessions`);
-      await page.waitForFunction(() => {
-        const client = (document.querySelector("openclaw-app") as DraftDeletionTestApp).runtime
-          ?.context.gateway.snapshot.client;
+      const applicationHandle = await getControlUiContextHandle(page);
+      await page.waitForFunction((application) => {
+        const client = application.gateway.snapshot.client;
         return client?.recoveryScopeReady === true && Boolean(client.recoveryScope);
-      });
+      }, applicationHandle);
       const draftStore = await page.evaluateHandle<
         typeof import("../lib/chat/composer-draft-store.runtime.ts")
       >('import("/src/lib/chat/composer-draft-store.runtime.ts")');
       const outboxStore = await page.evaluateHandle<typeof import("../lib/chat/outbox-store.ts")>(
         'import("/src/lib/chat/outbox-store.ts")',
       );
-      const owner = await page.evaluate(
-        async ({ store, outbox, sessionKeys }) => {
-          const client = (document.querySelector("openclaw-app") as DraftDeletionTestApp).runtime
-            ?.context.gateway.snapshot.client;
+      const owner = await applicationHandle.evaluate(
+        async (application, { store, outbox, sessionKeys }) => {
+          const client = application.gateway.snapshot.client;
           if (!client?.recoveryScope) {
             throw new Error("Gateway recovery scope unavailable");
           }
+          const recoveryScope = client.recoveryScope;
           const { gatewayOwner, key: storageKey } = outbox.storageTargetForGateway(
             client.gatewayUrl,
+            recoveryScope,
           );
           const sessions = Object.fromEntries(
             sessionKeys.map((key, index) => [
@@ -70,16 +161,22 @@ suite.define(() => {
               {
                 draft: `local ${key}`,
                 draftRevision: index + 1,
-                queue: [{ id: `queued-${index}`, text: "queued", createdAt: index }],
+                queue: [
+                  {
+                    id: `queued-${index}`,
+                    text: "queued",
+                    createdAt: index,
+                    storageScope: JSON.stringify([gatewayOwner, recoveryScope]),
+                  },
+                ],
                 updatedAt: index + 1,
               },
             ]),
           );
           sessionStorage.setItem(
-            `openclaw.control.chatComposer.v4:${encodeURIComponent(gatewayOwner)}`,
+            storageKey,
             JSON.stringify({ version: 4, gatewayOwner, sessions, recovery: {} }),
           );
-          const recoveryScope = client.recoveryScope;
           await Promise.all(
             sessionKeys.map((key, index) =>
               store.writeDurableComposerDraft(
@@ -97,24 +194,20 @@ suite.define(() => {
         },
         { store: draftStore, outbox: outboxStore, sessionKeys: keys },
       );
-      const deleteFromRuntime = (sessionKeys: string[]) =>
-        page.evaluate(async (targets) => {
-          const sessions = (document.querySelector("openclaw-app") as DraftDeletionTestApp).runtime
-            ?.context.sessions;
-          if (!sessions) {
-            throw new Error("Session capability unavailable");
-          }
+      const deleteSessions = (sessionKeys: string[]) =>
+        applicationHandle.evaluate(async (application, targets) => {
+          const sessions = application.sessions;
           return targets.length === 1
             ? sessions.delete(targets[0]!, { agentId: "main" })
             : sessions.deleteMany(targets.map((key) => ({ key, agentId: "main" })));
         }, sessionKeys);
 
-      await expect(deleteFromRuntime([retired[0]!])).resolves.toMatchObject({ deleted: true });
-      await expect(deleteFromRuntime(retired.slice(1, 3))).resolves.toMatchObject({
+      await expect(deleteSessions([retired[0]!])).resolves.toMatchObject({ deleted: true });
+      await expect(deleteSessions(retired.slice(1, 3))).resolves.toMatchObject({
         deleted: retired.slice(1, 3),
       });
       await gateway.setMethodResponse("sessions.delete", { ok: true, deleted: false });
-      await expect(deleteFromRuntime([noOp])).resolves.toMatchObject({ deleted: false });
+      await expect(deleteSessions([noOp])).resolves.toMatchObject({ deleted: false });
       await gateway.emitGatewayEvent("sessions.changed", {
         sessionKey: retired[3],
         sessionId: `session:${retired[3]}`,
@@ -125,11 +218,11 @@ suite.define(() => {
       await gateway.setMethodResponse("sessions.delete", { ok: true, deleted: true });
       await gateway.deferNext("sessions.delete", { key: replacement });
       const requestsBeforeReplacement = (await gateway.getRequests("sessions.delete")).length;
-      const replacementDelete = deleteFromRuntime([replacement]);
+      const replacementDelete = deleteSessions([replacement]);
       await gateway.waitForRequest("sessions.delete", { after: requestsBeforeReplacement });
       const inFlightRevision = await page.evaluate(
         async ({ store, key, scopeOwner }) => {
-          const storageKey = `openclaw.control.chatComposer.v4:${encodeURIComponent(scopeOwner.gatewayOwner)}`;
+          const storageKey = scopeOwner.storageKey;
           const local = JSON.parse(sessionStorage.getItem(storageKey) ?? "{}") as {
             sessions: Record<string, unknown>;
           };
@@ -159,7 +252,7 @@ suite.define(() => {
         .poll(() =>
           page.evaluate(
             async ({ store, key, scopeOwner }) => {
-              const storageKey = `openclaw.control.chatComposer.v4:${encodeURIComponent(scopeOwner.gatewayOwner)}`;
+              const storageKey = scopeOwner.storageKey;
               const local = JSON.parse(sessionStorage.getItem(storageKey) ?? "{}") as {
                 sessions?: Record<string, { draft?: string; queue?: unknown[] }>;
               };
@@ -181,7 +274,7 @@ suite.define(() => {
 
       await page.evaluate(
         async ({ store, key, scopeOwner }) => {
-          const storageKey = `openclaw.control.chatComposer.v4:${encodeURIComponent(scopeOwner.gatewayOwner)}`;
+          const storageKey = scopeOwner.storageKey;
           const local = JSON.parse(sessionStorage.getItem(storageKey) ?? "{}") as {
             sessions: Record<string, { draft?: string; draftRevision?: number }>;
           };
@@ -193,7 +286,8 @@ suite.define(() => {
           if (durable.status !== "not-found") {
             throw new Error("confirmed deletion did not leave a durable retirement fence");
           }
-          const revision = Date.now();
+          // Retirement fences can lead the wall clock; a new edit must advance that fence.
+          const revision = Math.max(Date.now(), (durable.revision ?? 0) + 1);
           local.sessions[scopeKey] = {
             draft: "post-confirm local replacement",
             draftRevision: revision,
@@ -219,11 +313,9 @@ suite.define(() => {
         .poll(() =>
           page.evaluate(
             async ({ store, sessionKeys, scopeOwner }) => {
-              const local = JSON.parse(
-                sessionStorage.getItem(
-                  `openclaw.control.chatComposer.v4:${encodeURIComponent(scopeOwner.gatewayOwner)}`,
-                ) ?? "{}",
-              ) as { sessions?: Record<string, { draft?: string; queue?: unknown[] }> };
+              const local = JSON.parse(sessionStorage.getItem(scopeOwner.storageKey) ?? "{}") as {
+                sessions?: Record<string, { draft?: string; queue?: unknown[] }>;
+              };
               return Object.fromEntries(
                 await Promise.all(
                   sessionKeys.map(async (key) => {
@@ -259,6 +351,7 @@ suite.define(() => {
             durable: "post-confirm durable replacement",
           },
         });
+      await applicationHandle.dispose();
     } finally {
       await context.close();
     }
@@ -307,12 +400,6 @@ suite.define(() => {
       );
 
       await gateway.setSessionsListResponse(sessionsListResponse([replacement]));
-      await gateway.emitGatewayEvent("sessions.changed", {
-        ...replacement,
-        reason: "update",
-        sessionKey: key,
-      });
-      await replacementLabel.waitFor();
       await gateway.deferNext("sessions.delete");
       await confirmModal.getByRole("button", { name: "Delete", exact: true }).click();
 
@@ -327,7 +414,16 @@ suite.define(() => {
       await expect
         .poll(() => page.locator(".sessions-error[role=alert]").textContent())
         .toContain("changed before deletion. Retry.");
+      await gateway.emitGatewayEvent("sessions.changed", {
+        ...replacement,
+        reason: "update",
+        sessionKey: key,
+      });
       await replacementLabel.waitFor();
+      expect(await page.getByRole("checkbox", { name: `Select session: ${key}` }).isChecked()).toBe(
+        false,
+      );
+      expect(await gateway.getRequests("sessions.delete")).toHaveLength(1);
       await captureUiProof(suite, page, "sessions-bulk-delete-replacement-protected.png");
     } finally {
       await context.close();
@@ -372,7 +468,8 @@ suite.define(() => {
       const row = page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
       await row.waitFor({ state: "visible", timeout: 10_000 });
       await row.hover();
-      await row.getByRole("button", { name: "Open session menu" }).click();
+      await row.click({ button: "right" });
+      await page.getByRole("menuitem", { name: "Advanced", exact: true }).click();
       await page
         .locator("openclaw-session-menu")
         .getByRole("menuitem", { name: "Delete…" })
@@ -462,7 +559,8 @@ suite.define(() => {
       const row = page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
       await row.waitFor({ state: "visible", timeout: 10_000 });
       await row.hover();
-      await row.getByRole("button", { name: "Open session menu" }).click();
+      await row.click({ button: "right" });
+      await page.getByRole("menuitem", { name: "Advanced", exact: true }).click();
       await page
         .locator("openclaw-session-menu")
         .getByRole("menuitem", { name: "Delete…" })

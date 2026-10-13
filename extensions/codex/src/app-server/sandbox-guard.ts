@@ -2,81 +2,54 @@
  * Blocks direct Codex app-server requests that would bypass OpenClaw sandbox or
  * node-exec routing guarantees.
  */
-import { tryResolveDefaultAgentId } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
-import { resolveSandboxRuntimeStatus, type SandboxContext } from "openclaw/plugin-sdk/sandbox";
+import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isCodexRemoteExecPlacementSandbox } from "./config-parsing.js";
+import type { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import {
   formatCodexNativeNodeExecBlock,
-  resolveCodexNativeExecutionPolicy,
+  prepareCodexNativeExecutionPolicy,
+  type resolveCodexNativeExecutionPolicy,
+  type CodexNativeExecutionPolicy,
+  type PreparedCodexNativeExecutionPolicy,
 } from "./native-execution-policy.js";
 
-type DirectMethodPolicy =
-  | "allowed-control-plane"
-  | "blocked-native-bypass"
-  | "requires-openclaw-environment";
-
-const DIRECT_METHOD_POLICIES = new Map<string, DirectMethodPolicy>([
-  ["account/rateLimits/read", "allowed-control-plane"],
-  ["account/read", "allowed-control-plane"],
-  ["app/installed", "allowed-control-plane"],
-  ["app/list", "allowed-control-plane"],
-  ["app/read", "allowed-control-plane"],
-  ["config/batchWrite", "allowed-control-plane"],
-  ["config/mcpServer/reload", "allowed-control-plane"],
-  ["config/read", "allowed-control-plane"],
-  ["config/value/write", "allowed-control-plane"],
-  ["environment/add", "allowed-control-plane"],
-  ["experimentalFeature/list", "allowed-control-plane"],
-  ["experimentalFeature/enablement/set", "allowed-control-plane"],
-  ["feedback/upload", "allowed-control-plane"],
-  ["hooks/list", "allowed-control-plane"],
-  ["initialize", "allowed-control-plane"],
-  ["marketplace/add", "allowed-control-plane"],
-  ["mcpServerStatus/list", "allowed-control-plane"],
-  ["model/list", "allowed-control-plane"],
-  ["plugin/install", "allowed-control-plane"],
-  ["plugin/installed", "allowed-control-plane"],
-  ["plugin/list", "allowed-control-plane"],
-  ["plugin/read", "allowed-control-plane"],
-  ["skills/list", "allowed-control-plane"],
-  ["thread/archive", "allowed-control-plane"],
-  ["thread/inject_items", "allowed-control-plane"],
-  ["thread/list", "allowed-control-plane"],
-  ["thread/metadata/update", "allowed-control-plane"],
-  ["thread/name/set", "allowed-control-plane"],
-  ["thread/read", "allowed-control-plane"],
-  ["thread/rollback", "allowed-control-plane"],
-  ["thread/start", "requires-openclaw-environment"],
-  ["thread/unarchive", "allowed-control-plane"],
-  ["thread/unsubscribe", "allowed-control-plane"],
-  ["turn/interrupt", "allowed-control-plane"],
-  ["turn/steer", "allowed-control-plane"],
-
-  ["command/exec", "blocked-native-bypass"],
-  ["command/resize", "blocked-native-bypass"],
-  ["command/terminate", "blocked-native-bypass"],
-  ["command/write", "blocked-native-bypass"],
-  ["fuzzyFileSearch", "blocked-native-bypass"],
-  ["mcpServer/resource/read", "blocked-native-bypass"],
-  ["mcpServer/tool/call", "blocked-native-bypass"],
-  ["process/kill", "blocked-native-bypass"],
-  ["process/resizePty", "blocked-native-bypass"],
-  ["process/spawn", "blocked-native-bypass"],
-  ["process/writeStdin", "blocked-native-bypass"],
-  ["review/start", "blocked-native-bypass"],
-  ["thread/compact/start", "blocked-native-bypass"],
-  ["thread/fork", "blocked-native-bypass"],
-  ["thread/resume", "blocked-native-bypass"],
-  ["thread/shellCommand", "blocked-native-bypass"],
-  ["turn/start", "blocked-native-bypass"],
-]);
-
-const BLOCKED_DIRECT_METHOD_PREFIXES = ["command/", "fs/", "windowsSandbox/"] as const;
-const NODE_EXEC_BLOCKED_CONTROL_PLANE_METHODS = new Set<string>([
-  // Reloading MCP servers can start app-backed processes in the Codex app-server environment.
+const ALLOWED_CONTROL_PLANE_METHODS = new Set([
+  "account/rateLimits/read",
+  "account/read",
+  "app/installed",
+  "app/list",
+  "app/read",
+  "config/batchWrite",
   "config/mcpServer/reload",
+  "config/read",
+  "config/value/write",
+  "environment/add",
+  "experimentalFeature/list",
+  "experimentalFeature/enablement/set",
+  "feedback/upload",
+  "hooks/list",
+  "initialize",
+  "marketplace/add",
+  "mcpServerStatus/list",
+  "model/list",
+  "plugin/install",
+  "plugin/installed",
+  "plugin/list",
+  "plugin/read",
+  "skills/list",
+  "thread/archive",
+  "thread/inject_items",
+  "thread/list",
+  "thread/metadata/update",
+  "thread/name/set",
+  "thread/read",
+  "thread/rollback",
+  "thread/unarchive",
+  "thread/unsubscribe",
+  "turn/interrupt",
+  "turn/steer",
 ]);
 
 /** Returns a block message when a direct app-server method would bypass OpenClaw execution policy. */
@@ -86,64 +59,125 @@ export function resolveCodexAppServerDirectSandboxBypassBlock(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
   sessionId?: string;
+  agentId?: string;
+  storePath?: string;
+  sessionTarget?: Parameters<typeof resolveCodexNativeExecutionPolicy>[0]["sessionTarget"];
+  executionPolicy: CodexNativeExecutionPolicy;
   sandbox?: Pick<SandboxContext, "enabled"> | null;
 }): string | undefined {
-  const policy = resolveDirectMethodPolicy(params.method);
-  if (NODE_EXEC_BLOCKED_CONTROL_PLANE_METHODS.has(params.method)) {
+  const controlPlane = ALLOWED_CONTROL_PLANE_METHODS.has(params.method);
+  // Reloading MCP servers can start app-backed processes in the Codex app-server environment.
+  if (!controlPlane || params.method === "config/mcpServer/reload") {
     const nodeExecBlock = resolveCodexNativeNodeExecBlock({
       config: params.config,
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
+      agentId: params.agentId,
+      storePath: params.storePath,
+      sessionTarget: params.sessionTarget,
+      executionPolicy: params.executionPolicy,
       surface: `app-server method \`${params.method}\``,
     });
     if (nodeExecBlock) {
       return nodeExecBlock;
     }
   }
-  if (policy === "allowed-control-plane") {
+  if (controlPlane) {
     return undefined;
-  }
-  const nodeExecBlock = resolveCodexNativeNodeExecBlock({
-    config: params.config,
-    sessionKey: params.sessionKey,
-    sessionId: params.sessionId,
-    surface: `app-server method \`${params.method}\``,
-  });
-  if (nodeExecBlock) {
-    return nodeExecBlock;
   }
   const sessionKey = params.sessionKey?.trim() || params.sessionId?.trim();
   if (!sessionKey) {
     return undefined;
   }
   const sandboxBlock = resolveCodexNativeSandboxBlock({
-    config: params.config,
+    ...params,
     sessionKey,
-    sandbox: params.sandbox,
     surface: `app-server method \`${params.method}\``,
   });
-  if (!sandboxBlock) {
-    return undefined;
-  }
-  if (
-    policy === "requires-openclaw-environment" &&
+  return sandboxBlock &&
+    params.method === "thread/start" &&
     hasOpenClawSandboxEnvironmentSelection(params.requestParams)
+    ? undefined
+    : sandboxBlock;
+}
+
+/** Resolve policy before yielding to client acquisition and recheck it at each write. */
+export async function prepareCodexAppServerDirectSandboxBypassBlock(
+  params: Omit<
+    Parameters<typeof resolveCodexAppServerDirectSandboxBypassBlock>[0],
+    "executionPolicy"
+  >,
+): Promise<
+  { block: string | undefined } & Pick<
+    PreparedCodexNativeExecutionPolicy,
+    "assertCurrent" | "source" | "release"
+  >
+> {
+  if (
+    ALLOWED_CONTROL_PLANE_METHODS.has(params.method) &&
+    params.method !== "config/mcpServer/reload"
   ) {
-    return undefined;
+    return { block: undefined, async assertCurrent() {}, release() {} };
   }
-  return sandboxBlock;
+  const selected = await prepareCodexNativeExecutionPolicy({
+    ...params,
+    readRuntimeSessionEntry: true,
+  });
+  return {
+    block: resolveCodexAppServerDirectSandboxBypassBlock({
+      ...params,
+      executionPolicy: selected.policy,
+    }),
+    assertCurrent: selected.assertCurrent,
+    source: selected.source,
+    release: selected.release,
+  };
+}
+
+export async function prepareCodexNativeExecutionBlock(
+  params: Omit<Parameters<typeof resolveCodexNativeExecutionBlock>[0], "executionPolicy">,
+): Promise<
+  { block: string | undefined } & Pick<
+    PreparedCodexNativeExecutionPolicy,
+    "assertCurrent" | "source" | "release"
+  >
+> {
+  const selected = await prepareCodexNativeExecutionPolicy({
+    ...params,
+    readRuntimeSessionEntry: true,
+  });
+  return {
+    block: resolveCodexNativeExecutionBlock({ ...params, executionPolicy: selected.policy }),
+    assertCurrent: selected.assertCurrent,
+    source: selected.source,
+    release: selected.release,
+  };
+}
+
+export async function prepareCodexNativeSandboxBlock(
+  params: Omit<Parameters<typeof resolveCodexNativeSandboxBlock>[0], "executionPolicy">,
+): Promise<
+  { block: string | undefined } & Pick<
+    PreparedCodexNativeExecutionPolicy,
+    "assertCurrent" | "source" | "release"
+  >
+> {
+  const selected = await prepareCodexNativeExecutionPolicy({
+    ...params,
+    readRuntimeSessionEntry: true,
+  });
+  return {
+    block: resolveCodexNativeSandboxBlock({ ...params, executionPolicy: selected.policy }),
+    assertCurrent: selected.assertCurrent,
+    source: selected.source,
+    release: selected.release,
+  };
 }
 
 /** Resolves the generic native-execution block for sandboxed or node-hosted sessions. */
-export function resolveCodexNativeExecutionBlock(params: {
-  config?: OpenClawConfig;
-  sessionKey?: string;
-  sessionId?: string;
-  agentId?: string;
-  sandbox?: Pick<SandboxContext, "enabled"> | null;
-  sandboxEnvironmentSelected?: boolean;
-  surface: string;
-}): string | undefined {
+export function resolveCodexNativeExecutionBlock(
+  params: Parameters<typeof resolveCodexNativeSandboxBlock>[0],
+): string | undefined {
   return resolveCodexNativeSandboxBlock(params) ?? resolveCodexNativeNodeExecBlock(params);
 }
 
@@ -153,6 +187,9 @@ export function resolveCodexNativeSandboxBlock(params: {
   sessionKey?: string;
   sessionId?: string;
   agentId?: string;
+  storePath?: string;
+  sessionTarget?: Parameters<typeof resolveCodexNativeExecutionPolicy>[0]["sessionTarget"];
+  executionPolicy: CodexNativeExecutionPolicy;
   sandbox?: Pick<SandboxContext, "enabled"> | null;
   sandboxEnvironmentSelected?: boolean;
   surface: string;
@@ -167,56 +204,27 @@ export function resolveCodexNativeSandboxBlock(params: {
   if (isCodexRemoteExecPlacementSandbox(params.sandbox) || params.sandbox?.enabled === true) {
     return formatCodexNativeSandboxBlock({ surface: params.surface });
   }
-  const sandboxAgentId =
-    parseAgentSessionKey(sessionKey)?.agentId ??
-    params.agentId ??
-    tryResolveDefaultAgentId(params.config ?? {});
-  if (!sandboxAgentId) {
-    return undefined;
-  }
-  const runtime = resolveSandboxRuntimeStatus({
-    cfg: params.config,
-    sessionKey,
-    agentId: sandboxAgentId,
-    classificationAgentId: sandboxAgentId,
-  });
-  if (!runtime.sandboxed) {
-    return undefined;
-  }
-  return formatCodexNativeSandboxBlock({ surface: params.surface });
-}
-
-function resolveDirectMethodPolicy(method: string): DirectMethodPolicy {
-  const exact = DIRECT_METHOD_POLICIES.get(method);
-  if (exact) {
-    return exact;
-  }
-  if (BLOCKED_DIRECT_METHOD_PREFIXES.some((prefix) => method.startsWith(prefix))) {
-    return "blocked-native-bypass";
-  }
-  return "blocked-native-bypass";
+  return params.executionPolicy.sandboxed
+    ? formatCodexNativeSandboxBlock({ surface: params.surface })
+    : undefined;
 }
 
 function hasOpenClawSandboxEnvironmentSelection(value: unknown): boolean {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return false;
   }
-  const environments = (value as { environments?: unknown }).environments;
+  const environments = value.environments;
   return (
     Array.isArray(environments) &&
     environments.length > 0 &&
-    environments.every((entry) => {
-      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-        return false;
-      }
-      const environment = entry as { environmentId?: unknown; cwd?: unknown };
-      return (
+    environments.every(
+      (environment) =>
+        isRecord(environment) &&
         typeof environment.environmentId === "string" &&
         environment.environmentId.startsWith("openclaw-sandbox-") &&
         typeof environment.cwd === "string" &&
-        environment.cwd.trim().length > 0
-      );
-    })
+        environment.cwd.trim().length > 0,
+    )
   );
 }
 
@@ -233,15 +241,12 @@ function resolveCodexNativeNodeExecBlock(params: {
   sessionKey?: string;
   sessionId?: string;
   agentId?: string;
+  storePath?: string;
+  sessionTarget?: Parameters<typeof resolveCodexNativeExecutionPolicy>[0]["sessionTarget"];
+  executionPolicy: CodexNativeExecutionPolicy;
   surface: string;
 }): string | undefined {
-  const sessionKey = params.sessionKey?.trim() || params.sessionId?.trim();
-  const policy = resolveCodexNativeExecutionPolicy({
-    config: params.config,
-    sessionKey,
-    agentId: params.agentId,
-    readRuntimeSessionEntry: Boolean(sessionKey),
-  });
+  const policy = params.executionPolicy;
   if (policy.nativeToolSurfaceAllowed) {
     return undefined;
   }
@@ -249,4 +254,18 @@ function resolveCodexNativeNodeExecBlock(params: {
     surface: params.surface,
     reason: policy.blockReason,
   });
+}
+
+const NATIVE_CONVERSATION_INTERACTIVE_APPROVALS_UNAVAILABLE =
+  "OpenClaw native Codex conversation binding cannot route interactive approvals yet; use the Codex harness or explicit /acp spawn codex for that workflow.";
+
+export function assertNativeConversationApprovalPolicySupported(
+  runtime: Pick<
+    ReturnType<typeof resolveCodexAppServerRuntimeOptions>,
+    "approvalPolicy" | "approvalsReviewer"
+  >,
+): void {
+  if (runtime.approvalPolicy !== "never" && runtime.approvalsReviewer === "user") {
+    throw new Error(NATIVE_CONVERSATION_INTERACTIVE_APPROVALS_UNAVAILABLE);
+  }
 }

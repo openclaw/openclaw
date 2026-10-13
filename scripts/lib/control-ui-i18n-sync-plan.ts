@@ -1,13 +1,8 @@
-export interface TranslationMap {
-  [key: string]: string | TranslationMap;
-}
+import type { TranslationMap } from "../../ui/src/i18n/lib/types.ts";
+import type controlUiLocaleEntries from "./control-ui-i18n-config.json";
 
-export type LocaleEntry = {
-  exportName: string;
-  fileName: string;
-  languageKey: string;
-  locale: string;
-};
+export type { TranslationMap };
+export type LocaleEntry = (typeof controlUiLocaleEntries)[number];
 
 export type GlossaryEntry = {
   source: string;
@@ -46,6 +41,12 @@ export type TranslationBatchItem = {
   sourcePath?: string;
   sourceContext?: string;
 };
+
+export function extractTranslationPlaceholders(text: string): string[] {
+  return [...new Set([...text.matchAll(/\{(\w+)\}/g)].map((match) => match[1] ?? ""))]
+    .filter(Boolean)
+    .toSorted((left, right) => left.localeCompare(right));
+}
 
 export function flattenTranslations(
   value: TranslationMap,
@@ -249,7 +250,7 @@ export function createControlUiLocaleSyncPlan(input: {
   };
 }
 
-export function compareStringArrays(left: string[], right: string[]): boolean {
+export function compareStringArrays(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 

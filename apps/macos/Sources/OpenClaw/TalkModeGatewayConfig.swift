@@ -38,22 +38,11 @@ enum TalkModeGatewayConfigParser {
         let activeProvider = common.activeProvider
         let activeConfig = common.providerConfig
         let ui = snapshot.config?["ui"]?.dictionaryValue
-        let rawSeam = ui?["seamColor"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let seamColorHex = ui?["seamColor"]?.stringValue?.nonEmpty
         let voice = activeConfig?["voiceId"]?.stringValue
-        let model = activeConfig?["modelId"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let resolvedModel: String? = if model?.isEmpty == false {
-            model!
-        } else if activeProvider == defaultProvider {
-            defaultModelIdFallback
-        } else {
-            nil
-        }
-        let outputFormat = activeConfig?["outputFormat"]?.stringValue
+        let resolvedModel = activeConfig?["modelId"]?.stringValue?.nonEmpty
+            ?? (activeProvider == defaultProvider ? defaultModelIdFallback : nil)
         let apiKey = activeConfig?["apiKey"]?.stringValue
-        let referenceAudioPath = activeConfig?["referenceAudioPath"]?.stringValue?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let referenceText = activeConfig?["referenceText"]?.stringValue?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
         let resolvedVoice: String? = if activeProvider == defaultProvider {
             (voice?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? voice : nil) ??
                 (envVoice?.isEmpty == false ? envVoice : nil) ??
@@ -72,11 +61,11 @@ enum TalkModeGatewayConfigParser {
             snapshot: common,
             voiceId: resolvedVoice,
             modelId: resolvedModel,
-            outputFormat: outputFormat,
+            outputFormat: activeConfig?["outputFormat"]?.stringValue,
             apiKey: resolvedApiKey,
-            referenceAudioPath: referenceAudioPath?.isEmpty == false ? referenceAudioPath : nil,
-            referenceText: referenceText?.isEmpty == false ? referenceText : nil,
-            seamColorHex: rawSeam.isEmpty ? nil : rawSeam)
+            referenceAudioPath: activeConfig?["referenceAudioPath"]?.stringValue?.nonEmpty,
+            referenceText: activeConfig?["referenceText"]?.stringValue?.nonEmpty,
+            seamColorHex: seamColorHex)
     }
 
     static func fallback(

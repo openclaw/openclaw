@@ -2,6 +2,7 @@
 // the already-parallel main package graph.
 import type { UserConfig } from "tsdown";
 import { createDeclarationBoundaryHooks } from "./scripts/lib/tsdown-declaration-boundary.mts";
+import { cacheTsdownRuntimeConfigs } from "./scripts/lib/tsdown-runtime-cache.mts";
 
 const externalDependencies = [
   "@anthropic-ai/sdk",
@@ -27,6 +28,7 @@ const config = {
     "internal/anthropic": "packages/ai/src/internal/anthropic.ts",
     "internal/google-model-family": "packages/ai/src/internal/google-model-family.ts",
     "internal/openai": "packages/ai/src/internal/openai.ts",
+    "internal/openai-completions-compat": "packages/ai/src/internal/openai-completions-compat.ts",
     "internal/openai-responses-payload-policy":
       "packages/ai/src/internal/openai-responses-payload-policy.ts",
     "internal/retry-after": "packages/ai/src/internal/retry-after.ts",
@@ -48,4 +50,4 @@ const config = {
   },
 } satisfies UserConfig;
 
-export default config;
+export default cacheTsdownRuntimeConfigs([config])[0]!;

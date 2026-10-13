@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import type { AuditEventInput } from "./audit-event-types.js";
 import type { AuditEventWriter } from "./audit-event-writer.js";
 import { createAuditEventRecorder } from "./audit-recorder.js";
@@ -38,7 +39,8 @@ describe("message audit recorder", () => {
   it("keeps message events off by default policy", async () => {
     const inputs: AuditEventInput[] = [];
     const recorder = createAuditEventRecorder({
-      messageMode: "off",
+      scheduler: createTestGatewayScheduler(),
+      getConfig: () => ({ logging: { audit: { messages: "off" } } }),
       writer: captureWriter(inputs),
     });
     const unsubscribe = onTrustedMessageAuditEvent(recorder.recordMessage);
@@ -53,7 +55,8 @@ describe("message audit recorder", () => {
   it("records only known direct conversations in direct mode", async () => {
     const inputs: AuditEventInput[] = [];
     const recorder = createAuditEventRecorder({
-      messageMode: "direct",
+      scheduler: createTestGatewayScheduler(),
+      getConfig: () => ({ logging: { audit: { messages: "direct" } } }),
       writer: captureWriter(inputs),
     });
     const unsubscribe = onTrustedMessageAuditEvent(recorder.recordMessage);
@@ -75,7 +78,8 @@ describe("message audit recorder", () => {
   it("records group metadata only in all mode", async () => {
     const inputs: AuditEventInput[] = [];
     const recorder = createAuditEventRecorder({
-      messageMode: "all",
+      scheduler: createTestGatewayScheduler(),
+      getConfig: () => ({ logging: { audit: { messages: "all" } } }),
       writer: captureWriter(inputs),
     });
     const unsubscribe = onTrustedMessageAuditEvent(recorder.recordMessage);

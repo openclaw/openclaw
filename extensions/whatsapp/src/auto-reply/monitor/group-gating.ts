@@ -1,9 +1,7 @@
-// Whatsapp plugin module implements group gating behavior.
 import type { BuildMentionRegexesOptions } from "openclaw/plugin-sdk/channel-mention-gating";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 import { formatAudioTranscriptForAgent } from "openclaw/plugin-sdk/media-understanding-runtime";
-import type { HistoryMediaEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveWhatsAppGroupsConfigPath } from "../../group-config-path.js";
 import {
   getPrimaryIdentityId,
@@ -28,15 +26,7 @@ import {
   resolveInboundMentionDecision,
 } from "./group-gating.runtime.js";
 import { noteGroupMember } from "./group-members.js";
-
-export type GroupHistoryEntry = {
-  sender: string;
-  body: string;
-  timestamp?: number;
-  id?: string;
-  senderJid?: string;
-  media?: HistoryMediaEntry[];
-};
+import type { GroupHistoryEntry } from "./inbound-context.js";
 
 type ApplyGroupGatingParams = {
   cfg: OpenClawConfig;
@@ -66,10 +56,6 @@ const groupDropWarned = createDedupeCache({
   maxSize: MAX_GROUP_DROP_WARNINGS,
 });
 
-function shouldWarnForGroupDrop(warnKey: string): boolean {
-  return !groupDropWarned.check(warnKey);
-}
-
 function isOwnerSender(
   baseMentionConfig: MentionConfig,
   msg: AdmittedWebInboundMessage,
@@ -86,13 +72,12 @@ function isOwnerSender(
   return owners.includes(sender);
 }
 
-function recordPendingGroupHistoryEntry(params: {
-  msg: AdmittedWebInboundMessage;
-  body?: string;
-  groupHistories: Map<string, GroupHistoryEntry[]>;
-  groupHistoryKey: string;
-  groupHistoryLimit: number;
-}) {
+function skipGroupMessageAndStoreHistory(
+  params: ApplyGroupGatingParams,
+  verboseMessage: string,
+  body?: string,
+) {
+  params.logVerbose(verboseMessage);
   const senderIdentity = getSenderIdentity(params.msg);
   const sender =
     senderIdentity.name && senderIdentity.e164
@@ -106,7 +91,7 @@ function recordPendingGroupHistoryEntry(params: {
     limit: params.groupHistoryLimit,
     entry: {
       sender,
-      body: params.body ?? params.msg.payload.body,
+      body: body ?? params.msg.payload.body,
       timestamp: params.msg.event.timestamp,
       id: params.msg.event.id,
       senderJid: senderIdentity.jid ?? params.msg.platform.senderJid,
@@ -123,21 +108,6 @@ function recordPendingGroupHistoryEntry(params: {
           }
         : {}),
     },
-  });
-}
-
-function skipGroupMessageAndStoreHistory(
-  params: ApplyGroupGatingParams,
-  verboseMessage: string,
-  body?: string,
-) {
-  params.logVerbose(verboseMessage);
-  recordPendingGroupHistoryEntry({
-    msg: params.msg,
-    body,
-    groupHistories: params.groupHistories,
-    groupHistoryKey: params.groupHistoryKey,
-    groupHistoryLimit: params.groupHistoryLimit,
   });
   return { shouldProcess: false } as const;
 }
@@ -156,7 +126,7 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
   if (conversationGroupPolicy.allowlistEnabled && !conversationGroupPolicy.allowed) {
     const accountId = inboundPolicy.account.accountId;
     const warnKey = JSON.stringify([accountId, conversationId, "group registry"]);
-    if (shouldWarnForGroupDrop(warnKey)) {
+    if (!groupDropWarned.check(warnKey)) {
       const groupsPath = resolveWhatsAppGroupsConfigPath({ cfg: params.cfg, accountId });
       params.replyLogger.warn(
         { conversationId, accountId, groupsPath },
@@ -188,16 +158,13 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
     }),
     allowFrom: inboundPolicy.configuredAllowFrom,
   };
-  const mentionMsg: AdmittedWebInboundMessage =
-    params.mentionText !== undefined
-      ? { ...params.msg, payload: { ...params.msg.payload, body: params.mentionText } }
-      : {
-          ...params.msg,
-          payload: {
-            ...params.msg.payload,
-            body: params.msg.payload.commandBody ?? params.msg.payload.body,
-          },
-        };
+  const mentionMsg: AdmittedWebInboundMessage = {
+    ...params.msg,
+    payload: {
+      ...params.msg.payload,
+      body: params.mentionText ?? params.msg.payload.commandBody ?? params.msg.payload.body,
+    },
+  };
   const commandBody = stripMentionsForCommand(
     mentionMsg.payload.body,
     mentionConfig.mentionRegexes,
@@ -234,12 +201,7 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
   const requireMention = activation !== "always";
   const replyContext = getReplyContext(params.msg, params.authDir);
   const sharedNumberSelfChat = params.selfChatMode === true;
-  // Detect reply-to-bot: compare JIDs, LIDs, and E.164 numbers.
-  // WhatsApp may report the quoted message sender as either a phone JID
-  // (xxxxx@s.whatsapp.net) or a LID (xxxxx@lid), so we compare both.
-  // But in shared-number/selfChatMode setups, replies from the same self number
-  // should not count as implicit bot mentions unless the message explicitly
-  // mentioned the bot in text.
+  // Shared-number replies to self do not imply a bot mention; explicit mentions still apply.
   const implicitReplyToSelf = sharedNumberSelfChat && identitiesOverlap(self, sender);
   const implicitMentionKinds = implicitMentionKindWhen(
     "quoted_bot",
@@ -271,7 +233,7 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
       return { shouldProcess: false, needsMentionText: true } as const;
     }
     const accountId = inboundPolicy.account.accountId;
-    if (shouldWarnForGroupDrop(JSON.stringify([accountId, conversationId, "no mention"]))) {
+    if (!groupDropWarned.check(JSON.stringify([accountId, conversationId, "no mention"]))) {
       const groupsPath = resolveWhatsAppGroupsConfigPath({ cfg: params.cfg, accountId });
       params.replyLogger.warn(
         { conversationId, accountId, groupsPath },

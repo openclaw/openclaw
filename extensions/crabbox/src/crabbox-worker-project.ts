@@ -1,6 +1,10 @@
 import type { WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
-import { crabboxCommandError } from "./crabbox-worker-command-error.js";
-import { runCrabboxCommand, type CrabboxCommandRunner } from "./crabbox-worker-command.js";
+import {
+  crabboxCommandOutput,
+  leaseRunArgs,
+  runCrabboxCommand,
+  type CrabboxCommandRunner,
+} from "./crabbox-worker-command.js";
 
 type ProjectPreparation = NonNullable<
   NonNullable<Parameters<WorkerProvider["provision"]>[2]>["project"]
@@ -12,7 +16,6 @@ export async function prepareCrabboxProjectFiles(params: {
   binary: string;
   provider: string;
   id: string;
-  runArgs: string[];
   runCommand: CrabboxCommandRunner;
   timeoutMs: () => number;
   signal?: AbortSignal;
@@ -35,23 +38,20 @@ export async function prepareCrabboxProjectFiles(params: {
       timeoutMs,
     });
     params.project.assertCurrent();
-    if (result.termination !== "exit" || result.code !== 0) {
-      throw crabboxCommandError("project preparation", result);
-    }
-    return result.stdout;
+    return crabboxCommandOutput("project preparation", result);
   };
   if (params.inspectPrepared) {
     if (!params.project.inspectPreparedWorkspace) {
       throw new Error("Enrolled project cannot verify its completed workspace");
     }
     await params.project.inspectPreparedWorkspace({
-      runScript: (input, signal) => run(params.runArgs, signal, () => input),
+      runScript: (input, signal) => run(leaseRunArgs(params), signal, () => input),
     });
     return undefined;
   }
   return await params.project.prepare({
-    runScript: (input, signal) => run(params.runArgs, signal, () => input),
-    runScriptWithBudget: (createScript, signal) => run(params.runArgs, signal, createScript),
+    runScript: (input, signal) => run(leaseRunArgs(params), signal, () => input),
+    runScriptWithBudget: (createScript, signal) => run(leaseRunArgs(params), signal, createScript),
     upload: async (localPath, remotePath, signal) => {
       await run(
         [

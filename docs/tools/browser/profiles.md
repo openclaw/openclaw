@@ -35,6 +35,16 @@ that card's browser and tab. This does not change `browser.defaultProfile` or
 another session's selection. Without a session browser target, the panel uses
 the configured default routing.
 
+The chat side panel shows only this session's tabs: tabs its agent or panel
+opened, plus tabs its conversation used. Other sessions' tabs and tabs opened
+outside OpenClaw stay hidden. The Browser dock outside a chat session lists
+every tab. Tabs opened from a session's panel belong to that session and follow
+the existing session tab cleanup: they close when the session is reset or
+deleted, with idle and per-session limits controlled by `browser.tabCleanup`.
+Tabs opened from a panel before this ownership existed have no recorded
+session, so they stay open but appear only in the Browser dock outside a chat
+session.
+
 The panel streams the active tab live as the page repaints. It falls back to
 screenshots for node-routed browsers, Chrome MCP existing-session profiles,
 missing Playwright, or stream connection failures. Navigation rules apply to
@@ -48,6 +58,11 @@ Preview cards appear only for HTTP(S) page URLs when OpenClaw can identify the
 browser's route. Blank or internal pages remain ordinary tool results. Tab
 actions without a page URL still update the Browser panel's selection. Sandbox
 browser results remain available to the agent but do not open a host-browser preview.
+Repeated opens of the same page in one chat activity group share one preview card
+for the same browser profile and host or node. The card opens the most recently
+used tab; different page URLs or browser routes stay separate. Long URLs that
+may have been shortened in tool metadata keep separate tab cards to avoid hiding
+different pages. Expand the tool activity to inspect every original call and result.
 
 If a listed tab cannot be accessed, the panel explains whether navigation rules
 blocked it or its address could not be verified. Select another tab, enter an

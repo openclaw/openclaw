@@ -36,22 +36,6 @@ function canPublish(scopes: readonly string[]): boolean {
   return scopes.includes("operator.write") || scopes.includes("operator.admin");
 }
 
-function beamTimestampEpochNanoseconds(value: string): bigint {
-  const match = /\.(\d{1,9})(?=Z|[+-]\d{2}:\d{2}$)/.exec(value);
-  const fraction = (match?.[1] ?? "").padEnd(9, "0");
-  // Date.parse drops accepted fractional precision after milliseconds.
-  const millisecondTimestamp = match
-    ? `${value.slice(0, match.index)}.${fraction.slice(0, 3)}${value.slice(match.index + match[0].length)}`
-    : value;
-  return BigInt(Date.parse(millisecondTimestamp)) * 1_000_000n + BigInt(fraction.slice(3));
-}
-
-function compareBeamTimestamps(left: string, right: string): number {
-  const leftNanoseconds = beamTimestampEpochNanoseconds(left);
-  const rightNanoseconds = beamTimestampEpochNanoseconds(right);
-  return leftNanoseconds < rightNanoseconds ? -1 : leftNanoseconds > rightNanoseconds ? 1 : 0;
-}
-
 export function createBeamRequestHandler(params: {
   store: BeamStore;
   now?: () => number;
@@ -105,26 +89,13 @@ export function createBeamRequestHandler(params: {
         sendJson(res, 400, { ok: false, error: parsed.error });
         return true;
       }
-      await getPluginRuntimeGatewayRequestScope()?.revalidate?.();
+      const revalidatePublisher = getPluginRuntimeGatewayRequestScope()?.revalidate;
+      await revalidatePublisher?.();
       const receivedAt = params.now?.() ?? Date.now();
-      await params.store.update(parsed.value.beamId, (existing) => {
-        const revisionOrder = existing
-          ? compareBeamTimestamps(parsed.value.updatedAt, existing.updatedAt)
-          : 1;
-        // Completion is monotonic within one source revision; a newer revision may reopen it.
-        if (
-          revisionOrder < 0 ||
-          (revisionOrder === 0 && existing?.completed && !parsed.value.completed)
-        ) {
-          return undefined;
-        }
-        return {
-          ...parsed.value,
-          // An anonymous replacement must not inherit a previous publisher's identity.
-          ...(client.profileId ? { uploaderProfileId: client.profileId } : {}),
-          createdAt: existing?.createdAt ?? receivedAt,
-          receivedAt,
-        };
+      await params.store.upload(parsed.value, {
+        receivedAt,
+        uploaderProfileId: client.profileId,
+        revalidatePublisher,
       });
       sendJson(res, 200, {
         ok: true,

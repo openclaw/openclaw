@@ -152,7 +152,10 @@ struct MacDesktopAvailabilityCoordinatorTests {
         try self.withOwner { owner, platform in
             owner.setRoute(generation: 7, connected: true, hostingEnabled: false)
             let old = try owner.admit(executionId: "execution")
+            let queuedChange = platform.changed
             owner.revoke(generation: 7, reason: "disconnect")
+            platform.uptime = 5
+            queuedChange?()
             #expect(platform.assertions.isEmpty)
             #expect(!platform.monitoring)
             owner.setRoute(generation: 7, connected: true, hostingEnabled: true)
@@ -304,7 +307,7 @@ final class DesktopPlatformProbe: MacDesktopAvailabilityPlatform {
     }
 
     private var nextAssertion: UInt32 = 0
-    private var changed: (@MainActor @Sendable () -> Void)?
+    var changed: (@MainActor @Sendable () -> Void)?
 
     func consoleState() -> MacDesktopAvailabilityCoordinator.State {
         self.state

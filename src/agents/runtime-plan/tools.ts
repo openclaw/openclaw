@@ -1,8 +1,3 @@
-/**
- * Applies runtime-plan or provider fallback tool schema policy. The helpers
- * normalize tool schemas, preserve owner metadata across cloned definitions,
- * and emit provider diagnostics.
- */
 import type { TSchema } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
@@ -42,7 +37,6 @@ type AgentRuntimeToolPolicyParams<TSchemaType extends TSchema = TSchema, TResult
   ) => void;
 };
 
-/** Builds the provider/runtime context passed into runtime-plan tool hooks. */
 function runtimePlanToolContext(params: {
   workspaceDir?: string;
   modelApi?: string | null;
@@ -100,7 +94,6 @@ function preserveRuntimeToolMetadata<TSchemaType extends TSchema = TSchema, TRes
   return normalizedTools;
 }
 
-/** Normalizes tool schemas through a runtime plan or provider fallback policy. */
 export function normalizeAgentRuntimeTools<
   TSchemaType extends TSchema = TSchema,
   TResult = unknown,
@@ -136,11 +129,12 @@ export function normalizeAgentRuntimeTools<
           runtimeHandle: params.runtimeHandle,
           allowRuntimePluginLoad: params.allowProviderRuntimePluginLoad,
         }));
-  const normalizedTools = Array.isArray(normalized) ? normalized : normalizableTools;
+  // Provider collection views wrap the results of map, including host-owned tool wrappers.
+  // Own the assembly array so later wrapping keeps its metadata; retain fenced tool elements.
+  const normalizedTools = Array.isArray(normalized) ? Array.from(normalized) : normalizableTools;
   return preserveRuntimeToolMetadata(normalizableTools, normalizedTools);
 }
 
-/** Emits runtime-plan or provider fallback diagnostics for normalized tools. */
 export function logAgentRuntimeToolDiagnostics(params: AgentRuntimeToolPolicyParams): void {
   const planContext = runtimePlanToolContext(params);
   if (params.runtimePlan) {

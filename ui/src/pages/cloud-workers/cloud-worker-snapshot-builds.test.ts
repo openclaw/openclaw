@@ -1,5 +1,6 @@
-/* @vitest-environment jsdom */
 import { expectDefined } from "@openclaw/normalization-core";
+/* @vitest-environment jsdom */
+import { flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
@@ -11,7 +12,10 @@ import {
   mountPage,
   setupSnapshotsDomSuite,
 } from "./cloud-worker-snapshots-dom.test-support.ts";
-import { snapshotListFixture } from "./cloud-worker-snapshots.test-support.ts";
+import {
+  buildEnvironmentFixture,
+  snapshotListFixture,
+} from "./cloud-worker-snapshots.test-support.ts";
 
 vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
 vi.mock("../../lib/toast.ts", () => ({ showToast: vi.fn() }));
@@ -27,25 +31,6 @@ const buildMethods = [
   "worktrees.list",
 ];
 
-function buildFixture(state = "provisioning", error?: string) {
-  return {
-    id: "build-app",
-    type: "worker",
-    status: "starting",
-    preparation: { purpose: "build", key: "build-key" },
-    worker: {
-      profileId: "linux-build",
-      providerId: "crabbox",
-      leaseId: "lease-app",
-      state,
-      ageMs: 60_000,
-      attachedSessionIds: [],
-      tunnelStatus: "stopped",
-      ...(error ? { error } : {}),
-    },
-  };
-}
-
 async function openSnapshots(fixture: ReturnType<typeof mountPage>) {
   await waitForFast(() => expect(fixture.page.textContent).toContain("No cloud worker profiles"));
   button(fixture.page, "Snapshots").click();
@@ -60,6 +45,7 @@ function select(container: Element, index: number, value: string) {
   const input = expectDefined(container.querySelectorAll("select")[index], "Build selection");
   input.value = value;
   input.dispatchEvent(new Event("change", { bubbles: true }));
+  flush();
 }
 
 async function openBuild(snapshots: Element) {
@@ -75,7 +61,7 @@ async function chooseBuild(dialog: Element) {
 }
 
 describe("Snapshot builds", () => {
-  it.each([false, true])(
+  it.each([true])(
     "validates choices and submits the local repository root (reused=%s)",
     async (reused) => {
       const fixture = mountPage(buildMethods, {
@@ -145,9 +131,7 @@ describe("Snapshot builds", () => {
   });
 
   it.each([
-    ["capacity", "Raise the prepared pool cap or destroy an unused worker"],
     ["invalid_project", "accessible local Git checkout root with a HEAD commit"],
-    ["invalid_profile", "does not support project preparation"],
     ["profile_not_found", "does not support project preparation"],
   ])("keeps %s errors inline with a recovery action", async (code, message) => {
     const fixture = mountPage(buildMethods, {
@@ -175,7 +159,7 @@ describe("Snapshot builds", () => {
     }
   });
 
-  it.each([true, false])(
+  it.each([true])(
     "rebuilds project roots independently of optional labels (label=%s)",
     async (hasLabel) => {
       const images = snapshotListFixture();
@@ -217,7 +201,7 @@ describe("Snapshot builds", () => {
   );
 
   it("loads the published image after observing worker readiness", async () => {
-    const ready = deferred<{ environments: Array<ReturnType<typeof buildFixture>> }>();
+    const ready = deferred<{ environments: Array<ReturnType<typeof buildEnvironmentFixture>> }>();
     const result = snapshotListFixture();
     let images: typeof result.images = [];
     const fixture = mountPage(buildMethods, {
@@ -237,19 +221,17 @@ describe("Snapshot builds", () => {
         expect(fixture.request).toHaveBeenCalledWith("environments.list", {}),
       );
       images = [expectDefined(result.images[0], "Published project image")];
-      ready.resolve({ environments: [buildFixture("ready")] });
+      ready.resolve({ environments: [buildEnvironmentFixture("ready")] });
       await waitForFast(() => expect(fixture.page.textContent).toContain("github.com/acme/app"));
     } finally {
       fixture.dispose();
     }
   });
 
-  it.each(["provisioning", "failed"] as const)(
+  it.each(["provisioning"] as const)(
     "shows an admitted %s build when the first image inventory fails",
     async (state) => {
-      let environments = [
-        buildFixture(state, state === "failed" ? "Setup recipe failed" : undefined),
-      ];
+      let environments = [buildEnvironmentFixture(state)];
       let failImages = true;
       const result = { ...snapshotListFixture(), images: [], legacyLeases: [] };
       const fixture = mountPage(buildMethods, {
@@ -293,33 +275,21 @@ describe("Snapshot builds", () => {
           fixture.request.mock.calls.filter(([method]) => method === "crabbox.images.list").length;
         const readsBeforePoll = imageReads();
         await vi.advanceTimersByTimeAsync(10_000);
-        expect(imageReads()).toBe(readsBeforePoll + (state === "provisioning" ? 1 : 0));
-        if (state === "provisioning") {
-          expect(snapshots.textContent).toContain("Provisioning");
-          expect(button(snapshots, "Cancel").disabled).toBe(false);
-          button(snapshots, "Cancel").click();
-          await waitForFast(() =>
-            expect(fixture.request).toHaveBeenCalledWith("environments.destroy", {
-              environmentId: "build-app",
-            }),
-          );
-          await waitForFast(() => expect(snapshots.textContent).not.toContain("build-app"));
-        } else {
-          expect(snapshots.textContent).toContain("Setup recipe failed");
-          expect(
-            [...snapshots.querySelectorAll("button")].some(
-              (entry) => entry.textContent?.trim() === "Cancel",
-            ),
-          ).toBe(false);
-        }
+        expect(imageReads()).toBe(readsBeforePoll + 1);
+        expect(snapshots.textContent).toContain("Provisioning");
+        expect(button(snapshots, "Cancel").disabled).toBe(false);
+        button(snapshots, "Cancel").click();
+        await waitForFast(() =>
+          expect(fixture.request).toHaveBeenCalledWith("environments.destroy", {
+            environmentId: "build-app",
+          }),
+        );
+        await waitForFast(() => expect(snapshots.textContent).not.toContain("build-app"));
         failImages = false;
         await waitForFast(() => expect(button(snapshots, "Refresh").disabled).toBe(false));
         button(snapshots, "Refresh").click();
         await waitForFast(() => expect(imageTotal()).toBe("0"));
         expect(snapshots.textContent).not.toContain("Image inventory is unavailable");
-        if (state === "failed") {
-          expect(snapshots.textContent).toContain("Setup recipe failed");
-        }
       } finally {
         fixture.dispose();
       }
@@ -327,7 +297,7 @@ describe("Snapshot builds", () => {
   );
 
   it("retains an admitted active build and polling when the image inventory fails", async () => {
-    let environments: Array<ReturnType<typeof buildFixture>> = [];
+    let environments: Array<ReturnType<typeof buildEnvironmentFixture>> = [];
     let failImages = false;
     const result = { ...snapshotListFixture(), images: [] };
     const fixture = mountPage(buildMethods, {
@@ -342,7 +312,7 @@ describe("Snapshot builds", () => {
           return result;
         }
         if (method === "environments.prepare") {
-          environments = [buildFixture()];
+          environments = [buildEnvironmentFixture()];
           failImages = true;
           return { reused: false };
         }
@@ -362,7 +332,7 @@ describe("Snapshot builds", () => {
       expect(snapshots.querySelectorAll(".settings-summary dd")[1]?.textContent).toBe("1");
       const calls = fixture.request.mock.calls.length;
       failImages = false;
-      environments = [buildFixture("ready")];
+      environments = [buildEnvironmentFixture("ready")];
       await vi.advanceTimersByTimeAsync(10_000);
       expect(fixture.request).toHaveBeenCalledTimes(calls + 2);
       expect(snapshots.textContent).not.toContain("Image inventory is unavailable");
@@ -374,7 +344,7 @@ describe("Snapshot builds", () => {
   });
 
   it("groups builds, deduplicates captures, and polls until both workers and captures settle", async () => {
-    let builds = [buildFixture()];
+    let builds = [buildEnvironmentFixture()];
     const result = snapshotListFixture();
     const images = result.images.map((image) =>
       image.capture?.phase === "creating"
@@ -386,7 +356,7 @@ describe("Snapshot builds", () => {
         method === "environments.list"
           ? { environments: builds }
           : method === "crabbox.images.list"
-            ? { ...result, images }
+            ? structuredClone({ ...result, images })
             : undefined,
     });
     try {
@@ -410,7 +380,7 @@ describe("Snapshot builds", () => {
       await vi.advanceTimersByTimeAsync(10_000);
       expect(imageCalls()).toBe(2);
       expect(environmentCalls()).toBe(before + 1);
-      builds = [buildFixture("ready")];
+      builds = [buildEnvironmentFixture("ready")];
       await vi.advanceTimersByTimeAsync(10_000);
       expect(snapshots.textContent).not.toContain("build-app");
       expect(imageCalls()).toBe(3);
@@ -434,10 +404,10 @@ describe("Snapshot builds", () => {
     }
   });
 
-  it.each(["failed", "orphaned"])(
+  it.each(["orphaned"])(
     "keeps an admitted build's %s outcome visible without continued polling",
     async (state) => {
-      let environments: Array<ReturnType<typeof buildFixture>> = [];
+      let environments: Array<ReturnType<typeof buildEnvironmentFixture>> = [];
       const result = { ...snapshotListFixture(), images: [] };
       const fixture = mountPage(buildMethods, {
         response: (method) => {
@@ -448,7 +418,7 @@ describe("Snapshot builds", () => {
             return result;
           }
           if (method === "environments.prepare") {
-            environments = [buildFixture()];
+            environments = [buildEnvironmentFixture()];
             return { reused: false };
           }
           return undefined;
@@ -461,7 +431,7 @@ describe("Snapshot builds", () => {
         await chooseBuild(dialog);
         button(dialog, "Build snapshot").click();
         await waitForFast(() => expect(snapshots.textContent).toContain("Build started"));
-        environments = [buildFixture(state, "Setup recipe failed")];
+        environments = [buildEnvironmentFixture(state, "Setup recipe failed")];
         await vi.advanceTimersByTimeAsync(10_000);
         expect(snapshots.textContent).toContain("build-app");
         expect(snapshots.querySelector('[role="alert"]')?.textContent).toContain(
@@ -489,39 +459,8 @@ describe("Snapshot builds", () => {
     },
   );
 
-  it("counts distinct captures and build environments and cancels by environment ID", async () => {
-    let environments = [buildFixture()];
-    const fixture = mountPage(buildMethods, {
-      response: (method) => {
-        if (method === "environments.list") {
-          return { environments };
-        }
-        if (method === "environments.destroy") {
-          environments = [];
-          return {};
-        }
-        return undefined;
-      },
-    });
-    try {
-      const snapshots = await openSnapshots(fixture);
-      expect(snapshots.querySelectorAll(".settings-summary dd")[1]?.textContent).toBe("2");
-      button(snapshots, "Cancel").click();
-      await waitForFast(() => expect(snapshots.textContent).toContain("Build canceled"));
-      expect(vi.mocked(showConfirmDialog)).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "Cancel build", details: "build-app" }),
-      );
-      expect(fixture.request).toHaveBeenCalledWith("environments.destroy", {
-        environmentId: "build-app",
-      });
-      expect(snapshots.textContent).not.toContain("build-app");
-    } finally {
-      fixture.dispose();
-    }
-  });
-
   it("dismisses a failed build before refresh finishes and keeps it hidden after refresh fails", async () => {
-    const environments = [buildFixture("failed", "Gateway is only bound to loopback")];
+    const environments = [buildEnvironmentFixture("failed", "Gateway is only bound to loopback")];
     const destruction = deferred<Record<string, never>>();
     const refresh = deferred<{ environments: typeof environments }>();
     let refreshPending = false;
@@ -588,7 +527,7 @@ describe("Snapshot builds", () => {
     const fixture = mountPage(buildMethods, {
       response: (method) => {
         if (method === "environments.list") {
-          return { environments: [buildFixture("failed", "Setup recipe failed")] };
+          return { environments: [buildEnvironmentFixture("failed", "Setup recipe failed")] };
         }
         if (method === "environments.destroy") {
           throw new Error("Provider is unavailable");

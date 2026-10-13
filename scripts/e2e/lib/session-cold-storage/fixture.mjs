@@ -5,6 +5,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
+import {
+  readSqliteTranscriptPayload,
+  sqliteTranscriptPayloadColumns,
+} from "../../../lib/sqlite-transcript-payload.mjs";
 
 // Use the supported legacy import boundary; never backdate the live database.
 export async function seedColdStorageFixture({ stateDir, workspaceDir }) {
@@ -134,10 +138,14 @@ export function readTranscriptRows(stateDir, sessionId) {
   return readDatabase(stateDir, (database) =>
     database
       .prepare(
-        "SELECT seq, event_json, created_at FROM transcript_events WHERE session_id = ? ORDER BY seq",
+        `SELECT seq, ${sqliteTranscriptPayloadColumns(database)}, created_at FROM transcript_events WHERE session_id = ? ORDER BY seq`,
       )
       .all(sessionId)
-      .map(({ seq, event_json, created_at }) => ({ seq, event_json, created_at })),
+      .map((row) => ({
+        seq: row.seq,
+        event_json: readSqliteTranscriptPayload(row),
+        created_at: row.created_at,
+      })),
   );
 }
 

@@ -151,18 +151,15 @@ export function migrateSingletonStateFoldInV12(db: DatabaseSync, previousVersion
       .get();
     if (nodeHost) {
       const gateway = {
-        ...(nodeHost.gateway_host == null ? {} : { host: nodeHost.gateway_host }),
-        ...(nodeHost.gateway_port == null ? {} : { port: nodeHost.gateway_port }),
-        ...(nodeHost.gateway_tls == null ? {} : { tls: nodeHost.gateway_tls === 1 }),
-        ...(nodeHost.gateway_tls_fingerprint == null
-          ? {}
-          : { tlsFingerprint: nodeHost.gateway_tls_fingerprint }),
-        ...(nodeHost.gateway_context_path == null
-          ? {}
-          : { contextPath: nodeHost.gateway_context_path }),
-        ...(nodeHost.gateway_cloudflare_access_json == null
-          ? {}
-          : { cloudflareAccess: JSON.parse(String(nodeHost.gateway_cloudflare_access_json)) }),
+        host: nodeHost.gateway_host ?? undefined,
+        port: nodeHost.gateway_port ?? undefined,
+        tls: nodeHost.gateway_tls == null ? undefined : nodeHost.gateway_tls === 1,
+        tlsFingerprint: nodeHost.gateway_tls_fingerprint ?? undefined,
+        contextPath: nodeHost.gateway_context_path ?? undefined,
+        cloudflareAccess:
+          nodeHost.gateway_cloudflare_access_json == null
+            ? undefined
+            : JSON.parse(String(nodeHost.gateway_cloudflare_access_json)),
       };
       importState.run(
         "nodeHost.config",
@@ -170,7 +167,9 @@ export function migrateSingletonStateFoldInV12(db: DatabaseSync, previousVersion
           version: nodeHost.version,
           nodeId: nodeHost.node_id,
           ...(nodeHost.display_name == null ? {} : { displayName: nodeHost.display_name }),
-          ...(Object.keys(gateway).length === 0 ? {} : { gateway }),
+          gateway: Object.values(gateway).some((value) => value !== undefined)
+            ? gateway
+            : undefined,
           installedAppsSharing: nodeHost.installed_apps_sharing === 1,
         }),
         Number(nodeHost.updated_at_ms),

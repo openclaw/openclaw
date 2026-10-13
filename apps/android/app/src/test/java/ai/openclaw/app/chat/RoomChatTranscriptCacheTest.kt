@@ -1,6 +1,8 @@
 package ai.openclaw.app.chat
 
-import ai.openclaw.app.ui.chat.latestChatMessageUsage
+import ai.openclaw.app.ui.chat.ChatTimelineItem
+import ai.openclaw.app.ui.chat.buildTimeline
+import ai.openclaw.app.ui.chat.prepareChatHistory
 import androidx.room3.Room
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -38,6 +40,42 @@ class RoomChatTranscriptCacheTest {
         }.asCoroutineDispatcher(),
       ).build()
   private val store = RoomChatTranscriptCache(database = database)
+
+  @Test
+  fun completedWorkKeepsExplicitAnswersAndUnresolvedErrorsAfterOfflineReload() =
+    runTest {
+      val controller =
+        createChatController { method, _ ->
+          if (method == "chat.history") {
+            """{"messages":[
+            {"role":"user","content":"Check the draft","timestamp":1000},
+            {"role":"assistant","content":"Checking","phase":"commentary","timestamp":2000},
+            {"role":"assistant","content":[{"type":"text","text":"Draft is ready","textSignature":"{\"v\":1,\"phase\":\"final_answer\"}"}],"timestamp":3000},
+            {"role":"assistant","content":"Finishing notes","phase":"commentary","timestamp":4000},
+            {"role":"assistant","content":"The follow-up failed","stopReason":"error","timestamp":5000}
+          ]}"""
+          } else {
+            emptyChatGatewayResponse(method)
+          }
+        }
+      controller.load("agent:main:dashboard:test")
+      advanceUntilIdle()
+      val live = controller.messages.value
+      saveTranscript(live)
+      for (history in listOf(live, loadTranscript())) {
+        val timeline =
+          prepareChatHistory(history, "agent:main:dashboard:test", "agent:main:main").buildTimeline(0, emptyList(), null)
+        assertEquals(
+          listOf("The follow-up failed", "Draft is ready", "Check the draft"),
+          timeline.items.filterIsInstance<ChatTimelineItem.Message>().map {
+            it.message.content
+              .first()
+              .text
+          },
+        )
+        assertEquals(1, timeline.items.filterIsInstance<ChatTimelineItem.WorkedSummary>().size)
+      }
+    }
 
   @After
   fun tearDown() {
@@ -148,13 +186,23 @@ class RoomChatTranscriptCacheTest {
           .last()
           .entryId,
       )
-      assertEquals(null, latestChatMessageUsage(controller.messages.value))
+      assertEquals(
+        null,
+        controller.messages.value
+          .last()
+          .usage,
+      )
 
       val offline = createChatController(transcriptCache = store, cacheScope = { ChatCacheScope("gateway-a", 2) }) { _, _ -> error("offline") }
       offline.load("main")
       advanceUntilIdle()
       assertTrue(offline.messagesFromCache.value)
-      assertEquals(null, latestChatMessageUsage(offline.messages.value))
+      assertEquals(
+        null,
+        offline.messages.value
+          .last()
+          .usage,
+      )
       assertEquals(2, offline.messages.value.size)
       assertEquals(
         "read",
@@ -494,11 +542,11 @@ class RoomChatTranscriptCacheTest {
       assertEquals("run-1", loaded[0].runId)
       assertEquals("run-parent", loaded[0].steerTargetRunId)
       assertEquals(ChatDeliveryMirror(kind = "channel-final"), loaded[1].deliveryMirror)
+      assertEquals(ChatMessageUsage(input = 0, output = 0), loaded[1].usage)
       assertTrue(loaded[2].content.isEmpty())
       assertEquals(ChatMessageUsage(input = 7_500, output = 450), loaded[2].usage)
       assertEquals(ChatMessageCost(total = 0.031), loaded[2].cost)
       assertTrue(loaded[3].isSyntheticDisplay)
-      assertEquals(ChatMessageUsage(input = 7_500, output = 450), latestChatMessageUsage(loaded))
     }
 
   @Test

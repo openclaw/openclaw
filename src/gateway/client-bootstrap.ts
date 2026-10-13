@@ -1,6 +1,5 @@
 // Gateway client bootstrap resolver.
 // Collects URL, auth, and handshake settings before constructing a GatewayClient.
-import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
 import { resolveGatewayPublicOrigin } from "../config/gateway-public-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -9,7 +8,9 @@ import {
 } from "./auth-surface-resolution.js";
 import {
   buildGatewayConnectionDetailsWithResolvers,
+  resolveGatewayDeviceAuthRoute,
   type GatewayConnectionDetails,
+  type GatewaySshRoute,
 } from "./connection-details.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import { resolveGatewayCredentialsWithSecretInputs } from "./credentials-secret-inputs.js";
@@ -21,19 +22,6 @@ import {
 } from "./credentials.js";
 import { resolveGatewayConnectionTlsFingerprint } from "./tls-fingerprint.js";
 
-/**
- * Maps connection-detail source labels to the override kinds that affect auth fallback.
- */
-function resolveGatewayUrlOverrideSource(urlSource: string): "cli" | "env" | undefined {
-  if (urlSource === "cli --url") {
-    return "cli";
-  }
-  if (urlSource === "env OPENCLAW_GATEWAY_URL") {
-    return "env";
-  }
-  return undefined;
-}
-
 export class GatewayExplicitAuthRequiredError extends Error {
   constructor(message: string) {
     super(message);
@@ -41,16 +29,16 @@ export class GatewayExplicitAuthRequiredError extends Error {
   }
 }
 
-export function ensureExplicitGatewayAuth(params: {
+export async function ensureExplicitGatewayAuth(params: {
   urlOverride?: string;
   urlOverrideSource?: "cli" | "env";
   explicitAuth?: ExplicitGatewayAuth;
   resolvedAuth?: ExplicitGatewayAuth;
   deviceAuthScope?: string;
-  allowStoredOriginAuth?: (scope: string) => boolean;
+  allowStoredOriginAuth?: (scope: string) => boolean | Promise<boolean>;
   errorHint: string;
   configPath?: string;
-}): void {
+}): Promise<void> {
   if (!params.urlOverride || !params.urlOverrideSource) {
     return;
   }
@@ -63,7 +51,10 @@ export function ensureExplicitGatewayAuth(params: {
   ) {
     return;
   }
-  if (params.deviceAuthScope && params.allowStoredOriginAuth?.(params.deviceAuthScope) === true) {
+  if (
+    params.deviceAuthScope &&
+    (await params.allowStoredOriginAuth?.(params.deviceAuthScope)) === true
+  ) {
     return;
   }
   const sourceHint =
@@ -88,65 +79,6 @@ type ConfiguredGatewayTargetIdentity = {
   authSurface: "local" | "remote";
   tlsSource?: "local loopback" | "config gateway.remote.url";
 };
-
-function appendControlUiBasePath(url: string, basePath: string): string {
-  return `${url}${normalizeControlUiBasePath(basePath)}`;
-}
-
-function resolveExactConfiguredGatewayTarget(params: {
-  buildConnectionDetails: (options: {
-    config: OpenClawConfig;
-    ignoreEnvUrlOverride?: boolean;
-    localPortOverride?: number;
-  }) => GatewayConnectionDetails;
-  config: OpenClawConfig;
-  explicitUrl: string;
-  localPortOverride?: number;
-}): ConfiguredGatewayTargetIdentity | undefined {
-  const candidates: Array<{
-    target: string;
-    identity: ConfiguredGatewayTargetIdentity;
-  }> = [];
-  if (params.config.gateway?.mode === "remote") {
-    const remoteUrl = trimToUndefined(params.config.gateway.remote?.url);
-    if (remoteUrl) {
-      candidates.push({
-        target: remoteUrl,
-        identity: { authSurface: "remote", tlsSource: "config gateway.remote.url" },
-      });
-    }
-  } else {
-    const localGateway = { ...params.config.gateway, mode: "local" as const };
-    delete localGateway.remote;
-    const localUrl = params.buildConnectionDetails({
-      config: { ...params.config, gateway: localGateway },
-      ignoreEnvUrlOverride: true,
-      ...(params.localPortOverride !== undefined
-        ? { localPortOverride: params.localPortOverride }
-        : {}),
-    }).url;
-    const basePath = params.config.gateway?.controlUi?.basePath ?? "";
-    candidates.push({
-      target: appendControlUiBasePath(localUrl, basePath),
-      identity: { authSurface: "local", tlsSource: "local loopback" },
-    });
-    const publicOrigin = resolveGatewayPublicOrigin(params.config);
-    if (publicOrigin) {
-      candidates.push({
-        target: appendControlUiBasePath(
-          publicOrigin.replace(/^https:/u, "wss:").replace(/^http:/u, "ws:"),
-          basePath,
-        ),
-        // A public reverse proxy may terminate a different certificate than the
-        // direct local listener, so local auth ownership does not imply a TLS pin.
-        identity: { authSurface: "local" },
-      });
-    }
-  }
-  // Direct-local is listed before publicOrigin so an identical URL retains
-  // the local listener's TLS identity instead of becoming ambiguous.
-  return candidates.find(({ target }) => target === params.explicitUrl)?.identity;
-}
 
 /** Resolve the only URL overrides allowed to displace configured Gateway targets. */
 export function resolveGatewayUrlOverride(params: {
@@ -186,7 +118,7 @@ export async function resolveGatewayClientBootstrap(params: {
   explicitTlsFingerprint?: string;
   serviceTargetUrl?: string;
   skipImplicitAuth?: boolean;
-  allowStoredOriginAuth?: (scope: string) => boolean;
+  allowStoredOriginAuth?: (scope: string) => boolean | Promise<boolean>;
   overrideAuthErrorHint?: string;
   buildConnectionDetails?: (options: {
     config: OpenClawConfig;
@@ -203,6 +135,7 @@ export async function resolveGatewayClientBootstrap(params: {
   connectionDetails: GatewayConnectionDetails;
   urlOverrideSource?: "cli" | "env";
   deviceAuthScope?: string;
+  sshTunnel?: GatewaySshRoute;
   authFailureReason?: string;
   preauthHandshakeTimeoutMs?: number;
   tlsFingerprint?: string;
@@ -232,19 +165,47 @@ export async function resolveGatewayClientBootstrap(params: {
       : {}),
     ...(params.serviceTargetUrl ? { serviceTargetUrl: params.serviceTargetUrl } : {}),
   });
-  const detectedUrlOverrideSource = resolveGatewayUrlOverrideSource(connection.urlSource);
+  const detectedUrlOverrideSource =
+    connection.urlSource === "cli --url"
+      ? "cli"
+      : connection.urlSource === "env OPENCLAW_GATEWAY_URL"
+        ? "env"
+        : undefined;
   const urlOverrideSource = urlOverride.source ?? detectedUrlOverrideSource;
-  const configuredTarget =
-    params.allowConfiguredAuthForExactTarget && urlOverrideSource === "cli"
-      ? resolveExactConfiguredGatewayTarget({
-          buildConnectionDetails,
-          config: params.config,
-          explicitUrl: connection.url,
-          ...(params.localPortOverride !== undefined
-            ? { localPortOverride: params.localPortOverride }
-            : {}),
-        })
-      : undefined;
+  let configuredTarget: ConfiguredGatewayTargetIdentity | undefined;
+  if (params.allowConfiguredAuthForExactTarget && urlOverrideSource === "cli") {
+    if (params.config.gateway?.mode === "remote") {
+      const remoteUrl = trimToUndefined(params.config.gateway.remote?.url);
+      if (remoteUrl && remoteUrl === connection.url) {
+        configuredTarget = { authSurface: "remote", tlsSource: "config gateway.remote.url" };
+      }
+    } else {
+      const localGateway = { ...params.config.gateway, mode: "local" as const };
+      delete localGateway.remote;
+      const localUrl = buildConnectionDetails({
+        config: { ...params.config, gateway: localGateway },
+        ignoreEnvUrlOverride: true,
+        ...(params.localPortOverride !== undefined
+          ? { localPortOverride: params.localPortOverride }
+          : {}),
+      }).url;
+      const basePath = normalizeControlUiBasePath(params.config.gateway?.controlUi?.basePath ?? "");
+      // Prefer the direct listener's TLS identity when publicOrigin names the same URL.
+      if (`${localUrl}${basePath}` === connection.url) {
+        configuredTarget = { authSurface: "local", tlsSource: "local loopback" };
+      } else {
+        const publicOrigin = resolveGatewayPublicOrigin(params.config);
+        if (
+          publicOrigin &&
+          `${publicOrigin.replace(/^https:/u, "wss:").replace(/^http:/u, "ws:")}${basePath}` ===
+            connection.url
+        ) {
+          // A reverse proxy can terminate a different certificate than the local listener.
+          configuredTarget = { authSurface: "local" };
+        }
+      }
+    }
+  }
   const tlsUrlSource = configuredTarget?.tlsSource ?? connection.urlSource;
   const tlsFingerprint = await resolveGatewayConnectionTlsFingerprint({
     config: params.config,
@@ -296,19 +257,24 @@ export async function resolveGatewayClientBootstrap(params: {
       modeOverride: surface,
     });
   }
-  const deviceAuthScope =
-    urlOverrideSource || params.config.gateway?.mode === "remote"
-      ? gatewayOriginScope(connection.url)
-      : undefined;
+  const { deviceAuthScope, sshTunnel } = resolveGatewayDeviceAuthRoute({
+    config: params.config,
+    url: connection.url,
+    remote: Boolean(urlOverrideSource || connection.urlSource === "config gateway.remote.url"),
+    configuredRemote:
+      (!urlOverrideSource && connection.urlSource === "config gateway.remote.url") ||
+      configuredTarget?.authSurface === "remote",
+    tlsFingerprint,
+  });
   if (params.overrideAuthErrorHint && !configuredTarget) {
-    ensureExplicitGatewayAuth({
+    await ensureExplicitGatewayAuth({
       urlOverride: urlOverrideSource ? connection.url : undefined,
       urlOverrideSource,
       explicitAuth,
       resolvedAuth: auth,
       deviceAuthScope,
       allowStoredOriginAuth: params.allowStoredOriginAuth,
-      errorHint: params.overrideAuthErrorHint ?? "Fix: pass --token or --password with --url.",
+      errorHint: params.overrideAuthErrorHint,
       configPath: params.configPath,
     });
   }
@@ -318,6 +284,7 @@ export async function resolveGatewayClientBootstrap(params: {
     connectionDetails: connection,
     ...(urlOverrideSource ? { urlOverrideSource } : {}),
     ...(deviceAuthScope ? { deviceAuthScope } : {}),
+    ...(sshTunnel ? { sshTunnel } : {}),
     ...(auth.failureReason ? { authFailureReason: auth.failureReason } : {}),
     ...(tlsFingerprint ? { tlsFingerprint } : {}),
     auth: {

@@ -16,6 +16,8 @@ export type DiagnosticSessionActivitySnapshot = {
   activeToolCallId?: string;
   activeToolAgeMs?: number;
   activeToolDeadlineAtMs?: number;
+  /** Latest explicit or quiet allowance across every current-owner tool. */
+  activeToolRecoveryDeadlineAtMs?: number;
   lastProgressAgeMs?: number;
   lastProgressReason?: string;
   repeatedRequestNoProgressAgeMs?: number;
@@ -27,6 +29,7 @@ export type DiagnosticSessionActivitySnapshot = {
 };
 
 type SnapshotTool = {
+  runId?: string;
   toolName: string;
   toolCallId?: string;
   startedAt: number;
@@ -69,12 +72,27 @@ export function buildDiagnosticSessionActivitySnapshot(
           ? "embedded_run"
           : undefined;
   let activeTool: SnapshotTool | undefined;
+  let activeToolDeadlineAtMs: number | undefined;
+  let activeToolRecoveryDeadlineAtMs: number | undefined;
+  const currentOwnerRunId = resolveCurrentDiagnosticRunId(activity.activeEmbeddedRuns.values());
   for (const tool of activity.activeTools.values()) {
     if (!activeTool || tool.startedAt < activeTool.startedAt) {
       activeTool = tool;
     }
+    // Nested tool wrappers keep the oldest identity, but the current run's
+    // enforced waits own its allowance. Prior runs cannot extend that budget.
+    if (currentOwnerRunId !== undefined && tool.runId === currentOwnerRunId) {
+      const deadline = tool.deadlineAtMs;
+      const recoveryDeadline = deadline ?? tool.startedAt + BLOCKED_TOOL_CALL_ABORT_FLOOR_MS;
+      activeToolRecoveryDeadlineAtMs = Math.max(
+        activeToolRecoveryDeadlineAtMs ?? recoveryDeadline,
+        recoveryDeadline,
+      );
+      if (deadline !== undefined) {
+        activeToolDeadlineAtMs = Math.max(activeToolDeadlineAtMs ?? deadline, deadline);
+      }
+    }
   }
-  const currentOwnerRunId = resolveCurrentDiagnosticRunId(activity.activeEmbeddedRuns.values());
   const churnProgress = resolveArgumentChurnProgress(activity, currentOwnerRunId, now);
   return {
     activeWorkKind,
@@ -82,7 +100,9 @@ export function buildDiagnosticSessionActivitySnapshot(
     activeToolName: activeTool?.toolName,
     activeToolCallId: activeTool?.toolCallId,
     activeToolAgeMs: activeTool ? Math.max(0, now - activeTool.startedAt) : undefined,
-    activeToolDeadlineAtMs: activeTool?.deadlineAtMs,
+    activeToolDeadlineAtMs:
+      currentOwnerRunId === undefined ? activeTool?.deadlineAtMs : activeToolDeadlineAtMs,
+    activeToolRecoveryDeadlineAtMs,
     lastProgressAgeMs: Math.max(0, now - churnProgress.lastProgressAt),
     lastProgressReason: churnProgress.lastProgressReason,
     repeatedRequestNoProgressAgeMs: resolveRepeatedRequestNoProgressAgeMs(
@@ -99,6 +119,15 @@ export function buildDiagnosticSessionActivitySnapshot(
 // staleness consumer (diagnostic recovery aborts, reply-run stale takeover,
 // steer gates): lowering it reopens #88870, removing it reopens #96168.
 export const BLOCKED_TOOL_CALL_ABORT_FLOOR_MS = 15 * 60_000;
+
+/** Process expiry starts cancellation; give its result the ordinary stalled-tool window. */
+export function resolveToolExecutionRecoveryDeadlineAtMs(
+  executionDeadlineAtMs: number | undefined,
+): number | undefined {
+  return executionDeadlineAtMs === undefined
+    ? undefined
+    : executionDeadlineAtMs + BLOCKED_TOOL_CALL_ABORT_FLOOR_MS;
+}
 
 // Default quiet-run reclaim window for steer/takeover. Evidence clocks stay local.
 export const RUN_STALE_TAKEOVER_MS = 10 * 60_000;

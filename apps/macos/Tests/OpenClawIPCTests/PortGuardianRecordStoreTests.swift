@@ -123,7 +123,7 @@ struct PortGuardianRecordStoreTests {
     }
 
     @Test
-    func `cancelled port sweep never touches its durable tunnel records`() async throws {
+    func `cancelled orphan cleanup never touches its durable tunnel records`() async throws {
         let fixture = try Self.fixture()
         defer { fixture.cleanup() }
         let store = try PortGuardianRecordStore(databaseURL: fixture.databaseURL)
@@ -133,17 +133,17 @@ struct PortGuardianRecordStoreTests {
             try PortGuardianRecordStore(databaseURL: fixture.databaseURL)
         })
 
-        let sweep = Task {
+        let cleanup = Task {
             withUnsafeCurrentTask { $0?.cancel() }
-            await guardian.sweep(mode: .unconfigured, hostsLocalGateway: false)
+            await guardian.reapOrphanedTunnels()
         }
-        await sweep.value
+        await cleanup.value
 
         #expect(try store.records() == [orphan])
     }
 
     @Test
-    func `uncancelled unconfigured sweep still reaps orphaned tunnel records`() async throws {
+    func `orphan cleanup reaps stale tunnel records`() async throws {
         let fixture = try Self.fixture()
         defer { fixture.cleanup() }
         let store = try PortGuardianRecordStore(databaseURL: fixture.databaseURL)
@@ -153,7 +153,7 @@ struct PortGuardianRecordStoreTests {
             try PortGuardianRecordStore(databaseURL: fixture.databaseURL)
         })
 
-        await guardian.sweep(mode: .unconfigured, hostsLocalGateway: false)
+        await guardian.reapOrphanedTunnels()
 
         #expect(try store.records().isEmpty)
     }

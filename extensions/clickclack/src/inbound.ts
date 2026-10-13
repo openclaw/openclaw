@@ -1,16 +1,12 @@
 import {
   buildChannelInboundEventContext,
-  createChannelInboundEnvelopeBuilder,
+  createChannelInboundEnvelopeBuilderAsync,
   recordChannelBotPairLoopAndCheckSuppression,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createChannelMessageReplyPipeline,
   deriveDurableFinalDeliveryRequirements,
 } from "openclaw/plugin-sdk/channel-outbound";
-/**
- * Converts authorized ClickClack messages into OpenClaw agent/model replies and
- * routes resulting outbound text back to ClickClack.
- */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveClickClackInboundAccess, type ClickClackInboundAccess } from "./access.js";
 import { createClickClackActivityPublisher, type ClickClackActivityPublisher } from "./activity.js";
@@ -38,8 +34,7 @@ function hasClickClackReplyMedia(payload: {
   mediaUrls?: readonly string[];
 }): boolean {
   return Boolean(
-    payload.mediaUrl?.trim() ||
-    payload.mediaUrls?.some((mediaUrl) => typeof mediaUrl === "string" && mediaUrl.trim()),
+    payload.mediaUrl?.trim() || payload.mediaUrls?.some((mediaUrl) => mediaUrl.trim()),
   );
 }
 
@@ -54,7 +49,6 @@ async function dispatchModelReply(params: {
   route: { agentId: string };
   target: string;
   correlationId?: string;
-  buildContext?: typeof buildChannelInboundEventContext;
 }) {
   const runtime = getClickClackRuntime();
   const result = await runtime.llm.complete({
@@ -105,10 +99,6 @@ async function dispatchModelReply(params: {
   });
 }
 
-/**
- * Dispatches one already-fetched ClickClack message through the configured
- * reply mode for its account.
- */
 export async function handleClickClackInbound(params: {
   account: ResolvedClickClackAccount;
   config: CoreConfig;
@@ -128,7 +118,7 @@ export async function handleClickClackInbound(params: {
       config: params.config,
       message,
     }));
-  if (!access.shouldDispatch || !access.channelIngress) {
+  if (!access.shouldDispatch || !access.channelIngress || !access.isCurrent()) {
     return;
   }
   const conversationId = message.channel_id || message.direct_conversation_id;
@@ -197,7 +187,7 @@ export async function handleClickClackInbound(params: {
   // attribution metadata onto activity rows and the final reply message.
   let turnProvenance: ClickClackMessageProvenance | undefined;
   let activity: ClickClackActivityPublisher | undefined;
-  if (params.account.agentActivity && (message.channel_id || message.direct_conversation_id)) {
+  if (params.account.agentActivity) {
     activity = createClickClackActivityPublisher({
       client: createClickClackClient({
         baseUrl: params.account.apiEndpoint,
@@ -218,10 +208,11 @@ export async function handleClickClackInbound(params: {
   const senderName = message.author?.display_name || message.author_id;
   // Preserve both normalized channel fields and ClickClack-native ids so reply
   // routing, session recovery, and command authorization see the same message.
-  const body = createChannelInboundEnvelopeBuilder({
+  const buildEnvelope = await createChannelInboundEnvelopeBuilderAsync({
     cfg: params.config as OpenClawConfig,
     route,
-  })({
+  });
+  const body = buildEnvelope({
     channel: "ClickClack",
     from: senderName,
     timestamp: new Date(message.created_at),
@@ -314,10 +305,7 @@ export async function handleClickClackInbound(params: {
           if (hasClickClackReplyMedia(payload)) {
             throw new Error("ClickClack media reply requires durable delivery");
           }
-          const text =
-            payload && typeof payload === "object" && "text" in payload
-              ? ((payload as { text?: string }).text ?? "")
-              : "";
+          const text = payload.text ?? "";
           if (!text.trim()) {
             return;
           }

@@ -10,11 +10,14 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
+  getSqliteDatabaseAdmission,
   openNodeSqliteDatabase,
   prepareSqliteQuerySync,
+  publishSqliteDatabaseAdmission,
   runSqliteImmediateTransactionSync,
+  type SqliteDatabaseAdmissionKey,
   type SqliteWorkerBackend,
-} from "openclaw/plugin-sdk/sqlite-runtime";
+} from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { pickKeyframeId } from "./analyze.js";
 import type {
   LogbookBatchInput,
@@ -25,6 +28,7 @@ import type {
   LogbookStandup,
   LogbookTimeline,
 } from "./store-contract.js";
+import { createLogbookFrameQueries } from "./store-frame-queries.js";
 import {
   LOGBOOK_SCHEMA_VERSION,
   SCHEMA,
@@ -46,10 +50,16 @@ type Database = import("node:sqlite").DatabaseSync;
 
 const LOGBOOK_SQLITE_BUSY_TIMEOUT_MS = 5_000;
 const FRAME_PRUNE_BATCH_SIZE = 64;
+const schemaAdmission: SqliteDatabaseAdmissionKey<true> = {
+  name: "logbook.schema",
+  schemaDependent: true,
+  read: (value) => (value === true ? true : undefined),
+};
 class LogbookDatabaseStore {
   private readonly db: Database;
   private readonly query;
   private readonly framesQuery;
+  private readonly frameMetadataQuery;
   private readonly batchesQuery;
   private readonly cardsQuery;
   private readonly statements;
@@ -76,42 +86,36 @@ class LogbookDatabaseStore {
         foreignKeys: true,
         synchronous: "NORMAL",
       });
-      const versionRow = db.prepare("PRAGMA user_version").get();
-      const schemaVersion = Number(versionRow?.user_version ?? 0);
-      if (schemaVersion > LOGBOOK_SCHEMA_VERSION) {
-        throw new Error(
-          `Logbook database uses newer schema version ${schemaVersion}; this build supports ${LOGBOOK_SCHEMA_VERSION}`,
-        );
-      }
-      db.exec(SCHEMA);
-      if (schemaVersion < LOGBOOK_SCHEMA_VERSION) {
-        migrateSqliteSchemaToStrict(db, SCHEMA, { databaseLabel: dbPath });
-        db.exec(`PRAGMA user_version = ${LOGBOOK_SCHEMA_VERSION};`);
+      if (!getSqliteDatabaseAdmission(db, schemaAdmission)) {
+        const versionRow = db.prepare("PRAGMA user_version").get();
+        const schemaVersion = Number(versionRow?.user_version ?? 0);
+        if (schemaVersion > LOGBOOK_SCHEMA_VERSION) {
+          throw new Error(
+            `Logbook database uses newer schema version ${schemaVersion}; this build supports ${LOGBOOK_SCHEMA_VERSION}`,
+          );
+        }
+        db.exec(SCHEMA);
+        if (schemaVersion < LOGBOOK_SCHEMA_VERSION) {
+          migrateSqliteSchemaToStrict(db, SCHEMA, { databaseLabel: dbPath });
+          db.exec(`PRAGMA user_version = ${LOGBOOK_SCHEMA_VERSION};`);
+        }
+        publishSqliteDatabaseAdmission(db, schemaAdmission, true);
       }
       this.db = db;
       this.walMaintenance = walMaintenance;
       this.query = getNodeSqliteKysely<LogbookDatabase>(db);
-      // Timestamp ties follow insertion ids, matching existing SQLite reads.
-      this.framesQuery = this.query
-        .selectFrom("frames")
-        .select([
-          "id",
-          "captured_at_ms",
-          "day",
-          "path",
-          "screen_index",
-          "width",
-          "height",
-          "byte_size",
-          "idle",
-        ])
-        .orderBy("captured_at_ms", "asc")
-        .orderBy("id", "asc");
+      const { framesQuery, sampledBatchFrames } = createLogbookFrameQueries(db, this.query);
+      this.framesQuery = framesQuery;
+      // Keep native integer overflow rejection while omitting unused frame strings.
+      this.frameMetadataQuery = framesQuery
+        .clearSelect()
+        .select(["id", "captured_at_ms", "screen_index", "width", "height", "byte_size", "idle"]);
       this.batchesQuery = this.query
         .selectFrom("batches")
         .select(["id", "day", "start_ms", "end_ms", "status", "error", "frame_count", "model"]);
       this.cardsQuery = this.query.selectFrom("cards");
       this.statements = {
+        sampledBatchFrames,
         insertFrame: prepareSqliteQuerySync<LogbookFrameInput>(db, (p) =>
           this.query.insertInto("frames").values({
             captured_at_ms: p((row) => row.capturedAtMs),
@@ -262,7 +266,8 @@ class LogbookDatabaseStore {
     }
   }
 
-  close(): void {
+  async close(): Promise<void> {
+    await this.walMaintenance.stop();
     try {
       this.walMaintenance.close();
     } finally {
@@ -288,11 +293,11 @@ class LogbookDatabaseStore {
     return row ? { capturedAtMs: row.captured_at_ms, contentHash: row.content_hash } : null;
   }
 
-  unbatchedActiveFrames(limit: number): LogbookFrame[] {
+  unbatchedActiveFrames(limit: number): Pick<LogbookFrame, "id" | "capturedAtMs">[] {
     return executeSqliteQuerySync(
       this.db,
-      this.framesQuery.where("batch_id", "is", null).where("idle", "=", 0).limit(limit),
-    ).rows.map(toFrame);
+      this.frameMetadataQuery.where("batch_id", "is", null).where("idle", "=", 0).limit(limit),
+    ).rows.map((row) => ({ id: row.id, capturedAtMs: row.captured_at_ms }));
   }
 
   countUnbatchedActiveFrames(): number {
@@ -312,11 +317,20 @@ class LogbookDatabaseStore {
     return row ? toFrame(row) : null;
   }
 
-  framesInRange(startMs: number, endMs: number): LogbookFrame[] {
+  framesInRange(
+    startMs: number,
+    endMs: number,
+  ): Pick<LogbookFrame, "id" | "capturedAtMs" | "idle">[] {
     return executeSqliteQuerySync(
       this.db,
-      this.framesQuery.where("captured_at_ms", ">=", startMs).where("captured_at_ms", "<", endMs),
-    ).rows.map(toFrame);
+      this.frameMetadataQuery
+        .where("captured_at_ms", ">=", startMs)
+        .where("captured_at_ms", "<", endMs),
+    ).rows.map((row) => ({
+      id: row.id,
+      capturedAtMs: row.captured_at_ms,
+      idle: row.idle === 1,
+    }));
   }
 
   createBatch(params: LogbookBatchInput): number {
@@ -385,11 +399,9 @@ class LogbookDatabaseStore {
     return row ? toBatch(row) : null;
   }
 
-  batchFrames(batchId: number): LogbookFrame[] {
-    return executeSqliteQuerySync(
-      this.db,
-      this.framesQuery.where("batch_id", "=", batchId),
-    ).rows.map(toFrame);
+  sampledBatchFrames(batchId: number): LogbookFrame[] {
+    // The ordinal scan and sampled payload read share one SQLite statement.
+    return this.statements.sampledBatchFrames(batchId).rows.map(toFrame);
   }
 
   // Replace batch evidence atomically so manual retries cannot duplicate it.
@@ -475,7 +487,14 @@ class LogbookDatabaseStore {
     runSqliteImmediateTransactionSync(
       this.db,
       () => {
-        const frames = selectKeyframes ? this.framesInRange(startMs, endMs) : undefined;
+        const frames = selectKeyframes
+          ? executeSqliteQuerySync(
+              this.db,
+              this.frameMetadataQuery
+                .where("captured_at_ms", ">=", startMs)
+                .where("captured_at_ms", "<", endMs),
+            ).rows.map((row) => ({ id: row.id, capturedAtMs: row.captured_at_ms }))
+          : undefined;
         this.statements.deleteCards({ day, startMs, endMs });
         for (const draft of drafts) {
           const keyframeId = frames ? pickKeyframeId(draft, frames) : draft.keyframeId;
@@ -651,8 +670,8 @@ export function createSqliteWorkerBackend(
           return store.resetErrorBatches();
         case "nextPendingBatch":
           return store.nextPendingBatch();
-        case "batchFrames":
-          return store.batchFrames(command.input.batchId);
+        case "sampledBatchFrames":
+          return store.sampledBatchFrames(command.input.batchId);
         case "replaceObservations":
           return store.replaceObservations(
             command.input.batchId,

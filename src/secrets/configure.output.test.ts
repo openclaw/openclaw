@@ -4,6 +4,7 @@ import { createAuthProfileStoreFixture } from "../agents/auth-profiles/credentia
 import { noteCommittedSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
 import { readPersistedSharedAuthProfileStoreRaw } from "../agents/auth-profiles/sqlite.js";
 import { runSecretsCommand } from "../cli/secrets-cli-output.js";
+import { defaultRuntime } from "../runtime.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -49,10 +50,11 @@ it.each([true, false])(
       const stdinTTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
       let stdout = "";
       let stderr = "";
-      const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
-        stdout += String(chunk);
-        return true;
-      });
+      const stdoutWrite = vi
+        .spyOn(defaultRuntime, "writeJson")
+        .mockImplementation((value, space) => {
+          stdout += `${JSON.stringify(value, null, space && space > 0 ? space : undefined)}\n`;
+        });
       const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
         stderr += String(chunk);
         return true;

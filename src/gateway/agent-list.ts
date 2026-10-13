@@ -1,6 +1,6 @@
 // Gateway agent list projection.
 // Combines configured agents and existing on-disk agent state for lightweight UI use.
-import fs from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries, tryResolveDefaultAgentId } from "../agents/agent-scope.js";
@@ -32,19 +32,12 @@ type GatewayAgentSelectionState = {
   selectionRequired: boolean;
 };
 
-const OWNER_ROSTER_ENTRIES = SYSTEM_AGENT_ROSTER_ENTRIES satisfies ReadonlyArray<{
-  id: string;
-  kind: GatewayAgentKind;
-}>;
-
-function listExistingAgentIdsFromDisk(): string[] {
+async function listExistingAgentIdsFromDisk(): Promise<string[]> {
   const agentsDir = path.join(resolveStateDir(), "agents");
   try {
-    return fs
-      .readdirSync(agentsDir, { withFileTypes: true })
+    return (await fs.readdir(agentsDir, { withFileTypes: true }))
       .filter((entry) => entry.isDirectory())
-      .map((entry) => normalizeAgentId(entry.name))
-      .filter(Boolean);
+      .map((entry) => normalizeAgentId(entry.name));
   } catch {
     return [];
   }
@@ -68,19 +61,21 @@ export function resolveGatewayAgentSelectionState(cfg: OpenClawConfig): GatewayA
   const defaultId = normalizeAgentId(legacyCompatibleId);
   return {
     defaultId,
-    ownership: legacyAgentId ? "legacy" : "explicit",
+    ownership: legacyAgentId && cfg.agents?.ownership !== "explicit" ? "legacy" : "explicit",
     selectionRequired: !legacyAgentId,
   };
 }
 
 /** Lists gateway-visible agents with canonical membership, ordering, and semantic kind. */
-export function listGatewayAgentsBasic(cfg: OpenClawConfig): GatewayAgentSelectionState & {
-  mainKey: string;
-  scope: SessionScope;
-  agents: GatewayAgentListRow[];
-} {
+export async function listGatewayAgentsBasic(cfg: OpenClawConfig): Promise<
+  GatewayAgentSelectionState & {
+    mainKey: string;
+    scope: SessionScope;
+    agents: GatewayAgentListRow[];
+  }
+> {
   const ownerEntries = new Map(
-    OWNER_ROSTER_ENTRIES.map((entry) => [normalizeAgentId(entry.id), entry] as const),
+    SYSTEM_AGENT_ROSTER_ENTRIES.map((entry) => [normalizeAgentId(entry.id), entry] as const),
   );
   const selection = resolveGatewayAgentSelectionState(cfg);
   const defaultId = selection.defaultId;
@@ -102,7 +97,7 @@ export function listGatewayAgentsBasic(cfg: OpenClawConfig): GatewayAgentSelecti
     agentIds.add(id);
   }
 
-  for (const id of listExistingAgentIdsFromDisk()) {
+  for (const id of await listExistingAgentIdsFromDisk()) {
     diskIds.add(id);
     agentIds.add(id);
   }

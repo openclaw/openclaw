@@ -20,6 +20,10 @@ OpenClaw chooses a harness after provider/model resolution:
    route. Provider/model prefixes alone never select a harness.
 4. If no registered harness matches, OpenClaw uses its embedded runtime.
 
+For configured models, transport details and request overrides come from the
+same selected model row. An exact model ID takes precedence over a legacy
+provider-prefixed row, including when the exact row inherits provider defaults.
+
 Plugin harness failures surface as run failures. In `auto` mode, embedded
 fallback only applies when no registered plugin harness supports the resolved
 provider/model. Once a plugin harness has claimed a run, OpenClaw does not

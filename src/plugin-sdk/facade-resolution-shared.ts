@@ -3,7 +3,10 @@
  */
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { areBundledPluginsDisabled, resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
+import { normalizeManifestPlatforms } from "../plugins/manifest-platforms.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { parsePluginCacheJson, readPluginCacheFile } from "../plugins/plugin-cache-files.js";
 import {
@@ -93,12 +96,9 @@ export type FacadePluginManifestLike = Pick<
   "id" | "origin" | "enabledByDefault" | "enabledByDefaultOnPlatforms" | "rootDir" | "channels"
 >;
 
-function readBundledPluginManifestRecordFromDir(params: {
-  pluginsRoot: string;
-  resolvedDirName: string;
-}): FacadePluginManifestLike | null {
+function readBundledPluginManifestRecordFromDir(rootDir: string): FacadePluginManifestLike | null {
   const file = readPluginCacheFile({
-    rootDir: path.join(params.pluginsRoot, params.resolvedDirName),
+    rootDir,
     relativePath: "openclaw.plugin.json",
     rejectHardlinks: false,
   });
@@ -111,17 +111,17 @@ function readBundledPluginManifestRecordFromDir(params: {
       return null;
     }
     const raw = parsed.value;
-    if (typeof raw.id !== "string" || raw.id.trim().length === 0) {
+    const id = normalizeOptionalString(raw.id);
+    if (!id) {
       return null;
     }
     return {
-      id: raw.id,
+      id,
       origin: "bundled",
       enabledByDefault: raw.enabledByDefault === true,
-      rootDir: path.join(params.pluginsRoot, params.resolvedDirName),
-      channels: Array.isArray(raw.channels)
-        ? raw.channels.filter((entry): entry is string => typeof entry === "string")
-        : [],
+      enabledByDefaultOnPlatforms: normalizeManifestPlatforms(raw.enabledByDefaultOnPlatforms),
+      rootDir,
+      channels: normalizeTrimmedStringList(raw.channels),
     };
   } catch {
     return null;
@@ -138,40 +138,21 @@ export function resolveBundledMetadataManifestRecord(
   if (!params.location) {
     return null;
   }
-  if (params.location.modulePath.startsWith(`${params.sourceExtensionsRoot}${path.sep}`)) {
-    const relativeToExtensions = path.relative(
-      params.sourceExtensionsRoot,
-      params.location.modulePath,
-    );
-    const resolvedDirName = relativeToExtensions.split(path.sep)[0];
-    if (!resolvedDirName) {
+  let pluginsRoot = params.sourceExtensionsRoot;
+  if (!params.location.modulePath.startsWith(`${pluginsRoot}${path.sep}`)) {
+    const bundledPluginsDir = resolveBundledPluginsDir(params.env ?? process.env);
+    if (!bundledPluginsDir) {
       return null;
     }
-    return readBundledPluginManifestRecordFromDir({
-      pluginsRoot: params.sourceExtensionsRoot,
-      resolvedDirName,
-    });
+    pluginsRoot = path.resolve(bundledPluginsDir);
+    if (!params.location.modulePath.startsWith(`${pluginsRoot}${path.sep}`)) {
+      return null;
+    }
   }
-  const bundledPluginsDir = resolveBundledPluginsDir(params.env ?? process.env);
-  if (!bundledPluginsDir) {
-    return null;
-  }
-  const normalizedBundledPluginsDir = path.resolve(bundledPluginsDir);
-  if (!params.location.modulePath.startsWith(`${normalizedBundledPluginsDir}${path.sep}`)) {
-    return null;
-  }
-  const relativeToBundledDir = path.relative(
-    normalizedBundledPluginsDir,
-    params.location.modulePath,
-  );
-  const resolvedDirName = relativeToBundledDir.split(path.sep)[0];
-  if (!resolvedDirName) {
-    return null;
-  }
-  return readBundledPluginManifestRecordFromDir({
-    pluginsRoot: normalizedBundledPluginsDir,
-    resolvedDirName,
-  });
+  const resolvedDirName = path.relative(pluginsRoot, params.location.modulePath).split(path.sep)[0];
+  return resolvedDirName
+    ? readBundledPluginManifestRecordFromDir(path.join(pluginsRoot, resolvedDirName))
+    : null;
 }
 
 /** Builds the cache key for one facade lookup under the current bundled-plugin mode. */

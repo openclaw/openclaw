@@ -11,14 +11,14 @@ import Testing
         #expect(prefixed.hasSuffix("\n\nhello world"))
     }
 
-    @Test func `forward options defaults`() {
-        let opts = VoiceWakeForwarder.ForwardOptions()
+    @Test func `forward invocation defaults`() {
+        let opts = VoiceWakeForwarder.makeInvocation(transcript: "hello world")
         #expect(opts.sessionKey == "main")
         #expect(opts.thinking == nil)
-        #expect(opts.deliver == true)
+        #expect(opts.deliver == false)
         #expect(opts.to == nil)
         #expect(opts.channel == .webchat)
-        #expect(opts.channel.shouldDeliver(opts.deliver) == false)
+        #expect(opts.message.hasSuffix("\n\nhello world"))
     }
 
     @Test func `selected forward options use session delivery context`() {
@@ -29,7 +29,8 @@ import Testing
             lastTo: "telegram:6812765697",
             deliveryContext: .init(channel: "telegram", to: "telegram:6812765697"))
 
-        let opts = VoiceWakeForwarder.forwardOptions(
+        let opts = VoiceWakeForwarder.makeInvocation(
+            transcript: "hello world",
             sessionKey: entry.key,
             routeEntry: entry,
             voiceWakeTrigger: "open claw")
@@ -39,26 +40,28 @@ import Testing
         #expect(opts.to == "telegram:6812765697")
         #expect(opts.voiceWakeTrigger == "open claw")
         #expect(opts.thinking == nil)
-        #expect(opts.channel.shouldDeliver(opts.deliver) == true)
+        #expect(opts.deliver == true)
     }
 
     @Test func `selected forward options parse channel scoped session fallback`() {
-        let opts = VoiceWakeForwarder.forwardOptions(
+        let opts = VoiceWakeForwarder.makeInvocation(
+            transcript: "hello world",
             sessionKey: "agent:main:discord:channel:123:456",
             routeEntry: nil)
 
         #expect(opts.channel == .discord)
         #expect(opts.to == "123:456")
-        #expect(opts.channel.shouldDeliver(opts.deliver) == true)
+        #expect(opts.deliver == true)
     }
 
     @Test func `selected forward options keep internal sessions on webchat`() {
-        let opts = VoiceWakeForwarder.forwardOptions(
+        let opts = VoiceWakeForwarder.makeInvocation(
+            transcript: "hello world",
             sessionKey: "agent:main:work",
             routeEntry: nil)
 
         #expect(opts.channel == .webchat)
         #expect(opts.to == nil)
-        #expect(opts.channel.shouldDeliver(opts.deliver) == false)
+        #expect(opts.deliver == false)
     }
 }

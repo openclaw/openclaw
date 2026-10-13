@@ -1,14 +1,60 @@
 import assert from "node:assert/strict";
+import http from "node:http";
 import test from "node:test";
 import { runTelegramTestDoctor } from "./telegram-test-doctor.mjs";
+
+test("doctor verifies the leased user and bot directly without a local listener", async (context) => {
+  context.mock.method(http.Server.prototype, "listen", () => {
+    throw new Error("readiness must not start a local Bot API adapter");
+  });
+  let released = 0;
+  const credential = {
+    driverEnv: {},
+    sutBotId: "42",
+    sutToken: "synthetic-token",
+    sutUsername: "sut_bot",
+    tdlibVersion: "1.8.67",
+    testerUserId: "123",
+    whenLeaseUnhealthy: new Promise(() => {}),
+    assertLeaseHealthy() {},
+    async release() {
+      released++;
+    },
+  };
+  const result = await runTelegramTestDoctor({
+    acquireCredential: async () => credential,
+    runCommandImpl: async () => ({
+      status: 0,
+      stdout: JSON.stringify({
+        ok: true,
+        authorized: true,
+        testDc: true,
+        tdlibVersion: "1.8.67",
+        user: { id: 123 },
+      }),
+    }),
+    fetchImpl: async (url, init) => {
+      assert.equal(url, "https://api.telegram.org/botsynthetic-token/test/getMe");
+      assert.equal(init.method, "POST");
+      assert.deepEqual(JSON.parse(init.body), {});
+      assert.ok(init.signal instanceof AbortSignal);
+      init.signal.throwIfAborted();
+      return Response.json({ ok: true, result: { id: 42, username: "sut_bot" } });
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.botApiTransport, "direct-https");
+  assert.equal(result.botApiProxy, false);
+  assert.equal(released, 1);
+});
 
 test("doctor revocation after getMe prevents later Bot API calls and releases", async () => {
   const leaseError = new Error("doctor lease revoked");
   let healthy = true;
   let revoke;
   let released = false;
-  let proxyClosed = false;
   const methods = [];
+  let statusArgs;
   const whenLeaseUnhealthy = new Promise((resolve) => {
     revoke = () => {
       healthy = false;
@@ -52,73 +98,90 @@ test("doctor revocation after getMe prevents later Bot API calls and releases", 
 
   await assert.rejects(
     runTelegramTestDoctor({
+      dm: false,
       acquireCredential: async () => credential,
       fetchImpl,
-      runCommandImpl: async () => ({
-        status: 0,
-        stdout: JSON.stringify({
-          ok: true,
-          authorized: true,
-          testDc: true,
-          tdlibVersion: "1.8.56",
-          testerGroupWriteAccess: true,
-          user: { id: 123 },
-        }),
-        stderr: "",
-        timedOut: false,
-      }),
-      startProxy: async () => ({
-        apiRoot: "http://127.0.0.1:19881",
-        close: async () => {
-          proxyClosed = true;
-        },
-      }),
+      runCommandImpl: async (_command, args) => {
+        statusArgs = args;
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            ok: true,
+            authorized: true,
+            testDc: true,
+            tdlibVersion: "1.8.56",
+            user: { id: 123 },
+            chatId: -1001,
+          }),
+          stderr: "",
+          timedOut: false,
+        };
+      },
     }),
     (error) => error === leaseError,
   );
   assert.deepEqual(methods, ["getMe"]);
-  assert.equal(proxyClosed, true);
+  assert.deepEqual(statusArgs.slice(-2), ["--require-chat", "-1001"]);
   assert.equal(released, true);
 });
 
-test("doctor requires verified tester write access before Bot API work and releases the lease", async () => {
-  for (const access of [false, undefined]) {
-    let released = false;
+test("doctor rejects a credential whose configured group cannot be restored", async () => {
+  let released = false;
+  const credential = {
+    driverEnv: {},
+    groupId: "-1001",
+    whenLeaseUnhealthy: new Promise(() => {}),
+    assertLeaseHealthy: () => {},
+    release: async () => {
+      released = true;
+    },
+  };
+
+  await assert.rejects(
+    runTelegramTestDoctor({
+      dm: false,
+      acquireCredential: async () => credential,
+      runCommandImpl: async () => ({
+        status: 1,
+        stdout: "",
+        stderr:
+          "[credential_state_missing_group] Chat -1001 could not be restored within the credential readiness boundary.",
+        timedOut: false,
+      }),
+      fetchImpl: async () => assert.fail("invalid credentials must not reach the Bot API"),
+    }),
+    /Disable and republish this credential/u,
+  );
+  assert.equal(released, true);
+});
+
+for (const [name, result] of [
+  ["launcher failure", { status: null, stdout: "", stderr: "spawn uv ENOENT", timedOut: false }],
+  ["timeout", { status: 1, stdout: "", stderr: "", timedOut: true }],
+  [
+    "unrelated TDLib failure",
+    { status: 1, stdout: "", stderr: "Timed out waiting for getMe", timedOut: false },
+  ],
+]) {
+  test(`doctor preserves ${name} as a runtime diagnostic`, async () => {
     const credential = {
       driverEnv: {},
       groupId: "-1001",
-      tdlibVersion: "1.8.67",
-      testerUserId: "123",
       whenLeaseUnhealthy: new Promise(() => {}),
-      assertLeaseHealthy() {},
-      async release() {
-        released = true;
-      },
+      assertLeaseHealthy: () => {},
+      release: async () => {},
     };
+
     await assert.rejects(
       runTelegramTestDoctor({
+        dm: false,
         acquireCredential: async () => credential,
-        runCommandImpl: async (_command, args) => {
-          assert.deepEqual(args.slice(-4), ["status", "--check-chat", "-1001", "--json"]);
-          return {
-            status: 0,
-            timedOut: false,
-            stdout: JSON.stringify({
-              ok: true,
-              authorized: true,
-              testDc: true,
-              tdlibVersion: "1.8.67",
-              user: { id: 123 },
-              testerGroupWriteAccess: access,
-            }),
-          };
-        },
-        startProxy: async () => {
-          assert.fail("unverified tester must not proceed to bot work");
-        },
+        runCommandImpl: async () => result,
+        fetchImpl: async () => assert.fail("failed TDLib readiness must not reach the Bot API"),
       }),
-      /tester group membership and text permission were not verified/,
+      (error) =>
+        /Check the existing uv launcher and TDLib runtime/u.test(error.message) &&
+        !/Disable and republish/u.test(error.message),
     );
-    assert.equal(released, true);
-  }
-});
+  });
+}

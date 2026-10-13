@@ -3,14 +3,16 @@ import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
+import { resolveTestNodeExecPath } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 
 const execFileAsync = promisify(execFile);
 
 describe("sendMSTeamsActivityWithReference SDK import ordering", () => {
   it("keeps root exports intact when quoted behavior is the first SDK access", async () => {
+    const nodeExecPath = resolveTestNodeExecPath();
     await execFileAsync(
-      process.execPath,
+      nodeExecPath,
       ["scripts/lib/plugin-npm-runtime-build.mjs", "extensions/msteams"],
       { cwd: process.cwd() },
     );
@@ -38,6 +40,7 @@ describe("sendMSTeamsActivityWithReference SDK import ordering", () => {
       const require = createRequire(import.meta.url);
       const Module = require("node:module");
       const originalLoad = Module._load;
+      const hostStringCoercion = require("openclaw/plugin-sdk/string-coerce-runtime");
       const universalStub = new Proxy(
         function universalStub() {
           return universalStub;
@@ -68,6 +71,9 @@ describe("sendMSTeamsActivityWithReference SDK import ordering", () => {
       // The built plugin expects an installed OpenClaw host. Stub unrelated host SDK exports so
       // this child isolates the emitted Teams loader and the real pinned Teams CommonJS package.
       Module._load = function load(request, parent, isMain) {
+        if (request === "openclaw/plugin-sdk/string-coerce-runtime") {
+          return hostStringCoercion;
+        }
         if (request.startsWith("openclaw/plugin-sdk/")) {
           return hostSdkStub;
         }
@@ -79,13 +85,6 @@ describe("sendMSTeamsActivityWithReference SDK import ordering", () => {
       const quotedCreates = [];
       const posts = [];
       const app = {
-        client: {
-          request: async () => ({}),
-          post: async (url, activity) => {
-            posts.push({ url, activity });
-            return { data: { id: "normal-proactive" } };
-          },
-        },
         api: {
           serviceUrl: "https://smba.trafficmanager.net/amer",
           conversations: {
@@ -129,6 +128,24 @@ describe("sendMSTeamsActivityWithReference SDK import ordering", () => {
         api.toActivityParams({ type: "message", text: "Direct conversion" }),
       );
 
+      const { Client } = await import("@microsoft/teams.common");
+      app.client = new Client({
+        interceptors: [{
+          request: ({ config }) => {
+            config.adapter = async (request) => {
+              posts.push({ url: request.url, activity: JSON.parse(request.data) });
+              return {
+                data: { id: "normal-proactive" },
+                status: 201,
+                statusText: "Created",
+                headers: {},
+                config: request,
+              };
+            };
+            return config;
+          },
+        }],
+      });
       await assert.doesNotReject(() =>
         sendMSTeamsActivityWithReference(
           app,
@@ -146,13 +163,15 @@ describe("sendMSTeamsActivityWithReference SDK import ordering", () => {
     `;
 
     const { stdout, stderr } = await execFileAsync(
-      process.execPath,
+      nodeExecPath,
       ["--import", "tsx", "--input-type=module", "--eval", fixture],
       {
         cwd: path.dirname(outDir),
         env: {
           ...process.env,
           NODE_DISABLE_COMPILE_CACHE: "1",
+          // The plugin's package-boundary config maps SDK imports to declarations, not runtime source.
+          TSX_TSCONFIG_PATH: path.join(process.cwd(), "tsconfig.json"),
           OPENCLAW_MSTEAMS_PROACTIVE_ARTIFACT: proactiveArtifact,
           VITEST: undefined,
         },

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createDeliveryRecoveryCoordinator,
   isDeliveryRecoveryRetryEligible,
+  isRetryableDeliveryNotSentError,
   resolveDeliveryNotSentRetryability,
   resolveDeliveryRecoveryDeadlineMs,
 } from "./delivery-recovery.shared.js";
@@ -28,28 +29,57 @@ describe("typed no-send retryability", () => {
       cause: new Error("adapter unavailable"),
     });
 
-  it("lets a retryable typed marker override permanent-looking text", () => {
-    expect(resolveDeliveryNotSentRetryability(retryableMarker())).toBe(true);
-  });
-
-  it("keeps typed provider rejection permanent", () => {
-    expect(
-      resolveDeliveryNotSentRetryability(
-        new PlatformMessageNotDispatchedError("chat not found", {
-          cause: new Error("invalid recipient"),
-          retryable: false,
-        }),
-      ),
-    ).toBe(false);
-  });
-
-  it("does not decide untyped or already-dispatched failures", () => {
-    const alreadyDispatched = new OutboundDeliveryError("delivery failed after dispatch", {
-      cause: retryableMarker(),
-      results: [{ channel: "telegram", messageId: "sent" }],
+  const permanentMarker = () =>
+    new PlatformMessageNotDispatchedError("chat not found", {
+      cause: new Error("invalid recipient"),
+      retryable: false,
     });
-    expect(resolveDeliveryNotSentRetryability(new Error("chat not found"))).toBeUndefined();
-    expect(resolveDeliveryNotSentRetryability(alreadyDispatched)).toBeUndefined();
+
+  it.each([
+    { name: "retryable marker", error: retryableMarker, typed: true, retryable: true },
+    { name: "permanent marker", error: permanentMarker, typed: false, retryable: false },
+    {
+      name: "untyped pre-connect failure",
+      error: () =>
+        Object.assign(new Error("connection refused"), {
+          code: "ECONNREFUSED",
+          syscall: "connect",
+        }),
+      typed: undefined,
+      retryable: true,
+    },
+    {
+      name: "unproven failure",
+      error: () => new Error("chat not found"),
+      typed: undefined,
+      retryable: false,
+    },
+    {
+      name: "mixed retryable and permanent markers",
+      error: () => new AggregateError([retryableMarker(), permanentMarker()]),
+      typed: false,
+      retryable: false,
+    },
+    {
+      name: "delivery with an already-dispatched result",
+      error: () =>
+        new OutboundDeliveryError("delivery failed after dispatch", {
+          cause: retryableMarker(),
+          results: [{ channel: "telegram", messageId: "sent" }],
+        }),
+      typed: undefined,
+      retryable: false,
+    },
+    {
+      name: "marker with contradictory visible-send evidence",
+      error: () => Object.assign(retryableMarker(), { visibleReplySent: true }),
+      typed: undefined,
+      retryable: false,
+    },
+  ])("preserves typed and fallback retry policy for $name", ({ error, typed, retryable }) => {
+    const failure = error();
+    expect(resolveDeliveryNotSentRetryability(failure)).toBe(typed);
+    expect(isRetryableDeliveryNotSentError(failure)).toBe(retryable);
   });
 });
 

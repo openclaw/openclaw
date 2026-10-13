@@ -1,10 +1,15 @@
 import { createHash } from "node:crypto";
-import { closeSync, openSync, readSync } from "node:fs";
+import fsSync, { closeSync, openSync, readSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { copyFileHandle, hashFileDescriptorSync } from "./file-descriptor.js";
+import {
+  copyFileHandle,
+  hashFileDescriptorSync,
+  hashFileMutationSnapshotSync,
+} from "./file-descriptor.js";
+import { createFileMutationClock } from "./file-mutation-clock.test-support.js";
 
 let directory: string;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -14,8 +19,52 @@ const expectedHash = createHash("sha256").update(bytes).digest("hex");
 beforeEach(() => {
   directory = tempDirs.make("openclaw-file-descriptor-");
 });
+afterEach(() => vi.restoreAllMocks());
 
 describe("pinned file descriptors", () => {
+  it.each(["hard link", "restored-mtime rewrite"] as const)(
+    "rechecks a %s between the digest and final path observation",
+    async (change) => {
+      const file = path.join(directory, "snapshot");
+      await fs.writeFile(file, Buffer.alloc(8192, 0x61));
+      await fs.utimes(file, 1_700_000_000, 1_700_000_000);
+      const expected = fsSync.lstatSync(file, { bigint: true });
+      const read = fsSync.readSync;
+      let hashed = false;
+      vi.spyOn(fsSync, "readSync").mockImplementation((...args: Parameters<typeof read>) => {
+        const count = read(...args);
+        hashed ||= count === 0;
+        return count;
+      });
+      let mutated = false;
+      const advanceCtime = createFileMutationClock({
+        beforeLstatSync: (pathname) => {
+          if (pathname !== file || !hashed || mutated) {
+            return;
+          }
+          mutated = true;
+          if (change === "hard link") {
+            fsSync.linkSync(file, path.join(directory, "capture"));
+          } else {
+            fsSync.writeFileSync(file, Buffer.alloc(8192, 0x62));
+            fsSync.utimesSync(file, expected.atime, expected.mtime);
+          }
+          advanceCtime(expected);
+        },
+      });
+      if (change === "hard link") {
+        expect(hashFileMutationSnapshotSync(file, expected)).toBe(
+          createHash("sha256").update(Buffer.alloc(8192, 0x61)).digest("hex"),
+        );
+      } else {
+        expect(() => hashFileMutationSnapshotSync(file, expected)).toThrow(
+          "changed while hashing snapshot",
+        );
+      }
+      expect(mutated).toBe(true);
+    },
+  );
+
   it("hashes all bytes without moving or closing the borrowed descriptor", async () => {
     const sourcePath = path.join(directory, "source");
     await fs.writeFile(sourcePath, bytes);
@@ -44,7 +93,6 @@ describe("pinned file descriptors", () => {
       const observed = createHash("sha256");
       expect(
         await copyFileHandle(source, target, {
-          noProgressMessage: "copy stalled",
           onChunk: (chunk) => {
             observed.update(chunk);
           },

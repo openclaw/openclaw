@@ -7,7 +7,7 @@ import { migrateLegacySignalTransportConfig } from "./config-compat.js";
 export const signalDoctor: ChannelDoctorAdapter = {
   normalizeCompatibilityConfig,
   cleanStaleConfig: async ({ cfg }) => {
-    const { detectSignalTransport } = await import("./transport-detection.runtime.js");
+    const { detectSignalTransport } = await import("./transport-detection.js");
     const transport = await migrateLegacySignalTransportConfig({
       cfg,
       detect: detectSignalTransport,

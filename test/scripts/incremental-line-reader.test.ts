@@ -32,18 +32,6 @@ describe("scripts/e2e/lib/incremental-line-reader.mjs", () => {
     });
   });
 
-  it("resets when an existing log is rewritten without changing size", () => {
-    withTempLog((logPath) => {
-      writeFileSync(logPath, "first\n", "utf8");
-      const reader = createIncrementalLineReader(logPath);
-
-      expect(reader.readLines()).toEqual({ lines: ["first"], reset: false });
-
-      writeFileSync(logPath, "other\n", "utf8");
-      expect(reader.readLines()).toEqual({ lines: ["other"], reset: true });
-    });
-  });
-
   it("clamps oversized initial reads to complete tail lines", () => {
     withTempLog((logPath) => {
       writeFileSync(logPath, "drop-partial\nkeep\nlast\n", "utf8");

@@ -70,7 +70,7 @@ export function resolveFastModeState(params: {
 
   return {
     mode: mode ?? false,
-    enabled: mode === "auto" || mode === true,
+    enabled: mode === "auto" || mode === true || mode === "ultrafast",
     source: mode === undefined ? "default" : source,
     fastAutoOnSeconds,
   };

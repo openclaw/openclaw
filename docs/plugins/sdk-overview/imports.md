@@ -52,12 +52,11 @@ map when they have tracked owner usage. They exist for bundled-plugin
 maintenance only and are not recommended import paths for new third-party
 plugins.
 
-`openclaw/plugin-sdk/discord` and `openclaw/plugin-sdk/telegram-account` are
-also kept as deprecated compatibility facades for tracked owner usage. They have
-no published removal date; run `pnpm plugins:boundary-report` and see the
-[removal timeline](/plugins/sdk-migration/removal-timeline) for the surfaces that
-do. Do not copy those import paths into new plugins; use injected runtime helpers
-and generic channel SDK subpaths instead.
+`openclaw/plugin-sdk/discord` and `openclaw/plugin-sdk/telegram-account` were
+removed with explicit SDK-owner approval on October 2, 2026. Use injected runtime
+helpers and generic channel SDK subpaths; see the
+[migration mappings](/plugins/sdk-migration/import-paths#removed-command-and-channel-facades)
+before upgrading plugins that still import these facades.
 </Warning>
 
 For provider discovery that only needs credential values, use
@@ -68,6 +67,10 @@ execution. Use `provider-web-search-config-contract` to read plugin-owned
 web-search config. Keep full auth and search runtime imports in execution paths.
 
 ## Subpath reference
+
+`openclaw/plugin-sdk/gateway-ingress` defines the optional service-owned
+[remote Control UI ingress](/plugins/sdk-gateway-ingress) capability. The host
+admits browser devices through its existing HTTP and WebSocket owners.
 
 The plugin SDK is exposed as a set of narrow subpaths grouped by area (plugin
 entry, channel, provider, auth, runtime, capability, memory, and reserved

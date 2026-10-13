@@ -163,7 +163,10 @@ suite.define(() => {
           locale: "en-US",
           serviceWorkers: "block",
           viewport: { height: 1000, width: 1440 },
-          recordVideo: { dir: artifactDir, size: { height: 1000, width: 1440 } },
+          recordVideo:
+            process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+              ? { dir: artifactDir, size: { height: 1000, width: 1440 } }
+              : undefined,
         });
         const page = await context.newPage();
         const record: Record<string, unknown> = {

@@ -4,6 +4,7 @@ import fs from "node:fs";
 import { userInfo } from "node:os";
 import path from "node:path";
 import { asNonArrayRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { resolveOsHomeRelativePath } from "../infra/home-dir.js";
 import { loadJsonFileThroughSymlink } from "../infra/json-file.js";
 
@@ -148,14 +149,8 @@ function parseClaudeCliOauthCredential(value: unknown): ClaudeCliCredential | nu
   ) {
     return null;
   }
-  const subscriptionType =
-    typeof data.subscriptionType === "string" && data.subscriptionType.trim()
-      ? data.subscriptionType.trim()
-      : undefined;
-  const rateLimitTier =
-    typeof data.rateLimitTier === "string" && data.rateLimitTier.trim()
-      ? data.rateLimitTier.trim()
-      : undefined;
+  const subscriptionType = normalizeOptionalString(data.subscriptionType);
+  const rateLimitTier = normalizeOptionalString(data.rateLimitTier);
   const plan = {
     ...(subscriptionType ? { subscriptionType } : {}),
     ...(rateLimitTier ? { rateLimitTier } : {}),
@@ -182,7 +177,7 @@ function readClaudeAccountEmail(homeDir?: string): string | undefined {
   const raw = loadJsonFileThroughSymlink(resolveClaudeCliAccountPath(homeDir));
   const account = asNonArrayRecord(raw).oauthAccount;
   const email = asNonArrayRecord(account).emailAddress;
-  return typeof email === "string" && email.trim() ? email.trim() : undefined;
+  return normalizeOptionalString(email);
 }
 
 function withClaudeAccountEmail(

@@ -1,67 +1,3 @@
-.chat {
-  --chat-thread-max-width: 48rem;
-  /* Keep overlays clear of the edge-hugging scrollbar and add room on wide screens. */
-  --chat-thread-gutter: 18px;
-  /* Composer box insets. The docked progress card derives its own edge from
-     both, so the two never overlap and their bottoms stay on one line. */
-  --chat-composer-side-inset: 36px;
-  --chat-composer-bottom-gap: 14px;
-  /* Docked progress-card width. Kept in step with PROGRESS_CARD_DOCK_MIN_GUTTER_PX
-     in chat-pane-rails.ts, which gates the placement on a gutter wide enough for
-     this card plus the gutter stack's insets. */
-  --chat-progress-dock-width: 250px;
-  --chat-thread-side-inset: clamp(6px, 1vw, 12px);
-
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  flex: 1 1 0;
-  height: 100%;
-  width: 100%;
-  min-height: 0;
-  /* Allow flex shrinking */
-  padding: 0 !important;
-  overflow: hidden;
-  background: transparent !important;
-  border: none !important;
-  box-shadow: none !important;
-}
-
-/* Chat thread - scrollable middle section, transparent */
-.chat-thread {
-  --chat-thread-padding-top: clamp(20px, 3vh, 28px);
-  --chat-thread-padding-bottom: calc(
-    6px + var(--chat-transcript-composer-underlap, 0px) + var(--chat-transcript-fade-height, 0px)
-  );
-
-  container: chat-transcript / size;
-  flex: 1 1 0;
-  /* Grow, shrink, and use 0 base for proper scrolling */
-  overflow-y: auto;
-  overflow-x: hidden;
-  overflow-anchor: none;
-  /* The transcript is document content, unlike the surrounding app chrome. */
-  user-select: text;
-  scrollbar-gutter: stable both-edges;
-  /* The pane header owns the titlebar and native drag surface. No horizontal
-     padding: macOS overlay scrollbars render inside the
-     scroll container's padding, which floats the thumb away from the pane
-     edge (visible next to the sidebar divider). The side inset lives on
-     .chat-thread-inner instead so the scrollbar hugs the edge. */
-  padding: var(--chat-thread-padding-top) 0 var(--chat-thread-padding-bottom);
-  margin: 0 0 0 0;
-  min-height: 0;
-  /* Allow shrinking for flex scroll behavior */
-  border-radius: var(--radius-md);
-  background: transparent;
-}
-
-/* Keep the route's initial skeleton in the full transcript region as the real composer mounts. */
-.chat-thread:has(> .lazy-view-state--loading) {
-  display: flex;
-  padding: 0;
-}
-
 /* The transcript stays keyboard-focusable for scroll keys, but the owner chose
    no focus box: a ring around the whole main content reads as a broken border. */
 .chat-thread:focus-visible {
@@ -69,20 +5,45 @@
 }
 
 .chat-position-rail {
+  contain: layout;
+  /* Centered previews need clearance at both ends of a capped rail. */
+  --chat-position-rail-clearance: 60px;
+  --chat-position-rail-height: min(
+    45vh,
+    calc(var(--chat-position-rail-count) * 12px),
+    calc(var(--chat-position-rail-viewport-height) - 2 * var(--chat-position-rail-clearance))
+  );
+  /* Reserve a full row at the 360px transcript visibility threshold below. */
+  --chat-position-rail-top: min(
+    calc((var(--chat-position-rail-viewport-height) - var(--chat-position-rail-height)) / 2),
+    calc(
+      360px + var(--chat-thread-padding-top) + var(--chat-thread-padding-bottom) -
+        var(--chat-position-rail-clearance) - 12px
+    )
+  );
+
   position: sticky;
   z-index: 4;
-  /* Container units exclude padding; include both insets to center in the scrollport. */
-  top: calc(50cqh + (var(--chat-thread-padding-bottom) - var(--chat-thread-padding-top)) / 2);
+  /* Sticky insets start inside the scrollport's top padding. */
+  top: calc(var(--chat-position-rail-top) - var(--chat-thread-padding-top));
   width: 0;
   height: 0;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 240ms ease-out;
+}
+
+.chat-position-rail[data-overflow] {
+  opacity: 1;
+  visibility: visible;
 }
 
 .chat-position-rail__track {
   position: absolute;
   top: 0;
-  left: 10px;
+  inset-inline-start: 10px;
   width: 44px;
-  transform: translateY(-50%);
+  height: var(--chat-position-rail-height);
 }
 
 /* Keep every message at 12px spacing. Long rails scroll within 45vh instead
@@ -91,10 +52,29 @@
   --chat-position-fade-top: 0px;
   --chat-position-fade-bottom: 0px;
 
+  --chat-position-marks-height: min(
+    var(--chat-position-rail-height),
+    max(
+      0px,
+      calc(
+        100cqh + var(--chat-thread-padding-top) + var(--chat-thread-padding-bottom) -
+          var(--chat-position-rail-top) - var(--chat-position-rail-clearance)
+      )
+    )
+  );
+
   position: relative;
-  display: grid;
-  grid-auto-rows: 12px;
-  max-height: min(45vh, calc(100cqh - 32px));
+  display: block;
+  /* Only the marks shrink; the track keeps its stable top as the composer grows. */
+  max-height: var(--chat-position-marks-height);
+  /* Keep the browser from clamping scrollTop when the composer collapses. */
+  padding-bottom: max(
+    0px,
+    calc(
+      var(--chat-position-scroll-top, 0px) + var(--chat-position-marks-height) -
+        var(--chat-position-rail-count) * 12px
+    )
+  );
   overflow: hidden auto;
   overscroll-behavior: contain;
   scroll-padding-block: 60px;
@@ -106,11 +86,11 @@
 }
 
 .chat-position-rail__marks[data-overflow-top] {
-  --chat-position-fade-top: 60px;
+  --chat-position-fade-top: min(60px, 25%);
 }
 
 .chat-position-rail__marks[data-overflow-bottom] {
-  --chat-position-fade-bottom: 60px;
+  --chat-position-fade-bottom: min(60px, 25%);
 }
 
 .chat-position-rail__marks[data-overflow-top],
@@ -132,8 +112,14 @@
   display: contents;
 }
 
-.chat-position-rail__marker {
+.chat-position-rail__virtual-space {
   position: relative;
+  height: calc(var(--chat-position-rail-count) * 12px);
+}
+
+.chat-position-rail__marker {
+  position: absolute;
+  inset-inline-start: 0;
   z-index: 1;
   display: flex;
   align-items: center;
@@ -149,7 +135,7 @@
 
 .chat-position-rail__tick {
   display: block;
-  width: 8px;
+  width: var(--chat-position-tick-width, 8px);
   height: 2px;
   border-radius: 1px;
   background: currentColor;
@@ -167,45 +153,43 @@
   color: var(--muted);
 }
 
-.chat-position-rail .chat-position-rail__marker:hover {
+.chat-position-rail__item[data-hovered] .chat-position-rail__marker {
   color: var(--text);
 }
 
-/* The wave is pointer-only; resting and keyboard-focused marks stay uniform. */
+/* The preview owner retains pointer hover over the card; keyboard-only marks stay uniform. Items carry the
+   width so :has() stays in the subject compound: a tick selector after it joins Chromium's
+   shared :has() invalidation set and restyles every tick on each transcript row insertion. */
 .chat-position-rail__item:has(
-    + .chat-position-rail__item + .chat-position-rail__item + .chat-position-rail__item:hover
-  )
-  .chat-position-rail__tick,
-.chat-position-rail__item:hover
+  + .chat-position-rail__item + .chat-position-rail__item + .chat-position-rail__item[data-hovered]
+),
+.chat-position-rail__item[data-hovered]
   + .chat-position-rail__item
   + .chat-position-rail__item
-  + .chat-position-rail__item
-  .chat-position-rail__tick {
-  width: 12px;
+  + .chat-position-rail__item {
+  --chat-position-tick-width: 12px;
 }
 
-.chat-position-rail__item:has(+ .chat-position-rail__item + .chat-position-rail__item:hover)
-  .chat-position-rail__tick,
-.chat-position-rail__item:hover
-  + .chat-position-rail__item
-  + .chat-position-rail__item
-  .chat-position-rail__tick {
-  width: 16px;
+.chat-position-rail__item:has(
+  + .chat-position-rail__item + .chat-position-rail__item[data-hovered]
+),
+.chat-position-rail__item[data-hovered] + .chat-position-rail__item + .chat-position-rail__item {
+  --chat-position-tick-width: 16px;
 }
 
-.chat-position-rail__item:has(+ .chat-position-rail__item:hover) .chat-position-rail__tick,
-.chat-position-rail__item:hover + .chat-position-rail__item .chat-position-rail__tick {
-  width: 24px;
+.chat-position-rail__item:has(+ .chat-position-rail__item[data-hovered]),
+.chat-position-rail__item[data-hovered] + .chat-position-rail__item {
+  --chat-position-tick-width: 24px;
 }
 
-.chat-position-rail__marker:hover .chat-position-rail__tick {
-  width: 32px;
+.chat-position-rail__item[data-hovered] {
+  --chat-position-tick-width: 32px;
 }
 
 .chat-position-rail__preview {
   position: absolute;
   top: var(--chat-position-preview);
-  left: 100%;
+  inset-inline-start: 100%;
   display: grid;
   width: 200px;
   gap: 4px;
@@ -283,29 +267,21 @@
   }
 }
 
-.chat-thread-inner {
-  /* Shared gutter plus the responsive side inset that used to be
-     .chat-thread's horizontal padding (moved off the scroll container so
-     overlay scrollbars sit flush at the pane edge). */
-  width: calc(100% - 2 * var(--chat-thread-gutter) - 2 * var(--chat-thread-side-inset));
-  max-width: var(--chat-thread-max-width);
-  margin-inline: auto;
-  /* Commit width with the virtual rows, even under the global reduced-motion
-     duration; gutter and row measurements must not sample a transition. */
-  transition-property: none;
-}
-
-/* Message images (sent images displayed in chat) */
-.chat-message-images {
+.chat-message-images,
+.chat-assistant-attachments {
   display: flex;
   flex-direction: column;
-  flex-wrap: nowrap;
-  align-items: flex-start;
   width: 100%;
   gap: var(--chat-block-gap);
 }
 
+.chat-message-images {
+  flex-wrap: nowrap;
+  align-items: flex-start;
+}
+
 .chat-message-image-button {
+  position: relative;
   display: inline-flex;
   max-width: 100%;
   padding: 0;
@@ -315,105 +291,137 @@
   cursor: zoom-in;
 }
 
+/* Keep the edge above hover-zoomed pixels without changing image layout. */
+.chat-message-image-button:not(.chat-attachment-image-button)::before {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  border: 1px solid color-mix(in srgb, var(--text) 4%, transparent);
+  border-radius: inherit;
+  corner-shape: inherit;
+  content: "";
+  pointer-events: none;
+}
+
 .chat-image-frame {
   position: relative;
   display: inline-flex;
-  max-width: 100%;
-  overflow: hidden;
+  max-width: min(100%, calc(400px + var(--chat-image-gutter, 0px)));
   border-radius: var(--radius-xl);
 }
 
-.chat-image-frame--managed {
-  width: fit-content;
-  max-width: min(100%, 400px);
-}
-
-.chat-image-frame--managed .chat-message-image-button {
-  align-items: center;
-  justify-content: flex-start;
-  width: auto;
+.chat-image-surface {
+  position: relative;
+  display: inline-flex;
+  width: 100%;
   min-width: 0;
-  min-height: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  corner-shape: inherit;
 }
 
-.chat-image-frame--managed::after {
+.chat-image-frame--managed {
+  --chat-image-gutter: 52px;
+
+  min-height: 44px;
+  padding-right: var(--chat-image-gutter);
+}
+
+.chat-image-frame--image {
+  display: block;
+  flex: none;
+  /* A definite intrinsic width keeps fit-content user grids from collapsing. */
+  width: calc(var(--chat-image-width) + var(--chat-image-gutter, 0px));
+}
+
+.chat-image-frame--image > .chat-image-surface {
+  display: block;
+  aspect-ratio: var(--chat-image-ratio);
+  background: color-mix(in srgb, var(--bg-muted) 45%, var(--bg));
+}
+
+.chat-image-frame--compact {
+  container-type: inline-size;
+  overflow: visible;
+  background: transparent;
+}
+
+.chat-image-frame--managed:not(.chat-image-frame--image) {
+  min-width: min(100%, calc(var(--chat-image-min-width) + var(--chat-image-gutter)));
+}
+
+.chat-image-skeleton.skeleton {
+  --skeleton-base: transparent;
+  --skeleton-highlight: color-mix(in srgb, var(--bg-hover) 45%, transparent);
+  --skeleton-duration: 2.4s;
+
   position: absolute;
-  z-index: 1;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  height: min(100%, 72px);
-  background: linear-gradient(to bottom, transparent, rgb(4 8 18 / 56%));
-  content: "";
-  opacity: 0;
+  inset: 0;
+  border-radius: inherit;
   pointer-events: none;
-  transition: opacity 140ms ease-out;
+}
+
+.chat-image-frame--image > .chat-image-surface > .chat-message-image-button {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.chat-image-frame--image .chat-message-image {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
 }
 
 .chat-image-actions {
+  display: block;
   position: absolute;
   z-index: 2;
-  right: 8px;
-  bottom: 8px;
-  display: flex;
-  gap: 4px;
-  opacity: 0;
-  pointer-events: none;
-  transform: translateY(2px);
-  transition:
-    opacity 120ms ease-out,
-    transform 120ms ease-out;
+  top: 0;
+  right: 0;
+  width: 44px;
+  height: 44px;
 }
 
-.chat-image-frame:hover .chat-image-actions,
-.chat-image-frame:focus-within .chat-image-actions {
-  opacity: 1;
-  pointer-events: auto;
-  transform: translateY(0);
-}
-
-.chat-image-frame--managed:hover::after,
-.chat-image-frame--managed:focus-within::after {
-  opacity: 1;
-}
-
-@media (hover: none) {
-  .chat-image-actions {
-    opacity: 1;
-    pointer-events: auto;
-    transform: translateY(0);
-  }
-
-  .chat-image-frame--managed::after {
-    opacity: 1;
-  }
+.chat-image-actions::part(menu) {
+  min-width: 164px;
+  padding: var(--menu-padding);
+  border: 1px solid var(--overlay-border);
+  border-radius: var(--menu-radius);
+  background: var(--bg-elevated);
+  box-shadow: var(--overlay-shadow);
 }
 
 .chat-image-action {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 44px;
+  height: 44px;
   padding: 0;
   border: 0;
-  border-radius: 0;
-  color: var(--media-foreground);
+  border-radius: var(--radius-md);
+  color: var(--muted);
   background: transparent;
   cursor: var(--cursor-action);
 }
 
-.chat-image-action:hover {
-  color: rgb(255 255 255 / 72%);
-  background: transparent;
+.chat-image-action:hover,
+.chat-image-actions[open] .chat-image-action {
+  color: var(--text);
+  background: var(--bg-hover);
 }
 
-.chat-image-action:focus-visible {
+.chat-image-action:focus-visible,
+.chat-assistant-attachment-card__action:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
 
-.chat-image-action svg {
+.chat-image-action svg,
+.chat-assistant-attachment-card__action svg {
   width: 15px;
   height: 15px;
 }
@@ -508,11 +516,6 @@
   }
 }
 
-.chat-message-image--small {
-  width: 160px;
-  min-width: 160px;
-}
-
 @supports (corner-shape: superellipse(1.5)) {
   .chat-assistant-attachment-card.chat-assistant-attachment-card {
     border-radius: calc(14px * var(--openclaw-corner-radius-scale));
@@ -527,8 +530,7 @@
   }
 }
 
-.chat-image-frame:hover .chat-message-image,
-.chat-assistant-attachments > .chat-message-image-button:hover .chat-message-image {
+.chat-message-image-button:hover .chat-message-image {
   transform: scale(1.02);
 }
 
@@ -575,12 +577,70 @@
   object-fit: cover;
 }
 
-.chat-assistant-attachments {
-  display: flex;
-  flex-direction: column;
+.chat-group.user .chat-message-images--gallery .chat-image-surface {
+  height: 100%;
+}
+
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .chat-thread
+    .chat-group.user
+    .chat-message-images--gallery:not(.chat-message-images--two-column) {
+    grid-template-columns: repeat(3, minmax(0, var(--chat-user-image-grid-size)));
+  }
+
+  .chat-thread
+    .chat-group.user
+    .chat-message-images--gallery:not(.chat-message-images--two-column)
+    :is(.chat-image-frame, .chat-message-image-button, .chat-message-image) {
+    width: 100%;
+    height: 100%;
+  }
+
+  .chat-thread
+    .chat-group.user
+    .chat-message-images--gallery:not(.chat-message-images--two-column)
+    .chat-image-frame {
+    height: auto;
+
+    &:not(.chat-image-frame--compact, .chat-image-frame--managed) {
+      aspect-ratio: 1;
+    }
+  }
+}
+
+.chat-group.user .chat-message-images--gallery > .chat-image-frame--managed {
+  height: auto;
+  aspect-ratio: auto;
+}
+
+.chat-group.user .chat-message-images--gallery .chat-image-frame--managed > .chat-image-surface {
   width: 100%;
+  height: auto;
+  aspect-ratio: 1;
+}
+
+.chat-group.user
+  .chat-message-images--gallery
+  .chat-image-frame--managed
+  .chat-message-image-button,
+.chat-group.user .chat-message-images--gallery .chat-image-frame--managed .chat-message-image {
+  width: 100%;
+  height: 100%;
+}
+
+.chat-group.user .chat-message-images--gallery > .chat-image-frame--compact {
+  height: auto;
+  align-self: start;
+}
+
+.chat-assistant-attachments {
   max-width: 100%;
-  gap: var(--chat-block-gap);
+}
+
+.chat-assistant-attachments--preview-chips {
+  flex-direction: row;
+  flex-wrap: wrap;
+  justify-content: var(--chat-user-content-align, flex-start);
 }
 
 .chat-group.user .chat-bubble--with-files {
@@ -646,12 +706,16 @@
   color: var(--text);
 }
 
-.chat-assistant-attachment-card__header {
+.chat-assistant-attachment-card__header,
+.chat-assistant-attachment-card__identity {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 10px;
   min-width: 0;
+}
+
+.chat-assistant-attachment-card__header {
+  justify-content: space-between;
   padding: 14px 16px;
 }
 
@@ -671,10 +735,6 @@
 }
 
 .chat-assistant-attachment-card__identity {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
   flex: 1;
 }
 
@@ -708,15 +768,19 @@
   line-height: 1.2;
 }
 
-.chat-assistant-attachment-card__title {
+.chat-assistant-attachment-card__title,
+.chat-assistant-attachment-card__status-reason {
   min-width: 0;
-  flex: 1;
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-assistant-attachment-card__title {
+  flex: 1;
   color: var(--text);
   font-size: 13px;
   font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .chat-assistant-attachment-card__meta {
@@ -740,13 +804,6 @@
   flex: none;
 }
 
-.chat-assistant-attachment-card__status-reason {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 @media (max-width: 560px) {
   .chat-assistant-attachment-card--blocked .chat-assistant-attachment-card__status-meta {
     display: grid;
@@ -764,6 +821,59 @@
     overflow: visible;
     text-overflow: clip;
     white-space: normal;
+  }
+}
+
+.chat-image-frame--compact > .chat-assistant-attachment-card {
+  align-self: start;
+
+  .chat-assistant-attachment-card__status-meta {
+    display: inline-flex;
+    gap: 0.5em;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+
+  .chat-assistant-attachment-card__status-separator {
+    display: inline;
+  }
+
+  .chat-assistant-attachment-card__status-reason {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+@container (max-width: 240px) {
+  .chat-image-frame--compact > .chat-assistant-attachment-card {
+    .chat-assistant-attachment-card__header {
+      height: 72px;
+      box-sizing: border-box;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 2px;
+      padding: 4px;
+    }
+
+    .chat-attachment-file-icon {
+      display: none;
+    }
+
+    .chat-assistant-attachment-card__identity {
+      flex: none;
+    }
+
+    .chat-assistant-attachment-card__details {
+      width: 100%;
+      gap: 0;
+    }
+
+    .chat-assistant-attachment-card__action {
+      height: 26px;
+      padding: 0;
+      font-size: clamp(8px, 14cqi, 12px);
+    }
   }
 }
 
@@ -798,16 +908,6 @@
 .chat-assistant-attachment-card__action:hover {
   color: var(--text-strong);
   background: color-mix(in srgb, var(--media-foreground) 8%, transparent);
-}
-
-.chat-assistant-attachment-card__action:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 2px;
-}
-
-.chat-assistant-attachment-card__action svg {
-  width: 15px;
-  height: 15px;
 }
 
 .chat-assistant-attachment-card__expand--icon svg {
@@ -893,6 +993,64 @@
   line-height: 1.4;
 }
 
+.chat-pairing-qr-notices {
+  display: grid;
+  gap: 8px;
+}
+
+.chat-pairing-qr-expired {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 14px 16px;
+}
+
+.chat-pairing-qr-expired .chat-assistant-attachment-card__reason {
+  font-size: calc(12px * var(--control-ui-text-scale));
+}
+
+.chat-pairing-qr-expired__icon {
+  display: flex;
+  flex: none;
+  align-items: center;
+  height: 1.5em;
+  color: var(--muted);
+  font-size: calc(13px * var(--control-ui-text-scale));
+}
+
+.chat-pairing-qr-expired__icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.chat-pairing-qr-expired__content {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+
+.chat-pairing-qr-expired__heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  line-height: 1.5;
+}
+
+.chat-pairing-qr-expired__title {
+  min-width: 0;
+  font-size: calc(13px * var(--control-ui-text-scale));
+  font-weight: 600;
+}
+
+.chat-pairing-qr-expired__badge {
+  min-width: 0;
+  color: var(--danger);
+  font-size: calc(12px * var(--control-ui-text-scale));
+}
+
 .chat-assistant-attachment-card__retry {
   color: currentColor;
 }
@@ -924,14 +1082,6 @@
   border: 1px solid color-mix(in srgb, var(--accent) 24%, transparent);
 }
 
-@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  .chat {
-    --chat-thread-gutter: var(--chat-mobile-edge-inset);
-    --chat-thread-side-inset: 0px;
-    --chat-mobile-edge-inset: 4px;
-  }
-}
-
 @container chat-transcript (max-width: 960px) or (max-height: 360px) {
   .chat-position-rail {
     display: none;
@@ -939,6 +1089,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .chat-position-rail,
   .chat-position-rail__tick {
     transition: none;
   }
@@ -952,11 +1103,5 @@
   .chat-position-rail__marker[data-visible] .chat-position-rail__tick {
     background: Highlight;
     outline: 1px solid Highlight;
-  }
-}
-
-@media (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  .chat-thread {
-    min-height: 40vh;
   }
 }

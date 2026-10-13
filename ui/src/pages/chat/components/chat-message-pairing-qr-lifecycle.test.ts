@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import {
   isChatMediaResourceCurrent,
   observeChatMediaResource,
@@ -57,7 +58,8 @@ describe("pairing QR expiry resource lifecycle", () => {
 
     schedulePairingQrExpiryRefresh(
       messageKey,
-      projectMessageMedia(resolvedMessage, []).nextPairingQrExpiresAt,
+      projectMessageMedia(resolvedMessage, normalizeMessage(resolvedMessage).content)
+        .nextPairingQrExpiresAt,
       refresh,
     );
 

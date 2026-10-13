@@ -5,28 +5,31 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import {
+  createManagedHandoffTempDirTracker,
+  readManagedHandoffArtifacts,
+} from "./update-managed-service-handoff-artifacts.test-support.js";
 import {
   signalMockManagedUpdateHandoffReady,
+  registerPreparedCoordinatorAdmissionTest,
   type MockManagedUpdateHandoffLeaseFailure,
 } from "./update-managed-service-handoff.test-support.js";
+
+const testNodeExecPath = resolveTestNodeExecPath();
 
 const spawnMock = vi.hoisted(() => vi.fn());
 const resolvePreferredOpenClawTmpDirMock = vi.hoisted(() => vi.fn());
 const forceKillChildProcessTreeMock = vi.hoisted(() => vi.fn());
-const findInstalledSystemdGatewayScopeMock = vi.hoisted(() =>
-  vi.fn(
-    async (_env: NodeJS.ProcessEnv) =>
-      null as {
-        scope: "user" | "system";
-        unitName: string;
-        unitPath: string;
-      } | null,
-  ),
+const findSystemdGatewayInstallationMock = vi.hoisted(() =>
+  vi.fn<typeof import("../daemon/systemd-scope.js").findSystemdGatewayInstallation>(async () => ({
+    kind: "none",
+  })),
 );
 // The coordinator must outlive mocked lease cleanup in afterEach.
-const tempRoots = createTempDirTracker();
+const tempRoots = createManagedHandoffTempDirTracker();
 const mockedHandoffLeaseCleanups = new Set<() => void>();
 const MOCK_INSTALL_ROOT = path.join(os.tmpdir(), `openclaw-handoff-single-flight-${process.pid}`);
 
@@ -65,7 +68,7 @@ vi.mock("node:child_process", async () => {
 
 vi.mock("../daemon/systemd-scope.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../daemon/systemd-scope.js")>()),
-  findInstalledSystemdGatewayScope: findInstalledSystemdGatewayScopeMock,
+  findSystemdGatewayInstallation: findSystemdGatewayInstallationMock,
 }));
 
 vi.mock("../process/child-process-tree.js", async (importOriginal) => ({
@@ -90,18 +93,25 @@ beforeEach(async () => {
   vi.spyOn(processIdentity, "getFileLockProcessStartTime").mockImplementation((targetPid) =>
     targetPid === process.pid ? parentStartIdentity : liveChildren.has(targetPid) ? 17 : null,
   );
-  vi.spyOn(processIdentity, "isPidAlive").mockImplementation(
-    (targetPid) => targetPid === process.pid || liveChildren.has(targetPid),
-  );
+  const kill = process.kill.bind(process);
+  vi.spyOn(process, "kill").mockImplementation((targetPid, signal) => {
+    if (signal !== 0 || targetPid === process.pid) {
+      return kill(targetPid, signal);
+    }
+    if (liveChildren.has(targetPid)) {
+      return true;
+    }
+    throw Object.assign(new Error("fixture process is absent"), { code: "ESRCH" });
+  });
   forceKillChildProcessTreeMock.mockReset();
   forceKillChildProcessTreeMock.mockImplementation((child: ReturnType<typeof createReadyChild>) => {
     child.stdout.destroy();
   });
-  findInstalledSystemdGatewayScopeMock.mockReset();
-  findInstalledSystemdGatewayScopeMock.mockResolvedValue(null);
+  findSystemdGatewayInstallationMock.mockReset();
+  findSystemdGatewayInstallationMock.mockResolvedValue({ kind: "none" });
   spawnMock.mockReset();
   spawnMock.mockImplementation((_command: string, args: string[]) => {
-    const child = createReadyChild(pid++, args.at(-1) ?? "");
+    const child = createReadyChild(pid++, readManagedHandoffArtifacts(args).paramsPath);
     liveChildren.add(child.pid);
     child.once("exit", () => liveChildren.delete(child.pid));
     return child;
@@ -112,13 +122,10 @@ afterEach(async () => {
   for (const cleanup of mockedHandoffLeaseCleanups) {
     cleanup();
   }
-  const handoffDirs = spawnMock.mock.calls.flatMap((call) => {
-    const args = call[1] as string[] | undefined;
-    const scriptPath = args?.[0];
-    return scriptPath ? [path.dirname(scriptPath)] : [];
-  });
-  await Promise.all(handoffDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
-  tempRoots.cleanup();
+  for (const [, args] of spawnMock.mock.calls) {
+    tempRoots.add(readManagedHandoffArtifacts(args).dir);
+  }
+  await tempRoots.cleanup();
   vi.restoreAllMocks();
   vi.resetModules();
 });
@@ -131,6 +138,13 @@ const baseParams = {
 };
 
 describe("managed service update handoff single-flight", () => {
+  registerPreparedCoordinatorAdmissionTest({
+    spawnMock,
+    makeTempDir: (prefix) => tempRoots.make(prefix),
+    setCoordinator: (directory) => {
+      resolvePreferredOpenClawTmpDirMock.mockReturnValue(directory);
+    },
+  });
   it.each([false, true])(
     "awaits the pre-park notice and rechecks helper ownership (lost: %s)",
     async (lost) => {
@@ -180,7 +194,7 @@ describe("managed service update handoff single-flight", () => {
     ["identifies a dead helper", "dead-helper"],
   ] as const)("rejects READY when the durable helper lease %s", async (_label, failure) => {
     spawnMock.mockImplementationOnce((_command: string, args: string[]) =>
-      createReadyChild(process.pid, args.at(-1) ?? "", failure),
+      createReadyChild(process.pid, readManagedHandoffArtifacts(args).paramsPath, failure),
     );
     const { claimManagedServiceUpdateHandoff, startManagedServiceUpdateHandoff } =
       await import("./update-managed-service-handoff.js");
@@ -205,42 +219,75 @@ describe("managed service update handoff single-flight", () => {
     expect(claimManagedServiceUpdateHandoff(identity)).toBe(false);
   });
 
-  it("rejects system-scope systemd before spawning or reserving handoff ownership", async () => {
-    findInstalledSystemdGatewayScopeMock.mockResolvedValueOnce({
-      scope: "system",
-      unitName: "openclaw-gateway.service",
-      unitPath: "/etc/systemd/system/openclaw-gateway.service",
-    });
-    const { claimManagedServiceUpdateHandoff, startManagedServiceUpdateHandoff } =
-      await import("./update-managed-service-handoff.js");
-    const root = `${MOCK_INSTALL_ROOT}-system-scope`;
+  it.each(["system", "dueling"] as const)(
+    "rejects an unwritable %s install before spawning or reserving ownership",
+    async (kind) => {
+      const system = {
+        scope: "system" as const,
+        unitName: "openclaw-gateway.service",
+        unitPath: "/etc/systemd/system/openclaw-gateway.service",
+      };
+      findSystemdGatewayInstallationMock.mockResolvedValue(
+        kind === "dueling"
+          ? {
+              kind,
+              system,
+              user: {
+                scope: "user",
+                unitName: system.unitName,
+                unitPath: "/fixture/user/" + system.unitName,
+              },
+            }
+          : { kind, system },
+      );
+      const { claimManagedServiceUpdateHandoff, startManagedServiceUpdateHandoff } =
+        await import("./update-managed-service-handoff.js");
+      const root = await fs.realpath(tempRoots.make("openclaw-system-scope-"));
+      const access = fs.access.bind(fs);
+      const permission = vi.spyOn(fs, "access").mockImplementation(async (file, mode) => {
+        if (String(file) === root && mode === (fs.constants.W_OK | fs.constants.X_OK)) {
+          throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+        }
+        return access(file, mode);
+      });
 
-    await expect(
-      startManagedServiceUpdateHandoff({
-        ...baseParams,
-        root,
-        handoffId: "system-handoff",
-        supervisor: "systemd",
-        env: { OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service" },
-        meta: {},
-      }),
-    ).rejects.toThrow(/user-scope systemd unit.*manual system-service update/);
-    expect(spawnMock).not.toHaveBeenCalled();
-    expect(
-      claimManagedServiceUpdateHandoff({
-        kind: "managed-update-handoff",
-        handoffId: "system-handoff",
-        installRoot: root,
-      }),
-    ).toBe(false);
+      await expect(
+        startManagedServiceUpdateHandoff({
+          ...baseParams,
+          root,
+          handoffId: "system-handoff",
+          supervisor: "systemd",
+          env: { OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service" },
+          meta: {},
+        }),
+      ).rejects.toMatchObject({
+        reason: "managed-service-handoff-failed",
+        message: expect.stringContaining("sudo systemctl restart openclaw-gateway.service"),
+      });
+      expect(spawnMock).not.toHaveBeenCalled();
+      expect(
+        claimManagedServiceUpdateHandoff({
+          kind: "managed-update-handoff",
+          handoffId: "system-handoff",
+          installRoot: root,
+        }),
+      ).toBe(false);
 
-    await expect(
-      startManagedServiceUpdateHandoff({ ...baseParams, root, meta: {} }),
-    ).resolves.toMatchObject({ status: "started" });
-    expect(spawnMock).toHaveBeenCalledOnce();
-    const owner = spawnMock.mock.results[0]?.value as ReturnType<typeof createReadyChild>;
-    owner.emit("exit", 0, null);
-  });
+      permission.mockRestore();
+      await expect(
+        startManagedServiceUpdateHandoff({
+          ...baseParams,
+          root,
+          supervisor: "systemd",
+          env: { OPENCLAW_STATE_DIR: root },
+          meta: {},
+        }),
+      ).resolves.toMatchObject({ status: "started" });
+      expect(spawnMock).toHaveBeenCalledOnce();
+      const owner = spawnMock.mock.results[0]?.value as ReturnType<typeof createReadyChild>;
+      owner.emit("exit", 0, null);
+    },
+  );
 
   it("shares one same-root helper until its lifecycle ends", async () => {
     const { startManagedServiceUpdateHandoff } =
@@ -284,6 +331,43 @@ describe("managed service update handoff single-flight", () => {
     nextOwner.emit("exit", 0, null);
   });
 
+  it("transfers through Bun-style child pipes without stream-level unref", async () => {
+    const commands: string[] = [];
+    spawnMock.mockImplementationOnce((_command: string, args: string[]) => {
+      const child = createReadyChild(process.pid, readManagedHandoffArtifacts(args).paramsPath);
+      child.stdin.on("data", (chunk) => {
+        const command = chunk.toString();
+        commands.push(command);
+        if (command === "transfer\n") {
+          child.stdout.write("transferred\n");
+        }
+      });
+      return child;
+    });
+    const { startManagedServiceUpdateHandoff, transferManagedServiceUpdateHandoff } =
+      await import("./update-managed-service-handoff.js");
+    const root = `${MOCK_INSTALL_ROOT}-bun-pipes`;
+    const started = await startManagedServiceUpdateHandoff({
+      ...baseParams,
+      root,
+      handoffId: "bun-pipes",
+      meta: {},
+    });
+    if (started.status !== "started") {
+      throw new Error("expected a new handoff owner");
+    }
+    const child = spawnMock.mock.results[0]?.value as ReturnType<typeof createReadyChild>;
+    expect("unref" in child.stdin).toBe(false);
+    expect("unref" in child.stdout).toBe(false);
+
+    await expect(
+      transferManagedServiceUpdateHandoff({ kind: "managed-update-handoff", ...started }),
+    ).resolves.toBe(true);
+    expect(commands).toEqual(["transfer\n"]);
+    expect(child.unref).toHaveBeenCalledOnce();
+    child.emit("exit", 0, null);
+  });
+
   it.each([
     ["has exited before its ChildProcess notification", "dead"],
     ["reuses its PID for another process", "reused"],
@@ -295,7 +379,7 @@ describe("managed service update handoff single-flight", () => {
     spawnMock.mockImplementation(spawn);
     const processIdentity = await import("../shared/pid-alive.js");
     const root = await fs.realpath(tempRoots.make("openclaw-helper-process-identity-"));
-    const parent = spawn(process.execPath, ["-e", "process.stdin.resume()"], {
+    const parent = spawn(testNodeExecPath, ["-e", "process.stdin.resume()"], {
       stdio: ["pipe", "ignore", "ignore"],
     });
     try {
@@ -309,7 +393,7 @@ describe("managed service update handoff single-flight", () => {
         root,
         restartDrainTimeoutMs: 300_000,
         parentPid: parent.pid,
-        execPath: process.execPath,
+        execPath: testNodeExecPath,
         argv1: process.argv[1],
         env: { ...process.env, OPENCLAW_STATE_DIR: root },
         meta: {},
@@ -344,9 +428,11 @@ describe("managed service update handoff single-flight", () => {
   });
 
   it("terminates the exact helper when its initial start identity is unavailable", async () => {
-    vi.mocked((await import("../shared/pid-alive.js")).getFileLockProcessStartTime)
-      .mockReturnValueOnce(17)
-      .mockReturnValueOnce(null);
+    const startIdentity = vi.mocked(
+      (await import("../shared/pid-alive.js")).getFileLockProcessStartTime,
+    );
+    const parentIdentity = startIdentity(process.pid);
+    startIdentity.mockImplementation((pid) => (pid === process.pid ? parentIdentity : null));
     const { claimManagedServiceUpdateHandoff, startManagedServiceUpdateHandoff } =
       await import("./update-managed-service-handoff.js");
     const identity = {
@@ -385,7 +471,7 @@ describe("managed service update handoff single-flight", () => {
       updaterPath,
       `require("node:fs").writeFileSync(${JSON.stringify(markerPath)}, "ran")`,
     );
-    const parent = spawn(process.execPath, ["-e", "process.stdin.resume()"], {
+    const parent = spawn(testNodeExecPath, ["-e", "process.stdin.resume()"], {
       stdio: ["pipe", "ignore", "ignore"],
     });
     const { cancelManagedServiceUpdateHandoff, startManagedServiceUpdateHandoff } =
@@ -399,7 +485,7 @@ describe("managed service update handoff single-flight", () => {
           root,
           restartDrainTimeoutMs: 300_000,
           parentPid: parent.pid,
-          execPath: process.execPath,
+          execPath: testNodeExecPath,
           argv1: updaterPath,
           env: { ...process.env, OPENCLAW_STATE_DIR: root },
           meta: {},
@@ -416,7 +502,7 @@ describe("managed service update handoff single-flight", () => {
       const helper = spawnMock.mock.results[0]?.value as import("node:child_process").ChildProcess;
       const [, args] = spawnMock.mock.calls[0] as [string, string[]];
       leaseDatabasePath = (
-        JSON.parse(await fs.readFile(args[1] ?? "", "utf8")) as {
+        JSON.parse(await fs.readFile(readManagedHandoffArtifacts(args).paramsPath, "utf8")) as {
           updateLeaseDatabasePath: string;
         }
       ).updateLeaseDatabasePath;
@@ -581,7 +667,7 @@ describe("managed service update handoff single-flight", () => {
       updaterPath,
       `process.stdout.write(JSON.stringify({root:${JSON.stringify(root)},status:"skipped",mode:"npm",reason:"already-current"}));`,
     );
-    const parent = spawn(process.execPath, ["-e", "process.stdin.resume()"], {
+    const parent = spawn(testNodeExecPath, ["-e", "process.stdin.resume()"], {
       stdio: ["pipe", "ignore", "ignore"],
     });
     const { startManagedServiceUpdateHandoff, transferManagedServiceUpdateHandoff } =
@@ -592,7 +678,7 @@ describe("managed service update handoff single-flight", () => {
           root,
           restartDrainTimeoutMs: 300_000,
           parentPid: parent.pid,
-          execPath: process.execPath,
+          execPath: testNodeExecPath,
           argv1: updaterPath,
           env: { ...process.env, OPENCLAW_STATE_DIR: root },
           meta: {},
@@ -626,7 +712,7 @@ describe("managed service update handoff single-flight", () => {
     const { DatabaseSync } = await import("node:sqlite");
     spawnMock.mockImplementation(spawn);
     const root = await fs.realpath(tempRoots.make("openclaw-handoff-control-epipe-"));
-    const parent = spawn(process.execPath, ["-e", "process.stdin.resume()"], {
+    const parent = spawn(testNodeExecPath, ["-e", "process.stdin.resume()"], {
       stdio: ["pipe", "ignore", "ignore"],
     });
     const {
@@ -638,7 +724,7 @@ describe("managed service update handoff single-flight", () => {
       root,
       restartDrainTimeoutMs: 300_000,
       parentPid: parent.pid,
-      execPath: process.execPath,
+      execPath: testNodeExecPath,
       argv1: process.argv[1],
       env: { ...process.env, OPENCLAW_STATE_DIR: root },
       meta: {},
@@ -653,7 +739,9 @@ describe("managed service update handoff single-flight", () => {
       throw new Error("expected the detached helper control pipe");
     }
     const [, args] = spawnMock.mock.calls[0] as [string, string[]];
-    const { updateLeaseDatabasePath } = JSON.parse(await fs.readFile(args[1] ?? "", "utf8")) as {
+    const { updateLeaseDatabasePath } = JSON.parse(
+      await fs.readFile(readManagedHandoffArtifacts(args).paramsPath, "utf8"),
+    ) as {
       updateLeaseDatabasePath: string;
     };
     let controlDestroyed = false;
@@ -774,7 +862,7 @@ describe("managed service update handoff single-flight", () => {
       updaterPath,
       `require("node:fs").writeFileSync(${JSON.stringify(markerPath)}, "ran")`,
     );
-    const parent = spawn(process.execPath, ["-e", "process.stdin.resume()"], {
+    const parent = spawn(testNodeExecPath, ["-e", "process.stdin.resume()"], {
       stdio: ["pipe", "ignore", "ignore"],
     });
     const {
@@ -787,7 +875,7 @@ describe("managed service update handoff single-flight", () => {
         root,
         restartDrainTimeoutMs: 300_000,
         parentPid: parent.pid,
-        execPath: process.execPath,
+        execPath: testNodeExecPath,
         argv1: updaterPath,
         env: { ...process.env, OPENCLAW_STATE_DIR: root },
         meta: {},
@@ -806,7 +894,9 @@ describe("managed service update handoff single-flight", () => {
     ).resolves.toBe(false);
     const child = spawnMock.mock.results[0]?.value as import("node:child_process").ChildProcess;
     const [, args] = spawnMock.mock.calls[0] as [string, string[]];
-    const helper = JSON.parse(await fs.readFile(args[1] ?? "", "utf8")) as {
+    const helper = JSON.parse(
+      await fs.readFile(readManagedHandoffArtifacts(args).paramsPath, "utf8"),
+    ) as {
       updateLeaseDatabasePath: string;
       stateDatabasePath: string;
     };

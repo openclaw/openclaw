@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
@@ -54,30 +55,24 @@ export function parseConversationRouteContext(
   if (!isRecord(value)) {
     return undefined;
   }
-  const guildId = normalizeBoundedId(value.guildId);
-  const peerId = normalizeBoundedId(value.peerId);
-  const teamId = normalizeBoundedId(value.teamId);
-  const parentPeerId = normalizeBoundedId(value.parentPeerId);
+  const context: ConversationRouteContext = {};
+  for (const key of ["peerId", "guildId", "teamId", "parentPeerId"] as const) {
+    const id = normalizeBoundedId(value[key]);
+    if (value[key] !== undefined && !id) {
+      return undefined;
+    }
+    if (id) {
+      context[key] = id;
+    }
+  }
   const memberRoleIds = normalizeRoleIds(value.memberRoleIds);
-  if (
-    (value.peerId !== undefined && !peerId) ||
-    (value.guildId !== undefined && !guildId) ||
-    (value.teamId !== undefined && !teamId) ||
-    (value.parentPeerId !== undefined && !parentPeerId) ||
-    !memberRoleIds.valid
-  ) {
+  if (!memberRoleIds.valid) {
     return undefined;
   }
-  if (!peerId && !guildId && !teamId && !parentPeerId && !memberRoleIds.value) {
-    return undefined;
+  if (memberRoleIds.value) {
+    context.memberRoleIds = memberRoleIds.value;
   }
-  return {
-    ...(peerId ? { peerId } : {}),
-    ...(guildId ? { guildId } : {}),
-    ...(teamId ? { teamId } : {}),
-    ...(parentPeerId ? { parentPeerId } : {}),
-    ...(memberRoleIds.value ? { memberRoleIds: memberRoleIds.value } : {}),
-  };
+  return Object.keys(context).length > 0 ? context : undefined;
 }
 
 /** Captures only authoritative inbound facts needed to replay configured route precedence. */
@@ -130,12 +125,7 @@ export function parseStoredConversationRouteContext(
   if (!value || value.length > MAX_STORED_ROUTE_CONTEXT_LENGTH) {
     return undefined;
   }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value) as unknown;
-  } catch {
-    return undefined;
-  }
+  const parsed = safeParseJson(value);
   if (
     !isRecord(parsed) ||
     parsed.version !== 1 ||

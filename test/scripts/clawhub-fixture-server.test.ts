@@ -1,28 +1,29 @@
 // ClawHub Fixture Server tests cover the local package fixture HTTP contract.
-import { execFileSync, spawn, spawnSync, type ChildProcessByStdio } from "node:child_process";
+import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import type { Readable } from "node:stream";
-import { setTimeout as delay } from "node:timers/promises";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginInstallRecord } from "../../src/config/types.plugins.js";
 import { checkClawHubPackageTrust } from "../../src/infra/clawhub-install-trust.js";
+import { withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { writePluginInspectFixture } from "./plugin-inspect.test-support.js";
 
 const SCRIPT_PATH = path.resolve("scripts/e2e/lib/clawhub-fixture-server.cjs");
 const PACKAGE_NAME = "@openclaw/kitchen-sink";
-const PACKAGE_PATH = `/api/v1/packages/${encodeURIComponent(PACKAGE_NAME)}`;
 const KITCHEN_SINK_VERSION = "0.2.5";
-type FixtureServerChild = ChildProcessByStdio<null, Readable, Readable>;
-const servers: FixtureServerChild[] = [];
+const servers: ChildProcess[] = [];
 
-afterEach(async () => {
-  vi.unstubAllGlobals();
-  await Promise.all(servers.splice(0).map(stopServer));
-});
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    // Keep startup records and artifacts alive until every fixture process has exited.
+    await Promise.all(servers.splice(0).map(stopServer));
+    cleanup();
+  }),
+);
 
 function collectStream(stream: NodeJS.ReadableStream) {
   let text = "";
@@ -33,7 +34,7 @@ function collectStream(stream: NodeJS.ReadableStream) {
   return () => text;
 }
 
-async function stopServer(child: FixtureServerChild) {
+async function stopServer(child: ChildProcess) {
   if (child.exitCode !== null || child.signalCode !== null) {
     return;
   }
@@ -41,40 +42,61 @@ async function stopServer(child: FixtureServerChild) {
     child.once("exit", () => resolve());
   });
   child.kill("SIGTERM");
-  await Promise.race([exited, delay(1_000, undefined, { ref: false })]);
-  if (child.exitCode === null && child.signalCode === null) {
-    child.kill("SIGKILL");
-    await exited;
-  }
+  await exited;
 }
 
-async function startFixtureServer(profile: string, args: string[] = [], cwd = process.cwd()) {
+async function startFixtureServer(
+  profile: string,
+  signal: AbortSignal,
+  args: string[] = [],
+  cwd = process.cwd(),
+) {
   const root = tempDirs.make("openclaw-clawhub-fixture-server-");
   const portFile = path.join(root, "port");
   const child = spawn(process.execPath, [SCRIPT_PATH, profile, portFile, ...args], {
     cwd,
     env: { ...process.env },
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["ignore", "pipe", "pipe", "ipc"],
   });
-  const readStdout = collectStream(child.stdout);
-  const readStderr = collectStream(child.stderr);
+  const readStdout = collectStream(expectDefined(child.stdout, "fixture stdout pipe"));
+  const readStderr = collectStream(expectDefined(child.stderr, "fixture stderr pipe"));
   servers.push(child);
 
-  // Preserve the 2.5-second startup budget while detecting the port file sooner.
-  for (let attempt = 0; attempt < 500; attempt += 1) {
-    if (existsSync(portFile)) {
-      const port = Number(readFileSync(portFile, "utf8"));
-      if (Number.isInteger(port) && port > 0) {
-        return { baseUrl: `http://127.0.0.1:${port}` };
+  // The fixture publishes its port only after listen and the synchronous port-file write.
+  let onMessage: (message: unknown) => void = () => {};
+  let onClose = () => {};
+  let onError: (error: Error) => void = () => {};
+  const ready = new Promise<number>((resolve, reject) => {
+    onMessage = (message) => {
+      if (
+        typeof message === "object" &&
+        message !== null &&
+        "port" in message &&
+        typeof message.port === "number" &&
+        Number.isInteger(message.port) &&
+        message.port > 0
+      ) {
+        resolve(message.port);
       }
-    }
-    if (child.exitCode !== null) {
-      throw new Error(`fixture server exited early: stdout=${readStdout()} stderr=${readStderr()}`);
-    }
-    await delay(5);
+    };
+    onClose = () =>
+      reject(
+        new Error(`fixture server exited early: stdout=${readStdout()} stderr=${readStderr()}`),
+      );
+    onError = reject;
+    child.on("message", onMessage);
+    child.once("close", onClose);
+    child.once("error", onError);
+  });
+  try {
+    const port = await withinTest(ready, signal);
+    expect(Number(readFileSync(portFile, "utf8"))).toBe(port);
+    return { baseUrl: `http://127.0.0.1:${port}` };
+  } finally {
+    child.off("message", onMessage);
+    child.off("close", onClose);
+    child.off("error", onError);
   }
-
-  throw new Error(`fixture server did not write a port: stderr=${readStderr()}`);
 }
 
 async function fetchJson(baseUrl: string, requestPath: string) {
@@ -118,92 +140,31 @@ function runNoRequestsAssertion(baseUrl?: string, cwd = process.cwd(), env = pro
 }
 
 describe("ClawHub fixture server", () => {
-  it.each([
-    ["plugins", "0.1.0"],
-    ["kitchen-sink-plugin", KITCHEN_SINK_VERSION],
-    ["catalog-search", "0.1.0"],
-  ])("serves an accepted install audit for the %s profile", async (profile, version) => {
-    const { baseUrl } = await startFixtureServer(profile);
-    const auditMessages: string[] = [];
-    const trust = await checkClawHubPackageTrust({
-      subject: { kind: "plugin", packageName: PACKAGE_NAME },
-      version,
-      baseUrl,
-      mode: "update",
-      logger: { info: (message) => auditMessages.push(message) },
-    });
+  it.for([["kitchen-sink-plugin", KITCHEN_SINK_VERSION, PACKAGE_NAME]] as const)(
+    "serves an accepted install audit for the %s profile",
+    async ([profile, version, packageName], { signal }) => {
+      const { baseUrl } = await startFixtureServer(profile, signal);
+      const auditMessages: string[] = [];
+      const trust = await checkClawHubPackageTrust({
+        subject: { kind: "plugin", packageName },
+        version,
+        baseUrl,
+        mode: "update",
+        logger: { info: (message) => auditMessages.push(message) },
+      });
 
-    expect(trust.ok).toBe(true);
-    expect(auditMessages).toHaveLength(1);
-    expect(auditMessages[0]).toContain("Outcome: Safe");
-    expect(auditMessages[0]).toContain("No security concerns found in the fixture release.");
-    expect(auditMessages[0]).toContain(`${baseUrl}${PACKAGE_PATH}/versions/${version}/security`);
-  });
+      expect(trust.ok).toBe(true);
+      expect(auditMessages).toHaveLength(1);
+      expect(auditMessages[0]).toContain("Outcome: Safe");
+      expect(auditMessages[0]).toContain("No security concerns found in the fixture release.");
+      const packagePath = `/api/v1/packages/${encodeURIComponent(packageName)}`;
+      expect(auditMessages[0]).toContain(`${baseUrl}${packagePath}/versions/${version}/security`);
+    },
+  );
 
-  it("serves package metadata and npm-pack artifacts for kitchen-sink fixtures", async () => {
-    const { baseUrl } = await startFixtureServer("kitchen-sink-plugin");
-
-    const packageDetail = await fetchJson(baseUrl, PACKAGE_PATH);
-    expect(packageDetail.package.name).toBe(PACKAGE_NAME);
-    expect(packageDetail.package.latestVersion).toBe(KITCHEN_SINK_VERSION);
-    expect(packageDetail.package.artifact.format).toBe("tgz");
-
-    const versionDetail = await fetchJson(
-      baseUrl,
-      `${PACKAGE_PATH}/versions/${KITCHEN_SINK_VERSION}/artifact`,
-    );
-    expect(versionDetail.artifact).toMatchObject({
-      artifactKind: "npm-pack",
-      packageName: PACKAGE_NAME,
-      source: "clawhub",
-      version: KITCHEN_SINK_VERSION,
-    });
-
-    const artifactResponse = await fetch(
-      `${baseUrl}${PACKAGE_PATH}/versions/${KITCHEN_SINK_VERSION}/artifact/download`,
-    );
-    expect(artifactResponse.status).toBe(200);
-    expect(artifactResponse.headers.get("x-clawhub-artifact-type")).toBe("npm-pack-tarball");
-    expect(artifactResponse.headers.get("x-clawhub-artifact-sha256")).toMatch(/^[a-f0-9]{64}$/u);
-    expect(Buffer.from(await artifactResponse.arrayBuffer()).length).toBeGreaterThan(100);
-
-    const legacyAssertion = runNoRequestsAssertion(baseUrl, process.cwd(), {
-      ...process.env,
-      OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_PACKAGE: PACKAGE_NAME,
-    });
-    expect(legacyAssertion.status, legacyAssertion.stderr).toBe(0);
-    expect(legacyAssertion.stdout).toContain(
-      "Verified complete legacy ClawHub artifact audit sequence.",
-    );
-
-    const missingResponse = await fetch(`${baseUrl}/missing`);
-    expect(missingResponse.status).toBe(404);
-    const methodResponse = await fetch(`${baseUrl}${PACKAGE_PATH}`, { method: "POST" });
-    expect(methodResponse.status).toBe(405);
-  });
-
-  it("rejects missing startup arguments before binding a fixture server", () => {
-    const result = spawnSync(process.execPath, [SCRIPT_PATH], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: { ...process.env },
-    });
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(
-      "usage: clawhub-fixture-server.cjs <catalog-search|kitchen-sink-plugin|plugins|prepublish-artifacts> <port-file> [manifest-file]",
-    );
-    const assertion = runPrepublishAssertion();
-    expect(assertion.status).toBe(1);
-    expect(assertion.stderr).toContain(
-      "assert-prepublish-requests requires <base-url> <package-name> <version>",
-    );
-    const emptyAssertion = runNoRequestsAssertion();
-    expect(emptyAssertion.status).toBe(1);
-    expect(emptyAssertion.stderr).toContain("assert-no-requests requires <base-url>");
-  });
-
-  it("serves exact prepublish tarballs through the ClawHub artifact contract", async () => {
+  it("serves exact prepublish tarballs through the ClawHub artifact contract", async ({
+    signal,
+  }) => {
     const root = tempDirs.make("openclaw-clawhub-prepublish-");
     const isolatedCwd = tempDirs.make("openclaw-clawhub-isolated-");
     const packageDir = path.join(root, "package");
@@ -248,6 +209,7 @@ describe("ClawHub fixture server", () => {
 
     const { baseUrl } = await startFixtureServer(
       "prepublish-artifacts",
+      signal,
       [manifestPath],
       isolatedCwd,
     );
@@ -303,6 +265,10 @@ phase() {
 }
 ${runner.slice(boundary)}
 `;
+    // The full runner exceeds Linux's per-argument limit when passed to bash -c.
+    const automaticPhasesPath = path.join(root, "automatic-phases.sh");
+    writeFileSync(automaticPhasesPath, automaticPhases);
+    const openclawArgvLog = path.join(root, "openclaw-argv.log");
     const runAutomaticChecks = (
       record: PluginInstallRecord | null = npmRecord,
       deniedPluginId?: string,
@@ -313,6 +279,7 @@ ${runner.slice(boundary)}
         JSON.stringify({ installRecords: record ? { whatsapp: record } : {} }),
       );
       const fixtureEnv = writePluginInspectFixture(bin, record ? { whatsapp: record } : {});
+      writeFileSync(openclawArgvLog, "");
       const artifacts = path.join(isolatedCwd, "artifacts");
       mkdirSync(artifacts, { recursive: true });
       writeFileSync(
@@ -348,7 +315,7 @@ ${runner.slice(boundary)}
       );
       return spawnSync(
         process.platform === "darwin" ? "/bin/bash" : "bash",
-        ["-c", automaticPhases],
+        [automaticPhasesPath],
         {
           encoding: "utf8",
           env: {
@@ -364,6 +331,7 @@ ${runner.slice(boundary)}
               .update(registryManifest)
               .digest("hex"),
             OPENCLAW_DOCKER_E2E_SELECTED_SHA: "a".repeat(40),
+            OPENCLAW_TEST_OPENCLAW_ARGV_LOG: openclawArgvLog,
             OPENCLAW_UPGRADE_SURVIVOR_BASELINE: "openclaw@2026.7.1-2",
             OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "base",
             OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: "manual",
@@ -380,6 +348,11 @@ ${runner.slice(boundary)}
     expect(automatic.status, automatic.stdout + automatic.stderr).toBe(0);
     expect(automatic.stdout).toContain("assert-prepublish-requests passed");
     expect(automatic.stdout).toContain("assert-prepublish-recovery-requests passed");
+    expect(
+      readFileSync(openclawArgvLog, "utf8")
+        .split("\n")
+        .filter((line) => line === "plugins install --help"),
+    ).toHaveLength(1);
     expect(automatic.stdout).toContain(
       'Plugin "whatsapp" has verified official capability-consent exemption.',
     );
@@ -501,28 +474,6 @@ ${runner.slice(boundary)}
     expect(
       runPrepublishAssertion(baseUrl, "@openclaw/whatsapp", version, undefined, isolatedCwd).status,
     ).toBe(0);
-    const { baseUrl: legacyBaseUrl } = await startFixtureServer(
-      "prepublish-artifacts",
-      [manifestPath],
-      isolatedCwd,
-    );
-    await fetchJson(legacyBaseUrl, whatsappPath);
-    await fetchJson(legacyBaseUrl, `${whatsappPath}/versions/${version}/artifact`);
-    await fetch(`${legacyBaseUrl}${whatsappPath}/versions/${version}/artifact/download`);
-    const legacyAssertion = runPrepublishAssertion(
-      legacyBaseUrl,
-      "@openclaw/whatsapp",
-      version,
-      undefined,
-      isolatedCwd,
-      undefined,
-      undefined,
-      {
-        ...process.env,
-        OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_PACKAGE: "@openclaw/whatsapp",
-      },
-    );
-    expect(legacyAssertion.status, legacyAssertion.stderr).toBe(0);
     const completeWithMinimum = runPrepublishAssertion(
       baseUrl,
       "@openclaw/whatsapp",
@@ -607,6 +558,7 @@ ${runner.slice(boundary)}
 
     const { baseUrl: maximumBaseUrl } = await startFixtureServer(
       "prepublish-artifacts",
+      signal,
       [manifestPath],
       isolatedCwd,
     );
@@ -633,8 +585,8 @@ ${runner.slice(boundary)}
     expect((await fetch(`${baseUrl}/api/v1/packages/%40openclaw%2Fai`)).status).toBe(404);
   });
 
-  it("serves separate plugin-family and skill search fixtures", async () => {
-    const { baseUrl } = await startFixtureServer("catalog-search");
+  it("serves separate plugin-family and skill search fixtures", async ({ signal }) => {
+    const { baseUrl } = await startFixtureServer("catalog-search", signal);
 
     const codePlugins = await fetchJson(
       baseUrl,

@@ -3,22 +3,19 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
   getApiKeyForModel: vi.fn(),
-  resolveApiKeyForProvider: vi.fn(),
   prepareProviderRuntimeAuth: vi.fn(),
 }));
 
 vi.mock("../../agents/model-auth.js", () => ({
   getApiKeyForModelCore: hoisted.getApiKeyForModel,
-  resolveApiKeyForProviderCore: hoisted.resolveApiKeyForProvider,
+  resolveApiKeyForProviderCore: vi.fn(),
 }));
 
 vi.mock("../provider-runtime.runtime.js", () => ({
   prepareProviderRuntimeAuth: hoisted.prepareProviderRuntimeAuth,
 }));
 
-let getApiKeyForModel: typeof import("./runtime-model-auth.runtime.js").getApiKeyForModel;
 let getRuntimeAuthForModelCore: typeof import("./runtime-model-auth.runtime.js").getRuntimeAuthForModelCore;
-let resolveProviderRuntimeApiKey: typeof import("./runtime-model-auth.runtime.js").resolveProviderRuntimeApiKey;
 
 const MODEL = {
   id: "github-copilot/gpt-4o",
@@ -29,13 +26,11 @@ const MODEL = {
 
 describe("runtime-model-auth.runtime", () => {
   beforeAll(async () => {
-    ({ getApiKeyForModel, getRuntimeAuthForModelCore, resolveProviderRuntimeApiKey } =
-      await import("./runtime-model-auth.runtime.js"));
+    ({ getRuntimeAuthForModelCore } = await import("./runtime-model-auth.runtime.js"));
   });
 
   beforeEach(() => {
     hoisted.getApiKeyForModel.mockReset();
-    hoisted.resolveApiKeyForProvider.mockReset();
     hoisted.prepareProviderRuntimeAuth.mockReset();
   });
 
@@ -125,29 +120,5 @@ describe("runtime-model-auth.runtime", () => {
       mode: "aws-sdk",
     });
     expect(hoisted.prepareProviderRuntimeAuth).not.toHaveBeenCalled();
-  });
-
-  it("keeps direct model auth exports available for bundled runtime facades", async () => {
-    hoisted.getApiKeyForModel.mockResolvedValue({
-      apiKey: "model-key",
-      source: "env:OPENAI_API_KEY",
-      mode: "api-key",
-    });
-    hoisted.resolveApiKeyForProvider.mockResolvedValue({
-      apiKey: "provider-key",
-      source: "env:OPENAI_API_KEY",
-      mode: "api-key",
-    });
-
-    await expect(getApiKeyForModel({ model: MODEL as never })).resolves.toEqual({
-      apiKey: "model-key",
-      source: "env:OPENAI_API_KEY",
-      mode: "api-key",
-    });
-    await expect(resolveProviderRuntimeApiKey({ provider: "openai" })).resolves.toEqual({
-      apiKey: "provider-key",
-      source: "env:OPENAI_API_KEY",
-      mode: "api-key",
-    });
   });
 });

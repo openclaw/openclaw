@@ -1,5 +1,5 @@
 import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import type { OpenClawConfig, WizardPrompter } from "openclaw/plugin-sdk/core";
 import { patchTopLevelChannelConfigSection } from "openclaw/plugin-sdk/setup";
 import { fingerprint } from "../protocol/index.js";
 import {
@@ -24,22 +24,7 @@ import {
   ReefTransportClient,
 } from "./transport.js";
 
-type Prompt = {
-  note(message: string, title?: string): Promise<void>;
-  text(params: {
-    message: string;
-    initialValue?: string;
-    placeholder?: string;
-    sensitive?: boolean;
-    validate?: (value: string) => string | undefined;
-  }): Promise<string>;
-  select<T>(params: {
-    message: string;
-    options: Array<{ value: T; label: string; hint?: string }>;
-    initialValue?: T;
-  }): Promise<T>;
-  confirm(params: { message: string; initialValue?: boolean }): Promise<boolean>;
-};
+type Prompt = Pick<WizardPrompter, "note" | "text" | "select" | "confirm">;
 
 const reefSetupAdapter = {
   applyAccountConfig: ({
@@ -128,7 +113,7 @@ export const reefSetupWizard = {
       ],
     });
     const runtime = getReefRuntime();
-    const identity = loadReefIdentityBinding(runtime);
+    const identity = await loadReefIdentityBinding(runtime);
     if (identity && (identity.handle !== handle || identity.relayUrl !== relayUrl)) {
       throw new Error(
         `This OpenClaw state already holds the Reef identity @${identity.handle} on ${identity.relayUrl}. Re-register the same handle and relay.`,
@@ -157,7 +142,7 @@ export const reefSetupWizard = {
     // Reserve the keys immediately before consuming auth or claiming a handle.
     // Definitive relay rejection releases it; ambiguous transport failure keeps
     // the binding because the relay may have committed the request.
-    const reservation = reserveReefIdentityBinding(runtime, { handle, relayUrl });
+    const reservation = await reserveReefIdentityBinding(runtime, { handle, relayUrl });
     let effectiveRequestPolicy = requestPolicy;
     try {
       if (!setupSession) {
@@ -174,16 +159,16 @@ export const reefSetupWizard = {
           await client.listFriends();
         } catch (verificationError) {
           if (isReefOwnershipRejection(verificationError)) {
-            releaseReefIdentityReservation(runtime, reservation);
+            await releaseReefIdentityReservation(runtime, reservation);
             throw error;
           }
-          finalizeReefIdentityBinding(runtime, reservation);
+          await finalizeReefIdentityBinding(runtime, reservation);
           throw verificationError;
         }
         // Signed access proves these keys already own the handle. Finalize
         // before checking account ownership so an account mismatch cannot
         // redirect the same keys to a different handle.
-        finalizeReefIdentityBinding(runtime, reservation);
+        await finalizeReefIdentityBinding(runtime, reservation);
         const { handles } = await client.listOwnHandles(setupSession);
         const existing = handles.find((entry) => entry.handle === handle);
         if (!existing) {
@@ -196,12 +181,12 @@ export const reefSetupWizard = {
           existing.request_policy,
         );
       }
-      finalizeReefIdentityBinding(runtime, reservation);
+      await finalizeReefIdentityBinding(runtime, reservation);
     } catch (error) {
       if (isDefinitiveReefRegistrationFailure(error)) {
-        releaseReefIdentityReservation(runtime, reservation);
+        await releaseReefIdentityReservation(runtime, reservation);
       } else {
-        finalizeReefIdentityBinding(runtime, reservation);
+        await finalizeReefIdentityBinding(runtime, reservation);
       }
       throw error;
     }

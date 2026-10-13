@@ -69,7 +69,7 @@ local proof.
   "version": "1.0.0",
   "type": "module",
   "dependencies": {
-    "typebox": "1.3.27"
+    "typebox": "1.3.34"
   },
   "peerDependencies": {
     "openclaw": ">=2026.3.24-beta.2"
@@ -197,6 +197,10 @@ local proof.
     sure `npm pack` includes that `dist/` output. TypeScript source entries are
     only for source checkouts and local development paths.
 
+    Plugin builds can use TypeScript 7. OpenClaw loads the emitted JavaScript;
+    local TypeScript source entries use OpenClaw's runtime transformer and do
+    not require the plugin to install the TypeScript compiler.
+
     Then pack the plugin and install the tarball with `npm-pack:`:
 
     ```bash
@@ -248,6 +252,19 @@ local proof.
   </Step>
 </Steps>
 
+## Add plugin artwork
+
+Ship `assets/icon.png` for plugin identity in catalogs, settings, and install
+cards. Use a separate monochrome `assets/activity.svg` for compact tool calls
+in chat. Check the activity shape at 16 px in both light and dark themes; avoid
+a filled square behind the mark.
+
+One activity icon covers the plugin. Add `assets/activity/<tool-name>.svg` only
+for tools that need a distinct shape, using their exact `tools.effective` IDs.
+Include the assets in your published package and verify their presence with
+`npm pack --dry-run`. See the [activity icon contract](/plugins/manifest/surfaces#inline-activity-icons)
+for supported SVG geometry, size bounds, and fallback behavior.
+
 <a id="registering-agent-tools"></a>
 
 ## Registering tools
@@ -296,6 +313,17 @@ register(api) {
 calls reject invalid schemas before execution and validate the final value after
 tool hooks. Omit it for tools without a stable JSON result. See
 [Tool plugins](/plugins/tool-plugins#output-contracts) for the full contract.
+
+Declare when a tool needs the session workspace with `workspaceAccess` in its
+registration options. Use `true` when the factory reads working files, or omit
+the option to retain that safe default. OpenClaw finishes workspace preparation
+before calling those factories or starting the model. Use `"execute"` when the
+factory only builds a definition and working files are accessed during tool
+preparation or execution. Use `false` only when both factory and execution are
+independent of the session workspace. These explicit declarations let the model
+start while checkout continues. Plain tool objects default to `"execute"` because
+they have no runtime factory. `defineToolPlugin` accepts the same option on each
+tool definition.
 
 Every tool registered with `api.registerTool(...)` must also be declared in the
 plugin manifest:
@@ -369,8 +397,12 @@ Custom Gateway RPC methods are an advanced entry point. Keep them on a
 plugin-specific prefix; core admin namespaces such as `config.*`,
 `exec.approvals.*`, `operator.admin.*`, `wizard.*`, and `update.*` stay reserved
 and resolve to `operator.admin`. The
-`openclaw/plugin-sdk/gateway-method-runtime` bridge is reserved for plugin HTTP
-routes that declare `contracts.gatewayMethodDispatch: ["authenticated-request"]`.
+`openclaw/plugin-sdk/gateway-method-runtime` bridge is reserved for authenticated plugin HTTP routes and registered RPC
+handlers that declare `contracts.gatewayMethodDispatch: ["authenticated-request"]`.
+Nested RPC dispatch retains the original authenticated client, live authority
+check, and request-owned cancellation signal. It still checks the target method's
+required scopes and rechecks caller authority at the mutation commit boundary;
+the contract never supplies a synthetic client or additional scopes.
 
 For the full import map, see [Plugin SDK overview](/plugins/sdk-overview).
 

@@ -98,7 +98,7 @@ suite.define(() => {
         expect(response?.status()).toBe(200);
         await gateway.waitForRequest("agent.identity.get");
         await expect.poll(() => avatarRequestCount).toBe(1);
-        const picker = page.locator("openclaw-agent-select");
+        const picker = page.locator(".settings-sidebar__agent openclaw-agent-select");
         const avatar = picker.locator(".agent-select__trigger .agent-select__avatar");
         const fallback = avatar.locator(".identity-avatar__fallback");
         await expect.poll(() => avatar.getAttribute("data-avatar-state")).toBe("pending");

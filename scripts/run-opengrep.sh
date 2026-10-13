@@ -28,7 +28,7 @@ BUCKET="precise"
 if [[ "${1:-}" == "precise" ]]; then
   shift
 elif [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-  sed -n '2,22p' "$0"
+  sed -n '/^# scripts\/run-opengrep\.sh$/,/^# Exit code:/p' "$0"
   exit 0
 elif [[ "${1:-}" == "broad" ]]; then
   echo "error: broad OpenGrep rulepacks are not supported in this repo workflow" >&2
@@ -50,14 +50,13 @@ if ! command -v opengrep >/dev/null 2>&1; then
 error: 'opengrep' not found on PATH.
 
 Install with:
-  curl -fsSL https://raw.githubusercontent.com/opengrep/opengrep/v1.27.1/install.sh | bash -s -- -v v1.27.1
+  curl -fsSL https://raw.githubusercontent.com/opengrep/opengrep/v1.30.0/install.sh | bash -s -- -v v1.30.0
 
 (See https://opengrep.dev for other options.)
 EOF
   exit 127
 fi
 
-# Pull off our own flags from the remaining args; pass everything else through to opengrep.
 EXTRA_ARGS=()
 PATHS_PASSED=0
 SAW_DOUBLE_DASH=0
@@ -91,16 +90,9 @@ while (( $# > 0 )); do
       ;;
     *)
       if (( SAW_DOUBLE_DASH )); then
-        # Treat anything after `--` as a path-positional override
-        if (( PATHS_PASSED == 0 )); then
-          PATHS_PASSED=1
-          EXTRA_ARGS+=( "$1" )
-        else
-          EXTRA_ARGS+=( "$1" )
-        fi
-      else
-        EXTRA_ARGS+=( "$1" )
+        PATHS_PASSED=1
       fi
+      EXTRA_ARGS+=( "$1" )
       shift
       ;;
   esac
@@ -120,7 +112,7 @@ write_empty_sarif() {
         "driver": {
           "name": "Opengrep OSS",
           "informationUri": "https://opengrep.dev",
-          "semanticVersion": "1.27.1",
+          "semanticVersion": "1.30.0",
           "rules": []
         }
       },

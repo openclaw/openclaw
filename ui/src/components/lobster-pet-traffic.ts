@@ -1,23 +1,22 @@
-// The ledge's uninvited guests: pass-through visitors (strangers, the crab,
-// the snail, the duck, the jellyfish) and the message in a bottle. Both run
-// on their own seeded clocks, independent of the resident's visit schedule;
-// a ReactiveController keeps the pet element focused on the resident.
+// Passers and bottles have seeded clocks independent of the resident's visits.
 import { expectDefined } from "@openclaw/normalization-core";
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import {
   LOBSTER_BOTTLE_FORTUNES,
-  LOBSTER_PASSER_CROSS_MS,
+  resolveLobsterPasserCrossMs,
   planLobsterBottle,
   planLobsterPasser,
   prefersReducedMotion,
-  type LobsterBottlePlan,
   type LobsterPasserPlan,
+  type LobsterPasserOptions,
 } from "./lobster-pet-plans.ts";
+import { LobsterPetTimers } from "./lobster-pet-timers.ts";
 
 // Facing, reactions, and the act loop stay owned by the pet element; the
 // controller only reports crossing milestones.
 type LobsterTrafficHooks = {
   visitsEnabled: () => boolean;
+  passerOptions: () => LobsterPasserOptions;
+  onPasserStart: (plan: LobsterPasserPlan) => void;
   // Fired at crossing start (toward the entry side) and mid-cross (travel
   // direction) so the resident can watch the traffic go by.
   onPasserFacing: (facing: 1 | -1) => void;
@@ -27,145 +26,173 @@ type LobsterTrafficHooks = {
 
 type LobsterBottleScene = { spotPct: number; opened: boolean; fortune: string };
 
-export class LobsterLedgeTraffic implements ReactiveController {
+export class LobsterLedgeTraffic {
   passer: LobsterPasserPlan | null = null;
-  private bottlePlan: LobsterBottlePlan | null = null;
-  private bottleVisible = false;
-  private bottleOpened = false;
-  private passerTimer: number | null = null;
-  private passerEndTimer: number | null = null;
-  private passerWatchTimer: number | null = null;
-  private bottleTimer: number | null = null;
-  private bottleEndTimer: number | null = null;
+  bottle: LobsterBottleScene | null = null;
+  private connected = false;
+  private readonly timers = new LobsterPetTimers<
+    "passerTimer" | "passerEndTimer" | "passerWatchTimer" | "bottleTimer" | "bottleEndTimer"
+  >();
+  private seed: number | null = null;
+  private passerConsumed = false;
+  private crossingMs = 0;
 
   constructor(
-    private readonly host: ReactiveControllerHost,
+    private readonly notify: () => void,
     private readonly hooks: LobsterTrafficHooks,
-  ) {
-    host.addController(this);
+  ) {}
+
+  connect() {
+    this.connected = true;
   }
 
-  hostDisconnected() {
+  update() {
+    if (!this.hooks.visitsEnabled()) {
+      this.clearTimers();
+      this.passer = null;
+      this.bottle = null;
+    }
+  }
+
+  dispose() {
+    this.connected = false;
     this.clearTimers();
-    // The show ends with the host, mirroring the pet's own visit timers
-    // (which also die on disconnect and only re-arm on a seed change):
-    // clear visible guests so a reconnect never shows a frozen passer or an
-    // unebbing bottle. The update request flushes on reattach.
+    // Clear visible guests so a reconnect cannot show a stopped passer or bottle.
     this.passer = null;
-    this.bottleVisible = false;
-    this.host.requestUpdate();
+    this.bottle = null;
+    this.notify();
   }
 
-  // Re-plans both events for a (re)seeded load.
+  // Only a new seed restores a crossing already consumed by this load.
   reset(seed: number) {
+    if (seed !== this.seed) {
+      this.seed = seed;
+      this.passerConsumed = false;
+    }
     this.clearTimers();
     this.passer = null;
-    this.bottleVisible = false;
-    this.bottleOpened = false;
-    this.schedulePasser(seed);
-    this.scheduleBottle(seed);
+    this.bottle = null;
+    if (this.connected && this.hooks.visitsEnabled()) {
+      this.schedulePasser(seed);
+      this.scheduleBottle(seed);
+    }
+  }
+
+  replanPasser(seed: number) {
+    const passer = this.passer;
+    const options = this.hooks.passerOptions();
+    const regular =
+      passer && ["stranger", "crab", "snail", "duck", "jellyfish"].includes(passer.kind);
+    if (
+      passer &&
+      (passer.kind !== "stranger" ||
+        options.strangers !== false ||
+        options.critters?.includes(passer.kind)) &&
+      (regular || options.critters?.includes(passer.kind))
+    ) {
+      return;
+    }
+    const wasCrossing = this.passer !== null;
+    this.clearPasserTimers();
+    this.passer = null;
+    if (wasCrossing) {
+      this.hooks.onPasserDone();
+    }
+    if (this.connected && this.hooks.visitsEnabled()) {
+      this.schedulePasser(seed);
+    }
   }
 
   passerCrossMs(): number {
-    return this.passer ? LOBSTER_PASSER_CROSS_MS[this.passer.kind] : 0;
-  }
-
-  bottle(): LobsterBottleScene | null {
-    if (!this.bottleVisible || !this.bottlePlan) {
-      return null;
-    }
-    return {
-      spotPct: this.bottlePlan.spotPct,
-      opened: this.bottleOpened,
-      fortune: expectDefined(
-        LOBSTER_BOTTLE_FORTUNES[this.bottlePlan.fortuneIndex],
-        "lobster bottle fortune",
-      ),
-    };
+    return this.passer ? this.crossingMs : 0;
   }
 
   readonly openBottle = () => {
-    if (this.bottleOpened || !this.bottleVisible) {
+    if (!this.bottle || this.bottle.opened) {
       return;
     }
-    this.bottleOpened = true;
-    // Read, then reclaimed by the sea a couple of minutes later.
+    this.bottle = { ...this.bottle, opened: true };
     this.armBottleEbb(120_000);
-    this.host.requestUpdate();
+    this.notify();
   };
 
   private clearTimers() {
-    for (const timer of [
-      this.passerTimer,
-      this.passerEndTimer,
-      this.passerWatchTimer,
-      this.bottleTimer,
-      this.bottleEndTimer,
-    ]) {
-      if (timer !== null) {
-        window.clearTimeout(timer);
-      }
-    }
-    this.passerTimer = null;
-    this.passerEndTimer = null;
-    this.passerWatchTimer = null;
-    this.bottleTimer = null;
-    this.bottleEndTimer = null;
+    this.clearPasserTimers();
+    this.timers.clear("bottleTimer", "bottleEndTimer");
+  }
+
+  private clearPasserTimers() {
+    this.timers.clear("passerTimer", "passerEndTimer", "passerWatchTimer");
   }
 
   private schedulePasser(seed: number) {
-    const plan = planLobsterPasser(seed);
+    if (this.passerConsumed) {
+      return;
+    }
+    const plan = planLobsterPasser(seed, this.hooks.passerOptions());
     if (!plan || prefersReducedMotion()) {
       return;
     }
-    this.passerTimer = window.setTimeout(() => {
-      this.passerTimer = null;
-      if (!this.hooks.visitsEnabled() || document.hidden) {
+    this.timers.schedule("passerTimer", plan.atMs, () => {
+      // A crossing gets one chance per load, even after theme or preference refreshes.
+      this.passerConsumed = true;
+      if (
+        !this.connected ||
+        !this.hooks.visitsEnabled() ||
+        document.hidden ||
+        prefersReducedMotion()
+      ) {
         return;
       }
+      this.hooks.onPasserStart(plan);
       this.passer = plan;
-      this.host.requestUpdate();
-      const crossMs = LOBSTER_PASSER_CROSS_MS[plan.kind];
+      this.crossingMs = resolveLobsterPasserCrossMs(
+        plan.kind,
+        this.hooks.passerOptions().critterArtwork,
+      );
+      this.notify();
+      const crossMs = this.passerCrossMs();
       this.hooks.onPasserFacing(plan.direction === 1 ? -1 : 1);
-      this.passerWatchTimer = window.setTimeout(() => {
-        this.passerWatchTimer = null;
+      this.timers.schedule("passerWatchTimer", crossMs / 2, () => {
         this.hooks.onPasserFacing(plan.direction);
-        // Mid-crossing is when the passer is closest: friends wave at the
-        // traffic, shy pets duck for a peek, regulars just watch it pass.
         this.hooks.onPasserMidCross();
-      }, crossMs / 2);
-      this.passerEndTimer = window.setTimeout(() => {
-        this.passerEndTimer = null;
+        this.notify();
+      });
+      this.timers.schedule("passerEndTimer", crossMs, () => {
         this.passer = null;
-        this.host.requestUpdate();
+        this.notify();
         this.hooks.onPasserDone();
-      }, crossMs);
-    }, plan.atMs);
+      });
+    });
   }
 
-  // The bottle keeps its own clock: it washes up whether or not the pet is
-  // around, waits to be opened, and drifts back out with the tide.
   private scheduleBottle(seed: number) {
-    this.bottlePlan = planLobsterBottle(seed);
-    if (!this.bottlePlan) {
+    const plan = planLobsterBottle(seed);
+    if (!plan) {
       return;
     }
-    this.bottleTimer = window.setTimeout(() => {
-      this.bottleTimer = null;
-      this.bottleVisible = true;
-      this.host.requestUpdate();
+    this.timers.schedule("bottleTimer", plan.atMs, () => {
+      if (!this.connected || !this.hooks.visitsEnabled()) {
+        return;
+      }
+      this.bottle = {
+        spotPct: plan.spotPct,
+        opened: false,
+        fortune: expectDefined(
+          LOBSTER_BOTTLE_FORTUNES[plan.fortuneIndex],
+          "lobster bottle fortune",
+        ),
+      };
+      this.notify();
       this.armBottleEbb(300_000);
-    }, this.bottlePlan.atMs);
+    });
   }
 
   private armBottleEbb(delayMs: number) {
-    if (this.bottleEndTimer !== null) {
-      window.clearTimeout(this.bottleEndTimer);
-    }
-    this.bottleEndTimer = window.setTimeout(() => {
-      this.bottleEndTimer = null;
-      this.bottleVisible = false;
-      this.host.requestUpdate();
-    }, delayMs);
+    this.timers.clear("bottleEndTimer");
+    this.timers.schedule("bottleEndTimer", delayMs, () => {
+      this.bottle = null;
+      this.notify();
+    });
   }
 }

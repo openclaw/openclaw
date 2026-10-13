@@ -1,9 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 // Proxy environment helpers mirror undici EnvHttpProxyAgent selection while
 // adding OpenClaw NO_PROXY CIDR/wildcard bypass checks.
 import { readTrimmedStringAlias } from "../../utils/string-readers.js";
 
-export const PROXY_ENV_KEYS = [
+const PROXY_ENV_KEYS = [
   "HTTP_PROXY",
   "HTTPS_PROXY",
   "ALL_PROXY",
@@ -17,14 +18,14 @@ export function hasProxyEnvConfigured(env: NodeJS.ProcessEnv = process.env): boo
   return readTrimmedStringAlias(env, PROXY_ENV_KEYS) !== undefined;
 }
 
-function normalizeProxyEnvValue(value: string | undefined): string | null | undefined {
+function readProxyEnvValue(
+  key: "http_proxy" | "https_proxy" | "all_proxy",
+  env: NodeJS.ProcessEnv,
+): string | undefined {
   // Empty lowercase env vars intentionally shadow uppercase values, matching
   // undici's EnvHttpProxyAgent precedence.
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
+  const lower = env[key];
+  return normalizeOptionalString(typeof lower === "string" ? lower : env[key.toUpperCase()]);
 }
 
 /** Explicit proxy option shape accepted by undici EnvHttpProxyAgent. */
@@ -45,16 +46,9 @@ export function resolveEnvHttpProxyUrl(
   protocol: "http" | "https",
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
-  const lowerHttpProxy = normalizeProxyEnvValue(env.http_proxy);
-  const lowerHttpsProxy = normalizeProxyEnvValue(env.https_proxy);
-  const httpProxy =
-    lowerHttpProxy !== undefined ? lowerHttpProxy : normalizeProxyEnvValue(env.HTTP_PROXY);
-  const httpsProxy =
-    lowerHttpsProxy !== undefined ? lowerHttpsProxy : normalizeProxyEnvValue(env.HTTPS_PROXY);
-  if (protocol === "https") {
-    return httpsProxy ?? httpProxy ?? undefined;
-  }
-  return httpProxy ?? undefined;
+  const httpProxy = readProxyEnvValue("http_proxy", env);
+  const httpsProxy = readProxyEnvValue("https_proxy", env);
+  return protocol === "https" ? (httpsProxy ?? httpProxy) : httpProxy;
 }
 
 /** Return whether EnvHttpProxyAgent-style HTTP/S proxy resolution finds a proxy URL. */
@@ -63,13 +57,6 @@ export function hasEnvHttpProxyConfigured(
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
   return resolveEnvHttpProxyUrl(protocol, env) !== undefined;
-}
-
-function resolveEnvAllProxyUrl(env: NodeJS.ProcessEnv): string | undefined {
-  const lowerAllProxy = normalizeProxyEnvValue(env.all_proxy);
-  const allProxy =
-    lowerAllProxy !== undefined ? lowerAllProxy : normalizeProxyEnvValue(env.ALL_PROXY);
-  return allProxy ?? undefined;
 }
 
 /**
@@ -82,7 +69,7 @@ function resolveEnvAllProxyUrl(env: NodeJS.ProcessEnv): string | undefined {
 export function resolveEnvHttpProxyAgentOptions(
   env: NodeJS.ProcessEnv = process.env,
 ): EnvHttpProxyAgentProxyOptions | undefined {
-  const allProxy = resolveEnvAllProxyUrl(env);
+  const allProxy = readProxyEnvValue("all_proxy", env);
   const httpProxy = resolveEnvHttpProxyUrl("http", env) ?? allProxy;
   const httpsProxy = resolveEnvHttpProxyUrl("https", env) ?? httpProxy;
   const options: EnvHttpProxyAgentProxyOptions = {
@@ -102,21 +89,11 @@ export function shouldUseEnvHttpProxyForUrl(
   targetUrl: string,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  let parsed: URL;
-  let protocol: "http" | "https";
-  try {
-    parsed = new URL(targetUrl);
-    if (parsed.protocol === "http:") {
-      protocol = "http";
-    } else if (parsed.protocol === "https:") {
-      protocol = "https";
-    } else {
-      return false;
-    }
-  } catch {
+  const parsed = URL.parse(targetUrl);
+  if (!parsed || (parsed.protocol !== "http:" && parsed.protocol !== "https:")) {
     return false;
   }
-
+  const protocol = parsed.protocol === "https:" ? "https" : "http";
   return hasEnvHttpProxyConfigured(protocol, env) && !matchesNoProxy(parsed, env);
 }
 
@@ -158,10 +135,8 @@ export function matchesNoProxy(
     return false;
   }
 
-  let parsed: URL;
-  try {
-    parsed = targetUrl instanceof URL ? targetUrl : new URL(targetUrl);
-  } catch {
+  const parsed = targetUrl instanceof URL ? targetUrl : URL.parse(targetUrl);
+  if (!parsed) {
     return false;
   }
 
@@ -285,7 +260,7 @@ function matchesIpv4NoProxyPattern(target: number | undefined, entryHost: string
     return false;
   }
   const patternParts = entryHost.split(".");
-  if (patternParts.length > 4 || patternParts.length === 0) {
+  if (patternParts.length > 4) {
     return false;
   }
   for (const [index, part] of patternParts.entries()) {

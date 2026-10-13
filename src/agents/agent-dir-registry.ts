@@ -20,11 +20,16 @@ export function registerResolvedAgentDir(params: {
   agentId: string;
   agentDir: string;
   env?: NodeJS.ProcessEnv;
-}): void {
+}): boolean {
   const key = normalizeAgentDirRegistryPath(params.agentDir, params.env);
   const agentIds = agentIdsByDir.get(key) ?? new Set<string>();
-  agentIds.add(normalizeAgentId(params.agentId));
+  const agentId = normalizeAgentId(params.agentId);
+  if (agentIds.has(agentId)) {
+    return false;
+  }
+  agentIds.add(agentId);
   agentIdsByDir.set(key, agentIds);
+  return true;
 }
 
 /** Remove a reverse lookup only while it still belongs to the expected agent. */

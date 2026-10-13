@@ -19,10 +19,7 @@ export const DEFAULT_PLUGIN_ENTRY_CANDIDATES = [
 export function getPackageManifestMetadata(
   manifest: PackageManifest | undefined,
 ): OpenClawPackageManifest | undefined {
-  if (!manifest) {
-    return undefined;
-  }
-  return manifest[MANIFEST_KEY];
+  return manifest?.[MANIFEST_KEY];
 }
 
 /** Package authoring metadata names source; the runtime manifest names only built assets. */

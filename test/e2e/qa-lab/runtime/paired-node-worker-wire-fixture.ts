@@ -11,6 +11,7 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
 import { WORKER_BUNDLE_PREWARM_VERSION } from "../../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import type { DeviceIdentity } from "../../../../src/infra/device-identity.js";
 import {
   NODE_WORKER_BUNDLE_INSTALL_COMMAND,
@@ -21,14 +22,21 @@ import {
   NODE_WORKER_BUNDLE_RETENTION_VERSION,
   NODE_WORKER_BUNDLE_STATUS_VERSION,
   NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
+  NODE_WORKER_NATIVE_INFERENCE_VERSION,
+  NODE_WORKER_PROMPT_CONTEXT_VERSION,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
 } from "../../../../src/infra/node-runner-inventory.js";
+import {
+  coerceNodeInvokeInputPayload,
+  coerceNodeInvokeCancelPayload,
+} from "../../../../src/node-host/invoke-payload.js";
 import type { NodeInvokeRequestPayload } from "../../../../src/node-host/invoke.js";
 import type { NodeWorkerBundleInstaller } from "../../../../src/node-host/node-worker-bundle-installer.js";
 import type { NodeWorkerContainerEngine } from "../../../../src/node-host/node-worker-container-engine.js";
 import type { createNodeWorkerSupervisor } from "../../../../src/node-host/node-worker-supervisor.js";
 import type { NodeWorkerWorkspaceRuntime } from "../../../../src/node-host/node-worker-workspace.js";
 import { VERSION } from "../../../../src/version.js";
+import { createDeferred, withTestTimeout } from "../../../helpers/promise.js";
 import { MODEL_REF, PROOF_TIMEOUT_MS } from "./cloud-worker-midturn-loss-fixture.js";
 
 const execFileAsync = promisify(execFile);
@@ -139,40 +147,32 @@ export async function createPublishedWireWorkspace(root: string): Promise<Publis
 }
 
 export async function connectWireClient(params: {
-  gateway: WireGateway;
+  gateway: Pick<WireGateway, "wsUrl" | "token" | "runtimeEnv">;
   role: "operator" | "node";
   identity: DeviceIdentity | null;
   includeApprovals?: boolean;
   onEvent?: (event: WireGatewayEvent) => void;
   onHelloOk?: () => void;
+  onClose?: (code: number, reason: string) => void;
   timeoutMs?: number;
+  nodeManifest?: { caps: string[]; commands: string[] };
 }): Promise<GatewayClient> {
-  const { GatewayClient } = await import("openclaw/plugin-sdk/gateway-runtime");
-  return await new Promise<GatewayClient>((resolve, reject) => {
-    let settled = false;
-    const finish = (error?: Error) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timeout);
-      if (error) {
-        client.stop();
-        reject(error);
-      } else {
-        resolve(client);
-      }
-    };
-    const timeout = setTimeout(
-      () => finish(new Error("Gateway client connection timed out")),
-      params.timeoutMs ?? 30_000,
-    );
-    timeout.unref();
-    const node = params.role === "node";
-    const client = new GatewayClient({
-      url: params.gateway.wsUrl,
-      token: params.gateway.token,
-      env: params.gateway.runtimeEnv,
+  const [{ prepareGatewayClientDeviceAuth }, { acquireGatewayTestClient }] = await Promise.all([
+    import("../../../../src/gateway/client.js"),
+    import("../../../helpers/gateway-client.js"),
+  ]);
+  const node = params.role === "node";
+  const connectionOptions = {
+    url: params.gateway.wsUrl,
+    token: params.gateway.token,
+    env: params.gateway.runtimeEnv,
+    deviceIdentity: params.identity,
+  };
+  // Source QA must prepare the auth worker before starting the handshake budget.
+  await prepareGatewayClientDeviceAuth(connectionOptions);
+  return await acquireGatewayTestClient(
+    {
+      ...connectionOptions,
       role: params.role,
       clientName: node ? GATEWAY_CLIENT_NAMES.NODE_HOST : GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
       clientDisplayName: node ? NODE_DISPLAY_NAME : "Paired node worker wire operator",
@@ -190,23 +190,23 @@ export async function connectWireClient(params: {
             ...(params.includeApprovals ? ["operator.approvals"] : []),
           ],
       caps: node
-        ? ["system"]
+        ? ["system", ...(params.nodeManifest?.caps ?? [])]
         : params.includeApprovals
           ? [GATEWAY_CLIENT_CAPS.APPROVALS, GATEWAY_CLIENT_CAPS.EXEC_APPROVALS]
           : undefined,
-      commands: node ? [] : undefined,
-      deviceIdentity: params.identity,
+      commands: node ? (params.nodeManifest?.commands ?? []) : undefined,
       requestTimeoutMs: PROOF_TIMEOUT_MS,
       onEvent: params.onEvent,
-      onHelloOk: () => {
-        params.onHelloOk?.();
-        finish();
-      },
-      onConnectError: (error) => finish(error),
-      onClose: (code, reason) => finish(new Error(`Gateway closed (${code}): ${reason}`)),
-    });
-    client.start();
-  });
+      onHelloOk: params.onHelloOk,
+      onClose: params.onClose,
+    },
+    {
+      timeoutMs: params.timeoutMs ?? 30_000,
+      timeoutMessage: "Gateway client connection timed out",
+      closeMessage: "Gateway closed",
+      unrefTimeout: true,
+    },
+  );
 }
 
 function isPairingRequired(error: unknown): boolean {
@@ -268,7 +268,7 @@ async function waitForApprovedWireNode(
 }
 
 type WireWorkerHostOptions = {
-  gateway: WireGateway;
+  gateway: Pick<WireGateway, "wsUrl" | "token" | "runtimeEnv">;
   operator: GatewayClient;
   root: string;
   label?: string;
@@ -279,11 +279,16 @@ type WireWorkerHostOptions = {
   workerGatewayUrl?: string;
   workspaceGatewayUrl?: (frame: NodeInvokeRequestPayload) => string;
   workerEnv?: NodeJS.ProcessEnv;
+  nodeConfig?: OpenClawConfig;
+  pluginRuntime?: Awaited<
+    ReturnType<typeof import("../../../../src/node-host/runtime.js").prepareNodeHostRuntime>
+  >;
   bundlePrewarm?: boolean;
   bundleRetention?: boolean;
   bundleStatus?: boolean;
   environmentSession?: boolean;
   onInvoke?: (frame: NodeInvokeRequestPayload) => void;
+  beforeInvoke?: (frame: NodeInvokeRequestPayload, host: PairedNodeWorkerHost) => Promise<void>;
   afterInvoke?: (frame: NodeInvokeRequestPayload, host: PairedNodeWorkerHost) => Promise<void>;
 };
 
@@ -300,6 +305,7 @@ export type PairedNodeWorkerHost = {
   disconnect(): Promise<void>;
   publishInventory(): Promise<void>;
   waitForInvokes(): Promise<void>;
+  stopPluginCommands(): Promise<void>;
   waitForWorkersIdle(): Promise<void>;
   installedBundleDirectory(bundleHash: string): Promise<string>;
   stop(): Promise<void>;
@@ -314,15 +320,15 @@ export async function createPairedNodeWorkerHost(
     { loadOrCreateDeviceIdentity },
     { handleInvoke },
     { NodeWorkerBundleInstaller },
-    { parseNodeWorkerLaunchInput },
     { createNodeWorkerSupervisor },
+    { snapshotNodeWorkerNativeInference },
     { NodeWorkerWorkspaceRuntime },
   ] = await Promise.all([
     import("../../../../src/infra/device-identity.js"),
     import("../../../../src/node-host/invoke.js"),
     import("../../../../src/node-host/node-worker-bundle-installer.js"),
-    import("../../../../src/node-host/node-worker-supervisor-contract.js"),
     import("../../../../src/node-host/node-worker-supervisor.js"),
+    import("../../../../src/node-host/node-worker-native-inference.js"),
     import("../../../../src/node-host/node-worker-workspace.js"),
   ]);
   const label = options.label ?? "node";
@@ -338,15 +344,26 @@ export async function createPairedNodeWorkerHost(
   await fs.mkdir(nodeEnv.HOME, { recursive: true });
   const workspace = new NodeWorkerWorkspaceRuntime({ root: nodeHostRoot, env: nodeEnv });
   const bundleInstaller = new NodeWorkerBundleInstaller({ root: nodeHostRoot, env: nodeEnv });
+  const nativeInferenceSnapshot = options.nodeConfig
+    ? snapshotNodeWorkerNativeInference(options.nodeConfig, nodeEnv)
+    : undefined;
   let capacity = { total: options.capacity ?? 2, available: 0 };
   let environmentSession = options.environmentSession ?? true;
   let client: GatewayClient | undefined;
+  let connection: { hello: boolean; changed: ReturnType<typeof createDeferred<void>> } | undefined;
   let closing = false;
+  const retireConnection = () => {
+    const previous = connection;
+    connection = undefined;
+    previous?.changed.resolve();
+  };
+  let pluginRuntime:
+    | ReturnType<NonNullable<WireWorkerHostOptions["pluginRuntime"]>["start"]>
+    | undefined;
   const invokeTasks = new Set<Promise<void>>();
   const invokeErrors: unknown[] = [];
   const commands: string[] = [];
   const frames: NodeInvokeRequestPayload[] = [];
-  const launchIds = new Set<string>();
   const identity = loadOrCreateDeviceIdentity({
     path: path.join(options.root, `${label}-identity.sqlite`),
   });
@@ -355,6 +372,8 @@ export async function createPairedNodeWorkerHost(
     protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
     workerHost: {
       enabled: true as const,
+      capturedExecPolicy: true as const,
+      promptContext: NODE_WORKER_PROMPT_CONTEXT_VERSION,
       ...(environmentSession
         ? { environmentSession: NODE_WORKER_ENVIRONMENT_SESSION_VERSION }
         : {}),
@@ -362,6 +381,7 @@ export async function createPairedNodeWorkerHost(
       ...(options.bundlePrewarm ? { bundlePrewarm: WORKER_BUNDLE_PREWARM_VERSION } : {}),
       ...(options.bundleRetention ? { bundleRetention: NODE_WORKER_BUNDLE_RETENTION_VERSION } : {}),
       ...(options.bundleStatus ? { bundleStatus: NODE_WORKER_BUNDLE_STATUS_VERSION } : {}),
+      ...(nativeInferenceSnapshot ? { nativeInference: NODE_WORKER_NATIVE_INFERENCE_VERSION } : {}),
     },
   });
 
@@ -370,6 +390,7 @@ export async function createPairedNodeWorkerHost(
     workspace,
     capacity: options.capacity,
     capacityWaitMs: options.capacityWaitMs,
+    nativeInferenceSnapshot,
     ...(options.containerEngine ? { containerEngine: options.containerEngine } : {}),
     ...(options.containerImage ? { containerImage: options.containerImage } : {}),
     onCapacityChanged: (nextCapacity) => {
@@ -378,6 +399,20 @@ export async function createPairedNodeWorkerHost(
   });
 
   const onEvent = (event: WireGatewayEvent) => {
+    if (event.event === "node.invoke.input") {
+      const input = coerceNodeInvokeInputPayload(event.payload);
+      if (input) {
+        pluginRuntime?.handleInput(input.invokeId, input.seq, input.payloadJSON);
+      }
+      return;
+    }
+    if (event.event === "node.invoke.cancel") {
+      const cancel = coerceNodeInvokeCancelPayload(event.payload);
+      if (cancel) {
+        pluginRuntime?.cancel(cancel.invokeId);
+      }
+      return;
+    }
     if (closing || event.event !== "node.invoke.request" || !client) {
       return;
     }
@@ -385,19 +420,23 @@ export async function createPairedNodeWorkerHost(
     const frame = event.payload as NodeInvokeRequestPayload;
     commands.push(frame.command);
     frames.push(frame);
-    if (frame.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND) {
-      launchIds.add(parseNodeWorkerLaunchInput(frame.paramsJSON).launchId);
-    }
     options.onInvoke?.(frame);
-    const task = handleInvoke(frame, receiver, { current: async () => [] }, undefined, {
-      workerBundleInstaller: bundleInstaller,
-      workerSupervisor: supervisor,
-      workerWorkspace: workspace,
-      gatewayUrl:
-        frame.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND
-          ? (options.workerGatewayUrl ?? options.gateway.wsUrl)
-          : (options.workspaceGatewayUrl?.(frame) ?? options.gateway.wsUrl),
-    })
+    const task = Promise.resolve()
+      .then(async () => await options.beforeInvoke?.(frame, host))
+      .then(
+        async () =>
+          await (options.pluginRuntime?.manifest.commands.includes(frame.command)
+            ? pluginRuntime!.invoke(frame)
+            : handleInvoke(frame, receiver, { current: async () => [] }, undefined, {
+                workerBundleInstaller: bundleInstaller,
+                workerSupervisor: supervisor,
+                workerWorkspace: workspace,
+                gatewayUrl:
+                  frame.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND
+                    ? (options.workerGatewayUrl ?? options.gateway.wsUrl)
+                    : (options.workspaceGatewayUrl?.(frame) ?? options.gateway.wsUrl),
+              })),
+      )
       .then(async () => await options.afterInvoke?.(frame, host))
       .catch((error: unknown) => {
         invokeErrors.push(error);
@@ -406,18 +445,49 @@ export async function createPairedNodeWorkerHost(
     invokeTasks.add(task);
   };
 
-  const connect = async (connection?: { environmentSession?: boolean }) => {
+  const connect = async (connectOptions?: { environmentSession?: boolean }) => {
+    await host.disconnect();
     if (closing) {
       throw new Error("paired worker node is closing");
     }
-    environmentSession = connection?.environmentSession ?? environmentSession;
-    const open = () =>
-      connectWireClient({
-        gateway: options.gateway,
+    environmentSession = connectOptions?.environmentSession ?? environmentSession;
+    const open = () => {
+      client = undefined;
+      retireConnection();
+      const next = { hello: false, changed: createDeferred() };
+      connection = next;
+      return connectWireClient({
+        gateway: {
+          wsUrl: options.gateway.wsUrl,
+          token: options.gateway.token,
+          runtimeEnv: nodeEnv,
+        },
         role: "node",
         identity,
         onEvent,
+        onHelloOk: () => {
+          next.hello = true;
+          next.changed.resolve();
+        },
+        onClose: (code, reason) => {
+          next.hello = false;
+          if (
+            connection === next &&
+            code === 4001 &&
+            (reason === "device removed" || reason === "client invalidated: device-pair-removed")
+          ) {
+            // Pairing removal ends this fixture's connection until an explicit connect().
+            retireConnection();
+            client?.stop();
+            return;
+          }
+          const previous = next.changed;
+          next.changed = createDeferred();
+          previous.resolve();
+        },
+        nodeManifest: options.pluginRuntime?.manifest,
       });
+    };
     let next: GatewayClient;
     try {
       next = await open();
@@ -433,7 +503,8 @@ export async function createPairedNodeWorkerHost(
       await client.stopAndWait({ timeoutMs: 2_000 });
       client = await open();
     }
-    await client.request(NODE_RUNNER_INVENTORY_UPDATE_METHOD, inventory());
+    pluginRuntime = options.pluginRuntime?.start({ client });
+    await host.publishInventory();
   };
   const drainInvokeTasks = async () => {
     while (invokeTasks.size > 0) {
@@ -454,29 +525,53 @@ export async function createPairedNodeWorkerHost(
     },
     connect,
     async disconnect() {
+      if (pluginRuntime) {
+        await host.stopPluginCommands();
+      }
       const current = client;
       client = undefined;
+      retireConnection();
       await current?.stopAndWait({ timeoutMs: 2_000 });
     },
     async publishInventory() {
-      if (!client) {
+      const current = client;
+      const readiness = connection;
+      if (!current || !readiness) {
         throw new Error("paired worker node is disconnected");
       }
-      await client.request(NODE_RUNNER_INVENTORY_UPDATE_METHOD, inventory());
+      const deadline = Date.now() + 30_000;
+      while (true) {
+        if (closing || client !== current || connection !== readiness) {
+          throw new Error("paired worker node is disconnected");
+        }
+        // Hello can be retired by close before an awakened publisher resumes.
+        if (readiness.hello) {
+          await current.request(NODE_RUNNER_INVENTORY_UPDATE_METHOD, inventory());
+          return;
+        }
+        const remainingMs = deadline - Date.now();
+        if (remainingMs <= 0) {
+          throw new Error("paired worker node hello timed out");
+        }
+        await withTestTimeout(
+          readiness.changed.promise,
+          remainingMs,
+          "paired worker node hello timed out",
+        );
+      }
+    },
+    async stopPluginCommands() {
+      await pluginRuntime?.close();
+      pluginRuntime = undefined;
     },
     async waitForInvokes() {
       await drainInvokeTasks();
     },
     async waitForWorkersIdle() {
       await waitUntil(async () => {
-        const receipts = await Promise.all(
-          [...launchIds].map(async (launchId) => await supervisor.status(launchId)),
-        );
-        // Finished turns do not prove the physical worker or container has been removed.
-        return capacity.available === capacity.total &&
-          receipts.every(
-            (receipt) => receipt !== undefined && !["pending", "running"].includes(receipt.state),
-          )
+        // Refused launches have no receipt; completed turns may still own a process.
+        // The supervisor owns physical, admission, recovery and durable liveness.
+        return capacity.available === capacity.total && !(await supervisor.hasActiveWork())
           ? true
           : undefined;
       });
@@ -504,13 +599,16 @@ export async function createPairedNodeWorkerHost(
     },
     async stop() {
       closing = true;
+      const cancellation = pluginRuntime?.cancelAll();
       const current = client;
       client = undefined;
+      retireConnection();
       const connectionCleanup = await Promise.allSettled([
+        cancellation,
         current?.stopAndWait({ timeoutMs: 2_000 }) ?? Promise.resolve(),
       ]);
       await drainInvokeTasks();
-      const cleanup = await Promise.allSettled([supervisor.close()]);
+      const cleanup = await Promise.allSettled([supervisor.close(), pluginRuntime?.close()]);
       const failures = [...connectionCleanup, ...cleanup].flatMap((result) =>
         result.status === "rejected" ? [result.reason] : [],
       );
@@ -532,54 +630,77 @@ export async function createPairedNodeWorkerHost(
 export async function startPairedNodeWorkerGateway(params: {
   owner: ReturnType<typeof createQaGatewayChild>;
   providerBaseUrl: string;
+  command?: Parameters<ReturnType<typeof createQaGatewayChild>["start"]>[0]["command"];
   executionIdentity?: boolean;
   repoRoot?: string;
   useRepoCli?: boolean;
   workspaceDir?: string;
   controlUiEnabled?: boolean;
   fullAccess?: boolean;
+  nativeWorkerDeviceId?: string;
+  requiredProfile?: string;
+  mockAuthAgentIds?: readonly string[];
+  mutateConfig?: Parameters<ReturnType<typeof createQaGatewayChild>["start"]>[0]["mutateConfig"];
 }): Promise<WireGateway> {
   return await params.owner.start({
     repoRoot: params.repoRoot ?? process.cwd(),
+    command: params.command,
     useRepoCli: params.useRepoCli ?? true,
     providerBaseUrl: `${params.providerBaseUrl}/v1`,
     providerMode: "mock-openai",
+    mockAuthAgentIds: params.mockAuthAgentIds,
     primaryModel: MODEL_REF,
     alternateModel: MODEL_REF,
     transportBaseUrl: "http://127.0.0.1",
     controlUiEnabled: params.controlUiEnabled ?? false,
-    mutateConfig: (config) => ({
-      ...config,
-      agents: {
-        ...config.agents,
-        defaults: {
-          ...config.agents?.defaults,
-          ...(params.workspaceDir ? { workspace: params.workspaceDir } : {}),
-          subagents: {
-            ...config.agents?.defaults?.subagents,
-            maxSpawnDepth: 2,
+    mutateConfig: (config) => {
+      const next: typeof config = {
+        ...config,
+        agents: {
+          ...config.agents,
+          defaults: {
+            ...config.agents?.defaults,
+            ...(params.workspaceDir ? { workspace: params.workspaceDir } : {}),
+            subagents: {
+              ...config.agents?.defaults?.subagents,
+              maxSpawnDepth: 2,
+            },
           },
         },
-      },
-      logging: params.executionIdentity
-        ? {
-            ...config.logging,
-            audit: { ...config.logging?.audit, enabled: true, executionIdentity: true },
-          }
-        : config.logging,
-      ...(params.fullAccess
-        ? {
-            tools: {
-              ...config.tools,
-              exec: { ...config.tools?.exec, mode: "full" as const },
-            },
-          }
-        : {}),
-      nodeHost: {
-        ...config.nodeHost,
-        workerRuns: { enabled: true },
-      },
-    }),
+        ...(params.nativeWorkerDeviceId
+          ? {
+              cloudWorkers: {
+                ...(params.requiredProfile ? { requiredProfile: params.requiredProfile } : {}),
+                profiles: {
+                  native: {
+                    provider: "device",
+                    settings: { device: params.nativeWorkerDeviceId, inference: "worker" },
+                  },
+                },
+              },
+            }
+          : {}),
+        logging: params.executionIdentity
+          ? {
+              ...config.logging,
+              audit: { ...config.logging?.audit, enabled: true, executionIdentity: true },
+            }
+          : config.logging,
+        ...(params.fullAccess
+          ? {
+              tools: {
+                ...config.tools,
+                exec: { ...config.tools?.exec, mode: "full" as const },
+              },
+            }
+          : {}),
+        nodeHost: {
+          ...config.nodeHost,
+          workerRuns: { enabled: true },
+        },
+      };
+      return params.mutateConfig ? params.mutateConfig(next) : next;
+    },
   });
 }
 

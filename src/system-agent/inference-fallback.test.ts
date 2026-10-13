@@ -26,11 +26,11 @@ const config: OpenClawConfig = {
       model: { primary: "zeta/model" },
       systemAgent: { agentId: "requester" },
     },
-    list: [
-      { id: "requester", default: true, model: "zeta/model" },
-      { id: "beta", model: "beta/model" },
-      { id: "alpha", model: "alpha/model" },
-    ],
+    entries: {
+      requester: { model: "zeta/model" },
+      beta: { model: "beta/model" },
+      alpha: { model: "alpha/model" },
+    },
   },
 };
 
@@ -122,11 +122,11 @@ describe("system-agent inference fallback", () => {
     const duplicateProviderConfig: OpenClawConfig = {
       agents: {
         defaults: { model: { primary: "zeta/model" } },
-        list: [
-          { id: "requester", model: "zeta/model" },
-          { id: "alpha-bad", model: "alpha/model" },
-          { id: "alpha-good", model: "alpha/model" },
-        ],
+        entries: {
+          requester: { model: "zeta/model" },
+          "alpha-bad": { model: "alpha/model" },
+          "alpha-good": { model: "alpha/model" },
+        },
       },
     };
 
@@ -156,10 +156,7 @@ describe("system-agent inference fallback", () => {
     const sameProviderConfig: OpenClawConfig = {
       agents: {
         defaults: { model: { primary: "alpha/model" } },
-        list: [
-          { id: "requester", model: "alpha/model" },
-          { id: "alpha-other", model: "alpha/model" },
-        ],
+        entries: { requester: { model: "alpha/model" }, "alpha-other": { model: "alpha/model" } },
       },
     };
 
@@ -188,10 +185,7 @@ describe("system-agent inference fallback", () => {
     const sameProviderConfig: OpenClawConfig = {
       agents: {
         defaults: { model: { primary: "alpha/model" } },
-        list: [
-          { id: "requester", model: "alpha/model" },
-          { id: "alpha-other", model: "alpha/model" },
-        ],
+        entries: { requester: { model: "alpha/model" }, "alpha-other": { model: "alpha/model" } },
       },
     };
 
@@ -220,11 +214,11 @@ describe("system-agent inference fallback", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: { model: { primary: "alpha/model" } },
-        list: [
-          { id: "requester", model: "alpha/model" },
-          { id: "alpha-other", model: "alpha/model" },
-          { id: "beta", model: "beta/model" },
-        ],
+        entries: {
+          requester: { model: "alpha/model" },
+          "alpha-other": { model: "alpha/model" },
+          beta: { model: "beta/model" },
+        },
       },
     };
 
@@ -254,11 +248,11 @@ describe("system-agent inference fallback", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: { model: { primary: "alpha/model" } },
-        list: [
-          { id: "requester", model: "alpha/model" },
-          { id: "alpha-other", model: "alpha/model" },
-          { id: "beta", model: "beta/model" },
-        ],
+        entries: {
+          requester: { model: "alpha/model" },
+          "alpha-other": { model: "alpha/model" },
+          beta: { model: "beta/model" },
+        },
       },
     };
 

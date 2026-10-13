@@ -18,12 +18,6 @@ import {
 } from "../app-sidebar.ts";
 import "../../components/app-sidebar.ts";
 
-function pointerEvent(type: "pointerenter" | "pointerleave", pointerType = "mouse") {
-  const event = new Event(type);
-  Object.defineProperty(event, "pointerType", { value: pointerType });
-  return event;
-}
-
 describe("AppSidebar agent chip", () => {
   it("keeps a configured avatar blank while waiting for authentication", async () => {
     const gateway = createGatewayHarness({} as GatewayBrowserClient);
@@ -80,40 +74,69 @@ describe("AppSidebar agent chip", () => {
     expect(request).toHaveBeenCalledWith("agent.identity.get", { agentId: "main" });
   });
 
-  it("keeps the hydrated identity while the active roster row is unavailable", async () => {
-    const request = vi.fn().mockResolvedValue({
-      agentId: "main",
-      name: "Workspace Molty",
-      emoji: "🦞",
-    });
-    const gatewayHarness = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
-    const agentIdentity = createAgentIdentityCapability(gatewayHarness.gateway);
-    const { sidebar } = await mountSidebar(
-      gatewayHarness.gateway,
-      createSessions("main", ["agent:main:main"]),
-      "panel",
-      null,
-      [],
-      agentIdentity,
-    );
-
-    sidebar.connected = true;
-    await vi.waitFor(() => {
-      expect(sidebar.querySelector(".sidebar-agent-card__name")?.textContent?.trim()).toBe(
-        "Workspace Molty",
+  it.each(["loading", "excluded"] as const)(
+    "does not revive a hydrated picker identity when discovery is %s",
+    async (discovery) => {
+      const request = vi.fn(async (_method: string, params: { agentId: string }) => ({
+        agentId: params.agentId,
+        name: params.agentId === "main" ? "Private agent" : "Shared agent",
+        emoji: "🦞",
+      }));
+      const gatewayHarness = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+      const agentIdentity = createAgentIdentityCapability(gatewayHarness.gateway);
+      await agentIdentity.ensure(["main"]);
+      const sessions = createSessions("main", ["agent:main:thread:readable"]);
+      const row = sessions.state.result?.sessions[0];
+      if (row) {
+        row.displayName = "Existing readable conversation";
+      }
+      const { sidebar } = await mountSidebar(
+        gatewayHarness.gateway,
+        sessions,
+        "panel",
+        discovery === "loading" ? null : { ...TWO_AGENTS, agents: [{ id: "shared" }] },
+        [],
+        agentIdentity,
       );
-    });
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
-    await vi.waitFor(() => {
+
+      sidebar.connected = true;
+      await sidebar.updateComplete;
+      expect(sidebar.querySelector(".sidebar-agent-card__name")?.textContent).not.toContain(
+        "Private agent",
+      );
+      if (discovery === "loading") {
+        expect(sidebar.querySelector(".sidebar-agent-card__main")).toBeNull();
+        expect(sidebar.querySelector(".sidebar-recent-session__title-row")?.textContent).toContain(
+          "Existing readable conversation",
+        );
+      } else {
+        expect(
+          sidebar.querySelector(".sidebar-agent-card__main")?.getAttribute("aria-label"),
+        ).toMatch(/shared/i);
+      }
+      sidebar
+        .querySelector<HTMLButtonElement>(
+          ".sidebar-workspace-header__main, .sidebar-agent-card__main",
+        )
+        ?.click();
+      await vi.dynamicImportSettled();
+      await sidebar.updateComplete;
+      expect(sidebar.querySelector(".sidebar-agent-menu")?.textContent).not.toContain(
+        "Private agent",
+      );
+      const capabilities = sidebar.querySelector('wa-dropdown-item[value="command:capabilities"]');
+      if (discovery === "loading") {
+        expect(capabilities).toBeNull();
+      } else {
+        expect(capabilities?.textContent).toMatch(/shared/i);
+      }
       expect(
         sidebar
-          .querySelector<HTMLElement>(
-            'wa-dropdown-item[value="command:capabilities"] .sidebar-customize-menu__text',
-          )
-          ?.textContent?.trim(),
-      ).toBe("What can Workspace Molty do?");
-    });
-  });
+          .querySelector('wa-dropdown-item[value="command:agent-settings"]')
+          ?.hasAttribute("disabled"),
+      ).toBe(discovery === "loading");
+    },
+  );
 
   it("keeps the configured roster label when identity hydration returns a fallback", async () => {
     const request = vi.fn(async (_method: string, params: { agentId: string }) =>
@@ -149,7 +172,7 @@ describe("AppSidebar agent chip", () => {
       const labels = [
         ...sidebar.querySelectorAll(".sidebar-agent-menu .agent-select__option-label"),
       ].map((element) => element.textContent?.trim());
-      expect(labels).toEqual(["Workspace Molty", "rust-claw"]);
+      expect(labels).toEqual(["Show all", "Workspace Molty", "rust-claw"]);
     });
     await vi.waitFor(() => {
       const rustRow = [
@@ -233,10 +256,12 @@ describe("AppSidebar agent chip", () => {
     const menu = sidebar.querySelector(".sidebar-agent-menu");
     expect(menu).not.toBeNull();
     expect(menu?.querySelector(".sidebar-pair-mobile")).toBeNull();
-    expect(menu?.querySelectorAll('[role="separator"]')).toHaveLength(1);
-    expect(menu?.querySelector('[role="separator"]')?.previousElementSibling?.className).toBe(
-      "sidebar-agent-menu__agent-grid",
-    );
+    expect(menu?.querySelectorAll('[role="separator"]')).toHaveLength(2);
+    expect(
+      menu
+        ?.querySelector('[role="separator"]')
+        ?.previousElementSibling?.classList.contains("sidebar-agent-menu__agent-list"),
+    ).toBe(true);
     expect(menu?.querySelector("openclaw-sidebar-build-chip")).toBeNull();
     expect(menu?.querySelector("openclaw-theme-mode-toggle")).toBeNull();
     expect(
@@ -244,19 +269,33 @@ describe("AppSidebar agent chip", () => {
         element.getAttribute("value"),
       ),
     ).toEqual([
+      "scope:all",
       "agent:main",
       "agent:research",
-      "command:sidebar-agents",
-      "command:all-agents",
       "command:new-agent",
+      "command:agents-directory",
       "command:capabilities",
       "command:agent-settings",
     ]);
 
-    const agentRows = [...(menu?.querySelectorAll(".sidebar-agent-menu__agent-switch") ?? [])];
+    const commands = [...(menu?.querySelectorAll('wa-dropdown-item[value^="command:"]') ?? [])];
+    expect(commands.map((item) => item.textContent?.trim())).toEqual([
+      "New agent",
+      "See all agents",
+      "What can Molty do?",
+      "Molty settings",
+    ]);
+    for (const command of commands) {
+      expect(command.querySelector('[slot="icon"] svg')).not.toBeNull();
+    }
+
+    expect(menu?.querySelector("[aria-checked], .session-menu__check")).toBeNull();
+    expect(menu?.querySelector('[value="scope:all"]')).not.toBeNull();
+
+    const agentRows = [...(menu?.querySelectorAll('wa-dropdown-item[value^="agent:"]') ?? [])];
     expect(agentRows).toHaveLength(2);
     expect(agentRows[0]?.classList.contains("sidebar-agent-menu__agent-switch--active")).toBe(true);
-    expect(agentRows[0]?.querySelector(".sidebar-agent-menu__agent-tile")).not.toBeNull();
+    expect(agentRows[0]?.querySelector(".sidebar-agent-menu__agent-row")).not.toBeNull();
     expect(menu?.querySelector(".identity-avatar__text")?.getAttribute("data-avatar")).toBe("🦞");
     expect(menu?.querySelector<HTMLImageElement>(".agent-select__avatar img")?.src).toContain(
       "data:image/png;base64,eA==",
@@ -285,120 +324,47 @@ describe("AppSidebar agent chip", () => {
     expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
   });
 
-  it("opens after fine-pointer hover intent without stealing focus", async () => {
-    vi.useFakeTimers();
-    vi.stubGlobal(
-      "matchMedia",
-      vi.fn(() => ({ matches: true })),
-    );
-    try {
-      const { sidebar } = await mountSidebar(
-        createGateway({} as GatewayBrowserClient),
+  it.each(["chip", "roster"] as const)(
+    "requests composer focus from the active agent's capabilities in %s mode",
+    async (mode) => {
+      const gateway = createGateway({} as GatewayBrowserClient);
+      const { sidebar, context } = await mountSidebar(
+        gateway,
         createSessions("main", ["agent:main:main"]),
         "panel",
         TWO_AGENTS,
       );
-      const menus = (
-        sidebar as unknown as {
-          sidebarMenus: { preloadMenuRenderer: () => Promise<unknown> };
-        }
-      ).sidebarMenus;
-      await menus.preloadMenuRenderer();
-      const input = document.createElement("input");
-      document.body.append(input);
-      input.focus();
-      const trigger = sidebar.querySelector<HTMLElement>(".sidebar-agent-card__main");
-      if (!trigger) {
-        throw new Error("Expected the sidebar agent card trigger");
-      }
-
-      trigger.dispatchEvent(pointerEvent("pointerenter"));
-      await vi.advanceTimersByTimeAsync(299);
+      const onNavigate = vi.fn();
+      sidebar.connected = true;
+      sidebar.onNavigate = onNavigate;
+      sidebar.activeRouteId = "skills";
+      context.agentSelection.set("research");
+      context.agentSelection.setScope(null);
+      sidebar.sidebarAgentsMode = mode;
       await sidebar.updateComplete;
-      expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
-      trigger.dispatchEvent(pointerEvent("pointerleave"));
-      await vi.advanceTimersByTimeAsync(1);
-      await sidebar.updateComplete;
-      expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
 
-      trigger.dispatchEvent(pointerEvent("pointerenter"));
-      await vi.advanceTimersByTimeAsync(300);
-      await sidebar.updateComplete;
-      const menu = sidebar.querySelector<HTMLElement>(".sidebar-agent-menu");
-      if (!menu) {
-        throw new Error("Expected the agent menu after hover intent");
-      }
-      menu.dispatchEvent(new Event("wa-after-show"));
-      expect(document.activeElement).toBe(input);
-
-      trigger.dispatchEvent(pointerEvent("pointerleave"));
-      await vi.advanceTimersByTimeAsync(199);
-      menu.dispatchEvent(pointerEvent("pointerenter"));
-      await vi.advanceTimersByTimeAsync(1);
-      expect(sidebar.querySelector(".sidebar-agent-menu")).toBe(menu);
-      menu.dispatchEvent(pointerEvent("pointerleave"));
-      await vi.advanceTimersByTimeAsync(200);
-      await sidebar.updateComplete;
-      expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
-    } finally {
-      vi.useRealTimers();
-      vi.unstubAllGlobals();
-    }
-  });
-
-  it("keeps hover opening disabled without a fine hover pointer", async () => {
-    vi.useFakeTimers();
-    vi.stubGlobal(
-      "matchMedia",
-      vi.fn(() => ({ matches: false })),
-    );
-    try {
-      const { sidebar } = await mountSidebar(
-        createGateway({} as GatewayBrowserClient),
-        createSessions("main", ["agent:main:main"]),
-        "panel",
-        TWO_AGENTS,
-      );
       sidebar
-        .querySelector<HTMLElement>(".sidebar-agent-card__main")
-        ?.dispatchEvent(pointerEvent("pointerenter"));
-      await vi.advanceTimersByTimeAsync(500);
+        .querySelector<HTMLButtonElement>(
+          ".sidebar-agent-card__main, .sidebar-workspace-header__main",
+        )
+        ?.click();
       await sidebar.updateComplete;
-      expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
-    } finally {
-      vi.useRealTimers();
-      vi.unstubAllGlobals();
-    }
-  });
+      const item = sidebar.querySelector<HTMLElement>(
+        'wa-dropdown-item[value="command:capabilities"]',
+      );
+      expect(item?.textContent).toContain("What can research do?");
+      sidebar
+        .querySelector(".sidebar-agent-menu")
+        ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item }, bubbles: true }));
 
-  it("requests composer focus and highlighting from the capabilities action", async () => {
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(
-      gateway,
-      createSessions("main", ["agent:main:main"]),
-      "panel",
-      TWO_AGENTS,
-    );
-    const onNavigate = vi.fn();
-    sidebar.connected = true;
-    sidebar.onNavigate = onNavigate;
-    await sidebar.updateComplete;
-
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
-    await sidebar.updateComplete;
-    const item = sidebar.querySelector<HTMLElement>(
-      'wa-dropdown-item[value="command:capabilities"]',
-    );
-    sidebar
-      .querySelector(".sidebar-agent-menu")
-      ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item }, bubbles: true }));
-
-    expect(onNavigate).toHaveBeenCalledOnce();
-    const options = onNavigate.mock.calls[0]?.[1] as { search: string };
-    const search = new URLSearchParams(options.search);
-    expect(search.get("draft")).toBe("What can you do?");
-    expect(search.get(SESSION_COMPOSER_FOCUS_PARAM)).toBe("1");
-  });
+      expect(onNavigate).toHaveBeenCalledOnce();
+      const options = onNavigate.mock.calls[0]?.[1] as { pathname: string; search: string };
+      expect(options.pathname).toBe("/chat/research");
+      const search = new URLSearchParams(options.search);
+      expect(search.get("draft")).toBe("What can you do?");
+      expect(search.get(SESSION_COMPOSER_FOCUS_PARAM)).toBe("1");
+    },
+  );
 
   it("drops the menu below the agent card instead of covering it", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
@@ -488,176 +454,37 @@ describe("AppSidebar agent chip", () => {
     expect(sidebar.querySelector(".sidebar-agent-menu")).toBe(firstMenu);
   });
 
-  it.each([0, 1])(
-    "keeps the mode toggle and agent actions with %i configured agents",
-    async (count) => {
-      const gateway = createGateway({} as GatewayBrowserClient);
-      const { sidebar } = await mountSidebar(
-        gateway,
-        createSessions("main", ["agent:main:main"]),
+  it.each([
+    { count: 6, pins: [], order: [1, 2, 3, 4, 5, 6] },
+    { count: 12, pins: ["agent-7", "agent-12"], order: [7, 12, 1, 2, 3, 4, 5, 6, 8, 9, 10, 11] },
+    { count: 12, pins: [], order: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] },
+    { count: 12, pins: ["deleted-agent"], order: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] },
+  ])(
+    "keeps all $count agents in pin order and searches only larger lists (pins=$pins)",
+    async ({ count, pins, order }) => {
+      const { sidebar, context } = await mountSidebar(
+        createGateway({} as GatewayBrowserClient),
+        createSessions("agent-1", ["agent:agent-1:main"]),
         "panel",
-        {
-          defaultId: "main",
-          mainKey: "main",
-          scope: "per-sender",
-          agents: count === 0 ? [] : [{ id: "main", identity: { name: "Molty", emoji: "🦞" } }],
-        },
+        manyAgents(count),
       );
       sidebar.connected = true;
+      sidebar.pinnedAgentIds = pins;
+      context.agentSelection.set("agent-1");
       await sidebar.updateComplete;
-
       sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
       await sidebar.updateComplete;
-      const menu = sidebar.querySelector(".sidebar-agent-menu");
-      expect(menu?.querySelector(".sidebar-customize-menu__title")).toBeNull();
-      expect(menu?.querySelector('[role="separator"]')).toBeNull();
-      expect(menu?.querySelector(".sidebar-agent-menu__filter")).toBeNull();
-      expect(menu?.querySelector(".sidebar-agent-menu__agent-switch")).toBeNull();
+      expect(Boolean(sidebar.querySelector(".sidebar-agent-menu__filter"))).toBe(count > 6);
+      expect(sidebar.querySelector(".sidebar-agent-menu__agent-list")).not.toBeNull();
       expect(
-        [...(menu?.children ?? [])]
-          .filter((element) => element.localName === "wa-dropdown-item")
-          .map((element) => element.getAttribute("value")),
-      ).toEqual([
-        "command:sidebar-agents",
-        "command:all-agents",
-        "command:new-agent",
-        "command:capabilities",
-        "command:agent-settings",
-      ]);
+        [
+          ...sidebar.querySelectorAll(
+            '.sidebar-agent-menu wa-dropdown-item[value^="agent:"] .agent-select__option-label',
+          ),
+        ].map((item) => item.textContent?.trim()),
+      ).toEqual(order.map((id) => "agent-" + id));
     },
   );
-
-  it.each([
-    { label: "All agents", navigation: ["agents-home", undefined] },
-    { label: "Agent settings", navigation: ["agents", { pathname: "/settings/agents/main" }] },
-  ])("navigates to $label and closes the agent menu", async ({ label, navigation }) => {
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(
-      gateway,
-      createSessions("main", ["agent:main:main"]),
-      "panel",
-      TWO_AGENTS,
-    );
-    const onNavigate = vi.fn();
-    sidebar.connected = true;
-    sidebar.onNavigate = onNavigate;
-    await sidebar.updateComplete;
-
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
-    await sidebar.updateComplete;
-    const actionRow = [
-      ...sidebar.querySelectorAll<HTMLElement>(".sidebar-agent-menu wa-dropdown-item"),
-    ].find((row) => row.textContent?.includes(label));
-    expect(actionRow).toBeDefined();
-    actionRow?.click();
-    await sidebar.updateComplete;
-    expect(onNavigate).toHaveBeenCalledWith(...navigation);
-    expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
-  });
-
-  it("keeps the plain roster without a filter at six agents or fewer", async () => {
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(
-      gateway,
-      createSessions("agent-1", ["agent:agent-1:main"]),
-      "panel",
-      manyAgents(6),
-    );
-    sidebar.connected = true;
-    await sidebar.updateComplete;
-
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
-    await sidebar.updateComplete;
-    expect(sidebar.querySelector(".sidebar-agent-menu__filter")).toBeNull();
-    expect(
-      sidebar.querySelectorAll(
-        ".sidebar-agent-menu wa-dropdown-item.sidebar-agent-menu__agent-switch",
-      ),
-    ).toHaveLength(6);
-  });
-
-  it("keeps pinned agents first in large scrollable rosters without a filter", async () => {
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar, context } = await mountSidebar(
-      gateway,
-      createSessions("agent-1", ["agent:agent-1:main"]),
-      "panel",
-      manyAgents(12),
-    );
-    sidebar.connected = true;
-    sidebar.pinnedAgentIds = ["agent-7", "agent-12"];
-    // Pins sort first, but the scrollable grid keeps every configured agent reachable.
-    context.agentSelection.state.selectedId = "agent-1";
-    await sidebar.updateComplete;
-
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
-    await sidebar.updateComplete;
-    expect(sidebar.querySelector(".sidebar-agent-menu__filter")).toBeNull();
-    // Pinned agents sort first without hiding the remaining roster.
-    const labels = () =>
-      [
-        ...sidebar.querySelectorAll(
-          ".sidebar-agent-menu wa-dropdown-item.sidebar-agent-menu__agent-switch .agent-select__option-label",
-        ),
-      ].map((el) => el.textContent?.trim());
-    expect(labels()).toEqual([
-      "agent-7",
-      "agent-12",
-      "agent-1",
-      "agent-2",
-      "agent-3",
-      "agent-4",
-      "agent-5",
-      "agent-6",
-      "agent-8",
-      "agent-9",
-      "agent-10",
-      "agent-11",
-    ]);
-  });
-
-  it("keeps the full large roster scrollable when nothing is pinned", async () => {
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(
-      gateway,
-      createSessions("agent-1", ["agent:agent-1:main"]),
-      "panel",
-      manyAgents(12),
-    );
-    sidebar.connected = true;
-    await sidebar.updateComplete;
-
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
-    await sidebar.updateComplete;
-    expect(sidebar.querySelector(".sidebar-agent-menu__filter")).toBeNull();
-    expect(
-      sidebar.querySelectorAll(
-        ".sidebar-agent-menu wa-dropdown-item.sidebar-agent-menu__agent-switch",
-      ),
-    ).toHaveLength(12);
-    expect(sidebar.querySelector(".sidebar-agent-menu__agent-grid")).not.toBeNull();
-  });
-
-  it("ignores stale pins when choosing the large-roster fallback", async () => {
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(
-      gateway,
-      createSessions("agent-1", ["agent:agent-1:main"]),
-      "panel",
-      manyAgents(12),
-    );
-    sidebar.connected = true;
-    sidebar.pinnedAgentIds = ["deleted-agent"];
-    await sidebar.updateComplete;
-
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
-    await sidebar.updateComplete;
-    expect(
-      sidebar.querySelectorAll(
-        ".sidebar-agent-menu wa-dropdown-item.sidebar-agent-menu__agent-switch",
-      ),
-    ).toHaveLength(12);
-  });
 
   it("loads switcher avatar tiles through the authenticated avatar loader", async () => {
     const avatarRoute = "/avatar/research?v=140879";

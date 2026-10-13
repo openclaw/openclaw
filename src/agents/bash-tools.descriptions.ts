@@ -12,11 +12,12 @@ export function describeExecTool(params?: {
       ? ["Run shell and wait for completion."]
       : [
           "Run shell now; background continuation supported.",
-          "Use yieldMs/background, then process for logs/status/input/intervention.",
+          "Completed calls return command output directly. Use process only when exec reports running with a sessionId; output text alone is not a process handle.",
           "Long run: automatic completion wake when enabled and output/failure occurs; otherwise process confirms completion.",
         ];
   const base = [
     ...continuation,
+    "Omit host to use the session's configured host.",
     params?.hasCronTool ? "No sleep loops for reminders/follow-ups; use automations." : undefined,
     "TTY CLI/UI/coding agent: pty=true.",
   ]

@@ -213,6 +213,11 @@ Omit `reliability.watchdog` to inherit the standard profiles, including the
 longer resumed-run budget for cron and explicit timeouts. Set it only when a
 backend intentionally needs its own watchdog policy.
 
+Recovery retries stay inside the operator-configured `timeoutMs`: elapsed time
+is measured monotonically, so an NTP correction or manual clock change can
+neither shorten a retry that still has budget nor let a hung CLI outlive its
+timeout.
+
 `freshSessionRecovery` is a backend-owned compatibility contract:
 
 - Leave it undefined or set it to `"replace-binding"` to preserve the legacy
@@ -309,6 +314,10 @@ declarations, oversized trees, and unknown scripts. Declare this only when that
 tree contains the complete inference implementation; optional tool integrations
 do not make an external implementation graph safe.
 
+On Windows, supported JavaScript entrypoints run through the verified Node
+executable selected from `PATH`. Explicit script paths do not require their
+suffix in `PATHEXT`; bare command lookup still follows `PATH` and `PATHEXT`.
+
 If the same backend also ships a self-contained native executable, list its
 canonical basenames in `nativeExecutableNames`. Other native commands remain
 unverified.
@@ -342,20 +351,6 @@ Declare how the backend enforces that contract:
 Runtime caps such as cron `toolsAllow` are normalized and group-expanded by
 OpenClaw before this contract is built. Native tools are disabled, and a
 backend without a complete declared enforcement path fails before execution.
-
-Rooted runs such as [Skill Workshop reviews](/tools/skill-workshop) also require
-`isolatesInstructionsWithExactTools: true` on the backend registration. Declare
-this optional capability only when exact-tool execution suppresses ambient
-instruction files, skills, hooks, and plugins for both fresh and resumed runs.
-The host-prepared instruction snapshot must remain authoritative. OpenClaw
-rejects rooted runs when this declaration is absent, even if the backend can
-enforce exact tools. Existing non-rooted runs do not require this field.
-
-The bundled Claude CLI backend declares this capability. Rooted execution
-disables its native tools and serves the selected OpenClaw tools through the
-host-owned MCP grant, which retains the root, filesystem policy, and configured
-sandbox. The declaration does not grant filesystem or approval authority to
-the backend.
 
 A backend whose native tools are model-callable may declare
 `projectNativeToolAuthority(nativeTools)` so that automations created from its

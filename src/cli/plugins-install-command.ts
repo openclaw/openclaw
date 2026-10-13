@@ -3,6 +3,7 @@ import { assertConfigWriteAllowedInCurrentMode } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "../plugins/clawhub.js";
 import { loadConfigForInstall, PluginInstallConfigError } from "../plugins/install-config.js";
+import { installManagedPlugin } from "../plugins/management-mutations.js";
 import { hasPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveClawHubInstallConfirmation } from "./clawhub-install-confirmation.js";
@@ -11,15 +12,13 @@ import { confirmNonClawHubInstall } from "./non-clawhub-install-acknowledgement.
 import { resolvePluginCapabilityConsentCliOptions } from "./plugin-capability-consent.js";
 import { createPluginInstallLogger } from "./plugins-command-helpers.js";
 import { createGatewayPluginInstaller } from "./plugins-install-gateway.js";
-import {
-  installPluginWithHookFallback,
-  resolveInstallSafetyOverrides,
-} from "./plugins-install-hook-fallback.js";
+import { installPluginWithHookFallback } from "./plugins-install-hook-fallback.js";
 import {
   resolvePluginInstallPreflight,
   type RunPluginInstallCommandParams,
 } from "./plugins-install-preflight.js";
 import { resolvePluginLifecycleGateway } from "./plugins-lifecycle-client.js";
+import { runWithLocalPluginState } from "./plugins-local-state.js";
 
 const DEPRECATED_DANGEROUS_FORCE_UNSAFE_INSTALL_WARNING =
   "--dangerously-force-unsafe-install is deprecated and no longer affects plugin installs because built-in install-time dangerous-code scanning has been removed. Configure security.installPolicy for operator-owned install decisions.";
@@ -77,13 +76,24 @@ export async function runPluginInstallCommand(params: RunPluginInstallCommandPar
       runtime.log(theme.warn(sourcePlan.warning));
     }
     result = await installPluginWithHookFallback({
-      request,
+      request: { ...request, ...(opts.enable === false ? { enable: false } : {}) },
       snapshot,
       runtime,
       applyRuntime: params.applyRuntime,
       beforePersistentApply: params.beforePersistentApply,
       invalidateRuntimeCache: params.invalidateRuntimeCache ?? true,
-      ...(gateway ? { install: createGatewayPluginInstaller(gateway) } : {}),
+      install: gateway
+        ? createGatewayPluginInstaller(gateway)
+        : (installParams) =>
+            runWithLocalPluginState("install", (assertCurrent) =>
+              installManagedPlugin({
+                ...installParams,
+                beforePersistentApply: () => {
+                  assertCurrent();
+                  installParams.beforePersistentApply?.();
+                },
+              }),
+            ),
       allowBundledFallback: sourcePlan?.allowBundledFallback,
       logger: createPluginInstallLogger(runtime),
       confirmInstall: resolveClawHubInstallConfirmation(),
@@ -92,14 +102,15 @@ export async function runPluginInstallCommand(params: RunPluginInstallCommandPar
         action: "install",
         runtime,
       }),
-      safetyOverrides: resolveInstallSafetyOverrides({
-        ...opts,
+      safetyOverrides: {
         config: snapshot.config,
+        onInstallPolicyWarning: opts.onInstallPolicyWarning,
+        trustedSourceLinkedOfficialInstall: opts.trustedSourceLinkedOfficialInstall,
         ...resolveInstallPolicyWarningAcknowledgementCliOptions({
           acknowledgeInstallPolicyWarning: opts.acknowledgeInstallPolicyWarning,
           allowPrompt: params.allowInstallPolicyWarningPrompt,
         }),
-      }),
+      },
     });
   } catch (error) {
     runtime.error(formatErrorMessage(error));

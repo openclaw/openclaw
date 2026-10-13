@@ -1,76 +1,68 @@
 import type { DatabaseSync } from "node:sqlite";
+import { parseSqliteTableDefinition } from "../infra/sqlite-schema-contract-assembly.js";
+import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
+import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
+import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
-import { ensureColumn, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
+import { ensureColumn, tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 
 export const SESSION_PENDING_INPUTS_TABLE = "session_pending_inputs";
-const presentDatabases = new WeakSet<DatabaseSync>();
-const completeDatabases = new WeakSet<DatabaseSync>();
-let absentDatabases = new WeakSet<DatabaseSync>();
+export const SESSION_INPUT_COMPLETIONS_TABLE = "session_input_completions";
 
-/** Cache feature-table presence per connection; first use invalidates earlier absence checks. */
+const ensurePendingTable = createSqliteSchemaEnsurer(
+  () =>
+    extractSqliteTableSchema(OPENCLAW_AGENT_SCHEMA_SQL, SESSION_PENDING_INPUTS_TABLE, {
+      endMarker: "-- Processing completion",
+      includeEndMarker: false,
+      errorMessage: "OpenClaw pending-input schema marker is missing.",
+    }),
+  {
+    tables: [SESSION_PENDING_INPUTS_TABLE],
+    indexes: ["idx_agent_session_pending_inputs_session"],
+  },
+);
+
+/** Read-only callers consume the schema owner's presence facts without installing anything. */
 export function hasSessionPendingInputsSchema(db: DatabaseSync): boolean {
-  if (presentDatabases.has(db)) {
-    return true;
-  }
-  if (!db.isTransaction && absentDatabases.has(db)) {
-    return false;
-  }
-  const present = Boolean(
-    // sqlite-allow-raw -- Feature-local schema discovery, never application data.
-    db
-      .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?")
-      .get(SESSION_PENDING_INPUTS_TABLE),
-  );
-  if (!db.isTransaction) {
-    (present ? presentDatabases : absentDatabases).add(db);
-  }
-  return present;
+  return tableExists(db, SESSION_PENDING_INPUTS_TABLE);
 }
 
-/** Lazily installs accepted-input custody without changing either schema version marker. */
+/** Install canonical first-use storage and migrate older same-version tables. */
 export function ensureSessionPendingInputsSchema(db: DatabaseSync): void {
-  if (completeDatabases.has(db)) {
-    return;
-  }
-  const start = OPENCLAW_AGENT_SCHEMA_SQL.indexOf(
-    `CREATE TABLE IF NOT EXISTS ${SESSION_PENDING_INPUTS_TABLE} (`,
-  );
-  if (start < 0) {
-    throw new Error("OpenClaw pending-input schema marker is missing.");
-  }
-  const nested = db.isTransaction;
-  runSqliteImmediateTransactionSync(db, () => {
-    db.exec(OPENCLAW_AGENT_SCHEMA_SQL.slice(start)); // sqlite-allow-raw -- Canonical additive DDL only.
-    ensureColumn(db, SESSION_PENDING_INPUTS_TABLE, "consumed_event_id TEXT");
-  });
-  absentDatabases = new WeakSet();
-  if (!nested) {
-    presentDatabases.add(db);
-    completeDatabases.add(db);
+  ensurePendingTable(db);
+  if (!hasPendingInputConsumptionColumn(db)) {
+    runSqliteImmediateTransactionSync(db, () => ensurePendingInputConsumptionColumn(db));
   }
 }
+
+/** Completion tracking is opt-in; ordinary input admission does not create this table. */
+export const ensureSessionInputCompletionsSchema = createSqliteSchemaEnsurer(
+  () =>
+    extractSqliteTableSchema(OPENCLAW_AGENT_SCHEMA_SQL, SESSION_INPUT_COMPLETIONS_TABLE, {
+      errorMessage: "OpenClaw input-completion schema marker is missing.",
+    }),
+  { tables: [SESSION_INPUT_COMPLETIONS_TABLE] },
+);
 
 /** Existing same-version stores converge through Doctor/open; absent tables stay feature-local. */
 export function hasPendingInputConsumptionColumnMigration(db: DatabaseSync): boolean {
-  return (
-    hasSessionPendingInputsSchema(db) &&
-    !tableHasColumn(db, SESSION_PENDING_INPUTS_TABLE, "consumed_event_id")
-  );
+  return hasSessionPendingInputsSchema(db) && !hasPendingInputConsumptionColumn(db);
 }
 
 export function ensurePendingInputConsumptionColumn(db: DatabaseSync): void {
   ensureColumn(db, SESSION_PENDING_INPUTS_TABLE, "consumed_event_id TEXT");
 }
 
-/** Read-only callers can inspect pre-feature stores without installing schema. */
 export function hasPendingInputConsumptionColumn(db: DatabaseSync): boolean {
-  if (completeDatabases.has(db)) {
-    return true;
+  const schema = getAdmittedSqliteSchemaFacts(db);
+  if (schema) {
+    const sql = schema.tableSql.get(SESSION_PENDING_INPUTS_TABLE);
+    return (
+      sql !== undefined &&
+      sql !== null &&
+      parseSqliteTableDefinition(sql, SESSION_PENDING_INPUTS_TABLE).columns.has("consumed_event_id")
+    );
   }
-  const present = tableHasColumn(db, SESSION_PENDING_INPUTS_TABLE, "consumed_event_id");
-  if (present && !db.isTransaction) {
-    completeDatabases.add(db);
-  }
-  return present;
+  return tableHasColumn(db, SESSION_PENDING_INPUTS_TABLE, "consumed_event_id");
 }

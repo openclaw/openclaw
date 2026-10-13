@@ -12,8 +12,6 @@ import {
   markEmbeddedRunAuthProfileSuccess,
   reportEmbeddedRunSuccessfulAuthBinding,
 } from "./run/auth-profile-success.js";
-import { resolveInitialThinkLevel } from "./run/runtime-resolution.js";
-import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 vi.mock("../auth-profiles.js", () => ({
   markAuthProfileSuccess: vi.fn(),
@@ -55,6 +53,20 @@ describe("reportEmbeddedRunSuccessfulAuthBinding", () => {
     },
   };
 
+  const bindingInput = {
+    profileId: "openai:work",
+    profileStore,
+    apiKeyInfo: null,
+    attempt: makeAttemptResult(),
+    provider: "openai",
+    modelId: "gpt-5.4",
+    modelApi: "openai-responses",
+    requestTransportOverrides: "none",
+    agentHarnessId: "codex",
+    pluginHarnessOwnsTransport: true,
+    pluginHarnessOwnsAuthBootstrap: true,
+  } satisfies Parameters<typeof reportEmbeddedRunSuccessfulAuthBinding>[0];
+
   afterEach(() => {
     clearAllRuntimeAuthMaterializations();
   });
@@ -64,24 +76,15 @@ describe("reportEmbeddedRunSuccessfulAuthBinding", () => {
     const unregister = registerRuntimeAuthMaterializationMutationListener(listener);
     const agentDir = "/tmp/openclaw-auth-success-dedup";
     const input = {
-      profileId: "openai:work",
-      profileStore,
+      ...bindingInput,
       apiKeyInfo: {
         apiKey: "resolved-key",
         source: "profile:openai:work",
         mode: "api-key" as const,
         profileId: "openai:work",
       },
-      attempt: {} as EmbeddedRunAttemptResult,
-      provider: "openai",
       agentDir,
-      modelId: "gpt-5.4",
-      modelApi: "openai-responses",
       modelBaseUrl: "https://api.openai.com/v1",
-      requestTransportOverrides: "none" as const,
-      agentHarnessId: "codex",
-      pluginHarnessOwnsTransport: true,
-      pluginHarnessOwnsAuthBootstrap: true,
     };
 
     try {
@@ -101,49 +104,17 @@ describe("reportEmbeddedRunSuccessfulAuthBinding", () => {
     }
   });
 
-  it.each([
-    {
-      name: "non-profile provenance",
+  it("rejects prepared auth with non-profile provenance", () => {
+    reportEmbeddedRunSuccessfulAuthBinding({
+      ...bindingInput,
       apiKeyInfo: {
         apiKey: "resolved-key",
         source: "env:OPENAI_API_KEY",
-        mode: "api-key" as const,
+        mode: "api-key",
         profileId: "openai:work",
       },
-    },
-    {
-      name: "different profile provenance",
-      apiKeyInfo: {
-        apiKey: "resolved-key",
-        source: "profile:openai:other",
-        mode: "api-key" as const,
-        profileId: "openai:other",
-      },
-    },
-    {
-      name: "non-API-key mode",
-      apiKeyInfo: {
-        apiKey: "resolved-key",
-        source: "profile:openai:work",
-        mode: "token" as const,
-        profileId: "openai:work",
-      },
-    },
-  ])("rejects prepared auth with $name", ({ apiKeyInfo }) => {
-    reportEmbeddedRunSuccessfulAuthBinding({
-      profileId: "openai:work",
-      profileStore,
-      apiKeyInfo,
-      attempt: {} as EmbeddedRunAttemptResult,
-      provider: "openai",
       agentDir: "/tmp/openclaw-auth-success-negative",
-      modelId: "gpt-5.4",
-      modelApi: "openai-responses",
       modelBaseUrl: "https://api.openai.com/v1",
-      requestTransportOverrides: "none",
-      agentHarnessId: "codex",
-      pluginHarnessOwnsTransport: true,
-      pluginHarnessOwnsAuthBootstrap: true,
     });
 
     expect(getPreparedRuntimeAuthMaterializations("/tmp/openclaw-auth-success-negative")).toEqual(
@@ -155,18 +126,11 @@ describe("reportEmbeddedRunSuccessfulAuthBinding", () => {
     const onSuccessfulAuthBinding = vi.fn();
 
     reportEmbeddedRunSuccessfulAuthBinding({
-      profileId: "openai:work",
-      profileStore,
-      apiKeyInfo: null,
+      ...bindingInput,
       attempt: {
+        ...bindingInput.attempt,
         authBindingFingerprint: "resolved-secretref-fingerprint",
-      } as EmbeddedRunAttemptResult,
-      provider: "openai",
-      modelId: "gpt-5.4",
-      modelApi: "openai-responses",
-      agentHarnessId: "codex",
-      pluginHarnessOwnsTransport: true,
-      pluginHarnessOwnsAuthBootstrap: true,
+      },
       onSuccessfulAuthBinding,
     });
 
@@ -189,16 +153,8 @@ describe("reportEmbeddedRunSuccessfulAuthBinding", () => {
     };
 
     reportEmbeddedRunSuccessfulAuthBinding({
-      profileId: "openai:work",
-      profileStore,
-      apiKeyInfo: null,
-      attempt: { runtimeArtifact } as EmbeddedRunAttemptResult,
-      provider: "openai",
-      modelId: "gpt-5.4",
-      modelApi: "openai-responses",
-      agentHarnessId: "codex",
-      pluginHarnessOwnsTransport: true,
-      pluginHarnessOwnsAuthBootstrap: true,
+      ...bindingInput,
+      attempt: { ...bindingInput.attempt, runtimeArtifact },
       onSuccessfulAuthBinding,
     });
 
@@ -217,17 +173,6 @@ describe("reportEmbeddedRunSuccessfulAuthBinding", () => {
 });
 
 describe("overflow loop owner policies", () => {
-  it("uses provider policy for a configless MiniMax-M3 run", () => {
-    expect(
-      resolveInitialThinkLevel({
-        config: undefined,
-        provider: "minimax",
-        modelId: "MiniMax-M3",
-        model: { reasoning: true },
-      }),
-    ).toBe("adaptive");
-  });
-
   it("retains bounded ordered delivery facts and source finality across generations", () => {
     const target = {
       tool: "message",

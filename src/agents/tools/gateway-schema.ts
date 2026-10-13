@@ -6,7 +6,6 @@
 import { Type } from "typebox";
 import { optionalPositiveIntegerSchema } from "../schema/typebox.js";
 
-/** Returns optional gateway URL/token/timeout schema properties for tool params. */
 export function gatewayCallOptionSchemaProperties() {
   return {
     gatewayUrl: Type.Optional(Type.String()),

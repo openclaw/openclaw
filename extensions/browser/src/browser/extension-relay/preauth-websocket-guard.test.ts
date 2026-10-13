@@ -2,8 +2,8 @@ import { IncomingMessage } from "node:http";
 import { Socket } from "node:net";
 import { Duplex } from "node:stream";
 import { setImmediate } from "node:timers/promises";
+import { WebSocketServer, type WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { WebSocketServer, type WebSocket } from "ws";
 import { handlePreAuthWebSocketUpgrade } from "./preauth-websocket-guard.js";
 import { EXTENSION_RELAY_MAX_PAYLOAD_BYTES } from "./relay-server.js";
 

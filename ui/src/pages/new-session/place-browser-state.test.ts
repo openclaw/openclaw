@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FsListDirResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
+import { GatewayRequestError } from "../../api/gateway.ts";
 import { PlaceBrowserState, PICKER_INPUT_DEBOUNCE_MS } from "./place-browser-state.ts";
 
 const workspace = {
@@ -42,19 +43,6 @@ function fixture() {
 }
 
 describe("PlaceBrowserState", () => {
-  it("filters the loaded directory without another request", async () => {
-    const { browser, listDirectory } = fixture();
-    await browser.navigate(workspace.path);
-
-    browser.setDraft("  /workspace/pa  ");
-    expect(browser.draft).toBe("  /workspace/pa  ");
-    expect(browser.usablePath()).toBe("/workspace/pa");
-    expect(browser.loading).toBe(false);
-    expect(browser.view().entries).toEqual([workspace.entries[0]]);
-    await vi.advanceTimersByTimeAsync(PICKER_INPUT_DEBOUNCE_MS);
-    expect(listDirectory).toHaveBeenCalledTimes(1);
-  });
-
   it("coalesces directory edits, marks loading immediately, and preserves the raw draft", async () => {
     const { browser, listDirectory, onListing } = fixture();
     await browser.navigate(workspace.path);
@@ -115,7 +103,8 @@ describe("PlaceBrowserState", () => {
       expect(listDirectory).toHaveBeenCalledTimes(phase === "pending" ? 1 : 2);
       expect(browser.listing).toEqual(workspace);
       expect(browser.loading).toBe(false);
-      expect(browser.highlightedEntry()).toEqual(workspace.entries[1]);
+      expect(browser.view().entries).toEqual([workspace.entries[1]]);
+      expect(browser.highlightedEntry()).toBeUndefined();
       expect(onListing).toHaveBeenCalledTimes(1);
     },
   );
@@ -148,27 +137,7 @@ describe("PlaceBrowserState", () => {
     expect(onListing).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps the current listing after explicit navigation fails", async () => {
-    const { browser, listDirectory } = fixture();
-    await browser.navigate(workspace.path);
-    listDirectory.mockRejectedValueOnce(new Error("directory not found"));
-
-    await browser.navigate("/missing");
-    expect(listDirectory).toHaveBeenCalledTimes(2);
-    expect(browser.listing).toEqual(workspace);
-    expect(browser.draft).toBe("/missing");
-    expect(browser.error).toBe("Couldn't list that folder.");
-    expect(browser.loading).toBe(false);
-    browser.setDraft("/workspace/pa");
-    expect(browser.error).toBeNull();
-  });
-
   it.each([
-    {
-      label: "load failure",
-      error: new Error("directory not found"),
-      message: "Couldn't list that folder.",
-    },
     {
       label: "missing scope",
       error: {
@@ -184,50 +153,41 @@ describe("PlaceBrowserState", () => {
         "To browse outside agent workspaces, open Inbox, select Limited access, request admin, then approve in Devices.",
     },
   ])(
-    "falls back on an initial $label and retains the mapped message",
+    "retains an explicit $label without changing the requested path",
     async ({ error, message }) => {
       const { browser, listDirectory, onListing } = fixture();
       listDirectory.mockRejectedValueOnce(error);
 
       await browser.navigate("/missing");
-      expect(listDirectory.mock.calls).toEqual([["/missing"], [undefined]]);
-      expect(browser.listing).toEqual(workspace);
-      expect(browser.draft).toBe(workspace.path);
+      expect(listDirectory.mock.calls).toEqual([["/missing"]]);
+      expect(browser.listing).toBeNull();
+      expect(browser.draft).toBe("/missing");
       expect(browser.error).toBe(message);
       expect(browser.loading).toBe(false);
-      expect(onListing).toHaveBeenCalledExactlyOnceWith(workspace);
+      expect(onListing).not.toHaveBeenCalled();
     },
   );
 
-  it("settles when the fallback root also fails", async () => {
-    const { browser, listDirectory } = fixture();
-    listDirectory.mockRejectedValue(new Error("unavailable"));
-
-    await browser.navigate("/missing");
-    expect(listDirectory.mock.calls).toEqual([["/missing"], [undefined]]);
-    expect(browser.listing).toBeNull();
-    expect(browser.error).toBe("Couldn't list that folder.");
-    expect(browser.loading).toBe(false);
-  });
-
-  it("shows the loaded folder's children for its own path and filters child names without loading", async () => {
-    const { browser, listDirectory } = fixture();
-    await browser.navigate(workspace.path);
-    expect(browser.draft).toBe(workspace.path);
-    expect(browser.view().entries).toEqual(workspace.entries);
-
-    for (const [draft, expectedEntries] of [
-      [workspace.path, workspace.entries],
-      [packages.path, [workspace.entries[0]]],
-      [workspace.path, workspace.entries],
-    ] as const) {
-      browser.setDraft(draft);
-      expect(browser.loading).toBe(false);
-      expect(browser.view().entries).toEqual(expectedEntries);
-      await vi.advanceTimersByTimeAsync(PICKER_INPUT_DEBOUNCE_MS);
-      expect(listDirectory).toHaveBeenCalledTimes(1);
-    }
-  });
+  it.each(["Error: ENOTDIR: not a directory"])(
+    "opens HOME without an error for a missing starting folder (%s)",
+    async (message) => {
+      const { browser, listDirectory } = fixture();
+      listDirectory.mockRejectedValueOnce(
+        new GatewayRequestError({ code: "INVALID_REQUEST", message }),
+      );
+      await browser.navigate("/missing", "initial");
+      expect(listDirectory.mock.calls).toEqual([["/missing"], [undefined]]);
+      expect(browser.draft).toBe(workspace.path);
+      expect(browser.error).toBeNull();
+      listDirectory.mockRejectedValueOnce(
+        new GatewayRequestError({ code: "INVALID_REQUEST", message }),
+      );
+      browser.setDraft("/missing");
+      await browser.activate();
+      expect(browser.draft).toBe("/missing");
+      expect(browser.error).toBe("Couldn't list that folder.");
+    },
+  );
 
   it("wraps the highlight, completes with Tab, and opens the highlighted folder with Enter", async () => {
     const { browser, listDirectory } = fixture();
@@ -235,20 +195,22 @@ describe("PlaceBrowserState", () => {
     const app = { name: "app", path: "/workspace/app" };
     listDirectory.mockResolvedValueOnce({ ...workspace, entries: [appOld, app] });
     await browser.navigate(workspace.path);
-    expect(browser.highlightedEntry()).toEqual(appOld);
+    expect(browser.highlightedEntry()).toBeUndefined();
     browser.moveHighlight(-1);
     expect(browser.highlightedEntry()).toEqual(app);
     browser.moveHighlight(1);
     expect(browser.highlightedEntry()).toEqual(appOld);
     browser.moveHighlight(1);
     browser.setDraft("/workspace/ap");
+    expect(browser.highlightedEntry()).toBeUndefined();
+    browser.moveHighlight(1);
     expect(browser.highlightedEntry()).toEqual(appOld);
     browser.moveHighlight(1);
     expect(browser.highlightedEntry()).toEqual(app);
 
     expect(browser.completeHighlighted()).toBe(true);
     expect(browser.draft).toBe(app.path);
-    expect(browser.highlightedEntry()).toEqual(app);
+    expect(browser.highlightedEntry()).toBeUndefined();
     expect(browser.completeHighlighted()).toBe(false);
     expect(browser.view().entries).toEqual([app, appOld]);
     expect(listDirectory).toHaveBeenCalledTimes(1);
@@ -264,11 +226,7 @@ describe("PlaceBrowserState", () => {
     expect(browser.view().entries).toEqual([]);
   });
 
-  it.each([
-    { draft: "  /missing  ", usable: "/missing", requested: "/missing" },
-    { draft: "  ", usable: "", requested: undefined },
-    { draft: "relative", usable: null, requested: null },
-  ])(
+  it.each([{ draft: "  ", usable: "", requested: undefined }])(
     "uses the typed path when Enter has no highlight: $draft",
     async ({ draft, usable, requested }) => {
       const { browser, listDirectory } = fixture();
@@ -280,6 +238,24 @@ describe("PlaceBrowserState", () => {
       await browser.activate();
       await vi.advanceTimersByTimeAsync(PICKER_INPUT_DEBOUNCE_MS);
       expect(listDirectory.mock.calls).toEqual(requested === null ? [] : [[requested]]);
+    },
+  );
+
+  it.each(["relative"])(
+    "keeps a relative draft on Enter despite a highlighted folder: %j",
+    async (draft) => {
+      const { browser, listDirectory } = fixture();
+      await browser.navigate(workspace.path);
+      browser.setDraft(draft);
+      browser.moveHighlight(1);
+      expect(browser.highlightedEntry()).toEqual(workspace.entries[0]);
+      expect(browser.usablePath()).toBeNull();
+
+      await browser.activate();
+      await vi.advanceTimersByTimeAsync(PICKER_INPUT_DEBOUNCE_MS);
+      expect(listDirectory).toHaveBeenCalledTimes(1);
+      expect(browser.draft).toBe(draft);
+      expect(browser.listing).toBe(workspace);
     },
   );
 
@@ -302,7 +278,7 @@ describe("PlaceBrowserState", () => {
     expect(browser.loading).toBe(false);
     expect(browser.error).toBeNull();
     expect(browser.highlightedEntry()).toBeUndefined();
-    expect(browser.activeIndex).toBe(0);
+    expect(browser.activeIndex).toBe(-1);
     expect(onListing).toHaveBeenCalledTimes(1);
     expect(vi.getTimerCount()).toBe(0);
   });

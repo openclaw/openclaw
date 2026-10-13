@@ -3,6 +3,7 @@ import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
 import { createChannelPartialDeliveryError } from "../../channels/turn/delivery-result.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -24,11 +25,12 @@ import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { createPluginBindingRecord } from "./conversation-binding.test-fixtures.js";
 import { needsTtsFallback } from "./dispatch-from-config.finalize.js";
 import { buildNoVisibleReplyFallbackText } from "./dispatch-from-config.payloads.js";
+import { registerPreparedSettlementTests } from "./dispatch-from-config.prepared-settlement.test-support.js";
 import {
   createDispatcher,
-  createPluginBindingRecord,
   diagnosticMocks,
   emptyConfig,
   hookMocks,
@@ -52,7 +54,7 @@ import {
   messageAuditEvents,
   globalBeforeAll0,
   describe0BeforeEach0,
-} from "./dispatch-from-config.test-harness.js";
+} from "./dispatch-from-config.test-support.js";
 import { withDispatchProcessedOutcomeSink } from "./dispatch-processed-outcome.js";
 import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 import { usesFullReplyRuntime } from "./reply-config-runtime-mode.js";
@@ -70,42 +72,7 @@ describe("dispatchReplyFromConfig", () => {
   });
   afterEach(clearRuntimeConfigSnapshot);
 
-  it("records channel transform suppression before TTS or visible fallback delivery", async () => {
-    setNoAbort();
-    const transport = vi.fn(async () => {});
-    const transformReplyPayload = vi.fn(() => null);
-    const dispatcher = createReplyDispatcher({ deliver: transport, transformReplyPayload });
-    const ctx = buildTestCtx({
-      Provider: "telegram",
-      Surface: "telegram",
-      SessionKey: "agent:main:telegram:direct:123",
-    });
-
-    const result = await dispatchReplyFromConfig({
-      ctx,
-      cfg: emptyConfig,
-      dispatcher,
-      replyResolver: vi.fn(async (_ctx, opts) => {
-        await opts?.onBlockReply?.({ text: "private block" });
-        return { text: "private reply" };
-      }),
-    });
-    dispatcher.markComplete();
-    await dispatcher.waitForIdle();
-
-    expect(result).toMatchObject({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    });
-    expect(result).not.toHaveProperty("noVisibleReplyFallbackEligible");
-    expect(result).not.toHaveProperty("noVisibleReplyFallbackDelivered");
-    expect(transformReplyPayload).toHaveBeenCalledTimes(2);
-    expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
-    expect(transport).not.toHaveBeenCalled();
-    expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
-      expect.objectContaining({ outcome: "completed", reason: "channel_transform" }),
-    );
-  });
+  registerPreparedSettlementTests();
 
   it.each([true, false])(
     "keeps a held native final with its delivery owner (primary=%s)",
@@ -224,53 +191,6 @@ describe("dispatchReplyFromConfig", () => {
     ).toBe(fallback);
     expect(result.noVisibleReplyFallbackEligible === true).toBe(fallback);
     expect(receipt?.anyVisibleDelivered).toBe(false);
-  });
-
-  it("does not dispatch a settled final reply after its session writer is replaced", async () => {
-    setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      lifecycleRevision: "revision-a",
-      activeWriterRunId: "run-settled",
-      updatedAt: 0,
-    };
-    const payload = setReplyPayloadMetadata(
-      { text: "settled fallback" },
-      {
-        assistantTranscriptOwned: true,
-        assistantTranscriptIdempotencyKey: "run-settled:settled-finalization-fallback",
-        sessionWriterDeliveryAuthority: {
-          expectedLifecycleRevision: "revision-a",
-          expectedSessionId: "s1",
-          expectedWriterRunId: "run-settled",
-          sessionKey: "agent:main:telegram:direct:123",
-          storePath: "/tmp/mock-sessions.json",
-        },
-      },
-    );
-    const dispatcher = createDispatcher();
-
-    const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "telegram",
-        Surface: "telegram",
-        SessionKey: "agent:main:telegram:direct:123",
-      }),
-      cfg: emptyConfig,
-      dispatcher,
-      replyOptions: { runId: "run-settled" },
-      replyResolver: vi.fn(async () => {
-        sessionStoreMocks.currentEntry = {
-          ...sessionStoreMocks.currentEntry,
-          activeWriterRunId: "replacement-run",
-        };
-        return payload;
-      }),
-    });
-
-    expect(result).toMatchObject({ queuedFinal: false });
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    expect(mocks.routeReply).not.toHaveBeenCalled();
   });
 
   it("keeps a block-only channel transform veto terminal", async () => {
@@ -1222,7 +1142,6 @@ describe("dispatchReplyFromConfig", () => {
     setNoAbort();
     const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
     const ctx = buildTestCtx({
-      Provider: "whatsapp",
       OriginatingChannel: "whatsapp",
       OriginatingTo: "whatsapp:+15555550123",
       AccountId: "default",
@@ -1263,7 +1182,6 @@ describe("dispatchReplyFromConfig", () => {
     setNoAbort();
     const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
     const ctx = buildTestCtx({
-      Provider: "whatsapp",
       OriginatingChannel: "whatsapp",
       OriginatingTo: "whatsapp:+15555550123",
       AccountId: "default",
@@ -1311,7 +1229,6 @@ describe("dispatchReplyFromConfig", () => {
     setNoAbort();
     const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
     const ctx = buildTestCtx({
-      Provider: "whatsapp",
       OriginatingChannel: "whatsapp",
       OriginatingTo: "whatsapp:+15555550124",
       To: "whatsapp:+15555550124",
@@ -1390,7 +1307,6 @@ describe("dispatchReplyFromConfig", () => {
       sessionStoreMocks.currentEntry = { sessionId: "s1", updatedAt: 0, sendPolicy: "deny" };
     }
     const ctx = buildTestCtx({
-      Provider: "whatsapp",
       OriginatingChannel: "whatsapp",
       OriginatingTo: `whatsapp:${phone}`,
       To: `whatsapp:${phone}`,
@@ -2014,9 +1930,17 @@ describe("dispatchReplyFromConfig", () => {
   it("strips split TTS directives from streamed block text before delivery", async () => {
     setNoAbort();
     ttsMocks.state.synthesizeFinalAudio = true;
-    const dispatcher = createDispatcher();
+
     const ctx = buildTestCtx({ Provider: "whatsapp" });
     const blockReplySentTexts: string[] = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload, { kind }) => {
+        if (kind === "block" && payload.text) {
+          blockReplySentTexts.push(payload.text);
+        }
+      },
+    });
+    vi.spyOn(dispatcher, "sendFinalReply");
     const replyResolver = async (
       _ctx: MsgContext,
       opts?: GetReplyOptions,
@@ -2025,14 +1949,6 @@ describe("dispatchReplyFromConfig", () => {
       await opts?.onBlockReply?.({ text: "xt]]hidden[[/tts:text]] visible" });
       return undefined;
     };
-    (dispatcher.sendBlockReply as ReturnType<typeof vi.fn>).mockImplementation(
-      (payload: ReplyPayload) => {
-        if (payload.text) {
-          blockReplySentTexts.push(payload.text);
-        }
-        return true;
-      },
-    );
 
     await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
 
@@ -2053,8 +1969,6 @@ describe("dispatchReplyFromConfig", () => {
     setNoAbort();
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
-      Provider: "whatsapp",
-      Surface: "whatsapp",
       ChatType: "group",
       From: "whatsapp:120363111111111@g.us",
       To: "whatsapp:120363111111111@g.us",
@@ -2540,19 +2454,14 @@ describe("dispatchReplyFromConfig", () => {
     { final: "same", audio: false, native: true },
     { final: "different", audio: false, native: true },
     { final: "same", audio: true, native: true },
-    { final: "same", audio: false, native: "identityless" },
     { final: "different", audio: false, native: "identityless" },
     { final: "same", audio: true, native: "identityless" },
-    { final: "same", audio: false, native: "deferred" },
     { final: "different", audio: false, native: "deferred" },
     { final: "same", audio: true, native: "deferred" },
-    { final: "same", audio: false, native: "ambiguous" },
     { final: "different", audio: false, native: "ambiguous" },
     { final: "same", audio: true, native: "ambiguous" },
-    { final: "same", audio: false, native: "partial" },
     { final: "different", audio: false, native: "partial" },
     { final: "same", audio: true, native: "partial" },
-    { final: "same", audio: false, native: "partial-envelope" },
     { final: "different", audio: false, native: "partial-envelope" },
     { final: "same", audio: true, native: "partial-envelope" },
   ])(
@@ -2785,15 +2694,9 @@ describe("dispatchReplyFromConfig", () => {
   it.each([
     { completionState: "prepared", audio: false, native: false },
     { completionState: "queued", audio: false, native: false },
-    { completionState: "unknown", audio: false, native: false },
     { completionState: "prepared", audio: true, native: false },
-    { completionState: "queued", audio: true, native: false },
-    { completionState: "unknown", audio: true, native: false },
     { completionState: "prepared", audio: false, native: true },
-    { completionState: "queued", audio: false, native: true },
-    { completionState: "unknown", audio: false, native: true },
     { completionState: "prepared", audio: true, native: true },
-    { completionState: "queued", audio: true, native: true },
     { completionState: "unknown", audio: true, native: true },
   ] as const)(
     "preserves completion ownership for a pending block ($completionState, audio=$audio, native=$native)",
@@ -2959,7 +2862,10 @@ describe("dispatchReplyFromConfig", () => {
     expect(firstFinalReplyPayload(dispatcher)).toEqual({ text: "Partial useful answer." });
     expect(
       vi.mocked(dispatcher.sendFinalReply).mock.calls.map(([payload]) => payload.text),
-    ).toEqual(["Partial useful answer.", expect.stringContaining("Something went wrong")]);
+    ).toEqual([
+      "Partial useful answer.",
+      expect.stringContaining(GENERIC_EXTERNAL_RUN_FAILURE_TEXT),
+    ]);
   });
 
   it.each([

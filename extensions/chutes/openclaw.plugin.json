@@ -38,6 +38,7 @@
       "method": "oauth",
       "choiceId": "chutes",
       "appGuidedAuth": "oauth",
+      "credentialOnly": true,
       "choiceLabel": "Chutes (OAuth)",
       "choiceHint": "Browser sign-in",
       "groupId": "chutes",

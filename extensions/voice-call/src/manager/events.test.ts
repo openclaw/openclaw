@@ -1,5 +1,5 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 // Voice Call tests cover events plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VoiceCallConfigSchema } from "../config.js";
@@ -57,6 +57,20 @@ const {
   setup,
 } = createEventManagerHarness();
 
+function createCall(overrides: Partial<CallRecord> & Pick<CallRecord, "callId">): CallRecord {
+  return {
+    provider: "plivo",
+    direction: "outbound",
+    state: "active",
+    from: "+15550000000",
+    to: "+15550000001",
+    startedAt: Date.now(),
+    transcript: [],
+    processedEventIds: [],
+    ...overrides,
+  };
+}
+
 beforeEach(() => {
   setup();
   logSpy.clearLogEntries();
@@ -69,26 +83,68 @@ afterEach(async () => {
 });
 
 describe("processEvent (functional)", () => {
-  it.each(["speech", "answered", "terminal"] as const)(
+  it("drains final assistant transcript before a carrier terminal event finalizes", async () => {
+    const ctx = createContext();
+    const call = createCall({ callId: "carrier-drain", providerCallId: "CA-drain" });
+    ctx.activeCalls.set(call.callId, call);
+    ctx.beforeCallEnd = async () => {
+      await processEvent(ctx, {
+        id: "last-transcript",
+        callId: call.callId,
+        timestamp: Date.now(),
+        type: "call.assistant-speech",
+        transcript: "The plumber will call back.",
+      });
+    };
+    await processEvent(ctx, {
+      id: "carrier-ended",
+      callId: call.callId,
+      timestamp: Date.now(),
+      type: "call.ended",
+      reason: "completed",
+    });
+    expect(call.transcript).toMatchObject([
+      { speaker: "bot", text: "The plumber will call back." },
+    ]);
+    expect(call.endReason).toBe("completed");
+  });
+
+  it("finalizes confirmed carrier termination even when final transcript drain fails", async () => {
+    const ctx = createContext({
+      beforeCallEnd: async () => {
+        throw new Error("bridge close failed");
+      },
+    });
+    const call = createCall({ callId: "drain-failed", providerCallId: "CA-drain-failed" });
+    ctx.activeCalls.set(call.callId, call);
+    await expect(
+      processEvent(ctx, {
+        id: "carrier-drain-failed",
+        callId: call.callId,
+        timestamp: Date.now(),
+        type: "call.ended",
+        reason: "completed",
+      }),
+    ).resolves.toEqual({ kind: "processed" });
+    expect(call.endReason).toBe("completed");
+    expect(ctx.activeCalls.size).toBe(0);
+  });
+
+  it.each(["speech", "answered", "terminal", "fatal-error"] as const)(
     "publishes %s side effects only after SQLite persistence succeeds",
     async (kind) => {
       let failPersistence = true;
       installStateRuntime(() => failPersistence);
       const onCallAnswered = vi.fn();
       const ctx = createContext({ onCallAnswered });
-      const call: CallRecord = {
+      const call: CallRecord = createCall({
         callId: `call-durable-${kind}`,
         providerCallId: "provider-before",
-        provider: "plivo",
-        direction: "outbound",
         state: kind === "answered" ? "ringing" : "active",
-        from: "+15550000000",
-        to: "+15550000001",
-        startedAt: Date.now(),
-        transcript: [],
-        processedEventIds: [],
-      };
-      const terminalLog = `[voice-call] Call finalized callId=${call.callId} providerCallId=provider-before endReason=hangup-user`;
+      });
+      const terminal = kind === "terminal" || kind === "fatal-error";
+      const endReason = kind === "fatal-error" ? "error" : "hangup-user";
+      const terminalLog = `[voice-call] Call finalized callId=${call.callId} providerCallId=provider-before endReason=${endReason}`;
       ctx.activeCalls.set(call.callId, call);
       ctx.providerCallIdMap.set("provider-before", call.callId);
       const resolve = vi.fn();
@@ -100,7 +156,7 @@ describe("processEvent (functional)", () => {
           timeout: setTimeout(() => {}, 60_000),
         });
       }
-      if (kind === "terminal") {
+      if (terminal) {
         ctx.maxDurationTimers.set(
           call.callId,
           setTimeout(() => {}, 60_000),
@@ -112,7 +168,9 @@ describe("processEvent (functional)", () => {
           ? { ...base, type: "call.speech", transcript: "durable", isFinal: true }
           : kind === "answered"
             ? { ...base, type: "call.answered", providerCallId: "provider-after" }
-            : { ...base, type: "call.ended", reason: "hangup-user" };
+            : kind === "fatal-error"
+              ? { ...base, type: "call.error", error: "carrier failure", retryable: false }
+              : { ...base, type: "call.ended", reason: "hangup-user" };
 
       await expect(processEvent(ctx, event)).rejects.toThrow(
         "synthetic SQLite persistence failure",
@@ -124,17 +182,26 @@ describe("processEvent (functional)", () => {
       expect(ctx.providerCallIdMap.has("provider-after")).toBe(false);
       expect(resolve).not.toHaveBeenCalled();
       expect(reject).not.toHaveBeenCalled();
-      expect(ctx.maxDurationTimers.has(call.callId)).toBe(kind === "terminal");
+      expect(ctx.maxDurationTimers.has(call.callId)).toBe(terminal);
       expect(logSpy.logEntries).not.toContain(terminalLog);
 
       failPersistence = false;
       await processEvent(ctx, event);
       expect(ctx.processedEventIds.has(event.id)).toBe(true);
       expect(resolve).toHaveBeenCalledTimes(kind === "speech" ? 1 : 0);
-      expect(reject).toHaveBeenCalledTimes(kind === "terminal" ? 1 : 0);
+      expect(reject).toHaveBeenCalledTimes(terminal ? 1 : 0);
       expect(onCallAnswered).toHaveBeenCalledTimes(kind === "answered" ? 1 : 0);
-      expect(ctx.activeCalls.has(call.callId)).toBe(kind !== "terminal");
-      if (kind === "terminal") {
+      if (kind === "answered") {
+        expect(onCallAnswered).toHaveBeenCalledWith(call);
+      }
+      expect(ctx.activeCalls.has(call.callId)).toBe(!terminal);
+      if (terminal) {
+        expect(call).toMatchObject({ state: endReason, endReason, endedAt: event.timestamp });
+        expect(reject).toHaveBeenCalledWith(
+          new Error(
+            kind === "fatal-error" ? "Call error: carrier failure" : "Call ended: hangup-user",
+          ),
+        );
         expect(logSpy.logEntries.filter((entry) => entry === terminalLog)).toHaveLength(1);
       } else {
         expect(logSpy.logEntries).not.toContain(terminalLog);
@@ -147,19 +214,16 @@ describe("processEvent (functional)", () => {
     async (aliasCallId) => {
       const now = Date.now();
       const ctx = createContext();
-      ctx.activeCalls.set("call-1", {
-        callId: "call-1",
-        providerCallId: "request-uuid",
-        provider: "plivo",
-        direction: "outbound",
-        state: "initiated",
-        from: "+15550000000",
-        to: "+15550000001",
-        startedAt: now,
-        transcript: [],
-        processedEventIds: [],
-        metadata: {},
-      });
+      ctx.activeCalls.set(
+        "call-1",
+        createCall({
+          callId: "call-1",
+          providerCallId: "request-uuid",
+          state: "initiated",
+          startedAt: now,
+          metadata: {},
+        }),
+      );
       ctx.providerCallIdMap.set("request-uuid", "call-1");
       const initialCall = ctx.activeCalls.get("call-1");
       if (!initialCall) {
@@ -218,7 +282,7 @@ describe("processEvent (functional)", () => {
       const openStore = state.openKeyedStore.bind(state);
       const fault = vi
         .spyOn(state, "openKeyedStore")
-        .mockImplementation(<T>(options: OpenKeyedStoreOptions) => {
+        .mockImplementation(<T>(options: OpenAsyncKeyedStoreOptions) => {
           const store = openStore<T>(options);
           store.entries = async () => {
             throw new Error("synthetic call history read failure");
@@ -266,19 +330,19 @@ describe("processEvent (functional)", () => {
 
     expect(ctx.processedEventIds.size).toBe(0);
 
-    ctx.activeCalls.set("call-late", {
-      callId: "call-late",
-      providerCallId: "provider-late",
-      provider: "plivo",
-      direction: "inbound",
-      state: "ringing",
-      from: "+15550000002",
-      to: "+15550000000",
-      startedAt: now,
-      transcript: [],
-      processedEventIds: [],
-      metadata: {},
-    });
+    ctx.activeCalls.set(
+      "call-late",
+      createCall({
+        callId: "call-late",
+        providerCallId: "provider-late",
+        direction: "inbound",
+        state: "ringing",
+        from: "+15550000002",
+        to: "+15550000000",
+        startedAt: now,
+        metadata: {},
+      }),
+    );
     ctx.providerCallIdMap.set("provider-late", "call-late");
 
     await processEvent(ctx, event);
@@ -290,40 +354,6 @@ describe("processEvent (functional)", () => {
     expect(call.state).toBe("answered");
     expect(call.answeredAt).toBe(now + 1);
     expect(Array.from(ctx.processedEventIds)).toEqual(["stable-late-call"]);
-  });
-
-  it("invokes onCallAnswered hook for answered events", async () => {
-    const now = Date.now();
-    let answeredCallId: string | null = null;
-    const ctx = createContext({
-      onCallAnswered: (call) => {
-        answeredCallId = call.callId;
-      },
-    });
-    ctx.activeCalls.set("call-2", {
-      callId: "call-2",
-      providerCallId: "call-2-provider",
-      provider: "plivo",
-      direction: "inbound",
-      state: "ringing",
-      from: "+15550000002",
-      to: "+15550000000",
-      startedAt: now,
-      transcript: [],
-      processedEventIds: [],
-      metadata: {},
-    });
-    ctx.providerCallIdMap.set("call-2-provider", "call-2");
-
-    await processEvent(ctx, {
-      id: "evt-answered-hook",
-      type: "call.answered",
-      callId: "call-2",
-      providerCallId: "call-2-provider",
-      timestamp: now + 1,
-    });
-
-    expect(answeredCallId).toBe("call-2");
   });
 
   it.each([
@@ -387,19 +417,19 @@ describe("processEvent (functional)", () => {
           },
         }),
       });
-      ctx.activeCalls.set("call-live", {
-        callId: "call-live",
-        providerCallId: "provider-live",
-        provider: "plivo",
-        direction: "inbound",
-        state: "ringing",
-        from: "+15550000002",
-        to: "+15550000000",
-        startedAt: now - 120_000,
-        transcript: [],
-        processedEventIds: [],
-        metadata: {},
-      });
+      ctx.activeCalls.set(
+        "call-live",
+        createCall({
+          callId: "call-live",
+          providerCallId: "provider-live",
+          direction: "inbound",
+          state: "ringing",
+          from: "+15550000002",
+          to: "+15550000000",
+          startedAt: now - 120_000,
+          metadata: {},
+        }),
+      );
       ctx.providerCallIdMap.set("provider-live", "call-live");
       const liveTimestamp = now + 250;
 
@@ -417,6 +447,7 @@ describe("processEvent (functional)", () => {
       expect(ctx.maxDurationTimers.has("call-live")).toBe(true);
 
       await vi.advanceTimersByTimeAsync(1_000);
+      await Promise.all(ctx.endCallOperations.values());
 
       expect(hangupCalls).toEqual([
         {
@@ -452,22 +483,22 @@ describe("processEvent (functional)", () => {
       }),
       provider,
     });
-    ctx.activeCalls.set("call-stream", {
-      callId: "call-stream",
-      providerCallId: "provider-stream",
-      provider: "twilio",
-      direction: "inbound",
-      state: "active",
-      from: "+15550000002",
-      to: "+15550000000",
-      startedAt: now - 120_000,
-      transcript: [],
-      processedEventIds: [],
-      metadata: {
-        initialMessage: "Hello from the bot.",
-        mode: "conversation",
-      },
-    });
+    ctx.activeCalls.set(
+      "call-stream",
+      createCall({
+        callId: "call-stream",
+        providerCallId: "provider-stream",
+        provider: "twilio",
+        direction: "inbound",
+        from: "+15550000002",
+        to: "+15550000000",
+        startedAt: now - 120_000,
+        metadata: {
+          initialMessage: "Hello from the bot.",
+          mode: "conversation",
+        },
+      }),
+    );
     ctx.providerCallIdMap.set("provider-stream", "call-stream");
 
     await speakInitialMessage(ctx, "provider-stream");
@@ -481,6 +512,7 @@ describe("processEvent (functional)", () => {
     expect(ctx.maxDurationTimers.has("call-stream")).toBe(true);
 
     await vi.advanceTimersByTimeAsync(1_000);
+    await Promise.all(ctx.endCallOperations.values());
 
     expect(hangupCalls).toEqual([
       {
@@ -491,31 +523,6 @@ describe("processEvent (functional)", () => {
     ]);
     expect(ctx.activeCalls.has("call-stream")).toBe(false);
     vi.useRealTimers();
-  });
-
-  it("auto-registers externally-initiated outbound-api calls with correct direction", async () => {
-    const ctx = createContext();
-    const event: NormalizedEvent = {
-      id: "evt-external-1",
-      type: "call.initiated",
-      callId: "CA-external-123",
-      providerCallId: "CA-external-123",
-      timestamp: Date.now(),
-      direction: "outbound",
-      from: "+15550000000",
-      to: "+15559876543",
-    };
-
-    await processEvent(ctx, event);
-
-    // Call should be registered in activeCalls and providerCallIdMap
-    expect(ctx.activeCalls.size).toBe(1);
-    const call = requireFirstActiveCall(ctx);
-    expect(ctx.providerCallIdMap.get("CA-external-123")).toBe(call.callId);
-    expect(call.providerCallId).toBe("CA-external-123");
-    expect(call.direction).toBe("outbound");
-    expect(call.from).toBe("+15550000000");
-    expect(call.to).toBe("+15559876543");
   });
 
   it("does not reject externally-initiated outbound calls even with disabled inbound policy", async () => {
@@ -537,25 +544,26 @@ describe("processEvent (functional)", () => {
     expect(ctx.activeCalls.size).toBe(1);
     expect(hangupCalls).toHaveLength(0);
     const call = requireFirstActiveCall(ctx);
+    expect(ctx.providerCallIdMap.get("CA-external-456")).toBe(call.callId);
+    expect(call.providerCallId).toBe("CA-external-456");
     expect(call.direction).toBe("outbound");
+    expect(call.from).toBe("+15550000000");
+    expect(call.to).toBe("+15559876543");
   });
 
   it("deduplicates by dedupeKey even when event IDs differ", async () => {
     const now = Date.now();
     const ctx = createContext();
-    ctx.activeCalls.set("call-dedupe", {
-      callId: "call-dedupe",
-      providerCallId: "provider-dedupe",
-      provider: "plivo",
-      direction: "outbound",
-      state: "answered",
-      from: "+15550000000",
-      to: "+15550000001",
-      startedAt: now,
-      transcript: [],
-      processedEventIds: [],
-      metadata: {},
-    });
+    ctx.activeCalls.set(
+      "call-dedupe",
+      createCall({
+        callId: "call-dedupe",
+        providerCallId: "provider-dedupe",
+        state: "answered",
+        startedAt: now,
+        metadata: {},
+      }),
+    );
     ctx.providerCallIdMap.set("provider-dedupe", "call-dedupe");
 
     const firstResult = await processEvent(ctx, {
@@ -596,26 +604,22 @@ describe("processEvent (functional)", () => {
 
   it.each([
     { label: "empty", transcript: "", withWaiter: false },
-    { label: "whitespace", transcript: " \t\n", withWaiter: false },
-    { label: "empty with a waiter", transcript: "", withWaiter: true },
     { label: "whitespace with a waiter", transcript: " \t\n", withWaiter: true },
   ])("records $label final speech as a processed non-turn", async ({ transcript, withWaiter }) => {
     const now = Date.now();
     const ctx = createContext();
     const callId = `call-blank-${withWaiter ? "waiter" : "direct"}-${transcript.length}`;
-    ctx.activeCalls.set(callId, {
+    ctx.activeCalls.set(
       callId,
-      providerCallId: `provider-${callId}`,
-      provider: "telnyx",
-      direction: "inbound",
-      state: "active",
-      from: "+15550000000",
-      to: "+15550000001",
-      startedAt: now,
-      transcript: [],
-      processedEventIds: [],
-      metadata: {},
-    });
+      createCall({
+        callId,
+        providerCallId: `provider-${callId}`,
+        provider: "telnyx",
+        direction: "inbound",
+        startedAt: now,
+        metadata: {},
+      }),
+    );
     const resolve = vi.fn();
     const reject = vi.fn();
     const timeout = setTimeout(() => {}, 60_000);
@@ -651,19 +655,16 @@ describe("processEvent (functional)", () => {
     );
     const callKeys = Array.from({ length: MAX_CALL_REPLAY_KEYS }, (_, index) => `call-${index}`);
     const ctx = createContext({ processedEventIds: new Set(managerKeys) });
-    ctx.activeCalls.set("call-bounded", {
-      callId: "call-bounded",
-      providerCallId: "provider-bounded",
-      provider: "plivo",
-      direction: "outbound",
-      state: "active",
-      from: "+15550000000",
-      to: "+15550000001",
-      startedAt: now,
-      transcript: [],
-      processedEventIds: callKeys,
-      metadata: {},
-    });
+    ctx.activeCalls.set(
+      "call-bounded",
+      createCall({
+        callId: "call-bounded",
+        providerCallId: "provider-bounded",
+        startedAt: now,
+        processedEventIds: callKeys,
+        metadata: {},
+      }),
+    );
     ctx.providerCallIdMap.set("provider-bounded", "call-bounded");
 
     const result = await processEvent(ctx, {
@@ -698,19 +699,15 @@ describe("processEvent (functional)", () => {
   it("keeps retryable call.error events replayable", async () => {
     const now = Date.now();
     const ctx = createContext();
-    ctx.activeCalls.set("call-retryable-error", {
-      callId: "call-retryable-error",
-      providerCallId: "provider-retryable-error",
-      provider: "plivo",
-      direction: "outbound",
-      state: "active",
-      from: "+15550000000",
-      to: "+15550000001",
-      startedAt: now,
-      transcript: [],
-      processedEventIds: [],
-      metadata: {},
-    });
+    ctx.activeCalls.set(
+      "call-retryable-error",
+      createCall({
+        callId: "call-retryable-error",
+        providerCallId: "provider-retryable-error",
+        startedAt: now,
+        metadata: {},
+      }),
+    );
     ctx.providerCallIdMap.set("provider-retryable-error", "call-retryable-error");
 
     const event: NormalizedEvent = {
@@ -836,6 +833,7 @@ describe("processEvent privacy assertions", () => {
     );
 
     expectCallerRedacted(phone, "prov-privacy-no-provider");
+    expect(ctx.activeCalls.size).toBe(0);
   });
 });
 

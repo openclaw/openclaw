@@ -1,10 +1,14 @@
 import {
   AGENT_RUN_ABORTED_STOP_REASON,
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
+  AGENT_RUN_SUPERSEDED_STOP_REASON,
   normalizeAgentRunTimeoutPhase,
   normalizeProviderStarted,
   type AgentRunTimeoutPhase,
 } from "@openclaw/normalization-core/agent-run-terminal-outcome";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
+import { createAbortError } from "../infra/abort-signal.js";
+import { findAgentRunTerminalOutcome } from "./agent-run-terminal-error.js";
 import {
   type FailoverError,
   findErrorProperty,
@@ -39,10 +43,9 @@ const AGENT_RUN_SUPERSEDED_ABORT_ERROR_CODE = "AGENT_RUN_SUPERSEDED_ABORT";
 const AGENT_RUN_DIRECT_ABORT_ERROR_CODE = "OPENCLAW_DIRECT_ABORT";
 
 export function createAgentRunDirectAbortError(): Error {
-  const error = new Error(AGENT_RUN_ABORTED_ERROR) as Error & { code: string };
-  error.name = "AbortError";
-  error.code = AGENT_RUN_DIRECT_ABORT_ERROR_CODE;
-  return error;
+  return Object.assign(createAbortError(AGENT_RUN_ABORTED_ERROR), {
+    code: AGENT_RUN_DIRECT_ABORT_ERROR_CODE,
+  });
 }
 
 function hasAgentRunAbortCode(value: unknown, code: string): boolean {
@@ -58,17 +61,15 @@ export function isAgentRunDirectAbortReason(value: unknown): boolean {
 }
 
 export function createAgentRunRestartAbortError(): Error {
-  const error = new Error(AGENT_RUN_RESTART_ABORT_ERROR) as Error & { code: string };
-  error.name = "AbortError";
-  error.code = AGENT_RUN_RESTART_ABORT_ERROR_CODE;
-  return error;
+  return Object.assign(createAbortError(AGENT_RUN_RESTART_ABORT_ERROR), {
+    code: AGENT_RUN_RESTART_ABORT_ERROR_CODE,
+  });
 }
 
 export function createAgentRunSupersededAbortError(): Error {
-  const error = new Error(AGENT_RUN_SUPERSEDED_ERROR) as Error & { code: string };
-  error.name = "AbortError";
-  error.code = AGENT_RUN_SUPERSEDED_ABORT_ERROR_CODE;
-  return error;
+  return Object.assign(createAbortError(AGENT_RUN_SUPERSEDED_ERROR), {
+    code: AGENT_RUN_SUPERSEDED_ABORT_ERROR_CODE,
+  });
 }
 
 export function isAgentRunRestartAbortReason(value: unknown): boolean {
@@ -76,7 +77,9 @@ export function isAgentRunRestartAbortReason(value: unknown): boolean {
 }
 
 export function isAgentRunSupersededAbortReason(value: unknown): boolean {
-  return hasAgentRunAbortCode(value, AGENT_RUN_SUPERSEDED_ABORT_ERROR_CODE);
+  return collectNestedErrorCandidates(value).some((candidate) =>
+    hasAgentRunAbortCode(candidate, AGENT_RUN_SUPERSEDED_ABORT_ERROR_CODE),
+  );
 }
 
 export function throwAgentRunRestartAbortReason(value: unknown): void {
@@ -85,11 +88,29 @@ export function throwAgentRunRestartAbortReason(value: unknown): void {
   }
 }
 
+const SESSION_PLACEMENT_TURN_SETTLEMENT_CLOSED_ERROR_CODE =
+  "SESSION_PLACEMENT_TURN_SETTLEMENT_CLOSED";
+
+/** Mark loss of the turn's settlement lifetime without asserting a successor exists. */
+export function createSessionPlacementSettlementClosedAbortError(): Error {
+  return Object.assign(createAbortError("session placement turn settlement is closed"), {
+    code: SESSION_PLACEMENT_TURN_SETTLEMENT_CLOSED_ERROR_CODE,
+  });
+}
+
+/** Recognize the owner's typed marker through error wrappers, never display text. */
+export function isSessionPlacementSettlementClosedError(value: unknown): boolean {
+  return collectNestedErrorCandidates(value).some((candidate) =>
+    hasAgentRunAbortCode(candidate, SESSION_PLACEMENT_TURN_SETTLEMENT_CLOSED_ERROR_CODE),
+  );
+}
+
 export function resolveAgentRunAbortLifecycleFields(signal: AbortSignal | undefined): {
   aborted?: true;
   stopReason?:
     | typeof AGENT_RUN_ABORTED_STOP_REASON
     | typeof AGENT_RUN_RESTART_ABORT_STOP_REASON
+    | typeof AGENT_RUN_SUPERSEDED_STOP_REASON
     | "timeout";
 } {
   if (!signal?.aborted) {
@@ -97,9 +118,11 @@ export function resolveAgentRunAbortLifecycleFields(signal: AbortSignal | undefi
   }
   const stopReason = isAgentRunRestartAbortReason(signal.reason)
     ? AGENT_RUN_RESTART_ABORT_STOP_REASON
-    : isSignalTimeoutReason(signal.reason)
-      ? "timeout"
-      : AGENT_RUN_ABORTED_STOP_REASON;
+    : isAgentRunSupersededAbortReason(signal.reason)
+      ? AGENT_RUN_SUPERSEDED_STOP_REASON
+      : isSignalTimeoutReason(signal.reason)
+        ? "timeout"
+        : AGENT_RUN_ABORTED_STOP_REASON;
   return {
     aborted: true,
     stopReason,
@@ -110,13 +133,17 @@ function resolveRunErrorTimeout(error: unknown): FailoverError["timeout"] {
   try {
     // Retry categories include connection failures and HTTP 5xx. Only recorded
     // watchdog facts or an intentional TimeoutError establish a deadline.
-    const timeout = findErrorProperty(error, (candidate) =>
-      isFailoverError(candidate)
-        ? candidate.timeout
-        : isSignalTimeoutReason(candidate)
-          ? { timeoutPhase: "provider" as const }
-          : undefined,
-    );
+    const terminal = findAgentRunTerminalOutcome(error);
+    const timeout =
+      terminal?.status === "timeout"
+        ? terminal
+        : findErrorProperty(error, (candidate) =>
+            isFailoverError(candidate)
+              ? candidate.timeout
+              : isSignalTimeoutReason(candidate)
+                ? { timeoutPhase: "provider" as const }
+                : undefined,
+          );
     if (!timeout) {
       return undefined;
     }
@@ -137,12 +164,7 @@ function resolveRunErrorTimeout(error: unknown): FailoverError["timeout"] {
 export function resolveAgentRunErrorLifecycleFields(
   error: unknown,
   signal: AbortSignal | undefined,
-): {
-  aborted?: true;
-  stopReason?:
-    | typeof AGENT_RUN_ABORTED_STOP_REASON
-    | typeof AGENT_RUN_RESTART_ABORT_STOP_REASON
-    | "timeout";
+): ReturnType<typeof resolveAgentRunAbortLifecycleFields> & {
   timeoutPhase?: AgentRunTimeoutPhase;
   providerStarted?: boolean;
 } {
@@ -156,6 +178,9 @@ export function resolveAgentRunErrorLifecycleFields(
   }
   if (isAgentRunRestartAbortReason(error)) {
     return { aborted: true, stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON };
+  }
+  if (isAgentRunSupersededAbortReason(error)) {
+    return { aborted: true, stopReason: AGENT_RUN_SUPERSEDED_STOP_REASON };
   }
   const timeout = resolveRunErrorTimeout(error);
   return timeout ? { stopReason: "timeout", ...timeout } : {};

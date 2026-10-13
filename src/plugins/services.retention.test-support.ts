@@ -1,12 +1,17 @@
 import assert from "node:assert/strict";
 import { setImmediate } from "node:timers/promises";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { startPluginServices, type PluginServicesHandle } from "./services.js";
 
 const gc = globalThis.gc;
 assert.ok(gc, "The retention child requires --expose-gc");
+// A released async frame can take several full collections before its WeakRefs clear.
+// The broken owner remains reachable after 100, so this only allows GC convergence.
+const GC_PASSES = 32;
 const scenario = process.argv[2];
 const counts = { starts: 0, stops: 0 };
+const scheduler = createTestGatewayScheduler();
 type Reference = { label: string; value: WeakRef<object> };
 
 function createUnownedControl() {
@@ -20,6 +25,7 @@ function createRegistry() {
     pluginId: "retention-probe",
     origin: "workspace",
     source: "retention-probe",
+    id: "retention-probe",
     service: {
       id: "retention-probe",
       start() {
@@ -36,7 +42,7 @@ function createRegistry() {
 async function createGenerations() {
   const references: Reference[] = [];
   let registry = createRegistry();
-  let handle = await startPluginServices({ registry, config: {} });
+  let handle = await startPluginServices({ scheduler, registry, config: {} });
   for (let generation = 0; generation < 8; generation += 1) {
     references.push(
       { label: `handle:${generation}`, value: new WeakRef(handle) },
@@ -44,7 +50,7 @@ async function createGenerations() {
     );
     await handle.stop({ strict: true });
     registry = createRegistry();
-    handle = await startPluginServices({ registry, config: {}, previous: handle });
+    handle = await startPluginServices({ scheduler, registry, config: {}, previous: handle });
   }
   return { handle, references };
 }
@@ -57,6 +63,7 @@ async function createPublishedHandle() {
   const payload = new PublicationPayload();
   const reference = new WeakRef(payload);
   const handle = await startPluginServices({
+    scheduler,
     registry: createRegistry(),
     config: {},
     throwOnStartError: true,
@@ -74,7 +81,7 @@ const { handle, references } =
   scenario === "generations" ? await createGenerations() : await createPublishedHandle();
 const control = createUnownedControl();
 try {
-  for (let pass = 0; pass < 8; pass += 1) {
+  for (let pass = 0; pass < GC_PASSES; pass += 1) {
     await setImmediate();
     gc();
   }
@@ -103,6 +110,10 @@ try {
     "Live service handle retained completed generation or publication state",
   );
 } finally {
-  await handle.stop({ strict: true });
-  assert.equal(counts.starts, counts.stops, "Every service start must have a settled stop");
+  try {
+    await handle.stop({ strict: true });
+    assert.equal(counts.starts, counts.stops, "Every service start must have a settled stop");
+  } finally {
+    await scheduler.stop();
+  }
 }

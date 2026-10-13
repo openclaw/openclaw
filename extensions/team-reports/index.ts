@@ -4,8 +4,10 @@ import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { parseTeamReportsConfig, resolveTeamReportsConfig } from "./src/config.js";
 import { registerTeamReportsGatewayMethods } from "./src/gateway-methods.js";
 import { createTeamReportsHttpHandler } from "./src/http.js";
+import { TeamReportsRunner } from "./src/run-worker.js";
 import { TeamReportsScheduler } from "./src/scheduler.js";
 import { createTeamReportsStore, type TeamReportsStore } from "./src/store.js";
+import { listWorkSessions } from "./src/work-sessions.js";
 
 export default definePluginEntry({
   id: "team-reports",
@@ -52,6 +54,7 @@ export default definePluginEntry({
 
     api.registerService({
       id: "team-reports",
+      apiVersion: 2,
       async start(ctx) {
         if (retired) {
           throw new Error("Team Reports runtime has been retired");
@@ -92,12 +95,20 @@ export default definePluginEntry({
             await nextStore.close();
             return;
           }
+          const runner = new TeamReportsRunner(
+            new URL(
+              `./src/run.worker${path.extname(api.runtimeSource)}`,
+              pathToFileURL(api.runtimeSource),
+            ),
+          );
           const nextScheduler = new TeamReportsScheduler({
             config: { ...config, summaries: summaryOptions },
             resolved,
             store: nextStore,
             llm: { complete: (params) => api.runtime.llm.complete(params) },
             context: ctx,
+            runReports: (params) => runner.run(params),
+            closeRunner: () => runner.close(),
           });
           try {
             await nextScheduler.start();
@@ -137,6 +148,14 @@ export default definePluginEntry({
       handler: createTeamReportsHttpHandler({
         basePath: initial.basePath,
         displayTimezone: initial.displayTimezone,
+        sessionRouting: () => {
+          const config = api.runtime.config.current();
+          return {
+            controlUiBasePath: config.gateway?.controlUi?.basePath,
+            mainKey: config.session?.mainKey,
+          };
+        },
+        workSessions: listWorkSessions,
         // Source checkouts, the flattened dist bundle, and installed packages all keep assets/ at the plugin root.
         assetsDir: path.join(api.rootDir ?? path.dirname(fileURLToPath(import.meta.url)), "assets"),
         getStore: () => store,

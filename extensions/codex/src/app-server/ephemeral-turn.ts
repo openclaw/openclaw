@@ -57,8 +57,11 @@ export class CodexEphemeralTurn {
           } else if (notification.method === "rawResponse/completed") {
             this.usage.record(params);
           } else if (notification.method === "turn/completed") {
-            this.turn = readCodexTurnCompletedNotification(params)?.turn ?? this.turn;
-            this.completion.resolve();
+            const completed = readCodexTurnCompletedNotification(params);
+            if (completed) {
+              this.turn = completed.turn;
+              this.completion.resolve();
+            }
           } else if (notification.method === "error") {
             this.usage.invalidateContext();
             if (params.willRetry !== true) {

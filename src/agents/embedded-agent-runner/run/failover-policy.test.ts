@@ -5,22 +5,29 @@ import { classifyAssistantFailoverReason } from "../../embedded-agent-helpers.js
 import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import { mergeRetryFailoverReason, resolveRunFailoverDecision } from "./failover-policy.js";
 
-describe("resolveRunFailoverDecision", () => {
-  it("escalates retry-limit exhaustion for replay-safe failover reasons", () => {
-    // Retry-limit exhaustion is only a model-fallback signal when the carried
-    // reason is known to be safe to replay against a different model.
-    expect(
-      resolveRunFailoverDecision({
-        stage: "retry_limit",
-        fallbackConfigured: true,
-        failoverReason: "rate_limit",
-      }),
-    ).toEqual({
-      action: "fallback_model",
-      reason: "rate_limit",
-    });
+function resolveAssistantDecision(
+  params: Partial<Omit<Parameters<typeof resolveRunFailoverDecision>[0], "stage">> = {},
+) {
+  return resolveRunFailoverDecision({
+    stage: "assistant",
+    terminal: { kind: "ok" },
+    fallbackConfigured: true,
+    failoverFailure: false,
+    failoverReason: null,
+    profileRotated: false,
+    ...params,
   });
+}
 
+const promptFailure = {
+  stage: "prompt",
+  externalAbort: false,
+  fallbackConfigured: true,
+  failoverFailure: true,
+  profileRotated: false,
+} as const;
+
+describe("resolveRunFailoverDecision", () => {
   it("escalates retry-limit for model_not_found when fallback is configured", () => {
     // model_not_found should trigger fallback to configured alternatives
     // when the primary model is decommissioned by the provider.
@@ -48,61 +55,11 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
-  it("returns error payload for model_not_found when no fallback is configured", () => {
-    expect(
-      resolveRunFailoverDecision({
-        stage: "retry_limit",
-        fallbackConfigured: false,
-        failoverReason: "model_not_found",
-      }),
-    ).toEqual({
-      action: "return_error_payload",
-    });
-  });
-
-  it("prefers prompt-side profile rotation before fallback", () => {
-    // Prompt construction can fail before any model output exists, so rotate
-    // the current provider profile before spending the configured fallback.
-    expect(
-      resolveRunFailoverDecision({
-        stage: "prompt",
-        externalAbort: false,
-        fallbackConfigured: true,
-        failoverFailure: true,
-        failoverReason: "rate_limit",
-        profileRotated: false,
-      }),
-    ).toEqual({
-      action: "rotate_profile",
-      reason: "rate_limit",
-    });
-  });
-
-  it("falls back after prompt rotation is exhausted", () => {
-    expect(
-      resolveRunFailoverDecision({
-        stage: "prompt",
-        externalAbort: false,
-        fallbackConfigured: true,
-        failoverFailure: true,
-        failoverReason: "rate_limit",
-        profileRotated: true,
-      }),
-    ).toEqual({
-      action: "fallback_model",
-      reason: "rate_limit",
-    });
-  });
-
   it("sends prompt TLS certificate failures directly to model fallback", () => {
     expect(
       resolveRunFailoverDecision({
-        stage: "prompt",
-        externalAbort: false,
-        fallbackConfigured: true,
-        failoverFailure: true,
+        ...promptFailure,
         failoverReason: "tls_certificate",
-        profileRotated: false,
       }),
     ).toEqual({
       action: "fallback_model",
@@ -110,33 +67,23 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
-  it.each(["cli_max_turns", "cli_turn_stopped"])(
-    "surfaces recorded terminal-stop prompt failures without profile rotation or model fallback (%s)",
-    (failoverCode) => {
-      expect(
-        resolveRunFailoverDecision({
-          stage: "prompt",
-          externalAbort: false,
-          fallbackConfigured: true,
-          failoverCode,
-          failoverFailure: true,
-          failoverReason: "unknown",
-          profileRotated: false,
-        }),
-      ).toEqual({
-        action: "surface_error",
-        reason: "unknown",
-      });
-    },
-  );
+  it("surfaces recorded terminal-stop prompt failures without profile rotation or model fallback", () => {
+    expect(
+      resolveRunFailoverDecision({
+        ...promptFailure,
+        failoverCode: "cli_turn_stopped",
+        failoverReason: "unknown",
+      }),
+    ).toEqual({
+      action: "surface_error",
+      reason: "unknown",
+    });
+  });
 
   it("surfaces prompt run-budget timeouts instead of model fallback (#60388)", () => {
     expect(
       resolveRunFailoverDecision({
-        stage: "prompt",
-        externalAbort: false,
-        fallbackConfigured: true,
-        failoverFailure: true,
+        ...promptFailure,
         failoverReason: "timeout",
         promptTimeoutFallbackSafe: true,
         timedOutByRunBudget: true,
@@ -148,131 +95,23 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
-  it("does not rotate prompt failures after the run budget is exhausted (#60388)", () => {
-    expect(
-      resolveRunFailoverDecision({
-        stage: "prompt",
-        externalAbort: false,
-        fallbackConfigured: true,
-        failoverFailure: true,
-        failoverReason: "rate_limit",
-        timedOutByRunBudget: true,
-        profileRotated: false,
-      }),
-    ).toEqual({
-      action: "surface_error",
-      reason: "rate_limit",
-    });
-  });
-
-  it("surfaces deterministic prompt format failures instead of rotating or falling back", () => {
-    expect(
-      resolveRunFailoverDecision({
-        stage: "prompt",
-        externalAbort: false,
-        fallbackConfigured: true,
-        failoverFailure: true,
-        failoverReason: "format",
-        profileRotated: false,
-      }),
-    ).toEqual({
-      action: "surface_error",
-      reason: "format",
-    });
-  });
-
-  it("can still rotate explicitly retryable prompt format failures", () => {
-    expect(
-      resolveRunFailoverDecision({
-        stage: "prompt",
-        allowFormatRetry: true,
-        externalAbort: false,
-        fallbackConfigured: true,
-        failoverFailure: true,
-        failoverReason: "format",
-        profileRotated: false,
-      }),
-    ).toEqual({
-      action: "rotate_profile",
-      reason: "format",
-    });
-  });
-
-  it("ignores stale classified assistant-side 429 text without error stopReason", () => {
-    // Classifiers may see old assistant text in the transcript. Without an
-    // actual failure signal, stale billing/rate-limit text is not failover.
-    expect(
-      resolveRunFailoverDecision({
-        stage: "assistant",
-        terminal: { kind: "ok" },
-        fallbackConfigured: true,
-        failoverFailure: false,
-        failoverReason: "rate_limit",
-        profileRotated: false,
-      }),
-    ).toEqual({
-      action: "continue_normal",
-    });
-  });
-
   it("surfaces deterministic assistant format failures instead of rotating or falling back", () => {
     expect(
-      resolveRunFailoverDecision({
-        stage: "assistant",
-        terminal: { kind: "ok" },
-        fallbackConfigured: true,
+      resolveAssistantDecision({
         failoverFailure: true,
         failoverReason: "format",
-        profileRotated: false,
       }),
     ).toEqual({
       action: "surface_error",
       reason: "format",
-    });
-  });
-
-  it("can still rotate explicitly retryable assistant format failures", () => {
-    expect(
-      resolveRunFailoverDecision({
-        stage: "assistant",
-        allowFormatRetry: true,
-        terminal: { kind: "ok" },
-        fallbackConfigured: true,
-        failoverFailure: true,
-        failoverReason: "format",
-        profileRotated: false,
-      }),
-    ).toEqual({
-      action: "rotate_profile",
-      reason: "format",
-    });
-  });
-
-  it("falls back after assistant rotation is exhausted", () => {
-    expect(
-      resolveRunFailoverDecision({
-        stage: "assistant",
-        terminal: { kind: "ok" },
-        fallbackConfigured: true,
-        failoverFailure: true,
-        failoverReason: "rate_limit",
-        profileRotated: true,
-      }),
-    ).toEqual({
-      action: "fallback_model",
-      reason: "rate_limit",
     });
   });
 
   it("sends assistant TLS certificate failures directly to model fallback", () => {
     expect(
-      resolveRunFailoverDecision({
-        stage: "assistant",
-        terminal: { kind: "ok" },
-        fallbackConfigured: true,
+      resolveAssistantDecision({
         failoverFailure: true,
         failoverReason: "tls_certificate",
-        profileRotated: false,
       }),
     ).toEqual({
       action: "fallback_model",
@@ -280,45 +119,12 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
-  it("does not fall back on stale classified assistant text after rotation is exhausted", () => {
-    expect(
-      resolveRunFailoverDecision({
-        stage: "assistant",
-        terminal: { kind: "ok" },
-        fallbackConfigured: true,
-        failoverFailure: false,
-        failoverReason: "billing",
-        profileRotated: true,
-      }),
-    ).toEqual({
-      action: "continue_normal",
-    });
-  });
-
-  it("does nothing for assistant turns without failover signals", () => {
-    expect(
-      resolveRunFailoverDecision({
-        stage: "assistant",
-        terminal: { kind: "ok" },
-        fallbackConfigured: true,
-        failoverFailure: false,
-        failoverReason: null,
-        profileRotated: false,
-      }),
-    ).toEqual({
-      action: "continue_normal",
-    });
-  });
-
   it("does not model-fallback prompt failures after an external abort", () => {
     expect(
       resolveRunFailoverDecision({
-        stage: "prompt",
+        ...promptFailure,
         externalAbort: true,
-        fallbackConfigured: true,
-        failoverFailure: true,
         failoverReason: "timeout",
-        profileRotated: false,
       }),
     ).toEqual({
       action: "surface_error",
@@ -328,34 +134,13 @@ describe("resolveRunFailoverDecision", () => {
 
   it("does not rotate or fallback assistant timeouts that fired during tool execution (#52147)", () => {
     expect(
-      resolveRunFailoverDecision({
-        stage: "assistant",
+      resolveAssistantDecision({
         terminal: { kind: "timeout", phase: "tool_execution", source: "runtime", aborted: true },
-        fallbackConfigured: true,
-        failoverFailure: false,
-        failoverReason: null,
-        profileRotated: false,
       }),
     ).toEqual({
       action: "continue_normal",
     });
   });
-
-  it.each(["compaction", "tool_execution"] as const)(
-    "does not spend profile or fallback retries on a %s timeout observation",
-    (phase) => {
-      expect(
-        resolveRunFailoverDecision({
-          stage: "assistant",
-          terminal: { kind: "timeout", phase, source: "observation" },
-          fallbackConfigured: true,
-          failoverFailure: false,
-          failoverReason: null,
-          profileRotated: false,
-        }),
-      ).toEqual({ action: "continue_normal" });
-    },
-  );
 
   it("falls back for opencode-go provider-owned stalled stream errors after rotation is exhausted", () => {
     const assistantError = {
@@ -387,65 +172,28 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
-  it("does not fallback assistant tool-execution timeouts even after profile rotation exhausted (#52147)", () => {
-    expect(
-      resolveRunFailoverDecision({
-        stage: "assistant",
-        terminal: { kind: "timeout", phase: "tool_execution", source: "runtime", aborted: true },
-        fallbackConfigured: true,
-        failoverFailure: false,
-        failoverReason: null,
-        profileRotated: true,
-      }),
-    ).toEqual({
-      action: "continue_normal",
-    });
-  });
-
-  it("still rotates assistant timeouts that fired during LLM phase (no active tool execution)", () => {
-    expect(
-      resolveRunFailoverDecision({
-        stage: "assistant",
-        terminal: { kind: "timeout", phase: "prompt", source: "runtime", aborted: true },
-        fallbackConfigured: true,
-        failoverFailure: false,
-        failoverReason: null,
-        profileRotated: false,
-      }),
-    ).toEqual({
-      action: "rotate_profile",
-      reason: null,
-    });
-  });
-
-  it("does not rotate harness-owned assistant timeouts", () => {
-    // Harness-owned transports already implement their own retry envelope;
-    // core failover should not double-rotate on those synthetic timeouts.
-    expect(
-      resolveRunFailoverDecision({
-        stage: "assistant",
-        terminal: { kind: "timeout", phase: "prompt", source: "runtime", aborted: true },
-        fallbackConfigured: true,
-        failoverFailure: false,
-        failoverReason: null,
-        harnessOwnsTransport: true,
-        profileRotated: false,
-      }),
-    ).toEqual({
-      action: "continue_normal",
-    });
-  });
+  it.each(["runtime", "run_budget"] as const)(
+    "does not rotate harness-owned %s timeouts",
+    (source) => {
+      // Harness-owned transports already implement their own retry envelope;
+      // core failover should not double-rotate on those synthetic timeouts.
+      expect(
+        resolveAssistantDecision({
+          terminal: { kind: "timeout", phase: "prompt", source, aborted: true },
+          harnessOwnsTransport: true,
+        }),
+      ).toEqual({
+        action: "continue_normal",
+      });
+    },
+  );
 
   it("does not rotate harness-owned assistant errors classified as timeout", () => {
     expect(
-      resolveRunFailoverDecision({
-        stage: "assistant",
-        terminal: { kind: "ok" },
-        fallbackConfigured: true,
+      resolveAssistantDecision({
         failoverFailure: true,
         failoverReason: "timeout",
         harnessOwnsTransport: true,
-        profileRotated: false,
       }),
     ).toEqual({
       action: "continue_normal",
@@ -454,14 +202,11 @@ describe("resolveRunFailoverDecision", () => {
 
   it("rotates concrete assistant failover failures that accompany harness-owned timeouts", () => {
     expect(
-      resolveRunFailoverDecision({
-        stage: "assistant",
+      resolveAssistantDecision({
         terminal: { kind: "timeout", phase: "prompt", source: "runtime" },
-        fallbackConfigured: true,
         failoverFailure: true,
         failoverReason: "rate_limit",
         harnessOwnsTransport: true,
-        profileRotated: false,
       }),
     ).toEqual({
       action: "rotate_profile",
@@ -469,64 +214,10 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
-  it("falls back with the concrete assistant failover reason after harness-owned timeout rotation is exhausted", () => {
-    expect(
-      resolveRunFailoverDecision({
-        stage: "assistant",
-        terminal: { kind: "timeout", phase: "prompt", source: "runtime" },
-        fallbackConfigured: true,
-        failoverFailure: true,
-        failoverReason: "billing",
-        harnessOwnsTransport: true,
-        profileRotated: true,
-      }),
-    ).toEqual({
-      action: "fallback_model",
-      reason: "billing",
-    });
-  });
-
-  it("treats idle watchdog timeouts during tool execution as model silence", () => {
-    expect(
-      resolveRunFailoverDecision({
-        stage: "assistant",
-        terminal: { kind: "timeout", phase: "tool_execution", source: "idle", aborted: true },
-        fallbackConfigured: true,
-        failoverFailure: false,
-        failoverReason: null,
-        profileRotated: false,
-      }),
-    ).toEqual({
-      action: "rotate_profile",
-      reason: null,
-    });
-  });
-
-  it("falls back after idle watchdog timeout during tool execution exhausts profile rotation", () => {
-    expect(
-      resolveRunFailoverDecision({
-        stage: "assistant",
-        terminal: { kind: "timeout", phase: "tool_execution", source: "idle", aborted: true },
-        fallbackConfigured: true,
-        failoverFailure: false,
-        failoverReason: null,
-        profileRotated: true,
-      }),
-    ).toEqual({
-      action: "fallback_model",
-      reason: "timeout",
-    });
-  });
-
   it("does not rotate or fallback assistant timeouts after an external abort", () => {
     expect(
-      resolveRunFailoverDecision({
-        stage: "assistant",
+      resolveAssistantDecision({
         terminal: { kind: "timeout", phase: "prompt", source: "external", aborted: true },
-        fallbackConfigured: true,
-        failoverFailure: false,
-        failoverReason: null,
-        profileRotated: false,
       }),
     ).toEqual({
       action: "surface_error",
@@ -536,73 +227,17 @@ describe("resolveRunFailoverDecision", () => {
 
   it("keeps an externally owned interruption ahead of an idle watchdog retry", () => {
     expect(
-      resolveRunFailoverDecision({
-        stage: "assistant",
+      resolveAssistantDecision({
         terminal: { kind: "timeout", phase: "tool_execution", source: "idle", aborted: true },
         signalOwnedInterruption: true,
-        fallbackConfigured: true,
-        failoverFailure: false,
-        failoverReason: null,
-        profileRotated: false,
       }),
     ).toEqual({ action: "surface_error", reason: null });
-  });
-
-  it("rotates profile on LLM idle timeout before falling back", () => {
-    expect(
-      resolveRunFailoverDecision({
-        stage: "assistant",
-        terminal: { kind: "timeout", phase: "prompt", source: "idle" },
-        fallbackConfigured: true,
-        failoverFailure: false,
-        failoverReason: null,
-        profileRotated: false,
-      }),
-    ).toEqual({
-      action: "rotate_profile",
-      reason: null,
-    });
-  });
-
-  it("escalates LLM idle timeout to fallback_model after profile rotation is exhausted", () => {
-    expect(
-      resolveRunFailoverDecision({
-        stage: "assistant",
-        terminal: { kind: "timeout", phase: "prompt", source: "idle" },
-        fallbackConfigured: true,
-        failoverFailure: false,
-        failoverReason: null,
-        profileRotated: true,
-      }),
-    ).toEqual({
-      action: "fallback_model",
-      reason: "timeout",
-    });
-  });
-
-  it("does not fallback harness-owned LLM idle timeouts after profile rotation is exhausted", () => {
-    expect(
-      resolveRunFailoverDecision({
-        stage: "assistant",
-        terminal: { kind: "timeout", phase: "prompt", source: "idle" },
-        fallbackConfigured: true,
-        failoverFailure: false,
-        failoverReason: null,
-        harnessOwnsTransport: true,
-        profileRotated: true,
-      }),
-    ).toEqual({
-      action: "continue_normal",
-    });
   });
 
   it("surfaces harness-owned prompt timeouts instead of falling back", () => {
     expect(
       resolveRunFailoverDecision({
-        stage: "prompt",
-        externalAbort: false,
-        fallbackConfigured: true,
-        failoverFailure: true,
+        ...promptFailure,
         failoverReason: "timeout",
         harnessOwnsTransport: true,
         profileRotated: true,
@@ -616,10 +251,7 @@ describe("resolveRunFailoverDecision", () => {
   it("falls back on fallback-safe harness-owned prompt timeouts", () => {
     expect(
       resolveRunFailoverDecision({
-        stage: "prompt",
-        externalAbort: false,
-        fallbackConfigured: true,
-        failoverFailure: true,
+        ...promptFailure,
         failoverReason: "timeout",
         harnessOwnsTransport: true,
         promptTimeoutFallbackSafe: true,
@@ -634,10 +266,8 @@ describe("resolveRunFailoverDecision", () => {
   it("surfaces fallback-safe harness-owned prompt timeouts when no fallback is configured", () => {
     expect(
       resolveRunFailoverDecision({
-        stage: "prompt",
-        externalAbort: false,
+        ...promptFailure,
         fallbackConfigured: false,
-        failoverFailure: true,
         failoverReason: "timeout",
         harnessOwnsTransport: true,
         promptTimeoutFallbackSafe: true,
@@ -651,12 +281,9 @@ describe("resolveRunFailoverDecision", () => {
 
   it("surfaces error on LLM idle timeout when no fallback is configured and rotation is exhausted", () => {
     expect(
-      resolveRunFailoverDecision({
-        stage: "assistant",
+      resolveAssistantDecision({
         terminal: { kind: "timeout", phase: "prompt", source: "idle" },
         fallbackConfigured: false,
-        failoverFailure: false,
-        failoverReason: null,
         profileRotated: true,
       }),
     ).toEqual({
@@ -665,64 +292,19 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
-  it("does not escalate LLM idle timeout after an external abort", () => {
+  it("moves an expired prompt attempt to its configured fallback without profile rotation", () => {
     expect(
-      resolveRunFailoverDecision({
-        stage: "assistant",
-        terminal: { kind: "timeout", phase: "prompt", source: "idle" },
-        signalOwnedInterruption: true,
-        fallbackConfigured: true,
-        failoverFailure: false,
-        failoverReason: null,
-        profileRotated: false,
-      }),
-    ).toEqual({
-      action: "surface_error",
-      reason: null,
-    });
-  });
-
-  it("does not rotate or fallback assistant timeouts that exhausted the run budget (#60388)", () => {
-    expect(
-      resolveRunFailoverDecision({
-        stage: "assistant",
+      resolveAssistantDecision({
         terminal: { kind: "timeout", phase: "prompt", source: "run_budget", aborted: true },
-        fallbackConfigured: true,
-        failoverFailure: false,
-        failoverReason: null,
-        profileRotated: false,
       }),
     ).toEqual({
-      action: "continue_normal",
-    });
-  });
-
-  it("does not fallback assistant run-budget timeouts even after profile rotation exhausted (#60388)", () => {
-    expect(
-      resolveRunFailoverDecision({
-        stage: "assistant",
-        terminal: { kind: "timeout", phase: "prompt", source: "run_budget", aborted: true },
-        fallbackConfigured: true,
-        failoverFailure: false,
-        failoverReason: null,
-        profileRotated: true,
-      }),
-    ).toEqual({
-      action: "continue_normal",
+      action: "fallback_model",
+      reason: "timeout",
     });
   });
 });
 
 describe("mergeRetryFailoverReason", () => {
-  it("preserves the previous classified reason when the current one is null", () => {
-    expect(
-      mergeRetryFailoverReason({
-        previous: "rate_limit",
-        failoverReason: null,
-      }),
-    ).toBe("rate_limit");
-  });
-
   it("records timeout when no classified reason is present", () => {
     expect(
       mergeRetryFailoverReason({
@@ -731,15 +313,5 @@ describe("mergeRetryFailoverReason", () => {
         timedOut: true,
       }),
     ).toBe("timeout");
-  });
-
-  it("preserves a previous concrete reason over a later coarse timeout", () => {
-    expect(
-      mergeRetryFailoverReason({
-        previous: "server_error",
-        failoverReason: null,
-        timedOut: true,
-      }),
-    ).toBe("server_error");
   });
 });

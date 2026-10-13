@@ -82,7 +82,7 @@ What OpenClaw can send to Telegram beyond text, and how inbound media reaches th
 
     ### Stickers
 
-    Inbound: static WEBP is downloaded and processed (placeholder `<media:sticker>`); animated TGS and video WEBM are skipped.
+    Inbound: static WEBP is downloaded and processed (placeholder `<media:sticker>`). When sticker media is unavailable, including animated TGS and video WEBM, OpenClaw uses the sticker's emoji as the message text. If no emoji is available, it uses `<media:sticker>`. Cached descriptions take precedence over this fallback.
 
     Sticker context fields: `Sticker.emoji`, `Sticker.setName`, `Sticker.fileId`, `Sticker.fileUniqueId`, `Sticker.cachedDescription`. Descriptions are cached in OpenClaw SQLite plugin state to reduce repeated vision calls.
 

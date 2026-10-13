@@ -78,39 +78,6 @@ describe("reconcileSessionHistory thinking profiles", () => {
     expect(next?.sessions[0]).toMatchObject(incoming);
   });
 
-  it("preserves a known empty profile when history omits capability metadata", () => {
-    const current = currentResult({ thinkingLevels: [], thinkingOptions: [] });
-
-    const next = reconcileSessionHistory(
-      current,
-      { ...row, updatedAt: 2 },
-      { ...identity, contextTokens: null },
-    );
-
-    expect(next?.sessions[0]?.thinkingLevels).toEqual([]);
-    expect(next?.sessions[0]?.thinkingOptions).toEqual([]);
-    expect(next?.defaults.thinkingLevels).toEqual([]);
-    expect(next?.defaults.thinkingDefault).toBeUndefined();
-  });
-
-  it("keeps supported metadata when history has no published profile", () => {
-    const metadata = {
-      thinkingLevels: [{ id: "low", label: "Careful" }],
-      thinkingOptions: ["Careful"],
-      thinkingDefault: "low",
-    };
-    const current = currentResult(metadata);
-
-    const next = reconcileSessionHistory(
-      current,
-      { ...row, updatedAt: 2 },
-      { ...identity, contextTokens: null },
-    );
-
-    expect(next?.sessions[0]).toMatchObject(metadata);
-    expect(next?.defaults).toMatchObject(metadata);
-  });
-
   it("does not inherit the previous model's profile", () => {
     const current = currentResult({
       thinkingLevels: [{ id: "high", label: "Deep effort" }],

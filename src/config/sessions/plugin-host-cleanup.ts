@@ -25,16 +25,17 @@ export type PluginHostSessionCleanupStoreParams = {
   shouldCleanup?: () => boolean;
 };
 
-function collectStoredSessionEntrySlotKeys(entry: SessionEntry, pluginId?: string): Set<string> {
+function collectPromotedSessionEntrySlotKeys(
+  entry: SessionEntry,
+  pluginId?: string,
+  sessionEntrySlotKeys?: ReadonlySet<string>,
+): Set<string> {
   const slotKeys = new Set<string>();
   const storedSlotKeys = entry.pluginExtensionSlotKeys;
-  if (!storedSlotKeys) {
-    return slotKeys;
-  }
   const records =
     pluginId === undefined
-      ? Object.values(storedSlotKeys)
-      : storedSlotKeys[pluginId]
+      ? Object.values(storedSlotKeys ?? {})
+      : storedSlotKeys?.[pluginId]
         ? [storedSlotKeys[pluginId]]
         : [];
   for (const record of records) {
@@ -45,15 +46,6 @@ function collectStoredSessionEntrySlotKeys(entry: SessionEntry, pluginId?: strin
       }
     }
   }
-  return slotKeys;
-}
-
-function collectPromotedSessionEntrySlotKeys(
-  entry: SessionEntry,
-  pluginId?: string,
-  sessionEntrySlotKeys?: ReadonlySet<string>,
-): Set<string> {
-  const slotKeys = collectStoredSessionEntrySlotKeys(entry, pluginId);
   for (const slotKey of sessionEntrySlotKeys ?? []) {
     slotKeys.add(slotKey);
   }
@@ -77,30 +69,18 @@ function clearPromotedSessionEntrySlots(
     return;
   }
   // Restart cleanup prunes only ownership for slot keys that disappeared from the new registry.
-  const pruneRecord = (record: Record<string, string>): void => {
+  for (const [ownerPluginId, record] of Object.entries(entry.pluginExtensionSlotKeys)) {
+    if (pluginId && ownerPluginId !== pluginId) {
+      continue;
+    }
     for (const [namespace, slotKey] of Object.entries(record)) {
       const normalized = normalizeSessionEntrySlotKey(slotKey);
       if (normalized.ok && slotKeys.has(normalized.key)) {
         delete record[namespace];
       }
     }
-  };
-  if (pluginId) {
-    const record = entry.pluginExtensionSlotKeys[pluginId];
-    if (record) {
-      pruneRecord(record);
-      if (Object.keys(record).length === 0) {
-        delete entry.pluginExtensionSlotKeys[pluginId];
-      }
-    }
-  } else {
-    for (const record of Object.values(entry.pluginExtensionSlotKeys)) {
-      pruneRecord(record);
-    }
-    for (const [ownerPluginId, record] of Object.entries(entry.pluginExtensionSlotKeys)) {
-      if (Object.keys(record).length === 0) {
-        delete entry.pluginExtensionSlotKeys[ownerPluginId];
-      }
+    if (Object.keys(record).length === 0) {
+      delete entry.pluginExtensionSlotKeys[ownerPluginId];
     }
   }
   if (Object.keys(entry.pluginExtensionSlotKeys).length === 0) {
@@ -115,28 +95,19 @@ export function clearPluginOwnedSessionState(
   sessionEntrySlotKeys?: ReadonlySet<string>,
 ): void {
   clearPromotedSessionEntrySlots(entry, pluginId, sessionEntrySlotKeys);
-  if (!pluginId) {
-    delete entry.pluginExtensions;
-    delete entry.pluginExtensionSlotKeys;
-    delete entry.pluginNextTurnInjections;
-    return;
-  }
-  if (entry.pluginExtensions) {
-    delete entry.pluginExtensions[pluginId];
-    if (Object.keys(entry.pluginExtensions).length === 0) {
-      delete entry.pluginExtensions;
-    }
-  }
-  if (entry.pluginExtensionSlotKeys) {
-    delete entry.pluginExtensionSlotKeys[pluginId];
-    if (Object.keys(entry.pluginExtensionSlotKeys).length === 0) {
-      delete entry.pluginExtensionSlotKeys;
-    }
-  }
-  if (entry.pluginNextTurnInjections) {
-    delete entry.pluginNextTurnInjections[pluginId];
-    if (Object.keys(entry.pluginNextTurnInjections).length === 0) {
-      delete entry.pluginNextTurnInjections;
+  for (const field of [
+    "pluginExtensions",
+    "pluginExtensionSlotKeys",
+    "pluginNextTurnInjections",
+  ] as const) {
+    const state = entry[field];
+    if (!pluginId) {
+      delete entry[field];
+    } else if (state) {
+      delete state[pluginId];
+      if (Object.keys(state).length === 0) {
+        delete entry[field];
+      }
     }
   }
 }
@@ -147,9 +118,6 @@ function hasPromotedSessionEntrySlot(
   sessionEntrySlotKeys?: ReadonlySet<string>,
 ): boolean {
   const slotKeys = collectPromotedSessionEntrySlotKeys(entry, pluginId, sessionEntrySlotKeys);
-  if (slotKeys.size === 0) {
-    return false;
-  }
   for (const slotKey of slotKeys) {
     if (Object.hasOwn(entry, slotKey)) {
       return true;
@@ -158,29 +126,9 @@ function hasPromotedSessionEntrySlot(
   return false;
 }
 
-function hasPluginOwnedSessionState(
-  entry: SessionEntry,
-  pluginId?: string,
-  sessionEntrySlotKeys?: ReadonlySet<string>,
-): boolean {
-  if (hasPromotedSessionEntrySlot(entry, pluginId, sessionEntrySlotKeys)) {
-    return true;
-  }
-  if (!pluginId) {
-    return Boolean(
-      entry.pluginExtensions || entry.pluginExtensionSlotKeys || entry.pluginNextTurnInjections,
-    );
-  }
-  return Boolean(
-    entry.pluginExtensions?.[pluginId] ||
-    entry.pluginExtensionSlotKeys?.[pluginId] ||
-    entry.pluginNextTurnInjections?.[pluginId],
-  );
-}
-
 export function matchesPluginHostCleanupSession(
   entryKey: string,
-  entry: SessionEntry,
+  entry: Pick<SessionEntry, "sessionId">,
   sessionKey?: string,
 ): boolean {
   const normalizedSessionKey = normalizeSessionKeyPreservingOpaquePeerIds(sessionKey);
@@ -207,10 +155,13 @@ export function hasPluginHostCleanupTarget(
   entry: SessionEntry,
   params: PluginHostSessionCleanupStoreParams,
 ): boolean {
-  if (params.mode === "promoted-slots") {
-    return hasPromotedSessionEntrySlot(entry, params.pluginId, params.sessionEntrySlotKeys);
-  }
-  return hasPluginOwnedSessionState(entry, params.pluginId, params.sessionEntrySlotKeys);
+  return (
+    hasPromotedSessionEntrySlot(entry, params.pluginId, params.sessionEntrySlotKeys) ||
+    (params.mode === "plugin-owned-state" &&
+      [entry.pluginExtensions, entry.pluginExtensionSlotKeys, entry.pluginNextTurnInjections].some(
+        (state) => Boolean(params.pluginId ? state?.[params.pluginId] : state),
+      ))
+  );
 }
 
 export function isLockedHarnessSessionOwnedByPlugin(

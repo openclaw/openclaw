@@ -5,6 +5,7 @@ import { testing } from "../../openai-transport-stream.test-support.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { SessionManager } from "../../sessions/index.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
+import { log } from "../logger.js";
 import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
 import {
   handleEmbeddedAttemptMidTurnPrecheck,
@@ -65,158 +66,150 @@ function createSessionManagerWithMessage(message: AgentMessage): SessionManager 
 describe("attempt prompt preflight", () => {
   it.each([
     "oversized",
-    "unwindowed",
     "unwindowed-tools",
     "missing-window",
-    "discarded",
     "discarded-invalid",
-    "fitting-with-raw-overflow",
     "fitting-with-discarded-invalid",
     "fitting-with-tool-output-schema",
-  ] as const)(
-    "handles a %s checkpoint when a context engine owns ordinary compaction",
-    async (variant) => {
-      const discarded = variant === "discarded" || variant === "discarded-invalid";
-      const fitting = variant.startsWith("fitting-");
-      const unwindowed = variant === "unwindowed" || variant === "unwindowed-tools";
-      const toolWithOutputSchema = {
-        name: "lookup",
-        description: "Look up a record.",
-        parameters: { type: "object" },
-        outputSchema: {
-          type: "string",
-          description: "result documentation ".repeat(4_000),
-        },
-      };
-      const owner = makeAgentAssistantMessage({
-        content: [{ type: "text", text: "covered" }],
-        model: attempt.model.id,
-      });
-      const item = { type: "compaction" as const, id: "cmp_test", encrypted_content: "opaque" };
-      captureOpenAIResponsesCompaction(
-        owner,
-        item,
-        "retained-users",
-        attempt.model,
-        testing.buildOpenAIResponsesReasoningReplayMetadata(attempt.model, attempt),
-        variant !== "missing-window" && variant !== "discarded-invalid"
-          ? [
-              {
-                type: "message",
-                role: "user",
-                content: [
-                  {
-                    type: "input_text",
-                    text: fitting ? "small retained window" : "retained content ".repeat(8_000),
-                  },
+  ] as const)("handles a %s provider checkpoint", async (variant) => {
+    const discarded = variant === "discarded-invalid";
+    const fitting = variant.startsWith("fitting-");
+    const unwindowed = variant === "unwindowed-tools";
+    const toolWithOutputSchema = {
+      name: "lookup",
+      description: "Look up a record.",
+      parameters: { type: "object" },
+      outputSchema: {
+        type: "string",
+        description: "result documentation ".repeat(4_000),
+      },
+    };
+    const owner = makeAgentAssistantMessage({
+      content: [{ type: "text", text: "covered" }],
+      model: attempt.model.id,
+    });
+    const item = { type: "compaction" as const, id: "cmp_test", encrypted_content: "opaque" };
+    captureOpenAIResponsesCompaction(
+      owner,
+      item,
+      "retained-users",
+      attempt.model,
+      testing.buildOpenAIResponsesReasoningReplayMetadata(attempt.model, attempt),
+      variant !== "missing-window" && variant !== "discarded-invalid"
+        ? [
+            {
+              type: "message",
+              role: "user",
+              content: [
+                {
+                  type: "input_text",
+                  text: fitting ? "small retained window" : "retained content ".repeat(8_000),
+                },
+              ],
+            },
+            item,
+          ]
+        : undefined,
+    );
+    const discardedInvalid = makeAgentAssistantMessage({
+      content: [],
+      model: attempt.model.id,
+    });
+    captureOpenAIResponsesCompaction(
+      discardedInvalid,
+      { ...item, id: "cmp_discarded", encrypted_content: "discarded opaque" },
+      "retained-users",
+      attempt.model,
+      testing.buildOpenAIResponsesReasoningReplayMetadata(attempt.model, attempt),
+    );
+    const result = await prepareEmbeddedAttemptPromptPreflight({
+      attempt,
+      compactionReplayEnabled: true,
+      contextEnginePromptAuthority:
+        unwindowed || discarded || fitting ? "preassembly_may_overflow" : "assembled",
+      ...(unwindowed || discarded || fitting
+        ? {
+            unwindowedContextEngineMessagesForPrecheck: discarded
+              ? [owner]
+              : [
+                  ...(variant === "fitting-with-discarded-invalid"
+                    ? [owner, discardedInvalid]
+                    : []),
+                  ...(variant === "unwindowed-tools"
+                    ? [
+                        makeAgentAssistantMessage({
+                          content: [
+                            { type: "toolCall", id: "call-1", name: "read", arguments: {} },
+                          ],
+                        }),
+                        makeToolResultMessage("raw tool history ".repeat(40_000)),
+                      ]
+                    : [
+                        {
+                          role: "user" as const,
+                          content: "raw history ".repeat(40_000),
+                          timestamp: 1,
+                        },
+                      ]),
                 ],
-              },
-              item,
-            ]
-          : undefined,
-      );
-      const discardedInvalid = makeAgentAssistantMessage({
-        content: [],
-        model: attempt.model.id,
-      });
-      captureOpenAIResponsesCompaction(
-        discardedInvalid,
-        { ...item, id: "cmp_discarded", encrypted_content: "discarded opaque" },
-        "retained-users",
-        attempt.model,
-        testing.buildOpenAIResponsesReasoningReplayMetadata(attempt.model, attempt),
-      );
-      const result = await prepareEmbeddedAttemptPromptPreflight({
-        attempt,
-        compactionReplayEnabled: true,
-        activeContextEngine: { info: { id: "owner", name: "Owner", ownsCompaction: true } },
-        contextEngineAssemblySucceeded: true,
-        contextEnginePromptAuthority:
-          unwindowed || discarded || fitting ? "preassembly_may_overflow" : "assembled",
-        ...(unwindowed || discarded || fitting
-          ? {
-              unwindowedContextEngineMessagesForPrecheck: discarded
-                ? [owner]
-                : [
-                    ...(variant === "fitting-with-discarded-invalid"
-                      ? [owner, discardedInvalid]
-                      : []),
-                    ...(variant === "unwindowed-tools"
-                      ? [
-                          makeAgentAssistantMessage({
-                            content: [
-                              { type: "toolCall", id: "call-1", name: "read", arguments: {} },
-                            ],
-                          }),
-                          makeToolResultMessage("raw tool history ".repeat(40_000)),
-                        ]
-                      : [
-                          {
-                            role: "user" as const,
-                            content: "raw history ".repeat(40_000),
-                            timestamp: 1,
-                          },
-                        ]),
-                  ],
-            }
-          : {}),
-        contextTokenBudget: 1_000,
-        hookMessagesForCurrentPrompt: discarded ? [] : [owner],
-        includeBoundaryTimestamp: false,
-        promptForPrecheck: "follow-up",
-        reserveTokens: 100,
-        sessionMessageCount: 1,
-        systemPrompt: "",
-        toolResultMaxChars: 1_000,
-        ...(variant === "fitting-with-tool-output-schema"
-          ? {
-              toolSchemaTokens: estimateToolSchemaTokenPressure([toolWithOutputSchema]),
-            }
-          : {}),
-        state: {
-          contextBudgetStatus: undefined,
-          preflightRecovery: undefined,
-          promptError: null,
-          promptErrorSource: null,
-          skipPromptSubmission: false,
-        },
-      });
-      if (discarded || fitting) {
-        expect(result.skipPromptSubmission).toBe(false);
-        expect(result.promptError).toBeNull();
-        expect(result.preflightRecovery).toBeUndefined();
-        if (fitting) {
-          expect(result.contextBudgetStatus?.estimatedPromptTokens).toBeGreaterThan(20_000);
-        }
-        return;
-      }
-      expect(result.skipPromptSubmission).toBe(true);
-      expect(result.promptErrorSource).toBe("precheck");
-      if (variant !== "missing-window") {
-        expect(result.preflightRecovery?.route).toBe("compact_only");
-        expect(result.contextBudgetStatus?.estimatedPromptTokens).toBeGreaterThan(20_000);
-        if (unwindowed) {
-          expect(result.preflightRecovery?.estimatedPromptTokens).toBe(
-            estimateLlmBoundaryTokenPressure({
-              messages: [owner],
-              prompt: "follow-up",
-              replay: { model: attempt.model, sessionId: attempt.sessionId, enabled: true },
-            }),
-          );
-          if (variant === "unwindowed-tools") {
-            expect(result.contextBudgetStatus?.toolResultReducibleChars).toBeGreaterThan(0);
-            expect(result.contextBudgetStatus?.route).not.toBe("compact_only");
           }
-        }
-      } else {
-        expect(result.preflightRecovery).toBeUndefined();
-        expect(String(result.promptError)).toContain("Run /compact");
+        : {}),
+      contextTokenBudget: 1_000,
+      hookMessagesForCurrentPrompt: discarded ? [] : [owner],
+      includeBoundaryTimestamp: false,
+      promptForPrecheck: "follow-up",
+      reserveTokens: 100,
+      sessionMessageCount: 1,
+      systemPrompt: "",
+      toolResultMaxChars: 1_000,
+      ...(variant === "fitting-with-tool-output-schema"
+        ? {
+            toolSchemaTokens: estimateToolSchemaTokenPressure([toolWithOutputSchema]),
+          }
+        : {}),
+      state: {
+        contextBudgetStatus: undefined,
+        preflightRecovery: undefined,
+        promptError: null,
+        promptErrorSource: null,
+        skipPromptSubmission: false,
+      },
+    });
+    if (discarded || fitting) {
+      expect(result.skipPromptSubmission).toBe(false);
+      expect(result.promptError).toBeNull();
+      expect(result.preflightRecovery).toBeUndefined();
+      if (fitting) {
+        expect(result.contextBudgetStatus?.estimatedPromptTokens).toBeGreaterThan(20_000);
       }
-    },
-  );
+      return;
+    }
+    expect(result.skipPromptSubmission).toBe(true);
+    expect(result.promptErrorSource).toBe("precheck");
+    if (variant !== "missing-window") {
+      expect(result.preflightRecovery?.route).toBe("compact_only");
+      expect(result.contextBudgetStatus?.estimatedPromptTokens).toBeGreaterThan(20_000);
+      if (unwindowed) {
+        expect(result.preflightRecovery?.estimatedPromptTokens).toBe(
+          estimateLlmBoundaryTokenPressure({
+            messages: [owner],
+            prompt: "follow-up",
+            replay: { model: attempt.model, sessionId: attempt.sessionId, enabled: true },
+          }),
+        );
+        if (variant === "unwindowed-tools") {
+          expect(result.contextBudgetStatus?.toolResultReducibleChars).toBeGreaterThan(0);
+          expect(result.contextBudgetStatus?.route).not.toBe("compact_only");
+        }
+      }
+    } else {
+      expect(result.preflightRecovery).toBeUndefined();
+      expect(String(result.promptError)).toContain("Run /compact");
+    }
+  });
 
-  it("routes a mid-turn compaction request with its measured budget", () => {
-    const outcome = handleEmbeddedAttemptMidTurnPrecheck({
+  it("routes a mid-turn compaction request with its measured budget", async () => {
+    const outcome = await handleEmbeddedAttemptMidTurnPrecheck({
       toolResultPromptProjectionState: createToolResultPromptProjectionState(),
       attempt,
       request,
@@ -238,12 +231,12 @@ describe("attempt prompt preflight", () => {
     });
   });
 
-  it("admits a retry without changing history when persisted truncation cannot help", () => {
+  it("admits a retry without changing history when persisted truncation cannot help", async () => {
     const toolResult = makeToolResultMessage("already capped tool output");
     const sessionManager = createSessionManagerWithMessage(toolResult);
     const messagesBefore = sessionManager.buildSessionContext().messages;
     const replaceSessionMessages = vi.fn();
-    const outcome = handleEmbeddedAttemptMidTurnPrecheck({
+    const outcome = await handleEmbeddedAttemptMidTurnPrecheck({
       toolResultPromptProjectionState: createToolResultPromptProjectionState(),
       attempt,
       request: { ...request, route: "truncate_tool_results_only" },
@@ -266,8 +259,8 @@ describe("attempt prompt preflight", () => {
     expect(sessionManager.buildSessionContext().messages).toEqual(messagesBefore);
   });
 
-  it("keeps the compaction fallback when persisted truncation cannot inspect history", () => {
-    const outcome = handleEmbeddedAttemptMidTurnPrecheck({
+  it("keeps the compaction fallback when persisted truncation cannot inspect history", async () => {
+    const outcome = await handleEmbeddedAttemptMidTurnPrecheck({
       toolResultPromptProjectionState: createToolResultPromptProjectionState(),
       attempt,
       request: { ...request, route: "truncate_tool_results_only" },
@@ -281,12 +274,12 @@ describe("attempt prompt preflight", () => {
     expect(outcome.promptError?.message).toBe(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
   });
 
-  it("handles successful mid-turn tool-result truncation without a prompt error", () => {
+  it("handles successful mid-turn tool-result truncation without a prompt error", async () => {
     const sessionManager = createSessionManagerWithMessage(
       makeToolResultMessage("large tool output ".repeat(5_000)),
     );
     const replaceSessionMessages = vi.fn();
-    const outcome = handleEmbeddedAttemptMidTurnPrecheck({
+    const outcome = await handleEmbeddedAttemptMidTurnPrecheck({
       toolResultPromptProjectionState: createToolResultPromptProjectionState(),
       attempt: { ...attempt, contextTokenBudget: 100 },
       request: { ...request, route: "truncate_tool_results_only" },
@@ -310,65 +303,39 @@ describe("attempt prompt preflight", () => {
     );
   });
 
-  it("records heuristic pressure without short-circuiting the provider attempt", async () => {
-    const result = await prepareEmbeddedAttemptPromptPreflight({
-      attempt,
-      compactionReplayEnabled: true,
-      contextEngineAssemblySucceeded: false,
-      contextEnginePromptAuthority: "assembled",
-      contextTokenBudget: 100,
-      hookMessagesForCurrentPrompt: [],
-      includeBoundaryTimestamp: false,
-      promptForPrecheck: "x".repeat(4_000),
-      reserveTokens: 20,
-      sessionMessageCount: 0,
-      state: {
-        contextBudgetStatus: undefined,
-        preflightRecovery: undefined,
-        promptError: null,
-        promptErrorSource: null,
-        skipPromptSubmission: false,
-      },
-      systemPrompt: "",
-      toolResultMaxChars: 1_000,
-    });
-
-    expect(result.skipPromptSubmission).toBe(false);
-    expect(result.promptError).toBeNull();
-    expect(result.promptErrorSource).toBeNull();
-    expect(result.preflightRecovery).toBeUndefined();
-    expect(result.contextBudgetStatus?.shouldCompact).toBe(true);
-    expect(result.contextBudgetStatus?.overflowTokens).toBeGreaterThan(0);
-  });
-
-  it("defers overflow admission to a context engine that owns compaction", async () => {
-    const state: Parameters<typeof prepareEmbeddedAttemptPromptPreflight>[0]["state"] = {
-      contextBudgetStatus: undefined,
-      preflightRecovery: undefined,
-      promptError: null,
-      promptErrorSource: null,
-      skipPromptSubmission: false,
-    };
-    const result = await prepareEmbeddedAttemptPromptPreflight({
-      attempt,
-      compactionReplayEnabled: true,
-      activeContextEngine: {
-        info: { id: "owner", name: "Owner", ownsCompaction: true },
-      },
-      contextEngineAssemblySucceeded: true,
-      contextEnginePromptAuthority: "assembled",
-      contextTokenBudget: 100,
-      hookMessagesForCurrentPrompt: [],
-      includeBoundaryTimestamp: false,
-      promptForPrecheck: "x".repeat(4_000),
-      reserveTokens: 20,
-      sessionMessageCount: 0,
-      state,
-      systemPrompt: "",
-      toolResultMaxChars: 1_000,
-    });
-
-    expect(result).toEqual(state);
+  it("warns and keeps client recovery when V2 pending input exceeds the hard budget", async () => {
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      const result = await prepareEmbeddedAttemptPromptPreflight({
+        attempt,
+        compactionReplayEnabled: true,
+        providerCompactionAtRequestBoundary: true,
+        contextEnginePromptAuthority: "assembled",
+        contextTokenBudget: 100,
+        pendingInputTokens: 101,
+        hookMessagesForCurrentPrompt: [],
+        includeBoundaryTimestamp: false,
+        promptForPrecheck: "oversized input",
+        reserveTokens: 20,
+        sessionMessageCount: 0,
+        state: {
+          contextBudgetStatus: undefined,
+          preflightRecovery: undefined,
+          promptError: null,
+          promptErrorSource: null,
+          skipPromptSubmission: false,
+        },
+        systemPrompt: "",
+        toolResultMaxChars: 1_000,
+      });
+      expect(result.preflightRecovery).toEqual({ route: "compact_only" });
+      expect(result.skipPromptSubmission).toBe(true);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("falling back to client compaction: pending input exceeds"),
+      );
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("does not persist heuristic pre-prompt tool-result truncation", async () => {
@@ -386,7 +353,6 @@ describe("attempt prompt preflight", () => {
     const result = await prepareEmbeddedAttemptPromptPreflight({
       attempt,
       compactionReplayEnabled: true,
-      contextEngineAssemblySucceeded: false,
       contextEnginePromptAuthority: "assembled",
       contextTokenBudget,
       hookMessagesForCurrentPrompt: messages,

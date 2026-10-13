@@ -1,18 +1,14 @@
 import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
-import type { PluginCapabilityCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
+import type { PluginCapabilityCatalogHostContext } from "openclaw/plugin-sdk/plugin-entry";
 import type {
   RealtimeTranscriptionProviderPlugin,
   RealtimeTranscriptionSession,
   RealtimeTranscriptionSessionCreateRequest,
 } from "openclaw/plugin-sdk/realtime-transcription";
 import type { RealtimeVoiceProviderPlugin } from "openclaw/plugin-sdk/realtime-voice-provider";
-import type {
-  SpeechProviderPlugin,
-  SpeechSynthesisStreamRequest,
-  SpeechTelephonySynthesisRequest,
-} from "openclaw/plugin-sdk/speech";
+import type { SpeechProviderPlugin } from "openclaw/plugin-sdk/speech";
 import type { VideoGenerationProvider } from "openclaw/plugin-sdk/video-generation";
 import {
   createXaiImageGenerationProviderMetadata,
@@ -192,18 +188,13 @@ export function createLazyXaiImageGenerationProvider(): ImageGenerationProvider 
 export function createLazyXaiMediaUnderstandingProvider(): MediaUnderstandingProvider {
   return {
     ...createXaiMediaUnderstandingProviderMetadata(),
-    transcribeAudio: async (req) => {
-      const provider = await loadXaiMediaUnderstandingProvider();
-      if (!provider.transcribeAudio) {
-        throw new Error("xAI media understanding provider missing transcribeAudio");
-      }
-      return await provider.transcribeAudio(req);
-    },
+    transcribeAudio: async (req) =>
+      (await loadXaiMediaUnderstandingProvider()).transcribeAudio(req),
   };
 }
 
 export function createLazyXaiVideoGenerationProvider(
-  context: Pick<PluginCapabilityCatalogContext, "isProviderApiKeyConfigured">,
+  context: Pick<PluginCapabilityCatalogHostContext, "isProviderApiKeyConfiguredAsync">,
 ): VideoGenerationProvider {
   return {
     ...createXaiVideoGenerationProviderMetadata(context),
@@ -212,39 +203,25 @@ export function createLazyXaiVideoGenerationProvider(
 }
 
 export function createLazyXaiSpeechProvider(
-  context: Pick<PluginCapabilityCatalogContext, "isProviderAuthProfileConfigured">,
+  context: Pick<
+    PluginCapabilityCatalogHostContext,
+    "isProviderAuthProfileConfigured" | "isProviderAuthProfileConfiguredAsync"
+  >,
 ): SpeechProviderPlugin {
   return {
     ...createXaiSpeechProviderMetadata(context),
-    listVoices: async (req) => {
-      const provider = await loadXaiSpeechProvider();
-      if (!provider.listVoices) {
-        throw new Error("xAI speech provider missing listVoices");
-      }
-      return await provider.listVoices(req);
-    },
+    listVoices: async (req) => (await loadXaiSpeechProvider()).listVoices(req),
     synthesize: async (req) => await (await loadXaiSpeechProvider()).synthesize(req),
-    streamSynthesize: async (req: SpeechSynthesisStreamRequest) => {
-      const provider = await loadXaiSpeechProvider();
-      if (!provider.streamSynthesize) {
-        throw new Error("xAI speech provider missing streamSynthesize");
-      }
-      return await provider.streamSynthesize(req);
-    },
-    synthesizeTelephony: async (req: SpeechTelephonySynthesisRequest) => {
-      const provider = await loadXaiSpeechProvider();
-      if (!provider.synthesizeTelephony) {
-        throw new Error("xAI speech provider missing synthesizeTelephony");
-      }
-      return await provider.synthesizeTelephony(req);
-    },
+    streamSynthesize: async (req) => (await loadXaiSpeechProvider()).streamSynthesize(req),
+    synthesizeTelephony: async (req) => (await loadXaiSpeechProvider()).synthesizeTelephony(req),
   };
 }
 
 export function createLazyXaiRealtimeTranscriptionProvider(
   context: Pick<
-    PluginCapabilityCatalogContext,
+    PluginCapabilityCatalogHostContext,
     | "isProviderAuthProfileConfigured"
+    | "isProviderAuthProfileConfiguredAsync"
     | "resolveApiKeyForProvider"
     | "createRealtimeTranscriptionWebSocketSession"
   >,
@@ -266,8 +243,8 @@ export function createLazyXaiRealtimeTranscriptionProvider(
 
 export function createLazyXaiRealtimeVoiceProvider(
   context: Pick<
-    PluginCapabilityCatalogContext,
-    "isProviderAuthProfileConfigured" | "resolveAgentDir"
+    PluginCapabilityCatalogHostContext,
+    "isProviderAuthProfileConfigured" | "isProviderAuthProfileConfiguredAsync" | "resolveAgentDir"
   >,
 ): RealtimeVoiceProviderPlugin {
   return {

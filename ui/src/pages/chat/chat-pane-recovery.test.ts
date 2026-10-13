@@ -28,16 +28,19 @@ function sessionsResult(row: GatewaySessionRow): SessionsListResult {
   };
 }
 
-function createQueuedSendRecoveryFixture() {
+function createQueuedSendRecoveryFixture(
+  options: { attempted?: boolean; initialIdle?: boolean } = {},
+) {
   vi.stubGlobal("sessionStorage", createStorageMock());
   const listRefresh = createDeferred<SessionsListResult>();
   const active: GatewaySessionRow = {
     key: "agent:main",
     kind: "direct",
     updatedAt: 10,
-    activeRunIds: ["server-run"],
-    hasActiveRun: true,
-    status: "running",
+    activeRunIds: options.initialIdle ? [] : ["server-run"],
+    hasActiveRun: !options.initialIdle,
+    status: options.initialIdle ? "done" : "running",
+    ...(options.initialIdle ? { lastRunId: "server-run" } : {}),
   };
   const idle: GatewaySessionRow = {
     ...active,
@@ -54,9 +57,9 @@ function createQueuedSendRecoveryFixture() {
         id: "queued-after-server-run",
         text: "send after idle",
         createdAt: 1,
-        sendAttempts: 0,
+        sendAttempts: options.attempted ? 1 : 0,
         sendRunId: "queued-send-run",
-        sendState: "waiting-idle",
+        sendState: options.attempted ? "unconfirmed" : "waiting-idle",
         sessionKey: "agent:main",
       },
     ],
@@ -171,6 +174,61 @@ describe("chat pane session recovery", () => {
         ),
       ).toEqual([]);
     } finally {
+      fixture.dispose();
+    }
+  });
+
+  it("recovers the first canonical idle row and new terminal runs without repeating unchanged reads", async () => {
+    const fixture = createQueuedSendRecoveryFixture({ attempted: true, initialIdle: true });
+    const historyReads = () =>
+      fixture.host.request.mock.calls.filter(([method]) => method === "chat.history").length;
+    try {
+      const initial = fixture.host.sessions.refresh({ force: true });
+      fixture.listRefresh.resolve(sessionsResult(fixture.idle));
+      await initial;
+      await vi.waitFor(() => expect(historyReads()).toBe(1));
+      await fixture.host.sessions.refresh({ force: true });
+      await Promise.resolve();
+      expect(historyReads()).toBe(1);
+      expect(fixture.host.chatQueue).toHaveLength(1);
+
+      fixture.idle.lastRunId = "new-terminal-run";
+      await fixture.host.sessions.refresh({ force: true });
+      await vi.waitFor(() => expect(historyReads()).toBe(2));
+      expect(fixture.host.chatQueue).toHaveLength(1);
+      expect(
+        fixture.host.request.mock.calls.filter(([method]) => method === "chat.send"),
+      ).toHaveLength(0);
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  it("waits for a fresh canonical idle read after a queued pane attaches to an existing cache", async () => {
+    const fixture = createQueuedSendRecoveryFixture({ attempted: true, initialIdle: true });
+    let unsubscribe: (() => void) | undefined;
+    try {
+      const initial = fixture.host.sessions.refresh({ force: true });
+      fixture.listRefresh.resolve(sessionsResult(fixture.idle));
+      await initial;
+      const historyReads = () =>
+        fixture.host.request.mock.calls.filter(([method]) => method === "chat.history").length;
+      await vi.waitFor(() => expect(historyReads()).toBe(1));
+      const { pane, state } = createTestChatPane({
+        client: fixture.host.client!,
+        sessions: fixture.host.sessions,
+      });
+      state.sessionKey = fixture.host.sessionKey;
+      state.chatQueue = [...fixture.host.chatQueue];
+      pane.applySessionsState(fixture.host.sessions.state);
+      unsubscribe = fixture.host.sessions.subscribe((next) => pane.applySessionsState(next));
+      expect(historyReads()).toBe(1);
+
+      await fixture.host.sessions.refresh({ force: true });
+      await vi.waitFor(() => expect(historyReads()).toBe(2));
+      expect(state.chatQueue).toHaveLength(1);
+    } finally {
+      unsubscribe?.();
       fixture.dispose();
     }
   });

@@ -48,13 +48,15 @@ flow:
           args: [{ ref: env }, 60000]
         - resetTransport: true
         - sendInbound:
-            conversation: { id: ambiguous-timeout, kind: direct }
+            conversation: { id: ambiguous-timeout, kind: channel }
             senderId: driver
             senderName: Teams QA Driver
-            text:
-              expr: "`qa msteams seed proactive conversation reference. reply with only this exact marker: ${config.seedMarker}`"
+            text: "@openclaw qa msteams seed proactive conversation reference"
+        - set: seedResult
+          value:
+            expr: "await (async () => { const timeoutMs = liveTurnTimeoutMs(env, 60000); const deadline = Date.now() + timeoutMs; let lastError; while (Date.now() < deadline) { try { return await env.gateway.call('send', { accountId: 'default', agentId: 'qa', channel: 'msteams', idempotencyKey: randomUUID(), message: config.seedMarker, to: 'conversation:19:ambiguous-timeout@thread.tacv2' }, { timeoutMs: Math.max(1, deadline - Date.now()) }); } catch (error) { lastError = error; if (!String(error).includes('No conversation reference found')) throw error; await new Promise((resolve) => setTimeout(resolve, 100)); } } throw lastError ?? new Error('timed out waiting for Teams conversation reference'); })()"
         - waitForOutbound:
-            conversation: { id: ambiguous-timeout, kind: direct }
+            conversation: { id: ambiguous-timeout, kind: channel }
             textIncludes: { ref: config.seedMarker }
             timeoutMs:
               expr: liveTurnTimeoutMs(env, 60000)

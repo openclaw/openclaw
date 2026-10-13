@@ -23,7 +23,7 @@ scenario:
     - src/cron/isolated-agent/run.ts
     - src/cron/isolated-agent/run-finalize.ts
     - src/cron/service/timer-execution.ts
-    - src/cron/task-run-history.ts
+    - src/cron/run-history.ts
     - src/cron/cron-execution-diagnostics.e2e.test.ts
   execution:
     kind: vitest

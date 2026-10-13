@@ -103,11 +103,7 @@ export function decideProviderLoginSessionAdoption(params: {
       return { status: "rejected" };
     }
   }
-  const needsPatch =
-    params.current.authProfileOverride !== params.nextProfileId ||
-    params.current.authProfileOverrideSource !== "user" ||
-    params.current.authProfileOverrideCompactionCount !== undefined;
-  return needsPatch
+  return !isProviderLoginPatchPersisted(params.current, params.nextProfileId)
     ? {
         status: "patch",
         patch: {

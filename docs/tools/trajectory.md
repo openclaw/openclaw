@@ -120,12 +120,24 @@ omitted when the session did not capture the corresponding runtime data.
 ## Capture storage
 
 Runtime trajectory events are stored with the session in the per-agent SQLite
-database. Exporting a trajectory materializes a redacted JSONL support bundle;
+database. Runtime batches carry the captured JSON bytes to the database worker
+for persistence. Cleanup drains the final batch.
+Queued events follow the same rolling byte limit while the database writer is busy.
+Exporting a trajectory materializes a redacted JSONL support bundle;
 the live runtime capture is not a session-adjacent JSONL sidecar.
 
-Legacy `.trajectory.jsonl` and `.trajectory-path.json` files may still appear
-from older releases or explicit legacy-file exports. Session maintenance treats
-those files as cleanup targets; active capture writes database rows.
+Each session keeps a rolling 10 MiB runtime window. Global retention removes
+complete runs older than 14 days, then the oldest remaining runs to target a
+512 MiB total. The session triggering cleanup is protected by its own rolling
+window. Global cleanup begins on first use and hourly thereafter, separately
+from appends. It selects bounded batches without holding the database writer
+and rechecks the selection before each deletion. Cleanup continues through
+bounded batches; concurrent changes defer a stale selection until a later
+append.
+
+Runtime export reads the SQLite capture. Pre-July 2026 `.trajectory.jsonl` and
+`.trajectory-path.json` sidecars are no longer read or followed. Existing files
+can be removed after retaining any needed diagnostic data.
 
 ## Disable capture
 
@@ -140,8 +152,8 @@ missing.
 
 ## Tune flush timeout
 
-OpenClaw flushes runtime trajectory rows during agent cleanup. The default
-cleanup timeout is 10,000 ms. On slow disks or large stores, set
+OpenClaw drains any pending runtime trajectory rows during agent cleanup. The
+default cleanup timeout is 10,000 ms. On slow disks or large stores, set
 `OPENCLAW_TRAJECTORY_FLUSH_TIMEOUT_MS` before starting OpenClaw:
 
 ```bash
@@ -166,11 +178,20 @@ redacts sensitive values before writing export files:
 
 The exporter also bounds input size:
 
-- runtime capture: the live capture is a rolling window capped at 10 MiB, dropping the oldest events to make room for new ones; export accepts existing legacy runtime sidecar files up to 50 MiB
-- session files: 50 MiB
+- runtime capture: the live capture is a rolling window capped at 10 MiB, dropping the oldest events to make room for new ones; export accepts the SQLite runtime store up to 50 MiB
+- session (transcript) sources: 50 MiB, whether read from the SQLite transcript store or a session file
 - runtime events per export: 200,000
 - total exported events: 250,000
 - individual runtime event lines are truncated above 256 KiB
+
+The source byte limits are checked before parsing events. SQLite sources use
+UTF-8 JSONL size, including separators between rows, regardless of the database
+encoding. SQLite runtime event counts are also checked before loading rows.
+Oversized sources fail with a size error before an export bundle is created.
+
+These are per-source limits, not a bound on total process memory. Parsing,
+projection, redaction, and output serialization can retain additional copies;
+large exports can still require more memory than their source size.
 
 Review bundles before sharing them outside your team. Redaction is best-effort
 and cannot know every application-specific secret.
@@ -189,9 +210,9 @@ If the command rejects the output path:
 - do not pass `/tmp/...` or `~/...`
 - keep the export inside `.openclaw/trajectory-exports/`
 
-If the export fails with a size error, the session or sidecar exceeded the
-export safety limits above. Start a new session or export a smaller
-reproduction.
+If the export fails with a size error, a transcript or runtime source — the
+SQLite store or a file — exceeded the export safety limits above. Start a new
+session or export a smaller reproduction.
 
 ## Related
 

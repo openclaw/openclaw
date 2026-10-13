@@ -4,12 +4,20 @@ import {
   type ParsedIpAddress,
 } from "@openclaw/net-policy/ip";
 
-export function normalizeGatewayErrorText(value: unknown): string {
-  return typeof value === "string" ? value.trim().toLowerCase() : "";
+export { normalizeLowercaseStringOrEmpty as normalizeGatewayErrorText } from "@openclaw/normalization-core/string-coerce";
+
+export function isGatewayClientStoppedError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return message === "gateway client stopped" || message === "Error: gateway client stopped";
 }
 
-export function isSensitiveUrlQueryParamName(key: string): boolean {
-  return /(?:token|password|secret|key|auth|credential)/iu.test(key);
+export function formatGatewayClientErrorForLog(err: unknown): string {
+  return String(err)
+    .replace(/\/\/([^@/?#\s]+)@/g, "//***:***@")
+    .replace(/(Authorization:\s*Bearer\s+)[^\s]+/giu, "$1***")
+    .replace(/([?&])([^=&\s]+)=([^&#\s"'<>)]*)/g, (match, prefix: string, key: string) =>
+      /(?:token|password|secret|key|auth|credential)/iu.test(key) ? `${prefix}${key}=***` : match,
+    );
 }
 
 const SHA256_HEX_FINGERPRINT = /^[a-fA-F0-9]{64}$/u;

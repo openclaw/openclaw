@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parse as parseSemver } from "semver";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { invalidateSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { ABANDONED_UPDATE_RUN_MS } from "../infra/update-run-timeouts.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
@@ -19,7 +20,7 @@ export type StateSchemaPublicationBlocker = {
 };
 
 /** Only the 2026.9.2 release line reopens the ledger without the transaction fence. */
-function isUnfencedUpdateDriver(version: unknown): boolean {
+export function isUnfencedUpdateDriver(version: unknown): boolean {
   const parsed = typeof version === "string" ? parseSemver(version) : null;
   return parsed !== null && `${parsed.major}.${parsed.minor}.${parsed.patch}` === "2026.9.2";
 }
@@ -111,5 +112,6 @@ export function resolveStateSchemaVersionToPublish(db: DatabaseSync): number {
           .where("config_machine_state.value_json", "!=", String(OPENCLAW_STATE_SCHEMA_VERSION)),
       ),
   );
+  invalidateSqliteSchemaFacts(db);
   return published;
 }

@@ -15,7 +15,7 @@ Lobster workflow tool plugin for typed pipelines and resumable approvals.
 ## Distribution
 
 - Package: `@openclaw/lobster`
-- Install route: npm or ClawHub
+- Install route: npm or ClawHub: `clawhub:@openclaw/lobster`
 
 ## Surface
 

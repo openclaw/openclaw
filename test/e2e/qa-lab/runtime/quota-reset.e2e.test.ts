@@ -14,57 +14,15 @@ import {
 } from "./quota-reset.test-support.js";
 
 describe.each([
-  {
-    source: "wham",
-    expiresDuringBlock: false,
-    scopedCooldown: false,
-    availableProbeCooldown: false,
-    staleUsageAfterSuccess: false,
-  },
-  {
-    source: "codex_rate_limits",
-    expiresDuringBlock: false,
-    scopedCooldown: false,
-    availableProbeCooldown: false,
-    staleUsageAfterSuccess: false,
-  },
-  {
-    source: "wham",
-    expiresDuringBlock: true,
-    scopedCooldown: false,
-    availableProbeCooldown: false,
-    staleUsageAfterSuccess: false,
-  },
-  {
-    source: "codex_rate_limits",
-    expiresDuringBlock: false,
-    scopedCooldown: true,
-    availableProbeCooldown: false,
-    staleUsageAfterSuccess: false,
-  },
-  {
-    source: "codex_rate_limits",
-    expiresDuringBlock: false,
-    scopedCooldown: true,
-    availableProbeCooldown: true,
-    staleUsageAfterSuccess: false,
-  },
-  {
-    source: "codex_rate_limits",
-    expiresDuringBlock: false,
-    scopedCooldown: true,
-    availableProbeCooldown: false,
-    staleUsageAfterSuccess: true,
-  },
+  ["wham", false, false, false, false],
+  ["codex_rate_limits", false, false, false, false],
+  ["wham", true, false, false, false],
+  ["codex_rate_limits", false, true, false, false],
+  ["codex_rate_limits", false, true, true, false],
+  ["codex_rate_limits", false, true, false, true],
 ] as const)(
-  "Gateway quota reset ($source, expired=$expiresDuringBlock, scoped=$scopedCooldown, available=$availableProbeCooldown, stale-success=$staleUsageAfterSuccess)",
-  ({
-    source,
-    expiresDuringBlock,
-    scopedCooldown,
-    availableProbeCooldown,
-    staleUsageAfterSuccess,
-  }) => {
+  "Gateway quota reset (%s, expired=%s, scoped=%s, available=%s, stale-success=%s)",
+  (source, expiresDuringBlock, scopedCooldown, availableProbeCooldown, staleUsageAfterSuccess) => {
     it(
       "recovers the next chat after upstream capacity returns without admitting exhausted or revoked auth",
       { timeout: 600_000 },
@@ -202,6 +160,9 @@ describe.each([
           const ordinaryCooldown = afterUtilityFailure?.cooldownUntil;
           expect(ordinaryCooldown, evidence()).toBeGreaterThan(Date.now() + clock.offset);
           expect(provider.responses, evidence()).toContainEqual({
+            atMs: expect.any(Number),
+            status: 200,
+            transport: "http",
             phase: "ordinary-rate-limit-with-capacity",
             path: "/core-wham/usage",
             value: expect.objectContaining({
@@ -215,10 +176,13 @@ describe.each([
             headers: {},
           });
           let beforeRecoveryReply: ReturnType<typeof stats>;
-          provider.observeNextSuccess(() => {
-            beforeRecoveryReply = stats();
-            turns.push({ beforeRecoveryReply });
-          });
+          provider.observeNextSuccess(
+            () => {
+              beforeRecoveryReply = stats();
+              turns.push({ beforeRecoveryReply });
+            },
+            { model: "gpt-5.5", path: "/v1/responses" },
+          );
           provider.setPhase("restored");
           expect(await turn(), evidence()).toEqual({ status: "ok", output: [MARKER] });
           expect(beforeRecoveryReply?.blockedUntil, evidence()).toBeUndefined();
