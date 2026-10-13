@@ -32,7 +32,7 @@ afterEach(() => {
 });
 
 it.each([
-  { name: "CLI service", appOwned: false, running: false },
+  { name: "CLI service", appOwned: false, running: false, platform: "linux" as const },
   { name: "offline app-owned service", appOwned: true, running: false },
   { name: "running app-owned service", appOwned: true, running: true },
   {
@@ -93,8 +93,8 @@ it.each([
       isLoaded: vi.fn(async () => !appOwned || running),
       readRuntime: vi.fn(async () => ({
         status: running ? "running" : "stopped",
-        // Linux ownership inspection requires the native manager identity before payload ownership.
-        systemd: { managerUid: process.getuid?.() ?? 501 },
+        // App payload ownership requires native manager identity; the CLI control stays unverified.
+        ...(appOwned ? { systemd: { managerUid: process.getuid?.() ?? 501 } } : {}),
       })),
       readCommand: vi.fn(async () => ({
         programArguments: [process.execPath, path.join(serviceRoot, "openclaw.mjs"), "gateway"],
