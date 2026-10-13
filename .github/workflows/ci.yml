@@ -2854,6 +2854,9 @@ jobs:
                 echo "Current CI targets must provide src/plugins/plugin-module-generation.test.ts." >&2
                 exit 1
               fi
+              if [[ -f src/infra/sqlite-existing-database.bun.test.ts ]]; then
+                OPENCLAW_TEST_BUN_LAUNCHER=1 pnpm test src/infra/sqlite-existing-database.bun.test.ts
+              fi
               ;;
             *)
               echo "Unsupported checks-fast task: $TASK" >&2

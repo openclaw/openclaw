@@ -85,6 +85,7 @@ export function withExistingSqliteRollbackDatabase<T>(
   }
   let writer: DatabaseSync | undefined;
   let snapshotOpen = false;
+  let rollbackJournal = false;
   const releaseReader = () => {
     if (!reader.isOpen) {
       return;
@@ -95,6 +96,13 @@ export function withExistingSqliteRollbackDatabase<T>(
       if (snapshotOpen && reader.isTransaction) {
         reader.exec("PRAGMA locking_mode = NORMAL"); // sqlite-allow-raw -- Release locks even when snapshot validation failed.
         reader.exec("ROLLBACK"); // sqlite-allow-raw -- End our read-only snapshot before closing.
+        // NORMAL applies at the next file access: ROLLBACK alone keeps the SHARED
+        // lock taken in EXCLUSIVE mode until close, which Bun defers, so this
+        // process's own writer could never commit. Only touch verified rollback
+        // stores, where an autocommit read cannot create WAL sidecars.
+        if (rollbackJournal) {
+          reader.exec("PRAGMA schema_version"); // sqlite-allow-raw -- Drop the lock retained from EXCLUSIVE mode.
+        }
       }
       snapshotOpen = false;
     } finally {
@@ -120,8 +128,7 @@ export function withExistingSqliteRollbackDatabase<T>(
     if (!["delete", "truncate", "persist"].includes(String(mode))) {
       throw new Error("Existing SQLite storage requires rollback journal mode.");
     }
-    // Keep the snapshot open, but let ROLLBACK release its lock without waiting
-    // for Bun to finalize retained statements after close_v2.
+    rollbackJournal = true;
     reader.exec("PRAGMA locking_mode = NORMAL"); // sqlite-allow-raw -- Restore connection-local lock policy.
     if (!existing) {
       options.validate?.(reader);
