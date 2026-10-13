@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { createMessageInjectionAuthority } from "../../auto-reply/reply/message-injection-authority.js";
 import { hasPendingFollowupQueueWork } from "../../auto-reply/reply/queue/state.js";
 import {
   interruptReplyRunTarget,
@@ -9,6 +10,7 @@ import {
 import type { SessionTranscriptTurnMutation } from "../../config/sessions/goals-operations.types.js";
 import type { QualifiedSessionEntryAccessTarget } from "../../config/sessions/session-accessor.types.js";
 import { acquireSessionInputActor } from "../../config/sessions/session-input-actor.js";
+import { withSessionPendingInputAuthorityGuard } from "../../config/sessions/session-pending-input-authority.js";
 import { withSessionTranscriptSourcePublication } from "../../config/sessions/transcript-write-context.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -512,6 +514,66 @@ export function assertChatSendExclusiveAdmission(
         : "goal-session-busy",
     );
   }
+}
+
+export function createChatSendPendingInputAdmission({
+  runId,
+  expectedProfileId,
+  sessionMutationAuthorization,
+  sessionMutationCommitGuard,
+  assertCustodyLifetimeCurrent,
+  assertClientUploadAllowed,
+}: Pick<
+  GatewayRequestHandlerOptions,
+  "sessionMutationAuthorization" | "sessionMutationCommitGuard"
+> & {
+  runId: string;
+  expectedProfileId?: string;
+  assertCustodyLifetimeCurrent: () => void;
+  assertClientUploadAllowed?: () => void;
+}) {
+  const assertCustodyCurrent = () => {
+    assertCustodyLifetimeCurrent();
+    if (sessionMutationAuthorization?.assertAdmittedInputCurrent) {
+      sessionMutationAuthorization.assertAdmittedInputCurrent();
+    } else {
+      sessionMutationCommitGuard?.();
+      sessionMutationAuthorization?.assertCurrent();
+    }
+  };
+  let preparationFailure: { cause: unknown } | undefined;
+  const assertAdmittedCurrent =
+    expectedProfileId === undefined
+      ? assertCustodyCurrent
+      : createMessageInjectionAuthority(() => {
+          if (preparationFailure) {
+            throw preparationFailure.cause;
+          }
+          assertCustodyCurrent();
+          return true;
+        });
+  return {
+    runId,
+    authority: sessionMutationAuthorization?.admittedInputAuthority
+      ? withSessionPendingInputAuthorityGuard(
+          sessionMutationAuthorization.admittedInputAuthority,
+          assertCustodyLifetimeCurrent,
+          expectedProfileId === undefined
+            ? undefined
+            : (cause) => {
+                preparationFailure ??= { cause };
+                assertAdmittedCurrent();
+                throw cause;
+              },
+        )
+      : undefined,
+    assertCurrent: () => {
+      assertClientUploadAllowed?.();
+      sessionMutationCommitGuard?.();
+      assertCustodyCurrent();
+    },
+    assertAdmittedCurrent,
+  };
 }
 
 /** Goal and initial-session policy are revalidated in the same input writer barrier. */
