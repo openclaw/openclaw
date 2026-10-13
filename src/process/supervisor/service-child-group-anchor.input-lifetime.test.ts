@@ -53,7 +53,7 @@ describe.skipIf(process.platform === "win32")("POSIX anchor input lifetime", () 
       ]).then(([result]) => result);
       const control = child.stdio[3];
       const lineage = child.stdio[4];
-      const inputProbe = child.stdio[6];
+      const inputProbe = child.stdio.at(6);
       const ready = createDeferredCore();
       const inputEof = createDeferredCore();
       const messages: ServiceChildAnchorMessage[] = [];
