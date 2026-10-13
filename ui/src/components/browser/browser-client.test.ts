@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import {
+  browserScrollScript,
   fetchBrowserScreenshotDataUrl,
   requestBrowserDashboard,
   isBrowserScreencastUnsupportedError,
@@ -335,5 +336,82 @@ describe("browser screencast requests", () => {
     [{ details: { body: { code: "SCREENCAST_UNSUPPORTED" } } }, true],
   ])("recognizes structured unsupported failures (%s)", (error, expected) => {
     expect(isBrowserScreencastUnsupportedError(error)).toBe(expected);
+  });
+});
+
+describe("browser wheel script", () => {
+  // jsdom has no layout, so give each scroller the sizes a browser would report.
+  function scroller(id: string, overflow: string, size: { client: number; scroll: number }) {
+    const el = document.createElement("div");
+    el.id = id;
+    el.style.overflowY = overflow;
+    el.style.overflowX = overflow;
+    for (const axis of ["Height", "Width"] as const) {
+      Object.defineProperty(el, `client${axis}`, { configurable: true, value: size.client });
+      Object.defineProperty(el, `scroll${axis}`, { configurable: true, value: size.scroll });
+    }
+    const scrollBy = vi.fn();
+    el.scrollBy = scrollBy as unknown as typeof el.scrollBy;
+    return { el, scrollBy };
+  }
+
+  function runAt(target: Element | null, params: Parameters<typeof browserScrollScript>[0]) {
+    // jsdom has no hit testing; report the element a browser would find under the pointer.
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => target),
+    });
+    const windowScroll = vi.spyOn(window, "scrollBy").mockImplementation(() => {});
+    // oxlint-disable-next-line typescript/no-implied-eval -- runs the exact page script source
+    const result = (new Function(`return (${browserScrollScript(params)})();`) as () => unknown)();
+    return { result, windowScroll };
+  }
+
+  afterEach(() => {
+    document.body.replaceChildren();
+    Reflect.deleteProperty(document, "elementFromPoint");
+  });
+
+  it("scrolls the nested scroller under the pointer instead of the document", () => {
+    const { el: list, scrollBy } = scroller("list", "auto", { client: 300, scroll: 3000 });
+    const item = document.createElement("span");
+    list.append(item);
+    document.body.append(list);
+
+    const { result, windowScroll } = runAt(item, {
+      deltaX: 0,
+      deltaY: 400,
+      point: { x: 150, y: 300 },
+    });
+
+    expect(result).toBe(true);
+    expect(scrollBy).toHaveBeenCalledExactlyOnceWith(0, 400);
+    expect(windowScroll).not.toHaveBeenCalled();
+  });
+
+  it("chains to the document when the scroller under the pointer cannot move further", () => {
+    const { el: list, scrollBy } = scroller("list", "auto", { client: 300, scroll: 3000 });
+    list.scrollTop = 2700;
+    document.body.append(list);
+
+    const { windowScroll } = runAt(list, { deltaX: 0, deltaY: 400, point: { x: 10, y: 10 } });
+
+    expect(scrollBy).not.toHaveBeenCalled();
+    expect(windowScroll).toHaveBeenCalledExactlyOnceWith(0, 400);
+  });
+
+  it("skips overflow-hidden ancestors and scrolls the document without a point", () => {
+    const { el: clipped, scrollBy } = scroller("clipped", "hidden", { client: 300, scroll: 3000 });
+    document.body.append(clipped);
+
+    expect(
+      runAt(clipped, { deltaX: 0, deltaY: 120, point: { x: 5, y: 5 } }).windowScroll,
+    ).toHaveBeenCalledExactlyOnceWith(0, 120);
+    expect(scrollBy).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
+    expect(runAt(clipped, { deltaX: 30, deltaY: 0 }).windowScroll).toHaveBeenCalledExactlyOnceWith(
+      30,
+      0,
+    );
   });
 });

@@ -5,6 +5,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
+import { browserScrollScript } from "./browser-client.ts";
 import {
   createBrowserClient,
   createBrowserPanelTestController,
@@ -897,6 +898,35 @@ describe("BrowserPanelController capture and input ownership", () => {
         return (envelope as BrowserRequestEnvelope).path === "/tabs";
       }),
     ).toEqual([]);
+  });
+
+  it("scrolls at the remote point under the wheel pointer", async () => {
+    vi.useFakeTimers();
+    const { client, request } = createBrowserClient(async (envelope) => {
+      if (envelope.path === "/act") {
+        return { result: true };
+      }
+      throw new Error(`Unexpected browser route: ${envelope.path}`);
+    });
+    const controller = createBrowserPanelTestController(client, "tab-a");
+
+    controller.handleWheel(
+      new WheelEvent("wheel", { deltaY: 60, clientX: 30, clientY: 40, cancelable: true }),
+    );
+    controller.handleWheel(
+      new WheelEvent("wheel", { deltaY: 40, clientX: 32, clientY: 44, cancelable: true }),
+    );
+    await vi.advanceTimersByTimeAsync(150);
+
+    const actions = request.mock.calls
+      .map(([, envelope]) => envelope as BrowserRequestEnvelope)
+      .filter((envelope) => envelope.path === "/act");
+    expect(actions).toHaveLength(1);
+    // Coalesced deltas scroll the element under the latest pointer position.
+    expect(actions[0]?.body).toMatchObject({
+      kind: "evaluate",
+      fn: browserScrollScript({ deltaX: 0, deltaY: 100, point: { x: 32, y: 44 } }),
+    });
   });
 
   it("never forwards a queued wheel action to a newly selected tab", async () => {
