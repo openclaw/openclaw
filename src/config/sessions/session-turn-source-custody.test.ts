@@ -49,7 +49,7 @@ it.each([false, true])(
           initialSessionEntry: {
             sessionId: scope.sessionId,
             updatedAt: 1,
-            status: "active",
+            status: "done",
             abortedLastRun: false,
           },
         },
@@ -63,7 +63,7 @@ it.each([false, true])(
         await expect(recorder.persistApproved()).resolves.toMatchObject({ appended: true });
         expect(readExactSessionEntryRow(f.database, scope.sessionKey)?.entry).toMatchObject({
           sessionId: scope.sessionId,
-          status: "active",
+          status: "done",
           abortedLastRun: false,
         });
         expect(
