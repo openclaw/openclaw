@@ -16,6 +16,7 @@ import {
   CLICKCLACK_CHANNEL_ID,
   clickClackConfigAdapter,
   clickClackMeta,
+  clickClackReload,
   DEFAULT_ACCOUNT_ID,
 } from "./channel-config.js";
 import { clickClackConfigSchema } from "./config-schema.js";
@@ -101,7 +102,7 @@ export const clickClackPlugin: ChannelPlugin<ResolvedClickClackAccount> = create
       media: true,
       blockStreaming: true,
     },
-    reload: { configPrefixes: ["channels.clickclack"] },
+    reload: clickClackReload,
     configSchema: clickClackConfigSchema,
     config: clickClackConfigAdapter,
     setupContract: clickClackSetupContract,

@@ -136,6 +136,10 @@ id (`wsp_...`), slug, or name; the gateway resolves it to the id at startup.
 | `mentionPatterns`            | `[]`                | Mention patterns for this account in group channels. See [Group mention gating](#group-mention-gating).               |
 | `groups`                     | `{}`                | Per-channel group policy overrides keyed by ClickClack channel ID. See [Group mention gating](#group-mention-gating). |
 
+Changes to `allowFrom` take effect without restarting the account connection,
+including while an agent waits for a question card answer. Account-specific
+allowlists override the shared list; accounts without an override inherit it.
+
 ### Keep an auth-gated public hostname
 
 Use `apiBaseUrl` when ClickClack and the OpenClaw gateway run on the same host
