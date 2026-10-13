@@ -12,6 +12,7 @@ import {
   withCanonicalAuthProfileCredentialObserver,
   type CanonicalAuthProfileCredentialObservation,
 } from "./credential-observation.js";
+import { closeAuthProfileFileState, refreshAuthProfileFileState } from "./file-state.js";
 import {
   assertAuthProfileMigrationReady,
   AuthProfileMigrationRequiredError,
@@ -128,6 +129,7 @@ describe("auth publication owner receipts", () => {
       const legacyPath = path.join(agentDir, "auth.json");
       if (discoveredAt === "prepare") {
         fs.writeFileSync(legacyPath, "{}");
+        await refreshAuthProfileFileState();
       }
       const snapshot = await prepareSecretsRuntimeSnapshot({
         config: {},
@@ -151,6 +153,8 @@ describe("auth publication owner receipts", () => {
       } else {
         expect(snapshot.degradedOwners).toEqual([]);
         fs.writeFileSync(legacyPath, "{}");
+        // Activation re-admits source facts without an unrelated background snapshot publication.
+        closeAuthProfileFileState();
         expect(activate).toThrow("requires legacy credential migration");
         expect(snapshotAt(resolveAuthProfileDatabasePath(agentDir))?.profiles.shared).toEqual(
           apiKey("second"),
@@ -307,6 +311,7 @@ describe("auth publication owner receipts", () => {
       }
       const legacyPath = path.join(oauthDir, "oauth.json");
       fs.writeFileSync(legacyPath, "{}");
+      await refreshAuthProfileFileState();
       withEnv(env, () =>
         saveAuthProfileStore(
           { version: 1, profiles: populated ? { shared: apiKey("updated") } : {} },
@@ -432,6 +437,8 @@ describe("auth publication owner receipts", () => {
     async ({ file, populated, refused }) => {
       const root = await seedRoot("original");
       fs.writeFileSync(path.join(root.agentDir, file), "{}");
+      // Re-admit the source for this save without a background snapshot publication.
+      closeAuthProfileFileState();
       withEnv(root.env, () =>
         saveAuthProfileStore(
           {

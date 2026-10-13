@@ -215,7 +215,7 @@ describe("auth profile sqlite reader lifecycle", () => {
     });
   });
 
-  it("observes foreign commits through cached readers and closes them on snapshot replacement", async () => {
+  it("observes foreign commits through cached readers and retains them on snapshot replacement", async () => {
     await withReaders((agentDir, open) => {
       expect(loadPersistedAuthProfileStore(agentDir)).toMatchObject(apiKeyStore("qa-main"));
       const reader = expectDefined(open.mock.results[0]?.value, "pooled auth reader");
@@ -238,11 +238,13 @@ describe("auth profile sqlite reader lifecycle", () => {
         writer.close();
       }
       replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store: apiKeyStore("qa-main") }]);
-      expect(reader.isOpen).toBe(false);
+      expect(reader.isOpen).toBe(true);
       expect(loadPersistedAuthProfileStore(agentDir)).toMatchObject(
         apiKeyStore("synthetic-external"),
       );
-      expect(open).toHaveBeenCalledTimes(2);
+      expect(open).toHaveBeenCalledOnce();
+      clearRuntimeAuthProfileStoreSnapshots();
+      expect(reader.isOpen).toBe(false);
     });
   });
 

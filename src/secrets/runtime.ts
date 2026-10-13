@@ -9,6 +9,7 @@ import {
   getRuntimeAuthProfileStoreCredentialsRevision,
   getRuntimeAuthProfileStoreSnapshotsRevision,
   prepareRuntimeAuthProfileStoreSnapshots,
+  registerRuntimeAuthProfileExternalRefresh,
 } from "../agents/auth-profiles/runtime-snapshots.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
@@ -659,6 +660,23 @@ export async function refreshActiveProviderAuthRuntimeSnapshot(): Promise<boolea
     }
   }
 }
+
+registerRuntimeAuthProfileExternalRefresh(async (paths) => {
+  const snapshot = getActiveSecretsRuntimeSnapshotState();
+  if (
+    !snapshot ||
+    !paths.every((pathname) =>
+      snapshot.authStores.some(
+        (entry) =>
+          entry.databasePath === pathname ||
+          (entry.owner.kind === "resolved" && entry.owner.sharedDatabasePath === pathname),
+      ),
+    )
+  ) {
+    return false;
+  }
+  return refreshActiveProviderAuthRuntimeSnapshot();
+});
 
 export {
   getActiveSecretsRuntimeSnapshotState as getActiveSecretsRuntimeSnapshot,
