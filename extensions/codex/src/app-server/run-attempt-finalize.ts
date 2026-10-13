@@ -5,6 +5,8 @@ import {
   runAgentHarnessLlmOutputHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createNativeSessionBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
+import { extractAssistantText } from "openclaw/plugin-sdk/agent-runtime";
+import { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";
 import { appendSessionYieldContext } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { classifyCodexModelCallFailureKind } from "./attempt-diagnostics.js";
 import {
@@ -474,8 +476,14 @@ export async function finalizeCodexAttempt(
     }
     const { assistantTranscriptOwned, assistantTranscriptIdempotencyKey, terminalAnchor } =
       mirrorOutcome;
+    // The host's required reply cannot be waived by a model's silence token.
+    // Core still decides whether settled evidence needs a tool-free summary.
+    const requiredSilentReply =
+      params.terminalReplyExpectation === "required" &&
+      result.currentAttemptAssistant !== undefined &&
+      isSilentReplyText(extractAssistantText(result.currentAttemptAssistant));
     const shouldCaptureSettledTurnFinalizationContext =
-      result.assistantTexts.every((text) => !text.trim()) &&
+      (result.assistantTexts.every((text) => !text.trim()) || requiredSilentReply) &&
       result.messagesSnapshot.some((message) => message.role === "toolResult") &&
       (!finalPromptError || activeProjector.settledTurnFailureFinalizationAllowed);
     // Supervised auth belongs to its native connection, which has no generic stock

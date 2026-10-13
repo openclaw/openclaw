@@ -54,6 +54,27 @@ export function registerSettledFinalizationTests({
         },
         expectedContext: true,
       },
+      {
+        label: "required reply after successful tools and NO_REPLY",
+        failure: undefined,
+        assistantText: "NO_REPLY",
+        replyExpectation: "required" as const,
+        expectedContext: true,
+      },
+      {
+        label: "optional silent reply after successful tools",
+        failure: undefined,
+        assistantText: "NO_REPLY",
+        replyExpectation: "optional" as const,
+        expectedContext: false,
+      },
+      {
+        label: "visible answer after successful tools",
+        failure: undefined,
+        assistantText: "The update is complete.",
+        replyExpectation: "required" as const,
+        expectedContext: false,
+      },
     ].map((scenario) => ({
       scenario,
       oversizedHistory: scenario.label === "completed turn",
@@ -106,9 +127,16 @@ export function registerSettledFinalizationTests({
         }
       }
       params.prompt = "Send the update to Alice.";
+      if ("replyExpectation" in scenario) {
+        params.terminalReplyExpectation = scenario.replyExpectation;
+      }
       const run = runCodexAppServerAttempt(params);
       await harness.waitForMethod("turn/start");
-      const emptyAssistant = { type: "agentMessage", id: "empty-assistant", text: "" };
+      const emptyAssistant = {
+        type: "agentMessage",
+        id: "empty-assistant",
+        text: "assistantText" in scenario ? scenario.assistantText : "",
+      };
       // Native events arrive in wire order; local projection must not delay terminal receipt.
       await Promise.all([
         harness.notify(itemNotification("item/started", emptyAssistant)),
@@ -184,6 +212,17 @@ export function registerSettledFinalizationTests({
         });
         if (!(context instanceof settledTurnContext.CodexSettledTurnContext)) {
           throw new Error("Expected complete settled-turn evidence from the harness");
+        }
+        if ("assistantText" in scenario) {
+          expect(context.data).toEqual(
+            expect.arrayContaining([
+              { type: "function_call_output", call_id: "tool-settled", output: "sent-to-alice\n" },
+            ]),
+          );
+          expect(
+            harness.requests.filter((request) => request.method === "turn/start"),
+          ).toHaveLength(1);
+          return;
         }
         expect(context.data).toHaveLength(oversizedHistory ? 200 : 3);
         if (oversizedHistory) {
