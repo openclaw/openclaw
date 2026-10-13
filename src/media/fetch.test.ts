@@ -701,11 +701,19 @@ describe("readRemoteMediaBuffer", () => {
             const partialFiles = await fs.readdir(mediaDir);
             expect(partialFiles).toHaveLength(1);
             const partialFile = partialFiles[0];
-            if (!partialFile) throw new Error("missing partially written media");
+            if (!partialFile) {
+              throw new Error("missing partially written media");
+            }
             partialBytes = await fs.readFile(path.join(mediaDir, partialFile));
-            if (outcome === "caller") callerAllowed = false;
-            if (outcome === "ambient") ambientAllowed = false;
-            if (outcome === "abort") parent.abort(closed);
+            if (outcome === "caller") {
+              callerAllowed = false;
+            }
+            if (outcome === "ambient") {
+              ambientAllowed = false;
+            }
+            if (outcome === "abort") {
+              parent.abort(closed);
+            }
             controller.enqueue(suffix);
             controller.close();
           },
@@ -719,7 +727,9 @@ describe("readRemoteMediaBuffer", () => {
           subdir,
           maxBytes: 1024,
           assertCurrent: () => {
-            if (!callerAllowed) throw closed;
+            if (!callerAllowed) {
+              throw closed;
+            }
           },
         });
       // Match the connector's direct call; only composition cases supply an ambient owner.
@@ -727,7 +737,9 @@ describe("readRemoteMediaBuffer", () => {
         outcome === "ambient" || outcome === "abort"
           ? withChannelReadAuthority(
               () => {
-                if (!ambientAllowed) throw closed;
+                if (!ambientAllowed) {
+                  throw closed;
+                }
               },
               save,
               parent.signal,
