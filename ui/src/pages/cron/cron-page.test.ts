@@ -4,6 +4,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CronJob, CronJobsListResult } from "../../api/types.ts";
 import { startCronClone } from "../../lib/cron/index.ts";
 import { updateCronRunsFilter } from "../../lib/cron/runs.ts";
+import { waitForConfirmDialogActions } from "../../test-helpers/modal-dialog.ts";
 import {
   createContext,
   createGateway,
@@ -821,12 +822,12 @@ describe("CronPage editor state sync", () => {
       );
     await waitForCronPage(() => expect(findRemoveButton()?.disabled).toBe(false));
     findRemoveButton()?.click();
-    const findConfirmButton = () =>
-      Array.from(document.querySelectorAll<HTMLButtonElement>(".exec-approval-actions .btn")).find(
-        (button) => button.textContent?.trim() === "Remove",
-      );
-    await waitForCronPage(() => expect(findConfirmButton()).toBeDefined());
-    findConfirmButton()?.click();
+    const confirmActions = await waitForConfirmDialogActions();
+    const confirmButton = Array.from(
+      confirmActions.querySelectorAll<HTMLButtonElement>(".btn"),
+    ).find((button) => button.textContent?.trim() === "Remove");
+    expect(confirmButton).toBeDefined();
+    confirmButton?.click();
     await removeRequested.promise;
     await waitForCronPage(() => expect(page.cron.cronEditingJob).toBeNull());
     await waitForCronPage(() => expect(page.cron.cronRunsScope).toBe("all"));

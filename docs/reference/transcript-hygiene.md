@@ -28,6 +28,7 @@ Scope includes:
 - Incomplete reasoning-only length-turn cleanup before provider replay
 - User-input provenance tagging (for inter-session routed prompts)
 - Empty assistant error/aborted-turn removal before both live requests and provider replay
+- Speech-only assistant turn replay as its spoken text
 
 If you need transcript storage details, see
 [Session management deep dive](/reference/session-management-compaction).
@@ -217,6 +218,10 @@ Empty length turns remain unchanged, as do length turns with visible text,
 tool calls, or unknown content blocks. Silent-reply turns with tool calls or
 unknown content blocks also remain unchanged. Stored transcripts are not
 rewritten.
+
+An assistant turn with no visible text or tool calls but recorded speech
+(`openclawDelivery.tts.text`) replays that speech as its text, so later turns
+still see the answer. Stored transcripts are not rewritten.
 
 Implementation: `normalizeAssistantReplayContent` in
 `src/agents/embedded-agent-runner/replay-history.ts`

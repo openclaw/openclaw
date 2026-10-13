@@ -50,11 +50,13 @@ export function batchStateDomainPublications(operation: () => void): void {
 /** Shared staging mechanics only; domain owners retain projections and authority. */
 export function createStateDomainPublication<T>(codec: {
   domain: string;
+  sourceIdentity?(this: void, db: DatabaseSync): string | symbol;
   keyOf(value: T): string;
   isValue(value: unknown): value is T;
 }) {
   const publication = createKeyedStateDomainPublication<T>({
     domain: codec.domain,
+    sourceIdentity: codec.sourceIdentity,
     isFact: (key, fact) =>
       fact.kind === "absent" ||
       (fact.kind === "postimage" && codec.isValue(fact.value) && codec.keyOf(fact.value) === key),
@@ -73,6 +75,7 @@ export function createStateDomainPublication<T>(codec: {
 /** Domains with compound keys keep their key policy outside the shared receipt lifecycle. */
 export function createKeyedStateDomainPublication<T>(codec: {
   domain: string;
+  sourceIdentity?(this: void, db: DatabaseSync): string | symbol;
   isFact(this: void, key: string, fact: SqliteCommittedFact<unknown>): boolean;
   invalidReceiptMessage?: string;
   installFailureMessage?: string;
@@ -92,7 +95,10 @@ export function createKeyedStateDomainPublication<T>(codec: {
     let source = state.sources.get(db);
     if (!source) {
       source = {
-        identity: readTrackedStateDatabaseIdentity(db)?.key ?? Symbol(codec.domain),
+        identity:
+          codec.sourceIdentity?.(db) ??
+          readTrackedStateDatabaseIdentity(db)?.key ??
+          Symbol(codec.domain),
         incarnation: randomUUID(),
       };
       state.sources.set(db, source);

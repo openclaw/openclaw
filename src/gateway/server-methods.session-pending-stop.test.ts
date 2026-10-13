@@ -159,14 +159,14 @@ describe("pending Stop producer binding", () => {
         },
       });
       await entered.promise;
-      const preparedSession = qualifyChatSendSession(session.value);
+      const preparedSession = await qualifyChatSendSession(session.value);
       const admission = admitChatSend({
         request: request.value,
         session: preparedSession,
         client,
         context,
         respond: vi.fn(),
-      }).finally(preparedSession.releaseSessionTarget);
+      });
       try {
         await vi.waitFor(() =>
           expect(context.dedupe.has(pendingChatSendDedupeKey(runId))).toBe(true),

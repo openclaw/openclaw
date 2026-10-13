@@ -2854,6 +2854,9 @@ jobs:
                 echo "Current CI targets must provide src/plugins/plugin-module-generation.test.ts." >&2
                 exit 1
               fi
+              if [[ -f src/infra/sqlite-existing-database.bun.test.ts ]]; then
+                OPENCLAW_TEST_BUN_LAUNCHER=1 pnpm test src/infra/sqlite-existing-database.bun.test.ts
+              fi
               ;;
             *)
               echo "Unsupported checks-fast task: $TASK" >&2
@@ -4069,6 +4072,16 @@ jobs:
             fi
           done
           finish_static_checks
+
+      - name: Run shared central lint
+        if: ${{ !cancelled() && matrix.shared_central_lint_selection_json }}
+        env:
+          NARROW_CHECK_PATHS_JSON: ${{ needs.preflight.outputs.narrow_check_paths_json }}
+          CI_LINT_SELECTION_JSON: ${{ matrix.shared_central_lint_selection_json }}
+          RUNNER_PROFILE: ${{ needs.preflight.outputs.runner_profile }}
+          OPENCLAW_LOCAL_CHECK: "0"
+        shell: bash
+        run: *run_changed_lint
 
       - &save_hosted_sdk_step
         name: Save hosted SDK boundary cache

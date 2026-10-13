@@ -1179,7 +1179,7 @@ src/agents/auth-profiles/external-auth.ts	1
 src/agents/auth-profiles/oauth-refresh-failure.ts	1
 src/agents/auth-profiles/oauth-refresh-lock-errors.ts	1
 src/agents/auth-profiles/oauth.ts	2
-src/agents/auth-profiles/persisted.ts	2
+src/agents/auth-profiles/persisted.ts	1
 src/agents/auth-profiles/policy.ts	1
 src/agents/auth-profiles/profiles.ts	1
 src/agents/auth-profiles/usage.ts	1
@@ -1850,7 +1850,7 @@ src/config/sessions/transcript-assistant-message.ts	2
 src/config/sessions/transcript-replay.ts	1
 src/config/sessions/transcript-stream.ts	1
 src/config/sessions/transcript-tree.ts	3
-src/config/sessions/transcript.ts	10
+src/config/sessions/transcript.ts	9
 src/config/sessions/types.ts	1
 src/config/validation-channel-rules.ts	1
 src/config/validation-core.ts	1

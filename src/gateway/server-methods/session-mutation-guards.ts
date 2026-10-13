@@ -18,6 +18,7 @@ import {
   retainGatewayDeviceRevocation,
 } from "../device-revocation.js";
 import type { ExpectedProfileBinding } from "../expected-profile.js";
+import { assertRemoteControlUiIngressCurrent } from "../ingress-attribution.js";
 import { isInternalApprovalCommitGuard } from "../internal-approval-authority.js";
 import {
   authorizeCurrentOperatorRoleScopes,
@@ -210,6 +211,7 @@ export function bindWebSocketRequestMutationAuthority<T extends GatewayRequestOp
   const captured = captureRequestMutationOptions(options, client);
   const { signal, hasCurrentClientAuthority } = captured;
   const assertWorkerCurrent = () => {
+    assertRemoteControlUiIngressCurrent(client.remoteControlUiIngress);
     signal?.throwIfAborted();
     const acceptedSource = readAcceptedGatewayDeviceSourceAuthority(hasCurrentClientAuthority);
     if (!hasCurrentDeviceRevocation() || client.internal?.agentRuntimeIdentity) {

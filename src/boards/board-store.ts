@@ -57,7 +57,7 @@ export type BoardSnapshotWithHtmlViewMetadata = {
 export type BoardSessionTarget = { sessionKey: string; agentId?: string };
 
 export type BoardWriteOptions = {
-  /** Recheck caller authority at the worker's transaction and commit boundaries. */
+  /** Check owner-held source authority at admission; admitted writes may finish after revocation. */
   assertCurrent?: () => void;
 };
 

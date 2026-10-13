@@ -249,7 +249,7 @@ it.each(["ordinary", "fresh header", "stale header"] as const)(
       if (!prepared.ok) {
         throw new Error("Session preparation failed");
       }
-      const session = qualifyChatSendSession(prepared.value);
+      const session = await qualifyChatSendSession(prepared.value);
       let admitted: Awaited<ReturnType<typeof admitChatSend>> | undefined;
       try {
         // Admission must read current settings even though preparation retained the old entry.
@@ -283,7 +283,6 @@ it.each(["ordinary", "fresh header", "stale header"] as const)(
         if (admitted?.ok) {
           admitted.value.cleanupAdmittedRun();
         }
-        session.releaseSessionTarget();
         clearAgentRunContext(runId);
       }
     });
@@ -334,25 +333,21 @@ it("releases rejected upload reservations so corrected input can reuse its key",
       if (!prepared.ok) {
         throw new Error("fixture session preparation failed");
       }
-      const session = qualifyChatSendSession(prepared.value);
-      try {
-        const admission = admitChatSend({
-          request: blocked.value,
-          session,
-          client: null,
-          context,
-          respond: vi.fn(),
-        });
-        if (failure === "throws") {
-          await expect(admission).rejects.toBe(policyError);
-        } else {
-          await expect(admission).resolves.toMatchObject({ ok: false });
-        }
-        expect(context.dedupe.has(session.pendingChatSendKey)).toBe(false);
-        expect(context.chatAbortControllers.size).toBe(0);
-      } finally {
-        session.releaseSessionTarget();
+      const session = await qualifyChatSendSession(prepared.value);
+      const admission = admitChatSend({
+        request: blocked.value,
+        session,
+        client: null,
+        context,
+        respond: vi.fn(),
+      });
+      if (failure === "throws") {
+        await expect(admission).rejects.toBe(policyError);
+      } else {
+        await expect(admission).resolves.toMatchObject({ ok: false });
       }
+      expect(context.dedupe.has(session.pendingChatSendKey)).toBe(false);
+      expect(context.chatAbortControllers.size).toBe(0);
       const corrected = await normalizeChatSendRequest({
         client: null,
         params: { sessionKey, message: "Hello", idempotencyKey: runId },
@@ -368,7 +363,7 @@ it("releases rejected upload reservations so corrected input can reuse its key",
       if (!next.ok) {
         throw new Error("fixture retry preparation failed");
       }
-      const retrySession = qualifyChatSendSession(next.value);
+      const retrySession = await qualifyChatSendSession(next.value);
       let retried: Awaited<ReturnType<typeof admitChatSend>> | undefined;
       try {
         retried = await admitChatSend({
@@ -383,7 +378,6 @@ it("releases rejected upload reservations so corrected input can reuse its key",
         if (retried?.ok) {
           retried.value.cleanupAdmittedRun();
         }
-        retrySession.releaseSessionTarget();
         clearAgentRunContext(runId);
       }
     }
@@ -423,7 +417,7 @@ it.each(["known-source", "new-terminal", "new-receipt"] as const)(
       if (!prepared.ok) {
         throw new Error("Session preparation failed");
       }
-      const session = qualifyChatSendSession(prepared.value);
+      const session = await qualifyChatSendSession(prepared.value);
       if (source === "new-terminal") {
         // The prepared request predates this receipt; its own reservation is not retry evidence.
         replaceSessionEntrySync(
@@ -498,7 +492,6 @@ it.each(["known-source", "new-terminal", "new-receipt"] as const)(
         if (admitted?.ok) {
           admitted.value.cleanupAdmittedRun();
         }
-        session.releaseSessionTarget();
         clearAgentRunContext(runId);
       }
     });
@@ -542,7 +535,7 @@ it.each([
     if (!prepared.ok) {
       throw new Error("Session preparation failed");
     }
-    const session = qualifyChatSendSession(prepared.value);
+    const session = await qualifyChatSendSession(prepared.value);
     const initialEntry = structuredClone(sessionAccessor.loadSessionEntry(scope));
     const observed = createDeferred();
     const resume = createDeferred();
@@ -610,7 +603,6 @@ it.each([
       if (admitted?.ok) {
         admitted.value.cleanupAdmittedRun();
       }
-      session.releaseSessionTarget();
       clearAgentRunContext(runId);
     }
   });

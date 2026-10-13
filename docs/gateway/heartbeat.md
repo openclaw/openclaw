@@ -108,6 +108,10 @@ string. `heartbeat.target` accepts `owner`, `last`, `none`, or a channel ID such
 
 ## What the heartbeat prompt is for
 
+Explicit speech-only replies keep their spoken text through heartbeat selection
+and speech synthesis, even when the visible reply is empty. They follow the same
+delivery target and visibility settings as other heartbeat alerts.
+
 The default prompt is intentionally narrow: follow the heartbeat monitor scratch
 context when provided, keep recurring work in automation jobs, and reply
 `NO_REPLY` when nothing needs attention. It explicitly tells the agent

@@ -260,6 +260,8 @@ CLI-backed runtimes settle profile health only after their resume, fork, and fre
 
     HTTP status mapping uses **`server_error`** for otherwise-unclassified non-timing `5xx` failures, including `502` and `503`. HTTP `529` retains **`overloaded`**. The timing statuses retain **`timeout`**: request timeout `408`, gateway timeouts `504`, `522`, and `524`, and nginx client-abort `499`. More-specific provider errors and context classifications keep their existing precedence.
 
+    Text-only provider envelopes such as `Google Generative AI API error (503): ...` use the same status mapping, so configured fallback still advances without a separate numeric status. Explicit numeric status fields take precedence; unrelated text containing numbers does not supply an HTTP status.
+
     Generic server text can also land in that timeout bucket when the source matches a known transient pattern. For example, the bare model runtime stream-wrapper message `An unknown error occurred` is treated as failover-worthy for every provider. The shared model runtime emits it when provider streams end with `stopReason: "aborted"` or `stopReason: "error"` without specific details. JSON `api_error` payloads with transient server text such as `internal server error`, `unknown error, 520`, `upstream error`, or `backend error` are also treated as failover-worthy timeouts.
 
     OpenRouter-specific generic upstream text such as bare `Provider returned error` is treated as timeout only when the provider context is actually OpenRouter. Generic internal fallback text such as `LLM request failed with an unknown error.` stays conservative and does not trigger failover by itself.

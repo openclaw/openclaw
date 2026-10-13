@@ -44,7 +44,7 @@ import { commitComposerDraft } from "./chat-composer-state.ts";
 import { renderFallbackIndicatorSolid } from "./chat-composer-status.tsx";
 import type { ChatComposerProps } from "./chat-composer-types.ts";
 import { isPastedTextAttachment } from "./chat-pasted-text.ts";
-import { ChatPermissionPicker } from "./chat-permission-picker.ts";
+import { ChatPermissionPicker } from "./chat-permission-picker.tsx";
 import {
   handleChatComposerDropdownShow,
   markPointerOpenedChatComposerDropdown,

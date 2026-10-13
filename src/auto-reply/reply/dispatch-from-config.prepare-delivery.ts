@@ -94,7 +94,11 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     routeReplyTo &&
     routeReplyChannel === normalizedCurrentSurface,
   );
-  const deliveryChannel = shouldRouteToOriginating ? routeReplyChannel : currentSurface;
+  // Heartbeat's custom dispatcher routes the reply, but synthesis still needs its destination.
+  const deliveryChannel =
+    shouldRouteToOriginating || state.replyOperationRunState.heartbeat
+      ? (routeReplyChannel ?? currentSurface)
+      : currentSurface;
   const { preparedTtsPreferences, getDispatchReplyOperation } = state;
   const maybeApplyTtsWithFinalizationLease = async (
     payload: ReplyPayload,

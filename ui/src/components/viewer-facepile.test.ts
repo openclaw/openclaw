@@ -446,3 +446,35 @@ it.each([true])(
     );
   },
 );
+
+it.each([false, true])(
+  "retains a participant avatar through metadata updates (linked: %s)",
+  async (linked) => {
+    const facepile = document.createElement("openclaw-viewer-facepile");
+    const navigate = vi.fn();
+    if (linked) {
+      facepile.personActivity = { basePath: "", navigate };
+    }
+    facepile.staticParticipants = [
+      { identity: { type: "profile", id: "profile-ada" }, label: "Ada" },
+    ];
+    document.body.append(facepile);
+    await facepile.updateComplete;
+    const avatar = facepile.querySelector("openclaw-viewer-avatar")!;
+    const initials = avatar.querySelector(".viewer-avatar__initials")!;
+    const link = facepile.querySelector<HTMLAnchorElement>("a");
+    link?.focus();
+    facepile.staticParticipants = [
+      { identity: { type: "profile", id: "profile-ada" }, label: "Ada King" },
+    ];
+    await facepile.updateComplete;
+    expect(facepile.querySelector("openclaw-viewer-avatar")).toBe(avatar);
+    expect(avatar.querySelector(".viewer-avatar__initials")).toBe(initials);
+    expect(avatar.querySelector(".viewer-avatar")?.getAttribute("aria-label")).toBe("Ada King");
+    if (link) {
+      expect(document.activeElement).toBe(link);
+      link.click();
+      expect(navigate).toHaveBeenCalledExactlyOnceWith("profile-ada", "Ada King");
+    }
+  },
+);

@@ -4,6 +4,7 @@ import type { Model } from "../llm/types.js";
 import type { ActiveRemoteModelCatalog } from "../model-catalog/remote-overlay.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PreparedSyntheticAuthFacts } from "../plugins/provider-synthetic-auth.js";
+import type { AuthProfileCredentialReceipts } from "../state/user-model-account-authority.js";
 import type { AuthProfileStore, SharedAuthStoreOwnership } from "./auth-profiles/types.js";
 import type { ModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
@@ -54,7 +55,10 @@ export type PreparedModelWorkerRequest = PreparedModelWorkerCommand &
     codexClientVersion?: string;
   }>;
 
-export type PreparedModelWorkerResult =
+export type PreparedModelWorkerResult = PreparedModelWorkerOutcome &
+  Readonly<{ authCredentials: AuthProfileCredentialReceipts }>;
+
+export type PreparedModelWorkerOutcome =
   | Readonly<
       PreparedModelRuntimeAuth & {
         status: "ok";
