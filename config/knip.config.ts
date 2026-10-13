@@ -55,6 +55,8 @@ const repositoryScriptEntries = [
   "apps/android/scripts/build-release-artifacts.ts!",
   // The cold-load benchmark guide invokes this opt-in CLI by path.
   "scripts/bench-control-ui-cold-load.ts!",
+  // The channel-turn benchmark guide invokes this opt-in CLI by path.
+  "scripts/bench-channel-turn.mts!",
   "scripts/bundle-a2ui.mts!",
   "scripts/build-discord-activity-sdk.mts!",
   // Plugin package asset hooks invoke the browser builder by path.
