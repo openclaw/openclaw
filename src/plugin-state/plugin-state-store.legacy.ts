@@ -91,6 +91,7 @@ export function createSyncKeyedStore<T>(
         ...writeScope,
         key: normalizedKey,
         updateValueJson: (current) => {
+          // SAFETY: This namespace stores the updater's caller-selected JSON type.
           const next = updateValue(current as T | undefined);
           assertActive?.();
           return next === undefined
@@ -106,6 +107,7 @@ export function createSyncKeyedStore<T>(
         ...scope,
         key: validateKey(key, "delete"),
         predicate: (current) => {
+          // SAFETY: The predicate receives this namespace's caller-selected JSON type.
           const result = predicate(current as T);
           assertActive?.();
           return result;
@@ -114,6 +116,7 @@ export function createSyncKeyedStore<T>(
     },
     lookup(key) {
       warnLegacyUse("lookup");
+      // SAFETY: The namespace's JSON value type is selected by the caller.
       return pluginStateLookup({ ...scope, key: validateKey(key, "lookup") }) as T | undefined;
     },
     lookupMany(keys) {
@@ -125,6 +128,7 @@ export function createSyncKeyedStore<T>(
     },
     consume(key) {
       warnLegacyUse("consume");
+      // SAFETY: The consumed row retains this namespace's caller-selected JSON type.
       return pluginStateConsume({ ...scope, key: validateKey(key, "consume") }) as T | undefined;
     },
     delete(key) {
@@ -133,6 +137,7 @@ export function createSyncKeyedStore<T>(
     },
     entries() {
       warnLegacyUse("entries");
+      // SAFETY: Every entry comes from this namespace's caller-selected JSON type.
       return pluginStateEntries(scope) as PluginStateEntry<T>[];
     },
     count() {

@@ -18,7 +18,8 @@ import { createThreadBindingManager } from "./thread-bindings.manager.js";
 import { resetThreadBindingsForTests } from "./thread-bindings.test-support.js";
 import type { ThreadBindingRecord } from "./thread-bindings.types.js";
 
-vi.mock("../runtime.js", () => {
+vi.mock("../runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../runtime.js")>();
   const runtime = {
     state: {
       openKeyedStoreV2: (options: OpenKeyedStoreOptions) =>
@@ -27,7 +28,7 @@ vi.mock("../runtime.js", () => {
         createPluginStateSyncKeyedStoreForTests("discord", options),
     },
   };
-  return { getDiscordRuntime: () => runtime, getOptionalDiscordRuntime: () => runtime };
+  return { ...actual, getDiscordRuntime: () => runtime, getOptionalDiscordRuntime: () => runtime };
 });
 
 it("keeps binding restoration, mutation, and shutdown SQL off the process main thread", async () => {

@@ -517,12 +517,15 @@ function createAccountBindingManager<TKind extends string>(
     channel: params.channel,
     accountId,
     capabilities: { placements: ["current"] },
+    /** @deprecated Use listBySessionAsync; removal follows a stable deprecation period. */
     listBySession: (targetSessionKey) =>
       listCurrentConversationBindingRecordsBySession(targetSessionKey, accountScope),
+    /** @deprecated Use resolveByConversationAsync; removal follows a stable deprecation period. */
     resolveByConversation: (ref) =>
       ref.channel === params.channel
         ? resolveCurrentConversationBindingRecord(conversationRef(ref.conversationId))
         : null,
+    /** @deprecated Use touchAsync; removal follows a stable deprecation period. */
     touch: (bindingId, at) => {
       const conversationId = conversationIdFromBinding(bindingId);
       if (conversationId) {
@@ -599,6 +602,7 @@ function createAccountBindingManager<TKind extends string>(
         assertCurrent,
         context,
       ),
+    /** @deprecated Use inspectByConversationAsync; removal follows a stable deprecation period. */
     inspectByConversation: (ref) =>
       ref.channel === params.channel
         ? inspectCurrentConversationBindingRecord(conversationRef(ref.conversationId))
