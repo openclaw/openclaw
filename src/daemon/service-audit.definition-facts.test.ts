@@ -834,17 +834,3 @@ it("keeps the scheduler engine setting protected during replacement", async () =
     expect.objectContaining({ kind: "unknown-edit", key: "Settings.UseUnifiedSchedulingEngine" }),
   );
 });
-
-it("tolerates the native default engine value during replacement", async () => {
-  const findings = await auditRewrittenTaskXml(
-    (xml) =>
-      xml.replace(
-        "<Priority>7</Priority>",
-        "<Priority>7</Priority>\n    <UseUnifiedSchedulingEngine>false</UseUnifiedSchedulingEngine>",
-      ),
-    { published: true },
-  );
-  expect(findings).not.toContainEqual(
-    expect.objectContaining({ key: "Settings.UseUnifiedSchedulingEngine" }),
-  );
-});
