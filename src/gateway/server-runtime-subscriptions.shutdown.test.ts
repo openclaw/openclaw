@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   loadSessionEntryReadOnly,
   persistSessionTranscriptTurn,
@@ -13,8 +14,6 @@ import { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.j
 import { createSubscriptionTestFixture } from "./server-runtime-subscriptions.test-support.js";
 import * as sessionObserverModel from "./session-observer-model.js";
 
-const runtimeConfigState = vi.hoisted(() => ({ value: {} as Record<string, unknown> }));
-vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => runtimeConfigState.value }));
 vi.mock("../audit/audit-recorder.js", () => ({
   createAuditEventRecorder: () => ({
     record: vi.fn(),
@@ -64,7 +63,7 @@ it.for(["before startup", "before inherited connection drain"] as const)(
     );
     let draining: Promise<void> | undefined;
     try {
-      runtimeConfigState.value = { agents: { defaults: { utilityModel: "test/utility" } } };
+      setRuntimeConfigSnapshot({ agents: { defaults: { utilityModel: "test/utility" } } });
       const entry = await upsertSessionEntryCore(scope, {
         sessionId: scope.sessionId,
         updatedAt: 1,

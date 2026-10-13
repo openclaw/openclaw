@@ -89,7 +89,7 @@ describe("runSkillExperienceReview", () => {
     );
   });
 
-  it("refreshes a later append without MAIN SQL and denies unprepared use after revocation", async () => {
+  it("keeps a later append live without MAIN SQL and denies unprepared use after revocation", async () => {
     const candidate = await createExperienceReviewCandidate(
       "review-append",
       [{ role: "user", content: "Remember the verified procedure.", timestamp: 1 }],
@@ -118,6 +118,8 @@ describe("runSkillExperienceReview", () => {
           );
           const refreshedSql = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
           try {
+            // The model response resumes before the next tool can prepare its source scope.
+            assertCurrent!();
             await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
               assertCurrent!();
             });

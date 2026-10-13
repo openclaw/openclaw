@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import type { RuntimeContextFragment } from "../agents/internal-runtime-context.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { buildRestartRecoveryClaimCleanupPatch } from "../config/sessions/restart-recovery-state.js";
 import {
   appendTranscriptMessage,
@@ -164,7 +165,6 @@ const mocks = vi.hoisted(() => {
       vi.fn<
         typeof import("./session-utils-store-worker.js").resolveGatewaySessionStoreTargetInWorker
       >(),
-    getRuntimeConfig: vi.fn<typeof import("../config/io.js").getRuntimeConfig>(),
     captureSessionEventTarget:
       vi.fn<
         typeof import("../auto-reply/reply/session-event-handoff.js").captureSessionEventTargetForHost
@@ -327,9 +327,6 @@ vi.mock("../config/sessions/main-session.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/sessions/main-session.js")>()),
   resolveSystemMainSessionTarget: mocks.resolveSystemMainSessionTarget,
 }));
-
-// mock-isolation: Restart fixtures publish their explicit config without loading a live config file.
-vi.mock("../config/io.js", () => ({ getRuntimeConfig: mocks.getRuntimeConfig }));
 
 vi.mock("../channels/plugins/session-conversation.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../channels/plugins/session-conversation.js")>()),
@@ -599,7 +596,7 @@ function expectQueueContext(stateDir = testState.stateDir) {
 }
 
 function setNoticeOwner(owner: string) {
-  mocks.getRuntimeConfig.mockReturnValue({ commands: { ownerAllowFrom: [owner] } });
+  setRuntimeConfigSnapshot({ commands: { ownerAllowFrom: [owner] } });
 }
 
 describe("scheduleRestartSentinelWake", () => {
@@ -658,8 +655,7 @@ describe("scheduleRestartSentinelWake", () => {
     );
     mocks.parseSessionThreadInfo.mockReset();
     mocks.parseSessionThreadInfo.mockReturnValue({ baseSessionKey: null, threadId: undefined });
-    mocks.getRuntimeConfig.mockReset();
-    mocks.getRuntimeConfig.mockReturnValue({ commands: { ownerAllowFrom: ["+15550002"] } });
+    setRuntimeConfigSnapshot({ commands: { ownerAllowFrom: ["+15550002"] } });
     configureRestartSessionEventMocks(mocks);
     mocks.loadSessionEntry.mockReset();
     mocks.loadSessionEntry.mockImplementation((sessionKey: string) =>
@@ -750,7 +746,7 @@ describe("scheduleRestartSentinelWake", () => {
     const sessionKey = "agent:main:whatsapp:direct:+15550002";
     const run = createUpdateRun({ trigger: "control-ui", origin: { sessionKey } });
     const session = mocks.loadSessionEntry(sessionKey);
-    mocks.getRuntimeConfig.mockReturnValue({ commands: { ownerAllowFrom: ["telegram:12345"] } });
+    setRuntimeConfigSnapshot({ commands: { ownerAllowFrom: ["telegram:12345"] } });
     mocks.loadSessionEntry.mockReturnValue({
       ...session,
       cfg: { commands: { ownerAllowFrom: ["telegram:12345"] } },
@@ -2705,7 +2701,7 @@ describe("scheduleRestartSentinelWake", () => {
   });
 
   it("merges base session routing into partial thread metadata", async () => {
-    mocks.getRuntimeConfig.mockReturnValue({
+    setRuntimeConfigSnapshot({
       commands: { ownerAllowFrom: ["room:!MixedCase:example.org"] },
     });
     mocks.readRestartSentinel.mockResolvedValue({

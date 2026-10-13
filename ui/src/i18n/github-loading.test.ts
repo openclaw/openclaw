@@ -1,8 +1,5 @@
-import { assert, expect, it } from "vitest";
-import {
-  dropRepoOwnedCustomElements,
-  jsdomCustomElementDefinitions,
-} from "../../../test/jsdom-custom-elements.ts";
+import type WaDropdownItem from "@awesome.me/webawesome/dist/components/dropdown-item/dropdown-item.js";
+import { expect, it, vi } from "vitest";
 import { useLazyEnglishTest } from "./lazy-english.test-support.ts";
 
 const loadI18n = useLazyEnglishTest();
@@ -32,7 +29,7 @@ it.each([
     surface: "identity",
     load: () => import("../features/github-connections/github-identity-view.ts"),
   },
-])("loads GitHub fallback copy at the cold $surface boundary", async ({ load }) => {
+])("loads GitHub fallback copy at the cold $surface boundary", async ({ load, surface }) => {
   const { en, manager } = await loadI18n({
     githubConnections: { manage: "Verbindungen verwalten" },
     sessionHovercard: { checks: { passing: "CI-Prüfungen erfolgreich" } },
@@ -68,21 +65,31 @@ it.each([
     ),
   ).toEqual(["GitHub connections", "My GitHub", "System GitHub", "For me", "For the system"]);
   await manager.setLocale("de");
-  const definitions = jsdomCustomElementDefinitions(customElements);
-  assert.isDefined(definitions);
-  const existingTags = new Set(definitions.map((definition) => definition.name));
+  // Cold imports repeat repository registrations. Dependencies register only once
+  // per worker, so their definitions must remain in the document's registry.
+  const define = customElements.define.bind(customElements);
+  const registration = vi
+    .spyOn(customElements, "define")
+    .mockImplementation((name, constructor, options) => {
+      if (!customElements.get(name)) {
+        define(name, constructor, options);
+      }
+    });
   try {
     await load();
   } finally {
-    dropRepoOwnedCustomElements({
-      registry: customElements,
-      definitions,
-      repoOwnedTags: new Set(
-        definitions
-          .filter(({ name }) => name.startsWith("openclaw-") && !existingTags.has(name))
-          .map(({ name }) => name),
-      ),
-    });
+    registration.mockRestore();
+  }
+  if (surface === "publication") {
+    const item = document.createElement("wa-dropdown-item") as WaDropdownItem;
+    document.body.append(item);
+    try {
+      await item.updateComplete;
+      item.focus();
+      expect(document.activeElement).toBe(item);
+    } finally {
+      item.remove();
+    }
   }
   expect(en.githubConnections).toBe(connections);
   expect(en.githubPublication).toBe(publication);

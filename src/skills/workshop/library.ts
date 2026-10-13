@@ -504,7 +504,11 @@ export async function patchWorkshopSkill(
         `${file} does not exist in "${params.name}". Use action=write_file to add it.`,
       );
     }
-    const matches = current.split(params.oldText).length - 1;
+    const { oldText } = params;
+    let matches = 0;
+    for (let at = current.indexOf(oldText); at !== -1; at = current.indexOf(oldText, at + 1)) {
+      matches++;
+    }
     if (matches !== 1) {
       throw new WorkshopWriteError(
         matches === 0

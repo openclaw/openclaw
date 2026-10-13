@@ -93,7 +93,6 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
   const recoveryKey = (id: string) => messageRecoveryKey(props.fullMessageAgentId, id);
   pruneTranscriptExpansions(expandedAssistantMessages, props);
   const subagents = projectSubagentStatus(props, searchFiltering);
-  const subagentWait = subagents.wait;
   const chatItemsInput = {
     paneId: props.paneId,
     sessionKey: props.sessionKey,
@@ -228,7 +227,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
   };
   const hasRealtimeTalkConversation = (props.realtimeTalkConversation?.length ?? 0) > 0;
   const hasTypingActors = (props.typingActors?.length ?? 0) > 0;
-  const hasLiveContent = Boolean(subagentWait || hasTypingActors || hasRealtimeTalkConversation);
+  const hasLiveContent = Boolean(subagents.wait || hasTypingActors || hasRealtimeTalkConversation);
   // Rows, not items: a handoff boundary is structure and draws nothing.
   const isEmpty = transcriptItems.length === 0 && !props.loading && !hasLiveContent;
   transcript.setContentReady(!props.loading);
@@ -324,11 +323,12 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     assistant: assistantIdentity,
     startupLabel: props.startupLabel,
     waitingApproval: props.waitingApproval,
-    waitingSubagents: subagentWait ?? undefined,
+    waitingSubagents: subagents.wait ?? undefined,
     runningSubagents: subagents.running,
     subagentActivity: subagents.activity.length
       ? html`<openclaw-chat-subagent-activity
           .rows=${subagents.activity}
+          .turnStartedAt=${subagents.wait ? workingIndicator?.request?.askedAt : undefined}
           .onOpenSubagent=${props.onOpenSubagent}
           .onOpenSession=${props.onOpenSession}
         ></openclaw-chat-subagent-activity>`
@@ -548,10 +548,10 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
   if (turnRecap !== null && !recapAttached && !isEmpty && !showLoadingSkeleton) {
     appendContent("turn-recap", renderTurnRecapRow(turnRecap));
   }
-  if (subagentWait && !subagents.placedWait && !searchFiltering) {
+  if (subagents.wait && !subagents.placedWait && !searchFiltering) {
     appendContent(
       "waiting-subagents",
-      renderUnplacedSubagentWait(props.sessionKey, subagentWait, streamGroupOptions),
+      renderUnplacedSubagentWait(props.sessionKey, subagents.wait, streamGroupOptions),
     );
   }
   const typingIndicator = renderChatTypingIndicator(
