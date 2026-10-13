@@ -32,6 +32,7 @@ const workerDeployArtifactNames = [
   "code-mode-node.worker.mjs",
   "file-tool-planning.worker.mjs",
   "file-tool-read.worker.mjs",
+  "gateway-state-owner-heartbeat.worker.mjs",
   "github-exec-launcher.mjs",
   "image-processor.worker.mjs",
   "openclaw-state-read.worker.mjs",

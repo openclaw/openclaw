@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import { expect } from "vitest";
 import { shouldUseDetachedVitestProcessGroup } from "../../scripts/vitest-process-group.mts";
 import { readCiWorkflow, type WorkflowStep } from "./ci-workflow.test-support.js";
+import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
 import { createWorkerArtifactTest, writeFixture } from "./vitest-worker-artifacts.test-support.js";
 
 const it = createWorkerArtifactTest();
@@ -72,8 +73,7 @@ it.for([
     const result = await node(
       ["--import", "tsx", path.join(copiedRoot, sparseFiles[0]!)],
       directory,
-      {
-        ...process.env,
+      testRunnerFixtureEnv({
         // This sparse adapter exercises the historical Node contract, not the host CI policy.
         // A prebuilt-dist CI shard must not make the copied runner prepare packages.
         OPENCLAW_CI_TEST_RUNTIME_POLICY: "node",
@@ -86,7 +86,7 @@ it.for([
         OPENCLAW_NODE_TEST_TARGETS_JSON: "[]",
         OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: "[]",
         OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: "1",
-      },
+      }),
     );
     const unshared =
       mode === "modern-unshared" ||

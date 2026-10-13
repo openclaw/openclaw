@@ -135,6 +135,9 @@ export function readSessionRowFacts(params: {
                 workspaceResultReconciling,
                 retryOnSend,
                 {
+                  startStatus: placement.environmentId
+                    ? context.workerEnvironmentService?.get(placement.environmentId)?.startStatus
+                    : undefined,
                   workerRuntimeInstall: context.workerPlacementRuntimeInstallReader?.read(
                     placement,
                     environment ?? null,

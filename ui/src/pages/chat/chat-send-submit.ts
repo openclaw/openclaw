@@ -391,17 +391,32 @@ export async function handleSendChat(
         });
         return undefined;
       }
+      const isRunCommand = parsed.command.key === "steer" || parsed.command.key === "redirect";
       const waitsForPicker = parsed.command.key === "redirect";
       const dispatchLocalCommand = async () => {
         if (waitsForPicker && !(await waitForSubmittedRoute(host, submittedSessionKey))) {
           return;
         }
+        if (
+          isRunCommand &&
+          (!submitGuardOptions.isCurrent() ||
+            !visibleSessionMatches(
+              host,
+              submitGuardOptions.scope.sessionKey,
+              submitGuardOptions.scope.agentId,
+            ) ||
+            rejectOversizedAttachments())
+        ) {
+          return;
+        }
         let recoveryComposer: PendingComposerSnapshot | undefined;
-        const recoveryScope = resolveUiConversationIdentity(host, submittedSessionKey);
+        const recoveryScope = isRunCommand
+          ? submitGuardOptions.scope
+          : resolveUiConversationIdentity(host, submittedSessionKey);
         if (messageOverride == null) {
           recordNonTranscriptInputHistory(host, userMessage);
           if (parsed.command.key !== "export-session") {
-            recoveryComposer = clearComposer();
+            recoveryComposer = clearComposer(isRunCommand ? "annotations" : "none");
           }
         }
         const recovery = captureChatCommandComposerRecovery(host, recoveryScope, recoveryComposer);
@@ -412,6 +427,7 @@ export async function handleSendChat(
           host,
           parsed.command.key,
           parsed.args,
+          isRunCommand ? deliveredAttachments : undefined,
         );
         if (
           parsed.command.key === "export-session" &&

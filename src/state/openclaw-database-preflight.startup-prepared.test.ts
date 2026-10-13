@@ -5,6 +5,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { readAgentDatabaseAdmissionRefusal } from "./agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
@@ -18,7 +19,6 @@ import {
   assertOpenClawDatabasesReady,
   preflightOpenClawDatabaseSchemas,
 } from "./openclaw-database-preflight.js";
-import { clearOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
@@ -131,7 +131,7 @@ it.each(["historical", "retired shared"] as const)(
     openOpenClawAgentDatabase({ agentId, path: historyPath, env: fleet.env });
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
-    clearOpenClawAgentIntegrityVerification(historyPath, fleet.env);
+    revokeSqliteDatabaseAdmissionsForPath(historyPath);
     const history = new (requireNodeSqlite().DatabaseSync)(historyPath);
     try {
       history.exec("PRAGMA journal_mode=DELETE;");
@@ -292,7 +292,7 @@ it("preserves configured ownership when reusing an unchanged inspected database"
   );
 });
 
-it("inspects a newly registered fleet member and still refuses its newer schema", async () => {
+it("reads newly registered stores without copying admitted state after startup writes", async () => {
   const fleet = createFleet();
   await withAgentDatabaseStartupAdmission(
     async () => {
@@ -308,6 +308,7 @@ it("inspects a newly registered fleet member and still refuses its newer schema"
       } finally {
         database.close();
       }
+      const prepare = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation");
       expect(await fleet.inspect()).toMatchObject({
         incompatible: [
           {
@@ -318,6 +319,10 @@ it("inspects a newly registered fleet member and still refuses its newer schema"
         ],
         indeterminate: [],
       });
+      const statePath = fs.realpathSync.native(
+        path.join(fleet.env.OPENCLAW_STATE_DIR, "state", "openclaw.sqlite"),
+      );
+      expect(prepare.mock.calls.filter(([pathname]) => pathname === statePath)).toHaveLength(0);
       expect(fleet.onAgentInspection).toHaveBeenLastCalledWith(
         expect.objectContaining({ schemaInspectionCount: 1 }),
       );

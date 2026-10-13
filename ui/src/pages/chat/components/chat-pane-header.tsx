@@ -48,6 +48,7 @@ export type ChatPaneHeaderProps = ChatPaneLayoutMenuProps & {
   presented: PresentationValue;
   mergedChrome: boolean;
   navDrawerOpen?: boolean;
+  newSessionAction?: unknown;
   title: string;
   session: GatewaySessionRow | undefined;
   incognito?: boolean;
@@ -357,6 +358,9 @@ function ChatPaneHeader(props: ChatPaneHeaderProps) {
               </button>
             </openclaw-tooltip>
           ) : undefined}
+          <Show when={props.mergedChrome && !props.navDrawerOpen}>
+            <LitContent value={props.newSessionAction} />
+          </Show>
           <Show when={incognito()}>
             <openclaw-tooltip
               prop:content={t("sessionsView.incognitoDescription")}

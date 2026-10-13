@@ -13,8 +13,8 @@ describe("Control UI build chunking", () => {
     const chat = modulePath("../pages/chat/chat-pane.ts");
     const newSession = modulePath("../pages/new-session/new-session-page.tsx");
     const optional = modulePath("../components/assistant-panel-content.ts");
-    const sharedStyle = modulePath("../styles/hub-tabs.css");
-    const sidebarStyle = modulePath("../styles/sidebar-issues.css");
+    const sharedStyle = modulePath("../styles/mcp-app-extensions.css");
+    const sidebarStyle = modulePath("../styles/sidebar-reorder.css");
     const entry = "\0cold-load-fixture";
     const sources = new Map([
       [
@@ -155,7 +155,6 @@ describe("Control UI build chunking", () => {
     expect(bootGroup.test(`${repoRoot}/ui/src/styles/chat.ts`)).toBe(false);
     expect(bootGroup.test(`${repoRoot}/ui/src/components/assistant-panel-content.ts`)).toBe(false);
     // Opening state stays cheap; rendering the debug overlay belongs to its lazy graph.
-    expect(bootGroup.test(`${repoRoot}/ui/src/pages/debug/debug-overlay-contract.ts`)).toBe(true);
     expect(bootGroup.test(`${repoRoot}/ui/src/pages/debug/debug-overlay-state.ts`)).toBe(true);
     expect(bootGroup.test(`${repoRoot}/ui/src/pages/debug/debug-overlay-content.ts`)).toBe(false);
     expect(bootGroup.test(`${repoRoot}/ui/src/pages/debug/debug-overlay.ts`)).toBe(false);

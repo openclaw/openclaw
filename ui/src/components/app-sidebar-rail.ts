@@ -27,6 +27,7 @@ import {
 } from "./app-sidebar-render.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
+import { renderNewSessionLink } from "./new-session-link.ts";
 import { personActivityLink, personActivityRouting } from "./person-activity-link.ts";
 import { renderSessionGlyph, renderSessionUnreadBadge } from "./session-glyph.ts";
 import { resolveSessionIconGraphic } from "./session-icon-glyph-registry.ts";
@@ -76,7 +77,8 @@ const railPinClickCapture = {
   },
 };
 
-export function renderSidebarRail(host: AppSidebarRenderHost) {
+export function renderSidebarRail(host: AppSidebarRenderHost, teamNewSession?: unknown) {
+  const newSessionAccess = host.readNewSessionAccess();
   const zone = host.reconciledSidebarZone();
   const pins = (
     normalizeSidebarEntries(host.sidebarSnapshot?.entries ?? host.sidebarEntries) ?? []
@@ -93,6 +95,20 @@ export function renderSidebarRail(host: AppSidebarRenderHost) {
       @mousedown=${beginNativeWindowDragFromTopInset}
     >
       ${renderSidebarAgentCard(host)}
+      <div class="sidebar-rail__create">
+        ${
+          teamNewSession ??
+          renderNewSessionLink({
+            basePath: host.basePath,
+            agentId: host.expandedAgentId(),
+            className: "sidebar-rail__button sidebar-new-session",
+            label: t("agentChip.newConversation"),
+            showShortcut: true,
+            disabledReason: newSessionAccess.allowed ? undefined : newSessionAccess.reason,
+            onOpen: (agentId, target) => host.requestOpenNewSession(agentId, target),
+          })
+        }
+      </div>
       <div class="sidebar-rail__views">
         ${views.map(
           (view) => html`<button

@@ -472,6 +472,9 @@ export async function consumeAnthropicStream(params: {
           }
         }
         applyAnthropicMessageDeltaUsage(output.usage, usage, messageStartPromptUsage);
+        if (sawStopReason && messageStartPromptUsage && typeof usage?.output_tokens === "number") {
+          output.usage.usageReport = { state: "available" };
+        }
         calculateCost(costModel, output.usage);
       }
     }

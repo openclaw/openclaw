@@ -15,6 +15,7 @@ import {
 } from "../infra/net/fetch-guard.js";
 import { wrapGuardedBodyStream } from "../infra/net/guarded-body-stream.js";
 import { shouldUseEnvHttpProxyForUrl } from "../infra/net/proxy-env.js";
+import { formatModelTransportContext } from "../llm/model-transport-context.js";
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveDebugProxySettings } from "../proxy-capture/env.js";
@@ -285,6 +286,7 @@ export function buildGuardedModelFetch(
   const dispatcherPolicy = buildProviderRequestDispatcherPolicy(requestConfig);
   const requestTimeoutMs = resolveModelRequestTimeoutMs(model, timeoutMs);
   return async (input, init) => {
+    const diagnosticContext = formatModelTransportContext();
     let localServiceLease: ProviderLocalServiceLease | undefined;
     const request = input instanceof Request ? new Request(input, init) : undefined;
     const rawUrl =
@@ -358,7 +360,7 @@ export function buildGuardedModelFetch(
         // Log the pre-swap URL: the swapped URL can carry an injected credential in its path.
         `method=${baseInit?.method ?? "GET"} url=${formatModelTransportDebugUrl(rawUrl)} timeoutMs=${requestTimeoutMs} ` +
         `proxy=${dispatcherPolicy ? "configured" : useEnvProxy ? "env" : "none"} ` +
-        `policy=${policy ? "custom" : "default"}`,
+        `policy=${policy ? "custom" : "default"}${diagnosticContext}`,
     );
     try {
       localServiceLease = await ensureModelProviderLocalService(
@@ -381,7 +383,7 @@ export function buildGuardedModelFetch(
         log,
         "model-fetch",
         `provider=${model.provider} api=${model.api} model=${model.id} ` +
-          `elapsedMs=${Date.now() - fetchStartedAt} ${summarizeProviderTransportError(remediatedError)}`,
+          `elapsedMs=${Date.now() - fetchStartedAt} ${summarizeProviderTransportError(remediatedError)}${diagnosticContext}`,
         baseSignal,
       );
       localServiceLease?.release();
@@ -393,7 +395,8 @@ export function buildGuardedModelFetch(
       `[model-fetch] response provider=${model.provider} api=${model.api} model=${model.id} ` +
       `status=${response.status} elapsedMs=${elapsedMs} ` +
       `dispatcher=${result.dispatcherReused ? "reused" : "new"} ` +
-      `contentType=${response.headers.get("content-type") ?? ""}`;
+      `contentType=${response.headers.get("content-type") ?? ""} ` +
+      `httpRequestId=${response.headers.get("x-request-id") ?? "unknown"}${diagnosticContext}`;
     if (!response.ok) {
       log.info(responseMessage);
     } else {

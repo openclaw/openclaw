@@ -1,4 +1,7 @@
+import { readFileSync } from "node:fs";
+import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { parse } from "yaml";
 
 const transport = vi.hoisted(() => ({ read: vi.fn(), sleep: vi.fn() }));
 vi.mock("node:child_process", async (importOriginal) => {
@@ -18,6 +21,35 @@ vi.mock("node:timers/promises", () => ({ setTimeout: transport.sleep }));
 
 import { createReleaseEvidenceClient, runReleaseCiGh } from "../../scripts/release-ci-summary.mjs";
 
+function readPluginArtifactMetadata() {
+  const workflow = parse(readFileSync(".github/workflows/plugin-npm-release.yml", "utf8"));
+  const step = workflow.jobs.verify_plugin_npm_preflight.steps.find(
+    (entry: { name: string }) => entry.name === "Validate npm preflight artifact readback",
+  );
+  const script = step.run.match(/node --input-type=module <<'NODE'[^\n]*\n([\s\S]*?)\nNODE/u)?.[1];
+  if (!script) {
+    throw new Error("Plugin artifact readback must use the release evidence read boundary");
+  }
+  let output = "";
+  runInNewContext(script.replace(/^import .*;\n/mu, ""), {
+    runReleaseCiGh,
+    URLSearchParams,
+    process: {
+      env: {
+        ARTIFACT_NAME: "plugin-npm-package-source-fixture-demo+encoded",
+        GITHUB_REPOSITORY: "openclaw/openclaw",
+        RUN_ID: "42",
+      },
+      stdout: {
+        write: (value: string) => {
+          output += value;
+        },
+      },
+    },
+  });
+  return JSON.parse(output);
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   transport.read.mockReset();
@@ -25,6 +57,43 @@ afterEach(() => {
 });
 
 describe("release evidence API reads", () => {
+  it("reads only the named plugin artifact after a transient metadata failure", () => {
+    vi.spyOn(Atomics, "wait").mockReturnValue("timed-out");
+    transport.read.mockImplementationOnce(() => {
+      throw Object.assign(new Error("gh failed"), { stderr: "gh: Server Error (HTTP 504)" });
+    });
+    const metadata = {
+      total_count: 1,
+      artifacts: [
+        { id: 7, name: "plugin-npm-package-source-fixture-demo+encoded", expired: false },
+      ],
+    };
+    transport.read.mockReturnValue(JSON.stringify(metadata));
+    expect(readPluginArtifactMetadata()).toEqual(metadata);
+    expect(transport.read.mock.calls.map((call) => call[1])).toEqual([
+      [
+        "api",
+        "repos/openclaw/openclaw/actions/runs/42/artifacts?name=plugin-npm-package-source-fixture-demo%2Bencoded&per_page=100",
+      ],
+      [
+        "api",
+        "repos/openclaw/openclaw/actions/runs/42/artifacts?name=plugin-npm-package-source-fixture-demo%2Bencoded&per_page=100",
+      ],
+    ]);
+  });
+
+  it.each([
+    { total_count: 101, artifacts: [{ id: 7 }] },
+    { artifacts: [{ id: 7 }] },
+    { total_count: 1, artifacts: null },
+  ])("rejects incomplete plugin artifact enumeration without retrying: %j", (response) => {
+    transport.read.mockReturnValue(JSON.stringify(response));
+    expect(readPluginArtifactMetadata).toThrow(
+      "Package artifact enumeration is incomplete or invalid",
+    );
+    expect(transport.read).toHaveBeenCalledOnce();
+  });
+
   it.each([
     { mode: "sync", failures: 1, network: false },
     { mode: "async", failures: 1, network: false },

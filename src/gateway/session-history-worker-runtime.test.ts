@@ -40,6 +40,10 @@ vi.mock("../config/sessions/session-transcript-worker-runtime.js", () => ({
       assertCurrent() {},
     }),
 }));
+// mock-isolation: Scheduler deadlines exclude the process-owned directory observer lifecycle.
+vi.mock("../infra/owned-directory-observation.js", () => ({
+  observeOwnedDirectory: () => ({ close() {} }),
+}));
 // mock-isolation: Cold restoration has its own owner tests; this fixture controls read callbacks.
 vi.mock("../config/sessions/session-cold-storage-read.js", () => ({
   readRestoredSessionTranscript: async (_scope: unknown, read: () => unknown) => {

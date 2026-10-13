@@ -3,6 +3,25 @@ import { describe, expect, it } from "vitest";
 import { configureProviderErrorRedactor, projectProviderError } from "./provider-error.js";
 
 describe("projectProviderError", () => {
+  it("preserves streamed response.failed error semantics without response content", () => {
+    expect(
+      projectProviderError(
+        Object.assign(new Error("invalid_prompt: rejected"), {
+          code: "invalid_prompt",
+          response: {
+            id: "resp_fixture",
+            status: "failed",
+            error: { code: "invalid_prompt", type: "invalid_request_error", message: "rejected" },
+            output: [{ type: "message", content: "unrelated generated text" }],
+          },
+        }),
+      ),
+    ).toMatchObject({
+      errorCode: "invalid_prompt",
+      errorType: "invalid_request_error",
+      errorBody: '{"code":"invalid_prompt","message":"rejected","type":"invalid_request_error"}',
+    });
+  });
   it.each([["=short-secret", "[Malformed diagnostic JSON redacted]"]])(
     "requires a complete redaction marker before preserving prose (%s)",
     (suffix, expected) => {

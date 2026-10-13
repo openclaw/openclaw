@@ -277,18 +277,6 @@ struct WatchSessionActivationGateTests {
     }
     #endif
 
-    @Test func `startup event buffering is ordered and bounded`() {
-        var buffer = WatchMessagingStartupBuffer<String>(maxCount: 3)
-
-        #expect(buffer.receive("first").isEmpty)
-        #expect(buffer.receive("second").isEmpty)
-        #expect(buffer.receive("third").isEmpty)
-        #expect(buffer.receive("fourth").isEmpty)
-        #expect(buffer.markReady() == ["second", "third", "fourth"])
-        #expect(buffer.receive("live") == ["live"])
-        #expect(buffer.markReady().isEmpty)
-    }
-
     @Test func `iPhone observes watch pairing and install changes`() throws {
         let sourceURL = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -372,6 +360,22 @@ struct WatchSessionActivationGateTests {
 
 @MainActor
 struct WatchMessagingInboundTransportTests {
+    @Test func `synchronous registration precedes queued inbound delivery`() async {
+        let transport = WatchConnectivityTransport()
+        let service = WatchMessagingService(transport: transport)
+        let requestID = await withCheckedContinuation { continuation in
+            transport.session(WCSession.default, didReceiveMessage: [
+                "type": OpenClawWatchPayloadType.appSnapshotRequest.rawValue,
+                "requestId": "during-registration",
+            ])
+            service.setExecApprovalResolveHandler { _ in Issue.record("Unexpected approval resolution") }
+            service.setExecApprovalSnapshotRequestHandler { _ in Issue.record("Unexpected approval snapshot") }
+            service.setAppSnapshotRequestHandler { event in continuation.resume(returning: event.requestId) }
+            service.setAppCommandHandler { _ in Issue.record("Unexpected app command") }
+        }
+        #expect(requestID == "during-registration")
+    }
+
     @MainActor
     private final class AdmissionGate {
         private(set) var entered = false

@@ -641,24 +641,22 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
           : {}),
         ...(chatTarget && withCurrentSessionSource
           ? {
-              withCurrent: async <T>(consume: () => T): Promise<T> => {
-                if (
-                  chatTarget.projection &&
+              // Retained sharing facts follow committed receipts independently of display refreshes.
+              withCurrent: async <T>(consume: () => T): Promise<T> =>
+                params.preparedTargets ||
+                (chatTarget.projection &&
                   chatTarget.resolved &&
                   chatTarget.projection.sharingTargetState({
                     key: chatTarget.resolved.canonicalKey,
                     agentId: chatTarget.resolved.agentId,
-                  }).status === "ready"
-                ) {
-                  return withSelectedStorage(() =>
-                    consumeSharing(undefined, () => {
-                      authorization.assertCurrent();
-                      return consume();
-                    }),
-                  );
-                }
-                return withCurrentSessionSource(consume);
-              },
+                  }).status === "ready")
+                  ? withSelectedStorage(() =>
+                      consumeSharing(undefined, () => {
+                        authorization.assertCurrent();
+                        return consume();
+                      }),
+                    )
+                  : withCurrentSessionSource(consume),
               withPreparedCurrent,
             }
           : {}),

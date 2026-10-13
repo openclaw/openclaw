@@ -68,6 +68,12 @@ Replacement files also require new admission; migration and repair owners publis
 replacement facts after committed DDL. Doctor and explicit verification retain
 their checks. See [integrity admission](/reference/database-schemas/integrity-and-recovery).
 
+Retained task workers request admission facts through their existing relay when
+needed. Task messages must not copy the global admission snapshot: its session
+write receipts can grow with every session, making unrelated reads expensive to
+dispatch. Shared receipts still invalidate cached facts, and replacement files
+still require admission through the same owner.
+
 For row data, hydrate once and update or invalidate the owner's in-memory facts
 from committed write receipts. Every writer must participate. A receipt may
 supply a postimage or explicit absence; missing coverage is unknown, not absence.
@@ -134,6 +140,14 @@ outcomes return reads to the canonical worker. Bounded transcript payload reads
 remain with the history owner. See
 [`session-actor.worker.ts`](https://github.com/openclaw/openclaw/blob/main/src/config/sessions/session-actor.worker.ts)
 and [`session-actor-replica.ts`](https://github.com/openclaw/openclaw/blob/main/src/config/sessions/session-actor-replica.ts).
+
+Cold input preparation uses the turn planner instead of fetching a full actor
+replica first. The planner carries its recovery expectation into the input
+command; prepared, explicit, and warm replica expectations remain fixed across
+version retries. Transcript input and restart recovery still
+commit atomically under the existing writer FIFO, source checks, final host
+COMMIT authorization, and receipt settlement. Schemas, durability, and update
+behavior are unchanged.
 
 Session memory indexing is background work. It batches transcript changes after
 an idle gap, pauses while the agent is busy, and yields between bounded source
@@ -288,8 +302,10 @@ Memory retrieval workers borrow the existing agent read-only owner across query
 awaits and release each borrow before replying. The owner retains the idle reader
 and its prepared statements, with committed-write invalidation and physical-file
 replacement handled by its existing lifecycle. Vector-extension probing keeps a
-separate extension-capable connection. Search queries, ranking, result bounds,
-schemas, and update behavior are unchanged.
+separate extension-capable connection. Memory-origin and forgotten-session reads
+use the same retained reader owner instead of opening a connection per request;
+committed writes still refresh origin rows and tombstone membership. Search
+queries, ranking, result bounds, schemas, and update behavior are unchanged.
 
 Transcript readers retain bounded hot/cold facts under the existing session write
 receipts. Archive, restore, session deletion, and native writes invalidate those
@@ -306,10 +322,12 @@ facts; cold or invalidated actors use the canonical snapshot read. Trajectory
 append and trim touch no session fields and preserve those receipts. Transcript
 bodies and byte limits remain SQL-owned bounded reads.
 
-Participant projections carry an autocommit read into the metadata CAS owner's
-unchanged immediate write transaction. Ordinary readers establish their own native
-snapshot. Concurrent participant updates remain independent of metadata CAS. These
-caches change no schema, retention, stored format, or update behavior.
+Participant reads and entry projections reuse the session actor's complete committed
+participant records, including contribution counts and recency. The participant writer
+updates those records in its existing transaction and publishes them on commit;
+rollback retains the previous facts. Cold, evicted, or invalidated actors use the
+canonical participant read. Participant updates remain independent of metadata CAS.
+This changes no schema, retention, stored format, or update behavior.
 
 ## Session and ancillary worker operations
 
@@ -383,7 +401,12 @@ visibility, membership, and conversation authority that the destination worker
 cannot validate. These changes add no schema, retention, or update migration.
 
 Cold session creation uses the existing session-entry worker for requested-key
-and parent lookups. Personal default selection reads profile links and its selected
+and parent lookups. The Gateway's `snapshot` timing includes scope preparation and
+its writer-queue reservation before the worker read; it does not clone the session
+store. That reservation preserves earlier queued writes when adopting an existing
+key and protects shared-store discovery from concurrent cold registration. Creation
+commits acquire their own writer admission and revalidate current authority.
+Personal default selection reads profile links and its selected
 credential through the existing shared-state and auth-store readers; credential
 authority still applies at the creation effect. Default cron loads resolve their
 saved partition in the same worker operation that loads the jobs. A queued load
@@ -1718,8 +1741,15 @@ or update-format change.
 Qualified Gateway entry reads request lifecycle timestamps only when a consumer
 needs reset freshness. Metadata, observer, and native model ownership reads use
 the existing single-statement entry facts without a deferred transaction.
-Restart-safe chat admission still requests lifecycle timestamps and retains the
-snapshot that joins entry facts with a legacy transcript-header fallback.
+Restart-safe chat admission still requests lifecycle timestamps. Current entry
+timestamps and runtime targets reuse receipt-backed actor facts; cold exact
+entry facts need only their single-statement snapshot. Legacy timestamp fallback
+reads the header for the captured session ID through the transcript owner's
+snapshot. An explicit concurrent transcript replacement can pair the captured
+entry with a newer header timestamp; the next read refreshes this descriptive
+metadata. Rich cohorts retain a shared snapshot for entry, parent, transcript,
+authorization, and cold-state facts. Category preparation is also a single SELECT;
+its existing write transaction rereads selected entries before applying changes.
 Schemas, stored bytes, permissions, and update behavior are unchanged.
 
 Current readers consume committed rows without a probe connection, version
@@ -4124,10 +4154,13 @@ admission can refuse dispatch or close can clean up the original handle. Host
 admission and physical-identity checks remain on the host.
 Checkpoint-only PASSIVE ticks preserve the connection's busy timeout without
 reading or changing it: SQLite does not invoke the busy handler for PASSIVE.
-After a complete tick, the WAL owner skips subsequent checkpoint-only work until
-an in-process write receipt changes. Sibling handles and workers share that receipt;
-blocked or failed checkpoints keep retrying when a reader may have released.
-Connections without a known write receipt continue checkpointing on every tick.
+After a complete tick, the WAL owner disarms its checkpoint-only timer until a
+local in-process write receipt schedules the next pass within ten seconds. Local
+sibling handles share the notification, and each native writer worker schedules
+its own maintenance. Later writes do not postpone a pending pass. Blocked or failed
+checkpoints keep retrying when a reader may have released. Connections without a
+known write receipt and explicit blocking checkpoint policies retain their timed
+cadence. Close removes the write notification along with the timer.
 Page reclamation and blocking checkpoint modes keep their zero-timeout scope.
 
 Completed checkpoint-only passes publish their write revision through the existing
@@ -4141,6 +4174,10 @@ WAL work pauses so Doctor and update-recovery captures keep stable source bytes.
 Explicitly admitted maintenance remains available. The final maintenance client
 release resumes the same worker's normal ten-second checkpoint cadence; overlapping
 maintenance clients keep it paused until all release.
+When another process holds offline maintenance custody, the state owner check
+still refuses each scheduled pass. That refusal skips the pass without recording a
+checkpoint failure or warning; health keeps its last real observation and the next
+tick retries.
 
 The Gateway run loop retains the shared-state database cache, actor owner, and
 SQLite worker broker until the final lifecycle outcome is recorded. Orderly
@@ -6337,6 +6374,12 @@ event still commits before the runtime advances; bulk transcript imports reuse
 their transaction-local append cursor. Root checks read metadata without saved
 prompt payloads. No cross-transaction root cache is introduced.
 
+Transcript rewrite preparation and publication copy mutable view containers while
+retaining already-owned string values, so old tool results and image payloads do
+not require another full byte copy on the main thread. Prepared views remain
+independently mutable. Opaque structured-cloneable SDK data retains native snapshot
+semantics. Worker write ordering, atomic publication, and stored bytes are unchanged.
+
 Append receipts read active identity, projection readiness, and the latest sequence
 in one transaction-local query. A clean latest message shares that result with
 the visible-tail consumer; native reentry or pending-input mutations require a
@@ -6547,7 +6590,11 @@ separate worker migration.
 Shared and per-agent auth-profile success and failure bookkeeping use the existing
 auth-profile shared-state domain and canonical agent executor. The caller captures
 the physical stores and execution authority before preparing inherited ownership
-and provider observations. Workers reread the current rows and apply the same health
+and provider observations. Overlapping health preparations remain ordered, but
+candidate stores do not reserve the database writer while read-only children load
+rows or provider probes run. Only a ready write joins its selected database FIFO;
+unrelated session writes can proceed during preparation. Workers reread the current
+rows and apply the same health
 reducers used for personal model accounts; inherited success clears health without
 changing the shared owner's last-good selection or rotation time. Committed facts
 update the existing runtime snapshot owner. Gateway close refuses new bookkeeping

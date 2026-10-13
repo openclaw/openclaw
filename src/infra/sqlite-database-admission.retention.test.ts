@@ -14,6 +14,8 @@ import {
   installSqliteDatabaseAdmissions,
   readSqliteDatabaseAdmissions,
   readSqliteDatabasePendingWriteToken,
+  prepareSqliteDatabaseCleanClose,
+  recordSqliteDatabaseIntegrity,
   readSqliteDatabaseWriteTokenForPath,
   retireSqliteDatabaseAdmissionForPath,
   retainSqliteDatabaseAdmissionLocation,
@@ -53,7 +55,15 @@ it("retires the final closed handle's facts while preserving open siblings and d
     first.close();
     expect(recordsFor(location)).toHaveLength(1);
     expect(getAdmittedSqliteSchemaFacts(second)?.tables.has("proof")).toBe(true);
-    second.close();
+    const admittedSchema = getAdmittedSqliteSchemaFacts(second);
+    recordSqliteDatabaseIntegrity(second);
+    {
+      using seal = prepareSqliteDatabaseCleanClose(second);
+      second.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+      second.close();
+      expect(recordsFor(location)).toHaveLength(1);
+      expect(seal.publish()).toBe(true);
+    }
     expect(recordsFor(location)).toEqual([]);
     expect(fstatSync(original.descriptor).isFile()).toBe(true);
 
@@ -61,6 +71,7 @@ it("retires the final closed handle's facts while preserving open siblings and d
     expect(recordsFor(location)).toEqual([]);
 
     first.open();
+    expect(getAdmittedSqliteSchemaFacts(first)?.admissionId).toBe(admittedSchema?.admissionId);
     admitSqliteSchema(first);
     expect(first.prepare("SELECT value FROM proof").get()).toEqual({ value: 42 });
     expect(getAdmittedSqliteSchemaFacts(first)?.tables.has("proof")).toBe(true);

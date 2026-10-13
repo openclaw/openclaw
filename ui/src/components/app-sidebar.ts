@@ -9,7 +9,6 @@ import type { SessionObserverDigest } from "../../../packages/gateway-protocol/s
 import { isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { t } from "../i18n/index.ts";
-import "./session-menu.ts";
 import "./mcp-app-catalog.tsx";
 import "./sidebar-agent-card.ts";
 import "./sidebar-attention.ts";
@@ -633,7 +632,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
           }
         }}
       >
-        ${renderSidebarRail(this)}
+        ${renderSidebarRail(this, this.sidebarAgentsMode === "roster" ? renderSidebarNewSessionMenu(this) : undefined)}
         <div class="sidebar-shell" @mousedown=${beginNativeWindowDragFromTopInset}>
           <div class="sidebar-shell__content">
             <div
@@ -646,7 +645,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
                   : this.navigationView === "online"
                     ? renderAppSidebarOnline(this)
                     : html`
-                        ${renderSessionListToolbar(this, this.sidebarAgentsMode === "roster" ? renderSidebarNewSessionMenu(this) : undefined)}
+                        ${renderSessionListToolbar(this)}
                         <div
                           class="sidebar-session-content"
                           ?hidden=${Boolean(this.contextualSidebar)}

@@ -2230,6 +2230,12 @@ Aggregate pruning diagnostics report the whole operation separately from actual
 writer waits.
 Archive order, retention policy, schemas, and update behavior are unchanged.
 
+History-only disk-budget eviction does not trigger the bulk session-entry planner
+statistics refresh. It removes old generations without changing session-entry
+cardinality; transcript readers keep their session-scoped index paths. Actual
+archived-entry deletions retain the existing bulk refresh threshold. This avoids
+a whole-database analysis holding the writer after a large history-only pass.
+
 Worker retirement preserves the original operation failure without reporting it
 again as a cleanup failure. A successfully retired execution owner is released for
 later requests; genuine native-close and lease-cleanup failures retain their

@@ -244,6 +244,8 @@ in the queue or preparing to execute, OpenClaw tries to continue the existing
 session automatically. Shutdown records recovery before canceling queued work.
 If restart cancellation finishes a collected run before that record commits,
 shutdown retains its recovery custody unless the session or run owner changes.
+Backend-owned restart aborts retain the same custody even when the caller's
+abort signal stays open and lifecycle persistence finishes after reply cleanup.
 Skipped sessions are logged with a reason, including when other sessions recover.
 Three attempts that fail to start a backend turn exhaust the recovery budget.
 Once a real backend turn starts,
@@ -445,14 +447,17 @@ logs one outcome with the before/after bytes and removal counts.
 An incomplete SQLite WAL checkpoint is a separate deferral. Cleanup preserves
 archives and history instead of deleting more data behind the blocked checkpoint.
 The result records `deferredReason: "checkpoint-incomplete"`, WAL bytes before and
-after, and the checkpoint outcome. Automatic and manual budget passes remain
-deferred until the checkpoint owner records completion after the pending cleanup
-work. Newer frames from concurrent writes do not erase that completion. Each SQLite cleanup
+after, and the checkpoint outcome. Manual cleanup and subsequent throttled
+automatic checks retry the checkpoint: an earlier blocked observation cannot
+suspend cleanup indefinitely when another connection completes a checkpoint
+without publishing its result. Cleanup still requires the checkpoint owner to
+record completion after the pending cleanup work. Newer frames from concurrent
+writes do not erase that completion. Each SQLite cleanup
 deletion or vacuum commit requires a new completion before further pruning, so a
 reader pinning those changes still defers cleanup. Ordering uses monotonic time;
 elapsed time, a budget change, or a system clock correction cannot release the gate.
-Normal periodic checkpointing continues, and subsequent activity can resume cleanup
-after recovery.
+Normal periodic checkpointing continues. A published completion allows the next
+activity to retry immediately; otherwise the normal check interval applies.
 
 Look for `session history disk budget deferred until a completed WAL checkpoint is observed`
 in the Gateway log. Its checkpoint fields include bounded operation names for

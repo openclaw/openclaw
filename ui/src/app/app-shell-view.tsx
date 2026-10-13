@@ -3,7 +3,10 @@ import { createEffect, createMemo, Show } from "solid-js";
 import { renderGatewayStatus } from "../components/gateway-status.ts";
 import { icons } from "../components/icons.ts";
 import { renderConnectingSplash } from "../components/loading-skeleton.ts";
-import { renderNewSessionLink } from "../components/new-session-link.ts";
+import {
+  renderContextNewSessionAction,
+  renderNewSessionLink,
+} from "../components/new-session-link.ts";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import {
   formatKeyboardShortcutCombo,
@@ -27,6 +30,7 @@ import { floatingSidebarAttentionVisible, renderFloatingUpdateCard } from "./nav
 import { RouterOutlet } from "./router-outlet.tsx";
 import { NAV_WIDTH_MAX, NAV_WIDTH_MIN } from "./settings.ts";
 import { renderCollapsedHomeToggle } from "./shell-assistant-toggles.ts";
+import { ShellLayoutProvider } from "./shell-layout-traits-solid.tsx";
 
 export type { ShellViewHost } from "./app-shell-view-state.ts";
 
@@ -46,7 +50,8 @@ export function renderApplicationShell(host: ShellViewHost): SolidJSX.Element {
   return <ApplicationShell host={host} />;
 }
 
-function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
+export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
+  let content!: HTMLElement;
   const view = createMemo(() => {
     props.host.shellRevision();
     return readShellView(props.host);
@@ -135,6 +140,20 @@ function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
             prop:resourceBasePath={view().context.resourceBasePath}
             prop:environment={view().config.environment}
             prop:navDrawerOpen={view().navDrawerOpen}
+            prop:newSessionAction={
+              view().mobileNavLayout &&
+              !view().mergedChatChrome &&
+              !view().navDrawerOpen &&
+              !view().onboarding &&
+              !view().nativeWebChrome &&
+              !document.documentElement.classList.contains("openclaw-native-nav")
+                ? renderContextNewSessionAction(
+                    view().context,
+                    "header-new-session",
+                    view().selectedAgentId,
+                  )
+                : undefined
+            }
             prop:onOpenPalette={props.host.openPalette}
             prop:onToggleDrawer={props.host.toggleNavigationSurface}
           />
@@ -158,19 +177,21 @@ function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
                 ref={createLitContentRef(() => icons.panelLeftOpen)}
               />
             </openclaw-tooltip>
-            <LitRouteHost
-              renderValue={() =>
-                renderNewSessionLink({
-                  basePath: view().context.basePath,
-                  agentId: view().selectedAgentId,
-                  className: "shell-chrome-controls__button shell-chrome-controls__new-thread",
-                  label: t("chat.runControls.newSession"),
-                  showShortcut: true,
-                  disabledReason: view().newSessionDisabledReason,
-                  onOpen: props.host.viewCallbacks.requestOpenNewSession,
-                })
-              }
-            />
+            <Show when={!view().railAvailable}>
+              <LitRouteHost
+                renderValue={() =>
+                  renderNewSessionLink({
+                    basePath: view().context.basePath,
+                    agentId: view().selectedAgentId,
+                    className: "shell-chrome-controls__button shell-chrome-controls__new-thread",
+                    label: t("chat.runControls.newSession"),
+                    showShortcut: true,
+                    disabledReason: view().newSessionDisabledReason,
+                    onOpen: props.host.viewCallbacks.requestOpenNewSession,
+                  })
+                }
+              />
+            </Show>
             <openclaw-tooltip
               prop:content={`${t("chat.openCommandPalette")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.commandPalette)})`}
             >
@@ -261,7 +282,10 @@ function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
               "content--actions-blocked": view().pageActionsBlocked,
             },
           ]}
-          ref={props.host.shellLayout.contentRef}
+          ref={(element) => {
+            content = element;
+            props.host.shellLayout.contentRef(element);
+          }}
           tabindex={-1}
           onMouseDown={beginNativeWindowDragFromTopInset}
           inert={
@@ -296,16 +320,29 @@ function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
           <Show when={view().embedNavigation}>
             <LitRouteHost renderValue={() => view().navigationContent} />
           </Show>
-          <RouterOutlet
-            inert={view().pageActionsBlocked || view().reloadRequired}
-            aria-disabled={view().pageActionsBlocked || view().reloadRequired ? "true" : undefined}
-            router={view().runtime.router}
-            retryContext={view().context}
-            retryEnabled={view().gatewayConnected}
-            retentionScope={view().presentationScope}
-            onNotFound={props.host.recoverNotFoundRoute}
-            notFoundRecoveryReady={view().gatewayConnected}
-          />
+          <ShellLayoutProvider
+            value={{
+              get owner() {
+                return props.host.shellLayout;
+              },
+              get host() {
+                return content;
+              },
+            }}
+          >
+            <RouterOutlet
+              inert={view().pageActionsBlocked || view().reloadRequired}
+              aria-disabled={
+                view().pageActionsBlocked || view().reloadRequired ? "true" : undefined
+              }
+              router={view().runtime.router}
+              retryContext={view().context}
+              retryEnabled={view().gatewayConnected}
+              retentionScope={view().presentationScope}
+              onNotFound={props.host.recoverNotFoundRoute}
+              notFoundRecoveryReady={view().gatewayConnected}
+            />
+          </ShellLayoutProvider>
         </main>
         <Show when={view().shellConnectionStatus}>
           <div class="shell-connection-status">

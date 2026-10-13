@@ -77,8 +77,9 @@ Gateway config reload watches the active config file path (resolved from profile
 
 ### Module compile cache
 
-The packaged CLI and the compiled `dist/entry.js` and `dist/index.js` entries automatically enable
-Node's on-disk module compile cache. This includes compiled source deployments
+Foreground Gateway runs through the packaged CLI and the compiled `dist/entry.js`
+and `dist/index.js` entries automatically enable Node's on-disk module compile
+cache. This includes compiled source deployments
 that retain their Git checkout. Cache entries live outside the release directory,
 under the operating system's temporary directory by default. Set
 `NODE_COMPILE_CACHE` to a writable persistent cache root to retain them across
@@ -87,6 +88,9 @@ each new build starts with its own cache. `NODE_DISABLE_COMPILE_CACHE=1` disable
 it. An unavailable cache produces one diagnostic and startup continues.
 With Node's permission model enabled, an already-active cache remains caller-owned
 so cache scoping never requires launching a process that permissions may forbid.
+One-shot commands do not enable a cache by default: cold cache persistence on Node
+and Bun can delay process exit after output. Setting `NODE_COMPILE_CACHE` explicitly
+opts those commands in. Explicit Gateway prewarming still populates the cache.
 
 The first boot populates the cache; later boots reuse it. Deployment systems can
 warm a candidate before cutover by booting and cleanly stopping it with isolated

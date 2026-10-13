@@ -22,6 +22,10 @@ accepted source revision and whether it came from a Gateway write or a file edit
 Later hot-reloadable writes do not erase a committed restart requirement while
 its application is pending.
 
+If restart preparation or signal delivery fails, the Gateway logs the failure
+and leaves the restart pending without retrying automatically. Correct the
+reported problem, then reapply the config or restart the Gateway manually.
+
 UI preferences remain in `ui.prefs`. Changing them preserves prepared model
 catalogs, provider authentication, and plugin registrations. Display changes
 still publish the updated config to consumers that read those settings.
@@ -45,8 +49,10 @@ removing an agent still revokes access to that agent's stores.
 Concurrent writers release each completed reload's lifecycle lease through the shared
 writer queue, so a busy database does not leave later reloads waiting for lease expiry.
 A database-open refusal for a deleting agent leaves other agents' admitted work usable.
-Heartbeat monitors deferred by that agent's deletion do not require a Gateway restart.
-Their existing reconciliation retry restores the monitors if deletion rolls back.
+Heartbeat monitor reconciliation that schedules its own retry does not require a
+Gateway restart. Hot reload logs a warning and continues while cron retries after
+30 seconds, including when startup is still settling. Monitors deferred by an
+agent's deletion are restored by that retry if deletion rolls back.
 Overlapping agent edits can supersede an earlier model-runtime refresh. If that
 refresh fails, the newer config retries the unfinished preparation without
 requiring a Gateway restart, including when the newer edit does not change models.

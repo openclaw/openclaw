@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import {
@@ -21,6 +22,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readMemoryPreimages, storeMemoryPreimage } from "./dreaming-consolidation-artifacts.js";
 import { readMemoryOriginsInWorker } from "./memory-entry-origin-reads.js";
 import { deleteMemoryEntryOriginsInDatabase } from "./memory-entry-origins-delete.js";
+import type { MemoryEntryOriginOperations } from "./memory-entry-origins-task.js";
 import {
   findForgottenMemorySessionIds,
   listMemoryEntryOrigins,
@@ -361,6 +363,74 @@ describe("memory entry origins", () => {
       ),
     ).resolves.toBe(1);
     expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual([kept]);
+  });
+
+  it("retains one origin reader and observes committed origin and tombstone writes", async () => {
+    const first = origin("first", "session-1");
+    const second = origin("second", "session-2");
+    await recordMemoryEntryOrigins({ agentId: "main", origins: [first] });
+    const target = {
+      agentId: "main",
+      stateDir,
+      databasePath: resolveOpenClawAgentSqlitePath({ agentId: "main" }),
+    };
+    const writer =
+      await sqliteRuntime.openOpenClawAgentSqliteWorkerStoreV2<MemoryEntryOriginOperations>(
+        { agentId: "main" },
+        { version: 2, assertCurrent: () => {} },
+        {
+          moduleUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.entryOrigins),
+          input: { kind: "forget", prepareTombstones: true },
+        },
+      );
+    const readers = new Set<DatabaseSync>();
+    const observed = observeHostDataSql((sql, database) => {
+      if (database && /^select\b/i.test(sql) && sql.includes("memory_entry_origins")) {
+        readers.add(database);
+      }
+    });
+    try {
+      await writer.prepare();
+      for (let read = 0; read < 2; read += 1) {
+        expect(readMemoryOriginsInWorker({ ...target, kind: "origin-rows" })).toEqual({
+          kind: "origin-rows",
+          rows: [first],
+        });
+      }
+      expect(
+        readMemoryOriginsInWorker({
+          ...target,
+          kind: "session-tombstones",
+          sessionIds: ["forgotten"],
+        }),
+      ).toEqual({ kind: "session-tombstones", indices: [] });
+
+      await recordMemoryEntryOrigins({ agentId: "main", origins: [second] });
+      expect(readMemoryOriginsInWorker({ ...target, kind: "origin-rows" })).toEqual({
+        kind: "origin-rows",
+        rows: [first, second],
+      });
+      await writer.run(
+        (scope) =>
+          scope.execute({
+            type: "forget.mark",
+            input: { agentId: "main", sessionIds: ["forgotten"], entryKeys: [], identity: "[]" },
+          }),
+        () => {},
+      );
+      expect(
+        readMemoryOriginsInWorker({
+          ...target,
+          kind: "session-tombstones",
+          sessionIds: ["forgotten"],
+        }),
+      ).toEqual({ kind: "session-tombstones", indices: [0] });
+      expect(readers.size).toBe(1);
+      expect([...readers].every((database) => database.isOpen)).toBe(true);
+    } finally {
+      observed.restore();
+      await writer.close();
+    }
   });
 
   it("bounds tombstone replies while reusing committed membership across pages", async () => {

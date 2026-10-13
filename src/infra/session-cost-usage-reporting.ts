@@ -234,6 +234,7 @@ export async function loadSessionUsageTimeSeries(
     }
 
     let points: Array<Omit<SessionUsageTimePoint, "cumulativeTokens" | "cumulativeCost">> = [];
+    let usageUnavailable = false;
     const agentDir = resolveAgentDir(scoped.config ?? {}, scoped.agentId);
     const resolveCost = createUsageCostResolver({ config: scoped.config, agentDir });
 
@@ -241,6 +242,10 @@ export async function loadSessionUsageTimeSeries(
       const entry = await parseUsageCostTranscriptEntryAsync(record, resolveCost, scoped.config);
       const timestamp = entry?.timestamp?.getTime();
       if (!entry?.usage || !timestamp) {
+        continue;
+      }
+      if (entry.usage.usageReport?.state === "unavailable") {
+        usageUnavailable = true;
         continue;
       }
       points.push({
@@ -286,6 +291,7 @@ export async function loadSessionUsageTimeSeries(
     let cumulativeCost = 0;
     return {
       sessionId: scoped.sessionId,
+      ...(usageUnavailable ? { usageReport: { state: "unavailable" as const } } : {}),
       points: points.map((point) => {
         cumulativeTokens += point.totalTokens;
         cumulativeCost += point.cost;
@@ -406,7 +412,10 @@ export async function loadSessionLogs(
       // Logs share pricing and timestamp interpretation with summaries and charts.
       // Recomputing here can turn unknown prices into zero or ignore tiered rates.
       const entry = await parseUsageCostTranscriptEntryAsync(parsed, resolveCost, scoped.config);
-      const usage = role === "assistant" ? entry?.usage : undefined;
+      const usage =
+        role === "assistant" && entry?.usage?.usageReport?.state !== "unavailable"
+          ? entry?.usage
+          : undefined;
 
       logs.push({
         timestamp: entry?.timestamp?.getTime() ?? 0,

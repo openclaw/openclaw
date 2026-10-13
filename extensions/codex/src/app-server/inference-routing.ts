@@ -98,7 +98,7 @@ export function ownCodexInferenceClient(
       isJsonObject(notification.params) &&
       typeof notification.params.threadId === "string"
     ) {
-      owner.threads.delete(notification.params.threadId);
+      forgetCodexInferenceThread(client, notification.params.threadId);
     }
     if (notification.method !== "account/updated" || !owner.authRoute) {
       return;
@@ -596,7 +596,7 @@ export function bindCodexInferenceThread(
     throw new Error("Codex inference client is closed");
   }
   if (!route) {
-    owner.threads.delete(threadId);
+    forgetCodexInferenceThread(client, threadId);
     return;
   }
   route.assertCurrent();
@@ -637,7 +637,17 @@ export function bindCodexInferenceThread(
         },
       })
     : undefined;
+  const previous = owner.threads.get(threadId)?.route;
+  if (previous && previous !== route) {
+    previous.context.forget(threadId);
+  }
   owner.threads.set(threadId, { route, providers: projected, qualification });
+}
+
+export function forgetCodexInferenceThread(client: CodexAppServerClient, threadId: string): void {
+  const owner = owners.get(client);
+  owner?.threads.get(threadId)?.route.context.forget(threadId);
+  owner?.threads.delete(threadId);
 }
 
 export function getCodexInferenceThread(

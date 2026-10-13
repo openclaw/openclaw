@@ -26,6 +26,32 @@ import { recordChildProcessSpawn } from "./spawn-diagnostics.js";
 import { resolveSafeChildProcessInvocation } from "./windows-command.js";
 
 export const COMMAND_PROCESS_TREE_KILL_GRACE_MS = 300;
+/**
+ * Post-SIGKILL teardown and orphan reaping, not cooperative grace. macOS reports
+ * EPERM, not ESRCH, while only unreaped zombies remain, and loaded hosts have
+ * exceeded 300 ms. Polling ends at extinction, so only surviving groups wait.
+ */
+export const COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS = 10_000;
+
+/** The single owner for confirming that a force-killed command group is gone. */
+export async function waitForCommandProcessGroupExit(
+  pid: number,
+  isOriginalProcess: () => boolean,
+): Promise<"exited" | "replaced" | "alive"> {
+  const deadline = Date.now() + COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS;
+  while (isChildProcessTreeAlive({ pid })) {
+    if (!isOriginalProcess()) {
+      return "replaced";
+    }
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      return isChildProcessTreeAlive({ pid }) ? "alive" : "exited";
+    }
+    await sleep(Math.min(25, remaining));
+  }
+  return "exited";
+}
+
 const commandAdmissions = new WeakMap<ChildProcess, Promise<void>>();
 
 /** Remote PID and pipes arrive together before admission or stream subscription. */
@@ -306,14 +332,13 @@ function retainCommandProcess(
         settleCustody();
         return;
       }
-      const deadline = Date.now() + COMMAND_PROCESS_TREE_KILL_GRACE_MS;
-      while (isChildProcessTreeAlive({ pid })) {
-        const currentStart = getFileLockProcessStartTime(pid);
-        const remaining = deadline - Date.now();
-        if ((currentStart !== null && currentStart !== startedAt) || remaining <= 0) {
-          throw new CommandProcessCleanupError();
-        }
-        await sleep(Math.min(25, remaining));
+      const groupPid = pid;
+      const exit = await waitForCommandProcessGroupExit(groupPid, () => {
+        const current = getFileLockProcessStartTime(groupPid);
+        return current === null || current === startedAt;
+      });
+      if (exit !== "exited") {
+        throw new CommandProcessCleanupError();
       }
       settleCustody();
     },

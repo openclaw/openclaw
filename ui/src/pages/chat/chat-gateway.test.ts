@@ -1340,11 +1340,16 @@ describe("handleChatGatewayEvent", () => {
       receive(state, "status", {
         ...envelope,
         seq: attempt,
-        retry: { attempt, maxAttempts: 10, reason: "rate_limit" },
+        retry: { attempt, maxAttempts: 10, reason: "rate_limit", retryAt: 10_000 + attempt },
       });
       expect(chatStartupStatusLabel(activeChatRunStartupStatus(state.chatRunStartup), null)).toBe(
-        `Retrying… ${attempt}/10`,
+        "Retrying…",
       );
+      expect(state.chatRunStartup).toMatchObject({
+        phase: "retrying",
+        retryAt: 10_000 + attempt,
+        seq: attempt,
+      });
       expect(state.chatMessages).toEqual([]);
       expect(state.chatRunError).toBeFalsy();
     }

@@ -1,5 +1,5 @@
 import type { ApplicationContext } from "../../app/context.ts";
-import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
+import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import type { PluginCredentialEditorProps } from "./credential-editor.tsx";
 import type { PluginsPageDetail } from "./plugins-page-model.ts";
 import type { PluginSettingsField } from "./settings-editor.tsx";
@@ -9,7 +9,7 @@ export class PluginSettingsController {
 
   constructor(
     private readonly options: {
-      gateway: GatewayPageController;
+      gateway: GatewayPageBinding;
       getContext: () => ApplicationContext;
       getDetail: () => PluginsPageDetail | null;
       canInspect: () => boolean;

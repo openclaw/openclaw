@@ -277,7 +277,9 @@ resolved target, and selected host; run `openclaw doctor --fix` with that host,
 then reload the affected plugin. The loader records the failure for that plugin
 and continues loading unrelated plugins.
 Private Doctor inspections keep their native admission facts separate from the
-operator's state. Their temporary captures never become deferred writes to the
+operator's state. Temporary captures copy native packages and their companions,
+so inspecting an update rehearsal never adds hardlinks to its private data.
+Their temporary captures never become deferred writes to the
 installed index after inspection ends; ordinary deferred writes retain their
 original state directory.
 When native packages share a dependency, admission reconciles identities only for

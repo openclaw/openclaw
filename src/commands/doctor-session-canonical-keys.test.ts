@@ -11,6 +11,7 @@ import {
 import { readStoredCanonicalSessionMainKey } from "../config/sessions/session-canonical-key.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
 import {
   readSessionProgressCard,
   writeSessionProgressCard,
@@ -20,7 +21,6 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { readOpenClawAgentIntegrityVerification } from "../state/openclaw-quarantine-store.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import {
@@ -66,13 +66,13 @@ describe("doctor canonical session-key repair", () => {
       const database = openSessionDatabase("main", env, storePath);
       const options = { agentId: "main", env, path: database.path };
       closeOpenClawAgentDatabasesForTest();
-      expect(readOpenClawAgentIntegrityVerification(options.path, env)?.clean_close).toBe(1);
+      expect(readSqliteDatabaseCleanClose(options.path)).toBe(true);
 
       expect(await repairCanonicalSessionKeys({ apply: true, cfg, env })).toMatchObject({
         foundGroups: 0,
         repairedGroups: 0,
       });
-      expect(readOpenClawAgentIntegrityVerification(options.path, env)?.clean_close).toBe(1);
+      expect(readSqliteDatabaseCleanClose(options.path)).toBe(true);
 
       await repairCanonicalSessionKeys({
         apply: true,

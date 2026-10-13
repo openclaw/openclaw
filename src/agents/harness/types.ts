@@ -250,6 +250,8 @@ export type AgentHarnessSideQuestionParams = {
     resolvedApiKey?: string;
   };
   question: string;
+  /** Preserve tool definitions but reject all tool execution in this side question. */
+  toolCalls?: "deny";
   images?: import("../../llm/types.js").ImageContent[];
   sessionEntry: import("../../config/sessions.js").SessionEntry;
   sessionStore?: Record<string, import("../../config/sessions.js").SessionEntry>;

@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { refreshAuthProfileFileState } from "../auth-profiles/file-state.js";
 import {
   assertAuthProfileMigrationReady,
   clearAuthProfileMigrationDiagnostics,
@@ -228,6 +229,7 @@ describe("AuthStorage OAuth refresh ownership", () => {
                   },
                 },
           );
+          await refreshAuthProfileFileState();
           expect(() => assertAuthProfileMigrationReady(agentDir)).toThrow(
             "requires legacy credential migration",
           );

@@ -1,3 +1,4 @@
+import type { JSX } from "@solidjs/web";
 import {
   createEffect,
   createMemo,
@@ -707,4 +708,12 @@ if (!customElements.get("openclaw-channels-page")) {
   defineSolidBridge("openclaw-channels-page", (_props, host) => <ChannelsPage host={host} />, {
     properties: {},
   });
+}
+
+export function ChannelsPageBridge(props: Record<string, never>): JSX.Element {
+  // SAFETY: The registration above installs the Solid bridge's static renderer.
+  const Bridge = customElements.get("openclaw-channels-page") as CustomElementConstructor & {
+    render: (props: Record<string, never>) => JSX.Element;
+  };
+  return Bridge.render(props);
 }

@@ -393,7 +393,7 @@ describe.skipIf(process.platform === "win32")(
           };
           const calls = vi.spyOn(client, "request");
           fixture.setPhase("side");
-          await expect(runCodexAppServerSideQuestion(side, options)).resolves.toEqual({
+          await expect(runCodexAppServerSideQuestion(side, options)).resolves.toMatchObject({
             text: SUMMARY,
           });
           expect(await fs.readFile(fixture.marker, "utf8")).toBe("completed-once\n");

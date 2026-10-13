@@ -262,6 +262,18 @@ it("returns the profile that actually handled tab open", async () => {
   });
 });
 
+it("rejects an invalid open timeoutMs before opening a tab", async () => {
+  const profileCtx = createProfileContext({ openTab: vi.fn() });
+  const response = await callTabsRoute({
+    method: "post",
+    path: "/tabs/open",
+    body: { url: "https://example.com", timeoutMs: -5 },
+    profileCtx,
+  });
+  expect(response.statusCode).toBe(400);
+  expect(profileCtx.openTab).not.toHaveBeenCalled();
+});
+
 async function callTabsAction(params: {
   body: Record<string, unknown>;
   profileCtx: ProfileContext;

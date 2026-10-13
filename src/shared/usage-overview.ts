@@ -169,21 +169,18 @@ function touchesHours(session: SessionUsageEntry, hours: Set<number>, calendar: 
   return touches;
 }
 
-function sessionRowTotals(session: SessionUsageEntry, days: ReadonlySet<string>) {
+function sessionRowTotals(session: SessionUsageEntry, days: ReadonlySet<string>): CostUsageTotals {
   const usage = session.usage;
-  let tokens = usage?.totalTokens ?? 0;
-  let cost = usage?.totalCost ?? 0;
-  if (days.size && usage?.dailyBreakdown?.length) {
-    tokens = 0;
-    cost = 0;
-    for (const day of usage.dailyBreakdown) {
-      if (days.has(day.date)) {
-        tokens += day.tokens;
-        cost += day.cost;
-      }
+  if (!days.size || !usage?.dailyBreakdown?.length) {
+    return usage ?? createEmptyCostUsageTotals();
+  }
+  const totals = createEmptyCostUsageTotals();
+  for (const day of usage.dailyBreakdown) {
+    if (days.has(day.date)) {
+      addCostUsageTotals(totals, { ...day, totalTokens: day.tokens, totalCost: day.cost });
     }
   }
-  return { tokens, cost };
+  return totals;
 }
 
 function compareUsageOverviewSessions(options: UsageOverviewOptions) {
@@ -205,9 +202,9 @@ function compareUsageOverviewSessions(options: UsageOverviewOptions) {
   const value = (entry: SessionUsageEntry) => {
     switch (options.sort) {
       case "tokens":
-        return totals(entry).tokens;
+        return totals(entry).totalTokens;
       case "cost":
-        return totals(entry).cost;
+        return totals(entry).totalCost;
       case "messages":
         return entry.usage?.messageCounts?.total ?? 0;
       case "errors":
@@ -229,7 +226,11 @@ function compactSession(session: SessionUsageEntry, days: ReadonlySet<string>): 
     return session;
   }
   const row = sessionRowTotals(session, days);
-  const usage = { ...session.usage, totalTokens: row.tokens, totalCost: row.cost };
+  const usage = {
+    ...session.usage,
+    ...row,
+    usageReport: row.usageReport,
+  };
   for (const field of [
     "dailyBreakdown",
     "dailyMessageCounts",
@@ -377,8 +378,11 @@ export function buildUsageOverview(
   };
   for (const session of matched) {
     const row = sessionRowTotals(session, days);
-    overview.tableTotals.tokens += row.tokens;
-    overview.tableTotals.cost += row.cost;
+    overview.tableTotals.tokens += row.totalTokens;
+    overview.tableTotals.cost += row.totalCost;
+    if (row.usageReport?.state === "unavailable") {
+      overview.tableTotals.usageReport = row.usageReport;
+    }
     overview.tableTotals.errors += session.usage?.messageCounts?.errors ?? 0;
   }
   for (const session of scoped) {
@@ -432,6 +436,7 @@ export function buildUsageOverview(
       }
     }
   }
+  overview.usageReport = accumulator.totals.usageReport;
   const aggregates = accumulator.finish();
   overview.selectedSessionCount = aggregates.sessionCount ?? 0;
   let totals = accumulator.totals;

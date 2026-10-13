@@ -19,8 +19,11 @@ The icon rail stays separate from the selected navigation list. **Pages** opens
 available built-in pages, dashboards, and plugin destinations, **Sessions** opens conversations,
 and **Online** shows connected people. Hover or focus an icon for its name.
 The active agent's avatar sits at the top of the rail and opens the agent menu;
-in team mode it opens the workspace menu. Command-palette search sits below the
-three view buttons.
+in team mode it opens the workspace menu. The accented **+**, labeled **New conversation**,
+sits directly below the avatar, separated from navigation by a divider. It stays in
+the same place in Pages, Sessions, and Online, even when the list is collapsed.
+It opens New session for the selected agent; in team mode, choose an agent from
+its menu first. Command-palette search sits below the three view buttons.
 Click the selected view again to collapse or expand its list, or press ⌘B on
 Mac or Ctrl+B on Windows/Linux. Selecting a different view opens its list.
 Home, Inbox, and your account controls stay together at the bottom of the rail.
@@ -53,9 +56,15 @@ is set. Only a running ring and unread dot decorate these shortcuts.
 Each view has one header row. In Sessions, the title is the owner-filter chip:
 **My sessions**, **Involving me**, **All owners**, or the selected person's name.
 Open the chip to choose whose sessions appear. **Involving me** also includes
-participation and mentions. The separate filter button controls the remaining
-session filters, and the row has one new-session button. In team mode that button
-opens the team new-session menu.
+participation and mentions. External catalog entries appear in **Involving me**
+only when their adopted OpenClaw conversation is in the Gateway-filtered list.
+Shared or imported catalog access alone does not establish involvement; use
+**All owners** to browse those sources. The separate filter button controls the
+remaining session filters. New conversation stays in the rail rather than moving
+into this header. On mobile, an equivalent **+** stays in the chat header or page
+topbar while the drawer is closed. Opening the drawer moves the action back to the
+rail, without a second header button. In team mode, the header action opens the
+same agent picker as the rail. Native apps keep their native creation controls.
 
 The owner filter is the only control for this selection. Its saved value belongs
 to the current Gateway and your profile in this browser. A signed-in profile
@@ -688,14 +697,23 @@ checkout directory's name.
 Registering the same resolved repository root again returns its existing project ID and
 display name. Passing a different `name` does not rename an existing project.
 
-`projects.list` returns recorded projects without checking Git. Recent projects
+`projects.list` reads committed registry rows through a read-only worker without
+checking Git or joining unrelated state writes. Registration initializes the
+registry when needed; listing an empty registry does not create it. Recent projects
 and folders do not wait for session display details to refresh. Operators with
 `operator.write` can request `{"includeObserved":true}` to discover additional
-checkouts from visible sessions and managed worktrees. Concurrent discovery of
-the same checkout set shares one bounded Git pass; subsequent requests read
-fresh repository metadata, including external remote changes and moved checkouts.
+checkouts from visible sessions and managed worktrees. Listings return the last
+Git discovery snapshot immediately while one bounded background pass refreshes
+the same checkout set. A cold set initially includes only recorded worktree facts;
+session-only checkouts appear after discovery completes. External remote changes
+and moved or removed checkouts refresh in the background on the first listing
+after the snapshot is one minute old. A changed checkout set starts new discovery,
+and Gateway shutdown cancels pending refreshes and clears snapshots.
+Listings retain a session snapshot during discovery and recheck the contributing
+sessions before replying. Unrelated session creation and activity do not invalidate
+an in-flight listing; changed access to a contributing session still requires a retry.
 
-**Projects from GitHub.** Search the same picker or paste a GitHub HTTPS or `git@github.com` repository URL. For a remote destination, creation records that source and the runner fetches it during dispatch; no Gateway project clone is required. For Gateway execution, the picker clones into the Gateway-managed projects area. Recent repository sources retain their URL without inventing a local path. Public repository search and cloning work anonymously. Private remote checkout uses the effective shared `tools.github` identity; the discovery credential below only grants picker access. For affiliated and private repositories, prefer the explicit `gateway.controlUi.github.token` SecretRef so this service access has a clear runtime owner. Set `gateway.controlUi.github.host` to the selected Enterprise host; an omitted credential host means `github.com`. The shipped `GH_TOKEN` then `GITHUB_TOKEN` fallback applies only to `github.com`. A trusted host that sets `gateway.projects.nativeGitHubSearch: true` instead prepares the current native system GitHub identity for each search; this is intended for a protected `gh` wrapper or host login and retains the native identity's 60-second cache and rotation fences. Ambient `GH_ENTERPRISE_TOKEN` or `GITHUB_ENTERPRISE_TOKEN` requires `GH_HOST` to match the selected Enterprise host; host-specific native login remains supported. When a Control UI SecretRef is explicit, its exact environment or store name is excluded from agent execution without clearing unrelated native GitHub CLI variables. Search caches each query for 60 seconds, then returns the last result with `stale: true` while one bounded background refresh runs. Every response rechecks the requesting connection and current GitHub identity; revocation or cancellation stops delivery. Each outbound request also rechecks the initiating requester’s authority. Refreshes belong to the Gateway and stop with its lifetime. Search requires `operator.read`, cloning requires `operator.write`, and deleting a Gateway-managed cloned checkout requires `operator.admin`. Clone deletion refuses while a live session or managed worktree still references the checkout. SecretRef ownership is not an OS-user security boundary; use a sandbox, dedicated host, or dedicated OS user when same-account processes are not trusted.
+**Projects from GitHub.** Search the same picker or paste a GitHub HTTPS or `git@github.com` repository URL. For a remote destination, creation records that source and the runner fetches it during dispatch; no Gateway project clone is required. For Gateway execution, the picker clones into the Gateway-managed projects area. Recent repository sources retain their URL without inventing a local path. Public repository search and cloning work anonymously. Private remote checkout uses the effective shared `tools.github` identity; the discovery credential below only grants picker access. For affiliated and private repositories, prefer the explicit `gateway.controlUi.github.token` SecretRef so this service access has a clear runtime owner. Set `gateway.controlUi.github.host` to the selected Enterprise host; an omitted credential host means `github.com`. The shipped `GH_TOKEN` then `GITHUB_TOKEN` fallback applies only to `github.com`. A trusted host that sets `gateway.projects.nativeGitHubSearch: true` instead prepares the current native system GitHub identity for each search; this is intended for a protected `gh` wrapper or host login and retains the native identity's 60-second cache and rotation fences. Ambient `GH_ENTERPRISE_TOKEN` or `GITHUB_ENTERPRISE_TOKEN` requires `GH_HOST` to match the selected Enterprise host; host-specific native login remains supported. When a Control UI SecretRef is explicit, its exact environment or store name is excluded from agent execution without clearing unrelated native GitHub CLI variables. Search caches GitHub response pages for 60 seconds, sharing affiliated repositories across queries for the same credential. Expired pages return with `stale: true` while one bounded background refresh per page runs, using ETags when GitHub supplies them. Every response rechecks the requesting connection and current GitHub identity; revocation or cancellation stops delivery. Each outbound request also rechecks the initiating requester’s authority. Refreshes belong to the Gateway and stop with its lifetime. Search requires `operator.read`, cloning requires `operator.write`, and deleting a Gateway-managed cloned checkout requires `operator.admin`. Clone deletion refuses while a live session or managed worktree still references the checkout. SecretRef ownership is not an OS-user security boundary; use a sandbox, dedicated host, or dedicated OS user when same-account processes are not trusted.
 
 For a GitHub Enterprise deployment, configure `gateway.github.host` and `gateway.github.apiBaseUrl`. GitHub Enterprise Server uses `https://HOSTNAME/api/v3`; its GraphQL requests use `/api/graphql`. To preselect a repository on New Session, set `gateway.projects.defaultRepository.url` and optionally its `ref`. OpenClaw derives the repository identity from the URL and selects a worker profile through the existing `cloudWorkers.projectProfiles` mapping. The profile can use any configured provider, including Azure through the Crabbox plugin. The default is returned only to clients authorized for `sessions.create`, and applies only while the user has no saved project choice; selecting a folder or another project overrides it.
 
