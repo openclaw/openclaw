@@ -14,10 +14,12 @@ import { encodeNodeTestGroups } from "../../scripts/lib/ci-node-test-groups-code
 import {
   createNodeTestShardBundles,
   createSelectedNodeTestShardBundles,
+  isRuntimeTestFileIncluded,
   type CompactNodeTestShard,
 } from "../../scripts/lib/ci-node-test-plan.mts";
 import {
   CI_PROOF_TEST_FILES,
+  PR_PROTECTED_RUNTIME_TEST_FILES,
   isCiProofTestFile,
 } from "../../scripts/lib/ci-proof-test-inventory.mts";
 import { refitTestTimings } from "../../scripts/lib/ci-test-timings-refit.mts";
@@ -164,6 +166,35 @@ it.each(["archive", "untracked", "symlink"])(
 );
 
 describe("CI changed Node test plan", () => {
+  it("keeps the native warm cleanup proof in its extension release tier", () => {
+    const source = "extensions/codex/src/app-server/thread-lifecycle-warm.ts";
+    const native = "extensions/codex/src/app-server/thread-lifecycle.warm-cleanup.native.test.ts";
+    const options = {
+      includeReleaseOnlyRuntimeTests: false,
+      selectionMode: "aggressive" as const,
+    };
+    // Explicit owner opt-ins remain intact; unselected automatic sweeps defer this tier.
+    expect(isRuntimeTestFileIncluded(native, options)).toBe(false);
+    expect(isRuntimeTestFileIncluded(native, { ...options, changedPaths: [native] })).toBe(true);
+
+    for (const [changedPath, includeReleaseOnlyRuntimeTests] of [
+      [native, false],
+      [source, true],
+    ] as const) {
+      const admitted = createChangedNodeTestShards([changedPath], {
+        ...options,
+        includeReleaseOnlyRuntimeTests,
+      });
+      const owners = fallbackGroups(expectDefined(admitted, "native warm cleanup plan")).filter(
+        (group) => group.includePatterns?.includes(native),
+      );
+      expect(owners, changedPath).toHaveLength(1);
+      expect(owners[0]?.configs).toEqual([
+        "test/vitest/vitest.extension-database-workers.config.ts",
+      ]);
+    }
+  });
+
   it("retains changed-owner proof tiers and direct test opt-in without unrelated areas", () => {
     const cwd = argvTempDirs.make("changed-owner-proof-tiers-");
     const areaSource = "src/infra/owner-entry.ts";
@@ -207,35 +238,33 @@ describe("CI changed Node test plan", () => {
     }
   });
 
-  it("protects caught and deferred owner contracts without widening a direct test edit", () => {
-    const cwd = argvTempDirs.make("changed-protected-owner-contracts-");
-    const source = "src/cli/fixture-command.ts";
-    const sibling = "src/cli/fixture-command.test.ts";
-    const caught = "src/cli/update-cli.test.ts";
-    const deferred = "src/cli/claws-cli-legacy-resume.test.ts";
-    const unrelated = "src/other/unprotected.test.ts";
-    writeFileSync(path.join(cwd, "package.json"), "{}\n");
-    for (const file of [source, sibling, caught, deferred, unrelated]) {
-      mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
-      writeFileSync(path.join(cwd, file), "export {};\n");
-    }
-    const options = {
-      cwd,
-      includePrExemptRuntimeTests: false,
-      includeReleaseOnlyRuntimeTests: false,
-    };
-    const owner = createChangedNodeTestShards([source], options);
-    expect(owner).not.toBeNull();
-    expect(selectedFiles(owner).toSorted()).toEqual([sibling, caught, deferred].toSorted());
-    const global = createChangedNodeTestShards(["package.json"], options);
-    expect(global).not.toBeNull();
-    expect(selectedFiles(global)).toEqual([caught]);
-    for (const target of [sibling, caught, deferred]) {
-      const leaf = createChangedNodeTestShards([target], options);
-      expect(leaf, target).not.toBeNull();
-      expect(selectedFiles(leaf), target).toEqual([target]);
-    }
-  });
+  it.each(["pnpm-lock.yaml", "test/vitest/vitest.unknown-owner.config.ts"])(
+    "keeps %s bounded to its direct consumers",
+    (hub) => {
+      const config = "test/vitest/vitest.commands.config.ts";
+      const onFallback = vi.fn();
+      const bounded = createChangedNodeTestShards([hub], { onFallback });
+      expect(bounded).not.toBeNull();
+      const configOwners = fallbackGroups(bounded ?? []).filter((group) =>
+        group.configs.includes(config),
+      );
+      if (hub === "pnpm-lock.yaml") {
+        expect(configOwners.length).toBeGreaterThan(0);
+        expect(selectedFiles(bounded)).toContain(
+          "src/commands/doctor-config-flow.session-store-owner.test.ts",
+        );
+        expect(
+          configOwners
+            .flatMap((group) => group.includePatterns ?? [])
+            .every((file) => PR_PROTECTED_RUNTIME_TEST_FILES.includes(file)),
+        ).toBe(true);
+      } else {
+        expect(configOwners).toHaveLength(0);
+      }
+      expect(selectedFiles(bounded)).not.toContain("src/infra/device-bootstrap.test.ts");
+      expect(onFallback).not.toHaveBeenCalled();
+    },
+  );
 
   it("reuses a complete consumer graph until the tracked inventory changes", () => {
     const cwd = argvTempDirs.make("changed-cached-consumers-");

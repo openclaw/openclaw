@@ -1,4 +1,3 @@
-import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -21,10 +20,6 @@ const mocks = vi.hoisted(() => ({
     typeof import("./worker-environments/local-workspace-prewarm.js").prewarmLocalWorkspaceTemplates
   >(async () => {}),
   prewarmGatewaySessionHistory: vi.fn(async () => {}),
-  ensureSkillsWatcher: vi.fn(),
-  prepareWorkspaceSkillEntries: vi.fn<
-    typeof import("../skills/loading/workspace-skill-loader.js").prepareWorkspaceSkillEntries
-  >(async () => ({ entries: [] })),
   prewarmContextWindowCacheAfterReady: vi.fn(async () => {}),
   getMemoryCapabilityRegistration: vi.fn<() => { pluginId: string } | undefined>(),
   prewarmMemorySearchWorker: vi.fn(async () => {
@@ -89,11 +84,6 @@ vi.mock("./server-methods/core-handlers.js", async () => {
     }),
   };
 });
-vi.mock("../skills/loading/workspace-skill-loader.js", () => ({
-  prepareWorkspaceSkillEntries: mocks.prepareWorkspaceSkillEntries,
-}));
-vi.mock("../agents/workspace-access.js", () => ({ getAgentWorkspaceAccess: () => undefined }));
-vi.mock("../skills/runtime/refresh.js", () => ({ ensureSkillsWatcher: mocks.ensureSkillsWatcher }));
 vi.mock("../agents/context.js", () => ({
   prewarmContextWindowCacheAfterReady: mocks.prewarmContextWindowCacheAfterReady,
 }));
@@ -108,18 +98,12 @@ vi.mock("../plugins/public-surface-loader.js", () => ({
 
 const { scheduleGatewayHandlerPrewarm, scheduleGatewayPrewarm } =
   await import("./server-startup-handler-prewarm.js");
-const workspaces = {
-  main: path.resolve("prewarm-main"),
-  research: path.resolve("prewarm-research"),
-};
 
 beforeEach(() => {
   mocks.events.length = 0;
   mocks.executeRequest.mockClear();
   mocks.prewarmLocalWorkspaceTemplates.mockClear();
   mocks.prewarmGatewaySessionHistory.mockClear();
-  mocks.ensureSkillsWatcher.mockClear();
-  mocks.prepareWorkspaceSkillEntries.mockClear();
   mocks.prewarmContextWindowCacheAfterReady.mockClear();
   mocks.loadCombinedSessionStoreForGatewayCore.mockClear();
   mocks.listManagedPlugins.mockClear();
@@ -134,20 +118,13 @@ afterEach(() => {
 });
 
 describe("scheduleGatewayHandlerPrewarm", () => {
-  it("prepares first-use modules, primary skills, and Memory Core in sequence without executing requests", async () => {
+  it("prepares first-use modules and Memory Core in sequence without executing requests", async () => {
     vi.useFakeTimers();
     mocks.prewarmGatewaySessionHistory.mockImplementationOnce(async () => {
       mocks.events.push("session-history-worker");
     });
     mocks.getMemoryCapabilityRegistration.mockReturnValue({ pluginId: "memory-core" });
-    const cfg: OpenClawConfig = {
-      agents: {
-        entries: {
-          main: { workspace: workspaces.main },
-          research: { workspace: workspaces.research },
-        },
-      },
-    };
+    const cfg: OpenClawConfig = { agents: { entries: {} } };
 
     const sidecar = scheduleGatewayHandlerPrewarm({
       scheduler: createTestGatewayScheduler("fake-timers"),
@@ -171,20 +148,6 @@ describe("scheduleGatewayHandlerPrewarm", () => {
       expect(mocks.prewarmGatewaySessionHistory).toHaveBeenCalledExactlyOnceWith(cfg, {
         isCancelled: expect.any(Function),
       });
-      expect(mocks.prepareWorkspaceSkillEntries.mock.calls).toEqual([
-        [workspaces.main, { config: cfg, agentId: "main" }],
-        [workspaces.research, { config: cfg, agentId: "research" }],
-      ]);
-      expect(mocks.ensureSkillsWatcher.mock.calls).toEqual([
-        [{ workspaceDir: workspaces.main, config: cfg, agentId: "main" }],
-        [{ workspaceDir: workspaces.research, config: cfg, agentId: "research" }],
-      ]);
-      expect(mocks.ensureSkillsWatcher.mock.invocationCallOrder[0]).toBeLessThan(
-        expectDefined(
-          mocks.prepareWorkspaceSkillEntries.mock.invocationCallOrder[0],
-          "skill preparation call",
-        ),
-      );
       expect(mocks.prewarmContextWindowCacheAfterReady).toHaveBeenCalledOnce();
       expect(mocks.loadCombinedSessionStoreForGatewayCore).not.toHaveBeenCalled();
       expect(mocks.loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledOnce();
@@ -429,7 +392,7 @@ it("keeps worker preparation but skips optional discovery when foreground work a
   mocks.getMemoryCapabilityRegistration.mockReturnValue({ pluginId: "memory-core" });
   const handle = scheduleGatewayHandlerPrewarm({
     scheduler: createTestGatewayScheduler("fake-timers"),
-    getConfig: () => ({ agents: { entries: { main: { workspace: workspaces.main } } } }),
+    getConfig: () => ({}),
     log: { warn: vi.fn() },
     startupTrace: {
       measure: async (_name, load) => {
@@ -450,8 +413,6 @@ it("keeps worker preparation but skips optional discovery when foreground work a
       await vi.runAllTimersAsync();
       await vi.dynamicImportSettled();
     } while (vi.getTimerCount() > 0);
-    expect(mocks.prepareWorkspaceSkillEntries).not.toHaveBeenCalled();
-    expect(mocks.ensureSkillsWatcher).not.toHaveBeenCalled();
     expect(mocks.prewarmMemorySearchWorker).not.toHaveBeenCalled();
     expect(mocks.prewarmGatewaySessionHistory).toHaveBeenCalledOnce();
   } finally {

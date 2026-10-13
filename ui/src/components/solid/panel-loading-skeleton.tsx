@@ -30,6 +30,10 @@ function Line(props: { width?: LineWidth }) {
   return <div class={["skeleton line", props.width ?? "long"]} />;
 }
 
+function Lines(props: { widths: readonly LineWidth[] }) {
+  return <For each={props.widths}>{(width) => <Line width={width} />}</For>;
+}
+
 function Rows() {
   return (
     <For each={[0, 1, 2, 3, 4]}>
@@ -57,7 +61,7 @@ function Widget(props: { columns: number; rows: number; lines: LineWidth[] }) {
         <Line width="short" />
       </div>
       <div class="widget-body">
-        <For each={props.lines}>{(width) => <Line width={width} />}</For>
+        <Lines widths={props.lines} />
       </div>
     </div>
   );
@@ -96,23 +100,15 @@ export function PanelLoadingSkeletonContent(props: PanelLoadingSkeletonProps) {
       case "chat":
         return (
           <div class="conversation">
-            <div class="bubble">
-              <div class="copy">
-                <Line />
-                <Line width="medium" />
-              </div>
-            </div>
-            <div class="bubble user">
-              <div class="copy">
-                <Line width="medium" />
-              </div>
-            </div>
-            <div class="bubble">
-              <div class="copy">
-                <Line />
-                <Line width="short" />
-              </div>
-            </div>
+            <For each={[["long", "medium"], ["medium"], ["long", "short"]] satisfies LineWidth[][]}>
+              {(widths, index) => (
+                <div class={["bubble", { user: index() === 1 }]}>
+                  <div class="copy">
+                    <Lines widths={widths} />
+                  </div>
+                </div>
+              )}
+            </For>
           </div>
         );
       case "desktop":
@@ -126,10 +122,7 @@ export function PanelLoadingSkeletonContent(props: PanelLoadingSkeletonProps) {
         return (
           <div class="discussion-frame">
             <div class="conversation">
-              <Line width="medium" />
-              <Line />
-              <Line />
-              <Line width="short" />
+              <Lines widths={["medium", "long", "long", "short"]} />
             </div>
           </div>
         );
@@ -140,32 +133,18 @@ export function PanelLoadingSkeletonContent(props: PanelLoadingSkeletonProps) {
           </div>
         );
       case "document":
-        return (
-          <>
-            <div class="skeleton file-heading medium" />
-            <div class="code">
-              <Line />
-              <Line />
-              <Line width="medium" />
-              <Line />
-              <Line width="short" />
-            </div>
-          </>
-        );
       case "review":
         return (
           <>
-            <div class="summary">
-              <div class="skeleton pill" />
-              <div class="skeleton pill" />
-            </div>
-            <div class="skeleton file-heading" />
+            {variant() === "review" ? (
+              <div class="summary">
+                <div class="skeleton pill" />
+                <div class="skeleton pill" />
+              </div>
+            ) : undefined}
+            <div class={["skeleton file-heading", { medium: variant() === "document" }]} />
             <div class="code">
-              <Line />
-              <Line />
-              <Line width="medium" />
-              <Line />
-              <Line width="short" />
+              <Lines widths={["long", "long", "medium", "long", "short"]} />
             </div>
           </>
         );
@@ -177,10 +156,7 @@ export function PanelLoadingSkeletonContent(props: PanelLoadingSkeletonProps) {
               <div class="skeleton pill" />
             </div>
             <div class="terminal">
-              <Line width="medium" />
-              <Line />
-              <Line width="short" />
-              <Line />
+              <Lines widths={["medium", "long", "short", "long"]} />
             </div>
           </>
         );

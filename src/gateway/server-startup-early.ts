@@ -107,9 +107,18 @@ export async function startGatewayEarlyRuntime(params: {
     : await measureStartup(params.startupTrace, "runtime.early.skills-listener", async () => {
         const skillsRuntimePromise = import("../skills/runtime/refresh.js");
         const remoteSkillsRuntimePromise = loadRemoteSkillsRuntimeModule();
-        const { closeSkillsWatchers, detachSkillsWatchers, registerSkillsChangeListener } =
-          await skillsRuntimePromise;
+        const {
+          closeSkillsWatchers,
+          detachSkillsWatchers,
+          refreshSkillsDiscovery,
+          registerSkillsChangeListener,
+        } = await skillsRuntimePromise;
         const { refreshRemoteBinsForConnectedNodes } = await remoteSkillsRuntimePromise;
+        try {
+          await refreshSkillsDiscovery({ config: params.getRuntimeConfig() });
+        } catch (error) {
+          params.log.warn(`failed to refresh skills during startup: ${String(error)}`);
+        }
         const unregister = registerSkillsChangeListener((event) => {
           if (params.isClosing()) {
             return;
@@ -124,6 +133,7 @@ export async function startGatewayEarlyRuntime(params: {
             params.broadcast("skills.changed", { reason: event.reason });
             return;
           }
+          params.broadcast("skills.changed", { reason: event.reason });
           // Coalesce local skill changes before refreshing connected remote
           // nodes so bulk plugin/skill updates do not stampede node refreshes.
           params.scheduler.schedule({
@@ -140,16 +150,11 @@ export async function startGatewayEarlyRuntime(params: {
                   `failed to refresh remote bins after skills change: ${String(error)}`,
                 );
               }
-              if (!params.isClosing()) {
-                params.broadcast("skills.changed", { reason: event.reason });
-              }
             },
           });
         });
         return async ({ exitAfterClose = false }: { exitAfterClose?: boolean } = {}) => {
           unregister();
-          // Process exit releases native watchers at once; retiring each one here
-          // blocks this thread on fseventsd for seconds apiece on macOS.
           await (exitAfterClose ? detachSkillsWatchers() : closeSkillsWatchers());
         };
       });

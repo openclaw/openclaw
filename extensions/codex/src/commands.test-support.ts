@@ -211,6 +211,13 @@ function mockCall(mockFn: ReturnType<typeof vi.fn>, callIndex = 0): ReadonlyArra
 export function mockArg(mockFn: ReturnType<typeof vi.fn>, callIndex: number, argIndex: number) {
   return mockCall(mockFn, callIndex)[argIndex];
 }
+
+export function mutatingCodexRequestMethods(
+  calls: ReadonlyArray<readonly [method: string, ...args: unknown[]]>,
+): string[] {
+  return calls.map(([method]) => method).filter((method) => method !== "thread/read");
+}
+
 export function requestParams(
   mockFn: ReturnType<typeof vi.fn>,
   callIndex = 0,

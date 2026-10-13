@@ -249,9 +249,10 @@ The generator records successful hosted job walls, including setup, in the exist
 spans and survive the daily refit. The hosted full planner splits measured rows
 above 12 minutes after file bundling, retaining exact coverage and worker settings.
 Complete split generations keep subsequent plans from recombining expensive work.
-The whole Gateway-methods owner retains its completed hosted cost when files are
-added or removed, until a complete observation covers the new inventory. Partial
-generations never supply that floor. Its full-validation rows use the existing
+Agents-support, CLI-process, Gateway chat, Gateway methods, and runtime-config
+owners retain their completed hosted cost when files are added or removed, until
+a complete observation covers the new inventory. Partial generations never supply
+that floor. Their full-validation rows use the existing
 `-hosted-N` split, while compact main and PR routing retain their existing policy.
 An indivisible over-budget test fails planning with its owner named; unmeasured
 rows still need native timing evidence before claiming the 20-minute objective.

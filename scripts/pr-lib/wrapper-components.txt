@@ -349,6 +349,7 @@ src/agents/worktrees/run-end-lifecycle.ts
 src/agents/sandbox/registry-lifecycle.ts
 src/agents/sandbox/registry-publication.ts
 src/config/zod-schema.database.ts
+src/infra/database-engine/admission-scope.ts
 src/infra/database-engine/observation.ts
 src/infra/database-engine/policy.ts
 src/infra/postgres-sync/connection.ts
@@ -579,6 +580,7 @@ src/config/model-provider-config.ts
 src/config/model-provider-overlay-ids.ts
 src/config/model-provider-rows.ts
 src/config/mutate.include-io.ts
+src/config/mutate.snapshot.ts
 src/config/mutate.ts
 src/config/mutation-conflict.ts
 src/config/normalize-exec-safe-bin.ts
@@ -1153,6 +1155,8 @@ src/infra/sqlite-worker-identity.ts
 src/infra/sqlite-worker-operation-admission.ts
 src/infra/sqlite-worker-operation-settlement.ts
 src/infra/sqlite-worker-request-class.ts
+src/infra/sqlite-worker-request-custody.ts
+src/infra/sqlite-writer-admission-client.ts
 src/infra/sqlite-worker-state-context.ts
 src/infra/sqlite-worker-store.ts
 src/infra/sqlite-worker-transfer.ts
@@ -1689,7 +1693,6 @@ src/skills/discovery/agent-filter.ts
 src/skills/discovery/filter.ts
 src/skills/skill-library-error.ts
 src/skills/lifecycle/upload-store-error.ts
-src/skills/runtime/refresh-watch-targets.types.ts
 src/state/agent-creation-claim.ts
 src/state/agent-database-admission-error.ts
 src/state/agent-database-admission.ts

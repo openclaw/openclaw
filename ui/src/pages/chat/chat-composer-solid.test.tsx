@@ -48,6 +48,10 @@ it("updates composer text on a live locale change without disturbing an IME draf
     onDraftChange,
   });
   const view = mountComposer(props);
+  view.container
+    .querySelector(".chat-controls__permission-picker")!
+    .dispatchEvent(new Event("wa-show"));
+  flush();
   const textarea = view.container.querySelector("textarea")!;
   const heading = view.container.querySelector(".chat-controls__permission-heading")!;
   expect(heading.textContent).toBe("Execution permissions");

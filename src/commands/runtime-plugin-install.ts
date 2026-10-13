@@ -42,6 +42,9 @@ type RuntimePluginEnsureParams = {
   workspaceDir?: string;
   output?: "interactive" | "silent";
   beforePersistentEffect?: () => void | Promise<void>;
+  beforePersistentApply?: () => void;
+  onCapabilityConsent?: PluginCapabilityConsentHandler;
+  recordOfficialCapabilities?: boolean;
 };
 
 type RuntimePluginRepairParams = {
@@ -140,9 +143,10 @@ async function ensureRuntimePluginForModelSelection(
   }
   const io = adaptRuntimePluginInstallIo(params);
   const onCapabilityConsent =
-    params.output === "silent"
+    params.onCapabilityConsent ??
+    (params.output === "silent"
       ? async () => undefined
-      : createPluginCapabilityConsentPrompter(params.prompter);
+      : createPluginCapabilityConsentPrompter(params.prompter));
   const existingRecords = await loadInstalledPluginIndexInstallRecords({ env: process.env });
   if (isInstalledRecordPresentOnDisk(existingRecords[descriptor.pluginId], process.env)) {
     // A recorded install with package.json on disk can be repaired/enabled
@@ -165,7 +169,9 @@ async function ensureRuntimePluginForModelSelection(
     const enableResult = await enablePluginWithCapabilityConsent(params.cfg, descriptor.pluginId, {
       workspaceDir: params.workspaceDir,
       onCapabilityConsent,
+      recordOfficialCapabilities: params.recordOfficialCapabilities,
       beforePersistentEffect: params.beforePersistentEffect,
+      beforePersistentApply: params.beforePersistentApply,
     });
     return finalizeRequiredRuntimePluginInstall(descriptor, {
       cfg: enableResult.config,
@@ -195,7 +201,9 @@ async function ensureRuntimePluginForModelSelection(
     promptInstall: false,
     autoConfirmSingleSource: true,
     onCapabilityConsent,
+    recordOfficialCapabilities: params.recordOfficialCapabilities,
     beforePersistentEffect: params.beforePersistentEffect,
+    beforePersistentApply: params.beforePersistentApply,
   });
   return finalizeRequiredRuntimePluginInstall(descriptor, {
     cfg: result.cfg,

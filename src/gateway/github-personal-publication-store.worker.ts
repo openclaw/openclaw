@@ -5,7 +5,7 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { githubPublicationReceipts } from "../state/github-publication-receipts.js";
-import { insertGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.js";
+import { insertGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.worker.js";
 import type { PersonalPublicationSelector } from "../state/github-publication-worker.types.js";
 import { ensurePersonalGitHubPublicationSchema } from "../state/openclaw-state-db-schema-additive.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";

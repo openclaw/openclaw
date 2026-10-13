@@ -522,7 +522,6 @@ extensions/memory-core/src/memory/manager-embedding-errors.ts	2
 extensions/memory-core/src/memory/manager-search.ts	4
 extensions/memory-core/src/memory/manager-vector-rebuild-state.ts	1
 extensions/memory-core/src/memory/manager.ts	1
-extensions/memory-core/src/memory/search-deadline.ts	1
 extensions/memory-core/src/migration/doctor-host-event-sources.ts	1
 extensions/memory-core/src/migration/doctor-memory-sidecar-import.ts	6
 extensions/memory-core/src/migration/doctor-memory-sidecar.ts	1
@@ -1628,7 +1627,7 @@ src/claws/workspace.ts	2
 src/cli/acp-cli.ts	7
 src/cli/attach-cli.ts	3
 src/cli/capability-cli/embedding.ts	2
-src/cli/capability-cli/image.ts	10
+src/cli/capability-cli/image.ts	9
 src/cli/capability-cli/model.ts	3
 src/cli/capability-cli/tts.ts	6
 src/cli/capability-cli/video.ts	5
@@ -1680,7 +1679,7 @@ src/cli/program/program-context.ts	2
 src/cli/program/register.agent-turn.ts	1
 src/cli/program/register.configure.ts	1
 src/cli/program/register.migrate.ts	7
-src/cli/program/register.onboard.ts	27
+src/cli/program/register.onboard.ts	26
 src/cli/program/register.setup.ts	2
 src/cli/program/register.status-health-sessions.ts	9
 src/cli/run-main.ts	1
@@ -2525,7 +2524,6 @@ src/skills/runtime/remote-probe-utils.ts	2
 src/skills/runtime/remote-skills.ts	1
 src/skills/workshop/tool-policy-diagnostic.ts	1
 src/snapshot/git-backup-codec.ts	7
-src/snapshot/git-backup.ts	2
 src/snapshot/local-repository.ts	4
 src/snapshot/manifest.ts	1
 src/state/local-onboarding-state.ts	1

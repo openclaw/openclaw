@@ -28,12 +28,7 @@ async function createContext(): Promise<BrowserContext> {
 }
 
 async function gatewayPhase(page: Page): Promise<string | undefined> {
-  return page.evaluate(() => {
-    const app = document.querySelector("openclaw-app") as HTMLElement & {
-      runtime?: { context: { gateway: { snapshot: { phase: string } } } };
-    };
-    return app.runtime?.context.gateway.snapshot.phase;
-  });
+  return page.evaluate(() => window.openclawControlUi?.snapshot().gatewayPhase ?? undefined);
 }
 
 async function documentMarker(page: Page): Promise<string | undefined> {

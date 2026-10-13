@@ -105,7 +105,7 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
   );
   assertCurrent();
   // Native repair can succeed while readiness still fails; retain both observed outcomes.
-  if (launchAgentRecovery.attempted && params.updateRun) {
+  if (launchAgentRecovery.status !== "not-needed" && params.updateRun) {
     const endedAtMs = Date.now();
     const { runId, env } = params.updateRun;
     const repair = getUpdateRun(runId, { env })?.repair ?? [];
@@ -113,17 +113,18 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
       runId,
       {
         attempt: Math.max(0, ...repair.map((entry) => entry.attempt)) + 1,
-        status: launchAgentRecovery.recovered ? "succeeded" : "failed",
+        status: launchAgentRecovery.status === "recovered" ? "succeeded" : "failed",
         startedAtMs,
         endedAtMs,
-        summary: launchAgentRecovery.recovered
-          ? launchAgentRecovery.message
-          : launchAgentRecovery.detail,
+        summary:
+          launchAgentRecovery.status === "recovered"
+            ? launchAgentRecovery.message
+            : launchAgentRecovery.detail,
       },
       { env },
     );
   }
-  if (!launchAgentRecovery.recovered) {
+  if (launchAgentRecovery.status !== "recovered") {
     return { health: params.health, launchAgentRecovery };
   }
 

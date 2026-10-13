@@ -40,7 +40,6 @@ import {
 import { chatStartupStatusLabel, type ChatRunStartupStatus } from "./chat-run-startup.ts";
 import { forwardChatWheelToTranscript } from "./chat-scroll-input.ts";
 import type { ChatState } from "./chat-state-contract.ts";
-import { projectSubagentStatus } from "./chat-subagent-wait.ts";
 import {
   type ChatPlacementStartupNoticeProps,
   renderChatComposerNotices,
@@ -438,11 +437,8 @@ export function renderChat(props: ChatProps) {
     ...inputDisplay.queue,
   ];
   const composerProps = { ...props, displayQueue };
-  const subagents = projectSubagentStatus({ ...props, runWorking }, false);
   const defaultComposer = renderChatComposer({
     ...props,
-    waitingSubagents: subagents.wait,
-    onOpenSubagents: subagents.listed ? props.onOpenSubagents : undefined,
     // Full conversation panes have one progress owner: Details. Catalog and
     // compact embedded composers retain their existing standalone presentation.
     progressCard: props.detailsEnabled ? null : props.progressCard,
