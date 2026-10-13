@@ -51,6 +51,7 @@ export function createSessionTranscriptHistoryPool(
     workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
     maxWorkers,
     idleTimeoutMs: 0,
+    burstIdleTimeoutMs: 30_000,
     prepareWorker: () => {
       ensureSqliteLibrarySelected();
       // Early workers stay conservative if native-close qualification was still pending.

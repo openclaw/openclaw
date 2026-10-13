@@ -1,4 +1,5 @@
 import { createEffect, createSignal, onCleanup, Show, untrack } from "solid-js";
+import type { SolidRouteProps } from "../../app-route-types.ts";
 import { ImageLightbox } from "../../components/image-lightbox.tsx";
 import { renderLazyViewError } from "../../components/lazy-view-error.ts";
 import { renderSessionBackground } from "../../components/session-background-view.ts";
@@ -29,11 +30,24 @@ import {
   NewSessionIncognitoControl,
   NewSessionIncognitoNotice,
 } from "./incognito-control-view.tsx";
+import { restoredInstantThreadPage } from "./instant-thread-restore.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { NewSessionPageOwner, type PageHost } from "./new-session-page-owner.ts";
 import { AgentSelect, NewSessionPlaceControls } from "./target-controls-view.tsx";
 
 registerNewSessionSetupEnglish();
+
+export function NewSessionRoute(props: SolidRouteProps<NewSessionRouteData>) {
+  // Instant-thread handoff parks and restores this exact registered host across route roots.
+  return (
+    <Show
+      when={restoredInstantThreadPage(props.data)}
+      fallback={<openclaw-new-session-page prop:data={props.data} />}
+    >
+      {(page) => page()}
+    </Show>
+  );
+}
 
 const pageOwners = new WeakMap<PageHost, NewSessionPageOwner>();
 
@@ -349,6 +363,9 @@ defineSolidBridge<
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
+      "openclaw-new-session-page": HTMLAttributes<PageHost> & {
+        "prop:data"?: NewSessionRouteData | undefined;
+      };
       "openclaw-chat-detail-panel": HTMLAttributes<
         HTMLElementTagNameMap["openclaw-chat-detail-panel"]
       > & {

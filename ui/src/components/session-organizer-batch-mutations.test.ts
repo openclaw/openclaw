@@ -11,6 +11,11 @@ import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.t
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { loadSettings, patchSettings } from "../app/settings.ts";
 import { t } from "../i18n/index.ts";
+import {
+  customSnoozeStorageKey,
+  readCustomSnooze,
+  rememberCustomSnooze,
+} from "../lib/sessions/custom-snooze.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import type {
   SessionDeleteBatchResult,
@@ -25,6 +30,7 @@ import {
   installDialogPolyfill,
   waitForConfirmDialogActions,
 } from "../test-helpers/modal-dialog.ts";
+import { createStorageMock } from "../test-helpers/storage.ts";
 import type {
   SidebarRecentSession,
   SidebarSessionMutationScope,
@@ -942,7 +948,7 @@ describe("session organizer snooze", () => {
     vi.setSystemTime(now);
     const h = createHarness();
     const row = sessionRow(0);
-    await snoozeSessionWithUndo(h.host, row, now + 3_600_000, h.scope);
+    await snoozeSessionWithUndo(h.host, row, { snoozedUntil: now + 3_600_000 }, h.scope);
     expect(h.patch).toHaveBeenCalledWith(
       row.key,
       { snoozedUntil: now + 3_600_000 },
@@ -969,11 +975,55 @@ describe("session organizer snooze", () => {
     expect(h.patch).toHaveBeenCalledTimes(2);
   });
 
+  it("remembers only successful custom snoozes, preserving the slot on presets, failures, and undo", async () => {
+    const h = createHarness();
+    const storage = createStorageMock();
+    vi.stubGlobal("localStorage", storage);
+    Object.assign(h.scope.client, {
+      gatewayUrl: "wss://snooze.example",
+      recoveryScope: "test-account",
+    });
+    const key = customSnoozeStorageKey("wss://snooze.example", "test-account");
+    const until = Date.now() + 86_400_000;
+    try {
+      rememberCustomSnooze(key, until);
+      h.patch.mockRejectedValueOnce(new Error("denied"));
+      await snoozeSessionWithUndo(
+        h.host,
+        sessionRow(1),
+        { snoozedUntil: until + 1000, rememberCustom: true },
+        h.scope,
+      );
+      expect(readCustomSnooze(key)).toBe(until);
+      await snoozeSessionWithUndo(h.host, sessionRow(1), { snoozedUntil: until + 2000 }, h.scope);
+      expect(readCustomSnooze(key)).toBe(until);
+      await snoozeSessionWithUndo(
+        h.host,
+        sessionRow(1),
+        { snoozedUntil: until + 3000, rememberCustom: true },
+        h.scope,
+      );
+      expect(readCustomSnooze(key)).toBe(until + 3000);
+      vi.mocked(showToast).mock.calls.at(-1)?.[0].onAction?.();
+      expect(readCustomSnooze(key)).toBe(until + 3000);
+      h.retireScope();
+      await snoozeSessionWithUndo(
+        h.host,
+        sessionRow(1),
+        { snoozedUntil: until + 4000, rememberCustom: true },
+        h.scope,
+      );
+      expect(readCustomSnooze(key)).toBe(until + 3000);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("reports a rejected snooze through the ordinary session mutation error path", async () => {
     const h = createHarness();
     const error = new Error("snooze wake time must be in the future");
     h.patch.mockRejectedValueOnce(error);
-    await snoozeSessionWithUndo(h.host, sessionRow(0), 200, h.scope);
+    await snoozeSessionWithUndo(h.host, sessionRow(0), { snoozedUntil: 200 }, h.scope);
     expect(h.publishSessionMutationError).toHaveBeenCalledWith(h.scope, error);
     expect(showToast).not.toHaveBeenCalled();
   });

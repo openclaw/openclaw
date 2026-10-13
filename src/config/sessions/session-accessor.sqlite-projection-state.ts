@@ -2,7 +2,10 @@ import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { MaterializedSessionStateDeletePlan } from "./session-accessor.sqlite-archive-types.js";
 import { readExactSessionEntryRowForCanonicalRepair } from "./session-accessor.sqlite-canonical-repair.js";
-import { sqliteSessionEntriesEqual } from "./session-accessor.sqlite-entry-equality.js";
+import {
+  sqliteSessionEntriesEqual,
+  type SqliteLifecycleTargetSnapshot,
+} from "./session-accessor.sqlite-entry-equality.js";
 import { captureSessionEntrySnapshot } from "./session-accessor.sqlite-entry-snapshot.js";
 import {
   deleteLegacySessionEntryRows,
@@ -42,6 +45,7 @@ type ProjectedLifecycleCommitOptions = Omit<ProjectedLifecycleCommitInput, "main
     postimages?: SessionEntryWritePostimages,
   ) => SessionEntryMaintenancePlan;
   postimages?: SessionEntryWritePostimages;
+  currentEntrySnapshot?: SqliteLifecycleTargetSnapshot[number];
   onArchived?: (sessionKey: string, previous: SessionEntry, current: SessionEntry) => void;
   onResetBoundary?: (facts: {
     sessionKey: string;
@@ -134,13 +138,16 @@ export function commitProjectedSessionEntryLifecycleMutationInDatabase(
     resetBoundary,
   } of projected.upsertedEntries) {
     const sameKeyRemoval = validatedRemovals.find((removal) => removal.sessionKey === sessionKey);
+    const retained = options.currentEntrySnapshot;
     const currentRow = sameKeyRemoval
       ? validatedRemovalRows.get(sessionKey)
-      : options.allowCanonicalRepair
-        ? readExactSessionEntryRowForCanonicalRepair(database, sessionKey, {
-            allowMalformedRowRepair: true,
-          })
-        : readExactSessionEntryRow(database, sessionKey, "full", undefined, true);
+      : retained?.sessionKey === sessionKey && retained.row
+        ? { entry: retained.entry, row: retained.row }
+        : options.allowCanonicalRepair
+          ? readExactSessionEntryRowForCanonicalRepair(database, sessionKey, {
+              allowMalformedRowRepair: true,
+            })
+          : readExactSessionEntryRow(database, sessionKey, "full", undefined, true);
     const currentEntry = sameKeyRemoval
       ? validatedRemovalEntries.get(sessionKey)
       : currentRow?.entry;
@@ -271,7 +278,7 @@ export function commitPreparedSessionEntryLifecycleMutationInDatabase(
   removalPlans: MaterializedSessionStateDeletePlan[],
   options?: Pick<
     ProjectedLifecycleCommitOptions,
-    "resetScope" | "onResetBoundary" | "onArchived" | "postimages"
+    "resetScope" | "onResetBoundary" | "onArchived" | "postimages" | "currentEntrySnapshot"
   >,
 ): ProjectedLifecycleCommitResult {
   return commitProjectedSessionEntryLifecycleMutationInDatabase(database, {
@@ -280,6 +287,7 @@ export function commitPreparedSessionEntryLifecycleMutationInDatabase(
     resetScope: options?.resetScope ?? { agentId: database.agentId },
     onResetBoundary: options?.onResetBoundary,
     postimages: options?.postimages,
+    currentEntrySnapshot: options?.currentEntrySnapshot,
     onArchived: options?.onArchived,
     applyMaintenance: (current, postimages) => {
       const maintenance = input.maintenance;

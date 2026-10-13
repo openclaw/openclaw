@@ -113,7 +113,17 @@ describe("terminal panel pending cancellation", () => {
         );
       }
       await waitForFast(() =>
-        expect(requests.filter((request) => request.method === targetMethod)).toHaveLength(1),
+        expect(
+          requests.filter((request) => request.method === targetMethod),
+          JSON.stringify({
+            hasUpdated: panel.hasUpdated,
+            connected: panel.isConnected,
+            open: panel.terminalPanelOpen,
+            terminalFactories: createGhosttyTerminalMock.mock.calls.length,
+            requestCount: requests.length,
+            requestMethods: requests.slice(-12).map(({ method }) => method),
+          }),
+        ).toHaveLength(1),
       );
       if (cancelled) {
         panel.renderRoot.querySelector<HTMLButtonElement>(".tabstrip-tab__close")!.click();

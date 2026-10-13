@@ -34,6 +34,7 @@ export {
 export {
   formatMemoryIndexRebuildGuidance,
   isAutomaticMemoryEntryEligible,
+  readMemorySearchManagerStatus,
   resolveMemoryIndexIdentityDiagnostic,
   resolveMemoryIndexIdentityReason,
   resolveMemoryIndexSearchDiagnostic,

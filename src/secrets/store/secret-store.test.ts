@@ -90,7 +90,7 @@ afterEach(async () => {
 });
 
 describe("secret store", () => {
-  it("purges newly deleted entries only after their retention deadline after an idle pass", async () => {
+  it("discovers newly deleted entries after idle and purges overdue entries after restart", async () => {
     vi.useFakeTimers();
     const deletedAtMs = Date.UTC(2026, 0, 1);
     vi.setSystemTime(deletedAtMs);
@@ -105,6 +105,7 @@ describe("secret store", () => {
     expect(countStoredRows(database, "EXPIRED_AFTER_IDLE")).toBe(1);
 
     vi.setSystemTime(deletedAtMs + 30 * 24 * 60 * 60_000 + 1);
+    await closeOpenClawStateDatabaseAsync();
     await expect(purgeStoredSecrets({ database })).resolves.toBe(1);
     expect(countStoredRows(database, "EXPIRED_AFTER_IDLE")).toBe(0);
   });

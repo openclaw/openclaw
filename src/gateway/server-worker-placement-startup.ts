@@ -8,6 +8,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { createGitHubPublicationRuntime } from "./github-publication-runtime.js";
@@ -114,6 +115,7 @@ export function createGatewayWorkerPlacementRuntime(
   const { scheduler } = params;
   let nodeWorkerSupervisorTransport: NodeWorkerSupervisorTransport | undefined;
   let stopped = false;
+  let scheduleDiskSpaceSweep: (() => void) | undefined;
   const runtimeRefresh = createWorkerRuntimeRefreshWaiter({
     environments: params.environments,
     isStopping: () => stopped,
@@ -418,6 +420,24 @@ export function createGatewayWorkerPlacementRuntime(
       runnerAvailability,
     });
     metadataChanges = changes;
+    const uninstallPlacementChanges = params.placements.subscribeChanges(() => {
+      sessionRetirement.invalidate();
+      diskSpace.invalidate();
+      scheduleDiskSpaceSweep?.();
+    });
+    const uninstallConfigChanges = sessionChanges.subscribe((change) => {
+      if (
+        "all" in change &&
+        (typeof change.scope !== "string" ||
+          change.scope === "stores" ||
+          change.scope === "config" ||
+          change.scope === "worker-environments")
+      ) {
+        sessionRetirement.invalidate();
+        diskSpace.invalidate();
+        scheduleDiskSpaceSweep?.();
+      }
+    });
     const scope = scheduler.scope();
     const operations = new Map<"reconcile" | "disk-space" | "auto-suspend", Promise<void>>();
     const uninstallEnvironmentReconcileGuard = installWorkerPlacementReconcileGuard({
@@ -487,8 +507,23 @@ export function createGatewayWorkerPlacementRuntime(
       }
       return (
         operations.get("disk-space") ??
-        trackOperation("disk-space", diskSpace.sweep(), "Worker disk-space sweep failed")
+        trackOperation(
+          "disk-space",
+          diskSpace.sweep().finally(() => scheduleDiskSpaceSweep?.()),
+          "Worker disk-space sweep failed",
+        )
       );
+    };
+    scheduleDiskSpaceSweep = () => {
+      const atMs = diskSpace.nextSweepAtMs();
+      if (!stopped && Number.isFinite(atMs)) {
+        scope.schedule({
+          id: "worker-placements:disk-space",
+          atMs,
+          mode: "earliest",
+          run: () => sweepDiskSpace().catch(() => {}),
+        });
+      }
     };
     const sweepActivePlacements = async (): Promise<void> => {
       try {
@@ -509,6 +544,7 @@ export function createGatewayWorkerPlacementRuntime(
     const uninstallSessionIdentityMutation = onSessionIdentityMutation((mutation) =>
       // Reconciliation belongs to the Gateway, not the notifying request's cancellation scope.
       runInDetachedAsyncContext(() => {
+        sessionRetirement.invalidate();
         const previousSessionId = mutation.previous.sessionId;
         const currentSessionId = "current" in mutation ? mutation.current.sessionId : undefined;
         if (previousSessionId && previousSessionId !== currentSessionId) {
@@ -538,6 +574,8 @@ export function createGatewayWorkerPlacementRuntime(
           params.environments.stopNodeEnrollmentWaits?.();
           scope.beginClose();
           uninstallSessionIdentityMutation();
+          uninstallPlacementChanges();
+          uninstallConfigChanges();
           uninstallSessionMaintenancePreservation();
           uninstallPlacementAdmission();
         }
@@ -618,12 +656,6 @@ export function createGatewayWorkerPlacementRuntime(
         everyMs: WORKER_PLACEMENT_RECONCILE_INTERVAL_MS,
         run: sweepActivePlacements,
       });
-      scope.schedule({
-        id: "worker-placements:disk-space",
-        atMs,
-        everyMs: WORKER_PLACEMENT_RECONCILE_INTERVAL_MS,
-        run: () => sweepDiskSpace().catch(() => {}),
-      });
       return sidecar;
     } catch (error) {
       try {
@@ -645,6 +677,7 @@ export function createGatewayWorkerPlacementRuntime(
       markChanged(nodeId: string) {
         runnerAvailability.markChanged();
         metadataChanges?.runnerChanged(nodeId);
+        scheduleDiskSpaceSweep?.();
       },
     },
     placements: params.placements,
