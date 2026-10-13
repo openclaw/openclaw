@@ -222,7 +222,10 @@ export function createKeyedStateDomainPublication<T>(codec: {
       registerListener(state.facts, listener),
     subscribe: (listener: (change: StateDomainChange<T>) => void) =>
       registerListener(state.observers, listener),
-    begin(owner: { identity: string | symbol; assertCurrent(): void }, isFact = codec.isFact) {
+    begin(
+      owner: { identity: string | symbol; assertCurrent(): void; publishPending?: boolean },
+      isFact = codec.isFact,
+    ) {
       const operationId = randomUUID();
       const superseded = new Set<string>();
       let installing = false;
@@ -242,7 +245,9 @@ export function createKeyedStateDomainPublication<T>(codec: {
         }
       });
       try {
-        install({ kind: "pending", identity: owner.identity, operationId });
+        if (owner.publishPending !== false) {
+          install({ kind: "pending", identity: owner.identity, operationId });
+        }
       } catch (error) {
         unsubscribe();
         throw error;
@@ -308,7 +313,9 @@ export function createKeyedStateDomainPublication<T>(codec: {
               install({ kind: "unknown", identity: owner.identity });
             }
           } finally {
-            install({ kind: "settled", identity: owner.identity, operationId });
+            if (owner.publishPending !== false) {
+              install({ kind: "settled", identity: owner.identity, operationId });
+            }
           }
         },
       };

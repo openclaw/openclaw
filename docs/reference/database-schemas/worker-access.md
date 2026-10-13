@@ -124,6 +124,10 @@ Confirmed rollback preserves the previous committed facts. A lost reply is not
 proof of rollback and must not trigger blind replay. Facts install before public
 observers, through
 [`sqlite-post-commit.ts`](https://github.com/openclaw/openclaw/blob/main/src/infra/sqlite-post-commit.ts).
+Exec allowlist usage writes retain receipt and supersession tracking without
+publishing a pending denial: recording last-used metadata cannot revoke another
+command's authorization. Policy edits and durable allow-always grants still
+publish pending denials; unknown outcomes still invalidate the policy view.
 Personal credential and GitHub publication owners are concrete examples:
 [`user-model-account-authority.ts`](https://github.com/openclaw/openclaw/blob/main/src/state/user-model-account-authority.ts)
 and [`github-publication-receipts.ts`](https://github.com/openclaw/openclaw/blob/main/src/state/github-publication-receipts.ts).
@@ -686,6 +690,12 @@ or a second owner.
 Committed entry metadata preserves an active trajectory-retention sweep through
 its existing owner. Unknown local writes still invalidate
 the sweep; rollback publishes no acknowledgment.
+Durable trajectory retention is triggered by appends, with one aggregate per
+hourly pass. Appends share a pending pass; an invalidated or failed pass waits
+until the next hourly opportunity instead of restarting on every append. The
+existing bounded deletion batches consume the pass's summary and committed
+trajectory receipts. Snapshot invalidation and run-content checks still protect
+history from deletion when concurrent writes change the retention decision.
 The v2026.9.8 `plugin-sdk/session-store-runtime` entry and last-route contracts
 retain their opaque `assertCommitAllowed` callbacks inside the native transaction.
 Released model-selection validators and synchronous Stop currentness callbacks keep

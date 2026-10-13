@@ -1,1 +1,1 @@
-export { AppTopbar } from "./app-topbar-solid.tsx";
+import "./app-topbar-solid.tsx";

@@ -145,6 +145,8 @@ export type ConfigSnapshotReadOptions = {
 export type ConfigSnapshotMetadataReadOptions = ConfigSnapshotReadOptions & {
   /** CLI diagnostics prepare metadata before validation; strict mode also retains source facts. */
   prepareValidation?: "runtime" | "strict";
+  /** Keep validation's metadata lazy when the caller needs no complete plugin inventory. */
+  completePluginMetadata?: boolean;
 };
 
 export type ReadConfigFileSnapshotInternalResult = {

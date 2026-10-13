@@ -157,7 +157,7 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
           return admitted.facts;
         },
         readReceipt: (facts) => (isReceipt(facts) ? facts : undefined),
-        stageCommit(facts) {
+        stageCommit(facts, nativeSettlement) {
           if (!isReceipt(facts)) {
             throw new Error("Placement claim commit has no receipt");
           }
@@ -225,6 +225,7 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
                   facts.projection
                     ? { projection: facts.projection, conflictSessionIds: new Set() }
                     : undefined,
+                  nativeSettlement,
                 )
               : stagePlacementWorkspaceResultWorkerPublication(
                   context.admission.identity,

@@ -779,7 +779,8 @@ Explicit OpenClaw actions request an immediate rescan: installing, updating,
 uninstalling, or editing a skill; changing configuration that affects skills;
 and starting or restarting the Gateway. A new eligible remote node also refreshes
 skill eligibility. Remote workspace discovery stays with the host that owns
-those files.
+those files. Configuration changes replace source plans and subscriptions on the
+healthy discovery worker; they do not wait for an unnecessary worker restart.
 
 The worker publishes a complete snapshot after discovery. Existing sessions
 pick up changed file-backed skills on their next agent turn. If the effective

@@ -166,26 +166,34 @@ it("invalidates old profile reads before the next profile has fetched its prefer
 
 it("syncs explicit None and reports saved only after the profile acknowledgement", async () => {
   const delayed = createDeferred<unknown>();
-  const request = vi.fn(async (method: string) =>
-    method === "users.prefs.get" ? { status: "ok", entries: {} } : delayed.promise,
-  );
+  const dispatched = createDeferred();
+  const request = vi.fn(async (method: string) => {
+    if (method === "users.prefs.get") {
+      return { status: "ok", entries: {} };
+    }
+    if (method === "users.prefs.set") {
+      dispatched.resolve();
+    }
+    return delayed.promise;
+  });
   const writer = createServerPrefsWriter(request, scope, true, { ok: true }, false);
   await refreshServerPrefsProfile(writer, profileId, config);
   patchSettings({ background: none });
-  const afterCommit = vi.fn();
+  const committed = createDeferred();
+  const afterCommit = vi.fn(() => committed.resolve());
   const transitions: string[] = [];
   const unsubscribe = subscribeServerUiPrefWrites(() => transitions.push(state().status));
   try {
     pushServerUiPrefs(writer, { background: none }, { profileId, canWrite: true, afterCommit });
     expect(state()).toEqual({ status: "pending" });
-    await waitForFast(() =>
-      expect(request).toHaveBeenLastCalledWith("users.prefs.set", {
-        entries: { "ui.background": none },
-        expectedEntries: { "ui.background": null },
-      }),
-    );
+    await dispatched.promise;
+    expect(request).toHaveBeenLastCalledWith("users.prefs.set", {
+      entries: { "ui.background": none },
+      expectedEntries: { "ui.background": null },
+    });
     delayed.resolve({ status: "ok" });
-    await waitForFast(() => expect(afterCommit).toHaveBeenCalledOnce());
+    await committed.promise;
+    expect(afterCommit).toHaveBeenCalledOnce();
     expect(state()).toEqual({ status: "saved" });
     expect(
       resolveServerUiPrefState(config, "background", scope, loadSettings(), { profileId }),

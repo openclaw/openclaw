@@ -4,15 +4,19 @@ import type { SessionEntryReplacementPublication } from "./session-accessor.sqli
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
 import type { SessionParticipantRecord } from "./session-membership-facts.types.js";
+import type { SessionTranscriptWatermark } from "./session-transcript-context-version.types.js";
 
 type PrepareEntryPatch = (
   database: OpenClawAgentDatabase,
   sessionKey: string,
 ) =>
-  | ((
-      postimages: SessionEntryWritePostimages,
-      publication: SessionEntryReplacementPublication,
-    ) => void)
+  | {
+      transcript: { sessionId: string; watermark: SessionTranscriptWatermark };
+      publish(
+        postimages: SessionEntryWritePostimages,
+        publication: SessionEntryReplacementPublication,
+      ): void;
+    }
   | undefined;
 
 const owners = new WeakMap<DatabaseSync, PrepareEntryPatch>();

@@ -264,6 +264,46 @@ it("serves installed state without a request and reconciles a retired worker gen
   });
 });
 
+it.each(["updated", "caller revoked", "disclosure revoked", "keeps changing"] as const)(
+  "reconciles a cold actor read superseded by a native publication (%s)",
+  async (change) => {
+    await withActor(async ({ actor, commands, fault, nativePatch }) => {
+      let callerRevoked = false;
+      const readAuthority: SessionActorAuthority = {
+        assertCurrent() {
+          if (callerRevoked) {
+            throw new Error("Read caller revoked");
+          }
+        },
+        authorize() {},
+      };
+      fault.onExecuted = () => {
+        if (change !== "keeps changing") {
+          fault.onExecuted = undefined;
+        }
+        nativePatch(654 + commands.length);
+        callerRevoked = change === "caller revoked";
+        fault.disclosureRevoked = change === "disclosure revoked";
+      };
+      const reading = actor.read(readAuthority);
+      if (change === "updated") {
+        await expect(reading).resolves.toMatchObject({ entry: { updatedAt: 655 } });
+        expect(commands).toEqual(["session.actor.read", "session.actor.read"]);
+      } else if (change === "keeps changing") {
+        await expect(reading).rejects.toThrow(
+          "Session actor changed before its read could publish",
+        );
+        expect(commands).toEqual(["session.actor.read", "session.actor.read"]);
+      } else {
+        await expect(reading).rejects.toThrow(
+          change === "caller revoked" ? "Read caller revoked" : "Snapshot disclosure revoked",
+        );
+        expect(commands).toEqual(["session.actor.read"]);
+      }
+    });
+  },
+);
+
 it("installs a cold command and stale preimage without a separate read request", async () => {
   await withActor(async ({ actor, commands, fault, retireGeneration }) => {
     const input = {

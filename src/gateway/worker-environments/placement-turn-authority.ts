@@ -3,6 +3,7 @@ import { attachErrorDiagnostic } from "../../infra/error-diagnostics.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
+import type { SqliteWorkerOperationSettlement } from "../../infra/sqlite-worker-operation-settlement.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { registerListener } from "../../shared/listeners.js";
 import { requireOpenClawStateDatabaseIdentity } from "../../state/openclaw-state-db-cache.js";
@@ -354,6 +355,7 @@ export function stagePlacementTurnClaimWorkerPublication(
   previousState?: WorkerSessionTurnClaimFacts["state"] | null,
   workspacePlacement?: WorkerSessionPlacementRecord,
   projection?: WorkerSessionPlacementReadResult,
+  nativeSettlement?: Promise<SqliteWorkerOperationSettlement>,
 ): { commit: () => void; rollback: () => void; invalidate: () => void } {
   return stageWorkerChange(identity, {
     kind: "claim",
@@ -362,6 +364,7 @@ export function stagePlacementTurnClaimWorkerPublication(
     facts: freezeJsonSnapshot(facts),
     workspacePlacement: freezeJsonSnapshot(workspacePlacement),
     projection,
+    nativeSettlement,
     workspaceResult: captureWorkspaceResultPostimage(facts.sessionId, workspaceResult),
   });
 }
@@ -387,12 +390,14 @@ export function stagePlacementRetirementWorkerPublication(
   identity: DatabasePathIdentity,
   sessionId: string,
   previousState: WorkerSessionTurnClaimFacts["state"],
+  nativeSettlement?: Promise<SqliteWorkerOperationSettlement>,
 ) {
   return stageWorkerChange(identity, {
     kind: "claim",
     sessionId,
     localOnly: previousState === "local",
     retired: true,
+    nativeSettlement,
   });
 }
 
@@ -419,14 +424,11 @@ export function capturePlacementReplicaRead(identity: DatabasePathIdentity) {
 /** Synchronous SDK reads consume committed writer receipts; cold reads use the async API. */
 export function readPlacementReplica(identity: DatabasePathIdentity, sessionId: string) {
   const owner = owners.get(identity.key);
-  if (
-    !owner?.active ||
-    !owner.placements.has(sessionId) ||
-    hasPendingPublication(owner, sessionId)
-  ) {
+  const published = owner?.placements.get(sessionId);
+  if (!owner?.active || !published || hasPendingPublication(owner, sessionId)) {
     return undefined;
   }
-  return { placement: owner.placements.get(sessionId)!.placement };
+  return { placement: published.placement };
 }
 
 /** Claim effects consult the single writer's postimage without reopening SQLite. */

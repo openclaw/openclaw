@@ -7,7 +7,10 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 
 export type ConfigCliSnapshotReader = (
-  options?: Pick<ConfigSnapshotMetadataReadOptions, "observe" | "prepareValidation">,
+  options?: Pick<
+    ConfigSnapshotMetadataReadOptions,
+    "observe" | "prepareValidation" | "completePluginMetadata"
+  >,
 ) => Promise<ConfigFileSnapshot>;
 
 export type ConfigCliWriter = (

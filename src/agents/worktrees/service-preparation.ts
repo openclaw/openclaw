@@ -19,6 +19,7 @@ import {
   WorktreePendingContentionError,
   WorktreeRepositoryError,
 } from "./errors.js";
+import { indexWorktreePaths } from "./gc-dependencies.js";
 import {
   commandError,
   listGitWorktrees,
@@ -234,47 +235,41 @@ export async function withWorktreeSources<T>(
         (record) => record.id !== params.restoringId,
       );
       const { repository } = params;
-      const requiredPaths = new Set([
-        repository.sourceRoot,
-        repository.repoRoot,
-        repository.commonDir,
-        ...(params.requiredPaths ?? []),
-      ]);
+      const source = await runGitWorkerOperation(
+        {
+          type: "worktree.eviction-source",
+          input: {
+            sourceRoot: repository.sourceRoot,
+            commonDir: repository.commonDir,
+            requiredPaths: [repository.repoRoot, ...(params.requiredPaths ?? [])],
+            records: records.map(({ id, path: checkoutPath, repoRoot }) => ({
+              id,
+              path: checkoutPath,
+              repoRoot,
+            })),
+          },
+        },
+        { signal: params.signal, assertCurrent: params.commitGuard },
+      );
+      if (!source.complete) {
+        throw new Error(
+          "Managed worktree source Git storage cannot be inspected safely. Repair its Git metadata before retrying.",
+        );
+      }
+      const ancestors = indexWorktreePaths(source.ownedPaths);
       const reuseTargets = records.filter(
         (record) =>
           (params.ownerId && worktreeOwnerMatches(record, params)) ||
           (params.name === record.name && record.repoFingerprint === repository.fingerprint),
       );
-      const retainSources = async (paths: readonly string[], initial = false) => {
-        const previousSize = requiredPaths.size;
-        for (const required of paths) {
-          requiredPaths.add(required);
-        }
-        if (!initial && requiredPaths.size === previousSize) {
-          return;
-        }
-        const source = await runGitWorkerOperation(
-          {
-            type: "worktree.eviction-source",
-            input: {
-              sourceRoot: repository.sourceRoot,
-              commonDir: repository.commonDir,
-              requiredPaths: [...requiredPaths],
-              records: records.map(({ id, path: checkoutPath, repoRoot }) => ({
-                id,
-                path: checkoutPath,
-                repoRoot,
-              })),
-            },
-          },
-          { signal: params.signal, assertCurrent: params.commitGuard },
-        );
-        if (!source.complete) {
-          throw new Error(
-            "Managed worktree source Git storage cannot be inspected safely. Repair its Git metadata before retrying.",
-          );
-        }
-        const needed = new Set([...source.worktreeIds, ...reuseTargets.map(({ id }) => id)]);
+      const retainSources = async (paths: readonly string[]) => {
+        // Additional destinations share this custody scope's prepared ownership inventory.
+        // Native removal still rechecks dependencies before deleting a checkout.
+        const needed = new Set([
+          ...source.worktreeIds,
+          ...reuseTargets.map(({ id }) => id),
+          ...paths.flatMap((required) => [...ancestors(required)]),
+        ]);
         for (const record of records) {
           if (!needed.has(record.id) || held.has(record.id)) {
             continue;
@@ -296,7 +291,7 @@ export async function withWorktreeSources<T>(
         }
         params.commitGuard();
       };
-      await retainSources([], true);
+      await retainSources([]);
       params.commitGuard();
       return retainSources;
     });

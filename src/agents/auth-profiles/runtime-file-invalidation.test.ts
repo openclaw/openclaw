@@ -23,7 +23,6 @@ const observation = vi.hoisted(() => ({
 
 // mock-isolation: Supply file events without native watches to prove snapshot retirement and refresh settlement.
 vi.mock("./file-state.js", () => ({
-  closeAuthProfileFileState() {},
   noteAuthProfileFileWrite() {},
   refreshAuthProfileFileState: async () => {},
   authProfileSourceExists: () => false,

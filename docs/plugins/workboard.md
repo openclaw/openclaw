@@ -430,6 +430,10 @@ seeing a usable token. Recovery goes through
 `workboard_promote`/`workboard_reassign`/`workboard_reclaim`, which do not
 require the token.
 
+Promotion rejects completed (`done`) cards, including when `force` is set, and
+preserves their completion timestamp. It remains available for recovering
+blocked work; `force` only bypasses dependency or schedule holds.
+
 ## Dispatch
 
 Dispatch is Gateway-local: it does not spawn arbitrary OS processes. Normal

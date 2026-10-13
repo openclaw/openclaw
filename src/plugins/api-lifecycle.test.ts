@@ -57,6 +57,9 @@ describe("plugin api lifecycle", () => {
       sessionKey,
     });
     await expect(
+      api.session.workflow.steerActiveRun({ sessionKey, text: "guidance" }),
+    ).resolves.toEqual({ steered: false, reason: "not wired" });
+    await expect(
       api.sendSessionAttachment({ sessionKey, files: [{ path: "/tmp/attachment.txt" }] }),
     ).resolves.toEqual({ ok: false, error: "not wired" });
     await expect(
@@ -147,6 +150,20 @@ describe("plugin api lifecycle", () => {
     });
   });
 
+  it("keeps workflow steering callable after registration", async () => {
+    const steerActiveRun = vi.fn<OpenClawPluginApi["steerActiveRun"]>(async () => ({
+      steered: true,
+      runId: "active-run",
+    }));
+    const api = captureRegisteredPluginApi({ steerActiveRun });
+    const input = { sessionKey: "agent:main:main", text: "guidance", idempotencyKey: "review-1" };
+    await expect(api.session.workflow.steerActiveRun(input)).resolves.toEqual({
+      steered: true,
+      runId: "active-run",
+    });
+    expect(steerActiveRun).toHaveBeenCalledExactlyOnceWith(input);
+  });
+
   it("blocks registration-phase methods after registration", () => {
     const registerSessionExtension = vi.fn();
     const api = captureRegisteredPluginApi({ registerSessionExtension });
@@ -164,6 +181,7 @@ describe("plugin api lifecycle", () => {
     ["clearRunContext", true],
     ["emitAgentEvent", true],
     ["enqueueNextTurnInjection", true],
+    ["steerActiveRun", true],
     ["getRunContext", true],
     ["sendSessionAttachment", true],
     ["scheduleSessionTurn", true],

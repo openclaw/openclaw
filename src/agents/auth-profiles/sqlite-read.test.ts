@@ -4,8 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import * as resources from "../../state/openclaw-agent-db-resources.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
 import * as rootContext from "../../state/openclaw-state-worker-context.js";
-import { closeAuthProfileFileState, registerAuthProfileFileChangeListener } from "./file-state.js";
+import { registerAuthProfileFileChangeListener } from "./file-state.js";
 import { createRuntimeAuthProfileRowsCache } from "./runtime-persisted-rows.js";
 import { prepareAgentAuthProfileRowsRead, readAuthProfileRowsAtPath } from "./sqlite-read.js";
 import type { AuthProfileRowRead } from "./types.js";
@@ -70,7 +71,7 @@ beforeEach(() => {
 afterEach(async () => {
   await Promise.all([...readers].map((reader) => reader.dispose()));
   readers.clear();
-  closeAuthProfileFileState();
+  await closeOpenClawStateDatabaseAsync();
   vi.restoreAllMocks();
   vi.useRealTimers();
 });

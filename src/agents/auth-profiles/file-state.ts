@@ -308,7 +308,7 @@ export async function refreshAuthProfileFileState(): Promise<void> {
   );
 }
 
-export function closeAuthProfileFileState(): void {
+function closeAuthProfileFileState(): void {
   for (const [directory, state] of directories) {
     retireDirectory(directory, state);
   }

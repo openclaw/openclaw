@@ -112,7 +112,7 @@ export function commitSessionLifecycleProjection(
         (plan) => plan.archivedEntries.length === 0 && plan.entryRemovals.length === 0,
       )
     ) {
-      publishActorEntry?.(postimages, candidate.publication);
+      publishActorEntry?.publish(postimages, candidate.publication);
     }
     const receipt = transferSessionEntryWorkerCandidate(database, admit, candidate);
     return receipt;

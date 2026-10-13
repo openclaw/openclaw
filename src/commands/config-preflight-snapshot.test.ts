@@ -11,7 +11,7 @@ import {
 } from "../../test/helpers/promise.js";
 import { resolveDeferredPluginMigrationConfigPaths } from "../config/deferred-plugin-migration-config.js";
 import { createConfigIO } from "../config/io.factory.js";
-import { readConfigFileSnapshot } from "../config/io.js";
+import { readConfigFileSnapshot, readConfigFileSnapshotWithPluginMetadata } from "../config/io.js";
 import {
   readDeferredPluginMigrationsAsync,
   recordDeferredPluginMigrations,
@@ -44,7 +44,7 @@ import {
 import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 import { runStartupConfigPreflight } from "./startup-config-preflight.js";
 
-it("preserves a proven schema failure from the full config snapshot", async () => {
+it("preserves a proven schema failure while completing plugin metadata", async () => {
   await withDoctorConfigPreflightHome(async (home) => {
     const configPath =
       process.env.OPENCLAW_CONFIG_PATH ?? path.join(home, ".openclaw/openclaw.json");
@@ -52,6 +52,7 @@ it("preserves a proven schema failure from the full config snapshot", async () =
     fs.writeFileSync(configPath, JSON.stringify({ gateway: { mode: "local" } }));
     const pathname = openOpenClawStateDatabase({ env: process.env }).path;
     await closeOpenClawStateDatabaseAsync();
+    revokeSqliteDatabaseAdmissionsForPath(pathname);
     const database = new DatabaseSync(pathname);
     try {
       database.exec(
@@ -61,7 +62,12 @@ it("preserves a proven schema failure from the full config snapshot", async () =
       database.close();
     }
     const before = fs.readFileSync(pathname);
-    await expect(readConfigFileSnapshot({ observe: false })).rejects.toMatchObject({
+    await expect(
+      readConfigFileSnapshotWithPluginMetadata({
+        observe: false,
+        allowCurrentPluginMetadata: false,
+      }),
+    ).rejects.toMatchObject({
       name: "SqliteSchemaMismatchError",
       message: expect.stringContaining("Invalid shared state schema content version"),
     });

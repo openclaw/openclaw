@@ -23,9 +23,11 @@ import { captureMemoryExactSessionReader } from "./session-accessor.memory-exact
 import { withSessionEntryCreationPublication } from "./session-accessor.sqlite-entry-cache-publication.js";
 import type { SessionEntryCreationOperation } from "./session-accessor.sqlite-entry-cache.types.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
+import { kickSessionEntryMaintenanceAfterWrite } from "./session-accessor.sqlite-maintenance-kick.js";
 import {
   captureLifecycleDatabaseScope,
   resolveSqliteScope,
+  resolveSqliteTranscriptArchiveDirectory,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import type {
@@ -352,6 +354,7 @@ export async function commitReplySessionInitialization(params: {
     }
   }
   let staleCommit: SessionEntry | null | undefined;
+  let usedMemoryBackend = false;
   let committedSessionEntry = sessionEntry;
   let beforeEntryMutationDone = false;
   const descriptor: ReplySessionInitializationUpsertDescriptor = {
@@ -417,7 +420,7 @@ export async function commitReplySessionInitialization(params: {
     const mutation = {
       activeSessionKey: params.activeSessionKey,
       agentId: params.agentId,
-      maintenanceOverride: params.maintenanceConfig,
+      skipMaintenance: true,
       storePath,
       upserts,
       commitGuard: () => {
@@ -506,6 +509,7 @@ export async function commitReplySessionInitialization(params: {
         },
       );
       if (memoryMutation) {
+        usedMemoryBackend = true;
         return;
       }
       if (bindCreation) {
@@ -562,8 +566,7 @@ export async function commitReplySessionInitialization(params: {
     if (
       !(
         error instanceof SqliteSessionMutationConflictError &&
-        (error.operationLabel === "session maintenance" ||
-          error.operationLabel === "session.lifecycle.reset")
+        error.operationLabel === "session.lifecycle.reset"
       ) &&
       (!(error instanceof SessionEntryLifecycleUpsertConflictError) ||
         error.sessionKey !== sessionKey)
@@ -583,6 +586,16 @@ export async function commitReplySessionInitialization(params: {
   }
   if (staleCommit !== undefined) {
     return createStaleReplySessionInitializationResult(staleCommit ?? undefined);
+  }
+  if (!usedMemoryBackend) {
+    // Reply preparation shares ordinary writes' maintenance owner, never forced cleanup.
+    kickSessionEntryMaintenanceAfterWrite({
+      activeSessionKey: params.activeSessionKey,
+      archiveDirectory: resolveSqliteTranscriptArchiveDirectory(captured),
+      maintenanceConfig: params.maintenanceConfig,
+      scope: { ...captured, path: database.path },
+      storePath,
+    });
   }
   store[sessionKey] = committedSessionEntry;
   if (params.retiredEntry) {

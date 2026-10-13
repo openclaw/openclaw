@@ -363,6 +363,8 @@ describe("plugin board widget cells", () => {
         cell.active = true;
       }
 
+      await cell.updateComplete;
+      await vi.dynamicImportSettled();
       await vi.waitFor(
         () =>
           expect(request).toHaveBeenCalledWith("progressCard.get", {

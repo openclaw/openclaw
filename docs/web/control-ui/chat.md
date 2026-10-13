@@ -49,8 +49,9 @@ the row shows **Outcome unknown**. Partial output alone does not finish a tool.
 
 While a turn is still working and has subagents running, its working indicator
 ends with their count, such as **3 subagents running**, and counts down as they
-finish. Selecting the count opens the **Subagents** panel on its list. Child
-sessions that are not subagents are not part of that count.
+finish. Selecting the count opens the **Subagents** panel on its list. Starting
+or discovering subagents does not open the panel automatically or change your
+selected panel. Child sessions that are not subagents are not part of that count.
 
 Under the reply, each unfinished subagent has its own row
 showing its name and current activity headline. Rows stay in launch order as
