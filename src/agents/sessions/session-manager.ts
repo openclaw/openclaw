@@ -383,11 +383,7 @@ export class SessionManager extends SessionManagerBranching {
       sources: ReadonlyMap<string, SessionEntry>,
       adopt: (version: SessionTranscriptContextVersion) => void,
     ) => void,
-    publishAsync?: (
-      entries: Array<SessionEntry | SessionLeafControl>,
-      sources: ReadonlyMap<string, SessionEntry>,
-      adopt: (version: SessionTranscriptContextVersion) => void,
-    ) => Promise<void>,
+    publishAsync?: (...args: Parameters<NonNullable<typeof publish>>) => Promise<void>,
     assertBeforeCommit?: () => void,
   ) {
     const prepared = SessionManager.inMemory(this.cwd);
@@ -404,6 +400,10 @@ export class SessionManager extends SessionManagerBranching {
       ): Generator<SessionPersistenceStep, void, void> {
         const publication = SessionManager.inMemory(prepared.cwd);
         Object.assign(publication, cloneTranscriptView(prepared.captureTranscriptView()));
+        // Publication changes ancestry and storage metadata, never the sealed payloads.
+        publication.fileEntries = publication.fileEntries.map((entry, index) =>
+          index < initialEntryCount ? entry : { ...entry },
+        );
         const entries = publication.fileEntries
           .slice(initialEntryCount)
           .filter((entry) => entry.type !== "session");
@@ -456,6 +456,7 @@ export class SessionManager extends SessionManagerBranching {
             persistedBoundaryCount + publication.getBoundaryCount() - loadedBoundaryCount;
         }
         const adopt = (version = publication.transcriptVersion) => {
+          entries.forEach((entry) => freezeJsonSnapshot(entry));
           publication.transcriptVersion = version;
           publication.transcriptMutationAt = version?.updatedAt;
           Object.assign(this, publication.captureTranscriptView());

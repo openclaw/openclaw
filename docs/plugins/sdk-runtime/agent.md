@@ -67,6 +67,10 @@ loads the selected active branch, and `openDetachedBoundedAsync` returns the sam
 selection without persistence. File-backed SQLite reads run on the history worker.
 The synchronous getters consume the prepared view without reading storage.
 
+Treat hydrated transcript entries and their payloads as immutable. The manager
+freezes persisted entries after migration and shares them across rewrite snapshots.
+Create new values when replacing a message instead of editing a returned entry.
+
 Full reads transfer bounded chunks from one committed SQLite snapshot without
 truncating the transcript to fit the worker. The caller still holds the complete
 result in memory; use the bounded methods when the complete history is unnecessary.
