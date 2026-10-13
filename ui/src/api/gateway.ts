@@ -29,7 +29,8 @@ import {
 } from "../lib/nodes/index.ts";
 import { listSessionPlacementRecoveryStorageKeys } from "../lib/sessions/session-placement-recovery-storage-key.ts";
 import { generateUUID } from "../lib/uuid.ts";
-import { createBrowserGatewaySocket, probeGatewayReachability } from "./gateway-browser-socket.ts";
+import { probeGatewayReachability } from "./gateway-browser-socket.ts";
+import * as gatewaySocket from "./gateway-browser-socket.ts";
 import { GatewayChatEvents } from "./gateway-chat-events.ts";
 import {
   GatewayRequestError,
@@ -50,8 +51,11 @@ import {
 } from "./gateway-connect-plan.ts";
 import { resolveMaxInboundSilenceMs } from "./gateway-heartbeat-policy.ts";
 import { requestTalkCatalog } from "./gateway-talk-catalog.ts";
+import { GatewayPayloadLimitError, normalizeGatewayPayloadError } from "./gateway-payload-error.ts";
 export type { EventFrame as GatewayEventFrame } from "@openclaw/gateway-client/browser";
-export { GatewayRequestError, resolveGatewayErrorDetailCode };
+
+export { GatewayRequestError, resolveGatewayErrorDetailCode, CONTROL_UI_OPERATOR_ROLE };
+export { GatewayPayloadLimitError };
 
 export type GatewayControlUiPluginTab = NonNullable<HelloOk["controlUiTabs"]>[number];
 export type GatewayControlUiPluginWidgetKind = NonNullable<HelloOk["controlUiWidgetKinds"]>[number];
@@ -92,7 +96,6 @@ export class GatewayBrowserClient {
   private connectDispatch = Promise.withResolvers<boolean>();
   private readonly initialConnectDispatch = this.connectDispatch.promise.then(() => undefined);
   private readonly chatEvents = new GatewayChatEvents((reason) => this.forceReconnect(reason));
-  private maxPayloadBytes: number | undefined;
   private scopeUpgradeRuntime: Promise<GatewayScopeUpgrade> | null = null;
   private connectionHello: GatewayHelloOk | null = null;
   private lastInboundActivityAtMs: number | null = null;
@@ -144,10 +147,21 @@ export class GatewayBrowserClient {
         this.reachabilityProbe?.abort();
         this.reachabilityProbe = null;
         this.chatEvents.clear();
-        this.maxPayloadBytes = undefined;
-        return createBrowserGatewaySocket(this.opts.url, handlers, () => this.maxPayloadBytes);
+        return gatewaySocket.createBrowserGatewaySocket(this.opts.url, handlers);
       },
       createRequestId: generateUUID,
+      validateRequestFrame: (frame, method, isPreAuth) => {
+        try {
+          gatewaySocket.validateGatewayRequestFrame(
+            frame,
+            method,
+            this.client.maxPayloadBytes,
+            isPreAuth,
+          );
+        } catch (error) {
+          throw normalizeGatewayPayloadError(error);
+        }
+      },
       createRequestError: (error) =>
         new GatewayRequestError({
           code: error.code ?? "UNAVAILABLE",
@@ -419,7 +433,6 @@ export class GatewayBrowserClient {
     // Replace retained identity before consumers can act on a different account.
     this.opts.offlineRecoveryScope = hello.auth?.recoveryScope;
     this.offlineStorageRetired = false;
-    this.maxPayloadBytes = hello.policy?.maxPayload;
     this.initializeInboundActivity(hello);
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;

@@ -152,6 +152,7 @@ export class GatewayPendingRequests {
     params?: unknown,
     options?: GatewayProtocolRequestOptions,
     deferUntilHello = false,
+    validateFrame?: (frame: string) => void,
   ): Promise<T> {
     let id: string;
     try {
@@ -246,6 +247,7 @@ export class GatewayPendingRequests {
       this.pending.set(id, pending);
       try {
         const frame = JSON.stringify({ type: "req", id, method, params });
+        validateFrame?.(frame);
         const send = () => {
           if (
             this.pending.get(id) !== pending ||

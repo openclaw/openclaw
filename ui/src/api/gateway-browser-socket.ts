@@ -7,6 +7,7 @@ import {
 import { gatewayWebSocketTransportUrl, uiDevGatewayResourceUrl } from "../dev-gateway.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { listen } from "../lib/reactive/listener.ts";
+import { GatewayPayloadLimitError } from "./gateway-payload-error.ts";
 
 const BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR_CODE = "BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR";
 export const BROWSER_WEBSOCKET_SECURITY_ERROR_CODE = "BROWSER_WEBSOCKET_SECURITY_ERROR";
@@ -71,6 +72,7 @@ export async function probeGatewayReachability(url: string, signal: AbortSignal)
     return false;
   }
 }
+export { validateGatewayRequestFrame } from "@openclaw/gateway-client/browser";
 
 export function createBrowserGatewaySocket(
   url: string,
@@ -158,13 +160,4 @@ export function createBrowserGatewaySocket(
       finishClose(code ?? 1000, reason ?? "");
     },
   };
-}
-
-export class GatewayPayloadLimitError extends Error {
-  constructor() {
-    super(
-      "Request exceeds the Gateway payload limit. Shorten the message or remove one or more attachments and retry.",
-    );
-    this.name = "GatewayPayloadLimitError";
-  }
 }

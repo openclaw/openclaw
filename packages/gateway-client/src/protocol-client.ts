@@ -8,6 +8,7 @@ import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveSleepDelayMs, RetrySupervisor, sleepWithAbort } from "@openclaw/retry";
 import { GatewayEventListeners } from "./event-listeners.js";
+import { resolveGatewayMaxPayloadBytes, validateGatewayRequestFrame } from "./payload-limits.js";
 import { GatewayPendingRequests, type GatewayProtocolRequestTiming } from "./pending-request.js";
 import type {
   CloseSnapshot,
@@ -67,6 +68,7 @@ export class GatewayProtocolClient<TPlan> {
   private socketOpened = false;
   private helloReceived = false;
   private readyForRequests = false;
+  maxPayloadBytes: number | undefined;
   private connectFailure: GatewayProtocolCloseContext["connectFailure"];
   private connectTiming: ConnectTimingState | null = null;
   private stoppedSocket?: { socket: GatewayProtocolSocket; context: CloseSnapshot };
@@ -151,7 +153,22 @@ export class GatewayProtocolClient<TPlan> {
     if (typeof method !== "string" || method.length === 0) {
       return Promise.reject(new Error("invalid request frame: method must be a non-empty string"));
     }
-    return this.requests.request<T>(socket, method, params, options, !this.readyForRequests);
+    return this.requests.request<T>(
+      socket,
+      method,
+      params,
+      options,
+      !this.readyForRequests && method !== "connect",
+      (frame) => this.validateOutgoingRequestFrame(frame, method, !this.helloReceived),
+    );
+  }
+
+  private validateOutgoingRequestFrame(frame: string, method: string, isPreAuth: boolean): void {
+    if (this.opts.validateRequestFrame) {
+      this.opts.validateRequestFrame(frame, method, isPreAuth);
+      return;
+    }
+    validateGatewayRequestFrame(frame, method, this.maxPayloadBytes, isPreAuth);
   }
 
   addEventListener(listener: (event: EventFrame) => void): () => void {
@@ -405,12 +422,19 @@ export class GatewayProtocolClient<TPlan> {
     };
     this.recordTiming("connect-plan-ready", generation, plan);
     void this.requests
-      .request<HelloOk>(socket, "connect", this.opts.buildConnectParams(plan), {
-        onSent: () => {
-          this.connectRequestSent = true;
-          this.recordTiming("request-sent", generation, plan);
+      .request<HelloOk>(
+        socket,
+        "connect",
+        this.opts.buildConnectParams(plan),
+        {
+          onSent: () => {
+            this.connectRequestSent = true;
+            this.recordTiming("request-sent", generation, plan);
+          },
         },
-      })
+        false,
+        (frame) => this.validateOutgoingRequestFrame(frame, "connect", true),
+      )
       .then((hello) => {
         // Closing transports remain current until their close callback runs;
         // a late response must not publish readiness or reset reconnect backoff.
@@ -418,6 +442,7 @@ export class GatewayProtocolClient<TPlan> {
           return;
         }
         this.helloReceived = true;
+        this.maxPayloadBytes = resolveGatewayMaxPayloadBytes(hello.policy);
         this.requests.setSuspensionPhase(hello.snapshot?.suspension?.phase);
         this.clearHandshakeTimer();
         this.connectFailure = undefined;

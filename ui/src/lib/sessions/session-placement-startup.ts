@@ -4,8 +4,8 @@ import type {
   SessionsDispatchResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
-import { GatewayPayloadLimitError } from "../../api/gateway-browser-socket.ts";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import { GatewayPayloadLimitError } from "../../api/gateway-payload-error.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionRuntimeEnglish } from "../../i18n/locales/en-new-session-runtime.ts";
