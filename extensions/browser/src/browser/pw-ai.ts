@@ -26,6 +26,7 @@ export const pwAi = {
   hasCachedPlaywrightBrowserConnection: session.hasCachedPlaywrightBrowserConnection,
   isBrowserObservedDialogBlockedError: session.isBrowserObservedDialogBlockedError,
   listPagesViaPlaywright: session.listPagesViaPlaywright,
+  prepareHeadlessPasskeyGuard: session.prepareHeadlessPasskeyGuard,
   respondToObservedDialogOnPage: session.respondToObservedDialogOnPage,
   armDialogViaPlaywright: downloads.armDialogViaPlaywright,
   armFileUploadViaPlaywright: downloads.armFileUploadViaPlaywright,

@@ -14,6 +14,7 @@ export {
   ensureContextState,
   getPageForTargetId,
   hasCachedPlaywrightBrowserConnection,
+  prepareHeadlessPasskeyGuard,
   retirePlaywrightBrowserConnectionExact,
 } from "./pw-session-connection.js";
 export {

@@ -56,6 +56,7 @@ import {
   getObservedBrowserStateForPage,
   normalizeCdpUrl,
 } from "./pw-session-state.js";
+import { guardHeadlessContexts } from "./pw-session-webauthn.js";
 import {
   BROWSER_REF_MARKER_ATTRIBUTE,
   readDocumentIdentitiesForPage,
@@ -523,7 +524,7 @@ export async function createPageViaPlaywright(
     signal: opts.signal,
   });
   assertCurrent();
-  const { browser, engine } = await connectBrowser(
+  const { browser, engine, headless } = await connectBrowser(
     opts.cdpUrl,
     opts.cdpPolicy ?? opts.ssrfPolicy,
     undefined,
@@ -559,6 +560,11 @@ export async function createPageViaPlaywright(
   try {
     assertCurrent();
     ensureContextState(context);
+    if (headless) {
+      // An isolated context is new, and its first document may already ask.
+      await guardHeadlessContexts([context]);
+      assertCurrent();
+    }
     page = await context.newPage();
     assertCurrent();
     ensurePageState(page);

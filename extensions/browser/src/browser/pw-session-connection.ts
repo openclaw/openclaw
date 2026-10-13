@@ -1,3 +1,4 @@
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
@@ -49,8 +50,17 @@ import {
   normalizeCdpUrl,
   targetKey,
 } from "./pw-session-state.js";
+import {
+  guardHeadlessContexts,
+  HEADLESS_PASSKEY_GUARD_SOURCE,
+  isHeadlessChromium,
+  refuseHeadlessPasskeyDialogs,
+  waitForPasskeyGuard,
+} from "./pw-session-webauthn.js";
 
 export { pageTargetInfo } from "./pw-session-page-target.js";
+
+const log = createSubsystemLogger("browser").child("webauthn");
 
 export function hasCachedPlaywrightBrowserConnection(cdpUrl: string): boolean {
   return cachedByCdpUrl.has(normalizeCdpUrl(cdpUrl));
@@ -435,21 +445,44 @@ export async function connectBrowser(
           }
           browser = await connectEndpoint(normalized, configuredPin?.lookup);
         }
+        let disconnected = false;
         const onDisconnected = () => {
+          disconnected = true;
           const current = cachedByCdpUrl.get(normalized);
           if (current?.browser === browser) {
             cachedByCdpUrl.delete(normalized);
           }
         };
-        if (resolveBrowserEngine(engine).descriptor.sessionScope === "connection") {
+        // Listen before the awaited setup below, so a browser lost meanwhile is not cached.
+        browser.on("disconnected", onDisconnected);
+        const engineAdapter = resolveBrowserEngine(engine);
+        if (engineAdapter.descriptor.sessionScope === "connection") {
           markConnectionScopedBrowser(browser);
         }
-        const connected: ConnectedBrowser = { browser, cdpUrl: normalized, onDisconnected, engine };
+        // Relay connections drive the user's visible Chrome, which shows its own dialogs.
+        const headless =
+          !relay && engineAdapter.descriptor.id === "chromium"
+            ? await isHeadlessChromium(browser)
+            : false;
+        observeBrowser(browser);
+        if (headless) {
+          // Before any caller can load a document through this connection.
+          await guardHeadlessContexts(browser.contexts());
+        }
+        if (disconnected) {
+          browser.off("disconnected", onDisconnected);
+          throw new Error("Browser disconnected while connecting.");
+        }
+        const connected: ConnectedBrowser = {
+          browser,
+          cdpUrl: normalized,
+          onDisconnected,
+          engine,
+          headless,
+        };
         if (connectingByCdpUrl.get(normalized) === pending) {
           cachedByCdpUrl.set(normalized, connected);
         }
-        browser.on("disconnected", onDisconnected);
-        observeBrowser(browser);
         return connected;
       } catch (err) {
         lastErr = err;
@@ -523,7 +556,11 @@ async function getPageForTargetIdOnce(opts: {
   if (opts.targetId && isBlockedTarget(opts.cdpUrl, opts.targetId)) {
     throw new BlockedBrowserTargetError();
   }
-  const { browser } = await connectBrowser(opts.cdpUrl, opts.ssrfPolicy, opts.relayReference);
+  const { browser, headless } = await connectBrowser(
+    opts.cdpUrl,
+    opts.ssrfPolicy,
+    opts.relayReference,
+  );
   const pages = await getAllPages(browser);
   if (!pages.length) {
     throw new Error("No pages available in the connected browser.");
@@ -541,9 +578,54 @@ async function getPageForTargetIdOnce(opts: {
     : accessible[0];
   if (found) {
     bindRoleRefsTarget(found.page, opts.cdpUrl, found.targetId);
+    if (headless) {
+      // Settled guards are cached; this only re-registers one that failed.
+      void refuseHeadlessPasskeyDialogs(found.page.context());
+    }
     return found.page;
   }
   throw new BrowserTabNotFoundError();
+}
+
+/**
+ * Guard a browser that OpenClaw launched headless before raw CDP opens a tab in
+ * it, and return the page script for that tab's first document.
+ *
+ * Playwright's context script covers the tab's later documents. It cannot be
+ * relied on for the first one: right after a fresh connection, Chrome sometimes
+ * commits a tab another client opened with a URL before Playwright registers
+ * its scripts. The raw CDP caller therefore opens the tab blank and runs the
+ * returned script on its own session first.
+ *
+ * The caller's recorded launch mode decides here; the connection's own
+ * command-line read is left as it is. Waits at most the guard budget: a slower
+ * connect keeps running, is cached for later actions, and then covers the tab.
+ */
+export async function prepareHeadlessPasskeyGuard(opts: {
+  cdpUrl: string;
+  cdpPolicy?: SsrFPolicy;
+  engine?: BrowserEngineId;
+  signal?: AbortSignal;
+}): Promise<{ firstDocumentScript: string }> {
+  const ready = connectBrowser(opts.cdpUrl, opts.cdpPolicy, undefined, opts.engine).then(
+    ({ browser }) => guardHeadlessContexts(browser.contexts()),
+    (err: unknown) => {
+      // Raw CDP can still open the tab; later Playwright actions report the failure.
+      log.warn(
+        `Passkey guard skipped for a new tab: ${redactCdpErrorText(formatErrorMessage(err))}`,
+      );
+    },
+  );
+  await waitForPasskeyGuard(
+    ready,
+    (budgetMs) => {
+      log.warn(
+        `Passkey guard not ready after ${budgetMs} ms; the new tab gets it for its first page now and for later pages once the browser connection is ready.`,
+      );
+    },
+    opts.signal,
+  );
+  return { firstDocumentScript: HEADLESS_PASSKEY_GUARD_SOURCE };
 }
 
 /** Resolve a Playwright page by target id, reconnecting once on stale state. */
