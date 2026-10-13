@@ -74,7 +74,16 @@ export function isProviderModelRerouted(
     allowScopedSnapshot: true,
     allowWorkspaceScopedSnapshot: true,
   });
-  return metadata ? listProviderPolicyOwners(provider, metadata).length > 0 : false;
+  if (!metadata) {
+    return false;
+  }
+  return (
+    listProviderPolicyOwners(provider, metadata).length > 0 ||
+    (metadata.owners.modelCatalogProviders.get(provider) ?? []).some((pluginId) => {
+      const owner = metadata.byPluginId.get(pluginId);
+      return owner?.origin === "bundled" || owner?.trustedOfficialInstall === true;
+    })
+  );
 }
 
 function routeTupleMatches(

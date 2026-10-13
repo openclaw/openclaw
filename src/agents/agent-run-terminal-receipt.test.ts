@@ -142,6 +142,41 @@ describe("isProviderModelRerouted", () => {
         ).toBe(true);
       });
     });
+
+    it.each([
+      { provider: "azure-openai-responses", origin: "bundled" as const, rerouted: true },
+      {
+        provider: "azure-openai-responses",
+        origin: "global" as const,
+        trustedOfficialInstall: true,
+        rerouted: true,
+      },
+      { provider: "partner-chat", origin: "global" as const, rerouted: false },
+    ])(
+      "respects $origin catalog alias ownership for $provider",
+      ({ rerouted, provider, ...owner }) => {
+        const snapshot = createPluginMetadataSnapshotFixture({
+          plugins: [
+            {
+              id: "catalog-owner",
+              providers: ["catalog-provider"],
+              modelCatalog: { aliases: { [provider]: { provider: "catalog-provider" } } },
+              ...owner,
+            },
+          ],
+        });
+        withPluginMetadataSnapshotScope(snapshot, () => {
+          const alias = { provider, model: "team/chat" };
+          expect(
+            isProviderModelRerouted(
+              alias,
+              { ...alias, responseModel: "upstream-model" },
+              declaredConfig(provider, alias.model),
+            ),
+          ).toBe(rerouted);
+        });
+      },
+    );
   });
 
   it.each([
