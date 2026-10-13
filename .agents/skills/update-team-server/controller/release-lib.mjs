@@ -4613,6 +4613,7 @@ try {
       result = readinessWaived || channelsWaived ? "READY_CPU_DEGRADED_OPERATOR_WAIVED" : "READY";
       break;
     }
+    case "suspension-poll-failure":
     case "suspension-prepare-failure": {
       if (args.length !== 2 || args[0] !== "@stdin") reject("invalid suspension failure diagnostic arguments");
       const exit = integer(args[1], "suspension failure exit");
@@ -4629,6 +4630,21 @@ try {
       let payload;
       if (length < bytes.length) {
         try { payload = JSON.parse(bytes.toString("utf8", 0, length)); } catch {}
+      }
+      if (command === "suspension-poll-failure") {
+        // Protocol/authentication refusals remain fatal even when the subprocess
+        // deadline fired. Only transport uncertainty permits another read.
+        const error = payload?.ok === false ? payload.error : undefined;
+        const transport = error?.type === "gateway_transport_error" &&
+          typeof error.message === "string" &&
+          typeof payload.gateway?.url === "string" && typeof payload.gateway?.urlSource === "string" &&
+          (error.code === undefined || Number.isSafeInteger(error.code)) &&
+          (error.reason === undefined || typeof error.reason === "string") &&
+          (error.timeoutMs === undefined || (Number.isSafeInteger(error.timeoutMs) && error.timeoutMs > 0));
+        const transient = (exit === 1 || exit === 124) && transport && (error.kind === "timeout" ||
+          (error.kind === "closed" && [undefined, 1006, 1012].includes(error.code)));
+        result = transient || (exit === 124 && length === 0) ? "retry" : "fatal";
+        break;
       }
       result = "unclassified";
       if (exit === 124) result = "timeout-exit";

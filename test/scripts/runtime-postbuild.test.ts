@@ -2184,6 +2184,12 @@ describe("previous release update compatibility", () => {
     ["config-doctor", "missing"],
     ["native-hook-relay", "present"],
     ["native-hook-relay", "missing"],
+    ["control-ui", "present"],
+    ["control-ui", "missing"],
+    ["control-ui.build-123-fixture", "present"],
+    ["control-ui.build-123-fixture", "missing"],
+    ["control-ui.build-123-fixture.retired", "present"],
+    ["control-ui.build-123-fixture.retired", "missing"],
   ])(
     "excludes the isolated %s graph when the runtime binding is %s",
     async (directory, runtime) => {

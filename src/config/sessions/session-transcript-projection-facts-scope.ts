@@ -33,7 +33,7 @@ export function readSessionTranscriptProjectionReceipt(
   sessionId: string,
 ) {
   const receipt = readCurrentReceipt(database, sessionId);
-  return receipt && structuredClone(receipt.facts);
+  return receipt && structuredClone({ facts: receipt.facts, contextOnly: receipt.contextOnly });
 }
 
 /** Accounting needs row validity, already established by the complete actor postimage. */

@@ -184,18 +184,24 @@ export function retainSessionHistoryWorkerDatabase(
                     options.prepareRead?.();
                     const input = prepare();
                     const projection = projectionTarget(input);
+                    const projectionReceipt = projection?.sessionId
+                      ? readSessionActorProjectionReceipt({
+                          path: database.path,
+                          sessionKey: projection.sessionKey,
+                          sessionId: projection.sessionId,
+                        })
+                      : undefined;
                     owned.nativeSequences.set(requestLane, ++requestLane.nativeSequence);
                     return {
                       ...input,
                       database,
                       validation: validation?.validation,
-                      projectionReceipt: projection?.sessionId
-                        ? readSessionActorProjectionReceipt({
-                            path: database.path,
-                            sessionKey: projection.sessionKey,
-                            sessionId: projection.sessionId,
-                          })
-                        : undefined,
+                      projectionReceipt: projectionReceipt && {
+                        ...projectionReceipt,
+                        ...(input.kind === "history-page" && !projectionReceipt.entrySessionKey
+                          ? { contextOnly: true }
+                          : {}),
+                      },
                     } satisfies SessionTranscriptWorkerRequest;
                   },
                   {

@@ -7,6 +7,9 @@ import {
   readDeferredPluginMigrationsAsync,
   recordDeferredPluginMigrations,
 } from "../../infra/deferred-plugin-migrations.js";
+import { listUpdateRuns } from "../../infra/update-run-reader.js";
+import { renderUpdateRunReport } from "../../infra/update-run-report.js";
+import { updateRunWarningMessages } from "../../infra/update-run-step.js";
 import { loadNodeHostConfig } from "../../node-host/config.js";
 import {
   readPersistedInstalledPluginIndexRowSync,
@@ -42,10 +45,20 @@ describe("update completion ownership", () => {
         reason: "The installed plugin has not confirmed its saved data and settings.",
         command: "openclaw doctor --fix",
       };
-      const warning = formatDeferredPluginMigration(pending);
+      // Each Doctor phase formats with the env its updater gives it.
+      const swapWarning = formatDeferredPluginMigration(pending, {
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+      });
+      const finalPassWarning = formatDeferredPluginMigration(pending, {
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
+      });
+      expect(swapWarning).toContain("Let the current update or repair finish.");
+      expect(finalPassWarning).not.toContain("Let the current update");
+      expect(finalPassWarning).toContain('Run "openclaw doctor --fix" to retry the upgrade.');
       await recordDeferredPluginMigrations({ pending: [pending] });
       await writeScenario("repair", {
-        doctorWarnings: [warning],
+        doctorWarningsByInvocation: [[swapWarning], [finalPassWarning]],
         completeDeferredPluginMigration: pending.pluginId,
       });
       mocks.plugins.mockImplementationOnce(async () => {
@@ -66,10 +79,24 @@ describe("update completion ownership", () => {
       expect(reportedResult("repair")).toMatchObject({
         status: pendingAgain ? "warning" : "ok",
       });
-      expect(reportedResult("repair")).toHaveProperty(
-        "postUpdate.doctor",
-        pendingAgain ? { status: "warning", warnings: [warning] } : { status: "ok" },
+      // Post-plugin convergence reports the still-pending migration once, as a
+      // plugin warning; Doctor's earlier copies are retired.
+      expect(reportedResult("repair")).toHaveProperty("postUpdate.doctor", { status: "ok" });
+      if (pendingAgain) {
+        expect(reportedResult("repair")).toHaveProperty("postUpdate.plugins.warnings", [
+          expect.objectContaining({ pluginId: pending.pluginId, message: finalPassWarning }),
+        ]);
+      }
+      // The earlier warning steps were persisted as reported; the run history and
+      // its rendered report must match the ledger after the final pass.
+      const [run] = listUpdateRuns();
+      expect(run).toMatchObject({ status: "succeeded" });
+      const expectedWarnings = pendingAgain ? [finalPassWarning] : [];
+      expect(updateRunWarningMessages(run?.steps ?? [])).toEqual(expectedWarnings);
+      const reportWarnings = renderUpdateRunReport(run!).lines.filter((line) =>
+        line.startsWith("Warning: "),
       );
+      expect(reportWarnings).toEqual(expectedWarnings.map((warning) => `Warning: ${warning}`));
     },
   );
 

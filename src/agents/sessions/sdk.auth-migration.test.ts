@@ -10,6 +10,7 @@ import { autoMigrateLegacyState } from "../../infra/state-migrations.doctor.js";
 import { inspectLegacyAgentDir } from "../../infra/state-migrations.legacy-sessions.js";
 import type { Model } from "../../llm/types.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../../plugins/legacy-session-surfaces.types.js";
+import { unregisterOpenClawAgentDatabase } from "../../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   inspectOpenClawAgentDatabaseOwner,
@@ -69,7 +70,7 @@ afterEach(() => {
 
 it("keeps a legacy SDK store when Doctor's configured owner differs", async () => {
   await withOpenClawTestState(
-    { label: "sdk-legacy-owner", layout: "split", agentEnv: "clear" },
+    { label: "sdk-legacy-owner", layout: "home", agentEnv: "clear" },
     async (state) => {
       vi.spyOn(os, "homedir").mockReturnValue(state.home);
       const legacyDir = path.join(state.home, ".openclaw", "agent");
@@ -78,6 +79,8 @@ it("keeps a legacy SDK store when Doctor's configured owner differs", async () =
       await writeFile(path.join(legacyDir, "bin", "fd"), "installed SDK tool");
       openOpenClawAgentDatabase({ agentId: "main", env: state.env, path: databasePath });
       await closeOpenClawAgentDatabaseByPathAsync(databasePath);
+      // The legacy standalone SDK fixture predates registry enrollment.
+      unregisterOpenClawAgentDatabase({ agentId: "main", env: state.env, path: databasePath });
       expect(inspectOpenClawAgentDatabaseOwner(databasePath)).toEqual({
         status: "owned",
         agentId: "main",

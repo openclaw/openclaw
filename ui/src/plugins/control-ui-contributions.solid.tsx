@@ -22,7 +22,7 @@ type ContributionsProps = {
   navigationMenus: SidebarMenusController | undefined;
   presented: boolean;
 };
-type ContributionsElement = SolidBridgeElement<ContributionsProps>;
+export type ContributionsElement = SolidBridgeElement<ContributionsProps>;
 
 function PluginContributionsContent(props: ContributionsProps, host: ContributionsElement) {
   const context = useApplication();

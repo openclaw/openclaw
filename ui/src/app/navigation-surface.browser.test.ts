@@ -1,6 +1,7 @@
 import { html, render } from "lit";
 import { afterEach, describe, expect, it } from "vitest";
-import "../components/sidebar-update-card.ts";
+import "../components/sidebar-attention.tsx";
+import "../components/sidebar-update-card.tsx";
 import "../styles.css";
 import { renderFloatingUpdateCard } from "./navigation-surface.ts";
 
@@ -57,6 +58,12 @@ describe.skipIf(!hasBrowserLayout)("navigation surface browser layout", () => {
     const refreshCardHost = document.querySelector<
       HTMLElement & { updateComplete: Promise<boolean> }
     >("openclaw-sidebar-update-card");
+    const attentionHost = document.querySelector<
+      HTMLElement & { updateComplete: Promise<boolean> }
+    >("openclaw-sidebar-attention");
+    await attentionHost?.updateComplete;
+    expect(attentionHost).not.toBeNull();
+    expect(attentionHost?.querySelector(".sidebar-issues-button")).toBeNull();
     await refreshCardHost?.updateComplete;
     const refreshCard = refreshCardHost?.querySelector<HTMLElement>(".sidebar-update-card");
     const buttons = Array.from(
