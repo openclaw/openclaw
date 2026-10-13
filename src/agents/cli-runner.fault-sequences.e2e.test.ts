@@ -523,7 +523,11 @@ describe("CLI runner fault sequences", () => {
         code: "cli_context_overflow",
       },
     ]);
-    expect(supervisorSpawnMock.mock.calls.map(([params]) => params.argv)).toEqual([
+    expect(
+      supervisorSpawnMock.mock.calls.map(([params]) =>
+        params.mode === "child" ? params.argv : params.mode,
+      ),
+    ).toEqual([
       expect.arrayContaining(["--model", PRIMARY_MODEL, "--resume", "source-cli-session"]),
       expect.arrayContaining(["--model", PRIMARY_MODEL, "--session-id"]),
       expect.arrayContaining(["--model", FALLBACK_MODEL]),
