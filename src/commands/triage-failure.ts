@@ -12,6 +12,7 @@ import {
   continueTriageInFreshProcess,
   queueManagedUpdateTriage,
   resolveTriageEntrypoint,
+  TriageAttemptFailedError,
 } from "../infra/triage-continuation.js";
 import {
   cancelManagedServiceUpdateHandoff,
@@ -28,7 +29,7 @@ export async function triageAfterFailure(
   failure: TriageFailureContext,
   signal?: AbortSignal,
   updateResultPath?: string,
-): Promise<void> {
+): Promise<"completed" | "failed" | void> {
   // Exec stamps its descendants. Codex also stamps shells even when its env policy
   // drops inherited variables; neither context should recursively launch a fixing agent.
   if (
@@ -72,6 +73,7 @@ export async function triageAfterFailure(
     );
   };
   let managedStartup = false;
+  let completion: "completed" | "failed" | void = undefined;
   try {
     await withConsoleLogsRoutedToStderr(async () => {
       const resolvedRoot =
@@ -106,7 +108,7 @@ export async function triageAfterFailure(
             "Automatic triage queued after managed update settlement; inspect the handoff log for its result.",
           );
         } else {
-          await continueTriageInFreshProcess({
+          completion = await continueTriageInFreshProcess({
             root,
             commandArgv,
             failure: boundedFailure,
@@ -153,6 +155,9 @@ export async function triageAfterFailure(
       await collectDiagnostics();
     });
   } catch (error) {
+    if (failure.kind === "gateway-startup" && error instanceof TriageAttemptFailedError) {
+      completion = "failed";
+    }
     const reason = scrubDoctorErrorMessage(
       redactSupportString(error instanceof Error ? error.message : String(error), redaction),
     );
@@ -208,4 +213,5 @@ export async function triageAfterFailure(
   runtime.error(
     "Original failure retained; inspect the triage verification evidence before retrying.",
   );
+  return completion;
 }

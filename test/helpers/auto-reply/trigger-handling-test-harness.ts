@@ -8,6 +8,7 @@ import { clearRuntimeAuthProfileStoreSnapshots } from "../../../src/agents/auth-
 import type { EmbeddedAgentQueueMessageOutcome } from "../../../src/agents/embedded-agent-runner/runs.js";
 import { withFastReplyConfig } from "../../../src/auto-reply/reply/get-reply-fast-path.test-support.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../../src/state/openclaw-agent-db-lifecycle.js";
 import { captureEnv } from "../../../src/test-utils/env.js";
 
 // Avoid exporting vitest mock types (TS2742 under pnpm + d.ts emit).
@@ -82,10 +83,16 @@ vi.doMock("../../../src/agents/embedded-agent-runner/runs.js", () => ({
     embeddedAgentMocks.queueEmbeddedAgentMessageWithOutcome(sessionId, text, options),
 }));
 
-vi.doMock("../../../src/agents/embedded-agent-runner/active-run-projections.js", () => ({
-  resolveActiveEmbeddedRunSessionId: (...args: unknown[]) =>
-    embeddedAgentMocks.resolveActiveEmbeddedRunSessionId(...args),
-}));
+vi.doMock(
+  "../../../src/agents/embedded-agent-runner/active-run-projections.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("../../../src/agents/embedded-agent-runner/active-run-projections.js")
+    >()),
+    resolveActiveEmbeddedRunSessionId: (...args: unknown[]) =>
+      embeddedAgentMocks.resolveActiveEmbeddedRunSessionId(...args),
+  }),
+);
 
 const providerUsageMocks = vi.hoisted(() => ({
   loadProviderUsageSummary: vi.fn().mockResolvedValue({
@@ -233,6 +240,7 @@ afterAll(async () => {
   if (!suiteTempHomeRoot) {
     return;
   }
+  await closeOpenClawAgentDatabasesAsync(suiteTempHomeRoot);
   try {
     rmSync(suiteTempHomeRoot, { recursive: true, force: true });
   } catch {
@@ -285,8 +293,9 @@ export function makeCfg(home: string): OpenClawConfig {
         models: {
           "anthropic/claude-haiku-4-5-20251001": {},
           "anthropic/claude-opus-4-7": {},
-          "openai/gpt-4.1-mini": {},
-          "openai/gpt-5.4": {},
+          // Model selections execute through this harness's embedded runner.
+          "openai/gpt-4.1-mini": { agentRuntime: { id: "openclaw" } },
+          "openai/gpt-5.4": { agentRuntime: { id: "openclaw" } },
         },
         workspace: join(home, "openclaw"),
         // Test harness: avoid 1s coalescer idle sleeps that dominate trigger suites.
@@ -294,7 +303,7 @@ export function makeCfg(home: string): OpenClawConfig {
         // Trigger tests assert routing/authorization behavior, not delivery pacing.
         humanDelay: { mode: "off" },
       },
-      list: [{ id: "main", default: true }],
+      entries: { main: {} },
     },
     channels: {
       whatsapp: {

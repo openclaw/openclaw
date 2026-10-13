@@ -163,6 +163,8 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
     runEmbeddedAgent = await loadSharedRunIntegrationHarness();
     const { withOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
     await withOpenClawTestState({ label: "cross-provider-warmup" }, async (warmupState) => {
+      const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+      setRuntimeConfigSnapshot(makeCrossProviderFallbackConfig());
       await warmRunOverflowCompactionHarness(runEmbeddedAgent, warmupState, {
         config: makeCrossProviderFallbackConfig(),
         agentHarnessRuntimeOverride: "openclaw",
@@ -178,6 +180,8 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
     resetSharedRunIntegrationHarnessMocks();
     const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
     state = await createOpenClawTestState({ label: "run.cross-provider-fallback-error-context" });
+    const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+    setRuntimeConfigSnapshot(makeCrossProviderFallbackConfig());
     useCrossProviderAuthFixture();
     mockedGlobalHookRunner.hasHooks.mockImplementation(() => false);
   });
@@ -229,7 +233,9 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
     const promise = runCompactionRemovedFallbackAttempt(state);
 
     await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
-    await expect(promise).rejects.toThrow("⚠️ Agent run failed (model: anthropic/test-model).");
+    await expect(promise).rejects.toThrow(
+      "⚠️ OpenClaw couldn't finish this reply. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow` in your terminal.",
+    );
     expect(mockedIsFailoverAssistantError).toHaveBeenCalledTimes(2);
     expect(getLastFormattedAssistant()).toMatchObject({
       provider: "anthropic",

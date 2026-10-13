@@ -2,54 +2,21 @@
 import { describe, expect, it } from "vitest";
 import { WhatsAppConfigSchema } from "./zod-schema.providers-whatsapp.js";
 
-function expectSchemaAllowlistIssue(
-  schema: {
-    safeParse: (
-      value: unknown,
-    ) =>
-      | { success: true; data: unknown }
-      | { success: false; error: { issues: Array<{ path: PropertyKey[] }> } };
-  },
-  config: unknown,
-  path: string | readonly string[],
-) {
-  const result = schema.safeParse(config);
-  expect(result.success).toBe(false);
-  if (!result.success) {
-    const pathParts = Array.isArray(path) ? path : [path];
+describe('WhatsApp dmPolicy="allowlist" requires non-empty effective allowFrom', () => {
+  it("rejects an allowlist without allowFrom", () => {
+    const result = WhatsAppConfigSchema.safeParse({ dmPolicy: "allowlist" });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toContainEqual(expect.objectContaining({ path: ["allowFrom"] }));
+    }
+  });
+
+  it("accepts an account allowlist when parent allowFrom exists", () => {
     expect(
-      result.error.issues.some((issue) => pathParts.every((part) => issue.path.includes(part))),
+      WhatsAppConfigSchema.safeParse({
+        allowFrom: ["+15550001111"],
+        accounts: { work: { dmPolicy: "allowlist" } },
+      }).success,
     ).toBe(true);
-  }
-}
-
-describe('dmPolicy="allowlist" requires non-empty effective allowFrom', () => {
-  it.each([
-    {
-      name: "whatsapp",
-      schema: WhatsAppConfigSchema,
-      config: { dmPolicy: "allowlist" },
-      issuePath: "allowFrom",
-    },
-  ] as const)(
-    'rejects $name dmPolicy="allowlist" without allowFrom',
-    ({ schema, config, issuePath }) => {
-      expectSchemaAllowlistIssue(schema, config, issuePath);
-    },
-  );
-});
-
-describe('account dmPolicy="allowlist" uses inherited allowFrom', () => {
-  it.each([
-    {
-      name: "whatsapp",
-      schema: WhatsAppConfigSchema,
-      config: { allowFrom: ["+15550001111"], accounts: { work: { dmPolicy: "allowlist" } } },
-    },
-  ] as const)(
-    "accepts $name account allowlist when parent allowFrom exists",
-    ({ schema, config }) => {
-      expect(schema.safeParse(config).success).toBe(true);
-    },
-  );
+  });
 });

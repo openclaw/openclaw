@@ -8,7 +8,8 @@ import {
   type SqliteTranscriptStorageRow,
 } from "./session-accessor.sqlite-read.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
-import { readMessageIdempotencyKey } from "./session-accessor.sqlite-transcript-store.js";
+import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
+import { transcriptEventNavigationSql } from "./transcript-payload.js";
 
 export type IncrementalSuffixIdempotencyMutation = {
   suffixIdentityKeys: readonly (readonly [string, string | null])[];
@@ -62,9 +63,9 @@ export function prepareIncrementalSuffixIdempotencyMutation(params: {
   const extractedKey =
     /* kysely-allow-raw: select the canonical message idempotency key without hydrating prefix events. */
     sql<string>`CASE
-    WHEN json_valid(event.event_json)
-      AND json_type(event.event_json, '$.message.idempotencyKey') = 'text'
-    THEN trim(json_extract(event.event_json, '$.message.idempotencyKey'), ${trimCharacters})
+    WHEN json_valid(${transcriptEventNavigationSql("event")})
+      AND json_type(${transcriptEventNavigationSql("event")}, '$.message.idempotencyKey') = 'text'
+    THEN trim(json_extract(${transcriptEventNavigationSql("event")}, '$.message.idempotencyKey'), ${trimCharacters})
   END`;
   const replacements = executeSqliteQuerySync(
     params.database.db,

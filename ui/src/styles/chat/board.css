@@ -40,6 +40,14 @@
   padding-inline: 16px;
 }
 
+.board-session-surface__board > openclaw-board-view[data-initial-loading] {
+  overflow: hidden;
+}
+
+.board-session-surface__board > openclaw-board-view:defined + openclaw-panel-loading-skeleton {
+  display: none;
+}
+
 .board-session-surface__state {
   display: grid;
   flex: 1 1 0;

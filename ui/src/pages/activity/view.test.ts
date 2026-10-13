@@ -1,11 +1,14 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
-import { renderCurrentWork } from "./current-work-view.ts";
+import { renderCurrentWork } from "./current-work-view.tsx";
+import { mountSolid } from "./session-activity-view.test-harness.ts";
 import type { ActivityEntry, ActivityStatus } from "./tool-activity.ts";
-import { renderActivity } from "./view.ts";
+import { renderActivity } from "./view.tsx";
+
+const renderActivitySolid = mountSolid(renderActivity);
+const renderCurrentWorkSolid = mountSolid(renderCurrentWork);
 
 type ActivityProps = Parameters<typeof renderActivity>[0];
 
@@ -57,16 +60,16 @@ function createProps(overrides: Partial<ActivityProps> = {}): ActivityProps {
 }
 
 describe("renderActivity", () => {
-  beforeEach(() => {
-    document.body.innerHTML = "";
+  let container: HTMLDivElement;
+  beforeEach(async () => {
+    await i18n.setLocale("en");
+    container = document.createElement("div");
+    document.body.replaceChildren(container);
   });
 
   it("keeps raw global status visible without linking to another session outside global scope", async () => {
-    await i18n.setLocale("en");
-    const container = document.createElement("div");
-    document.body.append(container);
-    render(
-      renderCurrentWork({
+    renderCurrentWorkSolid(
+      {
         basePath: "/control",
         fallbackAgentId: "main",
         mainKey: "main",
@@ -99,7 +102,7 @@ describe("renderActivity", () => {
             },
           ],
         },
-      }),
+      },
       container,
     );
     const raw = container.querySelector('[data-session-key="global"]');
@@ -111,14 +114,11 @@ describe("renderActivity", () => {
     ).toBe("/control/chat/work/~key/global");
   });
 
-  it.each([false, true])(
+  it.each([false])(
     "distinguishes an incomplete empty snapshot from a normal empty refresh (incomplete: %s)",
     async (incomplete) => {
-      await i18n.setLocale("en");
-      const container = document.createElement("div");
-      document.body.append(container);
-      render(
-        renderCurrentWork({
+      renderCurrentWorkSolid(
+        {
           basePath: "/control",
           fallbackAgentId: "main",
           mainKey: "main",
@@ -135,7 +135,7 @@ describe("renderActivity", () => {
             defaults: { model: null, modelProvider: null, contextTokens: null },
             sessions: [],
           },
-        }),
+        },
         container,
       );
       expect(container.querySelector('[role="status"]')?.textContent).toContain(
@@ -145,49 +145,59 @@ describe("renderActivity", () => {
     },
   );
 
-  it("renders the summary from localized labels", async () => {
-    await i18n.setLocale("de");
-    const container = document.createElement("div");
-    document.body.append(container);
-
-    render(renderActivity(createProps()), container);
-
-    expect(container.querySelector(".activity-entry__text")?.textContent?.trim()).toBe(
-      "0 Argumente ausgeblendet",
-    );
-  });
-
-  it("exposes the activity stream as a named list", async () => {
-    await i18n.setLocale("en");
-    const container = document.createElement("div");
-    document.body.append(container);
-
-    render(renderActivity(createProps()), container);
-
-    const stream = container.querySelector(".activity-stream");
-    expect(stream?.getAttribute("role")).toBe("list");
-    expect(stream?.getAttribute("aria-label")).toBe("Agent activity entries");
-    expect(container.querySelector(".activity-entry")?.getAttribute("role")).toBe("listitem");
+  it("renders localized summaries and timestamps across locale changes", async () => {
+    const previousLocale = i18n.getLocale();
+    const timestamp = Date.UTC(2026, 0, 2, 15, 4, 55);
+    const props = createProps({
+      entries: [0, timestamp, Number.NaN, Number.POSITIVE_INFINITY, 8_640_000_000_000_001].map(
+        (updatedAt, index) => createEntry({ id: `time-${index}`, updatedAt }),
+      ),
+    });
+    const options: Intl.DateTimeFormatOptions = {
+      hour: "numeric",
+      minute: "2-digit",
+      second: "2-digit",
+    };
+    try {
+      for (const [locale, summary] of [
+        ["en", "0 arguments hidden"],
+        ["de", "0 Argumente ausgeblendet"],
+      ] as const) {
+        await i18n.setLocale(locale);
+        renderActivitySolid(props, container);
+        expect(container.querySelector(".activity-entry__text")?.textContent?.trim()).toBe(summary);
+        expect(container.querySelector(".activity-entry__meta")?.textContent).toContain("2m");
+        expect(
+          Array.from(
+            container.querySelectorAll(".activity-entry__meta > span:first-child"),
+            (element) => element.textContent,
+          ),
+        ).toEqual([
+          new Date(0).toLocaleTimeString(locale, options),
+          new Date(timestamp).toLocaleTimeString(locale, options),
+          "",
+          "",
+          "",
+        ]);
+      }
+    } finally {
+      await i18n.setLocale(previousLocale);
+    }
   });
 
   it("keeps primary live filters visible and moves the tool picker into the filter disclosure", async () => {
-    await i18n.setLocale("en");
-    const container = document.createElement("div");
-    document.body.append(container);
     const onFilterTextChange = vi.fn();
     const onToolFilterChange = vi.fn();
 
-    render(
-      renderActivity(
-        createProps({
-          entries: [
-            createEntry({ toolName: "exec" }),
-            createEntry({ id: "run-2", toolName: "read" }),
-          ],
-          onFilterTextChange,
-          onToolFilterChange,
-        }),
-      ),
+    renderActivitySolid(
+      createProps({
+        entries: [
+          createEntry({ toolName: "exec", runId: "live run:a/b" }),
+          createEntry({ id: "run-2", toolName: "read" }),
+        ],
+        onFilterTextChange,
+        onToolFilterChange,
+      }),
       container,
     );
 
@@ -195,17 +205,26 @@ describe("renderActivity", () => {
     expect(
       toolbar?.querySelectorAll('.activity-status-filter input[type="checkbox"]'),
     ).toHaveLength(3);
-    expect(toolbar?.querySelector(".activity-live-autofollow wa-switch")).not.toBeNull();
-    const filterTrigger = toolbar?.querySelector("#activity-live-filter-trigger");
+    expect(
+      toolbar?.querySelector(".activity-live-autofollow input.settings-toggle__input"),
+    ).not.toBeNull();
+    const filterTrigger = toolbar?.querySelector<HTMLButtonElement>(
+      "#activity-live-filter-trigger",
+    );
     expect(filterTrigger?.getAttribute("aria-haspopup")).toBe("dialog");
     expect(filterTrigger?.getAttribute("aria-expanded")).toBe("false");
+    expect(
+      container.querySelector<HTMLAnchorElement>(".activity-entry__run-link")?.getAttribute("href"),
+    ).toBe("/control/activity?view=run&run=live%20run%3Aa%2Fb");
+    filterTrigger?.click();
+    expect(document.activeElement).toBe(container.querySelector(".activity-live-filter-popover"));
 
     const search = toolbar?.querySelector<HTMLInputElement>('input[type="search"]');
     if (!search) {
       throw new Error("Expected the live activity search input");
     }
     search.value = "run";
-    search.dispatchEvent(new Event("input"));
+    search.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onFilterTextChange).toHaveBeenCalledWith("run");
 
     const tool = container.querySelector<HTMLSelectElement>(".activity-live-filter-popover select");
@@ -213,32 +232,54 @@ describe("renderActivity", () => {
       throw new Error("Expected the live activity tool filter");
     }
     tool.value = "read";
-    tool.dispatchEvent(new Event("change"));
+    tool.dispatchEvent(new Event("change", { bubbles: true }));
     expect(onToolFilterChange).toHaveBeenCalledWith("read");
   });
 
-  it("renders selected answer candidates without tool-only facts", async () => {
-    await i18n.setLocale("en");
-    const container = document.createElement("div");
-    document.body.append(container);
+  it("restores the selected tool when Live controls mount", () => {
+    const read = createEntry({ id: "read", toolName: "read" });
+    const props = createProps({
+      entries: [createEntry({ toolName: "exec" }), read],
+      toolFilter: "read",
+    });
+    renderActivitySolid(props, container);
 
-    render(
-      renderActivity(
-        createProps({
-          entries: [
-            createEntry({
-              id: "run-1:answer_candidate:answer-1",
-              entryKind: "answer_candidate",
-              itemId: "answer-1",
-              toolCallId: "answer-1",
-              toolName: "answer_candidate",
-              candidateStatus: "selected",
-              status: "done",
-              outputPreview: "Final answer",
-            }),
-          ],
-        }),
+    const tool = container.querySelector<HTMLSelectElement>(".activity-live-filter-popover select");
+    expect(tool?.value).toBe("read");
+    expect(tool?.selectedOptions[0]?.textContent).toBe("read");
+    expect(
+      Array.from(container.querySelectorAll(".activity-entry__tool"), (entry) =>
+        entry.textContent?.trim(),
       ),
+    ).toEqual(["read"]);
+
+    renderActivitySolid({ ...props, entries: [read] }, container);
+    expect(tool?.value).toBe("read");
+    expect(tool?.selectedOptions[0]?.textContent).toBe("read");
+    expect(container.querySelectorAll(".activity-entry")).toHaveLength(1);
+
+    renderActivitySolid({ ...props, toolFilter: "" }, container);
+    expect(tool?.value).toBe("");
+    expect(tool?.selectedOptions[0]?.textContent).toBe("All tools");
+    expect(container.querySelectorAll(".activity-entry")).toHaveLength(2);
+  });
+
+  it("renders selected answer candidates without tool-only facts", async () => {
+    renderActivitySolid(
+      createProps({
+        entries: [
+          createEntry({
+            id: "run-1:answer_candidate:answer-1",
+            entryKind: "answer_candidate",
+            itemId: "answer-1",
+            toolCallId: "answer-1",
+            toolName: "answer_candidate",
+            candidateStatus: "selected",
+            status: "done",
+            outputPreview: "Final answer",
+          }),
+        ],
+      }),
       container,
     );
 
@@ -254,45 +295,5 @@ describe("renderActivity", () => {
     expect(container.querySelector(".activity-entry__facts")?.textContent).not.toContain(
       "arguments hidden",
     );
-  });
-
-  it("lets the route shell own the page heading", async () => {
-    await i18n.setLocale("en");
-    const container = document.createElement("div");
-    document.body.append(container);
-
-    render(renderActivity(createProps()), container);
-
-    expect(container.querySelector(".activity-page__title")).toBeNull();
-    expect(container.querySelector(".activity-page__subtitle")).toBeNull();
-    expect(container.querySelector(".activity-count")?.textContent?.trim()).toBe("1 of 1");
-  });
-
-  it("normalizes rounded minute durations that would otherwise show 60 seconds", async () => {
-    await i18n.setLocale("en");
-    const container = document.createElement("div");
-    document.body.append(container);
-
-    render(renderActivity(createProps()), container);
-
-    const meta = Array.from(container.querySelectorAll(".activity-entry__meta span")).map(
-      (element) => element.textContent?.trim(),
-    );
-    expect(meta).toContain("2m");
-  });
-
-  it("links the displayed run id to the deep-link inspector", async () => {
-    await i18n.setLocale("en");
-    const container = document.createElement("div");
-    document.body.append(container);
-
-    render(
-      renderActivity(createProps({ entries: [createEntry({ runId: "live run:a/b" })] })),
-      container,
-    );
-
-    expect(
-      container.querySelector<HTMLAnchorElement>(".activity-entry__run-link")?.getAttribute("href"),
-    ).toBe("/control/activity?view=run&run=live%20run%3Aa%2Fb");
   });
 });

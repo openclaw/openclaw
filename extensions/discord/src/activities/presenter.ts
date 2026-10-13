@@ -10,10 +10,13 @@ const DISCORD_WIDGET_HTML_MAX_BYTES = 48 * 1024;
 type WidgetPresenter = Parameters<OpenClawPluginApi["registerWidgetPresenter"]>[0];
 type WidgetPresenterContext = Parameters<WidgetPresenter["availability"]>[0];
 
-type DiscordWidgetPresenterDeps = {
-  sendComponentMessage?: typeof sendDiscordComponentMessage;
-  now?: () => number;
-};
+const unavailable = () => ({
+  ok: false as const,
+  error: {
+    code: "unavailable" as const,
+    message: "Discord Activities are unavailable for the current channel and account.",
+  },
+});
 
 function resolveDiscordChannelId(context: WidgetPresenterContext): string | undefined {
   const raw =
@@ -52,10 +55,7 @@ function resolveDiscordPresentationRoute(
 }
 
 /** Presents a canonical core widget document in the active Discord channel. */
-export function createDiscordWidgetPresenter(
-  runtime: DiscordActivitiesRuntime,
-  deps: DiscordWidgetPresenterDeps = {},
-): WidgetPresenter {
+export function createDiscordWidgetPresenter(runtime: DiscordActivitiesRuntime): WidgetPresenter {
   return {
     target: "current_channel",
     description: "Post an Activity launch button in the current Discord channel",
@@ -67,26 +67,14 @@ export function createDiscordWidgetPresenter(
     async availability(context) {
       return resolveDiscordPresentationRoute(context, runtime)
         ? { ok: true, value: { available: true } }
-        : {
-            ok: false,
-            error: {
-              code: "unavailable",
-              message: "Discord Activities are unavailable for the current channel and account.",
-            },
-          };
+        : unavailable();
     },
     async present({ context, document, title }) {
       const route = resolveDiscordPresentationRoute(context, runtime);
       if (!route) {
-        return {
-          ok: false,
-          error: {
-            code: "unavailable",
-            message: "Discord Activities are unavailable for the current channel and account.",
-          },
-        };
+        return unavailable();
       }
-      if (title.length > 80) {
+      if (Array.from(title).length > 80) {
         return {
           ok: false,
           error: { code: "presentation_error", message: "title must be 80 characters or fewer" },
@@ -100,7 +88,7 @@ export function createDiscordWidgetPresenter(
         title,
         channelId: route.channelId,
         accountId: route.account.accountId,
-        createdAt: (deps.now ?? Date.now)(),
+        createdAt: Date.now(),
       });
       let result: Awaited<ReturnType<typeof sendDiscordComponentMessage>>;
       let deliveredResult: Awaited<ReturnType<typeof sendDiscordComponentMessage>> | undefined;
@@ -138,7 +126,7 @@ export function createDiscordWidgetPresenter(
         if (!components) {
           throw new Error("Discord widget launch button could not be rendered");
         }
-        result = await (deps.sendComponentMessage ?? sendDiscordComponentMessage)(
+        result = await sendDiscordComponentMessage(
           `channel:${route.channelId}`,
           { ...components, text: title },
           {

@@ -37,9 +37,9 @@ function confirmNodeUpdate() {
 /** Returns a verified private runtime, or null when recovery was declined/unavailable. */
 export async function resolveUpdatedNodeRuntime(
   recoveryRoot,
-  { allowInstall = true, env = process.env } = {},
+  { allowInstall = true, env = process.env, acceptVersion, nodeVersion, installCommand } = {},
 ) {
-  if (env.OPENCLAW_NODE_UPDATE_RESPAWNED === "1") {
+  if (env.OPENCLAW_NODE_UPDATE_RESPAWNED === "1" && !installCommand) {
     return null;
   }
   const privatePaths = { allowMissing: true, trustedRoot: recoveryRoot };
@@ -59,26 +59,30 @@ export async function resolveUpdatedNodeRuntime(
       : path.join(nodeRoot, "bin", "node");
 
   // An earlier explicit opt-in is durable, but an incompatible cache is never trusted.
-  if (isUsableNode(nodePath, { env, trustedRoot: recoveryRoot })) {
+  if (isUsableNode(nodePath, { env, trustedRoot: recoveryRoot, acceptVersion })) {
     return nodePath;
   }
   if (
     !allowInstall ||
-    !process.stdin.isTTY ||
-    !process.stderr.isTTY ||
-    env.CI ||
-    process.argv.some((arg) => ["--non-interactive", "--json", "--yes"].includes(arg)) ||
+    (!installCommand &&
+      (!process.stdin.isTTY ||
+        !process.stderr.isTTY ||
+        env.CI ||
+        process.argv.some((arg) => ["--non-interactive", "--json", "--yes"].includes(arg)))) ||
+    (installCommand && !/^\d+\.\d+\.\d+$/.test(nodeVersion ?? "")) ||
     !canInstallPrivateNode()
   ) {
     return null;
   }
 
-  process.stderr.write(
-    "Install a compatible Node.js for OpenClaw only and retry this command.\n" +
-      "The Node.js installation will not change system Node.js, shell settings, or Gateway services.\n",
-  );
-  if (!(await confirmNodeUpdate())) {
-    return null;
+  if (!installCommand) {
+    process.stderr.write(
+      "Install a compatible Node.js for OpenClaw only and retry this command.\n" +
+        "The Node.js installation will not change system Node.js, shell settings, or Gateway services.\n",
+    );
+    if (!(await confirmNodeUpdate())) {
+      return null;
+    }
   }
 
   const windows = process.platform === "win32";
@@ -101,15 +105,41 @@ export async function resolveUpdatedNodeRuntime(
         "-NodeOnly",
         "-NodePrefix",
         nodeRoot,
+        ...(nodeVersion ? ["-NodeVersion", nodeVersion] : []),
       ]
-    : [installer, "--node-only", "--prefix", prefix];
-  const result = spawnSync(command, args, { stdio: "inherit", env });
-  if (result.status !== 0 || !isUsableNode(nodePath, { env, trustedRoot: recoveryRoot })) {
-    process.stderr.write(
-      "openclaw: Node.js update failed; install a compatible Node.js manually.\n",
-    );
+    : [
+        installer,
+        "--node-only",
+        "--prefix",
+        prefix,
+        ...(nodeVersion ? ["--node-version", nodeVersion] : []),
+      ];
+  const status = installCommand
+    ? await installCommand(command, args, env)
+    : spawnSync(command, args, { stdio: "inherit", env }).status;
+  // The POSIX installer publishes a versioned directory by repointing tools/node.
+  // Re-resolve that published alias through the same trust checks before probing it.
+  const installedRoot =
+    status === 0
+      ? resolveRecoveryPath(path.join(prefix, "tools", "node"), undefined, {
+          trustedRoot: recoveryRoot,
+        })
+      : null;
+  const installedPath =
+    installedRoot && path.join(installedRoot, ...(windows ? ["node.exe"] : ["bin", "node"]));
+  if (
+    !installedPath ||
+    !isUsableNode(installedPath, { env, trustedRoot: recoveryRoot, acceptVersion })
+  ) {
+    if (!installCommand) {
+      process.stderr.write(
+        "openclaw: Node.js update failed; install a compatible Node.js manually.\n",
+      );
+    }
     return null;
   }
-  process.stderr.write("openclaw: Node.js updated. Retrying your command.\n");
-  return nodePath;
+  if (!installCommand) {
+    process.stderr.write("openclaw: Node.js updated. Retrying your command.\n");
+  }
+  return installedPath;
 }

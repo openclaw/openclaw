@@ -19,7 +19,7 @@ import {
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getDeliveryQueueEntryStatus } from "../src/infra/delivery-queue-sqlite.js";
+import { getDeliveryQueueEntryStatus } from "../src/infra/delivery-queue-sqlite.test-support.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "../src/infra/outbound/delivery-queue-media-staging.js";
 
 const MIGRATION_DESCRIPTION = "Bad Request: group chat was upgraded to a supergroup chat";
@@ -193,16 +193,6 @@ describe("Telegram permanent rejection over real Bot API transport", () => {
           expect(
             getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, DELIVERY_INTENT_ID, stateDir),
           ).toBe("failed");
-
-          console.log(
-            `[telegram permanent-rejection proof] ${JSON.stringify({
-              queueTerminal: "failed",
-              restartReplayCount: 0,
-              providerStatus: 400,
-              classification: "typed non-retryable",
-              transport: "grammY Bot API HTTP to 127.0.0.1:<redacted>",
-            })}`,
-          );
         } finally {
           closeOpenClawAgentDatabasesForTest();
           closeOpenClawStateDatabaseForTest();

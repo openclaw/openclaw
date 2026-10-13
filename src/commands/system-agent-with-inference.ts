@@ -8,19 +8,6 @@ import type { BoundVerifySetupInferenceResult } from "../system-agent/setup-infe
 import type { SystemAgentCommandOptions } from "../system-agent/system-agent.js";
 import type { OnboardOptions } from "./onboard-types.js";
 
-type RunSystemAgent = typeof import("../system-agent/system-agent.js").runSystemAgent;
-type VerifySetupInference = (params: {
-  runtime: RuntimeEnv;
-  bindSession: true;
-}) => Promise<BoundVerifySetupInferenceResult>;
-type RunGuidedOnboarding = typeof import("./onboard-guided.js").runGuidedOnboarding;
-
-type SystemAgentWithInferenceDeps = {
-  verifyInference?: VerifySetupInference;
-  runGuidedOnboarding?: RunGuidedOnboarding;
-  runSystemAgent?: RunSystemAgent;
-};
-
 function hasInteractiveTty(opts: SystemAgentCommandOptions): boolean {
   const input = opts.input ?? process.stdin;
   const output = opts.output ?? process.stdout;
@@ -37,7 +24,11 @@ function failOneShotExecution(
   opts: SystemAgentCommandOptions,
   runtime: RuntimeEnv,
   error: unknown,
+  oneShot = true,
 ): void {
+  if (!oneShot) {
+    throw error;
+  }
   const message = formatErrorMessage(error);
   if (opts.json) {
     writeRuntimeJson(runtime, { ok: false, error: message });
@@ -58,7 +49,6 @@ export async function runSystemAgentWithInference(
   opts: SystemAgentCommandOptions = {},
   runtime: RuntimeEnv = defaultRuntime,
   onboardingOptions: Pick<OnboardOptions, "workspace" | "agentName" | "acceptRisk"> = {},
-  deps: SystemAgentWithInferenceDeps = {},
 ): Promise<void> {
   if (opts.yes && !opts.message?.trim()) {
     failOneShotExecution(
@@ -76,30 +66,19 @@ export async function runSystemAgentWithInference(
   }
   let inference: BoundVerifySetupInferenceResult;
   try {
-    const verifyInference =
-      deps.verifyInference ??
-      (await import("../system-agent/setup-inference.js")).verifySetupInference;
+    const { verifySetupInference } = await import("../system-agent/setup-inference.js");
     inference = await withConsoleSubsystemsSuppressed(() =>
-      verifyInference({ runtime, bindSession: true }),
+      verifySetupInference({ runtime, bindSession: true }),
     );
   } catch (error) {
-    if (!oneShot) {
-      throw error;
-    }
-    failOneShotExecution(opts, runtime, error);
-    return;
+    return failOneShotExecution(opts, runtime, error, oneShot);
   }
   if (inference.ok) {
-    const runSystemAgent =
-      deps.runSystemAgent ?? (await import("../system-agent/system-agent.js")).runSystemAgent;
+    const { runSystemAgent } = await import("../system-agent/system-agent.js");
     try {
       await runSystemAgent({ ...opts, verifiedInference: inference.binding }, runtime);
     } catch (error) {
-      if (!oneShot) {
-        throw error;
-      }
-      failOneShotExecution(opts, runtime, error);
-      return;
+      return failOneShotExecution(opts, runtime, error, oneShot);
     }
     if (oneShot) {
       requestExitAfterOneShotOutput(runtime);
@@ -128,7 +107,6 @@ export async function runSystemAgentWithInference(
   }
 
   runtime.log("OpenClaw requires working inference. Starting guided AI setup…");
-  const runGuidedOnboarding =
-    deps.runGuidedOnboarding ?? (await import("./onboard-guided.js")).runGuidedOnboarding;
+  const { runGuidedOnboarding } = await import("./onboard-guided.js");
   await runGuidedOnboarding(onboardingOptions, runtime, { handoffMode: "chat" });
 }

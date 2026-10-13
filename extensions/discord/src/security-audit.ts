@@ -1,4 +1,3 @@
-// Discord plugin module implements security audit behavior.
 import { coerceNativeSetting, normalizeAllowFromList } from "openclaw/plugin-sdk/channel-policy";
 import type {
   DiscordGuildChannelConfig,
@@ -25,10 +24,7 @@ function hasNarrowMemberRestriction(
 ): boolean {
   const users = channel?.users ?? guild.users ?? [];
   const roles = channel?.roles ?? guild.roles ?? [];
-  if ([...users, ...roles].some((entry) => isWildcardEntry(entry))) {
-    return false;
-  }
-  return users.length > 0 || roles.length > 0;
+  return ![...users, ...roles].some(isWildcardEntry) && (users.length > 0 || roles.length > 0);
 }
 
 function listBroadMemberTargetPaths(params: {
@@ -55,22 +51,6 @@ function listBroadMemberTargetPaths(params: {
   return paths.toSorted();
 }
 
-function addDiscordNameBasedEntries(params: {
-  target: Map<string, number>;
-  values: unknown;
-  source: string;
-}) {
-  if (!Array.isArray(params.values)) {
-    return;
-  }
-  const entries = new Set(
-    params.values.map((value) => String(value).trim()).filter(isDiscordMutableAllowEntry),
-  );
-  if (entries.size > 0) {
-    params.target.set(params.source, entries.size);
-  }
-}
-
 export async function collectDiscordSecurityAuditFindings(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -93,6 +73,17 @@ export async function collectDiscordSecurityAuditFindings(params: {
     () => [],
   );
   const discordNameBasedAllowEntries = new Map<string, number>();
+  const addNameBasedEntries = (values: unknown, source: string) => {
+    if (!Array.isArray(values)) {
+      return;
+    }
+    const entries = new Set(
+      values.map((value) => String(value).trim()).filter(isDiscordMutableAllowEntry),
+    );
+    if (entries.size > 0) {
+      discordNameBasedAllowEntries.set(source, entries.size);
+    }
+  };
   const discordPathPrefix =
     params.orderedAccountIds.length > 1 || params.hasExplicitAccountPath
       ? `channels.discord.accounts.${accountId}`
@@ -119,33 +110,23 @@ export async function collectDiscordSecurityAuditFindings(params: {
     }
   }
 
-  addDiscordNameBasedEntries({
-    target: discordNameBasedAllowEntries,
-    values: discordCfg.allowFrom,
-    source: `${discordPathPrefix}.allowFrom`,
-  });
-  addDiscordNameBasedEntries({
-    target: discordNameBasedAllowEntries,
-    values: (discordCfg.dm as { allowFrom?: unknown } | undefined)?.allowFrom,
-    source: `${discordPathPrefix}.dm.allowFrom`,
-  });
-  addDiscordNameBasedEntries({
-    target: discordNameBasedAllowEntries,
-    values: storeAllowFrom,
-    source: "Discord pairing store",
-  });
+  addNameBasedEntries(discordCfg.allowFrom, `${discordPathPrefix}.allowFrom`);
+  const dmAllowFromRaw = (discordCfg.dm as { allowFrom?: unknown } | undefined)?.allowFrom;
+  addNameBasedEntries(dmAllowFromRaw, `${discordPathPrefix}.dm.allowFrom`);
+  addNameBasedEntries(storeAllowFrom, "Discord pairing store");
 
   const guildEntries = (discordCfg.guilds as Record<string, unknown> | undefined) ?? {};
+  let hasAnyUserAllowlist = false;
+  const addUserEntries = (values: unknown, source: string) => {
+    hasAnyUserAllowlist ||= Array.isArray(values) && values.length > 0;
+    addNameBasedEntries(values, source);
+  };
   for (const [guildKey, guildValue] of Object.entries(guildEntries)) {
     if (!guildValue || typeof guildValue !== "object") {
       continue;
     }
     const guild = guildValue as Record<string, unknown>;
-    addDiscordNameBasedEntries({
-      target: discordNameBasedAllowEntries,
-      values: guild.users,
-      source: `${discordPathPrefix}.guilds.${guildKey}.users`,
-    });
+    addUserEntries(guild.users, `${discordPathPrefix}.guilds.${guildKey}.users`);
     const channels = guild.channels;
     if (!channels || typeof channels !== "object") {
       continue;
@@ -155,11 +136,10 @@ export async function collectDiscordSecurityAuditFindings(params: {
         continue;
       }
       const channel = channelValue as Record<string, unknown>;
-      addDiscordNameBasedEntries({
-        target: discordNameBasedAllowEntries,
-        values: channel.users,
-        source: `${discordPathPrefix}.guilds.${guildKey}.channels.${channelKey}.users`,
-      });
+      addUserEntries(
+        channel.users,
+        `${discordPathPrefix}.guilds.${guildKey}.channels.${channelKey}.users`,
+      );
     }
   }
 
@@ -189,52 +169,25 @@ export async function collectDiscordSecurityAuditFindings(params: {
 
   const nativeEnabled = resolveNativeCommandsEnabled({
     providerId: "discord",
-    providerSetting: coerceNativeSetting(
-      (discordCfg.commands as { native?: unknown } | undefined)?.native,
-    ),
+    providerSetting: coerceNativeSetting(discordCfg.commands?.native),
     globalSetting: params.cfg.commands?.native,
   });
   const nativeSkillsEnabled = resolveNativeSkillsEnabled({
     providerId: "discord",
-    providerSetting: coerceNativeSetting(
-      (discordCfg.commands as { nativeSkills?: unknown } | undefined)?.nativeSkills,
-    ),
+    providerSetting: coerceNativeSetting(discordCfg.commands?.nativeSkills),
     globalSetting: params.cfg.commands?.nativeSkills,
   });
   if (!nativeEnabled && !nativeSkillsEnabled) {
     return findings;
   }
 
-  const defaultGroupPolicy = params.cfg.channels?.defaults?.groupPolicy;
-  const groupPolicy =
-    (discordCfg.groupPolicy as string | undefined) ?? defaultGroupPolicy ?? "allowlist";
   const guildsConfigured = Object.keys(guildEntries).length > 0;
-  const hasAnyUserAllowlist = Object.values(guildEntries).some((guild) => {
-    if (!guild || typeof guild !== "object") {
-      return false;
-    }
-    const record = guild as Record<string, unknown>;
-    if (Array.isArray(record.users) && record.users.length > 0) {
-      return true;
-    }
-    const channels = record.channels;
-    if (!channels || typeof channels !== "object") {
-      return false;
-    }
-    return Object.values(channels as Record<string, unknown>).some((channel) => {
-      if (!channel || typeof channel !== "object") {
-        return false;
-      }
-      const channelRecord = channel as Record<string, unknown>;
-      return Array.isArray(channelRecord.users) && channelRecord.users.length > 0;
-    });
-  });
-  const dmAllowFromRaw = (discordCfg.dm as { allowFrom?: unknown } | undefined)?.allowFrom;
   const dmAllowFrom = Array.isArray(dmAllowFromRaw) ? dmAllowFromRaw : [];
   const ownerAllowFromConfigured =
-    normalizeAllowFromList([...dmAllowFrom, ...storeAllowFrom]).length > 0;
+    normalizeAllowFromList([...(discordCfg.allowFrom ?? dmAllowFrom), ...storeAllowFrom]).length >
+    0;
   if (
-    groupPolicy !== "disabled" &&
+    effectiveGroupPolicy !== "disabled" &&
     guildsConfigured &&
     !ownerAllowFromConfigured &&
     !hasAnyUserAllowlist

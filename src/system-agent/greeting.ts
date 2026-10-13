@@ -1,16 +1,15 @@
-// Cached, model-phrased caretaker greetings over deterministic gateway facts.
 import { createHash } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SystemAgentChatQuestion } from "../../packages/gateway-protocol/src/index.js";
-import {
-  CONFIG_AUDIT_MAX_ENTRIES,
-  CONFIG_AUDIT_SCOPE,
-  type ConfigAuditRecord,
-} from "../config/io.audit.js";
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
+import { CONFIG_AUDIT_SCOPE, type ConfigAuditRecord } from "../config/io.audit.js";
 import type { HealthSummary } from "../gateway/health/types.js";
 import { getHealthCache } from "../gateway/server/health-state.js";
-import { createSqliteAuditRecordStore } from "../infra/sqlite-audit-record-store.js";
-import { getUpdateAvailable, type UpdateAvailable } from "../infra/update-startup.js";
+import {
+  createSqliteAuditRecordReader,
+  createSqliteAuditRecordWriter,
+} from "../infra/sqlite-audit-record-store.async.js";
+import { getUpdateAvailable, type UpdateAvailable } from "../infra/update-status-state.js";
 import { formatSystemAgentStartupMessage, type SystemAgentOverview } from "./overview.js";
 
 const SYSTEM_AGENT_GREETING_SCOPE = "system-agent-greeting";
@@ -19,7 +18,6 @@ const SYSTEM_AGENT_GREETING_TIMEOUT_MS = 20_000;
 const SYSTEM_AGENT_GREETING_FAILURE_RETRY_MS = 60_000;
 const SYSTEM_AGENT_GREETING_MAX_CHARS = 700;
 const SYSTEM_AGENT_GREETING_MAX_LINES = 5;
-const CONFIG_AUDIT_PAGE_SIZE = 5;
 const GREETING_STATE_CAS_ATTEMPTS = 4;
 
 export type SystemAgentGreetingFacts = {
@@ -50,13 +48,14 @@ export type SystemAgentGreetingPlanner = (params: {
 }) => Promise<SystemAgentGreetingPlan | null>;
 
 export type SystemAgentGreetingCacheStore = Pick<
-  ReturnType<typeof createSqliteAuditRecordStore<SystemAgentGreetingCacheRecord>>,
-  "compareAndSet" | "latest"
->;
+  ReturnType<typeof createSqliteAuditRecordWriter<SystemAgentGreetingCacheRecord>>,
+  "compareAndSet" | "assertCurrent"
+> &
+  Pick<ReturnType<typeof createSqliteAuditRecordReader<SystemAgentGreetingCacheRecord>>, "latest">;
 
 type SystemAgentGreetingConfigAuditStore = Pick<
-  ReturnType<typeof createSqliteAuditRecordStore<ConfigAuditRecord>>,
-  "latest"
+  ReturnType<typeof createSqliteAuditRecordReader<ConfigAuditRecord>>,
+  "configAuditFacts" | "assertCurrent"
 >;
 
 type SystemAgentGreetingResolution = {
@@ -64,62 +63,48 @@ type SystemAgentGreetingResolution = {
   source: "cache" | "model" | "template";
 };
 
-const greetingFlights = new WeakMap<
-  SystemAgentGreetingCacheStore,
-  Map<string, Promise<SystemAgentGreetingResolution>>
->();
-const greetingFailures = new WeakMap<
-  SystemAgentGreetingCacheStore,
-  { factsHash: string; retryAfter: number }
->();
-let defaultGreetingCache: SystemAgentGreetingCacheStore | undefined;
+const greetingFlights = new WeakMap<object, Map<string, Promise<SystemAgentGreetingResolution>>>();
+const greetingFailures = new WeakMap<object, { factsHash: string; retryAfter: number }>();
+const defaultGreetingCacheKey = {};
 
-function openGreetingCache(env?: NodeJS.ProcessEnv): SystemAgentGreetingCacheStore {
-  return createSqliteAuditRecordStore<SystemAgentGreetingCacheRecord>({
-    scope: SYSTEM_AGENT_GREETING_SCOPE,
-    maxEntries: 1,
-    ...(env ? { env } : {}),
-  });
+export function createSystemAgentGreetingCache(
+  opts: { env?: NodeJS.ProcessEnv; assertCurrent?: () => void } = {},
+): SystemAgentGreetingCacheStore {
+  const options = { ...opts, scope: SYSTEM_AGENT_GREETING_SCOPE, maxEntries: 1 };
+  const reader = createSqliteAuditRecordReader<SystemAgentGreetingCacheRecord>(options);
+  const writer = createSqliteAuditRecordWriter<SystemAgentGreetingCacheRecord>(options);
+  return { ...reader, compareAndSet: writer.compareAndSet };
 }
 
-function getDefaultGreetingCache(): SystemAgentGreetingCacheStore {
-  defaultGreetingCache ??= openGreetingCache();
-  return defaultGreetingCache;
-}
-
-function openConfigAuditStore(env?: NodeJS.ProcessEnv): SystemAgentGreetingConfigAuditStore {
-  return createSqliteAuditRecordStore<ConfigAuditRecord>({
-    scope: CONFIG_AUDIT_SCOPE,
-    maxEntries: CONFIG_AUDIT_MAX_ENTRIES,
-    ...(env ? { env } : {}),
-  });
-}
-
-function tryOr<T>(fallback: T, read: () => T): T {
+async function tryOr<T>(fallback: T, read: () => T | Promise<T>): Promise<T> {
   try {
-    return read();
+    return await read();
   } catch {
     return fallback;
   }
 }
 
-function readGreetingCache(
+async function readGreetingCache(
   store: SystemAgentGreetingCacheStore,
-): SystemAgentGreetingCacheRecord | null {
-  return store.latest({ limit: 1 })[0]?.value ?? null;
+): Promise<SystemAgentGreetingCacheRecord | null> {
+  const records = await store.latest({ limit: 1 });
+  store.assertCurrent();
+  return records[0]?.value ?? null;
 }
 
-function mutateGreetingState(
+async function mutateGreetingState(
   store: SystemAgentGreetingCacheStore,
   mutate: (current: SystemAgentGreetingCacheRecord | null) => SystemAgentGreetingCacheRecord | null,
   createdAt = Date.now(),
-): void {
+): Promise<void> {
   for (let attempt = 0; attempt < GREETING_STATE_CAS_ATTEMPTS; attempt += 1) {
-    const current = readGreetingCache(store);
+    const current = await readGreetingCache(store);
+    store.assertCurrent();
     const next = mutate(current);
+    // Only an acknowledged comparison conflict may repeat preparation.
     if (
       next === current ||
-      store.compareAndSet(SYSTEM_AGENT_GREETING_KEY, current, next, createdAt)
+      (await store.compareAndSet(SYSTEM_AGENT_GREETING_KEY, current, next, createdAt))
     ) {
       return;
     }
@@ -166,48 +151,8 @@ export function systemAgentGreetingChannelHealth(
   return { available: true, degraded: [...degraded].toSorted((a, b) => a.localeCompare(b)) };
 }
 
-function readConfigAuditFacts(
-  store: SystemAgentGreetingConfigAuditStore,
-  lastSeenAuditSequence: number,
-): Pick<SystemAgentGreetingFacts, "auditSequence" | "recentExternalEdit"> {
-  let auditSequence = 0;
-  let beforeSequence: number | undefined;
-  let recentExternalEdit = false;
-  while (true) {
-    const page = store.latest({
-      limit: CONFIG_AUDIT_PAGE_SIZE,
-      ...(beforeSequence === undefined ? {} : { beforeSequence }),
-    });
-    if (beforeSequence === undefined) {
-      auditSequence = page[0]?.sequence ?? 0;
-    }
-    if (page.length === 0) {
-      break;
-    }
-    let reachedWatermark = false;
-    for (const entry of page) {
-      if (entry.sequence <= lastSeenAuditSequence) {
-        reachedWatermark = true;
-        break;
-      }
-      if (entry.value.event === "config.external") {
-        recentExternalEdit = true;
-      }
-    }
-    if (reachedWatermark || page.length < CONFIG_AUDIT_PAGE_SIZE) {
-      break;
-    }
-    const nextBeforeSequence = page.at(-1)?.sequence;
-    if (nextBeforeSequence === undefined || nextBeforeSequence === beforeSequence) {
-      break;
-    }
-    beforeSequence = nextBeforeSequence;
-  }
-  return { auditSequence, recentExternalEdit };
-}
-
 /** Read free facts from process/SQLite snapshots; this function never starts a probe. */
-export function loadSystemAgentGreetingFacts(
+export async function loadSystemAgentGreetingFacts(
   opts: {
     env?: NodeJS.ProcessEnv;
     cacheStore?: SystemAgentGreetingCacheStore;
@@ -216,22 +161,44 @@ export function loadSystemAgentGreetingFacts(
     getUpdateAvailable?: () => UpdateAvailable | null;
     getHealthCache?: () => HealthSummary | null;
   } = {},
-): SystemAgentGreetingFacts {
+): Promise<SystemAgentGreetingFacts> {
   // Facts stay best-effort: a broken snapshot source degrades that fact
   // instead of blocking the welcome.
-  const cache = tryOr<SystemAgentGreetingCacheRecord | null>(null, () =>
-    readGreetingCache(opts.cacheStore ?? opts.openCache?.() ?? openGreetingCache(opts.env)),
+  // Capture both sources before either read yields; pagination keeps the same owner.
+  let cacheStore: SystemAgentGreetingCacheStore | undefined;
+  let auditStore: SystemAgentGreetingConfigAuditStore | undefined;
+  try {
+    cacheStore =
+      opts.cacheStore ?? opts.openCache?.() ?? createSystemAgentGreetingCache({ env: opts.env });
+  } catch {
+    // Unavailable cache state leaves the audit cursor unacknowledged.
+  }
+  try {
+    auditStore =
+      opts.configAuditStore ??
+      createSqliteAuditRecordReader<ConfigAuditRecord>({
+        scope: CONFIG_AUDIT_SCOPE,
+        env: opts.env,
+      });
+  } catch {
+    // Unavailable audit state cannot advance delivery's cursor.
+  }
+  const cache = await tryOr<SystemAgentGreetingCacheRecord | null>(null, () =>
+    cacheStore ? readGreetingCache(cacheStore) : null,
   );
-  const auditFacts = tryOr({ auditSequence: 0, recentExternalEdit: false }, () =>
-    readConfigAuditFacts(
-      opts.configAuditStore ?? openConfigAuditStore(opts.env),
-      cache?.lastSeenAuditSequence ?? 0,
-    ),
+  const auditFacts = await tryOr({ auditSequence: 0, recentExternalEdit: false }, () =>
+    auditStore
+      ? auditStore.configAuditFacts(cache?.lastSeenAuditSequence ?? 0)
+      : { auditSequence: 0, recentExternalEdit: false },
   );
-  const update = tryOr<UpdateAvailable | null>(null, () =>
+  const update = await tryOr<UpdateAvailable | null>(null, () =>
     (opts.getUpdateAvailable ?? getUpdateAvailable)(),
   );
-  const health = tryOr<HealthSummary | null>(null, () => (opts.getHealthCache ?? getHealthCache)());
+  const health = await tryOr<HealthSummary | null>(null, () =>
+    (opts.getHealthCache ?? getHealthCache)(),
+  );
+  cacheStore?.assertCurrent();
+  auditStore?.assertCurrent();
   return {
     updateAvailable: update?.latestVersion ?? null,
     channelHealth: systemAgentGreetingChannelHealth(health),
@@ -251,6 +218,8 @@ export function systemAgentGreetingFactsHash(
     },
     defaultAgentId: overview.defaultAgentId,
     defaultModel: overview.defaultModel ?? null,
+    setupModel: overview.setupModel ?? null,
+    utilityModel: overview.utilityModel ?? null,
     gateway: {
       reachable: overview.gateway.reachable,
       url: overview.gateway.url,
@@ -342,10 +311,10 @@ function requiresDeterministicGreeting(overview: SystemAgentOverview): boolean {
   );
 }
 
-function formatSystemAgentGreetingFallback(
+function resolveSystemAgentGreetingFallback(
   overview: SystemAgentOverview,
   facts: SystemAgentGreetingFacts,
-): string {
+): SystemAgentGreetingResolution {
   const alerts: string[] = [];
   if (facts.updateAvailable) {
     alerts.push(`Update ${facts.updateAvailable} is available.`);
@@ -357,28 +326,12 @@ function formatSystemAgentGreetingFallback(
   }
   // recentExternalEdit is deliberately absent: withHostOwnedAlerts appends the
   // single canonical edit alert to every delivered greeting, template included.
-  return [formatSystemAgentStartupMessage(overview), alerts.join(" ") || undefined]
-    .filter((line): line is string => line !== undefined)
-    .join("\n");
-}
-
-async function withGreetingTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<T>((_resolve, reject) => {
-        timer = setTimeout(() => reject(new Error("system-agent greeting timed out")), timeoutMs);
-        if (typeof timer === "object" && "unref" in timer) {
-          timer.unref();
-        }
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
+  return {
+    text: [formatSystemAgentStartupMessage(overview), alerts.join(" ") || undefined]
+      .filter((line): line is string => line !== undefined)
+      .join("\n"),
+    source: "template",
+  };
 }
 
 async function resolveUncachedSystemAgentGreeting(params: {
@@ -387,37 +340,38 @@ async function resolveUncachedSystemAgentGreeting(params: {
   planner: SystemAgentGreetingPlanner;
   cacheStore: SystemAgentGreetingCacheStore;
   factsHash: string;
+  cacheKey: object;
   at: number;
   timeoutMs?: number;
 }): Promise<SystemAgentGreetingResolution> {
   const timeoutMs = params.timeoutMs ?? SYSTEM_AGENT_GREETING_TIMEOUT_MS;
-  let plan: SystemAgentGreetingPlan | null = null;
+  let plan: SystemAgentGreetingPlan | null;
   try {
     // This is the only metered greeting turn. The single-slot hash keeps unchanged
     // caretaker opens at zero tokens while preserving a model-free rescue path.
-    plan = await withGreetingTimeout(
+    plan = await raceWithTimeout(
       params.planner({ overview: params.overview, facts: params.facts, timeoutMs }),
       timeoutMs,
+      () => null,
+      { ref: false },
     );
   } catch {
     plan = null;
   }
   const text = plan ? normalizeGreetingText(plan.text) : null;
   const groundedText = text && modelGreetingCoversFacts(text, params.facts) ? text : null;
-  if (!groundedText || !plan?.modelRef.trim()) {
+  const modelRef = groundedText ? plan?.modelRef.trim() : undefined;
+  if (!groundedText || !modelRef) {
     // Keep provider outages cheap without writing a template into the model-greeting cache.
-    greetingFailures.set(params.cacheStore, {
+    greetingFailures.set(params.cacheKey, {
       factsHash: params.factsHash,
       retryAfter: params.at + SYSTEM_AGENT_GREETING_FAILURE_RETRY_MS,
     });
-    return {
-      text: formatSystemAgentGreetingFallback(params.overview, params.facts),
-      source: "template",
-    };
+    return resolveSystemAgentGreetingFallback(params.overview, params.facts);
   }
-  greetingFailures.delete(params.cacheStore);
+  greetingFailures.delete(params.cacheKey);
   try {
-    mutateGreetingState(
+    await mutateGreetingState(
       params.cacheStore,
       (current) => {
         // A slower turn for old facts must not replace a newer system-state greeting.
@@ -433,7 +387,7 @@ async function resolveUncachedSystemAgentGreeting(params: {
           lastSeenAuditSequence: current?.lastSeenAuditSequence ?? 0,
           factsHash: params.factsHash,
           text: groundedText,
-          modelRef: plan.modelRef.trim(),
+          modelRef,
           at: params.at,
         };
       },
@@ -442,6 +396,7 @@ async function resolveUncachedSystemAgentGreeting(params: {
   } catch {
     // Cache persistence is diagnostic-only; a successful greeting still wins.
   }
+  params.cacheStore.assertCurrent();
   return { text: groundedText, source: "model" };
 }
 
@@ -452,6 +407,8 @@ type ResolveSystemAgentGreetingParams = {
   /** False for internal session seeding: cache reads stay free and a miss uses the template. */
   allowInference?: boolean;
   cacheStore?: SystemAgentGreetingCacheStore;
+  /** The Gateway session owner retains flight/backoff identity across captured reads. */
+  cacheOwner?: object;
   openCache?: () => SystemAgentGreetingCacheStore;
   now?: () => number;
   timeoutMs?: number;
@@ -461,6 +418,7 @@ export async function resolveSystemAgentGreeting(
   params: ResolveSystemAgentGreetingParams,
 ): Promise<SystemAgentGreetingResolution> {
   const resolution = await resolveSystemAgentGreetingText(params);
+  params.cacheStore?.assertCurrent();
   // Host-owned alerts append at delivery, never into the cache: the cached
   // model text must stay valid for deliveries where the fact is absent.
   return { ...resolution, text: withHostOwnedAlerts(resolution.text, params.facts) };
@@ -472,29 +430,20 @@ async function resolveSystemAgentGreetingText(
   if (requiresDeterministicGreeting(params.overview)) {
     // When the system is broken, precision beats personality: the rescue path
     // must neither depend on nor spend inference, and model text is never cached.
-    return {
-      text: formatSystemAgentGreetingFallback(params.overview, params.facts),
-      source: "template",
-    };
+    return resolveSystemAgentGreetingFallback(params.overview, params.facts);
   }
   let cacheStore: SystemAgentGreetingCacheStore;
   try {
-    cacheStore = params.cacheStore ?? params.openCache?.() ?? getDefaultGreetingCache();
+    cacheStore = params.cacheStore ?? params.openCache?.() ?? createSystemAgentGreetingCache();
   } catch {
-    return {
-      text: formatSystemAgentGreetingFallback(params.overview, params.facts),
-      source: "template",
-    };
+    return resolveSystemAgentGreetingFallback(params.overview, params.facts);
   }
   const factsHash = systemAgentGreetingFactsHash(params.overview, params.facts);
   let cached: SystemAgentGreetingCacheRecord | null;
   try {
-    cached = readGreetingCache(cacheStore);
+    cached = await readGreetingCache(cacheStore);
   } catch {
-    return {
-      text: formatSystemAgentGreetingFallback(params.overview, params.facts),
-      source: "template",
-    };
+    return resolveSystemAgentGreetingFallback(params.overview, params.facts);
   }
   if (
     typeof cached?.text === "string" &&
@@ -506,38 +455,39 @@ async function resolveSystemAgentGreetingText(
     return { text: cached.text, source: "cache" };
   }
   if (params.allowInference === false) {
-    return {
-      text: formatSystemAgentGreetingFallback(params.overview, params.facts),
-      source: "template",
-    };
+    return resolveSystemAgentGreetingFallback(params.overview, params.facts);
   }
 
+  cacheStore.assertCurrent();
+  const cacheKey =
+    params.cacheOwner ??
+    (params.cacheStore || params.openCache ? cacheStore : defaultGreetingCacheKey);
   const at = (params.now ?? Date.now)();
   // This timestamp orders competing model-cache writes; audit acknowledgement uses
   // the monotonic sequence captured with the facts instead of wall-clock time.
-  const failure = greetingFailures.get(cacheStore);
+  const failure = greetingFailures.get(cacheKey);
   if (failure?.factsHash === factsHash && failure.retryAfter > at) {
-    return {
-      text: formatSystemAgentGreetingFallback(params.overview, params.facts),
-      source: "template",
-    };
+    return resolveSystemAgentGreetingFallback(params.overview, params.facts);
   }
   if (failure && failure.retryAfter <= at) {
-    greetingFailures.delete(cacheStore);
+    greetingFailures.delete(cacheKey);
   }
-  let flights = greetingFlights.get(cacheStore);
+  let flights = greetingFlights.get(cacheKey);
   if (!flights) {
     flights = new Map();
-    greetingFlights.set(cacheStore, flights);
+    greetingFlights.set(cacheKey, flights);
   }
   const existingFlight = flights.get(factsHash);
   if (existingFlight) {
-    return existingFlight;
+    const result = await existingFlight;
+    cacheStore.assertCurrent();
+    return result;
   }
   const flight = resolveUncachedSystemAgentGreeting({
     ...params,
     cacheStore,
     factsHash,
+    cacheKey,
     at,
   });
   flights.set(factsHash, flight);
@@ -551,18 +501,19 @@ async function resolveSystemAgentGreetingText(
 }
 
 /** Persist the config-audit cursor only after the host has delivered the greeting. */
-export function acknowledgeSystemAgentGreetingDelivery(params: {
+export async function acknowledgeSystemAgentGreetingDelivery(params: {
   auditSequence: number;
   cacheStore?: SystemAgentGreetingCacheStore;
   openCache?: () => SystemAgentGreetingCacheStore;
   now?: () => number;
-}): void {
+}): Promise<void> {
   if (!Number.isSafeInteger(params.auditSequence) || params.auditSequence < 0) {
     return;
   }
   try {
-    const cacheStore = params.cacheStore ?? params.openCache?.() ?? getDefaultGreetingCache();
-    mutateGreetingState(
+    const cacheStore =
+      params.cacheStore ?? params.openCache?.() ?? createSystemAgentGreetingCache();
+    await mutateGreetingState(
       cacheStore,
       (current) => {
         const lastSeenAuditSequence = Math.max(
@@ -584,16 +535,6 @@ export function acknowledgeSystemAgentGreetingDelivery(params: {
   }
 }
 
-function addQuickAction(
-  options: SystemAgentChatQuestion["options"],
-  option: SystemAgentChatQuestion["options"][number],
-): void {
-  if (options.length >= 4 || options.some((candidate) => candidate.reply === option.reply)) {
-    return;
-  }
-  options.push(option);
-}
-
 /** Quick actions are host-derived so model wording can never invent executable replies. */
 export function buildSystemAgentGreetingQuestion(
   overview: SystemAgentOverview,
@@ -601,23 +542,27 @@ export function buildSystemAgentGreetingQuestion(
 ): SystemAgentChatQuestion {
   const exceptional: SystemAgentChatQuestion["options"] = [];
   if (!overview.config.exists) {
-    addQuickAction(exceptional, { label: "Set up OpenClaw", reply: "setup" });
+    exceptional.push({ label: "Set up OpenClaw", reply: "setup" });
   } else if (!overview.config.valid) {
-    addQuickAction(exceptional, { label: "Inspect config", reply: "doctor" });
+    exceptional.push({ label: "Inspect config", reply: "doctor" });
   } else if (!overview.defaultModel) {
     // A valid config without verified inference cannot hand off to an agent;
     // setup is the canonical path to establish a model.
-    addQuickAction(exceptional, { label: "Set up inference", reply: "setup" });
+    exceptional.push(
+      overview.setupModel
+        ? { label: "Choose agent model", reply: "model setup" }
+        : { label: "Set up inference", reply: "setup" },
+    );
   }
   if (!overview.gateway.reachable) {
-    addQuickAction(exceptional, { label: "Run gateway status", reply: "gateway status" });
-    addQuickAction(exceptional, { label: "Restart gateway", reply: "restart gateway" });
+    exceptional.push({ label: "Run gateway status", reply: "gateway status" });
+    exceptional.push({ label: "Restart gateway", reply: "restart gateway" });
   }
   if (!facts.channelHealth.available || facts.channelHealth.degraded.length > 0) {
-    addQuickAction(exceptional, { label: "Check channel health", reply: "health" });
+    exceptional.push({ label: "Check channel health", reply: "health" });
   }
   if (facts.updateAvailable) {
-    addQuickAction(exceptional, { label: "Show update", reply: "status" });
+    exceptional.push({ label: "Show update", reply: "status" });
   }
   // Keep History and agent handoff reachable even when several exceptional facts compete
   // for the schema's four slots. The greeting itself still names every exceptional fact.
@@ -625,7 +570,7 @@ export function buildSystemAgentGreetingQuestion(
   // Without a model the handoff chip would advertise a dead action; the
   // no-model branch above already routes users to setup instead.
   if (overview.defaultModel) {
-    addQuickAction(options, {
+    options.push({
       label: "Talk to my agent",
       reply: "talk to agent",
       recommended:
@@ -637,7 +582,7 @@ export function buildSystemAgentGreetingQuestion(
         overview.gateway.reachable,
     });
   }
-  addQuickAction(options, {
+  options.push({
     label: facts.recentExternalEdit ? "Review recent changes" : "Show recent changes",
     reply: "audit",
   });

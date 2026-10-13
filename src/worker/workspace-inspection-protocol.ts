@@ -93,7 +93,13 @@ const writeResult = Type.Union([
 ]);
 const resultSchemas = {
   list: Type.Omit(SessionsFilesListResultSchema, ["sessionKey"]),
-  get: Type.Partial(Type.Omit(SessionsFilesGetResultSchema, ["sessionKey"])),
+  get: Type.Object(
+    {
+      ...Type.Partial(Type.Omit(SessionsFilesGetResultSchema, ["sessionKey"])).properties,
+      reason: Type.Optional(Type.Literal("outside_session_boundary")),
+    },
+    { additionalProperties: false },
+  ),
   set: writeResult,
   diff: SessionsDiffResultSchema,
 };

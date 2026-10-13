@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { withTriageTerminal } from "../../commands/triage.test-support.js";
+import * as processAncestors from "../../infra/restart-stale-pids.js";
 import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
@@ -7,7 +8,7 @@ import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { UpdatePreMutationError } from "./shared.js";
 import { handoffUpdateFromGateway } from "./update-command-handoff.js";
-import { createUpdateCommandFailureResult, UpdateCommandFailure } from "./update-command-result.js";
+import { resolveMutableUpdateFailure, UpdateCommandFailure } from "./update-command-result.js";
 import { reportPreMutationUpdateResult } from "./update-command-terminal.js";
 import { withUpdateFailureTriage } from "./update-command-triage.js";
 
@@ -38,6 +39,7 @@ vi.mock("../../commands/configure.shared.js", async (importOriginal) => ({
 let home: TempHomeEnv | undefined;
 afterEach(async () => {
   metadata.unavailable = false;
+  process.exitCode = undefined;
   closeOpenClawStateDatabaseForTest();
   await home?.restore();
   vi.restoreAllMocks();
@@ -66,6 +68,10 @@ it.each(["runtime", "missing updater"] as const)(
           metadata.unavailable = true;
           if (failure === "missing updater") {
             mockProcessPlatform("linux");
+            vi.spyOn(processAncestors, "inspectSelfAndAncestorPidsSync").mockReturnValue({
+              pids: new Set([process.pid, 1]),
+              complete: true,
+            });
             vi.stubEnv("OPENCLAW_SYSTEMD_UNIT", "openclaw-gateway.service");
             try {
               await handoffUpdateFromGateway({
@@ -88,12 +94,15 @@ it.each(["runtime", "missing updater"] as const)(
                 throw cause;
               }
               throw new UpdateCommandFailure(
-                createUpdateCommandFailureResult({
-                  root,
-                  mode: "npm",
-                  durationMs: 0,
-                  failure: { cause, detail: cause.message },
-                }),
+                (
+                  await resolveMutableUpdateFailure({
+                    root,
+                    mode: "npm",
+                    durationMs: 0,
+                    cause,
+                    originalRecovery: async () => undefined,
+                  })
+                ).result,
                 1,
                 cause.message,
               );

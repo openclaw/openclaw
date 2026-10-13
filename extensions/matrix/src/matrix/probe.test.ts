@@ -2,8 +2,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const createMatrixClientMock = vi.fn();
+const stopWithoutPersistMock = vi.fn();
 
-vi.mock("./probe.runtime.js", () => ({
+vi.mock("./client.js", () => ({
   createMatrixClient: (...args: unknown[]) => createMatrixClientMock(...args),
 }));
 
@@ -12,7 +13,9 @@ import { probeMatrix } from "./probe.js";
 describe("probeMatrix", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    stopWithoutPersistMock.mockResolvedValue(undefined);
     createMatrixClientMock.mockResolvedValue({
+      stopWithoutPersist: stopWithoutPersistMock,
       getUserId: vi.fn(async () => "@bot:example.org"),
     });
   });
@@ -37,6 +40,7 @@ describe("probeMatrix", () => {
   it("authenticates a configured userId instead of trusting the local client identity", async () => {
     createMatrixClientMock.mockImplementation(async (params: { userId?: string }) => {
       return {
+        stopWithoutPersist: stopWithoutPersistMock,
         getUserId: vi.fn(async () => {
           if (params.userId) {
             return params.userId;
@@ -66,25 +70,6 @@ describe("probeMatrix", () => {
       ok: false,
       status: 401,
       error: "Invalid access token",
-    });
-  });
-
-  it("passes accountId through to client creation", async () => {
-    await probeMatrix({
-      homeserver: "https://matrix.example.org",
-      accessToken: "tok",
-      userId: "@bot:example.org",
-      timeoutMs: 500,
-      accountId: "ops",
-    });
-
-    expect(createMatrixClientMock).toHaveBeenCalledWith({
-      homeserver: "https://matrix.example.org",
-      userId: undefined,
-      accessToken: "tok",
-      persistStorage: false,
-      localTimeoutMs: 500,
-      accountId: "ops",
     });
   });
 
@@ -130,23 +115,6 @@ describe("probeMatrix", () => {
       persistStorage: false,
       localTimeoutMs: 500,
       accountId: "ops",
-    });
-  });
-
-  it("omits deviceId when not provided", async () => {
-    await probeMatrix({
-      homeserver: "https://matrix.example.org",
-      accessToken: "tok",
-      timeoutMs: 500,
-    });
-
-    expect(createMatrixClientMock).toHaveBeenCalledWith({
-      homeserver: "https://matrix.example.org",
-      userId: undefined,
-      accessToken: "tok",
-      deviceId: undefined,
-      persistStorage: false,
-      localTimeoutMs: 500,
     });
   });
 

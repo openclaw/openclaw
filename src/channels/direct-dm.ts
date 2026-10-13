@@ -6,9 +6,10 @@ import {
   type OutboundReplyPayload,
 } from "../plugin-sdk/reply-payload.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
+import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { buildChannelInboundEventContext } from "./inbound-event/context.js";
 import {
-  resolveChannelInboundRouteEnvelope,
+  createChannelInboundEnvelopeBuilderAsync,
   resolveInboundRouteEnvelopeBuilderWithRuntime,
 } from "./inbound-event/envelope.js";
 import type {
@@ -59,6 +60,8 @@ type DispatchInboundDirectDmParams = {
   channelRuntime?: { inbound?: { buildContext?: unknown } };
   /** Set only after the channel's sender/pairing guard admits this event. */
   inboundAccessAuthorized?: boolean;
+  /** Recheck channel-owned live authority after preparation and at effect initiation. */
+  assertAuthority?: () => void;
   bodyForAgent?: string;
   commandBody?: string;
   provider?: string;
@@ -128,7 +131,7 @@ export async function dispatchInboundDirectDm(params: DispatchInboundDirectDmPar
   route: DirectDmRoute;
   ctxPayload: FinalizedMsgContext;
 }> {
-  const { route, buildEnvelope } = resolveChannelInboundRouteEnvelope({
+  const route = resolveAgentRoute({
     cfg: params.cfg,
     channel: params.channel,
     accountId: params.accountId,
@@ -144,6 +147,7 @@ export async function dispatchInboundDirectDm(params: DispatchInboundDirectDmPar
     : params.channelIngress;
   const boundParams =
     channelIngress === params.channelIngress ? params : { ...params, channelIngress };
+  const buildEnvelope = await createChannelInboundEnvelopeBuilderAsync({ cfg: params.cfg, route });
   const ctxPayload = await buildDirectDmContext(
     boundParams,
     route,
@@ -177,6 +181,7 @@ function buildDirectDmTurnPlan(
     accountId: route.accountId ?? params.accountId,
     route: { agentId: route.agentId, sessionKey: route.sessionKey },
     ctxPayload,
+    assertAuthority: params.assertAuthority,
     record: {
       onRecordError: params.onRecordError,
     },
@@ -194,6 +199,7 @@ function buildDirectDmTurnPlan(
   };
 }
 
+/** @deprecated Use dispatchInboundDirectDm. Retained for released SDK runtime callbacks until the next major. */
 export async function dispatchInboundDirectDmWithRuntime(
   params: Omit<DispatchInboundDirectDmParams, "resolveChannelIngress"> & {
     runtime: PluginRuntime;
@@ -235,9 +241,8 @@ export async function dispatchInboundDirectDmWithRuntime(
     MessageSidFull: params.messageId,
     Timestamp: params.timestamp,
     CommandAuthorized: params.commandAuthorized,
-    ...(params.inboundAccessAuthorized === true ? { InboundAccessAuthorized: true } : {}),
     ...(params.inboundAccessAuthorized === true
-      ? { ConversationRouteContextObserved: true as const }
+      ? { InboundAccessAuthorized: true, ConversationRouteContextObserved: true as const }
       : {}),
     ConversationRoutePeerId: params.peer.id,
     OriginatingChannel: params.originatingChannel ?? params.channel,

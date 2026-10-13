@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import type { AgentDeletionWorkerAuthority } from "../state/agent-deletion-worker.types.js";
 import type { ClawRemoveApplyOptions } from "./lifecycle-remove-contract.js";
 import type { ClawPackageRemovalPhaseResult } from "./package-remove-contract.js";
 import {
@@ -17,9 +18,15 @@ export async function applyClawPackageRemovalPhase(
     agentId: string;
     operationId: string;
     assertCurrent: () => void;
+    assertCurrentFinal?: () => void;
+    assertCurrentAsync?: () => Promise<void>;
+    deletion?: AgentDeletionWorkerAuthority;
   },
 ): Promise<ClawPackageRemovalPhaseResult> {
   const ordered = orderClawPackageRemovals(decisions);
+  if (options.assertCurrentAsync) {
+    await options.assertCurrentAsync();
+  }
   options.assertCurrent();
   const cleanup = normalizeClawPackageCleanup(
     filterReferencedCleanup(options.referencedCleanup, "package"),
@@ -44,6 +51,9 @@ export async function applyClawPackageRemovalPhase(
     expectedPackagePlanDigest: digestClawPackageRemovalPlan(ordered, cleanup),
     cleanup,
   });
+  if (options.assertCurrentAsync) {
+    await options.assertCurrentAsync();
+  }
   options.assertCurrent();
   const expected = ordered.map(({ packageRef }) => [
     packageRef.kind,

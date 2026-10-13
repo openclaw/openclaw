@@ -6,7 +6,10 @@ type SplitMediaFromOutputOptions = {
   extractAudioDirectives?: boolean;
   extractMarkdownImages?: boolean;
   extractMediaDirectives?: boolean;
+  preserveTrailingWhitespace?: boolean;
   markdownImageAllowlist?: readonly string[];
+  /** Observes accepted audio directives after media extraction. */
+  onAudioDirective?: () => void;
 };
 
 /** Splits tool/stdout text into visible text, media attachments, voice tags, and ordered segments. */

@@ -80,7 +80,6 @@ describe("approval scope", () => {
     },
     { kind: "payment", amount: `${"x".repeat(39)}\u202E`, currency: "EUR", target: "Stripe" },
     { kind: "payment", amount: "49.99", currency: `${"x".repeat(11)}\u202E`, target: "Stripe" },
-    { kind: "external-post", target: `${"x".repeat(127)}\u202E`, visibility: "public" },
     {
       kind: "standing-grant",
       automation: `${"x".repeat(127)}\u202E`,

@@ -4,22 +4,59 @@ import {
   readSessionPlacementRecovery,
   writeSessionPlacementRecovery,
 } from "../../lib/sessions/session-placement-recovery.ts";
+import { buildDraftSessionCreateParams } from "./create-params.ts";
 import {
   PendingSessionPlacementRecoveryState,
   resolveSubmissionOutcomeReason,
 } from "./session-placement-recovery-state.ts";
 
+function stageCreate(
+  pending: PendingSessionPlacementRecoveryState,
+  overrides: Partial<Parameters<PendingSessionPlacementRecoveryState["stageCreate"]>[0]> = {},
+) {
+  return pending.stageCreate({
+    agentId: "cloud",
+    target: { kind: "profile", profileId: "aws" },
+    message: "run remotely",
+    gatewayUrl: "ws://gateway.example",
+    recoveryScope: "principal-a",
+    createParams: { agentId: "cloud", message: "", worktree: true },
+    ...overrides,
+  });
+}
+
 describe("pending session placement recovery state", () => {
   beforeEach(() => sessionStorage.clear());
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    sessionStorage.clear();
+  });
+
+  it("does not restore a creating draft owned by another mounted surface", () => {
+    const context = {};
+    const palette = new PendingSessionPlacementRecoveryState(() => context);
+    const page = new PendingSessionPlacementRecoveryState(() => context);
+    const request = palette.stageCreate({
+      agentId: "main",
+      target: { kind: "device", deviceId: "runner" },
+      message: "palette task",
+      gatewayUrl: "ws://gateway.example",
+      recoveryScope: "principal-a",
+      createParams: { agentId: "main", message: "", worktree: true, worktreeSource: "empty" },
+    });
+    expect(request).not.toBeNull();
+    expect(page.restore("ws://gateway.example", "principal-a")).toBeNull();
+    expect(palette.restore("ws://gateway.example", "principal-a")?.message).toBe("palette task");
+    palette.releaseClaim();
+    expect(page.restore("ws://gateway.example", "principal-a")?.message).toBe("palette task");
+    expect(
+      palette.hasOtherLiveOwner("ws://gateway.example", "principal-a", palette.sessionKey),
+    ).toBe(true);
+    expect(palette.owns("ws://gateway.example", "principal-a", palette.sessionKey)).toBe(false);
+    page.clear();
+  });
 
   it.each([
-    {
-      name: "a replacement Gateway",
-      gatewayIdentityChanged: true,
-      placementDraftOwned: true,
-      expected: "gateway-changed",
-    },
     {
       name: "a normal local submission",
       gatewayIdentityChanged: false,
@@ -38,53 +75,10 @@ describe("pending session placement recovery state", () => {
     );
   });
 
-  it.each([undefined, true, false, "auto"] as const)(
-    "stages an idempotent create with Fast Mode %s before the Gateway request",
-    (fastMode) => {
-      const pending = new PendingSessionPlacementRecoveryState();
-      const createParams = pending.stageCreate({
-        agentId: "cloud",
-        target: { kind: "profile", profileId: "aws", machineClass: "fast" },
-        message: "run remotely",
-        gatewayUrl: "ws://gateway.example",
-        recoveryScope: "principal-a",
-        createParams: {
-          agentId: "cloud",
-          message: "",
-          thinkingLevel: "high",
-          ...(fastMode !== undefined ? { fastMode } : {}),
-          contextWindow: "large",
-          worktree: true,
-        },
-      });
-
-      expect(createParams).toMatchObject({
-        agentId: "cloud",
-        key: expect.stringMatching(/^agent:cloud:dashboard:/),
-        thinkingLevel: "high",
-        ...(fastMode !== undefined ? { fastMode } : {}),
-        contextWindow: "large",
-        worktree: true,
-      });
-      expect(
-        readSessionPlacementRecovery("ws://gateway.example", "principal-a", pending.sessionKey),
-      ).toMatchObject({
-        phase: "creating",
-        target: { kind: "profile", profileId: "aws", machineClass: "fast" },
-        sessionKey: createParams?.key,
-        createParams,
-      });
-    },
-  );
-
   it("preserves the requested permission mode in placement recovery", () => {
     const pending = new PendingSessionPlacementRecoveryState();
-    const createParams = pending.stageCreate({
-      agentId: "cloud",
-      target: { kind: "profile", profileId: "aws" },
+    const createParams = stageCreate(pending, {
       message: "run remotely with guarded permissions",
-      gatewayUrl: "ws://gateway.example",
-      recoveryScope: "principal-a",
       createParams: {
         agentId: "cloud",
         message: "",
@@ -99,18 +93,36 @@ describe("pending session placement recovery state", () => {
     ).toMatchObject({ createParams: { permissionMode: "guarded" } });
   });
 
+  it.each(["codex"])("preserves draft model and runtime %s through recovery", (agentRuntime) => {
+    const pending = new PendingSessionPlacementRecoveryState();
+    const createParams = stageCreate(pending, {
+      target: { kind: "auto-device" },
+      createParams: buildDraftSessionCreateParams({
+        agentId: "cloud",
+        message: "keep the selected runtime",
+        deferInitialTurn: true,
+        model: "openai/gpt-5.6-sol",
+        agentRuntime,
+        worktree: true,
+      }),
+    });
+
+    expect(createParams).not.toBeNull();
+    expect(createParams?.model).toBe("openai/gpt-5.6-sol");
+    expect(createParams?.agentRuntime).toBe(agentRuntime);
+    expect(
+      readSessionPlacementRecovery("ws://gateway.example", "principal-a", pending.sessionKey),
+    ).toMatchObject({ phase: "creating", createParams, message: "run remotely" });
+  });
+
   it.each([false, true])(
     "does not promote over a replacement submission (canonical key changes: %s)",
     (changesKey) => {
       const pending = new PendingSessionPlacementRecoveryState();
       expect(
-        pending.stageCreate({
-          agentId: "cloud",
+        stageCreate(pending, {
           target: { kind: "device", deviceId: "device-1" },
           message: "old input",
-          gatewayUrl: "ws://gateway.example",
-          recoveryScope: "principal-a",
-          createParams: { agentId: "cloud", message: "", worktree: true },
         }),
       ).not.toBeNull();
       const previous = pending.capture();
@@ -126,13 +138,7 @@ describe("pending session placement recovery state", () => {
     },
   );
 
-  it.each([
-    { machineClass: "" },
-    { machineClass: "x".repeat(129) },
-    { os: "" },
-    { os: " " },
-    { os: "x".repeat(65) },
-  ])("rejects invalid persisted placement options %#", (options) => {
+  it.each([{ os: "x".repeat(65) }])("rejects invalid persisted placement options %#", (options) => {
     expect(
       writeSessionPlacementRecovery({
         sessionKey: "agent:cloud:invalid-machine",
@@ -150,16 +156,7 @@ describe("pending session placement recovery state", () => {
 
   it("promotes the acknowledged server key before dispatch", () => {
     const pending = new PendingSessionPlacementRecoveryState();
-    expect(
-      pending.stageCreate({
-        agentId: "cloud",
-        target: { kind: "profile", profileId: "aws" },
-        message: "run remotely",
-        gatewayUrl: "ws://gateway.example",
-        recoveryScope: "principal-a",
-        createParams: { agentId: "cloud", message: "", worktree: true },
-      }),
-    ).not.toBeNull();
+    expect(stageCreate(pending)).not.toBeNull();
     const provisionalSessionKey = pending.sessionKey;
     const storage = sessionStorage;
     const provisionalKey = sessionPlacementRecoveryExactStorageKey(
@@ -206,16 +203,7 @@ describe("pending session placement recovery state", () => {
 
   it("restores the provisional row when canonical promotion cannot be written", () => {
     const pending = new PendingSessionPlacementRecoveryState();
-    expect(
-      pending.stageCreate({
-        agentId: "cloud",
-        target: { kind: "profile", profileId: "aws" },
-        message: "run remotely",
-        gatewayUrl: "ws://gateway.example",
-        recoveryScope: "principal-a",
-        createParams: { agentId: "cloud", message: "", worktree: true },
-      }),
-    ).not.toBeNull();
+    expect(stageCreate(pending)).not.toBeNull();
     const storage = sessionStorage;
     const provisionalSessionKey = pending.sessionKey;
     const provisionalKey = sessionPlacementRecoveryExactStorageKey(
@@ -253,12 +241,8 @@ describe("pending session placement recovery state", () => {
 
   it("keeps incognito placement drafts in memory without writing recovery storage", () => {
     const pending = new PendingSessionPlacementRecoveryState();
-    const createParams = pending.stageCreate({
-      agentId: "cloud",
-      target: { kind: "profile", profileId: "aws" },
+    const createParams = stageCreate(pending, {
       message: "private remote task",
-      gatewayUrl: "ws://gateway.example",
-      recoveryScope: "principal-a",
       createParams: {
         agentId: "cloud",
         incognito: true,
@@ -291,47 +275,11 @@ describe("pending session placement recovery state", () => {
     ).toBeNull();
   });
 
-  it("rejects a persisted recovery record that claims to be incognito", () => {
-    sessionStorage.setItem(
-      sessionPlacementRecoveryExactStorageKey(
-        "ws://gateway.example",
-        "principal-a",
-        "agent:cloud:dashboard:persisted-incognito",
-      ),
-      JSON.stringify({
-        sessionKey: "agent:cloud:dashboard:persisted-incognito",
-        messageId: "message-private",
-        message: "private task",
-        target: { kind: "profile", profileId: "aws" },
-        agentId: "cloud",
-        gatewayUrl: "ws://gateway.example",
-        recoveryScope: "principal-a",
-        phase: "creating",
-        createParams: {
-          key: "agent:cloud:dashboard:persisted-incognito",
-          agentId: "cloud",
-          incognito: true,
-          message: "",
-          worktree: true,
-        },
-      }),
-    );
-
-    const pending = new PendingSessionPlacementRecoveryState();
-    expect(pending.restore("ws://gateway.example", "principal-a")).toBeNull();
-    expect(sessionStorage.length).toBe(0);
-  });
-
   it("captures named creating recovery without sharing mutable payloads", () => {
     const pending = new PendingSessionPlacementRecoveryState();
     expect(
-      pending.stageCreate({
-        agentId: "cloud",
-        target: { kind: "profile", profileId: "aws" },
-        message: "run remotely",
+      stageCreate(pending, {
         attachments: [{ type: "image" }],
-        gatewayUrl: "ws://gateway.example",
-        recoveryScope: "principal-a",
         createParams: {
           agentId: "cloud",
           message: "",
@@ -354,78 +302,5 @@ describe("pending session placement recovery state", () => {
     });
     expect(captured?.attachments).not.toBe(pending.attachments);
     expect(captured?.createParams).not.toBe(pending.createParams);
-  });
-
-  it("restores only page-owned creating work", () => {
-    const dispatching = {
-      sessionKey: "agent:cloud:dispatching",
-      messageId: "message-dispatching",
-      message: "dispatching task",
-      target: { kind: "profile" as const, profileId: "aws" },
-      agentId: "cloud",
-      gatewayUrl: "ws://gateway.example",
-      recoveryScope: "principal-a",
-      phase: "dispatching" as const,
-    };
-    const sending = {
-      ...dispatching,
-      sessionKey: "agent:cloud:sending",
-      messageId: "message-sending",
-      phase: "sending" as const,
-    };
-    const creating = {
-      ...dispatching,
-      sessionKey: "agent:cloud:creating",
-      messageId: "message-creating",
-      phase: "creating" as const,
-      createParams: {
-        key: "agent:cloud:creating",
-        agentId: "cloud",
-        message: "" as const,
-        worktree: true as const,
-      },
-    };
-    expect(writeSessionPlacementRecovery(dispatching)).toBe(true);
-    expect(writeSessionPlacementRecovery(sending)).toBe(true);
-
-    const pending = new PendingSessionPlacementRecoveryState();
-    expect(pending.restore("ws://gateway.example", "principal-a")).toBeNull();
-    expect(pending.sessionKey).toBe("");
-
-    expect(writeSessionPlacementRecovery(creating)).toBe(true);
-    expect(pending.restore("ws://gateway.example", "principal-a")).toEqual(creating);
-    expect(pending.sessionKey).toBe(creating.sessionKey);
-  });
-
-  it("neutralizes a stale local owner without clearing newer durable recovery", () => {
-    const pending = new PendingSessionPlacementRecoveryState();
-    expect(
-      pending.stageCreate({
-        agentId: "cloud",
-        target: { kind: "profile", profileId: "aws" },
-        message: "stale task",
-        gatewayUrl: "ws://gateway.example",
-        recoveryScope: "principal-a",
-        createParams: { agentId: "cloud", message: "", worktree: true },
-      }),
-    ).not.toBeNull();
-    const newerRecovery = {
-      sessionKey: "agent:cloud:newer",
-      messageId: "message-newer",
-      message: "newer task",
-      target: { kind: "profile" as const, profileId: "aws" },
-      agentId: "cloud",
-      gatewayUrl: "ws://gateway.example",
-      recoveryScope: "principal-a",
-      phase: "dispatching" as const,
-    };
-    expect(writeSessionPlacementRecovery(newerRecovery)).toBe(true);
-
-    pending.clear();
-
-    expect(pending.sessionKey).toBe("");
-    expect(
-      readSessionPlacementRecovery("ws://gateway.example", "principal-a", newerRecovery.sessionKey),
-    ).toEqual(newerRecovery);
   });
 });

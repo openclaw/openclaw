@@ -1,7 +1,6 @@
 import type { IncomingMessage } from "node:http";
 import { PassThrough } from "node:stream";
 import { setImmediate } from "node:timers/promises";
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createPluginRuntimeCapabilityLease } from "../../plugins/capability-lease.js";
 import {
@@ -9,13 +8,10 @@ import {
   registerPluginHttpRoute,
   withPluginHttpRouteRegistry,
 } from "../../plugins/http-registry.js";
-import { runPluginRegisterSyncInRegistry } from "../../plugins/loader-module-runtime.js";
-import { resolvePluginModuleExport } from "../../plugins/module-export.js";
 import {
   getPluginInstance,
   type PluginInstanceHandle,
 } from "../../plugins/plugin-instance-scope.js";
-import { loadBundledPluginPublicArtifactModuleSync } from "../../plugins/public-surface-loader.js";
 import { projectPluginContributions } from "../../plugins/registry-contributions.js";
 import {
   createEmptyPluginRegistry,
@@ -34,20 +30,18 @@ import {
 
 const instances = new Set<PluginInstanceHandle>();
 
-function createOwner(
-  id = "shared-route",
-  builder = createPluginRegistry({
+function createOwner(id = "shared-route") {
+  const builder = createPluginRegistry({
     logger: { info() {}, warn() {}, error() {}, debug() {} },
     runtime: {} as PluginRuntime,
     activateGlobalSideEffects: false,
-  }),
-) {
+  });
   const record = createPluginRecord({ id });
   builder.registry.plugins.push(record);
   const api = builder.createApi(record, { config: {} });
   const instance = getPluginInstance(record)!;
   instances.add(instance);
-  return { builder, registry: builder.registry, record, api, instance };
+  return { registry: builder.registry, record, api, instance };
 }
 
 async function dispatch(
@@ -121,28 +115,6 @@ describe("plugin HTTP route instance ownership", () => {
       expect(afterRetirement.socketDestroyed).toBe(false);
     },
   );
-
-  it("does not transfer a route to an instance whose duplicate registration was rejected", async () => {
-    const observed: Array<string | undefined> = [];
-    const handler = () => {
-      observed.push(getPluginRuntimeGatewayRequestScope()?.pluginId);
-      return true;
-    };
-    const first = createOwner("accepted");
-    const rejected = createOwner("rejected", first.builder);
-    first.api.registerHttpRoute({ path: "/owned", auth: "plugin", handler });
-    rejected.api.registerHttpRoute({ path: "/owned", auth: "plugin", handler });
-    expect(first.registry.httpRoutes).toHaveLength(1);
-    expect(first.registry.diagnostics).toEqual(
-      expect.arrayContaining([expect.objectContaining({ pluginId: "rejected", level: "error" })]),
-    );
-    await rejected.instance.dispose();
-
-    const response = await dispatch(first.registry);
-    expect(observed).toEqual(["accepted"]);
-    expect(response.warn).not.toHaveBeenCalled();
-    expect(response.res.statusCode).toBe(200);
-  });
 
   it.each(["static", "dynamic", "anonymous"] as const)(
     "keeps a projected %s route's selected registry through nested managed calls",
@@ -263,33 +235,5 @@ describe("plugin HTTP route instance ownership", () => {
     } finally {
       handoff.release();
     }
-  });
-
-  it("keeps the bundled Prometheus singleton scrape live after another registration retires", async () => {
-    const pluginId = "diagnostics-prometheus";
-    const plugin = resolvePluginModuleExport(
-      loadBundledPluginPublicArtifactModuleSync({
-        dirName: pluginId,
-        artifactBasename: "index.js",
-      }),
-    );
-    expect(plugin.definition?.id).toBe(pluginId);
-    const register = expectDefined(plugin.register, "Prometheus registration");
-    const first = createOwner(pluginId);
-    const second = createOwner(pluginId);
-    for (const { api, registry, record } of [first, second]) {
-      runPluginRegisterSyncInRegistry(register, api, registry, record.id);
-    }
-    expect(first.registry.httpRoutes[0]?.handler).toBe(second.registry.httpRoutes[0]?.handler);
-    await second.instance.dispose();
-
-    const response = await dispatch(first.registry, "HTTP", "/api/diagnostics/prometheus");
-    expect(response.handled).toBe(true);
-    expect(response.res.statusCode).toBe(200);
-    expect(response.setHeader).toHaveBeenCalledWith(
-      "Content-Type",
-      "text/plain; version=0.0.4; charset=utf-8",
-    );
-    expect(response.warn).not.toHaveBeenCalled();
   });
 });

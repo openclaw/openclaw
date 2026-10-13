@@ -1,19 +1,13 @@
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { formatMatrixErrorReason } from "../errors.js";
 import type {
   MatrixCryptoBootstrapOptions,
   MatrixCryptoBootstrapResult,
 } from "./crypto-bootstrap.js";
 
-export type MatrixOwnDeviceVerificationStatus = {
-  encryptionEnabled: boolean;
-  userId: string | null;
-  deviceId: string | null;
-  // "verified" is intentionally strict: this device must be trusted through the
-  // Matrix cross-signing identity chain, not merely signed by the owner key.
-  verified: boolean;
-  localVerified: boolean;
-  crossSigningVerified: boolean;
-  signedByOwner: boolean;
+// Own-device "verified" requires the Matrix cross-signing identity chain,
+// not merely a signature from the owner key.
+export type MatrixOwnDeviceVerificationStatus = MatrixDeviceVerificationStatus & {
   recoveryKeyStored: boolean;
   recoveryKeyCreatedAt: string | null;
   recoveryKeyId: string | null;
@@ -91,24 +85,14 @@ export async function resolveMatrixDiagnosticResult<T>(
   promise: Promise<T>,
   timeoutMs: number,
 ): Promise<{ error: unknown; timedOut: boolean; value: T | null }> {
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  try {
-    const guarded = promise
+  return await raceWithTimeout(
+    promise
       .then((value) => ({ error: null, timedOut: false, value }))
-      .catch((error: unknown) => ({ error, timedOut: false, value: null }));
-    const timeout = new Promise<{ error: null; timedOut: true; value: null }>((resolve) => {
-      timeoutId = setTimeout(
-        () => resolve({ error: null, timedOut: true, value: null }),
-        timeoutMs,
-      );
-      timeoutId.unref?.();
-    });
-    return await Promise.race([guarded, timeout]);
-  } finally {
-    if (timeoutId) {
-      clearTimeout(timeoutId);
-    }
-  }
+      .catch((error: unknown) => ({ error, timedOut: false, value: null })),
+    timeoutMs,
+    () => ({ error: null, timedOut: true, value: null }),
+    { ref: false },
+  );
 }
 
 export function isMatrixAccessTokenInvalidatedError(error: unknown): boolean {

@@ -1,7 +1,8 @@
+import "../src/test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it } from "vitest";
+import { assert, describe, expect, it } from "vitest";
 import { runBuiltCli } from "./cli-json-stdout.test-support.js";
 
 describe("cli json stdout contract", () => {
@@ -67,13 +68,10 @@ describe("cli json stdout contract", () => {
       { name: "list", args: ["skills", "list", "--json"] },
       { name: "info", args: ["skills", "info", "fixture", "--json"] },
       { name: "check", args: ["skills", "check", "--json"] },
-      { name: "curator status", args: ["skills", "curator", "status", "--json"] },
-      { name: "curator pin", args: ["skills", "curator", "pin", "fixture", "--json"] },
-      { name: "curator unpin", args: ["skills", "curator", "unpin", "fixture", "--json"] },
-      { name: "curator restore", args: ["skills", "curator", "restore", "fixture", "--json"] },
+      { name: "workshop list", args: ["skills", "workshop", "list", "--json"] },
       {
-        name: "workshop apply",
-        args: ["skills", "workshop", "apply", "fixture-proposal", "--json"],
+        name: "workshop archive",
+        args: ["skills", "workshop", "archive", "fixture", "--json"],
       },
     ].map(({ name, args }) => ({
       name: `${name} after an explicit environment Gateway fails`,
@@ -82,31 +80,14 @@ describe("cli json stdout contract", () => {
       explicitGateway: true,
     })),
     {
-      name: "retired curator mutation",
-      args: ["skills", "curator", "pin", "missing-skill", "--json"],
-      message:
-        "Skill lifecycle curation is retired. The weekly collection review manages the skill collection; pin, unpin, and restore no longer exist.",
-    },
-    {
-      name: "retired curator mutation with parent JSON",
-      args: ["skills", "curator", "--json", "pin", "missing-skill"],
-      message:
-        "Skill lifecycle curation is retired. The weekly collection review manages the skill collection; pin, unpin, and restore no longer exist.",
-    },
-    {
       name: "workshop workspace validation with parent JSON",
       args: ["skills", "--json", "workshop", "list", "--agent", ""],
       message: "--agent must not be blank",
     },
     {
-      name: "workshop mutation",
-      args: ["skills", "workshop", "reject", "missing-proposal", "--json"],
-      message: "Skill proposal not found: missing-proposal",
-    },
-    {
-      name: "workshop inspection",
-      args: ["skills", "workshop", "inspect", "missing-proposal", "--json"],
-      message: "Skill proposal not found: missing-proposal",
+      name: "workshop show",
+      args: ["skills", "workshop", "show", "missing-skill", "--version", "v1", "--json"],
+      message: 'Skill "missing-skill" has no version "v1". Versions: none.',
     },
   ])("returns one canonical JSON document when skills $name fails", async (testCase) => {
     await withTempHome(
@@ -126,18 +107,22 @@ describe("cli json stdout contract", () => {
               : []),
           ].join("\n"),
         )}`;
-        const result = runBuiltCli(tempHome, testCase.args, {
-          NODE_OPTIONS: `--import=${preload}`,
-          OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
-          OPENCLAW_CONFIG_PATH: configPath,
-          OPENCLAW_GATEWAY_PORT: "1",
-          ...("explicitGateway" in testCase
-            ? {
-                OPENCLAW_GATEWAY_URL: "ws://127.0.0.1:9",
-                OPENCLAW_GATEWAY_TOKEN: "fixture-token",
-              }
-            : {}),
-        });
+        const result = runBuiltCli(
+          tempHome,
+          testCase.args,
+          {
+            OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+            OPENCLAW_CONFIG_PATH: configPath,
+            OPENCLAW_GATEWAY_PORT: "1",
+            ...("explicitGateway" in testCase
+              ? {
+                  OPENCLAW_GATEWAY_URL: "ws://127.0.0.1:9",
+                  OPENCLAW_GATEWAY_TOKEN: "fixture-token",
+                }
+              : {}),
+          },
+          { execArgv: [`--import=${preload}`] },
+        );
         const message =
           "remoteMissing" in testCase
             ? [
@@ -155,7 +140,8 @@ describe("cli json stdout contract", () => {
             message,
           },
         });
-        expect(result.stderr).toContain(message);
+        expect(result.stderr).toContain("[openclaw] The CLI command failed.");
+        expect(result.stderr).not.toContain(message);
         expect(result.stderr.length).toBeLessThan(2_048);
       },
       { prefix: "openclaw-skills-json-failure-e2e-" },
@@ -168,20 +154,32 @@ describe("cli json stdout contract", () => {
   ])("keeps skills search nested causes behind debug mode ($name)", async (testCase) => {
     await withTempHome(
       async (tempHome) => {
+        // Match the selected runtime's SyntaxError for the same malformed response.
+        let syntaxError: unknown;
+        try {
+          JSON.parse("not-json");
+        } catch (error) {
+          syntaxError = error;
+        }
+        assert(syntaxError instanceof SyntaxError);
         const preload = `data:text/javascript,${encodeURIComponent(
           'globalThis.fetch = async () => new Response("not-json", { status: 200 });',
         )}`;
-        const result = runBuiltCli(tempHome, ["skills", "search", "fixture"], {
-          NODE_OPTIONS: `--import=${preload}`,
-          OPENCLAW_DEBUG: testCase.debug,
-          OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
-          OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
-        });
+        const result = runBuiltCli(
+          tempHome,
+          ["skills", "search", "fixture"],
+          {
+            OPENCLAW_DEBUG: testCase.debug,
+            OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+            OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
+          },
+          { execArgv: [`--import=${preload}`] },
+        );
 
         expect(result.status, result.stderr).toBe(1);
         expect(result.stdout).toBe("");
         expect(result.stderr).toContain("ClawHub /api/v1/search returned malformed JSON");
-        expect(result.stderr.includes("Unexpected token")).toBe(testCase.includesCause);
+        expect(result.stderr.includes(syntaxError.message)).toBe(testCase.includesCause);
       },
       { prefix: "openclaw-skills-human-failure-e2e-" },
     );

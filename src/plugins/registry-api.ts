@@ -29,7 +29,7 @@ import {
   type PluginTypedHookPolicy,
 } from "./registry-state.js";
 import type { PluginRecord } from "./registry-types.js";
-import type { OpenClawPluginApi, PluginLogger, PluginRegistrationMode } from "./types.js";
+import type { OpenClawPluginApi, PluginRegistrationMode } from "./types.js";
 
 type BoundRegistrars = {
   [K in keyof PluginRegistrars]: PluginRegistrars[K] extends (
@@ -43,15 +43,6 @@ type BoundRegistrars = {
 // Registration exposes these async operations without loading session storage or delivery.
 const loadAttachments = createLazyRuntimeModule(() => import("./host-hook-attachments.js"));
 const loadHookState = createLazyRuntimeModule(() => import("./host-hook-state.js"));
-
-function normalizeLogger(logger: PluginLogger): PluginLogger {
-  return {
-    info: logger.info,
-    warn: logger.warn,
-    error: logger.error,
-    debug: logger.debug,
-  };
-}
 
 function resolvePluginPath(input: string, rootDir: string | undefined): string {
   const trimmed = input.trim();
@@ -69,7 +60,7 @@ export function createPluginApiFactory(
   const { registry, registryParams, getHostCronService, pushDiagnostic } = state;
   const { resolvePluginRuntime, resolveRegisteredChannelRuntime } = runtimeResolver;
 
-  const createApi = (
+  return (
     record: PluginRecord,
     params: {
       config: OpenClawPluginApi["config"];
@@ -92,6 +83,16 @@ export function createPluginApiFactory(
     );
     // SAFETY: Every registrar retains its key and signature with only its leading record bound.
     const { registerChannel, ...bound } = boundRegistrars as BoundRegistrars;
+    const bindCapabilityRegistrar =
+      <T extends { id: string }>(register: (provider: T) => unknown) =>
+      (entry: Parameters<typeof resolveCapabilityProviderRegistration<T>>[0]): void => {
+        register(
+          resolveCapabilityProviderRegistration(
+            entry,
+            registryParams.resolveCapabilityCatalogContext,
+          ),
+        );
+      };
     return buildPluginApi({
       id: record.id,
       name: record.name,
@@ -107,7 +108,12 @@ export function createPluginApiFactory(
         registrationMode === "cli-metadata"
           ? createUnavailableRuntime(registrationMode, record.id)
           : resolvePluginRuntime(record),
-      logger: normalizeLogger(registryParams.logger),
+      logger: {
+        info: registryParams.logger.info,
+        warn: registryParams.logger.warn,
+        error: registryParams.logger.error,
+        debug: registryParams.logger.debug,
+      },
       resolvePath: (input: string) =>
         resolvePluginPath(input, registrationMode === "cli-metadata" ? undefined : record.rootDir),
       handlers: {
@@ -116,27 +122,13 @@ export function createPluginApiFactory(
               ...bound,
               registerHook: (events, handler, opts) =>
                 bound.registerHook(events, handler, opts, params.config, params.pluginConfig),
-              registerSpeechProvider: (entry) => {
-                const provider = resolveCapabilityProviderRegistration(
-                  entry,
-                  registryParams.resolveCapabilityCatalogContext,
-                );
-                bound.registerSpeechProvider(provider);
-              },
-              registerRealtimeTranscriptionProvider: (entry) => {
-                const provider = resolveCapabilityProviderRegistration(
-                  entry,
-                  registryParams.resolveCapabilityCatalogContext,
-                );
-                bound.registerRealtimeTranscriptionProvider(provider);
-              },
-              registerRealtimeVoiceProvider: (entry) => {
-                const provider = resolveCapabilityProviderRegistration(
-                  entry,
-                  registryParams.resolveCapabilityCatalogContext,
-                );
-                bound.registerRealtimeVoiceProvider(provider);
-              },
+              registerSpeechProvider: bindCapabilityRegistrar(bound.registerSpeechProvider),
+              registerRealtimeTranscriptionProvider: bindCapabilityRegistrar(
+                bound.registerRealtimeTranscriptionProvider,
+              ),
+              registerRealtimeVoiceProvider: bindCapabilityRegistrar(
+                bound.registerRealtimeVoiceProvider,
+              ),
               registerNodeInvokePolicy: (policy) =>
                 bound.registerNodeInvokePolicy(policy, params.pluginConfig),
               onConversationBindingResolved: bound.registerConversationBindingResolvedHandler,
@@ -295,6 +287,4 @@ export function createPluginApiFactory(
       },
     });
   };
-
-  return createApi;
 }

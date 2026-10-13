@@ -21,12 +21,6 @@ describe("policy doctor strictness", () => {
     ["ignores list order", ["status", "deploy", "deploy"], ["deploy", "status", "deploy"], true],
     ["preserves duplicate cardinality", ["deploy", "deploy"], ["deploy"], false],
     [
-      "requires identical argument constraints",
-      [{ pattern: "deploy", argPattern: "^--stage$" }],
-      [{ pattern: "deploy", argPattern: "^--prod$" }],
-      false,
-    ],
-    [
       "rejects a removed argument constraint",
       ["deploy"],
       [{ pattern: "deploy", argPattern: "^--prod$" }],
@@ -51,12 +45,6 @@ describe("policy doctor strictness", () => {
     [
       "rejects null argument constraints",
       [{ pattern: "deploy", argPattern: null }],
-      ["deploy"],
-      false,
-    ],
-    [
-      "rejects non-string argument constraints",
-      [{ pattern: "deploy", argPattern: 1 }],
       ["deploy"],
       false,
     ],

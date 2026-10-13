@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   collectStalePluginRuntimeSymlinkHealthFindings,
   removeStalePluginRuntimeSymlinks,
@@ -77,9 +77,14 @@ describe("plugin runtime symlink health findings", () => {
     },
   );
 
-  it.each(["ENOENT", "ENOTDIR"])(
-    "reports and removes dangling links while preserving live shared-cache links (%s)",
-    async (code) => {
+  it.each([
+    { code: "ENOENT", scope: "@slack", hostOwned: false },
+    { code: "ENOTDIR", scope: "@slack", hostOwned: false },
+    { code: "ENOENT", scope: "", hostOwned: false },
+    { code: "ENOENT", scope: "@slack", hostOwned: true },
+  ])(
+    "repairs dangling $scope links only outside host-owned payloads ($code, hostOwned=$hostOwned)",
+    async ({ code, scope, hostOwned }) => {
       if (!(await canCreateDirectorySymlink(tempDir))) {
         return;
       }
@@ -92,12 +97,24 @@ describe("plugin runtime symlink health findings", () => {
         "@slack",
         "web-api",
       );
-      const scopeRoot = path.join(path.dirname(packageRoot), "@slack");
+      const scopeRoot = path.join(path.dirname(packageRoot), scope);
+      const packageName = scope ? `${scope}/web-api` : "web-api";
       const staleLink = path.join(scopeRoot, "web-api");
       const liveTarget = path.join(legacyRoot, "openclaw-live", "node_modules", "@slack", "bolt");
       const liveLink = path.join(scopeRoot, "bolt");
 
       await fs.mkdir(packageRoot, { recursive: true });
+      if (hostOwned) {
+        await fs.writeFile(
+          path.join(packageRoot, "openclaw-install-owner.json"),
+          JSON.stringify({
+            schemaVersion: 1,
+            owner: "macos-app",
+            displayName: "OpenClaw.app",
+            updateHint: "Update OpenClaw.app to update this Gateway.",
+          }),
+        );
+      }
       await fs.mkdir(scopeRoot, { recursive: true });
       await fs.mkdir(liveTarget, { recursive: true });
       await fs.writeFile(path.join(liveTarget, "package.json"), '{"name":"live-runtime"}\n');
@@ -106,12 +123,28 @@ describe("plugin runtime symlink health findings", () => {
       }
       await fs.symlink(missingTarget, staleLink, "dir");
       await fs.symlink(liveTarget, liveLink, "dir");
+      const packageDirectory = path.join(path.dirname(packageRoot), "ordinary-package");
+      const nestedLink = path.join(packageDirectory, "nested-stale-link");
+      await fs.mkdir(packageDirectory);
+      await fs.symlink(missingTarget, nestedLink, "dir");
+
+      if (hostOwned) {
+        expect(await collectStalePluginRuntimeSymlinkHealthFindings({ packageRoot })).toEqual([]);
+        expect(await removeStalePluginRuntimeSymlinks(packageRoot)).toEqual({
+          changes: [],
+          warnings: [],
+        });
+        await expectSymlinkPresent(staleLink);
+        await expectSymlinkPresent(liveLink);
+        await expectSymlinkPresent(nestedLink);
+        return;
+      }
 
       expect(await collectStalePluginRuntimeSymlinkHealthFindings({ packageRoot })).toEqual([
         {
           checkId: "core/doctor/stale-plugin-runtime-symlinks",
           severity: "warning",
-          message: `Stale plugin-runtime symlink @slack/web-api points at ${missingTarget}.`,
+          message: `Stale plugin-runtime symlink ${packageName} points at ${missingTarget}.`,
           path: staleLink,
           target: staleLink,
           requirement: "stale-plugin-runtime-symlink-removed",
@@ -126,9 +159,76 @@ describe("plugin runtime symlink health findings", () => {
       });
       await expect(fs.lstat(staleLink)).rejects.toMatchObject({ code: "ENOENT" });
       await expectSymlinkPresent(liveLink);
+      await expectSymlinkPresent(nestedLink);
       expect(await fs.readFile(path.join(liveLink, "package.json"), "utf8")).toBe(
         '{"name":"live-runtime"}\n',
       );
+    },
+  );
+
+  it.each(["symlink", "file", "target"] as const)(
+    "preserves a %s restored during dangling alias inspection",
+    async (replacement) => {
+      if (!(await canCreateDirectorySymlink(tempDir))) {
+        return;
+      }
+      const packageRoot = path.join(tempDir, "prefix", "node_modules", "openclaw");
+      const staleLink = path.join(path.dirname(packageRoot), "runtime");
+      const originalLink = path.join(tempDir, "original-alias");
+      const missingTarget = path.join(tempDir, "plugin-runtime-deps", "missing");
+      const liveTarget = path.join(tempDir, "live-package");
+      const contents = '{"name":"replacement-package"}\n';
+      await fs.mkdir(packageRoot, { recursive: true });
+      await fs.mkdir(liveTarget);
+      await fs.writeFile(path.join(liveTarget, "package.json"), contents);
+      await fs.symlink(missingTarget, staleLink, "dir");
+
+      const stat = fs.stat.bind(fs);
+      let replaced = false;
+      const inspection = vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
+        try {
+          return await stat(...args);
+        } catch (error) {
+          if (String(args[0]) === staleLink && !replaced) {
+            expect(error).toMatchObject({ code: "ENOENT" });
+            replaced = true;
+            if (replacement === "target") {
+              await fs.mkdir(missingTarget, { recursive: true });
+              await fs.writeFile(path.join(missingTarget, "package.json"), contents);
+            } else {
+              // Retain the old inode so the replacement cannot reuse its identity.
+              await fs.rename(staleLink, originalLink);
+              if (replacement === "symlink") {
+                await fs.symlink(liveTarget, staleLink, "dir");
+              } else {
+                await fs.writeFile(staleLink, contents);
+              }
+            }
+          }
+          throw error;
+        }
+      });
+      try {
+        const result = await removeStalePluginRuntimeSymlinks(packageRoot);
+        expect(replaced).toBe(true);
+        expect(result.changes).toEqual([]);
+        expect(result.warnings).toEqual([
+          expect.stringContaining(`Failed to remove stale plugin-runtime symlink ${staleLink}:`),
+        ]);
+        if (replacement === "file") {
+          expect(await fs.readFile(staleLink, "utf8")).toBe(contents);
+        } else {
+          expect(await fs.readlink(staleLink)).toBe(
+            replacement === "target" ? missingTarget : liveTarget,
+          );
+          expect(await fs.readFile(path.join(staleLink, "package.json"), "utf8")).toBe(contents);
+        }
+        if (replacement !== "target") {
+          expect(await fs.readlink(originalLink)).toBe(missingTarget);
+        }
+      } finally {
+        inspection.mockRestore();
+      }
     },
   );
 });

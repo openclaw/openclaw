@@ -24,7 +24,6 @@ type HardeningCase = {
   shellCommand?: string | null;
   withPathToken?: boolean;
   expectedArgv: (ctx: { pathToken: PathTokenSetup | null }) => string[];
-  expectedArgvChanged?: boolean;
   expectedCmdText?: string;
   checkRawCommandMatchesArgv?: boolean;
   expectedCommandPreview?: string | null;
@@ -252,10 +251,10 @@ function withScriptOperandPlanFixture<T>(
   return run(fixture, tmp);
 }
 
-const DENIED_RUNTIME_APPROVAL = {
+const DENIED_RUNTIME_APPROVAL = expect.objectContaining({
   ok: false,
-  message: "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
-} as const;
+  reason: "unsupported-command-shape",
+});
 
 function runNamedCase(name: string, run: () => void) {
   try {
@@ -411,7 +410,6 @@ describe("hardenApprovedExecutionPaths", () => {
       argv: ["env", "tr", "a", "b"],
       shellCommand: null,
       expectedArgv: () => ["env", "tr", "a", "b"],
-      expectedArgvChanged: false,
     },
     {
       name: "pins direct PATH-token executable during approval hardening",
@@ -420,7 +418,6 @@ describe("hardenApprovedExecutionPaths", () => {
       shellCommand: null,
       withPathToken: true,
       expectedArgv: ({ pathToken }) => [requirePathToken(pathToken).expected, "SAFE"],
-      expectedArgvChanged: true,
     },
     {
       name: "preserves env-wrapper PATH-token argv during approval hardening",
@@ -429,7 +426,6 @@ describe("hardenApprovedExecutionPaths", () => {
       shellCommand: null,
       withPathToken: true,
       expectedArgv: () => ["env", "poccmd", "SAFE"],
-      expectedArgvChanged: false,
     },
     {
       name: "rawCommand matches hardened argv after executable path pinning",
@@ -491,9 +487,6 @@ describe("hardenApprovedExecutionPaths", () => {
             throw new Error("unreachable");
           }
           expect(hardened.argv).toEqual(testCase.expectedArgv({ pathToken }));
-          if (typeof testCase.expectedArgvChanged === "boolean") {
-            expect(hardened.argvChanged).toBe(testCase.expectedArgvChanged);
-          }
         };
 
         if (testCase.withPathToken) {

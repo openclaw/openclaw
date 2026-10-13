@@ -1,11 +1,15 @@
+import {
+  captureDeliveryQueueStateContext,
+  type DeliveryQueueStateContext,
+} from "../infra/delivery-queue-state-context.js";
 import type { RestartSentinelPayload } from "../infra/restart-sentinel.js";
 import { isPendingControlPlaneUpdateRestartSentinel } from "../infra/update-control-plane-sentinel.js";
+import { getUpdateRunAsync as getUpdateRun } from "../infra/update-run-reader.js";
 import {
-  finishUpdateRun,
-  getUpdateRun,
-  recordUpdateRunPhase,
-  recordUpdateRunVerification,
-} from "../infra/update-run-ledger.js";
+  finishUpdateRunAsync as finishUpdateRun,
+  recordUpdateRunPhaseAsync as recordUpdateRunPhase,
+  recordUpdateRunVerificationAsync as recordUpdateRunVerification,
+} from "../infra/update-run-write.async.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../version.js";
 
@@ -13,30 +17,37 @@ import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../v
 export async function finalizeRestartUpdateRun(
   payload: RestartSentinelPayload,
   pendingExpired = false,
+  context: DeliveryQueueStateContext = captureDeliveryQueueStateContext(),
 ) {
+  const options = { env: context.workerContext.environment };
   const updateRunId = payload.stats?.runId;
-  let updateRun = updateRunId ? getUpdateRun(updateRunId) : undefined;
+  let updateRun = updateRunId ? await getUpdateRun(updateRunId, options) : undefined;
   if (updateRun?.status === "running") {
     if (!updateRun.origin.sessionKey && payload.sessionKey) {
-      updateRun = recordUpdateRunPhase(updateRun.runId, updateRun.phase, {
-        origin: {
-          sessionKey: payload.sessionKey,
-          ...(payload.deliveryContext
-            ? {
-                deliveryContext: {
-                  ...payload.deliveryContext,
-                  threadId: payload.threadId,
-                },
-              }
-            : {}),
+      updateRun = await recordUpdateRunPhase(
+        updateRun.runId,
+        updateRun.phase,
+        {
+          origin: {
+            sessionKey: payload.sessionKey,
+            ...(payload.deliveryContext
+              ? {
+                  deliveryContext: {
+                    ...payload.deliveryContext,
+                    threadId: payload.threadId,
+                  },
+                }
+              : {}),
+          },
         },
-      });
+        options,
+      );
     }
     if (
       updateRun.status === "running" &&
       (updateRun.phase === "restarting" || updateRun.phase === "verifying")
     ) {
-      updateRun = recordUpdateRunPhase(updateRun.runId, "verifying");
+      updateRun = await recordUpdateRunPhase(updateRun.runId, "verifying", {}, options);
     }
     const runningVersion = resolveRuntimeServiceVersion();
     const runningBuildId = resolveRuntimeServiceBuildId();
@@ -66,7 +77,7 @@ export async function finalizeRestartUpdateRun(
     const pluginErrors = getActivePluginRegistry()
       ?.diagnostics.filter((entry) => entry.level === "error")
       .map((entry) => entry.message);
-    updateRun = recordUpdateRunVerification(
+    updateRun = await recordUpdateRunVerification(
       updateRun.runId,
       {
         booted: true,
@@ -84,11 +95,18 @@ export async function finalizeRestartUpdateRun(
         ...(pluginErrors ? { pluginErrors } : {}),
         ...(payload.doctorHint ? { doctorHint: payload.doctorHint } : {}),
       },
-      { onlyIfRunning: true },
+      { ...options, onlyIfRunning: true },
     );
     if (updateRun.phase === "verifying" && updateRun.status === "running") {
       const { createUpdateRunNotifier } = await import("./update-run-notice.runtime.js");
-      await createUpdateRunNotifier(updateRun)(updateRun, "verifying");
+      const notify = await createUpdateRunNotifier(
+        updateRun,
+        undefined,
+        undefined,
+        undefined,
+        context,
+      );
+      await notify(updateRun, "verifying");
     }
     // A managed handoff preserves its original trigger, while an unmanaged RPC
     // also reaches restarting. Only the recorded owner can finish CLI verification.
@@ -99,21 +117,28 @@ export async function finalizeRestartUpdateRun(
       !orchestratorOwnsVerification &&
       (pendingExpired || !isPendingControlPlaneUpdateRestartSentinel(payload))
     ) {
-      updateRun = finishUpdateRun(updateRun.runId, {
-        status:
-          pendingExpired ||
-          payload.status === "error" ||
-          updateRun.verification.versionMatch === false
-            ? "failed"
-            : payload.status === "ok"
-              ? "succeeded"
-              : "skipped",
-        reason:
-          pendingExpired || updateRun.verification.versionMatch === false
-            ? "restart-unhealthy"
-            : (payload.stats?.reason ?? undefined),
-        after: { version: runningVersion, ...(runningBuildId ? { buildId: runningBuildId } : {}) },
-      });
+      updateRun = await finishUpdateRun(
+        updateRun.runId,
+        {
+          status:
+            pendingExpired ||
+            payload.status === "error" ||
+            updateRun.verification.versionMatch === false
+              ? "failed"
+              : payload.status === "ok"
+                ? "succeeded"
+                : "skipped",
+          reason:
+            pendingExpired || updateRun.verification.versionMatch === false
+              ? "restart-unhealthy"
+              : (payload.stats?.reason ?? undefined),
+          after: {
+            version: runningVersion,
+            ...(runningBuildId ? { buildId: runningBuildId } : {}),
+          },
+        },
+        options,
+      );
     }
   }
   return updateRun;

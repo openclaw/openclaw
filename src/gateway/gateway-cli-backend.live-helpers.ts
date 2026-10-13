@@ -228,7 +228,7 @@ export function resolveCliBackendLiveProviderSkipDecision(params: {
     action: "fail",
     message:
       `${message} Set ${CLI_BACKEND_LIVE_ADVISORY_ENV}=1 and ` +
-      `${CLI_BACKEND_LIVE_PROVIDER_SKIP_ENV}=1 only for advisory live probes.`,
+      `${CLI_BACKEND_LIVE_PROVIDER_SKIP_ENV}=1 only for advisory live checks.`,
   };
 }
 

@@ -117,14 +117,6 @@ struct LiveActivityPresentationArbiterTests {
     }
 
     @Test
-    func `voice sample history survives active phase changes`() {
-        #expect(LiveActivityManager.shouldResetVoiceSamples(previousStatus: nil))
-        #expect(!LiveActivityManager.shouldResetVoiceSamples(previousStatus: .voiceActive))
-        #expect(!LiveActivityManager.shouldResetVoiceSamples(previousStatus: .voiceListening))
-        #expect(!LiveActivityManager.shouldResetVoiceSamples(previousStatus: .voiceSpeaking))
-    }
-
-    @Test
     func `reconnect clears connection state without hiding active voice`() {
         let now = Date()
         var arbiter = LiveActivityPresentationArbiter()

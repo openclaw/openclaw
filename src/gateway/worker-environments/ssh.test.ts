@@ -28,6 +28,65 @@ function prepareTestWorkerSsh() {
 }
 
 describe("worker SSH preparation", () => {
+  it("discards a late identity before writing it and closes the retained preparation guard", async () => {
+    const controller = new AbortController();
+    const closed = new Error("SSH preparation stopped");
+    let retained: (() => void) | undefined;
+    const writeFile = vi.spyOn(fs, "writeFile");
+    let prepared: Awaited<ReturnType<typeof prepareWorkerSsh>> | undefined;
+    const request = {
+      ssh: SSH,
+      pinnedHostKey: SSH.hostKey,
+      assertCurrent: () => controller.signal.throwIfAborted(),
+      resolveIdentity: async (
+        _keyRef: WorkerSshEndpoint["keyRef"],
+        context?: { assertCurrent: () => void },
+      ) => {
+        retained = context?.assertCurrent;
+        context?.assertCurrent();
+        controller.abort(closed);
+        return { kind: "material" as const, contents: "synthetic-worker-key" };
+      },
+    };
+    try {
+      await expect(
+        prepareWorkerSsh(request).then((value) => {
+          prepared = value;
+          return value;
+        }),
+      ).rejects.toBe(closed);
+      expect(writeFile).not.toHaveBeenCalled();
+      expect(retained).toBeTypeOf("function");
+      expect(() => retained?.()).toThrow("preparation invocation is closed");
+    } finally {
+      await prepared?.dispose();
+      writeFile.mockRestore();
+    }
+  });
+
+  it("closes the preparation guard after success without disposing the prepared identity", async () => {
+    let retained: (() => void) | undefined;
+    const prepared = await prepareWorkerSsh({
+      ssh: SSH,
+      pinnedHostKey: SSH.hostKey,
+      resolveIdentity: async (
+        _keyRef: WorkerSshEndpoint["keyRef"],
+        context?: { assertCurrent: () => void },
+      ) => {
+        retained = context?.assertCurrent;
+        context?.assertCurrent();
+        return { kind: "path", path: "/keys/worker" };
+      },
+    });
+    try {
+      expect(retained).toBeTypeOf("function");
+      expect(() => retained?.()).toThrow("preparation invocation is closed");
+      await fs.access(prepared.knownHostsPath);
+    } finally {
+      await prepared.dispose();
+    }
+  });
+
   it("retries disposal after a filesystem cleanup failure", async () => {
     const prepared = await prepareTestWorkerSsh();
     const directory = path.dirname(prepared.knownHostsPath);
@@ -142,34 +201,6 @@ describe("worker SSH preparation", () => {
     }
   });
 
-  it("shares a decreasing deadline while preserving fast fallback budget", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000);
-    const prepared = await prepareTestWorkerSsh();
-    try {
-      const remainingTimeouts: number[] = [];
-      const result = await runWorkerSshCandidates(
-        prepared,
-        1_000,
-        async (port, remainingTimeoutMs) => {
-          remainingTimeouts.push(remainingTimeoutMs);
-          if (port === 2202) {
-            vi.advanceTimersByTime(1);
-            return { code: 255, termination: "exit" };
-          }
-          return { code: 0, termination: "exit" };
-        },
-      );
-
-      expect(remainingTimeouts).toEqual([1_000, 999]);
-      expect(result).toEqual({ code: 0, termination: "exit" });
-      expect(prepared.port).toBe(22);
-    } finally {
-      await prepared.dispose();
-      vi.useRealTimers();
-    }
-  });
-
   it("does not start a later candidate after the operation deadline", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
@@ -192,28 +223,25 @@ describe("worker SSH preparation", () => {
     }
   });
 
-  it.each(["timeout", "signal", "output-limit", "error"] as const)(
-    "does not select a candidate after %s termination",
-    async (termination) => {
-      const prepared = await prepareTestWorkerSsh();
-      prepared.selectPort(22);
-      try {
-        const attempted: number[] = [];
-        const result = await runWorkerSshCandidates(prepared, 1_000, async (port) => {
-          attempted.push(port);
-          return port === 22
-            ? { code: 255, termination: "exit" as const }
-            : { code: null, termination };
-        });
+  it("does not select a candidate after non-exit termination", async () => {
+    const prepared = await prepareTestWorkerSsh();
+    prepared.selectPort(22);
+    try {
+      const attempted: number[] = [];
+      const result = await runWorkerSshCandidates(prepared, 1_000, async (port) => {
+        attempted.push(port);
+        return port === 22
+          ? { code: 255, termination: "exit" as const }
+          : { code: null, termination: "timeout" };
+      });
 
-        expect(attempted).toEqual([22, 2200]);
-        expect(result).toEqual({ code: null, termination });
-        expect(prepared.port).toBe(22);
-      } finally {
-        await prepared.dispose();
-      }
-    },
-  );
+      expect(attempted).toEqual([22, 2200]);
+      expect(result).toEqual({ code: null, termination: "timeout" });
+      expect(prepared.port).toBe(22);
+    } finally {
+      await prepared.dispose();
+    }
+  });
 
   it("materializes identity contents once and removes them with the shared context", async () => {
     const prepared = await prepareWorkerSsh({

@@ -1,4 +1,3 @@
-// Progress-draft status text normalization for reasoning, preamble, and commentary lanes.
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatReasoningMessage } from "../agents/embedded-agent-utils.js";
 import { compactProgressText } from "../shared/text-truncate.js";
@@ -7,6 +6,8 @@ import { stripInlineDirectiveTagsForDelivery } from "../utils/directive-tags.js"
 
 const REASONING_PROGRESS_TAG_RE =
   /<\s*(\/?)\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/giu;
+const REASONING_PROGRESS_HEADING_RE =
+  /^\s*(?:>\s*)?(?:Reasoning:\s*(?:\r?\n|\r)\s*|Thinking\.{0,3}\s*(?:\r?\n|\r)\s*(?:\r?\n|\r)\s*)/i;
 const REASONING_PROGRESS_TAG_NAMES = [
   "think",
   "thinking",
@@ -24,16 +25,13 @@ const REASONING_PROGRESS_TAG_PREFIXES = REASONING_PROGRESS_TAG_NAMES.flatMap((na
   `</${name}`,
 ]);
 
-export function normalizeReasoningProgressLine(text: string): string {
+function normalizeReasoningProgressLine(text: string): string {
   const reasoningText = readReasoningProgressTextOutsideCode(text);
   if (reasoningText === undefined) {
     return "";
   }
   return stripReasoningProgressTagsOutsideCode(reasoningText)
-    .replace(
-      /^\s*(?:>\s*)?(?:Reasoning:\s*(?:\r?\n|\r)\s*|Thinking\.{0,3}\s*(?:\r?\n|\r)\s*(?:\r?\n|\r)\s*)/i,
-      "",
-    )
+    .replace(REASONING_PROGRESS_HEADING_RE, "")
     .replace(/\s{2,}|[^\S ]/g, " ")
     .trim();
 }
@@ -57,18 +55,10 @@ function readReasoningProgressTextOutsideCode(text: string): string | undefined 
       continue;
     }
     hasTags = true;
-    if (match[1]) {
-      if (inReasoning) {
-        chunks.push(text.slice(cursor, offset));
-      }
-      inReasoning = false;
-      cursor = offset + match[0].length;
-      continue;
-    }
     if (inReasoning) {
       chunks.push(text.slice(cursor, offset));
     }
-    inReasoning = true;
+    inReasoning = !match[1];
     cursor = offset + match[0].length;
   }
   if (!hasTags) {
@@ -149,7 +139,7 @@ function isSilentCommentaryProgressText(text: string): boolean {
   return /^NO_REPLY$/iu.test(normalized);
 }
 
-export function mergeReasoningProgressText(
+function mergeReasoningProgressText(
   current: string,
   incoming: string,
   options?: { snapshot?: boolean },
@@ -169,7 +159,7 @@ export function mergeReasoningProgressText(
   }
   if (
     options?.snapshot === true ||
-    isReasoningSnapshotText(incoming) ||
+    REASONING_PROGRESS_HEADING_RE.test(incoming) ||
     (normalizedCurrent && normalizedIncoming.startsWith(normalizedCurrent))
   ) {
     // Snapshot-style providers resend the full reasoning text. Replace the
@@ -177,12 +167,6 @@ export function mergeReasoningProgressText(
     return incoming;
   }
   return `${current}${incoming}`;
-}
-
-function isReasoningSnapshotText(text: string): boolean {
-  return /^\s*(?:>\s*)?(?:Reasoning:\s*(?:\r?\n|\r)\s*|Thinking\.{0,3}\s*(?:\r?\n|\r)\s*(?:\r?\n|\r)\s*)/i.test(
-    text,
-  );
 }
 
 function shouldAppendEmptyReasoningProgressDelta(current: string, incoming: string): boolean {
@@ -201,4 +185,50 @@ function hasReasoningProgressTagOutsideCode(text: string): boolean {
     }
   }
   return false;
+}
+/**
+ * Commentary line identity. An explicit item id owns its line. Without one,
+ * providers stream cumulative snapshots ("Checking" → "Checking the
+ * workspace"), so a snapshot that continues the open line reuses its id and
+ * updates in place; anything else starts a new line.
+ */
+export function resolveCommentaryLineId(commentary: {
+  itemId?: string;
+  normalized: string;
+  bareNormalized: string;
+  lastIdLessCommentaryId?: string;
+  lastIdLessCommentaryBare: string;
+}): string {
+  if (commentary.itemId) {
+    return `commentary:${commentary.itemId}`;
+  }
+  if (!commentary.normalized) {
+    // Sanitized to nothing (directive-only / NO_REPLY): no line to address, so
+    // it cannot retract the open one. Only an explicit itemId clears a line.
+    return "";
+  }
+  const continuesOpenLine =
+    Boolean(commentary.lastIdLessCommentaryBare) &&
+    (commentary.bareNormalized.startsWith(commentary.lastIdLessCommentaryBare) ||
+      commentary.lastIdLessCommentaryBare.startsWith(commentary.bareNormalized));
+  if (continuesOpenLine && commentary.lastIdLessCommentaryId) {
+    return commentary.lastIdLessCommentaryId;
+  }
+  return `commentary:${commentary.normalized}`;
+}
+
+export function createReasoningProgressAccumulator() {
+  let rawText = "";
+  return {
+    reset() {
+      rawText = "";
+    },
+    merge(this: void, text?: string, options?: { snapshot?: boolean }): string {
+      if (!text) {
+        return "";
+      }
+      rawText = mergeReasoningProgressText(rawText, text, options);
+      return normalizeReasoningProgressLine(rawText);
+    },
+  };
 }

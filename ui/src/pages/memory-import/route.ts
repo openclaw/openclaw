@@ -5,7 +5,7 @@ import { routePageSpec } from "../../app-route-paths.ts";
 export const page = definePage({
   ...routePageSpec("memory-import"),
   component: () =>
-    import("./memory-import-page.ts").then(() => ({
+    import("./memory-import-page.tsx").then(() => ({
       header: true,
       render: () => html`<openclaw-memory-import-page></openclaw-memory-import-page>`,
     })),

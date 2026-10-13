@@ -12,8 +12,9 @@ import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntry, loadTranscriptEventsSync } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
-import { readSkillReviewOutcomes } from "../skills/workshop/collection-review-state.js";
+import { listWorkshopChanges } from "../skills/workshop/library.js";
 import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
@@ -27,7 +28,6 @@ type ProviderRequest = {
     output?: unknown;
     content?: Array<{ text?: string }>;
   }>;
-  tools?: Array<{ name?: string }>;
 };
 
 function respondWithTool(
@@ -71,7 +71,7 @@ function respondWithTool(
 
 describe("Gateway automatic Workshop learning", () => {
   it(
-    "maintains a complete skill package within Workshop while foreground work continues",
+    "patches a learned skill through skill_workshop and announces it while foreground work continues",
     { timeout: 150_000 },
     async () => {
       const state = await createOpenClawTestState({
@@ -89,8 +89,8 @@ describe("Gateway automatic Workshop learning", () => {
         },
       });
       let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
+      let reviewWarnings: ReturnType<typeof createWarnLogCapture> | undefined;
       const providerErrors: unknown[] = [];
-      const providerRequests: ProviderRequest[] = [];
       const reviewRequests: ProviderRequest[] = [];
       const laterForegroundRequests: ProviderRequest[] = [];
       const reviewStarted = createDeferred();
@@ -142,7 +142,6 @@ describe("Gateway automatic Workshop learning", () => {
                 return;
               }
               const payload = JSON.parse(await readText(request)) as ProviderRequest;
-              providerRequests.push(payload);
               // Runtime context can append a user-role item after the actual request.
               if (
                 payload.input?.some(
@@ -184,7 +183,7 @@ describe("Gateway automatic Workshop learning", () => {
                 respondWithTool(response, `review_${reviewRequests.length}`, next.name, next.args);
               } else {
                 writeOpenAiResponsesText(response, {
-                  text: "Reviewed the publication skill and activation reference. File tool results record whether the correction completed.",
+                  text: "NO_REPLY",
                   messageId: "review_done",
                   responseId: "review_done",
                 });
@@ -212,7 +211,7 @@ describe("Gateway automatic Workshop learning", () => {
               models: { mode: "replace", providers: { [provider.providerId]: provider.config } },
               plugins: { slots: { memory: "none" } },
               tools: { profile: "coding" },
-              skills: { workshop: { autonomous: { mode: "auto" } } },
+              skills: { load: { watch: false }, workshop: { autonomous: { mode: "auto" } } },
             } satisfies OpenClawConfig;
             const workshop = resolveWorkshopSkillsDir(config, "main");
             const skillFile = path.join(workshop, "map-publication", "SKILL.md");
@@ -225,20 +224,32 @@ describe("Gateway automatic Workshop learning", () => {
             await fs.mkdir(path.dirname(supportFile), { recursive: true });
             await fs.writeFile(skillFile, originalSkill);
             await fs.writeFile(supportFile, originalSupport);
+            const reason = "require the public generation to match the release";
+            // The review keeps the foreground tool schemas for prompt-cache reuse, where Tool
+            // Search catalogs skill_workshop behind dispatch_action.
+            const workshopCall = (args: Record<string, unknown>) => ({
+              name: "dispatch_action",
+              args: { id: "skill_workshop", args },
+            });
             reviewActions = [
-              { name: "read", args: { path: outsideFile } },
-              { name: "read", args: { path: skillFile } },
-              { name: "read", args: { path: supportFile } },
-              {
-                name: "edit",
-                args: { path: skillFile, edits: [{ oldText: oldRule, newText: newRule }] },
-              },
-              {
-                name: "edit",
-                args: { path: supportFile, edits: [{ oldText: oldRule, newText: newRule }] },
-              },
-              { name: "read", args: { path: skillFile } },
-              { name: "read", args: { path: supportFile } },
+              // Acting tools are gated: they answer with a redirect instead of failing the review.
+              { name: "write", args: { path: outsideFile, content: "overwritten by review\n" } },
+              workshopCall({ action: "view", name: "map-publication" }),
+              workshopCall({
+                action: "patch",
+                name: "map-publication",
+                old_text: oldRule,
+                new_text: newRule,
+                reason,
+              }),
+              workshopCall({
+                action: "patch",
+                name: "map-publication",
+                file_path: "references/activation.md",
+                old_text: oldRule,
+                new_text: newRule,
+                reason,
+              }),
             ];
             gateway = await startGatewayWithClient({
               cfg: config,
@@ -246,6 +257,7 @@ describe("Gateway automatic Workshop learning", () => {
               token,
               scopes: ["operator.admin", "operator.read", "operator.write"],
             });
+            reviewWarnings = createWarnLogCapture("openclaw-gateway-workshop-learning");
             const sessionKey = "agent:main:workshop-learning-proof";
             const accepted = await gateway.client.request<{ runId: string; status: string }>(
               "agent",
@@ -298,23 +310,6 @@ describe("Gateway automatic Workshop learning", () => {
                 { runId: laterAccepted.runId, timeoutMs: 30_000 },
                 { timeoutMs: 35_000 },
               );
-              console.log(
-                "WORKSHOP_GATEWAY_OVERLAP_OBSERVATION",
-                JSON.stringify({
-                  accepted,
-                  completed,
-                  laterAccepted,
-                  laterCompleted,
-                  source,
-                  sourceEntry: loadSessionEntry(scope),
-                  originalTranscript,
-                  currentTranscript: loadTranscriptEventsSync(source),
-                  providerRequests,
-                  laterForegroundRequests,
-                  reviewRequests,
-                  providerErrors,
-                }),
-              );
               expect(laterCompleted.status).toBe("ok");
               expect(laterForegroundRequests).toHaveLength(1);
               expect(reviewRequests).toHaveLength(1);
@@ -330,54 +325,61 @@ describe("Gateway automatic Workshop learning", () => {
             );
             expect(laterTranscript).toContain(laterMessage);
             expect(laterTranscript).toContain(laterReply);
+            // The review announces its change in the originating conversation, where the
+            // foreground agent sees it next turn and can undo it.
             await expect
-              .poll(() => Object.values(readSkillReviewOutcomes().experienceReviews).length, {
+              .poll(() => JSON.stringify(loadTranscriptEventsSync(source)), {
                 timeout: 80_000,
                 interval: 100,
               })
-              .toBe(1);
+              .toContain("💾 Learned:")
+              .catch(async (cause: unknown) => {
+                throw new Error(
+                  JSON.stringify({
+                    reviewResults: reviewRequests.map((request) =>
+                      request.input?.findLast((item) => item.type === "function_call_output"),
+                    ),
+                    changes: await listWorkshopChanges("main"),
+                    providerErrors,
+                    reviewFailure: await reviewWarnings?.findText("skill experience review failed"),
+                  }),
+                  { cause },
+                );
+              });
             const skill = await fs.readFile(skillFile, "utf8");
             const support = await fs.readFile(supportFile, "utf8");
             const outside = await fs.readFile(outsideFile, "utf8");
             const finalTranscript = loadTranscriptEventsSync(source);
-            console.log(
-              "WORKSHOP_GATEWAY_LEARNING_EVIDENCE",
-              JSON.stringify({
-                foregroundRequests,
-                providerRequests,
-                laterForegroundRequests,
-                reviewRequests,
-                outcomes: readSkillReviewOutcomes().experienceReviews,
-                originalSkill,
-                originalSupport,
-                skill,
-                support,
-                outsideContent,
-                outside,
-                originalTranscript,
-                continuedTranscript,
-                finalTranscript,
-              }),
-            );
+            const changes = await listWorkshopChanges("main");
             expect(providerErrors).toEqual([]);
             expect(reviewRequests).toHaveLength(reviewActions.length + 1);
             const outsideResult = reviewRequests[1]?.input?.findLast(
               (item) => item.type === "function_call_output",
             );
-            expect(outsideResult?.output).toContain("Path escapes sandbox root");
+            expect(outsideResult?.output).toContain(
+              "write is not available in this background run.",
+            );
             expect(outside).toBe(outsideContent);
             for (const reviewRequest of reviewRequests) {
               const evidence = JSON.stringify(reviewRequest);
               expect(evidence).not.toContain(laterMessage);
               expect(evidence).not.toContain(outsideContent.trim());
             }
-            expect(finalTranscript).toEqual(continuedTranscript);
             expect(skill).toBe(originalSkill.replace(oldRule, newRule));
             expect(support).toBe(originalSupport.replace(oldRule, newRule));
+            expect(changes).toHaveLength(2);
+            expect(changes.every((change) => change.actor === "review")).toBe(true);
+            expect(finalTranscript.slice(0, continuedTranscript.length)).toEqual(
+              continuedTranscript,
+            );
+            const notice = JSON.stringify(finalTranscript.slice(continuedTranscript.length));
+            expect(notice).toContain(`updated \`map-publication\` (${reason})`);
+            expect(notice).toContain('Say \\"undo\\" to revert this skill change.');
           },
         );
       } finally {
         releaseReview.resolve();
+        reviewWarnings?.cleanup();
         if (gateway) {
           await disconnectGatewayClient(gateway.client);
           await gateway.server.close({ reason: "Workshop learning proof cleanup" });

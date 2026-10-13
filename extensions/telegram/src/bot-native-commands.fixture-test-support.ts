@@ -1,8 +1,13 @@
 // Telegram plugin module implements bot native commands.fixture test support behavior.
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import { useBundledProviderPolicyArtifactsForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { vi } from "vitest";
 import type { OpenClawConfig, TelegramAccountConfig } from "../runtime-api.js";
 import type { registerTelegramNativeCommands } from "./bot-native-commands.js";
+import { setTelegramRuntime } from "./runtime.js";
+
+useBundledProviderPolicyArtifactsForTest(["openai", "anthropic"]);
 
 type RegisterTelegramNativeCommandsParams = Parameters<typeof registerTelegramNativeCommands>[0];
 
@@ -15,9 +20,9 @@ export type NativeCommandTestParams = RegisterTelegramNativeCommandsParams & {
 export function createNativeCommandTestParams(
   params: Partial<NativeCommandTestParams> = {},
 ): RegisterTelegramNativeCommandsParams {
+  setTelegramRuntime(createPluginRuntimeMock());
   const log = vi.fn();
   return {
-    cancelPendingInbound: params.cancelPendingInbound ?? vi.fn(),
     bot:
       params.bot ??
       ({
@@ -100,33 +105,6 @@ export function createTelegramGroupCommandContext(params?: {
         type: "supergroup" as const,
         title: params?.title ?? "OpenClaw",
       },
-      from: { id: params?.userId ?? 200, username: params?.username ?? "bob" },
-    },
-  };
-}
-
-export function createTelegramTopicCommandContext(params?: {
-  match?: string;
-  messageId?: number;
-  date?: number;
-  chatId?: number;
-  title?: string;
-  threadId?: number;
-  userId?: number;
-  username?: string;
-}) {
-  return {
-    match: params?.match ?? "",
-    message: {
-      message_id: params?.messageId ?? 2,
-      date: params?.date ?? Math.floor(Date.now() / 1000),
-      chat: {
-        id: params?.chatId ?? -1001234567890,
-        type: "supergroup" as const,
-        title: params?.title ?? "OpenClaw",
-        is_forum: true,
-      },
-      message_thread_id: params?.threadId ?? 42,
       from: { id: params?.userId ?? 200, username: params?.username ?? "bob" },
     },
   };

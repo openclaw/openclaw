@@ -147,6 +147,11 @@ it.each([
       }
       return;
     }
+    if (mode === "cancel-drain" && index === 0 && !finishing) {
+      // EOF can close the source before cancellation reaches its accepted work.
+      response.flushHeaders();
+      return;
+    }
     response.end(
       `data: ${JSON.stringify({
         id: "completion-lease-response",
@@ -232,7 +237,7 @@ it.each([
       OPENCLAW_STATE_DIR: path.join(root, "state"),
     };
     await withEnvAsync(env, async () => {
-      const create = vi.spyOn(ModelRegistry, "create");
+      const create = vi.spyOn(ModelRegistry, "fromCapturedSources");
       const fork = vi.spyOn(ModelRegistry.prototype, "fork");
       const setRuntimeKey = vi.spyOn(AuthStorage.prototype, "setRuntimeApiKey");
       const resolveModel = modelResolution.resolveModelAsync;

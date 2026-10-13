@@ -1,10 +1,8 @@
-// Filters known noisy process warnings once per runtime.
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 const warningFilterKey = Symbol.for("openclaw.warning-filter");
 
-/** Normalized process warning fields used by the shared warning suppressor. */
-export type ProcessWarning = {
+type ProcessWarning = {
   code?: string;
   name?: string;
   message?: string;
@@ -14,21 +12,13 @@ type ProcessWarningInstallState = {
   installed: boolean;
 };
 
-/** Returns whether a process warning matches a known noisy runtime/dependency warning. */
-export function shouldIgnoreWarning(warning: ProcessWarning): boolean {
-  if (warning.code === "DEP0040" && warning.message?.includes("punycode")) {
-    return true;
-  }
-  if (warning.code === "DEP0060" && warning.message?.includes("util._extend")) {
-    return true;
-  }
-  if (
-    warning.name === "ExperimentalWarning" &&
-    warning.message?.includes("SQLite is an experimental feature")
-  ) {
-    return true;
-  }
-  return false;
+function shouldIgnoreWarning(warning: ProcessWarning): boolean {
+  return Boolean(
+    (warning.code === "DEP0040" && warning.message?.includes("punycode")) ||
+    (warning.code === "DEP0060" && warning.message?.includes("util._extend")) ||
+    (warning.name === "ExperimentalWarning" &&
+      warning.message?.includes("SQLite is an experimental feature")),
+  );
 }
 
 function normalizeWarningArgs(args: unknown[]): ProcessWarning {

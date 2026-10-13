@@ -22,12 +22,9 @@ import {
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import type { SetupWizardRunner } from "./server-methods/wizard.js";
 import { startGatewayServer } from "./server.js";
-import {
-  connectGatewayClient,
-  disconnectGatewayClient,
-  getGatewayE2ePortBlock,
-} from "./test-helpers.e2e.js";
+import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
+import { acquireGatewayE2ePortBlock, startClaimedGateway } from "./test-helpers.listener.js";
 
 const GATEWAY_E2E_TIMEOUT_MS = 90_000;
 const ENV_KEYS = [
@@ -91,19 +88,21 @@ async function withWizardGateway(
     setTestEnvValue("OPENCLAW_BUNDLED_PLUGINS_DIR", bundledPluginsDir);
     setTestEnvValue("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
     setTestEnvValue("OPENCLAW_TEST_MINIMAL_GATEWAY", "1");
-    const port = await getGatewayE2ePortBlock();
-    const server = await startGatewayServer(port, {
-      bind: "loopback",
-      auth: { mode: "token", token },
-      controlUiEnabled: false,
-      wizardRunner,
-    });
+    const claim = await acquireGatewayE2ePortBlock();
+    const server = await startClaimedGateway(claim, () =>
+      startGatewayServer(claim.port, {
+        bind: "loopback",
+        auth: { mode: "token", token },
+        controlUiEnabled: false,
+        wizardRunner,
+      }),
+    );
     try {
       await run({
         server,
         connect: async () => {
           const client = await connectGatewayClient({
-            url: `ws://127.0.0.1:${port}`,
+            url: `ws://127.0.0.1:${claim.port}`,
             token,
             clientDisplayName: "vitest-wizard-cancel",
           });

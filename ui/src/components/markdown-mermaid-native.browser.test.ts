@@ -106,12 +106,12 @@ describe("native Mermaid document", () => {
       const decoding = createDeferred();
       if (boundary === "engine load") {
         const descriptor = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, "srcdoc")!;
-        vi.spyOn(HTMLIFrameElement.prototype, "srcdoc", "set").mockImplementation(
-          function (this: HTMLIFrameElement) {
-            descriptor.set!.call(this, "<!doctype html><html></html>");
-            stalled.resolve();
-          },
-        );
+        vi.spyOn(HTMLIFrameElement.prototype, "srcdoc", "set").mockImplementation(function (
+          this: HTMLIFrameElement,
+        ) {
+          descriptor.set!.call(this, "<!doctype html><html></html>");
+          stalled.resolve();
+        });
       } else if (boundary === "engine render") {
         // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply preserves each port's receiver.
         const postMessage = MessagePort.prototype.postMessage;

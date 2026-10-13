@@ -1,12 +1,6 @@
-/**
- * Agent harness tool/message hook helpers.
- *
- * Harnesses use this to dispatch after-tool-call and before-message-write hooks
- * while isolating hook failures from the runtime path.
- */
-
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { cloneHookIsolationValue } from "../../plugins/hook-isolation.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { applyTranscriptSenderIdentityToWrite } from "../../sessions/user-turn-transcript.metadata.js";
 import { extractAssistantTranscriptSourceText } from "../../shared/chat-message-content.js";
@@ -35,19 +29,20 @@ export async function runAgentHarnessAfterToolCallHook(params: {
     adjustedArgs && typeof adjustedArgs === "object"
       ? (adjustedArgs as Record<string, unknown>)
       : params.startArgs;
-  const eventArgs = structuredClone(resolvedArgs);
   const hookRunner = getGlobalHookRunner();
   if (!hookRunner?.hasHooks("after_tool_call")) {
     return;
   }
   try {
+    const eventArgs = structuredClone(resolvedArgs);
+    const eventResult = cloneHookIsolationValue("after_tool_call", params.result);
     await hookRunner.runAfterToolCall(
       {
         toolName: params.toolName,
         params: eventArgs,
         ...(params.runId ? { runId: params.runId } : {}),
         toolCallId: params.toolCallId,
-        ...(params.result ? { result: params.result } : {}),
+        ...(eventResult ? { result: eventResult } : {}),
         ...(params.error ? { error: params.error } : {}),
         ...(params.startedAt != null ? { durationMs: Date.now() - params.startedAt } : {}),
       },

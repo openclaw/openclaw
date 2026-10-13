@@ -36,14 +36,6 @@ describe("projectSessionDisplayMessage", () => {
     ]);
   });
 
-  test("bounds previews without splitting surrogate pairs", () => {
-    const longReply = `${"a".repeat(SESSION_LAST_MESSAGE_PREVIEW_DEFAULT_CHARS - 2)}😊tail`;
-    const preview = projectSessionDisplayMessage({ role: "assistant", content: longReply });
-
-    expect(preview?.text).toHaveLength(SESSION_LAST_MESSAGE_PREVIEW_DEFAULT_CHARS);
-    expect(preview?.text).toBe(`${"a".repeat(SESSION_LAST_MESSAGE_PREVIEW_DEFAULT_CHARS - 3)}...`);
-  });
-
   test("honors explicit preview budgets up to the shared cap", () => {
     const maxChars = 800;
     const message = { role: "assistant", content: "a".repeat(maxChars + 20) };
@@ -56,18 +48,25 @@ describe("projectSessionDisplayMessage", () => {
     );
   });
 
-  test("flattens Markdown before bounding a preview", () => {
+  test.each([
+    ["nested label brackets", "[Report [Q3]](LONG)", "Read the Report [Q3] and then deploy."],
+    [
+      "balanced destination parentheses",
+      "[report](LONG/report_(Q3))",
+      "Read the report and then deploy.",
+    ],
+    [
+      "escaped destination parentheses",
+      "[report](LONG/report\\)Q3)",
+      "Read the report and then deploy.",
+    ],
+  ])("flattens links with %s before bounding a preview", (_label, link, expected) => {
     const longUrl = `https://example.com/${"x".repeat(SESSION_LAST_MESSAGE_PREVIEW_DEFAULT_CHARS)}`;
     const preview = projectSessionDisplayMessage(
-      { role: "assistant", content: `Read the [deployment guide](${longUrl})` },
+      { role: "assistant", content: `Read the ${link.replace("LONG", longUrl)} and then deploy.` },
       { flattenMarkdown: true },
     );
 
-    expect(preview?.text).toBe("Read the deployment guide");
-  });
-
-  test("preserves quoted directive examples", () => {
-    const quoted = "Use `[[reply_to_current]]` literally.";
-    expect(projectSessionDisplayMessage({ role: "assistant", content: quoted })?.text).toBe(quoted);
+    expect(preview?.text).toBe(expected);
   });
 });

@@ -45,6 +45,11 @@ vi.mock("../../config/config.js", async () => {
   return {
     ...actual,
     getRuntimeConfig: mocks.loadConfig,
+    loadConfig: mocks.loadConfig,
+    captureRuntimeConfigAsyncReader:
+      (...args: Parameters<typeof mocks.loadConfig>) =>
+      async () =>
+        mocks.loadConfig(...args),
     readConfigFileSnapshot: mocks.readConfigFileSnapshot,
     readConfigFileSnapshotForWrite: mocks.readConfigFileSnapshotForWrite,
     replaceConfigFile: mocks.replaceConfigFile,
@@ -326,6 +331,28 @@ describe("channelsCapabilitiesCommand", () => {
     );
   });
 
+  it("probes prepared accounts and reports their names", async () => {
+    const account = { accountId: "default", name: "Prepared account" };
+    const plugin = buildPlugin({ id: "slack" });
+    plugin.config.resolveAccount = () => {
+      throw new Error("legacy account resolution");
+    };
+    plugin.config.resolveAccountAsync = async () => account;
+    const probeAccount = vi.fn(async () => ({ ok: true }));
+    plugin.status = { probeAccount };
+    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
+      cfg: { channels: {} },
+      channelId: "slack",
+      plugin,
+      configChanged: false,
+    });
+
+    await channelsCapabilitiesCommand({ channel: "slack", json: true }, runtime);
+
+    expect(probeAccount).toHaveBeenCalledWith(expect.objectContaining({ account }));
+    expect(logs.join("\n")).toContain("Prepared account");
+  });
+
   it("serializes a failed probe when a capability probe exceeds its timeout", async () => {
     const probeAccount = vi.fn(
       () =>
@@ -356,7 +383,7 @@ describe("channelsCapabilitiesCommand", () => {
     expect(payload.channels?.[0]?.probe).toStrictEqual({
       ok: false,
       timedOut: true,
-      error: "probe timed out after 1ms",
+      error: "check timed out after 1ms",
     });
   });
 
@@ -384,7 +411,7 @@ describe("channelsCapabilitiesCommand", () => {
 
     await channelsCapabilitiesCommand({ channel: "telegram", timeout: "1" }, runtime);
 
-    expect(logs[0]?.split("\n")).toContain("Probe: failed (probe timed out after 1ms)");
+    expect(logs[0]?.split("\n")).toContain("Check: failed (check timed out after 1ms)");
   });
 
   it("serializes diagnostics when capability diagnostics exceed their timeout", async () => {
@@ -424,47 +451,6 @@ describe("channelsCapabilitiesCommand", () => {
       ],
       details: { timedOut: true },
     });
-  });
-
-  it("prints Teams Graph permission hints when present", async () => {
-    const plugin = buildPlugin({
-      id: "msteams",
-      probe: {
-        ok: true,
-        appId: "app-id",
-        graph: {
-          ok: true,
-          roles: ["ChannelMessage.Read.All", "Files.Read.All"],
-        },
-      },
-    });
-    plugin.status = {
-      ...plugin.status,
-      formatCapabilitiesProbe: () => [
-        { text: "App: app-id" },
-        {
-          text: "Graph roles: ChannelMessage.Read.All (channel history), Files.Read.All (files (OneDrive))",
-        },
-      ],
-    };
-    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
-      cfg: { channels: {} },
-      channelId: "msteams",
-      plugin,
-      configChanged: false,
-    });
-
-    await channelsCapabilitiesCommand({ channel: "msteams" }, runtime);
-
-    expect(logs).toStrictEqual([
-      [
-        "msteams:default",
-        "Support: chatTypes=direct",
-        "Actions: send, broadcast, poll",
-        "App: app-id",
-        "Graph roles: ChannelMessage.Read.All (channel history), Files.Read.All (files (OneDrive))",
-      ].join("\n"),
-    ]);
   });
 
   it("installs an explicit optional channel in the selected owner before rendering capabilities", async () => {

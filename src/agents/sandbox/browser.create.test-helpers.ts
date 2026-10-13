@@ -101,12 +101,12 @@ function createRuntimeMock() {
 
 vi.mock("../../runtime.js", createRuntimeMock);
 
-function createProfilesMock() {
+async function createProfilesMock() {
+  const actual = await vi.importActual<typeof import("../../plugin-sdk/browser-profiles.js")>(
+    "../../plugin-sdk/browser-profiles.js",
+  );
   return {
-    DEFAULT_BROWSER_ACTION_TIMEOUT_MS: 60_000,
-    DEFAULT_BROWSER_EVALUATE_ENABLED: true,
-    DEFAULT_OPENCLAW_BROWSER_COLOR: "#FF4500",
-    DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME: "openclaw",
+    ...actual,
     resolveProfile: (
       resolved: { cdpHost: string; cdpIsLoopback: boolean; profiles?: Record<string, unknown> },
       profileName: string,
@@ -125,7 +125,7 @@ function createProfilesMock() {
         cdpUrl: profile.cdpUrl ?? `http://${resolved.cdpHost}:${profile.cdpPort}`,
         cdpHost: resolved.cdpHost,
         cdpIsLoopback: resolved.cdpIsLoopback,
-        color: profile.color ?? "#FF4500",
+        color: profile.color ?? actual.DEFAULT_OPENCLAW_BROWSER_COLOR,
         driver: "openclaw",
         attachOnly: true,
       };
@@ -257,8 +257,13 @@ export function createSandboxBrowserTestHarness() {
     typeof import("./browser.js").ensureSandboxBrowser
   >[0];
 
-  async function ensureTestSandboxBrowser(params: Omit<EnsureSandboxBrowserParams, "bridgeAuth">) {
+  async function ensureTestSandboxBrowser(
+    params: Omit<EnsureSandboxBrowserParams, "bridgeAuth" | "evaluateEnabled"> & {
+      evaluateEnabled?: boolean;
+    },
+  ) {
     return await ensureSandboxBrowser({
+      evaluateEnabled: true,
       ...params,
       bridgeAuth: { token: "test-bridge-token" },
     });

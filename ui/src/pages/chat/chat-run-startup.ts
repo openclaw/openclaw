@@ -1,15 +1,30 @@
 import type { ChatRunStartupPhase } from "../../../../packages/gateway-protocol/src/index.js";
+import type { WorkerEnvironmentStartStatus } from "../../../../packages/gateway-protocol/src/schema/environments.js";
 import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
 import { t } from "../../i18n/index.ts";
+import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+
+registerNewSessionSetupEnglish();
 
 export type { ChatRunStartupPhase } from "../../../../packages/gateway-protocol/src/index.js";
 
 export type ChatRunStartupState =
   | { state: "status"; runId: string; phase: ChatRunStartupPhase; seq?: number }
-  | { state: "status"; runId: string; phase: "retrying"; message: string; seq: number }
+  | {
+      state: "status";
+      runId: string;
+      phase: "retrying" | "fallback";
+      message: string;
+      retryAt?: number;
+      seq: number;
+    }
   | { state: "activity"; runId: string; seq?: number };
 
 export type ChatRunStartupStatus = Extract<ChatRunStartupState, { state: "status" }>;
+
+export function isChatRunRecoveryStatus(status: ChatRunStartupState | null | undefined): boolean {
+  return status?.state === "status" && (status.phase === "retrying" || status.phase === "fallback");
+}
 
 /** Live status and history retain the same agent sequence; chat deltas have a separate counter. */
 export function reconcileChatRunStartup(
@@ -22,7 +37,7 @@ export function reconcileChatRunStartup(
   const current = host.chatRunStartup;
   if (current?.runId === next.runId) {
     if (
-      (next.state === "status" && next.phase !== "retrying" && current.state === "activity") ||
+      (next.state === "status" && !isChatRunRecoveryStatus(next) && current.state === "activity") ||
       (current.seq !== undefined &&
         (next.seq === undefined ? next.state === "status" : next.seq <= current.seq))
     ) {
@@ -39,6 +54,7 @@ export function reconcileChatRunStartup(
 }
 
 const STARTUP_LABEL_KEYS = {
+  waiting_for_state: "chat.startupStatus.waitingForState",
   preparing_workspace: "chat.startupStatus.preparingWorkspace",
   naming_worktree: "chat.startupStatus.namingWorktree",
   creating_worktree: "chat.startupStatus.creatingWorktree",
@@ -49,14 +65,43 @@ const STARTUP_LABEL_KEYS = {
   starting_model: "chat.startupStatus.startingModel",
 } as const satisfies Record<ChatRunStartupPhase, Parameters<typeof t>[0]>;
 
+export function isChatRunStartupPhase(value: unknown): value is ChatRunStartupPhase {
+  return typeof value === "string" && Object.hasOwn(STARTUP_LABEL_KEYS, value);
+}
+
 export function chatStartupStatusLabel(
   run: ChatRunStartupStatus | null | undefined,
   placement: ApplicationPlacementStartupStatus | null | undefined,
+  environmentStartStatus: WorkerEnvironmentStartStatus | undefined = placement?.startStatus,
 ): string | undefined {
+  const startStatus = environmentStartStatus;
+  if (
+    startStatus &&
+    placement?.phase !== "reconnecting" &&
+    (!run || run.phase === "provisioning_environment")
+  ) {
+    if (startStatus.phase === "saving") {
+      return t("chat.startupStatus.savingSnapshot");
+    }
+    if (startStatus.mode === "snapshot") {
+      return t("chat.startupStatus.startingFromSnapshot");
+    }
+    if (startStatus.phase === "preparing") {
+      return t("chat.startupStatus.preparingCloudEnvironment");
+    }
+  }
   if (run) {
-    return run.phase === "retrying" ? run.message : t(STARTUP_LABEL_KEYS[run.phase]);
+    if (run.phase === "retrying") {
+      return t("chat.recovery.retrying");
+    }
+    if (run.phase === "fallback") {
+      return t("chat.recovery.tryingFallback");
+    }
+    return t(STARTUP_LABEL_KEYS[run.phase]);
   }
   switch (placement?.phase) {
+    case "reconnecting":
+      return t("connection.reconnecting");
     case "pending":
     case "requested":
     case "provisioning":

@@ -54,8 +54,9 @@ const { FakeWebSocket } = vi.hoisted(() => {
   return { FakeWebSocket: MockWebSocket };
 });
 
-vi.mock("ws", () => ({
-  default: FakeWebSocket,
+// Intercept the shared transport constructor, not Bun's bare ws adapter.
+vi.mock("../../packages/gateway-client/src/websocket.js", () => ({
+  WebSocket: FakeWebSocket,
 }));
 
 type FakeWebSocketInstance = InstanceType<typeof FakeWebSocket>;

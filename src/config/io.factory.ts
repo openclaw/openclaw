@@ -14,7 +14,11 @@ import {
   readConfigFileSnapshotWithPluginMetadataFromContext,
   readSourceConfigBestEffortFromContext,
 } from "./io.snapshot.js";
-import type { ConfigIoFactoryOptions, ConfigSnapshotReadOptions } from "./io.types.js";
+import type {
+  ConfigIoFactoryOptions,
+  ConfigSnapshotReadOptions,
+  ConfigSnapshotMetadataReadOptions,
+} from "./io.types.js";
 import type { writeConfigFileFromContext } from "./io.write.js";
 import type { ConfigFileSnapshot } from "./types.js";
 import { withConfigWriteLock } from "./write-lock.js";
@@ -39,8 +43,9 @@ export function createConfigIO(options: ConfigIoFactoryOptions = {}) {
     readSourceConfigBestEffort: () => readSourceConfigBestEffortFromContext(context),
     readConfigFileSnapshot: (readOptions: ConfigSnapshotReadOptions = {}) =>
       readConfigFileSnapshotFromContext(context, readOptions),
-    readConfigFileSnapshotWithPluginMetadata: (readOptions: ConfigSnapshotReadOptions = {}) =>
-      readConfigFileSnapshotWithPluginMetadataFromContext(context, readOptions),
+    readConfigFileSnapshotWithPluginMetadata: (
+      readOptions: ConfigSnapshotMetadataReadOptions = {},
+    ) => readConfigFileSnapshotWithPluginMetadataFromContext(context, readOptions),
     readConfigFileSnapshotForWrite: (readOptions?: Pick<ConfigSnapshotReadOptions, "observe">) =>
       readConfigFileSnapshotForWriteFromContext(context, readOptions),
     prepareConfigRecovery: (current: ConfigFileSnapshot) =>
@@ -58,8 +63,10 @@ export function createConfigIO(options: ConfigIoFactoryOptions = {}) {
         reason: params.reason,
         prepareCandidate: context.prepareRecoveryBackupCandidate,
       }),
-    recoverConfigFromJsonRootSuffix: (snapshot: ConfigFileSnapshot) =>
-      recoverConfigFromJsonRootSuffixWithContext(context, snapshot),
+    recoverConfigFromJsonRootSuffix: (
+      snapshot: ConfigFileSnapshot,
+      assertRecoveryCandidate?: (config: unknown) => void,
+    ) => recoverConfigFromJsonRootSuffixWithContext(context, snapshot, assertRecoveryCandidate),
     writeConfigFile: async (
       config: Parameters<typeof writeConfigFileFromContext>[1],
       writeOptions: Parameters<typeof writeConfigFileFromContext>[2] = {},

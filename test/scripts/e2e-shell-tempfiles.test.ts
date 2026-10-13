@@ -85,8 +85,15 @@ async function runClawhubInstallProof(options: {
   const scratch = path.join(root, "scratch");
   const callsPath = path.join(root, "calls.jsonl");
   const fixturePath = path.join(root, "fixture.json");
+  const redactorPath = path.join(root, "redactor.mjs");
   await mkdir(bin);
   await mkdir(scratch);
+  await writeFile(redactorPath, "export const redactSensitiveText = (value) => value;\n");
+  await writeFile(
+    path.join(bin, "node"),
+    `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} "$@"\n`,
+    { mode: 0o755 },
+  );
   await writeFile(fixturePath, JSON.stringify({ skillText: maintainedSkillText, ...options }));
   await writeFile(
     path.join(bin, "pnpm"),
@@ -144,13 +151,14 @@ switch (args[1]) {
         PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`,
         HOME: root,
         TMPDIR: scratch,
+        OPENCLAW_E2E_REDACTOR_MODULE: redactorPath,
         ...options.overrides,
       },
     },
   );
   expect(result.error).toBeUndefined();
   expect(
-    (await readdir(scratch)).filter((entry) => entry.startsWith("openclaw-skill-install-home.")),
+    (await readdir(scratch)).filter((entry) => entry.startsWith("openclaw-skill-install")),
   ).toEqual([]);
   const calls = (await readFile(callsPath, "utf8"))
     .trim()
@@ -178,7 +186,7 @@ async function listShellScripts(dir: string): Promise<string[]> {
 async function extractClawhubSkillInstallVerifier(): Promise<string> {
   const script = await readFile("scripts/e2e/lib/skills/clawhub-install-proof.sh", "utf8");
   const marker =
-    'node --input-type=module - "$OPENCLAW_CONFIG_PATH" "$skill_dir" "$origin_json" "$lock_json" "$info_json" "$slug" "$maintained_fixture" <<\'NODE\'\n';
+    'run_node_module "$OPENCLAW_CONFIG_PATH" "$skill_dir" "$origin_json" "$lock_json" "$info_json" "$slug" "$maintained_fixture" <<\'NODE\'\n';
   const start = script.indexOf(marker);
   if (start === -1) {
     throw new Error("ClawHub skill install verifier heredoc was not found");
@@ -194,7 +202,7 @@ async function extractClawhubSkillInstallVerifier(): Promise<string> {
 async function extractClawhubSkillInstallSelector(): Promise<string> {
   const script = await readFile("scripts/e2e/lib/skills/clawhub-install-proof.sh", "utf8");
   const marker =
-    'node --input-type=module - "$search_json" "$resolve_json" "$requested_slug" "$preferred_slug" "$maintained_fixture" <<\'NODE\'\n';
+    'run_node_module "$search_json" "$resolve_json" "$requested_slug" "$preferred_slug" "$maintained_fixture" <<\'NODE\'\n';
   const start = script.indexOf(marker);
   if (start === -1) {
     throw new Error("ClawHub skill install selector heredoc was not found");
@@ -326,6 +334,44 @@ run_wizard_cmd failing-wizard fake-state "node fake-wizard" send_noop false
     } finally {
       await rm(tempRoot, { force: true, recursive: true });
     }
+  });
+
+  it("delivers wizard input and EOF without retaining an inherited writer", async () => {
+    const tempRoot = tempDirs.make("openclaw-onboard-fifo-eof-");
+    const fixturePath = path.join(tempRoot, "wizard-eof.sh");
+    await writeFile(
+      fixturePath,
+      `#!/usr/bin/env bash
+set -euo pipefail
+export OPENCLAW_ONBOARD_SCENARIO_SOURCE_ONLY=1
+export OPENCLAW_ONBOARD_E2E_TMPDIR=${JSON.stringify(tempRoot)}
+OPENCLAW_ENTRY=node
+openclaw_test_state_create() { :; }
+source scripts/e2e/lib/onboard/scenario.sh
+
+openclaw_e2e_run_script_with_pty() { cat >"$2"; }
+send_and_close() {
+  printf 'wizard input\\n' >&3
+  exec 3>&-
+}
+run_wizard_cmd eof-wizard fake-state cat send_and_close false
+printf 'recorded input:'
+cat "$WIZARD_LOG_PATH"
+test -z "$(find "$ONBOARD_TMP_DIR" -name '*.fifo.*')"
+cleanup_onboard_artifacts
+test ! -e "$ONBOARD_TMP_DIR"
+`,
+    );
+
+    const result = spawnSync("bash", [fixturePath], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      timeout: 10_000,
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stdout).toContain("recorded input:wizard input\n");
   });
 
   it("does not wait for a skills prompt after the ready state renders", async () => {

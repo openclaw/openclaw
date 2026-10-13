@@ -90,16 +90,20 @@ export type McpAppFixtureEvent = {
   aborted?: boolean;
 };
 
-async function readMcpAppFixtureEvents(eventsPath: string): Promise<McpAppFixtureEvent[]> {
-  return (await fs.readFile(eventsPath, "utf8"))
+async function readMcpAppFixtureEvents(
+  eventsPath: string,
+  scenario?: string,
+): Promise<McpAppFixtureEvent[]> {
+  const events = (await fs.readFile(eventsPath, "utf8"))
     .split("\n")
     .filter(Boolean)
     .map((line) => JSON.parse(line) as McpAppFixtureEvent);
+  return scenario === undefined ? events : events.filter((event) => event.scenario === scenario);
 }
 
 export function createMcpAppFixtureControl(controlPath: string, eventsPath: string) {
   return {
-    readEvents: () => readMcpAppFixtureEvents(eventsPath),
+    readEvents: (scenario?: string) => readMcpAppFixtureEvents(eventsPath, scenario),
     async configure(value: Record<string, unknown>): Promise<void> {
       const nextPath = controlPath + ".next";
       await fs.writeFile(nextPath, JSON.stringify(value));
@@ -150,9 +154,7 @@ export function createMcpAppTeardownRecorder(proofDir: string, fixtureEventsPath
           startedAtMs,
           observedAtMs: Date.now(),
           diagnostics,
-          events: (await readMcpAppFixtureEvents(fixtureEventsPath)).filter(
-            (event) => event.scenario === scenario,
-          ),
+          events: await readMcpAppFixtureEvents(fixtureEventsPath, scenario),
         });
         await fs.writeFile(
           path.join(proofDir, "graceful-teardown.json"),
@@ -266,16 +268,21 @@ export async function mountControlUiHost(
 <script type="module">
 import { GatewayBrowserClient } from "/src/api/gateway.ts";
 import "/src/components/mcp-app-view-registration.ts";
-import { WIDGET_PROMPT_EVENT } from "/src/components/mcp-app-security.ts";
+import { applicationContext } from "/src/app/context.ts";
+window.mcpConformanceApplicationContext = applicationContext;
+import { MCP_APP_MESSAGE_EVENT } from "/src/components/mcp-app-security.ts";
+import { mcpAppMessageText } from "/src/lib/mcp-app-message-content.ts";
 window.mcpConformanceGatewayBrowserClient = GatewayBrowserClient;
-document.addEventListener(WIDGET_PROMPT_EVENT, (event) => {
-  window.mcpConformancePrompt = event.detail.text;
+document.addEventListener(MCP_APP_MESSAGE_EVENT, (event) => {
+  event.preventDefault();
+  window.mcpConformancePrompt = mcpAppMessageText(event.detail.content);
+  event.detail.respond(true);
 });
 window.mcpConformanceUnmount = async () => {
   const mount = document.getElementById("mount");
   const view = window.mcpConformanceView;
   if (!mount || !view) return;
-  const frame = view.shadowRoot?.querySelector("iframe");
+  const frame = view.querySelector("iframe");
   await view.teardown();
   if (frame?.isConnected) throw new Error("MCP App frame remained mounted");
   console.info("mcp-conformance-frame-detached");
@@ -334,10 +341,11 @@ window.mcpConformanceUnmount = async () => {
         }
       };
       setTheme("dark");
-      Reflect.set(view, "context", {
+      const context = {
         gateway: {
-          snapshot: { client },
+          snapshot: { client, phase: "connected" },
           connection: { gatewayUrl: params.gatewayUrl },
+          subscribe: () => () => {},
         },
         theme: {
           subscribe(listener: () => void) {
@@ -345,6 +353,15 @@ window.mcpConformanceUnmount = async () => {
             return () => themeListeners.delete(listener);
           },
         },
+      };
+      document.getElementById("mount")?.addEventListener("context-request", (event) => {
+        if (
+          Reflect.get(event, "context") !== Reflect.get(window, "mcpConformanceApplicationContext")
+        ) {
+          return;
+        }
+        event.stopPropagation();
+        Reflect.get(event, "callback")(context);
       });
       view.sessionKey = params.sessionKey;
       view.viewId = params.viewId;
@@ -401,6 +418,7 @@ export function appHtml(appModuleUrl: string): string {
 <button id="arm-refresh">Arm catalog refresh</button>
 <output id="arm-result"></output>
 <button id="call-app">Call app tool</button>
+<button id="list-tools">List app tools</button>
 <button id="call-expiring">Call with deadline</button>
 <button id="cancel-call">Cancel app call</button>
 <button id="call-model">Call model tool</button>
@@ -411,6 +429,7 @@ export function appHtml(appModuleUrl: string): string {
 <output id="initialized">pending</output>
 <output id="capabilities"></output>
 <output id="ping"></output>
+<output id="tools"></output>
 <output id="input"></output>
 <output id="result"></output>
 <output id="app-tool"></output>
@@ -426,7 +445,6 @@ export function appHtml(appModuleUrl: string): string {
 <script type="module">
 import {
   App,
-  McpUiResourceTeardownResultSchema,
   applyDocumentTheme,
   applyHostStyleVariables,
 } from ${JSON.stringify(appModuleUrl)};
@@ -478,6 +496,10 @@ const callAppTool = async (timeout) => {
   } catch (error) { write("app-tool", "denied:" + error); }
 };
 document.getElementById("call-app").onclick = () => callAppTool();
+document.getElementById("list-tools").onclick = async () => {
+  try { write("tools", JSON.stringify(await app.request({ method: "tools/list", params: {} }))); }
+  catch (error) { write("tools", "denied:" + error); }
+};
 document.getElementById("call-expiring").onclick = () => callAppTool(3000);
 document.getElementById("cancel-call").onclick = () => activeCall?.abort(new Error("fixture caller cancelled"));
 document.getElementById("call-model").onclick = async () => {
@@ -509,10 +531,7 @@ document.getElementById("request-teardown").onclick = () => app.requestTeardown(
 await app.connect();
 applyHostContext();
 write("capabilities", JSON.stringify(app.getHostCapabilities() ?? {}));
-write("ping", JSON.stringify(await app.request(
-  { method: "ping", params: {} },
-  McpUiResourceTeardownResultSchema,
-)));
+write("ping", JSON.stringify(await app.request({ method: "ping", params: {} })));
 write("initialized", "ready");
 </script>`;
 }
@@ -654,8 +673,8 @@ export async function findAppFrame(page: Page): Promise<Frame> {
       const view = document.querySelector("mcp-app-view");
       return {
         exists: Boolean(view),
-        error: view?.shadowRoot?.querySelector(".error")?.textContent ?? null,
-        shadow: view?.shadowRoot?.textContent ?? null,
+        error: view?.querySelector(".error")?.textContent ?? null,
+        content: view?.textContent ?? null,
       };
     });
     throw new Error(

@@ -1,5 +1,6 @@
 // Covers runtime schema defaults and generated runtime config behavior.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { setGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -22,9 +23,10 @@ const mockGetCurrentPluginMetadataSnapshot = vi.hoisted(() => vi.fn());
 
 let readBestEffortRuntimeConfigSchema: typeof import("./runtime-schema.js").readBestEffortRuntimeConfigSchema;
 let loadGatewayRuntimeConfigSchema: typeof import("./runtime-schema.js").loadGatewayRuntimeConfigSchema;
+let invalidateGatewayRuntimeConfigSchema: typeof import("./runtime-schema.js").invalidateGatewayRuntimeConfigSchema;
 
 function explicitMainRoster(): OpenClawConfig {
-  return { agents: { list: [{ id: "main" }] } };
+  return { agents: { entries: { main: {} } } };
 }
 
 vi.mock("./config.js", () => {
@@ -98,81 +100,30 @@ function makeManifestRegistry() {
           },
         },
       },
-      {
-        id: "telegram",
-        name: "Telegram",
-        description: "Telegram plugin",
-        origin: "bundled",
-        channels: ["telegram"],
-        channelCatalogMeta: {
-          id: "telegram",
-          label: "Telegram",
-          blurb: "Telegram channel",
-        },
+      ...[
+        { id: "telegram", label: "Telegram", origin: "bundled", field: "botToken" },
+        { id: "slack", label: "Slack", origin: "bundled", field: "botToken" },
+        { id: "matrix", label: "Matrix", origin: "workspace", field: "homeserver" },
+      ].map(({ id, label, origin, field }) => ({
+        id,
+        name: label,
+        description: `${label} plugin`,
+        origin,
+        channels: [id],
+        channelCatalogMeta: { id, label, blurb: `${label} channel` },
         channelConfigs: {
-          telegram: {
-            schema: {
-              type: "object",
-              properties: {
-                botToken: { type: "string" },
-              },
-            },
+          [id]: {
+            schema: { type: "object", properties: { [field]: { type: "string" } } },
             uiHints: {},
           },
         },
-      },
-      {
-        id: "slack",
-        name: "Slack",
-        description: "Slack plugin",
-        origin: "bundled",
-        channels: ["slack"],
-        channelCatalogMeta: {
-          id: "slack",
-          label: "Slack",
-          blurb: "Slack channel",
-        },
-        channelConfigs: {
-          slack: {
-            schema: {
-              type: "object",
-              properties: {
-                botToken: { type: "string" },
-              },
-            },
-            uiHints: {},
-          },
-        },
-      },
-      {
-        id: "matrix",
-        name: "Matrix",
-        description: "Matrix plugin",
-        origin: "workspace",
-        channels: ["matrix"],
-        channelCatalogMeta: {
-          id: "matrix",
-          label: "Matrix",
-          blurb: "Matrix channel",
-        },
-        channelConfigs: {
-          matrix: {
-            schema: {
-              type: "object",
-              properties: {
-                homeserver: { type: "string" },
-              },
-            },
-            uiHints: {},
-          },
-        },
-      },
+      })),
     ],
   };
 }
 
-async function readSchemaNodes() {
-  const result = await readBestEffortRuntimeConfigSchema();
+async function readSchemaNodes(prepared?: Parameters<typeof readBestEffortRuntimeConfigSchema>[0]) {
+  const result = await readBestEffortRuntimeConfigSchema(prepared);
   const schema = result.schema as { properties?: Record<string, unknown> };
   const channelsNode = schema.properties?.channels as Record<string, unknown> | undefined;
   const channelProps = channelsNode?.properties as Record<string, unknown> | undefined;
@@ -194,8 +145,11 @@ function getCurrentMetadataSnapshotArg(index = 0): Record<string, unknown> | und
 }
 
 beforeAll(async () => {
-  ({ readBestEffortRuntimeConfigSchema, loadGatewayRuntimeConfigSchema } =
-    await import("./runtime-schema.js"));
+  ({
+    readBestEffortRuntimeConfigSchema,
+    loadGatewayRuntimeConfigSchema,
+    invalidateGatewayRuntimeConfigSchema,
+  } = await import("./runtime-schema.js"));
 });
 
 afterEach(() => {
@@ -235,6 +189,7 @@ describe("readBestEffortRuntimeConfigSchema", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockReadConfigFileSnapshot.mockReset();
     mockLoadConfig.mockReturnValue(explicitMainRoster());
     mockLoadPluginManifestRegistry.mockReturnValue(makeManifestRegistry());
   });
@@ -261,6 +216,79 @@ describe("readBestEffortRuntimeConfigSchema", () => {
     await readBestEffortRuntimeConfigSchema();
 
     expect(mockReadConfigFileSnapshot).toHaveBeenCalledWith({ observe: false });
+  });
+
+  it("builds from prepared config and metadata without another config or registry read", async () => {
+    mockReadConfigFileSnapshot.mockResolvedValue(
+      makeSnapshot({
+        valid: true,
+        config: {
+          ...explicitMainRoster(),
+          plugins: { entries: { "fallback-only": { enabled: true } } },
+        },
+      }),
+    );
+    const snapshot = makeSnapshot({
+      valid: true,
+      config: {
+        ...explicitMainRoster(),
+        plugins: { entries: { "prepared-demo": { enabled: true } } },
+      },
+    });
+    const pluginMetadataSnapshot = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "prepared-demo",
+          configSchema: { type: "object", properties: { mode: { type: "string" } } },
+          configUiHints: { mode: { sensitive: true } },
+        },
+      ],
+    });
+
+    const result = await readBestEffortRuntimeConfigSchema({ snapshot, pluginMetadataSnapshot });
+
+    expect(result.schema).toMatchObject({
+      properties: {
+        plugins: {
+          properties: {
+            entries: {
+              properties: {
+                "prepared-demo": {
+                  properties: { config: { properties: { mode: { type: "string" } } } },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(result.uiHints["plugins.entries.prepared-demo.config.mode"]?.sensitive).toBe(true);
+    expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+    expect(mockLoadPluginManifestRegistry).not.toHaveBeenCalled();
+    expect(mockGetCurrentPluginMetadataSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("resolves missing metadata from the prepared config without rereading its source", async () => {
+    mockReadConfigFileSnapshot.mockResolvedValue(
+      makeSnapshot({
+        valid: true,
+        config: { ...explicitMainRoster(), gateway: { mode: "local" } },
+      }),
+    );
+    const config: OpenClawConfig = {
+      ...explicitMainRoster(),
+      plugins: { entries: { "prepared-only": { enabled: true } } },
+    };
+
+    const { channelProps, entryProps } = await readSchemaNodes({
+      snapshot: makeSnapshot({ valid: true, config }),
+    });
+
+    expect(channelProps).toHaveProperty("matrix");
+    expect(entryProps).toHaveProperty("demo");
+    expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+    expect(mockLoadPluginManifestRegistry).toHaveBeenCalledTimes(1);
+    expect(getManifestRegistryLoadArg()?.config).toEqual(config);
   });
 
   it("falls back to bundled channel metadata when config is invalid", async () => {
@@ -291,6 +319,35 @@ describe("loadGatewayRuntimeConfigSchema", () => {
     });
     mockLoadPluginManifestRegistry.mockReturnValue(makeManifestRegistry());
   });
+
+  it.each(["config", "plugin registry", "invalidation"] as const)(
+    "refreshes shared schema metadata after %s changes",
+    (change) => {
+      let config = explicitMainRoster();
+      loadGatewayRuntimeConfigSchema(config);
+      loadGatewayRuntimeConfigSchema(config);
+      expect(mockLoadPluginManifestRegistry).toHaveBeenCalledTimes(1);
+
+      setGatewayPluginMetadataSnapshot(
+        createPluginMetadataSnapshotFixture({
+          plugins: [{ id: "updated-plugin", configSchema: { type: "object" } }],
+        }),
+      );
+
+      if (change === "config") {
+        config = { ...config, plugins: { entries: { demo: { enabled: false } } } };
+      } else if (change === "plugin registry") {
+        setActivePluginRegistry(createEmptyPluginRegistry());
+      } else {
+        invalidateGatewayRuntimeConfigSchema();
+      }
+
+      expect(loadGatewayRuntimeConfigSchema(config).schema).toHaveProperty(
+        "properties.plugins.properties.entries.properties.updated-plugin",
+      );
+      expect(mockLoadConfig).not.toHaveBeenCalled();
+    },
+  );
 
   it("uses manifest metadata instead of booting plugin runtime", () => {
     const result = loadGatewayRuntimeConfigSchema();

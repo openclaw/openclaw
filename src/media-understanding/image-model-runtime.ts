@@ -1,4 +1,3 @@
-// Resolves image-capable model metadata and credential-bound runtime auth.
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveModelAsync } from "../agents/embedded-agent-runner/model.js";
 import { isMinimaxVlmModel } from "../agents/minimax-vlm.js";
@@ -28,19 +27,10 @@ import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.runtime.
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import type { ImageDescriptionRequest } from "./types.js";
 
-type ImageRuntimeParams = {
-  cfg: ImageDescriptionRequest["cfg"];
-  agentDir: string;
-  provider: string;
-  model: string;
-  profile?: string;
-  preferredProfile?: string;
-  signal?: AbortSignal;
-  authStore?: ImageDescriptionRequest["authStore"];
-  agentId?: string;
-  workspaceDir?: string;
-  preparedModelRuntime?: ImageDescriptionRequest["preparedModelRuntime"];
-};
+type ImageRuntimeParams = Omit<
+  ImageDescriptionRequest,
+  "buffer" | "fileName" | "mime" | "prompt" | "maxTokens" | "timeoutMs"
+>;
 
 type ResolvedImageRuntimeContext = {
   cfg: ImageRuntimeParams["cfg"];
@@ -156,6 +146,7 @@ async function prepareResolvedImageRuntime(
       params.agentDir,
       params.cfg,
       {
+        abortSignal: params.signal,
         modelIdSource: "selected",
         authStorage,
         modelRegistry,
@@ -292,6 +283,7 @@ export async function resolveImageRuntime(
     Pick<NonNullable<Parameters<typeof resolveModelAsync>[4]>, "authStorage" | "modelRegistry">
   >;
   const resolveOptions = {
+    abortSignal: params.signal,
     modelIdSource: "selected" as const,
     allowBundledStaticCatalogFallback: true,
     ...preparedStores,

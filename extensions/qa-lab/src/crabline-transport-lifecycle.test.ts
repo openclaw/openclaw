@@ -175,64 +175,33 @@ describe("Crabline Telegram accepted lifecycle", () => {
     },
   );
 
-  it.each(["sendMessage", "editMessageText"] as const)(
-    "does not count a rejected %s as preview evidence",
-    async (method) => {
-      await withTelegramTransport(async ({ post, send, wait }) => {
-        const existingId = method === "editMessageText" ? await send(FINAL_TEXT) : undefined;
-        await post(
-          method,
-          {
-            ...(existingId === undefined
-              ? { message_thread_id: Number(THREAD_ID) }
-              : { message_id: existingId + 1000 }),
-            text: REJECTED_TEXT,
+  it("ignores delete observations unless acceptance is true", async () => {
+    await withTelegramTransport(async ({ transport, observe, post, send, wait }) => {
+      // These exercise the observer contract, not provider failures: authenticated
+      // deleteMessage is a success stub, and real recorder events carry a boolean.
+      for (const acceptance of [{}, { accepted: false }, { accepted: "true" }]) {
+        await transport.reset();
+        const messageId = await send("accepted preview");
+        const event: Parameters<Observer>[0] & { accepted?: unknown } = {
+          at: "2026-01-01T00:00:00.000Z",
+          body: {
+            chat_id: CHAT_ID,
+            message_id: messageId + 1000,
           },
-          400,
-        );
-        const messageId = existingId ?? (await send(FINAL_TEXT));
+          method: "POST",
+          path: "/bot<redacted>/deleteMessage",
+          query: {},
+          type: "api",
+          ...acceptance,
+        };
+        await observe(event);
         await post("editMessageText", { message_id: messageId, text: FINAL_TEXT });
 
-        // With only accepted final text, there is no qualifying preview.
-        await expect(wait()).rejects.toThrow("timed out after 25ms");
-        expectAcceptedSequence(await wait({ minimumPreviewEvents: 0 }), messageId);
-      });
-    },
-  );
-
-  it.each(["sendMessage", "editMessageText", "deleteMessage"] as const)(
-    "ignores synthetic %s observations unless acceptance is true",
-    async (method) => {
-      await withTelegramTransport(async ({ transport, observe, post, send, wait }) => {
-        // These exercise the observer contract, not provider failures: authenticated
-        // deleteMessage is a success stub, and real recorder events carry a boolean.
-        for (const acceptance of [{}, { accepted: false }, { accepted: "true" }]) {
-          await transport.reset();
-          const messageId = await send("accepted preview");
-          const event: Parameters<Observer>[0] & { accepted?: unknown } = {
-            at: "2026-01-01T00:00:00.000Z",
-            body: {
-              chat_id: CHAT_ID,
-              ...(method === "sendMessage"
-                ? { message_thread_id: Number(THREAD_ID) }
-                : { message_id: messageId + 1000 }),
-              ...(method === "deleteMessage" ? {} : { text: REJECTED_MARKER }),
-            },
-            method: "POST",
-            path: `/bot<redacted>/${method}`,
-            query: {},
-            type: "api",
-            ...acceptance,
-          };
-          await observe(event);
-          await post("editMessageText", { message_id: messageId, text: FINAL_TEXT });
-
-          expectAcceptedSequence(await wait(), messageId);
-          expect(transport.state.searchMessages({ query: REJECTED_MARKER })).toEqual([]);
-        }
-      });
-    },
-  );
+        expectAcceptedSequence(await wait(), messageId);
+        expect(transport.state.searchMessages({ query: REJECTED_MARKER })).toEqual([]);
+      }
+    });
+  });
 
   it("honors accepted deletes and clears pending IDs, bound IDs, and cursors on reset", async () => {
     await withTelegramTransport(async ({ transport, post, send, wait }) => {

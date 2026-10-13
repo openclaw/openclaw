@@ -1,17 +1,15 @@
 /** Owner-native outbound message lifecycle projection for run inspection. */
+import type { DatabaseSync } from "node:sqlite";
 import type {
   DecisionReceiptV1,
   ExecutionIdentityContextV1,
 } from "../../packages/gateway-protocol/src/index.js";
-import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import type { OutboundMessageAuditEventRecord } from "./audit-event-types.js";
 import {
-  countOutboundMessageAuditEventsForRun,
-  pageOutboundMessageAuditEventsForRun,
+  countOutboundMessageAuditEventsForRunInDatabase,
+  pageOutboundMessageAuditEventsForRunInDatabase,
   type OutboundMessageAuditEventCursor,
 } from "./message-delivery-audit-store.js";
-
-type MessageDeliveryReadOptions = OpenClawStateDatabaseOptions & { now?: number };
 
 function messageOutcome(
   event: OutboundMessageAuditEventRecord,
@@ -127,16 +125,18 @@ function projectMessageDeliveryReceipt(
   };
 }
 
-export function summarizeMessageDeliveryReceiptsForRun(params: {
-  context: ExecutionIdentityContextV1;
-  options: MessageDeliveryReadOptions;
-}): { count: number; coverageState?: "attribution-only"; missingEvidence: string[] } {
-  const count = countOutboundMessageAuditEventsForRun({
+export function summarizeMessageDeliveryReceiptsForRunInDatabase(
+  db: DatabaseSync,
+  params: {
+    context: ExecutionIdentityContextV1;
+    now: number;
+  },
+): { count: number; coverageState?: "attribution-only"; missingEvidence: string[] } {
+  const count = countOutboundMessageAuditEventsForRunInDatabase(db, {
     runId: params.context.runId,
     contextId: params.context.contextId,
     executionId: params.context.executionId,
-    now: params.options.now,
-    database: params.options,
+    now: params.now,
   });
   return {
     count,
@@ -145,25 +145,27 @@ export function summarizeMessageDeliveryReceiptsForRun(params: {
   };
 }
 
-export function pageMessageDeliveryReceiptsForRun(params: {
-  context: ExecutionIdentityContextV1;
-  after?: OutboundMessageAuditEventCursor;
-  offset?: number;
-  limit: number;
-  options: MessageDeliveryReadOptions;
-}): {
+export function pageMessageDeliveryReceiptsForRunInDatabase(
+  db: DatabaseSync,
+  params: {
+    context: ExecutionIdentityContextV1;
+    after?: OutboundMessageAuditEventCursor;
+    offset?: number;
+    limit: number;
+    now: number;
+  },
+): {
   entries: Array<{ receipt: DecisionReceiptV1; selectorId: string }>;
   nextCursor?: OutboundMessageAuditEventCursor;
 } {
-  const page = pageOutboundMessageAuditEventsForRun({
+  const page = pageOutboundMessageAuditEventsForRunInDatabase(db, {
     runId: params.context.runId,
     contextId: params.context.contextId,
     executionId: params.context.executionId,
     after: params.after,
     offset: params.offset,
     limit: params.limit,
-    now: params.options.now,
-    database: params.options,
+    now: params.now,
   });
   return {
     entries: page.entries.map(({ event, rowId }) => ({

@@ -160,6 +160,9 @@ describe.each([
           const ordinaryCooldown = afterUtilityFailure?.cooldownUntil;
           expect(ordinaryCooldown, evidence()).toBeGreaterThan(Date.now() + clock.offset);
           expect(provider.responses, evidence()).toContainEqual({
+            atMs: expect.any(Number),
+            status: 200,
+            transport: "http",
             phase: "ordinary-rate-limit-with-capacity",
             path: "/core-wham/usage",
             value: expect.objectContaining({
@@ -173,10 +176,13 @@ describe.each([
             headers: {},
           });
           let beforeRecoveryReply: ReturnType<typeof stats>;
-          provider.observeNextSuccess(() => {
-            beforeRecoveryReply = stats();
-            turns.push({ beforeRecoveryReply });
-          });
+          provider.observeNextSuccess(
+            () => {
+              beforeRecoveryReply = stats();
+              turns.push({ beforeRecoveryReply });
+            },
+            { model: "gpt-5.5", path: "/v1/responses" },
+          );
           provider.setPhase("restored");
           expect(await turn(), evidence()).toEqual({ status: "ok", output: [MARKER] });
           expect(beforeRecoveryReply?.blockedUntil, evidence()).toBeUndefined();

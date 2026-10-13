@@ -1,6 +1,6 @@
 import { mkdir, realpath } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WORKER_COMPUTER_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-computer.js";
 import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -19,11 +19,13 @@ import {
 import { saveMediaBuffer } from "../../media/store.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import type { WorkerGitHubLaunchBinding } from "../../worker/launch-descriptor.js";
 import type { PreparedWorkerComputer } from "./computer-transport.js";
 import * as skillTransfer from "./skill-resource-transfer.js";
 import { WorkerRunnerCapacityError, type WorkerTunnelHandle } from "./tunnel-contract.js";
 import {
+  createWorkerTurnTunnel,
   ENVIRONMENT_ID,
   MANIFEST_REF,
   root,
@@ -38,6 +40,7 @@ import {
   cleanupWorkerTurnLauncherTest,
   computerDescriptor,
   createWorkerSessionTurnPlacementProvider,
+  readLaunchToolNames,
   measureLaunchTurn,
   placements,
   seedActivePlacement,
@@ -46,22 +49,29 @@ import {
   unusedEnvironments,
 } from "./worker-turn-launcher.test-support.js";
 
-const prepareGitHubBinding = vi.hoisted(() => vi.fn());
-vi.mock("./worker-github-binding.js", () => ({
-  prepareWorkerGitHubBinding: prepareGitHubBinding,
+afterAll(closeStateDatabaseForTest);
+
+const readGitHubFact = vi.hoisted(() => vi.fn());
+// mock-isolation: Worker launches consume facts without starting identity discovery.
+vi.mock("../github-publication-discovery.js", () => ({
+  readGitHubPublicationFact: readGitHubFact,
 }));
 
 describe("worker launch capabilities", () => {
   beforeEach(setupWorkerTurnLauncherTest);
   beforeEach(() => {
-    prepareGitHubBinding.mockReset().mockResolvedValue(undefined);
+    readGitHubFact.mockReset().mockReturnValue({ available: false });
   });
-  afterEach(cleanupWorkerTurnLauncherTest);
+  afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
 
-  it.each([true, false])(
-    "carries only an available GitHub identity in the launch envelope (%s)",
-    async (available) => {
-      seedActivePlacement();
+  it.each([
+    { label: "available", available: true, revoked: false },
+    { label: "unavailable", available: false, revoked: false },
+    { label: "revoked before launch", available: true, revoked: true },
+  ])(
+    "carries only a current GitHub identity in the launch envelope ($label)",
+    async ({ available, revoked }) => {
+      await seedActivePlacement();
       const github: WorkerGitHubLaunchBinding = {
         token: "synthetic-turn-bound-github-token",
         login: "shared-bot",
@@ -69,7 +79,9 @@ describe("worker launch capabilities", () => {
         remoteUrl: "https://github.com/owner/repo.git",
         gitAuthor: { name: "Shared Bot", email: "shared@example.test" },
       };
-      prepareGitHubBinding.mockResolvedValue(available ? github : undefined);
+      readGitHubFact.mockReturnValue(
+        available ? { available: true, github } : { available: false },
+      );
       const launchTurn = vi.fn<NonNullable<WorkerTunnelHandle["launchTurn"]>>(async ({ plan }) => {
         if (available) {
           expect(plan.assignment.github).toEqual(github);
@@ -78,18 +90,20 @@ describe("worker launch capabilities", () => {
         }
         throw new WorkerRunnerCapacityError();
       });
-      const tunnel: WorkerTunnelHandle = {
-        environmentId: ENVIRONMENT_ID,
-        ownerEpoch: OWNER_EPOCH,
+      const tunnel: WorkerTunnelHandle = createWorkerTurnTunnel({
         launchTurn,
-        measureLaunchTurn,
+        measureLaunchTurn: (plan, claim) => {
+          if (revoked) {
+            expect(plan.assignment.github).toEqual(github);
+            readGitHubFact.mockReturnValue({ available: true });
+          }
+          return measureLaunchTurn(plan, claim);
+        },
         stageAttachments: vi.fn(),
-        runWorkspaceCommand: vi.fn(),
         quiesceWorkspace: vi.fn(),
         syncWorkspace: vi.fn(),
         reconcileWorkspace: vi.fn(),
-        stop: vi.fn(async () => {}),
-      };
+      });
       const environments = {
         ...unusedEnvironments(),
         get: vi.fn(() => attachedEnvironment()),
@@ -97,14 +111,20 @@ describe("worker launch capabilities", () => {
         startTunnel: vi.fn(async () => tunnel),
       };
       const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
-      await expect(
-        provider.executeTurn(
-          { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId: "run-github" },
-          turn("run-github"),
-          vi.fn(),
-        ),
-      ).rejects.toBeInstanceOf(WorkerRunnerCapacityError);
-      expect(launchTurn).toHaveBeenCalledOnce();
+      const execution = provider.executeTurn(
+        { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId: "run-github" },
+        turn("run-github"),
+        vi.fn(),
+      );
+      if (revoked) {
+        await expect(execution).rejects.toThrow(
+          "GitHub identity changed before worker launch; retry the turn.",
+        );
+        expect(launchTurn).not.toHaveBeenCalled();
+      } else {
+        await expect(execution).rejects.toBeInstanceOf(WorkerRunnerCapacityError);
+        expect(launchTurn).toHaveBeenCalledOnce();
+      }
     },
   );
 
@@ -113,10 +133,11 @@ describe("worker launch capabilities", () => {
     { missingFeature: undefined, modelHasVision: true, allowed: true },
     { missingFeature: undefined, modelHasVision: false, allowed: false },
     { missingFeature: WORKER_COMPUTER_PROTOCOL_FEATURE, modelHasVision: true, allowed: false },
+    { modelHasVision: true, supervisorAdmitsComputer: false, allowed: false },
   ])(
-    "grants computer with negotiated features and model vision (missing: $missingFeature, vision: $modelHasVision)",
-    async ({ missingFeature, modelHasVision, allowed }) => {
-      seedActivePlacement();
+    "grants computer with negotiated features, supervisor vocabulary, and model vision (%j)",
+    async ({ missingFeature, modelHasVision, supervisorAdmitsComputer = true, allowed }) => {
+      await seedActivePlacement();
       const environment = attachedEnvironment();
       if (!missingFeature) {
         environment.bootstrapReceipt!.protocolFeatures.push(WORKER_COMPUTER_PROTOCOL_FEATURE);
@@ -141,18 +162,17 @@ describe("worker launch capabilities", () => {
         expect(plan.assignment.toolAuthority.allowedToolNames.includes("computer")).toBe(allowed);
         throw new WorkerRunnerCapacityError();
       });
-      const tunnel: WorkerTunnelHandle = {
-        environmentId: ENVIRONMENT_ID,
-        ownerEpoch: OWNER_EPOCH,
+      const tunnel: WorkerTunnelHandle = createWorkerTurnTunnel({
         launchTurn,
-        measureLaunchTurn,
+        readLaunchToolNames: async () =>
+          (await readLaunchToolNames()).filter(
+            (name) => supervisorAdmitsComputer || name !== "computer",
+          ),
         stageAttachments: vi.fn(async () => {}),
-        runWorkspaceCommand: vi.fn(),
         quiesceWorkspace: vi.fn(),
         syncWorkspace: vi.fn(),
         reconcileWorkspace: vi.fn(),
-        stop: vi.fn(async () => {}),
-      };
+      });
       const environments = {
         ...unusedEnvironments(),
         get: vi.fn(() => environment),
@@ -175,7 +195,9 @@ describe("worker launch capabilities", () => {
       ).rejects.toBeInstanceOf(WorkerRunnerCapacityError);
       expect(launchTurn).toHaveBeenCalledOnce();
       expect(tunnel.stageAttachments).toHaveBeenCalledTimes(modelHasVision === true ? 1 : 0);
-      expect(prepareComputer).toHaveBeenCalledTimes(allowed ? 1 : 0);
+      expect(prepareComputer).toHaveBeenCalledTimes(
+        !missingFeature && modelHasVision !== false ? 1 : 0,
+      );
       expect(bind).toHaveBeenCalledTimes(allowed ? 1 : 0);
     },
   );
@@ -226,7 +248,7 @@ describe("worker launch capabilities", () => {
         "returned-success",
       ] as const
     ).flatMap((primary) =>
-      [false, true].map((closeFails) => ({
+      (primary.startsWith("returned") ? [true] : [false, true]).map((closeFails) => ({
         label: primary,
         nodeDeviceId: "paired-node-1",
         providerId: "device",
@@ -279,7 +301,7 @@ describe("worker launch capabilities", () => {
           : primary === "overload"
             ? ({ reason: "overloaded", status: 503 } as const)
             : primary === "http-507"
-              ? ({ reason: "timeout", status: 507 } as const)
+              ? ({ reason: "server_error", status: 507 } as const)
               : undefined;
       const primaryError = providerFailure
         ? primary === "http-507"
@@ -312,7 +334,7 @@ describe("worker launch capabilities", () => {
         media: [{ path: saved.path, contentType: "text/plain" }],
       };
       const originalPrompt = inputTurn.prompt;
-      seedActivePlacement("remote-exec", remote);
+      await seedActivePlacement("remote-exec", remote);
       const order: string[] = [];
       const launchTurn = vi.fn();
       const quiesceWorkspace = vi.fn(async () => {
@@ -330,19 +352,18 @@ describe("worker launch capabilities", () => {
             throw new Error("expected a local workspace source");
           }
           order.push("reconcile");
-          request.source.journal.commit(MANIFEST_REF);
+          await request.source.journal.commit(MANIFEST_REF);
           return {
             manifestRef: MANIFEST_REF,
             changed: false,
             verifyStable: vi.fn(async () => {}),
             verifyLocalStable: vi.fn(async () => {}),
+            publishStagedResult: async () => {},
+            discardPreparedStagedResult: async () => {},
           };
         },
       );
-      const tunnel: WorkerTunnelHandle = {
-        environmentId: ENVIRONMENT_ID,
-        ownerEpoch: OWNER_EPOCH,
-        measureLaunchTurn,
+      const tunnel: WorkerTunnelHandle = createWorkerTurnTunnel({
         launchTurn,
         runWorkspaceCommand: async (command) =>
           await runCommandWithTimeout([...command.argv], {
@@ -354,8 +375,7 @@ describe("worker launch capabilities", () => {
         quiesceWorkspace,
         syncWorkspace: vi.fn(),
         reconcileWorkspace,
-        stop: vi.fn(async () => {}),
-      };
+      });
       const secret = ["synthetic", "cleanup", "credential"].join("-");
       const cleanupDetail = `native close failed: HTTP 401 request timed out Authorization: Bearer ${secret} ${"x".repeat(3000)}`;
       const cleanupError = new AggregateError([new Error(cleanupDetail)], "computer close failed");
@@ -405,7 +425,7 @@ describe("worker launch capabilities", () => {
           );
           expect(placements.get(SESSION_ID)).toEqual(placementBefore);
           expect(loadSessionEntry(sessionTarget)).toEqual(entryBefore);
-          expect(placements.get("session-remote-successor")).toBeUndefined();
+          expect(await placements.getAsync("session-remote-successor")).toBeUndefined();
           if (nodeDeviceId) {
             const assertCurrent = getPluginRuntimeGatewayRequestScope()?.assertNodeExecutionCurrent;
             expect(assertCurrent).toBeTypeOf("function");
@@ -627,7 +647,7 @@ describe("worker launch capabilities", () => {
       ]);
       expect(launchTurn).not.toHaveBeenCalled();
       expect(environments.acquireTurnCredential).not.toHaveBeenCalled();
-      expect(placements.listPendingWorkspaceResults()).toEqual([]);
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       const placement = placements.get(SESSION_ID);
       expect([placement?.state, placement?.turnClaim]).toEqual(["active", null]);
       if (retainedNodeAuthority) {

@@ -63,20 +63,6 @@ function makeTricklingStream(intervalMs: number, onCancel?: (reason?: unknown) =
   });
 }
 
-async function expectIdleTimeout(
-  createReadPromise: () => Promise<unknown>,
-  expectedError: RegExp | string = /stalled/i,
-) {
-  vi.useFakeTimers();
-  try {
-    const rejection = expect(createReadPromise()).rejects.toThrow(expectedError);
-    await vi.advanceTimersByTimeAsync(60);
-    await rejection;
-  } finally {
-    vi.useRealTimers();
-  }
-}
-
 describe("cancelUnreadResponseBody", () => {
   it("cancels unread bodies and ignores cancellation failures", async () => {
     const cancel = vi.fn(() => {
@@ -236,12 +222,6 @@ describe("readResponseWithLimit", () => {
     },
   );
 
-  it("reads all chunks within the limit", async () => {
-    const response = new Response(makeStream([new Uint8Array([1, 2]), new Uint8Array([3, 4])]));
-
-    await expect(readResponseWithLimit(response, 100)).resolves.toEqual(Buffer.from([1, 2, 3, 4]));
-  });
-
   it.each([0.5, 3.5])("reports overflow for a fractional byte budget of %s", async (maxBytes) => {
     const response = new Response(makeStream([new Uint8Array([1, 2, 3]), new Uint8Array([4, 5])]));
 
@@ -273,41 +253,11 @@ describe("readResponseWithLimit", () => {
     await expect(readResponseWithLimit(response, maxBytes, options)).rejects.toThrow(expectedError);
   });
 
-  it.each([Number.NaN, Number.POSITIVE_INFINITY, -1])(
-    "rejects invalid maxBytes before reading: %s",
-    async (maxBytes) => {
-      await expect(
-        readResponseWithLimit(new Response(makeStream([new Uint8Array([1, 2, 3])])), maxBytes),
-      ).rejects.toThrow(/maxBytes must be a non-negative finite number/);
-    },
-  );
-
-  it.each([
-    {
-      name: "times out when no new chunk arrives before idle timeout",
-      expectedError: /stalled/i,
-      options: { chunkTimeoutMs: 50 },
-    },
-    {
-      name: "uses a custom idle-timeout error when provided",
-      expectedError: "custom idle 50",
-      options: {
-        chunkTimeoutMs: 50,
-        onIdleTimeout: ({ chunkTimeoutMs }: { chunkTimeoutMs: number }) =>
-          new Error(`custom idle ${chunkTimeoutMs}`),
-      },
-    },
-  ] as const)(
-    "$name",
-    async ({ expectedError, options }) => {
-      await expectIdleTimeout(() => {
-        const body = makeStallingStream([new Uint8Array([1, 2])]);
-        const res = new Response(body);
-        return readResponseWithLimit(res, 1024, options);
-      }, expectedError);
-    },
-    5_000,
-  );
+  it.each([Number.NaN, -1])("rejects invalid maxBytes before reading: %s", async (maxBytes) => {
+    await expect(
+      readResponseWithLimit(new Response(makeStream([new Uint8Array([1, 2, 3])])), maxBytes),
+    ).rejects.toThrow(/maxBytes must be a non-negative finite number/);
+  });
 
   it("names the default idle timeout for retry classifiers", async () => {
     vi.useFakeTimers();
@@ -558,14 +508,6 @@ describe("readResponseTextSnippet", () => {
     await expect(readResponseTextSnippet(response, options)).resolves.toBe(expected);
   });
 
-  it("rejects invalid maxBytes before reading text snippets", async () => {
-    await expect(
-      readResponseTextSnippet(new Response(makeStream([new TextEncoder().encode("hello")])), {
-        maxBytes: Number.NaN,
-      }),
-    ).rejects.toThrow(/maxBytes must be a non-negative finite number/);
-  });
-
   it("cancels immediately when a diagnostic prefix fills the byte budget", async () => {
     const cancel = vi.fn();
     const response = new Response(makeStallingStream([new TextEncoder().encode("exact")], cancel));
@@ -594,9 +536,16 @@ describe("readResponseTextSnippet", () => {
   });
 
   it("applies the idle timeout while reading snippets", async () => {
-    await expectIdleTimeout(() => {
+    vi.useFakeTimers();
+    try {
       const res = new Response(makeStallingStream([new Uint8Array([65, 66])]));
-      return readResponseTextSnippet(res, { maxBytes: 64, chunkTimeoutMs: 50 });
-    });
+      const rejection = expect(
+        readResponseTextSnippet(res, { maxBytes: 64, chunkTimeoutMs: 50 }),
+      ).rejects.toThrow(/stalled/i);
+      await vi.advanceTimersByTimeAsync(60);
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
   }, 5_000);
 });

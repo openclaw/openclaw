@@ -3,7 +3,11 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { acquireFileLockSync } from "@openclaw/fs-safe/file-lock";
+import {
+  acquireFileLock,
+  acquireFileLockSync,
+  type FileLockHandle,
+} from "@openclaw/fs-safe/file-lock";
 
 export const ARTIFACT_CACHE_VERSION = 6;
 export type BuildCachePath = {
@@ -79,7 +83,7 @@ export function portableRelativePath(rootDir: string, filePath: string) {
   return path.relative(rootDir, filePath).split(path.sep).join("/");
 }
 
-function hashInputFiles(
+export function hashInputFiles(
   rootDir: string,
   files: string[],
   fsImpl: typeof fs,
@@ -215,14 +219,14 @@ export function publishArtifactFiles(
   for (const file of files) {
     const source = path.resolve(sourceRoot, file);
     const target = path.resolve(targetRoot, file);
-    const bytes = fs.readFileSync(source);
-    if (fs.existsSync(target) && fs.readFileSync(target).equals(bytes)) {
+    if (fs.existsSync(target) && fs.readFileSync(target).equals(fs.readFileSync(source))) {
       continue;
     }
     fs.mkdirSync(path.dirname(target), { recursive: true });
     const temporary = `${target}.${randomUUID()}.tmp`;
     try {
-      fs.writeFileSync(temporary, bytes, { flag: "wx" });
+      // Clone where supported, with an independent-inode copy elsewhere.
+      fs.copyFileSync(source, temporary, fs.constants.COPYFILE_FICLONE);
       fs.renameSync(temporary, target);
     } finally {
       fs.rmSync(temporary, { force: true });
@@ -235,29 +239,49 @@ export function publishArtifactFiles(
   }
 }
 
-/** Identify the emitter selected from tsdown, not a separately hoisted dependency. */
+/** Hash the bundler and the checkout-owned native emitter, including its executable and API. */
 export function resolveTsdownCompilerFiles() {
   const require = createRequire(import.meta.url);
   const tsdown = fs.realpathSync(require.resolve("tsdown"));
   const tsdownRequire = createRequire(tsdown);
   const dts = fs.realpathSync(tsdownRequire.resolve("rolldown-plugin-dts"));
-  const compilerRequire = createRequire(dts);
+  const compilerPackage = require.resolve("typescript/package.json");
+  const compilerRoot = path.dirname(compilerPackage);
+  const platformPackage = createRequire(compilerPackage).resolve(
+    `@typescript/typescript-${process.platform}-${process.arch}/package.json`,
+  );
+  const platformRoot = path.dirname(platformPackage);
   return [
     tsdown,
     require.resolve("tsdown/package.json"),
     dts,
     tsdownRequire.resolve("rolldown-plugin-dts/package.json"),
-    compilerRequire.resolve("typescript"),
-    compilerRequire.resolve("typescript/package.json"),
+    compilerPackage,
+    platformPackage,
+    path.join(compilerRoot, "bin/tsc"),
+    ...listCacheFiles(
+      compilerRoot,
+      [
+        { path: "lib", extensions: [".js", ".cjs", ".json"] },
+        { path: "dist", extensions: [".js", ".json"] },
+        { path: "vendor", extensions: [".js", ".json"] },
+      ],
+      fs,
+    ),
+    ...listCacheFiles(platformRoot, ["lib"], fs),
   ];
 }
 
-function resolveTsdownCompilerIdentity() {
+let tsdownCompilerIdentity: string | undefined;
+export function resolveTsdownCompilerIdentity() {
+  if (tsdownCompilerIdentity) {
+    return tsdownCompilerIdentity;
+  }
   const hash = createHash("sha256");
   for (const file of resolveTsdownCompilerFiles()) {
     hash.update(fs.readFileSync(file));
   }
-  return hash.digest("hex");
+  return (tsdownCompilerIdentity = hash.digest("hex"));
 }
 
 function ownerIsDead(payload: unknown) {
@@ -279,16 +303,28 @@ function ownerIsDead(payload: unknown) {
   }
 }
 
-/** Own only synchronous cache snapshots; process lifetimes need checkout ownership. */
-export function acquireBuildArtifactLock(target: string, timeoutMs = 600_000) {
-  return acquireFileLockSync(target, {
+function buildArtifactLockOptions(timeoutMs: number) {
+  const reclaim = ({ payload }: { payload: unknown }) => ownerIsDead(payload);
+  return {
     timeoutMs,
     retry: { minTimeout: 500, maxTimeout: 500, factor: 1, randomize: false },
     payload: () => ({ pid: process.pid }),
-    shouldReclaim: ({ payload }) => ownerIsDead(payload),
-    staleRecovery: "remove-if-unchanged",
-    shouldRemoveStaleLock: ({ payload }) => ownerIsDead(payload),
-  });
+    shouldReclaim: reclaim,
+    staleRecovery: "remove-if-unchanged" as const,
+    shouldRemoveStaleLock: reclaim,
+  };
+}
+
+/** Snapshot locks never own subprocess lifetimes. */
+export function acquireBuildArtifactLock(target: string, timeoutMs = 600_000) {
+  return acquireFileLockSync(target, buildArtifactLockOptions(timeoutMs));
+}
+
+export function acquireBuildArtifactLockAsync(
+  target: string,
+  timeoutMs = 600_000,
+): Promise<FileLockHandle> {
+  return acquireFileLock(target, buildArtifactLockOptions(timeoutMs));
 }
 
 export type BuildCache = {
@@ -346,6 +382,38 @@ function resolveCachePaths(rootDir: string, step: BuildCacheStep, env: NodeJS.Pr
     outputRoot: path.join(cacheDir, "outputs"),
     stampPath: path.join(cacheDir, "stamp.json"),
   };
+}
+
+const BUILD_CACHE_INPUT_DIRECTORY = ".artifacts/build-cache-inputs";
+
+/** The build owner resets receipts before admitting children, then joins them before publication. */
+export function resetBuildCacheInputs(rootDir: string) {
+  fs.rmSync(path.join(rootDir, BUILD_CACHE_INPUT_DIRECTORY), { recursive: true, force: true });
+}
+
+function recordBuildCacheInput(rootDir: string, step: BuildCacheStep, signature: string) {
+  const directory = path.join(rootDir, BUILD_CACHE_INPUT_DIRECTORY);
+  fs.mkdirSync(directory, { recursive: true });
+  const file = path.join(directory, `${step.label.replace(/[^a-zA-Z0-9._-]+/g, "_")}.json`);
+  fs.writeFileSync(file, JSON.stringify({ label: step.label, inputHash: signature }));
+}
+
+export function writeBuildCacheInputs(rootDir: string) {
+  const directory = path.join(rootDir, BUILD_CACHE_INPUT_DIRECTORY);
+  const steps: Record<string, string> = {};
+  if (fs.existsSync(directory)) {
+    for (const file of fs.readdirSync(directory).toSorted()) {
+      const receipt: { label: string; inputHash: string } = JSON.parse(
+        fs.readFileSync(path.join(directory, file), "utf8"),
+      );
+      steps[receipt.label] = receipt.inputHash;
+    }
+  }
+  fs.mkdirSync(path.join(rootDir, "dist"), { recursive: true });
+  fs.writeFileSync(
+    path.join(rootDir, "dist/build-cache-inputs.json"),
+    `${JSON.stringify({ version: 1, steps }, null, 2)}\n`,
+  );
 }
 
 function hasAllFiles(rootDir: string, relativeFiles: string[], fsImpl: BuildCacheFs) {
@@ -417,6 +485,9 @@ export function resolveBuildStepCacheState(
       (!params.inputSignature || consumedInputs !== undefined) && stamp?.signature === signature;
     const restorable = stampMatches && cachedOutputsPresent && !actualOutputsAcceptable;
     const fresh = stampMatches && (actualOutputsAcceptable || cachedOutputsPresent);
+    if (fresh) {
+      recordBuildCacheInput(rootDir, step, signature);
+    }
     return {
       cacheable: true,
       fresh,
@@ -509,6 +580,7 @@ export function writeBuildStepCacheStamp(
       throw new Error(`Incomplete build cache snapshot: ${step.label}`);
     }
     writeArtifactRecord(cacheState.stampPath, record);
+    recordBuildCacheInput(params.rootDir ?? process.cwd(), step, cacheState.signature);
   } finally {
     lock.release();
   }

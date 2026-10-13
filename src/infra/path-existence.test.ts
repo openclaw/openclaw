@@ -1,24 +1,33 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { pathMayExistSync } from "./path-existence.js";
 
-it("distinguishes definite absence from paths that may still exist", () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-path-existence-"));
-  try {
-    const present = path.join(root, "present");
-    fs.writeFileSync(present, "");
-    expect(pathMayExistSync(present)).toBe(true);
-    expect(pathMayExistSync(path.join(root, "missing"))).toBe(false);
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-    const dangling = path.join(root, "dangling");
-    fs.symlinkSync("missing-target", dangling);
-    expect(pathMayExistSync(dangling)).toBe(true);
-    const blockedByFile = path.join(present, "child");
-    expect(() => fs.lstatSync(blockedByFile)).toThrow(expect.objectContaining({ code: "ENOTDIR" }));
-    expect(pathMayExistSync(blockedByFile)).toBe(true);
+it("distinguishes definite absence from paths that may still exist", () => {
+  const root = tempDirs.make("openclaw-path-existence-");
+  const present = path.join(root, "present");
+  fs.writeFileSync(present, "");
+  expect(pathMayExistSync(present)).toBe(true);
+  expect(pathMayExistSync(path.join(root, "missing"))).toBe(false);
+
+  const dangling = path.join(root, "dangling");
+  fs.symlinkSync("missing-target", dangling);
+  expect(pathMayExistSync(dangling)).toBe(true);
+  const blockedByFile = path.join(present, "child");
+  expect(() => fs.lstatSync(blockedByFile)).toThrow(expect.objectContaining({ code: "ENOTDIR" }));
+  expect(pathMayExistSync(blockedByFile)).toBe(false);
+});
+
+it.each(["EACCES", "EPERM", "ELOOP", "EIO"])("preserves uncertainty for %s", (code) => {
+  const probe = vi.spyOn(fs, "lstatSync").mockImplementation(() => {
+    throw Object.assign(new Error("filesystem probe failed"), { code });
+  });
+  try {
+    expect(pathMayExistSync("unreadable-path")).toBe(true);
   } finally {
-    fs.rmSync(root, { force: true, recursive: true });
+    probe.mockRestore();
   }
 });

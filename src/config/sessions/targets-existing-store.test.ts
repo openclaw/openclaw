@@ -24,7 +24,7 @@ describe("resolveExistingAgentSessionStoreTargetsSync", () => {
       const database = openOpenClawAgentDatabase({ agentId: "main", path: storePath });
       database.db.prepare("UPDATE session_nodes SET entry_valid = 0").run();
       const cfg: OpenClawConfig = {
-        agents: { list: [{ id: "main", default: true }] },
+        agents: { entries: { main: {} } },
         session: { store: storePath },
       };
       const parseEntry = vi.spyOn(sessionEntryStatus, "parseSessionEntryJson");
@@ -49,7 +49,7 @@ describe("resolveExistingAgentSessionStoreTargetsSync", () => {
       const agentsRoot = path.join(stateDir, "agents");
       const sqlitePath = path.join(agentsRoot, "main", "agent", "openclaw-agent.sqlite");
       const cfg: OpenClawConfig = {
-        agents: { list: [{ id: "main", default: true }] },
+        agents: { entries: { main: {} } },
       };
       const lstat = vi.spyOn(nodeFs, "lstatSync");
       const realpath = vi.spyOn(nodeFs.realpathSync, "native");
@@ -87,7 +87,7 @@ describe("resolveExistingAgentSessionStoreTargetsSync", () => {
         ...unrelatedAgentIds,
       ]);
       const cfg: OpenClawConfig = {
-        agents: { list: [{ id: "main", default: true }] },
+        agents: { entries: { main: {} } },
       };
       const lstat = vi.spyOn(nodeFs, "lstatSync");
       const stat = vi.spyOn(nodeFs, "statSync");
@@ -129,7 +129,7 @@ describe("resolveExistingAgentSessionStoreTargetsSync", () => {
             "sessions.json",
           ),
         },
-        agents: { list: [{ id: "ops", default: true }, { id: "work" }] },
+        agents: { entries: { ops: {}, work: {} } },
       };
 
       expect(resolveExistingAgentSessionStoreTargetsSync(cfg, "old", { env: process.env })).toEqual(

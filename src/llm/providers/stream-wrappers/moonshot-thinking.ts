@@ -1,4 +1,3 @@
-// Moonshot thinking wrapper normalizes reasoning output from Moonshot streams.
 import { asOptionalRecord as asPayloadRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { StreamFn } from "../../../agents/runtime/index.js";

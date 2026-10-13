@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   buildControlUiPublicSessionSharePath,
+  buildControlUiPublicSessionCardPath,
+  parseControlUiPublicSessionCardUrl,
   CONTROL_UI_PUBLIC_SESSION_SHARE_TOKEN_MAX_LENGTH,
   parseControlUiPublicSessionShareUrl,
 } from "./public-share.js";
@@ -17,6 +19,18 @@ describe("public session share URL", () => {
         "/control",
       ),
     ).toEqual({ token: TOKEN });
+  });
+
+  it("round-trips a card with exactly one token and no page selectors", () => {
+    const path = buildControlUiPublicSessionCardPath({ basePath: "/control", token: TOKEN });
+    expect(path).toBe(`/control/share/session/card.png?token=${TOKEN}`);
+    const url = new URL(path, "https://gateway.example.test");
+    expect(parseControlUiPublicSessionCardUrl(url, "/control")).toEqual({ token: TOKEN });
+    url.searchParams.set("offset", "1");
+    expect(parseControlUiPublicSessionCardUrl(url, "/control")).toBeNull();
+    url.searchParams.delete("offset");
+    url.searchParams.append("token", TOKEN);
+    expect(parseControlUiPublicSessionCardUrl(url, "/control")).toBeNull();
   });
 
   it.each([

@@ -1,8 +1,4 @@
-// Defines explicit consent for anonymous feature-usage statistics.
+import type { z } from "zod";
+import type { TelemetryConfigSchema } from "./zod-schema.telemetry.js";
 
-export type TelemetryConfig = {
-  /** Shares anonymous feature counts with the daily update check when explicitly enabled. */
-  enabled?: boolean;
-  /** ISO timestamp recording when the operator accepted or declined feature statistics. */
-  consentedAt?: string;
-};
+export type TelemetryConfig = NonNullable<z.input<typeof TelemetryConfigSchema>>;

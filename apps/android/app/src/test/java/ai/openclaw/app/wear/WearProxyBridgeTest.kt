@@ -1,7 +1,7 @@
 package ai.openclaw.app.wear
 
 import ai.openclaw.app.WEAR_AGENT_PULSE_PHONE_BUDGET_MILLIS
-import ai.openclaw.app.readWearAgentPulseConcurrently
+import ai.openclaw.app.readWearAgentPulseComponent
 import ai.openclaw.wear.shared.WearConnectionFailure
 import ai.openclaw.wear.shared.WearDecodeResult
 import ai.openclaw.wear.shared.WearEventType
@@ -228,16 +228,10 @@ class WearProxyBridgeTest {
         backgroundScope.recordingBridge(
           handleRequest = { _, request ->
             requestStarted.complete(Unit)
-            readWearAgentPulseConcurrently(
-              readTasks = {
-                delay(WearProtocol.RPC_REQUEST_TIMEOUT_MILLIS * 2)
-                Unit
-              },
-              readSwarm = {
-                delay(WearProtocol.RPC_REQUEST_TIMEOUT_MILLIS * 2)
-                Unit
-              },
-            )
+            readWearAgentPulseComponent(WEAR_AGENT_PULSE_PHONE_BUDGET_MILLIS) {
+              delay(WearProtocol.RPC_REQUEST_TIMEOUT_MILLIS * 2)
+              Unit
+            }
             WearMessage.Response(requestId = request.requestId, ok = true)
           },
         )

@@ -1,10 +1,21 @@
-// Workboard plugin module implements persistence types behavior.
 import type {
   WorkboardAttachment,
   WorkboardBoardMetadata,
   WorkboardCard,
   WorkboardNotificationSubscription,
+  WorkboardSessionPlacement,
+  WorkboardSessionsBoard,
+  WorkboardSessionsBoardSpec,
 } from "@openclaw/workboard-contract";
+
+/**
+ * Guard the first accepted write (including CAS retries), then allow its settlement.
+ * Independently authorized effects need separate scopes; settled scopes cannot be reused.
+ */
+export type WorkboardWriteAuthority = <T>(
+  assertCurrent: () => void,
+  run: () => Promise<T>,
+) => Promise<T>;
 
 export type PersistedWorkboardCard = {
   version: 1;
@@ -32,6 +43,24 @@ export type WorkboardKeyedStore<T = PersistedWorkboardCard> = {
   lookup(key: string): Promise<T | undefined>;
   delete(key: string): Promise<boolean>;
   entries(): Promise<Array<{ key: string; value: T }>>;
+};
+
+export type WorkboardSessionPlacementWrite = WorkboardSessionPlacement & {
+  source: "operator";
+  /** Undefined requires an absent row; otherwise compare the last observed revision. */
+  expectedUpdatedAt?: number;
+};
+
+export type WorkboardSessionsBoardStore = {
+  get(boardId: string): Promise<WorkboardSessionsBoard>;
+  update(boardId: string, patch: unknown): Promise<WorkboardSessionsBoard>;
+  listPlacements(boardId: string): Promise<WorkboardSessionPlacement[]>;
+  repairPlacements(): Promise<{ placements: number; boards: number }>;
+  writePlacement(
+    boardId: string,
+    placement: WorkboardSessionPlacementWrite,
+    expectedSpec: WorkboardSessionsBoardSpec,
+  ): Promise<boolean>;
 };
 
 export type WorkboardSubscriptionStore = Omit<
@@ -63,8 +92,21 @@ export type WorkboardCardStatsAggregate = {
 
 export type WorkboardOwnerClaimResult = "updated" | "conflict" | "owner_busy";
 
+export type WorkboardCardReadScope =
+  | { kind: "board"; boardId: string }
+  | { kind: "session"; sessionKey: string }
+  | {
+      kind: "worker-context";
+      cardId: string;
+      boardId: string;
+      agentId?: string;
+      parentIds: readonly string[];
+    };
+
 export type WorkboardCardStore = Omit<WorkboardKeyedStore, "entries"> & {
-  entries(boardId?: string): Promise<Array<{ key: string; value: PersistedWorkboardCard }>>;
+  entries(
+    scope?: WorkboardCardReadScope,
+  ): Promise<Array<{ key: string; value: PersistedWorkboardCard }>>;
   registerIfAbsent(key: string, value: PersistedWorkboardCard): Promise<boolean>;
   registerIfUpdatedAt(
     key: string,
@@ -83,4 +125,12 @@ export type WorkboardCardStore = Omit<WorkboardKeyedStore, "entries"> & {
   listBoardAggregates(): Promise<WorkboardBoardCardAggregate[]>;
   listStatsAggregates(boardId?: string): Promise<WorkboardCardStatsAggregate[]>;
   hasCards(boardId: string): Promise<boolean>;
+};
+
+export type WorkboardPersistence = {
+  cards: WorkboardCardStore;
+  boards: WorkboardKeyedStore<PersistedWorkboardBoard>;
+  sessionsBoard: WorkboardSessionsBoardStore;
+  subscriptions: WorkboardSubscriptionStore;
+  attachments: WorkboardKeyedStore<PersistedWorkboardAttachment>;
 };

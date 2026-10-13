@@ -1,7 +1,6 @@
 // Browser tests cover tabs plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { toBrowserErrorResponse } from "../errors.js";
 import { makeBrowserProfile } from "../server-context.test-harness.js";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 
@@ -141,18 +140,6 @@ function createRouteContext(
     }),
     forProfile: () => profileCtx,
     listProfiles: vi.fn(async () => []),
-    mapTabError: vi.fn(toBrowserErrorResponse),
-    ensureBrowserAvailable: profileCtx.ensureBrowserAvailable,
-    ensureTabAvailable: profileCtx.ensureTabAvailable,
-    isHttpReachable: profileCtx.isHttpReachable,
-    isReachable: profileCtx.isReachable,
-    listTabs: profileCtx.listTabs,
-    openTab: profileCtx.openTab,
-    labelTab: profileCtx.labelTab,
-    focusTab: profileCtx.focusTab,
-    closeTab: profileCtx.closeTab,
-    stopRunningBrowser: profileCtx.stopRunningBrowser,
-    resetProfile: profileCtx.resetProfile,
   };
 }
 
@@ -273,6 +260,18 @@ it("returns the profile that actually handled tab open", async () => {
     },
     resolvedProfile: "hot-profile",
   });
+});
+
+it("rejects an invalid open timeoutMs before opening a tab", async () => {
+  const profileCtx = createProfileContext({ openTab: vi.fn() });
+  const response = await callTabsRoute({
+    method: "post",
+    path: "/tabs/open",
+    body: { url: "https://example.com", timeoutMs: -5 },
+    profileCtx,
+  });
+  expect(response.statusCode).toBe(400);
+  expect(profileCtx.openTab).not.toHaveBeenCalled();
 });
 
 async function callTabsAction(params: {

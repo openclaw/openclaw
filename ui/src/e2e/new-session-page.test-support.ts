@@ -3,6 +3,10 @@ import path from "node:path";
 import { errors, type Locator, type Page } from "playwright";
 import { expect } from "vitest";
 import type { ApplicationContext } from "../app/context.ts";
+import {
+  evaluateControlUiContext,
+  getControlUiContextHandle,
+} from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionPath,
@@ -47,6 +51,12 @@ export async function openEnvironmentPicker(page: Page) {
   );
   await page.locator("#new-session-where-trigger").click();
   await afterShow;
+}
+
+export function checkoutBaseRefInput(scope: Page | Locator): Locator {
+  return scope
+    .getByRole("combobox", { name: "From", exact: true })
+    .or(scope.getByRole("textbox", { name: "From", exact: true }));
 }
 
 export const NEW_SESSION_MODEL_CATALOG = [
@@ -191,7 +201,7 @@ export async function expectPendingNewSessionPresentation(page: Page) {
     const user = thread.querySelector<HTMLElement>(".chat-group.user")!;
     const bubble = user.querySelector<HTMLElement>(".chat-bubble")!;
     const text = bubble.classList.contains("chat-bubble--with-images")
-      ? bubble.querySelector<HTMLElement>(".chat-text, .chat-json-collapse")!
+      ? bubble.querySelector<HTMLElement>(".chat-text")!
       : bubble;
     const claw = thread.querySelector<SVGElement>(".chat-reading-indicator svg")!;
     const userStyle = getComputedStyle(user);
@@ -262,7 +272,7 @@ export async function expectPendingSessionPlacementStartupBeforeRuntime(
   );
   await expect
     .poll(() => page.locator(".agent-chat__composer-combobox textarea").isDisabled())
-    .toBe(true);
+    .toBe(false);
   expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
   expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
   await captureUiProof(owner, page, "02-cloud-startup-chunk-pending.png");
@@ -415,24 +425,19 @@ export async function waitForCommittedNewSessionDraft(
 }
 
 export async function waitForGatewayRecoveryScope(page: Page, ready = true) {
-  await page.waitForFunction((expected) => {
-    const app = document.querySelector("openclaw-app") as HTMLElement & {
-      runtime?: { context: ApplicationContext };
-    };
-    return app.runtime?.context.gateway.snapshot.client?.recoveryScopeReady === expected;
-  }, ready);
+  const application = await getControlUiContextHandle(page);
+  try {
+    await page.waitForFunction(
+      ({ context, expected }) => context.gateway.snapshot.client?.recoveryScopeReady === expected,
+      { context: application, expected: ready },
+    );
+  } finally {
+    await application.dispose();
+  }
 }
 
 export async function replaceGatewayClient(page: Page) {
-  await page.evaluate(() => {
-    const app = document.querySelector("openclaw-app") as HTMLElement & {
-      runtime?: { context: { gateway: { connect: () => void } } };
-    };
-    if (!app.runtime) {
-      throw new Error("OpenClaw application runtime is unavailable");
-    }
-    app.runtime.context.gateway.connect();
-  });
+  await evaluateControlUiContext(page, (context) => context.gateway.connect());
 }
 
 export async function openNewSessionPlusMenu(page: Page) {
@@ -443,21 +448,15 @@ export async function openNewSessionPlusMenu(page: Page) {
   return menu;
 }
 
-export async function navigateInApp(page: Page, routeId: string, search = "") {
-  await page.evaluate(
-    ({ targetRouteId, targetSearch }) => {
-      const app = document.querySelector("openclaw-app") as HTMLElement & {
-        runtime?: {
-          context: {
-            navigate: (routeId: string, options?: { search?: string }) => void;
-          };
-        };
-      };
-      if (!app.runtime) {
-        throw new Error("OpenClaw application runtime is unavailable");
-      }
-      app.runtime.context.navigate(targetRouteId, { search: targetSearch });
-    },
+export async function navigateInApp(
+  page: Page,
+  routeId: Parameters<ApplicationContext["navigate"]>[0],
+  search = "",
+) {
+  await evaluateControlUiContext(
+    page,
+    (context, { targetRouteId, targetSearch }) =>
+      context.navigate(targetRouteId, { search: targetSearch }),
     { targetRouteId: routeId, targetSearch: search },
   );
 }

@@ -7,11 +7,10 @@ import {
   resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { chunkItems } from "../../utils/chunk-items.js";
 import type { ExactSessionEntry, SessionAccessScope } from "./session-accessor.sqlite-contract.js";
-import {
-  parseReadableSqliteSessionEntryRow,
-  readExactSessionEntryRowValidated,
-} from "./session-accessor.sqlite-entry-store.js";
+import { prepareSqliteSessionEntryRowDecoder } from "./session-accessor.sqlite-entry-read.js";
+import { readExactSessionEntryRowValidated } from "./session-accessor.sqlite-entry-store.js";
 import {
   getSessionKysely,
   resolveSqliteReadScope,
@@ -20,21 +19,22 @@ import {
   type SessionSqliteTargetResolutionCache,
 } from "./session-accessor.sqlite-scope.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
+import type {
+  SessionIdentityEvidenceIdentity,
+  SessionIdentityEvidenceResult,
+} from "./session-entry-read-source.types.js";
 import type { SessionEntry } from "./types.js";
 
-export type SessionIdentityEvidenceResult =
-  | { status: "current"; sessionKey: string }
-  | { status: "absent" }
-  | {
-      status: "unknown";
-      reason: "ambiguous" | "read-failed" | "row-invalid" | "schema-missing" | "table-missing";
-    };
+export type {
+  SessionIdentityEvidenceIdentity,
+  SessionIdentityEvidenceResult,
+} from "./session-entry-read-source.types.js";
 
 type ExactSessionEntryReadOnlyResult =
   | { found: true; value: ExactSessionEntry | undefined }
   | {
       found: false;
-      reason: "database-missing" | "schema-missing" | "table-missing" | "row-invalid";
+      reason: "database-missing" | "schema-missing" | "row-invalid";
     };
 
 /** Exact persisted-key probe that preserves database and row availability. */
@@ -48,7 +48,7 @@ export function loadExactSessionEntryReadOnlyResult(
   const resolved = resolveSqliteScope(scope);
   let result:
     | { found: true; value: { entry: SessionEntry | undefined; rowExists: boolean } }
-    | { found: false; reason: "database-missing" | "schema-missing" | "table-missing" };
+    | { found: false; reason: "database-missing" | "schema-missing" };
   try {
     result = withOpenClawAgentDatabaseReadOnly((database) => {
       const entry = readExactSessionEntryRowValidated(database, sessionKey)?.entry;
@@ -102,12 +102,6 @@ type SessionIdentityEvidenceProbe = {
 
 const SESSION_IDENTITY_EVIDENCE_QUERY_CHUNK_SIZE = 400;
 
-type SessionIdentityEvidenceItem = {
-  index: number;
-  sessionId: string;
-  sessionKey?: string;
-};
-
 type SessionIdentityEvidenceRow = {
   current_session_id: string;
   entry_json: string;
@@ -116,25 +110,21 @@ type SessionIdentityEvidenceRow = {
   updated_at: number;
 };
 
-function readSessionIdentityEvidenceRows(
+export function readSessionIdentityEvidenceInDatabase(
   database: Pick<OpenClawAgentDatabase, "agentId" | "db">,
-  items: readonly SessionIdentityEvidenceItem[],
+  items: readonly SessionIdentityEvidenceIdentity[],
 ): SessionIdentityEvidenceResult[] {
   assertCanonicalSqliteSessionKeysCurrent(database);
   const db = getSessionKysely(database.db);
   const rowsByKey = new Map<string, SessionIdentityEvidenceRow>();
   const readChunks = (values: readonly string[], column: "current_session_id" | "session_key") => {
-    for (
-      let offset = 0;
-      offset < values.length;
-      offset += SESSION_IDENTITY_EVIDENCE_QUERY_CHUNK_SIZE
-    ) {
-      const chunk = values.slice(offset, offset + SESSION_IDENTITY_EVIDENCE_QUERY_CHUNK_SIZE);
+    for (const chunk of chunkItems(values, SESSION_IDENTITY_EVIDENCE_QUERY_CHUNK_SIZE)) {
       const rows = executeSqliteQuerySync(
         database.db,
         db
           .selectFrom("session_nodes")
-          .select(["current_session_id", "entry_json", "entry_valid", "session_key", "updated_at"])
+          .select(["current_session_id", "entry_valid", "session_key", "updated_at"])
+          .select("entry_json")
           .where(column, "in", chunk),
       ).rows;
       for (const row of rows) {
@@ -158,13 +148,18 @@ function readSessionIdentityEvidenceRows(
 
   const rowsBySessionId = new Map<string, SessionIdentityEvidenceRow[]>();
   const readableKeys = new Set<string>();
+  const decodeRow = prepareSqliteSessionEntryRowDecoder(
+    database,
+    [...rowsByKey.values()].filter((row) => row.entry_valid === 1),
+    "list",
+  );
   for (const row of rowsByKey.values()) {
     const rows = rowsBySessionId.get(row.current_session_id) ?? [];
     rows.push(row);
     rowsBySessionId.set(row.current_session_id, rows);
     if (row.entry_valid === 1) {
       try {
-        if (parseReadableSqliteSessionEntryRow(database, row)) {
+        if (decodeRow(row)) {
           readableKeys.add(row.session_key);
         }
       } catch {
@@ -211,7 +206,7 @@ export function readSessionIdentityEvidenceBatch(
   const groups = new Map<
     string,
     {
-      items: SessionIdentityEvidenceItem[];
+      items: Array<SessionIdentityEvidenceIdentity & { index: number }>;
       options: ReturnType<typeof toDatabaseOptions>;
     }
   >();
@@ -235,10 +230,10 @@ export function readSessionIdentityEvidenceBatch(
   for (const group of groups.values()) {
     let read:
       | { found: true; value: SessionIdentityEvidenceResult[] }
-      | { found: false; reason: "database-missing" | "schema-missing" | "table-missing" };
+      | { found: false; reason: "database-missing" | "schema-missing" };
     try {
       read = withOpenClawAgentDatabaseReadOnly(
-        (database) => readSessionIdentityEvidenceRows(database, group.items),
+        (database) => readSessionIdentityEvidenceInDatabase(database, group.items),
         group.options,
       );
     } catch {

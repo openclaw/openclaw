@@ -1,30 +1,34 @@
-import { expect, it, vi } from "vitest";
+import { beforeAll, expect, it, onTestFailed, vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { ModelsSnapshotEvent } from "../../../packages/gateway-protocol/src/index.js";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withTestTimeout,
+} from "../../../test/helpers/promise.js";
 import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admission.js";
+import {
+  getActiveGatewayRootWorkCount,
+  getActiveGatewayRootWorkHolders,
+} from "../../process/gateway-work-admission.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import * as modelCatalogAuth from "../server-model-catalog-auth.js";
+import { acquireTestPortBlock } from "../../test-utils/port-claims.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
-  getGatewayE2ePortBlock,
   startGatewayWithClient,
 } from "../test-helpers.e2e.js";
+import * as chatMetadataHandler from "./chat-metadata-handler.js";
 
-// Optional startup prewarming must not compete with the catalog request drain.
-vi.mock("../server-startup-context-cache-prewarm.js", () => ({
-  scheduleContextCachePrewarm: () => ({ stop() {} }),
-}));
+// mock-isolation: Optional startup prewarming must not compete with the catalog request drain.
 vi.mock("../server-startup-handler-prewarm.js", () => ({
-  scheduleGatewayHandlerPrewarm: () => ({ stop() {} }),
+  scheduleGatewayPrewarm: () => [{ stop() {} }],
 }));
 
 // Keep real catalog publication while excluding automatic startup work from the
@@ -36,17 +40,31 @@ vi.mock("../server-runtime-services.js", async (importOriginal) => {
     activateGatewayScheduledServices: (
       params: Parameters<typeof actual.activateGatewayScheduledServices>[0],
     ) => actual.activateGatewayScheduledServices({ ...params, minimalTestGateway: true }),
-    scheduleGatewayPostReadyMaintenance: (
-      ...args: Parameters<typeof actual.scheduleGatewayPostReadyMaintenance>
-    ) => {
-      const timer = actual.scheduleGatewayPostReadyMaintenance(...args);
-      clearTimeout(timer);
-      return timer;
-    },
+    scheduleGatewayPostReadyMaintenance: () => {},
   };
 });
 
+beforeAll(async () => {
+  // Cold module compilation belongs to fixture preparation, before the real Gateway startup.
+  await import("../server-start.js");
+});
+
 it("connect negotiates snapshots and preserves draft and saved-session catalog scopes", async () => {
+  const startedAt = performance.now();
+  const phases: { phase: string; elapsedMs: number }[] = [];
+  const publications: ModelsSnapshotEvent[] = [];
+  const enterPhase = (phase: string) => {
+    phases.push({ phase, elapsedMs: Math.round(performance.now() - startedAt) });
+  };
+  onTestFailed(() => {
+    console.error("Model catalog integration phases", {
+      phases,
+      elapsedMs: Math.round(performance.now() - startedAt),
+      snapshots: publications.length,
+      activeRootWork: getActiveGatewayRootWorkCount(),
+    });
+  });
+  enterPhase("test state");
   const state = await createOpenClawTestState({
     label: "models-connect-publication",
     env: {
@@ -57,9 +75,7 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
       OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
     },
   });
-  const port = await getGatewayE2ePortBlock();
   const token = "synthetic-catalog-gateway-token";
-  const publications: ModelsSnapshotEvent[] = [];
   try {
     state.applyEnv();
     await state.writeAuthProfiles(
@@ -80,8 +96,11 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
       },
       "alpha",
     );
+    enterPhase("Gateway startup and connect");
+    const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+    const { port } = portClaim;
     const { client, server } = await startGatewayWithClient({
-      port,
+      portClaim,
       configPath: state.configPath,
       token,
       clientName: GATEWAY_CLIENT_IDS.CONTROL_UI,
@@ -133,6 +152,7 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
       },
     });
     try {
+      enterPhase("draft catalogs");
       await expect
         .poll(() => publications, { timeout: 15_000 })
         .toMatchObject([
@@ -176,6 +196,7 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
           await disconnectGatewayClient(other);
         }
       }
+      enterPhase("saved-session catalogs");
       const sessionKey = "agent:alpha:dashboard:12345678-1234-4123-8123-123456789abc";
       await upsertSessionEntryCore(
         { agentId: "alpha", sessionKey },
@@ -194,6 +215,7 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
         { agentId: "alpha", shortId: "12345678", slugHint: "saved" },
       ]) {
         const savedPublications: ModelsSnapshotEvent[] = [];
+        const savedPublication = createDeferred();
         const saved = await connectGatewayClient({
           url: `ws://127.0.0.1:${port}`,
           token,
@@ -206,54 +228,78 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
           onEvent(event) {
             if (event.event === "models.snapshot") {
               savedPublications.push(event.payload as ModelsSnapshotEvent);
+              savedPublication.resolve();
             }
           },
         });
         try {
-          await expect
-            .poll(() => savedPublications)
-            .toMatchObject([
-              {
-                scope: { agentId: "alpha", sessionKey },
-                catalog: {
-                  models: [
-                    {
-                      id: "first",
-                      provider: "fixture",
-                      available: true,
-                      manualSelectionAllowed: true,
-                    },
-                    {
-                      id: "second",
-                      provider: "fixture",
-                      available: true,
-                      manualSelectionAllowed: false,
-                    },
-                  ],
-                  accountSelection: {
-                    kind: "shared",
-                    authProfileId: "fixture:saved-account",
-                    source: "user",
-                  },
+          // hello-ok precedes worker-backed catalog publication; join that event
+          // instead of assuming preparation fits the polling matcher's deadline.
+          await savedPublication.promise;
+          expect(savedPublications[0]?.catalog.models).toHaveLength(2);
+          expect(savedPublications).toMatchObject([
+            {
+              scope: { agentId: "alpha", sessionKey },
+              catalog: {
+                models: expect.arrayContaining([
+                  expect.objectContaining({
+                    id: "first",
+                    provider: "fixture",
+                    available: true,
+                    manualSelectionAllowed: true,
+                  }),
+                  expect.objectContaining({
+                    id: "second",
+                    provider: "fixture",
+                    available: true,
+                    manualSelectionAllowed: false,
+                  }),
+                ]),
+                accountSelection: {
+                  kind: "shared",
+                  authProfileId: "fixture:saved-account",
+                  source: "user",
                 },
               },
-            ]);
+            },
+          ]);
           expect(publications).toHaveLength(1);
           expect(loadSessionEntry({ agentId: "alpha", sessionKey })?.modelOverride).toBe("second");
         } finally {
           await disconnectGatewayClient(saved);
         }
       }
-      const acquisitionStarted = createDeferred();
-      const releaseAcquisition = createDeferred();
-      const readPreparedCatalog = modelCatalogAuth.readPreparedCatalog;
-      const acquisition = vi
-        .spyOn(modelCatalogAuth, "readPreparedCatalog")
+      enterPhase("initial publication supersession");
+      await client.request("sessions.patch", {
+        key: sessionKey,
+        agentId: "alpha",
+        label: "Initial catalog publication race",
+      });
+      const publicationStarted = createDeferred();
+      const releasePublication = createDeferred();
+      const resolveReadParams = chatMetadataHandler.resolveChatMetadataReadParams;
+      let publicationSettled = false;
+      const publicationSpy = vi
+        .spyOn(chatMetadataHandler, "resolveChatMetadataReadParams")
         .mockImplementationOnce(async (...args) => {
-          // The registered reader has captured the saved account before catalog acquisition.
-          acquisitionStarted.resolve();
-          await releaseAcquisition.promise;
-          return readPreparedCatalog(...args);
+          const scope = await resolveReadParams(...args);
+          if (!scope?.withCurrent) {
+            throw new Error("Expected saved-session publication authority");
+          }
+          const withCurrent = scope.withCurrent;
+          return {
+            ...scope,
+            withCurrent: async <T>(consume: () => T): Promise<Awaited<T>> => {
+              // Cached projections still cross the live publication authority boundary.
+              publicationStarted.resolve();
+              await releasePublication.promise;
+              try {
+                return await withCurrent(consume);
+              } finally {
+                publicationSettled = true;
+              }
+            },
+          };
         });
       const racingPublications: ModelsSnapshotEvent[] = [];
       const sessionChanges: unknown[] = [];
@@ -277,9 +323,9 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
           },
         });
         await withTestTimeout(
-          acquisitionStarted.promise,
+          publicationStarted.promise,
           10_000,
-          "Initial catalog acquisition did not start",
+          "Initial catalog publication did not start",
         );
         await racingClient.request("sessions.subscribe", { agentId: "alpha" });
         await racingClient.request("sessions.patch", {
@@ -297,8 +343,20 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
         });
         expect(racingPublications).toEqual([]);
         expect(getActiveGatewayRootWorkCount()).toBeGreaterThan(0);
-        releaseAcquisition.resolve();
-        await expect.poll(() => getActiveGatewayRootWorkCount()).toBe(0);
+        releasePublication.resolve();
+        try {
+          await expect.poll(() => getActiveGatewayRootWorkCount()).toBe(0);
+        } catch (error) {
+          try {
+            console.error("Model catalog root work did not settle", {
+              publicationSettled,
+              holders: getActiveGatewayRootWorkHolders(),
+            });
+          } catch {
+            // Diagnostic failures must not replace the original assertion.
+          }
+          throw error;
+        }
         // A response on this same socket is a delivery barrier after initial work settles.
         await expect(
           racingClient.request("models.list", { agentId: "alpha", sessionKey }),
@@ -317,12 +375,13 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
           });
         }
       } finally {
-        releaseAcquisition.resolve();
-        acquisition.mockRestore();
+        releasePublication.resolve();
+        publicationSpy.mockRestore();
         if (racingClient) {
           await disconnectGatewayClient(racingClient);
         }
       }
+      enterPhase("catalog request during unrelated session patch");
       const unrelatedKey = "agent:alpha:catalog-other";
       await upsertSessionEntryCore(
         { agentId: "alpha", sessionKey: unrelatedKey },
@@ -330,38 +389,47 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
       );
       const requestEntered = createDeferred();
       const releaseRequest = createDeferred();
-      const pendingAcquisition = vi
-        .spyOn(modelCatalogAuth, "readPreparedCatalog")
+      const pendingPublication = vi
+        .spyOn(chatMetadataHandler, "resolveChatMetadataReadParams")
         .mockImplementationOnce(async (...args) => {
-          requestEntered.resolve();
-          await releaseRequest.promise;
-          return readPreparedCatalog(...args);
+          const scope = await resolveReadParams(...args);
+          if (!scope?.withCurrent) {
+            throw new Error("Expected saved-session publication authority");
+          }
+          const withCurrent = scope.withCurrent;
+          return {
+            ...scope,
+            withCurrent: async <T>(consume: () => T): Promise<Awaited<T>> => {
+              requestEntered.resolve();
+              await releaseRequest.promise;
+              return withCurrent(consume);
+            },
+          };
         });
       const pendingCatalog = client.request("models.list", { agentId: "alpha", sessionKey });
-      const superseded = expect(pendingCatalog).rejects.toMatchObject({
-        code: "UNAVAILABLE",
-        retryable: true,
-        retryAfterMs: 0,
+      const deliveredCatalog = expect(pendingCatalog).resolves.toMatchObject({
+        models: [{ id: "first", provider: "fixture", available: true }],
+        accountSelection: { authProfileId: "fixture:replacement-account" },
       });
       try {
-        await withTestTimeout(requestEntered.promise, 10_000, "Catalog request did not start");
+        await awaitGateBeforeSettlement(
+          requestEntered.promise,
+          pendingCatalog,
+          "Catalog request settled before its authority check",
+        );
         await client.request("sessions.patch", {
           key: unrelatedKey,
           agentId: "alpha",
           label: "Renamed unrelated session",
         });
         releaseRequest.resolve();
-        await superseded;
-        await expect(
-          client.request("models.list", { agentId: "alpha", sessionKey }),
-        ).resolves.toMatchObject({
-          accountSelection: { authProfileId: "fixture:replacement-account" },
-        });
+        await deliveredCatalog;
       } finally {
         releaseRequest.resolve();
-        pendingAcquisition.mockRestore();
-        await Promise.allSettled([pendingCatalog, superseded]);
+        pendingPublication.mockRestore();
+        await Promise.allSettled([pendingCatalog, deliveredCatalog]);
       }
+      enterPhase("legacy clients");
       for (const clientName of [
         GATEWAY_CLIENT_IDS.CONTROL_UI,
         GATEWAY_CLIENT_IDS.CLI,
@@ -392,10 +460,13 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
         }
       }
     } finally {
+      enterPhase("client cleanup");
       await disconnectGatewayClient(client);
+      enterPhase("Gateway cleanup");
       await server.close({ reason: "catalog publication test complete" });
     }
   } finally {
+    enterPhase("test state cleanup");
     await state.cleanup();
   }
 }, 60_000);

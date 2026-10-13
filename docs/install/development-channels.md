@@ -174,11 +174,15 @@ that check, without changing the ledger.
 
 ## Tagging best practices
 
-- Tag releases you want git checkouts to land on: `vYYYY.M.PATCH` for stable,
+- Tag releases you want git checkouts to land on: `vYYYY.M.PATCH` with patch
+  `1` through `32` for regular stable,
   `vYYYY.M.PATCH-beta.N` for beta. Named prerelease suffixes such as
   `-alpha.N`, `-rc.N`, and `-next.N` are not stable or beta targets.
 - Legacy numeric stable tags such as `vYYYY.M.PATCH-1` and `v1.0.1-1` are still
-  recognized as stable git tags for compatibility.
+  recognized as stable git tags for compatibility, except monthly patches `33`
+  and higher. Those patches are reserved for extended-stable; final tags and
+  numeric correction variants are never regular stable targets or beta's stable
+  fallback. Extended-stable remains a package-only update channel.
 - `vYYYY.M.PATCH.beta.N` (dot-separated) is also recognized for compatibility;
   prefer `-beta.N`.
 - Keep tags immutable: never move or reuse a tag.

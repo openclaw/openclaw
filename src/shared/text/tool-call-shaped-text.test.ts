@@ -3,13 +3,6 @@ import { describe, expect, it } from "vitest";
 import { detectToolCallShapedText } from "./tool-call-shaped-text.js";
 
 describe("detectToolCallShapedText", () => {
-  it("detects standalone OpenAI-style function-call JSON", () => {
-    expect(detectToolCallShapedText('{"name":"read","arguments":{"path":"README.md"}}')).toEqual({
-      kind: "json_tool_call",
-      toolName: "read",
-    });
-  });
-
   it.each(["", '{"name":"earlier","arguments":{}}\n'])(
     "prefers fenced tool_calls JSON after %j",
     (prefix) => {

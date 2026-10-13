@@ -31,6 +31,18 @@ afterEach(() => {
 });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+function catalogModel(id: string, name: string, contextWindow = 64_000) {
+  return {
+    id,
+    name,
+    reasoning: true,
+    input: ["text"],
+    contextWindow,
+    maxTokens: 4096,
+    cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+  };
+}
+
 it.each([true, false])(
   "returns Radius credentials with credentialOnly=%s and discovers models only for setup",
   async (credentialOnly) => {
@@ -51,17 +63,7 @@ it.each([true, false])(
         : url.endsWith("/oauth/token")
           ? { access_token: "access-test", refresh_token: "refresh-test", expires_in: 3600 }
           : {
-              models: [
-                {
-                  id: "balanced",
-                  name: "Balanced",
-                  reasoning: true,
-                  input: ["text"],
-                  contextWindow: 64_000,
-                  maxTokens: 4096,
-                  cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
-                },
-              ],
+              models: [catalogModel("balanced", "Balanced")],
               baseUrl: "https://radius.pi.dev/v1",
             };
       return { response: Response.json(payload), release: async () => {} };
@@ -127,15 +129,7 @@ it.each([true, false])(
 );
 
 it("routes a discovered organization model through the registered native transport", async () => {
-  const metadata = {
-    id: "organization/custom-model",
-    name: "Organization model",
-    reasoning: true,
-    input: ["text"] as const,
-    contextWindow: 100_000,
-    maxTokens: 4096,
-    cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
-  };
+  const metadata = catalogModel("organization/custom-model", "Organization model", 100_000);
   fetchGuard.mockResolvedValue({
     response: Response.json({ baseUrl: "https://radius.pi.dev/v1", models: [metadata] }),
     release: async () => undefined,
@@ -207,15 +201,7 @@ it("routes a discovered organization model through the registered native transpo
 });
 
 it("resolves a cold agent's model from its pinned account without inventing unknown models", async () => {
-  const model = {
-    id: "organization/cold-model",
-    name: "Cold model",
-    reasoning: true,
-    input: ["text"],
-    contextWindow: 64_000,
-    maxTokens: 4096,
-    cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
-  };
+  const model = catalogModel("organization/cold-model", "Cold model");
   fetchGuard.mockImplementation(async () => ({
     response: Response.json({ baseUrl: "https://radius.pi.dev/v1", models: [model] }),
     release: async () => undefined,

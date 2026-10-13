@@ -5,18 +5,25 @@ import type { PluginManifestControlUi } from "./manifest-types.js";
 
 export const CONTROL_UI_PLUGIN_MAX_ASSET_BYTES = 4 * 1024 * 1024;
 export const CONTROL_UI_PLUGIN_MAX_BUILD_BYTES = 8 * 1024 * 1024;
-const MAX_CONTROL_UI_ASSETS = 128;
+export const CONTROL_UI_PLUGIN_MAX_ASSETS = 128;
 
 export type PluginControlUiAsset = { body: Buffer; contentType: string };
 
+/** Files admitted from a plugin's dedicated browser build directory. */
+export function isPluginControlUiAssetPath(relativePath: string): boolean {
+  return /^(?:[\w-][\w.-]*\/)*[\w-][\w.-]*\.(?:m?js|css)$/u.test(relativePath);
+}
+
 // Serving and packing must capture the same bounded browser directory, including
 // dependent chunks, without exposing package sources or unrelated files.
+// CLI packing stays strict; Gateway callers supply the owning plugin's hardlink policy.
 export async function readPluginControlUiAssets(
   rootDir: string,
   declaration: PluginManifestControlUi,
+  options: { rejectHardlinks?: boolean } = {},
 ) {
   const pluginRoot = await root(rootDir, {
-    hardlinks: "reject",
+    hardlinks: options.rejectHardlinks === false ? "allow" : "reject",
     symlinks: "reject",
     maxBytes: CONTROL_UI_PLUGIN_MAX_ASSET_BYTES,
   });
@@ -26,14 +33,11 @@ export async function readPluginControlUiAssets(
   for await (const entry of walkRootDirectory(pluginRoot.rootReal, directory, {
     symlinkPolicy: "skip",
     maxDepth: 8,
-    maxEntries: MAX_CONTROL_UI_ASSETS,
+    maxEntries: CONTROL_UI_PLUGIN_MAX_ASSETS,
     limitBehavior: "throw",
   })) {
     const relativePath = path.posix.relative(directory, entry.relativePath);
-    if (
-      entry.kind !== "file" ||
-      !/^(?:[\w-][\w.-]*\/)*[\w-][\w.-]*\.(?:m?js|css)$/u.test(relativePath)
-    ) {
+    if (entry.kind !== "file" || !isPluginControlUiAssetPath(relativePath)) {
       continue;
     }
     const body = await pluginRoot.readBytes(entry.relativePath);

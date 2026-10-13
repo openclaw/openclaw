@@ -1,11 +1,7 @@
-/**
- * Sandbox workspace mount argument builder.
- *
- * Creates Docker bind specs for writable workspaces and read-only skill source mounts.
- */
 import fs from "node:fs";
 import path from "node:path";
 import { isPathInside } from "../../infra/path-guards.js";
+import { MATERIALIZED_SANDBOX_SKILLS_WORKSPACE_PARTS } from "../../shared/sandbox-workspace-paths.js";
 import { splitSandboxBindSpec } from "./bind-spec.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
 import { resolveSandboxHostPathViaExistingAncestor } from "./host-paths.js";
@@ -13,7 +9,6 @@ import { normalizeContainerPathCore } from "./path-utils.js";
 import type { SandboxWorkspaceAccess } from "./types.js";
 
 export const SANDBOX_MOUNT_FORMAT_VERSION = 4;
-const MATERIALIZED_SANDBOX_SKILLS_WORKSPACE_PARTS = [".openclaw", "sandbox-skills"] as const;
 
 /** Managed skill directory projected read-only into the sandbox workspace. */
 export type ReadOnlyWorkspaceSkillMount = {
@@ -100,12 +95,7 @@ export function resolveReadOnlyWorkspaceSkillMounts(params: {
   }
 
   return mounts
-    .filter((mount) =>
-      isExistingWorkspaceSkillMountSource({
-        rootDir: mount.rootDir,
-        hostPath: mount.hostPath,
-      }),
-    )
+    .filter(isExistingWorkspaceSkillMountSource)
     .map(({ hostPath, containerPath }) => ({ hostPath, containerPath }));
 }
 

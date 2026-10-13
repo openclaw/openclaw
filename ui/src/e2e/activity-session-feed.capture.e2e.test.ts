@@ -1,6 +1,7 @@
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   controlUiBundledGatewayUrl,
   controlUiSessionUrl,
@@ -43,6 +44,16 @@ suite.define(() => {
           });
         });
         const current = new Date();
+        const since = new Date(
+          current.getFullYear(),
+          current.getMonth(),
+          current.getDate() - 7,
+        ).getTime();
+        const until = new Date(
+          current.getFullYear(),
+          current.getMonth(),
+          current.getDate() + 1,
+        ).getTime();
         // Keep the automation fixtures on one local calendar day in every timezone.
         const now = new Date(
           current.getFullYear(),
@@ -58,6 +69,16 @@ suite.define(() => {
         const automationKeys = [designKey, gatewayHandoffKey, nightlyMaintenanceKey];
         const nonAutomationKeys = [releaseKey, incidentNotesKey];
         const sessionList = {
+          activityPulse: {
+            since,
+            until,
+            buckets: [0, 0, 0, 0, 0, 0, 5, 0],
+            sessions: 5,
+            started: 0,
+            people: 3,
+            running: 1,
+          },
+          peopleIncomplete: true,
           people: [
             {
               identity: { type: "profile", id: "profile-alice" },
@@ -295,12 +316,17 @@ suite.define(() => {
 
         const response = await page.goto(controlUiSessionUrl(suite.server.baseUrl, releaseKey));
         expect(response?.status()).toBe(200);
-        const onlineToggle = page.getByRole("button", { name: "Online", exact: true });
+        const onlineView = page.locator('[data-navigation-view="online"]');
+        await onlineView.click();
+        await expect.poll(() => onlineView.getAttribute("aria-pressed")).toBe("true");
+        const onlineToggle = page
+          .locator(".sidebar-online")
+          .getByRole("button", { name: "Online", exact: true });
         await expect.poll(() => onlineToggle.getAttribute("aria-expanded")).toBe("true");
-        await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(4);
+        await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(5);
         await page.locator(".sidebar").screenshot({
           animations: "disabled",
-          path: path.join(outputDir, "01-sidebar-online-default-open-light.png"),
+          path: path.join(outputDir, "01-sidebar-online-selected-open-light.png"),
         });
 
         await onlineToggle.focus();
@@ -311,10 +337,10 @@ suite.define(() => {
           .poll(() =>
             page.locator(".sidebar-online .viewer-facepile").getAttribute("data-viewer-count"),
           )
-          .toBe("4");
+          .toBe("5");
         await expect
           .poll(() => page.locator(".sidebar-online .viewer-avatar--overflow").textContent())
-          .toContain("+2");
+          .toContain("+3");
         await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
         await page.locator(".sidebar").screenshot({
           animations: "disabled",
@@ -330,17 +356,30 @@ suite.define(() => {
         await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
 
         await page.reload();
+        // View selection is transient. The saved section collapse remains until Online is selected,
+        // and selecting Online deliberately expands its roster.
+        expect(
+          await page.evaluate(() =>
+            JSON.parse(
+              localStorage.getItem("openclaw:sidebar:sessions:collapsed-sections") ?? "[]",
+            ),
+          ),
+        ).toEqual(expect.arrayContaining(["work", "online"]));
+        await onlineView.click();
+        await expect.poll(() => onlineToggle.getAttribute("aria-expanded")).toBe("true");
+        await onlineToggle.focus();
+        await page.keyboard.press("Enter");
         await expect.poll(() => onlineToggle.getAttribute("aria-expanded")).toBe("false");
         await page.emulateMedia({ colorScheme: "dark" });
         await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("dark");
         await page.locator(".sidebar").screenshot({
           animations: "disabled",
-          path: path.join(outputDir, "03-sidebar-online-persisted-collapsed-dark.png"),
+          path: path.join(outputDir, "03-sidebar-online-collapsed-dark.png"),
         });
         await onlineToggle.focus();
         await page.keyboard.press("Space");
         await expect.poll(() => onlineToggle.getAttribute("aria-expanded")).toBe("true");
-        await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(4);
+        await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(5);
         await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
         await page.locator(".sidebar").screenshot({
           animations: "disabled",
@@ -359,15 +398,16 @@ suite.define(() => {
         await page.reload();
         await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe("dash");
 
-        await page.evaluate(() => {
-          const app = document.querySelector("openclaw-app") as HTMLElement & {
-            runtime?: { context: { navigate: (routeId: string) => void } };
-          };
-          app.runtime?.context.navigate("activity");
+        await evaluateControlUiContext(page, (context) => {
+          context.navigate("activity");
         });
         await waitForControlUiRoute(page, { pathname: "/activity", routeId: "activity" });
         const activityPage = page.locator("openclaw-activity-page");
         await expect.poll(() => activityPage.count()).toBe(1);
+        await activityPage.locator(".activity-pulse__bars").waitFor();
+        expect(await activityPage.locator(".activity-pulse__bars > span").count()).toBe(
+          sessionList.activityPulse.buckets.length,
+        );
         // The title sits centered in the toolbar row; the intro copy and the
         // mode tabs share the content's left edge below it.
         const introLeft = await activityPage
@@ -387,7 +427,7 @@ suite.define(() => {
               .count(),
           )
           .toBe(3);
-        const peoplePopover = activityPage.locator("wa-popover.activity-feed__people-popover");
+        const peoplePopover = activityPage.locator(".activity-feed__people-popover:popover-open");
         const peoplePaint = await readThemedPopupPaint(peoplePopover, "body");
         if (proofPhase) {
           await page.screenshot({
@@ -451,6 +491,7 @@ suite.define(() => {
           path: path.join(outputDir, "05-global-activity.png"),
         });
 
+        await onlineView.click();
         await page.locator('[data-online-user-id="profile-alice"]').click();
         await expect.poll(() => new URL(page.url()).pathname).toBe("/activity/profile-alice");
         await expect

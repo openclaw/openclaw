@@ -6,6 +6,7 @@ import { RustCrypto } from "matrix-js-sdk/lib/rust-crypto/rust-crypto.js";
 import { SyncState } from "matrix-js-sdk/lib/sync.js";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixTestRuntime } from "../../test-runtime.js";
 import { SqliteBackedMatrixSyncStore } from "./file-sync-store.js";
@@ -71,6 +72,7 @@ describe("Matrix SDK sync-cache verification routing", () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     fs.rmSync(storageRoot, { recursive: true, force: true });
   });
@@ -79,13 +81,14 @@ describe("Matrix SDK sync-cache verification routing", () => {
     "routes only fresh verification events to crypto (saved sync: %s)",
     async (hasCache) => {
       if (hasCache) {
-        const seed = new SqliteBackedMatrixSyncStore(storageRoot);
+        const seed = await SqliteBackedMatrixSyncStore.create(storageRoot);
         await seed.setSyncData(verificationSync("saved-cursor", cachedEventId));
         seed.markCleanShutdown();
         await seed.flush();
+        await closeOpenClawStateDatabaseAsync();
         resetPluginStateStoreForTests();
       }
-      const store = new SqliteBackedMatrixSyncStore(storageRoot);
+      const store = await SqliteBackedMatrixSyncStore.create(storageRoot);
       expect(store.hasSavedSyncFromCleanShutdown()).toBe(hasCache);
       await expect(store.getSavedSyncToken()).resolves.toBe(hasCache ? "saved-cursor" : null);
 

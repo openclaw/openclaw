@@ -3,41 +3,21 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { FastMode } from "../../../shared/fast-mode.js";
 import { resolveFastModeState } from "../../fast-mode.js";
 import {
+  type ModelRef,
   normalizeStoredOverrideModel,
   resolveDefaultModelForAgent,
   resolvePersistedSelectedModelRef,
 } from "../../model-selection.js";
 import { resolveThinkingDefault } from "../../model-thinking-default.js";
-import {
-  loadSessionEntry,
-  resolveAgentConfig,
-  resolveGatewaySessionStoreTarget,
-} from "./subagent-spawn.runtime.js";
 
 type RequesterPreferencesContext = {
   cfg: OpenClawConfig;
-  requesterInternalKey: string;
   requesterAgentId?: string;
+  requesterEntry: SessionEntry | undefined;
 };
 
-function readRequesterSession(params: RequesterPreferencesContext): SessionEntry | undefined {
-  try {
-    const target = resolveGatewaySessionStoreTarget({
-      cfg: params.cfg,
-      key: params.requesterInternalKey,
-      agentId: params.requesterAgentId,
-    });
-    return loadSessionEntry({
-      storePath: target.storePath,
-      sessionKey: target.canonicalKey,
-      clone: false,
-    });
-  } catch {
-    return undefined;
-  }
-}
-
-function resolveRequesterModel(params: RequesterPreferencesContext, entry?: SessionEntry) {
+function resolveRequesterModel(params: RequesterPreferencesContext) {
+  const entry = params.requesterEntry;
   const defaultModel = resolveDefaultModelForAgent({
     cfg: params.cfg,
     agentId: params.requesterAgentId,
@@ -61,40 +41,39 @@ function resolveRequesterModel(params: RequesterPreferencesContext, entry?: Sess
   return { defaultModel, selectedModel };
 }
 
-export function readRequesterModel(params: RequesterPreferencesContext) {
-  const entry = readRequesterSession(params);
-  return entry ? (resolveRequesterModel(params, entry).selectedModel ?? undefined) : undefined;
+export function resolveRequesterPreferences(params: RequesterPreferencesContext) {
+  const entry = params.requesterEntry;
+  const { defaultModel, selectedModel } = resolveRequesterModel(params);
+  const model = selectedModel ?? defaultModel;
+  return {
+    model: selectedModel ?? undefined,
+    thinkingLevel:
+      (typeof entry?.thinkingLevel === "string" && entry.thinkingLevel.trim()) ||
+      resolveThinkingDefault({
+        cfg: params.cfg,
+        agentId: params.requesterAgentId,
+        provider: model.provider,
+        model: model.model,
+      }),
+  };
 }
 
-export function readRequesterThinkingLevel(
-  params: RequesterPreferencesContext,
-): string | undefined {
-  const entry = readRequesterSession(params);
-  if (typeof entry?.thinkingLevel === "string" && entry.thinkingLevel.trim()) {
-    return entry.thinkingLevel.trim();
+export function resolveRequesterFastMode(
+  params: RequesterPreferencesContext & { requesterModel?: ModelRef; childModel: string },
+): FastMode | undefined {
+  const entry = params.requesterEntry;
+  let model = params.requesterModel;
+  if (!model) {
+    const { defaultModel, selectedModel } = resolveRequesterModel(params);
+    model = selectedModel ?? defaultModel;
   }
-  const requesterAgentThinking = params.requesterAgentId
-    ? resolveAgentConfig(params.cfg, params.requesterAgentId)?.thinkingDefault
-    : undefined;
-  if (requesterAgentThinking) {
-    return requesterAgentThinking;
+  if (params.childModel !== `${model.provider}/${model.model}`) {
+    return undefined;
   }
-  const { defaultModel, selectedModel } = resolveRequesterModel(params, entry);
-  const model = selectedModel ?? defaultModel;
-  return resolveThinkingDefault({
+  return resolveFastModeState({
     cfg: params.cfg,
     provider: model.provider,
     model: model.model,
-  });
-}
-
-export function readRequesterFastMode(params: RequesterPreferencesContext): FastMode {
-  const entry = readRequesterSession(params);
-  const { defaultModel, selectedModel } = resolveRequesterModel(params, entry);
-  return resolveFastModeState({
-    cfg: params.cfg,
-    provider: selectedModel?.provider ?? defaultModel.provider,
-    model: selectedModel?.model ?? defaultModel.model,
     agentId: params.requesterAgentId,
     sessionEntry: entry,
   }).mode;

@@ -12,6 +12,7 @@ export type ProviderLoginOption = {
   groupLabel?: string;
   icon?: string;
   website?: string;
+  docsUrl?: string;
   kind: "oauth" | "device-code" | "secret";
   featured: boolean;
 };
@@ -31,17 +32,12 @@ export type ProviderChannelLoginResolution =
   | { status: "providers"; providers: ProviderOAuthLoginGroup[] }
   | { status: "ambiguous" | "unsupported"; choices: ProviderChannelLoginChoice[] };
 
-function supportsProviderAuthChoiceTextInference(
-  scopes?: ProviderAuthChoiceMetadata["onboardingScopes"],
-): boolean {
-  return !scopes || scopes.includes("text-inference");
-}
-
 function isEligible(choice: ProviderAuthChoiceMetadata): boolean {
   return (
     Boolean(choice.choiceId.trim()) &&
     choice.assistantVisibility !== "manual-only" &&
-    supportsProviderAuthChoiceTextInference(choice.onboardingScopes)
+    choice.assistantVisibility !== "detected-only" &&
+    (!choice.onboardingScopes || choice.onboardingScopes.includes("text-inference"))
   );
 }
 
@@ -56,6 +52,14 @@ export function isProviderLoginChoiceStartable(choice: ProviderAuthChoiceMetadat
   return loginKind(choice) !== undefined;
 }
 
+/** CLI API-key logins use the same credential-only runner without changing UI discovery. */
+export function isProviderCliLoginChoiceStartable(choice: ProviderAuthChoiceMetadata): boolean {
+  return (
+    isProviderLoginChoiceStartable(choice) ||
+    (isEligible(choice) && choice.methodId === "api-key" && choice.appGuidedSecret === true)
+  );
+}
+
 export function listProviderLoginOptions(
   choices: readonly ProviderAuthChoiceMetadata[],
 ): ProviderLoginOption[] {
@@ -63,12 +67,12 @@ export function listProviderLoginOptions(
     .filter(isEligible)
     .toSorted(
       (a, b) =>
-        Number(b.onboardingFeatured === true) - Number(a.onboardingFeatured === true) ||
         compareProviderAuthChoiceGroups(
           { id: a.groupId ?? a.providerId, label: a.groupLabel ?? a.choiceLabel },
           { id: b.groupId ?? b.providerId, label: b.groupLabel ?? b.choiceLabel },
         ) ||
         (a.assistantPriority ?? 0) - (b.assistantPriority ?? 0) ||
+        Number(b.onboardingFeatured === true) - Number(a.onboardingFeatured === true) ||
         a.choiceLabel.localeCompare(b.choiceLabel, "en") ||
         a.choiceId.localeCompare(b.choiceId),
     )
@@ -86,6 +90,7 @@ export function listProviderLoginOptions(
           groupLabel: choice.groupLabel,
           icon: choice.icon,
           website: choice.website,
+          docsUrl: choice.docsUrl,
           kind,
           featured: choice.onboardingFeatured === true,
         },
@@ -130,15 +135,11 @@ function projectChannelChoice(choice: ProviderAuthChoiceMetadata): ProviderChann
   };
 }
 
-function readChoices(params?: Parameters<typeof resolveManifestDeclaredProviderAuthChoices>[0]) {
-  return resolveManifestDeclaredProviderAuthChoices(params).filter(isEligible);
-}
-
 export function resolveProviderChannelLoginChoice(
   input: string | undefined,
   params?: Parameters<typeof resolveManifestDeclaredProviderAuthChoices>[0],
 ): ProviderChannelLoginResolution {
-  const metadata = readChoices(params);
+  const metadata = resolveManifestDeclaredProviderAuthChoices(params).filter(isEligible);
   const choices = metadata.map(projectChannelChoice);
   const raw = input?.trim() ?? "";
   const normalized = normalizeInput(input);

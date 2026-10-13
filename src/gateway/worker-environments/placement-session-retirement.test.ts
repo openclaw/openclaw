@@ -2,10 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import { createPlacementSessionRetirement } from "./placement-session-retirement.js";
 import {
@@ -110,9 +108,9 @@ function createHarness(records: WorkerSessionPlacementRecord[]) {
   });
   const retirement = createPlacementSessionRetirement({
     placements: {
-      get: (sessionId) => placements.get(sessionId),
-      list: () => [...placements.values()],
-      retireSessionPlacement: (input) => {
+      getAsync: async (sessionId) => placements.get(sessionId),
+      listAsync: async () => [...placements.values()],
+      retireSessionPlacementAsync: async (input) => {
         const current = placements.get(input.sessionId);
         if (
           current?.state !== input.expectedState ||
@@ -130,6 +128,7 @@ function createHarness(records: WorkerSessionPlacementRecord[]) {
     },
     forceDestroyEnvironment,
     createSessionEvidenceResolver,
+    reportChanges: (operation) => operation(),
     warn: vi.fn(),
   });
   return {
@@ -164,7 +163,7 @@ describe("placement session retirement", () => {
     );
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     const placements = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
-    const requested = placements.startDispatch({
+    const requested = await placements.startDispatch({
       sessionId: "session-requested",
       sessionKey: "agent:main:session-requested",
       agentId: "main",
@@ -174,27 +173,28 @@ describe("placement session retirement", () => {
       sessionKey: "agent:main:session-owned-requested",
       agentId: "main",
     };
-    const ownedClaim = placements.claimTurn({
+    const ownedClaim = await placements.claimTurn({
       ...ownedIdentity,
       owner: { kind: "local" },
       claimId: "requested-owner-claim",
       runId: "requested-owner-run",
     });
-    const ownedRequested = placements.startDispatch(ownedIdentity);
+    const ownedRequested = await placements.startDispatch(ownedIdentity);
     const retireSessionPlacement = vi.fn((input: WorkerSessionPlacementRetirement) =>
-      placements.retireSessionPlacement(input),
+      placements.retireSessionPlacementAsync(input),
     );
     const forceDestroyEnvironment = vi.fn();
     const warn = vi.fn();
     const retirement = createPlacementSessionRetirement({
       placements: {
-        get: (sessionId) => placements.get(sessionId),
-        list: () => placements.list(),
-        retireSessionPlacement,
+        getAsync: (sessionId) => placements.getAsync(sessionId),
+        listAsync: () => placements.listAsync(),
+        retireSessionPlacementAsync: retireSessionPlacement,
       },
       environments: { get: () => undefined },
       forceDestroyEnvironment,
       createSessionEvidenceResolver: async () => async () => "absent",
+      reportChanges: (operation) => operation(),
       warn,
     });
 
@@ -222,7 +222,7 @@ describe("placement session retirement", () => {
       );
       expect(forceDestroyEnvironment).not.toHaveBeenCalled();
     } finally {
-      closeOpenClawStateDatabaseForTest();
+      await closeStateDatabaseForTest();
       await fs.rm(root, { recursive: true, force: true });
     }
   });
@@ -251,9 +251,9 @@ describe("placement session retirement", () => {
     const harness = createHarness([current, unknown]);
     const retirement = createPlacementSessionRetirement({
       placements: {
-        get: (sessionId) => harness.placements.get(sessionId),
-        list: () => [...harness.placements.values()],
-        retireSessionPlacement: () => {
+        getAsync: async (sessionId) => harness.placements.get(sessionId),
+        listAsync: async () => [...harness.placements.values()],
+        retireSessionPlacementAsync: async () => {
           throw new Error("must not retire");
         },
       },
@@ -263,6 +263,7 @@ describe("placement session retirement", () => {
       },
       createSessionEvidenceResolver: async () => async (placement) =>
         placement.sessionId === current.sessionId ? "current" : "unknown",
+      reportChanges: (operation) => operation(),
       warn: vi.fn(),
     });
 

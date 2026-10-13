@@ -85,7 +85,7 @@ activates/tunes the policy even when no route existed. The retired
 - Required completion-delivery failure (`status: "ok"`, `completionStatus: "failed"`) does not increment execution backoff and may notify immediately only through a resolved alternate failure destination, not the failed primary route.
 - `delivery.failureDestination` is only supported for `sessionTarget="isolated"` jobs unless the job's primary `delivery.mode` is `"webhook"`.
 
-See [Automations](/automation/cron-jobs). Isolated automation runs are tracked as [background tasks](/automation/tasks).
+See [Automations](/automation/cron-jobs). Cron records isolated automation run history.
 
 ## Media model template variables
 

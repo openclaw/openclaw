@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import type { SidebarDock } from "../pages/chat/sidebar-layout-types.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
   controlUiBundledSettingsStorageKey,
@@ -15,10 +16,10 @@ const suite = createControlUiE2eSuite({
 });
 const sessionKey = "agent:main:main";
 
-async function seedSidePanel(page: Page) {
+async function seedSidePanel(page: Page, dock: SidebarDock = "right") {
   const key = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
   await page.addInitScript(
-    ({ settingsKey, session }) => {
+    ({ settingsKey, session, dock: initialDock }) => {
       localStorage.setItem(
         settingsKey,
         JSON.stringify({
@@ -35,7 +36,7 @@ async function seedSidePanel(page: Page) {
                   width: 420,
                 },
               ],
-              dock: "right",
+              dock: initialDock,
               open: true,
               expanded: false,
             },
@@ -43,8 +44,29 @@ async function seedSidePanel(page: Page) {
         }),
       );
     },
-    { settingsKey: key, session: sessionKey },
+    { settingsKey: key, session: sessionKey, dock },
   );
+}
+
+async function openSidePanel(page: Page, dock: SidebarDock = "right") {
+  await seedSidePanel(page, dock);
+  await installMockGateway(page, {
+    featureMethods: ["sessions.diff"],
+    methodResponses: {
+      "sessions.diff": {
+        additions: 0,
+        deletions: 0,
+        files: [],
+        root: "/tmp/openclaw",
+        sessionKey,
+      },
+    },
+    sessionKey,
+    workspace: "/tmp/openclaw",
+    workspaceGit: true,
+  });
+  await page.goto(`${suite.server.baseUrl}chat`);
+  await waitForControlUiGatewayReady(page);
 }
 
 async function lineStyle(locator: Locator) {
@@ -80,28 +102,64 @@ async function captureResizeState(page: Page, name: string) {
 }
 
 suite.define(() => {
+  it.each([
+    ["ltr", "left"],
+    ["ltr", "right"],
+    ["ltr", "bottom"],
+    ["rtl", "left"],
+    ["rtl", "right"],
+    ["rtl", "bottom"],
+  ] as const)(
+    "follows physical pointer and arrow movement in %s with the %s dock",
+    async (direction, dock) => {
+      await suite.withPage(
+        { locale: "en-US", viewport: { height: 760, width: 1440 } },
+        async ({ page }) => {
+          await openSidePanel(page, dock);
+          await page.evaluate((value) => {
+            document.documentElement.dir = value;
+          }, direction);
+          const divider = page.getByRole("separator", { name: "Resize side panel" });
+          await divider.waitFor();
+          const bounds = await divider.boundingBox();
+          expect(bounds).not.toBeNull();
+          const horizontal = dock === "bottom";
+          const coordinate = async () => {
+            const current = await divider.boundingBox();
+            expect(current).not.toBeNull();
+            return horizontal ? current!.y : current!.x;
+          };
+          const before = horizontal ? bounds!.y : bounds!.x;
+          const x = bounds!.x + bounds!.width / 2;
+          const y = bounds!.y + bounds!.height / 2;
+          const delta = horizontal ? 50 : -80;
+          await page.mouse.move(x, y);
+          await page.mouse.down();
+          await page.mouse.move(horizontal ? x : x + delta, horizontal ? y + delta : y, {
+            steps: 4,
+          });
+          await page.mouse.up();
+          await expect
+            .poll(async () => Math.abs((await coordinate()) - (before + delta)))
+            .toBeLessThanOrEqual(2);
+
+          await divider.focus();
+          const beforeForward = await coordinate();
+          await page.keyboard.press(horizontal ? "ArrowDown" : "ArrowRight");
+          await expect.poll(coordinate).toBeGreaterThan(beforeForward + 1);
+          const beforeBackward = await coordinate();
+          await page.keyboard.press(horizontal ? "ArrowUp" : "ArrowLeft");
+          await expect.poll(coordinate).toBeLessThan(beforeBackward - 1);
+        },
+      );
+    },
+  );
+
   it("keeps navigation and side-panel handles aligned across input and dock states", async () => {
     await suite.withPage(
       { colorScheme: "dark", locale: "en-US", viewport: { height: 760, width: 1440 } },
       async ({ page }) => {
-        await seedSidePanel(page);
-        await installMockGateway(page, {
-          featureMethods: ["sessions.diff"],
-          methodResponses: {
-            "sessions.diff": {
-              additions: 0,
-              deletions: 0,
-              files: [],
-              root: "/tmp/openclaw",
-              sessionKey,
-            },
-          },
-          sessionKey,
-          workspace: "/tmp/openclaw",
-          workspaceGit: true,
-        });
-        await page.goto(`${suite.server.baseUrl}chat`);
-        await waitForControlUiGatewayReady(page);
+        await openSidePanel(page);
 
         const navigation = page.getByRole("separator", { name: "Resize sidebar" });
         const sidePanel = page.getByRole("separator", { name: "Resize side panel" });

@@ -1,18 +1,17 @@
 import {
   runOutsidePluginMetadataSnapshotScope,
-  withPluginMetadataSnapshotScope,
+  createPluginMetadataSnapshotFrame,
 } from "../current-plugin-metadata-snapshot.js";
+import { runWithPluginExecutionFrame } from "../plugin-instance-invocation.js";
 import type { PluginMetadataSnapshot } from "../plugin-metadata-snapshot.types.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import type { PluginRegistry } from "../registry-types.js";
+import { getPluginRuntimeExecutionFrame, PluginRuntimeExecutionFrame } from "./execution-frame.js";
 import {
   runOutsidePluginRuntimeRegistryScope,
-  withPluginRuntimeRegistryScope,
+  createRegistryScope,
 } from "./gateway-request-scope.js";
-import {
-  withPluginRuntimeGenerationRegistryScope,
-  runOutsidePluginRuntimeGenerationRegistryScope,
-} from "./generation-state.js";
+import { runOutsidePluginRuntimeGenerationRegistryScope } from "./generation-state.js";
 
 export { getPluginRuntimeGenerationRegistry } from "./generation-state.js";
 
@@ -25,18 +24,22 @@ export function withPluginRuntimeGenerationScope<T>(
   run: () => T,
 ): T {
   const pluginRegistry = generation.pluginRegistry ?? createEmptyPluginRegistry();
-  return withPluginMetadataSnapshotScope(
+  const frame = createPluginMetadataSnapshotFrame(
     generation.metadataSnapshot,
-    () =>
-      withPluginRuntimeGenerationRegistryScope(pluginRegistry, () =>
-        withPluginRuntimeRegistryScope(
-          pluginRegistry,
-          run,
-          generation.metadataSnapshot.declaredProviderOwners,
-        ),
-      ),
     // The prepared generation already owns discovery and policy compatibility.
     { trustConfigIdentity: true },
+  );
+  return runWithPluginExecutionFrame(
+    new PluginRuntimeExecutionFrame(
+      frame,
+      createRegistryScope(
+        pluginRegistry,
+        getPluginRuntimeExecutionFrame(frame)?.gatewayScope,
+        generation.metadataSnapshot.declaredProviderOwners,
+      ),
+      pluginRegistry,
+    ),
+    run,
   );
 }
 

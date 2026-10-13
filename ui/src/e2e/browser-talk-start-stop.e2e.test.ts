@@ -11,7 +11,9 @@ import {
   installOpenAiTalkFixture,
   installTalkBrowserFixtures,
   installVideoTalkMediaFixture,
+  TALK_READY_HISTORY_MESSAGE,
   videoTalkCatalog,
+  waitForTalkReady,
 } from "./browser-talk-start-stop.fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -27,6 +29,7 @@ suite.define(() => {
   it("starts a provider WebSocket session and stops browser audio resources", async () => {
     await suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
+        historyMessages: [TALK_READY_HISTORY_MESSAGE],
         methodResponses: {
           "talk.client.create": {
             provider: "google",
@@ -60,6 +63,7 @@ suite.define(() => {
       await microphoneSelect.selectOption("usb");
       await page.goto(`${suite.server.baseUrl}chat`);
       await page.setViewportSize({ width: 320, height: 720 });
+      await waitForTalkReady(page);
       await page.getByRole("button", { name: "Tap to talk" }).click();
 
       const createRequest = await gateway.waitForRequest("talk.client.create");
@@ -205,6 +209,7 @@ suite.define(() => {
     await suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         deferredMethods: ["chat.send"],
+        historyMessages: [TALK_READY_HISTORY_MESSAGE],
         methodResponses: {
           "talk.client.create": {
             provider: "google",
@@ -229,6 +234,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       await page.setViewportSize({ width: 1366, height: 900 });
 
+      await waitForTalkReady(page);
       await page.getByRole("button", { name: "Start voice input" }).click();
       await gateway.waitForRequest("talk.client.create");
       await gateway.deliverLatest({ setupComplete: {} });
@@ -333,6 +339,7 @@ suite.define(() => {
   it("starts OpenAI Talk, enables a fake camera, and submits describe_view", async () => {
     await suite.withPage({ permissions: ["camera", "microphone"] }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
+        historyMessages: [TALK_READY_HISTORY_MESSAGE],
         methodResponses: {
           "talk.catalog": videoTalkCatalog("openai"),
           "talk.client.create": {
@@ -348,6 +355,7 @@ suite.define(() => {
 
       await page.setViewportSize({ width: 1366, height: 900 });
       await page.goto(`${suite.server.baseUrl}chat`);
+      await waitForTalkReady(page);
       await captureVideoTalkProof(suite, page, "01-before-video-talk.png");
 
       await page.getByRole("button", { name: "Start voice input" }).click();
@@ -475,7 +483,6 @@ suite.define(() => {
         "talk.catalog",
         "talk.catalog",
         "talk.client.create",
-        "talk.voice.get",
       ]);
       console.info(
         "[video-talk-e2e] describe_view=input_image+function_output+response_create,gateway_frame_requests:0",
@@ -500,6 +507,7 @@ suite.define(() => {
   it("starts Gemini Live Talk, enables a fake camera, and handles describe_view", async () => {
     await suite.withPage({ permissions: ["camera", "microphone"] }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
+        historyMessages: [TALK_READY_HISTORY_MESSAGE],
         methodResponses: {
           "talk.catalog": videoTalkCatalog("google"),
           "talk.client.create": {
@@ -549,6 +557,7 @@ suite.define(() => {
 
       await page.setViewportSize({ width: 1366, height: 900 });
       await page.goto(`${suite.server.baseUrl}chat`);
+      await waitForTalkReady(page);
       await page.getByRole("button", { name: "Start voice input" }).click();
       const request = await gateway.waitForRequest("talk.client.create");
       expect(request.params).toMatchObject({
@@ -601,7 +610,6 @@ suite.define(() => {
         "talk.catalog",
         "talk.catalog",
         "talk.client.create",
-        "talk.voice.get",
       ]);
       await captureVideoTalkProof(suite, page, "05-gemini-live-camera-preview.png");
       console.info(
@@ -626,6 +634,7 @@ suite.define(() => {
   it("shows actionable guidance when Video Talk camera permission is blocked", async () => {
     await suite.withPage(undefined, async ({ page }) => {
       const gateway = await installMockGateway(page, {
+        historyMessages: [TALK_READY_HISTORY_MESSAGE],
         methodResponses: {
           "talk.catalog": videoTalkCatalog("google"),
           "talk.client.create": {
@@ -660,6 +669,7 @@ suite.define(() => {
 
       await page.setViewportSize({ width: 1366, height: 900 });
       await page.goto(`${suite.server.baseUrl}chat`);
+      await waitForTalkReady(page);
       await page.getByRole("button", { name: "Start voice input" }).click();
       await gateway.waitForRequest("talk.client.create");
       const turnCameraOn = page.getByRole("button", { name: "Turn camera on" });
@@ -690,6 +700,8 @@ suite.define(() => {
     await suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
       const relaySessionId = "relay-e2e-transcript";
       const gateway = await installMockGateway(page, {
+        deferredMethods: ["talk.client.create"],
+        historyMessages: [TALK_READY_HISTORY_MESSAGE],
         methodResponses: {
           "talk.client.create": {
             provider: "openai",
@@ -710,22 +722,36 @@ suite.define(() => {
 
       await page.goto(`${suite.server.baseUrl}chat`);
       await page.setViewportSize({ width: 1366, height: 900 });
+      await waitForTalkReady(page);
       await page.getByRole("button", { name: "Start voice input" }).click();
       await gateway.waitForRequest("talk.client.create");
-      // The request is recorded before its mock response is delivered. Wait for
-      // microphone setup before probing relay readiness below.
+      // Microphone acquisition precedes relay admission and cannot prove readiness.
+      expect(
+        await page.evaluate(() => {
+          const state = (
+            window as Window & {
+              openclawTalkE2eState?: { constraints: unknown[]; inputProcessor: unknown };
+            }
+          ).openclawTalkE2eState;
+          return {
+            microphoneRequests: state?.constraints.length,
+            inputReady: state?.inputProcessor != null,
+          };
+        }),
+      ).toEqual({ microphoneRequests: 1, inputReady: false });
+      await gateway.resolveDeferred("talk.client.create");
       await expect
         .poll(() =>
           page.evaluate(
             () =>
               (
                 window as Window & {
-                  openclawTalkE2eState?: { constraints: unknown[] };
+                  openclawTalkE2eState?: { inputProcessor: unknown };
                 }
-              ).openclawTalkE2eState?.constraints.length,
+              ).openclawTalkE2eState?.inputProcessor != null,
           ),
         )
-        .toBe(1);
+        .toBe(true);
       await gateway.emitGatewayEvent("talk.event", { relaySessionId, type: "ready" });
       await expect
         .poll(() => page.locator('.agent-chat__voice-activity[data-status="listening"]').count())
@@ -770,10 +796,11 @@ suite.define(() => {
     });
   });
 
-  it("shows a visible error when relay microphone appends fall behind", async () => {
+  it("keeps the call alive while relay microphone appends stall", async () => {
     await suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
       const relaySessionId = "relay-e2e-input-backpressure";
       const gateway = await installMockGateway(page, {
+        historyMessages: [TALK_READY_HISTORY_MESSAGE],
         methodResponses: {
           "talk.client.create": {
             provider: "openai",
@@ -793,6 +820,7 @@ suite.define(() => {
       await installTalkBrowserFixtures(page);
 
       await page.goto(`${suite.server.baseUrl}chat`);
+      await waitForTalkReady(page);
       for (let index = 0; index < 4; index += 1) {
         await gateway.deferNext("talk.session.appendAudio");
       }
@@ -831,18 +859,16 @@ suite.define(() => {
         }
       });
 
+      // Five 256 ms frames stay inside the 3 s in-flight budget, so every frame is
+      // sent while the deferred appends stall and the session is not torn down.
       await expect
         .poll(() =>
           gateway.getRequests("talk.session.appendAudio").then((requests) => requests.length),
         )
-        .toBe(4);
-      await expect
-        .poll(() => page.getByRole("alert").textContent())
-        .toContain("Realtime Talk audio input fell behind");
-      await expect
-        .poll(() => gateway.getRequests("talk.session.close").then((requests) => requests.length))
-        .toBe(1);
-      await captureComposerProof(suite, page, "relay-input-backpressure-error.png");
+        .toBe(5);
+      expect(await page.getByRole("alert").count()).toBe(0);
+      expect(await gateway.getRequests("talk.session.close")).toHaveLength(0);
+      await captureComposerProof(suite, page, "relay-input-backpressure-alive.png");
     });
   });
 
@@ -851,6 +877,7 @@ suite.define(() => {
       const currentRelaySessionId = "relay-current-e2e";
       const staleRelaySessionId = "relay-stale-e2e";
       const gateway = await installMockGateway(page, {
+        historyMessages: [TALK_READY_HISTORY_MESSAGE],
         methodResponses: {
           "talk.client.create": {
             provider: "openai",
@@ -870,6 +897,7 @@ suite.define(() => {
       await installTalkBrowserFixtures(page);
 
       await page.goto(`${suite.server.baseUrl}chat`);
+      await waitForTalkReady(page);
       await gateway.deferNext("talk.client.create");
 
       await page.getByRole("button", { name: "Start voice input" }).click();
@@ -969,11 +997,14 @@ suite.define(() => {
 
   it("shows actionable guidance when Talk microphone permission is blocked", async () => {
     await suite.withPage(undefined, async ({ page }) => {
-      const gateway = await installMockGateway(page);
+      const gateway = await installMockGateway(page, {
+        historyMessages: [TALK_READY_HISTORY_MESSAGE],
+      });
       await installBlockedMicrophoneFixture(page);
 
       await page.setViewportSize({ width: 320, height: 720 });
       await page.goto(`${suite.server.baseUrl}chat`);
+      await waitForTalkReady(page);
       await page.getByRole("button", { name: "Tap to talk" }).click();
       await expect
         .poll(() => page.getByRole("alert").locator(".agent-chat__talk-status-text").textContent())

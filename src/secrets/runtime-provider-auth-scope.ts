@@ -1,6 +1,6 @@
 /** Classifies degradation state owned by provider and auth-profile refreshes. */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { resolveAuthProfileSecretOwnerId } from "./runtime-auth-profile-owner.js";
+import { listAuthProfileSecretOwnerIds } from "./runtime-auth-profile-owner.js";
 import type { PreparedSecretsRuntimeSnapshot } from "./runtime-state.js";
 
 export type SecretsStateScope = "full" | "provider-auth";
@@ -13,13 +13,7 @@ export function listProviderAuthDegradedOwners(
       (providerId) => normalizeOptionalLowercaseString(providerId) ?? providerId,
     ),
   );
-  const authOwnerIds = new Set(
-    snapshot.authStores.flatMap(({ agentDir, store }) =>
-      Object.keys(store.profiles).map((profileId) =>
-        resolveAuthProfileSecretOwnerId({ agentDir, profileId }),
-      ),
-    ),
-  );
+  const authOwnerIds = listAuthProfileSecretOwnerIds(snapshot.authStores);
   return (snapshot.degradedOwners ?? []).filter(
     (owner) =>
       (owner.ownerKind === "provider" && modelProviderOwnerIds.has(owner.ownerId)) ||
@@ -32,13 +26,7 @@ export function preparedDegradationSupportsSourceOnlyRecovery(
   snapshot: PreparedSecretsRuntimeSnapshot,
 ): boolean {
   const degradedOwners = snapshot.degradedOwners ?? [];
-  const authOwnerIds = new Set(
-    snapshot.authStores.flatMap(({ agentDir, store }) =>
-      Object.keys(store.profiles).map((profileId) =>
-        resolveAuthProfileSecretOwnerId({ agentDir, profileId }),
-      ),
-    ),
-  );
+  const authOwnerIds = listAuthProfileSecretOwnerIds(snapshot.authStores);
   return (
     degradedOwners.length > 0 &&
     degradedOwners.every(

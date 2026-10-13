@@ -148,6 +148,7 @@ flow:
           args:
             - ref: env
             - ref: sessionKey
+            - includeCodeModeControl: true
         - assert:
             expr: "transcript.assistantToolCallCounts.exec === 1 && transcript.completedToolCallCounts.exec === 1 && !transcript.successfulToolCallCounts.exec"
             message:

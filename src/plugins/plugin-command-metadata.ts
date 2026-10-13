@@ -1,4 +1,7 @@
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawPluginCommandDefinition } from "./types.js";
 
 type PluginCommandNativeMetadata = Readonly<{
@@ -32,21 +35,15 @@ export function projectPluginCommandNativeMetadata(
   const providerName = normalizedProvider ? command.nativeNames?.[normalizedProvider] : undefined;
   const defaultName = command.nativeNames?.default;
   const name =
-    typeof providerName === "string" && providerName.trim()
-      ? providerName.trim()
-      : typeof defaultName === "string" && defaultName.trim()
-        ? defaultName.trim()
-        : command.name.trim() || command.name;
+    normalizeOptionalString(providerName) ??
+    normalizeOptionalString(defaultName) ??
+    (command.name.trim() || command.name);
   const providerProgress = normalizedProvider
     ? command.nativeProgressMessages?.[normalizedProvider]
     : undefined;
   const defaultProgress = command.nativeProgressMessages?.default;
   const progressMessage =
-    typeof providerProgress === "string" && providerProgress.trim()
-      ? providerProgress.trim()
-      : typeof defaultProgress === "string" && defaultProgress.trim()
-        ? defaultProgress.trim()
-        : undefined;
+    normalizeOptionalString(providerProgress) ?? normalizeOptionalString(defaultProgress);
   const descriptionLocalizations = command.descriptionLocalizations
     ? Object.freeze({ ...command.descriptionLocalizations })
     : undefined;

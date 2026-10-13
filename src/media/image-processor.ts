@@ -4,8 +4,7 @@ import {
   type ImageInput,
   type Rastermill,
 } from "rastermill";
-import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
-import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { WorkerTaskPool } from "../infra/worker-task-pool.js";
 import {
   createLocalImageProcessor,
@@ -19,9 +18,10 @@ import type {
 } from "./image-processor.types.js";
 
 const pool = new WorkerTaskPool<ImageProcessorRequest, ImageProcessorReply>({
-  workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.imageProcessor),
-  // Each Photon instance retains a WASM heap; serialize transforms rather than multiply decodes.
-  maxWorkers: 1,
+  workerUrl: resolveRuntimeProcessEntrypointUrl("imageProcessor"),
+  // Bound simultaneous WASM heaps, then release burst capacity while retaining the first worker.
+  maxWorkers: 2,
+  burstIdleTimeoutMs: 5_000,
   sharedCompute: true,
 });
 

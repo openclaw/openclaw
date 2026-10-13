@@ -1,14 +1,15 @@
 import type { ChannelId } from "../channels/plugins/channel-id.types.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import { resolveMergedAccountConfig } from "./channel-account-config.js";
+import type { CommonChannelGroupConfig } from "./types.channel-messaging-common.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
-import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
-export type ChannelGroupConfig = {
-  requireMention?: boolean;
+export type ChannelGroupConfig = Pick<
+  CommonChannelGroupConfig,
+  "requireMention" | "tools" | "toolsBySender"
+> & {
+  requireMentionInBotThreads?: boolean;
   ingest?: boolean;
-  tools?: GroupToolPolicyConfig;
-  toolsBySender?: GroupToolPolicyBySenderConfig;
 };
 
 export type ChannelGroups = Record<string, ChannelGroupConfig>;

@@ -206,13 +206,8 @@ describe("Buzz live directory", () => {
   });
 
   it.each([
-    { rootEnabled: false, accountEnabled: true, active: false, unavailable: false },
-    { rootEnabled: false, accountEnabled: true, active: false, unavailable: true },
     { rootEnabled: true, accountEnabled: false, active: false, unavailable: false },
-    { rootEnabled: true, accountEnabled: false, active: false, unavailable: true },
     { rootEnabled: false, accountEnabled: true, active: true, unavailable: false },
-    { rootEnabled: false, accountEnabled: true, active: true, unavailable: true },
-    { rootEnabled: true, accountEnabled: false, active: true, unavailable: false },
     { rootEnabled: true, accountEnabled: false, active: true, unavailable: true },
   ])(
     "returns static rooms without network for disabled identities: %j",

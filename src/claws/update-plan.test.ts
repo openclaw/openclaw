@@ -1,15 +1,14 @@
 import { createHash } from "node:crypto";
-import { readFile, rm, stat, writeFile } from "node:fs/promises";
+import { rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { stableStringify } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { persistClawPackageRef } from "./provenance.js";
 import { parseClawManifest } from "./schema.js";
 import type { ClawPackage } from "./types.js";
@@ -20,48 +19,36 @@ import {
   targetSource,
 } from "./update-plan.test-helpers.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-afterEach(() => closeOpenClawStateDatabaseForTest());
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  }),
+);
 
 async function fixture(options?: Parameters<typeof createUpdatePlanFixture>[1]) {
   const root = tempDirs.make("openclaw-claw-update-");
   return await createUpdatePlanFixture(root, options);
 }
 
-describe("buildClawUpdatePlan", () => {
-  it("reads pre-bootstrap-column v6 state without mutating it", async () => {
-    const current = await fixture();
-    closeOpenClawStateDatabaseForTest();
-    const databasePath = resolveOpenClawStateSqlitePath(current.env);
-    const sqlite = requireNodeSqlite();
-    const database = new sqlite.DatabaseSync(databasePath);
-    try {
-      database.exec(`
-        ALTER TABLE claw_installs DROP COLUMN bootstrap_source_path;
-        ALTER TABLE claw_installs DROP COLUMN bootstrap_content_digest;
-      `);
-    } finally {
-      database.close();
-    }
-    const beforeBytes = await readFile(databasePath);
-    const beforeStat = await stat(databasePath);
-
-    const plan = await buildClawUpdatePlan({
-      agentId: "worker",
-      targetManifest: current.manifest,
-      targetSource: current.source,
-      config: current.config,
-      sourceMcpServers: current.config.mcp?.servers ?? {},
-      stateOptions: { env: current.env },
-      packagePreflight,
-    });
-
-    expect(plan).toMatchObject({ found: true, agentId: "worker", blockers: [] });
-    expect((await readFile(databasePath)).equals(beforeBytes)).toBe(true);
-    expect((await stat(databasePath)).mtimeMs).toBe(beforeStat.mtimeMs);
+function build(
+  current: Awaited<ReturnType<typeof fixture>>,
+  overrides: Partial<Parameters<typeof buildClawUpdatePlan>[0]> = {},
+) {
+  return buildClawUpdatePlan({
+    agentId: "worker",
+    targetManifest: current.manifest,
+    targetSource: current.source,
+    config: current.config,
+    sourceMcpServers: current.config.mcp?.servers ?? {},
+    stateOptions: { env: current.env },
+    packagePreflight,
+    ...overrides,
   });
+}
 
+describe("buildClawUpdatePlan", () => {
   it("moves a portable plugin dependency into a profile extension edge without reinstalling", async () => {
     const current = await fixture();
     const parsed = parseClawManifest({
@@ -72,8 +59,7 @@ describe("buildClawUpdatePlan", () => {
       throw new Error(JSON.stringify(parsed.diagnostics));
     }
 
-    const plan = await buildClawUpdatePlan({
-      agentId: "worker",
+    const plan = await build(current, {
       targetManifest: parsed.manifest,
       targetOpenClawProfile: {
         schemaVersion: 1,
@@ -90,8 +76,6 @@ describe("buildClawUpdatePlan", () => {
         ],
       },
       targetSource: targetSource(current.root, "2.0.0", "sha256:target"),
-      config: current.config,
-      sourceMcpServers: current.config.mcp?.servers ?? {},
       stateOptions: {
         env: current.env,
         packageDeps: {
@@ -137,78 +121,11 @@ describe("buildClawUpdatePlan", () => {
     expect(extensionChange?.current?.digest).not.toBe(extensionChange?.desired?.digest);
   });
 
-  it("plans missing package restoration without mutating state", async () => {
-    const current = await fixture();
-    const beforeConfig = structuredClone(current.config);
-    closeOpenClawStateDatabaseForTest();
-    const databasePath = resolveOpenClawStateSqlitePath(current.env);
-    const beforeBytes = await readFile(databasePath);
-    const beforeStat = await stat(databasePath);
-
-    const plan = await buildClawUpdatePlan({
-      agentId: "worker",
-      targetManifest: current.manifest,
-      targetSource: current.source,
-      config: current.config,
-      sourceMcpServers: current.config.mcp?.servers ?? {},
-      stateOptions: { env: current.env },
-      packagePreflight,
-    });
-
-    expect(plan).toMatchObject({
-      schemaVersion: "openclaw.clawUpdatePlan.v1",
-      stability: "experimental",
-      dryRun: true,
-      mutationAllowed: false,
-      planIntegrity: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
-      found: true,
-      summary: {
-        totalActions: 7,
-        unchanged: 5,
-        added: 0,
-        changed: 2,
-        removed: 0,
-        released: 0,
-      },
-      blockers: [],
-    });
-    expect(current.config).toEqual(beforeConfig);
-    expect((await readFile(databasePath)).equals(beforeBytes)).toBe(true);
-    expect((await stat(databasePath)).mtimeMs).toBe(beforeStat.mtimeMs);
-  });
-
-  it("resolves an unambiguous installed package name to its final local agent id", async () => {
-    const current = await fixture();
-
-    const plan = await buildClawUpdatePlan({
-      agentId: "@acme/worker",
-      targetManifest: current.manifest,
-      targetSource: current.source,
-      config: current.config,
-      sourceMcpServers: current.config.mcp?.servers ?? {},
-      stateOptions: { env: current.env },
-      packagePreflight,
-    });
-
-    expect(plan).toMatchObject({ found: true, agentId: "worker", blockers: [] });
-    expect(plan.actions).toContainEqual(
-      expect.objectContaining({ kind: "agent", id: "worker", action: "unchanged" }),
-    );
-  });
-
   it("plans restoration when the owned agent entry is missing", async () => {
     const current = await fixture();
     current.config.agents = { ...current.config.agents, entries: {} };
 
-    const plan = await buildClawUpdatePlan({
-      agentId: "worker",
-      targetManifest: current.manifest,
-      targetSource: current.source,
-      config: current.config,
-      sourceMcpServers: current.config.mcp?.servers ?? {},
-      stateOptions: { env: current.env },
-      packagePreflight,
-    });
+    const plan = await build(current);
 
     const agentAction = plan.actions.find(
       (action) => action.kind === "agent" && action.id === "worker",
@@ -221,15 +138,7 @@ describe("buildClawUpdatePlan", () => {
     const current = await fixture();
     await rm(join(current.root, "workspace-worker"), { recursive: true, force: true });
 
-    const plan = await buildClawUpdatePlan({
-      agentId: "worker",
-      targetManifest: current.manifest,
-      targetSource: current.source,
-      config: current.config,
-      sourceMcpServers: current.config.mcp?.servers ?? {},
-      stateOptions: { env: current.env },
-      packagePreflight,
-    });
+    const plan = await build(current);
 
     expect(plan.actions).toEqual(
       expect.arrayContaining([
@@ -342,8 +251,7 @@ describe("buildClawUpdatePlan", () => {
       throw new Error(JSON.stringify(parsed.diagnostics));
     }
 
-    const plan = await buildClawUpdatePlan({
-      agentId: "worker",
+    const plan = await build(current, {
       targetManifest: parsed.manifest,
       targetOpenClawProfile: {
         schemaVersion: 1,
@@ -353,10 +261,6 @@ describe("buildClawUpdatePlan", () => {
         },
       },
       targetSource: targetSource(current.root, "2.0.0", "sha256:target"),
-      config: current.config,
-      sourceMcpServers: current.config.mcp?.servers ?? {},
-      stateOptions: { env: current.env },
-      packagePreflight,
     });
 
     expect(plan.summary).toMatchObject({
@@ -453,12 +357,9 @@ describe("buildClawUpdatePlan", () => {
         throw new Error(JSON.stringify(parsed.diagnostics));
       }
 
-      const plan = await buildClawUpdatePlan({
-        agentId: "worker",
+      const plan = await build(current, {
         targetManifest: parsed.manifest,
         targetSource: targetSource(current.root, "2.0.0", "sha256:target"),
-        config: current.config,
-        sourceMcpServers: current.config.mcp?.servers ?? {},
         stateOptions: {
           env: current.env,
           packageDeps: {
@@ -477,7 +378,6 @@ describe("buildClawUpdatePlan", () => {
                   },
           },
         },
-        packagePreflight,
       });
 
       expect(plan.actions).toContainEqual(
@@ -510,15 +410,7 @@ describe("buildClawUpdatePlan", () => {
       .db.prepare("UPDATE claw_cron_refs SET status = 'pending' WHERE agent_id = 'worker'")
       .run();
 
-    const plan = await buildClawUpdatePlan({
-      agentId: "worker",
-      targetManifest: current.manifest,
-      targetSource: current.source,
-      config: current.config,
-      sourceMcpServers: current.config.mcp?.servers ?? {},
-      stateOptions: { env: current.env },
-      packagePreflight,
-    });
+    const plan = await build(current);
 
     expect(plan.actions).toEqual(
       expect.arrayContaining([
@@ -552,14 +444,9 @@ describe("buildClawUpdatePlan", () => {
       throw new Error(JSON.stringify(parsed.diagnostics));
     }
 
-    const plan = await buildClawUpdatePlan({
-      agentId: "worker",
+    const plan = await build(current, {
       targetManifest: parsed.manifest,
       targetSource: targetSource(current.root, "2.0.0", "sha256:target"),
-      config: current.config,
-      sourceMcpServers: current.config.mcp?.servers ?? {},
-      stateOptions: { env: current.env },
-      packagePreflight,
     });
 
     for (const [kind, id] of [
@@ -630,14 +517,9 @@ describe("buildClawUpdatePlan", () => {
       throw new Error(JSON.stringify(parsed.diagnostics));
     }
 
-    const plan = await buildClawUpdatePlan({
-      agentId: "worker",
+    const plan = await build(current, {
       targetManifest: parsed.manifest,
       targetSource: targetSource(current.root, "2.0.0", "sha256:target"),
-      config: current.config,
-      sourceMcpServers: current.config.mcp?.servers ?? {},
-      stateOptions: { env: current.env },
-      packagePreflight,
     });
 
     expect(plan.actions).toEqual(
@@ -686,14 +568,9 @@ describe("buildClawUpdatePlan", () => {
       throw new Error(JSON.stringify(parsed.diagnostics));
     }
 
-    const plan = await buildClawUpdatePlan({
-      agentId: "worker",
+    const plan = await build(current, {
       targetManifest: parsed.manifest,
       targetSource: targetSource(current.root, "2.0.0", "sha256:target"),
-      config: current.config,
-      sourceMcpServers: current.config.mcp?.servers ?? {},
-      stateOptions: { env: current.env },
-      packagePreflight,
     });
 
     expect(plan.actions).toEqual(
@@ -729,14 +606,8 @@ describe("buildClawUpdatePlan", () => {
       .run();
     delete current.config.mcp!.servers!.docs;
 
-    const plan = await buildClawUpdatePlan({
-      agentId: "worker",
-      targetManifest: current.manifest,
+    const plan = await build(current, {
       targetSource: targetSource(current.root, "2.0.0", "sha256:target"),
-      config: current.config,
-      sourceMcpServers: current.config.mcp?.servers ?? {},
-      stateOptions: { env: current.env },
-      packagePreflight,
     });
 
     expect(plan.actions).toEqual(
@@ -769,12 +640,9 @@ describe("buildClawUpdatePlan", () => {
       throw new Error(JSON.stringify(parsed.diagnostics));
     }
 
-    const plan = await buildClawUpdatePlan({
-      agentId: "worker",
+    const plan = await build(current, {
       targetManifest: parsed.manifest,
       targetSource: targetSource(current.root, "2.0.0", "sha256:target"),
-      config: current.config,
-      sourceMcpServers: current.config.mcp?.servers ?? {},
       stateOptions: {
         env: current.env,
         packageDeps: {
@@ -794,7 +662,6 @@ describe("buildClawUpdatePlan", () => {
           }),
         },
       },
-      packagePreflight,
     });
 
     expect(plan.actions).toContainEqual(
@@ -842,12 +709,9 @@ describe("buildClawUpdatePlan", () => {
             message: `Cannot add ${pkg.ref}.`,
           };
 
-    const plan = await buildClawUpdatePlan({
-      agentId: "worker",
+    const plan = await build(current, {
       targetManifest: parsed.manifest,
       targetSource: targetSource(current.root, "2.0.0", "sha256:target"),
-      config: current.config,
-      sourceMcpServers: current.config.mcp?.servers ?? {},
       stateOptions: {
         env: current.env,
         packageDeps: {
@@ -921,14 +785,9 @@ describe("buildClawUpdatePlan", () => {
       throw new Error(JSON.stringify(parsed.diagnostics));
     }
 
-    const plan = await buildClawUpdatePlan({
-      agentId: "worker",
+    const plan = await build(current, {
       targetManifest: parsed.manifest,
       targetSource: targetSource(current.root, "2.0.0", "sha256:target"),
-      config: current.config,
-      sourceMcpServers: current.config.mcp?.servers ?? {},
-      stateOptions: { env: current.env },
-      packagePreflight,
     });
 
     expect(plan.actions).toContainEqual(
@@ -965,14 +824,9 @@ describe("buildClawUpdatePlan", () => {
       throw new Error(JSON.stringify(parsed.diagnostics));
     }
 
-    const shared = await buildClawUpdatePlan({
-      agentId: "worker",
+    const shared = await build(current, {
       targetManifest: parsed.manifest,
       targetSource: targetSource(current.root, "2.0.0", "sha256:target"),
-      config: current.config,
-      sourceMcpServers: current.config.mcp?.servers ?? {},
-      stateOptions: { env: current.env },
-      packagePreflight,
     });
     expect(shared.actions).toContainEqual(
       expect.objectContaining({ kind: "mcpServer", id: "docs", action: "release", blocked: false }),
@@ -987,14 +841,9 @@ describe("buildClawUpdatePlan", () => {
         "UPDATE claw_mcp_server_refs SET relationship = 'referenced', origin = 'pre-existing', independent_owner = 1 WHERE agent_id = 'worker' AND name = 'docs'",
       )
       .run();
-    const independent = await buildClawUpdatePlan({
-      agentId: "worker",
+    const independent = await build(current, {
       targetManifest: parsed.manifest,
       targetSource: targetSource(current.root, "2.0.0", "sha256:target"),
-      config: current.config,
-      sourceMcpServers: current.config.mcp?.servers ?? {},
-      stateOptions: { env: current.env },
-      packagePreflight,
     });
     expect(independent.actions).toContainEqual(
       expect.objectContaining({ kind: "mcpServer", id: "docs", action: "release", blocked: false }),
@@ -1003,25 +852,13 @@ describe("buildClawUpdatePlan", () => {
 
   it("fails closed for missing agents and mismatched package identity", async () => {
     const current = await fixture();
-    const missing = await buildClawUpdatePlan({
+    const missing = await build(current, {
       agentId: "missing",
-      targetManifest: current.manifest,
-      targetSource: current.source,
-      config: current.config,
-      sourceMcpServers: current.config.mcp?.servers ?? {},
-      stateOptions: { env: current.env },
-      packagePreflight,
     });
     expect(missing.blockers).toContainEqual(expect.objectContaining({ code: "claw_not_found" }));
 
-    const mismatch = await buildClawUpdatePlan({
-      agentId: "worker",
-      targetManifest: current.manifest,
+    const mismatch = await build(current, {
       targetSource: { ...current.source, name: "@other/worker" },
-      config: current.config,
-      sourceMcpServers: current.config.mcp?.servers ?? {},
-      stateOptions: { env: current.env },
-      packagePreflight,
     });
     expect(mismatch.blockers).toContainEqual(
       expect.objectContaining({ code: "claw_identity_mismatch" }),

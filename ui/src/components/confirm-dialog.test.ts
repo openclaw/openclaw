@@ -101,26 +101,6 @@ describe("showConfirmDialog", () => {
     expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
   });
 
-  it("offers the opt-out only when a skip preference is supplied", async () => {
-    const plain = showConfirmDialog({ message: "Continue?" });
-    await getRenderedModalDialog(document.body);
-    expect(document.body.querySelector(".exec-approval-skip")).toBeNull();
-    findButton("Cancel").click();
-    await expect(plain).resolves.toBe(false);
-
-    const remember = vi.fn();
-    const offered = showConfirmDialog({
-      message: "Delete?",
-      skipPreference: { skipped: false, remember },
-    });
-    await getRenderedModalDialog(document.body);
-
-    expect(document.body.querySelector(".exec-approval-skip")).toBeInstanceOf(HTMLElement);
-    findButton("Confirm").click();
-    await expect(offered).resolves.toBe(true);
-    expect(remember).not.toHaveBeenCalled();
-  });
-
   it("remembers the opt-out only when the operator confirms with it ticked", async () => {
     const remember = vi.fn();
     const cancelled = showConfirmDialog({

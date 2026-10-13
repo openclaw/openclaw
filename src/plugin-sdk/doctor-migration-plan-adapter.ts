@@ -19,6 +19,7 @@ export function definePluginDoctorMigrationFromPlans(params: {
   id: string;
   label: string;
   doctorOnly?: boolean;
+  collectBackupResources?: PluginDoctorStateMigration["collectBackupResources"];
   resolvePlans: PluginDoctorPlanResolver;
 }): PluginDoctorStateMigration {
   const resolvePlans = async (input: {
@@ -34,21 +35,18 @@ export function definePluginDoctorMigrationFromPlans(params: {
         stateDir: input.stateDir,
         oauthDir: input.oauthDir,
       })) ?? [];
-    const resolvedPlans: ChannelLegacyStateMigrationPlan[] = [];
-    for (const plan of plans) {
-      resolvedPlans.push(
-        plan.kind === "plugin-state-import" && !plan.stateDir
-          ? { ...plan, stateDir: input.stateDir }
-          : plan,
-      );
-    }
-    return resolvedPlans;
+    return Array.from(plans, (plan) =>
+      plan.kind === "plugin-state-import" && !plan.stateDir
+        ? { ...plan, stateDir: input.stateDir }
+        : plan,
+    );
   };
 
   return {
     id: params.id,
     label: params.label,
     ...(params.doctorOnly === true ? { doctorOnly: true } : {}),
+    collectBackupResources: params.collectBackupResources,
     async detectLegacyState(input) {
       const plans = await resolvePlans(input);
       return plans.length > 0

@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../../../test/helpers/image-fixtures.js";
-import { buildInboundMediaNoteProjection } from "../../../auto-reply/media-note.js";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import type { UserMessage } from "../../../llm/types.js";
 import {
   attachRuntimePromptMediaFacts,
   readRuntimePromptImageOrder,
@@ -20,10 +21,81 @@ import {
   detectAndLoadPromptImages,
   detectImageReferences,
   hydratePromptMediaMessages,
+  materializeProviderContext,
 } from "./images.js";
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+describe("mixed prompt image hydration", () => {
+  it("attributes a suppressed-plus-inline sanitization failure to the inline fact", async () => {
+    const result = await detectAndLoadPromptImages({
+      prompt: "already described",
+      media: [
+        {
+          path: "/tmp/described-missing.png",
+          contentType: "image/png",
+          hydrationSuppressed: true,
+        },
+        { path: "/tmp/inline.png", contentType: "image/png" },
+      ],
+      workspaceDir: "/tmp",
+      model: { input: ["text", "image"] },
+      existingImages: [{ type: "image", data: "%%%", mimeType: "image/png" }],
+      imageOrder: ["inline"],
+    });
+
+    expect(result.images).toEqual([]);
+    expect(result.imageFactIndexes).toEqual([]);
+    expect(result.loadedCount).toBe(0);
+    expect(result.failedMediaCount).toBe(1);
+  });
+
+  it("preserves inline, offloaded, and explicit image materialization and order", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hydration-mixed-"));
+    const inlineBuffer = createSolidPngBuffer(1, 1, { r: 255, g: 0, b: 0 });
+    const offloadedBuffer = createSolidPngBuffer(1, 1, { r: 0, g: 255, b: 0 });
+    const explicitBuffer = createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 255 });
+    const inlinePath = path.join(root, "inline.png");
+    const offloadedPath = path.join(root, "offloaded.png");
+    const explicitPath = path.join(root, "explicit.png");
+    await fs.writeFile(offloadedPath, offloadedBuffer);
+    await fs.writeFile(explicitPath, explicitBuffer);
+    const inlineImage = {
+      type: "image" as const,
+      data: inlineBuffer.toString("base64"),
+      mimeType: "image/png",
+    };
+
+    try {
+      const result = await detectAndLoadPromptImages({
+        prompt: `inspect ${explicitPath}`,
+        media: [
+          { path: inlinePath, contentType: "image/png" },
+          { path: offloadedPath, contentType: "image/png" },
+        ],
+        workspaceDir: root,
+        model: { input: ["text", "image"] },
+        existingImages: [inlineImage],
+        imageOrder: ["inline", "offloaded"],
+        workspaceOnly: true,
+      });
+
+      expect(result.images).toEqual([
+        inlineImage,
+        { type: "image", data: offloadedBuffer.toString("base64"), mimeType: "image/png" },
+        { type: "image", data: explicitBuffer.toString("base64"), mimeType: "image/png" },
+      ]);
+      expect(result.imageFactIndexes).toEqual([0, 1, null]);
+      expect(result.loadedCount).toBe(2);
+      expect(result.failedMediaCount).toBe(0);
+      expect(result.images).toHaveLength(3);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("structured prompt media replay", () => {
   it("keeps per-slot provenance when the same image object is reused", () => {
@@ -37,7 +109,7 @@ describe("structured prompt media replay", () => {
   });
 
   it("retains the runtime fact carrier when queued hydration fails", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-runtime-failure-"));
+    const workspaceDir = tempDirs.make("openclaw-runtime-failure-");
     const media = [{ path: path.join(workspaceDir, "missing.png"), contentType: "image/png" }];
     const message = attachRuntimePromptMediaFacts(
       { role: "user" as const, content: "missing attachment" },
@@ -59,44 +131,37 @@ describe("structured prompt media replay", () => {
     }
   });
 
-  it("does not fail a described remote-only fact with no local identity", async () => {
-    const media = buildInboundMediaNoteProjection({
-      media: [{ url: "https://example.com/described.png", contentType: "image/png" }],
-      MediaUnderstanding: [
-        {
-          kind: "image.description",
-          attachmentIndex: 0,
-          text: "already described",
-          provider: "test",
-        },
-      ],
-    }).media;
+  it("preserves shipped carrier metadata through provider media materialization", async () => {
+    const workspaceDir = tempDirs.make("openclaw-legacy-carrier-");
+    const imagePath = path.join(workspaceDir, "attachment.png");
+    await fs.writeFile(imagePath, createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 255 }));
+    const message: UserMessage = attachRuntimePromptMediaFacts(
+      {
+        role: "user" as const,
+        content: "legacy runtime context",
+        timestamp: 1,
+        runtimeContextCarrier: true,
+        runtimeContextCarrierRetained: false,
+      },
+      [{ path: imagePath, contentType: "image/png" }],
+      ["offloaded"],
+    );
 
-    const result = await detectAndLoadPromptImages({
-      prompt: "already described",
-      media,
-      workspaceDir: "/tmp",
-      model: { input: ["text", "image"] },
-    });
+    try {
+      const result = await materializeProviderContext({
+        context: { messages: [message] },
+        workspaceDir,
+      });
 
-    expect(result.failedMediaCount).toBe(0);
-    expect(result.detectedRefs).toEqual([]);
-    expect(result.images).toEqual([]);
-  });
-
-  it("reports a fact-owned image dropped during sanitization", async () => {
-    const result = await detectAndLoadPromptImages({
-      prompt: "inspect it",
-      media: [{ path: "/tmp/already-materialized.png", contentType: "image/png" }],
-      workspaceDir: "/tmp",
-      model: { input: ["text", "image"] },
-      existingImages: [{ type: "image", data: "%%%", mimeType: "image/png" }],
-      existingImageFactIndexes: [0],
-      imageOrder: ["inline"],
-    });
-
-    expect(result.failedMediaCount).toBe(1);
-    expect(result.images).toEqual([]);
+      expect(result.messages[0]).toMatchObject({
+        role: "user",
+        runtimeContextCarrier: true,
+        runtimeContextCarrierRetained: false,
+        content: expect.arrayContaining([{ type: "text", text: "legacy runtime context" }]),
+      });
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
   });
 
   it("preserves persisted facts when replay hydration fails", async () => {
@@ -213,40 +278,6 @@ describe("structured prompt media replay", () => {
       expect(result.images).toHaveLength(2);
     } finally {
       await fs.rm(rootDir, { recursive: true, force: true });
-    }
-  });
-
-  it("does not duplicate an already-materialized offloaded slot", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-materialized-offload-"));
-    const imagePath = path.join(workspaceDir, "offloaded.png");
-    await fs.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
-    const image = { type: "image" as const, data: TINY_PNG_BASE64, mimeType: "image/png" };
-    const persisted = buildPersistedUserTurnMessage({
-      text: "already materialized",
-      media: [{ path: imagePath, contentType: "image/png" }],
-      mediaImageLayout: { slots: [{ kind: "offloaded", factIndex: 0 }] },
-    }) as unknown as AgentMessage;
-
-    try {
-      const first = await hydratePromptMediaMessages([persisted], {
-        workspaceDir,
-        model: { input: ["text", "image"] },
-        workspaceOnly: true,
-      });
-      const serialized = JSON.stringify(first[0]);
-      const restored = JSON.parse(serialized) as AgentMessage;
-      await fs.rm(imagePath);
-      const replay = await hydratePromptMediaMessages([restored], {
-        workspaceDir,
-        model: { input: ["text", "image"] },
-        workspaceOnly: true,
-      });
-      expect((replay[0] as unknown as { content?: unknown }).content).toEqual([
-        { type: "text", text: "already materialized" },
-        image,
-      ]);
-    } finally {
-      await fs.rm(workspaceDir, { recursive: true, force: true });
     }
   });
 
@@ -477,25 +508,6 @@ describe("structured prompt media replay", () => {
     expect(result.images).toEqual([]);
   });
 
-  it("pairs an identity-less persisted fact with its existing inline block", async () => {
-    const inlineImage = { type: "image" as const, data: TINY_PNG_BASE64, mimeType: "image/png" };
-    const message = {
-      role: "user" as const,
-      content: [{ type: "text" as const, text: "legacy identity-less" }, inlineImage],
-      __openclaw: { media: [{ kind: "image" }] },
-    } as unknown as AgentMessage;
-
-    const result = await hydratePromptMediaMessages([message], {
-      workspaceDir: "/tmp",
-      model: { input: ["text", "image"] },
-    });
-
-    expect((result[0] as unknown as { content?: unknown[] }).content).toEqual([
-      { type: "text", text: "legacy identity-less" },
-      inlineImage,
-    ]);
-  });
-
   it("does not pair an unresolved remote persisted fact with an existing inline block", async () => {
     const inlineImage = { type: "image" as const, data: TINY_PNG_BASE64, mimeType: "image/png" };
     const message = {
@@ -519,33 +531,6 @@ describe("structured prompt media replay", () => {
       { type: "text", text: "remote identity" },
       inlineImage,
     ]);
-  });
-
-  it("hydrates an identity-bearing persisted fact beside an unowned inline block", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-legacy-inline-"));
-    const imagePath = path.join(workspaceDir, "inline.png");
-    await fs.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
-    const inlineImage = { type: "image" as const, data: TINY_PNG_BASE64, mimeType: "image/png" };
-    const message = {
-      role: "user" as const,
-      content: [{ type: "text" as const, text: "legacy" }, inlineImage],
-      __openclaw: { media: [{ path: imagePath, contentType: "image/png" }] },
-    } as unknown as AgentMessage;
-
-    try {
-      const result = await hydratePromptMediaMessages([message], {
-        workspaceDir,
-        model: { input: ["text", "image"] },
-        workspaceOnly: true,
-      });
-      expect((result[0] as unknown as { content?: unknown }).content).toEqual([
-        { type: "text", text: "legacy" },
-        { type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" },
-        inlineImage,
-      ]);
-    } finally {
-      await fs.rm(workspaceDir, { recursive: true, force: true });
-    }
   });
 
   it("keeps identity-bearing persisted facts ahead of an unowned inline block", async () => {
@@ -585,41 +570,6 @@ describe("structured prompt media replay", () => {
       ]);
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
-    }
-  });
-
-  it("dedupes the local path alias of a claim-check fact", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-image-alias-"));
-    const workspaceDir = path.join(stateDir, "workspace");
-    const inboundDir = path.join(stateDir, "media", "inbound");
-    const mediaId = "aliased.png";
-    const imagePath = path.join(inboundDir, mediaId);
-    await fs.mkdir(workspaceDir, { recursive: true });
-    await fs.mkdir(inboundDir, { recursive: true });
-    await fs.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
-    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
-    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-
-    try {
-      const result = await detectAndLoadPromptImages({
-        prompt: `[media attached: ${imagePath} (image/png)]`,
-        media: [{ path: imagePath, url: `media://inbound/${mediaId}`, contentType: "image/png" }],
-        workspaceDir,
-        model: { input: ["text", "image"] },
-      });
-
-      expect(result.loadedCount).toBe(1);
-      expect(result.images).toHaveLength(1);
-      expect(result.detectedRefs).toEqual([
-        {
-          raw: `media://inbound/${mediaId}`,
-          resolved: `media://inbound/${mediaId}`,
-          type: "media-uri",
-        },
-      ]);
-    } finally {
-      envSnapshot.restore();
-      await fs.rm(stateDir, { recursive: true, force: true });
     }
   });
 

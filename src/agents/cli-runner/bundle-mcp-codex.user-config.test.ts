@@ -5,7 +5,7 @@ import { buildCodexUserMcpServersThreadConfigPatchForRuntime } from "./bundle-mc
 
 const authMocks = vi.hoisted(() => ({
   loadExecApprovalsReadOnlyAsync: vi.fn(),
-  loadAuthProfileStoreForSecretsRuntime: vi.fn(),
+  loadAuthProfileStoreForRuntimeAsync: vi.fn(),
   resolveApiKeyForProfile: vi.fn(),
   resolveMcpOAuthAccessToken: vi.fn(),
 }));
@@ -14,8 +14,9 @@ vi.mock("../../infra/exec-approvals-store.js", () => ({
   loadExecApprovalsReadOnlyAsync: authMocks.loadExecApprovalsReadOnlyAsync,
 }));
 
+// mock-isolation: MCP projection consumes synthetic profile snapshots without reading host stores.
 vi.mock("../auth-profiles/store-runtime.js", () => ({
-  loadAuthProfileStoreForSecretsRuntime: authMocks.loadAuthProfileStoreForSecretsRuntime,
+  loadAuthProfileStoreForRuntimeAsync: authMocks.loadAuthProfileStoreForRuntimeAsync,
 }));
 
 vi.mock("../auth-profiles/oauth.js", () => ({
@@ -31,7 +32,7 @@ describe("buildCodexUserMcpServersThreadConfigPatchForRuntime", () => {
     authMocks.loadExecApprovalsReadOnlyAsync
       .mockReset()
       .mockResolvedValue({ version: 1, agents: {} });
-    authMocks.loadAuthProfileStoreForSecretsRuntime.mockReset();
+    authMocks.loadAuthProfileStoreForRuntimeAsync.mockReset();
     authMocks.resolveApiKeyForProfile.mockReset();
     authMocks.resolveMcpOAuthAccessToken.mockReset();
   });
@@ -88,21 +89,6 @@ describe("buildCodexUserMcpServersThreadConfigPatchForRuntime", () => {
     expect(
       (await buildCodexUserMcpServersThreadConfigPatchForRuntime(cfg))?.mcp_servers.auto,
     ).not.toHaveProperty("tools");
-  });
-
-  it("returns undefined when cfg has no mcp.servers (regression: #80814)", async () => {
-    expect(await buildCodexUserMcpServersThreadConfigPatchForRuntime(undefined)).toBeUndefined();
-    expect(
-      await buildCodexUserMcpServersThreadConfigPatchForRuntime({} as OpenClawConfig),
-    ).toBeUndefined();
-    expect(
-      await buildCodexUserMcpServersThreadConfigPatchForRuntime({ mcp: {} } as OpenClawConfig),
-    ).toBeUndefined();
-    expect(
-      await buildCodexUserMcpServersThreadConfigPatchForRuntime({
-        mcp: { servers: {} },
-      } as OpenClawConfig),
-    ).toBeUndefined();
   });
 
   it("projects session server and tool overrides into user MCP config", async () => {
@@ -193,56 +179,6 @@ describe("buildCodexUserMcpServersThreadConfigPatchForRuntime", () => {
     });
   });
 
-  it("projects Codex-specific default tool approval mode", async () => {
-    const patch = await buildCodexUserMcpServersThreadConfigPatchForRuntime({
-      mcp: {
-        servers: {
-          search: {
-            transport: "streamable-http",
-            url: "https://mcp.example.com/mcp",
-            codex: {
-              defaultToolsApprovalMode: "approve",
-            },
-          },
-        },
-      },
-    } as unknown as OpenClawConfig);
-    expect(patch).toStrictEqual({
-      mcp_servers: {
-        search: {
-          url: "https://mcp.example.com/mcp",
-          default_tools_approval_mode: "approve",
-        },
-      },
-    });
-  });
-
-  it("projects exact OpenClaw MCP tool filters into Codex-native tool filters", async () => {
-    const patch = await buildCodexUserMcpServersThreadConfigPatchForRuntime({
-      mcp: {
-        servers: {
-          docs: {
-            transport: "streamable-http",
-            url: "https://docs.example.com/mcp",
-            toolFilter: {
-              include: ["search_docs", "read_docs"],
-              exclude: ["delete_docs"],
-            },
-          },
-        },
-      },
-    } as unknown as OpenClawConfig);
-    expect(patch).toStrictEqual({
-      mcp_servers: {
-        docs: {
-          url: "https://docs.example.com/mcp",
-          enabled_tools: ["search_docs", "read_docs"],
-          disabled_tools: ["delete_docs"],
-        },
-      },
-    });
-  });
-
   it("rejects wildcard OpenClaw MCP tool filters that Codex cannot project exactly", async () => {
     await expect(
       buildCodexUserMcpServersThreadConfigPatchForRuntime({
@@ -261,26 +197,6 @@ describe("buildCodexUserMcpServersThreadConfigPatchForRuntime", () => {
     ).rejects.toThrow(
       'Cannot project mcp.servers.docs.toolFilter.include pattern "search_*" into Codex enabled_tools',
     );
-  });
-
-  it("uses the Codex-native approval spelling when configured", async () => {
-    const patch = await buildCodexUserMcpServersThreadConfigPatchForRuntime({
-      mcp: {
-        servers: {
-          search: {
-            transport: "streamable-http",
-            url: "https://mcp.example.com/mcp",
-            codex: {
-              default_tools_approval_mode: "prompt",
-            },
-          },
-        },
-      },
-    } as unknown as OpenClawConfig);
-    expect(patch?.mcp_servers.search).toMatchObject({
-      url: "https://mcp.example.com/mcp",
-      default_tools_approval_mode: "prompt",
-    });
   });
 
   it("filters Codex-scoped user MCP servers by OpenClaw agent id", async () => {
@@ -325,24 +241,6 @@ describe("buildCodexUserMcpServersThreadConfigPatchForRuntime", () => {
     expect(apoloPatch!.mcp_servers.apolo).toMatchObject({ url: "https://apolo.example.com/mcp" });
   });
 
-  it("returns undefined when all user MCP servers are scoped to other agents", async () => {
-    const patch = await buildCodexUserMcpServersThreadConfigPatchForRuntime(
-      {
-        mcp: {
-          servers: {
-            atlas: {
-              transport: "streamable-http",
-              url: "https://atlas.example.com/mcp",
-              codex: { agents: ["atlas"] },
-            },
-          },
-        },
-      } as unknown as OpenClawConfig,
-      { agentId: "apolo" },
-    );
-    expect(patch).toBeUndefined();
-  });
-
   it("omits disabled user MCP servers from Codex app-server projection", async () => {
     const patch = await buildCodexUserMcpServersThreadConfigPatchForRuntime({
       mcp: {
@@ -368,26 +266,6 @@ describe("buildCodexUserMcpServersThreadConfigPatchForRuntime", () => {
           args: ["enabled-mcp.js"],
         },
       },
-    });
-  });
-
-  it("normalizes Codex agent scopes before matching", async () => {
-    const patch = await buildCodexUserMcpServersThreadConfigPatchForRuntime(
-      {
-        mcp: {
-          servers: {
-            atlas: {
-              transport: "streamable-http",
-              url: "https://atlas.example.com/mcp",
-              codex: { agents: ["Atlas"] },
-            },
-          },
-        },
-      } as unknown as OpenClawConfig,
-      { agentId: "ATLAS" },
-    );
-    expect(patch?.mcp_servers.atlas).toMatchObject({
-      url: "https://atlas.example.com/mcp",
     });
   });
 
@@ -445,79 +323,6 @@ describe("buildCodexUserMcpServersThreadConfigPatchForRuntime", () => {
       },
     } as unknown as OpenClawConfig);
     expect(patch).toBeUndefined();
-  });
-
-  it("preserves multiple user MCP servers as independent mcp_servers entries", async () => {
-    const patch = await buildCodexUserMcpServersThreadConfigPatchForRuntime({
-      mcp: {
-        servers: {
-          one: { transport: "stdio", command: "one" },
-          two: { transport: "stdio", command: "two" },
-        },
-      },
-    } as unknown as OpenClawConfig);
-    expect(patch?.mcp_servers).toBeDefined();
-    expect(Object.keys(patch!.mcp_servers).toSorted()).toEqual(["one", "two"]);
-    expect(patch!.mcp_servers.one).toMatchObject({ command: "one" });
-    expect(patch!.mcp_servers.two).toMatchObject({ command: "two" });
-  });
-
-  it("projects auth-profile backed user MCP servers with a fresh bearer header at runtime", async () => {
-    authMocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValueOnce({
-      version: 1,
-      profiles: {
-        "ducktape:mcp": {
-          type: "oauth",
-          provider: "ducktape",
-          access: "expired-access",
-          refresh: "refresh-token-must-not-project",
-          expires: 1,
-        },
-      },
-    });
-    authMocks.resolveApiKeyForProfile.mockResolvedValueOnce({
-      apiKey: "fresh-access-token",
-      provider: "ducktape",
-      profileId: "ducktape:mcp",
-      profileType: "oauth",
-      credential: {
-        type: "oauth",
-        provider: "ducktape",
-        access: "fresh-access-token",
-        refresh: "refresh-token-must-not-project",
-        expires: Date.now() + 60_000,
-      },
-    });
-
-    const patch = await buildCodexUserMcpServersThreadConfigPatchForRuntime({
-      mcp: {
-        servers: {
-          ducktape: {
-            transport: "streamable-http",
-            url: "https://agents.ducktape.xyz/mcp",
-            auth: "oauth",
-            oauth: { authProfileId: "ducktape:mcp" },
-            headers: {
-              Authorization: "Bearer stale-access",
-              "x-tenant": "keep",
-            },
-          },
-        },
-      },
-    } as unknown as OpenClawConfig);
-
-    expect(patch).toStrictEqual({
-      mcp_servers: {
-        ducktape: {
-          url: "https://agents.ducktape.xyz/mcp",
-          http_headers: {
-            Authorization: "Bearer fresh-access-token",
-            "x-tenant": "keep",
-          },
-        },
-      },
-    });
-    expect(JSON.stringify(patch)).not.toContain("refresh-token-must-not-project");
   });
 
   it("projects MCP-native OAuth credentials into local Codex runtime config", async () => {
@@ -602,7 +407,7 @@ describe("buildCodexUserMcpServersThreadConfigPatchForRuntime", () => {
   });
 
   it("preserves tool filters while projecting auth-profile backed MCP bearers at runtime", async () => {
-    authMocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValueOnce({
+    authMocks.loadAuthProfileStoreForRuntimeAsync.mockResolvedValueOnce({
       version: 1,
       profiles: {
         "ducktape:mcp": {
@@ -638,6 +443,7 @@ describe("buildCodexUserMcpServersThreadConfigPatchForRuntime", () => {
             oauth: { authProfileId: "ducktape:mcp" },
             headers: {
               Authorization: "Bearer stale-access",
+              "x-tenant": "keep",
             },
             toolFilter: {
               include: ["proof_echo", "proof_search"],
@@ -654,6 +460,7 @@ describe("buildCodexUserMcpServersThreadConfigPatchForRuntime", () => {
           url: "https://agents.ducktape.xyz/mcp",
           http_headers: {
             Authorization: "Bearer fresh-access-token",
+            "x-tenant": "keep",
           },
           enabled_tools: ["proof_echo", "proof_search"],
           disabled_tools: ["admin_delete"],

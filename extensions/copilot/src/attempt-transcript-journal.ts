@@ -18,6 +18,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import {
   isCompatibleSingletonRewrite,
   isCompleteToolGroup,
+  isSameUserTurn,
   projectReplayPayload,
   userText,
   type AttemptTranscriptMessage as TranscriptMessage,
@@ -243,7 +244,9 @@ export function createAttemptTranscriptJournal(params: {
       ...(write.eventId ? { eventId: write.eventId } : {}),
       idempotencyLookup: "scan",
       message: write.message,
-      prepareMessageAfterIdempotencyCheck: () => prepare(write, { singleton: true }),
+      preparation: {
+        prepareMessage: async () => prepare(write, { singleton: true }),
+      },
     });
     if (outcome.kind === "suppressed") {
       write.recorder?.markBlocked();
@@ -389,7 +392,7 @@ export function createAttemptTranscriptJournal(params: {
     }
     if (firstFailure) {
       const error = new Error(
-        `[copilot-attempt] canonical transcript persistence failed: ${firstFailure.message}`,
+        `[copilot-attempt] saved transcript persistence failed: ${firstFailure.message}`,
         { cause: firstFailure },
       ) as Error & { code?: string };
       error.code = "transcript_persistence_failed";
@@ -641,7 +644,7 @@ function resolveTranscriptTarget(attempt: AttemptParamsLike): SessionTranscriptT
   const storePath = normalizeOptionalString(attempt.sessionTarget?.storePath);
   if (!sessionId || !sessionKey || !storePath) {
     const error = new Error(
-      "[copilot-attempt] canonical transcript persistence requires an exact runtime session target",
+      "[copilot-attempt] saved transcript persistence requires an exact runtime session target",
     ) as Error & { code?: string };
     error.code = "transcript_persistence_failed";
     throw error;
@@ -663,38 +666,5 @@ function isCurrentJournalIdentity(
   // Current journal keys use a run id or the SDK's unique event id.
   return (
     key === `${params.attempt.runId}:user` || key.startsWith(`copilot-sdk:${params.sdkSessionId}:`)
-  );
-}
-
-function isSameUserTurn(
-  candidate: AgentMessage | undefined,
-  current: Extract<AgentMessage, { role: "user" }> | undefined,
-  currentRunUserKey: string,
-): boolean {
-  if (candidate?.role !== "user" || !current) {
-    return false;
-  }
-  if (candidate === current) {
-    return true;
-  }
-  const candidateKey = (candidate as { idempotencyKey?: unknown }).idempotencyKey;
-  const currentKey = (current as { idempotencyKey?: unknown }).idempotencyKey;
-  if (typeof candidateKey === "string" || typeof currentKey === "string") {
-    if (typeof candidateKey === "string" && typeof currentKey === "string") {
-      return candidateKey === currentKey;
-    }
-    if (
-      typeof candidateKey !== "string" ||
-      typeof currentKey === "string" ||
-      (!candidateKey.startsWith("copilot:") && candidateKey !== currentRunUserKey)
-    ) {
-      return false;
-    }
-  }
-  // The embedded-runner boundary identifies the active user as the last user
-  // and stamps it with this recorder timestamp; historical turns are ineligible.
-  return (
-    candidate.timestamp === current.timestamp &&
-    userText(candidate.content) === userText(current.content)
   );
 }

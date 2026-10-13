@@ -84,6 +84,10 @@ runs:
           exit 0
         fi
 
+        # The image's SSH debug profile must not override command-selected cwd.
+        sudo python3 -I -S "$GITHUB_ACTION_PATH/preserve-command-cwd.py" \
+          /etc/profile.d/blacksmith.sh
+
         workspace="$(cd "$GITHUB_WORKSPACE" && pwd -P)"
         sync_root="$(mktemp -d "$RUNNER_TEMP/openclaw-testbox-sync.XXXXXX")"
         sync_root="$(cd "$sync_root" && pwd -P)"
@@ -96,5 +100,18 @@ runs:
         git clone --quiet --local --no-hardlinks "$workspace" "$sync_root"
         git -C "$sync_root" remote set-url origin "$(git -C "$workspace" remote get-url origin)"
         ln -s "$workspace" "$sync_root/.git/crabbox-artifact-root"
+        # Exercise the same SSH-context login startup as `bash -lc` payloads.
+        # Probe before advertising readiness; identical HEADs cannot detect cwd drift.
+        (
+          cd "$sync_root"
+          export SSH_CONNECTION="${SSH_CONNECTION:-127.0.0.1 1 127.0.0.1 22}"
+          bash -lc '
+            actual="$(pwd -P)"
+            if [ "$actual" != "$1" ]; then
+              printf "Testbox login shell changed checkout: expected %s, got %s\n" "$1" "$actual" >&2
+              exit 1
+            fi
+          ' -- "$sync_root"
+        )
         # run-testbox publishes this documented handoff field in its ready registration.
         printf '%s\n' "$sync_root" > "$state"

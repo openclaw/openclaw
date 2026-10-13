@@ -7,9 +7,11 @@ import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 export async function createBaseDiscordMessageContext(
   overrides: Record<string, unknown> = {},
+  options?: { storePath: string },
 ): Promise<DiscordMessagePreflightContext> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discord-"));
-  const storePath = path.join(dir, "sessions.json");
+  const storePath =
+    options?.storePath ??
+    path.join(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discord-")), "sessions.json");
   return {
     cfg: { messages: { ackReaction: "👀" }, session: { store: storePath } },
     discordConfig: {},
@@ -28,7 +30,7 @@ export async function createBaseDiscordMessageContext(
     data: { guild: { id: "g1", name: "Guild" } },
     client: { rest: {} },
     message: {
-      id: "m1",
+      id: "1001",
       channelId: "c1",
       timestamp: new Date().toISOString(),
       attachments: [],

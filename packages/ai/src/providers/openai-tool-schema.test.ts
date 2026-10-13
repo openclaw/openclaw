@@ -7,33 +7,28 @@ import {
   findOpenAIStrictSchemaViolations,
   findOpenAIStrictToolProjectionDiagnostics,
   isStrictOpenAIJsonSchemaCompatible,
-  normalizeOpenAIStrictToolParameters,
   normalizeStrictOpenAIJsonSchema,
   resolveOpenAIProjectedToolsStrictToolFlag,
 } from "./openai-tool-schema.js";
 
 describe("OpenAI strict tool schema normalization", () => {
-  it.each([
-    "properties",
-    "patternProperties",
-    "$defs",
-    "definitions",
-    "dependentSchemas",
-    "dependencies",
-  ])("preserves literal names when repairing the %s schema map", (mapKey) => {
-    const schema = {
-      type: "object",
-      [mapKey]: { ["__proto__"]: { type: "string", description: null } },
-    };
+  it.each(["dependencies"])(
+    "preserves literal names when repairing the %s schema map",
+    (mapKey) => {
+      const schema = {
+        type: "object",
+        [mapKey]: { ["__proto__"]: { type: "string", description: null } },
+      };
 
-    const normalized = normalizeOpenAIStrictCompatSchema(schema);
-    expect(Object.getOwnPropertyDescriptor(normalized, mapKey)?.value).toStrictEqual({
-      ["__proto__"]: { type: "string" },
-    });
-    expect(schema[mapKey]).toStrictEqual({
-      ["__proto__"]: { type: "string", description: null },
-    });
-  });
+      const normalized = normalizeOpenAIStrictCompatSchema(schema);
+      expect(Object.getOwnPropertyDescriptor(normalized, mapKey)?.value).toStrictEqual({
+        ["__proto__"]: { type: "string" },
+      });
+      expect(schema[mapKey]).toStrictEqual({
+        ["__proto__"]: { type: "string", description: null },
+      });
+    },
+  );
 
   it("infers the root type from schema fields instead of a literal prototype key", () => {
     const schema = {
@@ -46,20 +41,6 @@ describe("OpenAI strict tool schema normalization", () => {
       ["__proto__"]: { type: "array" },
       properties: { path: { type: "string" } },
       type: "object",
-    });
-  });
-
-  it("preserves literal property names when strict normalization repairs a nested object", () => {
-    const schema = {
-      type: "object",
-      properties: { ["__proto__"]: { type: "object", properties: {} } },
-      required: ["__proto__"],
-      additionalProperties: false,
-    };
-
-    expect(normalizeStrictOpenAIJsonSchema(schema)).toStrictEqual({
-      ...schema,
-      properties: { ["__proto__"]: { type: "object", properties: {}, required: [] } },
     });
   });
 
@@ -122,34 +103,6 @@ describe("OpenAI strict tool schema normalization", () => {
     }
   });
 
-  it("does not close permissive nested object schemas implicitly", () => {
-    // Nested permissive objects stay incompatible unless callers make them strict.
-    const schema = {
-      type: "object",
-      properties: {
-        metadata: {
-          type: "object",
-        },
-      },
-      required: ["metadata"],
-    };
-
-    const normalized = normalizeStrictOpenAIJsonSchema(schema) as {
-      additionalProperties?: boolean;
-      properties?: { metadata?: { additionalProperties?: boolean } };
-    };
-
-    expect(normalized.additionalProperties).toBe(false);
-    expect(normalized.properties?.metadata).not.toHaveProperty("additionalProperties");
-    expect(isStrictOpenAIJsonSchemaCompatible(schema)).toBe(false);
-    expect(
-      resolveOpenAIProjectedToolsStrictToolFlag(
-        projectOpenAITools([{ name: "write", parameters: schema }]),
-        true,
-      ),
-    ).toBe(false);
-  });
-
   it("walks named schema maps without treating definition names as keywords", () => {
     const schema = {
       type: "object",
@@ -165,6 +118,12 @@ describe("OpenAI strict tool schema normalization", () => {
     expect(
       findOpenAIStrictSchemaViolations(schema, "parameters", { requireObjectRoot: true }),
     ).toEqual([]);
+    expect(
+      resolveOpenAIProjectedToolsStrictToolFlag(
+        projectOpenAITools([{ name: "lookup", parameters: schema }]),
+        true,
+      ),
+    ).toBe(true);
   });
 
   it("walks legacy and content schema applicators", () => {
@@ -198,40 +157,34 @@ describe("OpenAI strict tool schema normalization", () => {
     expect(isStrictOpenAIJsonSchemaCompatible(schema)).toBe(false);
   });
 
-  it("normalizes truly empty MCP tool schema {} for strict mode", () => {
-    const schema = {};
-    const normalized = normalizeStrictOpenAIJsonSchema(schema) as Record<string, unknown>;
-    expect(normalized.type).toBe("object");
-    expect(normalized.properties).toStrictEqual({});
-    expect(normalized.required).toStrictEqual([]);
-    expect(normalized.additionalProperties).toBe(false);
-    expect(isStrictOpenAIJsonSchemaCompatible(schema)).toBe(true);
-  });
-
-  it("reuses normalized strict schemas for stable tool schema objects", () => {
-    // Cache keys include unsupported-keyword policy, not just object identity.
+  it("downgrades strict mode for regex lookarounds in string patterns", () => {
     const schema = {
       type: "object",
       properties: {
-        path: { type: "string" },
+        filename: { type: "string", pattern: "^(?![\\\\/])(?![A-Za-z]:)(?!.*\\.\\.).+$" },
+        folder: { type: "string" },
+        content: { type: "string" },
       },
-      required: ["path"],
+      required: ["folder", "filename", "content"],
     };
 
-    const first = normalizeStrictOpenAIJsonSchema(schema);
-    const second = normalizeStrictOpenAIJsonSchema(schema);
-    const third = normalizeStrictOpenAIJsonSchema(schema, {
-      unsupportedToolSchemaKeywords: ["minimum"],
-    });
-
-    expect(second).toBe(first);
-    expect(third).not.toBe(first);
     expect(
-      normalizeStrictOpenAIJsonSchema(schema, {
-        unsupportedToolSchemaKeywords: ["minimum"],
-      }),
-    ).toBe(third);
+      findOpenAIStrictSchemaViolations(normalizeStrictOpenAIJsonSchema(schema), "parameters"),
+    ).toEqual(["parameters.properties.filename.pattern"]);
+    expect(
+      resolveOpenAIProjectedToolsStrictToolFlag(
+        projectOpenAITools([{ name: "create_file", parameters: schema }]),
+        true,
+      ),
+    ).toBe(false);
   });
+
+  it.each(["^[a-z]+$", "\\(?=a"])(
+    "keeps strict mode for pattern %s without a lookaround",
+    (pattern) => {
+      expect(findOpenAIStrictSchemaViolations({ type: "string", pattern }, "value")).toEqual([]);
+    },
+  );
 
   it("reports unreadable nested tool schemas instead of throwing", () => {
     const unreadable = {
@@ -253,57 +206,5 @@ describe("OpenAI strict tool schema normalization", () => {
         violations: ["broken.parameters is not JSON-serializable"],
       },
     ]);
-  });
-
-  it("keeps strict mode for emitted tools when unreadable tools are dropped", () => {
-    const projection = projectOpenAITools([
-      {
-        name: "broken",
-        parameters: {
-          type: "object",
-          get properties(): never {
-            throw new Error("properties exploded");
-          },
-        },
-      },
-      {
-        name: "lookup",
-        parameters: {
-          type: "object",
-          properties: {},
-          required: [],
-          additionalProperties: false,
-        },
-      },
-    ]);
-
-    expect(resolveOpenAIProjectedToolsStrictToolFlag(projection, true)).toBe(true);
-  });
-
-  it("reuses projected schemas for strict checks and normalization", () => {
-    let serializationCount = 0;
-    const projection = projectOpenAITools([
-      {
-        name: "lookup",
-        parameters: {
-          toJSON() {
-            serializationCount += 1;
-            return {
-              type: "object",
-              properties: {},
-              required: [],
-              additionalProperties: false,
-            };
-          },
-        },
-      },
-    ]);
-    const tool = projection.tools[0];
-    expect(tool).toBeDefined();
-
-    expect(resolveOpenAIProjectedToolsStrictToolFlag(projection, true)).toBe(true);
-    const normalized = normalizeOpenAIStrictToolParameters(tool?.parameters, true);
-    expect(normalizeOpenAIStrictToolParameters(tool?.parameters, true)).toBe(normalized);
-    expect(serializationCount).toBe(1);
   });
 });

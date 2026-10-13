@@ -2,9 +2,10 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
-  createPluginStateSyncKeyedStoreForTests,
+  createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
@@ -70,15 +71,15 @@ it("closes owned tabs over their transports and rechecks claims after runtime lo
       browser: { profiles: { remote: { driver: "existing-session" as const, cdpUrl } } },
     };
     await state.writeConfig(config);
+    setRuntimeConfigSnapshot(config);
     initializeBrowserSessionTabStore({
       state: {
-        openSyncKeyedStore: (options) =>
-          createPluginStateSyncKeyedStoreForTests("browser", options),
+        openKeyedStore: (options) => createPluginStateKeyedStoreForTests("browser", options),
       },
     });
     const sessionKey = "agent:main:transport-cleanup";
     try {
-      registry.trackSessionBrowserTab({
+      await registry.trackSessionBrowserTab({
         sessionKey,
         targetId: "volatile",
         profile: "remote",
@@ -96,7 +97,7 @@ it("closes owned tabs over their transports and rechecks claims after runtime lo
           profile: "remote",
           route: { kind: "browser-control" as const, baseUrl: cdpUrl },
         };
-        registry.trackSessionBrowserTab({ ...joined, now: 1_000 });
+        await registry.trackSessionBrowserTab({ ...joined, now: 1_000 });
         const lifecycle = () =>
           registry.closeTrackedBrowserTabsForSessions({ sessionKeys: [sessionKey] });
         const sweep = () => registry.sweepTrackedBrowserTabs({ now: 20_000, idleMs: 1 });
@@ -104,7 +105,7 @@ it("closes owned tabs over their transports and rechecks claims after runtime lo
         const first = firstKind === "sweep" ? sweep() : lifecycle();
         await Promise.resolve();
         expect(requests).toHaveLength(before);
-        registry.touchSessionBrowserTab({ ...joined, now: 11_000 });
+        await registry.touchSessionBrowserTab({ ...joined, now: 11_000 });
         const second = firstKind === "sweep" ? lifecycle() : sweep();
         const results = await Promise.all([first, second]);
         expect.soft(results.reduce((total, closed) => total + closed, 0)).toBe(1);
@@ -124,7 +125,7 @@ it("closes owned tabs over their transports and rechecks claims after runtime lo
       });
       expect(ownership.status).toBe("durable");
       const tab = { sessionKey, targetId: "owned", profile: "remote", ownership };
-      registry.trackSessionBrowserTab({ ...tab, now: 1_000 });
+      await registry.trackSessionBrowserTab({ ...tab, now: 1_000 });
       const resolved = resolveBrowserConfig(config.browser, config);
       const entered = createDeferred<void>();
       const release = createDeferred<void>();
@@ -139,23 +140,22 @@ it("closes owned tabs over their transports and rechecks claims after runtime lo
       });
       try {
         await entered.promise;
-        registry.touchSessionBrowserTab({ ...tab, now: 11_000 });
+        await registry.touchSessionBrowserTab({ ...tab, now: 11_000 });
       } finally {
         release.resolve();
       }
       await expect(sweep).resolves.toBe(0);
       expect(closedTargets).toEqual([]);
-      expect(getBrowserSessionTabStore().entries()).toHaveLength(1);
-      expect(getBrowserSessionTabStore().entries()[0]?.value).not.toHaveProperty(
-        "cleanupAttemptToken",
-      );
+      const retained = await getBrowserSessionTabStore().entries();
+      expect(retained).toHaveLength(1);
+      expect(retained[0]?.value).not.toHaveProperty("cleanupAttemptToken");
 
       await expect(closeTrackedBrowserTabsForSessions({ sessionKeys: [sessionKey] })).resolves.toBe(
         1,
       );
       expect(closedTargets).toEqual(["owned"]);
       expect([...targets]).toEqual(["user"]);
-      expect(getBrowserSessionTabStore().entries()).toEqual([]);
+      expect(await getBrowserSessionTabStore().entries()).toEqual([]);
       await expect(closeTrackedBrowserTabsForSessions({ sessionKeys: [sessionKey] })).resolves.toBe(
         0,
       );

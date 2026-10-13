@@ -3,8 +3,8 @@ import { ed25519, x25519 } from "@noble/curves/ed25519.js";
 import { hkdf } from "@noble/hashes/hkdf.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { randomBytes } from "@noble/hashes/utils.js";
-import { canonicalBytes } from "./canonical.js";
-import { base64, decodeUtf8, fromBase64, fromBase64url, hex, utf8 } from "./encoding.js";
+import { canonicalBytes, sha256Hex } from "./canonical.js";
+import { base64, decodeUtf8, fromBase64, fromBase64url, utf8 } from "./encoding.js";
 import { parseHandleEpoch } from "./identity.js";
 import type { SignedReceipt } from "./receipts.js";
 
@@ -22,7 +22,6 @@ export interface ReplayStore {
   /** Renews an in-flight claim while slow guard or review work is active. */
   refresh?(peer: string, id: string): Promise<void>;
   complete(peer: string, id: string, receipt: SignedReceipt, body?: MessageBody): Promise<void>;
-  consume(peer: string, id: string): Promise<void>;
   release(peer: string, id: string): Promise<void>;
   completed(peer: string, id: string): Promise<CompletedReplay | undefined>;
 }
@@ -181,21 +180,6 @@ export function seal(options: SealOptions): Envelope {
   };
 }
 
-export async function open(options: OpenOptions): Promise<MessageBody> {
-  const result = await openClaimed(options);
-  if (result.claim === "duplicate") {
-    throw new ReplayedError("duplicate envelope");
-  }
-  const peer = parseHandleEpoch(options.envelope.from).handle;
-  try {
-    await options.replayStore.consume(peer, options.envelope.id);
-    return result.body;
-  } catch (error) {
-    await options.replayStore.release(peer, options.envelope.id);
-    throw error;
-  }
-}
-
 export async function openClaimed(options: OpenOptions): Promise<ClaimedOpenResult> {
   const envelope = validateEnvelope(options.envelope);
   if (!options.senderSigningPublicKey) {
@@ -221,7 +205,7 @@ export async function openClaimed(options: OpenOptions): Promise<ClaimedOpenResu
     throw new WrongRecipientError();
   }
   const peer = parseHandleEpoch(envelope.from).handle;
-  const hash = hex(sha256(canonicalBytes(envelope)));
+  const hash = sha256Hex(canonicalBytes(envelope));
   const claim = await options.replayStore.claim(peer, envelope.id, hash);
   if (claim === "mismatch") {
     throw new ReplayedError("replay id binding mismatch");
@@ -266,12 +250,8 @@ export async function openClaimed(options: OpenOptions): Promise<ClaimedOpenResu
   }
 }
 
-export function envelopeHash(envelope: Envelope): string {
-  return hex(sha256(canonicalBytes(envelope)));
-}
-
 export function bodyHash(body: MessageBody): string {
-  return hex(sha256(canonicalBytes(body)));
+  return sha256Hex(canonicalBytes(body));
 }
 
 function decodeKey(value: string): Uint8Array {

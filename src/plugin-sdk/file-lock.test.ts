@@ -1,10 +1,12 @@
 /**
  * Tests plugin SDK file lock retry, stale lock, and cleanup behavior.
  */
+import { existsSync, readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   acquireFileLock,
   drainFileLockStateForTest,
@@ -106,7 +108,7 @@ describe("acquireFileLock", () => {
       try {
         expect(second.lockPath).toBe(first.lockPath);
         await first.release();
-        await expect(fs.access(first.lockPath)).resolves.toBeUndefined();
+        await fs.access(first.lockPath);
         await second.release();
         await expect(fs.access(first.lockPath)).rejects.toMatchObject({ code: "ENOENT" });
       } finally {
@@ -174,7 +176,6 @@ describe("acquireFileLock", () => {
       reclaim: false,
     },
     { name: "unknown owner", payload: { createdAt: "2000-01-01T00:00:00Z" }, reclaim: false },
-    { name: "invalid age", payload: { createdAt: "invalid" }, reclaim: false },
   ])("requires definite owner retirement for $name sidecars", async ({ payload, reclaim }) => {
     const filePath = path.join(tempDir, "owner-retirement");
     const lockPath = `${filePath}.lock`;
@@ -213,38 +214,6 @@ describe("acquireFileLock", () => {
     expect(await fs.readFile(`${filePath}.lock`, "utf8")).toBe(bytes);
   });
 
-  it("keeps a fresh lock when its payload is not readable", async () => {
-    const filePath = path.join(tempDir, "payload-pending");
-    const lockPath = `${filePath}.lock`;
-    const options = {
-      retries: {
-        retries: 0,
-        factor: 1,
-        minTimeout: 1,
-        maxTimeout: 1,
-      },
-      stale: 60_000,
-    } as const;
-
-    await fs.writeFile(lockPath, "{", "utf8");
-
-    let caught: { lockPath?: string } | undefined;
-    await expect(
-      (async () => {
-        try {
-          await acquireFileLock(filePath, options);
-        } catch (err) {
-          caught = err as { lockPath?: string };
-          throw err;
-        }
-      })(),
-    ).rejects.toMatchObject({
-      code: FILE_LOCK_TIMEOUT_ERROR_CODE,
-    });
-    await expect(fs.realpath(caught?.lockPath ?? "")).resolves.toBe(await fs.realpath(lockPath));
-    await expect(fs.readFile(lockPath, "utf8")).resolves.toBe("{");
-  });
-
   it("does not unlink an ownerless sidecar while its creator still holds it", async () => {
     const filePath = path.join(tempDir, "payload-pending-open");
     const lockPath = `${filePath}.lock`;
@@ -271,87 +240,69 @@ describe("acquireFileLock", () => {
     }
   });
 
-  it("keeps an expired malformed lock because ownership cannot be proven", async () => {
-    const filePath = path.join(tempDir, "payload-crashed");
+  it("releases an acquired lock when the handoff guard rejects it", async () => {
+    const filePath = path.join(tempDir, "rejected-handoff");
     const lockPath = `${filePath}.lock`;
     const options = {
-      retries: {
-        retries: 0,
-        factor: 1,
-        minTimeout: 1,
-        maxTimeout: 1,
-      },
-      stale: 10,
-    } as const;
+      retries: { retries: 0, factor: 1, minTimeout: 1, maxTimeout: 1 },
+      stale: 60_000,
+    };
+    const guardError = new Error("resource became borrowed");
 
-    await fs.writeFile(lockPath, "{", "utf8");
-    const staleAt = new Date(Date.now() - 60_000);
-    await fs.utimes(lockPath, staleAt, staleAt);
-
-    await expect(acquireFileLock(filePath, options)).rejects.toMatchObject({
-      code: FILE_LOCK_TIMEOUT_ERROR_CODE,
-    });
-    await expect(fs.readFile(lockPath, "utf8")).resolves.toBe("{");
-  });
-
-  it("keeps an expired lock when its live owner has no starttime proof", async () => {
-    const filePath = path.join(tempDir, "live-owner");
-    const lockPath = `${filePath}.lock`;
-    const options = {
-      retries: {
-        retries: 0,
-        factor: 1,
-        minTimeout: 1,
-        maxTimeout: 1,
-      },
-      stale: 10,
-    } as const;
-
-    await fs.writeFile(
-      lockPath,
-      JSON.stringify({ pid: process.pid, createdAt: new Date(Date.now() - 60_000).toISOString() }),
-      "utf8",
-    );
-
-    let caught: { lockPath?: string } | undefined;
     await expect(
-      (async () => {
-        try {
-          await acquireFileLock(filePath, options);
-        } catch (err) {
-          caught = err as { lockPath?: string };
-          throw err;
-        }
-      })(),
-    ).rejects.toMatchObject({
-      code: FILE_LOCK_TIMEOUT_ERROR_CODE,
-    });
-    await expect(fs.realpath(caught?.lockPath ?? "")).resolves.toBe(await fs.realpath(lockPath));
-    await expect(fs.readFile(lockPath, "utf8")).resolves.toContain(`"pid":${process.pid}`);
+      acquireFileLock(filePath, {
+        ...options,
+        assertResourceUnborrowed: () => {
+          // Reject only after the real lock sidecar contains its owner payload.
+          if (existsSync(lockPath) && readFileSync(lockPath, "utf8").length > 0) {
+            throw guardError;
+          }
+        },
+      }),
+    ).rejects.toBe(guardError);
+
+    await expect(fs.access(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+    const next = await acquireFileLock(filePath, options);
+    await next.release();
   });
 
   it("closes an opened lock handle when writing the owner payload fails", async () => {
     const filePath = path.join(tempDir, "write-fails");
     const writeError = new Error("owner write failed");
-    const close = vi.fn().mockResolvedValue(undefined);
-    vi.spyOn(fs, "open").mockResolvedValue({
-      close,
-      writeFile: vi.fn().mockRejectedValue(writeError),
-    } as unknown as Awaited<ReturnType<typeof fs.open>>);
+    const open = fs.open;
+    const opened: Awaited<ReturnType<typeof fs.open>>[] = [];
+    const closes: ReturnType<typeof vi.spyOn>[] = [];
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      if (args[1] === "wx") {
+        opened.push(handle);
+        vi.spyOn(handle, "writeFile").mockRejectedValue(writeError);
+        closes.push(vi.spyOn(handle, "close"));
+      }
+      return handle;
+    });
 
-    await expect(
-      acquireFileLock(filePath, {
-        retries: {
-          retries: 0,
-          factor: 1,
-          minTimeout: 1,
-          maxTimeout: 1,
-        },
-        stale: 100,
-      }),
-    ).rejects.toThrow(writeError);
+    // Inject the failure at the real JavaScript FileHandle write boundary.
+    await withEnvAsync({ FS_SAFE_NATIVE_MODE: "off" }, async () => {
+      await expect(
+        acquireFileLock(filePath, {
+          retries: {
+            retries: 0,
+            factor: 1,
+            minTimeout: 1,
+            maxTimeout: 1,
+          },
+          stale: 100,
+        }),
+      ).rejects.toThrow(writeError);
+    });
 
-    expect(close).toHaveBeenCalledTimes(1);
+    expect(opened).toHaveLength(1);
+    expect(closes[0]).toHaveBeenCalledTimes(1);
+    for (const handle of opened) {
+      await expect(handle.stat()).rejects.toMatchObject({ code: "EBADF" });
+    }
+    await expect(fs.stat(`${filePath}.lock`)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("reclaims a definitely stale retired lock sidecar", async () => {

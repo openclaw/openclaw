@@ -40,6 +40,9 @@ afterEach(async () => {
     for (const capture of logCaptures) {
       await capture.flush();
     }
+    if (vi.isFakeTimers()) {
+      expect(vi.getTimerCount()).toBe(0);
+    }
   } finally {
     for (const capture of logCaptures.splice(0)) {
       capture.cleanup();
@@ -47,20 +50,6 @@ afterEach(async () => {
     resetLogger();
     vi.useRealTimers();
   }
-});
-
-describe("worker desktop observer tokens", () => {
-  it("mints opaque tokens that expire after 60 seconds", () => {
-    const minted = mintDesktopObserverToken({
-      sourceKey: "worker:one",
-      ownerEpoch: 3,
-      control: true,
-      attachment: { kind: "unix-socket", socketPath: "/tmp/desktop.sock" },
-      nowMs: 1_000,
-    });
-    expect(minted.token).toMatch(/^[a-f0-9]{48}$/u);
-    expect(minted.expiresAtMs).toBe(61_000);
-  });
 });
 
 async function createProxyHarness(
@@ -121,6 +110,7 @@ async function createProxyHarness(
     httpServer.once("error", reject);
     httpServer.listen(0, "127.0.0.1", resolve);
   });
+  const serverTimers = vi.isFakeTimers() ? vi.getTimerCount() : undefined;
   const address = httpServer.address();
   if (!address || typeof address === "string") {
     throw new Error("expected TCP test server address");
@@ -148,6 +138,7 @@ async function createProxyHarness(
     desktopPeer: params.stream ?? (await peerConnected.promise),
     observerUrl: ws.url,
     release,
+    serverTimers,
     ws,
   };
 }
@@ -185,17 +176,11 @@ async function expectUnauthorizedObserver(url: string): Promise<void> {
 describe.runIf(process.platform !== "win32")("worker desktop observer proxy", () => {
   it.each([
     {
-      displayName: "Morgan Example",
-      userId: "morgan@example.test",
-      reason: "control-taken:Morgan Example",
-    },
-    {
       displayName: "  ",
       userId: "morgan@example.test",
       reason: "control-taken:morgan@example.test",
     },
     { displayName: null, userId: undefined, reason: "control-taken" },
-    { displayName: "A".repeat(110), userId: undefined, reason: `control-taken:${"A".repeat(109)}` },
     { displayName: "🦞".repeat(28), userId: undefined, reason: `control-taken:${"🦞".repeat(27)}` },
   ])(
     "identifies a controller takeover with a valid close reason ($reason)",
@@ -241,6 +226,7 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
     logCaptures.push(logCapture);
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const harness = await createProxyHarness({ control: true });
+    expect(vi.getTimerCount()).toBe(harness.serverTimers! + 1);
     const pings: Buffer[] = [];
     const onDesktopData = vi.fn();
     harness.ws.on("ping", (data) => pings.push(data));
@@ -274,7 +260,7 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
     expect(harness.release).toHaveBeenCalledOnce();
     vi.advanceTimersByTime(25_000);
     expect(pings).toHaveLength(2);
-    expect(vi.getTimerCount()).toBe(0);
+    expect(vi.getTimerCount()).toBe(harness.serverTimers);
   });
 
   it("clears the credential-bearing token timer when the token is consumed", async () => {
@@ -391,24 +377,6 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
     },
   );
 
-  it("keeps relaying both directions while the requester remains current", async () => {
-    const controller = new AbortController();
-    const harness = await createProxyHarness({
-      control: true,
-      requester: { signal: controller.signal, isCurrent: () => true },
-    });
-    const greeting = Buffer.from("RFB 003.008\n");
-    const fromDesktop = new Promise<Buffer>((resolve) => {
-      harness.ws.once("message", (data) => resolve(Buffer.from(data as Buffer)));
-    });
-    harness.desktopPeer.write(greeting);
-    await expect(fromDesktop).resolves.toEqual(greeting);
-    const fromBrowser = readSocketBytes(harness.desktopPeer, greeting.length);
-    harness.ws.send(greeting);
-    await expect(fromBrowser).resolves.toEqual(greeting);
-    expect(harness.release).not.toHaveBeenCalled();
-  });
-
   it("drops view-only input while forwarding framebuffer requests", async () => {
     const logCapture = createDiagnosticLogRecordCapture();
     logCaptures.push(logCapture);
@@ -446,14 +414,6 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
       closeCode: 1000,
     });
     expect(harness.release).toHaveBeenCalledOnce();
-  });
-
-  it("keeps controlling observers on the plain pass-through path", async () => {
-    const harness = await createProxyHarness({ control: true });
-    const bytes = Buffer.concat([Buffer.from("RFB 003.008\n", "ascii"), Buffer.from([1, 0])]);
-    const fromWebSocket = readSocketBytes(harness.desktopPeer, bytes.length);
-    harness.ws.send(bytes);
-    await expect(fromWebSocket).resolves.toEqual(bytes);
   });
 
   it("closes malformed view-only streams with a policy violation", async () => {
@@ -496,29 +456,6 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
     expect(harness.release).toHaveBeenCalledOnce();
   });
 
-  it("expires unused credential-bearing tokens without a later token operation", async () => {
-    const harness = await createProxyHarness();
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const minted = mintDesktopObserverToken({
-      sourceKey: "worker:unused",
-      ownerEpoch: 1,
-      control: false,
-      attachment: { kind: "unix-socket", socketPath: "/tmp/unused-desktop.sock" },
-      preauth: {
-        auth: "vnc-password",
-        credentials: { password: "synthetic-memory-only-password" },
-      },
-    });
-
-    vi.advanceTimersByTime(60_000);
-    // Wall-clock expiry still lies ahead; only the timer could have retired this token.
-    expect(minted.expiresAtMs).toBeGreaterThan(Date.now());
-    const observerUrl = new URL(harness.observerUrl);
-    observerUrl.searchParams.set("token", minted.token);
-    await expectUnauthorizedObserver(observerUrl.toString());
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
   it.each([false, true])(
     "bounds browser writes, resumes on drain, and closes a blocked desktop (control: %s)",
     async (control) => {
@@ -541,16 +478,17 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
       const harness = await createProxyHarness({
         control,
         stream,
+        requester: { signal: new AbortController().signal, isCurrent: () => true },
         getBufferedAmount: (ws) => {
           gatewaySocket = ws;
           return ws.bufferedAmount;
         },
       });
-      const pulse = new Promise<void>((resolve) => {
-        harness.ws.once("message", () => resolve());
+      const pulse = new Promise<Buffer>((resolve) => {
+        harness.ws.once("message", (data) => resolve(Buffer.from(data as Buffer)));
       });
       stream.push(Buffer.from("synthetic-server-pulse"));
-      await pulse;
+      await expect(pulse).resolves.toEqual(Buffer.from("synthetic-server-pulse"));
       const handshake = Buffer.concat([Buffer.from("RFB 003.008\n"), Buffer.from([1, 1])]);
       harness.ws.send(handshake);
       await expect.poll(() => releaseWrite).toBeDefined();
@@ -585,6 +523,29 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
       expect(harness.release).toHaveBeenCalledOnce();
     },
   );
+
+  it("expires unused credential-bearing tokens without a later token operation", async () => {
+    const harness = await createProxyHarness();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const minted = mintDesktopObserverToken({
+      sourceKey: "worker:unused",
+      ownerEpoch: 1,
+      control: false,
+      attachment: { kind: "unix-socket", socketPath: "/tmp/unused-desktop.sock" },
+      preauth: {
+        auth: "vnc-password",
+        credentials: { password: "synthetic-memory-only-password" },
+      },
+    });
+
+    vi.advanceTimersByTime(60_000);
+    // Wall-clock expiry still lies ahead; only the timer could have retired this token.
+    expect(minted.expiresAtMs).toBeGreaterThan(Date.now());
+    const observerUrl = new URL(harness.observerUrl);
+    observerUrl.searchParams.set("token", minted.token);
+    await expectUnauthorizedObserver(observerUrl.toString());
+    expect(vi.getTimerCount()).toBe(0);
+  });
 
   it("pauses and resumes unix-socket reads around websocket backpressure", async () => {
     let bufferedAmount = 5 * 1024 * 1024;

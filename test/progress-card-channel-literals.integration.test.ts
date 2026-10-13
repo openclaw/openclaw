@@ -1,8 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  createDiscordDraftPreviewController,
-  RequestClient,
-} from "../extensions/discord/test-api.js";
+import { loadDiscordDraftPreview, RequestClient } from "../extensions/discord/test-api.js";
 import {
   renderTelegramProgressDraftPreview,
   telegramHtmlToPlainTextFallback,
@@ -13,6 +10,8 @@ import { createOpenClawTools } from "../src/agents/openclaw-tools.js";
 import type { InProcessGatewayCaller } from "../src/agents/tools/in-process-gateway.js";
 import { createChannelProgressDraftCompositor } from "../src/channels/progress-draft-compositor.js";
 import { normalizeAgentPlanSteps } from "../src/channels/streaming.js";
+
+const { createDiscordDraftPreviewController } = await loadDiscordDraftPreview();
 
 const gatewayCall = vi.hoisted(() => vi.fn<InProcessGatewayCaller>());
 vi.mock("../src/agents/tools/in-process-gateway.js", async (importOriginal) => ({
@@ -135,9 +134,6 @@ describe("registered progress cards at the final channel renderer", () => {
         deliveryRest: rest,
         deliverChannelId: "test-channel",
         replyReference: { peek: () => undefined },
-        tableMode: "off",
-        maxLinesPerMessage: undefined,
-        chunkMode: "length",
         log: () => {},
       });
       try {
@@ -160,7 +156,7 @@ describe("registered progress cards at the final channel renderer", () => {
       [false, true].map((richMessages) => ({ markdown, text, html, richMessages })),
     ),
   )(
-    "keeps Telegram literal text and inactive links (rich=$richMessages): $markdown",
+    "keeps Telegram notes literal with headline styling (rich=$richMessages): $markdown",
     async ({ markdown, text, html, richMessages }) => {
       const previews: ReturnType<typeof renderTelegramProgressDraftPreview>[] = [];
       const progress = createChannelProgressDraftCompositor({
@@ -181,17 +177,17 @@ describe("registered progress cards at the final channel renderer", () => {
         },
       });
       try {
-        await runRegisteredCard(markdown, progress.pushPlanProgress);
+        await runRegisteredCard(markdown, progress.pushPlanProgress.bind(progress));
         expect(previews).toHaveLength(1);
         const preview = previews[0];
         if (richMessages) {
           expect(preview?.text).toBe(text);
           expect(preview?.richMessage).toEqual({
-            blocks: [{ type: "paragraph", text: { type: "code", text } }],
+            blocks: [{ type: "paragraph", text: { type: "bold", text } }],
             skip_entity_detection: true,
           });
         } else {
-          expect(preview?.text).toBe(`<code>${html}</code>`);
+          expect(preview?.text).toBe(`<b>${html}</b>`);
           expect(telegramHtmlToPlainTextFallback(preview?.text ?? "")).toBe(text);
           expect(preview?.text).not.toContain("href=");
         }

@@ -1,5 +1,6 @@
 {
   "id": "logbook",
+  "uiCapabilities": ["page", "navigation"],
   "categories": ["productivity"],
   "name": "Logbook",
   "description": "Automatic work journal: captures periodic screen snapshots from a paired node and turns them into a reviewable timeline of your day.",
@@ -45,6 +46,32 @@
       "advanced": true
     }
   },
+  "configGroups": [
+    {
+      "id": "screen-capture",
+      "title": "Screen capture",
+      "order": 10,
+      "properties": [
+        "captureEnabled",
+        "captureIntervalSeconds",
+        "nodeId",
+        "screenIndex",
+        "maxWidth"
+      ]
+    },
+    {
+      "id": "activity-analysis",
+      "title": "Activity analysis",
+      "order": 20,
+      "properties": ["analysisIntervalMinutes", "visionModel"]
+    },
+    {
+      "id": "retention",
+      "title": "Retention",
+      "order": 30,
+      "properties": ["retentionDays"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

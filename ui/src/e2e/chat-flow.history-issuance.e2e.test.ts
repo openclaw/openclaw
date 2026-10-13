@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   chatSessionListResponse,
   controlUiSessionUrl,
@@ -219,8 +220,11 @@ suite.define(() => {
         },
       });
       const referencePath = `chat/main/${reference === "named" ? "canonical-history" : "old-name-12345678"}`;
-      const canonicalPath = new URL("chat/main/canonical-history-12345678", suite.server.baseUrl)
-        .pathname;
+      const canonicalId = reference === "named" ? "1234567890abcdef1234567890abcdef" : "12345678";
+      const canonicalPath = new URL(
+        `chat/main/canonical-history-${canonicalId}`,
+        suite.server.baseUrl,
+      ).pathname;
       try {
         await page.goto(`${suite.server.baseUrl}chat/main`, { waitUntil: "domcontentloaded" });
         await page
@@ -229,14 +233,13 @@ suite.define(() => {
           .waitFor({ state: "visible" });
         const initialStartups = (await gateway.getRequests("chat.startup")).length;
         await gateway.deferNext("chat.startup");
-        await page.evaluate((pathname) => {
-          const app = document.querySelector("openclaw-app") as HTMLElement & {
-            runtime: {
-              context: { navigate: (routeId: string, options: { pathname: string }) => void };
-            };
-          };
-          app.runtime.context.navigate("chat", { pathname });
-        }, new URL(referencePath, suite.server.baseUrl).pathname);
+        await evaluateControlUiContext(
+          page,
+          (application, pathname) => {
+            application.navigate("chat", { pathname });
+          },
+          new URL(referencePath, suite.server.baseUrl).pathname,
+        );
         await gateway.waitForRequest("chat.startup", { after: initialStartups });
         if (reference === "named") {
           await page.waitForURL((url) => url.pathname === canonicalPath, {

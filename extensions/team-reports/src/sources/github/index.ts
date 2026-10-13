@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { truncateGraphemes } from "../../text.js";
 import type {
+  ActivityEntry,
   ActivityWindow,
   GithubItem,
   GithubSource,
@@ -60,20 +61,16 @@ async function listRepos(
   const repos = new Map<string, Repository>();
   const excluded = new Set(cfg.excludeRepos.map((repo) => repo.toLowerCase()));
   for (const org of new Set(cfg.orgs)) {
-    await client.attempt(
-      `List repositories for ${org}`,
-      async () => {
-        for await (const repo of client.pages(
-          pathWithQuery(`/orgs/${encodeURIComponent(org)}/repos`, { type: "all" }),
-          repoSchema,
-        )) {
-          if (!repo.archived && !excluded.has(repo.full_name.toLowerCase())) {
-            repos.set(repo.full_name.toLowerCase(), repo);
-          }
+    await client.attempt(`List repositories for ${org}`, async () => {
+      for await (const repo of client.pages(
+        pathWithQuery(`/orgs/${encodeURIComponent(org)}/repos`, { type: "all" }),
+        repoSchema,
+      )) {
+        if (!repo.archived && !excluded.has(repo.full_name.toLowerCase())) {
+          repos.set(repo.full_name.toLowerCase(), repo);
         }
-      },
-      true,
-    );
+      }
+    });
   }
   return repos;
 }
@@ -103,44 +100,32 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
       const people = new Map<string, Person>();
       const add = (login: string) => people.set(login.toLowerCase(), { github: [login] });
       for (const team of cfg.teams) {
-        await client.attempt(
-          `Load team ${team.org}/${team.slug}`,
-          async () => {
-            for await (const user of client.pages(
-              pathWithQuery(
-                `/orgs/${encodeURIComponent(team.org)}/teams/${encodeURIComponent(team.slug)}/members`,
-                {},
-              ),
-              userSchema,
-            )) {
-              add(user.login);
-            }
-          },
-          true,
-        );
+        await client.attempt(`Load team ${team.org}/${team.slug}`, async () => {
+          for await (const user of client.pages(
+            pathWithQuery(
+              `/orgs/${encodeURIComponent(team.org)}/teams/${encodeURIComponent(team.slug)}/members`,
+              {},
+            ),
+            userSchema,
+          )) {
+            add(user.login);
+          }
+        });
       }
       if (cfg.includeDirectCollaborators) {
         for (const repo of (await listRepos(client, cfg)).values()) {
-          await client.attempt(
-            `Load collaborators for ${repo.full_name}`,
-            async () => {
-              for await (const user of client.pages(
-                pathWithQuery(`${repoPath(repo.full_name)}/collaborators`, {
-                  affiliation: "direct",
-                }),
-                collaboratorSchema,
-              )) {
-                if (
-                  user.permissions?.push ||
-                  user.permissions?.maintain ||
-                  user.permissions?.admin
-                ) {
-                  add(user.login);
-                }
+          await client.attempt(`Load collaborators for ${repo.full_name}`, async () => {
+            for await (const user of client.pages(
+              pathWithQuery(`${repoPath(repo.full_name)}/collaborators`, {
+                affiliation: "direct",
+              }),
+              collaboratorSchema,
+            )) {
+              if (user.permissions?.push || user.permissions?.maintain || user.permissions?.admin) {
+                add(user.login);
               }
-            },
-            true,
-          );
+            }
+          });
         }
       }
       checkAbort(runtime.signal, ABORT_LABEL);
@@ -153,7 +138,7 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
       };
     },
 
-    async collect(cfg, window, roster) {
+    async collect(cfg, window, roster, emit) {
       const status = newStatus();
       const client = new GithubClient(cfg, runtime, status);
       checkAbort(runtime.signal, ABORT_LABEL);
@@ -166,7 +151,16 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
       }
       const repos = await listRepos(client, cfg);
       runtime.logger.info(`team-reports: GitHub repos listed: ${repos.size}`);
-      const items = new Map<string, GithubItem>();
+      let pending: ActivityEntry<GithubItem>[] = [];
+      let itemCount = 0;
+      let commitCount = 0;
+      const flush = async () => {
+        if (pending.length > 0) {
+          const batch = pending;
+          pending = [];
+          await emit(batch);
+        }
+      };
       const active = new Set<string>();
       const updatedRepos = new Set<string>();
       // updated_at is an item's LAST update, so a later edit would hide in-window comments during
@@ -176,19 +170,29 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
         untilMs: Math.max(window.untilMs, Date.now()),
       };
       const seenIssues = new Set<string>();
-      const add = (item: GithubItem) => {
+      const add = async (item: GithubItem) => {
         checkAbort(runtime.signal, ABORT_LABEL);
         if (item.atMs >= window.sinceMs && item.atMs < window.untilMs) {
-          items.set(`${item.kind}\0${item.url}\0${item.actor.toLowerCase()}\0${item.atMs}`, item);
+          pending.push({
+            key: `${item.kind}\0${item.url}\0${item.actor.toLowerCase()}\0${item.atMs}`,
+            value: item,
+          });
+          itemCount++;
+          if (item.kind === "commit") {
+            commitCount++;
+          }
+          if (pending.length === 100) {
+            await flush();
+          }
         }
       };
-      const addCommit = (repo: string, commit: z.infer<typeof commitSchema>) => {
+      const addCommit = async (repo: string, commit: z.infer<typeof commitSchema>) => {
         const date = commit.commit.committer?.date;
         if (!inWindow(date, window)) {
           return;
         }
         active.add(repo.toLowerCase());
-        add({
+        await add({
           kind: "commit",
           repo,
           title: commit.commit.message.split(/\r?\n/, 1)[0] ?? "",
@@ -207,10 +211,12 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
                 until: new Date(window.untilMs).toISOString(),
               }),
               commitSchema,
+              flush,
             )) {
-              addCommit(repo.full_name, commit);
+              await addCommit(repo.full_name, commit);
             }
           });
+          await flush();
         }
       };
       const orgCandidates = new Map<string, Repository[]>();
@@ -245,6 +251,8 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
               org,
               window,
               issueSchema,
+              undefined,
+              flush,
             )) {
               const repoName = /\/repos\/([^/]+\/[^/]+)\/?$/
                 .exec(issue.repository_url)?.[1]
@@ -268,7 +276,7 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
                 actor: issue.user?.login ?? "",
               };
               if (inWindow(issue.created_at, window)) {
-                add({
+                await add({
                   ...common,
                   kind: issue.pull_request ? "pr_opened" : "issue_opened",
                   atMs: Date.parse(issue.created_at),
@@ -287,7 +295,7 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
                   actor = pull.merged_by?.login;
                 });
                 if (actor) {
-                  add({
+                  await add({
                     ...common,
                     actor,
                     kind: "pr_merged",
@@ -295,7 +303,7 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
                   });
                 }
               } else if (inWindow(issue.closed_at, window)) {
-                add({
+                await add({
                   ...common,
                   kind: issue.pull_request ? "pr_closed" : "issue_closed",
                   atMs: Date.parse(issue.closed_at ?? ""),
@@ -303,6 +311,7 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
               }
             }
           });
+          await flush();
         }
         for (const type of ["issue", "pull-request"] as const) {
           await client.attempt(`${type} updated search for ${org}`, async () => {
@@ -324,7 +333,7 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
         }
       }
       runtime.logger.info(
-        `team-reports: GitHub issue searches done: ${items.size} items, ${updatedRepos.size} updated-search repos`,
+        `team-reports: GitHub issue searches done: ${itemCount} items, ${updatedRepos.size} updated-search repos`,
       );
       const strategies = new Set<string>();
       for (const [org, candidates] of orgCandidates) {
@@ -361,19 +370,21 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
                 window,
                 searchCommitSchema,
                 first,
+                flush,
               )) {
                 const repo = repos.get(commit.repository.full_name.toLowerCase());
                 if (repo) {
-                  addCommit(repo.full_name, commit);
+                  await addCommit(repo.full_name, commit);
                 }
               }
             }
           });
         }
+        await flush();
       }
       status.stats.commitStrategy = strategies.size > 1 ? "mixed" : ([...strategies][0] ?? "none");
       runtime.logger.info(
-        `team-reports: GitHub commits done: ${status.stats.commitStrategy}, ${[...items.values()].filter((item) => item.kind === "commit").length} items`,
+        `team-reports: GitHub commits done: ${status.stats.commitStrategy}, ${commitCount} items`,
       );
       for (const key of updatedRepos) {
         active.add(key);
@@ -394,9 +405,10 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
                 since: new Date(window.sinceMs).toISOString(),
               }),
               commentSchema,
+              flush,
             )) {
               if (inWindow(comment.created_at, window)) {
-                add({
+                await add({
                   kind,
                   repo: repo.full_name,
                   title: commentTitle(comment.body),
@@ -408,6 +420,7 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
               }
             }
           });
+          await flush();
         }
       }
       let advisoryReposScanned = 0;
@@ -421,6 +434,7 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
                 direction: "desc",
               }),
               advisorySchema,
+              flush,
             )) {
               // Newest-first updates let us stop before fetching any older pages.
               if (advisory.updated_at && Date.parse(advisory.updated_at) < window.sinceMs) {
@@ -439,7 +453,7 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
                 ].filter((login): login is string => Boolean(login)),
               );
               for (const actor of actors) {
-                add({
+                await add({
                   kind: "security_advisory",
                   repo: repo.full_name,
                   title: advisory.summary,
@@ -461,6 +475,7 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
             }
           }
         });
+        await flush();
       }
       checkAbort(runtime.signal, ABORT_LABEL);
       runtime.logger.info(
@@ -471,16 +486,8 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
           `team-reports: GitHub advisories skipped: ${status.stats.advisoriesSkipped} repos (HTTP 403/404; no advisories visible)`,
         );
       }
-      return {
-        items: [...items.values()].toSorted(
-          (a, b) =>
-            a.atMs - b.atMs ||
-            a.url.localeCompare(b.url, "en") ||
-            a.kind.localeCompare(b.kind, "en") ||
-            a.actor.localeCompare(b.actor, "en"),
-        ),
-        status,
-      };
+      await flush();
+      return status;
     },
   };
 }

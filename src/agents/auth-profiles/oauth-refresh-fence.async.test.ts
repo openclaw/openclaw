@@ -76,6 +76,46 @@ describe("awaited OAuth persistence", () => {
     },
   );
 
+  it.each(["reading", "polling"] as const)(
+    "cancels a pending refresh observer while %s without leaving polling work",
+    async (phase) => {
+      vi.useFakeTimers();
+      const controller = new AbortController();
+      const reading = createDeferredCore<{ pending: boolean }>();
+      const entered = createDeferredCore();
+      const read = vi.fn(() => {
+        entered.resolve();
+        return phase === "reading" ? reading.promise : { pending: true };
+      });
+      const resolve = vi.fn(async () => "access");
+      const observing = observeOAuthRefreshFenceSettlement({
+        label: "cancelled observer",
+        timeoutMs: 1_000,
+        signal: controller.signal,
+        read,
+        isPending: (snapshot) => snapshot.pending,
+        resolve,
+      });
+      const rejected = expect(observing).rejects.toMatchObject({ name: "AbortError" });
+      try {
+        await entered.promise;
+        await vi.advanceTimersByTimeAsync(0);
+        controller.abort(new DOMException("caller cancelled", "AbortError"));
+        await rejected;
+        reading.resolve({ pending: false });
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(read).toHaveBeenCalledOnce();
+        expect(resolve).not.toHaveBeenCalled();
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        controller.abort();
+        reading.resolve({ pending: false });
+        await observing.catch(() => {});
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it.each(["success", "failure"] as const)(
     "waits for durable claim and %s settlement before publishing",
     async (outcome) => {

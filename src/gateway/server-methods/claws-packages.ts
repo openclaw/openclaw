@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { listAgentEntries } from "../../agents/agent-scope.js";
-import { readClawStatus } from "../../claws/lifecycle-status.js";
+import { readClawPackageRemovalStatus } from "../../claws/lifecycle-status.js";
 import { resolveClawMonitorCleanupBinding } from "../../claws/monitor-cleanup-binding.js";
 import { clawPackageRemovalRequestSchema } from "../../claws/package-remove-contract.js";
 import {
@@ -11,13 +11,13 @@ import {
   projectClawPackageRemovePlan,
 } from "../../claws/package-remove-plan.js";
 import { applyClawPackageRemovals, planClawPackageRemovals } from "../../claws/package-remove.js";
-import { readClawInstallRecord } from "../../claws/provenance.js";
+import { claimClawPackageRefStatus } from "../../claws/provenance-write.js";
 import { projectPluginRuntimeFailure } from "../../plugins/lifecycle.js";
+import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { readAgentDeletionJournal } from "../../state/agent-deletion-journal.js";
 import {
   captureGatewayPluginRuntimeApplications,
   pluginLifecycleError,
-  withGatewayPluginLifecycleLease,
 } from "./plugins-lifecycle-error.js";
 import type {
   GatewayRequestContext,
@@ -54,6 +54,7 @@ export const clawsPackageHandlers = {
     }
     const input = parsed.data;
     let captured: ReturnType<typeof captureGatewayPluginRuntimeApplications> | undefined;
+    let entered = false;
     try {
       const applyRuntime = context.applyPluginLifecycleChange;
       if (!applyRuntime) {
@@ -70,30 +71,34 @@ export const clawsPackageHandlers = {
           ) ||
           journal?.operationId !== input.operationId ||
           journal.cleanupCompleted ||
-          listAgentEntries(context.getRuntimeConfig()).some(
-            (agent) => agent.id === input.agentId,
-          ) ||
-          digestClawRemovalInstall(readClawInstallRecord(input.agentId)) !==
-            input.expectedInstallDigest
+          listAgentEntries(context.getRuntimeConfig()).some((agent) => agent.id === input.agentId)
         ) {
           throw new Error("Claw package cleanup no longer owns the current removal state.");
         }
       };
       captured = captureGatewayPluginRuntimeApplications(applyRuntime, assertCurrent);
       const applyOwnedRuntime = captured.applyRuntime;
-      const { runtimeFailure, ...removed } = await withGatewayPluginLifecycleLease(
-        signal,
+      // A request must not wait on a config reload that is draining that request.
+      const { runtimeFailure, ...removed } = await withPluginLifecycleLease(
+        { signal, waitMs: 0 },
         async (lease) => {
+          entered = true;
           const beforePersistentApply = () => {
             assertCurrent();
             lease.assertOwned();
           };
           beforePersistentApply();
-          const status = await readClawStatus(input.agentId);
+          const record = await readClawPackageRemovalStatus(input.agentId, { signal });
           beforePersistentApply();
-          const record = status.records[0];
-          if (!record || status.records.length !== 1) {
+          if (!record) {
             throw new Error("Claw package cleanup has no unique current owner.");
+          }
+          // The current journal operation freezes the entire install record.
+          if (
+            digestClawRemovalInstall(record.orphaned ? undefined : record.install) !==
+            input.expectedInstallDigest
+          ) {
+            throw new Error("Claw package cleanup no longer owns the current removal state.");
           }
           const decisions = await planClawPackageRemovals(record.install, record.packages, {
             referencedCleanup: input.cleanup,
@@ -117,6 +122,7 @@ export const clawsPackageHandlers = {
           }
           return await applyClawPackageRemovals(orderClawPackageRemovals(decisions), {
             applyRuntime: applyOwnedRuntime,
+            deps: { claimPackageRef: claimClawPackageRefStatus },
             assertCurrent: beforePersistentApply,
           });
         },
@@ -145,7 +151,11 @@ export const clawsPackageHandlers = {
         undefined,
       );
     } catch (error) {
-      respond(false, undefined, pluginLifecycleError(error, captured?.application));
+      respond(
+        false,
+        undefined,
+        pluginLifecycleError(error, { application: captured?.application, entered, signal }),
+      );
     }
   },
 } satisfies GatewayRequestHandlers;

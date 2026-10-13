@@ -38,9 +38,8 @@ Telegram fixes `--credential-source` to `convex`. Its Test Server userbot
 credential cannot be supplied through the shared environment credential mode.
 
 Each lane exits non-zero on any failed scenario. `--allow-failures` writes
-artifacts without setting a failing exit code. Discord and Telegram also accept
-`--list-scenarios` to print available scenario ids and exit; the other lanes
-do not expose that flag.
+artifacts without setting a failing exit code. Discord, Slack, and Telegram also
+accept `--list-scenarios` to print selected scenario IDs and exit.
 
 ### Buzz QA
 
@@ -150,6 +149,32 @@ through the bundled Discord plugin. Verifies channel mention handling, that
 the SUT bot has registered the native `/help` command with Discord, and
 opt-in Mantis evidence scenarios.
 
+For reusable agent-driven proof, use the repository's
+`.agents/skills/discord-e2e/SKILL.md`. Its opt-in commands discover the QA broker
+through an existing authenticated Convex CLI; no bot tokens or broker secrets
+need to be copied:
+
+```bash
+pnpm openclaw qa discord --doctor
+pnpm openclaw qa discord \
+  --scenario-file qa/scenarios/channels/discord-e2e-lifecycle.yaml
+```
+
+These modes default to Convex, the CI credential role, and `mock-openai`.
+Explicit flags or credential environment settings still take precedence.
+`--scenario-file` is repeatable and accepts complete YAML flows declaring
+`execution.channel: discord` and `execution.config.agentE2e: true`.
+Native-write flows run once; positive `retryCount` values are rejected.
+They remain outside the curated default suite.
+
+The lifecycle distinguishes native fixture operations from a correlated SUT
+Gateway reply. Private event receipts cover revisions, reactions, typing, and
+deletion; rendering and human interactions still need a real client. Cleanup
+retains lease authority until the Gateway stops and removes only owned objects.
+Without existing thread-management permission, owned threads are archived,
+not deleted. Slash commands, component clicks, modals, ephemeral interactions,
+and bot DMs require a manual Discord client; user-account automation is not used.
+
 Required env when `--credential-source env`:
 
 - `OPENCLAW_QA_DISCORD_GUILD_ID`
@@ -171,7 +196,7 @@ Discord YAML module scenarios (`qa/scenarios/channels/discord-*.yaml`):
 - `discord-canary`
 - `discord-mention-gating`
 - `discord-native-help-command-registration`
-- `discord-progress-draft-lifecycle` - runs a deterministic tool turn, verifies
+- `discord-progress-draft-lifecycle` - runs a fixed tool turn, verifies
   the final answer has no synthesized activity receipt, confirms the working
   draft is deleted after a successful final, and confirms an error final keeps
   its draft visible as diagnostic context.

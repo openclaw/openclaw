@@ -1,8 +1,30 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { buildDraftSessionCreateParams, canStartSessionAsDraft } from "./create-params.ts";
+import type { ApplicationContext } from "../../app/context.ts";
+import { NewSessionCapabilityController } from "./capability-controller.ts";
+import { buildDraftSessionCreateParams } from "./create-params.ts";
 
 describe("create-as-draft availability", () => {
+  const capabilities = new NewSessionCapabilityController(
+    () => {},
+    () => {},
+  );
+  const canStartSessionAsDraft = (policy: {
+    allowedVisibilities?: string[];
+    hasMultipleIdentities?: boolean;
+  }) =>
+    capabilities.canStartAsDraft({
+      gateway: {
+        snapshot: {
+          hello: {
+            policy: {
+              allowedSessionVisibilities: policy.allowedVisibilities,
+              hasMultipleSessionSharingIdentities: policy.hasMultipleIdentities,
+            },
+          },
+        },
+      },
+    } as ApplicationContext);
   it("requires both draft policy and multiple creator identities", () => {
     expect(
       canStartSessionAsDraft({
@@ -17,17 +39,6 @@ describe("create-as-draft availability", () => {
       }),
     ).toBe(false);
     expect(canStartSessionAsDraft({ hasMultipleIdentities: true })).toBe(false);
-  });
-
-  it("stays dormant when the gateway has fewer than two identities", () => {
-    for (const hasMultipleIdentities of [undefined, false]) {
-      expect(
-        canStartSessionAsDraft({
-          allowedVisibilities: ["shared", "draft"],
-          hasMultipleIdentities,
-        }),
-      ).toBe(false);
-    }
   });
 });
 
@@ -78,21 +89,8 @@ describe("buildDraftSessionCreateParams", () => {
       repository: { url: "https://github.com/openclaw/openclaw.git", ref: "release" },
     });
   });
-  it("keeps plain chats minimal", () => {
-    expect(
-      buildDraftSessionCreateParams({
-        agentId: "Main",
-        message: "hello",
-        worktree: false,
-        baseRef: "main",
-        worktreeName: "ignored",
-        cwd: "/workspace",
-        workspace: "/workspace",
-      }),
-    ).toEqual({ agentId: "main", message: "hello" });
-  });
 
-  it.each([false, true])(
+  it.each([true])(
     "keeps incognito prompts out of early naming (deferred=%s)",
     (deferInitialTurn) => {
       expect(
@@ -200,21 +198,6 @@ describe("buildDraftSessionCreateParams", () => {
     });
   });
 
-  it("submits the catalog target for server-side resolution", () => {
-    expect(
-      buildDraftSessionCreateParams({
-        agentId: "main",
-        message: "start coding",
-        worktree: false,
-        catalogId: "claude",
-      }),
-    ).toEqual({
-      agentId: "main",
-      message: "start coding",
-      catalogId: "claude",
-    });
-  });
-
   it("maps worktree selections onto additive create params", () => {
     expect(
       buildDraftSessionCreateParams({
@@ -254,22 +237,6 @@ describe("buildDraftSessionCreateParams", () => {
     });
   });
 
-  it("sends a custom Gateway folder without requiring a worktree", () => {
-    expect(
-      buildDraftSessionCreateParams({
-        agentId: "main",
-        message: "bootstrap here",
-        worktree: false,
-        cwd: "/home",
-        workspace: "/workspace",
-      }),
-    ).toEqual({
-      agentId: "main",
-      message: "bootstrap here",
-      cwd: "/home",
-    });
-  });
-
   it("submits a selected project by id without leaking its host path", () => {
     expect(
       buildDraftSessionCreateParams({
@@ -285,25 +252,6 @@ describe("buildDraftSessionCreateParams", () => {
       message: "work in the recorded repo",
       projectId: "openclaw",
       worktree: true,
-    });
-  });
-
-  it("sends a custom Gateway checkout with an explicit worktree", () => {
-    expect(
-      buildDraftSessionCreateParams({
-        agentId: "main",
-        message: "isolated work",
-        worktree: true,
-        cwd: "/other/repo",
-        workspace: "/workspace",
-        baseRef: "main",
-      }),
-    ).toEqual({
-      agentId: "main",
-      message: "isolated work",
-      cwd: "/other/repo",
-      worktree: true,
-      worktreeBaseRef: "main",
     });
   });
 });

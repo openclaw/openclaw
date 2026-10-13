@@ -1,0 +1,128 @@
+import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta-readonly.js";
+import { isSubagentSessionFromEntry } from "../agents/subagents/spawn/subagent-depth-policy.js";
+import {
+  readExactSessionEntryRow,
+  readExactSessionEntryRowValidated,
+} from "../config/sessions/session-accessor.sqlite-entry-read.js";
+import type { CurrentTranscriptProjection } from "../config/sessions/session-accessor.sqlite-projection-read.js";
+import { readWithCanonicalSessionAdmission } from "../config/sessions/session-canonical-key.js";
+import type { SessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
+import type { SessionEntry } from "../config/sessions/types.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
+import { withScopedOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly-scope.js";
+import type { PreparedSessionHistoryReadTarget } from "./session-history-read.types.js";
+import { resolveGatewaySessionStoreReadResults } from "./session-utils-store-selection.js";
+import type { GatewaySessionStoreReadSources } from "./session-utils-store.types.js";
+
+type SessionHistorySubagentSource = Pick<CurrentTranscriptProjection, "database"> & {
+  resolved: Pick<CurrentTranscriptProjection["resolved"], "agentId">;
+};
+
+/** Auxiliary metadata never chooses one of several matching canonical source rows. */
+function readGatewaySessionEntryFromSources(
+  sessionKey: string,
+  sources: readonly SessionEntryReadSource[],
+  current?: { source: SessionEntryReadSource; entry: SessionEntry | undefined },
+): SessionEntry | undefined {
+  if (sources.length === 0) {
+    return undefined;
+  }
+  const selected = resolveGatewaySessionStoreReadResults({
+    canonicalKey: sessionKey,
+    scanTargets: [sessionKey],
+    deferCanonicalValidation: true,
+    reads: sources.map((source) => ({ storePath: source.path, readSource: source })),
+    readStore: ({ readSource }) => {
+      if (
+        current &&
+        readSource.path === current.source.path &&
+        readSource.agentId === current.source.agentId
+      ) {
+        return current.entry ? { [sessionKey]: current.entry } : {};
+      }
+      try {
+        const result = withScopedOpenClawAgentDatabaseReadOnly(
+          (database) =>
+            readWithCanonicalSessionAdmission(
+              database,
+              () => readExactSessionEntryRowValidated(database, sessionKey, "list")?.entry,
+            ),
+          readSource,
+        );
+        return result.found && result.value ? { [sessionKey]: result.value } : {};
+      } catch {
+        // Preserve the existing unavailable auxiliary store as an unclassified source.
+        return {};
+      }
+    },
+  });
+  return selected.canonicalValidationError ? undefined : selected.match?.entry;
+}
+
+/** Source lineage is independent of which live or archived transcript is being displayed. */
+export function createBoundSessionHistorySubagentSource(
+  readSnapshot: <T>(read: (source: SessionHistorySubagentSource) => T) => T,
+  stateDatabase: PreparedSessionHistoryReadTarget["stateDatabase"],
+  readSourceDatabases: () => GatewaySessionStoreReadSources | undefined,
+  sources: {
+    get: (key: string) => boolean | undefined;
+    set: (key: string, value: boolean) => unknown;
+  } = new Map(),
+): (sessionKey: string) => boolean {
+  const readSource = (projection: SessionHistorySubagentSource, sessionKey: string) => {
+    const cached = sources.get(sessionKey);
+    if (cached !== undefined) {
+      return cached;
+    }
+    if (isSubagentSessionFromEntry(sessionKey, undefined)) {
+      sources.set(sessionKey, true);
+      return true;
+    }
+    // Retired native children retain their canonical key. ACP lineage additionally
+    // requires current metadata from its separately bound shared-state owner.
+    const sourceAgentId = parseAgentSessionKey(sessionKey)?.agentId;
+    const sourceDatabases = readSourceDatabases();
+    const ownSource = { agentId: projection.database.agentId, path: projection.database.path };
+    const hasPreparedSource = Boolean(
+      sourceAgentId && sourceDatabases && Object.hasOwn(sourceDatabases, sourceAgentId),
+    );
+    const candidates =
+      sourceAgentId && sourceDatabases && hasPreparedSource
+        ? [...(sourceDatabases[sourceAgentId] ?? [])]
+        : [];
+    if (!sourceAgentId || sourceAgentId === projection.resolved.agentId || !hasPreparedSource) {
+      if (
+        !candidates.some(
+          (source) => source.agentId === ownSource.agentId && source.path === ownSource.path,
+        )
+      ) {
+        candidates.unshift(ownSource);
+      }
+    }
+    const ownCandidate = candidates.find(
+      (source) => source.agentId === ownSource.agentId && source.path === ownSource.path,
+    );
+    const ownEntry = ownCandidate
+      ? readExactSessionEntryRow(projection.database, sessionKey, "list")?.entry
+      : undefined;
+    const entry = readGatewaySessionEntryFromSources(sessionKey, candidates, {
+      source: ownCandidate ?? ownSource,
+      entry: ownEntry,
+    });
+    let child = isSubagentSessionFromEntry(sessionKey, entry);
+    if (!child && entry && (entry.parentSessionKey || entry.spawnedBy) && stateDatabase) {
+      const acp = readAcpSessionMetaForEntry({
+        sessionKey,
+        agentId: parseAgentSessionKey(sessionKey)?.agentId,
+        entry,
+        databasePath: stateDatabase.path,
+        env: stateDatabase.environment,
+      });
+      child = isSubagentSessionFromEntry(sessionKey, entry, acp);
+    }
+    sources.set(sessionKey, child);
+    return child;
+  };
+  return (sessionKey) =>
+    sources.get(sessionKey) ?? readSnapshot((projection) => readSource(projection, sessionKey));
+}

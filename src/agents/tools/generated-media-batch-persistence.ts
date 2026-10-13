@@ -1,4 +1,4 @@
-import { deleteMediaBuffer, type SavedMedia } from "../../media/store.js";
+import { deleteMediaBuffer, saveMediaBuffer, type SavedMedia } from "../../media/store.js";
 
 type GeneratedMediaSave<T> = {
   value: T;
@@ -6,6 +6,28 @@ type GeneratedMediaSave<T> = {
 };
 
 type GeneratedMediaSaveMode = "concurrent" | "sequential";
+
+export function persistGeneratedMediaBuffers(params: {
+  assets: readonly { buffer: Buffer; mimeType: string; fileName?: string }[];
+  subdir: string;
+  maxBytes: number;
+  filename?: string;
+}): Promise<SavedMedia[]> {
+  return persistGeneratedMediaBatch({
+    subdir: params.subdir,
+    mode: "concurrent",
+    saves: params.assets.map((asset) => async () => {
+      const savedMedia = await saveMediaBuffer(
+        asset.buffer,
+        asset.mimeType,
+        params.subdir,
+        params.maxBytes,
+        params.filename || asset.fileName,
+      );
+      return { value: savedMedia, savedMedia };
+    }),
+  });
+}
 
 /** Gives generated-media batches all-or-nothing result semantics with best-effort rollback. */
 export async function persistGeneratedMediaBatch<T>(params: {

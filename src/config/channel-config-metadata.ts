@@ -7,6 +7,7 @@ import {
   SENSITIVE_URL_HINT_TAG,
 } from "@openclaw/net-policy/redact-sensitive-url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { ChannelDmAllowFromMode } from "../channels/plugins/dm-access.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
   getOfficialExternalPluginCatalogEntryForPackage,
@@ -14,6 +15,7 @@ import {
   resolveOfficialExternalPluginId,
 } from "../plugins/official-external-plugin-catalog.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
+import { collectPluginProviderRequestOwners } from "../plugins/plugin-provider-request-policy.js";
 import { widenOfficialExternalChannelSecretSchema } from "./official-external-channel-secret-schema.js";
 import type { ChannelUiMetadata, PluginUiMetadata } from "./schema.js";
 import { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
@@ -26,8 +28,6 @@ type ChannelSchemaMetadataWithOwnership = ChannelUiMetadata & {
 type ChannelMetadataRecord = ChannelSchemaMetadataWithOwnership & {
   originRank: number;
 };
-
-type ChannelDmAllowFromMode = "topOnly" | "topOrNested" | "nestedOnly";
 
 export type ChannelDmPolicyMetadata = {
   id: string;
@@ -159,6 +159,7 @@ function normalizeCoreOwnedChannelSchema(schema: Record<string, unknown>): Recor
 export function collectPluginSchemaMetadataCore(
   registry: PluginManifestRegistry,
 ): PluginUiMetadata[] {
+  const requestOwners = collectPluginProviderRequestOwners(registry.plugins);
   const deduped = new Map<
     string,
     PluginUiMetadata & {
@@ -181,7 +182,17 @@ export function collectPluginSchemaMetadataCore(
         (entry) => entry.path,
       ),
       configUiHints: record.configUiHints,
+      configGroups: record.configGroups,
       configSchema: record.configSchema,
+      providerRequest: record.providerRequest
+        ? {
+            providers: Object.fromEntries(
+              [...requestOwners]
+                .filter(([, owner]) => owner.plugin === record)
+                .map(([provider, { policy }]) => [provider, policy]),
+            ),
+          }
+        : undefined,
       originRank: nextRank,
     });
   }
@@ -200,10 +211,10 @@ function prepareChannelConfigSchema(
     if (schema !== undefined) {
       assertChannelConfigSchemaTraversalDepth(schema);
     }
-    if (origin === "bundled") {
-      return widenOfficialExternalChannelSecretSchema({ channelId, schema });
-    }
-    const coreOwnedSchema = schema === undefined ? schema : normalizeCoreOwnedChannelSchema(schema);
+    const coreOwnedSchema =
+      origin === "bundled" || schema === undefined
+        ? schema
+        : normalizeCoreOwnedChannelSchema(schema);
     return widenOfficialExternalChannelSecretSchema({ channelId, schema: coreOwnedSchema });
   } catch (error) {
     if (origin === "bundled") {
@@ -406,17 +417,11 @@ export function collectChannelDmPolicyMetadata(
     };
     const dmAllowFromMode = doctorCapabilities?.dmAllowFromMode;
     const openDmRequiresAllowFromWildcard = doctorCapabilities?.openDmRequiresAllowFromWildcard;
-    for (const channelId of record.channels) {
-      put(
-        channelId,
-        originRank,
-        record.id,
-        channelId === packageChannelId ? dmAllowFromMode : undefined,
-        channelId === packageChannelId ? openDmRequiresAllowFromWildcard : undefined,
-      );
-    }
-    put(packageChannelId, originRank, record.id, dmAllowFromMode, openDmRequiresAllowFromWildcard);
-    for (const channelId of Object.keys(record.channelConfigs ?? {})) {
+    for (const channelId of [
+      ...record.channels,
+      packageChannelId,
+      ...Object.keys(record.channelConfigs ?? {}),
+    ]) {
       put(
         channelId,
         originRank,

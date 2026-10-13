@@ -23,7 +23,7 @@ suite.define(() => {
           providerId: "crabbox",
           machines: [{ id: "standard", label: "Standard", cpu: 32, memoryGb: 64, default: true }],
         };
-        const disabledReason = "Upgrade Crabbox to 0.53.1 or newer, then restart the Gateway.";
+        const disabledReason = "Upgrade Crabbox to enable this operating system.";
         const gateway = await installMockGateway(page, {
           operatorScopes: ["operator.admin", "operator.read", "operator.write"],
           workspaceGit: true,
@@ -88,7 +88,13 @@ suite.define(() => {
         await page.locator(".new-session-page__message").fill("Continue on Linux");
         await page.getByRole("button", { name: "Start session" }).click();
         const dispatch = await gateway.waitForRequest("sessions.dispatch");
-        expect(dispatch.params).toEqual({ key: sessionKey, agentId: "main", profileId: "aws" });
+        expect(dispatch.params).toEqual({
+          key: sessionKey,
+          agentId: "main",
+          profileId: "aws",
+          os: "linux",
+          machineClass: "standard",
+        });
       },
     );
   });

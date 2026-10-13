@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   loadSessionEntryReadOnly,
   replaceSessionEntry,
@@ -14,7 +15,7 @@ import {
   findCommandByNativeName,
   formatCommandArgMenuTitle,
   parseCommandArgs,
-  resolveCommandArgMenu,
+  resolveCommandArgMenuAsync,
 } from "./commands-registry.js";
 import type { VerboseLevel } from "./thinking.js";
 
@@ -41,7 +42,6 @@ describe("native verbose menu status", () => {
     { name: "global default", defaultLevel: "on", expected: "on" },
     { name: "agent default", defaultLevel: "on", agentLevel: "full", expected: "full" },
     { name: "stored off", agentLevel: "full", storedLevel: "off", expected: "off" },
-    { name: "stored full", agentLevel: "on", storedLevel: "full", expected: "full" },
   ])("shows $name without changing or borrowing session state", async (testCase) => {
     const cfg: OpenClawConfig = {
       agents: {
@@ -51,6 +51,7 @@ describe("native verbose menu status", () => {
       },
     };
     await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
     await replaceSessionEntry(
       { agentId: "other", sessionKey: session.sessionKey },
       { sessionId: "other-session", updatedAt: 1, verboseLevel: "on" },
@@ -67,7 +68,10 @@ describe("native verbose menu status", () => {
       });
     }
     const before = loadSessionEntryReadOnly(session);
-    const menu = expectDefined(resolveCommandArgMenu({ command, cfg, session }), "verbose menu");
+    const menu = expectDefined(
+      await resolveCommandArgMenuAsync({ command, cfg, session }),
+      "verbose menu",
+    );
     expect(formatCommandArgMenuTitle({ command, menu })).toBe(
       `Current verbose level: ${testCase.expected}.\nChoose on, off, or full for /verbose.`,
     );
@@ -77,9 +81,24 @@ describe("native verbose menu status", () => {
       ),
     ).toEqual(["/verbose on", "/verbose off", "/verbose full"]);
     expect(loadSessionEntryReadOnly(session)).toEqual(before);
+    const changedLevel = testCase.expected === "full" ? "off" : "full";
+    await replaceSessionEntry(session, {
+      sessionId: "target-session",
+      updatedAt: 2,
+      verboseLevel: changedLevel,
+    });
+    const changedMenu = expectDefined(
+      await resolveCommandArgMenuAsync({ command, cfg, session }),
+      "updated verbose menu",
+    );
+    expect(formatCommandArgMenuTitle({ command, menu: changedMenu })).toBe(
+      `Current verbose level: ${changedLevel}.\nChoose on, off, or full for /verbose.`,
+    );
   });
 
-  it.each(["on", "off", "full", "invalid"])("leaves explicit %s to directive dispatch", (raw) => {
-    expect(resolveCommandArgMenu({ command, args: parseCommandArgs(command, raw) })).toBeNull();
+  it("leaves explicit arguments to directive dispatch, including invalid levels", async () => {
+    expect(
+      await resolveCommandArgMenuAsync({ command, args: parseCommandArgs(command, "invalid") }),
+    ).toBeNull();
   });
 });

@@ -1,4 +1,3 @@
-// Collects channel account status issues for diagnostics.
 import { Value } from "typebox/value";
 import { ChannelsStatusResultSchema } from "../../packages/gateway-protocol/src/schema/channels.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
@@ -13,6 +12,16 @@ import {
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
   evaluateChannelHealth,
 } from "../gateway/channel-health-policy.js";
+
+const RUNTIME_ISSUE_MESSAGES = new Map([
+  ["not-running", "Channel is enabled and configured, but its runtime is not running."],
+  ["disconnected", "Channel reports running, but the runtime is disconnected."],
+  [
+    "stale-socket",
+    "Channel reports connected, but transport activity is stale; inbound delivery may be broken.",
+  ],
+  ["stuck", "Channel runtime appears stuck with stale run activity."],
+]);
 
 function resolveIssueAccountId(account: ChannelAccountSnapshot): string {
   return typeof account.accountId === "string" && account.accountId.trim()
@@ -34,7 +43,7 @@ function collectGenericRuntimeStatusIssues(
     // Dead ingress outranks the restart-pending short-circuit: a pending restart
     // cannot fix a channel whose inbound admission is unavailable, and hiding it
     // behind "status may be stale" is how silent inbound loss stays invisible.
-    if (account.ingressUnavailable === true) {
+    if (account.ingressUnavailable === true && !account.terminalDisconnect) {
       issues.push({
         channel,
         accountId,
@@ -56,39 +65,25 @@ function collectGenericRuntimeStatusIssues(
     if (health.healthy) {
       continue;
     }
-    let message: string;
-    let fix = "restart the channel or gateway";
-    switch (health.reason) {
-      case "not-running":
-        // Older status snapshots can omit running; absence is not a stopped runtime.
-        if (account.running !== false) {
-          continue;
-        }
-        message = "Channel is enabled and configured, but its runtime is not running.";
-        break;
-      case "disconnected":
-        message = "Channel reports running, but the runtime is disconnected.";
-        break;
-      case "stale-socket":
-        message =
-          "Channel reports connected, but transport activity is stale; inbound delivery may be broken.";
-        break;
-      case "stuck":
-        message = "Channel runtime appears stuck with stale run activity.";
-        break;
-      case "blocked":
-        message = "Channel runtime is blocked and needs operator action.";
-        fix = "resolve the reported channel error, then restart the channel";
-        break;
-      default:
-        continue;
+    // Older status snapshots can omit running; absence is not a stopped runtime.
+    if (health.reason === "not-running" && account.running !== false) {
+      continue;
+    }
+    const blocked = health.reason === "terminal-disconnect" || health.reason === "blocked";
+    const message = blocked
+      ? account.lastError || "Channel runtime is blocked and needs operator action."
+      : RUNTIME_ISSUE_MESSAGES.get(health.reason);
+    if (message === undefined) {
+      continue;
     }
     issues.push({
       channel,
       accountId,
       kind: "runtime",
       message,
-      fix,
+      fix: blocked
+        ? "resolve the reported channel error, then restart the channel"
+        : "restart the channel or gateway",
     });
   }
   return issues;

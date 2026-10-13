@@ -1,7 +1,9 @@
 // Migrates OpenClaw-owned SQLite tables to canonical STRICT schemas.
 import type { DatabaseSync } from "node:sqlite";
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
+import { quoteSqliteIdentifier } from "./sqlite-schema-sql.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 
 type TableListRow = {
@@ -61,15 +63,16 @@ const DEFAULT_STRICT_MIGRATION_BUSY_TIMEOUT_MS = 5_000;
 const STRICT_MIGRATION_TABLE_PREFIX = "__openclaw_strict_migration_";
 const SQLITE_ROWID_ALIASES = ["_rowid_", "rowid", "oid"] as const;
 
-function quoteSqliteIdentifier(identifier: string): string {
-  return `"${identifier.replaceAll('"', '""')}"`;
-}
-
-function readMainTableList(db: DatabaseSync): TableListRow[] {
+export function readMainTableList(db: DatabaseSync): Array<TableListRow & { name: string }> {
   return (db.prepare("PRAGMA table_list").all() as TableListRow[]).filter(
-    (row) =>
+    (row): row is TableListRow & { name: string } =>
       row.schema === "main" && typeof row.name === "string" && !row.name.startsWith("sqlite_"),
   );
+}
+
+/** Canonical bootstrap needs no legacy rebuild when every ordinary table is already STRICT. */
+export function hasNonStrictSqliteTables(db: DatabaseSync): boolean {
+  return readMainTableList(db).some((row) => row.type === "table" && Number(row.strict) !== 1);
 }
 
 function readTableColumns(db: DatabaseSync, tableName: string): TableColumnRow[] {
@@ -130,9 +133,7 @@ function readCanonicalStrictTables(schemaSql: string): CanonicalStrictTable[] {
   try {
     canonical.exec(schemaSql);
     const tables = readMainTableList(canonical).filter((row) => row.type === "table");
-    const nonStrict = tables.flatMap((row) =>
-      Number(row.strict ?? 0) === 1 || typeof row.name !== "string" ? [] : [row.name],
-    );
+    const nonStrict = tables.filter((row) => Number(row.strict ?? 0) !== 1).map((row) => row.name);
     if (nonStrict.length > 0) {
       throw new Error(
         `Canonical SQLite schema contains non-STRICT tables: ${nonStrict.toSorted().join(", ")}`,
@@ -140,9 +141,6 @@ function readCanonicalStrictTables(schemaSql: string): CanonicalStrictTable[] {
     }
     return tables
       .map((row) => {
-        if (typeof row.name !== "string") {
-          throw new Error("Canonical SQLite schema contains an unnamed table");
-        }
         const schemaRow = canonical
           .prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ?")
           .get(row.name) as { sql?: unknown } | undefined;
@@ -202,7 +200,7 @@ function readPreservedSchemaObjects(
     });
 }
 
-function readAutoincrementHighWater(db: DatabaseSync, tableName: string): string | null {
+export function readAutoincrementHighWater(db: DatabaseSync, tableName: string): string | null {
   const sequenceTable = db
     .prepare(
       "SELECT 1 AS found FROM sqlite_schema WHERE type = 'table' AND name = 'sqlite_sequence'",
@@ -226,7 +224,7 @@ function readAutoincrementHighWater(db: DatabaseSync, tableName: string): string
   return normalized;
 }
 
-function restoreAutoincrementHighWater(
+export function restoreAutoincrementHighWater(
   db: DatabaseSync,
   tableName: string,
   previousHighWater: string | null,
@@ -272,6 +270,26 @@ function readForeignKeysEnabled(db: DatabaseSync): boolean {
   return Number(row?.foreign_keys ?? 0) === 1;
 }
 
+/** Temporarily relax foreign keys around synchronous staging work, outside a transaction. */
+export function withSqliteForeignKeysDisabled<T>(db: DatabaseSync, fn: () => T): T {
+  if (db.isTransaction) {
+    throw new Error("SQLite foreign-key enforcement cannot change inside a transaction");
+  }
+  const enabled = readForeignKeysEnabled(db);
+  db.exec("PRAGMA foreign_keys = OFF;");
+  try {
+    const result = fn();
+    if (isPromiseLike(result)) {
+      throw new Error(
+        "SQLite foreign-key scope must be synchronous; Promise returns are not supported",
+      );
+    }
+    return result;
+  } finally {
+    db.exec(enabled ? "PRAGMA foreign_keys = ON;" : "PRAGMA foreign_keys = OFF;");
+  }
+}
+
 /**
  * Rebuild canonical non-STRICT tables inside the caller's transaction.
  * Foreign-key enforcement must be disabled before BEGIN; integrity is checked
@@ -289,8 +307,8 @@ export function migrateSqliteSchemaToStrictInTransaction(
   db.exec(schemaSql);
   const currentTableRows = new Map(
     readMainTableList(db)
-      .filter((row) => row.type === "table" && typeof row.name === "string")
-      .map((row) => [row.name as string, row]),
+      .filter((row) => row.type === "table")
+      .map((row) => [row.name, row]),
   );
   const tablesToMigrate = canonicalTables.filter(
     (table) => Number(currentTableRows.get(table.name)?.strict ?? 0) !== 1,
@@ -306,14 +324,11 @@ export function migrateSqliteSchemaToStrictInTransaction(
   const preservedObjects = readPreservedSchemaObjects(db, names);
   // SQLite reparses every trigger and view during ALTER TABLE. Temporarily
   // remove them so a referenced table can be absent between DROP and RENAME.
-  for (const object of preservedObjects) {
-    if (object.type === "trigger") {
-      db.exec(`DROP TRIGGER ${quoteSqliteIdentifier(object.name)};`);
-    }
-  }
-  for (const object of preservedObjects) {
-    if (object.type === "view") {
-      db.exec(`DROP VIEW ${quoteSqliteIdentifier(object.name)};`);
+  for (const type of ["trigger", "view"] as const) {
+    for (const object of preservedObjects) {
+      if (object.type === type) {
+        db.exec(`DROP ${type.toUpperCase()} ${quoteSqliteIdentifier(object.name)};`);
+      }
     }
   }
   for (const [index, table] of tablesToMigrate.entries()) {

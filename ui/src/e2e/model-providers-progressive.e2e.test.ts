@@ -1,11 +1,12 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { chromium, type Browser } from "playwright";
 import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { ModelCatalogResult } from "../api/types.ts";
 import type { ApplicationRouter } from "../app-routes.ts";
-import type { ApplicationContext } from "../app/context.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   canRunPlaywrightChromium,
@@ -15,6 +16,8 @@ import {
   waitForControlUiRoute,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
+import { pickerValue } from "../test-helpers/select-picker-e2e.ts";
+import { requestRaw, resolveConfigMutation } from "./model-providers.test-support.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
@@ -243,11 +246,8 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
       await page.goto(`${server.baseUrl}settings/appearance`);
       await waitForControlUiRoute(page, { routeId: "appearance" });
       await gateway.waitForRequest("config.get");
-      await page.evaluate(async () => {
-        const app = document.querySelector<
-          HTMLElement & { runtime: { router: ApplicationRouter } }
-        >("openclaw-app");
-        const route = app?.runtime.router.getRoute("model-providers");
+      await evaluateControlUiContext(page, async (application) => {
+        const route = (application.router as ApplicationRouter).getRoute("model-providers");
         if (!route) {
           throw new Error("Models route is unavailable");
         }
@@ -270,38 +270,31 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
       const trigger = picker.locator(".picker-select__trigger");
       await trigger.click();
       await picker.locator('[role="option"][data-value="fixture/chosen"]').click();
-      await gateway.waitForRequest("config.patch");
-      await gateway.setMethodResponse("config.get", snapshot(saved, "saved-settings"));
-      await gateway.setMethodResponse("models.list", {
+      expect(requestRaw(await gateway.waitForRequest("config.patch"))).toMatchObject({
+        agents: { defaults: { model: "fixture/chosen" } },
+      });
+      const currentCatalog: ModelCatalogResult = {
         models: [
           ...models,
           { id: "added", name: "Added model", provider: "fixture", available: true },
         ],
         defaultModels: { automaticUtilityModel: "fixture/chosen" },
-      });
-      await gateway.resolveDeferred("config.patch", {
-        ok: true,
-        config: saved,
-        hash: "saved-settings",
-      });
+      };
+      await gateway.setMethodResponse("models.list", currentCatalog);
+      await resolveConfigMutation(gateway, saved, "saved-settings");
+      await gateway.emitGatewayEvent("chat.metadata.changed", {});
       await expect.poll(() => trigger.isEnabled()).toBe(true);
-      expect(await defaults.getByText("Defaults saved.", { exact: true }).count()).toBe(0);
-      await gateway.resolveDeferred("models.authStatus");
-      await waitForControlUiRoute(page, { routeId: "model-providers" });
-      await page.evaluate(
-        () =>
-          new Promise<void>((resolve) => {
-            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-          }),
-      );
-      expect(await trigger.textContent()).toContain("Chosen model");
-      expect(await defaults.locator("#model-providers-utility-model").textContent()).toContain(
-        "Auto · Chosen model",
-      );
+      expect(await pickerValue(picker)).toBe("fixture/chosen");
       await trigger.click();
       await expect
         .poll(() => picker.locator('[role="option"][data-value="fixture/added"]').isVisible())
         .toBe(true);
+      await gateway.resolveDeferred("models.authStatus");
+      await waitForControlUiRoute(page, { routeId: "model-providers" });
+      expect(await pickerValue(picker)).toBe("fixture/chosen");
+      expect(await picker.locator('[role="option"][data-value="fixture/added"]').isVisible()).toBe(
+        true,
+      );
     } finally {
       await context.close();
     }
@@ -341,11 +334,8 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
       await page.goto(`${server.baseUrl}settings/appearance`);
       await waitForControlUiRoute(page, { routeId: "appearance" });
       await gateway.waitForRequest("config.get");
-      await page.evaluate(async () => {
-        const app = document.querySelector<
-          HTMLElement & { runtime: { router: ApplicationRouter } }
-        >("openclaw-app");
-        const route = app?.runtime.router.getRoute("model-providers");
+      await evaluateControlUiContext(page, async (application) => {
+        const route = (application.router as ApplicationRouter).getRoute("model-providers");
         if (!route) {
           throw new Error("Models route is unavailable");
         }
@@ -368,38 +358,31 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
       const trigger = picker.locator(".picker-select__trigger");
       await trigger.click();
       await picker.locator('[role="option"][data-value="fixture/chosen"]').click();
-      await gateway.waitForRequest("config.patch");
-      await gateway.setMethodResponse("config.get", snapshot(saved, "saved-settings"));
-      await gateway.setMethodResponse("models.list", {
+      expect(requestRaw(await gateway.waitForRequest("config.patch"))).toMatchObject({
+        agents: { defaults: { model: "fixture/chosen" } },
+      });
+      const currentCatalog: ModelCatalogResult = {
         models: [
           models[1]!,
           { id: "added", name: "Added model", provider: "fixture", available: true },
         ],
         defaultModels: { automaticUtilityModel: "fixture/chosen" },
-      });
-      await gateway.resolveDeferred("config.patch", {
-        ok: true,
-        config: saved,
-        hash: "saved-settings",
-      });
+      };
+      await gateway.setMethodResponse("models.list", currentCatalog);
+      await resolveConfigMutation(gateway, saved, "saved-settings");
+      await gateway.emitGatewayEvent("chat.metadata.changed", {});
       await expect.poll(() => trigger.isEnabled()).toBe(true);
-      expect(await defaults.getByText("Defaults saved.", { exact: true }).count()).toBe(0);
-      await gateway.resolveDeferred("models.authStatus");
-      await waitForControlUiRoute(page, { routeId: "model-providers" });
-      await page.evaluate(
-        () =>
-          new Promise<void>((resolve) => {
-            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-          }),
-      );
-      expect(await trigger.textContent()).toContain("Chosen model");
-      expect(await defaults.locator("#model-providers-utility-model").textContent()).toContain(
-        "Auto · Chosen model",
-      );
+      expect(await pickerValue(picker)).toBe("fixture/chosen");
       await trigger.click();
       await expect
         .poll(() => picker.locator('[role="option"][data-value="fixture/added"]').isVisible())
         .toBe(true);
+      await gateway.resolveDeferred("models.authStatus");
+      await waitForControlUiRoute(page, { routeId: "model-providers" });
+      expect(await pickerValue(picker)).toBe("fixture/chosen");
+      expect(await picker.locator('[role="option"][data-value="fixture/added"]').isVisible()).toBe(
+        true,
+      );
       expect(await picker.locator('[role="option"][data-value="fixture/initial"]').count()).toBe(0);
       const reads = (await gateway.getRequests("models.list")).length;
       await gateway.deferNext("models.list");
@@ -412,9 +395,7 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
       expect(await picker.locator('[role="option"][data-value="fixture/added"]').isVisible()).toBe(
         true,
       );
-      expect(await defaults.locator("#model-providers-utility-model").textContent()).toContain(
-        "Auto · Chosen model",
-      );
+      expect(await pickerValue(picker)).toBe("fixture/chosen");
       expect(await page.locator(".model-providers__catalog-progress").count()).toBe(0);
       if (recordVisuals) {
         await writeFile(
@@ -433,7 +414,6 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
     const page = await context.newPage();
     const previous = { agents: { defaults: { model: "fixture/previous" } } };
     const current = { agents: { defaults: { model: "fixture/current" } } };
-    const saved = { agents: { defaults: { model: "fixture/chosen" } } };
     const previousModel = {
       id: "previous",
       name: "Previous connection model",
@@ -442,7 +422,6 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
     };
     const currentModels = [
       { id: "current", name: "Current connection model", provider: "fixture", available: true },
-      { id: "chosen", name: "Chosen model", provider: "fixture", available: true },
     ];
     const snapshot = (config: typeof previous, hash: string) => ({
       config,
@@ -466,7 +445,7 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
       const defaults = page.locator(".model-providers__defaults");
       const picker = defaults.locator("openclaw-select-picker").first();
       const trigger = picker.locator(".picker-select__trigger");
-      await expect.poll(() => trigger.textContent()).toContain("Previous connection model");
+      await expect.poll(() => pickerValue(picker)).toBe("fixture/previous");
       await expect.poll(() => trigger.isEnabled()).toBe(true);
 
       const configReads = (await gateway.getRequests("config.get")).length;
@@ -478,14 +457,8 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
         models: currentModels,
         defaultModels: { automaticUtilityModel: "fixture/current" },
       });
-      await page.evaluate(() => {
-        const app = document.querySelector<
-          HTMLElement & { runtime: { context: ApplicationContext } }
-        >("openclaw-app");
-        if (!app) {
-          throw new Error("Application is unavailable");
-        }
-        app.runtime.context.gateway.connect();
+      await evaluateControlUiContext(page, (application) => {
+        application.gateway.connect();
       });
       await gateway.waitForRequest("config.get", { after: configReads });
       await gateway.emitGatewayEvent("models.snapshot", {
@@ -499,12 +472,10 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
       await gateway.rejectDeferred("config.get", { message: "Current config is unavailable." });
       await expect
         .poll(() =>
-          page.evaluate(() => {
-            const app = document.querySelector<
-              HTMLElement & { runtime: { context: ApplicationContext } }
-            >("openclaw-app");
-            return app?.runtime.context.runtimeConfig.state.lastError;
-          }),
+          evaluateControlUiContext(
+            page,
+            (application) => application.runtimeConfig.state.lastError,
+          ),
         )
         .toContain("Current config is unavailable.");
       if (recordVisuals) {
@@ -513,8 +484,12 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
           await takeControlUiViewportScreenshot(page, page.locator(".shell"), [defaults]),
         );
       }
-      await expect.poll(() => trigger.isEnabled()).toBe(false);
-      expect(await trigger.textContent()).not.toContain("Previous connection model");
+      await trigger.click();
+      const currentOption = picker.locator('[role="option"][data-value="fixture/current"]');
+      expect(await currentOption.getAttribute("aria-disabled")).toBe("true");
+      await currentOption.click({ force: true });
+      await trigger.click();
+      expect(await pickerValue(picker)).toBe("");
       expect(await defaults.locator("#model-providers-utility-model").textContent()).toContain(
         "Auto · Current connection model",
       );
@@ -522,33 +497,11 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
       await gateway.setMethodResponse("config.get", snapshot(current, "current-settings"));
       await page.locator(".model-providers__refresh-button").click();
       await expect.poll(() => trigger.isEnabled()).toBe(true);
-      await expect.poll(() => trigger.textContent()).toContain("Current connection model");
+      await expect.poll(() => pickerValue(picker)).toBe("fixture/current");
       await trigger.click();
       expect(await picker.locator('[role="option"][data-value="fixture/previous"]').count()).toBe(
         0,
       );
-      await gateway.deferNext("config.patch");
-      await gateway.deferNext("config.get");
-      await picker.locator('[role="option"][data-value="fixture/chosen"]').click();
-      await gateway.waitForRequest("config.patch");
-      const savedConfigReads = (await gateway.getRequests("config.get")).length;
-      await gateway.resolveDeferred("config.patch", {
-        ok: true,
-        config: saved,
-        hash: "saved-settings",
-      });
-      await gateway.waitForRequest("config.get", { after: savedConfigReads });
-      await gateway.rejectDeferred("config.get", { message: "Saved config could not refresh." });
-      await expect.poll(() => defaults.textContent()).toContain("Saved config could not refresh.");
-      await expect.poll(() => trigger.isEnabled()).toBe(true);
-      expect(await trigger.textContent()).toContain("Chosen model");
-      expect(await defaults.getByText("Defaults saved.", { exact: true }).count()).toBe(0);
-      if (recordVisuals) {
-        await writeFile(
-          path.join(artifactDir, "config-save-warning-editable.png"),
-          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [defaults]),
-        );
-      }
     } finally {
       await context.close();
     }
@@ -582,7 +535,12 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
       const defaults = page.locator(".model-providers__defaults");
       const picker = defaults.locator("openclaw-select-picker").first();
       const trigger = picker.locator(".picker-select__trigger");
-      await expect.poll(() => trigger.isEnabled()).toBe(false);
+      await trigger.click();
+      const currentOption = picker.locator('[role="option"][data-value="fixture/current"]');
+      expect(await currentOption.getAttribute("aria-disabled")).toBe("true");
+      await currentOption.click({ force: true });
+      expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+      await trigger.click();
       const configReads = (await gateway.getRequests("config.get")).length;
       await page.locator(".model-providers__refresh-button").click();
       await gateway.waitForRequest("config.get", { after: configReads });
@@ -608,7 +566,7 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
   });
 
   it.each(["snapshot", "ordinary"] as const)(
-    "opens the Models route from %s catalog publication while auth is pending",
+    "opens the Models route from %s catalog publication and refreshes after overlapping reads",
     async (publicationKind) => {
       const context = await browser.newContext({ locale: "en-US", serviceWorkers: "block" });
       const page = await context.newPage();
@@ -641,7 +599,13 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
           await waitForControlUiRoute(page, { routeId: "appearance" });
           await page.locator('a[href="/settings/model-providers"]').first().click();
         }
-        await gateway.waitForRequest("models.list");
+        // Appearance can start a prepared-only read before navigation. Release the
+        // held catalog only after the Models page has admitted its own projection.
+        const routeCatalogRequests = async () =>
+          (await gateway.getRequests("models.list")).filter(
+            (request) => asNullableRecord(request.params)?.preparedOnly !== true,
+          );
+        await expect.poll(async () => (await routeCatalogRequests()).length).toBe(1);
         const publication = {
           target: {},
           scope: { agentId: "main" },
@@ -663,7 +627,7 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
         await expect.poll(() => preparedRow.isVisible()).toBe(true);
         await expect.poll(() => preparedRow.textContent()).toContain("Prepared model");
         expect(await preparedRow.isEnabled()).toBe(true);
-        expect(await gateway.getRequests("models.list")).toHaveLength(1);
+        expect(await routeCatalogRequests()).toHaveLength(1);
 
         await gateway.resolveDeferred("models.authStatus");
         await waitForControlUiRoute(page, { routeId: "model-providers" });
@@ -673,19 +637,25 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
           await gateway.resolveDeferred("models.list", { models: [older] });
         }
         await expect.poll(() => preparedRow.isVisible()).toBe(true);
-        expect(await picker.locator('[data-value="fixture/older"]').count()).toBe(0);
 
-        await gateway.deferNext("models.list");
-        await gateway.emitGatewayEvent("chat.metadata.changed", {});
-        await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(2);
-        expect(await trigger.getAttribute("aria-expanded")).toBe("true");
+        const beforeRefresh = await gateway.deferNext("models.list", { refresh: true });
+        await page.locator(".model-providers__refresh-button").click();
+        const refreshed = await gateway.waitForRequest("models.list", {
+          after: beforeRefresh,
+          match: { refresh: true },
+        });
+        expect(refreshed.params).toMatchObject({ agentId: "main", refresh: true });
         await gateway.resolveDeferred("models.list", {
           models: [prepared, added],
           defaultModels: { automaticUtilityModel: "fixture/added" },
         });
+        if ((await trigger.getAttribute("aria-expanded")) !== "true") {
+          await trigger.click();
+        }
         await expect
           .poll(() => picker.locator('[role="option"][data-value="fixture/added"]').isVisible())
           .toBe(true);
+        expect(await picker.locator('[data-value="fixture/older"]').count()).toBe(0);
         expect(await trigger.getAttribute("aria-expanded")).toBe("true");
       } finally {
         await context.close();
@@ -778,11 +748,11 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
           await waitForControlUiRoute(page, { routeId: "appearance" });
           await gateway.deferNext("models.authStatus");
           previousAuthLoads = (await gateway.getRequests("models.authStatus")).length;
-          await page.evaluate(async () => {
-            const app = document.querySelector<
-              HTMLElement & { runtime: { router: ApplicationRouter } }
-            >("openclaw-app");
-            const route = app?.runtime.router.getRoute("model-providers");
+          if (moduleState === "cached") {
+            await gateway.emitGatewayEvent("chat.metadata.changed", {});
+          }
+          await evaluateControlUiContext(page, async (application) => {
+            const route = (application.router as ApplicationRouter).getRoute("model-providers");
             if (!route) {
               throw new Error("Models route is unavailable");
             }

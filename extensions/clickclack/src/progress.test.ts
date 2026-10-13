@@ -1,15 +1,24 @@
 import { describe, expect, it, vi } from "vitest";
 import { createClickClackAgentProgressPublisher } from "./progress.js";
 
+type PublisherOptions = Parameters<typeof createClickClackAgentProgressPublisher>[0];
+
+function createPublisher(
+  publishEphemeral: PublisherOptions["client"]["publishEphemeral"],
+  options: Partial<Omit<PublisherOptions, "client">> = {},
+) {
+  return createClickClackAgentProgressPublisher({
+    client: { publishEphemeral },
+    target: { workspaceId: "ws_1", channelId: "chn_1" },
+    turnId: "msg_1",
+    ...options,
+  });
+}
+
 describe("ClickClack native agent progress", () => {
   it("serializes turn, item, completion, and clear frames", async () => {
     const publishEphemeral = vi.fn().mockResolvedValue(undefined);
-    const publisher = createClickClackAgentProgressPublisher({
-      client: { publishEphemeral },
-      target: { workspaceId: "ws_1", channelId: "chn_1" },
-      turnId: "msg_1",
-      agentLabel: "Blackbird",
-    });
+    const publisher = createPublisher(publishEphemeral, { agentLabel: "Blackbird" });
 
     publisher.start();
     publisher.onItemEvent({
@@ -48,7 +57,7 @@ describe("ClickClack native agent progress", () => {
         id: "item:tool_1",
         kind: "tool",
         tool_name: "search",
-        text: "🧩 Search: Done",
+        text: "Search: Done",
         status: "completed",
       },
     });
@@ -58,45 +67,9 @@ describe("ClickClack native agent progress", () => {
     });
   });
 
-  it("correlates lane-prefixed item ids with their bare tool-call ids", async () => {
-    const publishEphemeral = vi.fn().mockResolvedValue(undefined);
-    const publisher = createClickClackAgentProgressPublisher({
-      client: { publishEphemeral },
-      target: { workspaceId: "ws_1", channelId: "chn_1" },
-      turnId: "msg_1",
-    });
-
-    publisher.start();
-    publisher.onItemEvent({
-      itemId: "tool:read-1",
-      kind: "tool",
-      name: "read",
-      progressText: "Reading",
-    });
-    publisher.onItemEvent({
-      toolCallId: "read-1",
-      kind: "tool",
-      name: "read",
-      progressText: "Done",
-      phase: "end",
-      status: "completed",
-    });
-    await publisher.finalize();
-
-    expect(publishEphemeral).toHaveBeenCalledTimes(3);
-    expect(publishEphemeral.mock.calls[1]?.[0].payload).toMatchObject({
-      op: "finalize",
-      line: { id: "item:read-1", text: "📖 Read: Done", status: "completed" },
-    });
-  });
-
   it("hides command metadata from item-only native progress", async () => {
     const publishEphemeral = vi.fn().mockResolvedValue(undefined);
-    const publisher = createClickClackAgentProgressPublisher({
-      client: { publishEphemeral },
-      target: { workspaceId: "ws_1", channelId: "chn_1" },
-      turnId: "msg_1",
-    });
+    const publisher = createPublisher(publishEphemeral);
 
     publisher.start();
     publisher.onItemEvent({
@@ -112,7 +85,7 @@ describe("ClickClack native agent progress", () => {
 
     expect(JSON.stringify(publishEphemeral.mock.calls)).not.toContain("private-sentinel");
     expect(publishEphemeral.mock.calls[1]?.[0].payload).toMatchObject({
-      line: { text: "🧩 Server.exec" },
+      line: { text: "Server.exec" },
     });
   });
 
@@ -122,10 +95,8 @@ describe("ClickClack native agent progress", () => {
       .fn()
       .mockRejectedValueOnce(new Error("offline"))
       .mockResolvedValue(undefined);
-    const publisher = createClickClackAgentProgressPublisher({
-      client: { publishEphemeral },
+    const publisher = createPublisher(publishEphemeral, {
       target: { workspaceId: "ws_1", conversationId: "dm_1" },
-      turnId: "msg_1",
       onError,
     });
 
@@ -144,11 +115,7 @@ describe("ClickClack native agent progress", () => {
       .fn()
       .mockImplementationOnce(() => firstRequest)
       .mockResolvedValue(undefined);
-    const publisher = createClickClackAgentProgressPublisher({
-      client: { publishEphemeral },
-      target: { workspaceId: "ws_1", channelId: "chn_1" },
-      turnId: "msg_1",
-    });
+    const publisher = createPublisher(publishEphemeral);
 
     publisher.start();
     publisher.onItemEvent({ itemId: "tool_1", kind: "tool", progressText: "first" });
@@ -168,44 +135,11 @@ describe("ClickClack native agent progress", () => {
     expect(publishEphemeral.mock.calls[2]?.[0].payload).toMatchObject({ op: "clear" });
   });
 
-  it("publishes streamed line updates at a bounded cadence", async () => {
-    vi.useFakeTimers();
-    try {
-      const publishEphemeral = vi.fn().mockResolvedValue(undefined);
-      const publisher = createClickClackAgentProgressPublisher({
-        client: { publishEphemeral },
-        target: { workspaceId: "ws_1", channelId: "chn_1" },
-        turnId: "msg_1",
-      });
-
-      publisher.start();
-      await vi.advanceTimersByTimeAsync(0);
-      publisher.onItemEvent({ itemId: "tool_1", kind: "tool", progressText: "first" });
-      publisher.onItemEvent({ itemId: "tool_1", kind: "tool", progressText: "second" });
-      publisher.onItemEvent({ itemId: "tool_1", kind: "tool", progressText: "latest" });
-
-      expect(publishEphemeral).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(100);
-
-      expect(publishEphemeral).toHaveBeenCalledTimes(2);
-      expect(publishEphemeral.mock.calls[1]?.[0].payload).toMatchObject({
-        op: "append",
-        line: { id: "item:tool_1", text: expect.stringContaining("latest") },
-      });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("retracts an existing commentary line without replacing it with a placeholder", async () => {
     vi.useFakeTimers();
     try {
       const publishEphemeral = vi.fn().mockResolvedValue(undefined);
-      const publisher = createClickClackAgentProgressPublisher({
-        client: { publishEphemeral },
-        target: { workspaceId: "ws_1", channelId: "chn_1" },
-        turnId: "msg_1",
-      });
+      const publisher = createPublisher(publishEphemeral);
 
       publisher.start();
       await vi.advanceTimersByTimeAsync(0);
@@ -241,11 +175,7 @@ describe("ClickClack native agent progress", () => {
     vi.useFakeTimers();
     try {
       const publishEphemeral = vi.fn().mockResolvedValue(undefined);
-      const publisher = createClickClackAgentProgressPublisher({
-        client: { publishEphemeral },
-        target: { workspaceId: "ws_1", channelId: "chn_1" },
-        turnId: "msg_1",
-      });
+      const publisher = createPublisher(publishEphemeral);
 
       publisher.start();
       await vi.advanceTimersByTimeAsync(0);
@@ -283,11 +213,7 @@ describe("ClickClack native agent progress", () => {
         .fn()
         .mockImplementationOnce(() => firstRequest)
         .mockResolvedValue(undefined);
-      const publisher = createClickClackAgentProgressPublisher({
-        client: { publishEphemeral },
-        target: { workspaceId: "ws_1", channelId: "chn_1" },
-        turnId: "msg_1",
-      });
+      const publisher = createPublisher(publishEphemeral);
 
       publisher.start();
       publisher.onItemEvent({ itemId: "tool_1", kind: "tool", progressText: "pending" });

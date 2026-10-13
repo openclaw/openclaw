@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import {
   chatSessionListResponse,
   createChatFlowE2eSuite,
@@ -64,7 +65,7 @@ suite.define(() => {
 
       const main = page.getByRole("main");
       await main.locator('[data-chat-model-select="true"]').click();
-      await main.locator('[data-chat-model-option="openai/gpt-5.6-sol"]').click();
+      await selectChatModelOption(main.locator('[data-chat-model-option="openai/gpt-5.6-sol"]'));
 
       const modelPatch = await gateway.waitForRequest("sessions.patch");
       expect(requireRecord(modelPatch.params)).toMatchObject({

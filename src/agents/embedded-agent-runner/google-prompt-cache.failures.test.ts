@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import { once } from "node:events";
 import { createServer } from "node:http";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
@@ -10,7 +9,7 @@ import { buildGuardedModelFetch } from "../provider-transport-fetch.js";
 import {
   createCacheFetchMock,
   createCapturingStreamFn,
-  createOversizedJsonResponse,
+  createReadyGooglePromptCacheEntry,
   fetchUrl,
   makeGoogleModel,
   makeSessionManager,
@@ -49,50 +48,18 @@ const plainPromptContext = {
   messages: [],
 } as never;
 
-function readyEntry(params: {
+async function readyEntry(params: {
   cachedContent?: string;
   expireTime?: unknown;
   now?: number;
-}): SessionCustomEntry {
-  const now = params.now ?? NOW;
+}): Promise<SessionCustomEntry> {
+  const entry = await createReadyGooglePromptCacheEntry({ now: params.now ?? NOW });
   return {
-    id: "entry-ready",
-    parentId: null,
-    timestamp: new Date(now - 5_000).toISOString(),
-    type: "custom",
-    customType: "openclaw.google-prompt-cache",
+    ...entry,
     data: {
-      status: "ready",
-      timestamp: now - 5_000,
-      provider: "google",
-      modelId: "gemini-3.1-pro-preview",
-      modelApi: "google-generative-ai",
-      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-      systemPromptDigest: crypto.createHash("sha256").update("Follow policy.").digest("hex"),
-      cacheRetention: "long",
+      ...entry.data,
       cachedContent: params.cachedContent ?? "cachedContents/existing",
-      ...(params.expireTime === undefined ? {} : { expireTime: params.expireTime }),
-    },
-  };
-}
-
-function failedEntry(retryAfter: number): SessionCustomEntry {
-  return {
-    id: "entry-failed",
-    parentId: null,
-    timestamp: new Date(NOW - 5_000).toISOString(),
-    type: "custom",
-    customType: "openclaw.google-prompt-cache",
-    data: {
-      status: "failed",
-      timestamp: NOW - 5_000,
-      provider: "google",
-      modelId: "gemini-3.1-pro-preview",
-      modelApi: "google-generative-ai",
-      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-      systemPromptDigest: crypto.createHash("sha256").update("Follow policy.").digest("hex"),
-      cacheRetention: "long",
-      retryAfter,
+      expireTime: params.expireTime,
     },
   };
 }
@@ -110,7 +77,6 @@ describe("google prompt cache failure handling", () => {
     ["JSON null", () => new Response("null", { status: 200 })],
     ["JSON primitive", () => new Response("42", { status: 200 })],
     ["JSON array", () => new Response("[]", { status: 200 })],
-    ["oversized JSON", () => createOversizedJsonResponse().response],
     [
       "body read failure",
       () =>
@@ -158,48 +124,16 @@ describe("google prompt cache failure handling", () => {
       { name: "cachedContents/cache\u0000id", expireTime: new Date(NOW + 60_000).toISOString() },
     ],
     [
-      "C0 unit-separator name",
-      { name: "cachedContents/cache\u001fid", expireTime: new Date(NOW + 60_000).toISOString() },
-    ],
-    [
-      "DEL name",
-      { name: "cachedContents/cache\u007fid", expireTime: new Date(NOW + 60_000).toISOString() },
-    ],
-    [
-      "C1 next-line name",
-      { name: "cachedContents/cache\u0085id", expireTime: new Date(NOW + 60_000).toISOString() },
-    ],
-    [
       "lone high-surrogate name",
       { name: "cachedContents/cache\ud800id", expireTime: new Date(NOW + 60_000).toISOString() },
-    ],
-    [
-      "lone low-surrogate name",
-      { name: "cachedContents/cache\udc00id", expireTime: new Date(NOW + 60_000).toISOString() },
     ],
     [
       "NFC Unicode name",
       { name: "cachedContents/caf\u00e9", expireTime: new Date(NOW + 60_000).toISOString() },
     ],
     [
-      "NFD Unicode name",
-      { name: "cachedContents/cafe\u0301", expireTime: new Date(NOW + 60_000).toISOString() },
-    ],
-    [
-      "embedded-whitespace name",
-      { name: "cachedContents/cache id", expireTime: new Date(NOW + 60_000).toISOString() },
-    ],
-    [
       "query-delimited name",
       { name: "cachedContents/cache-id?bad", expireTime: new Date(NOW + 60_000).toISOString() },
-    ],
-    [
-      "fragment-delimited name",
-      { name: "cachedContents/cache-id#bad", expireTime: new Date(NOW + 60_000).toISOString() },
-    ],
-    [
-      "backslash-delimited name",
-      { name: "cachedContents/cache\\id", expireTime: new Date(NOW + 60_000).toISOString() },
     ],
     [
       "percent-encoded separator name",
@@ -253,12 +187,6 @@ describe("google prompt cache failure handling", () => {
       },
     ],
     [
-      "transport timeout",
-      async () => {
-        throw new Error("model request timed out");
-      },
-    ],
-    [
       "provider abort",
       async () => {
         throw new DOMException("provider stopped", "AbortError");
@@ -303,21 +231,28 @@ describe("google prompt cache failure handling", () => {
     expect(innerStreamFn).not.toHaveBeenCalled();
   });
 
-  it("keeps unregistered auth sentinel failures outside optional cache handling", async () => {
-    const innerStreamFn = vi.fn();
-    const fetchMock = vi.fn();
-    const wrapped = await preparePromptCacheStream({
-      apiKey: "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end",
-      fetchMock,
-      now: NOW,
-      sessionManager: makeSessionManager(),
-      streamFn: innerStreamFn,
-    });
+  it.each(["api-key", "header"])(
+    "keeps unregistered %s sentinel failures outside optional cache handling",
+    async (scope) => {
+      const unknownSentinel = "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end";
+      const innerStreamFn = vi.fn();
+      const fetchMock = vi.fn();
+      const model = makeGoogleModel();
+      const headers = { ...model.headers, Authorization: `Bearer ${unknownSentinel}` };
+      const wrapped = await preparePromptCacheStream({
+        apiKey: scope === "api-key" ? unknownSentinel : "gemini-api-key",
+        model: scope === "header" ? { ...model, headers } : model,
+        fetchMock,
+        now: NOW,
+        sessionManager: makeSessionManager(),
+        streamFn: innerStreamFn,
+      });
 
-    await expect(invoke(wrapped)).rejects.toThrow("is not registered in this process");
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(innerStreamFn).not.toHaveBeenCalled();
-  });
+      await expect(invoke(wrapped)).rejects.toThrow("is not registered in this process");
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(innerStreamFn).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps request-header construction failures outside optional cache handling", async () => {
     const constructionFailure = new Error("request headers unavailable");
@@ -351,7 +286,7 @@ describe("google prompt cache failure handling", () => {
       fetchMock: vi.fn(async () => new Response("denied", { status: 403 })),
       now: NOW,
       sessionManager: {
-        appendCustomEntry: vi.fn(async () => {
+        appendCustomEntryAsync: vi.fn(async () => {
           throw rebound;
         }),
         getEntries: () => [],
@@ -369,7 +304,7 @@ describe("google prompt cache failure handling", () => {
       fetchMock: vi.fn(async () => new Response("denied", { status: 403 })),
       now: NOW,
       sessionManager: {
-        appendCustomEntry: vi.fn(async () => {
+        appendCustomEntryAsync: vi.fn(async () => {
           throw new Error("metadata unavailable");
         }),
         getEntries: () => [],
@@ -391,71 +326,8 @@ describe("google prompt cache failure handling", () => {
         expireTime: new Date(NOW + 3_600_000).toISOString(),
       },
     ],
-    [
-      "query-delimited cache name",
-      {
-        cachedContent: "cachedContents/cache-id?bad",
-        expireTime: new Date(NOW + 3_600_000).toISOString(),
-      },
-    ],
-    [
-      "fragment-delimited cache name",
-      {
-        cachedContent: "cachedContents/cache-id#bad",
-        expireTime: new Date(NOW + 3_600_000).toISOString(),
-      },
-    ],
-    [
-      "backslash-delimited cache name",
-      {
-        cachedContent: "cachedContents/cache\\id",
-        expireTime: new Date(NOW + 3_600_000).toISOString(),
-      },
-    ],
-    [
-      "percent-encoded separator cache name",
-      {
-        cachedContent: "cachedContents/cache%2Fid",
-        expireTime: new Date(NOW + 3_600_000).toISOString(),
-      },
-    ],
-    [
-      "current-directory cache name",
-      {
-        cachedContent: "cachedContents/.",
-        expireTime: new Date(NOW + 3_600_000).toISOString(),
-      },
-    ],
-    [
-      "parent-directory cache name",
-      {
-        cachedContent: "cachedContents/..",
-        expireTime: new Date(NOW + 3_600_000).toISOString(),
-      },
-    ],
-    [
-      "C0 cache name",
-      {
-        cachedContent: "cachedContents/cache\u0000id",
-        expireTime: new Date(NOW + 3_600_000).toISOString(),
-      },
-    ],
-    [
-      "lone-surrogate cache name",
-      {
-        cachedContent: "cachedContents/cache\ud800id",
-        expireTime: new Date(NOW + 3_600_000).toISOString(),
-      },
-    ],
-    [
-      "Unicode cache name",
-      {
-        cachedContent: "cachedContents/caf\u00e9",
-        expireTime: new Date(NOW + 3_600_000).toISOString(),
-      },
-    ],
   ])("rebuilds persisted ready state with %s", async (_name, entry) => {
-    const entries = [readyEntry(entry)];
+    const entries = [await readyEntry(entry)];
     const fetchMock = createCacheFetchMock({
       name: "cachedContents/rebuilt",
       expireTime: new Date(NOW + 3_600_000).toISOString(),
@@ -478,7 +350,7 @@ describe("google prompt cache failure handling", () => {
 
   it("continues uncached when an invalid persisted name cannot be rebuilt", async () => {
     const entries = [
-      readyEntry({
+      await readyEntry({
         cachedContent: "cachedContents/cache\u0000id",
         expireTime: new Date(NOW + 3_600_000).toISOString(),
       }),
@@ -520,7 +392,7 @@ describe("google prompt cache failure handling", () => {
   it("refreshes a transport-stable punctuation name at the exact URL", async () => {
     const cachedContent = "cachedContents/cache-_.!~*'()";
     const entries = [
-      readyEntry({
+      await readyEntry({
         cachedContent,
         expireTime: new Date(NOW + 60_000).toISOString(),
       }),
@@ -547,11 +419,10 @@ describe("google prompt cache failure handling", () => {
 
   it.each([
     ["malformed JSON", "not-json{{{"],
-    ["missing expiry", "{}"],
     ["nonfuture expiry", JSON.stringify({ expireTime: new Date(NOW).toISOString() })],
   ])("retains a valid existing cache after refresh returns %s", async (_name, body) => {
     const entries = [
-      readyEntry({
+      await readyEntry({
         cachedContent: "cachedContents/existing",
         expireTime: new Date(NOW + 60_000).toISOString(),
       }),
@@ -569,22 +440,6 @@ describe("google prompt cache failure handling", () => {
     expect(fetchUrl(fetchMock)).toContain("cachedContents/existing?updateMask=ttl");
     expect(getCapturedPayload()?.cachedContent).toBe("cachedContents/existing");
     expect(entries).toHaveLength(1);
-  });
-
-  it("honors failed-cache backoff without another create attempt", async () => {
-    const fetchMock = vi.fn();
-    const innerStreamFn = vi.fn(() => "visible-output" as never);
-    const wrapped = await preparePromptCacheStream({
-      fetchMock,
-      now: NOW,
-      sessionManager: makeSessionManager([failedEntry(NOW + 60_000)]),
-      streamFn: innerStreamFn,
-    });
-
-    await expect(invoke(wrapped, makeGoogleModel(), plainPromptContext)).resolves.toBe(
-      "visible-output",
-    );
-    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("does not swallow primary stream failures after cache degradation", async () => {

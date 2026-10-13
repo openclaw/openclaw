@@ -78,9 +78,8 @@ export class NewSessionTitleController implements ReactiveController {
   }
 
   private sync(input: DraftTitleInput | null) {
-    const message = input?.message.trim() ?? "";
     const next =
-      input && message.length >= 12 && !message.startsWith("/") ? { ...input, message } : null;
+      input && input.message.length >= 12 && !input.message.startsWith("/") ? input : null;
     if (sameDraft(this.current, next)) {
       return;
     }

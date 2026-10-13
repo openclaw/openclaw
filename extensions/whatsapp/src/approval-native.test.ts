@@ -66,24 +66,9 @@ describe("whatsapp approval capability", () => {
       blocks: [
         {
           type: "buttons",
-          buttons: [
-            {
-              action: {
-                type: "approval",
-                approvalId: "exec-1",
-                approvalKind: "exec",
-                decision: "allow-once",
-              },
-            },
-            {
-              action: {
-                type: "approval",
-                approvalId: "exec-1",
-                approvalKind: "exec",
-                decision: "deny",
-              },
-            },
-          ],
+          buttons: ["allow-once", "deny"].map((decision) => ({
+            action: { type: "approval", approvalId: "exec-1", approvalKind: "exec", decision },
+          })),
         },
       ],
     });
@@ -125,32 +110,14 @@ describe("whatsapp approval capability", () => {
       blocks: [
         {
           type: "buttons",
-          buttons: [
-            {
-              action: {
-                type: "approval",
-                approvalId: "plugin:approval-1",
-                approvalKind: "plugin",
-                decision: "allow-once",
-              },
+          buttons: ["allow-once", "allow-always", "deny"].map((decision) => ({
+            action: {
+              type: "approval",
+              approvalId: "plugin:approval-1",
+              approvalKind: "plugin",
+              decision,
             },
-            {
-              action: {
-                type: "approval",
-                approvalId: "plugin:approval-1",
-                approvalKind: "plugin",
-                decision: "allow-always",
-              },
-            },
-            {
-              action: {
-                type: "approval",
-                approvalId: "plugin:approval-1",
-                approvalKind: "plugin",
-                decision: "deny",
-              },
-            },
-          ],
+          })),
         },
       ],
     });
@@ -188,7 +155,7 @@ describe("whatsapp approval capability", () => {
     checks.defaultAccountBothTarget,
   );
 
-  it("allows group-origin emoji approvals only after exec forwarding and approvers are configured", () => {
+  it("allows group-origin emoji approvals only after exec forwarding and approvers are configured", async () => {
     const request = buildExecRequest("120363401234567890@g.us");
     const withoutApprovers = buildConfig({ approvals: { exec: { enabled: true } } });
     const withApprovers = buildConfig({
@@ -197,7 +164,7 @@ describe("whatsapp approval capability", () => {
     });
 
     expect(
-      whatsappApprovalCapability.native?.resolveOriginTarget?.({
+      await whatsappApprovalCapability.nativeAsync?.resolveOriginTarget?.({
         cfg: withoutApprovers,
         accountId: "default",
         approvalKind: "exec",
@@ -205,7 +172,7 @@ describe("whatsapp approval capability", () => {
       }),
     ).toBeNull();
     expect(
-      whatsappApprovalCapability.native?.resolveOriginTarget?.({
+      await whatsappApprovalCapability.nativeAsync?.resolveOriginTarget?.({
         cfg: withApprovers,
         accountId: "default",
         approvalKind: "exec",

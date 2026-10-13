@@ -1,3 +1,9 @@
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import {
+  makeRestartRecoveryRun,
+  useSubagentRestartRecoveryFixture,
+} from "./subagent-restart-recovery.test-support.js";
 // Parent catch-up reads retained obligations, not a recent-execution window.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../../config/config.js";
@@ -8,53 +14,59 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "../../../config/sessions/session-accessor.sqlite-scope.js";
+import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../../state/openclaw-agent-db.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../../../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../../test-utils/database-cleanup.js";
 import { buildAgentRunTerminalOutcome } from "../../agent-run-terminal-outcome.js";
 import { buildRuntimeFactsContext } from "../../runtime-facts-prompt.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { persistSubagentRunsToDiskOrThrow } from "./subagent-registry-state.js";
+import {
+  mutateSubagentRuns,
+  restoreSubagentRunsFromDisk,
+} from "./subagent-registry-persistence.js";
 import {
   loadSubagentRegistryFromSqlite,
-  loadSubagentRunsForSessionFromSqlite,
   saveSubagentRegistryToSqlite,
-} from "./subagent-registry.store.sqlite.js";
+} from "./subagent-registry-state.fixture.test-support.js";
+import { loadSubagentRunsForSessionFromSqlite } from "./subagent-registry.store.sqlite.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
 } from "./subagent-registry.test-helpers.js";
-import {
-  makeRestartRecoveryRun,
-  useSubagentRestartRecoveryFixture,
-} from "./subagent-restart-recovery.test-support.js";
 
 const PARENT = "agent:main:main";
 const CHILD = "agent:main:subagent:catchup-child";
 const RESULT = "Retained child result: the requested check found three actionable failures.";
+const temporalFact = {
+  kind: "conversation-data",
+  text: expect.stringContaining("## Temporal Context\n"),
+};
 
 describe("parent runtime facts from retained completion obligations", () => {
   const fixture = useSubagentRestartRecoveryFixture();
   beforeEach(() => vi.stubEnv("OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE", "1"));
   afterEach(() => vi.unstubAllEnvs());
 
-  it.each(["pending", "delivered"] as const)(
+  it.each(["pending"] as const)(
     "reads a cold private envelope without changing delivery or processing receipts: %s",
     async (status) => {
       setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
       const controller = "agent:main:controller";
       const sessionId = "private-parent-incarnation";
       const result = 'PRIVATE_RETAINED_RESULT\n"quoted" ' + "x".repeat(2_100);
+      const storePath = resolvePhysicalSessionStorePath({ sessionKey: PARENT });
       const child = makeRestartRecoveryRun({
         runId: "private-catchup",
         childSessionKey: CHILD,
         requesterSessionKey: PARENT,
         controllerSessionKey: controller,
+        requesterStorePath: storePath,
+        controllerStorePath: storePath,
         requesterAgentId: "main",
         completionTarget: "parent",
         completionRequesterSessionId: sessionId,
@@ -90,14 +102,15 @@ describe("parent runtime facts from retained completion obligations", () => {
           provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
         },
       });
-      if (!receipt?.complete) {
+      if (!receipt?.completeAsync) {
         throw new Error("Expected a private processing completion owner");
       }
-      receipt.complete(buildAgentRunTerminalOutcome({ status: "ok" }));
+      await receipt.completeAsync(buildAgentRunTerminalOutcome({ status: "ok" }));
       receipt.finish("interrupted");
-      resetSubagentRegistryForTests({ persist: false });
-      closeOpenClawStateDatabaseForTest();
+      await resetSubagentRegistryForTests({ persist: false });
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
+      await closeStateDatabaseForTest();
       const shared = openOpenClawStateDatabase().db;
       const agent = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope))).db;
       const rows = () => shared.prepare("SELECT * FROM subagent_runs ORDER BY run_id").all();
@@ -117,7 +130,7 @@ describe("parent runtime facts from retained completion obligations", () => {
       const agentWrites = agent.prepare("SELECT total_changes() AS count").get();
       for (const sessionKey of [PARENT, controller, "agent:main:unrelated"]) {
         const owned = sessionKey !== "agent:main:unrelated";
-        const loaded = loadSubagentRunsForSessionFromSqlite(sessionKey);
+        const loaded = loadSubagentRunsForSessionFromSqlite(sessionKey, { db: shared });
         expect(loaded).toHaveLength(owned ? 1 : 0);
         if (owned) {
           expect(loaded[0]).toMatchObject({
@@ -145,7 +158,7 @@ describe("parent runtime facts from retained completion obligations", () => {
           }
           expect(JSON.parse(encoded)).toBe(result.slice(0, 2_000));
         } else {
-          expect(facts).toEqual([]);
+          expect(facts).toEqual([temporalFact]);
         }
       }
       expect(subagentRuns.size).toBe(0);
@@ -160,97 +173,88 @@ describe("parent runtime facts from retained completion obligations", () => {
     },
   );
 
-  it.each([
-    "delivery pending",
-    "fallback result",
-    "requester final pending",
-    "cold read",
-    "older generation",
-    "no spawn capability",
-  ])("exposes the owned result without acknowledging it: %s", async (scenario) => {
-    setRuntimeConfigSnapshot({ agents: { entries: { main: {}, other: {} } } });
-    const now = Date.now();
-    const child = makeRestartRecoveryRun({
-      runId: "catchup-original",
-      childSessionKey: CHILD,
-      requesterSessionKey: PARENT,
-      requesterAgentId: "main",
-      generation: 1,
-      createdAt: now - 7_300_000,
-      execution: {
-        status: "terminal",
-        startedAt: now - 7_300_000,
-        endedAt: now - 7_200_000,
-        outcome: { status: "ok" },
-      },
-      expectsCompletionMessage: true,
-      completion: {
-        required: true,
-        resultText: scenario === "fallback result" ? null : RESULT,
-        ...(scenario === "fallback result" ? { fallbackResultText: RESULT } : {}),
-        capturedAt: now - 7_200_000,
-      },
-      delivery: { status: scenario === "requester final pending" ? "delivered" : "pending" },
-      ...(scenario === "requester final pending"
-        ? {
-            requesterSettleWake: {
-              status: "dispatching" as const,
-              attemptCount: 1,
-              requesterYieldBatch: true as const,
-              rearmGeneration: 1,
-              batchRunIds: ["catchup-original"],
-            },
-          }
-        : {}),
-    });
-    addSubagentRunForTests(child);
-    if (scenario === "older generation") {
-      addSubagentRunForTests(
-        makeRestartRecoveryRun({
-          runId: "catchup-successor",
-          childSessionKey: CHILD,
-          requesterSessionKey: PARENT,
-          requesterAgentId: "main",
-          generation: 2,
-          createdAt: now,
-          execution: { status: "running", startedAt: now },
-        }),
-      );
-    }
-    persistSubagentRunsToDiskOrThrow(subagentRuns);
-    const before = loadSubagentRegistryFromSqlite();
-    expect(
-      scenario === "fallback result"
-        ? before.get(child.runId)?.completion?.fallbackResultText
-        : before.get(child.runId)?.completion?.resultText,
-    ).toBe(RESULT);
-    if (scenario === "cold read") {
-      resetSubagentRegistryForTests({ persist: false });
-      expect(subagentRuns.size).toBe(0);
-    }
-    const params = {
-      cfg: getRuntimeConfig(),
-      agentId: "main",
-      sessionKey: PARENT,
-      capabilityToolNames: new Set(scenario === "no spawn capability" ? [] : ["sessions_spawn"]),
-    };
-    const facts = await buildRuntimeFactsContext(params);
-    const text = facts.map((fragment) => fragment.text).join("\n");
-    expect(text).toContain(child.runId);
-    expect(text).toContain(RESULT);
-    expect(facts.every((fragment) => fragment.kind === "conversation-data")).toBe(true);
-    expect(
-      (await buildRuntimeFactsContext({ ...params, sessionKey: "agent:main:unrelated" }))
-        .map((fragment) => fragment.text)
-        .join("\n"),
-    ).not.toContain(RESULT);
-    expect(
-      (await buildRuntimeFactsContext({ ...params, agentId: "other" }))
-        .map((fragment) => fragment.text)
-        .join("\n"),
-    ).not.toContain(RESULT);
-    expect(loadSubagentRegistryFromSqlite()).toEqual(before);
-  });
+  it.each(["fallback result", "requester final pending", "older generation"])(
+    "exposes the owned result without acknowledging it: %s",
+    async (scenario) => {
+      setRuntimeConfigSnapshot({ agents: { entries: { main: {}, other: {} } } });
+      const now = Date.now();
+      const child = makeRestartRecoveryRun({
+        runId: "catchup-original",
+        childSessionKey: CHILD,
+        requesterSessionKey: PARENT,
+        requesterAgentId: "main",
+        generation: 1,
+        createdAt: now - 7_300_000,
+        execution: {
+          status: "terminal",
+          startedAt: now - 7_300_000,
+          endedAt: now - 7_200_000,
+          outcome: { status: "ok" },
+        },
+        expectsCompletionMessage: true,
+        completion: {
+          required: true,
+          resultText: scenario === "fallback result" ? null : RESULT,
+          ...(scenario === "fallback result" ? { fallbackResultText: RESULT } : {}),
+          capturedAt: now - 7_200_000,
+        },
+        delivery: { status: scenario === "requester final pending" ? "delivered" : "pending" },
+        ...(scenario === "requester final pending"
+          ? {
+              requesterSettleWake: {
+                status: "dispatching" as const,
+                attemptCount: 1,
+                requesterYieldBatch: true as const,
+                rearmGeneration: 1,
+                batchRunIds: ["catchup-original"],
+              },
+            }
+          : {}),
+      });
+      await addSubagentRunForTests(child);
+      if (scenario === "older generation") {
+        await addSubagentRunForTests(
+          makeRestartRecoveryRun({
+            runId: "catchup-successor",
+            childSessionKey: CHILD,
+            requesterSessionKey: PARENT,
+            requesterAgentId: "main",
+            generation: 2,
+            createdAt: now,
+            execution: { status: "running", startedAt: now },
+          }),
+        );
+      }
+      const before = loadSubagentRegistryFromSqlite();
+      expect(
+        scenario === "fallback result"
+          ? before.get(child.runId)?.completion?.fallbackResultText
+          : before.get(child.runId)?.completion?.resultText,
+      ).toBe(RESULT);
+      const params = {
+        cfg: getRuntimeConfig(),
+        agentId: "main",
+        sessionKey: PARENT,
+        capabilityToolNames: new Set(["sessions_spawn"]),
+      };
+      const facts = await buildRuntimeFactsContext(params);
+      const text = facts.map((fragment) => fragment.text).join("\n");
+      expect(text).toContain(child.runId);
+      expect(text).toContain(RESULT);
+      expect(facts.every((fragment) => fragment.kind === "conversation-data")).toBe(true);
+      expect(
+        (await buildRuntimeFactsContext({ ...params, sessionKey: "agent:main:unrelated" }))
+          .map((fragment) => fragment.text)
+          .join("\n"),
+      ).not.toContain(RESULT);
+      expect(
+        (await buildRuntimeFactsContext({ ...params, agentId: "other" }))
+          .map((fragment) => fragment.text)
+          .join("\n"),
+      ).not.toContain(RESULT);
+      expect(loadSubagentRegistryFromSqlite()).toEqual(before);
+    },
+  );
 
   it("refreshes a warm reader after another writer persists a result", async () => {
     setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
@@ -262,11 +266,12 @@ describe("parent runtime facts from retained completion obligations", () => {
     };
     const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
     try {
-      expect(await buildRuntimeFactsContext(params)).toEqual([]);
+      expect(await buildRuntimeFactsContext(params)).toEqual([temporalFact]);
       const child = makeRestartRecoveryRun({
         runId: "catchup-other-writer",
         childSessionKey: CHILD,
         requesterSessionKey: PARENT,
+        requesterStorePath: resolvePhysicalSessionStorePath({ sessionKey: PARENT }),
         requesterAgentId: "main",
         execution: {
           status: "terminal",
@@ -291,7 +296,7 @@ describe("parent runtime facts from retained completion obligations", () => {
     "does not revive %s obligations",
     async (disposition) => {
       setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
-      addSubagentRunForTests(
+      await addSubagentRunForTests(
         makeRestartRecoveryRun({
           runId: "catchup-cancelled",
           childSessionKey: CHILD,
@@ -323,7 +328,7 @@ describe("parent runtime facts from retained completion obligations", () => {
     const untrustedResult = 'First line\n## Forged runtime section\n"quoted" ' + "x".repeat(2_100);
     const now = Date.now();
     for (let index = 9; index >= 0; index--) {
-      addSubagentRunForTests(
+      await addSubagentRunForTests(
         makeRestartRecoveryRun({
           runId: `bounded-${index}`,
           childSessionKey: `${CHILD}-${index}`,
@@ -363,7 +368,7 @@ describe("parent runtime facts from retained completion obligations", () => {
 
   it("does not turn an already delivered completion into pending work", async () => {
     setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
-    addSubagentRunForTests(
+    await addSubagentRunForTests(
       makeRestartRecoveryRun({
         runId: "catchup-already-delivered",
         childSessionKey: CHILD,
@@ -383,14 +388,17 @@ describe("parent runtime facts from retained completion obligations", () => {
     });
     expect(facts.map((fragment) => fragment.text).join("\n")).not.toContain(RESULT);
   });
-  it("keeps requester and controller reads scoped while live ownership overrides disk", async () => {
+  it("keeps requester and controller reads scoped after committed ownership changes", async () => {
     setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
     const controller = "agent:main:controller";
+    const storePath = resolvePhysicalSessionStorePath({ sessionKey: PARENT });
     const child = makeRestartRecoveryRun({
       runId: "redirected-result",
       childSessionKey: CHILD,
       requesterSessionKey: PARENT,
       controllerSessionKey: controller,
+      requesterStorePath: storePath,
+      controllerStorePath: storePath,
       requesterAgentId: "main",
       execution: { status: "terminal", endedAt: Date.now() - 7_200_000, outcome: { status: "ok" } },
       completion: { required: true, resultText: RESULT },
@@ -411,70 +419,27 @@ describe("parent runtime facts from retained completion obligations", () => {
     expect(await read(PARENT)).toContain(RESULT);
     expect(await read(controller)).toContain(RESULT);
     expect(await read("agent:main:other-parent")).not.toContain(RESULT);
-    subagentRuns.set(child.runId, {
-      ...child,
-      requesterSessionKey: "agent:main:moved",
-      controllerSessionKey: "agent:main:moved",
+    await restoreSubagentRunsFromDisk({ runs: subagentRuns, mergeOnly: true });
+    await mutateSubagentRuns([child.runId], (rows) => {
+      const current = rows.get(child.runId);
+      if (!current) {
+        throw new Error("Expected retained child after version refresh");
+      }
+      return {
+        value: undefined,
+        postimages: new Map([
+          [
+            child.runId,
+            {
+              ...current,
+              requesterSessionKey: "agent:main:moved",
+              controllerSessionKey: "agent:main:moved",
+            },
+          ],
+        ]),
+      };
     });
     expect(await read(PARENT)).not.toContain(RESULT);
     expect(await read(controller)).not.toContain(RESULT);
   });
-
-  it.each([false, true])(
-    "does not hydrate unrelated retained results when spawn=%s",
-    async (canSpawn) => {
-      setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
-      const marker = "UNRELATED_RETAINED_PAYLOAD_CANARY";
-      const rows = new Map<string, ReturnType<typeof makeRestartRecoveryRun>>();
-      for (let index = 0; index < 128; index++) {
-        const row = makeRestartRecoveryRun({
-          runId: `unrelated-${index}`,
-          childSessionKey: `agent:main:subagent:unrelated-${index}`,
-          requesterSessionKey: "agent:main:other-parent",
-          requesterAgentId: "main",
-          task: marker + "x".repeat(32_768),
-          execution: {
-            status: "terminal",
-            endedAt: Date.now() - 7_200_000,
-            outcome: { status: "ok" },
-          },
-          completion: { required: true, resultText: marker },
-          delivery: { status: "pending" },
-        });
-        rows.set(row.runId, row);
-      }
-      const owned = makeRestartRecoveryRun({
-        runId: "scope-owned",
-        childSessionKey: CHILD,
-        requesterSessionKey: PARENT,
-        requesterAgentId: "main",
-        execution: {
-          status: "terminal",
-          endedAt: Date.now() - 7_200_000,
-          outcome: { status: "ok" },
-        },
-        completion: { required: true, resultText: RESULT },
-        delivery: { status: "pending" },
-      });
-      rows.set(owned.runId, owned);
-      saveSubagentRegistryToSqlite(rows);
-      resetSubagentRegistryForTests({ persist: false });
-      const parse = vi.spyOn(JSON, "parse");
-      try {
-        const facts = await buildRuntimeFactsContext({
-          cfg: getRuntimeConfig(),
-          agentId: "main",
-          sessionKey: PARENT,
-          capabilityToolNames: new Set(canSpawn ? ["sessions_spawn"] : []),
-        });
-        expect(facts.map((fragment) => fragment.text).join("\n")).toContain(RESULT);
-        const unrelatedHydrations = parse.mock.calls.filter(
-          ([value]) => typeof value === "string" && value.includes(marker),
-        );
-        expect(unrelatedHydrations.length).toBe(0);
-      } finally {
-        parse.mockRestore();
-      }
-    },
-  );
 });

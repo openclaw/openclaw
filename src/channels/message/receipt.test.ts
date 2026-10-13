@@ -1,4 +1,3 @@
-// Message receipt tests cover receipt state and acknowledgement metadata for channel messages.
 import { describe, expect, it } from "vitest";
 import {
   createMessageReceiptFromOutboundResults,
@@ -57,18 +56,18 @@ describe("createMessageReceiptFromOutboundResults", () => {
     ]);
   });
 
-  it.each(
-    (["chatId", "channelId", "roomId", "conversationId", "toJid"] as const).flatMap((field) => [
-      { field, messageId: undefined, messageIdLabel: "absent" },
-      { field, messageId: "", messageIdLabel: "blank" },
-    ]),
-  )(
-    "keeps $field routing metadata with $messageIdLabel messageId out of platform identity",
-    ({ field, messageId }) => {
+  it.each([undefined, ""])(
+    "keeps routing metadata with messageId=%s out of platform identity",
+    (messageId) => {
       const result = {
         channel: "demo",
         ...(messageId === undefined ? {} : { messageId }),
-        [field]: "route-only",
+        chatId: "route-only",
+        channelId: "route-only",
+        roomId: "route-only",
+        conversationId: "route-only",
+        toJid: "route-only",
+        target: { kind: "channel" as const, id: "route-only" },
       };
       const receipt = createMessageReceiptFromOutboundResults({ results: [result], sentAt: 123 });
 
@@ -78,19 +77,6 @@ describe("createMessageReceiptFromOutboundResults", () => {
       expect(receipt.raw).toEqual([result]);
     },
   );
-
-  it("does not use target routing metadata as platform message identity", () => {
-    const target = { kind: "channel" as const, id: "route-only" };
-    const receipt = createMessageReceiptFromOutboundResults({
-      results: [{ channel: "demo", messageId: "", target }],
-      sentAt: 123,
-    });
-
-    expect(receipt.primaryPlatformMessageId).toBeUndefined();
-    expect(receipt.platformMessageIds).toEqual([]);
-    expect(receipt.parts).toEqual([]);
-    expect(receipt.raw).toEqual([{ channel: "demo", messageId: "", target }]);
-  });
 
   it.each([
     {

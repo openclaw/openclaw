@@ -29,14 +29,18 @@ import {
   isBrowserOperatorUiClient,
   isOperatorUiClient,
 } from "../../../utils/message-channel.js";
-import { ControlUiGitHubError } from "../../control-ui-github-api.js";
+import { isGatewayAuthPolicyCurrent } from "../../auth-policy.js";
+import {
+  getRemoteControlUiIngressContext,
+  hasCurrentRemoteControlUiIngress,
+} from "../../ingress-attribution.js";
+import { resolveIdentityOperatorScopes } from "../../operator-identity-scopes.js";
 import type { OperatorScope } from "../../operator-scopes.js";
-import { normalizeChromeExtensionOrigin } from "../../origin-check.js";
+import { checkGatewayWsBrowserOrigin, normalizeChromeExtensionOrigin } from "../../origin-check.js";
 import { parseGatewayRole } from "../../role-policy.js";
 import { authenticatedProfileUnavailableError } from "../../server-methods/gateway-client-identity.js";
 import { formatForLog } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
-import { checkGatewayWsBrowserOrigin } from "../ws-origin-policy.js";
 import { isNativeAppUiClient } from "./handshake-auth-helpers.js";
 import type {
   AuthenticatedGatewayConnect,
@@ -90,17 +94,15 @@ export async function rejectGatewayStartupConnect(
 }
 
 export async function rejectUnavailableProfileConnect(
-  context: GatewayConnectPhaseContext,
+  context: Pick<
+    GatewayConnectPhaseContext,
+    "markHandshakeFailure" | "sendHandshakeErrorResponse" | "releasePendingNodePairingCleanup"
+  > & { handler: Pick<GatewayConnectPhaseContext["handler"], "close"> },
   error: unknown,
 ): Promise<void> {
   // Role admission needs a verified profile; an empty-scope hello hides the
   // verification outage behind unrelated permission errors on every request.
-  const failure = authenticatedProfileUnavailableError(
-    error instanceof ControlUiGitHubError && error.statusCode === 429
-      ? "GitHub is rate limiting profile verification. Retry shortly; if this continues, ask a gateway administrator to check the GitHub API credential."
-      : undefined,
-    error instanceof ControlUiGitHubError ? error.retryAfterMs : undefined,
-  );
+  const failure = authenticatedProfileUnavailableError(error);
   context.markHandshakeFailure("authenticated-profile-unavailable");
   context.sendHandshakeErrorResponse(ErrorCodes.UNAVAILABLE, failure.message, failure);
   await context.releasePendingNodePairingCleanup();
@@ -137,15 +139,7 @@ export function resolveEffectiveConnectionScopes(params: {
   const verifiedIdentity = params.verifiedIdentity;
   let identityScopes: OperatorScope[] = [];
   if (params.role === "operator" && verifiedIdentity) {
-    const exactIdentityScopes = params.identityScopes?.[verifiedIdentity];
-    identityScopes = exactIdentityScopes ?? [];
-    if (exactIdentityScopes === undefined && verifiedIdentity.includes("@")) {
-      const normalizedIdentity = verifiedIdentity.toLowerCase();
-      identityScopes =
-        Object.entries(params.identityScopes ?? {}).find(
-          ([identity]) => identity.includes("@") && identity.toLowerCase() === normalizedIdentity,
-        )?.[1] ?? [];
-    }
+    identityScopes = resolveIdentityOperatorScopes(verifiedIdentity, params.identityScopes);
   }
   const scopes = applyConnectionScopeCap({
     scopes: [...new Set([...params.deviceScopes, ...identityScopes])],
@@ -168,7 +162,7 @@ export function rejectGatewayConnectOrigin(
   reason: string,
 ): void {
   const message =
-    "origin not allowed (open the Control UI from the gateway host or allow it in gateway.controlUi.allowedOrigins)";
+    "origin not allowed (use gateway.publicOrigin with allowedOrigins omitted, or allow this origin in gateway.controlUi.allowedOrigins)";
   context.markHandshakeFailure("origin-mismatch", {
     origin: context.handler.requestOrigin ?? "n/a",
     host: context.handler.requestHost ?? "n/a",
@@ -185,6 +179,15 @@ export function resolveGatewayConnectPolicyFailure(
   context: GatewayConnectPhaseContext,
   state: AuthenticatedGatewayConnect,
 ): { kind: "auth" } | { kind: "origin"; reason: string } | undefined {
+  if (context.browserOrigin) {
+    const originCheck = checkGatewayWsBrowserOrigin(context.browserOrigin, getRuntimeConfig());
+    if (!originCheck.ok) {
+      return { kind: "origin", reason: originCheck.reason };
+    }
+  }
+  if (!isGatewayAuthPolicyCurrent(state.authPolicy)) {
+    return { kind: "auth" };
+  }
   if (
     state.sessionUsesSharedGatewayAuth &&
     context.handler.getRequiredSharedGatewaySessionGeneration &&
@@ -192,12 +195,6 @@ export function resolveGatewayConnectPolicyFailure(
       context.handler.getRequiredSharedGatewaySessionGeneration()
   ) {
     return { kind: "auth" };
-  }
-  if (context.browserOrigin) {
-    const originCheck = checkGatewayWsBrowserOrigin(context.browserOrigin, getRuntimeConfig());
-    if (!originCheck.ok) {
-      return { kind: "origin", reason: originCheck.reason };
-    }
   }
   return undefined;
 }
@@ -281,10 +278,34 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
     close(1008, "invalid role");
     return undefined;
   }
-  // Default-deny: scopes must be explicit. Empty/missing scopes means no permissions.
+  // Default-deny, except signed ingress requests may select their live grant ceiling.
   // Note: If the client does not present a device identity, we can't bind scopes to a paired
   // device/token, so we will clear scopes after auth to avoid self-declared permissions.
   const scopes = Array.isArray(connectParams.scopes) ? connectParams.scopes : [];
+  const remoteIngress = getRemoteControlUiIngressContext(context.handler.upgradeReq);
+  if (remoteIngress) {
+    const denied = !hasCurrentRemoteControlUiIngress(remoteIngress)
+      ? "Remote Control UI ingress is no longer active; reconnect through the current grant."
+      : role !== "operator"
+        ? "Remote Control UI ingress only admits the operator role."
+        : !connectParams.device
+          ? "Remote Control UI ingress requires a signed device identity."
+          : Object.values(connectParams.auth ?? {}).some((credential) => credential !== undefined)
+            ? "Remote Control UI ingress requires a credential-free signed device; reconnect without stored credentials."
+            : !roleScopesAllow({
+                  role,
+                  requestedScopes: scopes,
+                  allowedScopes: remoteIngress.operatorScopeCeiling,
+                })
+              ? "Remote Control UI scopes must stay within this grant's operator scope ceiling."
+              : undefined;
+    if (denied) {
+      markHandshakeFailure("remote-control-ui-admission-denied");
+      sendHandshakeErrorResponse(ErrorCodes.FORBIDDEN, denied);
+      close(1008, truncateCloseReason(denied));
+      return undefined;
+    }
+  }
   connectParams.role = role;
   connectParams.scopes = scopes;
 

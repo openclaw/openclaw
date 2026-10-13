@@ -4,12 +4,18 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import { observeChatCache, type ChatMessageCache } from "./session-message-cache.ts";
-import { installSessionPrefetch } from "./session-prefetch.ts";
+import { SessionPrefetchController } from "./session-prefetch.ts";
 import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
 
 export const PREFETCH_TEST_NOW = 1_000_000;
-export const prefetchSnapshotHost = { assistantAgentId: "main", agentsList: null, hello: null };
+export const prefetchSnapshotHost = {
+  settings: { gatewayUrl: "ws://test.invalid" },
+  client: { recoveryScope: "test-recovery-scope", recoveryScopeReady: true },
+  assistantAgentId: "main",
+  agentsList: null,
+  hello: null,
+};
 
 export type SessionPrefetchUpdate = {
   client: GatewayBrowserClient | null;
@@ -80,7 +86,10 @@ export function createSessionPrefetchFixture() {
   const context = {
     agents: { state: { agentsList: null } },
     gateway: {
-      snapshot: { assistantAgentId: "main", hello: null },
+      connection: { gatewayUrl: "ws://test.invalid" },
+      get snapshot() {
+        return { assistantAgentId: "main", hello: null, client: current.client };
+      },
       subscribe: () => () => undefined,
     },
     sessions: {
@@ -104,7 +113,7 @@ export function createSessionPrefetchFixture() {
   const shell = document.createElement("openclaw-app-shell");
   shell.append(host);
   document.body.append(shell);
-  const controller = installSessionPrefetch(host, cache, store, () => context);
+  const controller = new SessionPrefetchController(host, cache, store, () => context);
   controller.hostConnected?.();
 
   function updatePrefetch(update: SessionPrefetchUpdate): void {

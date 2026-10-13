@@ -1,5 +1,6 @@
 package ai.openclaw.app.wear
 
+import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.wear.shared.WearEventType
 import ai.openclaw.wear.shared.WearMessage
 import ai.openclaw.wear.shared.WearProtocolCodec
@@ -25,6 +26,30 @@ import org.junit.Test
 
 class WearProxyControllerTest {
   private val json = Json
+
+  @Test
+  fun statusAndGatewayControlsProjectCurrentCompatibilityDiagnosis() =
+    runTest {
+      var connected = false
+      var problemCode: String? = "PROTOCOL_MISMATCH"
+      val controller =
+        WearProxyController(
+          requestGateway = { _, _ -> error("Status must not request the Gateway") },
+          isGatewayConnected = { connected },
+          gatewayStatusText = { "Versions differ" },
+          gatewayProblemCode = { problemCode },
+        )
+      for (method in listOf(WearRpcMethod.ProxyStatus, WearRpcMethod.GatewayConnect, WearRpcMethod.GatewayDisconnect)) {
+        val result = checkNotNull(controller.handle(request(method)).result).jsonObject
+        assertEquals("incompatible", result.getValue("failure").jsonPrimitive.content)
+      }
+      problemCode = null
+      val offline = checkNotNull(controller.handle(request(WearRpcMethod.ProxyStatus)).result).jsonObject
+      assertEquals("gateway_offline", offline.getValue("failure").jsonPrimitive.content)
+      connected = true
+      val recovered = checkNotNull(controller.handle(request(WearRpcMethod.ProxyStatus)).result).jsonObject
+      assertFalse("failure" in recovered)
+    }
 
   @Test
   fun statusDoesNotTouchGateway() =
@@ -191,8 +216,8 @@ class WearProxyControllerTest {
           selectedModelRef = { "openai/gpt-test" },
           agents = {
             listOf(
-              WearProxyAgent(id = "main", name = "Main", emoji = "*"),
-              WearProxyAgent(id = "ops", name = "Ops", emoji = null),
+              GatewayAgentSummary(id = "main", name = "Main", emoji = "*"),
+              GatewayAgentSummary(id = "ops", name = "Ops", emoji = null),
             )
           },
           selectGatewayAgent = { agentId ->
@@ -263,9 +288,9 @@ class WearProxyControllerTest {
           gatewayStatusText = { "Connected" },
           activeAgentId = { activeAgentId },
           agents = {
-            listOf(WearProxyAgent(id = " ", name = "Invalid", emoji = null)) +
+            listOf(GatewayAgentSummary(id = " ", name = "Invalid", emoji = null)) +
               (0..32).map { index ->
-                WearProxyAgent(id = "agent-$index", name = "Agent $index", emoji = null)
+                GatewayAgentSummary(id = "agent-$index", name = "Agent $index", emoji = null)
               }
           },
         )

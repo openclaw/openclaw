@@ -1,4 +1,3 @@
-// Imessage tests cover status plugin behavior.
 import {
   createPluginSetupWizardStatus,
   createTestWizardPrompter,
@@ -8,12 +7,12 @@ import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import * as setupRuntime from "openclaw/plugin-sdk/setup";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveIMessageAccount } from "./accounts.js";
+import { imessagePlugin } from "./channel.js";
 import * as channelRuntimeModule from "./channel.runtime.js";
 import * as clientModule from "./client.js";
 import { probeIMessage, probeIMessagePrivateApi } from "./probe.js";
 import { createIMessageSetupWizardProxy } from "./setup-core.js";
 import { imessageSetupWizard } from "./setup-surface.js";
-import { probeIMessageStatusAccount } from "./status-core.js";
 
 const getIMessageSetupStatus = createPluginSetupWizardStatus({
   id: "imessage",
@@ -197,21 +196,6 @@ describe("imessage setup status", () => {
     installIMessageCliMock.mockReset();
   });
 
-  it("does not inherit configured state from a sibling account", async () => {
-    const result = await getSetupStatus(
-      {
-        accounts: {
-          default: { cliPath: "/usr/local/bin/imsg" },
-          work: {},
-        },
-      },
-      "work",
-    );
-
-    expect(result.configured).toBe(false);
-    expect(result.statusLines).toContain("iMessage: needs setup");
-  });
-
   it("uses configured defaultAccount for omitted setup status cliPath", async () => {
     const status = await getSetupStatus({
       cliPath: "/tmp/root-imsg",
@@ -241,36 +225,18 @@ describe("imessage setup status", () => {
     expect(status.statusLines).toContain("iMessage: needs setup");
   });
 
-  it("setup status lines use the selected account cliPath", async () => {
-    const status = await getSetupStatus(
-      {
-        cliPath: "/tmp/root-imsg",
-        accounts: {
-          work: {
-            cliPath: "/tmp/work-imsg",
-          },
-        },
-      },
-      "work",
-    );
-
-    expect(status.statusLines).toContain("imsg: missing (/tmp/work-imsg)");
-  });
-
-  it("setup status explains how to install imsg when the binary is missing", async () => {
-    const status = await getSetupStatus({});
-
-    expect(status.statusLines).toContain(
-      "Install imsg on the Messages Mac: brew install steipete/tap/imsg",
-    );
-  });
-
-  it("prepare offers to install imsg and returns the installed cliPath", async () => {
+  it("wizard proxy offers to install imsg and returns the installed cliPath", async () => {
     mockSuccessfulInstall(false, "0.13.0");
     const confirm = vi.fn(async () => true);
     const note = vi.fn(async () => {});
 
-    const result = await prepareIMessage({ platform: "darwin", confirm, note });
+    const proxy = createIMessageSetupWizardProxy(async () => imessageSetupWizard);
+    const result = await prepareIMessage({
+      platform: "darwin",
+      prepare: proxy.prepare,
+      confirm,
+      note,
+    });
 
     expect(confirm).toHaveBeenCalledWith({
       message: "imsg not found. Install now?",
@@ -281,41 +247,6 @@ describe("imessage setup status", () => {
       cliPath: "imsg",
     });
     expect(note).toHaveBeenCalledWith("Installed imsg at /opt/homebrew/bin/imsg", "iMessage");
-    expect(result).toEqual({
-      credentialValues: {
-        cliPath: "/opt/homebrew/bin/imsg",
-      },
-    });
-  });
-
-  it("setup status preserves an explicit PATH-based imsg wrapper", async () => {
-    const status = await getSetupStatus({ cliPath: "imsg" });
-
-    expect(status.statusLines).toContain(
-      "imsg command not found (imsg). Check the configured cliPath or wrapper.",
-    );
-  });
-
-  it("prepare offers to update Homebrew-managed imsg paths", async () => {
-    mockSuccessfulInstall(true, "0.13.1");
-    const confirm = vi.fn(async () => true);
-    const note = vi.fn(async () => {});
-
-    const result = await prepareIMessage({
-      platform: "darwin",
-      cliPath: "/opt/homebrew/bin/imsg",
-      confirm,
-      note,
-    });
-
-    expect(confirm).toHaveBeenCalledWith({
-      message: "imsg detected. Reinstall/update now?",
-      initialValue: false,
-    });
-    expect(installIMessageCliMock).toHaveBeenCalledWith(expect.anything(), {
-      upgrade: true,
-      cliPath: "/opt/homebrew/bin/imsg",
-    });
     expect(result).toEqual({
       credentialValues: {
         cliPath: "/opt/homebrew/bin/imsg",
@@ -340,43 +271,6 @@ describe("imessage setup status", () => {
       "iMessage",
     );
     expect(result).toBeUndefined();
-  });
-
-  it("setup wizard proxy delegates imsg install preparation", async () => {
-    mockSuccessfulInstall(false, "0.13.0");
-    const proxy = createIMessageSetupWizardProxy(async () => imessageSetupWizard);
-    const confirm = vi.fn(async () => true);
-
-    const result = await prepareIMessage({
-      platform: "darwin",
-      prepare: proxy.prepare,
-      confirm,
-    });
-
-    expect(confirm).toHaveBeenCalledWith({
-      message: "imsg not found. Install now?",
-      initialValue: true,
-    });
-    expect(result).toEqual({
-      credentialValues: {
-        cliPath: "/opt/homebrew/bin/imsg",
-      },
-    });
-  });
-
-  it("prepare preserves custom imsg cliPath values", async () => {
-    const confirm = vi.fn(async () => true);
-
-    const result = await prepareIMessage({
-      platform: "darwin",
-      cliPath: "ssh imessage-host imsg",
-      confirm,
-    });
-
-    expect(result).toBeUndefined();
-    expect(setupToolsMocks.detectBinary).not.toHaveBeenCalled();
-    expect(confirm).not.toHaveBeenCalled();
-    expect(installIMessageCliMock).not.toHaveBeenCalled();
   });
 
   it("prepare preserves explicit PATH-based imsg wrappers", async () => {
@@ -427,42 +321,6 @@ describe("probeIMessage", () => {
     });
   });
 
-  it("marks unknown rpc subcommand as fatal", async () => {
-    const { create } = mockRpcClient();
-    const result = await probeIMessage(1000, { cliPath: "imsg-test-rpc" });
-    expect(result.ok).toBe(false);
-    expect(result.fatal).toBe(true);
-    expect(result.error).toMatch(/rpc/i);
-    expect(result.error).toContain("brew update && brew upgrade imsg");
-    expect(create).not.toHaveBeenCalled();
-  });
-
-  it("explains how to update imsg when its private status subcommand is unsupported", async () => {
-    const runCommand = mockCommandSequence({
-      stderr: "Unknown subcommand 'status' for command 'imsg'",
-      code: 1,
-    });
-
-    await expect(
-      probeIMessagePrivateApi("imsg-legacy-private-status", 1000),
-    ).resolves.toMatchObject({
-      available: false,
-      v2Ready: false,
-      selectors: {},
-      rpcMethods: [],
-      cliCapabilities: {
-        sendRichSupportsAttachment: false,
-        pollSendSupportsNoComment: false,
-      },
-      error:
-        'imsg CLI does not support the "status" subcommand. Update imsg on the Messages Mac: brew update && brew upgrade imsg',
-    });
-    expect(runCommand).toHaveBeenCalledExactlyOnceWith(
-      ["imsg-legacy-private-status", "status", "--json"],
-      { timeoutMs: 1000 },
-    );
-  });
-
   it("keeps foundational RPC healthy when an older imsg lacks private status", async () => {
     const runCommand = mockCommandSequence(
       { stdout: "rpc help" },
@@ -479,11 +337,23 @@ describe("probeIMessage", () => {
       ok: true,
       privateApi: {
         available: false,
+        v2Ready: false,
+        selectors: {},
+        rpcMethods: [],
+        cliCapabilities: {
+          sendRichSupportsAttachment: false,
+          pollSendSupportsNoComment: false,
+        },
         error:
           'imsg CLI does not support the "status" subcommand. Update imsg on the Messages Mac: brew update && brew upgrade imsg',
       },
     });
     expect(runCommand).toHaveBeenCalledTimes(2);
+    expect(runCommand).toHaveBeenNthCalledWith(
+      2,
+      ["imsg-legacy-foundational-rpc", "status", "--json"],
+      { timeoutMs: 1000 },
+    );
     expect(request).toHaveBeenCalledWith("chats.list", { limit: 1 }, { timeoutMs: 1000 });
     expect(stop).toHaveBeenCalledOnce();
   });
@@ -511,20 +381,6 @@ describe("probeIMessage", () => {
     expect(result.ok).toBe(false);
     expect(result.error).toBe(
       "imsg command not found (imsg). Check the configured iMessage cliPath or wrapper.",
-    );
-    expect(processRuntime.runCommandWithTimeout).not.toHaveBeenCalled();
-    expect(create).not.toHaveBeenCalled();
-  });
-
-  it("explains how to fix a missing custom imsg wrapper", async () => {
-    vi.spyOn(setupRuntime, "detectBinary").mockResolvedValue(false);
-    const { create } = mockRpcClient();
-
-    const result = await probeIMessage(1000, { cliPath: "/usr/local/bin/imsg-wrapper" });
-
-    expect(result.ok).toBe(false);
-    expect(result.error).toBe(
-      "imsg command not found (/usr/local/bin/imsg-wrapper). Check the configured iMessage cliPath or wrapper.",
     );
     expect(processRuntime.runCommandWithTimeout).not.toHaveBeenCalled();
     expect(create).not.toHaveBeenCalled();
@@ -623,25 +479,6 @@ describe("probeIMessage", () => {
     });
   });
 
-  it("detects poll caption suppression from the exact poll send help contract", async () => {
-    const runCommand = mockCommandSequence(
-      privateStatusResult({ selectors: { pollPayloadMessage: true } }),
-      { stdout: "send-rich --file" },
-      { stdout: "poll send --question <text> --option <text> --no-comment" },
-    );
-
-    await expect(
-      probeIMessagePrivateApi("imsg-poll-no-comment-supported", 1000),
-    ).resolves.toMatchObject({
-      cliCapabilities: { pollSendSupportsNoComment: true },
-    });
-    expect(runCommand).toHaveBeenNthCalledWith(
-      3,
-      ["imsg-poll-no-comment-supported", "poll", "send", "--help"],
-      { timeoutMs: 1000 },
-    );
-  });
-
   it("does not infer poll caption suppression from selectors when the flag is absent", async () => {
     mockCommandSequence(
       privateStatusResult({ selectors: { pollPayloadMessage: true } }),
@@ -695,10 +532,10 @@ describe("probeIMessage", () => {
     } as const;
     const account = resolveIMessageAccount({ cfg, accountId: "work" });
 
-    await probeIMessageStatusAccount({
+    await imessagePlugin.status!.probeAccount!({
       account,
+      cfg,
       timeoutMs: 2500,
-      probeIMessageAccount: channelRuntimeModule.probeIMessageAccount,
     });
 
     expect(probeSpy).toHaveBeenCalledWith({

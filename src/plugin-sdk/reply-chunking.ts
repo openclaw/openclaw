@@ -1,6 +1,3 @@
-/**
- * Public SDK subpath for reply chunking modes and silent-reply token helpers.
- */
 export {
   chunkByParagraph,
   chunkText,

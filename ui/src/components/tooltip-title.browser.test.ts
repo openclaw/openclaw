@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { installTestLinkReader } from "../test-helpers/link-reader.ts";
 import { installTitleTooltips } from "./tooltip-title.ts";
 
 // Accessible names and opacity require real layout; keep the canonical browser-only gate.
@@ -51,6 +52,35 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
         expect(button.checkVisibility({ checkOpacity: true })).toBe(true);
         expect(namedButton.elements()).toEqual([button]);
         await namedButton.click();
+      },
+    );
+
+    it.each([
+      ["an entering ancestor", "container", false],
+      ["the trigger itself", "button", false],
+      ["the label inside the trigger", "label", true],
+    ] as const)(
+      "judges a repeated title against text faded by %s",
+      async (_case, fadedPart, expectedOpen) => {
+        const parts = {
+          container: document.createElement("div"),
+          button: document.createElement("button"),
+          label: document.createElement("span"),
+        };
+        parts.label.textContent = "Active";
+        parts.button.title = "Active";
+        parts.button.append(parts.label);
+        parts.container.append(parts.button);
+        document.body.append(parts.container);
+        parts[fadedPart].style.opacity = "0";
+
+        parts.button.focus();
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => resolve());
+        });
+        expect(document.querySelector("openclaw-tooltip")?.hasAttribute("open") ?? false).toBe(
+          expectedOpen,
+        );
       },
     );
 
@@ -142,7 +172,9 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
     );
 
     it("preserves an icon-only GitHub link name while its title hint is reserved for a preview", async () => {
-      const provider = document.createElement("openclaw-github-link-hovercard-provider");
+      const provider = installTestLinkReader(
+        document.createElement("openclaw-link-reader-hovercard-provider"),
+      );
       const link = document.createElement("a");
       link.href = "https://github.com/openclaw/openclaw/pull/99816";
       link.title = "Issue details";

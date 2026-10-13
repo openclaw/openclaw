@@ -7,10 +7,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveNonEnvSecretRefApiKeyMarker } from "../secrets/provider-credential-values.js";
 import { appendConfigPathSegment } from "../shared/dot-path.js";
 import { isRecord } from "../utils.js";
-import {
-  resolveNonEnvSecretRefHeaderValueMarker,
-  resolveEnvSecretRefHeaderValueMarker,
-} from "./model-auth-markers.js";
+import { resolveEnvSecretRefHeaderValueMarker } from "./model-auth-markers.js";
 import { normalizeProviderMapKeys } from "./models-config.merge.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 
@@ -86,7 +83,7 @@ function resolveSourceManagedHeaderMarkers(params: {
     markers[headerName] =
       sourceHeaderRef.source === "env"
         ? resolveEnvSecretRefHeaderValueMarker(sourceHeaderRef.id)
-        : resolveNonEnvSecretRefHeaderValueMarker(sourceHeaderRef.source);
+        : resolveNonEnvSecretRefApiKeyMarker(sourceHeaderRef.source);
   }
   return markers;
 }

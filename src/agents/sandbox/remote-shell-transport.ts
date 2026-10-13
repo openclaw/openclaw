@@ -1,5 +1,5 @@
 /** Remote-shell transport operations shared by SSH and provider-owned execution. */
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -8,6 +8,7 @@ import { resolveRootPath } from "../../infra/boundary-path.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { normalizeEnvVarKey } from "../../infra/host-env-security.js";
 import { isPlainCommandExitFailure, spawnCommand } from "../../process/exec.js";
+import { runWithSpawnBroker } from "../../process/spawn-broker/context.js";
 import type { SandboxBackendCommandResult } from "./backend-handle.types.js";
 import { SANDBOX_COMMAND_MAX_BUFFER_BYTES } from "./constants.js";
 import {
@@ -68,19 +69,27 @@ export function createRemoteShellSandboxSession(
     if (command.argv.length === 0) {
       throw new Error("Remote shell command argv is empty");
     }
-    if (checkCurrent) {
-      options.assertCurrent?.();
-    }
-    const result = await spawnCommand(command.argv, {
-      baseEnv: command.env,
-      cwd: command.cwd,
-      cancelSignal: params.signal,
-      encoding: "buffer",
-      input: params.stdin ?? Buffer.alloc(0),
-      maxBuffer: SANDBOX_COMMAND_MAX_BUFFER_BYTES,
-      reject: false,
-      stripFinalNewline: false,
-    });
+    const launch = () => {
+      if (checkCurrent) {
+        options.assertCurrent?.();
+      }
+      params.signal?.throwIfAborted();
+      return spawnCommand(command.argv, {
+        baseEnv: command.env,
+        cwd: command.cwd,
+        cancelSignal: params.signal,
+        encoding: "buffer",
+        input: params.stdin ?? Buffer.alloc(0),
+        maxBuffer: SANDBOX_COMMAND_MAX_BUFFER_BYTES,
+        reject: false,
+        stripFinalNewline: false,
+      });
+    };
+    // Released guards cannot retain foreign-writer authority across broker IPC.
+    // Keep the final check and native launch synchronous until the next SDK major.
+    const result = await (checkCurrent && options.assertCurrent
+      ? runWithSpawnBroker(undefined, launch)
+      : launch());
     if (params.signal?.aborted || result.isCanceled) {
       throw createAbortError("Aborted");
     }
@@ -185,7 +194,7 @@ async function uploadDirectoryToRemoteCommand(
   params: RemoteShellUploadParams,
   options: RemoteShellSessionOptions,
 ): Promise<void> {
-  await assertSafeUploadSymlinks(params.localDir);
+  await assertSafeUploadSymlinks(params.localDir, params.signal);
   const remoteCommand = buildRemoteCommand([
     "/bin/sh",
     "-c",
@@ -200,122 +209,85 @@ async function uploadDirectoryToRemoteCommand(
     throw new Error("Remote shell command argv is empty");
   }
   const tarEnv = sanitizeEnvVars(process.env).allowed;
-  await new Promise<void>((resolve, reject) => {
-    options.assertCurrent?.();
-    const tar = spawn("tar", ["-C", params.localDir, "-cf", "-", "."], {
-      stdio: ["ignore", "pipe", "pipe"],
-      env: tarEnv,
-      signal: params.signal,
-    });
-    const remote = spawn(executable, args, {
-      stdio: ["pipe", "pipe", "pipe"],
-      env: command.env,
-      cwd: command.cwd,
-      signal: params.signal,
-    });
-    const tarStderr: Buffer[] = [];
-    const remoteStdout: Buffer[] = [];
-    const remoteStderr: Buffer[] = [];
-    let tarClosed = false;
-    let remoteClosed = false;
-    let tarCode: number | null = 0;
-    let remoteCode: number | null = 0;
-    let tarSignal: NodeJS.Signals | null = null;
-    let remoteSignal: NodeJS.Signals | null = null;
-    let settled = false;
-
-    const fail = (error: unknown) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      for (const child of [tar, remote]) {
-        try {
-          child.kill("SIGKILL");
-        } catch {
-          // Preserve the pipeline error while still terminating the peer.
-        }
-      }
-      reject(toErrorObject(error, "Non-Error rejection"));
-    };
-
-    tar.stderr.on("data", (chunk) => tarStderr.push(Buffer.from(chunk)));
-    tar.stderr.on("error", fail);
-    tar.stdout.on("error", fail);
-    remote.stdout.on("data", (chunk) => remoteStdout.push(Buffer.from(chunk)));
-    remote.stdout.on("error", fail);
-    remote.stderr.on("data", (chunk) => remoteStderr.push(Buffer.from(chunk)));
-    remote.stderr.on("error", fail);
-    remote.stdin?.on("error", fail);
-
-    tar.on("error", fail);
-    remote.on("error", fail);
-
-    tar.on("close", (code, signal) => {
-      tarClosed = true;
-      tarCode = code;
-      tarSignal = signal;
-      maybeResolve();
-    });
-    remote.on("close", (code, signal) => {
-      remoteClosed = true;
-      remoteCode = code;
-      remoteSignal = signal;
-      maybeResolve();
-    });
-
-    function maybeResolve() {
-      if (settled || !tarClosed || !remoteClosed) {
-        return;
-      }
-      settled = true;
-      // A null code means the process died from a signal (OOM kill, dropped
-      // connection, supervisor teardown) without reporting a status. An
-      // unknown outcome is not evidence of a completed transfer.
-      if (tarCode === null) {
-        reject(new Error(`tar exited from signal ${tarSignal ?? "unknown"}`));
-        return;
-      }
-      if (tarCode !== 0) {
-        reject(
-          new Error(
-            Buffer.concat(tarStderr).toString("utf8").trim() || `tar exited with code ${tarCode}`,
-          ),
-        );
-        return;
-      }
-      if (remoteCode === null) {
-        reject(new Error(`remote exited from signal ${remoteSignal ?? "unknown"}`));
-        return;
-      }
-      if (remoteCode !== 0) {
-        reject(
-          new Error(
-            Buffer.concat(remoteStderr).toString("utf8").trim() ||
-              `remote exited with code ${remoteCode}`,
-          ),
-        );
-        return;
-      }
-      resolve();
-    }
-
-    try {
-      // Readable pipe errors do not close the writable peer automatically.
-      tar.stdout.pipe(remote.stdin);
-    } catch (error) {
-      fail(error);
-    }
+  options.assertCurrent?.();
+  params.signal?.throwIfAborted();
+  const tar: ChildProcess = spawn("tar", ["-C", params.localDir, "-cf", "-", "."], {
+    stdio: ["ignore", "pipe", "pipe"],
+    env: tarEnv,
+    signal: params.signal,
   });
+  const remote: ChildProcess = spawn(executable, args, {
+    stdio: ["pipe", "pipe", "pipe"],
+    env: command.env,
+    cwd: command.cwd,
+    signal: params.signal,
+  });
+  let failure: Error | undefined;
+  const fail = (error: unknown) => {
+    if (failure) {
+      return;
+    }
+    // Abort and stream errors can precede close; cleanup must still join both children.
+    failure = toErrorObject(error, "Non-Error rejection");
+    for (const child of [tar, remote]) {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // Preserve the pipeline error while still terminating the peer.
+      }
+    }
+  };
+  const completion = (child: ChildProcess, name: string) => {
+    const stderr: Buffer[] = [];
+    child.on("error", fail);
+    // EMFILE/ENFILE can leave streams absent; native close still settles the child.
+    child.stderr?.on("data", (chunk) => stderr.push(Buffer.from(chunk)));
+    child.stderr?.on("error", fail);
+    child.stdout?.on("error", fail);
+    return new Promise<Error | undefined>((resolve) => {
+      child.on("close", (code, signal) => {
+        resolve(
+          code === 0
+            ? undefined
+            : new Error(
+                code === null
+                  ? `${name} exited from signal ${signal ?? "unknown"}`
+                  : Buffer.concat(stderr).toString("utf8").trim() ||
+                      `${name} exited with code ${code}`,
+              ),
+        );
+      });
+    });
+  };
+  const pending = [completion(tar, "tar"), completion(remote, "remote")];
+  remote.stdout?.resume();
+  remote.stdin?.on("error", fail);
+
+  try {
+    // Readable pipe errors do not close the writable peer automatically.
+    if (tar.stdout && remote.stdin) {
+      tar.stdout.pipe(remote.stdin);
+    }
+  } catch (error) {
+    fail(error);
+  }
+  // Neither a pipe error nor an unknown exit status proves a completed transfer.
+  const results = await Promise.all(pending);
+  const error = failure ?? results.find((result) => result !== undefined);
+  if (error) {
+    throw error;
+  }
 }
 
-async function assertSafeUploadSymlinks(localDir: string): Promise<void> {
+async function assertSafeUploadSymlinks(localDir: string, signal?: AbortSignal): Promise<void> {
   const rootDir = path.resolve(localDir);
   await walkDirectory(rootDir);
 
   async function walkDirectory(currentDir: string): Promise<void> {
+    signal?.throwIfAborted();
     const entries = await fs.readdir(currentDir, { withFileTypes: true });
     for (const entry of entries) {
+      signal?.throwIfAborted();
       const entryPath = path.join(currentDir, entry.name);
       if (entry.isSymbolicLink()) {
         // The remote tar extract should not recreate links that escape the

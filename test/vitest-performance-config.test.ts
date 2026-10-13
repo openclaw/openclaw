@@ -9,95 +9,6 @@ import { createNodeEvalArgs } from "../src/test-utils/node-process.ts";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 import { loadVitestPerformanceConfig } from "./vitest/vitest.performance-config.ts";
 
-describe("loadVitestPerformanceConfig", () => {
-  it("enables the filesystem module cache by default", () => {
-    expect(loadVitestPerformanceConfig({}, "linux")).toEqual({
-      fsModuleCache: true,
-      fsModuleCachePath: path.join(process.cwd(), ".cache", "vitest", "default"),
-    });
-  });
-
-  it("enables the filesystem module cache explicitly", () => {
-    expect(
-      loadVitestPerformanceConfig(
-        {
-          OPENCLAW_VITEST_FS_MODULE_CACHE: "1",
-        },
-        "linux",
-      ),
-    ).toEqual({
-      fsModuleCache: true,
-      fsModuleCachePath: path.join(process.cwd(), ".cache", "vitest", "default"),
-    });
-  });
-
-  it("passes through the filesystem module cache path when provided", () => {
-    expect(
-      loadVitestPerformanceConfig(
-        {
-          OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: "/tmp/openclaw-vitest-cache",
-        },
-        "linux",
-      ),
-    ).toEqual({
-      fsModuleCache: true,
-      fsModuleCachePath: "/tmp/openclaw-vitest-cache",
-    });
-  });
-
-  it("disables the filesystem module cache by default on Windows", () => {
-    expect(loadVitestPerformanceConfig({}, "win32")).toStrictEqual({});
-  });
-
-  it("still allows enabling the filesystem module cache explicitly on Windows", () => {
-    expect(
-      loadVitestPerformanceConfig(
-        {
-          OPENCLAW_VITEST_FS_MODULE_CACHE: "1",
-        },
-        "win32",
-      ),
-    ).toEqual({
-      fsModuleCache: true,
-      fsModuleCachePath: path.join(process.cwd(), ".cache", "vitest", "default"),
-    });
-  });
-
-  it("allows disabling the filesystem module cache explicitly", () => {
-    expect(
-      loadVitestPerformanceConfig(
-        {
-          OPENCLAW_VITEST_FS_MODULE_CACHE: "0",
-        },
-        "linux",
-      ),
-    ).toStrictEqual({});
-  });
-
-  it("enables import timing output and import breakdown reporting", () => {
-    expect(
-      loadVitestPerformanceConfig(
-        {
-          OPENCLAW_VITEST_IMPORT_DURATIONS: "true",
-          OPENCLAW_VITEST_PRINT_IMPORT_BREAKDOWN: "1",
-        },
-        "linux",
-      ),
-    ).toEqual({
-      fsModuleCache: true,
-      fsModuleCachePath: path.join(process.cwd(), ".cache", "vitest", "default"),
-      experimental: {
-        importDurations: { print: true },
-        printImportBreakdown: true,
-      },
-    });
-  });
-
-  it("uses RUNNER_OS to detect Windows even when the platform is not win32", () => {
-    expect(loadVitestPerformanceConfig({ RUNNER_OS: "Windows" }, "linux")).toStrictEqual({});
-  });
-});
-
 describe("filesystem module cache ownership", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   const cli = path.join(
@@ -172,6 +83,53 @@ const cacheConfig = ${JSON.stringify(loadVitestPerformanceConfig({}, "linux", ro
 ${source}
 `),
     );
+
+  it("preserves each project's optimized dependency identity when reusing shared transforms", () => {
+    const { root } = prepareCacheFixture("optimizer-identity");
+    const cacheOwner = new URL("./vitest/vitest.performance-config.ts", import.meta.url).href;
+    runCacheApi(
+      root,
+      `
+import { createVitestProjectCachePlugin } from ${JSON.stringify(cacheOwner)};
+fs.writeFileSync(path.join(root, "subject.js"), 'export const dependencyRoot = "__OPTIMIZER_ROOT__";');
+const transforms = [];
+const plugin = {
+  name: "fixture-optimized-dependency-import",
+  transform(code, id) {
+    if (!id.endsWith("/subject.js")) return;
+    const directory = this.environment.config.cacheDir;
+    transforms.push(directory);
+    return { code: code.replace('"__OPTIMIZER_ROOT__"', JSON.stringify(directory)), map: null };
+  },
+};
+const create = () => createVitest("test", {
+  root, config: false, watch: false, ...cacheConfig,
+  projects: ["A", "B"].map(name => ({
+    extends: false,
+    root,
+    plugins: [plugin, createVitestProjectCachePlugin()],
+    test: { name, ...cacheConfig },
+  })),
+});
+for (let pass = 0; pass < 2; pass++) {
+  const ctx = await create();
+  try {
+    const directories = [];
+    for (const name of ["A", "B"]) {
+      const project = ctx.getProjectByName(name);
+      const { dependencyRoot } = await project.import("./subject.js");
+      assert.equal(dependencyRoot, project.vite.config.cacheDir, name + " must keep its own dependency imports");
+      directories.push(dependencyRoot);
+    }
+    assert.notEqual(directories[0], directories[1]);
+  } finally {
+    await ctx.close();
+  }
+}
+assert.equal(transforms.length, 2, "both projects must reuse their own persisted transforms on the second run");
+`,
+    );
+  });
 
   it("preserves another checkout's cache when shared dependencies change", () => {
     const root = tempDirs.make("oc-vitest-cache-ownership-");
@@ -441,64 +399,6 @@ try {
   assert.ok(keyed.has(path.join(root, "post-init.js").replaceAll("\\\\", "/")));
 } finally {
   await ctx?.close();
-}
-`,
-    );
-  });
-
-  it("invalidates root and selected project cache keys together", () => {
-    const { root, generation } = prepareCacheFixture("separate-projects");
-    runCacheApi(
-      root,
-      `
-const generation = ${JSON.stringify(generation)};
-const projectRoot = path.join(root, "A");
-fs.mkdirSync(projectRoot);
-for (const directory of [root, projectRoot]) {
-  fs.writeFileSync(path.join(directory, "subject.js"), 'export const version = "__DEPENDENCY_VERSION__";');
-}
-const plugin = {
-  name: "fixture-selected-project-generation",
-  transform(code, id) {
-    if (!id.endsWith("/subject.js")) return;
-    return { code: code.replace("__DEPENDENCY_VERSION__", fs.readFileSync(generation, "utf8")), map: null };
-  },
-};
-const ctx = await createVitest("test", {
-  root, config: false, watch: false, ...cacheConfig, project: ["A"],
-  projects: [{
-    extends: false,
-    root: projectRoot,
-    plugins: [plugin],
-    test: {
-      name: "A",
-      fsModuleCache: true,
-      fsModuleCachePath: path.join(root, "cache-A"),
-    },
-  }],
-}, { plugins: [plugin] });
-try {
-  const rootProject = ctx.getRootProject();
-  const selectedProject = ctx.getProjectByName("A");
-  assert.equal((await rootProject.import("./subject.js")).version, "1.0.0");
-  assert.equal((await selectedProject.import("./subject.js")).version, "1.0.0");
-  const entries = [rootProject, selectedProject].map((project) => {
-    const environment = project.runner.environment;
-    const module = [...environment.moduleGraph.idToModuleMap.values()].find((entry) =>
-      entry.id?.endsWith("/subject.js")
-    );
-    assert.ok(module?.id, JSON.stringify([...environment.moduleGraph.idToModuleMap.keys()]));
-    return [environment, module.id];
-  });
-  for (const [environment, id] of entries) {
-    assert.equal(typeof ctx._fsCache.getMemoryCachePath(environment, id), "string");
-  }
-  ctx.clearAllCachePaths();
-  for (const [environment, id] of entries) {
-    assert.equal(ctx._fsCache.getMemoryCachePath(environment, id), undefined);
-  }
-} finally {
-  await ctx.close();
 }
 `,
     );

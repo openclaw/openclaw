@@ -1,3 +1,4 @@
+import { normalizeAuthProfileSecretRefs } from "../agents/auth-profiles/credential-normalize.js";
 import { removeProviderAuthProfilesWithLock as removeProviderAuthProfilesWithLockStrict } from "../agents/auth-profiles/profiles.js";
 import { updateAuthProfileStoreWithLock as updateAuthProfileStoreWithLockStrict } from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../agents/auth-profiles/types.js";
@@ -13,13 +14,33 @@ type AuthProfileUpsertParams = {
   stateDir?: string;
 };
 
+type AuthProfileUpdateParams = Pick<
+  Parameters<typeof updateAuthProfileStoreWithLockStrict>[0],
+  "agentDir" | "profileId" | "sharedStoreWrite" | "stateDir" | "saveOptions"
+> & { updater: (store: AuthProfileStore) => boolean };
+
 // These Plugin SDK exports shipped with nullable failure semantics. Core callers use the
 // strict helpers directly so plugins retain the stable contract without masking core failures.
 export async function updateAuthProfileStoreWithLockCompat(
-  params: Parameters<typeof updateAuthProfileStoreWithLockStrict>[0],
+  params: AuthProfileUpdateParams,
 ): Promise<AuthProfileStore | null> {
   try {
-    return await updateAuthProfileStoreWithLockStrict(params);
+    return await updateAuthProfileStoreWithLockStrict({
+      agentDir: params.agentDir,
+      profileId: params.profileId,
+      sharedStoreWrite: params.sharedStoreWrite,
+      stateDir: params.stateDir,
+      saveOptions: params.saveOptions,
+      updater: (store) => {
+        const changed = params.updater(store);
+        if (changed) {
+          for (const [profileId, credential] of Object.entries(store.profiles)) {
+            store.profiles[profileId] = normalizeAuthProfileSecretRefs(credential);
+          }
+        }
+        return changed;
+      },
+    });
   } catch {
     return null;
   }

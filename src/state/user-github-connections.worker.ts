@@ -1,0 +1,269 @@
+import { randomUUID } from "node:crypto";
+import type { DatabaseSync } from "node:sqlite";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import {
+  deferSqliteWorkerCommitReceipt,
+  requestSqliteWorkerOperationAdmission,
+} from "../infra/sqlite-worker-operation-admission.js";
+import { tableExists } from "./openclaw-state-db-schema-helpers.js";
+import type { DB } from "./openclaw-state-db.generated.js";
+import {
+  cancelUserGitHubAuthorizationInDatabase,
+  disconnectedUserGitHubConnection,
+  disconnectUserGitHubConnectionInDatabase,
+  parseUserGitHubConnection,
+  readUserGitHubConnectionInDatabase,
+  readCanonicalUserGitHubConnectionInDatabase,
+  resolvePersonalGitHubOwnerInDatabase,
+  writeUserGitHubConnectionInDatabase,
+} from "./user-github-connections.kernel.js";
+import type {
+  UserGitHubConnection,
+  UserGitHubConnectionCommit,
+  UserGitHubConnectionMutation,
+  UserGitHubRefreshMutation,
+} from "./user-github-connections.types.js";
+import type { UserProfilesDatabase } from "./user-profiles.types.js";
+import type {
+  WorkerOperationHandlers,
+  WorkerOperations,
+  WorkerWriteOperationContext,
+} from "./worker-operation-registry.js";
+
+function listUserGitHubConnections(db: DatabaseSync): Array<{
+  owner: string;
+  connection: UserGitHubConnection;
+}> {
+  if (!tableExists(db, "secret_store_entries") || !tableExists(db, "user_profiles")) {
+    return [];
+  }
+  const query = getNodeSqliteKysely<
+    Pick<DB, "secret_store_entries"> & Pick<UserProfilesDatabase, "user_profiles">
+  >(db);
+  return executeSqliteQuerySync(
+    db,
+    query
+      .selectFrom("secret_store_entries")
+      .innerJoin("user_profiles", "user_profiles.id", "secret_store_entries.scope_id")
+      .select(["scope_id", "value"])
+      .where("scope_kind", "=", "identity")
+      .where("name", "=", "github-connection")
+      .where("kind", "=", "secret")
+      .where("allowed_hosts", "is", null)
+      .where("deleted_at_ms", "is", null)
+      .where("merged_into", "is", null)
+      .orderBy("scope_id"),
+  ).rows.flatMap((row) => {
+    try {
+      return [{ owner: row.scope_id, connection: parseUserGitHubConnection(row.value) }];
+    } catch {
+      return [];
+    }
+  });
+}
+
+function requirePending(
+  current: UserGitHubConnection | undefined,
+  generation: string,
+  requestId: string,
+) {
+  if (
+    !current?.pending ||
+    current.generation !== generation ||
+    current.pending.requestId !== requestId ||
+    current.pending.expiresAtMs <= Date.now()
+  ) {
+    throw new Error("My GitHub authorization changed or expired; start again.");
+  }
+  return { ...current, pending: current.pending };
+}
+
+function applyMutation(
+  current: UserGitHubConnection | undefined,
+  mutation: Exclude<UserGitHubConnectionMutation, { kind: "disconnect" | "cancel" }>,
+): UserGitHubConnection | undefined {
+  switch (mutation.kind) {
+    case "start":
+      return {
+        ...(current ?? disconnectedUserGitHubConnection()),
+        pending: {
+          kind: "starting",
+          requestId: mutation.requestId,
+          createdAtMs: mutation.createdAtMs,
+          expiresAtMs: mutation.expiresAtMs,
+        },
+      };
+    case "device":
+      return {
+        ...requirePending(current, mutation.generation, mutation.requestId),
+        pending: mutation.device,
+      };
+    case "poll": {
+      const owned = requirePending(current, mutation.generation, mutation.requestId);
+      if (owned.pending.kind !== "device" || owned.pending.deviceCode !== mutation.deviceCode) {
+        throw new Error("My GitHub authorization changed.");
+      }
+      const result = mutation.result;
+      return {
+        ...owned,
+        pending:
+          result.kind === "terminal"
+            ? undefined
+            : {
+                ...owned.pending,
+                ...(result.kind === "candidate"
+                  ? { candidate: result.candidate }
+                  : { pollIntervalMs: result.pollIntervalMs, nextPollAtMs: result.nextPollAtMs }),
+              },
+      };
+    }
+    case "connect": {
+      const owned = requirePending(current, mutation.generation, mutation.requestId);
+      const candidate = owned.pending.kind === "device" ? owned.pending.candidate : undefined;
+      if (!candidate || candidate.profileId !== mutation.profileId) {
+        throw new Error("My GitHub authorization changed.");
+      }
+      return {
+        ...owned,
+        generation: randomUUID(),
+        pending: undefined,
+        selection: {
+          kind: "connected",
+          profileId: candidate.profileId,
+          accountId: mutation.accountId,
+          login: mutation.login,
+          refreshToken: candidate.tokens.refreshToken,
+          scopes: candidate.tokens.scopes,
+          accessExpiresAtMs: candidate.receivedAtMs + candidate.tokens.expiresInSeconds * 1000,
+          refreshExpiresAtMs:
+            candidate.receivedAtMs + candidate.tokens.refreshTokenExpiresInSeconds * 1000,
+        },
+      };
+    }
+    case "expire":
+      return current?.pending && current.pending.expiresAtMs <= mutation.nowMs
+        ? { ...current, pending: undefined }
+        : undefined;
+    case "beginRefresh":
+      if (
+        current?.generation !== mutation.generation ||
+        current.selection.kind !== "connected" ||
+        current.selection.profileId !== mutation.profileId
+      ) {
+        throw new Error("My GitHub selection changed.");
+      }
+      return {
+        ...current,
+        selection: { ...current.selection, refresh: { operationId: mutation.operationId } },
+      };
+  }
+  throw new Error("Unknown personal GitHub connection mutation.");
+}
+
+function mutate<T>(
+  context: WorkerWriteOperationContext,
+  operation: (
+    db: ReturnType<WorkerWriteOperationContext["open"]>["db"],
+    capture: (receipt: UserGitHubConnectionCommit) => void,
+  ) => T,
+): T {
+  return context.write(
+    ({ db }) => {
+      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+      const receipt: UserGitHubConnectionCommit = {
+        kind: "user-github-connection",
+        changedOwners: [],
+        retiredProfileIds: [],
+      };
+      const result = operation(db, (publication) => {
+        receipt.changedOwners.push(...publication.changedOwners);
+        receipt.retiredProfileIds.push(...publication.retiredProfileIds);
+      });
+      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: receipt });
+      deferSqliteWorkerCommitReceipt(db, receipt);
+      return result;
+    },
+    { operationLabel: "users.github.mutate" },
+  );
+}
+
+export const userGitHubConnectionOperations = {
+  "userGitHubConnections.read": ({ owner }: { owner: string }, { open }) =>
+    readUserGitHubConnectionInDatabase(open().db, owner),
+  "userGitHubConnections.resolveOwner": ({ profile }: { profile: string }, { open }) =>
+    resolvePersonalGitHubOwnerInDatabase(profile, open().db),
+  "userGitHubConnections.list": (_input: undefined, { open }) =>
+    listUserGitHubConnections(open().db),
+  "userGitHubConnections.mutate": (
+    input: { owner: string; mutation: UserGitHubConnectionMutation },
+    context,
+  ) => {
+    return mutate(context, (db, capture) => {
+      const { owner, mutation } = input;
+      if (mutation.kind === "disconnect") {
+        return disconnectUserGitHubConnectionInDatabase(db, owner, capture);
+      }
+      if (mutation.kind === "cancel") {
+        return cancelUserGitHubAuthorizationInDatabase(db, owner, mutation.requestId, capture);
+      }
+      const current = readUserGitHubConnectionInDatabase(db, owner);
+      const next = applyMutation(current, mutation);
+      return next
+        ? writeUserGitHubConnectionInDatabase(db, owner, next, current, capture)
+        : undefined;
+    });
+  },
+  "userGitHubConnections.refresh": (input: UserGitHubRefreshMutation, context) =>
+    mutate(context, (db, capture) => {
+      const resolved = readCanonicalUserGitHubConnectionInDatabase(db, input.owner);
+      if (!resolved) {
+        return false;
+      }
+      const { owner, connection: current } = resolved;
+      const selection = current?.selection;
+      if (
+        !current ||
+        selection?.kind !== "connected" ||
+        selection.profileId !== input.profileId ||
+        selection.refresh?.operationId !== input.operationId
+      ) {
+        return false;
+      }
+      const result = input.result;
+      const next =
+        result.kind === "rotated"
+          ? {
+              ...selection,
+              refreshToken: result.tokens.refreshToken,
+              scopes: result.tokens.scopes,
+              accessExpiresAtMs: result.receivedAtMs + result.tokens.expiresInSeconds * 1000,
+              refreshExpiresAtMs:
+                result.receivedAtMs + result.tokens.refreshTokenExpiresInSeconds * 1000,
+              refreshFailure: undefined,
+              refresh: {
+                operationId: input.operationId,
+                tokens: result.tokens,
+                receivedAtMs: result.receivedAtMs,
+              },
+            }
+          : {
+              ...selection,
+              refresh: undefined,
+              ...(result.kind === "materialized"
+                ? { login: result.login, refreshFailure: undefined }
+                : { refreshFailure: result.failure }),
+            };
+      writeUserGitHubConnectionInDatabase(
+        db,
+        owner,
+        { ...current, selection: next },
+        current,
+        capture,
+      );
+      return true;
+    }),
+} satisfies WorkerOperationHandlers<WorkerWriteOperationContext>;
+
+export type UserGitHubConnectionWorkerOperations = WorkerOperations<
+  typeof userGitHubConnectionOperations
+>;

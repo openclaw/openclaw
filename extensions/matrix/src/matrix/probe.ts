@@ -1,5 +1,4 @@
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
-// Matrix plugin module implements probe behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
@@ -7,11 +6,7 @@ import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { runChannelProbe } from "openclaw/plugin-sdk/text-utility-runtime";
 
-const loadMatrixProbeRuntimeDeps = createLazyRuntimeModule(() =>
-  import("./probe.runtime.js").then((runtimeModule) => ({
-    createMatrixClient: runtimeModule.createMatrixClient,
-  })),
-);
+const loadMatrixProbeRuntimeDeps = createLazyRuntimeModule(() => import("./client.js"));
 
 export type MatrixProbe = BaseProbeResult & {
   status?: number | null;
@@ -59,11 +54,15 @@ export async function probeMatrix(params: {
         ssrfPolicy: params.ssrfPolicy,
         dispatcherPolicy: params.dispatcherPolicy,
       });
-      const userId = await client.getUserId();
-      if (inputUserId && inputUserId !== userId) {
-        return { ...result, error: "Matrix access token user does not match configured userId" };
+      try {
+        const userId = await client.getUserId();
+        if (inputUserId && inputUserId !== userId) {
+          return { ...result, error: "Matrix access token user does not match configured userId" };
+        }
+        return { ...result, ok: true, userId };
+      } finally {
+        await client.stopWithoutPersist();
       }
-      return { ...result, ok: true, userId };
     },
     (error) => ({
       ok: false,

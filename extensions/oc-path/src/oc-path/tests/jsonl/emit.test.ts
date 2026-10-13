@@ -1,35 +1,15 @@
 // OC Path tests cover emit plugin behavior.
 import { describe, expect, it } from "vitest";
-import { emitJsonl } from "../../jsonl/emit.js";
+import { renderJsonl } from "../../jsonl/emit.js";
 import { parseJsonl } from "../../jsonl/parse.js";
 import { OcEmitSentinelError, REDACTED_SENTINEL } from "../../sentinel.js";
 
-describe("emitJsonl — round-trip", () => {
-  it("returns raw bytes verbatim by default", () => {
-    const raw = '{"a":1}\n\n{"b":2}\nthis is malformed\n';
-    const { ast } = parseJsonl(raw);
-    expect(emitJsonl(ast)).toBe(raw);
-  });
-
-  it("echoes pre-existing sentinel bytes by default; strict mode rejects", () => {
-    const raw = `{"a":"${REDACTED_SENTINEL}"}\n`;
-    const { ast } = parseJsonl(raw);
-    expect(emitJsonl(ast)).toBe(raw);
-    expect(() =>
-      emitJsonl(ast, {
-        fileNameForGuard: "session-events",
-        acceptPreExistingSentinel: false,
-      }),
-    ).toThrow(OcEmitSentinelError);
-  });
-});
-
-describe("emitJsonl — render mode", () => {
+describe("renderJsonl", () => {
   it("renders nested values compactly and preserves entry order", () => {
     const { ast } = parseJsonl(
       '{ "2": 2, "1": 1, "2": 3, "values": [{}, [], {"scalars": [true, false, null, -1.5, "text"]}] }\n[ {}, [] ]\n',
     );
-    const out = emitJsonl(ast, { mode: "render" });
+    const out = renderJsonl(ast);
     expect(out).toBe(
       '{"2":2,"1":1,"2":3,"values":[{},[],{"scalars":[true,false,null,-1.5,"text"]}]}\n[{},[]]',
     );
@@ -37,13 +17,13 @@ describe("emitJsonl — render mode", () => {
 
   it("preserves blank and malformed lines verbatim in render mode", () => {
     const { ast } = parseJsonl('{"a":1}\n\nbroken\n{"b":2}\n');
-    const out = emitJsonl(ast, { mode: "render" });
+    const out = renderJsonl(ast);
     expect(out.split("\n")).toEqual(['{"a":1}', "", "broken", '{"b":2}']);
   });
 
   it("reports the line and nested path when a value-leaf is the sentinel", () => {
     const { ast } = parseJsonl(`{"ok":true}\n{"outer":[{"token":"${REDACTED_SENTINEL}"}]}\n`);
-    expect(() => emitJsonl(ast, { mode: "render", fileNameForGuard: "events" })).toThrow(
+    expect(() => renderJsonl(ast, "events")).toThrow(
       expect.objectContaining({
         code: "OC_EMIT_SENTINEL",
         path: "oc://events/L2/outer/0/token",
@@ -79,6 +59,6 @@ describe("emitJsonl — render mode", () => {
         },
       ],
     };
-    expect(() => emitJsonl(tampered, { mode: "render" })).toThrow(OcEmitSentinelError);
+    expect(() => renderJsonl(tampered)).toThrow(OcEmitSentinelError);
   });
 });

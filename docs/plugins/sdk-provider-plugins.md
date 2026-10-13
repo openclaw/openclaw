@@ -53,6 +53,25 @@ Unavailable storage or an unusable matching OAuth profile continues to interacti
 sign-in. A matching account identity alone does not make expired credentials usable.
 A failed selected import stops the operation instead of silently starting a different login.
 
+## Loopback OAuth callbacks
+
+Bundled providers use `startProviderOAuthLoopbackCallbackServer` from
+`openclaw/plugin-sdk/provider-auth-runtime` to bind their callback before opening
+the browser. `waitForCallback()` returns either an OAuth error or a validated
+code/state pair with `parameters: URLSearchParams` for provider-specific fields.
+Repeated parameters remain available for the provider to validate.
+
+The default response acknowledges the callback and closes the listener. Set
+`deferResponse: true` to finish token exchange and identity checks before calling
+`complete({ status, body, contentType })`. Abort, optional `timeoutMs`, and browser
+disconnection still close a deferred response; a late `complete()` is a no-op.
+Always call `close()` in `finally`. The caller's signal and authority checks own
+token requests and persistence; the listener deadline does not cancel that work.
+
+By default, the listener binds every loopback address resolved for the redirect
+hostname. `bindHostname` adds a loopback host. Use `bindOnlyHostname` instead to
+preserve a provider's exact Node bind host (`localhost`, `127.0.0.1`, or `::1`).
+
 ## Handle model access after sign-in
 
 Existing consumers of `runModelsAuthLoginFlow` from
@@ -311,6 +330,41 @@ a saved policy is not proof that the running Gateway applied it.
     timeline](/plugins/sdk-migration/removal-timeline) for the dates and gates
     that govern deprecated surfaces named on this page and its child pages.
 
+    To read runtime auth profiles, await `loadAuthProfileStoreForRuntimeAsync`
+    from `openclaw/plugin-sdk/agent-runtime`. It reads persisted profiles in a
+    database worker and preserves the optional third `env` argument for
+    service-owned state directories. The synchronous `loadAuthProfileStoreForRuntime`
+    is deprecated and will be removed at the next Plugin SDK major.
+
+    `createProviderApiKeyAuthMethod` accepts an optional `validateApiKey` callback.
+    Return an error message to reject a resolved key before any auth profile is
+    returned or saved. The check runs for interactive input, resolved SecretRefs,
+    and non-interactive flag, environment, or saved-profile credentials.
+
+    Bundled custom API-key methods can use `captureProviderApiKey` and
+    `persistProviderApiKey` from `openclaw/plugin-sdk/provider-auth-api-key`
+    when vendor prompts or validation need to stay between auth steps.
+    `captureProviderApiKey(ctx, options)` accepts the existing token/provider,
+    environment, and prompt options. It returns the resolved `apiKey` for
+    validation alongside the original storage `input` and `mode`, without
+    saving credentials. Build returned profiles from `input` and `mode` so
+    SecretRefs remain references. The helper preserves the context's staged
+    workspace and secret-storage prompt preference.
+
+    `persistProviderApiKey(ctx, profileId, { provider, resolved, metadata })`
+    accepts an already resolved non-interactive key. It leaves profile-sourced
+    credentials unchanged, returns `false` if credential conversion fails,
+    and propagates persistence errors. Keep vendor checks before this call;
+    apply auth-profile config and model defaults afterward through their
+    existing owners. Neither helper chooses an endpoint or model.
+    Interactive auth methods can use `ctx.existingProfiles` to reconnect with
+    host-authorized `{ profileId, credential }` candidates. CLI login and onboarding
+    supply stored profiles for the selected provider; `--profile-id` narrows CLI
+    login to that profile. Personal account flows supply only the current person's
+    selected private account. An absent or empty list means no reusable account.
+    Provider methods select compatible candidates and offer reuse or a new account;
+    they must not load shared credentials to fill the list.
+
     A custom interactive auth method that mints a static token or API key can
     request protected persistence on its returned profile:
 
@@ -472,6 +526,30 @@ providers:
 | `paired`  | After profile | Synthesize multiple related entries             |
 | `late`    | Last pass     | Override existing providers (wins on collision) |
 
+Within each phase, OpenClaw runs up to four catalog hooks concurrently. It waits
+for the phase to settle, then merges model rows and provider outcomes in provider
+label order. Hooks retain their individual discovery deadlines; completion order
+does not change catalog precedence.
+
+## Provider stream decorators
+
+`wrapStreamFn` receives optional request context for provider-owned behavior:
+
+- `modelParams` contains only per-model params, with the current agent's model
+  params taking precedence over default model params. Global and agent-wide
+  params are excluded; `extraParams` still contains the merged request params.
+- `modelCallUrgency` is the host's `foreground`, `normal`, or `background`
+  classification. Translate it into provider-native scheduling hints only when
+  the selected endpoint supports them and the operator has enabled the behavior.
+
+A wrapper that only decorates requests can return its callable with
+`preservesGenericCompatibility: true`, for example
+`Object.assign(decoratedStream, { preservesGenericCompatibility: true })`.
+This keeps shared request shaping and output normalization active, including
+MiMo reasoning replay and final-answer handling. Without the flag, a replacement
+stream keeps the existing behavior of taking ownership of those compatibility
+policies. Returning the original stream or no wrapper also preserves them.
+
 ## Next steps
 
 - [Channel Plugins](/plugins/sdk-channel-plugins) - if your plugin also provides a channel
@@ -493,9 +571,9 @@ resolve here.
 
 ### Provider hook families
 
-[Provider hook families](/plugins/sdk-provider-plugins/hook-families) — Shared replay, stream, and tool-compat family builders and the SDK seams behind them.
+[Provider hook families](/plugins/sdk-provider-plugins/hook-families) — Shared replay, stream, and tool-compat family builders and the SDK interfaces behind them.
 
-- <a id="sdk-seams-powering-the-family-builders"></a>[SDK seams powering the family builders](/plugins/sdk-provider-plugins/hook-families#sdk-seams-powering-the-family-builders)
+- <a id="sdk-seams-powering-the-family-builders"></a>[SDK interfaces behind the family builders](/plugins/sdk-provider-plugins/hook-families#sdk-seams-powering-the-family-builders)
 
 ### Provider hook wiring
 

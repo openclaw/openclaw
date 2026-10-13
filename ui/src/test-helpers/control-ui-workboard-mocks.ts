@@ -43,44 +43,6 @@ export function installWorkboardBoardMock(seed: ReturnType<typeof buildWorkboard
     return undefined;
   }
   const workboardCards = new Map<string, MockCard>(seed.cards.map((card) => [card.id, card]));
-  const tasks = new Map(seed.tasks.map((task) => [task.id, task]));
-  gateway.setRequestHandler("tasks.list", ({ params, respond }) => {
-    const input = params as { sessionKey?: string; status?: string | string[] };
-    respond({
-      tasks: [...tasks.values()].filter(
-        (task) =>
-          (!input.sessionKey || task.sessionKey === input.sessionKey) &&
-          (!input.status ||
-            (Array.isArray(input.status)
-              ? input.status.includes(task.status)
-              : input.status === task.status)),
-      ),
-    });
-  });
-  gateway.setRequestHandler("tasks.get", ({ params, respond }) => {
-    const task = tasks.get((params as { taskId: string }).taskId);
-    respond(
-      task ? { task } : { __mockError: { code: "INVALID_REQUEST", message: "Task not found" } },
-    );
-  });
-  gateway.setRequestHandler("tasks.cancel", ({ params, respond, emit }) => {
-    const task = tasks.get((params as { taskId: string }).taskId);
-    if (!task) {
-      respond({ found: false, cancelled: false, reason: "Mock task not found." });
-      return;
-    }
-    const cancelled = task.status === "queued" || task.status === "running";
-    if (cancelled) {
-      task.status = "cancelled";
-      task.updatedAt = Date.now();
-      task.terminalSummary = "Stopped by the operator in this synthetic fixture.";
-    }
-    respond({ found: true, task, cancelled });
-    if (cancelled) {
-      emit("task", { action: "upserted", task });
-      emit("plugin.workboard.changed", { epoch: "workboard-mock", revision: ++revision });
-    }
-  });
   const statuses = seed.methodResponses["workboard.cards.list"].statuses;
   let revision = Date.now();
   const boardSummaries = () =>

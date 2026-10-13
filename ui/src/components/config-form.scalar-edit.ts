@@ -5,53 +5,27 @@ export type ScalarEditHint = {
   branch?: ScalarValueBranch;
 };
 
-type ScalarEditState = {
+type ScalarInputState = {
   edit?: ScalarEditHint;
+  controlIdentity: unknown;
+  sourceIdentity: unknown;
   pathKey: string;
   presentationIdentity: string;
+  renderedValue: string;
 };
 
-const scalarEditState = new WeakMap<HTMLInputElement, ScalarEditState>();
+const scalarInputState = new WeakMap<HTMLInputElement, ScalarInputState>();
 
 export function scalarValueBranch(value: unknown): ScalarValueBranch | undefined {
-  if (typeof value === "string") {
-    return "string";
-  }
-  if (typeof value === "number") {
-    return "number";
-  }
-  if (typeof value === "boolean") {
-    return "boolean";
-  }
-  return undefined;
-}
-
-export function syncScalarEditIdentity(
-  element: Element | undefined,
-  pathKey: string,
-  presentationIdentity: string,
-): void {
-  if (!(element instanceof HTMLInputElement)) {
-    return;
-  }
-  const previous = scalarEditState.get(element);
-  const preserveEdit =
-    previous?.edit !== undefined &&
-    element.ownerDocument.activeElement === element &&
-    previous.pathKey === pathKey &&
-    previous.presentationIdentity === presentationIdentity;
-  scalarEditState.set(element, {
-    edit: preserveEdit ? previous.edit : undefined,
-    pathKey,
-    presentationIdentity,
-  });
+  const type = typeof value;
+  return type === "string" || type === "number" || type === "boolean" ? type : undefined;
 }
 
 export function beginScalarEdit(
   target: HTMLInputElement,
   initialBranch: ScalarValueBranch | undefined,
 ): ScalarEditHint {
-  const state = scalarEditState.get(target);
+  const state = scalarInputState.get(target);
   if (!state) {
     return { branch: initialBranch };
   }
@@ -63,18 +37,78 @@ export function scalarEditHintForInput(
   target: HTMLInputElement,
   initialBranch: ScalarValueBranch | undefined,
 ): ScalarEditHint {
-  return scalarEditState.get(target)?.edit ?? { branch: initialBranch };
+  return scalarInputState.get(target)?.edit ?? { branch: initialBranch };
 }
 
 export function finishScalarEdit(target: HTMLInputElement): void {
-  const state = scalarEditState.get(target);
+  const state = scalarInputState.get(target);
   if (state) {
     state.edit = undefined;
   }
 }
 
-export function finishScalarEditFromEvent(event: Event): void {
-  if (event.currentTarget instanceof HTMLInputElement) {
-    finishScalarEdit(event.currentTarget);
+export function setControlValidity(
+  target: HTMLInputElement | HTMLTextAreaElement,
+  message: string,
+  errorContainer = ".settings-row",
+): boolean {
+  target.setCustomValidity(message);
+  target.setAttribute("aria-invalid", String(Boolean(message)));
+  const error = target.closest(errorContainer)?.querySelector<HTMLElement>(".cfg-field__error");
+  if (error) {
+    error.hidden = !message;
+    error.textContent = message;
   }
+  return !message;
+}
+
+export function syncScalarInputIdentity(
+  element: Element | undefined,
+  controlIdentity: unknown,
+  sourceIdentity: unknown,
+  pathKey: string,
+  presentationIdentity: string,
+  renderedValue: string,
+  revalidate: (target: HTMLInputElement) => void,
+): void {
+  if (!(element instanceof HTMLInputElement)) {
+    return;
+  }
+  const previous = scalarInputState.get(element);
+  const edit =
+    element.ownerDocument.activeElement === element &&
+    previous?.pathKey === pathKey &&
+    previous.presentationIdentity === presentationIdentity
+      ? previous.edit
+      : undefined;
+  if (previous) {
+    if (
+      !Object.is(previous.sourceIdentity, sourceIdentity) ||
+      previous.pathKey !== pathKey ||
+      previous.presentationIdentity !== presentationIdentity ||
+      previous.renderedValue !== renderedValue
+    ) {
+      // A focused input whose DOM value drifted from the last render holds an
+      // in-flight edit the model has not committed yet (mid-keystroke or
+      // mid-automation fill). Resetting it here silently eats that input when
+      // a background config refresh lands; blurred fields keep the
+      // authoritative-reset contract.
+      if (element.matches(":focus") && element.value !== previous.renderedValue) {
+        revalidate(element);
+      } else {
+        element.value = renderedValue;
+        setControlValidity(element, "");
+      }
+    } else if (!Object.is(previous.controlIdentity, controlIdentity)) {
+      revalidate(element);
+    }
+  }
+  scalarInputState.set(element, {
+    edit,
+    controlIdentity,
+    sourceIdentity,
+    pathKey,
+    presentationIdentity,
+    renderedValue,
+  });
 }

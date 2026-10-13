@@ -5,7 +5,8 @@ import {
   isBrowserOperatorUiClient,
   isWebchatClient,
 } from "../../utils/message-channel.js";
-import { checkBrowserOrigin, normalizeChromeExtensionOrigin } from "../origin-check.js";
+import { isGatewayAuthGrantCurrent, isGatewayAuthPolicyCurrent } from "../auth-policy.js";
+import { checkGatewayWsBrowserOrigin, normalizeChromeExtensionOrigin } from "../origin-check.js";
 import { invalidateGatewayPolicyClient } from "./ws-policy-close.js";
 import type { GatewayWsBrowserOrigin, GatewayWsClient } from "./ws-types.js";
 
@@ -31,22 +32,14 @@ export function resolveGatewayWsBrowserOrigin(
     requestHost: params.requestHost,
     origin: params.origin,
     isLocalClient: params.isLocalClient,
+    remoteControlUiIngress: params.remoteControlUiIngress,
   };
 }
 
-export function checkGatewayWsBrowserOrigin(origin: GatewayWsBrowserOrigin, cfg: OpenClawConfig) {
-  return checkBrowserOrigin({
-    ...origin,
-    allowedOrigins: cfg.gateway?.controlUi?.allowedOrigins,
-    allowHostHeaderOriginFallback:
-      cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true,
-  });
-}
-
 /** Revocation follows committed publication; unrelated authenticated connections remain live. */
-export function disconnectDisallowedGatewayBrowserOriginClients(
+export function disconnectDisallowedGatewayPolicyClients(
   clients: Iterable<
-    Pick<GatewayWsClient, "browserOrigin" | "invalidated" | "invalidatedReason"> & {
+    Pick<GatewayWsClient, "browserOrigin" | "invalidated" | "invalidatedReason" | "authPolicy"> & {
       socket: Pick<GatewayWsClient["socket"], "close">;
     }
   >,
@@ -58,6 +51,13 @@ export function disconnectDisallowedGatewayBrowserOriginClients(
         reason: "origin-policy-changed",
         code: 1008,
         message: "origin not allowed",
+      });
+    } else if (!isGatewayAuthPolicyCurrent(client.authPolicy, cfg)) {
+      invalidateGatewayPolicyClient(client, {
+        reason: "gateway-policy-changed",
+        code: 4001,
+        message: "gateway policy changed",
+        revokeSource: !isGatewayAuthGrantCurrent(client.authPolicy, cfg),
       });
     }
   }

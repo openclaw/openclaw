@@ -16,7 +16,11 @@ import {
   sanitizeBinaryOutput,
 } from "./shell-utils.js";
 
-vi.mock("node:child_process", { spy: true });
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  // Whole-module autospy mutates native ChildProcess prototypes across shared-worker files.
+  return { ...actual, spawnSync: vi.fn(actual.spawnSync) };
+});
 
 const isWin = process.platform === "win32";
 
@@ -43,6 +47,25 @@ describe("sanitizeBinaryOutput", () => {
     expect(sanitizeBinaryOutput("a\u0000\u0007\u007f\u0080b\t\n")).toBe(
       "a\\x00\\x07\\x7f\\x80b\t\n",
     );
+  });
+
+  it.each(["report-👩\u200d💻.json", "می\u200cخواهم.txt"])(
+    "preserves Unicode joiners in command output: %s",
+    (text) => {
+      expect(sanitizeBinaryOutput(text)).toBe(text);
+      expect(sanitizeBinaryOutput(text, { ansiMode: "compat" })).toBe(text);
+
+      const sanitize = createStreamingBinaryOutputSanitizer();
+      const chunks = ["\u001b[3", "2m", ...Array.from(text), "\u001b[", "0m"];
+      expect(chunks.map(sanitize).join("")).toBe(text);
+    },
+  );
+
+  it("still removes other format characters and lone surrogates", () => {
+    const text = "a\u200bb\u202ec\u2066d\u2069e\ufefff\ud800g\udc00h\u0000";
+    const expected = "abcdefgh\\x00";
+    expect(sanitizeBinaryOutput(text)).toBe(expected);
+    expect(createStreamingBinaryOutputSanitizer()(text)).toBe(expected);
   });
 });
 

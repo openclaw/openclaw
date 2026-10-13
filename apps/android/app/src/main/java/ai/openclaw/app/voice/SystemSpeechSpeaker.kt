@@ -1,7 +1,6 @@
 package ai.openclaw.app.voice
 
 import android.content.Context
-import android.media.AudioAttributes
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import kotlinx.coroutines.CancellationException
@@ -75,13 +74,7 @@ internal class SystemSpeechSpeaker(
                   }
                 }
                 speechRate?.let { speechEngine.setSpeechRate(it) }
-                speechEngine.setAudioAttributes(
-                  AudioAttributes
-                    .Builder()
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                    .setUsage(AudioAttributes.USAGE_MEDIA)
-                    .build(),
-                )
+                speechEngine.setAudioAttributes(speechPlaybackAttributes())
                 beforeSpeak()
                 checkActive(request)
               }

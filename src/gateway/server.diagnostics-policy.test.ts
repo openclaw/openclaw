@@ -5,10 +5,26 @@ import {
   setDiagnosticsEnabledForProcess,
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
+import type { GatewaySchedulerClock } from "../infra/gateway-scheduler.js";
 import { logWebhookReceived } from "../logging/diagnostic.js";
+import { createGatewaySchedulerClock } from "../test-utils/gateway-scheduler-clock.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { createGatewayKernel } from "./server-kernel.js";
+
+const schedulerClock = vi.hoisted((): { clock?: GatewaySchedulerClock } => ({}));
+
+vi.mock("../infra/gateway-scheduler.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/gateway-scheduler.js")>();
+  return {
+    ...actual,
+    GatewayScheduler: class extends actual.GatewayScheduler {
+      constructor(options: ConstructorParameters<typeof actual.GatewayScheduler>[0] = {}) {
+        super({ ...options, clock: schedulerClock.clock ?? options.clock });
+      }
+    },
+  };
+});
 
 it("owns diagnostic dispatch and heartbeat across initial disable, enable, disable, and close", async () => {
   const previouslyEnabled = areDiagnosticsEnabledForProcess();
@@ -36,6 +52,8 @@ it("owns diagnostic dispatch and heartbeat across initial disable, enable, disab
       gateway: { mode: "local", port, auth: { mode: "none" }, controlUi: { enabled: false } },
     });
     state.applyEnv();
+    const clock = createGatewaySchedulerClock(Date.now());
+    schedulerClock.clock = clock.clock;
     kernel = await createGatewayKernel(port, {
       auth: { mode: "none" },
       bind: "loopback",
@@ -43,12 +61,11 @@ it("owns diagnostic dispatch and heartbeat across initial disable, enable, disab
       sidecarStartup: "defer",
     });
     expect(areDiagnosticsEnabledForProcess()).toBe(false);
-    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const events: string[] = [];
     unsubscribe = onDiagnosticEvent((event) => events.push(event.type));
     const tick = async () => {
       logWebhookReceived({ channel: "test" });
-      await vi.advanceTimersByTimeAsync(30_000);
+      await clock.advanceBy(30_000);
       await waitForDiagnosticEventsDrained();
     };
     await tick();
@@ -74,7 +91,7 @@ it("owns diagnostic dispatch and heartbeat across initial disable, enable, disab
   } finally {
     unsubscribe?.();
     await kernel?.closeOnStartupFailure();
-    vi.useRealTimers();
+    delete schedulerClock.clock;
     await state.cleanup();
     setDiagnosticsEnabledForProcess(previouslyEnabled);
   }

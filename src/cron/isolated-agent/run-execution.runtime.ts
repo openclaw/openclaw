@@ -8,7 +8,6 @@ export { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-bu
 export { resolveFastModeState } from "../../agents/fast-mode.js";
 export { resolveCronAgentLane } from "../../agents/lanes.js";
 export { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
-export { resolveCandidateThinkingLevel } from "../../agents/thinking-runtime.js";
 export { isCliProvider } from "../../agents/model-selection-cli.js";
 export { normalizeVerboseLevel } from "../../auto-reply/thinking.shared.js";
 export { registerAgentRunContext } from "../../infra/agent-run-registry.js";

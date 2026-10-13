@@ -561,7 +561,7 @@ class WearProxyClientTest {
         )
       client.updatePreferredPhoneNodeId("phone-stale")
 
-      client.invalidatePreferredPhoneNode()
+      client.updatePreferredPhoneNodeId(null)
       val result = client.request(WearRpcMethod.ProxyStatus, buildJsonObject {}, null)
 
       assertEquals("phone-reachable", result.sourceNodeId)
@@ -596,7 +596,7 @@ class WearProxyClientTest {
 
       val first = async { runCatching { client.request(WearRpcMethod.ProxyStatus, buildJsonObject {}, null) } }
       discoveryStarted.await()
-      client.invalidatePreferredPhoneNode()
+      client.updatePreferredPhoneNodeId(null)
       resolvedNode = "phone-new"
       releaseDiscovery.complete(Unit)
 
@@ -861,7 +861,7 @@ private fun testProxyClient(
   nodeResolver: suspend () -> String?,
   transport: suspend (String, String, ByteArray) -> Unit,
 ): WearProxyClient =
-  WearProxyClient.createForTests(
+  WearProxyClient(
     nodeResolver = WearNodeResolver(nodeResolver),
     transport = WearMessageTransport(transport),
   )

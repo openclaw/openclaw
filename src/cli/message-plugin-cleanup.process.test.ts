@@ -4,7 +4,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
-import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
+import {
+  runCliProcessChild,
+  waitForCliProcessStderrMarker,
+} from "./cli-process-child.test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -21,6 +24,7 @@ describe("message CLI plugin cleanup", () => {
     const configPath = path.join(root, "openclaw.json");
     const marker = path.join(root, "stopped.txt");
     const id = "message-cleanup-fixture";
+    const mediaUrls = ["https://example.com/first.png", "https://example.com/second.png"] as const;
     const meta = {
       id,
       label: "Message cleanup fixture",
@@ -68,7 +72,7 @@ export default { id: plugin.id, register(api) {
   api.registerChannel({ plugin });
   api.on("gateway_stop", () => {
     fs.appendFileSync(${JSON.stringify(marker)}, "stopped\\n");
-    ${pending ? "return new Promise(() => {});" : "return Promise.resolve();"}
+    ${pending ? "return new Promise(resolve => { process.stdin.once('end', resolve); process.stdin.resume(); });" : "return Promise.resolve();"}
   });
 } };`,
     );
@@ -83,6 +87,23 @@ export default { id: plugin.id, register(api) {
     );
 
     const result = await runCliProcessChild({
+      ...(pending
+        ? {
+            interact: async (
+              child: import("node:child_process").ChildProcessWithoutNullStreams,
+            ) => {
+              try {
+                await waitForCliProcessStderrMarker(
+                  child,
+                  "gateway_stop hook exceeded 2500ms; continuing",
+                );
+                expect(child.exitCode).toBeNull();
+              } finally {
+                child.stdin.end();
+              }
+            },
+          }
+        : {}),
       nodeArgs: [
         // Share immutable CLI code; each case still owns a fresh process and plugin lifecycle.
         ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli)),
@@ -93,8 +114,12 @@ export default { id: plugin.id, register(api) {
         id,
         "--target",
         "user:synthetic",
+        "--media",
+        mediaUrls[0],
         "--message",
         "Synthetic payload",
+        "--media",
+        mediaUrls[1],
         ...(json ? ["--json"] : []),
       ],
       env: {
@@ -118,6 +143,9 @@ export default { id: plugin.id, register(api) {
       expect(JSON.parse(result.stdout)).toMatchObject(
         fail ? { ok: false, error: { message: "synthetic target failure" } } : { dryRun: true },
       );
+      if (!fail) {
+        expect(JSON.parse(result.stdout).payload.mediaUrls).toEqual(mediaUrls);
+      }
     }
     if (pending) {
       expect(result.stderr).toContain("gateway_stop hook exceeded 2500ms; continuing");

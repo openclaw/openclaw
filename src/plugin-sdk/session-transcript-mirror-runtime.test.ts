@@ -1,6 +1,5 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import {
   runExclusiveSqliteSessionWrite,
@@ -9,7 +8,15 @@ import {
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { SessionTranscriptReadFenceError } from "../config/sessions/session-transcript-read-fence.js";
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
+import { withOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
+import {
+  onInternalSessionTranscriptUpdate,
+  onSessionTranscriptUpdate,
+  type InternalSessionTranscriptUpdate,
+  type SessionTranscriptUpdate,
+} from "../sessions/transcript-events.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
   readCodexSessionTranscriptEventsBeforeAdmission,
   withCodexSessionTranscriptMirrorWriteLock,
@@ -19,13 +26,13 @@ import {
   readSessionTranscriptVisibleMessageDelta,
 } from "./session-transcript-runtime.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-sdk-transcript-mirror-");
 
 describe("private session transcript mirror runtime", () => {
   let storePath: string;
 
   beforeEach(() => {
-    const tempDir = tempDirs.make("openclaw-sdk-transcript-mirror-");
+    const tempDir = sessionDirs.make();
     storePath = path.join(tempDir, "sessions.json");
   });
 
@@ -108,13 +115,17 @@ describe("private session transcript mirror runtime", () => {
     });
 
     const resolvedScope = resolveSqliteTranscriptScope(scope);
+    await waitForSessionTranscriptProjection(scope);
     await expect(
       readSessionTranscriptVisibleMessageDelta({ ...scope, maxMessages: 10 }),
-    ).resolves.toEqual({
-      kind: "unavailable",
-      reason: "projection_rebuilding",
+    ).resolves.toMatchObject({
+      kind: "page",
+      entries: [
+        { idempotencyKey: "mirror-user", seq: 1 },
+        { idempotencyKey: "mirror-active", seq: 2 },
+      ],
+      hasMore: false,
     });
-    await waitForSessionTranscriptProjection(scope);
     await withCodexSessionTranscriptMirrorWriteLock(scope, async (locked) => {
       const afterReconcile = await locked.appendMessageWithMessageSequence({
         message: {
@@ -166,6 +177,71 @@ describe("private session transcript mirror runtime", () => {
       });
       expect(dirtyProjection.messageSeq).toBeUndefined();
     });
+  });
+
+  it("publishes the append's lifecycle after the session row is replaced", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "owned-mirror-session",
+      sessionKey: "agent:main:owned-mirror",
+      storePath,
+    };
+    const entry = {
+      sessionId: scope.sessionId,
+      activeWriterRunId: "mirror-writer",
+      lifecycleRevision: "committed-lifecycle",
+      updatedAt: 1,
+    };
+    await upsertSessionEntryCore(scope, entry);
+    const appended = await withOwnedSessionTranscriptWrites(
+      {
+        sessionTarget: {
+          ...scope,
+          expectedLifecycleRevision: entry.lifecycleRevision,
+          expectedWriterRunId: entry.activeWriterRunId,
+        },
+        withTranscriptWrite: async (run) => await run(),
+      },
+      () =>
+        withCodexSessionTranscriptMirrorWriteLock(scope, (locked) =>
+          locked.appendMessageWithMessageSequence({
+            message: { role: "assistant", content: "Committed reply" },
+          }),
+        ),
+    );
+    expect(appended.lifecycleRevision).toBe(entry.lifecycleRevision);
+    expect(appended.messageSeq).toBe(1);
+    const result = appended.result;
+    if (!result) {
+      throw new Error("expected committed mirror reply");
+    }
+    await upsertSessionEntryCore(scope, { ...entry, lifecycleRevision: "replacement-lifecycle" });
+    const internalUpdates: InternalSessionTranscriptUpdate[] = [];
+    const publicUpdates: SessionTranscriptUpdate[] = [];
+    const offInternal = onInternalSessionTranscriptUpdate((update) => internalUpdates.push(update));
+    const offPublic = onSessionTranscriptUpdate((update) => publicUpdates.push(update));
+    try {
+      await withCodexSessionTranscriptMirrorWriteLock(scope, (locked) =>
+        locked.publishUpdate({
+          lifecycleRevision: appended.lifecycleRevision,
+          message: result.message,
+          messageId: result.messageId,
+          messageSeq: appended.messageSeq,
+        }),
+      );
+      expect(internalUpdates).toMatchObject([
+        {
+          lifecycleRevision: "committed-lifecycle",
+          messageId: result.messageId,
+          messageSeq: 1,
+        },
+      ]);
+      expect(publicUpdates).toHaveLength(1);
+      expect(publicUpdates[0]).not.toHaveProperty("lifecycleRevision");
+    } finally {
+      offInternal();
+      offPublic();
+    }
   });
 
   it("rejects an admission receipt for a different transcript target", async () => {

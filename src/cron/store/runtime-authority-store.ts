@@ -8,8 +8,10 @@ import {
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import { createSqliteSchemaEnsurer } from "../../infra/sqlite-schema-ensure.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
+import { getOpenClawStateFeatureSchemaSql } from "../../state/openclaw-state-feature-schema.js";
 import { normalizeCronRuntimeAuthority } from "../runtime-authority.js";
 import { normalizeCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import { cronJobUsesToolRuntime } from "../tools-allow.js";
@@ -18,24 +20,10 @@ import type { CronStoredJob, CronToolsAllowProvenance } from "../types.js";
 const CRON_RUNTIME_AUTHORITY_TABLE = "cron_job_runtime_authorities";
 const CRON_RUNTIME_AUTHORITY_FINGERPRINT_VERSION = 1;
 
-const CRON_RUNTIME_AUTHORITY_SCHEMA_SQL = `
-CREATE TABLE IF NOT EXISTS cron_job_runtime_authorities (
-  store_key TEXT NOT NULL,
-  job_id TEXT NOT NULL,
-  authority_json TEXT,
-  authority_input_fingerprint TEXT,
-  recovery_required INTEGER NOT NULL,
-  PRIMARY KEY (store_key, job_id),
-  FOREIGN KEY (store_key, job_id)
-    REFERENCES cron_jobs(store_key, job_id) ON DELETE CASCADE,
-  CHECK (recovery_required IN (0, 1)),
-  CHECK (
-    (recovery_required = 0 AND authority_json IS NOT NULL AND authority_input_fingerprint IS NOT NULL)
-    OR
-    (recovery_required = 1 AND authority_json IS NULL AND authority_input_fingerprint IS NULL)
-  )
-) STRICT;
-`;
+const ensureCronRuntimeAuthorityTable = createSqliteSchemaEnsurer(
+  () => getOpenClawStateFeatureSchemaSql(CRON_RUNTIME_AUTHORITY_TABLE),
+  { tables: [CRON_RUNTIME_AUTHORITY_TABLE] },
+);
 
 type CronAuthorityDatabase = Pick<
   OpenClawStateKyselyDatabase,
@@ -80,12 +68,6 @@ function cronRuntimeAuthorityInputFingerprint(job: CronStoredJob): string {
   return `v${CRON_RUNTIME_AUTHORITY_FINGERPRINT_VERSION}:${createHash("sha256")
     .update(JSON.stringify(canonical), "utf8")
     .digest("hex")}`;
-}
-
-/** Creates the additive table only when authority state is first persisted. */
-function ensureCronRuntimeAuthorityTable(db: DatabaseSync): void {
-  // sqlite-allow-raw -- feature-local additive schema DDL; data access uses Kysely.
-  db.exec(CRON_RUNTIME_AUTHORITY_SCHEMA_SQL);
 }
 
 function loadCronRuntimeAuthorityRows(

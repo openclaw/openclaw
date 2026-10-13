@@ -13,15 +13,15 @@ type SessionViewerPresenceStore = {
 
 const stores = new WeakMap<ApplicationGateway, SessionViewerPresenceStore>();
 
-function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
+export function sessionViewerPresenceForGateway(
+  gateway: ApplicationGateway,
+): SessionViewerPresenceStore {
+  const existing = stores.get(gateway);
+  if (existing) {
+    return existing;
+  }
   const watchedByOwner = new Map<object, Set<string>>();
   let knownClient = gateway.snapshot.client;
-  let lastHello: object | null = null;
-  let lastSignature: string | null = null;
-  let acknowledgedSignature: string | null = null;
-  let acknowledgedGeneration = 0;
-  let requestGeneration = 0;
-
   const isActive = () => watchedByOwner.size > 0;
 
   const visibleSessionKeys = (): string[] => {
@@ -42,17 +42,7 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
     sync,
     onAttach: () => {
       knownClient = gateway.snapshot.client;
-      lastHello = null;
-      lastSignature = null;
-      acknowledgedSignature = null;
-      acknowledgedGeneration = 0;
-    },
-    onDetach: () => {
-      requestGeneration += 1;
-      lastHello = null;
-      lastSignature = null;
-      acknowledgedSignature = null;
-      acknowledgedGeneration = 0;
+      lifecycle.clearRequest();
     },
   });
   const { retry } = lifecycle;
@@ -63,10 +53,7 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
     if (client !== knownClient) {
       retry.reset();
       knownClient = client;
-      lastHello = null;
-      lastSignature = null;
-      acknowledgedSignature = null;
-      acknowledgedGeneration = 0;
+      lifecycle.clearRequest();
     }
     const available =
       snapshot.phase === "connected" &&
@@ -74,10 +61,7 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
       snapshot.hello !== null &&
       isGatewayMethodAdvertised(snapshot, SESSION_VIEWERS_SET_METHOD) === true;
     if (!available) {
-      lastHello = null;
-      lastSignature = null;
-      acknowledgedSignature = null;
-      acknowledgedGeneration = 0;
+      lifecycle.clearRequest();
       if (!isActive()) {
         lifecycle.detach();
       }
@@ -91,47 +75,26 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
       ? snapshot.assistantAgentId
       : undefined;
     const signature = JSON.stringify({ agentId, sessionKeys });
-    if (snapshot.hello === lastHello && signature === lastSignature) {
-      if (
-        !isActive() &&
-        acknowledgedSignature === signature &&
-        acknowledgedGeneration === requestGeneration
-      ) {
+    if (lifecycle.matchesRequest(signature)) {
+      if (!isActive() && lifecycle.requestAcknowledged) {
         lifecycle.detach();
       }
       return;
     }
-    lastHello = snapshot.hello;
-    lastSignature = signature;
-    const currentGeneration = ++requestGeneration;
-    const isCurrentRequest = () =>
-      lifecycle.attached &&
-      currentGeneration === requestGeneration &&
-      snapshot.hello === lastHello &&
-      signature === lastSignature;
-    retry.cancel();
-    const request = client.request(SESSION_VIEWERS_SET_METHOD, {
-      ...(agentId ? { agentId } : {}),
-      sessionKeys,
-    });
-    void request
-      .then(() => {
-        if (isCurrentRequest()) {
-          acknowledgedSignature = signature;
-          acknowledgedGeneration = currentGeneration;
-          retry.reset();
+    lifecycle.send(
+      client,
+      SESSION_VIEWERS_SET_METHOD,
+      { ...(agentId ? { agentId } : {}), sessionKeys },
+      signature,
+      {
+        onSuccess: () => {
           if (!isActive()) {
             lifecycle.detach();
           }
-        }
-      })
-      .catch(() => {
-        if (!isCurrentRequest()) {
-          return;
-        }
-        lastSignature = null;
-        retry.schedule(lifecycle.schedule);
-      });
+        },
+        onError: () => retry.schedule(lifecycle.schedule),
+      },
+    );
   }
 
   const watch = (owner: object, sessionKeys: readonly string[]) => {
@@ -158,17 +121,7 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
     }
   };
 
-  return { watch, unwatch: (owner) => watch(owner, []) };
-}
-
-export function sessionViewerPresenceForGateway(
-  gateway: ApplicationGateway,
-): SessionViewerPresenceStore {
-  const existing = stores.get(gateway);
-  if (existing) {
-    return existing;
-  }
-  const store = createStore(gateway);
+  const store: SessionViewerPresenceStore = { watch, unwatch: (owner) => watch(owner, []) };
   stores.set(gateway, store);
   return store;
 }

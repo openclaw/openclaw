@@ -12,6 +12,7 @@ export async function createNostrRelayFixture(
     accepted?: boolean;
     reason?: string;
     rejectUpgrade?: boolean;
+    holdUpgrades?: boolean;
     holdAcknowledgements?: boolean;
     onEvent?: (event: Event) => void;
   } = {},
@@ -21,6 +22,7 @@ export async function createNostrRelayFixture(
   const errors: unknown[] = [];
   const connections = new Set<Socket>();
   const pendingAcknowledgements: Array<() => void> = [];
+  const pendingUpgrades: Array<() => void> = [];
   let upgradeAttempts = 0;
   const server = createServer((_request, response) => {
     response.writeHead(404).end();
@@ -34,7 +36,12 @@ export async function createNostrRelayFixture(
     maxPayload: 64 * 1024,
     verifyClient: (_info, done) => {
       upgradeAttempts += 1;
-      done(!options.rejectUpgrade, 503, "fixture refusal");
+      const complete = () => done(!options.rejectUpgrade, 503, "fixture refusal");
+      if (options.holdUpgrades) {
+        pendingUpgrades.push(complete);
+      } else {
+        complete();
+      }
     },
   });
   sockets.on("error", (error) => errors.push(error));
@@ -118,6 +125,11 @@ export async function createNostrRelayFixture(
       acknowledgements,
       errors,
       upgradeAttempts: () => upgradeAttempts,
+      releaseUpgrades: () => {
+        for (const complete of pendingUpgrades.splice(0)) {
+          complete();
+        }
+      },
       acknowledgeAll: () => {
         for (const acknowledge of pendingAcknowledgements.splice(0)) {
           acknowledge();

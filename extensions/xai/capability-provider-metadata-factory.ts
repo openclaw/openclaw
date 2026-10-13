@@ -1,7 +1,7 @@
 import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
 import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
 import type {
-  PluginCapabilityCatalogContext,
+  PluginCapabilityCatalogHostContext,
   OpenClawConfig,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type {
@@ -119,7 +119,7 @@ export function isXaiVideo15Model(model: string | undefined): boolean {
 }
 
 export function createXaiVideoGenerationProviderMetadata(
-  context: Pick<PluginCapabilityCatalogContext, "isProviderApiKeyConfigured">,
+  context: Pick<PluginCapabilityCatalogHostContext, "isProviderApiKeyConfiguredAsync">,
 ) {
   return {
     id: "xai",
@@ -133,7 +133,8 @@ export function createXaiVideoGenerationProviderMetadata(
         modes: ["imageToVideo"],
       },
     },
-    isConfigured: (ctx) => context.isProviderApiKeyConfigured({ provider: "xai", ...ctx }),
+    isConfiguredAsync: (ctx) =>
+      context.isProviderApiKeyConfiguredAsync({ provider: "xai", ...ctx }),
     capabilities: {
       generate: {
         maxVideos: 1,
@@ -169,16 +170,6 @@ export function createXaiVideoGenerationProviderMetadata(
 
 export type XaiRealtimeTranscriptionEncoding = "pcm" | "mulaw" | "alaw";
 
-type XaiRealtimeTranscriptionProviderConfig = {
-  apiKey?: string;
-  baseUrl?: string;
-  sampleRate?: number;
-  encoding?: XaiRealtimeTranscriptionEncoding;
-  interimResults?: boolean;
-  endpointingMs?: number;
-  language?: string;
-};
-
 function normalizeRealtimeTranscriptionEncoding(
   value: unknown,
 ): XaiRealtimeTranscriptionEncoding | undefined {
@@ -200,7 +191,7 @@ function normalizeRealtimeTranscriptionEncoding(
 
 export function normalizeXaiRealtimeTranscriptionProviderConfig(
   config: RealtimeTranscriptionProviderConfig,
-): XaiRealtimeTranscriptionProviderConfig {
+) {
   const raw = isRecord(config) ? config : undefined;
   const providers = isRecord(raw?.providers) ? raw.providers : undefined;
   const nested = providers?.xai ?? raw?.xai ?? raw;
@@ -220,7 +211,10 @@ export function normalizeXaiRealtimeTranscriptionProviderConfig(
 }
 
 export function createXaiRealtimeTranscriptionProviderMetadata(
-  context: Pick<PluginCapabilityCatalogContext, "isProviderAuthProfileConfigured">,
+  context: Pick<
+    PluginCapabilityCatalogHostContext,
+    "isProviderAuthProfileConfigured" | "isProviderAuthProfileConfiguredAsync"
+  >,
 ) {
   return {
     id: "xai",
@@ -233,6 +227,11 @@ export function createXaiRealtimeTranscriptionProviderMetadata(
         normalizeXaiRealtimeTranscriptionProviderConfig(providerConfig).apiKey ??
         normalizeOptionalString(process.env.XAI_API_KEY),
       ) || context.isProviderAuthProfileConfigured({ provider: "xai", cfg }),
+    isConfiguredAsync: async ({ providerConfig, cfg }) =>
+      Boolean(
+        normalizeXaiRealtimeTranscriptionProviderConfig(providerConfig).apiKey ??
+        normalizeOptionalString(process.env.XAI_API_KEY),
+      ) || (await context.isProviderAuthProfileConfiguredAsync({ provider: "xai", cfg })),
   } satisfies Omit<RealtimeTranscriptionProviderPlugin, "createSession">;
 }
 
@@ -249,8 +248,8 @@ const XAI_REALTIME_AUDIO_FORMAT_PCM16_24KHZ = {
 
 export function createXaiRealtimeVoiceProviderMetadata(
   context: Pick<
-    PluginCapabilityCatalogContext,
-    "isProviderAuthProfileConfigured" | "resolveAgentDir"
+    PluginCapabilityCatalogHostContext,
+    "isProviderAuthProfileConfigured" | "isProviderAuthProfileConfiguredAsync" | "resolveAgentDir"
   >,
 ) {
   return {
@@ -283,6 +282,13 @@ export function createXaiRealtimeVoiceProviderMetadata(
         agentId,
         context,
       ),
+    isConfiguredAsync: ({ providerConfig, cfg, agentId }) =>
+      hasXaiRealtimeApiKeyInputAsync(
+        normalizeXaiRealtimeProviderConfig(providerConfig).apiKey,
+        cfg,
+        agentId,
+        context,
+      ),
   } satisfies Omit<RealtimeVoiceProviderPlugin, "createBridge" | "createBrowserSession">;
 }
 
@@ -307,12 +313,37 @@ function hasXaiRealtimeApiKeyInput(
   {
     isProviderAuthProfileConfigured,
     resolveAgentDir,
-  }: Pick<PluginCapabilityCatalogContext, "isProviderAuthProfileConfigured" | "resolveAgentDir">,
+  }: Pick<
+    PluginCapabilityCatalogHostContext,
+    "isProviderAuthProfileConfigured" | "resolveAgentDir"
+  >,
 ): boolean {
   if (normalizeOptionalString(configApiKey) || normalizeOptionalString(process.env.XAI_API_KEY)) {
     return true;
   }
   return isProviderAuthProfileConfigured({
+    provider: "xai",
+    cfg,
+    ...(cfg && agentId ? { agentDir: resolveAgentDir(cfg, agentId) } : {}),
+  });
+}
+
+async function hasXaiRealtimeApiKeyInputAsync(
+  configApiKey: string | undefined,
+  cfg: OpenClawConfig | undefined,
+  agentId: string | undefined,
+  {
+    isProviderAuthProfileConfiguredAsync,
+    resolveAgentDir,
+  }: Pick<
+    PluginCapabilityCatalogHostContext,
+    "isProviderAuthProfileConfiguredAsync" | "resolveAgentDir"
+  >,
+): Promise<boolean> {
+  if (normalizeOptionalString(configApiKey) || normalizeOptionalString(process.env.XAI_API_KEY)) {
+    return true;
+  }
+  return isProviderAuthProfileConfiguredAsync({
     provider: "xai",
     cfg,
     ...(cfg && agentId ? { agentDir: resolveAgentDir(cfg, agentId) } : {}),

@@ -1,5 +1,4 @@
-import { createHash } from "node:crypto";
-import { stableStringify } from "@openclaw/normalization-core";
+import { digestClawValue } from "./digest.js";
 import {
   clawPackageRemovalSelector,
   type ClawPackageInspection,
@@ -16,11 +15,6 @@ export function orderClawPackageRemovals(decisions: ClawPackageRemovalDecision[]
   );
 }
 
-/** Comparison facts only; removers must still validate their current journal and leases. */
-export function digestClawRemovalState(value: unknown): string {
-  return `sha256:${createHash("sha256").update(stableStringify(value)).digest("hex")}`;
-}
-
 /** Omitted cleanup options and their defaults must have the same identity across JSON RPC. */
 export function normalizeClawPackageCleanup(cleanup?: ClawReferencedCleanup) {
   return {
@@ -34,14 +28,14 @@ export function digestClawPackageRemovalPlan(
   decisions: ClawPackageRemovalDecision[],
   cleanup: ClawReferencedCleanup,
 ): string {
-  return digestClawRemovalState({
+  return digestClawValue({
     decisions: orderClawPackageRemovals(decisions),
     cleanup: normalizeClawPackageCleanup(cleanup),
   });
 }
 
 export function digestClawRemovalInstall(install: PersistedClawInstall | undefined): string {
-  return digestClawRemovalState(install ?? null);
+  return digestClawValue(install ?? null);
 }
 
 type PackageRemoveAction = {

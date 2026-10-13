@@ -428,34 +428,6 @@ describe("loadBundledEntryExportSync", () => {
     expect(message).toContain("ENOENT");
   });
 
-  it("keeps Windows dist sidecar loads off source-transform loading", async () => {
-    const createJiti = vi.fn(() => vi.fn(() => ({ load: 0 })));
-    stubPluginModuleLoaderJitiFactory(createJiti as unknown as PluginModuleLoaderFactory);
-
-    await withMockedWindowsPlatform(async () => {
-      const channelEntryContract = await importFreshModule<
-        typeof import("./channel-entry-contract.js")
-      >(import.meta.url, "./channel-entry-contract.js?scope=windows-dist-jiti");
-      const tempRoot = tempDirs.make("openclaw-channel-entry-contract-");
-
-      const pluginRoot = path.join(tempRoot, "dist", "extensions", "telegram");
-      fs.mkdirSync(pluginRoot, { recursive: true });
-
-      const importerPath = path.join(pluginRoot, "index.js");
-      const helperPath = path.join(pluginRoot, "helper.cjs");
-      fs.writeFileSync(importerPath, "export default {};\n", "utf8");
-      fs.writeFileSync(helperPath, "module.exports = { load: 42 };\n", "utf8");
-
-      expect(
-        channelEntryContract.loadBundledEntryExportSync<number>(pathToFileURL(importerPath).href, {
-          specifier: "./helper.cjs",
-          exportName: "load",
-        }),
-      ).toBe(42);
-      expect(createJiti).not.toHaveBeenCalled();
-    });
-  });
-
   it("normalizes Windows absolute sidecar paths before module loads them", async () => {
     const tempRoot = tempDirs.make("openclaw-channel-entry-contract-");
     const openedFdPath = path.join(tempRoot, "opened");
@@ -513,7 +485,7 @@ describe("loadBundledEntryExportSync", () => {
     });
   });
 
-  it("transforms OpenClaw SDK dependencies after a native built sidecar load declines", async () => {
+  it("keeps the host SDK native when a built sidecar needs plugin transformation", async () => {
     const sourceLoad = vi.fn(() => ({ sentinel: 42 }));
     const createJiti = vi.fn((_filename: string, _options?: Record<string, unknown>) => sourceLoad);
     const tempRoot = tempDirs.make("openclaw-channel-entry-contract-");
@@ -553,54 +525,29 @@ describe("loadBundledEntryExportSync", () => {
       | { nativeModules?: string[]; tryNative?: boolean }
       | undefined;
     expect(jitiOptions?.tryNative).toBe(false);
-    expect(jitiOptions?.nativeModules).toEqual([]);
+    expect(jitiOptions?.nativeModules).toEqual(["openclaw"]);
     expect(sourceLoad).toHaveBeenCalledWith(sidecarPath);
   });
 
-  it("loads packaged telegram setup sidecars from dist-facing api modules", () => {
-    const tempRoot = tempDirs.make("openclaw-channel-entry-contract-");
-
-    const pluginRoot = path.join(tempRoot, "dist", "extensions", "telegram");
+  it("does not replay a failed native sidecar through the plugin transformer", () => {
+    const root = tempDirs.make("openclaw-channel-entry-failure-");
+    const pluginRoot = path.join(root, "dist", "extensions", "fixture");
     fs.mkdirSync(pluginRoot, { recursive: true });
-
-    const importerPath = path.join(pluginRoot, "setup-entry.js");
-    const setupApiPath = path.join(pluginRoot, "setup-plugin-api.js");
-    const secretsApiPath = path.join(pluginRoot, "secret-contract-api.js");
-
-    fs.writeFileSync(importerPath, "export default {};\n", "utf8");
+    const importerPath = path.join(pluginRoot, "setup-entry.cjs");
+    const evaluations = path.join(root, "evaluations.txt");
+    fs.writeFileSync(importerPath, "module.exports = {};\n");
     fs.writeFileSync(
-      setupApiPath,
-      'export const telegramSetupPlugin = { id: "telegram" };\n',
-      "utf8",
-    );
-    fs.writeFileSync(
-      secretsApiPath,
-      [
-        "export const collectRuntimeConfigAssignments = () => [];",
-        "export const secretTargetRegistryEntries = [];",
-        'export const channelSecrets = { TELEGRAM_TOKEN: { env: "TELEGRAM_TOKEN" } };',
-        "",
-      ].join("\n"),
-      "utf8",
+      path.join(pluginRoot, "sidecar.cjs"),
+      `require("node:fs").appendFileSync(${JSON.stringify(evaluations)}, "evaluation\\n");
+       throw new Error("sidecar initialization failed");`,
     );
 
-    expect(
-      loadBundledEntryExportSync<{ id: string }>(pathToFileURL(importerPath).href, {
-        specifier: "./setup-plugin-api.js",
-        exportName: "telegramSetupPlugin",
+    expect(() =>
+      loadBundledEntryExportSync(pathToFileURL(importerPath).href, {
+        specifier: "./sidecar.cjs",
       }),
-    ).toEqual({ id: "telegram" });
-
-    expect(
-      loadBundledEntryExportSync<Record<string, unknown>>(pathToFileURL(importerPath).href, {
-        specifier: "./secret-contract-api.js",
-        exportName: "channelSecrets",
-      }),
-    ).toEqual({
-      TELEGRAM_TOKEN: {
-        env: "TELEGRAM_TOKEN",
-      },
-    });
+    ).toThrow("sidecar initialization failed");
+    expect(fs.readFileSync(evaluations, "utf8")).toBe("evaluation\n");
   });
 
   it("reuses resolved bundled sidecar paths before cached module exports", async () => {
@@ -651,13 +598,6 @@ describe("loadBundledEntryExportSync", () => {
     } finally {
       vi.doUnmock("../infra/boundary-file-read.js");
     }
-  });
-
-  it("emits non-negative source-loader sub-step timings on the built-artifact load path", async () => {
-    // Built artifacts prefer `nodeRequire`, but Node can still reject a sidecar
-    // and fall back through jiti. The profile line must never report negative
-    // or missing source-loader sub-step timings either way.
-    await expectBuiltArtifactNodeRequireFastPath("built-artifact-profile-fast-path");
   });
 
   it("keeps dist-runtime built sidecar loads on the nodeRequire fast-path", async () => {

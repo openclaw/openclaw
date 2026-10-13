@@ -34,6 +34,44 @@
         "defaultModel": "muse-spark-1.3",
         "models": [
           {
+            "id": "muse-wonder-1.0",
+            "name": "Muse Wonder",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 1048576,
+            "maxTokens": 131072,
+            "thinkingLevelMap": {
+              "off": "minimal",
+              "minimal": "minimal",
+              "low": "low",
+              "medium": "medium",
+              "high": "high",
+              "xhigh": "xhigh",
+              "max": "max"
+            },
+            "compat": {
+              "supportsTools": true,
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": [
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ]
+            },
+            "cost": {
+              "input": 4,
+              "output": 20,
+              "cacheRead": 0.2,
+              "cacheWrite": 0
+            }
+          },
+          {
             "id": "muse-spark-1.3",
             "name": "Muse Spark 1.3",
             "reasoning": true,
@@ -49,7 +87,8 @@
               "low": "low",
               "medium": "medium",
               "high": "high",
-              "xhigh": "xhigh"
+              "xhigh": "xhigh",
+              "max": "max"
             },
             "compat": {
               "supportsTools": true,
@@ -59,7 +98,8 @@
                 "low",
                 "medium",
                 "high",
-                "xhigh"
+                "xhigh",
+                "max"
               ]
             },
             "cost": {

@@ -1,4 +1,3 @@
-/** Doctor note for workspace bootstrap file size and truncation risk. */
 import { note } from "../../packages/terminal-core/src/note.js";
 import {
   listAgentIds,
@@ -42,36 +41,38 @@ function formatCauses(causes: Array<"per-file-limit" | "total-limit">): string {
   return causes.map((cause) => (cause === "per-file-limit" ? "max/file" : "max/total")).join(", ");
 }
 
-/**
- * Analyzes configured bootstrap files and emits warnings when injection will truncate content.
- *
- * Returns the raw budget analysis for tests and callers that need structured evidence.
- */
+export async function collectBootstrapFileSize(
+  cfg: OpenClawConfig,
+  workspaceDir: string,
+  agentId?: string,
+) {
+  const bootstrapMaxChars = resolveBootstrapMaxChars(cfg, agentId);
+  const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(cfg, agentId);
+  const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForDiagnostics({
+    workspaceDir,
+    config: cfg,
+    agentId,
+  });
+  return {
+    bootstrapTotalMaxChars,
+    analysis: analyzeBootstrapBudget({
+      files: buildBootstrapInjectionStats({ bootstrapFiles, injectedFiles: contextFiles }),
+      bootstrapMaxChars,
+      bootstrapTotalMaxChars,
+    }),
+  };
+}
+
 export async function noteBootstrapFileSize(cfg: OpenClawConfig) {
   const defaultAgentId = tryResolveDefaultAgentId(cfg);
   const agentIds = listAgentIds(cfg);
-  const workspaces = agentIds.map((agentId) => ({
-    agentId,
-    workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
-  }));
   let defaultAnalysis: ReturnType<typeof analyzeBootstrapBudget> | undefined;
-  for (const { agentId, workspaceDir } of workspaces) {
-    const bootstrapMaxChars = resolveBootstrapMaxChars(cfg, agentId);
-    const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(cfg, agentId);
-    const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForDiagnostics({
-      workspaceDir,
-      config: cfg,
+  for (const agentId of agentIds) {
+    const { analysis, bootstrapTotalMaxChars } = await collectBootstrapFileSize(
+      cfg,
+      resolveAgentWorkspaceDir(cfg, agentId),
       agentId,
-    });
-    const stats = buildBootstrapInjectionStats({
-      bootstrapFiles,
-      injectedFiles: contextFiles,
-    });
-    const analysis = analyzeBootstrapBudget({
-      files: stats,
-      bootstrapMaxChars,
-      bootstrapTotalMaxChars,
-    });
+    );
     if (agentId === defaultAgentId) {
       defaultAnalysis = analysis;
     }
@@ -96,13 +97,10 @@ export async function noteBootstrapFileSize(cfg: OpenClawConfig) {
       lines.push("Workspace bootstrap files are near configured limits:");
     }
 
-    const nonTruncatedNearLimit = analysis.nearLimitFiles.filter((file) => !file.truncated);
-    if (nonTruncatedNearLimit.length > 0) {
-      for (const file of nonTruncatedNearLimit) {
-        lines.push(
-          `- ${file.name}: ${formatInt(file.rawChars)} chars (${formatPercent(file.rawChars, file.effectiveFileLimit)} of max/file ${formatInt(file.effectiveFileLimit)})`,
-        );
-      }
+    for (const file of analysis.nearLimitFiles.filter((entry) => !entry.truncated)) {
+      lines.push(
+        `- ${file.name}: ${formatInt(file.rawChars)} chars (${formatPercent(file.rawChars, file.effectiveFileLimit)} of max/file ${formatInt(file.effectiveFileLimit)})`,
+      );
     }
 
     lines.push(
@@ -112,42 +110,29 @@ export async function noteBootstrapFileSize(cfg: OpenClawConfig) {
       `Total bootstrap raw chars (before truncation): ${formatInt(analysis.totals.rawChars)}.`,
     );
 
-    // The near-limit percentage names each file's effective limit: USER.md's
-    // fixed cap can sit far below the configured bootstrapMaxChars, so quoting
-    // the configured value there would report a small fraction for a file that
-    // is actually close to its ceiling.
-    const fixedUserCapApplied = analysis.truncatedFiles.some(
-      (file) => isFixedUserCapFile(file) && file.causes.includes("per-file-limit"),
-    );
-    // Near-limit USER.md files are not truncated, so the branch above emits no
-    // guidance unless the fixed-cap note also covers them; the ineffective
-    // tuning tip stays suppressed for them either way.
-    const fixedUserCapNearLimit = analysis.nearLimitFiles.some(isFixedUserCapFile);
-    const fixedUserCapRelevant = fixedUserCapApplied || fixedUserCapNearLimit;
-    const needsPerFileTip =
-      analysis.truncatedFiles.some(
-        (file) => file.causes.includes("per-file-limit") && !isFixedUserCapFile(file),
-      ) || analysis.nearLimitFiles.some((file) => !isFixedUserCapFile(file));
+    // Report USER.md's fixed cap separately from tunable per-file limits.
+    const perFileWarnings = [
+      ...analysis.truncatedFiles.filter((file) => file.causes.includes("per-file-limit")),
+      ...analysis.nearLimitFiles,
+    ];
+    const fixedUserCapRelevant = perFileWarnings.some(isFixedUserCapFile);
+    const needsPerFileTip = perFileWarnings.some((file) => !isFixedUserCapFile(file));
     const needsTotalTip =
       analysis.truncatedFiles.some((file) => file.causes.includes("total-limit")) ||
       analysis.totalNearLimit;
-    if (needsPerFileTip || needsTotalTip || fixedUserCapRelevant) {
-      lines.push("");
-    }
-    if (fixedUserCapRelevant) {
-      lines.push(
-        `USER.md has a fixed ${formatInt(USER_BOOTSTRAP_MAX_CHARS)}-character bootstrap cap; keep it compact.`,
-      );
-    }
-    if (needsPerFileTip) {
-      lines.push(
-        "- Tip: tune `agents.entries.*.bootstrapMaxChars` for this agent, or `agents.defaults.bootstrapMaxChars` as fallback, for per-file limits.",
-      );
-    }
-    if (needsTotalTip) {
-      lines.push(
-        "- Tip: tune `agents.entries.*.bootstrapTotalMaxChars` for this agent, or `agents.defaults.bootstrapTotalMaxChars` as fallback, for total-budget limits.",
-      );
+    const tips = [
+      fixedUserCapRelevant
+        ? `USER.md has a fixed ${formatInt(USER_BOOTSTRAP_MAX_CHARS)}-character bootstrap cap; keep it compact.`
+        : "",
+      needsPerFileTip
+        ? "- Tip: tune `agents.entries.*.bootstrapMaxChars` for this agent, or `agents.defaults.bootstrapMaxChars` as fallback, for per-file limits."
+        : "",
+      needsTotalTip
+        ? "- Tip: tune `agents.entries.*.bootstrapTotalMaxChars` for this agent, or `agents.defaults.bootstrapTotalMaxChars` as fallback, for total-budget limits."
+        : "",
+    ].filter(Boolean);
+    if (tips.length > 0) {
+      lines.push("", ...tips);
     }
 
     note(lines.join("\n"), "Bootstrap file size");

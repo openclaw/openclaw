@@ -1,37 +1,136 @@
 /** Native writer facts are evidence, never serialized lifecycle authority. */
-import { createHash } from "node:crypto";
-import { constants, promises as fs } from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
+import { readRegularFile, sameFileIdentity } from "@openclaw/fs-safe/advanced";
+import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { z } from "zod";
 import { hasErrnoCode } from "../infra/errno.js";
+import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
+
+// Numbers retain legacy provenance; only newly observed IDs become exact strings.
+const identityField = z.union([
+  z.string().regex(/^(0|-?[1-9][0-9]*)$/),
+  z.number().nonnegative().refine(Number.isInteger),
+]);
 
 const fileState = z.strictObject({
   sha256: z.string().regex(/^[a-f0-9]{64}$/),
   mode: z.number().int().nonnegative(),
-  dev: z.number().nonnegative(),
-  ino: z.number().nonnegative(),
+  dev: identityField,
+  ino: identityField,
   size: z.number().int().nonnegative(),
   mtimeMs: z.number().finite(),
   ctimeMs: z.number().finite(),
 });
-export const GatewayServiceStagedFilesSchema = z.strictObject({
-  files: z
-    .array(
-      z.strictObject({
-        sourcePath: z.string().max(4096).refine(path.isAbsolute),
-        before: fileState.nullable(),
-        after: fileState,
-      }),
-    )
-    .min(1)
-    .max(16),
+const definitionFile = z.strictObject({
+  sourcePath: z.string().max(4096).refine(path.isAbsolute),
+  before: fileState.nullable(),
+  after: fileState.nullable(),
+  prepared: fileState.nullable().optional(),
 });
-export type GatewayServiceStagedFiles = z.infer<typeof GatewayServiceStagedFilesSchema>;
+export const GatewayServiceDefinitionBackupReceiptSchema = z.strictObject({
+  id: z.uuid(),
+  files: z.array(definitionFile).min(1).max(4),
+  guards: z.array(definitionFile.pick({ sourcePath: true, after: true })),
+  task: z
+    .strictObject({
+      beforeSha256: fileState.shape.sha256,
+      afterPolicySha256: fileState.shape.sha256,
+      preparedXml: z.string().min(1).optional(),
+      recoveredPolicy: z.enum(["previous", "prepared"]).optional(),
+    })
+    .optional(),
+});
+export type GatewayServiceDefinitionBackupReceipt = z.infer<
+  typeof GatewayServiceDefinitionBackupReceiptSchema
+>;
+export type GatewayServiceDefinitionTransactionHooks = {
+  preservePolicy?: readonly string[];
+  assertCurrent: () => void;
+  beforeWrite: () => Promise<void>;
+  filePrepared: (sourcePath: string, temporaryPath: string | null) => Promise<void>;
+  fileWritten: (sourcePath: string, contents: string | Uint8Array | null) => Promise<void>;
+  taskWritten: (expectedXml: string) => Promise<void>;
+  taskPrepared: (expectedXml: string) => Promise<void>;
+};
 type GatewayServiceFileState = z.infer<typeof fileState>;
 
-/** Read one stable regular file; publication owners compare it to retained write facts. */
+/** Rename can change ctime; the staged inode and payload identify the publication. */
+export function matchesServiceFilePublication(
+  current: GatewayServiceFileState | null,
+  prepared: GatewayServiceFileState,
+): current is GatewayServiceFileState {
+  return (
+    current !== null &&
+    (["dev", "ino"] as const).every((key) => {
+      const retained = prepared[key];
+      const observed = current[key];
+      // Numeric stats exposed unsigned IDs; Node's bigint stats can be signed.
+      // Legacy writers lost these bits: a same-double replacement is undetectable
+      // until a successful observation/publication upgrades the receipt.
+      return typeof retained === "number"
+        ? (typeof observed === "number"
+            ? observed
+            : Number(BigInt.asUintN(64, BigInt(observed)))) === retained
+        : observed === retained;
+    }) &&
+    (["sha256", "mode", "size", "mtimeMs"] as const).every((key) => current[key] === prepared[key])
+  );
+}
+
+export function matchesServiceFileState(
+  current: GatewayServiceFileState | null,
+  retained: GatewayServiceFileState | null,
+): boolean {
+  return retained === null
+    ? current === null
+    : matchesServiceFilePublication(current, retained) && current.ctimeMs === retained.ctimeMs;
+}
+
+/** Keep the live file runnable until a complete replacement is ready. */
+export async function publishServiceFile(params: {
+  filePath: string;
+  contents: string | Uint8Array;
+  mode: number;
+  definitionTransaction?: GatewayServiceDefinitionTransactionHooks;
+  beforeRename?: () => Promise<void>;
+  assertCurrent?: () => void;
+}): Promise<void> {
+  const hooks = params.definitionTransaction;
+  const dirMode = (await fs.stat(path.dirname(params.filePath))).mode & 0o7777;
+  assertGatewayServiceUpdateCurrent();
+  await replaceFileAtomic({
+    filePath: params.filePath,
+    content: params.contents,
+    mode: params.mode,
+    dirMode,
+    tempPrefix: `.${path.basename(params.filePath)}.openclaw`,
+    syncTempFile: true,
+    syncParentDir: true,
+    // Windows sharing violations must preserve the old launcher, never copy over it.
+    copyFallbackOnPermissionError: false,
+    fileSystem: {
+      promises: {
+        ...fs,
+        rename: async (temporary, target) => {
+          await params.beforeRename?.();
+          await hooks?.beforeWrite();
+          await hooks?.filePrepared(params.filePath, String(temporary));
+          assertGatewayServiceUpdateCurrent();
+          hooks?.assertCurrent();
+          params.assertCurrent?.();
+          await fs.rename(temporary, target);
+        },
+      },
+    },
+  });
+  await hooks?.fileWritten(params.filePath, params.contents);
+}
+
+/** Read one regular file; publication owners compare it to retained write facts. */
 export async function readServiceFileState(file: string): Promise<GatewayServiceFileState | null> {
-  const before = await fs.lstat(file).catch((error: unknown) => {
+  const before = await fs.lstat(file, { bigint: true }).catch((error: unknown) => {
     if (hasErrnoCode(error, "ENOENT")) {
       return null;
     }
@@ -43,29 +142,25 @@ export async function readServiceFileState(file: string): Promise<GatewayService
   if (!before.isFile()) {
     throw new Error("Managed service artifact is not a regular file.");
   }
-  const handle = await fs.open(file, constants.O_RDONLY | constants.O_NOFOLLOW);
-  try {
-    const opened = await handle.stat();
-    const keys = ["dev", "ino", "size", "mtimeMs", "ctimeMs", "mode"] as const;
-    if (!opened.isFile() || keys.some((key) => before[key] !== opened[key])) {
-      throw new Error("Managed service artifact changed before inspection.");
-    }
-    const contents = await handle.readFile();
-    const after = await handle.stat();
-    const current = await fs.lstat(file);
-    if (keys.some((key) => before[key] !== after[key] || after[key] !== current[key])) {
-      throw new Error("Managed service artifact changed during inspection.");
-    }
-    return {
-      sha256: createHash("sha256").update(contents).digest("hex"),
-      mode: after.mode & 0o777,
-      dev: after.dev,
-      ino: after.ino,
-      size: after.size,
-      mtimeMs: after.mtimeMs,
-      ctimeMs: after.ctimeMs,
-    };
-  } finally {
-    await handle.close();
+  const {
+    buffer: contents,
+    stat: opened,
+    exactIdentity,
+  } = await readRegularFile({ filePath: file });
+  if (!sameFileIdentity(before, exactIdentity) || before.mode !== BigInt(opened.mode)) {
+    throw new Error("Managed service artifact changed before inspection.");
   }
+  const current = await fs.lstat(file, { bigint: true });
+  if (!sameFileIdentity(exactIdentity, current) || BigInt(opened.mode) !== current.mode) {
+    throw new Error("Managed service artifact changed during inspection.");
+  }
+  return {
+    sha256: sha256Hex(contents),
+    mode: opened.mode & 0o7777,
+    dev: exactIdentity.dev.toString(),
+    ino: exactIdentity.ino.toString(),
+    size: contents.byteLength,
+    mtimeMs: opened.mtimeMs,
+    ctimeMs: opened.ctimeMs,
+  };
 }

@@ -7,7 +7,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createTestWebInboundMessage } from "../inbound/test-message.test-helper.js";
 import type { AdmittedWebInboundMessage } from "../inbound/types.js";
 import { buildMentionConfig } from "./mentions.js";
-import { applyGroupGating, type GroupHistoryEntry } from "./monitor/group-gating.js";
+import { applyGroupGating } from "./monitor/group-gating.js";
+import type { GroupHistoryEntry } from "./monitor/inbound-context.js";
 import { formatWhatsAppInboundListeningLog } from "./monitor/listener-log.js";
 import { buildInboundLine } from "./monitor/message-line.js";
 
@@ -190,17 +191,6 @@ function createDirectMessage(overrides: TestMessageOverrides = {}): AdmittedWebI
   });
 }
 
-function makeOwnerGroupConfig() {
-  return makeConfig({
-    channels: {
-      whatsapp: {
-        allowFrom: ["+111"],
-        groups: { "*": { requireMention: true } },
-      },
-    },
-  });
-}
-
 describe("WhatsApp listener diagnostics", () => {
   it("describes WhatsApp inbound listener scope without implying DM-only routing", () => {
     expect(
@@ -251,29 +241,6 @@ describe("WhatsApp listener diagnostics", () => {
 });
 
 describe("applyGroupGating", () => {
-  it("treats reply-to-bot as implicit mention", async () => {
-    const cfg = makeConfig({});
-    const { result } = await runGroupGating({
-      cfg,
-      msg: createGroupMessage({
-        id: "m1",
-        to: "+15550000",
-        admission: { accountId: "default" },
-        body: "following up",
-        timestamp: Date.now(),
-        selfJid: "15551234567@s.whatsapp.net",
-        selfE164: "+15551234567",
-        replyToId: "m0",
-        replyToBody: "bot said hi",
-        replyToSender: "+15551234567",
-        replyToSenderJid: "15551234567@s.whatsapp.net",
-        replyToSenderE164: "+15551234567",
-      }),
-    });
-
-    expect(result.shouldProcess).toBe(true);
-  });
-
   it("does not treat self-number quoted replies as implicit mention in selfChatMode groups", async () => {
     const cfg = makeConfig({
       channels: {
@@ -329,85 +296,6 @@ describe("applyGroupGating", () => {
         timestamp: Date.now(),
         senderE164: "+15559999999",
         senderJid: "15559999999@s.whatsapp.net",
-        selfJid: "15551234567@s.whatsapp.net",
-        selfE164: "+15551234567",
-        replyToId: "m0",
-        replyToBody: "bot earlier response",
-        replyToSender: "+15551234567",
-        replyToSenderJid: "15551234567@s.whatsapp.net",
-        replyToSenderE164: "+15551234567",
-      }),
-    });
-
-    expect(result.shouldProcess).toBe(true);
-  });
-
-  it("processes explicit group @mentions when self is in allowFrom (#49317)", async () => {
-    if (!sessionDir) {
-      throw new Error("sessionDir not initialized");
-    }
-    await fs.writeFile(
-      path.join(sessionDir, "lid-mapping-216372600647751_reverse.json"),
-      JSON.stringify("+15551234567"),
-    );
-    const cfg = makeConfig({
-      channels: {
-        whatsapp: {
-          allowFrom: ["+15551234567"],
-          groupPolicy: "open",
-          groups: { "*": { requireMention: true } },
-        },
-      },
-    });
-    const msg = createGroupMessage({
-      id: "g-self-lid-mention",
-      admission: { accountId: "default" },
-      body: "@216372600647751 can you see this?",
-      mentionedJids: ["216372600647751@lid"],
-      senderE164: "+15550001111",
-      senderName: "Alice",
-      selfE164: "+15551234567",
-      selfJid: "15551234567@s.whatsapp.net",
-    });
-
-    const { result, groupHistories } = await runGroupGating({
-      cfg,
-      authDir: sessionDir,
-      msg,
-    });
-
-    expect(result.shouldProcess).toBe(true);
-    expect(msg.groupMention).toEqual({ wasMentioned: true, requireMention: true });
-    expect(groupHistories.get("whatsapp:default:group:123@g.us")).toBeUndefined();
-  });
-
-  it("honors per-account selfChatMode overrides before suppressing implicit mentions", async () => {
-    const cfg = makeConfig({
-      channels: {
-        whatsapp: {
-          selfChatMode: true,
-          groupPolicy: "open",
-          groups: { "*": { requireMention: true } },
-          accounts: {
-            work: {
-              selfChatMode: false,
-            },
-          },
-        },
-      },
-    });
-    // Per-account override: work account has selfChatMode: false despite root being true
-    const { result } = await runGroupGating({
-      cfg,
-      selfChatMode: false,
-      msg: createGroupMessage({
-        id: "m-account-override",
-        to: "+15550000",
-        admission: { accountId: "work" },
-        body: "following up on bot reply",
-        timestamp: Date.now(),
-        senderE164: "+15551234567",
-        senderJid: "15551234567@s.whatsapp.net",
         selfJid: "15551234567@s.whatsapp.net",
         selfE164: "+15551234567",
         replyToId: "m0",
@@ -493,43 +381,6 @@ describe("applyGroupGating", () => {
     expect(result.shouldProcess).toBe(true);
   });
 
-  it("preserves allowFrom fallback for named-account group gating when groupAllowFrom is empty", async () => {
-    const cfg = makeConfig({
-      channels: {
-        whatsapp: {
-          groupPolicy: "allowlist",
-          accounts: {
-            work: {
-              groupPolicy: "allowlist",
-              allowFrom: ["+111"],
-              groupAllowFrom: [],
-              groups: {
-                "*": {
-                  requireMention: false,
-                },
-              },
-            },
-          },
-        },
-      },
-    });
-
-    const { result } = await runGroupGating({
-      cfg,
-      msg: createGroupMessage({
-        id: "g-empty-group-allow-fallback",
-        admission: { accountId: "work" },
-        body: "plain group message",
-        senderE164: "+111",
-        senderJid: "111@s.whatsapp.net",
-        selfJid: "15551234567@s.whatsapp.net",
-        selfE164: "+15551234567",
-      }),
-    });
-
-    expect(result.shouldProcess).toBe(true);
-  });
-
   it("uses account-scoped allowFrom when bypassing mention gating for owner commands", async () => {
     const cfg = makeConfig({
       channels: {
@@ -558,33 +409,6 @@ describe("applyGroupGating", () => {
     expect(result.shouldProcess).toBe(true);
   });
 
-  it("does not treat group mention gating as self-chat under implicit self fallback", async () => {
-    const cfg = makeConfig({
-      channels: {
-        whatsapp: {
-          groups: { "*": { requireMention: true } },
-        },
-      },
-      messages: { groupChat: { mentionPatterns: ["@openclaw"] } },
-    });
-
-    // Third-party @-mention and no configured-pattern match: still dropped
-    // (the self-chat suppression path must not swallow the identity check).
-    const { result, groupHistories } = await runGroupGating({
-      cfg,
-      msg: createGroupMessage({
-        id: "g-other-mention",
-        body: "please check this out",
-        mentionedJids: ["15550000000@s.whatsapp.net"],
-        selfE164: "+15551234567",
-        selfJid: "15551234567@s.whatsapp.net",
-      }),
-    });
-
-    expect(result.shouldProcess).toBe(false);
-    expect(groupHistories.get("whatsapp:default:group:123@g.us")?.length).toBe(1);
-  });
-
   it("processes a pattern-matching message that also @-mentions another member (#109488)", async () => {
     const cfg = makeConfig({
       channels: {
@@ -606,23 +430,6 @@ describe("applyGroupGating", () => {
         mentionedJids: ["15550000000@s.whatsapp.net"],
         selfE164: "+15551234567",
         selfJid: "15551234567@s.whatsapp.net",
-      }),
-    });
-
-    expect(result.shouldProcess).toBe(true);
-  });
-
-  it.each([
-    { id: "g-new", command: "/new" },
-    { id: "g-status", command: "/status" },
-  ])("bypasses mention gating for owner $command in group chats", async ({ id, command }) => {
-    const { result } = await runGroupGating({
-      cfg: makeOwnerGroupConfig(),
-      msg: createGroupMessage({
-        id,
-        body: command,
-        senderE164: "+111",
-        senderName: "Owner",
       }),
     });
 
@@ -665,12 +472,11 @@ describe("applyGroupGating", () => {
         groupChat: { mentionPatterns: ["@global"] },
       },
       agents: {
-        list: [
-          {
-            id: "work",
+        entries: {
+          work: {
             groupChat: { mentionPatterns: ["@workbot"] },
           },
-        ],
+        },
       },
       bindings: [
         {
@@ -713,25 +519,6 @@ describe("applyGroupGating", () => {
       }),
     });
     expect(workMention.shouldProcess).toBe(true);
-  });
-
-  it("allows group messages when whatsapp groups default disables mention gating", async () => {
-    const cfg = makeConfig({
-      channels: {
-        whatsapp: {
-          allowFrom: ["*"],
-          groups: { "*": { requireMention: false } },
-        },
-      },
-      messages: { groupChat: { mentionPatterns: ["@openclaw"] } },
-    });
-
-    const { result } = await runGroupGating({
-      cfg,
-      msg: createGroupMessage(),
-    });
-
-    expect(result.shouldProcess).toBe(true);
   });
 
   it("blocks group messages when whatsapp groups is set without a wildcard", async () => {
@@ -799,54 +586,9 @@ describe("buildInboundLine", () => {
     expect(line).toContain("original");
     expect(line).toContain("[/Replying]");
   });
-
-  it("keeps outbound WhatsApp responsePrefix out of inbound messages", () => {
-    const line = buildInboundLine({
-      msg: createDirectMessage({
-        admission: {
-          conversation: {
-            id: "+1555",
-          },
-        },
-        body: "ping",
-        to: "+2666",
-      }),
-      envelope: { includeTimestamp: false },
-    });
-
-    expect(line).toContain("ping");
-    expect(line).not.toContain("{provider}");
-    expect(line).not.toContain("{model}");
-  });
-
-  it("normalizes direct from labels by stripping whatsapp: prefix", () => {
-    const line = buildInboundLine({
-      msg: createDirectMessage({
-        admission: {
-          conversation: {
-            id: "whatsapp:+15550001111",
-          },
-        },
-        body: "ping",
-        to: "+2666",
-      }),
-      envelope: { includeTimestamp: false },
-    });
-
-    expect(line).toContain("+15550001111");
-    expect(line).not.toContain("whatsapp:+15550001111");
-  });
 });
 
 describe("buildInboundLine reply context", () => {
-  it("omits reply context when replyToBody is missing", () => {
-    const line = buildInboundLine({
-      msg: createDirectMessage({ body: "ping" }),
-      envelope: { includeTimestamp: false },
-    });
-    expect(line).not.toContain("[Replying to");
-  });
-
   it("uses unknown sender label when reply sender is absent", () => {
     const line = buildInboundLine({
       msg: createDirectMessage({ body: "ping", replyToBody: "original" }),

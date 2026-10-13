@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
-import { reconnectMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { pauseVirtualClock, reconnectMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { expectRequestCountStable } from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
@@ -13,10 +14,87 @@ import {
   sessionsListResponse,
   waitForPatch,
 } from "./session-management.test-support.ts";
+import { openSidebarPages } from "./sidebar-customization.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
 
 suite.define(() => {
+  it.each(["stay", "navigate"] as const)(
+    "offers Undo when an individual archive completes after %s on the Sessions page",
+    async (transition) => {
+      const artifacts = createControlUiE2eArtifactDir(`archive-outcome-${transition}`);
+      const context = await suite.browser.newContext(createControlUiE2eContextOptions());
+      const page = await context.newPage();
+      const main = sessionRow("agent:main:main", "Main", 1);
+      const target = sessionRow("agent:main:pending-archive", "Pending archive", 2, {
+        pinned: true,
+      });
+      const gateway = await installMockGateway(page, {
+        sessions: [main, target],
+        sessionKey: main.key,
+        sessionArchiveFiltering: true,
+      });
+      try {
+        await page.goto(`${suite.server.baseUrl}sessions`);
+        const row = page.locator(".session-data-row").filter({ hasText: target.label });
+        await row.waitFor({ state: "visible" });
+        await gateway.deferNext("sessions.patch", { key: target.key, archived: true });
+        await row.getByRole("button", { name: "Open session menu" }).click();
+        await activateSelfRemovingControl(
+          page
+            .locator("openclaw-session-menu")
+            .getByRole("menuitem", { name: "Archive session", exact: true }),
+        );
+        const archived = await waitForPatch(
+          gateway,
+          (params) => params.key === target.key && params.archived === true,
+        );
+        expect(archived.params).toMatchObject({
+          key: target.key,
+          expectedSessionId: target.sessionId,
+          archived: true,
+        });
+        const undo = page.getByRole("button", { name: "Undo", exact: true });
+        expect(await undo.count()).toBe(0);
+        if (transition === "navigate") {
+          const pages = await openSidebarPages(page);
+          await pages.getByRole("link", { name: "Agents", exact: true }).click();
+          await page.waitForURL((url) => url.pathname.endsWith("/agents"));
+          await page.locator("openclaw-sessions-page").waitFor({ state: "detached" });
+        }
+        const destination = new URL(page.url()).pathname;
+        await page.screenshot({ path: `${artifacts}/archive-pending.png` });
+
+        // Only the archive acknowledgement is held; the canonical mock owns its row update.
+        await gateway.resolveDeferred("sessions.patch");
+        await undo.waitFor({ state: "visible" });
+        await page.screenshot({ path: `${artifacts}/archive-completed.png` });
+        await undo.click();
+        const restored = await waitForPatch(
+          gateway,
+          (params) => params.key === target.key && params.archived === false,
+        );
+        expect(restored.params).toMatchObject({
+          key: target.key,
+          expectedSessionId: target.sessionId,
+          archived: false,
+          pinned: true,
+        });
+        expect(await gateway.getRequests("sessions.patch")).toHaveLength(2);
+        await page
+          .locator(`.sidebar-recent-session[data-session-key="${target.key}"]`)
+          .waitFor({ state: "visible" });
+        expect(new URL(page.url()).pathname).toBe(destination);
+      } finally {
+        try {
+          await page.screenshot({ path: `${artifacts}/final-state.png` });
+        } finally {
+          await context.close();
+        }
+      }
+    },
+  );
+
   it.each([
     { surface: "header", reconnect: false },
     { surface: "header", reconnect: true },
@@ -43,7 +121,7 @@ suite.define(() => {
           await page.locator(".chat-header-session-menu__trigger").click();
         } else {
           await rowFor(archived.key).hover();
-          await rowFor(archived.key).getByRole("button", { name: "Open session menu" }).click();
+          await rowFor(archived.key).click({ button: "right" });
         }
         await activateSelfRemovingControl(
           page
@@ -77,9 +155,16 @@ suite.define(() => {
           (params) => params.key === archived.key && params.archived === false,
         );
         expect(restored.params).toMatchObject({
+          key: archived.key,
           expectedSessionId: archived.sessionId,
-          pinned: true,
+          archived: false,
+          ...(surface === "header" ? { pinned: true } : {}),
         });
+        // Header Undo retains the legacy shared flag; the personal sidebar does not write it.
+        if (surface === "sidebar") {
+          expect(restored.params).not.toHaveProperty("pinned");
+        }
+        expect(await gateway.getRequests("sessions.patch")).toHaveLength(2);
         await rowFor(archived.key).waitFor({ state: "visible" });
         expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(target.key));
       } finally {
@@ -93,6 +178,7 @@ suite.define(() => {
     async (queued) => {
       const context = await suite.browser.newContext(createControlUiE2eContextOptions());
       const page = await context.newPage();
+      await page.clock.install();
       const archived = sessionRow("agent:main:undo-cross-agent", "Restored original", 3, {
         pinned: true,
       });
@@ -145,7 +231,7 @@ suite.define(() => {
           await sidebar.getByRole("button", { name: /Switch agent/ }).click();
           await sidebar
             .locator("wa-dropdown.sidebar-agent-menu")
-            .getByRole("menuitemradio", { name, exact: true })
+            .getByRole("menuitem", { name, exact: true })
             .click();
         };
         await rowFor(archived.key).waitFor({ state: "visible" });
@@ -159,11 +245,15 @@ suite.define(() => {
         const undo = page.getByRole("button", { name: "Undo", exact: true });
         await undo.waitFor({ state: "visible" });
         if (queued) {
+          await undo.hover();
           const listsBefore = (
             await gateway.getRequests("sessions.list", { agentId: "main", includeGlobal: true })
           ).length;
           await gateway.deferNext("sessions.list", { agentId: "main", includeGlobal: true });
+          await pauseVirtualClock(page);
           await gateway.emitGatewayEvent("sessions.changed", { agentId: "main", reason: "update" });
+          await page.clock.fastForward(5_001);
+          await page.clock.resume();
           await gateway.waitForRequest("sessions.list", {
             after: listsBefore,
             match: { agentId: "main", includeGlobal: true },
@@ -192,9 +282,15 @@ suite.define(() => {
         await captureUiProof(suite, page, "cross-agent-after-pagination.png");
         await switchAgent("Main");
         await rowFor(archived.key).waitFor({ state: "visible" });
+        // Restoring legacy shared metadata does not author a personal navigation pin.
         await rowFor(archived.key)
-          .getByRole("button", { name: "Unpin session", exact: true })
+          .getByRole("button", { name: "Pin session", exact: true })
           .waitFor({ state: "attached" });
+        expect(
+          await page
+            .locator(`.sidebar-rail [data-sidebar-entry="session:${archived.key}"]`)
+            .count(),
+        ).toBe(0);
       } finally {
         await context.close();
       }

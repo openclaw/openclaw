@@ -4,6 +4,7 @@ import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { z } from "zod";
 import { NODE_WORKER_WORKSPACE_PREPARE_COMMAND } from "../../infra/node-commands.js";
 import type { WorkerProfile } from "../../plugins/types.js";
+import { EnvironmentRecipeSchema, type EnvironmentRecipe } from "./environment-recipe.js";
 import type { WorkerProjectSnapshot } from "./workspace-git-base.js";
 
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
@@ -22,18 +23,21 @@ const Target = z
     machineClass: z.string().min(1).max(256),
     platform: z.string().min(1).max(64),
     arch: z.string().min(1).max(64).optional(),
+    profileKey: Digest.optional(),
   })
   .strict();
 const Preparation = z
   .object({
     key: Digest,
     cacheKey: Digest,
-    contractVersion: z.literal(1),
+    // Persisted v1 allocations remain readable for replay and cleanup.
+    contractVersion: z.union([z.literal(1), z.literal(2)]),
     setupRecipe: z
       .string()
       .regex(/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u)
       .optional(),
     runSetupScript: z.boolean().optional(),
+    recipe: EnvironmentRecipeSchema.optional(),
     target: Target,
     artifacts: Artifacts,
   })
@@ -71,40 +75,53 @@ export function createWorkerProjectPreparationIdentity(params: {
   artifacts: WorkerPreparationArtifacts;
   setupRecipe?: string;
   runSetupScript?: boolean;
+  recipe?: EnvironmentRecipe;
 }): WorkerProjectPreparationIdentity {
   const artifacts = Artifacts.parse(params.artifacts);
   artifacts.enabledPluginIds = [...new Set(artifacts.enabledPluginIds)].toSorted();
   artifacts.protocolFeatures = [...new Set(artifacts.protocolFeatures)].toSorted();
-  // An explicit setup skip owns a separate cache; default identities stay unchanged.
+  // Skipping an executable recipe owns a separate cache; absent recipes do no setup.
   const facts = {
-    contractVersion: 1 as const,
+    contractVersion: 2 as const,
     ...(params.setupRecipe ? { setupRecipe: params.setupRecipe } : {}),
-    ...(params.runSetupScript === false ? { runSetupScript: false as const } : {}),
+    ...(params.recipe ? { recipe: EnvironmentRecipeSchema.parse(params.recipe) } : {}),
+    ...(params.setupRecipe && params.runSetupScript === false
+      ? { runSetupScript: false as const }
+      : {}),
     target: Target.parse(params.target),
     artifacts,
   };
   // Source root is transport location only: linked worktrees share Git identity.
   // The explicit contract version also invalidates Gateway-owned setup semantics.
+  // The provider-resolved target owns OS identity, including an omitted default.
+  const { os: _requestedOs, ...profile } = params.profileSnapshot;
   const compatibility = {
-    ...facts,
+    contractVersion: facts.contractVersion,
+    setupRecipe: facts.setupRecipe,
+    runSetupScript: facts.runSetupScript,
+    target: facts.target,
     namespace: params.namespace,
     providerId: params.providerId,
-    profileId: params.profileId,
-    profile: {
-      ...params.profileSnapshot,
-      machineClass: facts.target.machineClass,
-      executionMode: params.profileSnapshot.executionMode ?? "worker-turn",
-    },
+    // Providers own the disk fingerprint; unknown providers conservatively retain
+    // their settings. Installation and execution mode belong to runtime readiness.
+    profile: facts.target.profileKey ?? params.profileSnapshot.settings,
     project: { key: params.project.key },
     workspaceProtocol: NODE_WORKER_WORKSPACE_PREPARE_COMMAND,
   };
   const digest = (value: unknown) =>
     createHash("sha256").update(stableStringify(value)).digest("hex");
-  // An older checkout can accelerate preparation, but only the exact commit may
-  // advertise readiness. Keep its physical cache identity separate from that claim.
+  // Ready workers still bind exact runtime, profile and commit facts; reusable
+  // disks only need compatible setup and boot inputs.
   return {
     key: digest({
       ...compatibility,
+      artifacts,
+      profileId: params.profileId,
+      profile: {
+        ...profile,
+        machineClass: facts.target.machineClass,
+        executionMode: params.profileSnapshot.executionMode ?? "worker-turn",
+      },
       project: { ...compatibility.project, baseCommit: params.project.baseCommit },
     }),
     cacheKey: digest(compatibility),

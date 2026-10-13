@@ -1,5 +1,4 @@
 import { bufferedOversizedJsonResponse as oversizedJsonResponse } from "openclaw/plugin-sdk/test-fixtures";
-// Vydra tests cover speech provider plugin behavior.
 import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { binaryResponse, jsonResponse, stubFetch } from "./provider-test-helpers.js";
@@ -9,14 +8,16 @@ describe("vydra speech provider", () => {
   installPinnedHostnameTestHooks();
 
   const provider = buildVydraSpeechProvider();
-  const originalVydraApiKey = process.env.VYDRA_API_KEY;
+  const request = {
+    text: "OpenClaw test",
+    cfg: {},
+    providerConfig: { apiKey: "vydra-test-key" },
+    target: "audio-file",
+    timeoutMs: 30_000,
+  } satisfies Parameters<typeof provider.synthesize>[0];
 
   afterEach(() => {
-    if (originalVydraApiKey === undefined) {
-      delete process.env.VYDRA_API_KEY;
-    } else {
-      process.env.VYDRA_API_KEY = originalVydraApiKey;
-    }
+    vi.unstubAllEnvs();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -24,12 +25,7 @@ describe("vydra speech provider", () => {
   it("exposes the default voice and model", async () => {
     expect(provider.models).toEqual(["elevenlabs/tts"]);
     const voices = await provider.listVoices?.({});
-    expect(voices).toEqual([
-      {
-        id: "21m00Tcm4TlvDq8ikWAM",
-        name: "Rachel",
-      },
-    ]);
+    expect(voices).toEqual([{ id: "21m00Tcm4TlvDq8ikWAM", name: "Rachel" }]);
   });
 
   it("posts to the tts endpoint and downloads the audio", async () => {
@@ -38,13 +34,7 @@ describe("vydra speech provider", () => {
       binaryResponse("mp3-data", "audio/mpeg"),
     );
 
-    const result = await provider.synthesize({
-      text: "OpenClaw test",
-      cfg: {} as never,
-      providerConfig: { apiKey: "vydra-test-key" },
-      target: "audio-file",
-      timeoutMs: 30_000,
-    });
+    const result = await provider.synthesize(request);
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
@@ -66,25 +56,19 @@ describe("vydra speech provider", () => {
   });
 
   it("does not treat a blank environment API key as configured", () => {
-    process.env.VYDRA_API_KEY = "   ";
+    vi.stubEnv("VYDRA_API_KEY", "   ");
 
     expect(provider.isConfigured?.({ providerConfig: {}, timeoutMs: 30_000 })).toBe(false);
   });
 
   it("rejects blank environment API keys before making requests", async () => {
-    process.env.VYDRA_API_KEY = "\t  \n";
+    vi.stubEnv("VYDRA_API_KEY", "\t  \n");
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(
-      provider.synthesize({
-        text: "OpenClaw test",
-        cfg: {} as never,
-        providerConfig: {},
-        target: "audio-file",
-        timeoutMs: 30_000,
-      }),
-    ).rejects.toThrow("Vydra API key missing");
+    await expect(provider.synthesize({ ...request, providerConfig: {} })).rejects.toThrow(
+      "Vydra API key missing",
+    );
 
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -97,26 +81,17 @@ describe("vydra speech provider", () => {
 
     await expect(
       provider.synthesize({
-        text: "OpenClaw test",
-        cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } } as never,
-        providerConfig: { apiKey: "vydra-test-key" },
-        target: "audio-file",
-        timeoutMs: 30_000,
+        ...request,
+        cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
       }),
     ).rejects.toThrow("Vydra audio download exceeds 1 bytes");
   });
 
   it("rejects speech synthesis JSON responses that exceed the provider cap", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(oversizedJsonResponse()));
+    stubFetch(oversizedJsonResponse());
 
-    await expect(
-      provider.synthesize({
-        text: "OpenClaw test",
-        cfg: {} as never,
-        providerConfig: { apiKey: "vydra-test-key" },
-        target: "audio-file",
-        timeoutMs: 30_000,
-      }),
-    ).rejects.toThrow("Vydra speech synthesis: JSON response exceeds 16777216 bytes");
+    await expect(provider.synthesize(request)).rejects.toThrow(
+      "Vydra speech synthesis: JSON response exceeds 16777216 bytes",
+    );
   });
 });

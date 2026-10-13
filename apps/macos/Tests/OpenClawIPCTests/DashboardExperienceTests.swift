@@ -5,9 +5,119 @@ import Testing
 import WebKit
 @testable import OpenClaw
 
-@Suite(.serialized)
+@Suite(.serialized, .testWaitLimit)
 @MainActor
 struct DashboardExperienceTests {
+    @Test(arguments: [false, true], [false, true])
+    func `first run owns its dashboard handoff across controller replacement`(
+        existingDashboard: Bool, cancelled: Bool) async throws
+    {
+        _ = AppKitTestSupport.application
+        let gate = DashboardWindowOwnershipPresentationGate()
+        let server = try await DashboardHTTPFixture.start(
+            html: """
+            <!doctype html><html><body><script>
+            window.addEventListener('openclaw:native-navigate', event => {
+              history.replaceState({}, '', event.detail.path + (event.detail.search || ''));
+              event.preventDefault();
+            });
+            window.__OPENCLAW_NATIVE_COMMANDS_READY__ = true;
+            window.dispatchEvent(new Event('openclaw:native-commands-state'));
+            </script></body></html>
+            """,
+            contentSecurityPolicy: "default-src 'none'; script-src 'unsafe-inline'",
+            beforeResponse: { _ = await gate.waitForRelease() })
+        defer { server.stop() }
+        let endpoint = GatewayConnection.EndpointSnapshot(
+            config: (url: server.websocketURL(), token: "fixture", password: nil), routeAuthority: nil)
+        let manager = DashboardManager._testMake(primaryEndpointProvider: { _ in endpoint })
+        defer { manager.close() }
+        if existingDashboard { manager._testSetController(self.makeController(server: server)) }
+        let opening = Task {
+            await manager.show(
+                atPath: DashboardRouteMap.custodianPagePath,
+                search: DashboardRouteMap.custodianOnboardingSearch,
+                target: .primary, waitForLoad: true, reportErrors: false)
+        }
+        do {
+            await gate.waitUntilRequested()
+            let original = try #require(manager._testController())
+            let window = try #require(original.window)
+            await manager.handleEndpointState(.ready(
+                mode: .local, url: server.websocketURL(), token: "renewed", password: nil, routeRevision: 2))
+            let replacement = try #require(manager._testController())
+            #expect(replacement !== original)
+            #expect(replacement.window === window)
+            if cancelled {
+                opening.cancel()
+                await #expect(throws: CancellationError.self) { try await opening.value.get() }
+                await gate.release()
+                #expect(manager.openWindowCount(for: .primary) == 0)
+            } else {
+                await gate.release()
+                try await opening.value.get()
+                try await DashboardTestWait.document(replacement, "onboarding route after replacement") {
+                    try await replacement.webView.evaluateJavaScript("location.pathname === '/custodian'") as? Bool == true
+                }
+                #expect(manager.openWindowCount(for: .primary) == 1)
+            }
+        } catch {
+            opening.cancel()
+            await gate.release()
+            _ = await opening.value
+            throw error
+        }
+    }
+
+    @Test func `cancelling a dashboard handoff retires its pending navigation and window`() async throws {
+        let gate = DashboardWindowOwnershipPresentationGate()
+        let server = try await DashboardHTTPFixture.start(beforeResponse: {
+            _ = await gate.waitForRelease()
+        })
+        defer { server.stop() }
+        let endpoint = GatewayConnection.EndpointSnapshot(
+            config: (url: server.websocketURL(), token: "fixture", password: nil), routeAuthority: nil)
+        let manager = DashboardManager._testMake(primaryEndpointProvider: { _ in endpoint })
+        defer { manager.close() }
+        let opening = Task {
+            await manager.show(
+                atPath: DashboardRouteMap.custodianPagePath,
+                search: DashboardRouteMap.custodianOnboardingSearch,
+                target: .primary,
+                waitForLoad: true,
+                reportErrors: false)
+        }
+        do {
+            await gate.waitUntilRequested()
+            let controller = try #require(manager._testController())
+            #expect(controller._testPendingNativeNavigation?.search == DashboardRouteMap.custodianOnboardingSearch)
+            let loadingChanges = AsyncTestSignal()
+            let loadingObservation = controller.webView.observe(\.isLoading) { _, _ in
+                loadingChanges.notify()
+            }
+            defer { loadingObservation.invalidate() }
+
+            opening.cancel()
+            let result = await opening.value
+            // WebKit may publish the stopped load after native cancellation returns.
+            try await loadingChanges.wait("cancelled dashboard navigation") {
+                !controller.webView.isLoading
+            }
+            await gate.release()
+
+            #expect(throws: CancellationError.self) { try result.get() }
+            #expect(manager.openWindowCount(for: .primary) == 0)
+            #expect(controller._testPendingNativeNavigation == nil)
+            #expect(!controller.webView.isLoading)
+            #expect(!controller.isShowingFailurePage)
+        } catch {
+            opening.cancel()
+            await gate.release()
+            _ = await opening.value
+            throw error
+        }
+    }
+
     @Test func `switching experiences retains documents and restores the selected Gateway`() async throws {
         let server = try await DashboardHTTPFixture.start()
         defer { server.stop() }
@@ -21,15 +131,27 @@ struct DashboardExperienceTests {
         let primary = try #require(manager._testAuxiliaryWindows().first?.controller)
         await manager.openNewDashboardWindow(for: .profile("saved")).value
         let saved = try #require(manager._testAuxiliaryWindows().first { $0.target == .profile("saved") }?.controller)
-        try await self.waitForDocument(saved)
+        try await DashboardTestWait.document(saved, "saved Gateway document") {
+            try await saved.webView.evaluateJavaScript("document.readyState === 'complete'") as? Bool == true
+        }
         try await saved.webView.evaluateJavaScript("window.fixtureDraft = 'Keep this draft'")
         let savedWindow = try #require(saved.window)
         let primaryWindow = try #require(primary.window)
-        primaryWindow.miniaturize(nil)
+        try await AppKitTestSupport.performWindowTransition(
+            primaryWindow, notification: NSWindow.didMiniaturizeNotification)
+        {
+            primaryWindow.miniaturize(nil)
+        }
         saved.show()
         #expect(manager.hasVisibleWindows)
 
-        manager.hideWindows()
+        try await AppKitTestSupport.performWindowTransition(
+            primaryWindow, notification: NSWindow.didDeminiaturizeNotification)
+        {
+            manager.hideWindows()
+            await manager.handleEndpointState(.ready(
+                mode: .remote, url: server.websocketURL(), token: "renewed", password: nil, routeRevision: 2))
+        }
 
         #expect(!manager.hasVisibleWindows)
         #expect(!primaryWindow.isVisible && !primaryWindow.isMiniaturized)
@@ -48,12 +170,32 @@ struct DashboardExperienceTests {
         #expect(try await saved.webView.evaluateJavaScript("window.fixtureDraft") as? String == "Keep this draft")
 
         manager.hideWindows()
-        await manager.handleEndpointState(.ready(
-            mode: .remote, url: server.websocketURL(), token: "renewed", password: nil, routeRevision: 2))
         let renewed = try #require(primaryWindow.windowController as? DashboardWindowController)
         #expect(renewed.auth.token == "renewed")
         #expect(renewed.isHiddenForExperience)
         #expect(!primaryWindow.isVisible && primaryWindow.isExcludedFromWindowsMenu)
+
+        // Native ordering must not promote a window the experience owner has hidden.
+        primaryWindow.orderFront(nil)
+        #expect(!renewed.isWindowOpen)
+        #expect(manager.frontmostDashboard() == nil)
+        manager.hideWindows()
+
+        renewed.show()
+        try await AppKitTestSupport.performWindowTransition(
+            primaryWindow, notification: NSWindow.didMiniaturizeNotification)
+        {
+            primaryWindow.miniaturize(nil)
+        }
+        try await AppKitTestSupport.performWindowTransition(
+            primaryWindow, notification: NSWindow.didDeminiaturizeNotification)
+        {
+            manager.hideWindows()
+            renewed.show()
+        }
+        #expect(primaryWindow.windowController === renewed)
+        #expect(!renewed.isHiddenForExperience)
+        #expect(primaryWindow.isVisible && !primaryWindow.isExcludedFromWindowsMenu)
     }
 
     @Test(arguments: ["navigation", "new-window", "focus", "picker"])
@@ -92,7 +234,7 @@ struct DashboardExperienceTests {
         #expect(manager._testController() === saved)
         #expect(manager.openWindowCount(for: .primary) == 0)
         #expect(saved._testPendingNativeNavigation == nil)
-        #expect(manager._testPendingGatewayAlerts().isEmpty)
+        #expect(manager.alertPresenter._testPendingAlerts.isEmpty)
     }
 
     @Test func `a retired source socket cannot deliver a draft after Dashboard endpoint lookup`() async throws {
@@ -129,7 +271,7 @@ struct DashboardExperienceTests {
             #expect(manager._testController() === saved)
             #expect(manager._testMainTarget() == .profile("saved"))
             #expect(saved._testPendingNativeNavigation == nil)
-            #expect(manager._testPendingGatewayAlerts().isEmpty)
+            #expect(manager.alertPresenter._testPendingAlerts.isEmpty)
         } catch {
             await fixture.gateway.shutdown()
             throw error
@@ -156,12 +298,16 @@ struct DashboardExperienceTests {
         manager._testSetController(saved)
         manager._testSetMainTarget(.profile("saved"))
         saved.show(url: server.url("/"), auth: saved.auth)
-        try await self.waitForDocument(saved)
+        try await DashboardTestWait.document(saved, "saved Gateway document") {
+            try await saved.webView.evaluateJavaScript("document.readyState === 'complete'") as? Bool == true
+        }
         try await saved.webView.evaluateJavaScript("window.fixtureDraft = 'Saved Gateway draft'")
 
         await manager.show(atPath: "/settings/devices", target: .primary)
         let primary = try #require(manager._testAuxiliaryWindows().first { $0.target == .primary }?.controller)
-        try await self.waitForDocument(primary)
+        try await DashboardTestWait.document(primary, "primary handoff document") {
+            try await primary.webView.evaluateJavaScript("document.readyState === 'complete'") as? Bool == true
+        }
         #expect(try await primary.webView.evaluateJavaScript("window.routes") as? [String] == ["/settings/devices"])
         #expect(manager._testMainTarget() == .profile("saved"))
         #expect(manager._testController() === saved)
@@ -201,20 +347,9 @@ struct DashboardExperienceTests {
     private func makeController(server: DashboardHTTPFixture) -> DashboardWindowController {
         DashboardWindowController(
             url: server.url("/"),
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: DashboardWindowAuth.unauthenticated,
             websiteDataStore: .nonPersistent(),
             windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
-    }
-
-    private func waitForDocument(_ controller: DashboardWindowController) async throws {
-        let deadline = ContinuousClock.now + .seconds(10)
-        while ContinuousClock.now < deadline {
-            if !controller.webView.isLoading, controller.canDeliverNativeCommands,
-               try await controller.webView.evaluateJavaScript("document.readyState === 'complete'") as? Bool == true
-            { return }
-            try await Task.sleep(for: .milliseconds(20))
-        }
-        Issue.record("The dashboard fixture did not finish loading")
     }
 }

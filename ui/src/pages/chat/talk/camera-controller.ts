@@ -1,7 +1,6 @@
-import type { ReactiveController } from "lit";
+import { openRealtimeTalkCamera } from "./input.ts";
 
 type RealtimeTalkCameraControllerOptions = {
-  acquire: (deviceId: string | undefined, signal: AbortSignal) => Promise<MediaStream>;
   getDeviceId: () => string | undefined;
   setDeviceId: (deviceId: string | undefined) => void;
   isClosed: () => boolean;
@@ -10,7 +9,7 @@ type RealtimeTalkCameraControllerOptions = {
   onReleased?: () => void;
 };
 
-export class RealtimeTalkCameraController implements ReactiveController {
+export class RealtimeTalkCameraController {
   stream: MediaStream | null = null;
   video: HTMLVideoElement | null = null;
   private setupController: AbortController | null = null;
@@ -34,7 +33,9 @@ export class RealtimeTalkCameraController implements ReactiveController {
     this.setupController = controller;
     let stream: MediaStream;
     try {
-      stream = await this.options.acquire(this.options.getDeviceId(), controller.signal);
+      stream = await openRealtimeTalkCamera(this.options.getDeviceId(), {
+        signal: controller.signal,
+      });
     } catch (error) {
       if (this.options.isClosed() || controller.signal.aborted) {
         return;
@@ -116,9 +117,5 @@ export class RealtimeTalkCameraController implements ReactiveController {
       this.video = null;
     }
     this.options.onStream(null);
-  }
-
-  hostDisconnected(): void {
-    this.release();
   }
 }

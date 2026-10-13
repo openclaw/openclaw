@@ -83,6 +83,7 @@ export const TranscriptsListResultSchema = closedObject({
   sessions: Type.Array(TranscriptSessionSummarySchema, { maxItems: TRANSCRIPTS_LIST_MAX }),
   nextCursor: NullableString,
 });
+export const TranscriptsSummarizeParamsSchema = closedObject({ selector: Selector });
 export const TranscriptsGetParamsSchema = closedObject({
   selector: Selector,
   includeUtterances: Type.Optional(Type.Boolean()),

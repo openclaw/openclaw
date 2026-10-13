@@ -11,17 +11,12 @@ final class ChildProcessExit: @unchecked Sendable {
 
     private let lock = NSLock()
     private let processIdentifier: pid_t
-    private let source: DispatchSourceProcess?
+    private let source: DispatchSourceProcess
     private var continuation: CheckedContinuation<Void, Never>?
     private var finished = false
 
     init(processIdentifier: pid_t, queue: DispatchQueue = .global(qos: .utility)) {
         self.processIdentifier = processIdentifier
-        if Self.hasExited(processIdentifier) {
-            self.source = nil
-            self.finished = true
-            return
-        }
         let source = DispatchSource.makeProcessSource(
             identifier: processIdentifier,
             eventMask: .exit,
@@ -31,9 +26,8 @@ final class ChildProcessExit: @unchecked Sendable {
             self?.finish()
         }
         source.resume()
-        // The child can exit between the initial waitid probe and kqueue
-        // registration. Recheck after resume so that race cannot consume
-        // the full timeout when no NOTE_EXIT event is delivered.
+        // The owned child is still unreaped, so its PID cannot be reused.
+        // Check after registration to also cover exits before observer creation.
         if Self.hasExited(processIdentifier) {
             self.finish()
         }
@@ -59,15 +53,6 @@ final class ChildProcessExit: @unchecked Sendable {
     }
 
     private func wait() async {
-        await withTaskGroup(of: Void.self) { group in
-            group.addTask { await self.waitForSignal() }
-            group.addTask { await self.pollUntilExit() }
-            defer { group.cancelAll() }
-            _ = await group.next()
-        }
-    }
-
-    private func waitForSignal() async {
         await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
                 self.lock.lock()
@@ -81,21 +66,6 @@ final class ChildProcessExit: @unchecked Sendable {
             }
         } onCancel: {
             self.finish()
-        }
-    }
-
-    /// Recover missed NOTE_EXIT events without making launchers own a second observer.
-    private func pollUntilExit() async {
-        while !Task.isCancelled {
-            do {
-                try await Task.sleep(for: .milliseconds(50))
-            } catch {
-                return
-            }
-            if Self.hasExited(self.processIdentifier) {
-                self.finish()
-                return
-            }
         }
     }
 
@@ -120,7 +90,7 @@ final class ChildProcessExit: @unchecked Sendable {
         let continuation = self.continuation
         self.continuation = nil
         self.lock.unlock()
-        self.source?.cancel()
+        self.source.cancel()
         continuation?.resume()
     }
 

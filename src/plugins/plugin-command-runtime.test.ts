@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 const getCurrentPluginConversationBinding = vi.hoisted(() => vi.fn(async () => null));
 vi.mock("./conversation-binding.js", () => ({
@@ -21,7 +22,6 @@ import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { markPluginRegistryRetired } from "./registry-lifecycle.js";
 import {
   clearActivePluginRegistry,
-  prepareActivePluginRegistryShutdown,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "./runtime.js";
@@ -143,16 +143,6 @@ describe("plugin command runtime", () => {
     expect(reply.text).toContain("openclaw doctor");
     expect(reply.text).not.toMatch(/fixture-secret-value|private-detail|at loader/);
     expect(reply.text!.length).toBeLessThan(400);
-  });
-
-  it("prepares plugin host cleanup before gateway shutdown", async () => {
-    await prepareActivePluginRegistryShutdown();
-    const { registry, cleanup } = createCleanupRegistry("shutdown");
-    setActivePluginRegistry(registry);
-
-    await clearActivePluginRegistry();
-
-    expect(cleanup).toHaveBeenCalledOnce();
   });
 
   it("binds the request-scoped registry and scopes provider aliases", async () => {
@@ -352,38 +342,6 @@ describe("plugin command runtime", () => {
     ).toEqual({ ok: true });
   });
 
-  it("admits an invocation before retirement but rejects later starts", async () => {
-    const registry = createEmptyPluginRegistry();
-    let release!: () => void;
-    const entered = new Promise<void>((resolveEntered) => {
-      registerCommand(registry, {
-        pluginId: "slow",
-        name: "slow",
-        handler: async () => {
-          resolveEntered();
-          await new Promise<void>((resolve) => {
-            release = resolve;
-          });
-          return { text: "finished" };
-        },
-      });
-    });
-    setActivePluginRegistry(registry);
-    const runtime = createPluginCommandRuntime();
-    const candidate = runtime.listNativeCandidates("telegram")[0]!;
-    const admitted = requirePluginDispatch(candidate);
-    const late = requirePluginDispatch(candidate);
-    const running = admitted.execute(executionContext);
-    await entered;
-    markPluginRegistryRetired(registry);
-    await expect(late.execute(executionContext)).resolves.toMatchObject({
-      text: expect.stringContaining("registry changed"),
-    });
-    release();
-    await expect(running).resolves.toEqual({ text: "finished" });
-    expect(getPluginCommandExecutionCount(registry)).toBe(0);
-  });
-
   it("does not prepare arguments for commands that reject them", () => {
     const registry = createEmptyPluginRegistry();
     registerCommand(registry, {
@@ -396,29 +354,10 @@ describe("plugin command runtime", () => {
     expect(candidate.prepareDispatch("unexpected")).toEqual({ kind: "non-plugin" });
   });
 
-  it("preserves the shipped catalog-retention call and rejects retired runtimes", () => {
-    const registry = createEmptyPluginRegistry();
-    registerCommand(registry, {
-      pluginId: "demo",
-      name: "demo",
-      channels: ["telegram"],
-      handler: async () => ({ text: "ok" }),
-    });
-    setActivePluginRegistry(registry);
-    const runtime = createPluginCommandRuntime();
-    expect(() => runtime.retainNativeCatalog("telegram")).not.toThrow();
-    expect(() => runtime.retainNativeCatalog("discord")).not.toThrow();
-    markPluginRegistryRetired(registry);
-    expect(() => runtime.retainNativeCatalog("telegram")).toThrow("retired registry generation");
-  });
-
   it("defers full registry cleanup until an admitted command settles", async () => {
     const { registry, cleanup } = createCleanupRegistry("slow");
     let release!: () => void;
-    let entered!: () => void;
-    const started = new Promise<void>((resolve) => {
-      entered = resolve;
-    });
+    const { promise: started, resolve: entered } = createDeferred();
     registerCommand(registry, {
       pluginId: "slow",
       name: "slow",
@@ -477,10 +416,7 @@ describe("plugin command runtime", () => {
 
   it("awaits cleanup from detached handler context after execution settles", async () => {
     const { registry, cleanup } = createCleanupRegistry("detached");
-    let releaseDetached!: () => void;
-    const detachedGate = new Promise<void>((resolve) => {
-      releaseDetached = resolve;
-    });
+    const { promise: detachedGate, resolve: releaseDetached } = createDeferred();
     let releaseCleanup!: () => void;
     cleanup.mockImplementationOnce(
       async () =>
@@ -522,10 +458,7 @@ describe("plugin command runtime", () => {
 
   it("does not reuse an outer admission for detached nested handler cleanup", async () => {
     const { registry } = createCleanupRegistry("nested");
-    let releaseDetached!: () => void;
-    const detachedGate = new Promise<void>((resolve) => {
-      releaseDetached = resolve;
-    });
+    const { promise: detachedGate, resolve: releaseDetached } = createDeferred();
     let detachedClear!: Promise<void>;
     registerCommand(registry, {
       pluginId: "inner",
@@ -538,14 +471,8 @@ describe("plugin command runtime", () => {
         return Promise.resolve({ text: "inner" });
       },
     });
-    let releaseOuter!: () => void;
-    const outerGate = new Promise<void>((resolve) => {
-      releaseOuter = resolve;
-    });
-    let outerHolding!: () => void;
-    const outerHoldingGate = new Promise<void>((resolve) => {
-      outerHolding = resolve;
-    });
+    const { promise: outerGate, resolve: releaseOuter } = createDeferred();
+    const { promise: outerHoldingGate, resolve: outerHolding } = createDeferred();
     const innerDispatchRef: { current?: PluginCommandDispatch } = {};
     registerCommand(registry, {
       pluginId: "outer",

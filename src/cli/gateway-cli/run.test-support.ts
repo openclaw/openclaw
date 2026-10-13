@@ -12,15 +12,7 @@ type GatewayRunTestApi = {
     cfg: OpenClawConfig,
   ): (params: { host: string; port: number }) => Promise<boolean>;
   isGatewayHealthzResponse(statusCode: number | undefined, body: string): boolean;
-  normalizeGatewayHealthProbeHost(host: string): string;
-  probeGatewayHealthz(params: {
-    host: string;
-    port: number;
-    timeoutMs?: number;
-    tlsFingerprint?: string;
-  }): Promise<boolean>;
   resolveGatewayLockErrorExitCode(err: unknown): number;
-  resolveGatewayStartupFailureExitCode(err: unknown): number;
   runGatewayLoopWithSupervisedLockRecovery(params: {
     startLoop: (lifecycleDeadlineMs?: number) => Promise<void>;
     supervisor: RespawnSupervisor | null;
@@ -48,19 +40,15 @@ export const testing: GatewayRunTestApi = {
   isGatewayHealthzResponse(statusCode, body) {
     return getTestApi().isGatewayHealthzResponse(statusCode, body);
   },
-  normalizeGatewayHealthProbeHost(host) {
-    return getTestApi().normalizeGatewayHealthProbeHost(host);
-  },
-  async probeGatewayHealthz(params) {
-    return await getTestApi().probeGatewayHealthz(params);
-  },
   resolveGatewayLockErrorExitCode(err) {
     return getTestApi().resolveGatewayLockErrorExitCode(err);
   },
-  resolveGatewayStartupFailureExitCode(err) {
-    return getTestApi().resolveGatewayStartupFailureExitCode(err);
-  },
   async runGatewayLoopWithSupervisedLockRecovery(params) {
-    await getTestApi().runGatewayLoopWithSupervisedLockRecovery(params);
+    await getTestApi().runGatewayLoopWithSupervisedLockRecovery({
+      probeHealth: async () => {
+        throw new Error("Unexpected health probe");
+      },
+      ...params,
+    });
   },
 };

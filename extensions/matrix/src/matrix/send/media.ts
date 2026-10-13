@@ -1,4 +1,3 @@
-// Matrix plugin module implements media behavior.
 import { parseBuffer, type IFileInfo } from "music-metadata";
 import type { MediaKind } from "openclaw/plugin-sdk/media-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
@@ -7,8 +6,6 @@ import type {
   EncryptedFile,
   FileWithThumbnailInfo,
   MatrixClient,
-  TimedFileInfo,
-  VideoFileInfo,
 } from "../sdk.js";
 import type {
   MatrixMediaContent,
@@ -30,31 +27,14 @@ function buildMatrixMediaInfo(params: {
   if (params.mimetype) {
     base.mimetype = params.mimetype;
   }
-  if (params.imageInfo) {
-    const dimensional: DimensionalFileInfo = {
-      ...base,
-      ...params.imageInfo,
-    };
-    if (typeof params.durationMs === "number") {
-      const videoInfo: VideoFileInfo = {
-        ...dimensional,
-        duration: params.durationMs,
-      };
-      return videoInfo;
-    }
-    return dimensional;
-  }
+  const info = params.imageInfo ? { ...base, ...params.imageInfo } : base;
   if (typeof params.durationMs === "number") {
-    const timedInfo: TimedFileInfo = {
-      ...base,
-      duration: params.durationMs,
-    };
-    return timedInfo;
+    return { ...info, duration: params.durationMs };
   }
-  if (Object.keys(base).length === 0) {
+  if (!params.imageInfo && Object.keys(info).length === 0) {
     return undefined;
   }
-  return base;
+  return info;
 }
 
 export function buildMediaContent(params: {
@@ -70,23 +50,16 @@ export function buildMediaContent(params: {
   imageInfo?: DimensionalFileInfo;
   file?: EncryptedFile;
 }): MatrixMediaContent {
-  const info = buildMatrixMediaInfo({
-    size: params.size,
-    mimetype: params.mimetype,
-    durationMs: params.durationMs,
-    imageInfo: params.imageInfo,
-  });
   const base: MatrixMediaContent = {
     msgtype: params.msgtype,
     body: params.body,
     filename: params.filename,
-    info: info ?? undefined,
+    info: buildMatrixMediaInfo(params),
   };
   // Encrypted media should only include the "file" payload, not top-level "url".
   if (!params.file && params.url) {
     base.url = params.url;
   }
-  // For encrypted files, add the file object
   if (params.file) {
     base.file = params.file;
   }

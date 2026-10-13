@@ -1,4 +1,3 @@
-/** Tracks control-plane plugin metadata context during registry and status operations. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
@@ -6,10 +5,6 @@ import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "./manifest-registry-installed.js";
 import { resolvePluginCacheInputs } from "./roots.js";
 
-/** Discovery inputs that affect plugin source resolution. */
-type PluginDiscoveryContext = ReturnType<typeof resolvePluginCacheInputs>;
-
-/** Parameters used to resolve plugin discovery roots and load paths. */
 type ResolvePluginDiscoveryContextParams = {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -17,7 +12,6 @@ type ResolvePluginDiscoveryContextParams = {
   loadPaths?: readonly string[];
 };
 
-/** Parameters used to resolve the plugin control-plane fingerprint. */
 export type ResolvePluginControlPlaneContextParams = ResolvePluginDiscoveryContextParams & {
   activationFingerprint?: string;
   index?: InstalledPluginIndex;
@@ -25,21 +19,14 @@ export type ResolvePluginControlPlaneContextParams = ResolvePluginDiscoveryConte
   policyHash?: string;
 };
 
-function resolveConfiguredPluginLoadPaths(
-  config: OpenClawConfig | undefined,
-): readonly string[] | undefined {
-  const paths = config?.plugins?.load?.paths;
-  return Array.isArray(paths) ? paths : undefined;
-}
-
-/** Resolves plugin discovery roots and load paths for cache/fingerprint callers. */
 export function resolvePluginDiscoveryContext(
   params: ResolvePluginDiscoveryContextParams = {},
-): PluginDiscoveryContext {
+): ReturnType<typeof resolvePluginCacheInputs> {
+  const paths = params.config?.plugins?.load?.paths;
   return resolvePluginCacheInputs({
     env: params.env ?? process.env,
     workspaceDir: params.workspaceDir,
-    loadPaths: params.loadPaths ?? resolveConfiguredPluginLoadPaths(params.config),
+    loadPaths: params.loadPaths ?? (Array.isArray(paths) ? paths : undefined),
   });
 }
 

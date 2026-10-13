@@ -24,6 +24,7 @@ import {
   implicitMentionKindWhen,
   resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-mention-gating";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
@@ -54,6 +55,7 @@ beforeAll(() => {
   installMatrixTestRuntime({
     logging: { shouldLogVerbose: () => false },
     channel: {
+      inbound: createPluginRuntimeMock().channel.inbound,
       text: {
         resolveMarkdownTableMode,
         convertMarkdownTables,

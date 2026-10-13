@@ -55,18 +55,11 @@ export function isOpenClawTrustedPluginInstallSpec(
   if (explicitNpm) {
     return resolveOpenClawTrustedNpmPackageInstall(npmSpec, bundledSources) !== null;
   }
-  const parsedPackageName = parseRegistryNpmSpec(npmSpec)?.name;
   const bundled =
     findBundledPluginSourceInMap({
       bundled: bundledSources,
       lookup: { kind: "pluginId", value: npmSpec },
     }) ??
-    (parsedPackageName
-      ? findBundledPluginSourceInMap({
-          bundled: bundledSources,
-          lookup: { kind: "npmSpec", value: parsedPackageName },
-        })
-      : undefined) ??
     findBundledPluginSourceInMap({
       bundled: bundledSources,
       lookup: { kind: "localPath", value: npmSpec },

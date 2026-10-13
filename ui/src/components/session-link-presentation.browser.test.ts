@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { userEvent } from "vitest/browser";
 import "../styles/base.css";
 import "../styles/chat/text.css";
 import "../styles/sidebar-markdown.css";
-import "../styles/chat/grouped.css";
+import "../pages/chat/components/chat-attribution.css";
 
 const title = "A resolved session title long enough to need truncation in a narrow chat bubble";
 
@@ -21,6 +22,49 @@ afterEach(() => {
 });
 
 describe("session link presentation", () => {
+  it.each([
+    "chat-text",
+    "sidebar-markdown",
+    "chat-reply-attribution",
+    "chat-reply-attribution chat-reply-attribution--forwarded",
+  ])(
+    "keeps session references borderless without removing keyboard focus in %s",
+    async (className) => {
+      const host = document.createElement("div");
+      host.id = "session-link-proof";
+      host.className = className;
+      host.innerHTML =
+        '<a class="markdown-session-link" href="/chat/main/raw">agent:main:raw</a>' +
+        '<a class="markdown-session-link markdown-session-link--titled" href="/chat/main/resolved"><span class="session-label">Resolved title</span></a>' +
+        '<a class="markdown-session-link" href="/chat/main/code"><code>agent:main:code</code></a>' +
+        '<a class="markdown-session-link markdown-session-link--titled markdown-session-link--automation" href="/chat/main/cron"><span class="session-label">Automation</span></a>' +
+        '<a class="markdown-session-link markdown-session-link--titled markdown-session-link--agent" href="/chat/research"><span class="session-label">Research</span></a>';
+      const start = document.createElement("button");
+      start.textContent = "Start keyboard navigation";
+      host.prepend(start);
+      document.body.append(host);
+      for (const theme of ["light", "dark"]) {
+        document.documentElement.dataset.theme = theme;
+        document.documentElement.dataset.themeMode = theme;
+        await userEvent.click(start);
+        for (const link of host.querySelectorAll("a")) {
+          const style = getComputedStyle(link);
+          expect([
+            style.borderTopWidth,
+            style.borderRightWidth,
+            style.borderBottomWidth,
+            style.borderLeftWidth,
+          ]).toEqual(["0px", "0px", "0px", "0px"]);
+          await userEvent.keyboard("{Tab}");
+          expect(document.activeElement).toBe(link);
+          expect(link.matches(":focus-visible")).toBe(true);
+          expect(getComputedStyle(link).outlineStyle).toBe("solid");
+          expect(getComputedStyle(link).outlineWidth).toBe("2px");
+        }
+      }
+    },
+  );
+
   it.each(["light", "dark"] as const)(
     "keeps resolved titles on the text baseline with shared link color in %s",
     (theme) => {

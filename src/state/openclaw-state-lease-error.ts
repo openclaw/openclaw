@@ -1,17 +1,14 @@
-const leaseErrorCodes = [
-  "OPENCLAW_STATE_LEASE_INVALID_INPUT",
-  "OPENCLAW_STATE_LEASE_TIMEOUT",
-  "OPENCLAW_STATE_LEASE_ABORTED",
-  "OPENCLAW_STATE_LEASE_LOST",
-  "OPENCLAW_STATE_LEASE_STORAGE_FAILED",
-] as const;
-export type OpenClawStateLeaseErrorCode = (typeof leaseErrorCodes)[number];
+export type OpenClawStateLeaseErrorCode =
+  | "OPENCLAW_STATE_LEASE_INVALID_INPUT"
+  | "OPENCLAW_STATE_LEASE_HELD"
+  | "OPENCLAW_STATE_LEASE_ABORTED"
+  | "OPENCLAW_STATE_LEASE_LOST"
+  | "OPENCLAW_STATE_LEASE_STORAGE_FAILED";
 
-export function isOpenClawStateLeaseErrorCode(
-  value: unknown,
-): value is OpenClawStateLeaseErrorCode {
-  return leaseErrorCodes.some((code) => code === value);
-}
+type OpenClawStateLeaseAcquisitionFailure =
+  | { kind: "held"; holder: { owner: string; epoch: number } }
+  | { kind: "store-unavailable"; reason: "sqlite-busy" | "lifecycle-busy" | "storage-error" }
+  | { kind: "aborted"; reason: "caller-signal"; elapsedMs: number };
 
 export class OpenClawStateLeaseError extends Error {
   readonly code: OpenClawStateLeaseErrorCode;
@@ -20,6 +17,31 @@ export class OpenClawStateLeaseError extends Error {
     super(message, { cause: options.cause });
     this.name = "OpenClawStateLeaseError";
     this.code = options.code;
+  }
+}
+
+export class OpenClawStateLeaseAcquisitionError extends OpenClawStateLeaseError {
+  constructor(
+    label: string,
+    readonly outcome: OpenClawStateLeaseAcquisitionFailure,
+    cause?: unknown,
+  ) {
+    super(
+      outcome.kind === "held"
+        ? `${label} is held by ${outcome.holder.owner} (lease epoch ${outcome.holder.epoch})`
+        : outcome.kind === "aborted"
+          ? `${label} acquisition was aborted after ${outcome.elapsedMs} ms by caller signal`
+          : `failed to acquire ${label}: store unavailable (${outcome.reason})`,
+      {
+        code:
+          outcome.kind === "held"
+            ? "OPENCLAW_STATE_LEASE_HELD"
+            : outcome.kind === "aborted"
+              ? "OPENCLAW_STATE_LEASE_ABORTED"
+              : "OPENCLAW_STATE_LEASE_STORAGE_FAILED",
+        cause,
+      },
+    );
   }
 }
 
@@ -33,4 +55,35 @@ export function toOpenClawStateLeaseVerificationError(
         `failed to verify ${identity.leaseLabel ?? "state lease"} ${identity.scope}/${identity.key}`,
         { code: "OPENCLAW_STATE_LEASE_STORAGE_FAILED", cause: error },
       );
+}
+
+export function createOpenClawStateLeaseError(
+  code: OpenClawStateLeaseErrorCode,
+  message: string,
+  cause?: unknown,
+): OpenClawStateLeaseError {
+  return new OpenClawStateLeaseError(message, { code, cause });
+}
+
+export function createOpenClawStateLeaseLostError(
+  identity: { scope: string; key: string; leaseLabel?: string },
+  cause?: unknown,
+): OpenClawStateLeaseError {
+  return createOpenClawStateLeaseError(
+    "OPENCLAW_STATE_LEASE_LOST",
+    `${identity.leaseLabel ?? "state lease"} ${identity.scope}/${identity.key} was lost`,
+    cause,
+  );
+}
+
+export function createOpenClawStateLeaseAbortError(
+  signal: AbortSignal,
+  label: string,
+  leaseLabel: string,
+): OpenClawStateLeaseError {
+  return createOpenClawStateLeaseError(
+    "OPENCLAW_STATE_LEASE_ABORTED",
+    `${leaseLabel} ${label} was aborted`,
+    signal.reason,
+  );
 }

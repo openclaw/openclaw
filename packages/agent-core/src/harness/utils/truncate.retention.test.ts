@@ -1,6 +1,12 @@
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../../../../src/infra/runtime-worker-url.js";
+import { resolveTestNodeExecPath } from "../../../../../src/test-utils/node-process.js";
 import { runNodeScript } from "../../../../../test/helpers/run-node-script.js";
+import { agentCoreRetentionEntrypoints } from "../../retention-runtime.test-support.js";
 
 it.for(
   ["head", "tail", "partial-tail", "line"].flatMap((mode) =>
@@ -13,9 +19,10 @@ it.for(
     const result = await runNodeScript(
       [
         "--expose-gc",
-        "--import",
-        "tsx",
-        fileURLToPath(new URL("./truncate.retention.test-support.ts", import.meta.url)),
+        ...resolveRuntimeWorkerArgv(
+          resolveRuntimeWorkerUrl(agentCoreRetentionEntrypoints.truncate),
+          resolveTestNodeExecPath(),
+        ),
         mode,
         String(limit),
       ],

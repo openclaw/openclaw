@@ -45,12 +45,6 @@ const APPROVAL_INTENT_SYSTEM_PROMPT = [
   "Only classify consent for the pending change itself. A message asking to change the proposal is not approval.",
 ].join("\n");
 
-export type SystemAgentApprovalIntentDeps = {
-  resolveVerifiedInferenceRoute?: typeof resolveSystemAgentVerifiedInferenceRoute;
-  acquireSimpleCompletionModelForAgent?: typeof acquireSimpleCompletionModelForAgent;
-  completeWithPreparedSimpleCompletionModel?: typeof completeWithPreparedSimpleCompletionModel;
-};
-
 /**
  * Judge whether a message approves the pending proposal. Closed-list answers
  * short-circuit so a literal "yes" cannot be reinterpreted by the conversation
@@ -58,22 +52,17 @@ export type SystemAgentApprovalIntentDeps = {
  * CLI-harness routes do not spawn a second harness for that check, so their
  * ambiguous replies stay "other" and the conversation asks for a clear yes.
  */
-export async function classifySystemAgentApprovalIntent(
-  params: {
-    message: string;
-    proposal?: string;
-    verifiedInference: SystemAgentVerifiedInferenceBinding;
-  },
-  deps: SystemAgentApprovalIntentDeps = {},
-): Promise<SystemAgentApprovalIntent> {
+export async function classifySystemAgentApprovalIntent(params: {
+  message: string;
+  proposal?: string;
+  verifiedInference: SystemAgentVerifiedInferenceBinding;
+}): Promise<SystemAgentApprovalIntent> {
   const textIntent = classifySystemAgentApprovalText(params.message);
   if (textIntent !== "other") {
     return textIntent;
   }
   try {
-    const resolveVerifiedRoute =
-      deps.resolveVerifiedInferenceRoute ?? resolveSystemAgentVerifiedInferenceRoute;
-    const route = await resolveVerifiedRoute(params.verifiedInference);
+    const route = await resolveSystemAgentVerifiedInferenceRoute(params.verifiedInference);
     // A second direct completion would bypass CLI and plugin-harness execution
     // ownership. Those routes require an exact closed-list approval instead.
     if (!route || route.runner !== "embedded" || route.agentHarnessRuntimeOverride !== "openclaw") {
@@ -86,9 +75,7 @@ export async function classifySystemAgentApprovalIntent(
     const trackOwner = captureAsyncWorkTracker();
     // Reporting a verdict does not settle response callbacks or cancellation work.
     void trackOwner(async () => {
-      const prepared = await (
-        deps.acquireSimpleCompletionModelForAgent ?? acquireSimpleCompletionModelForAgent
-      )({
+      const prepared = await acquireSimpleCompletionModelForAgent({
         cfg: route.runConfig,
         agentId: route.agentId,
         agentDir: route.agentDir,
@@ -121,10 +108,7 @@ export async function classifySystemAgentApprovalIntent(
             const controller = new AbortController();
             const timer = setTimeout(() => controller.abort(), APPROVAL_INTENT_TIMEOUT_MS);
             try {
-              const response = await (
-                deps.completeWithPreparedSimpleCompletionModel ??
-                completeWithPreparedSimpleCompletionModel
-              )({
+              const response = await completeWithPreparedSimpleCompletionModel({
                 model: prepared.model,
                 auth: prepared.auth,
                 cfg: route.runConfig,
@@ -146,7 +130,7 @@ export async function classifySystemAgentApprovalIntent(
                   signal: controller.signal,
                 },
               });
-              if (!(await resolveVerifiedRoute(params.verifiedInference))) {
+              if (!(await resolveSystemAgentVerifiedInferenceRoute(params.verifiedInference))) {
                 return "other";
               }
               const verdict = extractEmbeddedAssistantText(response)

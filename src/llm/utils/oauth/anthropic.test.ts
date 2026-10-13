@@ -50,6 +50,7 @@ describe("Anthropic OAuth token responses", () => {
     const close = vi.fn(async () => undefined);
     startOAuthLoopbackCallbackServer.mockResolvedValueOnce({
       waitForCallback: vi.fn(),
+      complete: vi.fn(async () => undefined),
       close,
     });
     const loginPromise = anthropicOAuthProvider.login({
@@ -152,7 +153,12 @@ describe("Anthropic OAuth callback host", () => {
         type: "authorization_code" as const,
         code: "authorization-code",
         state: params.expectedState,
+        parameters: new URLSearchParams({
+          code: "authorization-code",
+          state: params.expectedState,
+        }),
       }),
+      complete: async () => undefined,
       close: async () => undefined,
     }));
     const tokenExchange = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
@@ -193,6 +199,7 @@ describe("Anthropic OAuth callback host", () => {
     vi.stubEnv("OPENCLAW_OAUTH_CALLBACK_HOST", "127.0.0.1");
     startOAuthLoopbackCallbackServer.mockResolvedValueOnce({
       waitForCallback: async () => ({ type: "oauth_error", error: "access_denied" }),
+      complete: async () => undefined,
       close: async () => undefined,
     });
     const login = anthropicOAuthProvider.login({

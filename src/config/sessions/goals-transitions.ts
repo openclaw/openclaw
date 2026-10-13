@@ -3,10 +3,7 @@ import { resolveFreshSessionTotalTokens } from "./types.js";
 import type { SessionEntry, SessionGoal, SessionGoalStatus } from "./types.js";
 
 export class SessionGoalTransitionError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "SessionGoalTransitionError";
-  }
+  override name = "SessionGoalTransitionError";
 }
 
 function normalizeTokenCount(value: number | undefined): number | undefined {

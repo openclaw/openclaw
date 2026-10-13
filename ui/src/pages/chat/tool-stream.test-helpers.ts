@@ -33,7 +33,7 @@ export function createHost(overrides?: Partial<MutableHost>): MutableHost {
     toolStreamSyncTimer: null,
     sessions: {
       state: { modelOverrides },
-      refreshReplacement: vi.fn(async () => null),
+      reconcileMutation: vi.fn(async () => ({ status: "refreshed" as const })),
     },
     compactionStatus: null,
     compactionClearTimer: null,

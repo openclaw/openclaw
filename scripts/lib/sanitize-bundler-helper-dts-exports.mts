@@ -8,18 +8,13 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import ts from "typescript";
-
-/** Runtime helpers that must never appear as undeclared declaration exports. */
-const BUNDLER_RUNTIME_HELPER_EXPORT_NAMES = ["__exportAll"] as const;
-
-type BundlerRuntimeHelperExportName = (typeof BUNDLER_RUNTIME_HELPER_EXPORT_NAMES)[number];
-
-const HELPER_NAME_SET = new Set<string>(BUNDLER_RUNTIME_HELPER_EXPORT_NAMES);
+import { pathToFileURL } from "node:url";
+import * as ts from "typescript/unstable/ast";
+import { createNativeTypeScriptParser, type NativeTypeScriptParser } from "./native-typescript.mts";
 
 export type UndeclaredBundlerHelperDtsExport = {
   /** Helper local name as it appears in the export clause. */
-  name: BundlerRuntimeHelperExportName;
+  name: "__exportAll";
   /** 1-based line of the export clause. */
   line: number;
 };
@@ -28,10 +23,6 @@ type DtsSanitization = {
   edits: Array<{ start: number; end: number }>;
   removed: UndeclaredBundlerHelperDtsExport[];
 };
-
-function isBundlerHelperName(name: string | undefined): name is BundlerRuntimeHelperExportName {
-  return Boolean(name && HELPER_NAME_SET.has(name));
-}
 
 function hasLocalHelperBinding(sourceFile: ts.SourceFile, name: string): boolean {
   return sourceFile.statements.some((statement) => {
@@ -73,10 +64,6 @@ function hasLocalHelperBinding(sourceFile: ts.SourceFile, name: string): boolean
   });
 }
 
-function exportElementLocalName(element: ts.ExportSpecifier): string | undefined {
-  return element.propertyName?.text ?? element.name.text;
-}
-
 function removeListElement(
   sourceText: string,
   element: ts.Node,
@@ -94,14 +81,17 @@ function removeListElement(
   edits.push({ start: before ? start - before[0].length : start, end });
 }
 
-function scanDts(sourceText: string, fileName: string): DtsSanitization {
-  const sourceFile = ts.createSourceFile(
-    fileName,
-    sourceText,
-    ts.ScriptTarget.Latest,
-    /*setParentNodes*/ true,
-    ts.ScriptKind.TS,
-  );
+function scanDts(
+  sourceText: string,
+  fileName: string,
+  parser?: NativeTypeScriptParser,
+): DtsSanitization {
+  // Escaped identifiers and string names still need the native parser.
+  if (!sourceText.includes("\\") && !sourceText.includes("__exportAll")) {
+    return { edits: [], removed: [] };
+  }
+  using ownedParser = parser ? undefined : createNativeTypeScriptParser();
+  const sourceFile = (parser ?? ownedParser!).parseSourceFile(fileName, sourceText);
   const helperIsDeclared = hasLocalHelperBinding(sourceFile, "__exportAll");
   const removed: UndeclaredBundlerHelperDtsExport[] = [];
   const edits: Array<{ start: number; end: number }> = [];
@@ -111,8 +101,7 @@ function scanDts(sourceText: string, fileName: string): DtsSanitization {
       ? statement.importClause?.namedBindings
       : undefined;
     if (importBindings && ts.isNamedImports(importBindings)) {
-      const namedBindings = importBindings;
-      const helpers = namedBindings.elements.filter(
+      const helpers = importBindings.elements.filter(
         (specifier): specifier is ts.ImportSpecifier =>
           ts.isImportSpecifier(specifier) &&
           specifier.name.text === "__exportAll" &&
@@ -120,7 +109,7 @@ function scanDts(sourceText: string, fileName: string): DtsSanitization {
           specifier.propertyName.text !== "__exportAll",
       );
       if (helpers.length > 0) {
-        if (helpers.length === namedBindings.elements.length) {
+        if (helpers.length === importBindings.elements.length) {
           edits.push({ start: statement.getFullStart(), end: statement.getEnd() });
         } else {
           for (const helper of helpers) {
@@ -137,8 +126,8 @@ function scanDts(sourceText: string, fileName: string): DtsSanitization {
       continue;
     }
     for (const element of exportClause.elements) {
-      const localName = exportElementLocalName(element);
-      if (!isBundlerHelperName(localName) || helperIsDeclared) {
+      const localName = element.propertyName?.text ?? element.name.text;
+      if (localName !== "__exportAll" || helperIsDeclared) {
         continue;
       }
       const { line } = sourceFile.getLineAndCharacterOfPosition(element.getStart(sourceFile));
@@ -153,16 +142,20 @@ function scanDts(sourceText: string, fileName: string): DtsSanitization {
 export function findUndeclaredBundlerHelperDtsExports(
   sourceText: string,
   fileName = "chunk.d.ts",
+  parser?: NativeTypeScriptParser,
 ): UndeclaredBundlerHelperDtsExport[] {
-  return scanDts(sourceText, fileName).removed;
+  return scanDts(sourceText, fileName, parser).removed;
 }
 
 /** Drops undeclared bundler helper specifiers from declaration text. */
-export function sanitizeBundlerHelperDtsExports(sourceText: string): {
+export function sanitizeBundlerHelperDtsExports(
+  sourceText: string,
+  parser?: NativeTypeScriptParser,
+): {
   sourceText: string;
   removed: UndeclaredBundlerHelperDtsExport[];
 } {
-  const { edits, removed } = scanDts(sourceText, "chunk.d.ts");
+  const { edits, removed } = scanDts(sourceText, "chunk.d.ts", parser);
   let next = sourceText;
   for (const edit of edits.toSorted((left, right) => right.start - left.start)) {
     next = `${next.slice(0, edit.start)}${next.slice(edit.end)}`;
@@ -175,6 +168,7 @@ export function sanitizeBundlerHelperDtsExportTree(root: string): number {
   if (!fs.existsSync(root)) {
     return 0;
   }
+  using parser = createNativeTypeScriptParser();
   const queue = [root];
   let changed = 0;
   while (queue.length > 0) {
@@ -196,7 +190,7 @@ export function sanitizeBundlerHelperDtsExportTree(root: string): number {
         continue;
       }
       const current = fs.readFileSync(fullPath, "utf8");
-      const sanitized = sanitizeBundlerHelperDtsExports(current).sourceText;
+      const sanitized = sanitizeBundlerHelperDtsExports(current, parser).sourceText;
       if (sanitized !== current) {
         fs.writeFileSync(fullPath, sanitized);
         changed += 1;
@@ -204,4 +198,12 @@ export function sanitizeBundlerHelperDtsExportTree(root: string): number {
     }
   }
   return changed;
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  const root = process.argv[2];
+  if (!root || process.argv.length !== 3) {
+    throw new Error("usage: sanitize-bundler-helper-dts-exports.mts <dist-root>");
+  }
+  sanitizeBundlerHelperDtsExportTree(path.resolve(root));
 }
