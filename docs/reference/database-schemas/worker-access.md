@@ -47,6 +47,12 @@ Every refresh still re-admits the current database source and checks its authori
 Reader retirement stops change publications and joins the retained reader;
 the next Gateway generation rebinds retained observers before startup admission.
 
+Persisted auth-row observation belongs to the host. Catalog workers reload
+credentials through their native task owner instead of retaining background row
+readers for WAL notifications. Workers still observe physical file replacement
+to retire native SQLite handles; session-only WAL activity needs no worker auth
+reread.
+
 Synchronous boot admission, migrations, Doctor/CLI one-shots, and lock primitives
 are the limited exceptions. Runtime access still using them is migration debt.
 For engine stores, the synchronous `withEngineStoreAdmission` scope is lexical:

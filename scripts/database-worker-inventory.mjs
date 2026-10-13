@@ -34,22 +34,6 @@ const reviewed = new Map([
     },
   ],
   [
-    "src/infra/session-cost-usage-cache.kernel.ts",
-    {
-      priority: 99,
-      evidence:
-        "Durable refreshes use usageCache.writeRollup/prune in the agent execution worker. Shared rollup kernels also serve session-cost-usage-cache.sqlite.ts's exclusive maintenance/deletion scopes; incognito uses the memory actor.",
-    },
-  ],
-  [
-    "src/infra/session-cost-usage-cache.sqlite.ts",
-    {
-      priority: 99,
-      evidence:
-        "createCacheWriter.write dispatches durable writes through captured agent execution. Its native branch serves maintenance/deletion custody when supportsOpenClawAgentDatabaseExecution refuses worker access; incognito uses the memory actor.",
-    },
-  ],
-  [
     "src/infra/outbound/current-conversation-bindings.ts",
     {
       priority: 99,
@@ -2480,6 +2464,8 @@ const reviewedOperations = new Map([
   ],
 ]);
 const workerModules = new Set([
+  "src/boards/sqlite-board-store.kernel.ts", // Only sqlite-board-store.worker.ts executes boards.applyOps/putWidget/grant; session-history-read-operation.worker.ts owns board-snapshot/board-widget-document reads. Host imports are type-only.
+  "src/infra/session-cost-usage-cache.kernel.ts", // Only session-cost-usage-worker.ts reads rollups; openclaw-agent-execution-operations.ts dispatches usageCache.writeRollup/prune in the agent execution worker. The host cache writer imports only types.
   "src/trajectory/runtime-retention.sqlite.ts", // SQL runs only through agent execution, session-history read, and entry-patch workers; runtime-retention.ts uses only the pure due/state helpers.
   "src/config/sessions/session-reaction-store.read.ts", // Only the history worker reader calls reaction SQL; synchronous test inspection lives in test support.
   "src/config/sessions/session-sharing-store.native.ts", // Membership mutations run only in session-sharing-store.worker.ts; host imports are type-only.

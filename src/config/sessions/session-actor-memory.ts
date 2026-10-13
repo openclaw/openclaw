@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { parseAgentSessionKey, toAgentStoreSessionKey } from "../../routing/session-key.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import type { ConversationReadQuery } from "./conversation-registry.types.js";
 import type {
   SessionActor,
@@ -111,11 +110,10 @@ export function createMemorySessionActorOwner(options: { agentId: string; path: 
       }
       const { sessionKey } = requestedTarget;
       if (
-        !isIncognitoSessionKey(sessionKey) ||
         parseAgentSessionKey(sessionKey)?.agentId !== options.agentId ||
         toAgentStoreSessionKey({ agentId: options.agentId, requestKey: sessionKey }) !== sessionKey
       ) {
-        throw new Error("Memory session actors require an incognito session key");
+        throw new Error("Memory session actors require a canonical session key for their agent");
       }
       const target = structuredClone(requestedTarget);
       let selected = sessions.get(sessionKey);

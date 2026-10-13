@@ -37,6 +37,11 @@ import {
 } from "./runtime.js";
 
 const observations = vi.hoisted(() => new Map<string, Set<(filename?: string) => void>>());
+// These cases exercise Gateway publication even when Vitest hosts them in a worker thread.
+vi.mock("node:worker_threads", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:worker_threads")>()),
+  isMainThread: true,
+}));
 // mock-isolation: Native delivery is covered by its owner; this file proves credential publication.
 vi.mock("../infra/owned-directory-observation.js", () => ({
   observeOwnedDirectory(directory: string, notify: (filename?: string) => void) {

@@ -7,7 +7,7 @@ import type {
   PluginStateSyncKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
-  createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -23,7 +23,7 @@ import { resetThreadBindingsForTests } from "./thread-bindings.test-support.js";
 import type { ThreadBindingManager, ThreadBindingRecord } from "./thread-bindings.types.js";
 
 type BindingStoreMocks = {
-  openKeyedStore: Mock<
+  openKeyedStoreV2: Mock<
     (
       options: OpenKeyedStoreOptions,
     ) => Pick<PluginStateKeyedStore<ThreadBindingRecord>, "entries" | "register" | "delete">
@@ -69,8 +69,12 @@ export function registerThreadBindingCompatibilityTests({
             .mockRejectedValue(new Error("Unexpected bot intro"))
         : undefined;
       const queuedOperation = boundary.startsWith("queued-");
-      stores.openKeyedStore.mockImplementation((options) => {
-        const store = createPluginStateKeyedStoreForTests<ThreadBindingRecord>("discord", options);
+      stores.openKeyedStoreV2.mockImplementation((options) => {
+        const store = createPluginStateKeyedStoreV2ForTests<ThreadBindingRecord>(
+          "discord",
+          options,
+          { assertCurrent() {} },
+        );
         return {
           ...store,
           register: async (...args: Parameters<typeof store.register>) => {
