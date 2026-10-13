@@ -8,6 +8,27 @@ import Testing
 @Suite(.serialized, .testWaitLimit)
 @MainActor
 struct CronJobsStoreTests {
+    @Test func `reopening the menu refreshes a current lease without a new publication`() async throws {
+        let fixture = CronSourceFixture()
+        let store = CronJobsStore(gateway: fixture.gateway)
+        do {
+            store.start()
+            try await self.waitForTotal(1, in: store)
+            store.stop()
+            fixture.catalogTotal.setValue(2)
+
+            store.start()
+            try await self.waitForTotal(2, in: store)
+            #expect(store.summary.jobs.count == 2)
+        } catch {
+            store.stop()
+            await fixture.gateway.shutdown()
+            throw error
+        }
+        store.stop()
+        await fixture.gateway.shutdown()
+    }
+
     @Test func `count-only refreshes notify observers without changing preview rows`() async throws {
         let fixture = CronSourceFixture()
         fixture.catalogTotal.setValue(9)
@@ -171,5 +192,18 @@ struct CronJobsStoreTests {
         {"type":"event","event":"cron","seq":\#(sequence),"payload":{"jobId":"shared-job","action":"finished"}}
         """#
         request.socket.emitReceiveSuccess(.string(event))
+    }
+
+    private func waitForTotal(_ total: Int, in store: CronJobsStore) async throws {
+        while store.summary.total != total {
+            let changed = AsyncTestGate()
+            withObservationTracking {
+                _ = store.summary
+            } onChange: {
+                changed.open()
+            }
+            await changed.wait()
+            try Task.checkCancellation()
+        }
     }
 }
