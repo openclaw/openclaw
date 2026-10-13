@@ -9,14 +9,18 @@ description: Choose proportional OpenClaw tests/checks, diagnose failures, route
 
 - **PR CI = default broad proof.** Change builds + focused tests pass → open
   ready PR. CI runs broad suites; never delay PR for pre-PR suite runs.
-- **Before PR, prove locally and narrowly:** touched tests with
+- **Before PR, prove narrowly:** touched tests with
   `pnpm test <file> --maxWorkers=1`, targeted typecheck, lint, format.
-  Trusted work: local proof default.
-- **Boxes = exception.** Crabbox/Testbox only for gaps CI/local machine cannot
-  cover: another OS/device, live providers/channels, long E2E, heavy benchmarks.
-  Box must be granted right away. Queued: stop task-owned allocation, run locally.
-  Never wait on box queue or chain Testbox → AWS → Hetzner fallbacks.
-  Local machine cannot safely cover contract: record gap; never fake proof.
+  Prefer local proof for trusted, bounded work when dependencies and current
+  host capacity are qualified. Local execution is optional: a focused command
+  can still load a large compiler graph or expand to broad lanes.
+- **Choose remote proof deliberately.** Use PR CI for broad proof; Crabbox/Testbox
+  may cover expensive checks, a busy or unqualified local host, another OS/device,
+  live providers/channels, long E2E, or heavy benchmarks. Acquire only when the
+  command is ready and capacity is granted promptly. If queued, stop only the
+  task-owned allocation; use PR CI or a safe local scope. Keep uncovered
+  platform-specific proof pending. Never force heavy work onto a busy machine
+  or chain providers. Use the smallest profile proven for the selected workload.
 - **Never rerun or re-push just for green.** Fix real failures; read available
   CI failure classification before attributing red.
 

@@ -26,7 +26,7 @@
 - Red `main` = emergency. Fresh worktree; exact failing check + focused tests locally (Testbox only for uncovered environment need, immediate grant). Push proven fix directly to `main`, no PR/auto-merge wait; deterministic breaks and flakes alike. Ruleset refuses direct push → PR + report refusal. Rerun alone ≠ repair. Affected merge refs need fresh push after fix.
 - Main pushes run only `security-fast`; full main CI hourly.
 - PR CI = default broad proof. Before PR: `pnpm test <file> --maxWorkers=1` + targeted typecheck/lint/format. Do not hold ready PR for broad pre-PR suites.
-- Crabbox/Testbox only for what CI/local cannot cover (another OS/device, live providers/channels, long E2E, heavy benchmarks), only immediate grant. Queue → local for trusted source; untrusted stays secretless-isolated. Never wait on queue or chain Testbox → AWS → Hetzner.
+- Prefer bounded local proof on a qualified, available host. Crabbox/Testbox may cover expensive checks, busy/unqualified hosts or environment gaps; acquire only when ready and capacity is granted promptly. Queue → stop task-owned allocation, use PR CI or a safe local scope; preserve uncovered requirements and secretless isolation for untrusted source. Never chain provider fallbacks.
 - Never dispatch/rerun/re-push/update branches merely for green. Fix real failures. Read failure classification before attribution.
 - PR CI runs every planned job to completion. `pr-failure-report` + `openclaw/ci-gate` summary classify failed jobs against newest scheduled main run:
   - **pre-existing, matching failure signatures:** no further attribution. Native admin route may cite table run id + rows as evidence.

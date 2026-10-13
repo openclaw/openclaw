@@ -34,8 +34,8 @@ Own local tooling, script wrappers, generated-artifact helper rules. Repo-global
 ## Proof Rules
 
 - PR CI = default broad proof. Change builds + focused tests pass → open ready PR; never hold for pre-PR suite runs.
-- Before PR: narrow local proof — touched tests (`pnpm test <file> --maxWorkers=1`) + targeted typecheck/lint/format. Trusted work: local proof default.
-- Boxes = exception. Crabbox/Testbox only for coverage CI/local machine cannot provide (another OS or device, live providers/channels, long E2E, heavy benchmarks), only when granted immediately. Queued → run locally. Never wait on box queue or chain Testbox → AWS → Hetzner fallbacks.
+- Before PR: narrow proof — touched tests (`pnpm test <file> --maxWorkers=1`) + targeted typecheck/lint/format. Prefer local execution for trusted, bounded work when dependencies and current host capacity are qualified; local execution is optional.
+- Boxes: deliberate remote proof for expensive checks, a busy/unqualified local host, another OS/device, live providers/channels, long E2E or heavy benchmarks. Acquire when the command is ready; use the smallest proven profile. Queued → stop only task-owned allocation, use PR CI or a safe local scope; keep platform-specific gaps pending. Never force heavy local checks or chain provider fallbacks.
 - CI fails → `pnpm test:ci-failed <pr>`; read published classification (pre-existing on main vs new). Fix new failures → `pnpm test:ci-failed <pr> --run` until local pass → push once. Pre-existing: failure-table landing rule. Never rerun/re-push just for green (`gh run rerun` included); never local full suite for CI repair.
 - Untrusted contributor/fork code: secretless isolation. Credentialed execution needs maintainer authorization; scope live credentials + isolate Gateway/state.
 
@@ -50,7 +50,7 @@ Own local tooling, script wrappers, generated-artifact helper rules. Repo-global
 
 ## Execution Gotchas
 
-Commands apply within task authority/safety boundaries. Trusted work: local focused proof default.
+Commands apply within task authority/safety boundaries. Prefer bounded local proof when dependencies and current host capacity are qualified.
 
 - Fs-safe dependency trouble: follow [on-demand vendoring instructions](vendor-fs-safe.md); vendor contents local, registry dependencies default.
 - Trusted normal checkout missing dependencies: `pnpm install --frozen-lockfile`, retry once before diagnosing code defect. Never reconcile shared/worktree install while other jobs use it.
