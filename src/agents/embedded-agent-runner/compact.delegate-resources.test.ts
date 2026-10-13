@@ -438,6 +438,7 @@ describe("delegate compaction resource retirement", () => {
 
   it.for(modes)(
     "keeps actual work owned through %s",
+    { timeout: 30_000 },
     async (mode, { signal }) => {
       const lspCancelled = mode === "lsp-parent-abort";
       const mcpCancelled = mode === "mcp-caller-abort";
@@ -875,6 +876,5 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
       })();
       await runningCase;
     },
-    30_000,
   );
 });
