@@ -44,7 +44,7 @@ import {
   parseExactVitestExcludePaths,
   resolveExtensionBatchParallelism,
   runExtensionBatchPlan,
-} from "../../scripts/test-extension-batch.mts";
+} from "../../scripts/test-extension-batch-run.mts";
 import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
@@ -98,9 +98,10 @@ function createConcurrentExtensionBatchPlan() {
   };
 }
 
-function runScriptResult(args: string[], cwd = process.cwd()) {
+function runScriptResult(args: string[], cwd = process.cwd(), env = process.env) {
   return spawnSync(process.execPath, ["--import", "tsx", scriptPath, ...args], {
     cwd,
+    env,
     encoding: "utf8",
   });
 }
@@ -1028,6 +1029,16 @@ await new Promise(()=>{});export default {};`,
       extensionIds: ["telegram", "slack"],
       passthroughArgs: ["--run"],
     });
+  });
+
+  it("reports single-plugin preparation rejection as infrastructure failure", () => {
+    const result = runScriptResult(["firecrawl"], undefined, {
+      ...process.env,
+      OPENCLAW_EXTENSION_BATCH_PARALLEL: "invalid",
+    });
+
+    expect(result.stderr).toContain("OPENCLAW_EXTENSION_BATCH_PARALLEL must be a positive integer");
+    expect(result.status, result.stdout + result.stderr).toBe(2);
   });
 
   it("fails explicitly requested extensions without tests by default", () => {

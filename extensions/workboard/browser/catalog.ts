@@ -1,6 +1,6 @@
 import type { GatewayBrowserClient } from "./api/gateway.ts";
 import type { WorkboardCapability } from "./lib/workboard/capability.ts";
-import { loadWorkboardCatalog } from "./lib/workboard/loading.ts";
+import { loadWorkboard } from "./lib/workboard/loading.ts";
 import {
   getWorkboardRuntime,
   getWorkboardState,
@@ -104,7 +104,9 @@ export class WorkboardCatalog {
     if (!force && (this.snapshot.ready || getWorkboardRuntime(this.host).loadPromise)) {
       return false;
     }
-    const loaded = await loadWorkboardCatalog({
+    const loaded = await loadWorkboard({
+      force: true,
+      catalogOnly: true,
       host: this.host,
       client,
       requestUpdate: this.host.notify,

@@ -14,7 +14,7 @@ import { sessionsListResponse } from "./session-management.test-support.ts";
 const suite = createControlUiE2eSuite({ name: "Chat header and delegated work" });
 
 suite.define(() => {
-  it("opens Subagents for a batch, explains the yielded wait, and leaves the next empty conversation collapsed", async () => {
+  it("opens Subagents for a batch without duplicate wait status and leaves the next empty conversation collapsed", async () => {
     await suite.withPage(
       {
         locale: "en-US",
@@ -74,17 +74,16 @@ suite.define(() => {
         expect(await activePane.locator(".chat-pane__actions").getByRole("button").count()).toBe(3);
 
         const details = activePane.locator(".chat-pane__header-trailing > openclaw-chat-details");
+        const detailsDialog = activePane.getByRole("dialog", { name: "Details", exact: true });
         await details.getByRole("button", { name: "Details", exact: true }).click();
-        await details.getByRole("dialog", { name: "Details", exact: true }).waitFor();
+        await detailsDialog.waitFor();
         expect(
           await activePane
             .locator(".chat-main__conversation-frame > openclaw-chat-details")
             .count(),
         ).toBe(0);
-        await details.getByRole("button", { name: "Close details", exact: true }).click();
-        await details
-          .getByRole("dialog", { name: "Details", exact: true })
-          .waitFor({ state: "hidden" });
+        await detailsDialog.getByRole("button", { name: "Close details", exact: true }).click();
+        await detailsDialog.waitFor({ state: "hidden" });
 
         const prompt = "Review the backend in a subagent.";
         await activePane.locator(".agent-chat__composer-combobox textarea").fill(prompt);
@@ -189,11 +188,11 @@ suite.define(() => {
           state: "final",
           yielded: true,
         });
-        await waitLine.waitFor();
-        await expect
-          .poll(async () => (await waitLine.textContent())?.replace(/\s+/g, " ").trim())
-          .toBe("Waiting on 1 subagent · Backend review · running 1m 5s View");
-        expect(await waitLine.count()).toBe(1);
+        await activePane
+          .locator(".chat-subagent-activity")
+          .getByText("Backend review", { exact: true })
+          .waitFor();
+        expect(await waitLine.count()).toBe(0);
         expect(await activePane.locator(".chat-working-indicator--subagents").count()).toBe(0);
         expect(await transcriptHeight()).toBe(beforeWaitHeight);
         const mountedPanel = await panel.elementHandle();
@@ -213,15 +212,8 @@ suite.define(() => {
         await mountedPanel?.dispose();
         await activePane.getByRole("button", { name: "Close Subagents", exact: true }).click();
         await panel.waitFor({ state: "hidden" });
-        await waitLine.getByRole("button", { name: "View", exact: true }).click();
+        await selectChatLayoutAction(activePane, "Subagents");
         await panelRow.waitFor();
-        await expect
-          .poll(() =>
-            activePane
-              .locator('[data-region-header="side"] .tabstrip-tab[aria-selected="true"]')
-              .evaluate((element) => element.matches(":focus")),
-          )
-          .toBe(true);
 
         const settledChild: GatewaySessionRow = {
           ...child,

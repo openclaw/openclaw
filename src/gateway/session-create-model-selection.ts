@@ -67,7 +67,7 @@ export function resolveSessionCreateModelInputError(
   if (params.agentRuntime !== undefined && (!params.model || params.catalogTarget)) {
     return errorShape(
       ErrorCodes.INVALID_REQUEST,
-      "agentRuntime requires an explicit canonical provider/model selection",
+      "agentRuntime requires an explicit provider/model selection using full IDs",
     );
   }
   const requestedProfile = splitTrailingAuthProfile(

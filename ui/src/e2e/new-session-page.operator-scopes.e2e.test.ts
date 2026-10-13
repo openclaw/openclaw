@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   createControlUiE2eContextOptions,
   tooltipTitleText,
@@ -58,7 +59,7 @@ suite.define(() => {
       ["chat.metadata", "chat.startup", "projects.list", "sessions.create", "sessions.dispatch"],
     );
     try {
-      const sidebarCreate = page.locator(".sidebar-session-toolbar .sidebar-new-session");
+      const sidebarCreate = page.locator(".sidebar-rail .sidebar-new-session");
       const submit = page.getByRole("button", { name: "Start session" });
       const incognito = page.getByRole("switch", { name: "Incognito" });
 
@@ -89,7 +90,7 @@ suite.define(() => {
       const effort = page.locator('[data-chat-thinking-select="true"]');
 
       await expect
-        .poll(() => page.locator(".sidebar-session-toolbar .sidebar-new-session").isEnabled())
+        .poll(() => page.locator(".sidebar-rail .sidebar-new-session").isEnabled())
         .toBe(true);
       await expect.poll(() => submit.isEnabled()).toBe(true);
       await expect.poll(() => incognito.isDisabled()).toBe(true);
@@ -481,7 +482,7 @@ suite.define(() => {
     );
     try {
       await expect
-        .poll(() => page.locator(".sidebar-session-toolbar .sidebar-new-session").isDisabled())
+        .poll(() => page.locator(".sidebar-rail .sidebar-new-session").isDisabled())
         .toBe(true);
       const submit = page.getByRole("button", { name: "Start session" });
       await expect.poll(() => submit.isDisabled()).toBe(true);
@@ -503,12 +504,7 @@ suite.define(() => {
       await gateway.closeLatest(1001, "new-session scope proof");
       await expect
         .poll(() =>
-          page.evaluate(() => {
-            const app = document.querySelector("openclaw-app") as HTMLElement & {
-              runtime?: { context: { gateway: { snapshot: { phase: string } } } };
-            };
-            return app.runtime?.context.gateway.snapshot.phase;
-          }),
+          evaluateControlUiContext(page, (application) => application.gateway.snapshot.phase),
         )
         .toBe("reconnecting");
 

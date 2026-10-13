@@ -99,6 +99,19 @@ For a concrete migration or recovery issue, consult
 
 ## Verify and recover
 
+The controller's existing `OPENCLAW_TEAM_VERIFICATION_BUDGET` defaults to ten
+minutes for each started candidate or restored predecessor. Its shared
+acceptance owner waits for native critical startup and model-agent admission,
+sampled main-thread responsiveness, and an exact-generation RPC response before
+the marker. Responsive CPU/utilization load needs no operator waiver. Deferred
+background recovery and other agents' pending inspections can continue while
+acceptance runs; the model agent's own admission and critical startup still wait.
+Typed dispatch timeouts reconcile the identical request and idempotency key only
+after fresh readiness checks; readiness and reconciliation consume the same
+absolute deadline. The 60-second transport timeout does not shorten this startup
+window. Wrong identity, corruption, protocol/authentication failures, incorrect
+marker receipts, and deadline expiry remain failures with evidence retained.
+
 Use the exact invocation's native terminal acceptance receipt as the authoritative outcome. The native owner performs the serving/build SHA, process generation, RPC, health/startup/readiness, configured-channel, protected-policy/identity, original session-witness, and journal-resolution checks recorded there. Reuse its validation and real model-marker receipt; do not repeat health probes, channel/session/policy audits, migration checks, or marker turns as agent-side acceptance. Preserve the intended state of the configured sole cadence without adding another validation loop. Read the native result, not just the observer process status: observer exit `0` can wrap native exit `75`/deferred and is not accepted deployment. Supervisor success, a skip, healthy old code, rollback, or same-release recovery is not a new deployment.
 
 Missing or ambiguous native acceptance, concrete native failure, contradictory current evidence, or an actual ownership conflict calls for targeted diagnosis through the same owner, not a second validation suite. When that diagnosis needs live checks, respect generation and owner-phase boundaries; never run ordinary RPCs across an active fence or pause the configured cadence for a quiet proof window. Preserve failed outcomes and unresolved journals; do not delete evidence or retry blindly. Use only the owner's compatibility-checked recovery and cleanup, preserving referenced releases, backups, ordinary sessions, unrelated state, and dirty workspaces.

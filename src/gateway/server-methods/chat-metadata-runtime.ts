@@ -5,7 +5,10 @@ import { getPreparedRuntimeAuthProfileStoreSnapshot } from "../../agents/auth-pr
 import { getRuntimeAuthProfileStoreMetadataRevision } from "../../agents/auth-profiles/runtime-snapshots.js";
 import { readSessionRuntimeOwnershipAsync } from "../../agents/harness/session-runtime-ownership.js";
 import type { AgentHarnessSessionRuntimeOwnership } from "../../agents/harness/types.js";
-import { getPublishedPreparedModelCatalogOwnerSnapshot } from "../../agents/prepared-model-catalog.js";
+import {
+  getPendingPreparedModelRuntimeReplacement,
+  getPublishedPreparedModelCatalogOwnerSnapshot,
+} from "../../agents/prepared-model-catalog.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
 import { resolveSwarmConfig } from "../../agents/subagents/swarm/swarm-config.js";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
@@ -268,18 +271,30 @@ export function createGatewayChatMetadataRuntime(params: {
   };
 
   const runRefresh = async (options: ChatMetadataRefreshOptions) => {
+    // Superseded gates resolve so readers can join the successor's publication.
+    for (
+      let ownerReplacement = getPendingPreparedModelRuntimeReplacement();
+      ownerReplacement;
+      ownerReplacement = getPendingPreparedModelRuntimeReplacement()
+    ) {
+      await ownerReplacement;
+      assertOpen();
+    }
     assertOpen();
     const facts = captureGenerationFacts(deps);
     if (!current || !generationFactsMatch(current.facts, facts)) {
       // Commands and session-specific projections stay on demand within the published owner facts.
       const generation: PreparedMetadataGeneration = {
         facts,
-        modelLists: createChatMetadataModelList({
-          facts,
-          context: deps.getContext(),
-          requested: requestedModelLists,
-          maxEntries: CHAT_METADATA_CACHE_MAX_ENTRIES,
-        }),
+        modelLists:
+          current && generationFactsMatch(current.facts, facts, "catalog")
+            ? current.modelLists
+            : createChatMetadataModelList({
+                facts,
+                context: deps.getContext(),
+                requested: requestedModelLists,
+                maxEntries: CHAT_METADATA_CACHE_MAX_ENTRIES,
+              }),
         agentsById: new Map(),
         neutralProjectionByAgentId: new Map(),
         sessionProjectionByKey: new Map(),

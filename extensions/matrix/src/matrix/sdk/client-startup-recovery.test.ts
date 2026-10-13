@@ -14,7 +14,6 @@ import { installMatrixTestRuntime, resetMatrixTestStores } from "../../test-runt
 import { writeMatrixIdbSnapshotJson } from "../crypto-state-store.js";
 import { MatrixClient } from "../sdk.js";
 import * as cryptoOwnership from "./crypto-store-ownership.js";
-import { observeCryptoStoreContention } from "./crypto-store-ownership.test-helpers.js";
 import { persistIdbToDisk, restoreIdbFromDisk } from "./idb-persistence.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => afterEach(cleanup));
@@ -286,16 +285,12 @@ describe("Matrix encrypted startup ownership", () => {
       abort.abort();
       finish.resolve();
       await expect(startup).rejects.toMatchObject({ name: "AbortError" });
-      const waiter = observeCryptoStoreContention(snapshotPath);
-      const replacementStartup = replacement.prepareForOneOff();
-      try {
-        await waiter.waitFor(replacementStartup);
-        expect(fixture.init).toHaveBeenCalledTimes(1);
-        await owner.stopWithoutPersist();
-        await expect(replacementStartup).rejects.toThrow("unresolved unsafe final state");
-      } finally {
-        waiter.close();
-      }
+      await expect(replacement.prepareForOneOff()).rejects.toMatchObject({
+        code: "matrix_crypto_store_owner_active",
+      });
+      expect(fixture.init).toHaveBeenCalledTimes(1);
+      await owner.stopWithoutPersist();
+      await expect(replacement.prepareForOneOff()).rejects.toThrow("unresolved unsafe final state");
     } finally {
       finish.resolve();
       await startup.catch(() => undefined);
@@ -443,7 +438,7 @@ describe("Matrix encrypted startup ownership", () => {
     }
   });
 
-  it("never publishes a canceled replacement that did not acquire crypto ownership", async () => {
+  it("never publishes a refused replacement that did not acquire crypto ownership", async () => {
     const tempDir = tempDirs.make("matrix-unowned-replacement-");
     const snapshotPath = path.join(tempDir, "snapshot.json");
     const options = {
@@ -456,21 +451,13 @@ describe("Matrix encrypted startup ownership", () => {
     };
     const owner = new MatrixClient("https://matrix.example.org", "test-token", options);
     const replacement = new MatrixClient("https://matrix.example.org", "test-token", options);
-    const abort = new AbortController();
     try {
       await owner.prepareForOneOff();
       const savedBefore = vi.mocked(persistIdbToDisk).mock.calls.length;
-      const waiter = observeCryptoStoreContention(snapshotPath);
-      const replacementStartup = replacement.start({ abortSignal: abort.signal });
-      const rejected = expect(replacementStartup).rejects.toMatchObject({ name: "AbortError" });
-      try {
-        await waiter.waitFor(replacementStartup);
-      } finally {
-        waiter.close();
-      }
+      await expect(replacement.start()).rejects.toMatchObject({
+        code: "matrix_crypto_store_owner_active",
+      });
       expect(fixture.init).toHaveBeenCalledTimes(1);
-      abort.abort();
-      await rejected;
       await replacement.stopAndPersist();
       expect(vi.mocked(persistIdbToDisk).mock.calls.length).toBe(savedBefore);
       await owner.stopAndPersist();
@@ -482,7 +469,6 @@ describe("Matrix encrypted startup ownership", () => {
         await successor.stopAndPersist();
       }
     } finally {
-      abort.abort();
       await Promise.allSettled([owner.stopWithoutPersist(), replacement.stopWithoutPersist()]);
     }
   });

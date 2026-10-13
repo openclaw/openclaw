@@ -1345,6 +1345,8 @@ describe("capability cli", () => {
       "portrait",
       "--quality",
       "max",
+      "--resolution",
+      " 2k ",
       "--openai-moderation",
       "low",
       "--json",
@@ -1353,6 +1355,7 @@ describe("capability cli", () => {
     expect(firstImageGenerationCall()).toMatchObject({
       agentDir: "/tmp/agent-beta",
       quality: "max",
+      resolution: "2K",
       providerOptions: { openai: { moderation: "low" } },
     });
   });
@@ -1427,6 +1430,27 @@ describe("capability cli", () => {
     expect(inputImages).toHaveLength(2);
     expect(inputImages[0]?.fileName).toBe(path.basename(inputPath));
   });
+
+  it.each(["generate", "edit"])(
+    "rejects invalid image %s resolution before dispatch",
+    async (action) => {
+      await expect(
+        runCapability(
+          "image",
+          action,
+          "--prompt",
+          "portrait",
+          ...(action === "edit" ? ["--file", "unused.png"] : []),
+          "--resolution",
+          "1080p",
+          "--json",
+        ),
+      ).rejects.toThrow("exit 1");
+      expectRuntimeErrorContains("resolution must be one of 1K, 2K, or 4K");
+      expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
+      expect(mocks.generateImage).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     ["--timeout-ms", ""],

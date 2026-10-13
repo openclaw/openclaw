@@ -438,7 +438,7 @@ retryable. Omitting the option leaves the generated status source unchanged.
 The existing `openclaw/plugin-sdk/meeting-runtime` entry point exposes optional
 participation methods on `MeetingSessionRuntime`. Supply its `participation`
 options with an SQLite plugin keyed store, current capabilities, action
-validation, and a provider executor. Providers observe canonical source identity,
+validation, and a provider executor. Providers observe resolved source identity,
 epoch, revision, and finality through `observeParticipationSource`; never accept
 these fields from model arguments. `inspectParticipationSource` returns a
 snapshot and a live guard for work that crosses asynchronous boundaries.
@@ -600,3 +600,9 @@ Revalidate each caller before delivering any result.
 `allowStale: false` waits for freshness; `refresh: true` replaces an older load.
 `clear()` retires pending cache publications. Cache keys must include the owning
 identity or revision; the cache never provides authorization.
+
+`createStaleWhileRevalidateCache` from `openclaw/plugin-sdk/collection-runtime`
+passes the previous successful value (or `undefined`) to its load callback,
+including explicit refreshes. Keep HTTP validators with that value so eviction,
+clear, and failed refreshes retire the representation and its validators together.
+The loader must treat the previous value as immutable.

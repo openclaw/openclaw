@@ -83,6 +83,10 @@ writes use the same schema gate before writing (see [Strict validation](/gateway
 for the clobber/rollback rules that apply to every write).
 
 The adapter also watches included files and follows editor rename-replace writes.
+Native file events trigger the usual reload debounce. A background reconciliation
+runs every five minutes to recover missed events, so an edit with no native event
+can take up to five minutes to be detected. Polling and automatic polling fallback
+keep their existing intervals, including `CHOKIDAR_INTERVAL` overrides.
 All reload consumers share the snapshot for each observation; a filesystem echo
 of a Gateway write keeps that write's application receipt and restart intent.
 A write publication also reconciles file edits already observed during its
@@ -441,5 +445,5 @@ When you edit a source file that is referenced through `$include`, OpenClaw plan
 the reload from the source-authored layout, not the flattened in-memory view.
 That keeps hot-reload decisions (hot-apply vs restart) predictable even when a
 single top-level section lives in its own included file such as
-`plugins: { $include: "./plugins.json5" }`. Reload planning fails closed if the
+`plugins: { $include: "./plugins.json5" }`. Reload planning stops if the
 source layout is ambiguous.

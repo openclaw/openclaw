@@ -1207,9 +1207,9 @@ if (process.argv[1]?.endsWith("vitest-worker-compiler.mts")) {
       expect(result.stderr).toContain("Compiled subprocess artifact changed");
       expect(result.stderr).not.toContain("[test] passed");
       expect(result.stderr.match(/^\[.*\] FAILED \(exit \d+\)$/gmu)).toEqual([
-        "[test] FAILED (exit 1)",
+        "[test] FAILED (exit 2)",
       ]);
-      expect(result.stderr.trim().split("\n").at(-1)).toBe("[test] FAILED (exit 1)");
+      expect(result.stderr.trim().split("\n").at(-1)).toBe("[test] FAILED (exit 2)");
     }));
 
   it("does not build for config imports, pure shards, or metadata collection", ({

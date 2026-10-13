@@ -156,6 +156,7 @@ describe("catalog request existing directory ownership", () => {
     if (conflict) {
       expect(result).toEqual({
         status: "failed",
+        authCredentials: [],
         error: `Conflicting registered agent owners for ${agentDir}`,
       });
       expect(fs.existsSync(fixture.marker)).toBe(false);

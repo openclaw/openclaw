@@ -35,7 +35,7 @@ import { SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION } from "./subagent-completion-i
 import { resolveSubagentCompletionResultText } from "./subagent-completion-result.js";
 
 const CLAIM_LEASE_MS = 125_000;
-const CANONICAL_RESULT_PROMPT = `A completed subagent task is ready for parent review. ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION} The canonical result follows.`;
+const CANONICAL_RESULT_PROMPT = `A completed subagent task is ready for parent review. ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION} The result follows.`;
 
 /** Atomically admits a queue generation and publishes process mirrors only after commit. */
 export async function admitCorrelatedSubagentSessionDelivery(params: {

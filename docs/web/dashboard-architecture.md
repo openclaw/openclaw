@@ -427,7 +427,8 @@ while a single background refresh runs under the Gateway's execution owner.
 The first read still awaits GitHub. At most 32 concurrent callers can prepare
 or await reads, and at most 32 transports can remain in flight.
 The shared transport caches only validated projections under its captured
-credential scope. This internal cache write is not delivery to a widget.
+credential scope and request filters, across sessions using that identity.
+This internal cache write is not delivery to a widget.
 Every caller, including the initiator, followers, and cache hits, revalidates its
 own live authority before delivery. Removing one caller does not invalidate
 another authorized caller's result. Failed refreshes log sanitized guidance and

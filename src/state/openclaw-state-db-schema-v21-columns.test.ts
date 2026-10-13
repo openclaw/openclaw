@@ -8,6 +8,7 @@ import {
   deriveMeetingTranscriptSessionColumns,
   deriveMeetingTranscriptSummaryColumns,
 } from "../transcripts/store-columns.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { migratePredicateColumnsV21 } from "./openclaw-state-db-schema-v21-columns.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -313,10 +314,12 @@ describe("schema 20 migration through shared-state owners", () => {
         expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
       }
       const { db } = openOpenClawStateDatabase(options);
-      expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 21 });
+      expect(db.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+      });
       expect(
         db.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get(),
-      ).toEqual({ schema_version: 21 });
+      ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
       expect(
         db
           .prepare(

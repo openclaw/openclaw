@@ -143,7 +143,7 @@ it("retains admission through pinned WAL eviction and certifies the final checkp
     for (let iteration = 2; iteration <= 9; iteration += 1) {
       write(iteration);
       const database = openOpenClawAgentDatabase(options);
-      closeCachedOpenClawAgentDatabase(database, { eviction: true });
+      closeCachedOpenClawAgentDatabase(database);
       expect(database.db.isOpen).toBe(false);
       await withOpenClawAgentDatabaseAsync(options, (reopened) => {
         expect(reopened.db.prepare("SELECT updated_at FROM session_nodes").get()).toEqual({

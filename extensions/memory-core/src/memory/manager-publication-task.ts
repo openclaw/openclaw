@@ -116,6 +116,13 @@ export type MemoryPublicationOperations = {
     input: { state: MemoryPublicationState };
     output: MemoryPublicationResult<boolean>;
   };
+  "source.replace.group": {
+    input: {
+      sources: Array<{ header: MemorySourceIndexHeader; fragments: MemoryPublicationFragment[] }>;
+      state: MemoryPublicationState;
+    };
+    output: MemoryPublicationOperations["source.replace"]["output"];
+  };
   "source.replace.inline": {
     input: {
       header: MemorySourceIndexHeader;

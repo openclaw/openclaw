@@ -57,7 +57,8 @@ export async function startOrResumeThread(
 ): Promise<CodexAppServerThreadLifecycleBinding> {
   const incognito = isIncognitoSessionKey(input.params.sessionKey);
   const clientId = resolveCodexAppServerClientInstanceId(input.client);
-  return await withCodexThreadLifecycleBinding(input, async (bindingIdentity, saved, authority) => {
+  let cleanupWarmBinding: (() => Promise<void>) | undefined;
+  const prep = withCodexThreadLifecycleBinding(input, async (bindingIdentity, saved, authority) => {
     const assert = authority.assertCurrent;
     const params: CodexStartOrResumeThreadParams = { ...input, assertCurrent: assert, authority };
     const expectedOwnership = params.params.expectedSessionRuntimeOwnership;
@@ -79,7 +80,7 @@ export async function startOrResumeThread(
       });
       if (!isDeepStrictEqual(params.dynamicTools, nativeCatalog)) {
         throw new Error(
-          "Canonical Codex declarations changed after tool preparation; retry the turn on its preserved native thread.",
+          "Saved Codex declarations changed after tool preparation; retry the turn on its preserved native thread.",
         );
       }
     }
@@ -554,6 +555,7 @@ export async function startOrResumeThread(
           buildLoadedPluginThreadConfig,
         });
         if (warmReuse.kind === "ready") {
+          cleanupWarmBinding = warmReuse.cleanupOnFailure;
           return publishCodexThreadInferenceBinding(params, warmReuse.binding, true);
         }
         if (incognito || warmReuse.kind === "rotate") {
@@ -606,4 +608,22 @@ export async function startOrResumeThread(
     }
     return publishCodexThreadInferenceBinding(params, started);
   });
+  try {
+    return await prep;
+  } catch (error) {
+    // Warm reuse transfers its claim before publication and lease settlement.
+    // Until this function returns, a rejected preparation still owns cleanup.
+    if (cleanupWarmBinding) {
+      try {
+        await cleanupWarmBinding();
+      } catch (releaseError) {
+        throw new AggregateError(
+          [error, releaseError],
+          "Codex warm thread preparation and subscription cleanup failed",
+          { cause: releaseError },
+        );
+      }
+    }
+    throw error;
+  }
 }

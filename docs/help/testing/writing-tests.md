@@ -64,10 +64,12 @@ for export preservation, state-isolating mocks, annotations, and the shrinking b
 Before raw database reads or file snapshots, follow the
 [async close contract](/help/testing/fixtures#raw-sqlite-state-access).
 
-## Skills watchers
+<a id="skills-watchers" />
 
-Close real watchers or disable watching as described in
-[watcher cleanup](/help/testing/fixtures#skills-watchers).
+## Skills discovery
+
+Close the background worker and isolate passive refresh as described in
+[discovery cleanup](/help/testing/fixtures#skills-discovery).
 
 ## Flake triage
 

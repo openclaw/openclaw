@@ -9,7 +9,7 @@ import {
   attachSessionTranscriptRunId,
   resolveTerminalAssistantTranscriptRunId,
 } from "../../sessions/transcript-events.js";
-import { getRuntimeConfig } from "../io.js";
+import { captureRuntimeConfigAsyncReader, getRuntimeConfigSnapshot } from "../io.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveSessionStorePathCore } from "./paths.js";
@@ -425,7 +425,8 @@ async function prepareTranscriptTurnTarget(
   if (!sessionKey || !scope.sessionId) {
     throw new Error("Cannot persist a transcript turn without a session key and session id");
   }
-  const effectiveConfig = config ?? getRuntimeConfig();
+  const effectiveConfig =
+    config ?? getRuntimeConfigSnapshot() ?? (await captureRuntimeConfigAsyncReader()());
   const agentId = resolveTranscriptTurnAgentId({
     config: effectiveConfig,
     scopeAgentId: scope.agentId,
@@ -450,7 +451,7 @@ async function prepareTranscriptTurnTarget(
     sessionKey,
     storePath,
   });
-  const runtimeTarget = await resolveSessionTranscriptRuntimeTarget(binding, config, {
+  const runtimeTarget = await resolveSessionTranscriptRuntimeTarget(binding, effectiveConfig, {
     keyFormat: "agent-qualified",
   });
   // Keep the selected locator and private storage namespace across the await.

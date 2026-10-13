@@ -3,15 +3,12 @@ import {
   createAgentRunRestartAbortError,
   isAgentRunRestartAbortReason,
 } from "../../agents/run-termination.js";
-import { createMessageInjectionAuthority } from "../../auto-reply/reply/message-injection-authority.js";
 import { reserveReplyAdmissionTicket } from "../../auto-reply/reply/reply-admission-ticket.js";
 import { lookupSessionGoalOperation } from "../../config/sessions/goals-operations-read.js";
 import type {
   SessionGoalOperation,
   SessionGoalOperationResult,
 } from "../../config/sessions/goals-operations.js";
-import type { SessionEntryCreationOperation } from "../../config/sessions/session-accessor.sqlite-entry-cache.types.js";
-import { withSessionPendingInputAuthorityGuard } from "../../config/sessions/session-pending-input-authority.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { logVerbose } from "../../globals.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -46,9 +43,13 @@ import {
 } from "./chat-send-message-injection.js";
 import type { ChatSendInternalOptions } from "./chat-send-options.js";
 import { applyChatSendReplyContextFields } from "./chat-send-reply-context.js";
+import { createChatSendSessionInitialization } from "./chat-send-session-binding.js";
 import { prepareAndAdmitChatSend } from "./chat-send-setup.js";
 import { prepareChatSendUserTurn } from "./chat-send-user-turn.js";
-import { createChatSendGoalCommitGuard } from "./chat-send-work-admission.js";
+import {
+  createChatSendGoalCommitGuard,
+  createChatSendPendingInputAdmission,
+} from "./chat-send-work-admission.js";
 import { prepareChatSendAckTiming } from "./chat-server-timing.js";
 import { createGatewayChatUserTurnController } from "./chat-user-turn-recorder.js";
 import { isDirectGatewayUserClient } from "./cron-creator-authority-admission.js";
@@ -170,10 +171,9 @@ async function handleChatSendWithOptions(
     admission.settleTerminal({ ...terminalState, startedAt: admissionStartedAt });
   // sessions.create invokes chat only after committing a fresh session. Its eligible
   // initial input transfers custody with the transcript and restart claim, not before.
-  const commitInitialInput =
-    req.method === "sessions.create" &&
-    restartSafeAdmission !== undefined &&
-    !restartSafeAdmission.retryExpectedState;
+  const commitFreshInput =
+    restartSafeAdmission !== undefined && !restartSafeAdmission.retryExpectedState;
+  const commitInitialInput = req.method === "sessions.create" && commitFreshInput;
   let inputAdmissionAttempted = false;
   let replyAdmissionTicket: ReturnType<typeof reserveReplyAdmissionTicket>;
   let releaseBeforeDispatch: void | (() => void) = undefined;
@@ -181,7 +181,6 @@ async function handleChatSendWithOptions(
   try {
     const assertCustodyLifetimeCurrent = () => {
       admission.assertWorkAdmissionCurrent();
-      admission.assertSessionTargetCurrent();
       if (sessionRoutingChanged(context.getRuntimeConfig())) {
         throw new Error("Session routing changed before input admission; refresh and retry.");
       }
@@ -191,6 +190,9 @@ async function handleChatSendWithOptions(
       (assertSource) => {
         admission.assertClientUploadAllowed?.();
         assertCustodyLifetimeCurrent();
+        if (commitFreshInput) {
+          sessionMutationAuthorization?.assertCurrent();
+        }
         assertSource();
       },
     );
@@ -300,60 +302,45 @@ async function handleChatSendWithOptions(
     });
     phase?.mark("persist");
     let approvedInput: PersistedUserTurnMessage | undefined;
-    if (
+    let stageInput = Boolean(
       entry?.sessionId &&
       userTurn.baseInput.display !== false &&
       (!systemInputProvenance || systemInputProvenance.kind === "external_user") &&
       !isInternalTextSlashCommandTurn &&
       !request.goalOperation &&
       !restartSafeAdmission?.retryExpectedState &&
-      !commitInitialInput
-    ) {
+      !commitInitialInput,
+    );
+    if (stageInput && restartSafeAdmission) {
+      inputAdmissionAttempted = true;
+      const input = await admission.acquireInputActor();
+      if (input) {
+        const authority = {
+          assertCurrent: assertCustodyLifetimeCurrent,
+          authorize: assertCustodyLifetimeCurrent,
+        };
+        const state = input.actor.snapshot(authority) ?? (await input.actor.read(authority));
+        // Older Gateways can leave custody behind before committing the recovery
+        // claim. Recover that input; fresh idle sends commit transcript custody directly.
+        stageInput = state.pendingInputs.some(
+          (pending) => pending.idempotency_key === userTurn.baseInput.idempotencyKey,
+        );
+      }
+    }
+    if (stageInput) {
       // ACK transfers input custody. Persist approved source bytes before
       // dispatch; a validated durable retry already owns its transcript input.
       inputAdmissionAttempted = true;
-      const assertCustodyCurrent = () => {
-        assertCustodyLifetimeCurrent();
-        if (sessionMutationAuthorization?.assertAdmittedInputCurrent) {
-          sessionMutationAuthorization.assertAdmittedInputCurrent();
-        } else {
-          sessionMutationCommitGuard?.();
-          sessionMutationAuthorization?.assertCurrent();
-        }
-      };
-      let preparationFailure: { cause: unknown } | undefined;
-      const assertAdmittedCurrent =
-        req.expectedProfileId === undefined
-          ? assertCustodyCurrent
-          : createMessageInjectionAuthority(() => {
-              if (preparationFailure) {
-                throw preparationFailure.cause;
-              }
-              assertCustodyCurrent();
-              return true;
-            });
-      const staged = await userTurnRecorder.stageApproved?.({
-        runId: clientRunId,
-        authority: sessionMutationAuthorization?.admittedInputAuthority
-          ? withSessionPendingInputAuthorityGuard(
-              sessionMutationAuthorization.admittedInputAuthority,
-              assertCustodyLifetimeCurrent,
-              req.expectedProfileId === undefined
-                ? undefined
-                : (cause) => {
-                    preparationFailure ??= { cause };
-                    assertAdmittedCurrent();
-                    throw cause;
-                  },
-            )
-          : undefined,
-        assertCurrent: () => {
-          admission.assertClientUploadAllowed?.();
-          sessionMutationCommitGuard?.();
-          assertCustodyCurrent();
-        },
-        assertAdmittedCurrent,
-      });
+      const staged = await userTurnRecorder.stageApproved?.(
+        createChatSendPendingInputAdmission({
+          runId: clientRunId,
+          expectedProfileId: req.expectedProfileId,
+          sessionMutationAuthorization,
+          sessionMutationCommitGuard,
+          assertCustodyLifetimeCurrent,
+          assertClientUploadAllowed: admission.assertClientUploadAllowed,
+        }),
+      );
       if (userTurnRecorder.isPendingInputConsumed?.()) {
         admission.cleanupAdmittedRun();
         clearAgentRunContext(clientRunId, lifecycleGeneration);
@@ -375,9 +362,9 @@ async function handleChatSendWithOptions(
     }
     let goalResult: SessionGoalOperationResult | undefined;
     if (restartSafeAdmission) {
-      inputAdmissionAttempted ||= commitInitialInput;
+      inputAdmissionAttempted = true;
       const persistedUserTurn = await persistGatewayUserTurnTranscript();
-      if (commitInitialInput) {
+      if (commitInitialInput || (!request.goalOperation && commitFreshInput)) {
         approvedInput = persistedUserTurn?.message;
       }
       const goalOperation = request.goalOperation;
@@ -638,18 +625,13 @@ async function handleChatSendWithOptions(
       },
       cronCreatorAuthority,
       assertDashboardReadCurrent,
-      ...(needsSessionCreationBinding && sessionMutationAuthorization?.bindCreation
-        ? {
-            bindSessionCreation: (operation: SessionEntryCreationOperation) => {
-              sessionMutationAuthorization.bindCreation?.(
-                { sessionKey, agentId: session.agentId },
-                operation,
-              );
-              return sessionMutationAuthorization.assertCurrent;
-            },
-            onSessionCreated: sessionMutationAuthorization.recordCreatedSession,
-          }
-        : {}),
+      getSessionInitializationOptions: createChatSendSessionInitialization({
+        sessionKey,
+        agentId: session.agentId,
+        authorization: sessionMutationAuthorization,
+        needsCreationBinding: needsSessionCreationBinding,
+        getSessionInitializationOptions: userTurn.getSessionInitializationOptions,
+      }),
       externalAuthorityAdmission,
       injection: {
         beginCapturedMessageInjection,

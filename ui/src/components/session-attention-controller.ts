@@ -5,6 +5,7 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { compactApprovalCommand } from "../app/approval-presentation.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import { canUseQuestionPrompts } from "../app/question-prompt-client.ts";
 import {
   createQuestionPromptState,
   disposeQuestionPromptState,
@@ -91,6 +92,7 @@ export class SessionAttentionController implements ReactiveController {
     const connected = gateway.snapshot.phase === "connected";
     const client =
       connected &&
+      canUseQuestionPrompts(gateway.snapshot) &&
       isGatewayMethodAdvertised({ hello: gateway.snapshot.hello }, "question.list") === true
         ? gateway.snapshot.client
         : null;

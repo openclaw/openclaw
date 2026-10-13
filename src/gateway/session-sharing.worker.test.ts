@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { expect, it, vi } from "vitest";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { prepareQualifiedSessionEntryTarget } from "../config/sessions/session-accessor.entry.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
@@ -15,6 +16,7 @@ import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
+import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -137,7 +139,7 @@ it.each([
         key: kind === "alias" ? "agent:main:main" : scope.sessionKey,
         agentId: scope.agentId,
       });
-      const qualified = prepareQualifiedSessionEntryTarget({
+      const qualified = await prepareQualifiedSessionEntryTarget({
         ...route,
         requestedKey: kind === "alias" ? route.canonicalKey : scope.sessionKey,
         storeKey: route.canonicalKey,
@@ -154,7 +156,7 @@ it.each([
         expect(result.error).toBeNull();
         await withQualifiedGatewaySessionEntry({
           cfg,
-          target: qualified.target,
+          target: qualified,
           logicalStorePath: route.storePath,
           includeMembership: true,
           assertConfigCurrent: () => {},
@@ -208,7 +210,6 @@ it.each([
         expect(host.queries).toEqual([]);
       } finally {
         host.restore();
-        qualified.release();
       }
     });
   },
@@ -278,16 +279,71 @@ it("does not replay an authorization consumer after its own effect changes the r
     });
     expect(result.error).toBeNull();
     const effect = vi.fn();
-    await expect(
-      result.authorization!.withCurrent!(() => {
+    try {
+      await result.authorization!.withCurrent!(() => {
         effect();
         replaceSessionEntrySync(scope, { ...entry, updatedAt: effect.mock.calls.length + 1 });
         result.authorization!.assertCurrent();
-      }),
-    ).rejects.toThrow(/changed during read/);
-    expect(effect).toHaveBeenCalledOnce();
+      });
+      expect(effect).toHaveBeenCalledOnce();
+    } finally {
+      result.authorization?.release?.();
+    }
   });
 });
+
+it.for([false, true])(
+  "checks committed chat authority while an unrelated writer is held (revoked=%s)",
+  async (revoked, { signal }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = rolePolicyConfig();
+      const client = roleClient("view", "contended-member");
+      const scope = { agentId: "main", sessionKey: "agent:main:contended-sharing" };
+      replaceSessionEntrySync(scope, {
+        sessionId: "contended-session",
+        updatedAt: 1,
+        visibility: "read-only",
+        createdActor: { type: "human", source: "profile", id: "another-profile" },
+      });
+      const identityId = client.authenticatedUserProfile!.profileId;
+      await addSessionMember(scope, { identityId, addedBy: "another-profile" });
+      const result = await resolveSessionMutationAuthorizationAsync({
+        client,
+        method: "chat.send",
+        requestParams: scope,
+        context: { getRuntimeConfig: () => cfg } as GatewayRequestContext,
+      });
+      expect(result.error).toBeNull();
+      if (revoked) {
+        await removeSessionMember(scope, identityId);
+      }
+      const entered = createDeferred();
+      const release = createDeferred();
+      const writer = runOpenClawAgentWriteAdmission(scope, async () => {
+        entered.resolve();
+        await release.promise;
+      });
+      const effect = vi.fn(() => "accepted");
+      try {
+        await withinTest(entered.promise, signal);
+        const checked = result.authorization!.withCurrent!(effect);
+        if (revoked) {
+          await expect(withinTest(checked, signal)).rejects.toThrow(
+            "session is read-only for this connection",
+          );
+          expect(effect).not.toHaveBeenCalled();
+        } else {
+          expect(await withinTest(checked, signal)).toBe("accepted");
+          expect(effect).toHaveBeenCalledOnce();
+        }
+      } finally {
+        release.resolve();
+        await writer;
+        result.authorization?.release?.();
+      }
+    });
+  },
+);
 
 it.each([
   "worker-before-read",

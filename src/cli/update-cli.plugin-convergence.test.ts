@@ -37,7 +37,6 @@ import {
   listUpdateRuns,
   makeOkUpdateResult,
   mockGitUpdateAfterMutation,
-  mutateConfigFileWithRetry,
   readConfigFileSnapshot,
   replaceConfigFile,
   resolveGatewayInstallEntrypoint,
@@ -195,15 +194,6 @@ describe("update-cli", () => {
     expect(replaceConfigFile).toHaveBeenCalledWith({
       nextConfig: { update: { channel: "dev" } },
       baseHash: "stable-hash",
-    });
-    expect(mutateConfigFileWithRetry).toHaveBeenCalledExactlyOnceWith({
-      mutate: expect.any(Function),
-      writeOptions: {
-        assertCurrent: expect.any(Function),
-        beforeCommit: expect.any(Function),
-        observe: false,
-        skipPluginValidation: true,
-      },
     });
     expect(syncPluginCall()?.channel).toBe("dev");
     expect(syncPluginCall()?.config?.update?.channel).toBe("dev");

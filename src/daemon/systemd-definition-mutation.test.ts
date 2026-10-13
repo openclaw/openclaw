@@ -218,8 +218,8 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
       const stat = fs.stat.bind(fs);
       vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
         const value = await stat(...args);
-        if (args[0] === directory) {
-          Object.defineProperty(value, "uid", { value: 0 });
+        if (value && args[0] === directory) {
+          Object.defineProperty(value, "uid", { value: typeof value.uid === "bigint" ? 0n : 0 });
         }
         return value;
       });
@@ -272,7 +272,7 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
       const stat = await originalLstat(...args);
       if (args[0] === (kind === "parent" ? path.dirname(extra) : extra)) {
-        Object.defineProperty(stat, "uid", { value: 0 });
+        Object.defineProperty(stat, "uid", { value: typeof stat.uid === "bigint" ? 0n : 0 });
       }
       return stat;
     });
@@ -325,8 +325,8 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
       vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
         const stat = await lstat(...args);
         if (args[0] === shared || args[0] === path.dirname(shared)) {
-          Object.defineProperty(stat, "uid", { value: 0 });
-          Object.defineProperty(stat, "gid", { value: 0 });
+          Object.defineProperty(stat, "uid", { value: typeof stat.uid === "bigint" ? 0n : 0 });
+          Object.defineProperty(stat, "gid", { value: typeof stat.gid === "bigint" ? 0n : 0 });
         }
         return stat;
       });
@@ -335,10 +335,14 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
         sharedFd = args[0] === shared ? handle.fd : undefined;
         if (args[0] === shared) {
           const stat = handle.stat.bind(handle);
-          vi.spyOn(handle, "stat").mockImplementation(async () => {
-            const opened = await stat();
-            Object.defineProperty(opened, "uid", { value: 0 });
-            Object.defineProperty(opened, "gid", { value: 0 });
+          vi.spyOn(handle, "stat").mockImplementation(async (...statArgs) => {
+            const opened = await stat(...statArgs);
+            Object.defineProperty(opened, "uid", {
+              value: typeof opened.uid === "bigint" ? 0n : 0,
+            });
+            Object.defineProperty(opened, "gid", {
+              value: typeof opened.gid === "bigint" ? 0n : 0,
+            });
             return opened;
           });
         }
@@ -495,10 +499,10 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
       const handle = await open(...args);
       if (args[0] === unitPath) {
         const stat = handle.stat.bind(handle);
-        vi.spyOn(handle, "stat").mockImplementation(async () => {
-          const opened = await stat();
+        vi.spyOn(handle, "stat").mockImplementation(async (...statArgs) => {
+          const opened = await stat(...statArgs);
           Object.defineProperty(opened, field, {
-            value: opened[field] + 1,
+            value: typeof opened[field] === "bigint" ? opened[field] + 1n : opened[field] + 1,
           });
           return opened;
         });
@@ -785,7 +789,12 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
       const stat = await originalLstat(...args);
       if (args[0] === protectedParent) {
-        Object.defineProperty(stat, "uid", { value: (process.geteuid?.() ?? 0) + 1 });
+        Object.defineProperty(stat, "uid", {
+          value:
+            typeof stat.uid === "bigint"
+              ? BigInt((process.geteuid?.() ?? 0) + 1)
+              : (process.geteuid?.() ?? 0) + 1,
+        });
       }
       return stat;
     });
@@ -808,8 +817,15 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
       const stat = await originalLstat(...args);
       if (args[0] === protectedPath) {
-        Object.defineProperty(stat, "uid", { value: (process.geteuid?.() ?? 0) + 1 });
-        Object.defineProperty(stat, "mode", { value: Number(stat.mode) | 0o022 });
+        Object.defineProperty(stat, "uid", {
+          value:
+            typeof stat.uid === "bigint"
+              ? BigInt((process.geteuid?.() ?? 0) + 1)
+              : (process.geteuid?.() ?? 0) + 1,
+        });
+        Object.defineProperty(stat, "mode", {
+          value: typeof stat.mode === "bigint" ? stat.mode | 0o022n : stat.mode | 0o022,
+        });
       }
       return stat;
     });

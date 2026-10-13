@@ -29,6 +29,11 @@ import {
   readTranscriptIdentityByEventId,
 } from "./session-accessor.sqlite-read.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
+import type {
+  TranscriptAppendCursor,
+  TranscriptAppendOptions,
+  TranscriptInsertRow,
+} from "./session-accessor.sqlite-transcript-append.types.js";
 import {
   createTranscriptIdentityInserter,
   readIdempotencyKeyOwner,
@@ -47,7 +52,11 @@ import {
   rotateTranscriptGenerationInTransaction,
   touchTranscriptMutationInTransaction,
 } from "./session-accessor.sqlite-transcript-state.js";
-import { readSessionActorTransactionState } from "./session-actor-transaction.js";
+import {
+  readSessionActorTransactionState,
+  writableSessionActorMap,
+  writableSessionActorNavigation,
+} from "./session-actor-transaction.js";
 import { withSessionActorTranscriptRewrite } from "./session-actor-transcript-publication.worker.js";
 import {
   createTranscriptIndexAppenderInTransaction,
@@ -70,42 +79,13 @@ import {
   prepareTranscriptPayload,
   readTranscriptStorageEncoding,
   transcriptEventJsonSql,
-  type PreparedTranscriptPayload,
 } from "./transcript-payload.js";
-
-type TranscriptAppendOptions = {
-  /** Exact event bytes, including canonical media, prepared by the message append owner. */
-  eventJson?: string;
-  preparedPayload?: PreparedTranscriptPayload;
-  allowStoredAlias?: boolean;
-  onPlaceholderInserted?: (placeholder: { sessionKey: string; sessionId: string }) => void;
-  idempotencyKeyMode?: "dedupe" | "preserve-owner" | "relocate-owner";
-  onProjectionReconcileNeeded?: () => void;
-  scheduleProjectionReconcile?: boolean;
-  touchMutation?: boolean;
-};
-
-type TranscriptAppendCursor = {
-  initialized?: boolean;
-  readIdentity?: ReturnType<typeof createTranscriptIdentityReader>;
-  nextSeq?: number;
-  appendToIndex?: ReturnType<typeof createTranscriptIndexAppenderInTransaction>;
-  updateWindow?: (createdAt: number) => unknown;
-  insertEvent?: ReturnType<typeof createTranscriptEventInserter>;
-  insertIdentity?: ReturnType<typeof createTranscriptIdentityInserter>;
-};
 
 /** Inserts exact transcript rows without mutating the forward-only projection. */
 export function insertTranscriptRowsWithoutProjectionInTransaction(
   database: OpenClawAgentDatabase,
   sessionId: string,
-  rows: readonly {
-    event: TranscriptEvent;
-    seq: number;
-    createdAt: number;
-    messageIdempotencyKey?: string | null;
-    storedEventSeq?: number;
-  }[],
+  rows: readonly TranscriptInsertRow[],
   reservedMessageIdempotencyKeys: ReadonlySet<string> = new Set(),
 ): void {
   return withSqliteDatabaseWriteScope(database.db, [sqliteSessionIdWriteScope(sessionId)], () => {
@@ -226,10 +206,12 @@ export function appendTranscriptEventInTransaction(
         actor.hot.transcript.version.rawSeq = seq;
         actor.hot.transcript.watermark.maxSeq = seq;
         const stored: unknown = JSON.parse(eventJson);
+        actor.transcript.payloads = writableSessionActorMap(actor.transcript.payloads);
         actor.transcript.payloads.set(seq, {
           event: stored,
           serializedBytes: Buffer.byteLength(eventJson) + 1,
         });
+        actor.transcript.navigation = writableSessionActorNavigation(actor.transcript.navigation);
         // SAFETY: The same canonical event feeds the existing projection and tree codecs.
         actor.transcript.navigation.push({ ...(stored as SessionTreeEntry), seq });
       }
@@ -248,6 +230,9 @@ export function appendTranscriptEventInTransaction(
         withoutSqliteDatabaseWriteScope(database.db, () => options.onProjectionReconcileNeeded?.());
       }
       if (identity) {
+        if (actor) {
+          actor.transcript.identities = writableSessionActorMap(actor.transcript.identities);
+        }
         // Replayed copies take ownership so later retries resolve on the active branch.
         // scan-assistant preserves a colliding user's ownership instead.
         if (idempotencyKeyOwner && options.idempotencyKeyMode === "relocate-owner") {

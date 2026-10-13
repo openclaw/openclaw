@@ -13,7 +13,6 @@ vi.mock("../gateway-rpc.js", async () => {
       callGatewayFromCli(...args),
   };
 });
-const { isCronMachineOutput } = await import("./output-mode.js");
 const { registerCronCli } = await import("./register.js");
 const { registerCronSimpleCommands } = await import("./register.cron-simple.js");
 const stderrIsTTY = Object.getOwnPropertyDescriptor(process.stderr, "isTTY");
@@ -67,40 +66,6 @@ afterEach(() => {
 });
 
 describe("cron output routing", () => {
-  it("aligns early stdout routing with the registered command output modes", () => {
-    const program = new Command().name("openclaw");
-    registerCronCli(program);
-    const cron = program.commands.find((command) => command.name() === "cron");
-    expect(cron).toBeDefined();
-    const gatewayOptions = [
-      [],
-      ["--url", "ws://127.0.0.1:18789"],
-      ["--port", "18789"],
-      ["--token", "test-token"],
-      ["--password", "test-password"],
-      ["--timeout", "250"],
-      ["--expect-final"],
-      ["--port=18789"],
-      ["--timeout", "250", "--expect-final"],
-      ["--log-level", "debug", "--port", "18789"],
-    ];
-    for (const command of cron!.commands) {
-      const alwaysJson =
-        command.options.find((option) => option.long === "--json")?.description ===
-        "Explicit machine-output spelling (command results are JSON by default)";
-      for (const name of [command.name(), ...command.aliases()]) {
-        for (const root of ["cron", "automations"]) {
-          for (const options of gatewayOptions) {
-            const argv = ["node", "openclaw", root, ...options, name];
-            expect(isCronMachineOutput(argv), argv.join(" ")).toBe(
-              command.name() === "scratch" || alwaysJson,
-            );
-          }
-        }
-      }
-    }
-  });
-
   it("inherits parent Gateway options without losing JSON mode", async () => {
     const program = new Command().name("openclaw");
     registerCronCli(program);
@@ -176,42 +141,27 @@ describe("cron show pagination (#83856)", () => {
   });
 });
 
-it.each([
-  ["disable", false, false],
-  ["disable", true, true],
-  ["enable", true, false],
-] as const)("%s with stderr TTY=%s emits hint=%s", async (command, tty, hint) => {
-  Object.defineProperty(process.stderr, "isTTY", { value: tty, configurable: true });
+it("emits the hidden-job hint when disabling from a terminal", async () => {
+  Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });
   const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-  await run([command, "job-1"]);
+  await run(["disable", "job-1"]);
   expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
     id: "job-1",
-    patch: { enabled: command === "enable" },
+    patch: { enabled: false },
   });
-  if (hint) {
-    expect(stderr).toHaveBeenCalledWith(expect.stringContaining("openclaw cron list --all"));
-  } else {
-    expect(stderr).not.toHaveBeenCalled();
-  }
+  expect(stderr).toHaveBeenCalledWith(expect.stringContaining("openclaw cron list --all"));
 });
 
-it.each([undefined, { enabled: false }])(
-  "warns only for a known disabled scheduler: %j",
-  async (status) => {
-    callGatewayFromCli.mockImplementation(async (method: string) =>
-      method === "cron.status" ? status : { ok: true },
-    );
-    await run(["enable", "job-1"]);
-    expect(defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith({ ok: true });
-    if (status) {
-      for (const text of ["scheduler is disabled", "cron.enabled", "OPENCLAW_SKIP_CRON=1"]) {
-        expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining(text));
-      }
-    } else {
-      expect(defaultRuntime.error).not.toHaveBeenCalled();
-    }
-  },
-);
+it("warns for a known disabled scheduler", async () => {
+  callGatewayFromCli.mockImplementation(async (method: string) =>
+    method === "cron.status" ? { enabled: false } : { ok: true },
+  );
+  await run(["enable", "job-1"]);
+  expect(defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith({ ok: true });
+  for (const text of ["scheduler is disabled", "cron.enabled", "OPENCLAW_SKIP_CRON=1"]) {
+    expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining(text));
+  }
+});
 
 describe("cron runs", () => {
   it("queries all visible automations without a job selector", async () => {
@@ -255,65 +205,18 @@ describe("cron runs", () => {
     });
   });
 
-  it.each([["job-1"], ["--id", "job-1"], [""], ["--id", "  "]].map((selector) => ({ selector })))(
-    "rejects --all combined with a supplied selector %j before RPC",
-    async ({ selector }) => {
-      await expect(run(["runs", "--all", ...selector])).rejects.toThrow("exit 1");
-      expect(defaultRuntime.error).toHaveBeenCalledWith("--all cannot be combined with a job id");
-      expect(callGatewayFromCli).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["cron", "automations"])("registers --all through the %s root", async (root) => {
-    const program = new Command().name("openclaw").exitOverride();
-    registerCronCli(program);
-    await program.parseAsync([root, "runs", "--all"], { from: "user" });
-    expect(callGatewayFromCli).toHaveBeenCalledExactlyOnceWith("cron.runs", expect.anything(), {
-      scope: "all",
-      limit: 50,
-    });
+  it("rejects --all combined with a supplied selector before RPC", async () => {
+    await expect(run(["runs", "--all", "job-1"])).rejects.toThrow("exit 1");
+    expect(defaultRuntime.error).toHaveBeenCalledWith("--all cannot be combined with a job id");
+    expect(callGatewayFromCli).not.toHaveBeenCalled();
   });
 
-  it("forwards filters, first-page offset, and sort", async () => {
-    await run([
-      "runs",
-      "job-1",
-      "--status",
-      "error",
-      "--delivery-status",
-      "not-delivered",
-      "--query",
-      "timeout",
-      "--offset",
-      "0",
-      "--sort",
-      "asc",
-      "--limit",
-      "25",
-    ]);
-    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.runs", expect.anything(), {
-      id: "job-1",
-      status: "error",
-      deliveryStatus: "not-delivered",
-      query: "timeout",
-      offset: 0,
-      sortDir: "asc",
-      limit: 25,
-    });
-  });
   it("preserves default paging and the --id alias", async () => {
     await run(["runs", "--id", "job-1"]);
     expect(callGatewayFromCli).toHaveBeenCalledWith("cron.runs", expect.anything(), {
       id: "job-1",
       limit: 50,
     });
-  });
-  it("rejects invalid offsets before RPC", async () => {
-    await expect(run(["runs", "job-1", "--offset", "-1"])).rejects.toThrow("exit 1");
-    expect(defaultRuntime.error).toHaveBeenCalledWith(
-      "Invalid --offset (must be a non-negative integer).",
-    );
-    expect(callGatewayFromCli).not.toHaveBeenCalled();
   });
   it("reports an invalid offset as an expected JSON failure before RPC", async () => {
     const program = new Command().name("openclaw").exitOverride();

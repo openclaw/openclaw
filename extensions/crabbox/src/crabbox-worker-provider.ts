@@ -38,6 +38,7 @@ import {
   parseCrabboxOperatingSystem,
   parseCrabboxProfile,
   resolveCrabboxProvisionProfile,
+  resolveCrabboxPreparationTarget,
   resolveCrabboxWarmImageProfile,
 } from "./crabbox-worker-profile.js";
 import { prepareCrabboxProjectFiles } from "./crabbox-worker-project.js";
@@ -384,8 +385,46 @@ export function createCrabboxWorkerProvider(
           return await failProvisionAfterCleanup({ ...context, id: leaseId, stopLease }, error);
         }
       }
+      let runtimePrepared = false;
+      let runtimeSetupFailed = false;
+      const prepareRuntime = async (scrubScript?: string) => {
+        if (!options?.prepareNodeRuntime) {
+          throw new Error("Crabbox project snapshots require node runtime preparation");
+        }
+        const runtime = await options.prepareNodeRuntime();
+        assertCurrent();
+        const setup = createCrabboxNodeRuntimeSetup({
+          nodeBootstrap: runtime.nodeBootstrap,
+          workerBundle: runtime.workerBundle,
+          leaseId,
+          target: parsed.target,
+        });
+        try {
+          await runProvisionSetup({
+            ...inspectedParams,
+            phase: "node runtime preparation",
+            // Scrub must inherit no shell credentials from runtime installation.
+            setup: scrubScript
+              ? `${setup.command}\nunset ${Object.keys(setup.forwardedEnv).join(" ")}\n${scrubScript}`
+              : setup.command,
+            forwardedEnv: setup.forwardedEnv,
+            timeoutMs:
+              resolveCrabboxNodeEnrollmentTimeoutMs(runtime.bootstrapTimeoutMs) +
+              (scrubScript ? WARM_IMAGE_COMMAND_ROUND_TRIP_TIMEOUT_MS : 0),
+            signal:
+              preparationSignal && runtime.signal
+                ? AbortSignal.any([preparationSignal, runtime.signal])
+                : (preparationSignal ?? runtime.signal),
+          });
+          runtimePrepared = true;
+        } catch (error) {
+          // The command owner settles setup failure; outer catches must not stop twice.
+          runtimeSetupFailed = true;
+          throw error;
+        }
+        assertCurrent();
+      };
       if (project && (await warmImages.lookupLease(leaseId))?.phase !== "enrolled") {
-        let preparationFailed = false;
         let captured: boolean;
         try {
           const preparedProject = await prepareCrabboxProjectFiles({
@@ -415,45 +454,13 @@ export function createCrabboxWorkerProvider(
                 ? { forkedCheckpointId: allocationChoice.checkpointId }
                 : {}),
             },
-            async (scrubScript) => {
-              if (!options?.prepareNodeRuntime) {
-                throw new Error("Crabbox project snapshots require node runtime preparation");
-              }
-              const runtime = await options.prepareNodeRuntime();
-              signal?.throwIfAborted();
-              assertCurrent();
-              const setup = createCrabboxNodeRuntimeSetup({
-                nodeBootstrap: runtime.nodeBootstrap,
-                workerBundle: runtime.workerBundle,
-                leaseId,
-              });
-              try {
-                await runProvisionSetup({
-                  ...inspectedParams,
-                  phase: "node runtime preparation",
-                  // Node clears its own environment; scrub must also inherit no shell credentials.
-                  setup: `${setup.command}\nunset ${Object.keys(setup.forwardedEnv).join(" ")}\n${scrubScript}`,
-                  forwardedEnv: setup.forwardedEnv,
-                  timeoutMs:
-                    resolveCrabboxNodeEnrollmentTimeoutMs(runtime.bootstrapTimeoutMs) +
-                    WARM_IMAGE_COMMAND_ROUND_TRIP_TIMEOUT_MS,
-                  signal:
-                    runtime.signal && preparationSignal
-                      ? AbortSignal.any([preparationSignal, runtime.signal])
-                      : (preparationSignal ?? runtime.signal),
-                });
-              } catch (error) {
-                // The command owner settles setup failure and cleanup; do not stop it twice.
-                preparationFailed = true;
-                throw error;
-              }
-            },
+            prepareRuntime,
           );
         } catch (error) {
           // The runtime grant has a separate abort signal; revalidate the project owner.
           signal?.throwIfAborted();
           assertCurrent();
-          if (preparationFailed) {
+          if (runtimeSetupFailed) {
             throw error;
           }
           return await failProvisionAfterCleanup({ ...context, id: leaseId, stopLease }, error);
@@ -476,7 +483,6 @@ export function createCrabboxWorkerProvider(
         );
       }
       let enrollment: CrabboxWorkerNodeEnrollment;
-      let runtimeSetupFailed = false;
       try {
         // A fork of an image captured for this exact runtime already holds it. Enrollment still
         // verifies the runtime, and the node fetches a missing worker bundle from the Gateway.
@@ -486,31 +492,14 @@ export function createCrabboxWorkerProvider(
             await warmImages.checkpointRuntimeIdentity(allocationChoice.checkpointId),
             nodeRuntimeIdentity,
           );
-        if (!project && options?.prepareNodeRuntime && !forkHasRuntime) {
-          const runtime = await options.prepareNodeRuntime();
-          assertCurrent();
-          const setup = createCrabboxNodeRuntimeSetup({
-            nodeBootstrap: runtime.nodeBootstrap,
-            workerBundle: runtime.workerBundle,
-            leaseId,
-            target: parsed.target,
-          });
-          await runProvisionSetup({
-            ...inspectedParams,
-            phase: "node runtime preparation",
-            setup: setup.command,
-            forwardedEnv: setup.forwardedEnv,
-            timeoutMs: resolveCrabboxNodeEnrollmentTimeoutMs(runtime.bootstrapTimeoutMs),
-            signal:
-              preparationSignal && runtime.signal
-                ? AbortSignal.any([preparationSignal, runtime.signal])
-                : (preparationSignal ?? runtime.signal),
-          }).catch((error: unknown) => {
-            // Setup owns failure cleanup; the enrollment catch must not stop the lease twice.
-            runtimeSetupFailed = true;
-            throw error;
-          });
-          assertCurrent();
+        if (
+          options?.prepareNodeRuntime &&
+          !runtimePrepared &&
+          priorAllocation?.phase !== "enrolled" &&
+          !forkHasRuntime &&
+          (!project || allocationChoice.kind === "checkpoint")
+        ) {
+          await prepareRuntime();
         }
         enrollment = await beginNodeEnrollment();
         signal?.throwIfAborted();
@@ -654,17 +643,7 @@ export function createCrabboxWorkerProvider(
         ? undefined
         : parsed.idleTimeoutMs;
     },
-    resolvePreparationTarget(profile, machineClass, os) {
-      const parsed = parseCrabboxProfile(profile);
-      const effective = resolveCrabboxWarmImageProfile(
-        parsed,
-        machineClass ?? parsed.class,
-        os === undefined ? parsed.target : parseCrabboxOperatingSystem(os),
-      );
-      return effective.warmImage && effective.class && !effective.setupEnv?.length
-        ? { machineClass: effective.class, platform: effective.target }
-        : undefined;
-    },
+    resolvePreparationTarget: resolveCrabboxPreparationTarget,
     notePreparedDemand: async (lease, preparation) =>
       await warmImages.notePreparedDemand(lease.leaseId, preparation),
     resolveAllocation,

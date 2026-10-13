@@ -156,30 +156,36 @@ function FacepilePerson(props: {
       ? personActivityLink(props.user.identity.id, props.routing, presenceViewerLabel(props.user))
       : null,
   );
-  const avatar = () =>
-    props.user.identity?.type === "agent" ? (
-      <AgentViewerAvatar
-        user={props.user}
-        identity={props.user.identity}
-        markAsViewer={props.markAsViewer}
-      />
-    ) : (
-      <ViewerAvatar
-        user={props.user}
-        identity={props.user.identity}
-        markAsViewer={props.markAsViewer}
-        variant="session"
-      />
-    );
+  const avatar = (
+    <Show
+      when={props.user.identity?.type === "agent" ? props.user.identity : undefined}
+      fallback={
+        <ViewerAvatar
+          user={props.user}
+          identity={props.user.identity}
+          markAsViewer={props.markAsViewer}
+          variant="session"
+        />
+      }
+    >
+      {(identity) => (
+        <AgentViewerAvatar
+          user={props.user}
+          identity={identity()}
+          markAsViewer={props.markAsViewer}
+        />
+      )}
+    </Show>
+  );
   return (
-    <Show when={link()} fallback={avatar()}>
+    <Show when={link()} fallback={avatar}>
       {(target) => (
         <a
           class="person-activity-avatar-link"
           href={target().href}
           onClick={(event) => target().open(event)}
         >
-          {avatar()}
+          {avatar}
         </a>
       )}
     </Show>

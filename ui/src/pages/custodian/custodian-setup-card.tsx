@@ -155,6 +155,19 @@ function CustodianSetupCardView(props: Props) {
             {t("custodian.autoSetup.verifying")}
           </p>
         </Show>
+        <Show when={!setup().pending && result()?.selected?.shared}>
+          <p>{t("custodian.autoSetup.sharedCodexLogin")}</p>
+          <Show when={result()?.separateSignIn}>
+            <button
+              class="btn"
+              type="button"
+              disabled={busy()}
+              onClick={() => void setup().signIn()}
+            >
+              {t("custodian.autoSetup.separateLogin")}
+            </button>
+          </Show>
+        </Show>
         <Show when={!setup().pending && result()?.status === "needs-sign-in"}>
           <p>{t("custodian.autoSetup.signInBody")}</p>
           <Show when={!busy()}>

@@ -310,9 +310,7 @@ suite.define(() => {
             document.dispatchEvent(new Event("visibilitychange"));
           });
         } else {
-          await page
-            .locator("openclaw-app-sidebar .sidebar-session-toolbar .sidebar-new-session")
-            .click();
+          await page.locator("openclaw-app-sidebar .sidebar-rail .sidebar-new-session").click();
           await page.waitForURL((url) => url.pathname === "/new");
           await page.locator("openclaw-new-session-page").waitFor();
           await expect
@@ -474,9 +472,7 @@ suite.define(() => {
             await gateway.waitForRequest(method);
           }
         } else {
-          await page
-            .locator("openclaw-app-sidebar .sidebar-session-toolbar .sidebar-new-session")
-            .click();
+          await page.locator("openclaw-app-sidebar .sidebar-rail .sidebar-new-session").click();
           await page.waitForURL((url) => url.pathname === "/new");
           await page.locator("openclaw-new-session-page").waitFor();
         }

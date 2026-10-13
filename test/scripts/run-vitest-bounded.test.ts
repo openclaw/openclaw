@@ -42,7 +42,120 @@ afterAll(async () => {
   await preparedCli.cleanup();
 });
 
+const packageScripts = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"))
+  .scripts as Record<string, string>;
+const loaderEntries = [
+  {
+    name: "JavaScript launcher",
+    args: [path.join(repoRoot, "scripts/run-vitest.mjs")],
+    failedTrailers: ["[test] FAILED (exit 2)"],
+  },
+  ...[
+    "test",
+    "test:changed",
+    "test:changed:max",
+    "test:max",
+    "test:serial",
+    "test:perf:imports",
+    "test:perf:imports:changed",
+    "test:watch",
+  ].map((name) => ({
+    name,
+    args: packageScripts[name]!.split(" ").slice(1),
+    failedTrailers: ["[test] FAILED (exit 2)"],
+  })),
+  {
+    name: "test:extensions:batch",
+    args: packageScripts["test:extensions:batch"]!.split(" ").slice(1),
+    failedTrailers: [],
+  },
+];
+
 describe("Vitest CLI final outcome ownership", () => {
+  it.for(
+    ["missing", "broken"].flatMap((failure) =>
+      loaderEntries.map(({ name, args, failedTrailers }) => ({
+        name,
+        args,
+        failedTrailers,
+        failure,
+      })),
+    ),
+  )(
+    "classifies $failure loader initialization at $name",
+    async ({ failure, args, failedTrailers }, { signal, onTestFinished }) => {
+      const lifetime = createFixtureLifetime();
+      onTestFinished(() => lifetime.cleanup());
+      await lifetime.run(async () => {
+        const root = lifetime.createTempDir("oc-vt-loader-failure-");
+        const preload = path.join(root, "preload.mjs");
+        const loaderFailure =
+          failure === "missing"
+            ? 'throw Object.assign(new Error("owned missing loader dependency"), {code: "ERR_MODULE_NOT_FOUND"});'
+            : `return {format: "module", shortCircuit: true, source: ${JSON.stringify('throw new Error("owned broken loader dependency");')}};`;
+        fs.writeFileSync(
+          preload,
+          `import {registerHooks} from "node:module";
+registerHooks({load(url, context, nextLoad) {
+  if (url.endsWith("/scripts/tsx.mjs")) {
+    ${loaderFailure}
+  }
+  return nextLoad(url, context);
+}});`,
+        );
+        const result = await lifetime.track(
+          runNodeScript(
+            [...args, "--help"],
+            { ...process.env, NODE_OPTIONS: `--import=${preload}` },
+            10_000,
+            { signal, requireProcessTreeExit: process.platform !== "win32" },
+          ),
+        );
+        expect(result.error, result.stderr).toBeUndefined();
+        expect(result.status, result.stderr).toBe(2);
+        expect(result.stderr).toContain(`owned ${failure} loader dependency`);
+        expect(result.stderr.match(/^\[.*\] FAILED \(exit \d+\)$/gmu) ?? []).toEqual(
+          failedTrailers,
+        );
+      });
+    },
+  );
+
+  it.for([0, 1, 2])(
+    "preserves settled implementation exit %s through the JavaScript CLI",
+    async (code, { signal, onTestFinished }) => {
+      const lifetime = createFixtureLifetime();
+      onTestFinished(() => lifetime.cleanup());
+      await lifetime.run(async () => {
+        const root = lifetime.createTempDir("oc-vt-exit-propagation-");
+        const preload = path.join(root, "preload.mjs");
+        fs.writeFileSync(
+          preload,
+          `import { registerHooks } from "node:module";
+registerHooks({ load(url, context, nextLoad) {
+  if (url.endsWith("/scripts/run-vitest-child.mts")) {
+    return { format: "module", shortCircuit: true, source: "process.exitCode = ${code};" };
+  }
+  return nextLoad(url, context);
+}});`,
+        );
+        const result = await lifetime.track(
+          runNodeScript(
+            [path.join(preparedCli.root, "scripts/run-vitest.mjs")],
+            { ...preparedCli.env(process.env), NODE_OPTIONS: `--import=${preload}` },
+            10_000,
+            { signal, requireProcessTreeExit: process.platform !== "win32" },
+          ),
+        );
+        expect(result.error, result.stderr).toBeUndefined();
+        expect(result.status, result.stderr).toBe(code);
+        expect(result.stderr.match(/^\[test\] FAILED \(exit \d+\)$/gmu) ?? []).toEqual(
+          code ? [`[test] FAILED (exit ${code})`] : [],
+        );
+      });
+    },
+  );
+
   it.for(
     entrypoints.flatMap((entry) =>
       (entry.script.startsWith("test-projects-")
@@ -256,7 +369,7 @@ syncBuiltinESMExports();
       );
       expect(result.error, result.stderr).toBeUndefined();
       expect(result.signal, result.stderr).toBeNull();
-      expect(result.status, result.stderr).toBe(1);
+      expect(result.status, result.stderr).toBe(2);
       expect(result.stderr).toContain("fixture runtime identity inspected");
       expect(result.stderr).not.toContain("fixture reader or UI build admitted");
     },
@@ -386,7 +499,7 @@ syncBuiltinESMExports();
         }
         const failed = outcome.endsWith("-failure") || outcome === "cancel";
         expect(await withinTest(closed, signal), output).toEqual({
-          code: failed ? 1 : 0,
+          code: failed ? 2 : 0,
           signal: null,
         });
         const events = fs

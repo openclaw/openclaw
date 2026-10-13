@@ -33,7 +33,7 @@ Custom plugin UI flag below controls user-installed native browser code only.
 ## Control UI Labs
 
 Open **Settings → Labs** to manage experiments that have a
-Control UI switch. Enabling or disabling a lab patches the canonical Gateway
+Control UI switch. Enabling or disabling a lab patches the saved Gateway
 config immediately without restarting the Gateway.
 
 Labs includes Speech bubbles, Decision assistance, Code Mode, Tool Search for all models, Custom
@@ -138,7 +138,7 @@ preference does not select a new provider or grant tool authority. Operators who
 do not want automatic evaluation can turn the preference off or clear that
 agent’s Decision model. The transferred evidence and costs are described below.
 
-The prefilter sends the complete current request and a deterministic, bounded
+The prefilter sends the complete current request and a rule-based, bounded
 projection of recent conversation to the owning agent’s configured Decision
 provider. It retains the nearest complete user/assistant exchange and, when it
 fits, one additional exchange in chronological order. Resolved output from

@@ -1,6 +1,6 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { installMockGateway, type MockGatewayControls } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -37,13 +37,9 @@ async function revokeAdmin(page: Page, gateway: MockGatewayControls) {
   await gateway.waitForRequest("connect", { after: previousConnects });
   await expect
     .poll(() =>
-      page.evaluate(() => {
-        // SAFETY: the production openclaw-app owns this runtime; only its public store is inspected.
-        const app = document.querySelector("openclaw-app") as
-          | (HTMLElement & { runtime?: { context: ApplicationContext } })
-          | null;
-        const snapshot = app?.runtime?.context.gateway.snapshot;
-        return snapshot?.phase === "connected" ? snapshot.hello?.auth?.scopes : null;
+      evaluateControlUiContext(page, (context) => {
+        const snapshot = context.gateway.snapshot;
+        return snapshot.phase === "connected" ? snapshot.hello?.auth?.scopes : null;
       }),
     )
     .toEqual(["operator.read"]);
@@ -144,25 +140,15 @@ suite.define(() => {
           const waitForProfile = async (profileId: string) => {
             await expect
               .poll(() =>
-                page.evaluate(() => {
-                  // SAFETY: inspect the public Gateway store owned by the production app.
-                  const app = document.querySelector("openclaw-app") as
-                    | (HTMLElement & { runtime?: { context: ApplicationContext } })
-                    | null;
-                  return app?.runtime?.context.gateway.snapshot.selfUser?.id;
-                }),
+                evaluateControlUiContext(page, (context) => context.gateway.snapshot.selfUser?.id),
               )
               .toBe(profileId);
           };
           const decline = () =>
-            page.evaluate(() => {
+            evaluateControlUiContext(page, (context) => {
               window.dispatchEvent(new CustomEvent("openclaw:native-update-declined"));
               // Admission publishes synchronously before draining configuration writes.
-              // SAFETY: inspect the public overlay store owned by the production app.
-              const app = document.querySelector("openclaw-app") as
-                | (HTMLElement & { runtime?: { context: ApplicationContext } })
-                | null;
-              return app?.runtime?.context.overlays.snapshot.updateRunning;
+              return context.overlays.snapshot.updateRunning;
             });
           const postNativeUpdate = async () => {
             const card = page.locator(
@@ -233,13 +219,9 @@ suite.define(() => {
             await gateway.waitForRequest("connect", { after: previousConnects });
             await expect
               .poll(() =>
-                page.evaluate(() => {
-                  // SAFETY: inspect the public Gateway store owned by the production app.
-                  const app = document.querySelector("openclaw-app") as
-                    | (HTMLElement & { runtime?: { context: ApplicationContext } })
-                    | null;
-                  const snapshot = app?.runtime?.context.gateway.snapshot;
-                  return snapshot?.phase === "connected" ? snapshot.hello?.auth?.scopes : null;
+                evaluateControlUiContext(page, (context) => {
+                  const snapshot = context.gateway.snapshot;
+                  return snapshot.phase === "connected" ? snapshot.hello?.auth?.scopes : null;
                 }),
               )
               .toEqual(["operator.admin"]);

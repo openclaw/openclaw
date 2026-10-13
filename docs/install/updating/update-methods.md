@@ -123,6 +123,7 @@ For the default profile, run these commands from the source checkout:
 ```bash
 openclaw gateway stop &&
 pnpm build &&
+openclaw doctor --fix &&
 openclaw gateway start
 ```
 
@@ -332,8 +333,10 @@ Prefer `openclaw update` for supervised installs: it can coordinate the package
 swap with the running Gateway service. If you update manually on a supervised
 install, stop the managed Gateway first. Package managers replace files in
 place, and a running Gateway can otherwise try to load core or plugin files
-mid-swap. Restart the Gateway after the package manager finishes so it picks up
-the new install.
+mid-swap. After the package manager finishes, run `openclaw doctor --fix` before
+restarting the Gateway so it picks up canonical config and migrated state. Check
+`openclaw update status` for unfinished plugin upgrades and their repair commands.
+Normal CLI commands and Gateway startup do not apply deferred plugin migrations.
 
 On Windows, the published OpenClaw 2026.9.3 updater can exhaust its fixed
 30-second baseline package-fingerprint budget before replacing any files. It

@@ -85,6 +85,8 @@ export type OwnedSessionTranscriptWriteContext = {
   sessionKey?: string;
   sessionTarget?: SessionTranscriptWriteTarget;
   initialWriter?: InitialSessionTranscriptWriter;
+  /** A committed first writer retained only while its terminal outcome is appended. */
+  settledInitialWriter?: InitialSessionTranscriptWriter;
   sessionReader?: SessionEntryCohortReader;
   sessionActor?: {
     actor: SessionActor;
@@ -94,6 +96,8 @@ export type OwnedSessionTranscriptWriteContext = {
   /** Revalidate the captured owner, including an absent writer, inside each commit. */
   assertCommitAllowed?: SessionSourceAssertion;
   withTranscriptWrite: <T>(run: () => Promise<T> | T) => Promise<T>;
+  /** Terminal bookkeeping through the retained writer after restart cancels execution. */
+  withRestartAbortWrite?: <T>(write: () => Promise<T>) => Promise<T>;
   metadataPublication?: { current?: MetadataPublication };
 };
 
@@ -241,6 +245,7 @@ export function readOwnedSessionTranscriptEntry(
   return (
     entry && {
       sessionId: entry.sessionId,
+      updatedAt: entry.updatedAt,
       lifecycleRevision: entry.lifecycleRevision,
       activeWriterRunId: entry.activeWriterRunId,
       cliHistoryBoundary: entry.cliHistoryBoundary,
@@ -432,6 +437,21 @@ export async function withOwnedSessionTranscriptWrites<T>(
   return await ownedTranscriptWriteContext.run(captureWriteContext(context), run);
 }
 
+/** Only the matching transcript owner can admit a restart's interrupted assistant row. */
+export async function withOwnedSessionRestartAbortWrite<T>(
+  scope: SessionTranscriptWriteTarget | undefined,
+  write: () => Promise<T>,
+): Promise<T> {
+  const context = ownedTranscriptWriteContext.getStore();
+  if (!scope || !context?.withRestartAbortWrite) {
+    return await write();
+  }
+  if (!contextMatches({ context, sessionTarget: captureWriteTarget(scope) })) {
+    throw new SessionTranscriptWriterClaimReboundError();
+  }
+  return await context.withRestartAbortWrite(write);
+}
+
 /** Add a caller's live capability without replacing its admitted writer or settlement owner. */
 export function withSessionTranscriptWriteAssertion<T>(
   scope: SessionTranscriptWriteTarget,
@@ -558,6 +578,19 @@ function assertTranscriptWriteContext(
     throw new SessionTranscriptWriterClaimReboundError();
   }
   assertSource();
+}
+
+/** A committed first-insert owner can settle through the current terminal writer. */
+export function assertSessionTranscriptInitialWriter(
+  writer: InitialSessionTranscriptWriter,
+  scope: SessionTranscriptWriteTarget,
+): void {
+  const context = ownedTranscriptWriteContext.getStore();
+  if (writer.committedFence && context?.settledInitialWriter === writer) {
+    assertTranscriptWriteContext(context, captureWriteTarget(scope));
+    return;
+  }
+  writer.assertActive();
 }
 
 /** A guarded context cannot silently become an unfenced write to another target. */

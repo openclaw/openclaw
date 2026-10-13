@@ -769,7 +769,7 @@ describe("ManagedWorktreeService", () => {
         runEndCleanup: { outcome: "retained-unpushed", at: now },
       });
       expect(retained?.removedAt).toBeUndefined();
-      await expect(fs.access(created.path)).resolves.toBeUndefined();
+      await fs.access(created.path);
     });
 
     it("records busy retention while a run lease is live", async () => {
@@ -783,7 +783,7 @@ describe("ManagedWorktreeService", () => {
         runEndCleanup: { outcome: "retained-busy", at: now },
       });
       expect(retained?.removedAt).toBeUndefined();
-      await expect(fs.access(created.path)).resolves.toBeUndefined();
+      await fs.access(created.path);
       await lease.release();
     });
 
@@ -806,7 +806,7 @@ describe("ManagedWorktreeService", () => {
           reason: "synthetic removal claim failure",
         },
       });
-      await expect(fs.access(created.path)).resolves.toBeUndefined();
+      await fs.access(created.path);
       removalClaim.mockRestore();
       await lease.release();
     });

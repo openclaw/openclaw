@@ -186,6 +186,15 @@ describe("workshop library", () => {
     expect(await listWorkshopArchive({}, "main")).toEqual([]);
   });
 
+  it("rejects a patch whose old text matches overlapping places", async () => {
+    await createWorkshopSkill(ctx, { name: "deploy", content: skill("deploy", "run\nrun\nrun") });
+
+    await expect(
+      patchWorkshopSkill(ctx, { name: "deploy", oldText: "run\nrun", newText: "go" }),
+    ).rejects.toThrow(/matches 2 places/);
+    expect(await readLive("deploy")).toBe(skill("deploy", "run\nrun\nrun"));
+  });
+
   it("never lists or reads a symlinked saved version", async () => {
     await createWorkshopSkill(ctx, { name: "deploy", content: skill("deploy", "step 1") });
     const outside = path.join(state.root, "outside");

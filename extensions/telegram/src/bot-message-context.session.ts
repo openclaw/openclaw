@@ -394,7 +394,7 @@ export async function buildTelegramInboundContextPayload(
     allMedia.length > 1
       ? `${unavailableMedia.length} of ${allMedia.length} attachments could not be downloaded`
       : unavailableMedia[0]?.reason === "oversize"
-        ? `file exceeds ${unavailableMedia[0].limitMb}MB limit`
+        ? `file exceeds ${unavailableMedia[0].limit} limit`
         : "download failed";
   const appendMediaUnavailableNotice = (text: string) =>
     unavailableMedia.length > 0

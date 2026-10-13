@@ -1,6 +1,5 @@
 // Manages compile-cache respawn behavior for the CLI entrypoint.
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
 import { getCompileCacheDir } from "node:module";
 import path from "node:path";
 import process from "node:process";
@@ -25,11 +24,8 @@ export function resolveEntryInstallRoot(entryFile: string): string {
   return entryParent === "dist" || entryParent === "src" ? path.dirname(entryDir) : entryDir;
 }
 
-function isSourceCheckoutInstallRoot(installRoot: string): boolean {
-  return (
-    existsSync(path.join(installRoot, ".git")) ||
-    existsSync(path.join(installRoot, "src", "entry.ts"))
-  );
+function isSourceEntry(currentFile: string): boolean {
+  return path.extname(currentFile) === ".ts";
 }
 
 function isNodeCompileCacheRequested(env: NodeJS.ProcessEnv): boolean {
@@ -45,7 +41,6 @@ type OpenClawCompileCacheRespawnPlan = {
 
 function buildOpenClawCompileCacheRespawnPlan(params: {
   currentFile: string;
-  installRoot: string;
   compileCacheDir?: string;
   env?: NodeJS.ProcessEnv;
 }): OpenClawCompileCacheRespawnPlan | undefined {
@@ -59,7 +54,7 @@ function buildOpenClawCompileCacheRespawnPlan(params: {
   if (isForegroundGmailRunArgv(argv) || shouldKeepNativeHookRelayInProcess(argv, platform)) {
     return undefined;
   }
-  if (!isSourceCheckoutInstallRoot(params.installRoot)) {
+  if (!isSourceEntry(params.currentFile)) {
     return undefined;
   }
   if (env[COMPILE_CACHE_DISABLED_RESPAWNED_ENV] === "1") {
@@ -84,13 +79,11 @@ function buildOpenClawCompileCacheRespawnPlan(params: {
 
 export async function respawnWithoutOpenClawCompileCacheIfNeeded(params: {
   currentFile: string;
-  installRoot: string;
   env?: NodeJS.ProcessEnv;
   prepareWriteError?: () => Promise<(message: string) => void | Promise<void>>;
 }): Promise<boolean> {
   const plan = buildOpenClawCompileCacheRespawnPlan({
     currentFile: params.currentFile,
-    installRoot: params.installRoot,
     compileCacheDir: getCompileCacheDir?.(),
     env: params.env,
   });
@@ -119,12 +112,16 @@ export async function respawnWithoutOpenClawCompileCacheIfNeeded(params: {
 }
 
 export function enableOpenClawCompileCache(params: {
+  currentFile: string;
   env?: NodeJS.ProcessEnv;
   installRoot: string;
 }): void {
-  if (!isSourceCheckoutInstallRoot(params.installRoot)) {
+  if (!isSourceEntry(params.currentFile)) {
     enableInstallCompileCache({
-      directory: resolveOpenClawCompileCacheDirectory(params),
+      directory: resolveOpenClawCompileCacheDirectory({
+        ...params,
+        foregroundGateway: isForegroundGatewayRunArgv(process.argv),
+      }),
       env: params.env,
     });
   }

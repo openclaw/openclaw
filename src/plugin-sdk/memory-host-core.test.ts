@@ -427,7 +427,7 @@ describe("memory-host-core helpers", () => {
           results: [],
         })}\n`,
       );
-      const exportStat = await fs.stat(eventExportPath);
+      const exportStat = await fs.stat(eventExportPath, { bigint: true });
       const exportOwner = JSON.parse(
         await fs.readFile(
           path.join(path.dirname(eventExportPath), ".openclaw-memory-host-events-owner.json"),

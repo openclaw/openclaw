@@ -2,6 +2,10 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
+import {
   getAgentEventLifecycleGeneration,
   resetAgentEventsForTest,
   rotateAgentEventLifecycleGeneration,
@@ -37,6 +41,7 @@ async function createRunController(overrides: Partial<RunEmbeddedAgentParams> = 
     ...overrides,
     admittedRunContext,
   };
+  setRuntimeConfigSnapshot(params.config ?? {});
   const controller = createEmbeddedRunLaneController({
     getLifecycleGeneration: () => lifecycleGeneration,
     getParams: () => params,
@@ -92,6 +97,7 @@ afterEach(async () => {
   resetCommandQueueStateForTest();
   vi.useRealTimers();
   vi.restoreAllMocks();
+  clearRuntimeConfigSnapshot();
 });
 
 describe("runtime-owned lane deadline handoff", () => {
