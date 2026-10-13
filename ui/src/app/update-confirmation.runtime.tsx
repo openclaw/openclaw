@@ -12,6 +12,7 @@ import { createSignal, Show } from "solid-js";
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
 import { isReportableUpdateRun } from "../../../src/shared/update-outcome.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
+import { ExternalSupervisorGuidance } from "../components/external-supervisor-guidance.tsx";
 import { UpdateGitRevisions } from "../components/solid/update-git-revisions.tsx";
 import { registerUpdateActionsEnglish } from "../i18n/locales/en-update-actions.ts";
 import { formatUiError } from "../lib/format-error.ts";
@@ -198,6 +199,7 @@ export async function confirmAndStartUpdateRuntime(
         statusRefreshed: statusCheck === "success" && !readError,
         updateAvailable,
         updateSchedule,
+        externalSupervisorGuidance: latestProgress?.externalSupervisorGuidance ?? null,
       };
     }
 
@@ -263,6 +265,9 @@ export async function confirmAndStartUpdateRuntime(
                     prop:connected={!view().disconnected}
                   />
                 )}
+              </Show>
+              <Show when={view().run?.reason === "external-supervisor-update-required"}>
+                <ExternalSupervisorGuidance guidance={view().externalSupervisorGuidance} />
               </Show>
               <div class="exec-approval-actions">
                 <Show

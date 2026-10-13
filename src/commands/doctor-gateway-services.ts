@@ -44,6 +44,7 @@ import { NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON } from "../infra/gateway-superv
 import { formatInstallOwnerMessage, readInstallOwner } from "../infra/install-owner.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { parseTcpPortFromArgs } from "../infra/tcp-port.js";
+import { resolveExternalSupervisorGuidance as resolveSupervisorGuidance } from "../plugins/supervisor-guidance-runtime.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { sleep } from "../utils/sleep.js";
 import { resolveGatewayDaemonRuntime } from "./daemon-runtime.js";
@@ -97,6 +98,12 @@ type GatewayServiceConfigRepairOptions = {
 
 const DOCTOR_LAUNCHCTL_TIMEOUT_MS = 5_000;
 const DOCTOR_LAUNCHCTL_CONFIRM_POLL_MS = 100;
+
+async function resolveServiceRepairDeferredNote(config?: OpenClawConfig): Promise<string> {
+  const guidance = await resolveSupervisorGuidance("repair", config ? { config } : undefined);
+  return formatServiceRepairDeferredNote(undefined, guidance);
+}
+
 async function confirmLegacyLaunchdServiceUnloaded(serviceTarget: string): Promise<boolean> {
   const deadline = Date.now() + DOCTOR_LAUNCHCTL_TIMEOUT_MS;
   while (Date.now() < deadline) {
@@ -484,7 +491,7 @@ export async function maybeRepairGatewayServiceConfig(
   }
 
   if (serviceRepairDeferred) {
-    note(formatServiceRepairDeferredNote(), "Gateway service config");
+    note(await resolveServiceRepairDeferredNote(cfg), "Gateway service config");
     return cfg;
   }
 
@@ -690,7 +697,7 @@ export async function maybeScanExtraGatewayServices(
     const serviceRepairPolicy = resolveServiceRepairPolicy();
     const serviceRepairDeferred = isServiceRepairDeferred(serviceRepairPolicy);
     if (serviceRepairDeferred) {
-      note(formatServiceRepairDeferredNote(), "Legacy gateway cleanup skipped");
+      note(await resolveServiceRepairDeferredNote(), "Legacy gateway cleanup skipped");
     }
     const shouldRemove = serviceRepairDeferred
       ? false

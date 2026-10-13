@@ -427,6 +427,7 @@ export function buildPluginManifestRecord(params: {
     dashboard: params.manifest.dashboard,
     controlUi: params.manifest.controlUi,
     uiCapabilities: params.manifest.uiCapabilities,
+    supervisorGuidance: params.manifest.supervisorGuidance,
     themes: params.manifest.themes,
     themeDefinitions: loadManifestThemeDefinitions({
       pluginId,

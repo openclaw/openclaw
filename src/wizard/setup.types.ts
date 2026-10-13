@@ -25,3 +25,11 @@ export type GatewayWizardSettings = {
   authMode: GatewayAuthMode;
   gatewayToken?: string;
 };
+
+export type GatewayServiceSetupOutcome =
+  | {
+      status: "ready";
+      action: "installed" | "started" | "reused" | "restarted" | "restart-scheduled";
+    }
+  | { status: "skipped"; reason: "explicit" | "systemd-unavailable" | "external" }
+  | { status: "failed"; error: string };

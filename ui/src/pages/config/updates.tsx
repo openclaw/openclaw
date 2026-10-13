@@ -18,6 +18,7 @@ import {
   getUpdateGitComparison,
   isUpdateActionable,
 } from "../../app/update-schedule-projection.ts";
+import { ExternalSupervisorGuidance } from "../../components/external-supervisor-guidance.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
   SettingsPage,
@@ -124,6 +125,14 @@ function RecordedAttempt(props: UpdatesViewProps) {
           <div class="settings-row settings-row--stacked">
             <openclaw-update-run-view prop:run={run()} prop:connected={props.connected} />
           </div>
+        </Show>
+        <Show
+          when={
+            (run()?.reason ?? props.update.recordedUpdateAttempt?.reason) ===
+            "external-supervisor-update-required"
+          }
+        >
+          <ExternalSupervisorGuidance guidance={props.update.externalSupervisorGuidance} />
         </Show>
         <Show when={failed() || props.update.updateStatusBanner?.source === "read"}>
           <SettingsRow

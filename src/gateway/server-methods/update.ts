@@ -57,6 +57,7 @@ import { resolveUnmanagedUpdateInstallReason } from "../../infra/update-runner-i
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { getUpdateAvailable } from "../../infra/update-status-state.js";
 import { SystemPackageOwnershipError } from "../../infra/update-system-package-ownership.js";
+import { resolveExternalSupervisorGuidance } from "../../plugins/supervisor-guidance-runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { mergeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import {
@@ -75,6 +76,7 @@ import type { GatewayRequestHandlers } from "./types.js";
 import {
   admitGatewayUpdateRequest,
   retainUpdateRequesterAuthority,
+  buildRefusedUpdateResult,
   createUnexpectedUpdateFailureResult,
   recordHandoffFailure,
   resolveGatewayUpdateAdmission,
@@ -281,19 +283,6 @@ export const updateHandlers: GatewayRequestHandlers = {
       const installRoot = installSurface.root;
       result.mode = installSurface.mode;
       result.root = installRoot;
-      const refusedUpdate = (
-        outcome: "error" | "skipped",
-        reason: string,
-        beforeVersion?: string | null,
-      ): UpdateRunResult => ({
-        status: outcome,
-        mode: installSurface.mode,
-        ...(installRoot ? { root: installRoot } : {}),
-        ...(beforeVersion ? { before: { version: beforeVersion } } : {}),
-        reason,
-        steps: [],
-        durationMs: 0,
-      });
       if (installSurface.kind === "immutable") {
         await reportImmutableGatewayUpdateRefusal(runId, installSurface, respond);
         return;
@@ -412,18 +401,20 @@ export const updateHandlers: GatewayRequestHandlers = {
             ? effectiveChannel
             : (configChannel ?? undefined);
       if (targetFailureReason) {
-        result = refusedUpdate("error", targetFailureReason);
+        result = buildRefusedUpdateResult(installSurface, "error", targetFailureReason);
       } else if (installSurface.kind === "missing") {
-        result = refusedUpdate("error", "not-openclaw-root");
+        result = buildRefusedUpdateResult(installSurface, "error", "not-openclaw-root");
       } else if (isGatewayExternallySupervised()) {
         const beforeVersion = await readPackageVersion(installSurface.root);
-        result = refusedUpdate(
+        result = buildRefusedUpdateResult(
+          installSurface,
           "skipped",
           EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON,
           beforeVersion,
         );
       } else if (installSurface.kind === "package-root") {
-        result = refusedUpdate(
+        result = buildRefusedUpdateResult(
+          installSurface,
           "skipped",
           resolveUnmanagedUpdateInstallReason(),
           await readPackageVersion(installSurface.root),
@@ -435,7 +426,8 @@ export const updateHandlers: GatewayRequestHandlers = {
         const beforeVersion = installSurface.root
           ? await readPackageVersion(installSurface.root)
           : null;
-        result = refusedUpdate(
+        result = buildRefusedUpdateResult(
+          installSurface,
           "skipped",
           installSurface.kind === "global" ? "restart-unavailable" : "restart-disabled",
           beforeVersion,
@@ -586,7 +578,7 @@ export const updateHandlers: GatewayRequestHandlers = {
           result = await recordHandoffFailure(
             runId,
             err,
-            refusedUpdate("error", "managed-service-handoff-failed"),
+            buildRefusedUpdateResult(installSurface, "error", "managed-service-handoff-failed"),
             warn,
             stage,
           );
@@ -699,6 +691,10 @@ export const updateHandlers: GatewayRequestHandlers = {
       await notify(outcomeRun, "finished");
     }
     recordGatewayUpdateOutcome(result, actor, context?.logGateway);
+    const externalSupervisorGuidance =
+      result.reason === EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON
+        ? await resolveExternalSupervisorGuidance("update", { config: getConfig() })
+        : undefined;
     respond(
       true,
       {
@@ -709,6 +705,7 @@ export const updateHandlers: GatewayRequestHandlers = {
         acknowledgement,
         ...(outcomeMessage ? { message: outcomeMessage } : {}),
         result,
+        ...(externalSupervisorGuidance ? { externalSupervisorGuidance } : {}),
         ...(handoff ? { handoff } : {}),
         restart: null,
         sentinel: {

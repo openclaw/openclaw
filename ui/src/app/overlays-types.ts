@@ -1,5 +1,9 @@
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.js";
-import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
+import type {
+  ExternalSupervisorGuidance,
+  UpdateAvailable,
+  UpdateScheduleState,
+} from "../api/types.ts";
 import type { DevicePairSetupAccess, DevicePairSetupLifecycle } from "../lib/device-pair-setup.ts";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "./exec-approval.ts";
 import type { SubmittedUpdateReport } from "./update-failure-report.ts";
@@ -15,6 +19,7 @@ export type UpdateFailureReportNotice = {
 };
 
 export type ApplicationUpdateOverlaySnapshot = {
+  externalSupervisorGuidance?: ExternalSupervisorGuidance | null;
   updateAvailable: UpdateAvailable | null;
   updateSchedule: UpdateScheduleState | null;
   heldUpdateCampaignId: string | null;
