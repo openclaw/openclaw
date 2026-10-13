@@ -6,8 +6,12 @@ import { createEmbeddedAgentRunnerOpenAiConfig } from "../../agents/test-helpers
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { readTranscriptMessages } from "../../sessions/user-turn-transcript.test-support.js";
+import { readModelFallbackNotice } from "../../shared/model-fallback-notice.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { runCronIsolatedAgentTurn } from "./run.js";
+// Keep lazy runner imports outside the turn's timeout budget.
+import "./run-executor.runtime.js";
+import "./run-embedded.runtime.js";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -171,8 +175,21 @@ it("continues one cron user turn when the primary times out after provider dispa
       storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
     });
     expect(messages.filter((message) => message.role === "user")).toHaveLength(1);
+    expect(messages.map(readModelFallbackNotice).filter(Boolean)).toMatchObject([
+      {
+        kind: "model-fallback",
+        fromModel: "mock-openai/primary",
+        toModel: "mock-openai/backup",
+        reason: "timeout",
+      },
+    ]);
     expect(
-      messages.filter((message) => message.role === "assistant" && message.stopReason === "stop"),
+      messages.filter(
+        (message) =>
+          message.role === "assistant" &&
+          message.stopReason === "stop" &&
+          !readModelFallbackNotice(message),
+      ),
     ).toHaveLength(1);
   });
 });

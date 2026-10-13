@@ -25,6 +25,11 @@ import {
   type LeaseHeartbeatWorkerData,
 } from "./openclaw-state-lease-heartbeat-shared.js";
 import {
+  createStateLeaseRenewalScheduler,
+  type StateLeaseRenewal,
+  type StateLeaseRenewalOutcome,
+} from "./openclaw-state-lease-renewal.worker.js";
+import {
   readOpenClawStateLeaseExpiry,
   renewOpenClawStateLeaseInTransaction,
 } from "./openclaw-state-lease-store.js";
@@ -33,6 +38,7 @@ import { encodeOpenClawStateWorkerError } from "./openclaw-state-worker-error.js
 type HeartbeatRegistration = { registration: LeaseHeartbeatWorkerData; port: MessagePort };
 type HeartbeatDatabase = {
   database: ReturnType<typeof openTrackedStateDatabase>;
+  renewals: ReturnType<typeof createStateLeaseRenewalScheduler>;
   references: number;
 };
 const databases = new Map<string, HeartbeatDatabase>();
@@ -94,11 +100,24 @@ function startHeartbeat(
   let processOwner = params.processOwner;
   let heartbeat: ReturnType<typeof setTimeout> | undefined;
   let closed = false;
+  const scheduledRenewal: StateLeaseRenewal = {
+    identity: params.identity,
+    leaseMs: params.leaseMs,
+    intervalMs: params.heartbeatMs,
+    execute: (operation) =>
+      withRenewalProgress(() => {
+        assertStateDatabaseAccessAllowed(params.path);
+        return operation();
+      }),
+    complete: (outcome) =>
+      runAutomatic(() => renewInWorker(false, "automatic-renewal", outcome), "automatic-renewal"),
+  };
   const close = () => {
     if (closed) {
       return;
     }
     clearTimeout(heartbeat);
+    retainedDatabase?.renewals.cancel(scheduledRenewal);
     try {
       if (retainedDatabase) {
         if (retainedDatabase.references === 1) {
@@ -141,6 +160,7 @@ function startHeartbeat(
   const renewInWorker = (
     explicit: boolean,
     path: LeaseHeartbeatLoss["path"],
+    outcome?: StateLeaseRenewalOutcome,
   ): number | undefined => {
     if (Atomics.load(shared, state.status) >= state.closed) {
       return undefined;
@@ -149,6 +169,9 @@ function startHeartbeat(
     let contentionError: unknown;
     attempt += 1;
     try {
+      if (outcome && "error" in outcome) {
+        throw outcome.error;
+      }
       // Native lookup can be slow; keep it outside write admission and startup readiness.
       if (
         processOwner?.identity.startedAt === null &&
@@ -159,28 +182,30 @@ function startHeartbeat(
           processOwner.env,
         );
       }
-      expiresAt = runWithSqliteBusyTimeout(
-        db,
-        0,
-        () =>
-          runSqliteImmediateTransactionSync(
+      expiresAt = outcome
+        ? outcome.expiresAt
+        : runWithSqliteBusyTimeout(
             db,
-            () => {
-              assertStateDatabaseAccessAllowed(params.path);
-              if (Atomics.load(shared, state.status) >= state.closed) {
-                return undefined;
-              }
-              return renewOpenClawStateLeaseInTransaction(
+            0,
+            () =>
+              runSqliteImmediateTransactionSync(
                 db,
-                params.identity,
-                params.leaseMs,
-                processOwner?.identity,
-              );
-            },
-            { operationLabel: "state.lease.renew", logger: { warn() {} } },
-          ),
-        { lockFailureReporting: "suppress" },
-      );
+                () => {
+                  assertStateDatabaseAccessAllowed(params.path);
+                  if (Atomics.load(shared, state.status) >= state.closed) {
+                    return undefined;
+                  }
+                  return renewOpenClawStateLeaseInTransaction(
+                    db,
+                    params.identity,
+                    params.leaseMs,
+                    processOwner?.identity,
+                  );
+                },
+                { operationLabel: "state.lease.renew", logger: { warn() {} } },
+              ),
+            { lockFailureReporting: "suppress" },
+          );
       if (expiresAt !== undefined) {
         Atomics.store(shared, state.lastRenewedAt, BigInt(expiresAt - params.leaseMs));
       }
@@ -219,6 +244,15 @@ function startHeartbeat(
     // Contention may delay renewal, but must never delay expiry detection by a
     // full heartbeat interval or authorize renewal after the persisted deadline.
     clearTimeout(heartbeat);
+    retainedDatabase?.renewals.cancel(scheduledRenewal);
+    if (
+      contentionError === undefined &&
+      processOwner === undefined &&
+      (!params.deferActivation || Atomics.load(shared, state.status) === state.ready)
+    ) {
+      retainedDatabase?.renewals.schedule(scheduledRenewal, expiresAt);
+      return expiresAt;
+    }
     heartbeat = setTimeout(
       () => {
         if (params.deferActivation && Atomics.load(shared, state.status) === state.starting) {
@@ -235,6 +269,7 @@ function startHeartbeat(
         ),
       ),
     );
+    heartbeat.unref();
     // A still-valid old expiry permits automatic retry, not renewal success.
     if (explicit && contentionError !== undefined) {
       throw toErrorObject(contentionError, "state lease heartbeat renewal was delayed");
@@ -244,19 +279,20 @@ function startHeartbeat(
 
   // SQLite and native process lookup are synchronous on this worker. Publish only
   // occupancy; callers still require a fresh reply and check the durable owner.
-  const renew = (
-    explicit = false,
-    path: LeaseHeartbeatLoss["path"] = "automatic-renewal",
-  ): number | undefined => {
+  function withRenewalProgress<T>(operation: () => T): T {
     Atomics.add(renewalProgress, 0, 1n);
     Atomics.notify(shared, state.ack);
     try {
-      return withDatabaseAdmission(() => renewInWorker(explicit, path));
+      return withDatabaseAdmission(operation);
     } finally {
       Atomics.add(renewalProgress, 0, 1n);
       Atomics.notify(shared, state.ack);
     }
-  };
+  }
+  const renew = (
+    explicit = false,
+    path: LeaseHeartbeatLoss["path"] = "automatic-renewal",
+  ): number | undefined => withRenewalProgress(() => renewInWorker(explicit, path));
 
   function activateHeartbeat(): void {
     let expiresAt: number | undefined;
@@ -383,8 +419,10 @@ function startHeartbeat(
       retainedDatabase.references++;
     } else {
       // Only the first registration opens SQLite; later leases cannot stall active renewals.
+      const database = withDatabaseAdmission(openHeartbeatDatabase);
       retainedDatabase = {
-        database: withDatabaseAdmission(openHeartbeatDatabase),
+        database,
+        renewals: createStateLeaseRenewalScheduler(database),
         references: 1,
       };
       databases.set(databaseKey, retainedDatabase);

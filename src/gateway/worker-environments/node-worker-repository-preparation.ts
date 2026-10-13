@@ -238,8 +238,27 @@ export function createNodeWorkerRepositoryPreparation(
         baseCommit: prepared.baseCommit,
       };
     },
-    configureAuthor: async (workspaceDir: string, author: { name?: string; email?: string }) => {
-      for (const [key, value] of Object.entries(author)) {
+    configureCheckout: async (
+      workspaceDir: string,
+      author: { name?: string; email?: string },
+      origin?: string,
+    ) => {
+      const settings: Record<string, string | undefined> = {
+        "user.name": author.name,
+        "user.email": author.email,
+      };
+      if (origin) {
+        // Retained checkouts own their origin after the initial materialization.
+        const remotes = await git(undefined, ["-C", workspaceDir, "remote"]);
+        if (!succeeded(remotes)) {
+          throw workspaceSyncError(remotes);
+        }
+        if (!remotes.stdout.split(/\r?\n/u).includes("origin")) {
+          settings["remote.origin.url"] = origin;
+          settings["remote.origin.fetch"] = "+refs/heads/*:refs/remotes/origin/*";
+        }
+      }
+      for (const [key, value] of Object.entries(settings)) {
         if (!value) {
           continue;
         }
@@ -248,7 +267,7 @@ export function createNodeWorkerRepositoryPreparation(
           workspaceDir,
           "config",
           "--local",
-          `user.${key}`,
+          key,
           value,
         ]);
         if (!succeeded(configured)) {

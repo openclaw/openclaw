@@ -13,7 +13,19 @@ Who owns compaction on a Codex turn, and what the OpenClaw transcript mirror kee
 
 When the selected model uses the Codex harness, Codex app-server owns native
 token-pressure and manual thread compaction. OpenClaw separately owns its
-transcript mirror. When `agents.defaults.compaction.maxActiveTranscriptBytes`
+transcript mirror. Effective Ultrafast turns cap native automatic compaction at
+260,000 total context tokens, preserving lower configured
+`model_auto_compact_token_limit` values. OpenClaw applies this limit through the
+native thread configuration before the turn; changing back to Fast or standard
+restores the configured native limit on the next turn. Other tiers retain their
+native compaction settings.
+
+An incognito thread has no persisted resume source, so its creation-time
+compaction settings cannot change in place. If a speed change requires a different
+limit, OpenClaw preserves the conversation and asks you to restore the previous
+speed or start a new incognito conversation. No turn is sent with mismatched settings.
+
+When `agents.defaults.compaction.maxActiveTranscriptBytes`
 is set to a positive value, OpenClaw checks that mirror before ordinary and
 heartbeat turns. When the byte guard trips, OpenClaw attempts semantic
 compaction through its selected host context engine before admitting the turn.

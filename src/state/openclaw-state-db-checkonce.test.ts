@@ -1,10 +1,15 @@
-import { copyFileSync, renameSync } from "node:fs";
+import { copyFileSync, renameSync, unlinkSync } from "node:fs";
 import path from "node:path";
 import { constants, DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import {
+  readSqliteDatabaseCleanClose,
+  readSqliteDatabaseIntegrityVerification,
+  revokeSqliteDatabaseAdmissionsForPath,
+} from "../infra/sqlite-database-admission.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
@@ -18,6 +23,7 @@ import {
 } from "./openclaw-state-db-schema-version.js";
 import {
   closeOpenClawStateDatabaseForTest,
+  closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
   withOpenClawStateStartupMigrationCheckpointDatabase,
 } from "./openclaw-state-db.js";
@@ -30,6 +36,34 @@ const directories = useAutoCleanupTempDirTracker((cleanup) =>
     cleanup();
   }),
 );
+
+it("preserves full verification across a disposable startup checkpoint write", async () => {
+  const env = { OPENCLAW_STATE_DIR: directories.make("state-checkpoint-clean-close-") };
+  const state = openOpenClawStateDatabase({ env });
+  const verified = readSqliteDatabaseIntegrityVerification(state.db);
+  expect(verified).toBeDefined();
+  await closeOpenClawStateDatabaseAsync();
+  const observed = observeSqliteReadSql(StatementSync.prototype);
+  try {
+    withOpenClawStateStartupMigrationCheckpointDatabase(
+      (db) => {
+        db.prepare(
+          `INSERT INTO state_leases(scope, lease_key, owner, created_at, updated_at)
+           VALUES('checkpoint-proof', 'global', 'startup', 1, 1)`,
+        ).run();
+      },
+      { env, atomic: true },
+    );
+    expect(readSqliteDatabaseCleanClose(state.path)).toBe(true);
+    const reopened = openOpenClawStateDatabase({ env });
+    expect(readSqliteDatabaseIntegrityVerification(reopened.db)).toEqual(verified);
+    expect(
+      observed.queries.filter((sql) => /PRAGMA (?:integrity|foreign_key)_check/iu.test(sql)),
+    ).toEqual([]);
+  } finally {
+    observed.restore();
+  }
+});
 
 function validationStatements(queries: string[]): string[] {
   return queries.filter((sql) =>
@@ -48,6 +82,8 @@ it("admits a restarted current schema before repeated version and migration prob
     )
     .run("restart.fixture", '"retained"', 1);
   closeOpenClawStateDatabaseForTest();
+  // Exercise cold admission rather than restoring this orderly close's seal.
+  revokeSqliteDatabaseAdmissionsForPath(first.path);
   const observation = observeSqliteReadSql(StatementSync.prototype);
   try {
     const restarted = openOpenClawStateDatabase({ env });
@@ -128,6 +164,7 @@ it("checks integrity once before index repair and once after rebuilding the inde
       2,
     );
     closeOpenClawStateDatabaseForTest();
+    unlinkSync(`${pathname}.seal`);
     observation.queries.length = 0;
     expect(openOpenClawStateDatabase({ env }).db.isOpen).toBe(true);
     expect(observation.queries.filter((sql) => sql === "PRAGMA integrity_check;")).toHaveLength(1);
@@ -142,7 +179,7 @@ it("checks integrity once before index repair and once after rebuilding the inde
   }
 });
 
-it("reuses live shared-state admission and revalidates after the final reader and writer close", () => {
+it("reuses live admission and revalidates after the final handles close without a seal", () => {
   const env = { OPENCLAW_STATE_DIR: directories.make("state-checkonce-") };
   const first = openOpenClawStateDatabase({ env });
   const pathname = first.path;
@@ -159,6 +196,7 @@ it("reuses live shared-state admission and revalidates after the final reader an
     expect(validationStatements(observation.queries)).toEqual([]);
     survivingReader.close();
     closeOpenClawStateDatabaseForTest();
+    unlinkSync(`${pathname}.seal`);
     const reopened = openOpenClawStateDatabase({ env });
     expect(observation.queries.filter((sql) => sql === "PRAGMA integrity_check;")).toHaveLength(1);
     expect(observation.queries.filter((sql) => sql === "PRAGMA foreign_key_check;")).toHaveLength(

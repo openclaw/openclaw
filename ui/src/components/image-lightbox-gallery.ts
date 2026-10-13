@@ -44,17 +44,17 @@ export class ImageLightboxGalleryController {
     // The opener retains and releases the initial image independently of the modal.
     const preview = { ...initial, release: undefined };
     if (initial.loadFullResolution) {
-      this.upgrade(this.index, preview, initial.loadFullResolution);
+      void this.prepare(this.index, initial.loadFullResolution, preview);
     } else {
       this.images.set(this.index, Promise.resolve(preview));
     }
     this.preloadNeighbors();
   }
 
-  private upgrade(
+  private prepare(
     index: number,
-    preview: ImageLightboxItem,
     load: () => Promise<ImageLightboxItem | null>,
+    preview?: ImageLightboxItem,
   ) {
     const generation = this.generation;
     const pending = Promise.resolve()
@@ -63,6 +63,7 @@ export class ImageLightboxGalleryController {
       .catch(() => null)
       .then((item) => {
         if (
+          preview &&
           item &&
           generation === this.generation &&
           this.images.get(index) === pending &&
@@ -71,9 +72,13 @@ export class ImageLightboxGalleryController {
           this.current = item;
           this.notify();
         }
-        return item ?? preview;
+        if (!item && !preview && this.images.get(index) === pending) {
+          this.images.delete(index);
+        }
+        return item ?? preview ?? null;
       });
     this.images.set(index, pending);
+    return pending;
   }
 
   dispose() {
@@ -176,18 +181,7 @@ export class ImageLightboxGalleryController {
     if (!load) {
       return Promise.resolve(null);
     }
-    const generation = this.generation;
-    const pending = Promise.resolve()
-      .then(() => (generation === this.generation ? load(retryFailed) : null))
-      .then(decodeImage)
-      .catch(() => null);
-    this.images.set(index, pending);
-    void pending.then((item) => {
-      if (!item && this.images.get(index) === pending) {
-        this.images.delete(index);
-      }
-    });
-    return pending;
+    return this.prepare(index, () => load(retryFailed));
   }
 
   private preloadNeighbors() {

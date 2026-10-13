@@ -622,6 +622,11 @@ describe("createGatewayKernel", () => {
       kernel.kernel.unlockStartupMethods();
       kernel.kernel.markSidecarsReady();
 
+      expect(getReadiness()).toMatchObject({
+        ready: false,
+        failing: ["startup-sidecars"],
+      });
+      kernel.kernel.setDispatchReady(true);
       expectCoreAgentDatabaseReadiness(getReadiness, state);
       await expect(
         dispatchGatewayRequestInProcess("chat.send", chatParams, dispatchOptions),
@@ -958,9 +963,9 @@ describe("createGatewayKernel", () => {
         "gateway.config-revision-key",
         "gateway.request-context",
         "sessions.projection",
+        "gateway.instance-runtime-import",
         "sessions.materialize",
         "gateway.lifetime-sidecars",
-        "gateway.instance-runtime-import",
       ]);
     } finally {
       try {

@@ -842,8 +842,7 @@ suite.define(() => {
         ),
       ).toEqual([2, 6, 22]);
       for (const request of await gateway.getRequests("chat.history")) {
-        expect(request.params).toMatchObject({ limit: 1000 });
-        expect(request.params).not.toHaveProperty("maxBytes");
+        expect(request.params).toMatchObject({ limit: 1000, maxBytes: 1024 * 1024 });
       }
     } finally {
       await suite.closeBrowserContext(context);

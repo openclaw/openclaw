@@ -27,6 +27,7 @@ import { registerExecutionPhaseReceiptTests } from "./update-command-execution-p
 import { executeMutableUpdate } from "./update-command-execution.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { admitSourceUpdateArtifacts } from "./update-command-git-admission.js";
+import * as readiness from "./update-command-readiness.js";
 import { stubNodeRuntime } from "./update-command-runtime-recovery.test-support.js";
 import {
   gatewayServiceCommandUsesRoot,
@@ -254,6 +255,8 @@ export function prepareBundledPluginRuntime({ repoRoot }) {
   });
 
   it("reports the post-stop activation checks as a timed step", async () => {
+    // Gateway readiness is outside this timed-step contract.
+    vi.spyOn(readiness, "verifyPreviousGatewayForUpdate").mockResolvedValue(true);
     mocks.runPackageUpdate.mockImplementation(
       async ({
         validateCandidate,

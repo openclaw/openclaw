@@ -902,6 +902,40 @@ describe("sending", () => {
     );
   });
 
+  it.each([410, 503, undefined])(
+    "keeps successful sends alongside a failed delivery (status=%s)",
+    async (statusCode) => {
+      const failed = await registerSubscription("https://push.example.com/failed");
+      const delivered = await registerSubscription("https://push.example.com/delivered");
+      vi.mocked(webPush.sendNotification).mockImplementation(async (subscription) => {
+        if (subscription.endpoint === failed.endpoint) {
+          throw Object.assign(new Error("delivery failed"), { statusCode });
+        }
+        return { statusCode: 201, body: "", headers: {} };
+      });
+
+      const results = await broadcastWebPush({ title: "Mixed broadcast" }, tmpDir);
+
+      expect(results).toHaveLength(2);
+      expect(results).toEqual(
+        expect.arrayContaining([
+          {
+            ok: false,
+            subscriptionId: failed.subscriptionId,
+            statusCode,
+            error: "delivery failed",
+          },
+          { ok: true, subscriptionId: delivered.subscriptionId, statusCode: 201 },
+        ]),
+      );
+      const remaining = await listWebPushSubscriptions(tmpDir);
+      expect(remaining).toEqual(
+        statusCode === 410 ? [delivered] : expect.arrayContaining([failed, delivered]),
+      );
+      expect(remaining).toHaveLength(statusCode === 410 ? 1 : 2);
+    },
+  );
+
   it("does not delete a subscription re-registered during an expired send", async ({ signal }) => {
     const endpoint = "https://push.example.com/reregistered";
     await registerSubscription(endpoint);

@@ -52,7 +52,8 @@ const browserUrl = `${links.httpUrl}#bootstrapToken=one-time-bootstrap&gatewayUr
 
 beforeEach(async () => {
   await Promise.all([import("../agents/utility-model.js"), import("./onboard-agent-target.js")]);
-  vi.useFakeTimers();
+  // Advance handoff polling without draining process-owned directory maintenance.
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   vi.setSystemTime(0);
   for (const name of [
     "OPENCLAW_GATEWAY_TOKEN",

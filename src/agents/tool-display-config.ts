@@ -202,6 +202,7 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
     plugins: displayTool("puzzle", "Plugins", ["action", "pluginId", "packageName", "query"]),
     exec: displayTool("squareTerminal", "Exec", ["command"]),
     tool_call: displayTool("wrench", "Tool Call", []),
+    dispatch_action: displayTool("wrench", "Tool Call", []),
     tool_call_update: displayTool("wrench", "Tool Call", []),
     session_status: displayTool("barChart", "Session Status", ["sessionKey", "model"]),
     github_publish: displayTool("github", "GitHub Publish", ["title"]),

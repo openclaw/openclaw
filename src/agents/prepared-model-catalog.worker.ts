@@ -32,6 +32,7 @@ import {
 import { normalizeAgentId } from "../routing/session-key.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
+import { captureAuthProfileCredentialCommits } from "../state/user-model-account-authority.js";
 import {
   resolveAgentCredentialMapFromStore,
   resolveUsableAgentCredentialModes,
@@ -67,8 +68,8 @@ import type { PreparedModelCatalogWorkerData } from "./prepared-model-catalog-wo
 import type {
   PreparedModelCatalogWorkerInput,
   PreparedModelCatalogWorkerTask,
+  PreparedModelWorkerOutcome,
   PreparedModelWorkerRequest,
-  PreparedModelWorkerResult,
 } from "./prepared-model-catalog-worker.types.js";
 import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
 import {
@@ -219,7 +220,7 @@ async function runCatalogRequest(
   work: AsyncWorkScope,
   prepareGeneration: () => Promise<WorkerGeneration>,
   beginDiscovery: () => Promise<void>,
-): Promise<PreparedModelWorkerResult> {
+): Promise<PreparedModelWorkerOutcome> {
   const directoryOwner = value.input.agentId
     ? { agentId: value.input.agentId, agentDir: value.input.agentDir, env: value.input.env }
     : undefined;
@@ -501,7 +502,7 @@ async function runCatalogRequest(
       ...(facts.modelCatalog.staticEntries ?? []).map((entry) => entry.provider),
       ...Object.values(authStore.profiles).map((profile) => profile.provider),
     ];
-    const result: PreparedModelWorkerResult = {
+    const result: PreparedModelWorkerOutcome = {
       status: "ok",
       kind: "catalog",
       generationFingerprint,
@@ -612,70 +613,74 @@ if (parentPort) {
       withPluginSourceCaptureDirectory(
         data.sourceCaptureDirectory,
         async () => {
-          const workspaceDir =
-            value.pluginMetadataSnapshot.workspaceDir ?? value.input.workspaceDir;
-          let previous = contexts.get(workspaceDir);
-          const fingerprint = fingerprintPreparedModelCatalogPluginContext(value);
-          let attempted: WorkerGeneration | undefined;
-          let replacing = false;
-          try {
-            const work = new AsyncWorkScope();
-            const result = await withWorkerAuthProfileWrites(value.input.env, work, () =>
-              withClawInstallSchemaVersionFacts(request.clawInstallSchemaVersions, () =>
-                // Never select a Codex binary here; report the parent's decision.
-                withHandedOffCodexClientVersion(request.codexClientVersion, () =>
-                  work.run(() =>
-                    runCatalogRequest(
-                      value,
-                      request,
-                      work,
-                      async () => {
-                        if (previous?.fingerprint === fingerprint) {
-                          return previous.prepared;
-                        }
-                        replacing = true;
-                        return (attempted = await prepareWorkerGeneration(value));
-                      },
-                      async () => {
-                        // Admission can outlast a refresh on slow filesystems; only completed
-                        // generation preparation starts the provider-discovery deadline.
-                        stopProgress();
-                        const response = await channel?.request(null);
-                        response?.consumed();
-                        if (response && response.input !== true) {
-                          throw new Error(
-                            "prepared model catalog request retired before discovery",
-                          );
-                        }
-                      },
+          const { result: outcome, receipts: authCredentials } =
+            await captureAuthProfileCredentialCommits(async () => {
+              const workspaceDir =
+                value.pluginMetadataSnapshot.workspaceDir ?? value.input.workspaceDir;
+              let previous = contexts.get(workspaceDir);
+              const fingerprint = fingerprintPreparedModelCatalogPluginContext(value);
+              let attempted: WorkerGeneration | undefined;
+              let replacing = false;
+              try {
+                const work = new AsyncWorkScope();
+                const result = await withWorkerAuthProfileWrites(value.input.env, work, () =>
+                  withClawInstallSchemaVersionFacts(request.clawInstallSchemaVersions, () =>
+                    // Never select a Codex binary here; report the parent's decision.
+                    withHandedOffCodexClientVersion(request.codexClientVersion, () =>
+                      work.run(() =>
+                        runCatalogRequest(
+                          value,
+                          request,
+                          work,
+                          async () => {
+                            if (previous?.fingerprint === fingerprint) {
+                              return previous.prepared;
+                            }
+                            replacing = true;
+                            return (attempted = await prepareWorkerGeneration(value));
+                          },
+                          async () => {
+                            // Admission can outlast a refresh on slow filesystems; only completed
+                            // generation preparation starts the provider-discovery deadline.
+                            stopProgress();
+                            const response = await channel?.request(null);
+                            response?.consumed();
+                            if (response && response.input !== true) {
+                              throw new Error(
+                                "prepared model catalog request retired before discovery",
+                              );
+                            }
+                          },
+                        ),
+                      ),
                     ),
                   ),
-                ),
-              ),
-            );
-            if (attempted && result.status === "ok") {
-              contexts.set(workspaceDir, { fingerprint, prepared: attempted });
-              attempted = undefined;
-              replacing = false;
-              // Acquire the replacement before releasing shared source registrations.
-              await previous?.prepared.release();
-              // Registry custody can retain this request's async context until retirement.
-              // Drop the settled predecessor instead of retaining its callbacks through that scope.
-              previous = undefined;
-            }
-            return result;
-          } finally {
-            try {
-              if (replacing) {
-                // Registration can replace module-level API handles before a refresh fails.
-                // Re-register the requested config next time instead of reusing that context.
-                contexts.delete(workspaceDir);
-                await previous?.prepared.release();
+                );
+                if (attempted && result.status === "ok") {
+                  contexts.set(workspaceDir, { fingerprint, prepared: attempted });
+                  attempted = undefined;
+                  replacing = false;
+                  // Acquire the replacement before releasing shared source registrations.
+                  await previous?.prepared.release();
+                  // Registry custody can retain this request's async context until retirement.
+                  // Drop the settled predecessor instead of retaining its callbacks through that scope.
+                  previous = undefined;
+                }
+                return result;
+              } finally {
+                try {
+                  if (replacing) {
+                    // Registration can replace module-level API handles before a refresh fails.
+                    // Re-register the requested config next time instead of reusing that context.
+                    contexts.delete(workspaceDir);
+                    await previous?.prepared.release();
+                  }
+                } finally {
+                  await attempted?.release();
+                }
               }
-            } finally {
-              await attempted?.release();
-            }
-          }
+            });
+          return { ...outcome, authCredentials };
         },
         data.sourceCaptureManagedRoot,
       ),

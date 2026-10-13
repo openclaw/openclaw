@@ -152,17 +152,15 @@ class WorkerReefTrustStore {
   async beginRemoval(peer: string, assertOwnerCurrent?: () => void): Promise<() => Promise<void>> {
     const key = this.#key(peer);
     const state = this.operationState;
-    let phase: "revoking" | "ready" | "settling" | "settled" = "revoking";
+    let admitted = false;
     const operation = state.peers.createOperation!<ReefTrustStateOperations>(
       [state.peers, state.deliveries],
       operationHandler,
       {
         assertCurrent: () => {
-          if (phase === "revoking") {
+          if (!admitted) {
             state.assertCurrent();
             assertOwnerCurrent?.();
-          } else if (phase !== "settling") {
-            throw new Error("Reef removal settlement is not active");
           }
         },
       },
@@ -170,17 +168,14 @@ class WorkerReefTrustStore {
     const revoke = () =>
       operation.execute({ type: "remove", input: { key } }, { writeStores: [0] });
     await revoke();
-    phase = "ready";
+    admitted = true;
+    let pending = true;
     return async () => {
-      if (phase !== "ready") {
+      if (!pending) {
         throw new Error("Reef removal settlement was already consumed");
       }
-      phase = "settling";
-      try {
-        await revoke();
-      } finally {
-        phase = "settled";
-      }
+      pending = false;
+      await revoke();
     };
   }
 
@@ -240,17 +235,15 @@ class WorkerReefTrustStore {
     const requestId = randomUUID();
     const key = this.#key(peer);
     const state = this.operationState;
-    let phase: "recording" | "ready" | "settling" | "closed" = "recording";
+    let admitted = false;
     const operation = state.peers.createOperation!<ReefTrustStateOperations>(
       [state.peers, state.deliveries],
       operationHandler,
       {
         assertCurrent: () => {
-          if (phase === "recording") {
+          if (!admitted) {
             state.assertCurrent();
             assertOwnerCurrent?.();
-          } else if (phase !== "settling") {
-            throw new Error("Reef request settlement is not active");
           }
         },
       },
@@ -259,17 +252,14 @@ class WorkerReefTrustStore {
       { type: "beginRequest", input: { key, requestId, requestedAt } },
       { writeStores: [0] },
     );
-    phase = "ready";
+    admitted = true;
+    let pending = true;
     const consume = async <T>(run: () => Promise<T>): Promise<T> => {
-      if (phase !== "ready") {
+      if (!pending) {
         throw new Error("Reef request settlement was already consumed");
       }
-      phase = "settling";
-      try {
-        return await run();
-      } finally {
-        phase = "closed";
-      }
+      pending = false;
+      return run();
     };
     return {
       requestId,
@@ -291,7 +281,7 @@ class WorkerReefTrustStore {
           );
         }),
       close: () => {
-        phase = "closed";
+        pending = false;
       },
     };
   }

@@ -133,7 +133,10 @@ describe("hourly main CI admission", () => {
     const context = {
       ...base,
       eventName: "push",
-      steps: { diff_base: { outputs: { sha: baseSha } } },
+      steps: {
+        diff_base: { outputs: { sha: baseSha } },
+        guard_setup: { outputs: {}, outcome: "success" },
+      },
     } as const;
     expect(evaluate(guards.if, context)).toBe(true);
     expect(evaluate(guards.env.BASE_SHA, context)).toBe(baseSha);

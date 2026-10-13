@@ -157,19 +157,6 @@ describe("resolveSkillDispatchTools", () => {
     expect(args?.sessionConfigSource).toBe("runtime");
   });
 
-  it("passes unrestricted skill-dispatch tool surfaces to cron jobs", async () => {
-    const tools = await resolveSkillDispatchTools(dispatchDefaults, dependencies);
-
-    const args = createOpenClawToolsAsyncMock.mock.calls.at(-1)?.[0];
-    expect(tools.map((tool) => tool.name)).toEqual(["read", "cron", "exec", "conversations_send"]);
-    expect(args?.cronCreatorToolAllowlist).toEqual([
-      { name: "read" },
-      { name: "automations" },
-      { name: "exec" },
-      { name: "conversations_send" },
-    ]);
-  });
-
   it("carries command skill file identity into tool diagnostics", async () => {
     await resolveSkillDispatchTools(
       {

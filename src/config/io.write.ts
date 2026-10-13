@@ -5,7 +5,6 @@ import { err, ok } from "@openclaw/normalization-core/result";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { isVerbose } from "../global-state.js";
 import {
-  readConfigWritePendingMigrations,
   withDeferredPluginConfigRollback,
   withDeferredPluginMigrationsCurrent,
 } from "../infra/deferred-plugin-migrations.js";
@@ -34,6 +33,7 @@ import {
 } from "./config-path-mutation.js";
 import { assertConfigWriteAllowedInCurrentMode } from "./config-write-guard.js";
 import {
+  readConfigWriteMigrationFacts,
   preserveDeferredPluginMigrationConfig,
   setDeferredPluginMigrationConfigFacts,
 } from "./deferred-plugin-migration-config.js";
@@ -112,7 +112,7 @@ export async function writeConfigFileFromContext(
   writeOptions: ConfigWriteOptions,
   readSnapshot: () => Promise<ReadConfigFileSnapshotInternalResult>,
 ): Promise<InternalConfigWriteResult> {
-  const { deps, configPath } = context;
+  const { deps, configPath, options: ioOptions } = context;
   let options = writeOptions;
   const sourceGuard = captureConfigWriteLockGuard(configPath);
   const doctorAuthority = getUpdateDoctorConfigWriteAuthority(configPath);
@@ -140,11 +140,11 @@ export async function writeConfigFileFromContext(
       }
     : await readSnapshot();
   const snapshot = snapshotRead.snapshot;
-  const deferredPluginMigrations = readConfigWritePendingMigrations(configPath, deps.env);
+  const pendingMigrations = await readConfigWriteMigrationFacts(snapshot, deps.env, ioOptions);
   const configForWrite = preserveDeferredPluginMigrationConfig({
     sourceConfig: snapshot.sourceConfig,
     nextConfig: cfg,
-    pending: deferredPluginMigrations,
+    pending: pendingMigrations ?? [],
     writeOptions: options,
   });
   if (doctorAuthority) {
@@ -267,7 +267,7 @@ export async function writeConfigFileFromContext(
       pluginValidation: options.skipPluginValidation ? "skip" : "full",
       semanticValidation: "strict",
       preservedLegacyRootKeys: options.preservedLegacyRootKeys,
-      deferredPluginMigrations,
+      deferredPluginMigrations: pendingMigrations,
     });
     if (!result.ok) {
       throw createConfigValidationFailedError(result.issues);
@@ -314,7 +314,7 @@ export async function writeConfigFileFromContext(
     preserveDeferredPluginMigrationConfig({
       sourceConfig: snapshot.parsed,
       nextConfig: applyUnsetPathsForWrite(tildeRestoredOutputConfig, unsetPaths),
-      pending: deferredPluginMigrations,
+      pending: pendingMigrations ?? [],
       writeOptions: { unsetPaths: options.unsetPaths },
     }),
     options.lastTouchedVersionOverride,
@@ -546,7 +546,7 @@ export async function writeConfigFileFromContext(
     await assertAgentDeletionTargetsUnchanged(snapshot.config, sourceConfigForPreflight, deps.env);
     await options.beforeCommit?.();
     const result = withDeferredPluginMigrationsCurrent(
-      { env: deps.env, configPath, expectedPending: deferredPluginMigrations },
+      { env: deps.env, configPath, expectedPending: pendingMigrations },
       () => {
         const published = preparedFile.publish();
         publication.phase = "published";
@@ -628,7 +628,7 @@ export async function writeConfigFileFromContext(
         "Cleared agents.defaults.sessionStore.agentId because session.store changed. Set that owner path explicitly to assign the destination store's owner.",
       );
     }
-    setDeferredPluginMigrationConfigFacts(sourceConfigForPreflight, deferredPluginMigrations);
+    setDeferredPluginMigrationConfigFacts(sourceConfigForPreflight, pendingMigrations);
     return {
       persistedHash: nextHash,
       persistedConfig: stampedOutputConfig,

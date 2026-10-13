@@ -743,7 +743,12 @@ describe("session activity people filter", () => {
       onFiltersChange,
     });
 
+    const trigger = container.querySelector<HTMLButtonElement>(".activity-feed__people-trigger");
+    trigger?.click();
+    expect(trigger?.getAttribute("aria-expanded")).toBe("true");
+    expect(document.activeElement).toBe(container.querySelector(".activity-feed__people-popover"));
     container.querySelector<HTMLButtonElement>('[data-activity-person=""]')?.click();
+    expect(trigger?.getAttribute("aria-expanded")).toBe("false");
 
     expect(onFiltersChange).toHaveBeenCalledWith({
       personId: null,

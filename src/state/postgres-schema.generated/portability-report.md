@@ -13,8 +13,8 @@
 | Database | Object        | Total | Translated | Reported |
 | -------- | ------------- | ----: | ---------: | -------: |
 | state    | table         |   134 |        134 |        0 |
-| state    | column        |  1388 |       1386 |        2 |
-| state    | index         |   292 |        290 |        2 |
+| state    | column        |  1394 |       1392 |        2 |
+| state    | index         |   296 |        296 |        0 |
 | state    | foreignKey    |    32 |         32 |        0 |
 | state    | check         |   293 |        293 |        0 |
 | state    | trigger       |     0 |          0 |        0 |
@@ -45,8 +45,6 @@
 - outbound_message_progress.sequence: rowid alias becomes identity; AUTOINCREMENT/sqlite_sequence never-reuse semantics differ: PostgreSQL sequences are nontransactional and explicit values do not advance them.
 - session_repository_workspaces.run_setup_script: 0/1 boolean candidate retained as bigint.
 - session_state_events.sequence: rowid alias becomes identity; AUTOINCREMENT/sqlite_sequence never-reuse semantics differ: PostgreSQL sequences are nontransactional and explicit values do not advance them.
-- index `acp_sessions.idx_acp_sessions_resume_acpx`: v22 promotion follow-up PR4b (#169254): derive the ACP resume value once and index its promoted column; pendingPromotion. Source: `CREATE INDEX idx_acp_sessions_resume_acpx   ON acp_sessions(trim(json_extract(CASE WHEN json_valid(identity_json) THEN identity_json END, '$.acpxSessionId'),     char(9,10,11,12,13,32,160,5760,8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,8202,8232,8233,8239,8287,12288,65279)))`
-- index `acp_sessions.idx_acp_sessions_resume_agent`: v22 promotion follow-up PR4b (#169254): derive the ACP resume value once and index its promoted column; pendingPromotion. Source: `CREATE INDEX idx_acp_sessions_resume_agent   ON acp_sessions(trim(json_extract(CASE WHEN json_valid(identity_json) THEN identity_json END, '$.agentSessionId'),     char(9,10,11,12,13,32,160,5760,8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,8202,8232,8233,8239,8287,12288,65279)))`
 - internalTable `sqlite_sequence.sqlite_sequence`: SQLite-owned storage is not translated. Source: `CREATE TABLE sqlite_sequence(name,seq)`
 - column `sqlite_sequence.name`: Parent table omitted. Source: ``
 - column `sqlite_sequence.seq`: Parent table omitted. Source: ``

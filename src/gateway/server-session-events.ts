@@ -527,6 +527,11 @@ async function handleTranscriptUpdateBroadcast(
               ...(update.runId ? { runId: update.runId } : {}),
               sessionSnapshot,
             });
+      // Do not invalidate history for a recoverable attempt: a refetch could
+      // publish its durable error row before the owning run settles.
+      if (projected?.deferredAssistantError) {
+        return;
+      }
       const historyReset = message === undefined || projected?.requiresHistoryReset;
       if (!historyReset && projected?.payload) {
         params.broadcastToConnIds("session.message", projected.payload, connIds, broadcastOptions);

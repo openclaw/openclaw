@@ -1,5 +1,9 @@
 import { QUEUED_USER_MESSAGE_MARKER } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
 import type { SessionSystemPromptReport } from "../../../config/sessions/types.js";
 import * as execApprovals from "../../../infra/exec-approvals.js";
 import { withMockedPlatform } from "../../../test-utils/vitest-spies.js";
@@ -102,9 +106,11 @@ function createInput(options?: {
 }) {
   const replaceSessionMessages = vi.fn();
   const report = options?.report ?? ({} as SessionSystemPromptReport);
+  const attempt = options?.attempt ?? createAttempt({ trigger: "user" });
+  setRuntimeConfigSnapshot(attempt.config ?? {});
   return {
     input: {
-      attempt: options?.attempt ?? createAttempt({ trigger: "user" }),
+      attempt,
       capabilityToolNames: new Set<string>(),
       includeBoundaryTimestamp: false,
       isRawModelRun: false,
@@ -125,6 +131,7 @@ function createInput(options?: {
 }
 
 beforeEach(async () => {
+  setRuntimeConfigSnapshot({ agents: { defaults: { userTimezone: "UTC" } } });
   vi.clearAllMocks();
   vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-09T12:00:00Z"));
   vi.spyOn(mediaTaskStatus, "buildMediaTaskRuntimeContext").mockResolvedValue(undefined);
@@ -145,6 +152,7 @@ afterEach(async () => {
   deleteSession("exec-a");
   deleteSession("exec-z");
   await resetSubagentRegistryForTests({ persist: false });
+  clearRuntimeConfigSnapshot();
 });
 
 describe("prepareEmbeddedAttemptPromptContext", () => {

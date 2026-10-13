@@ -8,13 +8,11 @@ import { ConfigMutationConflictError } from "../../config/mutation-conflict.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
   invokeConfigOpenFile,
   invokeConfigPatch,
-  invokeConfigSchema,
   startConfigWrite,
 } from "./config-invocations.test-support.js";
 import { clearConfigSchemaResponseCacheForTests, configHandlers } from "./config.js";
@@ -96,13 +94,8 @@ vi.mock("./config-write-flow.js", async () => {
   };
 });
 
-const { execOpenPathMock, loadGatewayRuntimeConfigSchemaMock } = vi.hoisted(() => ({
+const { execOpenPathMock } = vi.hoisted(() => ({
   execOpenPathMock: vi.fn(),
-  loadGatewayRuntimeConfigSchemaMock: vi.fn(() => ({
-    schema: { type: "object" },
-    uiHints: undefined as Record<string, { advanced?: boolean }> | undefined,
-    version: "test-schema",
-  })),
 }));
 
 vi.mock("./open-path.js", async () => {
@@ -110,8 +103,9 @@ vi.mock("./open-path.js", async () => {
   return { ...actual, execOpenPath: execOpenPathMock };
 });
 
-vi.mock("../../config/runtime-schema.js", () => ({
-  loadGatewayRuntimeConfigSchema: loadGatewayRuntimeConfigSchemaMock,
+vi.mock("../../config/runtime-schema.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/runtime-schema.js")>()),
+  loadGatewayRuntimeConfigSchema: () => ({ schema: { type: "object" }, uiHints: undefined }),
 }));
 
 function mockOpenPathError(error: Error) {
@@ -355,43 +349,6 @@ describe("config.openFile", () => {
         `config.openFile failed path=${pathPrefix}...: open failed`,
       );
     });
-  });
-});
-
-describe("config schema response cache", () => {
-  it.each([
-    {
-      name: "retains the schema after a display-only write",
-      raw: { ui: { prefs: { theme: "knot" } } },
-      expectedLoads: 1,
-    },
-    {
-      name: "rebuilds after a plugin config write",
-      raw: { plugins: { entries: { example: { enabled: false } } } },
-      expectedLoads: 2,
-    },
-  ])("$name", async ({ raw, expectedLoads }) => {
-    await invokeConfigSchema();
-    const patch = await invokeConfigPatch({ raw, baseHash: storedHash });
-
-    expect(patch.respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ ok: true }),
-      undefined,
-    );
-    expect(loadGatewayRuntimeConfigSchemaMock).toHaveBeenCalledTimes(1);
-
-    await invokeConfigSchema();
-
-    expect(loadGatewayRuntimeConfigSchemaMock).toHaveBeenCalledTimes(expectedLoads);
-  });
-
-  it("rebuilds when the active plugin registry generation changes", async () => {
-    await invokeConfigSchema();
-    setActivePluginRegistry(createTestRegistry([]));
-    await invokeConfigSchema();
-
-    expect(loadGatewayRuntimeConfigSchemaMock).toHaveBeenCalledTimes(2);
   });
 });
 

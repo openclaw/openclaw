@@ -24,6 +24,7 @@ import {
   getOpenClawAgentDatabaseIfOpen,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -71,6 +72,8 @@ async function withLifetime(
   await withOpenClawTestState({ label: "incognito-lifetime" }, async (state) => {
     await state.writeConfig(config);
     setRuntimeConfigSnapshot(config);
+    // Incognito deletion fences reuse the shared-state handle retained by Gateway startup.
+    openOpenClawStateDatabase();
     const time = createGatewaySchedulerClock(Date.now());
     vi.spyOn(Date, "now").mockImplementation(time.clock.now);
     const scheduler = createTestGatewayScheduler(time.clock);

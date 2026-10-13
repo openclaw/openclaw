@@ -100,9 +100,7 @@ export async function prepareGatewaySessionAccessAuthority(request: {
     isIncognitoSessionKey(sessionKey) ||
     (isRecord(input) && input.agentId !== undefined && input.agentId !== parsed.agentId)
   ) {
-    denied(
-      "This operation requires a canonical, non-incognito sessionKey and its matching agentId.",
-    );
+    denied("This operation requires a full, non-incognito sessionKey and its matching agentId.");
   }
   // Capture ingress facts before preparation yields. A newly selected profile or renewed grant
   // cannot authorize an invocation admitted under a different source.

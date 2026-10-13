@@ -9,8 +9,10 @@ import {
 import { captureRuntimeConfigAsyncReader, setRuntimeConfigSnapshot } from "../../config/config.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import * as sessionEntryReader from "../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { persistGatewaySessionLifecycleEvent } from "../../gateway/session-lifecycle-state.js";
+import * as sessionStoreWorker from "../../gateway/session-utils-store-worker.js";
 import {
   getAgentEventLifecycleGeneration,
   rotateAgentEventLifecycleGeneration,
@@ -24,6 +26,7 @@ import {
   retainQueuedAgentRunContext,
 } from "../../infra/agent-run-registry.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayContextResolver,
@@ -56,44 +59,119 @@ import {
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-restart-owner-");
 
-it("reports why supplied shutdown candidates could not be marked", async () => {
+it("keeps retained subagent interruptions out of main-session startup worker admission", async () => {
   const stateDir = sessionDirs.make();
   const storePath = path.join(stateDir, "sessions.json");
   const sessionKey = "agent:main:main";
   await replaceSessionEntry(
     { storePath, sessionKey },
-    {
-      sessionId: "main-session",
-      updatedAt: 1,
-      lifecycleRunId: "main-run",
-    },
+    { sessionId: "main-session", updatedAt: 1, abortedLastRun: true },
   );
-  const warn = vi.spyOn(mainSessionRecoveryLog, "warn");
+  const summaries = await sessionEntryReader.readSessionEntrySummariesInWorker({ storePath });
+  const retained = Array.from({ length: 4_500 }, (_, index) => ({
+    sessionKey: `agent:main:subagent:retained-${index}`,
+    entry: { sessionId: `retained-${index}`, updatedAt: 1, abortedLastRun: true },
+  }));
+  const read = vi
+    .spyOn(sessionEntryReader, "readSessionEntrySummariesInWorker")
+    .mockResolvedValue([...retained, ...summaries]);
+  const resolveTarget = sessionStoreWorker.resolveGatewaySessionStoreTargetInWorker;
+  const lookup = vi
+    .spyOn(sessionStoreWorker, "resolveGatewaySessionStoreTargetInWorker")
+    .mockImplementation((params) => {
+      if (params.key !== sessionKey) {
+        return Promise.reject(new Error("worker task capacity reached"));
+      }
+      return resolveTarget(params);
+    });
+  const warn = vi.spyOn(mainSessionRecoveryLog, "warn").mockImplementation(() => {});
   try {
     expect(
-      await markRestartAbortedMainSessions({
+      await markStartupOrphanedMainSessionsForRecovery({
         cfg: { session: { store: storePath } },
         stateDir,
-        resolveGatewayContext: () => undefined,
-        activeRuns: [
-          {
-            sessionKey,
-            sessionId: "main-session",
-            runId: "main-run",
-            lifecycleGeneration: getAgentEventLifecycleGeneration(),
-          },
-        ],
-        isActiveRun: () => false,
       }),
-    ).toEqual({ marked: 0, skipped: 0 });
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("activeRuns=1 skipped=0 skipReason=owner_changed"),
-    );
-    expect(loadSessionEntry({ storePath, sessionKey })?.mainRestartRecovery).toBeUndefined();
+    ).toEqual({ marked: 1, skipped: 0 });
+    expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
+      abortedLastRun: true,
+      mainRestartRecovery: { chargedAttempts: 0 },
+    });
+    expect(lookup.mock.calls.length).toBe(1);
+    expect(lookup.mock.calls[0]?.[0].key).toBe(sessionKey);
   } finally {
+    read.mockRestore();
+    lookup.mockRestore();
     warn.mockRestore();
   }
 });
+
+it.each([false, true])(
+  "reports skipped shutdown sessions when another is marked: %s",
+  async (markOther) => {
+    const stateDir = sessionDirs.make();
+    const storePath = path.join(stateDir, "sessions.json");
+    const sessionKey = "agent:main:main";
+    await replaceSessionEntry(
+      { storePath, sessionKey },
+      {
+        sessionId: "main-session",
+        updatedAt: 1,
+        lifecycleRunId: "main-run",
+      },
+    );
+    const otherKey = "agent:main:other";
+    if (markOther) {
+      await replaceSessionEntry(
+        { storePath, sessionKey: otherKey },
+        { sessionId: "other-session", updatedAt: 1, lifecycleRunId: "other-run" },
+      );
+    }
+    const warn = vi.spyOn(mainSessionRecoveryLog, "warn");
+    try {
+      expect(
+        await markRestartAbortedMainSessions({
+          cfg: { session: { store: storePath } },
+          stateDir,
+          resolveGatewayContext: () => undefined,
+          activeRuns: [
+            {
+              sessionKey,
+              sessionId: "main-session",
+              runId: "main-run",
+              lifecycleGeneration: getAgentEventLifecycleGeneration(),
+            },
+            {
+              sessionKey: "agent:main:missing",
+              sessionId: "missing-session",
+              runId: "missing-run",
+              lifecycleGeneration: getAgentEventLifecycleGeneration(),
+            },
+            ...(markOther
+              ? [
+                  {
+                    sessionKey: otherKey,
+                    sessionId: "other-session",
+                    runId: "other-run",
+                    lifecycleGeneration: getAgentEventLifecycleGeneration(),
+                  },
+                ]
+              : []),
+          ],
+          isActiveRun: (run) => run.runId !== "main-run",
+        }),
+      ).toEqual({ marked: markOther ? 1 : 0, skipped: 0 });
+      expect(warn).toHaveBeenCalledWith(
+        'skipped restart recovery session: {"sessionKey":"agent:main:main","reason":"owner_changed"}',
+      );
+      expect(warn).toHaveBeenCalledWith(
+        'skipped restart recovery session: {"sessionKey":"agent:main:missing","reason":"no_matching_session"}',
+      );
+      expect(loadSessionEntry({ storePath, sessionKey })?.mainRestartRecovery).toBeUndefined();
+    } finally {
+      warn.mockRestore();
+    }
+  },
+);
 
 it("keeps healthy stores recoverable when an earlier startup mark fails", async () => {
   await withOpenClawTestState({ label: "recovery-mark-failure" }, async (state) => {
@@ -309,6 +387,7 @@ it("marks healthy startup orphans while leaving a refused secondary database unt
       "PRAGMA user_version = 16; UPDATE schema_meta SET agent_id = 'main', schema_version = 16;",
     );
     copy.close();
+    revokeSqliteDatabaseAdmissionsForPath(copyPath);
     await assertOpenClawDatabasesReady({
       config: cfg,
       env: state.env,

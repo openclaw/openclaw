@@ -81,11 +81,13 @@ export function createCodexAttemptLifecycleController(
       ) {
         return;
       }
-      const authored = resolveAuthoredResponse();
+      const deliveredFinal =
+        state.pendingTerminalDynamicToolRelease?.response.finalSourceReplyDelivered === true;
+      const authored = deliveredFinal ? undefined : resolveAuthoredResponse();
       if (
         !authored &&
-        state.pendingTerminalDynamicToolRelease?.response.success === true &&
-        !state.currentTurnHadNonTerminalDynamicToolResult &&
+        (deliveredFinal || state.pendingTerminalDynamicToolRelease?.response.success === true) &&
+        (deliveredFinal || !state.currentTurnHadNonTerminalDynamicToolResult) &&
         state.activeAppServerTurnRequests === 0 &&
         pendingOpenClawDynamicToolCompletionIds.size === 0
       ) {
@@ -100,7 +102,7 @@ export function createCodexAttemptLifecycleController(
       ) {
         return;
       }
-      if (!authored && state.currentTurnHadNonTerminalDynamicToolResult) {
+      if (!authored && !deliveredFinal && state.currentTurnHadNonTerminalDynamicToolResult) {
         state.pendingTerminalDynamicToolRelease = undefined;
         state.currentTurnHadNonTerminalDynamicToolResult = false;
         return;
@@ -110,7 +112,7 @@ export function createCodexAttemptLifecycleController(
         !value ||
         state.completed ||
         runAbortController.signal.aborted ||
-        !value.response.success
+        (!value.response.success && !deliveredFinal)
       ) {
         return;
       }
@@ -151,18 +153,26 @@ export function createCodexAttemptLifecycleController(
     if (value.response.toolAuthoredSourceReply) {
       // Once this raw batch has an authored candidate, only whole-batch admission
       // can finish it. An ordinary sibling cannot leave a fallback that drops it.
-      if (modelCall) {
+      if (
+        modelCall &&
+        !state.pendingTerminalDynamicToolRelease?.response.finalSourceReplyDelivered
+      ) {
         state.pendingTerminalDynamicToolRelease = undefined;
       }
       // A nested or unobserved call cannot borrow the outer model call's authority.
       scheduleTerminalDynamicToolReleaseCheck();
       return;
     }
-    if (value.response.terminate === true && value.response.success) {
+    if (
+      value.response.terminate === true &&
+      (value.response.success || value.response.finalSourceReplyDelivered)
+    ) {
       if (
-        ![...(modelResponse?.calls.values() ?? [])].some(
-          (call) => call.result?.response.toolAuthoredSourceReply,
-        )
+        value.response.finalSourceReplyDelivered ||
+        (!state.pendingTerminalDynamicToolRelease?.response.finalSourceReplyDelivered &&
+          ![...(modelResponse?.calls.values() ?? [])].some(
+            (call) => call.result?.response.toolAuthoredSourceReply,
+          ))
       ) {
         state.pendingTerminalDynamicToolRelease = value;
       }
@@ -171,7 +181,9 @@ export function createCodexAttemptLifecycleController(
       scheduleTerminalDynamicToolReleaseCheck();
     } else {
       state.currentTurnHadNonTerminalDynamicToolResult = true;
-      state.pendingTerminalDynamicToolRelease = undefined;
+      if (!state.pendingTerminalDynamicToolRelease?.response.finalSourceReplyDelivered) {
+        state.pendingTerminalDynamicToolRelease = undefined;
+      }
     }
   };
   const recordModelResponseNotification = (notification: CodexServerNotification) => {

@@ -197,7 +197,7 @@ export function resolveChangedCiTsgoInputs(
   if (
     compilerPaths.length === 0 ||
     !compilerPaths.every(isChangedCiTsgoInput) ||
-    (exists && !paths.every(exists))
+    (exists && !compilerPaths.every(exists))
   ) {
     return undefined;
   }

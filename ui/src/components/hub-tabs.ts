@@ -1,8 +1,76 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { AsyncDirective } from "lit/async-directive.js";
+import { directive, type ElementPart } from "lit/directive.js";
 import { ref } from "lit/directives/ref.js";
+import { createTabsController, type TabsOptions } from "../lib/tabs-controller.ts";
+import { rememberHubTabFocus, reclaimHubTabFocus } from "./hub-tabs-focus.ts";
 import "../styles/hub-tabs.css";
-import { reclaimHubTabFocus, rememberHubTabFocus } from "./hub-tabs-focus.ts";
-import { syncTabGroupLabel } from "./web-awesome-tabs.ts";
+import "../styles/tabs.css";
+import { bindShadowStyles } from "./solid/shadow-styles.ts";
+import hubStyles from "../styles/hub-tabs.css?inline";
+import tabsStyles from "../styles/tabs.css?inline";
+
+/** The remaining Lit callers share the native controller with Solid tabs. */
+class TabsDirective extends AsyncDirective {
+  #element?: HTMLElement;
+  #options: TabsOptions = {};
+  #controller?: ReturnType<typeof createTabsController>;
+  #generation = 0;
+  #styleTexts: readonly string[] = [tabsStyles];
+  #styles?: ReturnType<typeof bindShadowStyles>;
+
+  render(_options: TabsOptions, _styles?: readonly string[]) {
+    return nothing;
+  }
+
+  override update(part: ElementPart, [options, styles = []]: [TabsOptions, (readonly string[])?]) {
+    // SAFETY: The directive attaches to the native div tablist rendered below.
+    this.#element = part.element as HTMLElement;
+    this.#options = options;
+    const styleTexts = [tabsStyles, ...styles];
+    if (
+      styleTexts.length !== this.#styleTexts.length ||
+      styleTexts.some((css, index) => css !== this.#styleTexts[index])
+    ) {
+      this.#styles?.dispose();
+      this.#styles = undefined;
+      this.#styleTexts = styleTexts;
+    }
+    this.#connect();
+    return nothing;
+  }
+
+  #connect() {
+    if (!this.isConnected || !this.#element) {
+      return;
+    }
+    this.#controller ??= createTabsController(this.#element, () => this.#options);
+    const generation = ++this.#generation;
+    queueMicrotask(() => {
+      if (generation === this.#generation && this.isConnected) {
+        if (this.#element) {
+          this.#styles ??= bindShadowStyles(this.#element, this.#styleTexts);
+          this.#styles.sync();
+        }
+        this.#controller?.sync();
+      }
+    });
+  }
+
+  protected override disconnected() {
+    this.#generation += 1;
+    this.#controller?.dispose();
+    this.#controller = undefined;
+    this.#styles?.dispose();
+    this.#styles = undefined;
+  }
+
+  protected override reconnected() {
+    this.#connect();
+  }
+}
+
+const nativeTabs = directive(TabsDirective);
 
 type HubTabOption<T extends string> = {
   value: T;
@@ -29,63 +97,52 @@ type HubTabsProps<T extends string> = {
   onActivate?: (element: HTMLElement) => void;
 };
 
-// Web Awesome selects its first tab when `active` is empty. A truthy value that
-// matches no panel preserves an intentional no-selection state.
-const NO_ACTIVE_TAB = "__openclaw-hub-tabs-no-active__";
 export function renderHubTabs<T extends string>(props: HubTabsProps<T>): TemplateResult {
   const variant = props.variant ?? "primary";
   const requestedActive = props.requestedActive ?? props.active;
-  const className = `hub-tabs hub-tabs--${variant} ${props.id}-hub-tabs${props.carapace ? " oc-segmented" : ""}${props.className ? ` ${props.className}` : ""}`;
+  const className = `oc-tabs hub-tabs hub-tabs--${variant} ${props.id}-hub-tabs${props.carapace ? " oc-segmented" : ""}${props.className ? ` ${props.className}` : ""}`;
   const fallbackFocusValue =
     props.active === null ? props.tabs.find((tab) => !tab.disabled)?.value : null;
   return html`
-    <wa-tab-group
+    <div
+      role="tablist"
       class=${className}
       aria-label=${props.ariaLabel}
-      .active=${props.active ?? NO_ACTIVE_TAB}
-      activation="manual"
-      without-scroll-controls
-      ${ref((element) => syncTabGroupLabel(element, props.ariaLabel))}
+      ${nativeTabs(
+        {
+          active: props.active,
+          activation: "manual",
+          onActivate: (value, element, event) => {
+            const tab = props.tabs.find((entry) => entry.value === value);
+            if (!tab || tab.value === requestedActive) {
+              return false;
+            }
+            if (event instanceof KeyboardEvent) {
+              rememberHubTabFocus(props.id, tab.value, element);
+            }
+            props.onSelect(tab.value);
+            props.onActivate?.(element);
+            return false;
+          },
+        },
+        [hubStyles],
+      )}
     >
       ${props.tabs.map((tab) => {
         const selected = props.active === tab.value;
-        const activate = (event: Event, keyboard = false) => {
-          const activeElement = event.currentTarget;
-          if (
-            !(activeElement instanceof HTMLElement) ||
-            tab.disabled ||
-            tab.value === requestedActive
-          ) {
-            return;
-          }
-          if (keyboard) {
-            event.preventDefault();
-            rememberHubTabFocus(props.id, tab.value, activeElement);
-          }
-          props.onSelect(tab.value);
-          props.onActivate?.(activeElement);
-        };
         return html`
-          <wa-tab
+          <button
+            type="button"
+            role="tab"
             id=${`${props.id}-tab-${tab.value}`}
-            panel=${tab.value}
+            data-tab-value=${tab.value}
             aria-controls=${props.panelId}
-            class="hub-tab ${props.carapace ? "oc-segmented-item" : ""}"
+            class="oc-tab hub-tab ${props.carapace ? "oc-segmented-item" : ""}"
             ?active=${selected}
             ?disabled=${tab.disabled}
             .tabIndex=${selected || tab.value === fallbackFocusValue ? 0 : -1}
             aria-selected=${selected ? "true" : "false"}
             data-test-id=${tab.testId ?? nothing}
-            @click=${(event: MouseEvent) => {
-              if (event.detail > 0 || event.isTrusted) {
-                activate(event);
-              }
-            }}
-            @keydown=${(event: KeyboardEvent) => {
-              if (!event.repeat && (event.key === "Enter" || event.key === " ")) {
-                activate(event, true);
-              }
-            }}
             ${selected ? ref((element) => reclaimHubTabFocus(props.id, tab.value, element)) : nothing}
           >
             ${tab.label}${
@@ -93,9 +150,9 @@ export function renderHubTabs<T extends string>(props: HubTabsProps<T>): Templat
                 ? nothing
                 : html`<span class="hub-tab__badge hub-tab__badge--count">${tab.count}</span>`
             }${tab.badge == null ? nothing : html`<span class="hub-tab__badge">${tab.badge}</span>`}
-          </wa-tab>
+          </button>
         `;
       })}
-    </wa-tab-group>
+    </div>
   `;
 }

@@ -9,6 +9,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   appendTranscriptEvent,
+  appendTranscriptMessage,
   patchSessionEntryCore,
   persistSessionTranscriptTurn,
   readActiveTranscriptEntryAnchor,
@@ -29,6 +30,7 @@ import {
 } from "../../../../src/state/openclaw-state-db.js";
 import {
   buildSessionEntry,
+  buildSessionEntries,
   matchesSessionEntryPrefixHash,
   type SessionFileEntry,
 } from "./session-files.js";
@@ -78,6 +80,86 @@ afterEach(async () => {
 });
 
 describe("SQLite session snapshots and reset content revision", () => {
+  it("keeps batched incremental exports current across sessions, appends and rewrites", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "incremental-export",
+      sessionKey: "agent:main:chat:incremental-export",
+      storePath: path.join(tmpDir, "agents", "main", "sessions", "sessions.json"),
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    const sibling = {
+      ...scope,
+      sessionId: "batch-sibling",
+      sessionKey: "agent:main:chat:batch-sibling",
+    };
+    await upsertSessionEntryCore(sibling, { sessionId: sibling.sessionId, updatedAt: 1 });
+    await appendTranscriptMessage(sibling, {
+      eventId: "sibling-question",
+      message: { role: "user", content: "A separate session preference." },
+    });
+    const first = {
+      type: "message",
+      id: "heartbeat",
+      message: {
+        role: "user",
+        content: "Internal poll.",
+        provenance: { kind: "internal_system", sourceTool: "heartbeat" },
+      },
+    };
+    expect(replaceTranscriptEventsSync(scope, [first])).toBe(true);
+    const fullExport = () =>
+      buildSessionEntry(scope.sessionKey, { ...scope, onTranscriptMessage() {} });
+    let expectedSibling = "User: A separate session preference.";
+    const workerExport = async () => {
+      const [entry, siblingEntry] = await buildSessionEntries([
+        { absPath: scope.sessionKey, options: scope },
+        { absPath: sibling.sessionKey, options: sibling },
+      ]);
+      expect(siblingEntry?.content).toBe(expectedSibling);
+      expect(siblingEntry).toEqual(
+        await buildSessionEntry(sibling.sessionKey, { ...sibling, onTranscriptMessage() {} }),
+      );
+      return entry ?? null;
+    };
+    expect(await workerExport()).toEqual(await fullExport());
+
+    await appendTranscriptMessage(scope, {
+      eventId: "heartbeat-answer",
+      message: { role: "assistant", content: "Excluded heartbeat continuation." },
+    });
+    await appendTranscriptMessage(scope, {
+      eventId: "question",
+      message: {
+        role: "user",
+        content: "A searchable new preference.",
+        __openclaw: { senderIsOwner: true },
+      },
+    });
+    const appended = requireSessionEntry(await workerExport());
+    expect(appended).toEqual(await fullExport());
+    expect(appended.content).toBe("User: A searchable new preference.");
+    expect(appended.lineMap).toEqual([3]);
+    expect(appended.lineProvenance[0]?.originClass).toBe("owner");
+    expect(await workerExport()).toEqual(appended);
+
+    await appendTranscriptMessage(sibling, {
+      eventId: "sibling-answer",
+      message: { role: "assistant", content: "The sibling's committed update." },
+    });
+    expectedSibling += "\nAssistant: The sibling's committed update.";
+
+    expect(
+      replaceTranscriptEventsSync(scope, [
+        { ...first, message: { role: "user", content: "Rewritten searchable preference." } },
+      ]),
+    ).toBe(true);
+    const rewritten = requireSessionEntry(await workerExport());
+    expect(rewritten).toEqual(await fullExport());
+    expect(rewritten.content).toBe("User: Rewritten searchable preference.");
+    expect(rewritten.lineMap).toEqual([1]);
+  });
+
   it.each(["interactive", "dreaming", "cron"])(
     "preserves SQLite/archive output and callback observations for %s transcripts",
     async (kind) => {

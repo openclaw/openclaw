@@ -128,7 +128,7 @@ async function readWorkspaceState(dir: string) {
 }
 
 async function expectBootstrapSeeded(dir: string) {
-  await expect(fs.access(path.join(dir, DEFAULT_BOOTSTRAP_FILENAME))).resolves.toBeUndefined();
+  await fs.access(path.join(dir, DEFAULT_BOOTSTRAP_FILENAME));
   const state = await readWorkspaceState(dir);
   expect(state.bootstrapSeededAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
 }
@@ -147,7 +147,7 @@ async function expectWorkspaceVanished(action: Promise<unknown>): Promise<void> 
 }
 
 async function expectCompletedWithoutBootstrap(dir: string) {
-  await expect(fs.access(path.join(dir, DEFAULT_IDENTITY_FILENAME))).resolves.toBeUndefined();
+  await fs.access(path.join(dir, DEFAULT_IDENTITY_FILENAME));
   await expectPathMissing(path.join(dir, DEFAULT_BOOTSTRAP_FILENAME));
   const state = await readWorkspaceState(dir);
   expect(state.setupCompletedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
@@ -284,7 +284,7 @@ describe("ensureAgentWorkspace", () => {
     await writeWorkspaceFile(DEFAULT_IDENTITY_FILENAME, "# IDENTITY.md\n\n- **Name:** Example\n");
 
     await expect(resolveWorkspaceBootstrapStatus(tempDir)).resolves.toBe("pending");
-    await expect(fs.access(workspacePath(DEFAULT_BOOTSTRAP_FILENAME))).resolves.toBeUndefined();
+    await fs.access(workspacePath(DEFAULT_BOOTSTRAP_FILENAME));
     expect((await readWorkspaceState(tempDir)).setupCompletedAt).toBeUndefined();
     await expect(isWorkspaceBootstrapPending(tempDir)).resolves.toBe(true);
     await ensureWorkspace();
@@ -346,7 +346,7 @@ describe("ensureAgentWorkspace", () => {
 
     try {
       await ensureWorkspace();
-      await expect(fs.access(bootstrapPath)).resolves.toBeUndefined();
+      await fs.access(bootstrapPath);
       const state = await readWorkspaceState(tempDir);
       expect(state.setupCompletedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
     } finally {
@@ -442,7 +442,7 @@ describe("ensureAgentWorkspace runtime-managed-implicit provisioning", () => {
     expect(result.dir).toBe(targetDir);
     expect(result.bootstrapPending).toBe(false);
     // Directory is provisioned so ACP cwd fallback and media staging keep working...
-    await expect(fs.access(targetDir)).resolves.toBeUndefined();
+    await fs.access(targetDir);
     // ...but no bootstrap files, git repo, or workspace state are seeded.
     await expectPathMissing(path.join(targetDir, DEFAULT_AGENTS_FILENAME));
     await expectPathMissing(path.join(targetDir, DEFAULT_BOOTSTRAP_FILENAME));
@@ -501,7 +501,7 @@ describe("workspace completion persistence", () => {
         await withTestTimeout(entered.promise, 5_000, "Completion write was not reached");
         await checkpoint();
         expect(settled).toBe(false);
-        await expect(fs.access(bootstrapPath)).resolves.toBeUndefined();
+        await fs.access(bootstrapPath);
         current = outcome !== "retired-before-commit";
         release.resolve();
         if (outcome === "committed") {
@@ -511,7 +511,7 @@ describe("workspace completion persistence", () => {
           await expect(pending).rejects.toThrow(
             outcome === "failed" ? "completion write failed" : "workspace owner retired",
           );
-          await expect(fs.access(bootstrapPath)).resolves.toBeUndefined();
+          await fs.access(bootstrapPath);
         }
         const snapshot = await workspaceState.readWorkspaceStateSnapshot(dir);
         expect(Boolean(snapshot.setup.setupCompletedAt)).toBe(

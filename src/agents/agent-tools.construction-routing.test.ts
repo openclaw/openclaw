@@ -118,6 +118,36 @@ describe("createOpenClawCodingTools cron scope", () => {
     expect(firstOpenClawToolsOptions()?.cronSelfRemoveOnlyJobId).toBe("job-current");
   });
 
+  it("keeps self-scoped automation inspection available without sender ownership", () => {
+    const tools = createOpenClawCodingTools({
+      trigger: "cron",
+      jobId: "job-current",
+      senderIsOwner: false,
+    });
+
+    expect(tools.map((tool) => tool.name)).toContain(AUTOMATIONS_TOOL_NAME);
+    expect(tools.map((tool) => tool.name)).not.toContain("gateway");
+    expect(firstOpenClawToolsOptions()?.cronSelfRemoveOnlyJobId).toBe("job-current");
+  });
+
+  it("preserves explicit automation denial for a scheduled run", () => {
+    const tools = createOpenClawCodingTools({
+      trigger: "cron",
+      jobId: "job-current",
+      senderIsOwner: false,
+      config: { tools: { deny: [AUTOMATIONS_TOOL_NAME] } },
+    });
+    expect(tools.map((tool) => tool.name)).not.toContain(AUTOMATIONS_TOOL_NAME);
+  });
+
+  it.each([{ trigger: "cron" as const }, { jobId: "job-current" }])(
+    "does not expose automation controls for an incomplete scheduled context: %j",
+    (context) => {
+      const tools = createOpenClawCodingTools({ ...context, senderIsOwner: false });
+      expect(tools.map((tool) => tool.name)).not.toContain(AUTOMATIONS_TOOL_NAME);
+    },
+  );
+
   it("admits only the automation tool for channel-owner management authority", async () => {
     const runId = "remote-management-tools";
     const { operationalRunInstance } = createTestAdmittedRunContext(runId);

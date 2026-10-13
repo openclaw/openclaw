@@ -34,6 +34,7 @@ import {
 } from "../infra/gateway-boot-lifecycle.js";
 import { settlePendingFinalDelivery } from "../infra/outbound/delivery-completion.js";
 import { writeGatewayRestartIntentSync } from "../infra/restart-intent.js";
+import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
 import type { SqliteIntegrityDiagnostics } from "../infra/sqlite-integrity.js";
 import { SqliteWorkerBroker } from "../infra/sqlite-worker-broker.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
@@ -69,7 +70,6 @@ import type { IncognitoAgentDatabaseExecution } from "../state/openclaw-agent-ex
 import { useIncognitoActorProbe } from "../state/openclaw-agent-execution-incognito.test-support.js";
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../state/openclaw-agent-write-admission.js";
-import { readOpenClawAgentIntegrityVerification } from "../state/openclaw-quarantine-store.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -753,9 +753,8 @@ it.skipIf(process.platform !== "linux")(
       expect(() =>
         assertNoOpenClawAgentDatabaseLeasesReadOnly({ env: fixture.state.env }),
       ).not.toThrow();
-      expect(
-        readOpenClawAgentIntegrityVerification(agent.path, fixture.state.env)?.clean_close,
-      ).toBe(1);
+      // The released worker owner seals before unrelated sidecars settle.
+      expect(readSqliteDatabaseCleanClose(agent.path)).toBe(true);
       await vi.advanceTimersByTimeAsync(4_999);
       operation.complete();
       release.resolve();
@@ -775,9 +774,7 @@ it.skipIf(process.platform !== "linux")(
       expect(() =>
         assertNoOpenClawAgentDatabaseLeasesReadOnly({ env: fixture.state.env }),
       ).not.toThrow();
-      expect(
-        readOpenClawAgentIntegrityVerification(agent.path, fixture.state.env)?.clean_close,
-      ).toBe(1);
+      expect(readSqliteDatabaseCleanClose(agent.path)).toBe(true);
       closeOpenClawAgentDatabasesForTest(fixture.state.stateDir);
       resetGatewayWorkAdmission();
       const gate = schema.agentDatabaseIntegrityBeforeMutationSteps;

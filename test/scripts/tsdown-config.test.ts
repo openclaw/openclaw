@@ -56,6 +56,11 @@ const workerBuildTargets = [
   ],
   ["file-tool-read", "worker/file-tool-read.worker", "src/worker/worker-deploy-file-tool-read.ts"],
   [
+    "gateway-state-owner-heartbeat",
+    "worker/gateway-state-owner-heartbeat.worker",
+    "src/infra/gateway-state-owner-heartbeat.worker.ts",
+  ],
+  [
     "image-processor",
     "worker/image-processor.worker",
     "src/worker/worker-deploy-image-processor.ts",

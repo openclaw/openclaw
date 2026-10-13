@@ -9,14 +9,18 @@ description: Choose proportional OpenClaw tests/checks, diagnose failures, route
 
 - **PR CI = default broad proof.** Change builds + focused tests pass → open
   ready PR. CI runs broad suites; never delay PR for pre-PR suite runs.
-- **Before PR, prove locally and narrowly:** touched tests with
+- **Before PR, prove narrowly:** touched tests with
   `pnpm test <file> --maxWorkers=1`, targeted typecheck, lint, format.
-  Trusted work: local proof default.
-- **Boxes = exception.** Crabbox/Testbox only for gaps CI/local machine cannot
-  cover: another OS/device, live providers/channels, long E2E, heavy benchmarks.
-  Box must be granted right away. Queued: stop task-owned allocation, run locally.
-  Never wait on box queue or chain Testbox → AWS → Hetzner fallbacks.
-  Local machine cannot safely cover contract: record gap; never fake proof.
+  Prefer local proof for trusted, bounded work when dependencies and current
+  host capacity are qualified. Local execution is optional: a focused command
+  can still load a large compiler graph or expand to broad lanes.
+- **Choose remote proof deliberately.** Use PR CI for broad proof; Crabbox/Testbox
+  may cover expensive checks, a busy or unqualified local host, another OS/device,
+  live providers/channels, long E2E, or heavy benchmarks. Acquire only when the
+  command is ready and capacity is granted promptly. If queued, stop only the
+  task-owned allocation; use PR CI or a safe local scope. Keep uncovered
+  platform-specific proof pending. Never force heavy work onto a busy machine
+  or chain providers. Use the smallest profile proven for the selected workload.
 - **Never rerun or re-push just for green.** Fix real failures; read available
   CI failure classification before attributing red.
 
@@ -29,7 +33,7 @@ description: Choose proportional OpenClaw tests/checks, diagnose failures, route
 ## Select the proof
 
 - Runtime defect: reproduce real entry point; rerun it + relevant siblings.
-- Trusted source: `pnpm changed:lanes --json`, `pnpm check:changed`, focused tests.
+- Trusted source: `pnpm changed:lanes --json`, focused tests + targeted typecheck/lint/format; `pnpm check:changed` = optional smart local check.
 - Public SDK/plugin contract: representative consumers, not all-plugin sweep.
 - Build output, lazy imports, package boundaries: include `pnpm build`.
 - Workflow: `git diff --check` + `pnpm check:workflows`.
@@ -61,6 +65,11 @@ description: Choose proportional OpenClaw tests/checks, diagnose failures, route
 
 ## CI failures
 
+- PR CI fails → `pnpm test:ci-failed <pr>`; read pre-existing/new/unknown classification.
+- Fix new failures; investigate unknown → `pnpm test:ci-failed <pr> --run` until selected tests pass locally → push once.
+- `--run` enables `OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE=1`: collect ordinary failures across selected configs, while infrastructure failures still stop; use the same opt-in for manual focused reruns.
+- Pre-existing failures: [failure-table landing rule](../openclaw-pr-maintainer/references/landing.md#red-main-and-inherited-failures). Matching signatures ≠ job-name-only attribution.
+- Never `gh run rerun` to chase green; never local full suite for CI repair.
 - Bind diagnosis to exact SHA + job. Fetch failed logs once; prefer exact run/job
   state over stale PR rollups.
 - Distinguish product, harness, infrastructure, credentials, superseded-run

@@ -22,6 +22,33 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
 }));
 
 describe("diagnostics-prometheus service", () => {
+  it("counts egress outcomes and catalog preparation independently of log records", () => {
+    const metrics = createMetricsHarness();
+    try {
+      for (const outcome of ["forwarded", "refused"] as const) {
+        for (const substituted of [false, true]) {
+          metrics.record({ type: "secret.egress", outcome, substituted });
+          metrics.record({ type: "secret.egress", outcome, substituted }, untrusted);
+          expect(metrics.render()).toContain(
+            `openclaw_secret_egress_requests_total{outcome="${outcome}",substituted="${substituted}"} 1\n`,
+          );
+        }
+      }
+      const catalog = { type: "tool.catalog", source: "client", mode: "code-mode" } as const;
+      metrics.record({ ...catalog, toolCount: 10 });
+      metrics.record({ ...catalog, toolCount: 12 });
+      metrics.record({ ...catalog, toolCount: 99 }, untrusted);
+      expect(metrics.render()).toContain(
+        'openclaw_tool_catalog_total{mode="code-mode",source="client"} 2\n',
+      );
+      expect(metrics.render()).toContain(
+        'openclaw_tool_catalog_tools_total{mode="code-mode",source="client"} 22\n',
+      );
+    } finally {
+      metrics.stop();
+    }
+  });
+
   it("distinguishes long runs through one hour without changing shorter-duration histograms", () => {
     const metrics = createMetricsHarness();
     try {
@@ -75,6 +102,65 @@ describe("diagnostics-prometheus service", () => {
       expect(rendered).not.toMatch(
         /openclaw_webhook_duration_seconds_bucket\{[^}]*le="(?:900|1800|3600)"/,
       );
+    } finally {
+      metrics.stop();
+    }
+  });
+
+  it("resolves RPC latency tails with bounded method-only scrape series", () => {
+    const metrics = createMetricsHarness();
+    const base = { type: "gateway.rpc" as const, method: "sessions.history" };
+    try {
+      for (const durationMs of [12, 24, 600, 1200, 2400, 4800, 9600, 24000, 30000, 600001]) {
+        metrics.record({ ...base, phase: "response", outcome: "ok", durationMs });
+        metrics.record({
+          ...base,
+          phase: "handler",
+          outcome: "returned",
+          durationMs,
+          admissionMs: durationMs,
+        });
+        metrics.record({
+          ...base,
+          phase: "dispatch",
+          outcome: "returned",
+          durationMs,
+          queueWaitMs: durationMs,
+          response: "sent",
+        });
+      }
+      const rendered = metrics.render();
+      for (const timing of ["first_response", "handler", "admission", "queue_wait"]) {
+        const name = `openclaw_gateway_rpc_${timing}_seconds`;
+        const lines = rendered.split("\n").filter((line) => line.startsWith(`${name}_`));
+        expect(lines).toHaveLength(44);
+        for (const [bound, count] of [
+          [0.01, 0],
+          [0.0125, 1],
+          [0.025, 2],
+          [0.6, 3],
+          [1.25, 4],
+          [2.5, 5],
+          [5, 6],
+          [10, 7],
+          [25, 8],
+          [30, 9],
+          [600, 9],
+          ["+Inf", 10],
+        ]) {
+          expect(lines).toContain(
+            `${name}_bucket{le="${bound}",method="sessions.history"} ${count}`,
+          );
+        }
+        expect(lines).toContain(`${name}_count{method="sessions.history"} 10`);
+        const bounds = lines
+          .filter((line) => line.startsWith(`${name}_bucket`))
+          .map((line) => Number(line.match(/le="([^"]+)"/)?.[1]))
+          .filter((bound) => bound >= 0.01 && bound <= 30);
+        for (let index = 1; index < bounds.length; index += 1) {
+          expect(bounds[index]! / bounds[index - 1]!).toBeLessThanOrEqual(4 / 3 + 1e-12);
+        }
+      }
     } finally {
       metrics.stop();
     }

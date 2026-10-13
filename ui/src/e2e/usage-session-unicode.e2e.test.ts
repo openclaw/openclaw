@@ -169,7 +169,7 @@ suite.define(() => {
           .length;
         await gateway.setMethodResponse("sessions.usage", usageResponse());
         await page
-          .locator("openclaw-usage-page")
+          .locator("openclaw-usage-page .usage-header")
           .getByRole("button", { name: "Refresh", exact: true })
           .click();
         const refreshRequest = await gateway.waitForRequest("sessions.usage", {

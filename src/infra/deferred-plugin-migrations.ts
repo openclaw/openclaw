@@ -103,19 +103,24 @@ export function withDeferredPluginConfigRollback(
   }
 }
 
-/** Exclude only this write's admitted repairs; persisted rows remain pending until publication. */
-export function readConfigWritePendingMigrations(
+/** Ordinary writes consume canonical config; only migration owners supply pending facts. */
+export async function readConfigWritePendingMigrations(
   configPath: string,
   env?: NodeJS.ProcessEnv,
-): readonly DeferredPluginMigration[] {
-  const pending = readDeferredPluginMigrations({ env });
+  preparedPending?: readonly DeferredPluginMigration[],
+): Promise<readonly DeferredPluginMigration[] | undefined> {
   const completion = configMigrationCompletion.getStore();
-  if (!completion || completion.configPath !== configPath || completion.published) {
-    return pending;
+  if (!completion || completion.configPath !== configPath) {
+    return preparedPending;
   }
   completion.assertCurrent();
-  assertPendingGeneration(pending, completion.expectedPending);
-  return pending.filter((entry) => !completion.resolvedPluginIds.includes(entry.pluginId));
+  if (completion.published) {
+    return await readDeferredPluginMigrationsAsync({ env });
+  }
+  // Publication asserts this generation inside its write transaction; reading it here only repeats that.
+  return completion.expectedPending.filter(
+    (entry) => !completion.resolvedPluginIds.includes(entry.pluginId),
+  );
 }
 
 export class DeferredPluginMigrationConflictError extends Error {
@@ -223,7 +228,7 @@ export async function prepareDeferredPluginMigrationRuntime(): Promise<void> {
   ]);
 }
 
-/** Keep asynchronous config inspection off the main thread without creating state. */
+/** Keep Doctor and update inspection off the main thread without creating state. */
 export async function readDeferredPluginMigrationsAsync(
   options: Parameters<typeof readDeferredPluginMigrations>[0] = {},
 ): Promise<readonly DeferredPluginMigration[]> {
@@ -296,7 +301,7 @@ export function withDeferredPluginMigrationsCurrent<T>(
   params: {
     env?: NodeJS.ProcessEnv;
     configPath?: string;
-    expectedPending: readonly DeferredPluginMigration[];
+    expectedPending?: readonly DeferredPluginMigration[];
     onConflict?: (pending: readonly DeferredPluginMigration[]) => T;
   },
   publish: () => T,
@@ -305,6 +310,9 @@ export function withDeferredPluginMigrationsCurrent<T>(
   const completion =
     scope && scope.configPath === params.configPath && !scope.published ? scope : undefined;
   const expectedPending = completion?.expectedPending ?? params.expectedPending;
+  if (expectedPending === undefined) {
+    return publish();
+  }
   const databasePath = resolveOpenClawStateSqlitePath(params.env);
   const existing = openClawStateDatabaseCache.getOpenClawStateDatabaseIfOpenAtPath(databasePath);
   if (expectedPending.length === 0 && !existing) {

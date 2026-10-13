@@ -394,8 +394,12 @@ describe("retained session source verification", () => {
               },
             ],
           });
-          const io = createConfigIO({ env: state.env, configPath: state.configPath });
           const editConfig = async () => {
+            const io = createConfigIO({
+              env: state.env,
+              configPath: state.configPath,
+              deferredPluginMigrations: readDeferredPluginMigrations({ env: state.env }),
+            });
             const snapshot = await io.readConfigFileSnapshot();
             await io.writeConfigFile(
               {
@@ -439,7 +443,8 @@ describe("retained session source verification", () => {
           }
           await editConfig();
           expect(
-            (await io.readConfigFileSnapshot()).sourceConfig.plugins?.entries?.[pluginId]?.config,
+            (await createConfigIO({ env: state.env }).readConfigFileSnapshot()).sourceConfig.plugins
+              ?.entries?.[pluginId]?.config,
           ).toEqual({ fixture: false });
           for (const [file, bytes] of originals) {
             expect(fs.readFileSync(file)).toEqual(bytes);

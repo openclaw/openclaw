@@ -81,6 +81,8 @@ describe("chat pane session menu boundary", () => {
     draw();
     const menu = container.querySelector("openclaw-chat-header-session-menu")!;
     await menu.updateComplete;
+    menu.querySelector("wa-dropdown")!.dispatchEvent(new Event("wa-show"));
+    await menu.updateComplete;
     const items = [...menu.querySelectorAll("wa-dropdown-item")];
     expect(items.length).toBeGreaterThan(0);
     await Promise.all(items.map((item) => item.updateComplete));
@@ -356,6 +358,8 @@ describe("chat pane session menu boundary", () => {
     const menu = container.querySelector("openclaw-chat-header-session-menu");
     expect(menu).not.toBeNull();
     await menu?.updateComplete;
+    menu?.querySelector("wa-dropdown")?.dispatchEvent(new Event("wa-show"));
+    await menu?.updateComplete;
     if (fields.archived === undefined) {
       expect(menu?.querySelector('[value="toggle-pin"]')).toBeNull();
     } else {
@@ -369,6 +373,41 @@ describe("chat pane session menu boundary", () => {
       );
     }
   });
+
+  it.each([
+    ["agent:main:plugin:anthropic:catalog-adopt:claude:fixture", false],
+    ["agent:main:harness:codex:supervision:fixture", false],
+    ["agent:main:harness:codex:node-session:fixture", false],
+    ["agent:main:ordinary", true],
+  ])(
+    "offers header Delete only when the transcript belongs to OpenClaw: %s",
+    async (key, allowed) => {
+      const { pane, state } = createTestChatPane({ client: createGatewayBrowserClientFixture() });
+      state.settings = loadSettings();
+      const row: GatewaySessionRow = { key, sessionId: "fixture", kind: "direct", updatedAt: 0 };
+      const container = document.body.appendChild(document.createElement("div"));
+      render(
+        pane.renderPaneHeader(
+          createPaneHeaderWorkspaceFixture(state),
+          row,
+          false,
+          undefined,
+          false,
+          null,
+        ),
+        container,
+      );
+      const menu = container.querySelector("openclaw-chat-header-session-menu");
+      await menu?.updateComplete;
+      menu?.querySelector("wa-dropdown")?.dispatchEvent(new Event("wa-show"));
+      await menu?.updateComplete;
+      const deleteItem = menu?.querySelector<HTMLElement & { disabled: boolean }>(
+        '[value="delete"]',
+      );
+      expect(deleteItem).not.toBeNull();
+      expect(deleteItem?.disabled).toBe(!allowed);
+    },
+  );
 
   it("forks through the shared session organizer flow and selects the new session", async () => {
     const create = vi.fn(async () => "agent:main:forked");

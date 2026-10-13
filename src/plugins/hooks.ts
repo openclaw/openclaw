@@ -556,7 +556,14 @@ export function createHookRunner(
         return { block: true };
       }
       const nextMessage = result.message;
-      return nextMessage ? { message: nextMessage } : undefined;
+      if (!nextMessage) {
+        return undefined;
+      }
+      // Reject non-messages without traversing payloads; the transcript owner validates content.
+      if (typeof nextMessage !== "object" || typeof nextMessage.role !== "string") {
+        throw new Error("the replacement is not a session message; the original message was kept");
+      }
+      return { message: nextMessage };
     } catch (err) {
       const msg = `[hooks] ${hookName} handler from ${hook.pluginId} failed: ${String(err)}`;
       if (shouldCatchHookErrors(hookName)) {

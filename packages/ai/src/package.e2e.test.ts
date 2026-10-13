@@ -176,6 +176,10 @@ const compatibility = {
       "resolveOpenAIProjectedToolsStrictToolFlag",
       "stripUnsupportedSchemaKeywords",
       "projectRuntimeToolInputSchema",
+      "publishRuntimeToolInputSchema",
+      "getPublishedRuntimeToolInputSchema",
+      "prepareOpenAIFunctionTool",
+      "prepareAnthropicInputSchema",
     ],
     types: [
       "ToolSchemaModelCompat",

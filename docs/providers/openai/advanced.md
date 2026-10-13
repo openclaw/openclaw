@@ -159,6 +159,16 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     Fast mode (formerly Priority processing) and sends
     `service_tier = "priority"`. Explicit `/fast ultrafast` or
     `params.fastMode: "ultrafast"` sends `service_tier = "ultrafast"` instead.
+    While Ultrafast is requested, OpenClaw caps the embedded runtime's context
+    budget and Responses server-compaction threshold at **260,000 tokens**. This
+    leaves headroom below the tier's serving boundary for output and tool rounds.
+    Smaller configured budgets or `responsesCompactThreshold` values still win;
+    larger thresholds are capped for Ultrafast. Fast, Standard, and other explicit
+    service tiers keep their configured budgets. Client-side compaction uses the
+    same capped budget even when `responsesServerCompaction: false`; its reserve
+    can make it run earlier. This helps long conversations stay on Ultrafast,
+    though the provider still chooses the served tier.
+
     The selected account and model must support that tier; the provider can
     reject it or return a different effective tier. Fast mode does not rewrite `reasoning` or
     `text.verbosity`. `fastMode: "auto"` starts new model calls fast until the

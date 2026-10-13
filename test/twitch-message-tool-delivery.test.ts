@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { twitchPlugin } from "../extensions/twitch/api.js";
 import { isDeliveredMessagingToolResult } from "../src/agents/embedded-agent-message-tool-source-reply.js";
-import { installMessageToolOnlyTerminalHook } from "../src/agents/embedded-agent-runner/run/message-tool-terminal.js";
+import { installMessageToolTerminalHook } from "../src/agents/embedded-agent-runner/run/message-tool-terminal.js";
 import type { Agent, AfterToolCallContext } from "../src/agents/runtime/index.js";
 import { createMessageTool } from "../src/agents/tools/message-tool-execution.js";
 import type { TrustedMessageAuditEvent } from "../src/audit/message-audit-events.js";
@@ -206,7 +206,7 @@ describe("Twitch message-tool delivery", () => {
 
           const agent = {} as Agent;
           const delivered = vi.fn();
-          installMessageToolOnlyTerminalHook({
+          installMessageToolTerminalHook({
             agent,
             config: cfg,
             currentProvider: "twitch",

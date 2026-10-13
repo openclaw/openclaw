@@ -383,6 +383,7 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
     }
     expect(priorTimeout).toMatchObject({
       name: "TimeoutError",
+      timeoutMs: 100,
       message: "codex app-server first hosted search turn timed out after 100ms",
     });
 

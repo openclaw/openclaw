@@ -22,7 +22,7 @@ import {
   projectSessionActorHotState,
 } from "./session-actor-hydration.worker.js";
 import {
-  cloneSessionActorStoredState,
+  forkSessionActorStoredState,
   withSessionActorTransactionState,
 } from "./session-actor-transaction.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
@@ -125,7 +125,8 @@ it("hydrates once and commits, rejects, and rolls back against the exact actor p
       expect(state.hot.completionKeys).toEqual([]);
       counter.counts.reads = 0;
       reads.length = 0;
-      const working = cloneSessionActorStoredState(state);
+      const beforeCommit = structuredClone(state);
+      const working = forkSessionActorStoredState(state);
       runOpenClawAgentWriteTransaction(
         (db) =>
           withSessionActorTransactionState(db, working, () => {
@@ -196,18 +197,74 @@ it("hydrates once and commits, rejects, and rolls back against the exact actor p
           { rawSeq: 2, eventId: "assistant" },
         ],
       });
-      expect(state.hot.entry?.activeWriterRunId).toBeUndefined();
+      expect(state).toEqual(beforeCommit);
       state = working;
     } finally {
       counter.restore();
     }
     expect(cachedEntries().entries.get(scope.sessionKey)?.label).toBe("actor committed");
     const committed = projectSessionActorHotState(state);
-    const abandoned = cloneSessionActorStoredState(state);
+    const projectionState = {
+      ...state,
+      hot: {
+        ...state.hot,
+        entry: {
+          ...state.hot.entry!,
+          cliSessionIds: { synthetic: "original-session" },
+        },
+        participants: [
+          {
+            identity: { type: "profile" as const, id: "owner" },
+            contributionCount: 1,
+            firstPromptedAt: 1,
+            lastPromptedAt: 2,
+          },
+        ],
+        members: [{ identityId: "owner", addedBy: "owner", addedAt: 1 }],
+      },
+    };
+    const retained = structuredClone(projectionState);
+    const detached = projectSessionActorHotState(projectionState);
+    const original = structuredClone(detached);
+    detached.entry!.label = "caller edit";
+    detached.entry!.cliSessionIds!.synthetic = "caller edit";
+    Object.assign(detached.target.database, { birthtime: "caller edit" });
+    Object.assign(detached.version, { sequence: -1 });
+    detached.participants[0]!.identity.id = "caller edit";
+    detached.members[0]!.identityId = "caller edit";
+    detached.pendingInputs[0]!.input_id = "caller edit";
+    detached.transcript.version.rawSeq = -1;
+    detached.transcript.watermark.maxSeq = -1;
+    Object.assign(detached.transcript.anchors[0]!, { entryId: "caller edit" });
+    detached.transcript.idempotency[0]!.eventId = "caller edit";
+    if (detached.transcript.modelContext.kind === "resident") {
+      detached.transcript.modelContext.entries[0]!.eventId = "caller edit";
+    }
+    expect(projectionState).toEqual(retained);
+    expect(projectSessionActorHotState(projectionState)).toEqual(original);
+    const beforeRollback = structuredClone(state);
+    const abandoned = forkSessionActorStoredState(state);
     expect(() =>
       runOpenClawAgentWriteTransaction(
         (db) =>
           withSessionActorTransactionState(db, abandoned, () => {
+            writeSessionEntry(db, scope.sessionKey, {
+              ...abandoned.hot.entry!,
+              label: "rolled back",
+            });
+            appendTranscriptEventsInTransaction(db, scope, [
+              {
+                type: "message",
+                id: "rolled-back-message",
+                parentId: "assistant",
+                timestamp: "2026-01-01T00:00:03.000Z",
+                message: {
+                  role: "assistant",
+                  content: [{ type: "text", text: "rolled back" }],
+                  idempotencyKey: "rolled-back-once",
+                },
+              },
+            ]);
             mutatePendingInput(
               {
                 ...pending,
@@ -228,12 +285,13 @@ it("hydrates once and commits, rejects, and rolls back against the exact actor p
         options,
       ),
     ).toThrow("authority revoked");
+    expect(state).toEqual(beforeRollback);
     expect(projectSessionActorHotState(state)).toEqual(committed);
     expect(readSessionInputCompletion(database, pending)).toBeUndefined();
     expect(readSessionPendingInputByKey(database, scope, pending.idempotencyKey)?.input_id).toBe(
       "accepted-input",
     );
-    const completed = cloneSessionActorStoredState(state);
+    const completed = forkSessionActorStoredState(state);
     runOpenClawAgentWriteTransaction(
       (db) =>
         withSessionActorTransactionState(db, completed, () => {
@@ -462,7 +520,7 @@ it("initializes over a retained transcript and preserves prepared snapshots, rel
     });
     expect(freshChecks).toBe(1);
     rejectFresh = true;
-    const abandoned = cloneSessionActorStoredState(state);
+    const abandoned = forkSessionActorStoredState(state);
     expect(() =>
       runOpenClawAgentWriteTransaction(
         (db) =>
@@ -495,7 +553,7 @@ it("initializes over a retained transcript and preserves prepared snapshots, rel
         options,
       ),
     ).toThrow("fresh authority revoked");
-    const directAbandoned = cloneSessionActorStoredState(state);
+    const directAbandoned = forkSessionActorStoredState(state);
     expect(() =>
       runOpenClawAgentWriteTransaction(
         (db) =>

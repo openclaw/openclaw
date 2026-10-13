@@ -328,7 +328,7 @@ async function main() {
         if (contributes) {
           runs.push(timingRun);
         }
-        if (source === "release" || source === "packed-release" || contributes) {
+        if (source === "release" || contributes) {
           sampled += 1;
         }
         if (sampled === count) {

@@ -1,4 +1,4 @@
-import { render as renderSolid, type JSX } from "@solidjs/web";
+import { insert, render as renderSolid, type JSX } from "@solidjs/web";
 import { nothing, render as renderLit } from "lit";
 import { AsyncDirective, directive } from "lit/async-directive.js";
 import type { Part } from "lit/directive.js";
@@ -6,6 +6,7 @@ import {
   createComponent,
   createContext,
   createEffect,
+  createRoot,
   createSignal,
   flush,
   getOwner,
@@ -18,6 +19,11 @@ import {
 } from "solid-js";
 
 export type { TemplateResult as LegacyTemplateResult } from "lit";
+
+/** Render opaque plugin SDK templates with their event receiver. */
+export function renderLegacyTemplate(template: unknown, target: HTMLElement, host?: object): void {
+  renderLit(template, target, { host });
+}
 
 /** Retained content keeps its DOM while foreground directive work is disconnected. */
 export const SolidContentPresentation = createContext<Accessor<boolean>>(() => true);
@@ -205,29 +211,39 @@ class SolidContent extends AsyncDirective {
     if (!component || !element) {
       return;
     }
-    // The directive controls connection; its creator owns resources mounted by later effects.
-    this.dispose = runWithOwner(this.owner, () =>
-      renderSolid(() => {
-        // A legacy host can publish props during its parent's Solid commit.
-        const [props, setProps] = createSignal(this.props, { ownedWrite: true });
-        const [presented, setPresented] = createSignal(this.isConnected, { ownedWrite: true });
-        this.updateProps = (next) => setProps(() => next);
-        this.updatePresented = setPresented;
-        const liveProps = new Proxy<Record<string, unknown>>(
-          {},
-          {
-            get: (_target, key: string) => props()[key],
-            has: (_target, key: string) => key in props(),
-            ownKeys: () => Reflect.ownKeys(props()),
-            getOwnPropertyDescriptor: () => ({ enumerable: true, configurable: true }),
-          },
-        );
-        return (
-          <SolidContentPresentation value={presented}>
-            {createComponent(component, liveProps)}
-          </SolidContentPresentation>
-        );
-      }, element),
+    const owner = this.owner ?? getOwner();
+    const view = () => {
+      // A legacy host can publish props during its parent's Solid commit.
+      const [props, setProps] = createSignal(this.props, { ownedWrite: true });
+      const [presented, setPresented] = createSignal(this.isConnected, { ownedWrite: true });
+      this.updateProps = (next) => setProps(() => next);
+      this.updatePresented = setPresented;
+      const liveProps = new Proxy<Record<string, unknown>>(
+        {},
+        {
+          get: (_target, key: string) => props()[key],
+          has: (_target, key: string) => key in props(),
+          ownKeys: () => Reflect.ownKeys(props()),
+          getOwnPropertyDescriptor: () => ({ enumerable: true, configurable: true }),
+        },
+      );
+      return (
+        <SolidContentPresentation value={presented}>
+          {createComponent(component, liveProps)}
+        </SolidContentPresentation>
+      );
+    };
+    // Nested top-level rendering can flush effects under the parent's render owner.
+    this.dispose = runWithOwner(owner, () =>
+      owner
+        ? createRoot((dispose) => {
+            insert(element, view());
+            return () => {
+              dispose();
+              element.replaceChildren();
+            };
+          })
+        : renderSolid(view, element),
     );
     this.root = { element, dispose: () => this.disposeRoot() };
     this.roots?.add(this.root);

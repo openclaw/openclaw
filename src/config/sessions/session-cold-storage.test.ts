@@ -10,6 +10,7 @@ import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
 import { flushLogger, setLoggerOverride } from "../../logging/logger.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
@@ -25,7 +26,6 @@ import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
-import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseByPathAsync,
@@ -36,6 +36,7 @@ import * as archiveWorkers from "./session-accessor.sqlite-archive.js";
 import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
 import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-delete-snapshot.js";
 import { readSessionTranscriptHistoryEvents } from "./session-accessor.sqlite-history.test-support.js";
+import { deleteMaterializedSessionStatePlans } from "./session-accessor.sqlite-lifecycle-state.js";
 import {
   loadTranscriptEventsSync,
   loadTranscriptHeaderSync,
@@ -338,7 +339,7 @@ describe("cold transcript storage workers", () => {
     process.on("worker", observeWorker);
     try {
       closeOpenClawAgentDatabasesForTest();
-      clearOpenClawAgentIntegrityVerification(fixture.options.path);
+      revokeSqliteDatabaseAdmissionsForPath(fixture.options.path);
       await expect(runSessionColdStorageMaintenance({ config: fixture.config })).resolves.toEqual({
         archivedTranscripts: 2,
         externalizedTranscripts: 0,
@@ -349,11 +350,11 @@ describe("cold transcript storage workers", () => {
       ).toBeDefined();
       await closeOpenClawAgentDatabaseByPathAsync(fixture.options.path);
       closeOpenClawAgentDatabasesForTest();
-      clearOpenClawAgentIntegrityVerification(fixture.options.path);
+      revokeSqliteDatabaseAdmissionsForPath(fixture.options.path);
       await restoreSessionColdTranscript(fixture.scope);
       await closeOpenClawAgentDatabaseByPathAsync(fixture.options.path);
       closeOpenClawAgentDatabasesForTest();
-      clearOpenClawAgentIntegrityVerification(fixture.options.path);
+      revokeSqliteDatabaseAdmissionsForPath(fixture.options.path);
       await restoreSessionColdTranscript(fixture.secondScope);
       expect(fixture.snapshot()).toEqual(fixture.original);
       await closeOpenClawAgentDatabaseByPathAsync(fixture.options.path);
@@ -593,7 +594,22 @@ describe("cold transcript storage workers", () => {
     );
     const events = loadTranscriptEventsSync(fixture.scope);
     assertSessionTranscriptHot(fixture.database(), historicalId);
+    const hotPlan = planSessionStateDeleteIfUnreferenced({
+      archiveDirectory: path.dirname(fixture.scope.storePath),
+      archiveTranscript: false,
+      database: openOpenClawAgentDatabase(fixture.options),
+      referencedSessionIds: new Set(),
+      sessionId: historicalId,
+    });
+    expect(hotPlan).not.toBeNull();
+    const preparedDeletion = await archiveWorkers.materializeSessionStateDeletePlans([hotPlan!]);
     await archiveFixture(fixture);
+    expect(
+      runOpenClawAgentWriteTransaction(
+        (database) => deleteMaterializedSessionStatePlans(database, preparedDeletion),
+        fixture.options,
+      ),
+    ).toEqual([]);
     expect(() => assertSessionTranscriptHot(fixture.database(), historicalId)).toThrow(
       expect.objectContaining({ code: "TRANSCRIPT_COLD" }),
     );

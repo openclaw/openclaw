@@ -8,6 +8,7 @@ import {
   generateWorkboardPostgresSchema,
   pendingPromotion,
 } from "../../scripts/generate-postgres-schema.mts";
+import { catalog as readCatalog, portTables } from "../../scripts/lib/postgres-schema-catalog.mts";
 import { listOpenClawStateFeatureSchemas } from "../../src/state/openclaw-state-feature-schema.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -35,7 +36,7 @@ function verifiedFixture(sql: string, verify: (db: DatabaseSync) => void) {
 
 describe("PostgreSQL schema generation", () => {
   it("keeps the complete workboard artifact current and uses the admitted search path", async () => {
-    const { sql, catalog } = await generateWorkboardPostgresSchema();
+    const { sql, catalog, portMetadata } = await generateWorkboardPostgresSchema();
     expect(sql).toBe(
       fs.readFileSync(
         path.join(root, "extensions/workboard/src/workboard-schema.postgres.sql"),
@@ -51,6 +52,56 @@ describe("PostgreSQL schema generation", () => {
     );
     expect(sql).not.toMatch(/\b(?:BEGIN|COMMIT|CREATE SCHEMA)\b/);
     expect(sql).toMatch(/[^\n]\n$/);
+    expect(portMetadata).toEqual(
+      JSON.parse(
+        fs.readFileSync(
+          path.join(root, "src/infra/database-engine/workboard-port.generated.json"),
+          "utf8",
+        ),
+      ),
+    );
+    const preData = sql.slice(portMetadata.preData[0], portMetadata.preData[1]);
+    const postData = sql.slice(portMetadata.postData[0], portMetadata.postData[1]);
+    expect(preData + postData).toBe(sql);
+    expect(preData).toContain('CREATE TABLE "workboard_cards"');
+    expect(preData).not.toMatch(/CREATE (?:UNIQUE )?INDEX|ALTER TABLE/);
+    expect(postData).not.toContain("CREATE TABLE");
+    expect(postData).toContain('CREATE INDEX "workboard_cards_board_status_idx"');
+    expect(postData).toContain('ALTER TABLE "workboard_card_labels" ADD FOREIGN KEY');
+  });
+
+  it("derives identity allocation semantics and composite keys from canonical SQLite", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      db.exec(`
+        CREATE TABLE allocated (id INTEGER PRIMARY KEY AUTOINCREMENT) STRICT;
+        CREATE TABLE reused (id INTEGER PRIMARY KEY, note TEXT DEFAULT 'AUTOINCREMENT') STRICT;
+        CREATE TABLE paired (left_id TEXT, right_id INTEGER, PRIMARY KEY(left_id, right_id)) STRICT;
+      `);
+      const tables = portTables(readCatalog(db, ""));
+      expect(tables.map(({ name, pk, identities }) => ({ name, pk, identities }))).toEqual([
+        { name: "allocated", pk: ["id"], identities: [{ column: "id", autoIncrement: true }] },
+        { name: "paired", pk: ["left_id", "right_id"], identities: [] },
+        { name: "reused", pk: ["id"], identities: [{ column: "id", autoIncrement: false }] },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("renders eager and lazy state DDL inside the connection owner's namespace and transaction", async () => {
+    const { files, report } = await generatePostgresSchemas(root);
+    for (const file of ["state.postgres.sql", ...report.fragments.map((item) => item.file)]) {
+      expect(files[file], file).not.toMatch(/^(?:BEGIN|COMMIT|SET|CREATE SCHEMA)\b/m);
+      expect(files[file], file).not.toContain('"openclaw_state".');
+    }
+    expect(files["state.postgres.sql"]).toContain('CREATE TABLE "schema_meta" (');
+    const backgrounds = report.fragments.find((item) =>
+      item.tables.includes("user_background_images"),
+    )!;
+    expect(files[backgrounds.file]).toContain('CREATE TABLE "user_background_images" (');
+    expect(files[backgrounds.file]).toContain('REFERENCES "user_profiles"');
+    expect(files["state.postgres.sql"]).not.toContain('CREATE TABLE "user_background_images"');
   });
 
   it("accounts for every canonical SQLite object and generates identical bytes twice", async () => {
@@ -72,16 +123,9 @@ describe("PostgreSQL schema generation", () => {
         .toSorted(),
     ).toEqual(pendingPromotion.map((item) => item.name).toSorted());
     for (const fragment of generated.report.fragments) {
-      expect(generated.files[fragment.file]).toContain(
-        "SET LOCAL standard_conforming_strings = on;",
-      );
       for (const table of fragment.tables) {
-        expect(generated.files["state.postgres.sql"]).not.toContain(
-          `CREATE TABLE "openclaw_state"."${table}"`,
-        );
-        expect(generated.files[fragment.file]).toContain(
-          `CREATE TABLE "openclaw_state"."${table}"`,
-        );
+        expect(generated.files["state.postgres.sql"]).not.toContain(`CREATE TABLE "${table}"`);
+        expect(generated.files[fragment.file]).toContain(`CREATE TABLE "${table}"`);
       }
     }
     const exported = await generatePostgresSchemas(root, "openclaw", { includeJsonReport: true });
@@ -193,7 +237,10 @@ describe("PostgreSQL schema generation", () => {
     `);
     const { files, report } = await generatePostgresSchemas(directory, 'proof"scope');
     const sql = files["state.postgres.sql"]!;
-    expect(sql).toContain('CREATE SCHEMA "proof""scope_state";');
+    expect(sql).not.toMatch(/\b(?:BEGIN|COMMIT|CREATE SCHEMA)\b/);
+    expect(files["agent.postgres.sql"]).toContain('CREATE SCHEMA "proof""scope_agent";');
+    expect(files["agent.postgres.sql"]).toContain("BEGIN;");
+    expect(files["agent.postgres.sql"]).toContain("COMMIT;");
     expect(sql).toContain('"id" bigint GENERATED BY DEFAULT AS IDENTITY');
     expect(sql).toContain('PRIMARY KEY ("position", "alias")');
     expect(sql).toContain('UNIQUE ("parent_id", "label")');
@@ -205,11 +252,9 @@ describe("PostgreSQL schema generation", () => {
     expect(sql).toContain('("position") ASC NULLS FIRST');
     expect(sql).toContain('WHERE "parent_id" IS NOT NULL');
     expect(sql).toContain(
-      'REFERENCES "proof""scope_state"."parent" ("id") ON UPDATE CASCADE ON DELETE SET NULL DEFERRABLE INITIALLY DEFERRED',
+      'REFERENCES "parent" ("id") ON UPDATE CASCADE ON DELETE SET NULL DEFERRABLE INITIALLY DEFERRED',
     );
-    expect(sql.indexOf('CREATE TABLE "proof""scope_state"."parent"')).toBeLessThan(
-      sql.indexOf("ADD FOREIGN KEY"),
-    );
+    expect(sql.indexOf('CREATE TABLE "parent"')).toBeLessThan(sql.indexOf("ADD FOREIGN KEY"));
     expect(sql).not.toMatch(/\bSTRICT\b|WITHOUT ROWID|AUTOINCREMENT/);
     expect(
       report.catalogs.state!.tables.find((table) => table.name === "parent")?.columns[0],
@@ -319,7 +364,7 @@ describe("PostgreSQL schema generation", () => {
       sql: null,
       reason: expect.any(String),
     });
-    expect(files["state.postgres.sql"]).not.toContain('REFERENCES "openclaw_state"."mixed"');
+    expect(files["state.postgres.sql"]).not.toContain('REFERENCES "mixed"');
     expect(report.catalogs.state!.tables.map((table) => table.name)).toEqual(["dependent"]);
   });
 
@@ -369,8 +414,8 @@ describe("PostgreSQL schema generation", () => {
     expect(foreignKey).toMatchObject({ sql: null });
     expect(foreignKey?.reason).toBeTruthy();
     expect(catalog.tables.map((table) => table.name).toSorted()).toEqual(["child", "parent"]);
-    expect(files["state.postgres.sql"]).toContain('CREATE TABLE "openclaw_state"."parent"');
-    expect(files["state.postgres.sql"]).toContain('CREATE TABLE "openclaw_state"."child"');
+    expect(files["state.postgres.sql"]).toContain('CREATE TABLE "parent"');
+    expect(files["state.postgres.sql"]).toContain('CREATE TABLE "child"');
     expect(files["state.postgres.sql"]).not.toContain("ADD FOREIGN KEY");
   });
 
@@ -418,9 +463,7 @@ describe("PostgreSQL schema generation", () => {
       sql: null,
       reason: expect.stringMatching(/nullable.*primary|primary.*nullable/i),
     });
-    expect(files["state.postgres.sql"]).not.toContain(
-      'CREATE TABLE "openclaw_state"."nullable_key"',
-    );
+    expect(files["state.postgres.sql"]).not.toContain('CREATE TABLE "nullable_key"');
   });
 
   it("reports a translated boolean default that is incompatible with its bigint column", async () => {

@@ -55,7 +55,6 @@ suite.define(() => {
       gatewayOwners.push(gatewayOwner);
       const gateway = await gatewayOwner.start({
         repoRoot: process.cwd(),
-        useRepoCli: true,
         transportBaseUrl: "http://127.0.0.1",
         providerMode: "mock-openai",
         providerBaseUrl: "http://127.0.0.1:9/v1",

@@ -60,12 +60,7 @@ function startLineLoadingKeepalive(params: {
   userId: string;
   accountId?: string;
 }): () => void {
-  let stopped = false;
-
   const trigger = () => {
-    if (stopped) {
-      return;
-    }
     void showLoadingAnimation(params.userId, {
       cfg: params.cfg,
       accountId: params.accountId,
@@ -76,13 +71,7 @@ function startLineLoadingKeepalive(params: {
   trigger();
   const timer = setInterval(trigger, 18_000);
 
-  return () => {
-    if (stopped) {
-      return;
-    }
-    stopped = true;
-    clearInterval(timer);
-  };
+  return () => clearInterval(timer);
 }
 
 export async function monitorLineProvider(opts: MonitorLineProviderOptions) {
@@ -329,16 +318,11 @@ export async function monitorLineProvider(opts: MonitorLineProviderOptions) {
   logVerbose(`line: registered webhook handler at ${normalizedPath}`);
   statusSink?.(channelReadyPatch());
 
-  let stopped = false;
   let stopPromise: Promise<void> | undefined;
   const stopHandler = (): Promise<void> => {
     if (stopPromise) {
       return stopPromise;
     }
-    if (stopped) {
-      return Promise.resolve();
-    }
-    stopped = true;
     logVerbose(`line: stopping provider for account ${resolvedAccountId}`);
     unregisterHttp();
     stopPromise = bot.stop().finally(() => {

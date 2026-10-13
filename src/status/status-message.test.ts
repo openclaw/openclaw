@@ -274,6 +274,12 @@ describe("buildStatusMessage cache usage", () => {
     "distinguishes $source cache usage ($cacheRead, $cacheWrite)",
     ({ source, cacheRead, cacheWrite }) => {
       const usage = { inputTokens: 10_000, outputTokens: 50, cacheRead, cacheWrite };
+      const transcriptUsage =
+        source === "transcript"
+          ? usage
+          : source === "session with unreported transcript"
+            ? { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens }
+            : null;
       const parts = buildStatusMessageParts({
         modelRefs: statusModelRefs({ provider: "anthropic", model: "claude-haiku-4-5" }),
         agent: { model: "anthropic/claude-haiku-4-5" },
@@ -282,12 +288,7 @@ describe("buildStatusMessage cache usage", () => {
           updatedAt: 0,
           ...(source !== "transcript" ? usage : {}),
         },
-        transcriptUsage:
-          source === "transcript"
-            ? usage
-            : source === "session with unreported transcript"
-              ? { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens }
-              : null,
+        transcriptUsage,
       });
       const table = parts.presentation.blocks.find((block) => block.type === "table");
       if (table?.type !== "table") {

@@ -38,11 +38,24 @@ function expectCanonicalSessions(scope: SessionScope, label: string) {
 }
 
 describe("deferred plugin session receipt retirement", () => {
-  it.each(["missing", "changed"] as const)(
-    "keeps a receipt active when its archived transcript is %s",
-    async (damage) => {
+  it.each([
+    ["missing", false, "retained_plugin_source_conflict"],
+    ["changed", false, "retained_plugin_source_conflict"],
+    ["missing", true, "historical_transcript_deferred"],
+    ["changed", true, "historical_transcript_deferred"],
+  ] as const)(
+    "keeps a receipt active when its archived transcript is %s (leftover pointer: %s)",
+    async (damage, leftoverPointer, issueCode) => {
       await withOpenClawTestState({ label: "deferred-damaged-archive" }, async (state) => {
         const { cfg, scope } = await seedDeferredPluginSessionSource(state, "default");
+        const pointer = path.join(state.sessionsDir("main"), "legacy-kept.trajectory-path.json");
+        const pointerBytes = JSON.stringify({
+          traceSchema: "openclaw-trajectory-pointer",
+          runtimeFile: path.join(state.sessionsDir("main"), "missing.trajectory.jsonl"),
+        });
+        if (leftoverPointer) {
+          fs.writeFileSync(pointer, pointerBytes);
+        }
         const run = () =>
           runDoctorSessionSqlite({ cfg, env: state.env, allAgents: true, mode: "import" });
         const target = (await run()).targets[0]!;
@@ -65,6 +78,10 @@ describe("deferred plugin session receipt retirement", () => {
         const move = manifest.targets
           .flatMap((entry) => entry.completedMoves)
           .find((entry) => entry.sourcePath === transcript)!;
+        // Older interrupted settlements can leave a pointer beside an archived transcript.
+        if (leftoverPointer) {
+          fs.writeFileSync(pointer, pointerBytes);
+        }
         // Recreate the unfinished receipt left by a published version after successful archival.
         runOpenClawStateWriteTransaction(
           ({ db }) => {
@@ -85,9 +102,12 @@ describe("deferred plugin session receipt retirement", () => {
 
         const refused = await run();
         expect(hasDeferredPluginSessionImport(receiptParams)).toBe(true);
+        if (leftoverPointer) {
+          expect(fs.readFileSync(pointer, "utf8")).toBe(pointerBytes);
+        }
         expect(refused.targets.flatMap((entry) => entry.issues)).toContainEqual(
           expect.objectContaining({
-            code: "retained_plugin_source_conflict",
+            code: issueCode,
             message: expect.stringContaining(transcript),
           }),
         );

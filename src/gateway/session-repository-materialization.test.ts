@@ -4,6 +4,10 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  isSessionEntryDataSql,
+  observeHostDataSql,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
 import * as githubOAuth from "../agents/github-oauth-client.js";
 import {
   resolveManagedGitHubProfileDir,
@@ -46,6 +50,7 @@ describe("explicit repository move to Gateway", () => {
     "host mismatch",
     "revoked",
     "reset",
+    "clone reset",
     "auth failure",
   ] as const)(
     "keeps the current shared GitHub identity and move authority at clone admission: %s",
@@ -162,7 +167,24 @@ describe("explicit repository move to Gateway", () => {
               : new Error("fixture clone transport reached");
           const clone = vi
             .spyOn(projectCloning, "materializeProjectClone")
-            .mockRejectedValue(cloneFailure);
+            .mockImplementation(async (_request, options) => {
+              if (scenario === "clone reset") {
+                const sql = observeHostDataSql();
+                try {
+                  expect(options?.assertCurrent).toBeTypeOf("function");
+                  options?.assertCurrent?.();
+                  expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
+                  await sessionEntries.patchSessionEntryCore(scope, () => ({
+                    lifecycleRevision: "reset-at-clone-effect",
+                  }));
+                  expect(options?.assertCurrent).toThrow("Repository workspace changed");
+                  expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
+                } finally {
+                  sql.restore();
+                }
+              }
+              throw cloneFailure;
+            });
           const operation = materializeSessionRepositoryWorkspaceOnGateway({
             ...scope,
             cfg,

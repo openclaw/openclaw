@@ -220,7 +220,7 @@ describe("worker placement read cache", () => {
     },
   );
 
-  it("reuses preservation until a writer adds a non-local placement", async () => {
+  it("updates prepared preservation from non-local writer receipts", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-preservation-cache-"));
     const database = openOpenClawStateDatabase();
     const reader = createWorkerSessionPlacementStore({ database });
@@ -239,13 +239,15 @@ describe("worker placement read cache", () => {
     await writer.releaseTurnIfOwned(claim);
     const unchanged = await reader.prepareMaintenancePlacements();
     expect(unchanged.placements).toEqual([]);
-    unchanged.release();
     expect(reads).not.toHaveBeenCalled();
     const remote = await writer.startDispatch({
       sessionId: "remote",
       agentId: "main",
       sessionKey: "agent:main:remote",
     });
+    expect(unchanged.placements).toEqual([remote]);
+    unchanged.assertCurrent();
+    unchanged.release();
     const changed = await reader.prepareMaintenancePlacements();
     expect(changed.placements).toEqual([remote]);
     changed.assertCurrent();

@@ -74,7 +74,7 @@ restoration failure; slow startup does not undo a completed repair.
 
   </Accordion>
   <Accordion title="10. systemd linger (Linux)">
-    If running as a systemd user service, doctor ensures lingering is enabled so the gateway stays alive after logout.
+    If running as a systemd user service, doctor enables lingering if needed so the gateway stays alive after logout.
   </Accordion>
   <a id="11-workspace-status-skills-plugins-and-taskflows" />
   <Accordion title="11. Workspace status (skills and plugins)">
@@ -284,7 +284,7 @@ restoration failure; slow startup does not undo a completed repair.
 
     Service installation and repair recognize current Node executables named `node`, `nodejs`, or versioned names such as `node24` and `node-24`, including Windows `.exe` variants. Each candidate still has to pass the Node and SQLite capability checks before selection.
 
-    Newly installed or repaired macOS LaunchAgents use a canonical system PATH (`/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`) instead of copying the interactive shell PATH, so Homebrew-managed system binaries stay available while Volta, asdf, fnm, pnpm, and other version-manager directories do not change which Node child processes resolve. Linux services still keep explicit environment roots (`NVM_DIR`, `FNM_DIR`, `VOLTA_HOME`, `ASDF_DATA_DIR`, `BUN_INSTALL`, `PNPM_HOME`) and stable user-bin directories, but guessed version-manager fallback directories are only written to the service PATH when those directories exist on disk.
+    Newly installed or repaired macOS LaunchAgents use a fixed system PATH (`/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`) instead of copying the interactive shell PATH, so Homebrew-managed system binaries stay available while Volta, asdf, fnm, pnpm, and other version-manager directories do not change which Node child processes resolve. Linux services still keep explicit environment roots (`NVM_DIR`, `FNM_DIR`, `VOLTA_HOME`, `ASDF_DATA_DIR`, `BUN_INSTALL`, `PNPM_HOME`) and stable user-bin directories, but guessed version-manager fallback directories are only written to the service PATH when those directories exist on disk.
 
   </Accordion>
 </AccordionGroup>

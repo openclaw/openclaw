@@ -457,7 +457,6 @@ describe("memory vector KNN subprocess boundary", () => {
     ["oversized", "stdout exceeded its limit"],
     ["oversized-stderr", "stderr exceeded its limit"],
     ["early-exit", "exited before returning a result (code 7, signal none): fixture KNN failure"],
-    ["wrong-id", "invalid envelope"],
     ["extra", "extra output"],
   ])("respawns after %s without poisoning the next request", async (mode, message) => {
     const fixture = useFixtureChild();

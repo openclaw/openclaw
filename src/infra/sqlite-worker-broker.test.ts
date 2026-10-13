@@ -31,6 +31,11 @@ import {
 } from "./sqlite-worker-store.js";
 import type { FixtureOperations } from "./sqlite-worker-store.test-support.js";
 
+vi.mock("./diagnostic-flags.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./diagnostic-flags.js")>()),
+  isDiagnosticFlagEnabled: () => false,
+}));
+
 vi.mock("node:os", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:os")>()),
   availableParallelism: () => 32,
@@ -75,6 +80,18 @@ function holdDatabaseAdmission(pathname: string) {
 it("waits for schema publication after opening, then dispatches queued writes once in order", async () => {
   const file = databasePath();
   const store = await open(file);
+  await waitForDiagnosticEventsDrained();
+  const completed: DiagnosticWorkerRequestFields[] = [];
+  onTestFinished(
+    onInternalDiagnosticEvent(
+      (event) => {
+        if (event.type === "worker.request" && event.phase === "completed") {
+          completed.push(event);
+        }
+      },
+      { include: ["worker.request"] },
+    ),
+  );
   const admission = holdDatabaseAdmission(file);
   const requests = vi.spyOn(Worker.prototype, "postMessage");
   const first = append(store, "first");
@@ -95,6 +112,28 @@ it("waits for schema publication after opening, then dispatches queued writes on
       { status: "fulfilled", value: { writes: 2 } },
     ]);
     expect(await read(store)).toEqual(["first", "second"]);
+    await waitForDiagnosticEventsDrained();
+    expect(completed).toHaveLength(3);
+    for (const { timing } of completed) {
+      expect(timing).toBeDefined();
+      const stages = [
+        timing?.enqueued,
+        timing?.dispatched,
+        timing?.posted,
+        timing?.received,
+        timing?.inputReady,
+        timing?.executeStarted,
+        timing?.executeFinished,
+        timing?.serialized,
+        timing?.replied,
+        timing?.replyReceived,
+      ];
+      for (const stamp of stages) {
+        expect(stamp).toEqual(expect.any(Number));
+      }
+      expect(stages).toEqual(stages.toSorted((a, b) => a! - b!));
+      expect(timing?.postFinished).toBeGreaterThanOrEqual(timing!.posted!);
+    }
   } finally {
     admission.release();
     await vi.advanceTimersByTimeAsync(10);

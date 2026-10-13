@@ -95,6 +95,7 @@ describe("unavailable finalization through the real core backend", () => {
         agentId: "main",
         sessionKey: target.sessionKey,
         sessionTarget: target,
+        config: {},
         authProfileStore: { version: 1, profiles: {} },
         resolvedApiKey: "synthetic-unused-host-key",
       },

@@ -14,6 +14,8 @@ import { cronStoreKey } from "../../cron/store/key.js";
 import { recordCronRunInDatabase } from "../../cron/store/run-history.kernel.js";
 import type { CronRunHistoryWrite } from "../../cron/store/run-history.types.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
+import { ensureUserProfilesSchema } from "../../state/user-profiles-schema.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
@@ -52,6 +54,8 @@ async function withCronHistory(
     };
     await state.writeConfig(cfg);
     setRuntimeConfigSnapshot(cfg);
+    ensureUserProfilesSchema({});
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
     const owner = roleClient("none", "history-owner");
     const foreign = roleClient("none", "history-foreign");
     const viewer = roleClient("view", "history-viewer");
@@ -174,6 +178,78 @@ async function withCronHistory(
 }
 
 describe("cron.runs session visibility", () => {
+  it("searches delivery errors before paging while preserving job and session visibility", async () => {
+    await withCronHistory(async ({ jobId, foreignJobId, query, rows, storePath }) => {
+      const storeKey = cronStoreKey(storePath);
+      const template = expectDefined(rows[0], "fixture run");
+      const targets: Pick<CronRunLogEntry, "jobId" | "sessionKey" | "deliveryStatus">[] = [
+        { jobId, sessionKey: "agent:main:history-foreign", deliveryStatus: "not-delivered" },
+        { jobId, sessionKey: "agent:main:history-own", deliveryStatus: "not-delivered" },
+        { jobId, sessionKey: "agent:main:history-own", deliveryStatus: "unknown" },
+        {
+          jobId: foreignJobId,
+          sessionKey: "agent:main:history-own",
+          deliveryStatus: "not-delivered",
+        },
+      ];
+      const entries: CronRunLogEntry[] = targets.map((row, index) => ({
+        jobId: row.jobId,
+        sessionKey: row.sessionKey,
+        deliveryStatus: row.deliveryStatus,
+        action: "finished",
+        ts: 100 + index,
+        runId: `delivery-search-${index}`,
+        status: "ok",
+        completionStatus: row.deliveryStatus === "unknown" ? "unknown" : "failed",
+        summary: "Report completed",
+        deliveryError: "Synthetic recipient unavailable",
+      }));
+      runOpenClawStateWriteTransaction(({ db }) => {
+        for (const entry of entries) {
+          recordCronRunInDatabase(db, {
+            ...template,
+            jobId: entry.jobId,
+            sessionKey: entry.sessionKey,
+            runId: `cron:${entry.jobId}:${entry.ts}:delivery-search`,
+            startedAt: entry.ts,
+            endedAt: entry.ts,
+            status: cronRunStorageStatus(entry),
+            summary: entry.summary,
+            detail: cronRunLogEntryToDetail(entry, { storeKey }),
+          });
+        }
+      });
+      for (const scope of ["job", "all"] as const) {
+        expect(
+          await query({
+            ...(scope === "job" ? { id: jobId } : { scope }),
+            query: "RECIPIENT unavailable",
+            sortDir: "asc",
+            offset: 1,
+            limit: 1,
+          }),
+        ).toHaveBeenCalledWith(
+          true,
+          {
+            entries: [
+              expect.objectContaining({
+                runId: "delivery-search-2",
+                deliveryStatus: "unknown",
+                deliveryError: "Synthetic recipient unavailable",
+              }),
+            ],
+            total: 2,
+            offset: 1,
+            limit: 1,
+            hasMore: false,
+            nextOffset: null,
+          },
+          undefined,
+        );
+      }
+    });
+  });
+
   it.each([
     {
       sessionTarget: "session:custom-target",

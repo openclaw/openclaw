@@ -3,7 +3,6 @@
 # Existing suppressions carry a TODO at the file site.
 extensions/acpx/src/runtime.ts
 extensions/active-memory/index.test.ts
-extensions/amazon-bedrock/index.test.ts
 extensions/amazon-bedrock/stream.runtime.ts
 extensions/anthropic/session-catalog.test.ts
 extensions/browser/src/browser-tool.test.ts
@@ -66,7 +65,6 @@ extensions/feishu/src/outbound.ts
 extensions/feishu/src/reply-dispatcher.test.ts
 extensions/feishu/src/reply-dispatcher.ts
 extensions/feishu/src/streaming-card.test.ts
-extensions/firecrawl/src/firecrawl-tools.test.ts
 extensions/github-copilot/index.test.ts
 extensions/google-meet/index.test.ts
 extensions/google/realtime-voice-provider.test.ts
@@ -105,7 +103,6 @@ extensions/memory-wiki/src/compile.ts
 extensions/memory-wiki/src/query.test.ts
 extensions/memory-wiki/src/query.ts
 extensions/microsoft-foundry/index.test.ts
-extensions/migrate-hermes/config.test.ts
 extensions/migrate-hermes/secrets.test.ts
 extensions/msteams/src/channel.ts
 extensions/mxc/test/mxc-backend.test.ts
@@ -211,7 +208,6 @@ src/agents/bash-tools.exec-host-gateway.ts
 src/agents/bash-tools.exec-host-node.test.ts
 src/agents/bash-tools.exec-runtime.ts
 src/agents/btw.test.ts
-src/agents/btw.ts
 src/agents/cli-runner.reliability.test.ts
 src/agents/cli-runner.spawn.test.ts
 src/agents/cli-runner/execute.supervisor-capture.test.ts
@@ -237,7 +233,6 @@ src/agents/embedded-agent-runner/runs.ts
 src/agents/embedded-agent-runner/thinking.test.ts
 src/agents/embedded-agent-runner/tool-result-truncation.test.ts
 src/agents/embedded-agent-runner/tool-result-truncation.ts
-src/agents/embedded-agent-runner/transcript-file-state.test.ts
 src/agents/embedded-agent-subscribe.handlers.tools.test.ts
 src/agents/harness/native-hook-relay.test.ts
 src/agents/harness/selection.test.ts
@@ -307,7 +302,6 @@ src/cli/config-cli.test.ts
 src/cli/daemon-cli/status.gather.test.ts
 src/cli/devices-cli.runtime.ts
 src/cli/exec-approvals-cli.ts
-src/cli/gateway-cli/register.ts
 src/cli/gateway-cli/run-loop.test.ts
 src/cli/gateway-cli/run-loop.ts
 src/cli/gateway-cli/run.option-collisions.test.ts
@@ -351,7 +345,6 @@ src/config/sessions/session-accessor.conformance.test.ts
 src/config/sessions/session-accessor.test.ts
 src/config/sessions/transcript.test.ts
 src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts
-src/cron/isolated-agent/run-executor.ts
 src/cron/isolated-agent/run.test-harness.ts
 src/daemon/launchd.test.ts
 src/daemon/schtasks.startup-fallback.test.ts

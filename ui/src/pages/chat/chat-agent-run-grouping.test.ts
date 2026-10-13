@@ -57,6 +57,37 @@ function requireFrame(
 }
 
 describe("coalesceAgentRunFrames", () => {
+  it.each(["interrupted", "active", "silent-terminal", "earlier-terminal"] as const)(
+    "classifies a persisted tool-use tail as %s without inventing a final answer",
+    (state) => {
+      const runId = "run-tail";
+      const commentary = group("assistant", "Checking the fixture.", runId, {
+        stopReason: "toolUse",
+        __openclaw: { runId, turnTainted: true },
+      });
+      const terminal = { role: "assistant", stopReason: "stop", content: [], runId };
+      const frame = requireFrame(
+        coalesceAgentRunFrames(
+          [userBoundary(runId), commentary, group("tool", "inspection", runId)],
+          {
+            messages: [
+              ...(state === "earlier-terminal" ? [terminal] : []),
+              ...commentary.messages.map(({ message }) => message),
+              ...(state === "silent-terminal" ? [terminal] : []),
+            ],
+            activeRunId: state === "active" ? runId : null,
+          },
+        )[1],
+      );
+      expect(frame.outcome).toEqual(
+        state === "interrupted" || state === "active"
+          ? { kind: state }
+          : { kind: "completed", actionOwner: null },
+      );
+      expect(frame.parts).toHaveLength(2);
+    },
+  );
+
   it("keeps one lifecycle-stable frame key while preserving semantic part keys", () => {
     const runId = "run-1";
     const stream: StreamRunRenderItem = {
