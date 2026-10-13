@@ -475,8 +475,9 @@ it.each(
         removeChatRun: () => undefined,
         broadcast: harness.broadcast,
         nodeSendToSession: harness.nodeSendToSession,
-        markMainSessionsAbortedForRestart: (params) =>
-          markRestartAbortedMainSessions({ ...params, cfg, stateDir: state.stateDir }),
+        markMainSessionsAbortedForRestart: async (params) => {
+          await markRestartAbortedMainSessions({ ...params, cfg, stateDir: state.stateDir });
+        },
       });
       expect(controller.signal.aborted).toBe(true);
       expect(pendingController.signal.aborted).toBe(true);
