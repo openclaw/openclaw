@@ -347,27 +347,29 @@ describe("saved update failure resolution", () => {
       ok: true,
     });
   });
-  it.each(["restart-unhealthy", "update-recovery-pending"])(
-    "requires a later verified updater outcome for %s",
-    async (reason) => {
-      failedRun.reason = reason;
-      const savedFailure = failure(reason);
-      const successfulRun = latestRun;
-      latestRun = failedRun;
-      expect(await validate(savedFailure)).toMatchObject({
-        ok: false,
-        summary: expect.stringContaining("Next step:"),
-      });
-      expect(failedRun.status).toBe("failed");
-      expect(verifyPreviousGatewayForUpdate).not.toHaveBeenCalled();
+  it.each([
+    "restart-unhealthy",
+    "update-recovery-pending",
+    "package-recovery-permissions-unsafe",
+    "managed-handoff-lease-identity-changed",
+  ])("requires a later verified updater outcome for %s", async (reason) => {
+    failedRun.reason = reason;
+    const savedFailure = failure(reason);
+    const successfulRun = latestRun;
+    latestRun = failedRun;
+    expect(await validate(savedFailure)).toMatchObject({
+      ok: false,
+      summary: expect.stringContaining("Next step:"),
+    });
+    expect(failedRun.status).toBe("failed");
+    expect(verifyPreviousGatewayForUpdate).not.toHaveBeenCalled();
 
-      latestRun = successfulRun;
-      expect(await validate(savedFailure)).toMatchObject({ ok: true });
+    latestRun = successfulRun;
+    expect(await validate(savedFailure)).toMatchObject({ ok: true });
 
-      vi.mocked(verifyPreviousGatewayForUpdate).mockResolvedValue(false);
-      expect(await validate(savedFailure)).toMatchObject({ ok: false });
-    },
-  );
+    vi.mocked(verifyPreviousGatewayForUpdate).mockResolvedValue(false);
+    expect(await validate(savedFailure)).toMatchObject({ ok: false });
+  });
 
   it("does not invent a target for an error-only artifact", async () => {
     expect(await validate({ error: "Update failed" })).toEqual({

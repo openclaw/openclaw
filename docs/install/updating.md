@@ -216,6 +216,13 @@ recovery guidance while removing private paths and process IDs. These checks run
 in the installed updater: a new candidate cannot repair an older driver's refusal
 before package replacement, or recover detail an older report already discarded.
 
+Package-swap reports distinguish `package-recovery-permissions-unsafe` (recovery
+artifact permissions or link count) from `managed-handoff-lease-identity-changed`
+(a recorded lease database path, file, or parent directory changed). Shared
+reports retain these closed reason codes while redacting private diagnostics.
+Other package failures keep the `global-install-failed` reason. These diagnostics
+do not change refusal, backup, or rollback behavior and require an updated driver.
+
 Control UI updates use a verified helper to stop and restart the managed Gateway.
 On macOS, the helper carries its live update ownership into LaunchAgent activation;
 ordinary commands inside the Gateway still cannot stop their own service. If an
