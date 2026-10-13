@@ -175,8 +175,13 @@ describe("transcript message reactions", () => {
   it("resets a closed custom picker without moving focus into its hidden palette", async () => {
     const { root } = await customEntry();
     const nextControl = host.appendChild(document.createElement("button"));
+    const hidden = new Promise<void>((resolve) => {
+      root
+        .querySelector(".chat-reaction-picker")!
+        .addEventListener("overlay-after-hide", () => resolve(), { once: true });
+    });
     nextControl.focus();
-    await Promise.resolve();
+    await hidden;
     flush();
     expect(root.querySelector("input")).toBeNull();
     expect(document.activeElement).toBe(nextControl);
