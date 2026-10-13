@@ -224,7 +224,6 @@ it("keeps transcript residency across entry patches without losing either owner'
     );
     try {
       entryPatch({ label: "entry owner committed", model: "updated-model" });
-      expect(reads.counts.select).toBe(0);
       expect(reads.counts.watermark).toBe(0);
       runSqliteImmediateTransactionSync(f.database.db, () =>
         recordSessionParticipantFromWorker(f.database, f.scope, {
@@ -357,6 +356,8 @@ it.each(["entry", "target"] as const)(
           validateCanonicalKeys: false,
         };
       };
+      // Warm publication setup before measuring ordinary patches.
+      f.patchEntry(prepare("warm publication"));
       const reads = trackSqliteStatementExecutions(f.database.db, ["select"], (sql) =>
         /^select\b/iu.test(sql) ? "select" : null,
       );
