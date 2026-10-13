@@ -6,16 +6,21 @@ import { createUiVitestConfig } from "./vitest/vitest.ui.config.ts";
 
 const WEB_AWESOME = "@awesome.me/webawesome";
 
-type InlineCarrier = {
-  test?: {
-    deps?: { optimizer?: { client?: { enabled?: boolean; include?: string[] } } };
-    projects?: InlineCarrier[];
-    server?: { deps?: { inline?: Array<string | RegExp> } };
-  };
-};
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
 
-function inlinePatterns(config: InlineCarrier): Array<string | RegExp> {
-  return config.test?.server?.deps?.inline ?? [];
+function inlinePatterns(config: unknown): Array<string | RegExp> {
+  if (!isRecord(config) || !isRecord(config.test) || !isRecord(config.test.server)) {
+    return [];
+  }
+  const deps = config.test.server.deps;
+  if (!isRecord(deps) || !Array.isArray(deps.inline)) {
+    return [];
+  }
+  return deps.inline.filter(
+    (entry): entry is string | RegExp => typeof entry === "string" || entry instanceof RegExp,
+  );
 }
 
 describe("root UI Vitest Lit runtime", () => {
