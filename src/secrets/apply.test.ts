@@ -227,7 +227,7 @@ describe("secrets apply", () => {
     await seedDefaultApplyFixture(fixture);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     clearSecretsRuntimeSnapshot();
     vi.restoreAllMocks();
     clearRuntimeAuthProfileStoreSnapshots();
