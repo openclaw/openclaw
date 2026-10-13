@@ -308,10 +308,12 @@ facts; cold or invalidated actors use the canonical snapshot read. Trajectory
 append and trim touch no session fields and preserve those receipts. Transcript
 bodies and byte limits remain SQL-owned bounded reads.
 
-Participant projections carry an autocommit read into the metadata CAS owner's
-unchanged immediate write transaction. Ordinary readers establish their own native
-snapshot. Concurrent participant updates remain independent of metadata CAS. These
-caches change no schema, retention, stored format, or update behavior.
+Participant reads and entry projections reuse the session actor's complete committed
+participant records, including contribution counts and recency. The participant writer
+updates those records in its existing transaction and publishes them on commit;
+rollback retains the previous facts. Cold, evicted, or invalidated actors use the
+canonical participant read. Participant updates remain independent of metadata CAS.
+This changes no schema, retention, stored format, or update behavior.
 
 ## Session and ancillary worker operations
 

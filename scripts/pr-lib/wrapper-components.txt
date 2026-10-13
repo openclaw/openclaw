@@ -2019,6 +2019,7 @@ src/config/sessions/session-accessor.sqlite-entry-read.ts
 src/config/sessions/session-accessor.sqlite-entry-select.ts
 src/config/sessions/session-accessor.sqlite-entry-revision.ts
 src/config/sessions/session-accessor.sqlite-participant-projection.ts
+src/config/sessions/session-actor-entry-publication.worker.ts
 src/config/sessions/session-participant-identity.ts
 src/config/sessions/session-participant-prepared-read.ts
 packages/agent-core/src/harness/session/session.ts

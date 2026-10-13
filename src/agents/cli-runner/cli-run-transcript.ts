@@ -157,8 +157,9 @@ export async function persistCliAssistantTranscript(params: {
   if (!runParams.persistAssistantTranscript || !runParams.sessionKey) {
     return { owned: false };
   }
+  const idempotencyKey = cliAssistantItemId(runParams.runId);
+  let committed = false;
   try {
-    const idempotencyKey = cliAssistantItemId(runParams.runId);
     const result = await appendExactAssistantMessageToSessionTranscript({
       sessionKey: runParams.sessionKey,
       agentId: runParams.agentId,
@@ -173,6 +174,9 @@ export async function persistCliAssistantTranscript(params: {
       idempotencyKey,
       runId: runParams.runId,
       config: runParams.config,
+      onMessageCommitted: () => {
+        committed = true;
+      },
       beforeMessageWrite: (write) => {
         const message = runAgentHarnessBeforeMessageWriteHook({
           ...write,
@@ -232,7 +236,7 @@ export async function persistCliAssistantTranscript(params: {
     };
   } catch (error) {
     log.warn(`CLI assistant transcript persistence failed: ${formatErrorMessage(error)}`);
-    return { owned: false };
+    return committed ? { owned: true, idempotencyKey } : { owned: false };
   }
 }
 
