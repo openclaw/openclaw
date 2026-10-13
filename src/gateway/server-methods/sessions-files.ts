@@ -45,6 +45,10 @@ import {
   resolveOpenPathCommand,
   sanitizePathForLog,
 } from "./open-path.js";
+import {
+  DeviceFolderFilesUnavailableError,
+  resolveDeviceFolderWorkspaceAccess,
+} from "./session-device-folder-workspace-access.js";
 import { createSessionFileReadAuthority } from "./session-file-read-authority.js";
 import {
   getRepositoryArtifact,
@@ -79,20 +83,27 @@ function sessionFilesError(type: string, message: string, details?: Record<strin
   });
 }
 
-function rejectDeviceFolderFiles(
+function respondDeviceFolderFilesUnavailable(respond: RespondFn, message?: string): void {
+  respond(
+    false,
+    undefined,
+    sessionFilesError(
+      "device_folder_files_unavailable",
+      message ?? "Start this session on its paired device to browse or edit its files.",
+    ),
+  );
+}
+
+function rejectDeviceFolderReveal(
   entry: Pick<InternalSessionEntry, "deviceFolder"> | undefined,
   respond: RespondFn,
 ): boolean {
   if (!entry?.deviceFolder) {
     return false;
   }
-  respond(
-    false,
-    undefined,
-    sessionFilesError(
-      "device_folder_files_unavailable",
-      "Files access is unavailable for existing folders on paired devices. Use the session's file tools on the selected device.",
-    ),
+  respondDeviceFolderFilesUnavailable(
+    respond,
+    "This folder lives on the paired device and cannot be revealed on the Gateway.",
   );
   return true;
 }
@@ -217,9 +228,16 @@ async function loadSessionFiles(
   context: GatewayRequestContext,
   assertSourceCurrent: () => void,
 ): Promise<
-  LoadedSessionFiles & { repository?: Awaited<ReturnType<typeof resolveRepositoryWorkspaceAccess>> }
+  LoadedSessionFiles & {
+    repository?:
+      | Awaited<ReturnType<typeof resolveRepositoryWorkspaceAccess>>
+      | Awaited<ReturnType<typeof resolveDeviceFolderWorkspaceAccess>>;
+  }
 > {
   const { storePath, entry, canonicalKey, agentId } = loaded;
+  if (entry?.deviceFolder) {
+    return { files: [], repository: await resolveDeviceFolderWorkspaceAccess(loaded, context) };
+  }
   const metadata = captureSessionEntryMetadataRead({
     storePath,
     sessionKey: canonicalKey,
@@ -351,9 +369,6 @@ async function handleSessionFilesRead(
     { ...params, agentId },
     context.getRuntimeConfig(),
     async (source, assertSourceCurrent) => {
-      if (rejectDeviceFolderFiles(source.entry, respond)) {
-        return;
-      }
       const assertCurrent = () => {
         assertSourceCurrent();
         read?.assertCurrent();
@@ -466,6 +481,10 @@ async function handleSessionFilesRead(
           publish();
         }
       } catch (error) {
+        if (error instanceof DeviceFolderFilesUnavailableError) {
+          respondDeviceFolderFilesUnavailable(respond, error.message);
+          return;
+        }
         if (
           !hostRead.hasHostRead() ||
           !(error instanceof SessionMutationAuthorizationChangedError)
@@ -518,14 +537,13 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
       { ...params, agentId },
       context.getRuntimeConfig(),
       async (loaded, assertSourceCurrent) => {
-        if (rejectDeviceFolderFiles(loaded.entry, respond)) {
-          return;
-        }
         if (!loaded.agentId || !loaded.entry?.sessionId) {
           respondSessionFileNotFound(respond, params.path);
           return;
         }
-        using repository = await resolveRepositoryWorkspaceAccess(loaded, context);
+        using repository =
+          (await resolveRepositoryWorkspaceAccess(loaded, context)) ??
+          (await resolveDeviceFolderWorkspaceAccess(loaded, context));
         if (repository?.kind === "stored") {
           throw new Error("Start this cloud session before editing its repository files.");
         }
@@ -589,7 +607,13 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
           file: update.file,
         });
       },
-    );
+    ).catch((error: unknown) => {
+      if (error instanceof DeviceFolderFilesUnavailableError) {
+        respondDeviceFolderFilesUnavailable(respond, error.message);
+        return;
+      }
+      throw error;
+    });
   },
   "sessions.files.reveal": defineValidatedGatewayHandler(
     "sessions.files.reveal",
@@ -608,7 +632,7 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
         { sessionKey: params.key, agentId },
         context.getRuntimeConfig(),
         async (loaded, assertCurrent) => {
-          if (rejectDeviceFolderFiles(loaded.entry, respond)) {
+          if (rejectDeviceFolderReveal(loaded.entry, respond)) {
             return;
           }
           if (loaded.entry?.repositoryWorkspaceId) {

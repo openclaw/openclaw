@@ -404,10 +404,12 @@ does not remove the existing folder.
 
 Device-folder sessions cannot move to another device or continue on the Gateway.
 Attachment staging is not supported for these sessions; use a managed workspace
-when you need to upload attachments. The Gateway Files panel and workspace reveal
-are unavailable for device-folder sessions; use the agent's file tools on the
-selected device instead. Gateway file operations reject these sessions rather
-than reading or writing a similarly named local workspace.
+when you need to upload attachments. While the session is active on its paired
+device, the Gateway Files panel can browse, preview, and edit the bound folder
+through that device. Stop the session and Files becomes unavailable until it is
+started again. Workspace reveal remains unavailable because there is no Gateway
+checkout. Gateway file operations never fall back to a similarly named local
+workspace.
 
 ### Isolate hosted worker sessions in containers
 
