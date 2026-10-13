@@ -302,6 +302,11 @@ drain grace. Neither window resets on progress. These cleanup limits still
 apply when the execution budget is unlimited. See
 [Codex timeouts](/plugins/codex-harness-reference#timeouts).
 
+Harness cleanup flushes trajectory events accepted before foreground work ended,
+including during restart cancellation. It cannot accept new events after that
+lifetime ends, or flush through a closed host, revoked admission, replaced run,
+or replaced recorder.
+
 When a runtime reports a definitive timeout, the Gateway records its terminal
 status and error for the session sidebar immediately, without waiting for
 provider retry grace. Opening the failed session dismisses its sidebar attention

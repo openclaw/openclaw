@@ -7712,7 +7712,6 @@
 ["src/gateway/server/ws-connection/message-handler.control-ui-build-admission.test.ts","../health-state.js","e6bfcad2e04f2860ae03831eb657a39e2f9f10553bc78afb9f4179f22ba12d8b",1]
 ["src/gateway/server/ws-connection/message-handler.post-connect-health.test.ts","../../../config/config.js","a3837f9471845a0e3a40c19a9a77f6164c2ee903df3b485470192203f58b6868",1]
 ["src/gateway/server/ws-connection/message-handler.post-connect-health.test.ts","../../../config/io.js","356e54841975612bf099a5ab6111da36f767a46ed69c9d86c78af03531b0d518",1]
-["src/gateway/server/ws-connection/message-handler.post-connect-health.test.ts","../../../infra/system-presence.js","458f192a4f7d1e5b3afd77df1d6fc2da64ee659040e6a9534ac0f33c92edcaf8",1]
 ["src/gateway/server/ws-connection/message-handler.post-connect-health.test.ts","../../github-user-identity.js","ac71f25c9136cf944da0b220f45f25cef6479b63ddfcad47408a4fe4707d19e4",1]
 ["src/gateway/server/ws-connection/message-handler.post-connect-health.test.ts","../../server-history-prewarm.js","5356dd878a98fc0e9003b6843f3ffee0ea5920a27c1d0852fde42c77a4d2cb72",1]
 ["src/gateway/server/ws-connection/message-handler.post-connect-health.test.ts","../../server-methods.js","6ca282e9f6e50245213da90062943126aa7d6437ea170a0873ee4192ccdaf96a",1]
