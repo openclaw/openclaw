@@ -1210,13 +1210,15 @@ describe("runEmbeddedAgent per-turn send ledger ownership", () => {
     sessionKey: string;
     onDeferredTurnSendLedgerScope?: Parameters<TestRunEmbeddedAgent>[0]["onDeferredTurnSendLedgerScope"];
   }) {
+    const config = createEmbeddedAgentRunnerOpenAiConfig(["mock-1"]);
+    setRuntimeConfigSnapshot(config);
     return runEmbeddedAgent({
       // A shared session id would resolve to whichever session key an earlier test stored.
       sessionId: `session:${params.runId}`,
       sessionKey: params.sessionKey,
       sessionFile: nextSessionCompatibilityKey(),
       workspaceDir,
-      config: createEmbeddedAgentRunnerOpenAiConfig(["mock-1"]),
+      config,
       prompt: "send it",
       provider: "openai",
       model: "mock-1",
