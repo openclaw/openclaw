@@ -1,4 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type {
+  CodeModeNamespaceDescriptor,
+  SerializedCodeModeNamespaceValue,
+} from "../agents/code-mode-namespaces.js";
 import type { CodeModeHeadlessResult } from "../agents/code-mode.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { formatErrorMessageWithCode } from "../infra/errors.js";
@@ -140,5 +144,26 @@ export function parseScriptPayloadResult(
     stateChanged: state.stateChanged,
     ...(state.stateChanged ? { state: state.state } : {}),
     ...(nextCheck ? { nextCheck } : {}),
+  };
+}
+
+/** Exposes the persisted trigger state (and any stream batch) to the script as `trigger`. */
+export function triggerStateNamespace(
+  state: unknown,
+  streamBatch?: string,
+): CodeModeNamespaceDescriptor {
+  const entries: Array<[string, SerializedCodeModeNamespaceValue]> = [
+    ["state", { kind: "value", value: state }],
+  ];
+  if (streamBatch !== undefined) {
+    entries.push(["streamBatch", { kind: "value", value: streamBatch }]);
+  }
+  return {
+    id: "cron:trigger",
+    globalName: "trigger",
+    scope: {
+      kind: "object",
+      entries,
+    },
   };
 }
