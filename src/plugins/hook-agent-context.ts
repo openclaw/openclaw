@@ -1,5 +1,6 @@
 /** Builds plugin hook agent context snapshots from active session and model state. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { isSyntheticSourceReplyTurn } from "../agents/reply-completion.js";
 import { parseRawSessionConversationRef } from "../sessions/session-key-utils.js";
 import type { PluginHookChannelContext } from "./hook-channel-context.types.js";
 import type { PluginHookAgentContext } from "./hook-types.js";
@@ -130,7 +131,13 @@ export function buildAgentHookContextIdentityFields(params: {
   senderId?: string | null;
   chatId?: string | null;
   channelContext?: PluginHookChannelContext;
-}): Pick<PluginHookAgentContext, "senderId" | "chatId" | "channelContext"> {
+  causalMessageId?: string;
+  senderIsOwner?: boolean;
+  inputProvenance?: PluginHookAgentContext["inputProvenance"];
+}): Pick<
+  PluginHookAgentContext,
+  "senderId" | "chatId" | "channelContext" | "messageId" | "senderIsOwner"
+> {
   const trigger = normalizeOptionalString(params.trigger);
   if (trigger && trigger !== "user") {
     return {};
@@ -138,6 +145,8 @@ export function buildAgentHookContextIdentityFields(params: {
 
   const senderId = normalizeOptionalString(params.senderId);
   const chatId = normalizeOptionalString(params.chatId);
+  const externalUserTurn = trigger === "user" && !isSyntheticSourceReplyTurn(params);
+  const messageId = externalUserTurn ? normalizeOptionalString(params.causalMessageId) : undefined;
   const sender = senderId
     ? { ...params.channelContext?.sender, id: senderId }
     : params.channelContext?.sender;
@@ -157,5 +166,9 @@ export function buildAgentHookContextIdentityFields(params: {
     ...(senderId ? { senderId } : {}),
     ...(chatId ? { chatId } : {}),
     ...(channelContext ? { channelContext } : {}),
+    ...(messageId ? { messageId } : {}),
+    ...(externalUserTurn && senderId && typeof params.senderIsOwner === "boolean"
+      ? { senderIsOwner: params.senderIsOwner }
+      : {}),
   };
 }

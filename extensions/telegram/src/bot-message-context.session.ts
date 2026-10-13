@@ -246,6 +246,15 @@ export async function buildTelegramInboundContextPayload(
   const messageTimestamp = msg.date ? msg.date * 1000 : undefined;
   const replyTarget = describeReplyTarget(msg);
   const bufferedMessages = options?.bufferedMessages ?? [];
+  // Text/forward buffers and albums already retain their admitted member ids.
+  // Publish multiplicity separately from the reply/dedupe representative.
+  const sourceMessageIds = [
+    ...new Set([
+      ...bufferedMessages.map((message) => String(message.message_id)),
+      ...allMedia.flatMap((media) => (media.sourceMessageId ? [media.sourceMessageId] : [])),
+    ]),
+  ];
+  const batchMessageIds = sourceMessageIds.length > 1 ? sourceMessageIds : undefined;
   const hasMultiMessageBatch = bufferedMessages.length > 1;
   const shouldRenderBufferedBody = hasMultiMessageBatch && options?.ingressBuffer !== "text-batch";
   const forwardOrigin = shouldRenderBufferedBody ? null : normalizeForwardedContext(msg);
@@ -658,6 +667,9 @@ export async function buildTelegramInboundContextPayload(
     },
     contextVisibility: contextVisibilityMode,
     extra: {
+      MessageSids: batchMessageIds,
+      MessageSidFirst: batchMessageIds?.[0],
+      MessageSidLast: batchMessageIds?.at(-1),
       GroupThread: groupThread,
       BotUsername: primaryCtx.me?.username ?? undefined,
       AmbientTranscriptWatermarkKey: ambientTranscriptWatermarkKey,

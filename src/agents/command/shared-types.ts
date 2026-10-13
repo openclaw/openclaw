@@ -73,6 +73,8 @@ export type AgentRunMessageContext = {
   messageActionTurnCapability?: string;
   /** Trusted sender identity bit for command/channel-action auth. */
   senderIsOwner?: boolean;
+  /** Single external inbound message that initiated this run, independent of reply routing. */
+  causalMessageId?: string;
   /** Current channel ID for auto-threading (Slack). */
   currentChannelId?: string;
   /** Current thread timestamp for auto-threading (Slack). */

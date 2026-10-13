@@ -3,6 +3,7 @@ import {
   buildChannelSourceTurnId,
   readChannelSourceTurnId,
   readChannelSourceTurnSameThreadRequired,
+  resolveCausalInboundMessageId,
   setChannelSourceTurnId,
   setChannelSourceTurnSameThreadRequired,
   shouldMintChannelSourceTurnId,
@@ -80,5 +81,46 @@ describe("buildChannelSourceTurnId", () => {
     expect(shouldMintChannelSourceTurnId("webchat")).toBe(false);
     expect(shouldMintChannelSourceTurnId("telegram")).toBe(true);
     expect(shouldMintChannelSourceTurnId(undefined)).toBe(true);
+  });
+});
+
+describe("resolveCausalInboundMessageId", () => {
+  it("uses the admitted full id rather than reply routing aliases for one source", () => {
+    expect(
+      resolveCausalInboundMessageId({ MessageSid: "short", MessageSidFull: " full " }, {}),
+    ).toBe("full");
+    expect(
+      resolveCausalInboundMessageId(
+        {
+          MessageSid: "one",
+          MessageSids: ["one", "one"],
+          MessageSidFirst: "one",
+          MessageSidLast: "one",
+        },
+        {},
+      ),
+    ).toBe("one");
+  });
+
+  it.each([
+    { MessageSids: ["first", "last"] },
+    { MessageSidFirst: "first", MessageSidLast: "last" },
+    { MessageSids: ["first"], MessageSidLast: "last" },
+  ])("withholds a representative when batch members disagree: %j", (batch) => {
+    expect(resolveCausalInboundMessageId({ MessageSid: "last", ...batch }, {})).toBeUndefined();
+  });
+
+  it.each([
+    { isHeartbeat: true },
+    { inputProvenance: { kind: "internal_system" as const } },
+    { inputProvenance: { kind: "inter_session" as const } },
+  ])("withholds stale ids for synthetic input: %j", (source) => {
+    expect(resolveCausalInboundMessageId({ MessageSidFull: "stale" }, source)).toBeUndefined();
+  });
+
+  it("does not invent a causal id from a batch boundary without an admitted message id", () => {
+    expect(
+      resolveCausalInboundMessageId({ MessageSidFirst: "one", MessageSidLast: "one" }, {}),
+    ).toBeUndefined();
   });
 });

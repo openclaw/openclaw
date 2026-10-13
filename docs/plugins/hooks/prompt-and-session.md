@@ -238,6 +238,23 @@ When sender identity is available, agent hook contexts also include:
   under a channel-owned object plugins can extend with channel-specific
   fields.
 
+Core CLI and embedded hooks also expose admission-time metadata for external
+user turns:
+
+- `ctx.messageId` is the provider ID of the single inbound message that started
+  the logical run. It is separate from reply/thread targets. Followups and
+  interrupt replacements have their own IDs; retries and model fallbacks keep
+  the initiating ID, and steering does not replace it. Multi-message inbound
+  batches, multi-source collected runs, synthetic overflow summaries, and
+  internal turns omit it.
+- `ctx.senderIsOwner` is the host-resolved owner status for a known sender:
+  `true`, `false`, or absent when unknown. Internal turns omit it.
+
+Correlate message IDs within the channel, account, and conversation. These
+fields describe admission facts; they do not grant current authorization for
+side effects. Plugins must use the host's live action/approval authority. This
+metadata does not promise delivery by other harness implementations.
+
 Core only defines the nested `id` fields. Channel plugins that pass richer
 sender or chat metadata through the inbound helper can augment
 `PluginHookChannelSenderContext` or `PluginHookChannelChatContext` from

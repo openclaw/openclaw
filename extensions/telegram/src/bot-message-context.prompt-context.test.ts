@@ -127,6 +127,26 @@ const ambientRows = [
 ] as const;
 
 describe("Telegram prompt composition", () => {
+  it("publishes text-batch member ids while preserving the latest reply representative", async () => {
+    const first = message(20, "first fragment");
+    const last = message(21, "last fragment");
+    const context = await buildTelegramMessageContextForTest({
+      message: { ...first, text: "first fragment\nlast fragment" },
+      options: {
+        bufferedMessages: [first, last],
+        messageIdOverride: "21",
+        ingressBuffer: "text-batch",
+      },
+    });
+    expect(context?.ctxPayload).toMatchObject({
+      MessageSid: "21",
+      MessageSids: ["20", "21"],
+      MessageSidFirst: "20",
+      MessageSidLast: "21",
+      BodyForAgent: "first fragment\nlast fragment",
+    });
+  });
+
   it.each([
     { name: "existing plain DM", existing: true, reply: false, include: false },
     { name: "existing DM reply", existing: true, reply: true, include: true },

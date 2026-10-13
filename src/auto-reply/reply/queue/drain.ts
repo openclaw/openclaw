@@ -38,7 +38,7 @@ import {
   waitForQueueDebounce,
 } from "../../../utils/queue-helpers.js";
 import { isRoutableChannel } from "../route-reply.js";
-import { resolveCollectedRun } from "./collected-run.js";
+import { resolveCollectedRun, resolveCollectGroupIdentity } from "./collected-run.js";
 import {
   assertSingleAdmissionOwner,
   collectRuntimeMetadata,
@@ -1012,7 +1012,7 @@ export function scheduleFollowupDrain(
               transcriptPrompt,
               ...(userTurnTranscriptRecorder ? { userTurnTranscriptRecorder } : {}),
               run,
-              messageId: groupSource.messageId ?? resolveFollowupReplyAnchor(groupSource),
+              ...resolveCollectGroupIdentity(activeGroupItems, groupSource),
               enqueuedAt: Date.now(),
               ...routing,
               ...collectRuntimeMetadata(activeGroupItems, cancellation.signal),

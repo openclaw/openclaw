@@ -150,6 +150,8 @@ export type FollowupRun = {
   runObservers?: FollowupRunObservers;
   /** Provider message ID, when available (for deduplication). */
   messageId?: string;
+  /** Single external inbound source; absent for collected or synthetic multi-source work. */
+  causalMessageId?: string;
   summaryLine?: string;
   /** Turn-owned tool authority captured before queue ownership transfers. */
   toolsAllow?: string[];

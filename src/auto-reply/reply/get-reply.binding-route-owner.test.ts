@@ -173,6 +173,29 @@ async function invoke(
 }
 
 it.each([
+  { name: "single source", batch: {}, causal: "binding" },
+  { name: "batch list", batch: { MessageSids: ["binding", "last"] }, causal: undefined },
+  {
+    name: "batch boundaries",
+    batch: { MessageSidFirst: "binding", MessageSidLast: "last" },
+    causal: undefined,
+  },
+  {
+    name: "repeated one-source facts",
+    batch: { MessageSids: ["binding", "binding"] },
+    causal: "binding",
+  },
+])("projects causal identity at the reply producer for $name", async ({ batch, causal }) => {
+  const context = {
+    ...makeContext(baseRoute),
+    ...batch,
+  };
+  await invoke("getReply", context);
+  expect(vi.mocked(runEmbeddedAgent)).toHaveBeenCalledOnce();
+  expect(vi.mocked(runEmbeddedAgent).mock.calls[0]?.[0].causalMessageId).toBe(causal);
+});
+
+it.each([
   ["getReply", "earlier-child-change-during-later-base-read"],
   ["getReply", "derived-none-to-global"],
   ["dispatch", "metadata-during-touch"],

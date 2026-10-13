@@ -62,6 +62,7 @@ import {
 import {
   buildChannelSourceTurnId,
   readChannelSourceTurnId,
+  resolveCausalInboundMessageId,
   resolveReplySourceTurnId,
   setChannelSourceTurnId,
   shouldMintChannelSourceTurnId,
@@ -219,6 +220,10 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
   const sourceMessageId =
     normalizeOptionalString(sessionCtx.MessageSidFull) ??
     normalizeOptionalString(sessionCtx.MessageSid);
+  const causalMessageId = resolveCausalInboundMessageId(sessionCtx, {
+    inputProvenance,
+    isHeartbeat,
+  });
   const sourceTurnId =
     readChannelSourceTurnId(sessionCtx) ??
     (shouldMintChannelSourceTurnId(ctx.Provider ?? ctx.Surface ?? promptSessionCtx.Provider)
@@ -417,6 +422,8 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       groupTurn && groupTurn.round > 1
         ? groupTurn.messageId
         : (sessionCtx.MessageSidFull ?? sessionCtx.MessageSid),
+    // Reply anchors and aggregate representatives are not causal inbound identities.
+    ...(causalMessageId ? { causalMessageId } : {}),
     summaryLine: baseBodyTrimmedRaw,
     ...(queuedToolsAllow !== undefined ? { toolsAllow: queuedToolsAllow } : {}),
     ...(opts?.disableTools !== undefined ? { disableTools: opts.disableTools } : {}),

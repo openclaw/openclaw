@@ -8,6 +8,39 @@ vi.mock("./sticker-vision.runtime.js", () => ({
 }));
 
 describe("buildTelegramMessageContext media carriers", () => {
+  it("publishes album multiplicity including a member whose download failed", async () => {
+    const context = await buildTelegramMessageContextForTest({
+      message: {
+        chat: { id: 42, type: "private", first_name: "Ada" },
+        message_id: 20,
+        text: "album caption",
+      },
+      options: { messageIdOverride: "21" },
+      allMedia: [
+        { kind: "image", sourceMessageId: "20" },
+        { kind: "image", sourceMessageId: "21", unavailable: { reason: "download-failed" } },
+      ],
+    });
+    expect(context?.ctxPayload).toMatchObject({
+      MessageSid: "21",
+      MessageSids: ["20", "21"],
+      MessageSidFirst: "20",
+      MessageSidLast: "21",
+    });
+  });
+
+  it("keeps multiple attachments from one provider message single-source", async () => {
+    const context = await buildTelegramMessageContextForTest({
+      message: { chat: { id: 42, type: "private", first_name: "Ada" }, message_id: 20 },
+      allMedia: [
+        { kind: "image", sourceMessageId: "20" },
+        { kind: "document", sourceMessageId: "20" },
+      ],
+    });
+    expect(context?.ctxPayload.MessageSid).toBe("20");
+    expect(context?.ctxPayload.MessageSids).toBeUndefined();
+  });
+
   it("carries direct tool policy into a topic-bound admitted turn", async () => {
     const context = await buildTelegramMessageContextForTest({
       message: {
