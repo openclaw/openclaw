@@ -1035,6 +1035,16 @@ checkpoint mode or timeout, or archive-retention behavior.
 
 ### Slow reply preparation
 
+Before acknowledgement, `slow chat send` reports requests taking at least one
+second, including the first turn of `sessions.create`. Its `detail.admission.*`
+fields separate work admission and validation inside that admission.
+The `detail.persist.*` fields separate pending input staging,
+transcript persistence, and dashboard authority preparation.
+These fixed labels contain no message content or session identifiers and require
+no diagnostic flag. Durations include awaited work: `admission.revalidate` is
+nested inside `admission.work`, so their values must not be added together or
+treated as SQLite execution time.
+
 When a reply spends a long time preparing, inspect the normal Gateway logs:
 
 ```bash

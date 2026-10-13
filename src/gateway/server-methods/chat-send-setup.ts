@@ -162,6 +162,7 @@ export async function prepareAndAdmitChatSend(
     hasCurrentClientAuthority,
     withPreparedCurrent: sessionMutationAuthorization?.withPreparedCurrent,
     followRegistration: sessionMutationAuthorization?.followRegistration,
+    diagnostics,
   });
   if (!admitted.ok) {
     return undefined;
