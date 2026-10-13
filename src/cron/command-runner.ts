@@ -3,7 +3,7 @@ import { beginLifecycleWriteCustody } from "../infra/lifecycle-write-custody.js"
 import { hasCommandProcessCleanupError, type SpawnResult } from "../process/exec-result.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { isScheduledBackupCommand, SCHEDULED_BACKUP_TIMEOUT_SECONDS } from "./backup-command.js";
+import { isScheduledBackupCommand } from "./backup-command.js";
 import {
   buildCronCommandSummary,
   isCronCommandActionCriticalLine,
@@ -113,13 +113,9 @@ export async function runCronCommandJob(params: {
 
   const command = formatCommand(payload.argv);
   const noOutputTimeoutMs = secondsToMs(payload.noOutputTimeoutSeconds);
-  const isManagedBackup = isScheduledBackupCommand(params.job);
-  // Managed backup schedules can predate the archive-sized budget in their payload,
-  // so the generic ten-minute command deadline must not apply to them either way.
-  const commandTimeoutMs =
-    secondsToMs(payload.timeoutSeconds) ??
-    (isManagedBackup ? SCHEDULED_BACKUP_TIMEOUT_SECONDS * 1000 : DEFAULT_COMMAND_TIMEOUT_MS);
-  const releaseCustody = isManagedBackup ? beginLifecycleWriteCustody("backup") : undefined;
+  const releaseCustody = isScheduledBackupCommand(params.job)
+    ? beginLifecycleWriteCustody("backup")
+    : undefined;
   let failure: unknown;
   try {
     // Scope settlement replaces an already-produced command result with its cleanup
@@ -131,7 +127,7 @@ export async function runCronCommandJob(params: {
     try {
       result = await withCommandProcessScope(async () => {
         produced.result = await runCommandWithTimeout(payload.argv, {
-          timeoutMs: commandTimeoutMs,
+          timeoutMs: secondsToMs(payload.timeoutSeconds) ?? DEFAULT_COMMAND_TIMEOUT_MS,
           ...(payload.cwd ? { cwd: payload.cwd } : {}),
           ...(payload.input !== undefined ? { input: payload.input } : {}),
           ...(payload.env ? { env: payload.env } : {}),

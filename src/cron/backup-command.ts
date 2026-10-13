@@ -21,8 +21,10 @@ const BACKUP_COMMANDS = {
  * A managed backup copies a whole installation, so its runtime is sized by the data
  * (hours for a multi-gigabyte archive), not by a request. Cron's generic ten-minute
  * command deadline killed those runs, so the schedule declares this archive-sized
- * budget instead. `resolveCronJobTimeoutMs` and the cron command runner reuse it for
- * schedules created before the payload carried a timeout.
+ * budget in its own command payload instead. Both cron deadline layers already honor
+ * an explicit `payload.timeoutSeconds`, so no scheduler policy has to special-case
+ * backups. Re-running `backup enable` re-stamps this managed declaration, which is how
+ * a schedule written by an earlier release picks the budget up.
  */
 export const SCHEDULED_BACKUP_TIMEOUT_SECONDS = 24 * 60 * 60;
 

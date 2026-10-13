@@ -445,7 +445,10 @@ The interval defaults to `24h` when `--every` is omitted. An explicitly empty or
 
 Scheduled backup runs carry their own execution budget instead of the generic
 [ten-minute command default](/automation/cron-jobs/how-it-works): a full archive is sized by the data and takes
-hours on a multi-gigabyte installation. The budget also applies to schedules created by earlier releases.
+hours on a multi-gigabyte installation. A schedule created by an earlier release keeps the
+generic default until it is enabled again; re-running `openclaw backup enable` with the same
+mode and target re-stamps the managed declaration. An explicit `timeoutSeconds` on the job
+still wins.
 
 Offsite schedules accept `--namespace <name>`, `--claim-namespace`, `--no-include-workspace`, and
 `--keep-daily`, `--keep-weekly`, and `--keep-monthly`. They use the same archive,
