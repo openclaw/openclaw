@@ -346,8 +346,8 @@ it.for([
               const construction = resolveEmbeddedAttemptToolConstructionPlan({
                 toolsAllow: toolRunContext.runtimeToolAllowlist,
               });
-              const boundTools = expectDefined(
-                host.capabilities.createToolSurface,
+              const boundTools = await expectDefined(
+                host.capabilities.createToolSurfaceAsync,
                 "managed tool surface",
               )({
                 ...toolRunContext,

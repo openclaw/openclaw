@@ -96,7 +96,7 @@ it.each(["retargeted", "empty", "cancel-during-idle", "cancel-during-write"] as 
       expect(loadTranscriptEventsSync(target)).toEqual(before);
       expect(settled).toHaveBeenCalledTimes(scenario === "empty" ? 1 : 0);
       if (scenario === "retargeted") {
-        manager.setSessionTarget(replacement);
+        await manager.setSessionTargetAsync(replacement);
       }
       release.resolve();
       await heldWriter;

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "../../agents/sessions/session-manager.js";
@@ -201,8 +202,12 @@ it("rejects an oversized header before acquiring its payload", async () => {
 
 it("omits an oversized latest compaction boundary before acquiring its payload", async () => {
   await withBoundedContextScope(async (scope) => {
-    const manager = SessionManager.open(scope);
-    const kept = manager.appendMessage({ role: "user", content: "retained", timestamp: 1 });
+    const manager = await SessionManager.openAsync(scope);
+    const kept = await manager.appendMessageAsync({
+      role: "user",
+      content: "retained",
+      timestamp: 1,
+    });
     const marker = "synthetic-oversized-boundary:";
     await appendTranscriptEvent(scope, {
       type: "compaction",
@@ -357,9 +362,12 @@ it("retains the latest boundary and counts earlier resets before a truncated tai
 
 it("keeps reset history closed across compaction with a warm history cache", async () => {
   await withBoundedContextScope(async (scope) => {
-    const manager = SessionManager.open(scope);
-    const appendUser = (content: string) =>
-      manager.appendMessage({ role: "user", content, timestamp: 1 });
+    const manager = await SessionManager.openAsync(scope);
+    const appendUser = async (content: string) =>
+      expectDefined(
+        await manager.appendMessageAsync({ role: "user", content, timestamp: 1 }),
+        "user append must persist",
+      );
     const settle = async () => {
       manager.flushPendingPersistence();
       await waitForSessionTranscriptProjection(scope);
@@ -370,18 +378,18 @@ it("keeps reset history closed across compaction with a warm history cache", asy
       expect(page.events.map(({ event }) => (event as { id: string }).id)).toEqual(ids);
     };
 
-    appendUser("before-reset user");
-    manager.appendMessage(
+    await appendUser("before-reset user");
+    await manager.appendMessageAsync(
       makeAgentAssistantMessage({
         content: [{ type: "text", text: "before-reset assistant" }],
       }),
     );
-    manager.appendResetBoundary("new");
-    const freshUserId = appendUser("fresh user");
+    await manager.appendResetBoundaryAsync("new");
+    const freshUserId = await appendUser("fresh user");
     await settle();
     expectHistory([freshUserId]);
 
-    manager.appendCompaction("fresh-only summary", freshUserId, 100);
+    await manager.appendCompactionAsync("fresh-only summary", freshUserId, 100);
     await settle();
     expectHistory([freshUserId]);
     expect(manager.buildSessionContext().messages).toMatchObject([
@@ -390,14 +398,14 @@ it("keeps reset history closed across compaction with a warm history cache", asy
     ]);
     expect(readActiveTranscriptStats(scope).eventCount).toBe(2);
 
-    const nextUserId = appendUser("after compaction");
+    const nextUserId = await appendUser("after compaction");
     await settle();
     expectHistory([freshUserId, nextUserId]);
     expect(readActiveTranscriptStats(scope).eventCount).toBe(3);
 
     // A newer reset wins for both scopes; another compaction must not revive older resets.
-    manager.appendResetBoundary("new", nextUserId);
-    const newestUserId = appendUser("after second reset");
+    await manager.appendResetBoundaryAsync("new", nextUserId);
+    const newestUserId = await appendUser("after second reset");
     await settle();
     expectHistory([nextUserId, newestUserId]);
     expect(manager.buildSessionContext().messages).toMatchObject([
@@ -406,10 +414,10 @@ it("keeps reset history closed across compaction with a warm history cache", asy
     ]);
     expect(readActiveTranscriptStats(scope).eventCount).toBe(2);
 
-    manager.appendCompaction("newest-only summary", newestUserId, 100);
+    await manager.appendCompactionAsync("newest-only summary", newestUserId, 100);
     await settle();
     expectHistory([nextUserId, newestUserId]);
-    const reopened = SessionManager.open(scope);
+    const reopened = await SessionManager.openAsync(scope);
     expect(reopened.buildSessionContext().messages).toMatchObject([
       { role: "compactionSummary", summary: "newest-only summary" },
       { role: "user", content: "after second reset" },
@@ -515,14 +523,14 @@ it("counts retained raw bytes without hydrating private native payloads", async 
   await withBoundedContextScope(async (scope) => {
     const marker = "synthetic-retained-native-payload:";
     const privateText = marker + "x".repeat(1024 * 1024);
-    const manager = SessionManager.open(scope);
-    const kept = manager.appendMessage({
+    const manager = await SessionManager.openAsync(scope);
+    const kept = await manager.appendMessageAsync({
       role: "user",
       content: "kept",
       timestamp: 1,
       __openclaw: { upstreamUserText: privateText },
-    } as Parameters<SessionManager["appendMessage"]>[0]);
-    manager.appendResetBoundary("new", kept);
+    } as Parameters<SessionManager["appendMessageAsync"]>[0]);
+    await manager.appendResetBoundaryAsync("new", kept);
     await waitForSessionTranscriptProjection(scope);
     const originalParse = JSON.parse;
     let privateBytes = 0;

@@ -10,7 +10,6 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { readConversationBindingRouteFacts } from "../conversation-binding-route-facts.js";
 import {
   ensureConfiguredBindingRouteReady,
-  resolveRuntimeConversationBindingRoute,
   resolveRuntimeConversationBindingRouteAsync,
   inspectRuntimeConversationBindingRoute,
   type RuntimeConversationBindingRouteResult,
@@ -77,37 +76,40 @@ describe("runtime conversation binding route", () => {
   it.each([
     { targetSessionKey: "agent:review:home", metadata: { agentId: "other" } },
     { targetSessionKey: "global", metadata: { agentId: "review" } },
-  ])("constructs the bound owner's route before roster selection ($targetSessionKey)", (target) => {
-    const binding = createBinding(target);
-    registerAdapter(binding);
-    const session = { mainKey: "home", groupScope: "main" as const };
-    const result = resolveRuntimeConversationBindingRoute({
-      conversation: binding.conversation,
-      resolveRoute: ({ boundAgentId }) =>
-        resolveAgentRoute({
-          cfg: boundAgentId
-            ? { session }
-            : { session, agents: { ownership: "explicit", entries: { main: {}, review: {} } } },
-          defaultAgentId: boundAgentId,
-          channel: "demo",
-          peer: { kind: "group", id: "room-1" },
-        }),
-    });
-    expect(result.route).toMatchObject({
-      agentId: "review",
-      sessionKey: target.targetSessionKey,
-      mainSessionKey: "agent:review:home",
-      groupScope: "main",
-      lastRoutePolicy: target.targetSessionKey === "global" ? "session" : "main",
-    });
-    expect(result.boundAgentId).toBe("review");
-    expect(readConversationBindingRouteFacts(result.route)).toMatchObject({
-      kind: "agent",
-      agentId: "review",
-      observedAgentId: "review",
-      bindingId: binding.bindingId,
-    });
-  });
+  ])(
+    "constructs the bound owner's route before roster selection ($targetSessionKey)",
+    async (target) => {
+      const binding = createBinding(target);
+      registerAdapter(binding);
+      const session = { mainKey: "home", groupScope: "main" as const };
+      const result = await resolveRuntimeConversationBindingRouteAsync({
+        conversation: binding.conversation,
+        resolveRoute: ({ boundAgentId }) =>
+          resolveAgentRoute({
+            cfg: boundAgentId
+              ? { session }
+              : { session, agents: { ownership: "explicit", entries: { main: {}, review: {} } } },
+            defaultAgentId: boundAgentId,
+            channel: "demo",
+            peer: { kind: "group", id: "room-1" },
+          }),
+      });
+      expect(result.route).toMatchObject({
+        agentId: "review",
+        sessionKey: target.targetSessionKey,
+        mainSessionKey: "agent:review:home",
+        groupScope: "main",
+        lastRoutePolicy: target.targetSessionKey === "global" ? "session" : "main",
+      });
+      expect(result.boundAgentId).toBe("review");
+      expect(readConversationBindingRouteFacts(result.route)).toMatchObject({
+        kind: "agent",
+        agentId: "review",
+        observedAgentId: "review",
+        bindingId: binding.bindingId,
+      });
+    },
+  );
 
   it.each([
     null,
@@ -120,10 +122,10 @@ describe("runtime conversation binding route", () => {
       },
     }),
     createBinding({ targetSessionKey: "global" }),
-  ])("does not invent an agent for a binding without an agent owner (%j)", (binding) => {
+  ])("does not invent an agent for a binding without an agent owner (%j)", async (binding) => {
     registerAdapter(binding);
-    expect(() =>
-      resolveRuntimeConversationBindingRoute({
+    await expect(
+      resolveRuntimeConversationBindingRouteAsync({
         conversation: { channel: "demo", accountId: "default", conversationId: "room-1" },
         resolveRoute: ({ boundAgentId }) =>
           resolveAgentRoute({
@@ -132,7 +134,7 @@ describe("runtime conversation binding route", () => {
             defaultAgentId: boundAgentId,
           }),
       }),
-    ).toThrow(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
+    ).rejects.toThrow(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
   });
 
   it.each(["main", "home"])(
@@ -240,7 +242,7 @@ describe("runtime conversation binding route", () => {
     },
   ])(
     "projects $name and touches only its owning channel account",
-    ({ binding, kind, agentId, touchBinding }) => {
+    async ({ binding, kind, agentId, touchBinding }) => {
       const route = createRoute();
       const { resolveByConversation, touch } = registerAdapter(binding);
       const siblingTouches = [
@@ -251,7 +253,7 @@ describe("runtime conversation binding route", () => {
           registerAdapter(createBinding({ conversation: { ...binding.conversation, ...scope } }))
             .touch,
       );
-      const result = resolveRuntimeConversationBindingRoute({
+      const result = await resolveRuntimeConversationBindingRouteAsync({
         route,
         conversation: binding.conversation,
         touchBinding,
@@ -287,19 +289,19 @@ describe("runtime conversation binding route", () => {
     },
   );
 
-  it("rejects an opaque target when its plugin ownership metadata is missing", () => {
+  it("rejects an opaque target when its plugin ownership metadata is missing", async () => {
     const binding = createBinding({
       targetSessionKey: "plugin-thread-1",
       metadata: { agentId: "review" },
     });
     registerAdapter(binding);
 
-    expect(() =>
-      resolveRuntimeConversationBindingRoute({
+    await expect(
+      resolveRuntimeConversationBindingRouteAsync({
         route: createRoute(),
         conversation: binding.conversation,
       }),
-    ).toThrow();
+    ).rejects.toThrow();
   });
 });
 

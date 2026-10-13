@@ -4,7 +4,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -33,7 +32,6 @@ import {
   dismissChannelPairingRequest,
   listChannelPairingRequests,
   readChannelAllowFromStore,
-  readChannelAllowFromStoreSync,
   removeChannelAllowFromStoreEntry,
   resolveChannelPairingRequestId,
   upsertChannelPairingRequest,
@@ -341,16 +339,8 @@ describe("pairing store", () => {
     const env = pairingEnv;
     writeAllowFromFixture({ env, channel: "telegram", accountId: "yy", allowFrom: ["1001"] });
     await expect(readChannelAllowFromStore("telegram", env, "yy")).resolves.toEqual(["1001"]);
-    expect(readChannelAllowFromStoreSync("telegram", env, "yy")).toEqual(["1001"]);
 
     writeAllowFromFixture({ env, channel: "telegram", accountId: "yy", allowFrom: ["10022"] });
     await expect(readChannelAllowFromStore("telegram", env, "yy")).resolves.toEqual(["10022"]);
-    const sql = observeHostDataSql();
-    try {
-      expect(readChannelAllowFromStoreSync("telegram", env, "yy")).toEqual(["10022"]);
-      expect(sql.queries.filter((query) => query.includes("channel_pairing_requests"))).toEqual([]);
-    } finally {
-      sql.restore();
-    }
   });
 });

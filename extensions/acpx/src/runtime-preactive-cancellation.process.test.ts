@@ -112,6 +112,8 @@ it.each(["queued", "setup"] as const)(
             shouldRouteToOriginating: false,
             shouldSendToolSummaries: false,
             shouldSendFullToolDetails: false,
+            shouldSendToolSummariesAsync: async () => false,
+            shouldSendFullToolDetailsAsync: async () => false,
             sendPolicy: "allow",
           },
           {

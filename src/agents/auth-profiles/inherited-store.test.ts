@@ -133,7 +133,7 @@ it.each([
       return runtime.loadAuthProfileStoreWithoutExternalProfiles(workerDir, options);
     }
     if (mode === "local-update") {
-      return runtime.ensureAuthProfileStoreForLocalUpdate(workerDir);
+      return runtime.ensureAuthProfileStoreForLocalUpdateAsync(workerDir);
     }
     if (mode === "prepared-snapshot") {
       setRuntimeAuthProfileStoreSnapshot(local, workerDir);

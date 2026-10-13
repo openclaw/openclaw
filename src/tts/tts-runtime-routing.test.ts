@@ -18,7 +18,7 @@ import {
   requireFirstSynthesisRequest,
   requireRecord,
   resolveTtsConfig,
-  resolveTtsPrefsPath,
+  resolveTtsPrefsPathAsync,
   setRuntimeConfigSnapshot,
   setTtsMachinePrefsPathResolver,
   synthesizeMock,
@@ -33,13 +33,13 @@ import {
 } from "./tts-runtime.test-support.js";
 
 describe("TTS runtime native voice-note routing", () => {
-  it("prefers the environment preference path over migrated machine state", () => {
+  it("prefers the environment preference path over migrated machine state", async () => {
     const previousEnvPath = process.env.OPENCLAW_TTS_PREFS;
     const envPath = prefsPathFor("env-override");
     setTtsMachinePrefsPathResolver(() => prefsPathFor("machine-state"));
     process.env.OPENCLAW_TTS_PREFS = envPath;
     try {
-      expect(resolveTtsPrefsPath(resolveTtsConfig({}))).toBe(envPath);
+      expect(await resolveTtsPrefsPathAsync(resolveTtsConfig({}))).toBe(envPath);
     } finally {
       if (previousEnvPath === undefined) {
         delete process.env.OPENCLAW_TTS_PREFS;

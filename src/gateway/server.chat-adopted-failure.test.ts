@@ -13,7 +13,7 @@ import {
   type MockInstance,
 } from "vitest";
 import { resolveAgentDir } from "../agents/agent-scope.js";
-import { upsertAuthProfile } from "../agents/auth-profiles.js";
+import { upsertAuthProfileAsync } from "../agents/auth-profiles.js";
 import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../agents/failover/user-copy.js";
 import { withFullRuntimeReplyConfig } from "../auto-reply/reply/get-reply-fast-path.js";
 import * as replyRun from "../auto-reply/reply/get-reply-run.js";
@@ -176,7 +176,7 @@ describe("chat.send quoted model profiles", () => {
         },
       },
     });
-    upsertAuthProfile({
+    await upsertAuthProfileAsync({
       agentDir: resolveAgentDir(getRuntimeConfig(), "main"),
       profileId: "openai:before",
       credential: { type: "api_key", provider: "openai", key: "synthetic-before-key" },
@@ -244,7 +244,7 @@ describe("chat.send quoted model profiles", () => {
   ])(
     "persists the exact model and profile only in this session: %s",
     async (command, profile, provider, model) => {
-      upsertAuthProfile({
+      await upsertAuthProfileAsync({
         agentDir: resolveAgentDir(getRuntimeConfig(), "main"),
         profileId: profile,
         credential: { type: "api_key", provider, key: "synthetic-selected-key" },

@@ -2,10 +2,10 @@ import type { PluginCapabilityCatalog } from "./capability-catalog.types.js";
 
 /** Host operations stay native; catalog construction must not start sessions or read stores. */
 export type PluginCapabilityCatalogContext = {
-  /** @deprecated Use isProviderApiKeyConfiguredAsync. Removed at the next Plugin SDK major. */
+  /** @deprecated Use isProviderApiKeyConfiguredAsync. Removal requires stable deprecation and a compatibility period before a later normal release. */
   isProviderApiKeyConfigured: typeof import("./provider-auth-availability.js").isProviderApiKeyConfigured;
   isProviderApiKeyConfiguredAsync?: typeof import("./provider-auth-availability.js").isProviderApiKeyConfiguredAsync;
-  /** @deprecated Use isProviderAuthProfileConfiguredAsync. Removed at the next Plugin SDK major. */
+  /** @deprecated Use isProviderAuthProfileConfiguredAsync. Removal requires stable deprecation and a compatibility period before a later normal release. */
   isProviderAuthProfileConfigured: typeof import("./provider-auth-availability.js").isProviderAuthProfileConfigured;
   isProviderAuthProfileConfiguredAsync?: typeof import("./provider-auth-availability.js").isProviderAuthProfileConfiguredAsync;
   resolveAgentDir: typeof import("../agents/agent-scope-config.js").resolveAgentDir;
@@ -13,8 +13,6 @@ export type PluginCapabilityCatalogContext = {
   resolveProviderRequestHeaders: typeof import("../agents/provider-request-config.js").resolveProviderRequestHeaders;
   resolveProviderAuthProfileApiKey: typeof import("./provider-auth-availability.js").resolveProviderAuthProfileApiKey;
   resolveApiKeyForProvider: typeof import("./runtime/runtime-model-auth.runtime.js").resolveProviderRuntimeApiKey;
-  /** @deprecated Use the host context's captureWsEventAsync; retained for shipped plugins. */
-  captureWsEvent: typeof import("../proxy-capture/runtime.js").captureWsEvent;
   createDebugProxyWebSocketAgent: typeof import("../proxy-capture/env.js").createDebugProxyWebSocketAgent;
   resolveDebugProxySettings: typeof import("../proxy-capture/env.js").resolveDebugProxySettings;
   fetchWithSsrFGuard: typeof import("../infra/net/fetch-guard.js").fetchWithSsrFGuard;

@@ -472,7 +472,6 @@ vi.mock("../../plugins/hook-runner-global.js", () => ({
 // mock-isolation: Reply routing supplies ACP snapshots without initializing live control state.
 vi.mock("../../acp/runtime/session-meta.js", () => ({
   listAcpSessionEntries: acpMocks.listAcpSessionEntries,
-  readAcpSessionEntry: acpMocks.readAcpSessionEntry,
   readAcpSessionEntryAsync: async (params: {
     sessionKey: string;
     agentId?: string;

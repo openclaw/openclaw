@@ -236,9 +236,11 @@ it.each(["completed", "interrupted"] as const)(
           totalTokensFresh: true,
           totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
         });
-        const transcript = SessionManager.open(scope, state.workspaceDir);
-        transcript.appendMessage(makeUserMessage("Remember the Cedar project receipt.", 1));
-        transcript.appendMessage(
+        const transcript = await SessionManager.openAsync(scope, state.workspaceDir);
+        await transcript.appendMessageAsync(
+          makeUserMessage("Remember the Cedar project receipt.", 1),
+        );
+        await transcript.appendMessageAsync(
           makeAssistantMessageFixture({
             provider: "test-provider",
             model: "owner-model",
@@ -402,7 +404,7 @@ it.each(["completed", "interrupted"] as const)(
           runtimeContext,
         );
         expect(humanMessages.findIndex(isModelRuntimeContextCarrier)).toBeGreaterThan(userIndex);
-        const canonicalHuman = SessionManager.open(scope)
+        const canonicalHuman = (await SessionManager.openAsync(scope))
           .buildSessionContext()
           .messages.findLast(
             (message) => message.role === "user" && text(message.content) === human,

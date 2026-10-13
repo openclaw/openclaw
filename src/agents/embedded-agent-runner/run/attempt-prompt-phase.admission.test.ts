@@ -44,7 +44,7 @@ describe("prompt projection write admission", () => {
         storePath: resolveDefaultSessionStorePath("main"),
       };
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      const manager = SessionManager.open(scope);
+      const manager = await SessionManager.openAsync(scope);
       const fixture = createFixture();
       fixture.input.prepared.sessionRuntime.sessionManager = manager;
       const projection = createToolResultPromptProjectionState();

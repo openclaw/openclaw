@@ -7,9 +7,9 @@ export const PROGRESS_RECEIPT_HANDOFF_COMPAT_RECORD = {
   introduced: "2026-09-19",
   deprecated: "2026-10-06",
   warningStarts: "2026-10-06",
-  removalGate: "next-plugin-sdk-major",
+  removalGate: "after-stable-deprecation",
   replacement:
-    "Adapt editable progress cards through ReplyDispatchRuntimeInfo.adoptProgressDraft. The released receipt-based adoptProgressContinuation type is retained until the next Plugin SDK major and explicit breaking-release approval; the host never offers it, so adapters keep ordinary waiting-reply delivery.",
+    "Adapt editable progress cards through ReplyDispatchRuntimeInfo.adoptProgressDraft. The released receipt-based adoptProgressContinuation type is retained until removal after stable deprecation and a compatibility period; the host never offers it, so adapters keep ordinary waiting-reply delivery.",
   docsPath: "/plugins/sdk-migration/compatibility-policy#progress-card-handoff",
   surfaces: [
     "openclaw/plugin-sdk/reply-runtime.ReplyDispatchRuntimeInfo.adoptProgressContinuation",

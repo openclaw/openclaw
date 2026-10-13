@@ -10,13 +10,11 @@ import {
   listGenericCurrentConversationBindingsBySession,
   listGenericCurrentConversationBindingsBySessionsAsync,
   requiresRegisteredSessionBindingAdapter,
-  resolveGenericCurrentConversationBinding,
   captureGenericBindingSupport,
   inspectCurrentConversationBindingRecords,
   inspectGenericCurrentConversationBindingAsync,
   resolveGenericCurrentConversationBindingAsync,
   readGenericCurrentConversationBindingSelectionAsync,
-  touchGenericCurrentConversationBinding,
   touchGenericCurrentConversationBindingAsync,
   unbindGenericCurrentConversationBindings,
 } from "./current-conversation-bindings.js";
@@ -66,16 +64,12 @@ export { isSessionBindingError } from "./session-binding-errors.js";
 export type SessionBindingService = {
   bind: (input: SessionBindingBindInput) => Promise<SessionBindingRecord>;
   getCapabilities: (params: SessionBindingScope) => SessionBindingCapabilities;
-  /** @deprecated Use listBySessionAsync; removed in the next Plugin SDK major. */
+  /** @deprecated Use listBySessionAsync; removed in a later normal release after stable deprecation and a compatibility period. */
   listBySession: (targetSessionKey: string) => SessionBindingRecord[];
-  /** @deprecated Use resolveByConversationAsync. The synchronous form will be removed in the next Plugin SDK major. */
-  resolveByConversation: (ref: ConversationRef) => SessionBindingRecord | null;
-  /** @deprecated Use touchAsync. The synchronous form will be removed in the next Plugin SDK major. */
-  touch: (bindingId: string, at?: number, scope?: SessionBindingScope) => void;
   unbind: (input: SessionBindingUnbindInput) => Promise<SessionBindingRecord[]>;
 };
 
-/** Host service with explicit awaited mutations; the legacy structural type stays assignable. */
+/** Host service with explicit awaited reads and mutations. */
 export type AsyncSessionBindingService = SessionBindingService & {
   inspectByConversationAsync: typeof inspectSessionBindingByConversationAsync;
   resolveByConversationAsync: (ref: ConversationRef) => Promise<SessionBindingRecord | null>;
@@ -136,7 +130,7 @@ const ADAPTERS_BY_CHANNEL_ACCOUNT = resolveGlobalMap<string, SessionBindingAdapt
   SESSION_BINDING_ADAPTERS_KEY,
 );
 
-/** @deprecated Use registerSessionBindingAdapterV2; removed in the next Plugin SDK major. */
+/** @deprecated Use registerSessionBindingAdapterV2; removed in a later normal release after stable deprecation and a compatibility period. */
 export function registerSessionBindingAdapter(adapter: SessionBindingAdapter): void {
   warnPluginSdkDeprecation({
     family: "conversation-bindings",
@@ -327,7 +321,7 @@ export async function listSessionBindingsBySessionAsync(
   );
 }
 
-/** @deprecated Use inspectSessionBindingByConversationAsync; removed in the next Plugin SDK major. */
+/** @deprecated Use inspectSessionBindingByConversationAsync; removed in a later normal release after stable deprecation and a compatibility period. */
 export function inspectSessionBindingByConversation(
   ref: ConversationRef,
 ): SessionBindingInspection {
@@ -583,24 +577,6 @@ const DEFAULT_SESSION_BINDING_SERVICE: SessionBindingServiceV2 = {
     results.push(...listGenericCurrentConversationBindingsBySession(key));
     return dedupeBindings(results).filter((record) => routableBinding(record));
   },
-  resolveByConversation: (ref) => {
-    warnPluginSdkDeprecation({
-      family: "conversation-bindings",
-      method: "SessionBindingService.resolveByConversation",
-      replacement: "SessionBindingService.resolveByConversationAsync",
-      compatibility: "Synchronous binding operations retain commit-before-return compatibility.",
-    });
-    const normalized = normalizeConversationRef(ref);
-    if (!normalized.channel || !normalized.conversationId) {
-      return null;
-    }
-    const adapter = resolveAdapterForChannelAccount(normalized);
-    return routableBinding(
-      adapter
-        ? adapter.resolveByConversation(normalized)
-        : resolveGenericCurrentConversationBinding(normalized),
-    );
-  },
   resolveByConversationAsync: async (ref) => {
     const normalized = captureConversationRef(ref);
     if (!normalized.channel || !normalized.conversationId) {
@@ -617,25 +593,6 @@ const DEFAULT_SESSION_BINDING_SERVICE: SessionBindingServiceV2 = {
         });
     assertAdapterSelectionCurrent(normalized, adapter);
     return routableBinding(binding);
-  },
-  touch: (bindingId, at, scope) => {
-    warnPluginSdkDeprecation({
-      family: "conversation-bindings",
-      method: "SessionBindingService.touch",
-      replacement: "SessionBindingService.touchAsync",
-      compatibility: "Synchronous binding operations retain commit-before-return compatibility.",
-    });
-    const normalizedBindingId = bindingId.trim();
-    if (!normalizedBindingId) {
-      return;
-    }
-    const adapters = getActiveRegisteredAdapters(scope);
-    for (const adapter of adapters) {
-      adapter.touch?.(normalizedBindingId, at);
-    }
-    if (!scope || adapters.length === 0) {
-      touchGenericCurrentConversationBinding(normalizedBindingId, at, scope);
-    }
   },
   touchAsync: async (bindingId, at, scope) => {
     const normalizedBindingId = bindingId.trim();

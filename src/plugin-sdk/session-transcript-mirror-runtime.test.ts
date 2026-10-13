@@ -19,7 +19,7 @@ import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js"
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
   readCodexSessionTranscriptEventsBeforeAdmission,
-  withCodexSessionTranscriptMirrorWriteLock,
+  withCodexSessionTranscriptMirrorWrite,
 } from "./codex-session-transcript-runtime.js";
 import {
   appendSessionTranscriptMessageByIdentity,
@@ -45,7 +45,7 @@ describe("private session transcript mirror runtime", () => {
     };
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
 
-    await withCodexSessionTranscriptMirrorWriteLock(scope, async (locked) => {
+    await withCodexSessionTranscriptMirrorWrite(scope, async (locked) => {
       expect(await locked.readMessageFacts({ idempotencyKeys: ["mirror-user"] })).toEqual({
         anchorsByIdempotencyKey: new Map(),
         existingIdempotencyKeys: new Set(),
@@ -126,7 +126,7 @@ describe("private session transcript mirror runtime", () => {
       ],
       hasMore: false,
     });
-    await withCodexSessionTranscriptMirrorWriteLock(scope, async (locked) => {
+    await withCodexSessionTranscriptMirrorWrite(scope, async (locked) => {
       const afterReconcile = await locked.appendMessageWithMessageSequence({
         message: {
           role: "assistant",
@@ -156,7 +156,7 @@ describe("private session transcript mirror runtime", () => {
       "session.transcript.batch",
     );
 
-    await withCodexSessionTranscriptMirrorWriteLock(scope, async (locked) => {
+    await withCodexSessionTranscriptMirrorWrite(scope, async (locked) => {
       expect(await locked.readMessageFacts({ idempotencyKeys: ["mirror-user"] })).toMatchObject({
         existingIdempotencyKeys: new Set(["mirror-user"]),
         messagesByIdempotencyKey: new Map([
@@ -203,7 +203,7 @@ describe("private session transcript mirror runtime", () => {
         withTranscriptWrite: async (run) => await run(),
       },
       () =>
-        withCodexSessionTranscriptMirrorWriteLock(scope, (locked) =>
+        withCodexSessionTranscriptMirrorWrite(scope, (locked) =>
           locked.appendMessageWithMessageSequence({
             message: { role: "assistant", content: "Committed reply" },
           }),
@@ -221,7 +221,7 @@ describe("private session transcript mirror runtime", () => {
     const offInternal = onInternalSessionTranscriptUpdate((update) => internalUpdates.push(update));
     const offPublic = onSessionTranscriptUpdate((update) => publicUpdates.push(update));
     try {
-      await withCodexSessionTranscriptMirrorWriteLock(scope, (locked) =>
+      await withCodexSessionTranscriptMirrorWrite(scope, (locked) =>
         locked.publishUpdate({
           lifecycleRevision: appended.lifecycleRevision,
           message: result.message,

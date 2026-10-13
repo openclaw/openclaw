@@ -78,8 +78,8 @@ it.each(["file", "sqlite"] as const)(
     );
     const fixture = storage === "sqlite" ? await writeSqliteSession() : undefined;
     if (fixture) {
-      const source = SessionManager.open(fixture.sessionTarget);
-      source.appendCustomMessageEntry("openclaw.sessions_yield", yieldText, false, {
+      const source = await SessionManager.openAsync(fixture.sessionTarget);
+      await source.appendCustomMessageEntryAsync("openclaw.sessions_yield", yieldText, false, {
         source: "sessions_yield",
         message: yieldText,
       });

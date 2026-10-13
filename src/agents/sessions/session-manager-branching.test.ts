@@ -1,5 +1,6 @@
 // Branch replacement keeps the live manager and durable identity on the same commit edge.
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -79,7 +80,9 @@ describe("SessionManager branch replacement", () => {
         replaceTranscriptEventsSync(scope, entries);
       }
       const manager =
-        mode === "sqlite" ? SessionManager.open(scope, dir) : SessionManager.fromEntries(entries);
+        mode === "sqlite"
+          ? await SessionManager.openAsync(scope, dir)
+          : SessionManager.fromEntries(entries);
 
       const branchId = await manager.createBranchedSession("reply");
       const expected = [
@@ -97,17 +100,19 @@ describe("SessionManager branch replacement", () => {
         expect(branchId).toBe(manager.getSessionId());
         expect(await loadTranscriptEvents(scope)).toEqual(entries);
         expect(
-          SessionManager.open({ ...scope, sessionId: branchId! }).getPersistedEntries(),
+          (
+            await SessionManager.openAsync({ ...scope, sessionId: branchId! })
+          ).getPersistedEntries(),
         ).toEqual(expected);
       } else {
         expect(branchId).toBeUndefined();
         expect(manager.getSessionTarget()).toBeUndefined();
       }
-      manager.appendCompaction("summary", "user", 1);
-      manager.appendResetBoundary("reset", "reply");
+      await manager.appendCompactionAsync("summary", "user", 1);
+      await manager.appendResetBoundaryAsync("reset", "reply");
       const reopened =
         mode === "sqlite"
-          ? SessionManager.openBounded(
+          ? await SessionManager.openBoundedAsync(
               { ...scope, sessionId: manager.getSessionId() },
               { maxBytes: 4096, maxEvents: 2 },
             )
@@ -148,22 +153,24 @@ describe("SessionManager branch replacement", () => {
       parentId: user.messageId,
     });
 
-    const sessionManager = SessionManager.open(scope, dir);
+    const sessionManager = await SessionManager.openAsync(scope, dir);
     const sourceTarget = sessionManager.getSessionTarget();
     expect(sourceTarget).toMatchObject(scope);
-    const observedBranches: unknown[] = [];
+    const observedBranches: Array<Promise<unknown>> = [];
     const stop = onSessionIdentityMutation((mutation) => {
       if (mutation.kind !== "replace" || !mutation.current.sessionKeys.includes(sessionKey)) {
         return;
       }
-      observedBranches.push({
+      const observedIdentity = {
         sessionId: sessionManager.getSessionId(),
         target: sessionManager.getSessionTarget(),
-        durableEntries: SessionManager.open({
+      };
+      observedBranches.push(
+        SessionManager.openAsync({
           ...scope,
           sessionId: mutation.current.sessionId!,
-        }).getEntries(),
-      });
+        }).then((manager) => ({ ...observedIdentity, durableEntries: manager.getEntries() })),
+      );
     });
     let branchedMarker: string | undefined;
     try {
@@ -175,7 +182,7 @@ describe("SessionManager branch replacement", () => {
 
     expect(branchedMarker).toBe(branchedSessionId);
     expect(branchedSessionId).not.toBe(sessionId);
-    expect(observedBranches).toEqual([
+    expect(await Promise.all(observedBranches)).toEqual([
       {
         sessionId: branchedSessionId,
         target: { ...sourceTarget, sessionId: branchedSessionId },
@@ -207,11 +214,11 @@ describe("SessionManager branch replacement", () => {
       expect.objectContaining({ id: user.messageId, type: "message" }),
       expect.objectContaining({ id: assistant.messageId, type: "message" }),
     ]);
-    expect(() => sessionManager.prepareTranscriptRewrite()).not.toThrow();
-    expect(sessionManager.removeTrailingEntries((entry) => entry.id === assistant.messageId)).toBe(
-      1,
-    );
-    expect(() => sessionManager.prepareTranscriptRewrite()).not.toThrow();
+    await sessionManager.prepareTranscriptRewriteAsync();
+    expect(
+      await sessionManager.removeTrailingEntriesAsync((entry) => entry.id === assistant.messageId),
+    ).toBe(1);
+    await sessionManager.prepareTranscriptRewriteAsync();
     await expect(loadTranscriptEvents({ ...scope, sessionId: branchedSessionId })).resolves.toEqual(
       [
         expect.objectContaining({ id: branchedSessionId, type: "session" }),
@@ -228,8 +235,16 @@ describe("SessionManager branch replacement", () => {
       sessionKey: "agent:main:branch-write-failure",
       storePath: path.join(dir, "sessions.json"),
     };
-    const manager = SessionManager.open(scope, dir);
-    const leafId = manager.appendMessage({ role: "user", content: "source", timestamp: 1 });
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    const manager = await SessionManager.openAsync(scope, dir);
+    const leafId = expectDefined(
+      await manager.appendMessageAsync({
+        role: "user",
+        content: "source",
+        timestamp: 1,
+      }),
+      "Expected appended message",
+    );
     const beforeEntry = loadSessionEntry(scope);
     const beforeEvents = await loadTranscriptEvents(scope);
     const beforeEntries = manager.getEntries();
@@ -292,7 +307,7 @@ describe("SessionManager branch replacement", () => {
         message: textAssistant("answer before raced branch"),
         parentId: user.messageId,
       });
-      const sessionManager = SessionManager.open(scope, dir);
+      const sessionManager = await SessionManager.openAsync(scope, dir);
       const runAsWriter = <T>(run: () => Promise<T>) =>
         withOwnedSessionTranscriptWrites(
           {
@@ -371,13 +386,13 @@ describe("SessionManager branch replacement", () => {
           activeWriterRunId: writerChanged ? "branch-replacement-writer" : "branch-original-writer",
         });
         if (change === "successor-writer") {
-          expect(() =>
-            sessionManager.appendMessage({
+          await expect(
+            sessionManager.appendMessageAsync({
               role: "user",
               content: "stale successor append",
               timestamp: commitStartedAt,
             }),
-          ).toThrow(SessionTranscriptWriterClaimReboundError);
+          ).rejects.toThrow(SessionTranscriptWriterClaimReboundError);
         }
         expect(readManagerState()).toEqual(beforeBranch);
       } else {

@@ -3,7 +3,6 @@ import type { ConversationBindingInspection } from "openclaw/plugin-sdk/conversa
 import {
   inspectRuntimeConversationBindingRoute,
   resolveConfiguredBindingRoute,
-  type resolveRuntimeConversationBindingRoute,
   type RuntimeConversationBindingRouteResult,
   resolveRuntimeConversationBindingRouteAsync,
 } from "openclaw/plugin-sdk/conversation-binding-runtime";
@@ -14,7 +13,7 @@ import { shouldIgnoreStaleDiscordRouteBinding } from "./route-resolution.js";
 type DiscordConversationBindingRouteParams = {
   cfg: OpenClawConfig;
   resolveRoute: NonNullable<
-    Parameters<typeof resolveRuntimeConversationBindingRoute>[0]["resolveRoute"]
+    Parameters<typeof inspectRuntimeConversationBindingRoute>[0]["resolveRoute"]
   >;
   accountId: string;
   runtimeConversationId: string;

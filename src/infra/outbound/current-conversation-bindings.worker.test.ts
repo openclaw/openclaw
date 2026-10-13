@@ -21,10 +21,7 @@ import { requireNodeSqlite } from "../node-sqlite.js";
 import { SQLITE_WORKER_MAX_MESSAGE_BYTES } from "../sqlite-worker-contract.js";
 import * as admission from "../sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../sqlite-worker-owner-probe.test-support.js";
-import {
-  createAccountScopedConversationBindingManager,
-  createAccountScopedConversationBindingManagerV2,
-} from "./account-scoped-conversation-bindings.js";
+import { createAccountScopedConversationBindingManagerV2 } from "./account-scoped-conversation-bindings.js";
 import { resolveBoundDeliveryDestination } from "./bound-delivery-router.js";
 import {
   bindCurrentConversationRecordAsync,
@@ -404,9 +401,9 @@ it.each(["transaction", "commit"] as const)(
   },
 );
 
-it("keeps account touch bytes identical and rejects a manager shadowed by another adapter", async () => {
+it("rejects account touches from a manager shadowed by another adapter", async () => {
   await withOpenClawTestState({ label: "account-binding-worker" }, async () => {
-    const manager = createAccountScopedConversationBindingManager({
+    const manager = createAccountScopedConversationBindingManagerV2({
       channel: "fixture",
       accountId: "owner",
       cfg: { session: { threadBindings: { idleHours: 1, maxAgeHours: 2 } } },
@@ -422,7 +419,7 @@ it("keeps account touch bytes identical and rejects a manager shadowed by anothe
       resolveByConversation: () => null,
     };
     try {
-      manager.bindConversation({
+      await manager.bindConversationAsync({
         conversationId: "thread",
         targetSessionKey: "agent:main:target",
         targetKind: "session",
@@ -437,13 +434,9 @@ it("keeps account touch bytes identical and rejects a manager shadowed by anothe
         "SELECT record_json, metadata_json, expires_at FROM current_conversation_bindings WHERE binding_id = ?",
       );
       const at = original.boundAt + 1_000;
-      manager.touchConversation("thread", at);
+      await manager.touchConversationAsync("thread", at);
       const expected = row.get(original.bindingId);
-      updateCurrentConversationBindingRecord(ref, () => original);
       const service = getSessionBindingService();
-      await service.touchAsync(original.bindingId, at, ref);
-      expect(row.get(original.bindingId)).toEqual(expected);
-
       const pending = service.touchAsync(original.bindingId, at + 1_000, ref);
       registerSessionBindingAdapter(replacement);
       await expect(pending).rejects.toThrow("no longer active");
@@ -457,7 +450,7 @@ it("keeps account touch bytes identical and rejects a manager shadowed by anothe
 
 it("joins expiry pruning refused by the stopped manager without deleting its row", async () => {
   await withOpenClawTestState({ label: "binding-list-prune-manager" }, async () => {
-    const manager = createAccountScopedConversationBindingManager({
+    const manager = createAccountScopedConversationBindingManagerV2({
       channel: "fixture",
       accountId: "owner",
       cfg: {},
@@ -593,7 +586,7 @@ it.each(["replaced", "removed", "expired", "malformed"] as const)(
 
 it("binds, refreshes and removes generic and account-owned rows without caller-thread SQL", async () => {
   await withOpenClawTestState({ label: "binding-mutations-worker" }, async () => {
-    const manager = createAccountScopedConversationBindingManager({
+    const manager = createAccountScopedConversationBindingManagerV2({
       channel: "fixture",
       accountId: "owner",
       cfg: {},

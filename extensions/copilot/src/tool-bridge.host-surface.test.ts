@@ -8,8 +8,9 @@ import { createCopilotTestHostCapabilities } from "./host-capability.test-suppor
 import { createCopilotToolBridge, makeInvocation, runSdkTool } from "./tool-bridge.test-support.js";
 
 const mocks = vi.hoisted(() => ({ publicFactory: vi.fn(() => []) }));
+// mock-isolation: Host-surface fixtures supply prepared tools without constructing the public agent runtime.
 vi.mock("openclaw/plugin-sdk/agent-harness", () => ({
-  createOpenClawCodingTools: mocks.publicFactory,
+  createOpenClawCodingToolsAsync: mocks.publicFactory,
 }));
 
 afterEach(() => vi.clearAllMocks());

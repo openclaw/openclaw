@@ -10,7 +10,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { createDebugProxyWebSocketAgent, resolveDebugProxySettings } from "../proxy-capture/env.js";
-import { captureWsEvent, captureWsEventAsync } from "../proxy-capture/runtime.js";
+import { captureWsEventAsync } from "../proxy-capture/runtime.js";
 import { createRealtimeTranscriptionWebSocketSession } from "../realtime-transcription/websocket-session.js";
 import type { PluginCapabilityCatalogHostContext } from "./capability-catalog-context.types.js";
 import type { createProviderAuthAvailability } from "./provider-auth-availability-core.js";
@@ -40,7 +40,6 @@ export function createPluginCapabilityCatalogContext(
       (await import("./runtime/runtime-model-auth.runtime.js")).resolveProviderRuntimeApiKey(
         params,
       ),
-    captureWsEvent,
     captureWsEventAsync,
     createDebugProxyWebSocketAgent,
     resolveDebugProxySettings,

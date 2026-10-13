@@ -1,4 +1,5 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
@@ -86,7 +87,11 @@ async function createSession(messages: string[] = [], agentId = "main") {
       message: { role: "user", content, timestamp: 0 },
     });
   }
-  return { target, manager: SessionManager.open(target, dir), params: { sessionTarget: target } };
+  return {
+    target,
+    manager: await SessionManager.openAsync(target, dir),
+    params: { sessionTarget: target },
+  };
 }
 
 it("recovers SQLite-only compacted history across every CLI reader", async () => {
@@ -99,13 +104,16 @@ it("recovers SQLite-only compacted history across every CLI reader", async () =>
       storePath: path.join(stateDir, "agents", "audit", "sessions", "sessions.json"),
     };
     await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-    const manager = SessionManager.open(target, stateDir);
-    const kept = manager.appendMessage(makeUserMessage("CANONICAL_HISTORY", 1));
-    manager.appendCompaction("CANONICAL_SUMMARY", kept, 1000);
-    manager.appendMessage({ role: "user", content: "CANONICAL_TAIL", timestamp: 3 });
+    const manager = await SessionManager.openAsync(target, stateDir);
+    const kept = expectDefined(
+      await manager.appendMessageAsync(makeUserMessage("CANONICAL_HISTORY", 1)),
+      "canonical fixture message ID",
+    );
+    await manager.appendCompactionAsync("CANONICAL_SUMMARY", kept, 1000);
+    await manager.appendMessageAsync({ role: "user", content: "CANONICAL_TAIL", timestamp: 3 });
     manager.flushPendingPersistence();
     expect(loadTranscriptEventsSync(target)).toHaveLength(4);
-    expect(SessionManager.open(target).buildSessionContext().messages).toMatchObject([
+    expect((await SessionManager.openAsync(target)).buildSessionContext().messages).toMatchObject([
       { role: "compactionSummary", summary: "CANONICAL_SUMMARY" },
       { role: "user", content: "CANONICAL_HISTORY" },
       { role: "user", content: "CANONICAL_TAIL" },
@@ -146,10 +154,10 @@ describe("canonical CLI history", () => {
         excludeFromContext: true,
         timestamp: 1,
       };
-      const retained = manager.appendMessage(retainedMessage);
-      manager.appendResetBoundary("reset", retained);
-      manager.appendMessage({ role: "user", content: "next", timestamp: 2 });
-      manager.appendMessage({
+      const retained = await manager.appendMessageAsync(retainedMessage);
+      await manager.appendResetBoundaryAsync("reset", retained);
+      await manager.appendMessageAsync({ role: "user", content: "next", timestamp: 2 });
+      await manager.appendMessageAsync({
         role: "custom",
         customType: "display-only",
         content: "x".repeat(5 * 1024 * 1024),
@@ -179,8 +187,8 @@ describe("canonical CLI history", () => {
     "replays durable notes only from the canonical %s window",
     async (boundary) => {
       const { params, manager } = await createSession();
-      const appendNote = (content: string, extra = {}) =>
-        manager.appendMessage({
+      const appendNote = async (content: string, extra = {}) =>
+        await manager.appendMessageAsync({
           role: "custom",
           customType: "openclaw.system-note",
           content,
@@ -188,17 +196,24 @@ describe("canonical CLI history", () => {
           timestamp: 1,
           ...extra,
         });
-      appendNote("OUTSIDE_WINDOW");
-      const firstKept = manager.appendMessage({ role: "user", content: "retained", timestamp: 2 });
-      appendNote("RETAINED_NOTE");
-      if (boundary === "compaction") {
-        manager.appendCompaction("summary", firstKept, 1000);
-      } else {
-        manager.appendResetBoundary("reset", firstKept);
+      await appendNote("OUTSIDE_WINDOW");
+      const firstKept = await manager.appendMessageAsync({
+        role: "user",
+        content: "retained",
+        timestamp: 2,
+      });
+      if (!firstKept) {
+        throw new Error("Expected the retained fixture message ID");
       }
-      appendNote("CURRENT_NOTE");
-      appendNote("EXCLUDED_NOTE", { excludeFromContext: true });
-      manager.appendMessage(buildRuntimeContextCustomMessage("TRANSIENT_NOTE")!);
+      await appendNote("RETAINED_NOTE");
+      if (boundary === "compaction") {
+        await manager.appendCompactionAsync("summary", firstKept, 1000);
+      } else {
+        await manager.appendResetBoundaryAsync("reset", firstKept);
+      }
+      await appendNote("CURRENT_NOTE");
+      await appendNote("EXCLUDED_NOTE", { excludeFromContext: true });
+      await manager.appendMessageAsync(buildRuntimeContextCustomMessage("TRANSIENT_NOTE")!);
       const before = structuredClone(manager.getEntries());
       for (const owner of [params, { ...params, sessionManager: manager }]) {
         const context = await loadCliSessionPromptContext(owner);
@@ -224,7 +239,7 @@ describe("canonical CLI history", () => {
     async (text) => {
       const manager = SessionManager.inMemory();
       for (const content of ["OLDER_NOTE", `NEWEST_NOTE\n${text.repeat(2000)}`]) {
-        manager.appendMessage({
+        await manager.appendMessageAsync({
           role: "custom",
           customType: "openclaw.system-note",
           content,
@@ -250,15 +265,25 @@ describe("canonical CLI history", () => {
     "projects only %s caller memory without changing its entries or timestamps",
     async (shape) => {
       const { params, manager: durable } = await createSession(["BORROWED_RETAINED"]);
-      durable.appendCompaction("BORROWED_SUMMARY", "msg-0", 1000);
-      durable.appendMessage({ role: "user", content: "BORROWED_TAIL", timestamp: 1 });
+      await durable.appendCompactionAsync("BORROWED_SUMMARY", "msg-0", 1000);
+      await durable.appendMessageAsync({ role: "user", content: "BORROWED_TAIL", timestamp: 1 });
       const manager = SessionManager.inMemory();
-      const first = manager.appendMessage({ role: "user", content: "OWNED_PREFIX", timestamp: 11 });
-      const retained = manager.appendMessage(makeUserMessage("OWNED_RETAINED", 12));
+      const first = expectDefined(
+        await manager.appendMessageAsync(makeUserMessage("OWNED_PREFIX", 11)),
+        "prefix fixture message ID",
+      );
+      const retained = expectDefined(
+        await manager.appendMessageAsync(makeUserMessage("OWNED_RETAINED", 12)),
+        "retained fixture message ID",
+      );
       if (shape === "compacted") {
-        manager.appendCompaction("OWNED_SUMMARY", retained, 1000, { source: "owned" });
+        await manager.appendCompactionAsync("OWNED_SUMMARY", retained, 1000, { source: "owned" });
       }
-      const tail = manager.appendMessage({ role: "user", content: "OWNED_TAIL", timestamp: 13 });
+      const tail = await manager.appendMessageAsync({
+        role: "user",
+        content: "OWNED_TAIL",
+        timestamp: 13,
+      });
       const owned = { ...params, sessionManager: manager };
       const before = structuredClone(manager.getEntries());
       const hooks = await loadCliSessionHistoryMessages(owned);
@@ -286,8 +311,12 @@ describe("canonical CLI history", () => {
         });
       }
       expect(manager.getEntries()).toEqual(before);
-      manager.appendResetBoundary("reset", tail);
-      manager.appendMessage({ role: "user", content: "OWNED_AFTER_RESET", timestamp: 14 });
+      await manager.appendResetBoundaryAsync("reset", tail);
+      await manager.appendMessageAsync({
+        role: "user",
+        content: "OWNED_AFTER_RESET",
+        timestamp: 14,
+      });
       for (const load of [
         loadCliSessionHistoryMessages,
         loadCliSessionContextEngineMessages,
@@ -299,8 +328,12 @@ describe("canonical CLI history", () => {
         ]);
       }
       const branchManager = SessionManager.fromEntries([manager.getHeader(), ...before]);
-      branchManager.branch(first);
-      branchManager.appendMessage({ role: "user", content: "OWNED_BRANCH", timestamp: 15 });
+      await branchManager.branchAsync(first);
+      await branchManager.appendMessageAsync({
+        role: "user",
+        content: "OWNED_BRANCH",
+        timestamp: 15,
+      });
       for (const load of [
         loadCliSessionHistoryMessages,
         loadCliSessionContextEngineMessages,
@@ -316,14 +349,21 @@ describe("canonical CLI history", () => {
 
   it("bounds caller memory before replay and hook projection while retaining a compacted cut", async () => {
     const manager = SessionManager.inMemory();
-    const retained = manager.appendMessage({
+    const retained = await manager.appendMessageAsync({
       role: "user",
       content: "older large " + "x".repeat(5 * 1024 * 1024),
       timestamp: 1,
     });
-    manager.appendCompaction("OWNED_SUMMARY", retained, 1000);
+    if (!retained) {
+      throw new Error("Expected the retained fixture message ID");
+    }
+    await manager.appendCompactionAsync("OWNED_SUMMARY", retained, 1000);
     for (let index = 0; index < 125; index++) {
-      manager.appendMessage({ role: "user", content: `tail-${index}`, timestamp: index });
+      await manager.appendMessageAsync({
+        role: "user",
+        content: `tail-${index}`,
+        timestamp: index,
+      });
     }
     const params = { sessionManager: manager };
     const before = structuredClone(manager.getEntries());
@@ -375,7 +415,7 @@ describe("canonical CLI history", () => {
     await appendTranscriptEvent(target, header);
     await expect(hasCliSessionTranscript(params)).resolves.toBe(true);
     await expect(loadCliSessionHistoryMessages(params)).resolves.toEqual([]);
-    SessionManager.open(target).appendCustomEntry("state", {});
+    await (await SessionManager.openAsync(target)).appendCustomEntryAsync("state", {});
     await expect(hasCliSessionTranscript(params)).resolves.toBe(true);
     await expect(loadCliSessionHistoryMessages(params)).resolves.toEqual([]);
     const ephemeral = { sessionTarget: undefined };
@@ -412,8 +452,8 @@ describe("canonical CLI history", () => {
 
   it("keeps active-branch history after a durable branch switch", async () => {
     const { params, manager } = await createSession(["active root", "abandoned"]);
-    manager.branch("msg-0");
-    manager.appendMessage({ role: "user", content: "active tail", timestamp: 3 });
+    await manager.branchAsync("msg-0");
+    await manager.appendMessageAsync({ role: "user", content: "active tail", timestamp: 3 });
     for (const load of [loadCliSessionHistoryMessages, loadCliSessionContextEngineMessages]) {
       await expect(load(params)).resolves.toMatchObject([
         { content: "active root" },
@@ -424,8 +464,8 @@ describe("canonical CLI history", () => {
 
   it("uses retained prefixes for compaction and reset without reviving older context", async () => {
     const { params, manager } = await createSession(["summarized", "retained"]);
-    manager.appendCompaction("summary", "msg-1", 1000);
-    const tail = manager.appendMessage({ role: "user", content: "tail", timestamp: 3 });
+    await manager.appendCompactionAsync("summary", "msg-1", 1000);
+    const tail = await manager.appendMessageAsync({ role: "user", content: "tail", timestamp: 3 });
     await expect(loadCliSessionContextEngineMessages(params)).resolves.toMatchObject([
       { role: "compactionSummary", summary: "summary", firstKeptEntryId: "msg-1" },
       { content: "retained" },
@@ -436,8 +476,8 @@ describe("canonical CLI history", () => {
       { content: "retained" },
       { content: "tail" },
     ]);
-    manager.appendResetBoundary("reset", tail);
-    manager.appendMessage({ role: "user", content: "after reset", timestamp: 4 });
+    await manager.appendResetBoundaryAsync("reset", tail);
+    await manager.appendMessageAsync({ role: "user", content: "after reset", timestamp: 4 });
     for (const load of [loadCliSessionHistoryMessages, loadCliSessionContextEngineMessages]) {
       await expect(load(params)).resolves.toMatchObject([
         { content: "tail" },
@@ -467,7 +507,7 @@ describe("canonical CLI history", () => {
         ...fixture.params,
         ...(owner === "memory" ? { sessionManager: manager } : {}),
       };
-      const firstKept = manager.appendMessage({
+      const firstKept = await manager.appendMessageAsync({
         role: "custom",
         customType: "display-test",
         content: "display only",
@@ -475,13 +515,20 @@ describe("canonical CLI history", () => {
         excludeFromContext: true,
         timestamp: 2,
       });
-      const retained = manager.appendMessage({ role: "user", content: "retained", timestamp: 3 });
-      if (boundary === "compaction") {
-        manager.appendCompaction("summary", firstKept, 1000);
-      } else {
-        manager.appendResetBoundary("reset", firstKept);
+      if (!firstKept) {
+        throw new Error("Expected the display fixture message ID");
       }
-      manager.appendMessage({ role: "user", content: "tail", timestamp: 4 });
+      const retained = await manager.appendMessageAsync({
+        role: "user",
+        content: "retained",
+        timestamp: 3,
+      });
+      if (boundary === "compaction") {
+        await manager.appendCompactionAsync("summary", firstKept, 1000);
+      } else {
+        await manager.appendResetBoundaryAsync("reset", firstKept);
+      }
+      await manager.appendMessageAsync({ role: "user", content: "tail", timestamp: 4 });
       const expected = [
         ...(boundary === "compaction" ? [{ role: "compactionSummary", summary: "summary" }] : []),
         { role: "user", content: "retained" },
@@ -581,7 +628,7 @@ describe("canonical CLI history", () => {
     "refuses history and durable notes across %s invalidations even when opted in",
     async (reason) => {
       const { params, manager } = await createSession(["previous account context"]);
-      manager.appendMessage({
+      await manager.appendMessageAsync({
         role: "custom",
         customType: "openclaw.system-note",
         content: "previous account private note",
@@ -591,7 +638,7 @@ describe("canonical CLI history", () => {
       manager.flushPendingPersistence();
       for (const compacted of [false, true]) {
         if (compacted) {
-          manager.appendCompaction("previous account summary", "msg-0", 1000);
+          await manager.appendCompactionAsync("previous account summary", "msg-0", 1000);
           manager.flushPendingPersistence();
         }
         for (const sessionManager of [undefined, manager]) {

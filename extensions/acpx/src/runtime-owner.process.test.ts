@@ -11,7 +11,7 @@ import {
   registerAcpRuntimeBackend,
   unregisterAcpRuntimeBackend,
   testing,
-  readAcpSessionEntry,
+  readAcpSessionEntryAsync,
 } from "openclaw/plugin-sdk/acp-runtime";
 import { createAdmittedHostCapabilityTestFixture } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
@@ -175,7 +175,7 @@ it.for(["global", "shared-project"])(
             identity: { acpxRecordId: previous.acpxRecordId },
           });
           const handle = previous;
-          expect(readAcpSessionEntry(target(handle.agentId))?.storeSessionKey).toBe(
+          expect((await readAcpSessionEntryAsync(target(handle.agentId)))?.storeSessionKey).toBe(
             handle.sessionKey,
           );
           const result = await turn(handle, `${handle.agentId}-second`);
@@ -283,7 +283,7 @@ it("closes a completed oneshot without mixing its replacement record identity", 
         admission.closeAdmission();
       }
       expect(JSON.parse(chunks.join(""))).toMatchObject({ history: ["oneshot-owned-history"] });
-      expect(readAcpSessionEntry(target)?.acp?.identity).toMatchObject({
+      expect((await readAcpSessionEntryAsync(target))?.acp?.identity).toMatchObject({
         state: "resolved",
         acpxRecordId: handle.acpxRecordId,
       });
@@ -296,7 +296,7 @@ it("closes a completed oneshot without mixing its replacement record identity", 
           clearMeta: true,
         }),
       ).resolves.toMatchObject({ runtimeClosed: true, metaCleared: true });
-      expect(readAcpSessionEntry(target)?.acp).toBeUndefined();
+      expect((await readAcpSessionEntryAsync(target))?.acp).toBeUndefined();
     } finally {
       testing.resetAcpSessionManagerForTests();
       unregisterAcpRuntimeBackend("acpx");

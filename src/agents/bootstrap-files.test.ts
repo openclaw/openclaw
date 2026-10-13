@@ -678,7 +678,7 @@ describe("hasCompletedBootstrapTurn", () => {
       sessionId: sessionTarget.sessionId,
       updatedAt: Date.now(),
     });
-    sessionManager = SessionManager.open(sessionTarget, tmpDir);
+    sessionManager = await SessionManager.openAsync(sessionTarget, tmpDir);
   });
 
   it("returns false without a complete SQLite transcript identity", async () => {
@@ -687,25 +687,37 @@ describe("hasCompletedBootstrapTurn", () => {
   });
 
   it("returns false when no full bootstrap marker has been recorded", async () => {
-    sessionManager.appendMessage({ role: "user", content: "hello", timestamp: 1 });
-    sessionManager.appendCustomEntry("openclaw:unrelated", { timestamp: 2 });
+    await sessionManager.appendMessageAsync({ role: "user", content: "hello", timestamp: 1 });
+    await sessionManager.appendCustomEntryAsync("openclaw:unrelated", { timestamp: 2 });
 
     expect(await hasCompletedBootstrapTurn(sessionTarget)).toBe(false);
   });
 
   it("invalidates a completion marker after compaction", async () => {
-    const firstEntryId = sessionManager.appendMessage(makeUserMessage("hello", 1));
-    sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, { timestamp: 2 });
-    sessionManager.appendCompaction("trimmed", firstEntryId, 10);
+    const firstEntryId = expectDefined(
+      await sessionManager.appendMessageAsync(makeUserMessage("hello", 1)),
+      "bootstrap fixture message ID",
+    );
+    await sessionManager.appendCustomEntryAsync(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, {
+      timestamp: 2,
+    });
+    await sessionManager.appendCompactionAsync("trimmed", firstEntryId, 10);
 
     expect(await hasCompletedBootstrapTurn(sessionTarget)).toBe(false);
   });
 
   it("accepts a newer full bootstrap marker after compaction", async () => {
-    const firstEntryId = sessionManager.appendMessage(makeUserMessage("hello", 1));
-    sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, { timestamp: 2 });
-    sessionManager.appendCompaction("trimmed", firstEntryId, 10);
-    sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, { timestamp: 3 });
+    const firstEntryId = expectDefined(
+      await sessionManager.appendMessageAsync(makeUserMessage("hello", 1)),
+      "bootstrap fixture message ID",
+    );
+    await sessionManager.appendCustomEntryAsync(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, {
+      timestamp: 2,
+    });
+    await sessionManager.appendCompactionAsync("trimmed", firstEntryId, 10);
+    await sessionManager.appendCustomEntryAsync(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, {
+      timestamp: 3,
+    });
 
     const hostExec = vi.spyOn(DatabaseSync.prototype, "exec");
     try {
@@ -717,19 +729,26 @@ describe("hasCompletedBootstrapTurn", () => {
   });
 
   it("invalidates a completion marker after a session reset", async () => {
-    sessionManager.appendMessage({ role: "user", content: "hello", timestamp: 1 });
-    sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, { timestamp: 2 });
-    sessionManager.appendResetBoundary("reset");
+    await sessionManager.appendMessageAsync({ role: "user", content: "hello", timestamp: 1 });
+    await sessionManager.appendCustomEntryAsync(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, {
+      timestamp: 2,
+    });
+    await sessionManager.appendResetBoundaryAsync("reset");
 
     expect(await hasCompletedBootstrapTurn(sessionTarget)).toBe(false);
   });
 
   it("ignores completion markers on an inactive transcript branch", async () => {
-    const firstEntryId = sessionManager.appendMessage(makeUserMessage("hello", 1));
-    sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, { timestamp: 2 });
+    const firstEntryId = expectDefined(
+      await sessionManager.appendMessageAsync(makeUserMessage("hello", 1)),
+      "bootstrap fixture message ID",
+    );
+    await sessionManager.appendCustomEntryAsync(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, {
+      timestamp: 2,
+    });
     expect(await hasCompletedBootstrapTurn(sessionTarget)).toBe(true);
 
-    sessionManager.appendLeafControl({
+    await sessionManager.appendLeafControlAsync({
       targetId: firstEntryId,
       appendParentId: firstEntryId,
     });

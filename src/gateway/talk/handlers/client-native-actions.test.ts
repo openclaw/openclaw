@@ -183,7 +183,7 @@ describe("native Talk action ownership through public plugin registration", () =
             await params.preparedRunAdmission.admit("embedded", "native-history-backend");
             const recorder = params.userTurnTranscriptRecorder;
             const manager = guardSessionManager(
-              SessionManager.open({ agentId, sessionId, sessionKey, storePath }),
+              await SessionManager.openAsync({ agentId, sessionId, sessionKey, storePath }),
               {
                 agentId: AGENT_ID,
                 sessionKey: SESSION_KEY,
@@ -364,16 +364,16 @@ describe("native Talk action ownership through public plugin registration", () =
         sessionKey: SESSION_KEY,
         storePath: resolveOpenClawAgentSqlitePath({ agentId: AGENT_ID }),
       };
-      const manager = SessionManager.open(scope);
-      const append = (
+      const manager = await SessionManager.openAsync(scope);
+      const append = async (
         content: string,
         flags: { display?: false; excludeFromContext?: true } = {},
-      ) => manager.appendMessage({ role: "user", content, timestamp: 1, ...flags });
-      append("ordinary");
-      append("context only", { display: false });
-      append("display only", { excludeFromContext: true });
+      ) => await manager.appendMessageAsync({ role: "user", content, timestamp: 1, ...flags });
+      await append("ordinary");
+      await append("context only", { display: false });
+      await append("display only", { excludeFromContext: true });
       for (let index = 0; index < 70; index++) {
-        append(`excluded sentinel ${index}`, { display: false, excludeFromContext: true });
+        await append(`excluded sentinel ${index}`, { display: false, excludeFromContext: true });
       }
       const raw = rawTranscriptRows();
       const display = await readSessionPreviewItemsFromTranscriptAsync(scope, 16, 800);
@@ -405,9 +405,9 @@ describe("native Talk action ownership through public plugin registration", () =
       ]);
       expect(rawTranscriptRows()).toEqual(raw);
       // Reset retention is intentional model context, even for a hidden/excluded user row.
-      const kept = append("reset-kept", { display: false, excludeFromContext: true });
-      manager.appendResetBoundary("new", kept);
-      append("post-reset excluded", { display: false, excludeFromContext: true });
+      const kept = await append("reset-kept", { display: false, excludeFromContext: true });
+      await manager.appendResetBoundaryAsync("new", kept);
+      await append("post-reset excluded", { display: false, excludeFromContext: true });
       const resetRaw = rawTranscriptRows();
       expect(
         (await readSessionPreviewItemsFromTranscriptAsync(scope, 16, 800, "model-context")).map(
@@ -421,7 +421,7 @@ describe("native Talk action ownership through public plugin registration", () =
       ]);
       expect(rawTranscriptRows()).toEqual(resetRaw);
       for (let index = 0; index < 20; index++) {
-        append(`${index}:` + "x".repeat(30));
+        await append(`${index}:` + "x".repeat(30));
       }
       const bounded = await readSessionPreviewItemsFromTranscriptAsync(
         scope,

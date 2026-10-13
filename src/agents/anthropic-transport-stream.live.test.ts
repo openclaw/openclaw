@@ -299,9 +299,12 @@ describeProviderLive("anthropic transport stream provider live", () => {
         },
       } satisfies NonNullable<Parameters<typeof streamAnthropic>[2]>;
       await upsertSessionEntryCore(target, { sessionId, updatedAt: Date.now() });
-      let manager = SessionManager.open(target, root);
+      let manager = await SessionManager.openAsync(target, root);
       const append = async (message: Message) => {
-        await withSessionManagerWrite(manager, () => manager.appendMessage(message));
+        await withSessionManagerWrite(
+          manager,
+          async () => await manager.appendMessageAsync(message),
+        );
       };
       const messages = () =>
         manager
@@ -369,7 +372,7 @@ describeProviderLive("anthropic transport stream provider live", () => {
         }
         expect(checkpoint.data).toContain(marker);
         await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
-        manager = SessionManager.open(target, root);
+        manager = await SessionManager.openAsync(target, root);
         const saved = messages().findLast(
           (message) => message.role === "assistant" && message.providerReplay,
         );

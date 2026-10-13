@@ -5,7 +5,6 @@ export {
   ensureConfiguredBindingRouteReady,
   resolveConfiguredBindingRoute,
   type ConfiguredBindingRouteResult,
-  resolveRuntimeConversationBindingRoute,
   resolveRuntimeConversationBindingRouteAsync,
   inspectRuntimeConversationBindingRoute,
   type RuntimeConversationBindingRouteResult,

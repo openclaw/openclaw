@@ -507,9 +507,9 @@ describe("recoverEmbeddedRunOverflow", () => {
     const systemPrompt = "Follow the project rules. ".repeat(2_000);
     const oversized = "Oversized source material. ".repeat(8_000);
     const manager = SessionManager.inMemory();
-    manager.appendMessage({ role: "user", content: "Remember copper.", timestamp: 1 });
-    manager.appendMessage(createAssistant(testModel, [{ type: "text", text: "ACK" }]));
-    manager.appendMessage({ role: "user", content: oversized, timestamp: 3 });
+    await manager.appendMessageAsync({ role: "user", content: "Remember copper.", timestamp: 1 });
+    await manager.appendMessageAsync(createAssistant(testModel, [{ type: "text", text: "ACK" }]));
+    await manager.appendMessageAsync({ role: "user", content: oversized, timestamp: 3 });
     const before = structuredClone(manager.getBranch());
     const requestBudget = createCompactionRequestBudget({
       contextWindow,
@@ -572,7 +572,7 @@ describe("recoverEmbeddedRunOverflow", () => {
       timestamp: 4,
       idempotencyKey: pendingUserIdempotencyKey,
     };
-    manager.appendMessage(pendingUser);
+    await manager.appendMessageAsync(pendingUser);
     const { session } = await createTestSession({
       model: { ...testModel, contextWindow },
       sessionManager: manager,

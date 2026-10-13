@@ -139,7 +139,7 @@ async function resolveProviderLabelAsync(params: ProviderLabelParams): Promise<s
   );
 }
 
-/** @deprecated Use formatModelsAvailableHeaderAsync. Removed at the next Plugin SDK major. */
+/** @deprecated Use formatModelsAvailableHeaderAsync. Removed after stable deprecation and a compatibility period. */
 export function formatModelsAvailableHeader(params: {
   provider: string;
   total: number;

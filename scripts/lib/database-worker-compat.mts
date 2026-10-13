@@ -30,10 +30,7 @@ const reviewed = new Map<string, readonly string[]>([
     "src/gateway/session-catalog-identity.ts",
     ["createSessionCatalogSourceActorProjector", "createSessionCatalogGitHubLinker"],
   ],
-  [
-    "src/plugin-sdk/memory-core-host-engine-sessions.ts",
-    ["loadArchivedSessions", "loadMemorySessionMetadata", "resolveMemorySessionTargets"],
-  ],
+  ["src/plugin-sdk/memory-core-host-engine-sessions.ts", ["loadMemorySessionMetadata"]],
   [
     "src/plugin-sdk/codex-session-transcript-runtime.ts",
     [
@@ -76,14 +73,6 @@ const reviewed = new Map<string, readonly string[]>([
   [
     "src/agents/harness/native-session/binding-lifecycle.ts",
     ["createNativeSessionBindingLifecycle"],
-  ],
-  [
-    "src/agents/harness/native-session/binding-generation.ts",
-    [
-      "resolveNativeSessionBinding",
-      "reclaimNativeSessionGeneration",
-      "captureNativeSessionGenerationAuthority",
-    ],
   ],
   [
     "src/agents/harness/native-session/binding-generation-authority.ts",

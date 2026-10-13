@@ -8,7 +8,7 @@ import {
   pluginRegistrationContractRegistry,
   setActivePluginRegistry,
 } from "../../plugin-sdk/plugin-test-runtime.js";
-import { withEnv, withEnvAsync } from "../../plugin-sdk/test-env.js";
+import { withEnvAsync } from "../../plugin-sdk/test-env.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 
 type TtsRuntimeModule = typeof import("openclaw/plugin-sdk/tts-runtime");
@@ -23,7 +23,7 @@ let requireApiKeyMock: SummarizeTextDeps["requireApiKey"];
 let summarizeTextCore: TtsCoreModule["summarizeText"];
 let resolveTtsConfig: TtsRuntimeModule["resolveTtsConfig"];
 let maybeApplyTtsToPayload: TtsRuntimeModule["maybeApplyTtsToPayload"];
-let getTtsProvider: TtsRuntimeModule["getTtsProvider"];
+let getTtsProviderAsync: TtsRuntimeModule["getTtsProviderAsync"];
 let parseTtsDirectives: TtsRuntimeModule["testApi"]["parseTtsDirectives"];
 let resolveModelOverridePolicy: TtsRuntimeModule["testApi"]["resolveModelOverridePolicy"];
 let getResolvedSpeechProviderConfig: TtsRuntimeModule["testApi"]["getResolvedSpeechProviderConfig"];
@@ -45,13 +45,6 @@ function isolatedSpeechProviderEnv(
     ...Object.fromEntries(SPEECH_PROVIDER_ENV_KEYS.map((key) => [key, undefined])),
     ...overrides,
   };
-}
-
-function withIsolatedSpeechProviderEnv<T>(
-  overrides: Record<string, string | undefined>,
-  fn: () => T,
-): T {
-  return withEnv(isolatedSpeechProviderEnv(overrides), fn);
 }
 
 async function withIsolatedSpeechProviderEnvAsync<T>(
@@ -311,7 +304,7 @@ async function setupTtsRuntime() {
   ttsRuntime = await loadTtsRuntime();
   resolveTtsConfig = ttsRuntime.resolveTtsConfig;
   maybeApplyTtsToPayload = ttsRuntime.maybeApplyTtsToPayload;
-  getTtsProvider = ttsRuntime.getTtsProvider;
+  getTtsProviderAsync = ttsRuntime.getTtsProviderAsync;
   ({
     parseTtsDirectives,
     resolveModelOverridePolicy,
@@ -471,7 +464,7 @@ export function describeTtsConfigContract() {
       });
     });
 
-    describe("getTtsProvider", () => {
+    describe("getTtsProviderAsync", () => {
       it.each([
         {
           name: "primary readiness succeeds",
@@ -503,8 +496,8 @@ export function describeTtsConfigContract() {
           prefsPath: "/tmp/tts-prefs-microsoft.json",
           expected: "microsoft",
         },
-      ] as const)("selects provider based on readiness: $name", (testCase) => {
-        withIsolatedSpeechProviderEnv(testCase.env, () => {
+      ] as const)("selects provider based on readiness: $name", async (testCase) => {
+        await withIsolatedSpeechProviderEnvAsync(testCase.env, async () => {
           const config = {
             auto: "off",
             mode: "final",
@@ -522,13 +515,13 @@ export function describeTtsConfigContract() {
             maxTextLength: 4000,
             timeoutMs: 30_000,
           } as ReturnType<typeof resolveTtsConfig>;
-          const provider = getTtsProvider(config, testCase.prefsPath);
+          const provider = await getTtsProviderAsync(config, testCase.prefsPath);
           expect(provider).toBe(testCase.expected);
         });
       });
 
-      it("passes cfg into auto-selection so model-provider Google keys can configure TTS", () => {
-        withIsolatedSpeechProviderEnv(
+      it("passes cfg into auto-selection so model-provider Google keys can configure TTS", async () => {
+        await withIsolatedSpeechProviderEnvAsync(
           {
             ELEVENLABS_API_KEY: undefined,
             XI_API_KEY: undefined,
@@ -536,7 +529,7 @@ export function describeTtsConfigContract() {
             GEMINI_API_KEY: undefined,
             GOOGLE_API_KEY: undefined,
           },
-          () => {
+          async () => {
             const cfg = asLegacyOpenClawConfig({
               agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
               models: {
@@ -557,14 +550,14 @@ export function describeTtsConfigContract() {
             const config = resolveTtsConfig(cfg);
             const prefsPath = `/tmp/tts-prefs-google-model-provider-${Date.now()}.json`;
 
-            expect(getTtsProvider(config, prefsPath)).toBe("google");
+            expect(await getTtsProviderAsync(config, prefsPath)).toBe("google");
           },
         );
       });
     });
 
     describe("resolveTtsConfig provider normalization", () => {
-      it("normalizes legacy edge provider ids to microsoft", () => {
+      it("normalizes legacy edge provider ids to microsoft", async () => {
         const config = resolveTtsConfig(
           asLegacyOpenClawConfig({
             agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
@@ -580,7 +573,9 @@ export function describeTtsConfigContract() {
         );
 
         expect(config.provider).toBe("microsoft");
-        expect(getTtsProvider(config, "/tmp/tts-prefs-normalized.json")).toBe("microsoft");
+        expect(await getTtsProviderAsync(config, "/tmp/tts-prefs-normalized.json")).toBe(
+          "microsoft",
+        );
       });
     });
   });

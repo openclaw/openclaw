@@ -168,17 +168,24 @@ export function registerCompactionSafeguardTests({
       const { attachCompactionAccountingRecorder } =
         await import("./run/compaction-accounting-bridge.js");
       const sessionManager = SessionManager.inMemory(getWorkspaceDir());
-      sessionManager.appendMessage({ role: "user", content: "a".repeat(46_191), timestamp: 1 });
+      await sessionManager.appendMessageAsync({
+        role: "user",
+        content: "a".repeat(46_191),
+        timestamp: 1,
+      });
       const assistant = createAssistant(testModel, [{ type: "text", text: "ACK" }]);
-      sessionManager.appendMessage({
+      await sessionManager.appendMessageAsync({
         ...assistant,
         usage: { ...assistant.usage, input: 19_140, output: 2, totalTokens: 19_142 },
       });
-      const pendingUserEntryId = sessionManager.appendMessage({
-        role: "user",
-        content: "b".repeat(52_602),
-        timestamp: 3,
-      });
+      const pendingUserEntryId = expectDefined(
+        await sessionManager.appendMessageAsync({
+          role: "user",
+          content: "b".repeat(52_602),
+          timestamp: 3,
+        }),
+        "pending compaction user entry",
+      );
       const contextEngineRuntimeContext = {};
       attachCompactionAccountingRecorder(contextEngineRuntimeContext, { pendingUserEntryId });
       const conversation = () =>
@@ -270,7 +277,7 @@ export function registerCompactionSafeguardTests({
           "Compare the remaining options.",
           "Keep the rollout notes.",
         ]) {
-          sessionManager.appendMessage({ role: "user", content, timestamp: 1 });
+          await sessionManager.appendMessageAsync({ role: "user", content, timestamp: 1 });
         }
         const originalMessages = sessionManager.buildSessionContext().messages;
         const settingsManager = SettingsManager.inMemory({

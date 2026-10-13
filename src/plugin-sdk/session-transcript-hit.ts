@@ -20,7 +20,7 @@ export type {
   SessionTranscriptReadParams,
 } from "./session-transcript-memory-hit.js";
 
-/** @deprecated Await loadCombinedSessionStoreForGatewayAsync. Removal: next Plugin SDK major. */
+/** @deprecated Await loadCombinedSessionStoreForGatewayAsync. Removal follows stable deprecation and a compatibility period. */
 export function loadCombinedSessionStoreForGateway(
   cfg: OpenClawConfig,
   opts: { agentId?: string; configuredAgentsOnly?: boolean } = {},

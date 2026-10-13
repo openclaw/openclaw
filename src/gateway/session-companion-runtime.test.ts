@@ -101,7 +101,7 @@ describe("Side chat with a published Gateway runtime", () => {
         model: string | undefined;
         authority: AdmittedRunOperatorAuthority | undefined;
       }> = [];
-      const internalTargets: Parameters<typeof SessionManager.open>[0][] = [];
+      const internalTargets: Parameters<typeof SessionManager.openAsync>[0][] = [];
       const seededHistory: unknown[][] = [];
       runLoop.mockImplementation(async (_refresh, { runParams }) => {
         observedModels.push({
@@ -168,8 +168,8 @@ describe("Side chat with a published Gateway runtime", () => {
           // Prevent fixture-seed maintenance from overlapping the hydration SQL measurement.
           skipMaintenance: true,
         });
-        const selectedManager = SessionManager.open(selected);
-        selectedManager.appendMessage({
+        const selectedManager = await SessionManager.openAsync(selected);
+        await selectedManager.appendMessageAsync({
           role: "user",
           content: "Inspect the synthetic project.",
           timestamp: 1,
@@ -202,7 +202,7 @@ describe("Side chat with a published Gateway runtime", () => {
           return respond;
         };
         if (outcome !== "success") {
-          const received = createDeferredCore<Parameters<typeof SessionManager.open>[0]>();
+          const received = createDeferredCore<Parameters<typeof SessionManager.openAsync>[0]>();
           const release = createDeferredCore();
           const cleaned = createDeferredCore();
           const prepare = hydration.prepareSessionTranscriptHydration;
@@ -285,7 +285,6 @@ describe("Side chat with a published Gateway runtime", () => {
           });
         const authority = operatorAuthority(["test-provider/test-model"]);
         const deniedAuthority = operatorAuthority([]);
-        const syncOpen = SessionManager.open.bind(SessionManager);
         const asyncOpen = SessionManager.openAsync.bind(SessionManager);
         let hydrationCount = 0;
         const hydrationFailures: unknown[] = [];
@@ -297,16 +296,6 @@ describe("Side chat with a published Gateway runtime", () => {
             hydrationFailures.push(error);
           }
         };
-        const syncProbe = vi.spyOn(SessionManager, "open").mockImplementation((...args) => {
-          const sql = observeMainThreadSql();
-          try {
-            const result = syncOpen(...args);
-            recordHydration(sql);
-            return result;
-          } finally {
-            sql.restore();
-          }
-        });
         const asyncProbe = vi
           .spyOn(SessionManager, "openAsync")
           .mockImplementation(async (...args) => {
@@ -346,7 +335,6 @@ describe("Side chat with a published Gateway runtime", () => {
             }),
           ).rejects.toThrow("Side chat");
         } finally {
-          syncProbe.mockRestore();
           asyncProbe.mockRestore();
         }
         expect(observedModels).toEqual([

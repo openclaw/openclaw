@@ -49,12 +49,12 @@ function bootstrapBinding(cwd: string) {
   };
 }
 
-function createOverflowFixture() {
+async function createOverflowFixture() {
   const sessionFile = path.join(tempDir, "session.jsonl");
   const workspaceDir = path.join(tempDir, "workspace");
-  openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" }).appendMessage(
-    assistantMessage("pre-compaction context", 10) as never,
-  );
+  await openFileBackedSessionManagerForTest(sessionFile, {
+    sessionId: "session-1",
+  }).appendMessageAsync(assistantMessage("pre-compaction context", 10) as never);
   const params = createParams(sessionFile, workspaceDir);
   params.contextTokenBudget = 400_000;
   return { sessionFile, workspaceDir, params };
@@ -102,7 +102,7 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
       await withOpenClawTestState(
         { label: "codex-overflow-binding-birth", layout: "state-only", applyEnv: false },
         async (fixture) => {
-          const { workspaceDir, params } = createOverflowFixture();
+          const { workspaceDir, params } = await createOverflowFixture();
           const identity = {
             kind: "session" as const,
             agentId: "main",
@@ -305,7 +305,7 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
   );
 
   it("preserves the binding when host authority expires while overflow recovery waits", async () => {
-    const { workspaceDir, params } = createOverflowFixture();
+    const { workspaceDir, params } = await createOverflowFixture();
     const identity = {
       kind: "session" as const,
       agentId: "main",
@@ -394,7 +394,7 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
   });
 
   it("preserves a newer context-engine binding when a stale resumed thread overflows", async () => {
-    const { sessionFile, workspaceDir, params } = createOverflowFixture();
+    const { sessionFile, workspaceDir, params } = await createOverflowFixture();
     await writeCodexAppServerBinding(sessionFile, bootstrapBinding(workspaceDir));
     const compact = vi.fn<ContextEngine["compact"]>();
     const contextEngine = createProjectedContextEngine({ compact });
@@ -441,7 +441,7 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
     expect(savedBinding?.threadId).toBe("thread-new");
   });
   it("does not pre-compact over-budget rendered context-engine prompts before Codex turn/start", async () => {
-    const { params } = createOverflowFixture();
+    const { params } = await createOverflowFixture();
     const hugePayload = {
       rows: Array.from({ length: 10 }, (_, index) => ({
         id: index,

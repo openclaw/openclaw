@@ -9,8 +9,8 @@ import {
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import {
-  withSessionTranscriptWriteLock,
-  type SessionTranscriptWriteLockContext,
+  withSessionTranscriptWrite,
+  type SessionTranscriptWriteContext,
 } from "../../plugin-sdk/session-transcript-runtime.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
@@ -99,7 +99,7 @@ describe("selected transcript turn cold restoration", () => {
     return { ...fixture, append, descriptor, replaceRevision, prepareMessage };
   }
 
-  it.each(["turn", "locked worker with owner fence", "locked SDK released-sync"])(
+  it.each(["turn", "locked worker with owner fence", "ordered SDK write"])(
     "restores raw-key history and appends through its selected identity (%s)",
     async (mode) => {
       const fixture = await createFixture();
@@ -108,9 +108,9 @@ describe("selected transcript turn cold restoration", () => {
         expect(fixture.prepareMessage).toHaveBeenCalledOnce();
       } else {
         const message = { role: "user", content: "Resume selected history" };
-        const prepare = vi.fn((value: typeof message) => value);
+        const prepare = vi.fn(async (value: typeof message) => value);
         const readAndAppend = async (
-          locked: Pick<SessionTranscriptWriteLockContext, "appendMessage" | "readEvents">,
+          locked: Pick<SessionTranscriptWriteContext, "appendMessage" | "readEvents">,
         ) => {
           expect(await locked.readEvents()).toContainEqual(
             expect.objectContaining({ id: "history-user" }),
@@ -118,9 +118,7 @@ describe("selected transcript turn cold restoration", () => {
           await expect(
             locked.appendMessage({
               message,
-              ...(mode === "locked SDK released-sync"
-                ? { prepareMessageAfterIdempotencyCheck: prepare }
-                : {}),
+              ...(mode === "ordered SDK write" ? { preparation: { prepareMessage: prepare } } : {}),
             }),
           ).resolves.toMatchObject({ appended: true });
         };
@@ -133,12 +131,12 @@ describe("selected transcript turn cold restoration", () => {
             readAndAppend,
           );
         } else {
-          await withSessionTranscriptWriteLock(
+          await withSessionTranscriptWrite(
             { ...fixture.scope, sessionKey: "agent:main:global" },
             readAndAppend,
           );
         }
-        expect(prepare).toHaveBeenCalledTimes(mode === "locked SDK released-sync" ? 1 : 0);
+        expect(prepare).toHaveBeenCalledTimes(mode === "ordered SDK write" ? 1 : 0);
       }
       expect(readSessionColdTranscript(fixture.database(), historicalId)).toBeUndefined();
       const events = loadTranscriptEventsSync(fixture.scope);
@@ -306,7 +304,7 @@ describe("selected transcript turn cold restoration", () => {
           ? fixture.append()
           : guard === "optional writer fence"
             ? withTranscriptWriteLock(scope, callback)
-            : withSessionTranscriptWriteLock(scope, callback),
+            : withSessionTranscriptWrite(scope, callback),
       );
       try {
         await withinTest(
@@ -358,7 +356,7 @@ describe("selected transcript turn cold restoration", () => {
     const fixture = await createFixture();
     replaceSessionEntrySync(fixture.scope, { sessionId: currentId, updatedAt: 2 });
 
-    await withSessionTranscriptWriteLock(fixture.scope, async (locked) => {
+    await withSessionTranscriptWrite(fixture.scope, async (locked) => {
       expect(await locked.readEvents()).toContainEqual(
         expect.objectContaining({ id: "history-user" }),
       );

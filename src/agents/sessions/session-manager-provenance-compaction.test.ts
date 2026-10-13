@@ -34,25 +34,25 @@ it("persists a generated provenance compaction across reload and branch navigati
       storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
     };
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    const source = SessionManager.open(scope);
-    source.appendMessage({
+    const source = await SessionManager.openAsync(scope);
+    await source.appendMessageAsync({
       role: "user",
       content: "Approve the rollout.",
       timestamp: 1,
       __openclaw: { senderId: "alex-id", senderName: "Alex" },
-    } as Parameters<SessionManager["appendMessage"]>[0]);
-    source.appendMessage({
+    } as Parameters<SessionManager["appendMessageAsync"]>[0]);
+    await source.appendMessageAsync({
       role: "user",
       content: "Do not deploy until I review it.",
       timestamp: 2,
       __openclaw: { senderId: "bea-id", senderName: "Bea" },
-    } as Parameters<SessionManager["appendMessage"]>[0]);
-    source.appendMessage({
+    } as Parameters<SessionManager["appendMessageAsync"]>[0]);
+    await source.appendMessageAsync({
       role: "user",
       content: "A legacy note with no known speaker.",
       timestamp: 3,
     });
-    source.appendMessage({ role: "user", content: "What remains?", timestamp: 4 });
+    await source.appendMessageAsync({ role: "user", content: "What remains?", timestamp: 4 });
     const preparation = prepareCompaction(source.getBranch() as SessionTreeEntry[], {
       enabled: true,
       reserveTokens: 1_000,
@@ -89,21 +89,21 @@ it("persists a generated provenance compaction across reload and branch navigati
     if (!result.ok) {
       throw result.error;
     }
-    source.appendCompaction(
+    await source.appendCompactionAsync(
       result.value.summary,
       result.value.firstKeptEntryId,
       result.value.tokensBefore,
       result.value.details,
     );
-    const branchSummaryId = source.branchWithSummary(
+    const branchSummaryId = await source.branchWithSummaryAsync(
       source.getLeafId(),
       "Branch navigation keeps the provenance summary.",
     );
-    source.branch(branchSummaryId);
-    source.appendMessage({ role: "user", content: "Branch follow-up.", timestamp: 6 });
+    await source.branchAsync(branchSummaryId);
+    await source.appendMessageAsync({ role: "user", content: "Branch follow-up.", timestamp: 6 });
     await waitForSessionTranscriptProjection(scope);
 
-    const persisted = SessionManager.open(scope);
+    const persisted = await SessionManager.openAsync(scope);
     expect(persisted.getBranch()).toContainEqual(
       expect.objectContaining({ type: "compaction", summary: result.value.summary }),
     );
@@ -114,7 +114,7 @@ it("persists a generated provenance compaction across reload and branch navigati
         summary: "Branch navigation keeps the provenance summary.",
       }),
     );
-    const context = SessionManager.openModelContext(scope).buildSessionContext();
+    const context = (await SessionManager.openModelContextAsync(scope)).buildSessionContext();
     expect(context.messages).toContainEqual(
       expect.objectContaining({ role: "compactionSummary", summary: result.value.summary }),
     );

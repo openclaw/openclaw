@@ -99,7 +99,7 @@ export function createContext(
     broadcast: vi.fn(),
     broadcastToConnIds: vi.fn(),
     approvalEvents: {
-      publishRequested: vi.fn(() => 0),
+      publishRequestedAsync: vi.fn(async () => 0),
       publishResolved: vi.fn(),
     },
     getApprovalClientConnIds: vi.fn(() => new Set(["approval-client"])),

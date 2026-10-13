@@ -292,9 +292,9 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
         });
         await readFinished.promise;
         if (mutation === "rewrite") {
-          const source = SessionManager.open(sessionTarget);
+          const source = await SessionManager.openAsync(sessionTarget);
           expect(
-            source.removeTrailingEntries(
+            await source.removeTrailingEntriesAsync(
               (entry) => entry.type === "message" && entry.message.role === "toolResult",
             ),
           ).toBe(1);
@@ -837,15 +837,15 @@ it.each([false, true])(
   "bounds prepared Codex history without truncating native evidence (incognito=%s)",
   async (incognito) => {
     const fixture = await writeSqliteSession({ incognito });
-    const source = SessionManager.open(fixture.sessionTarget);
+    const source = await SessionManager.openAsync(fixture.sessionTarget);
     for (let index = 0; index < 30; index += 1) {
-      source.appendMessage({
+      await source.appendMessageAsync({
         role: "user",
         content: `old-${index}:` + "x".repeat(2048),
         timestamp: index + 3,
       });
     }
-    source.appendMessage({ role: "user", content: "latest question", timestamp: 40 });
+    await source.appendMessageAsync({ role: "user", content: "latest question", timestamp: 40 });
     const target = {
       sessionFile: fixture.marker,
       sessionId: fixture.sessionTarget.sessionId,
@@ -864,7 +864,7 @@ it.each([false, true])(
     );
     expect(native).toHaveLength(33);
     expect(native?.[2]).toMatchObject({ content: "old-0:" + "x".repeat(2048) });
-    source.appendMessage({
+    await source.appendMessageAsync({
       role: "user",
       content: "oversized latest:" + "x".repeat(2048),
       timestamp: 41,

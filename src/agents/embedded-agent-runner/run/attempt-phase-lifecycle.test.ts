@@ -315,24 +315,25 @@ describe("embedded attempt phase lifecycle state", () => {
       const sessionManager =
         boundary === "missing terminal"
           ? SessionManager.inMemory(dir)
-          : SessionManager.open(target, dir);
-      const terminalEntryId = sessionManager.appendMessage({
-        role: "assistant",
-        content: [{ type: "text", text: "done" }],
-        api: "openai-responses",
-        provider: "openai",
-        model: "test-model",
-        usage: {
-          input: 1,
-          output: 1,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 2,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "stop",
-        timestamp: 2,
-      });
+          : await SessionManager.openAsync(target, dir);
+      const { entryId: terminalEntryId } =
+        await sessionManager.appendMessageWithTranscriptAnchorAsync({
+          role: "assistant",
+          content: [{ type: "text", text: "done" }],
+          api: "openai-responses",
+          provider: "openai",
+          model: "test-model",
+          usage: {
+            input: 1,
+            output: 1,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 2,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "stop",
+          timestamp: 2,
+        });
       const expectedTerminalAnchor = readActiveTranscriptEntryAnchor({
         agentId: persistedUser.anchor.agentId,
         sessionId: persistedUser.anchor.sessionId,
@@ -541,7 +542,7 @@ describe("embedded attempt phase lifecycle state", () => {
         storePath: path.join(dir, "sessions.json"),
       };
       await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-      const sessionManager = SessionManager.open(target, dir);
+      const sessionManager = await SessionManager.openAsync(target, dir);
       let currentTurn = false;
       installSessionToolResultGuard(sessionManager, {
         runId: "reused-run-id",
@@ -552,22 +553,27 @@ describe("embedded attempt phase lifecycle state", () => {
             ? { block: true }
             : undefined,
       });
-      sessionManager.appendMessage(
+      await sessionManager.appendMessageAsync(
         makeAgentAssistantMessage({ content: [{ type: "text", text: "Previous turn." }] }),
       );
-      const transcriptLeafId = sessionManager.appendCustomEntry("previous-turn-finished");
+      const transcriptLeafId =
+        await sessionManager.appendCustomEntryAsync("previous-turn-finished");
       currentTurn = true;
-      sessionManager.appendMessage({ role: "user", content: "Current task.", timestamp: 2 });
-      sessionManager.appendMessage(
+      await sessionManager.appendMessageAsync({
+        role: "user",
+        content: "Current task.",
+        timestamp: 2,
+      });
+      await sessionManager.appendMessageAsync(
         makeAgentAssistantMessage({
           content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
           stopReason: "toolUse",
         }),
       );
-      const toolResultEntryId = sessionManager.appendMessage(
+      const toolResultEntryId = await sessionManager.appendMessageAsync(
         makeTextToolResult("call-1", "read", "Current verified result.", false, 3),
       );
-      sessionManager.appendMessage(
+      await sessionManager.appendMessageAsync(
         makeAgentAssistantMessage({ content: [{ type: "text", text: "Suppressed terminal." }] }),
       );
 
@@ -646,8 +652,12 @@ describe("embedded attempt phase lifecycle state", () => {
       storePath: path.join(dir, "openclaw-agent.sqlite"),
     };
     await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-    const sessionManager = SessionManager.open(target, dir);
-    sessionManager.appendMessage({ role: "user", content: "synthetic after-turn", timestamp: 1 });
+    const sessionManager = await SessionManager.openAsync(target, dir);
+    await sessionManager.appendMessageAsync({
+      role: "user",
+      content: "synthetic after-turn",
+      timestamp: 1,
+    });
     const originalEntries = sessionManager.getEntries();
     const executionState: Pick<EmbeddedAttemptExecutionState, "terminal"> = {
       terminal:
@@ -728,14 +738,14 @@ describe("embedded attempt phase lifecycle state", () => {
       await setImmediate();
       expect(completed).toBe(!needsWrite);
       expect(hoisted.runAgentEndSideEffects).toHaveBeenCalledTimes(needsWrite ? 0 : 1);
-      expect(SessionManager.open(target, dir).getEntries()).toEqual(originalEntries);
+      expect((await SessionManager.openAsync(target, dir)).getEntries()).toEqual(originalEntries);
       if (scenario === "abort while queued") {
         executionState.terminal = { kind: "aborted", source: "external" };
       }
       release.resolve();
       await heldWriter;
       await afterTurn;
-      const entries = SessionManager.open(target, dir).getEntries();
+      const entries = (await SessionManager.openAsync(target, dir)).getEntries();
       if (scenario === "eligible completion") {
         expect(entries).toHaveLength(originalEntries.length + 1);
         expect(entries.at(-1)).toMatchObject({

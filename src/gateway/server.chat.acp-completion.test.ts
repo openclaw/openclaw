@@ -289,6 +289,8 @@ describe("Gateway ACP completion ownership", () => {
               shouldRouteToOriginating: false,
               shouldSendToolSummaries: false,
               shouldSendFullToolDetails: false,
+              shouldSendToolSummariesAsync: async () => false,
+              shouldSendFullToolDetailsAsync: async () => false,
               sendPolicy: "allow",
             },
             {

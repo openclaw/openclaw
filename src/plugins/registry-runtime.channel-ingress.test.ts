@@ -62,13 +62,7 @@ afterEach(() => {
   audits.clear();
 });
 
-it.each([
-  "loadAdapter",
-  "setIdleTimeoutBySessionKey",
-  "setMaxAgeBySessionKey",
-  "setIdleTimeoutBySessionKeyAsync",
-  "setMaxAgeBySessionKeyAsync",
-] as const)(
+it.each(["loadAdapter", "setIdleTimeoutBySessionKeyAsync", "setMaxAgeBySessionKeyAsync"] as const)(
   "keeps adopted channel %s usable after its captured registry is collected",
   async (method) => {
     class RetainedService {
@@ -84,8 +78,6 @@ it.each([
     const api = registryBuilder.createApi(record, { config: {} });
     const instance = getPluginInstance(record)!;
     const binding = { boundAt: 1, lastActivityAt: 2 };
-    const idle = vi.fn(() => [binding]);
-    const maxAge = vi.fn(() => [binding]);
     const idleAsync = vi.fn(async () => [binding]);
     const maxAgeAsync = vi.fn(async () => [binding]);
     api.registerChannel({
@@ -102,8 +94,6 @@ it.each([
         config: { listAccountIds: () => [], resolveAccount: () => ({ accountId: "default" }) },
         outbound: { deliveryMode: "direct" },
         conversationBindings: {
-          setIdleTimeoutBySessionKey: idle,
-          setMaxAgeBySessionKey: maxAge,
           setIdleTimeoutBySessionKeyAsync: idleAsync,
           setMaxAgeBySessionKeyAsync: maxAgeAsync,
         },
@@ -138,7 +128,7 @@ it.each([
       if (method === "loadAdapter") {
         return channel.outbound.loadAdapter(record.id);
       }
-      if (method === "setIdleTimeoutBySessionKey" || method === "setIdleTimeoutBySessionKeyAsync") {
+      if (method === "setIdleTimeoutBySessionKeyAsync") {
         return channel.threadBindings[method]({ ...input, idleTimeoutMs: 10 });
       }
       return channel.threadBindings[method]({ ...input, maxAgeMs: 20 });
@@ -162,8 +152,6 @@ it.each([
         expect(empty.channels).toHaveLength(0);
       }
       const expected = {
-        setIdleTimeoutBySessionKey: idle,
-        setMaxAgeBySessionKey: maxAge,
         setIdleTimeoutBySessionKeyAsync: idleAsync,
         setMaxAgeBySessionKeyAsync: maxAgeAsync,
       };

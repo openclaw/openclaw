@@ -1,9 +1,7 @@
 import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
   createTelegramThreadBindingManager,
-  setTelegramThreadBindingIdleTimeoutBySessionKey,
   setTelegramThreadBindingIdleTimeoutBySessionKeyAsync,
-  setTelegramThreadBindingMaxAgeBySessionKey,
   setTelegramThreadBindingMaxAgeBySessionKeyAsync,
 } from "./thread-bindings.js";
 
@@ -15,11 +13,7 @@ function withOptionalAccountId<T extends { accountId?: string | null }>(params: 
 
 export const telegramThreadBindingLifecycle: Pick<
   ConversationBindings,
-  | "createManager"
-  | "setIdleTimeoutBySessionKey"
-  | "setMaxAgeBySessionKey"
-  | "setIdleTimeoutBySessionKeyAsync"
-  | "setMaxAgeBySessionKeyAsync"
+  "createManager" | "setIdleTimeoutBySessionKeyAsync" | "setMaxAgeBySessionKeyAsync"
 > = {
   createManager: ({ cfg, accountId }) =>
     createTelegramThreadBindingManager({
@@ -28,10 +22,6 @@ export const telegramThreadBindingLifecycle: Pick<
       persist: false,
       enableSweeper: false,
     }),
-  setIdleTimeoutBySessionKey: (params) =>
-    setTelegramThreadBindingIdleTimeoutBySessionKey(withOptionalAccountId(params)),
-  setMaxAgeBySessionKey: (params) =>
-    setTelegramThreadBindingMaxAgeBySessionKey(withOptionalAccountId(params)),
   setIdleTimeoutBySessionKeyAsync: (params) =>
     setTelegramThreadBindingIdleTimeoutBySessionKeyAsync(withOptionalAccountId(params)),
   setMaxAgeBySessionKeyAsync: (params) =>

@@ -22,7 +22,6 @@ import {
   settleSessionUpstreamLink,
 } from "./session-upstream-links-runtime.js";
 import {
-  deleteSessionUpstreamLink,
   deleteSessionUpstreamLinkAsync,
   listWatchedSessionUpstreamLinks,
   upsertSessionUpstreamLink,
@@ -364,7 +363,7 @@ describe("session upstream links", () => {
       expect.objectContaining({ marker: { offset: 9 }, lastScannedAt: 200, updatedAt: 200 }),
     );
 
-    deleteSessionUpstreamLink(watched, "main", database);
+    await deleteSessionUpstreamLinkAsync(watched, "main", database);
     expect([...(await listWatchedSessionUpstreamLinks(database))]).toEqual([]);
   });
 

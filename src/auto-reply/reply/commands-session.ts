@@ -321,10 +321,8 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
     const conversationBindings = getChannelPlugin(bindingContext.channel)?.conversationBindings;
     const supportsLifecycleUpdate =
       action === SESSION_ACTION_IDLE
-        ? typeof conversationBindings?.setIdleTimeoutBySessionKeyAsync === "function" ||
-          typeof conversationBindings?.setIdleTimeoutBySessionKey === "function"
-        : typeof conversationBindings?.setMaxAgeBySessionKeyAsync === "function" ||
-          typeof conversationBindings?.setMaxAgeBySessionKey === "function";
+        ? typeof conversationBindings?.setIdleTimeoutBySessionKeyAsync === "function"
+        : typeof conversationBindings?.setMaxAgeBySessionKeyAsync === "function";
     if (!conversationBindings?.supportsCurrentConversationBinding || !supportsLifecycleUpdate) {
       return sessionCommandReply(
         "⚠️ /session idle and /session max-age are currently available only on channels that support conversation binding lifecycle updates.",

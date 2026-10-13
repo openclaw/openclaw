@@ -394,13 +394,13 @@ export function observeOpenAICompactionEntries(params: {
   };
 }
 
-export function observeOpenAICompactionState(params: {
+export async function observeOpenAICompactionState(params: {
   agentId: string;
   sessionId: string;
   sessionKey: string;
   storePath: string;
-}): OpenAICompactionStateObservation {
-  const manager = SessionManager.open(params);
+}): Promise<OpenAICompactionStateObservation> {
+  const manager = await SessionManager.openAsync(params);
   return observeOpenAICompactionEntries({
     persistedEntries: manager.getEntries(),
     activeMessages: manager.buildSessionContext().messages,

@@ -134,7 +134,7 @@ describe("AgentSession runtime and transcript projections", () => {
       const { dir, scope } = createSessionScope("source-projection", config);
       registerSecretValueForRedaction(registeredLiteral);
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      const manager = SessionManager.open(scope, dir);
+      const manager = await SessionManager.openAsync(scope, dir);
       guardSessionManager(manager, { config, allowedToolNames: ["exec", "wait"] });
       const originalArgs = {
         ...args,
@@ -210,7 +210,7 @@ describe("AgentSession runtime and transcript projections", () => {
         session.dispose();
         const databasePath = resolveSqliteTargetFromSessionStorePath(scope.storePath).path!;
         expect(await closeOpenClawAgentDatabaseByPathAsync(databasePath)).toBe(true);
-        const reopened = SessionManager.open(scope, dir);
+        const reopened = await SessionManager.openAsync(scope, dir);
         expect(reopened.buildSessionContext()).toEqual(cached);
         const { session: nextSession } = await createTestSession({
           sessionManager: reopened,
@@ -349,7 +349,7 @@ describe("AgentSession runtime and transcript projections", () => {
         );
       }
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      const manager = SessionManager.open(scope, dir);
+      const manager = await SessionManager.openAsync(scope, dir);
       guardSessionManager(manager, { config: {}, allowedToolNames: ["exec", "wait", "other"] });
       const { session } = await createTestSession({
         sessionManager: manager,
@@ -416,7 +416,7 @@ describe("AgentSession runtime and transcript projections", () => {
           late.content = [
             { type: "toolCall", id: `late_${action}`, name: "exec", arguments: { code: source } },
           ];
-          manager.appendMessage(late);
+          await manager.appendMessageAsync(late);
           guardSessionManager(manager).clearPendingToolResults?.();
           const lateStored = manager.getLeafEntry();
           expect(lateStored).toMatchObject({
@@ -432,7 +432,7 @@ describe("AgentSession runtime and transcript projections", () => {
             resolveSqliteTargetFromSessionStorePath(scope.storePath).path!,
           ),
         ).toBe(true);
-        expect(SessionManager.open(scope, dir).buildSessionContext()).toEqual(cached);
+        expect((await SessionManager.openAsync(scope, dir)).buildSessionContext()).toEqual(cached);
       } finally {
         await resetCodeModeTestState();
         resetGlobalHookRunner();
@@ -464,7 +464,7 @@ describe("AgentSession runtime and transcript projections", () => {
       ]),
     );
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    const manager = SessionManager.open(scope, dir);
+    const manager = await SessionManager.openAsync(scope, dir);
     guardSessionManager(manager, { config: {}, allowedToolNames: ["exec", "wait", "other"] });
     const otherParameters = Type.Object({ code: Type.String() });
     const other: ToolDefinition<typeof otherParameters> = {
@@ -543,7 +543,7 @@ describe("AgentSession runtime and transcript projections", () => {
           resolveSqliteTargetFromSessionStorePath(scope.storePath).path!,
         ),
       ).toBe(true);
-      expect(SessionManager.open(scope, dir).buildSessionContext()).toEqual(cached);
+      expect((await SessionManager.openAsync(scope, dir)).buildSessionContext()).toEqual(cached);
     } finally {
       resetGlobalHookRunner();
       await resetCodeModeTestState();
@@ -553,7 +553,7 @@ describe("AgentSession runtime and transcript projections", () => {
   it("preserves source across reused managers and ordinary append batches", async () => {
     const { dir, scope } = createSessionScope("source-reuse");
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    const manager = SessionManager.open(scope, dir);
+    const manager = await SessionManager.openAsync(scope, dir);
     const { tools, catalogRef } = createCodeModeHarness();
     registerHeadlessToolSearchCatalog({ catalogRef, tools: [] });
     const shell: ToolDefinition = {
@@ -653,9 +653,9 @@ describe("AgentSession runtime and transcript projections", () => {
           resolveSqliteTargetFromSessionStorePath(scope.storePath).path!,
         ),
       ).toBe(true);
-      const replay = SessionManager.open(scope, dir).buildSessionContext().messages;
+      const replay = (await SessionManager.openAsync(scope, dir)).buildSessionContext().messages;
       expect(replay.some((message) => message.role === "custom")).toBe(false);
-      const storedActivity = SessionManager.open(scope, dir).getBranch().at(-1);
+      const storedActivity = (await SessionManager.openAsync(scope, dir)).getBranch().at(-1);
       expect(storedActivity).toMatchObject({
         message: {
           details: {

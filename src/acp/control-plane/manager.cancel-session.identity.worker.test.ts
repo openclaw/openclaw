@@ -4,7 +4,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import { readAcpSessionEntry, upsertAcpSessionMeta } from "../runtime/session-meta.js";
+import { readAcpSessionEntryAsync, upsertAcpSessionMeta } from "../runtime/session-meta.js";
 import {
   readDurableAcpSignals,
   withAcpCancellationFixture,
@@ -95,7 +95,7 @@ it.each(["owner", "lifecycle"] as const)(
         releaseStatus.resolve();
         await result;
         sql.restore();
-        expect(readAcpSessionEntry(f.target)?.acp).toMatchObject({
+        expect((await readAcpSessionEntryAsync(f.target))?.acp).toMatchObject({
           runtimeSessionName: "successor-runtime",
           state: "running",
           identity: { agentSessionId: "successor-agent" },

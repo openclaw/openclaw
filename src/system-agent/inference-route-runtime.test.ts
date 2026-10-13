@@ -7,7 +7,7 @@ import {
   clearAuthProfileMigrationDiagnostics,
   markAuthProfileMigrationRequired,
 } from "../agents/auth-profiles/legacy-source-diagnostic.js";
-import { upsertAuthProfile } from "../agents/auth-profiles/profiles.js";
+import { upsertAuthProfileAsync } from "../agents/auth-profiles/profiles.js";
 import { setRuntimeAuthProfileStoreSnapshot } from "../agents/auth-profiles/runtime-snapshots.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
 import { fingerprintResolvedProviderAuth } from "../agents/execution-auth-binding.js";
@@ -129,7 +129,7 @@ it.each(["fixture", "unrelated"])(
     const profileId = "fixture:selected";
     const credential = { type: "api_key" as const, provider: "fixture", key };
     const agentDir = resolveAgentDir(cfg, "main");
-    upsertAuthProfile({ agentDir, profileId, credential });
+    await upsertAuthProfileAsync({ agentDir, profileId, credential });
     setRuntimeAuthProfileStoreSnapshot(
       { version: 1, profiles: { [profileId]: credential } },
       agentDir,
@@ -375,7 +375,7 @@ it.each([
       expect((await readRuntime()).agents?.entries).toHaveProperty("engineering");
     }
     if (alternateProfile) {
-      upsertAuthProfile({
+      await upsertAuthProfileAsync({
         agentDir: resolveAgentDir(await readRuntime(), "main"),
         profileId: "fixture:alternate",
         credential: { type: "api_key", provider: "fixture", key: "synthetic-alternate-key" },

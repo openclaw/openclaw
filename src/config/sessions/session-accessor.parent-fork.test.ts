@@ -81,7 +81,7 @@ async function openForkedChildSession(
     { sessionKey: "agent:main:child", storePath },
     { sessionId: fork.sessionId, sessionFile: fork.sessionFile, updatedAt: Date.now() },
   );
-  return SessionManager.openAsync({
+  return await SessionManager.openAsync({
     agentId: "main",
     sessionId: fork.sessionId,
     sessionKey: "agent:main:child",

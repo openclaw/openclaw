@@ -600,8 +600,7 @@ describe("prepared node workspace ownership", () => {
     await f.runtime.prepare(binding);
     const store = new NodeWorkerPreparedWorkspaceStore({ env: f.env });
     const row = (await store.find(binding.environmentId))!;
-    const mutation = await store.beginMutation(row);
-    mutation.close();
+    await store.beginMutation(row);
     const restarted = new NodeWorkerWorkspaceRuntime(f.options);
     await expect(
       restarted.exec({ ...f.command, argv: [NODE_WORKSPACE_DRAIN_COMMAND] }),

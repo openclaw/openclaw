@@ -1,23 +1,17 @@
 import { createHash } from "node:crypto";
-import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import {
-  ErrorCodes,
-  errorShape,
-  type ErrorShape,
-  type MentionInboxItem,
-  type MentionsListResult,
+import { ok, type Result } from "@openclaw/normalization-core/result";
+import type {
+  ErrorShape,
+  MentionInboxItem,
+  MentionsListResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { warnMentionInboxDeprecation } from "../plugins/compat/mention-inbox-deprecation.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
-import {
-  openClawStateDatabaseCache,
-  registerOpenClawStateDatabaseAsyncResource,
-} from "../state/openclaw-state-db-cache.js";
+import { registerOpenClawStateDatabaseAsyncResource } from "../state/openclaw-state-db-cache.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { onUserProfilesChanged, readUserProfileVersion } from "../state/user-profile-events.js";
 import { readGatewayAccessRevision } from "./gateway-access-revision.js";
@@ -380,16 +374,6 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
     return mentionInboxUnavailable();
   }
 
-  function legacyError(
-    method: "list" | "dismiss" | "recordCommittedInput" | "invalidate",
-  ): ErrorShape {
-    warnMentionInboxDeprecation(method);
-    return errorShape(
-      ErrorCodes.UNAVAILABLE,
-      `mentionInbox.${method} is unavailable; await mentionInbox.${method}Async instead.`,
-    );
-  }
-
   function dismissItems(
     draft: InboxState,
     client: GatewayClient | null,
@@ -573,8 +557,6 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
         return mentionInboxUnavailable(log);
       }
     },
-    list: () => err(legacyError("list")),
-    dismiss: () => err(legacyError("dismiss")),
     async listAsync(client, publish) {
       let failure: Result<never, ErrorShape> | undefined;
       try {
@@ -641,25 +623,7 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
           readOperation(() => readView(client, params.getRuntimeConfig(), true, connectedTargets)),
       );
     },
-    recordCommittedInput(input: MentionCommittedInput): void {
-      warnMentionInboxDeprecation("recordCommittedInput");
-      if (closing || scheduler.signal.aborted) {
-        return;
-      }
-      const captured = structuredClone(input);
-      const record = () => void recordCommittedInputAsync(captured);
-      // Legacy callers may still submit inside a transaction. Rollback must not enqueue a mention.
-      const database = openClawStateDatabaseCache.getOpenClawStateDatabaseIfOpenAtPath(
-        context.admission.identity.canonicalPath,
-      );
-      if (!database || !deferSqlitePostCommitPublication(database.db, record)) {
-        record();
-      }
-    },
     recordCommittedInputAsync,
-    invalidate(): never {
-      throw new Error(legacyError("invalidate").message);
-    },
     invalidateAsync,
     dispose,
   };

@@ -65,8 +65,8 @@ describe("Telegram transcript-backed answer recovery through HTTP", () => {
     const workspace = http.state.workspaceDir;
     const entry = { sessionId, updatedAt: Date.now() };
     await patchSessionEntry({ ...scope, fallbackEntry: entry, update: () => entry });
-    const manager = SessionManager.open(scope, workspace);
-    manager.appendMessage(user("Answer with the requested files."));
+    const manager = await SessionManager.openAsync(scope, workspace);
+    await manager.appendMessageAsync(user("Answer with the requested files."));
     const cfg = {
       agents: {
         defaults: { sandbox: { mode: "off" as const } },
@@ -105,8 +105,7 @@ describe("Telegram transcript-backed answer recovery through HTTP", () => {
     await dispatchProgressTurn(
       async () => {
         modelRuns += 1;
-        manager.appendMessage(assistant(recoveredAnswer));
-        manager.flushPendingPersistence();
+        await manager.appendMessageAsync(assistant(recoveredAnswer));
       },
       { context, mode: "off", toolProgress: false, finalReply: { text: recoveredAnswer } },
     );
@@ -150,8 +149,7 @@ describe("Telegram transcript-backed answer recovery through HTTP", () => {
     };
     await dispatchProgressTurn(
       async () => {
-        manager.appendMessage(assistant(recoveredAnswer));
-        manager.flushPendingPersistence();
+        await manager.appendMessageAsync(assistant(recoveredAnswer));
       },
       {
         context,
@@ -186,10 +184,9 @@ describe("Telegram transcript-backed answer recovery through HTTP", () => {
     );
     await dispatchProgressTurn(
       async () => {
-        manager.appendMessage(assistant("[[reply_to_current]]" + first));
-        manager.appendMessage(user("Now answer the queued follow-up."));
-        manager.appendMessage(assistant("[[reply_to_current]]" + recoveredAnswer));
-        manager.flushPendingPersistence();
+        await manager.appendMessageAsync(assistant("[[reply_to_current]]" + first));
+        await manager.appendMessageAsync(user("Now answer the queued follow-up."));
+        await manager.appendMessageAsync(assistant("[[reply_to_current]]" + recoveredAnswer));
       },
       {
         context,
@@ -206,8 +203,9 @@ describe("Telegram transcript-backed answer recovery through HTTP", () => {
 
   it("rejects stale and other-session transcript recovery", async () => {
     const { context, manager, scope, workspace } = await transcriptCase("stale-answer");
-    manager.appendMessage(assistant(recoveredAnswer + "\n[[reply_to:42]]", Date.now() - 60_000));
-    manager.flushPendingPersistence();
+    await manager.appendMessageAsync(
+      assistant(recoveredAnswer + "\n[[reply_to:42]]", Date.now() - 60_000),
+    );
     await dispatchProgressTurn(
       async () => {
         const otherScope = {
@@ -217,10 +215,9 @@ describe("Telegram transcript-backed answer recovery through HTTP", () => {
         };
         const entry = { sessionId: otherScope.sessionId, updatedAt: Date.now() };
         await patchSessionEntry({ ...otherScope, fallbackEntry: entry, update: () => entry });
-        const other = SessionManager.open(otherScope, workspace);
-        other.appendMessage(user("Different conversation."));
-        other.appendMessage(assistant(recoveredAnswer + "\n[[reply_to:99]]"));
-        other.flushPendingPersistence();
+        const other = await SessionManager.openAsync(otherScope, workspace);
+        await other.appendMessageAsync(user("Different conversation."));
+        await other.appendMessageAsync(assistant(recoveredAnswer + "\n[[reply_to:99]]"));
       },
       { context, mode: "off", toolProgress: false, finalReply: { text: shortened } },
     );
@@ -240,10 +237,9 @@ describe("Telegram transcript-backed answer recovery through HTTP", () => {
     let previewId: number | undefined;
     await dispatchProgressTurn(
       async (options) => {
-        manager.appendMessage(assistant(shortened));
-        manager.appendMessage(user("Continue with the complete latest answer."));
-        manager.appendMessage(assistant(recoveredAnswer));
-        manager.flushPendingPersistence();
+        await manager.appendMessageAsync(assistant(shortened));
+        await manager.appendMessageAsync(user("Continue with the complete latest answer."));
+        await manager.appendMessageAsync(assistant(recoveredAnswer));
         await options?.onPartialReply?.({ text: recoveredAnswer });
         await waitForBotApiCall(
           (call) => call.method === "sendMessage" && call.fields.text === recoveredAnswer,
@@ -307,14 +303,13 @@ describe("Telegram transcript-backed answer recovery through HTTP", () => {
         await options?.onBlockReply?.({ text: "Initial documents.", mediaUrls: sources });
         await waitForBotApiCall((call) => call.method === "sendDocument");
         await options?.onBlockReply?.({ text: recoveredAnswer, mediaUrls: sources });
-        manager.appendMessage(
+        await manager.appendMessageAsync(
           assistant(
             recoveredAnswer +
               sources.map((source) => "\nMEDIA:" + source).join("") +
               "\n[[reply_to_current]]",
           ),
         );
-        manager.flushPendingPersistence();
       },
       {
         context,

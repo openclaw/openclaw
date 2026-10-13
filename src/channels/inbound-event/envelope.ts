@@ -22,7 +22,7 @@ type ChannelInboundEnvelopeBuilderParams = {
   route: Pick<ResolvedAgentRoute, "agentId" | "sessionKey">;
 };
 
-/** @deprecated Use createChannelInboundEnvelopeBuilderAsync. Retained until the next Plugin SDK major. */
+/** @deprecated Use createChannelInboundEnvelopeBuilderAsync. Retained for a compatibility period after stable deprecation. */
 export function createChannelInboundEnvelopeBuilder(params: ChannelInboundEnvelopeBuilderParams) {
   const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
     agentId: params.route.agentId,
@@ -64,7 +64,7 @@ function createEnvelopeFormatter(
   };
 }
 
-/** @deprecated Use resolveAgentRoute and createChannelInboundEnvelopeBuilderAsync. Retained until the next Plugin SDK major. */
+/** @deprecated Use resolveAgentRoute and createChannelInboundEnvelopeBuilderAsync. Retained for a compatibility period after stable deprecation. */
 export function resolveChannelInboundRouteEnvelope(params: ResolveAgentRouteInput) {
   const route = resolveAgentRoute(params);
   return {

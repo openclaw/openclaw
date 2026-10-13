@@ -79,7 +79,7 @@ describe("released agent-sessions SDK static append", () => {
           env: { OPENCLAW_STATE_DIR: state.stateDir },
         };
         await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-        const id: string = SdkSessionManager.appendMessageToTranscript(target, message);
+        const id: string = await SdkSessionManager.appendMessageToTranscriptAsync(target, message);
         try {
           expect(typeof id).toBe("string");
           expect(inspectTranscriptEventsSync(target).events.at(-1)).toMatchObject({
@@ -112,7 +112,7 @@ describe("released agent-sessions SDK static append", () => {
         timestamp: 1,
         idempotencyKey: "static-parity:custom",
       };
-      const first = SdkSessionManager.appendMessageToTranscript(target, custom);
+      const first = await SdkSessionManager.appendMessageToTranscriptAsync(target, custom);
       const nextCustom = {
         ...custom,
         idempotencyKey: "static-parity:next",
@@ -189,7 +189,10 @@ describe("released agent-sessions SDK static append", () => {
         storePath: resolveSessionStorePathCore(undefined, scope),
       };
       const manager = await SdkSessionManager.openAsync(target);
-      const seed = await manager.appendMessageAsync(makeUserMessage("Synthetic seed", 1));
+      const seed = expectDefined(
+        await manager.appendMessageAsync(makeUserMessage("Synthetic seed", 1)),
+        "Expected appended message",
+      );
       const first = manager.appendMessageAsync(makeUserMessage("Instance first", 2));
       const second = SdkSessionManager.appendMessageToTranscriptAsync(target, {
         role: "custom",
@@ -225,7 +228,9 @@ describe("appendSessionTranscriptNote", () => {
           updatedAt: 1,
           lifecycleRevision: "closing-note-generation",
         });
-        SessionManager.open(target).appendMessage(makeUserMessage("Retained before close", 1));
+        await (
+          await SessionManager.openAsync(target)
+        ).appendMessageAsync(makeUserMessage("Retained before close", 1));
         await waitForSessionTranscriptProjection(target);
         const before = await loadTranscriptEvents(target);
         const entered = createDeferredCore();
@@ -686,7 +691,7 @@ describe("appendSessionTranscriptNote", () => {
           },
           { type: "message", id: secondId, parentId: firstId, message: { content: "Second note" } },
         ]);
-        const stored = SessionManager.open(originalTarget).getEntry(firstId);
+        const stored = (await SessionManager.openAsync(originalTarget)).getEntry(firstId);
         expect(stored).toMatchObject({ message: { content: originalNote.content } });
         expect(stored).toHaveProperty("message", firstResult.message);
         expect(beforeReplay.at(-1)).toHaveProperty("message", secondResult.message);
@@ -716,7 +721,9 @@ describe("appendSessionTranscriptNote", () => {
           updatedAt: 1,
           lifecycleRevision: "redaction-generation",
         });
-        SessionManager.open(target).appendMessage(makeUserMessage("Retained prefix", 1));
+        await (
+          await SessionManager.openAsync(target)
+        ).appendMessageAsync(makeUserMessage("Retained prefix", 1));
         await waitForSessionTranscriptProjection(target);
         const before = await loadTranscriptEvents(target);
         const marker = "synthetic-static-note-registry-value";
@@ -750,7 +757,7 @@ describe("appendSessionTranscriptNote", () => {
           const after = await loadTranscriptEvents(target);
           expect(after.slice(0, before.length)).toEqual(before);
           expect(after).toHaveLength(before.length + 1);
-          const stored = SessionManager.open(target).getEntry(result.messageId);
+          const stored = (await SessionManager.openAsync(target)).getEntry(result.messageId);
           expect(stored).toMatchObject({
             type: "message",
             message: { content: note.content },

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
@@ -47,15 +48,18 @@ describe("AgentSession compaction boundary", () => {
       sessionId: scope.sessionId,
       updatedAt: 1,
     });
-    const sessionManager = SessionManager.open(scope, dir);
-    sessionManager.appendMessage(makeUserMessage("Tetris", 1));
-    const retainedId = sessionManager.appendMessage({
-      ...createAssistant(testModel, [
-        { type: "toolCall", id: "retained-call", name: "read", arguments: {} },
-      ]),
-      timestamp: 2,
-    });
-    sessionManager.appendMessage({
+    const sessionManager = await SessionManager.openAsync(scope, dir);
+    await sessionManager.appendMessageAsync(makeUserMessage("Tetris", 1));
+    const retainedId = expectDefined(
+      await sessionManager.appendMessageAsync({
+        ...createAssistant(testModel, [
+          { type: "toolCall", id: "retained-call", name: "read", arguments: {} },
+        ]),
+        timestamp: 2,
+      }),
+      "Expected appended message",
+    );
+    await sessionManager.appendMessageAsync({
       role: "toolResult",
       toolCallId: "retained-call",
       toolName: "read",
@@ -63,13 +67,13 @@ describe("AgentSession compaction boundary", () => {
       isError: false,
       timestamp: 3,
     });
-    sessionManager.appendMessage({
+    await sessionManager.appendMessageAsync({
       ...createAssistant(testModel, [
         { type: "toolCall", id: "second-retained", name: "read", arguments: {} },
       ]),
       timestamp: 3,
     });
-    sessionManager.appendMessage({
+    await sessionManager.appendMessageAsync({
       role: "toolResult",
       toolCallId: "second-retained",
       toolName: "read",
@@ -77,14 +81,14 @@ describe("AgentSession compaction boundary", () => {
       isError: false,
       timestamp: 3,
     });
-    sessionManager.appendCompaction("Prior work is summarized.", retainedId, 100);
-    sessionManager.appendMessage({
+    await sessionManager.appendCompactionAsync("Prior work is summarized.", retainedId, 100);
+    await sessionManager.appendMessageAsync({
       ...createAssistant(testModel, [
         { type: "toolCall", id: "new-call", name: "read", arguments: {} },
       ]),
       timestamp: 4,
     });
-    sessionManager.appendMessage({
+    await sessionManager.appendMessageAsync({
       role: "toolResult",
       toolCallId: "new-call",
       toolName: "read",

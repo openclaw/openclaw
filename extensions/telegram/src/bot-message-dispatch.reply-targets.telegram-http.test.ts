@@ -312,7 +312,9 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
             provider: "telegram",
             to: "telegram:-1001:topic:1",
           });
-          sourceId = SessionManager.open(scope, state.stateDir).appendMessage(
+          sourceId = await (
+            await SessionManager.openAsync(scope, state.stateDir)
+          ).appendMessageAsync(
             makeAgentAssistantMessage({
               content: [{ type: "text", text: "The General-topic answer." }],
               timestamp: Date.now(),
@@ -380,7 +382,9 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
       let failed = false;
       await dispatchProgressTurn(
         async () => {
-          SessionManager.open(scope, state.stateDir).appendMessage(
+          await (
+            await SessionManager.openAsync(scope, state.stateDir)
+          ).appendMessageAsync(
             makeAgentAssistantMessage({
               content: [{ type: "text", text: "Accepted quoted answer" }],
               timestamp: Date.now(),

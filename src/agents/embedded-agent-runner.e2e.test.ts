@@ -360,7 +360,7 @@ const createPersistedTestSessionManager = async (params: {
     { agentId: target.agentId, sessionKey: target.sessionKey, storePath: target.storePath },
     { sessionId: target.sessionId, updatedAt: Date.now() },
   );
-  return SessionManager.open(target, workspaceDir);
+  return await SessionManager.openAsync(target, workspaceDir);
 };
 
 const textFromContent = (content: unknown) => {
@@ -1140,12 +1140,12 @@ describe("runEmbeddedAgent", () => {
         sessionId: "session:test",
         sessionKey,
       });
-      sessionManager.appendMessage({
+      await sessionManager.appendMessageAsync({
         role: "user",
         content: [{ type: "text", text: "seed user" }],
         timestamp: Date.now(),
       });
-      sessionManager.appendMessage({
+      await sessionManager.appendMessageAsync({
         role: "assistant",
         content: [{ type: "text", text: "seed assistant" }],
         stopReason: "stop",

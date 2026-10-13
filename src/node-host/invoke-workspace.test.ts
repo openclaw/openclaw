@@ -3,10 +3,7 @@ import type { GatewayClient } from "../gateway/client.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import type {
-  OpenClawPluginNodeHostCommand,
-  OpenClawPluginNodeHostCommandContext,
-} from "../plugins/types.node-host.js";
+import type { OpenClawPluginNodeHostCommandContext } from "../plugins/types.node-host.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { handleInvoke } from "./invoke.js";
 
@@ -15,79 +12,6 @@ afterEach(() => {
 });
 
 describe("node workspace invocation ownership", () => {
-  it("binds managed workspace claims to the exact live plugin invocation session", async () => {
-    const release = vi.fn();
-    const acquireManagedWorkspace = vi.fn(() => ({ workspaceDir: "/managed", release }));
-    const workspaceRequest = {
-      workspaceDir: "/managed",
-      environmentId: "environment-1",
-      sessionId: "session-1",
-      ownerEpoch: 1,
-      sessionKey: "agent:main:managed",
-    };
-    let retainedAcquire:
-      | NonNullable<OpenClawPluginNodeHostCommandContext["acquireManagedWorkspace"]>
-      | undefined;
-    const handle = vi.fn<OpenClawPluginNodeHostCommand["handle"]>(
-      async (paramsJSON, _io, context) => {
-        expect(JSON.parse(paramsJSON ?? "{}")).toEqual({ sessionKey: "agent:main:other" });
-        expect(context?.sessionKey).toBe(workspaceRequest.sessionKey);
-        const acquire = context?.acquireManagedWorkspace;
-        if (!acquire) {
-          throw new Error("managed workspace authority missing");
-        }
-        retainedAcquire = acquire;
-        expect(() => acquire({ ...workspaceRequest, sessionKey: "agent:main:other" })).toThrow(
-          "workspace invocation authority is closed",
-        );
-        expect(acquire(workspaceRequest)).toEqual({
-          workspaceDir: "/managed",
-          release,
-        });
-        return '{"ok":true}';
-      },
-    );
-    const registry = createEmptyPluginRegistry();
-    registry.plugins = [
-      createPluginRecord({
-        id: "workspace-plugin",
-        source: "test",
-        origin: "bundled",
-        enabled: true,
-        configSchema: true,
-      }),
-    ];
-    registry.nodeHostCommands = [
-      {
-        pluginId: "workspace-plugin",
-        pluginName: "Workspace Plugin",
-        command: { command: "workspace.claim", handle },
-        source: "test",
-      },
-    ];
-    setActivePluginRegistry(registry);
-    const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
-
-    await handleInvoke(
-      {
-        id: "invoke-workspace",
-        nodeId: "node-1",
-        command: "workspace.claim",
-        paramsJSON: JSON.stringify({ sessionKey: "agent:main:other" }),
-        sessionKey: workspaceRequest.sessionKey,
-      },
-      { request } as unknown as GatewayClient,
-      { current: async () => [] },
-      undefined,
-      { pluginCommandContext: { sendNodeEvent: vi.fn(), acquireManagedWorkspace } },
-    );
-
-    expect(acquireManagedWorkspace).toHaveBeenCalledOnce();
-    expect(() => retainedAcquire?.(workspaceRequest)).toThrow(
-      "workspace invocation authority is closed",
-    );
-  });
-
   it.each(["current", "aborted", "returned"] as const)(
     "settles an async workspace acquisition when its plugin invocation is %s",
     async (outcome) => {

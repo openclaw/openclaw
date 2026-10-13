@@ -501,7 +501,10 @@ it("commits user and custom messages in FIFO order without host writes, and chec
     });
     expect(isRecordedModelFallbackStop(refusedReplay)).toBe(false);
     expect(manager.getPersistedEntries()).toEqual(beforeRejectedReplay);
-    const afterRefusal = await manager.appendMessageAsync(user("after-replay-refusal"));
+    const afterRefusal = expectDefined(
+      await manager.appendMessageAsync(user("after-replay-refusal")),
+      "Expected appended message",
+    );
     expect(manager.getLeafEntry()).toMatchObject({ id: afterRefusal, parentId: lastId });
     expect(hostExec.mock.calls.filter(([sql]) => /^BEGIN\b/iu.test(sql))).toEqual([]);
     expect(await loadTranscriptEvents(target)).toEqual(manager.getPersistedEntries());
@@ -512,7 +515,10 @@ it("commits user and custom messages in FIFO order without host writes, and chec
 
 it("revalidates overtaken keyed replays while retaining fresh committed pending users", async () => {
   const { target, manager } = await fixture(state, "overtaken-keyed-replay");
-  const originalId = await manager.appendMessageAsync(user("original"));
+  const originalId = expectDefined(
+    await manager.appendMessageAsync(user("original")),
+    "Expected appended message",
+  );
   let newerId: string | undefined;
   const appendOvertaken = async (
     message: Parameters<SessionManager["appendMessageWithTranscriptAnchorAsync"]>[0],
@@ -527,11 +533,15 @@ it("revalidates overtaken keyed replays while retaining fresh committed pending 
       controls,
     ) => {
       const receipt = await withWorker(options, database, assertCurrent, operation, controls);
-      // The retained synchronous SDK can publish before an awaited receipt is adopted.
-      newerId = manager.appendMessage(user(nextKey));
+      newerId = expectDefined(
+        await manager.appendMessageAsync(user(nextKey)),
+        "Expected appended message",
+      );
       return receipt;
     };
-    const spy = vi.spyOn(metadataRuntime, "withSessionMetadataWorker").mockImplementation(delayed);
+    const spy = vi
+      .spyOn(metadataRuntime, "withSessionMetadataWorker")
+      .mockImplementationOnce(delayed);
     try {
       return await manager.appendMessageWithTranscriptAnchorAsync(message);
     } finally {
@@ -581,36 +591,28 @@ it("revalidates overtaken keyed replays while retaining fresh committed pending 
 
 it("fences local navigation changes at worker commit and receipt publication", async () => {
   const { target, manager } = await fixture(state, "navigation-during-append");
-  const seed = expectDefined(
-    await manager.appendMessageAsync(user("navigation-seed")),
-    "Expected seed",
-  );
+  await manager.appendMessageAsync(user("navigation-seed"));
   const tail = expectDefined(
     await manager.appendMessageAsync(user("navigation-tail")),
     "Expected tail",
   );
   const before = await loadTranscriptEvents(target);
-  for (const change of ["branch", "branch-back"] as const) {
-    manager.branch(tail);
-    const admission = probe.admission(workerAdmission, (request, grant, admit) => {
-      if (request.stage === "commit") {
-        manager.branch(seed);
-        if (change === "branch-back") {
-          manager.branch(tail);
-        }
-      }
-      admit(request, grant);
-    });
-    try {
-      await expect(manager.appendMessageAsync(user(`refused-${change}`))).rejects.toThrow(
-        "Session transcript navigation changed before publication",
-      );
-      expect(manager.getLeafId()).toBe(change === "branch" ? seed : tail);
-      expect(await loadTranscriptEvents(target)).toEqual(before);
-    } finally {
-      admission.mockRestore();
+  const admission = probe.admission(workerAdmission, (request, grant, admit) => {
+    if (request.stage === "commit") {
+      manager.resetLeaf();
     }
+    admit(request, grant);
+  });
+  try {
+    await expect(manager.appendMessageAsync(user("refused-reset"))).rejects.toThrow(
+      "Session transcript navigation changed before publication",
+    );
+    expect(manager.getLeafId()).toBeNull();
+    expect(await loadTranscriptEvents(target)).toEqual(before);
+  } finally {
+    admission.mockRestore();
   }
+  await manager.branchAsync(tail);
 
   const withWorker = metadataRuntime.withSessionMetadataWorker;
   const delayed: typeof withWorker = async (

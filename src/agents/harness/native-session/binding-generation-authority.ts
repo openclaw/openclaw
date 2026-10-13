@@ -13,7 +13,7 @@ import type {
 } from "./binding-generation.js";
 
 /**
- * @deprecated Use resolveNativeSessionBindingWithAuthorityV2; removed in the next Plugin SDK major.
+ * @deprecated Use resolveNativeSessionBindingWithAuthorityV2; removed after stable deprecation and a compatibility period.
  */
 export async function resolveNativeSessionBindingWithAuthority<TBinding>(
   params: NativeSessionBindingResolveOptions<TBinding> & {

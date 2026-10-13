@@ -33,7 +33,7 @@ import {
   appendSessionTranscriptMessageByIdentity,
   readSessionTranscriptRawDelta,
   readSessionTranscriptVisibleMessageDelta,
-  withSessionTranscriptWriteLock,
+  withSessionTranscriptWrite,
 } from "./session-transcript-runtime.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-sdk-visible-transcript-");
@@ -63,7 +63,7 @@ describe("session transcript visible cursor SDK", () => {
     });
     const resumeLateRead = createDeferred();
     let lateRead: Promise<unknown> | undefined;
-    await withSessionTranscriptWriteLock(scope, async (locked) => {
+    await withSessionTranscriptWrite(scope, async (locked) => {
       await expect(locked.readEvents()).resolves.toContainEqual(
         expect.objectContaining({
           message: expect.objectContaining({ content: "before nested read" }),
@@ -83,12 +83,14 @@ describe("session transcript visible cursor SDK", () => {
       });
       await locked.appendMessage({
         message: { role: "assistant", content: "after nested read" },
-        prepareMessageAfterIdempotencyCheckAsync: async (message) => {
-          await expect(readSessionTranscriptVisibleMessageDelta(scope)).resolves.toMatchObject({
-            kind: "page",
-            entries: [{ message: { role: "user", content: "before nested read" } }],
-          });
-          return message;
+        preparation: {
+          prepareMessage: async (message) => {
+            await expect(readSessionTranscriptVisibleMessageDelta(scope)).resolves.toMatchObject({
+              kind: "page",
+              entries: [{ message: { role: "user", content: "before nested read" } }],
+            });
+            return message;
+          },
         },
       });
       await expect(readSessionTranscriptVisibleMessageDelta(scope)).resolves.toMatchObject({
@@ -110,10 +112,12 @@ describe("session transcript visible cursor SDK", () => {
             const finishPreparation = createDeferred();
             const writing = locked.appendMessage({
               message: { role: "user", content: "after cancelled read" },
-              prepareMessageAfterIdempotencyCheckAsync: async (message) => {
-                preparing.resolve();
-                await withinTest(finishPreparation.promise, signal);
-                return message;
+              preparation: {
+                prepareMessage: async (message) => {
+                  preparing.resolve();
+                  await withinTest(finishPreparation.promise, signal);
+                  return message;
+                },
               },
             });
             try {

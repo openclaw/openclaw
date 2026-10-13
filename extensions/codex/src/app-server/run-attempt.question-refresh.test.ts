@@ -46,6 +46,8 @@ describe("runCodexAppServerAttempt question refresh", () => {
     const { isSecret, stagedSource } = scenario;
     activeRunRegistrationMocks.questionWaiters.clear();
     const turnStarted = createDeferred<void>();
+    const questionStarted = createDeferred<void>();
+    const promptDelivered = createDeferred<void>();
     const { request, notify, handleServerRequest } = createStartedThreadHarness(async (method) => {
       if (method === "thread/unsubscribe") {
         return { status: "unsubscribed" };
@@ -83,11 +85,13 @@ describe("runCodexAppServerAttempt question refresh", () => {
       input: { text: "2", idempotencyKey: `${params.runId}:question-answer` },
       target: { ...target, sessionEntry: undefined },
     });
-    params.onBlockReply = vi.fn();
+    params.onBlockReply = vi.fn(() => promptDelivered.resolve());
     const onRunProgress = vi.fn<NonNullable<typeof params.onRunProgress>>((event) => {
       // Host progress fires after the active turn's input bridge is installed.
       if (event.reason === "turn:start") {
         turnStarted.resolve();
+      } else if (event.reason === "request:item/tool/requestUserInput:start") {
+        questionStarted.resolve();
       }
     });
     params.onRunProgress = onRunProgress;
@@ -118,11 +122,20 @@ describe("runCodexAppServerAttempt question refresh", () => {
       },
     });
 
-    // Flush the delivery task without advancing the run deadline during cold async setup.
-    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledTimes(1), {
-      ...fastWait,
-      interval: 0,
-    });
+    await Promise.race([
+      questionStarted.promise.then(async () => {
+        // Async ticking flushes the fixture's immediate gateway replies before its delivery timer.
+        await vi.advanceTimersByTimeAsync(0);
+        await promptDelivered.promise;
+      }),
+      response.then((result) => {
+        throw new Error("Input request ended before its prompt was delivered", { cause: result });
+      }),
+      run.then((result) => {
+        throw new Error("Attempt ended before its input prompt was delivered", { cause: result });
+      }),
+    ]);
+    expect(params.onBlockReply).toHaveBeenCalledTimes(1);
     await waitAndQueueActiveRunMessage(params.sessionId, "tool progress", { debounceMs: 0 });
     await vi.waitFor(
       () => expect(request.mock.calls.map(([method]) => method)).toContain("turn/steer"),

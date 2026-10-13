@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import type { Context, Model, SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
@@ -31,9 +32,13 @@ describe("AgentSession small-context compaction", () => {
       contextTokenBudget: model.contextWindow,
     });
     const sessionManager = SessionManager.inMemory();
-    sessionManager.appendMessage({ role: "user", content: "a".repeat(46_191), timestamp: 1 });
+    await sessionManager.appendMessageAsync({
+      role: "user",
+      content: "a".repeat(46_191),
+      timestamp: 1,
+    });
     const assistant = createAssistant(model, [{ type: "text", text: "ACK" }]);
-    sessionManager.appendMessage({
+    await sessionManager.appendMessageAsync({
       ...assistant,
       usage: { ...assistant.usage, input: 19_140, output: 2, totalTokens: 19_142 },
     });
@@ -45,7 +50,10 @@ describe("AgentSession small-context compaction", () => {
       timestamp: 3,
       idempotencyKey: pendingKey,
     };
-    const pendingUserEntryId = sessionManager.appendMessage(pendingUser);
+    const pendingUserEntryId = expectDefined(
+      await sessionManager.appendMessageAsync(pendingUser),
+      "Expected appended message",
+    );
     const { session } = await createTestSession({
       model,
       settingsManager,
@@ -128,8 +136,12 @@ describe("AgentSession small-context compaction", () => {
       retry: { enabled: false },
     });
     const sessionManager = SessionManager.inMemory();
-    sessionManager.appendMessage({ role: "user", content: "Earlier request", timestamp: 1 });
-    sessionManager.appendMessage(
+    await sessionManager.appendMessageAsync({
+      role: "user",
+      content: "Earlier request",
+      timestamp: 1,
+    });
+    await sessionManager.appendMessageAsync(
       createAssistant(model, [{ type: "text", text: "Earlier answer" }]),
     );
     const canonicalUser = {
@@ -138,12 +150,15 @@ describe("AgentSession small-context compaction", () => {
       timestamp: 3,
       idempotencyKey: "retained-canonical-user",
     };
-    const userId = sessionManager.appendMessage(canonicalUser);
+    const userId = expectDefined(
+      await sessionManager.appendMessageAsync(canonicalUser),
+      "Expected appended message",
+    );
     const carrier = buildRuntimeContextCustomMessage("Retained runtime context");
     if (!carrier) {
       throw new Error("Expected a runtime context carrier");
     }
-    sessionManager.appendCustomMessageEntry(
+    await sessionManager.appendCustomMessageEntryAsync(
       carrier.customType,
       carrier.content,
       carrier.display,
@@ -201,21 +216,21 @@ describe("AgentSession small-context compaction", () => {
       });
       const sessionManager = SessionManager.inMemory();
       const file = "/workspace/archive.md";
-      sessionManager.appendMessage(
+      await sessionManager.appendMessageAsync(
         makeUserMessage("Read the archive and preserve its project decisions.", 1),
       );
-      sessionManager.appendMessage(
+      await sessionManager.appendMessageAsync(
         createAssistant(
           model,
           [{ type: "toolCall", id: "archive-read", name: "read", arguments: { path: file } }],
           "toolUse",
         ),
       );
-      sessionManager.appendMessage(
+      await sessionManager.appendMessageAsync(
         makeTextToolResult("archive-read", "read", "The project uses blue buttons.", false, 3),
       );
-      sessionManager.appendMessage(makeUserMessage("Continue the project.", 4));
-      sessionManager.appendMessage(
+      await sessionManager.appendMessageAsync(makeUserMessage("Continue the project.", 4));
+      await sessionManager.appendMessageAsync(
         createAssistant(model, [{ type: "text", text: "Ready to continue." }]),
       );
       const { session } = await createTestSession({
@@ -269,8 +284,8 @@ describe("AgentSession small-context compaction", () => {
       retry: { enabled: false },
     });
     const sessionManager = SessionManager.inMemory();
-    sessionManager.appendMessage(makeUserMessage("Read the large archive.", 1));
-    sessionManager.appendMessage(
+    await sessionManager.appendMessageAsync(makeUserMessage("Read the large archive.", 1));
+    await sessionManager.appendMessageAsync(
       createAssistant(
         model,
         [
@@ -284,7 +299,7 @@ describe("AgentSession small-context compaction", () => {
         "toolUse",
       ),
     );
-    sessionManager.appendMessage({
+    await sessionManager.appendMessageAsync({
       role: "toolResult",
       toolCallId: "large-read",
       toolName: "read",
@@ -315,13 +330,20 @@ describe("AgentSession small-context compaction", () => {
     "enforces admitted input preservation without a prepared budget (%s)",
     async (mode) => {
       const sessionManager = SessionManager.inMemory();
-      sessionManager.appendMessage({ role: "user", content: "Earlier request", timestamp: 1 });
-      sessionManager.appendMessage(
+      await sessionManager.appendMessageAsync({
+        role: "user",
+        content: "Earlier request",
+        timestamp: 1,
+      });
+      await sessionManager.appendMessageAsync(
         createAssistant(testModel, [{ type: "text", text: "Earlier answer" }], "stop"),
       );
       const pending = { role: "user" as const, content: "Approved current input", timestamp: 3 };
-      const pendingId = sessionManager.appendMessage(pending);
-      const carrierId = sessionManager.appendCustomMessageEntry(
+      const pendingId = expectDefined(
+        await sessionManager.appendMessageAsync(pending),
+        "Expected appended message",
+      );
+      const carrierId = await sessionManager.appendCustomMessageEntryAsync(
         "runtime-context",
         "Current runtime context",
         false,
@@ -375,12 +397,12 @@ describe("AgentSession small-context compaction", () => {
       contextTokenBudget: model.contextWindow,
     });
     const sessionManager = SessionManager.inMemory();
-    sessionManager.appendMessage({
+    await sessionManager.appendMessageAsync({
       role: "user",
       content: "Earlier project context. ".repeat(60),
       timestamp: 1,
     });
-    sessionManager.appendMessage(
+    await sessionManager.appendMessageAsync(
       createAssistant(model, [{ type: "text", text: "Earlier answer. ".repeat(80) }]),
     );
     const pending = "Process this pending project material. ".repeat(150);
@@ -391,7 +413,7 @@ describe("AgentSession small-context compaction", () => {
       idempotencyKey: pendingKey,
       timestamp: 3,
     };
-    sessionManager.appendMessage(pendingUser);
+    await sessionManager.appendMessageAsync(pendingUser);
     const { session } = await createTestSession({
       model,
       settingsManager,

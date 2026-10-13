@@ -90,7 +90,7 @@ describe.each([false, true])(
           },
         };
         try {
-          const ordinary = host.hostCapabilities.createToolSurface?.(options) ?? [];
+          const ordinary = (await host.hostCapabilities.createToolSurfaceAsync?.(options)) ?? [];
           if (sandboxed) {
             expect(ordinary.some((tool) => tool.name === "computer")).toBe(false);
           }
@@ -115,10 +115,10 @@ describe.each([false, true])(
                   })
                 : undefined;
               const bound =
-                host.hostCapabilities.createToolSurface?.({
+                (await host.hostCapabilities.createToolSurfaceAsync?.({
                   ...options,
                   conversationCapabilityProfile,
-                }) ?? [];
+                })) ?? [];
               if (!sandboxed) {
                 expect(bound.map((tool) => tool.name)).toEqual(
                   expect.arrayContaining(ordinary.map((tool) => tool.name)),
@@ -137,9 +137,12 @@ describe.each([false, true])(
             { runId: "run-computer", agentId: "main", isActive: () => true, bind: () => null },
             async () => {
               expect(
-                host.hostCapabilities
-                  .createToolSurface?.({ ...options, sandbox: undefined })
-                  ?.some((tool) => tool.name === "computer"),
+                (
+                  await host.hostCapabilities.createToolSurfaceAsync?.({
+                    ...options,
+                    sandbox: undefined,
+                  })
+                )?.some((tool) => tool.name === "computer"),
               ).toBe(false);
             },
           );

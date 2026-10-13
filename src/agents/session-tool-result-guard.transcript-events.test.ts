@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -15,11 +16,11 @@ import {
 } from "../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
-  appendTranscriptMessageSync,
   loadSessionEntry,
   listSessionPendingInputs,
-  persistCompactionBoundaryWithSessionEntrySync,
+  persistCompactionBoundaryWithSessionEntryAsync,
 } from "../config/sessions/session-accessor.js";
+import { loadTranscriptEventsSync } from "../config/sessions/session-accessor.sqlite-read.js";
 import { applyAssistantDeliveryDirectives } from "../config/sessions/transcript-assistant-delivery.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { projectInFlightRunSnapshot } from "../gateway/chat-inflight-snapshot.js";
@@ -40,10 +41,7 @@ import {
   type InternalSessionTranscriptUpdate,
 } from "../sessions/transcript-events.js";
 import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  openOpenClawAgentDatabase,
-} from "../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { createAssistantErrorTranscript } from "./assistant-error-transcript.js";
 import { normalizeAssistantReplayContent } from "./embedded-agent-runner/replay-history.js";
 import { createSubscribedSessionHarness } from "./embedded-agent-subscribe.e2e-harness.js";
@@ -108,7 +106,12 @@ async function openPersistedSessionManager(
     ...target,
     entry: sessionEntry,
   });
-  return { root, sessionManager: SessionManager.open(target, root), target, sessionEntry };
+  return {
+    root,
+    sessionManager: await SessionManager.openAsync(target, root),
+    target,
+    sessionEntry,
+  };
 }
 
 beforeEach(() => {
@@ -264,45 +267,33 @@ describe("guardSessionManager transcript updates", () => {
     }
   });
 
-  it("preserves source text when a concurrent append forces a retry", async () => {
+  it("preserves source text when a stale manager appends after a competing write", async () => {
     const config = { logging: { redactPatterns: [String.raw`/opaque\(([^)]+)\)/g`] } };
     const {
       root,
       sessionManager: manager,
       target,
     } = await openPersistedSessionManager(undefined, config);
-    const baseId = manager.appendMessage(makeUserMessage("Compute a value", 1));
+    const baseId = await manager.appendMessageAsync(makeUserMessage("Compute a value", 1));
     installSessionToolResultGuard(manager, { config });
     const toolCall = codeCall("retry-source");
     const emitted = makeAgentAssistantMessage({
       content: [{ type: "text", text: "opaque(abcdefghijklmnopqrst)" }, toolCall],
       stopReason: "toolUse",
     });
-    const { db } = openOpenClawAgentDatabase({ agentId: target.agentId, path: target.storePath });
-    const exec = db.exec.bind(db);
-    let injected = false;
-    const execSpy = vi.spyOn(db, "exec").mockImplementation((statement) => {
-      if (statement === "BEGIN IMMEDIATE" && !injected) {
-        injected = true;
-        // Commit after validation but before the writer acquires its snapshot.
-        const concurrent = appendTranscriptMessageSync(target, {
-          eventId: "concurrent-assistant",
-          message: assistantText("Concurrent"),
-        });
-        expect(concurrent.ok).toBe(true);
-      }
-      return exec(statement);
+    const concurrent = await appendTranscriptMessage(target, {
+      eventId: "concurrent-assistant",
+      message: assistantText("Concurrent"),
     });
-    let entryId: string;
-    try {
-      entryId = manager.appendMessage(emitted);
-      expect(execSpy).toHaveBeenCalledWith("ROLLBACK");
-    } finally {
-      execSpy.mockRestore();
-    }
+    expect(concurrent.appended).toBe(true);
+    expect(manager.getLeafId()).toBe(baseId);
+    const entryId = expectDefined(
+      await manager.appendMessageAsync(emitted),
+      "persisted assistant entry",
+    );
     await closeOpenClawAgentDatabasesAsync(root);
     closeOpenClawAgentDatabasesForTest(root);
-    const entries = SessionManager.open(target).getBranch();
+    const entries = (await SessionManager.openAsync(target)).getBranch();
     expect(entries.map(({ id, parentId }) => ({ id, parentId }))).toEqual([
       { id: baseId, parentId: null },
       { id: "concurrent-assistant", parentId: baseId },
@@ -318,8 +309,8 @@ describe("guardSessionManager transcript updates", () => {
     for (const runId of ["run-first", "run-second"]) {
       const guarded = guardSessionManager(sessionManager, {
         runId,
-        withCompactionPersistence: (prepared) =>
-          persistCompactionBoundaryWithSessionEntrySync(target, {
+        withCompactionPersistenceAsync: async (prepared) =>
+          await persistCompactionBoundaryWithSessionEntryAsync(target, {
             prepared,
             transcriptByteCompactionLatch: {
               activeBytes: 2048,
@@ -328,12 +319,19 @@ describe("guardSessionManager transcript updates", () => {
             },
           }),
       });
-      const keptId = guarded.appendMessage({ role: "user", content: runId, timestamp: 1 });
-      guarded.appendCompaction("summary", keptId, 100, { source: "hook" }, true, {
+      const keptId = expectDefined(
+        await guarded.appendMessageAsync({
+          role: "user",
+          content: runId,
+          timestamp: 1,
+        }),
+        "retained user entry",
+      );
+      await guarded.appendCompactionAsync("summary", keptId, 100, { source: "hook" }, true, {
         itemId: `compaction-${runId}`,
       });
     }
-    const compactions = SessionManager.open(target, root)
+    const compactions = (await SessionManager.openAsync(target, root))
       .getBranch()
       .filter((entry) => entry.type === "compaction");
     expect(compactions).toMatchObject([
@@ -423,7 +421,10 @@ describe("guardSessionManager transcript updates", () => {
         expect(await listSessionPendingInputs(target)).toEqual({ items: [], total: 0 });
         expect(approvalHook).toHaveBeenCalledOnce();
 
-        const unstagedId = guarded.appendMessage(makeUserMessage("Unstaged source", 3));
+        const unstagedId = expectDefined(
+          await guarded.appendMessageAsync(makeUserMessage("Unstaged source", 3)),
+          "unstaged user entry",
+        );
         expect(approvalHook).toHaveBeenCalledTimes(2);
         expect(guarded.getEntry(unstagedId)).toMatchObject({
           message: { role: "user", content: "[approved] Unstaged source" },
@@ -448,11 +449,9 @@ describe("guardSessionManager transcript updates", () => {
       timestamp: 1,
     };
     const assertOriginalInputCommit = vi.fn(() => {
-      expect(
-        SessionManager.open(target, root)
-          .getBranch()
-          .filter((entry) => entry.type === "message"),
-      ).toHaveLength(0);
+      expect(loadTranscriptEventsSync(target)).not.toContainEqual(
+        expect.objectContaining({ type: "message" }),
+      );
     });
     const recorder = createUserTurnTranscriptRecorder({
       message,
@@ -470,15 +469,15 @@ describe("guardSessionManager transcript updates", () => {
       preparedUserTurnTranscriptRecorder: recorder,
     });
 
-    const entryId = guarded.appendMessage({ ...message });
-    expect(guarded.appendMessage({ ...message })).toBe(entryId);
+    const entryId = await guarded.appendMessageAsync({ ...message });
+    expect(await guarded.appendMessageAsync({ ...message })).toBe(entryId);
     expect(assertOriginalInputCommit).toHaveBeenCalledOnce();
     expect(admitted).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ entryId, idempotencyKey: message.idempotencyKey }),
     );
     await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
-    const persisted = SessionManager.open(target, root)
+    const persisted = (await SessionManager.openAsync(target, root))
       .getBranch()
       .filter((entry) => entry.type === "message");
     expect(persisted).toMatchObject([
@@ -491,7 +490,7 @@ describe("guardSessionManager transcript updates", () => {
     const { root, target, sessionManager } = await openPersistedSessionManager();
     await sessionManager.appendModelChange("openai", "gpt-5.6-sol");
     await sessionManager.appendThinkingLevelChange("off");
-    const stale = SessionManager.openBounded(target, {
+    const stale = await SessionManager.openBoundedAsync(target, {
       cwd: root,
       maxBytes: 100_000,
       maxEvents: 100,
@@ -520,7 +519,7 @@ describe("guardSessionManager transcript updates", () => {
       preparedUserTurnTranscriptRecorder: recorder,
     });
     expect(recorder.getAdmissionReceipt()).toBeUndefined();
-    guarded.appendMessage({ ...message });
+    await guarded.appendMessageAsync({ ...message });
     expect(marked).toHaveBeenCalledTimes(1);
     expect(marked.mock.calls[0]?.[2]).toEqual({ appended: false });
     expect(updates).toEqual([]);
@@ -536,18 +535,25 @@ describe("guardSessionManager transcript updates", () => {
     const sm = SessionManager.inMemory();
     const message = { ...makeUserMessage("canonical", 1), idempotencyKey: "run:user" };
     const expected = structuredClone(message);
-    const userId = sm.appendMessage(message);
+    const userId = expectDefined(await sm.appendMessageAsync(message), "canonical user entry");
     const setupModel = { modelApi: "openai-responses", modelId: "test-model", provider: "openai" };
     await sm.appendModelChange(setupModel.provider, setupModel.modelId);
     await sm.appendThinkingLevelChange("off");
-    const metadata = sm.appendCustomEntry("model-snapshot", setupModel);
-    const leaf = sm.appendMessage(assistantText("visible"));
-    sm.appendLeafControl({ targetId: leaf, appendParentId: metadata, appendMode: "side" });
+    const metadata = await sm.appendCustomEntryAsync("model-snapshot", setupModel);
+    const leaf = expectDefined(
+      await sm.appendMessageAsync(assistantText("visible")),
+      "visible leaf",
+    );
+    await sm.appendLeafControlAsync({
+      targetId: leaf,
+      appendParentId: metadata,
+      appendMode: "side",
+    });
     const ids = sm.getEntries().map((entry) => entry.id);
     const onUserMessagePersisted = vi.fn();
     guardSessionManager(sm, { preparedUserTurnMessage: message, onUserMessagePersisted });
     const runtime = makeUserMessage("canonical", 1);
-    expect(sm.appendMessage(runtime)).toBe(userId);
+    expect(await sm.appendMessageAsync(runtime)).toBe(userId);
     expect(sm.getAppendParentId()).toBe(metadata);
     expect(sm.getLeafId()).toBe(leaf);
     expect(sm.getEntries().map((entry) => entry.id)).toEqual(ids);
@@ -574,7 +580,7 @@ describe("guardSessionManager transcript updates", () => {
       sessionKey: target.sessionKey,
       preparedUserTurnMessage: message,
     });
-    const entryId = guarded.appendMessage(message);
+    const entryId = expectDefined(await guarded.appendMessageAsync(message), "mutated user entry");
     expect(guarded.getEntry(entryId)).toMatchObject({
       message: { role: "user", content: [{ type: "text", text: "Hi @Morgan" }] },
     });
@@ -585,15 +591,17 @@ describe("guardSessionManager transcript updates", () => {
     const updates = collectUpdates();
     const { sessionManager: sm, target } = await openPersistedSessionManager("original-lifecycle");
     const replacement = await openPersistedSessionManager("replacement-lifecycle");
+    let rebind: Promise<void> | undefined;
     const guarded = guardSessionManager(sm, {
       agentId: target.agentId,
       sessionKey: target.sessionKey,
       onMessagePersisted: () => {
-        sm.setSessionTarget(replacement.target);
+        rebind = sm.setSessionTargetAsync(replacement.target);
       },
     });
     const message = assistantText("hello from subagent");
-    guarded.appendMessage(message);
+    await guarded.appendMessageAsync(message);
+    await expectDefined(rebind, "callback rebind");
     expect(updates).toStrictEqual([
       {
         agentId: "main",
@@ -620,13 +628,13 @@ describe("guardSessionManager transcript updates", () => {
       prepareAssistantTranscriptMessage: (message) =>
         applyAssistantDeliveryDirectives(message, { managedMediaUrls: ["./first.json"] }),
     });
-    firstRun.appendMessage(assistantText("first reply\nMEDIA:./first.json"));
-    guardSessionManager(sm, {
+    await firstRun.appendMessageAsync(assistantText("first reply\nMEDIA:./first.json"));
+    await guardSessionManager(sm, {
       agentId: target.agentId,
       runId: "run-second",
       sessionKey: target.sessionKey,
-    }).appendMessage({ ...assistantText("second reply"), stopReason: "error" });
-    guardSessionManager(sm).appendMessage(assistantText("unowned reply"));
+    }).appendMessageAsync({ ...assistantText("second reply"), stopReason: "error" });
+    await guardSessionManager(sm).appendMessageAsync(assistantText("unowned reply"));
     expect(updates[0]?.message).toMatchObject({
       content: [{ type: "text", text: "first reply\nMEDIA:./first.json" }],
       openclawDelivery: { mediaUrls: ["./first.json"] },
@@ -661,8 +669,8 @@ describe("append-only assistant errors with deferred display", () => {
       stopReason: "error",
       errorMessage: "provider rate limit",
     });
-    manager.appendMessage(failed);
-    manager.appendMessage({
+    await manager.appendMessageAsync(failed);
+    await manager.appendMessageAsync({
       role: "toolResult",
       toolCallId: toolCall.id,
       toolName: toolCall.name,
@@ -671,7 +679,7 @@ describe("append-only assistant errors with deferred display", () => {
       timestamp: 1,
     });
     owner.clear();
-    manager.appendMessage(
+    await manager.appendMessageAsync(
       makeAgentAssistantMessage({
         content: [{ type: "text", text: "Recovered" }],
         timestamp: 2,
@@ -680,7 +688,7 @@ describe("append-only assistant errors with deferred display", () => {
     owner.settle(false);
     await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
-    const messages = SessionManager.open(target).buildSessionContext().messages;
+    const messages = (await SessionManager.openAsync(target)).buildSessionContext().messages;
     expect(messages).toMatchObject([
       {
         role: "assistant",
@@ -720,7 +728,7 @@ describe("append-only assistant errors with deferred display", () => {
         media: [{ url: "https://example.invalid/report.pdf", contentType: "application/pdf" }],
       },
     };
-    manager.appendMessage({
+    await manager.appendMessageAsync({
       ...makeAgentAssistantMessage({
         content: [{ type: "text", text: "Here" }],
         stopReason: "error",
@@ -729,9 +737,9 @@ describe("append-only assistant errors with deferred display", () => {
       ...facts,
     });
     owner.clear();
-    manager.appendMessage(assistantText("Recovered"));
+    await manager.appendMessageAsync(assistantText("Recovered"));
     owner.settle(false);
-    expect(SessionManager.open(target).buildSessionContext().messages).toMatchObject([
+    expect((await SessionManager.openAsync(target)).buildSessionContext().messages).toMatchObject([
       {
         role: "assistant",
         content: [{ type: "text", text: "Here" }],
@@ -759,11 +767,13 @@ describe("append-only assistant errors with deferred display", () => {
       openclawDisplayContent: [displayText, attachment],
     };
     failed.usage = { ...failed.usage, output: 7, totalTokens: 7 };
-    manager.appendMessage(failed);
-    manager.appendMessage(makeTextToolResult("call-terminal", "read", "Result", false, 1));
+    await manager.appendMessageAsync(failed);
+    await manager.appendMessageAsync(
+      makeTextToolResult("call-terminal", "read", "Result", false, 1),
+    );
     owner.settle(true);
     owner.settle(true);
-    const messages = SessionManager.open(target).buildSessionContext().messages;
+    const messages = (await SessionManager.openAsync(target)).buildSessionContext().messages;
     expect(messages).toMatchObject([
       {
         role: "assistant",

@@ -277,7 +277,10 @@ describe("registerMxcPlugin", () => {
       expect(readBackend().factory).toEqual(expect.any(Function));
       setActivePluginRegistry(registry.registry);
       setActivePluginRegistry(createEmptyPluginRegistry());
-      await expect.poll(readBackend).toEqual(original);
+      await expect(disposePluginRegistryInstances(registry.registry)).resolves.toMatchObject({
+        failures: [],
+      });
+      expect(readBackend()).toEqual(original);
     } finally {
       await expect(disposePluginRegistryInstances(registry.registry)).resolves.toMatchObject({
         failures: [],

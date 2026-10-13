@@ -31,7 +31,9 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
   let aborts = 0;
   let nestedSignal: AbortSignal | undefined;
   type ToolOptions = NonNullable<
-    Parameters<NonNullable<AgentHarnessAttemptParamsV2["hostCapabilities"]["createToolSurface"]>>[0]
+    Parameters<
+      NonNullable<AgentHarnessAttemptParamsV2["hostCapabilities"]["createToolSurfaceAsync"]>
+    >[0]
   >;
   let catalog: ToolOptions["toolSearchCatalogRef"];
   let contextSignal: AbortSignal | undefined;

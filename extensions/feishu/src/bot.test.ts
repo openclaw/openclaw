@@ -51,8 +51,8 @@ const failedFinalReceipt = {
 
 type RecordedSession = Parameters<PluginRuntime["channel"]["session"]["recordInboundSession"]>[0];
 type ConfiguredBindingRoute = ReturnType<typeof resolveConfiguredBindingRoute>;
-type BoundConversation = ReturnType<
-  ReturnType<typeof getSessionBindingService>["resolveByConversation"]
+type BoundConversation = Awaited<
+  ReturnType<ReturnType<typeof getSessionBindingService>["resolveByConversationAsync"]>
 >;
 type BindingReadiness = Awaited<ReturnType<typeof ensureConfiguredBindingRouteReady>>;
 type DeepPartial<T> = {
@@ -346,7 +346,7 @@ vi.mock("openclaw/plugin-sdk/conversation-binding-runtime", async () => {
     resolveRuntimeConversationBindingRouteAsync: async (params: {
       route: ResolvedAgentRoute;
       conversation: Parameters<
-        ReturnType<typeof actual.getSessionBindingService>["resolveByConversation"]
+        ReturnType<typeof actual.getSessionBindingService>["resolveByConversationAsync"]
       >[0];
     }) => {
       const bindingRecord = mockResolveBoundConversation(params.conversation);
@@ -368,10 +368,6 @@ vi.mock("openclaw/plugin-sdk/conversation-binding-runtime", async () => {
       };
     },
     ensureConfiguredBindingRouteReady: mockEnsureConfiguredBindingRouteReady,
-    getSessionBindingService: () => ({
-      resolveByConversation: mockResolveBoundConversation,
-      touch: mockTouchBinding,
-    }),
   };
 });
 

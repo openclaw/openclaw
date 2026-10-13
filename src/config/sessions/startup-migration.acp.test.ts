@@ -2,7 +2,7 @@ import { expect, it, vi } from "vitest";
 import { repairAcpSessionMetaKeysForDoctor } from "../../acp/runtime/session-meta-doctor.js";
 import { buildAcpDatabaseSessionKey } from "../../acp/runtime/session-meta-keys.js";
 import {
-  readAcpSessionEntry,
+  readAcpSessionEntryAsync,
   writeAcpSessionMetaForMigration,
 } from "../../acp/runtime/session-meta.js";
 import { noteSessionTranscriptHealth } from "../../commands/doctor-session-transcripts.js";
@@ -230,7 +230,7 @@ it("startup requires offline ACP repair before handing restored stores to runtim
         onWarnings: (reported) => warnings.push(...reported),
       });
       expect(warnings).toEqual([]);
-      expect(readAcpSessionEntry(scope)?.acp).toEqual(meta);
+      expect((await readAcpSessionEntryAsync(scope))?.acp).toEqual(meta);
       await expect(startup()).resolves.toBeUndefined();
       expect(handoffDatabase).toHaveBeenCalledTimes(owners.size);
       expect(await repairAcpSessionMetaKeysForDoctor({ cfg, env, apply: false })).toMatchObject({
@@ -268,7 +268,7 @@ it("startup requires offline ACP repair before handing restored stores to runtim
       .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
       .run(nullKey);
     await expect(startup()).resolves.toBeUndefined();
-    expect(readAcpSessionEntry({ ...nullScope, cfg })?.acp).toBeUndefined();
+    expect((await readAcpSessionEntryAsync({ ...nullScope, cfg }))?.acp).toBeUndefined();
     expect(
       agentDatabase
         .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
@@ -399,12 +399,14 @@ it("startup preserves unbound ACP rows retained by Doctor without serving their 
     expect(handoffDatabase).toHaveBeenCalledTimes(1);
     for (const sessionKey of keys) {
       expect(
-        readAcpSessionEntry({
-          cfg,
-          env,
-          agentId: sessionKey.startsWith("agent:retired:") ? "retired" : "main",
-          sessionKey,
-        })?.acp,
+        (
+          await readAcpSessionEntryAsync({
+            cfg,
+            env,
+            agentId: sessionKey.startsWith("agent:retired:") ? "retired" : "main",
+            sessionKey,
+          })
+        )?.acp,
       ).toBeUndefined();
     }
     expect(db.prepare("SELECT * FROM acp_sessions ORDER BY session_key").all()).toEqual(before);

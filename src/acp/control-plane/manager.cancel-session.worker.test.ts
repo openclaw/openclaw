@@ -7,7 +7,7 @@ import * as terminalSignals from "../../sessions/subagent-terminal-state.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { applyAcpSessionMutation } from "../runtime/session-meta-write.kernel.js";
-import { readAcpSessionEntry, upsertAcpSessionMeta } from "../runtime/session-meta.js";
+import { readAcpSessionEntryAsync, upsertAcpSessionMeta } from "../runtime/session-meta.js";
 import {
   withAcpCancellationFixture,
   readDurableAcpSignals,
@@ -26,7 +26,7 @@ it("refuses inline-only idle ACP metadata without host data SQL", async () => {
         sql.restore();
         expect(f.ensureSession).not.toHaveBeenCalled();
         expect(f.cancel).not.toHaveBeenCalled();
-        expect(readAcpSessionEntry(f.target)?.entry?.acp?.state).toBe("running");
+        expect((await readAcpSessionEntryAsync(f.target))?.entry?.acp?.state).toBe("running");
         expect(sql.queries).toEqual([]);
       } finally {
         sql.restore();
@@ -78,7 +78,7 @@ it("does not admit durable runtime cancellation from an inherited discovery snap
       release.resolve();
       await result;
       expect(f.cancel).not.toHaveBeenCalled();
-      expect(readAcpSessionEntry(f.target)?.acp).toBeUndefined();
+      expect((await readAcpSessionEntryAsync(f.target))?.acp).toBeUndefined();
     } finally {
       release.resolve();
       await result;
@@ -203,7 +203,7 @@ it.each(["metadata", "lifecycle"] as const)(
       expect(await result).toMatchObject([{ status: "rejected" }]);
       expect(f.cancel).not.toHaveBeenCalled();
       expect(close).not.toHaveBeenCalled();
-      expect(readAcpSessionEntry(f.target)?.acp).toBeUndefined();
+      expect((await readAcpSessionEntryAsync(f.target))?.acp).toBeUndefined();
     });
   },
 );
@@ -690,7 +690,7 @@ it.each(["metadata-read", "runtime-rpc"] as const)(
         return result;
       });
       await turnEntered.promise;
-      const originalMeta = readAcpSessionEntry(f.target)?.acp;
+      const originalMeta = (await readAcpSessionEntryAsync(f.target))?.acp;
       if (!originalMeta) {
         releaseTurn.resolve();
         await turnResult;

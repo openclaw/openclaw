@@ -321,8 +321,6 @@ export async function prepareNodeHostRuntime(params?: {
           ? {
               acquireManagedWorkspaceAsync: (request) =>
                 workerWorkspace.acquireManagedWorkspaceAsync(request),
-              acquireManagedWorkspace: (request) =>
-                workerWorkspace.acquireManagedWorkspace(request),
             }
           : {}),
       };

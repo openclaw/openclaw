@@ -304,7 +304,7 @@ describeLive("OpenAI AgentSession repeated compaction live", () => {
       };
       const reopen = async () => {
         await disposeOpenClawAgentDatabaseByPath(sessionTarget.storePath);
-        return SessionManager.open(sessionTarget, workspaceDir);
+        return await SessionManager.openAsync(sessionTarget, workspaceDir);
       };
       try {
         await run(

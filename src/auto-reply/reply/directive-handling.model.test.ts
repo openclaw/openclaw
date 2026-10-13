@@ -84,7 +84,7 @@ vi.mock("../../agents/auth-profiles/store-runtime.js", () => {
       authProfilesStoreMock.profiles[profileId],
     ensureAuthProfileStoreWithoutExternalProfiles: readAuthProfileStoreForTest,
     ensureAuthProfileStoreWithoutExternalProfilesAsync: async () => readAuthProfileStoreForTest(),
-    ensureAuthProfileStoreForLocalUpdate: readAuthProfileStoreForTest,
+    ensureAuthProfileStoreForLocalUpdateAsync: async () => readAuthProfileStoreForTest(),
     loadAuthProfileStore: readAuthProfileStoreForTest,
     loadAuthProfileStoreForRuntime: readAuthProfileStoreForTest,
     loadAuthProfileStoreForSecretsRuntime: readAuthProfileStoreForTest,

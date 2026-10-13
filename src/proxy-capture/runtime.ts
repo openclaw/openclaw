@@ -24,7 +24,6 @@ import {
   resolveRuntimeDeps,
   type CaptureOwner,
   type DebugProxyCaptureAsyncRuntimeDeps,
-  type DebugProxyCaptureRuntimeDeps,
 } from "./runtime-owner.js";
 import {
   readCapturedResponseBodyBounded,
@@ -42,11 +41,9 @@ import type {
 } from "./types.js";
 
 export {
-  finalizeDebugProxyCapture,
   finalizeDebugProxyCaptureAsync,
   isDebugProxyGlobalFetchPatchInstalled,
   resolveDebugProxyFetchTransport,
-  type DebugProxyCaptureRuntimeDeps,
 } from "./runtime-owner.js";
 
 const REDACTED_CAPTURE_BINARY_PAYLOAD = Buffer.from("[REDACTED BINARY PAYLOAD]", "utf8");
@@ -175,52 +172,6 @@ function createHttpCaptureEventBase(params: {
     host: params.url.host,
     path: `${params.url.pathname}${params.url.search}`,
   };
-}
-
-/** @deprecated Use initializeDebugProxyCaptureAsync for worker-backed capture. */
-export function initializeDebugProxyCapture(
-  mode: string,
-  resolved?: DebugProxySettings,
-  deps: DebugProxyCaptureRuntimeDeps = {},
-): void {
-  const settings = resolveEnabledDebugProxySettings(resolved);
-  if (!settings) {
-    return;
-  }
-  const owner = resolveCaptureOwner(settings, resolveRuntimeDeps(deps), {
-    initialize: true,
-    explicit: resolved !== undefined,
-  });
-  if (!owner) {
-    return;
-  }
-  owner.store.upsertSession({
-    id: settings.sessionId,
-    startedAt: Date.now(),
-    mode,
-    sourceScope: "openclaw",
-    sourceProcess: settings.sourceProcess,
-    proxyUrl: settings.proxyUrl,
-  });
-  installDebugProxyGlobalFetchPatch(owner, captureInstalledFetch, deps);
-}
-
-/** @deprecated Use captureHttpExchangeAsync and await capture finalization at shutdown. */
-export function captureHttpExchange(
-  params: HttpCaptureParams,
-  resolved?: DebugProxySettings,
-  deps: DebugProxyCaptureRuntimeDeps = {},
-): void {
-  const settings = resolveEnabledDebugProxySettings(resolved);
-  if (!settings) {
-    return;
-  }
-  const owner = resolveCaptureOwner(settings, resolveRuntimeDeps(deps), {
-    explicit: resolved !== undefined,
-  });
-  if (owner) {
-    void captureInstalledFetch(owner, params);
-  }
 }
 
 function captureInstalledFetch(
@@ -507,25 +458,6 @@ function captureOwnedWsEvent(
     { data: redactCapturePayload(params.payload), contentType: "application/json" },
     execution,
   );
-}
-
-// Websocket seams call this directly because Node fetch patching cannot observe frame traffic.
-/** @deprecated Use captureWsEventAsync and await capture finalization at shutdown. */
-export function captureWsEvent(
-  params: WsCaptureParams,
-  resolved?: DebugProxySettings,
-  deps: DebugProxyCaptureRuntimeDeps = {},
-): void {
-  const settings = resolveEnabledDebugProxySettings(resolved);
-  if (!settings) {
-    return;
-  }
-  const owner = resolveCaptureOwner(settings, resolveRuntimeDeps(deps), {
-    explicit: resolved !== undefined,
-  });
-  if (owner) {
-    void captureOwnedWsEvent(params, owner, { asynchronous: false });
-  }
 }
 
 function runAsyncCapture(

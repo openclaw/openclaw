@@ -174,13 +174,14 @@ describe("dispatchReplyFromConfig", () => {
         SessionKey: `agent:main:${surface}:channel:C123`,
       });
       const onItemEvent = vi.fn();
-      let isVerboseProgressActive = () => false;
+      let isVerboseProgressActive = async () => false;
+      let verboseProgressVisible = false;
 
       const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
         sessionStoreMocks.currentEntry = {
           verboseLevel: nextVerboseLevel,
         };
-        expect(isVerboseProgressActive()).toBe(durableCommentary);
+        expect(await isVerboseProgressActive()).toBe(durableCommentary);
         expect(opts?.commentaryPayloadsEnabled).toBe(durableCommentary);
         await opts?.onItemEvent?.({
           itemId: "commentary-1",
@@ -205,9 +206,10 @@ describe("dispatchReplyFromConfig", () => {
           commentaryProgressEnabled: true,
           progressPreambleEnabled: true,
           commentaryPayloadsEnabled: true,
-          shouldDeliverCommentaryPayloads: () => isVerboseProgressActive(),
-          onVerboseProgressVisibility: (getter) => {
+          shouldDeliverCommentaryPayloads: () => verboseProgressVisible,
+          onVerboseProgressVisibilityAsync: async (getter) => {
             isVerboseProgressActive = getter;
+            verboseProgressVisible = await getter();
           },
           onItemEvent,
         },

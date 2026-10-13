@@ -4,9 +4,9 @@ import { getAcpSessionManager, testing } from "./acp-runtime.js";
 
 afterEach(() => testing.resetAcpSessionManagerForTests());
 
-it("preserves the plugin manager operations without exposing reset-only custody", () => {
+it("preserves the plugin manager operations without exposing reset-only custody", async () => {
   const manager = getAcpSessionManager();
-  expect(manager.resolveSession({ cfg: {}, sessionKey: "" })).toEqual({
+  expect(await manager.resolveSessionAsync({ cfg: {}, sessionKey: "" })).toEqual({
     kind: "none",
     sessionKey: "",
   });

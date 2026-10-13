@@ -23,7 +23,7 @@ type DescriptorOptions = {
 type RoundTripHarness = {
   createDescriptor(options?: DescriptorOptions): Promise<WorkerLaunchDescriptor>;
   requestParams(method: string): unknown[];
-  sessionTarget: Parameters<typeof SessionManager.open>[0];
+  sessionTarget: Parameters<typeof SessionManager.openAsync>[0];
   settleRun(runId: string): Promise<void>;
   setOutcome(outcome: WorkerInferenceTerminalOutcome): void;
 };
@@ -99,7 +99,7 @@ export async function runWorkerProviderReplayRoundTrip(harness: RoundTripHarness
     committedReplay?.role === "assistant" ? committedReplay.providerReplay?.data : undefined,
   ).toBe(ciphertext);
 
-  const canonicalMessages = SessionManager.open(harness.sessionTarget)
+  const canonicalMessages = (await SessionManager.openAsync(harness.sessionTarget))
     .getBranch()
     .flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
   const replayOwner = canonicalMessages.find(

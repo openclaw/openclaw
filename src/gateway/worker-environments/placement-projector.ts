@@ -21,9 +21,7 @@ export type WorkerSessionPlacementReader = Pick<WorkerSessionPlacementStore, "ge
       | "getManyAsync"
       | "prepareSessionPlacement"
       | "prepareRuntimeRefresh"
-      | "getWorkspaceResultReconcilingSessionIds"
       | "getWorkspaceResultReconcilingSessionIdsAsync"
-      | "listPendingWorkspaceResults"
       | "listPendingWorkspaceResultsAsync"
       | "registerTurnClaimClosedHandler"
     >

@@ -175,8 +175,6 @@ export async function prepareNodeWorkerWorkspaceOverlay(params: {
           await mutation.complete();
         }
         throw error;
-      } finally {
-        mutation.close();
       }
     },
   };

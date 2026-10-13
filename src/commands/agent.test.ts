@@ -63,7 +63,7 @@ import { interruptSessionWorkAdmissions } from "../sessions/session-lifecycle-ad
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveEffectiveAgentSkillFilter } from "../skills/discovery/agent-filter.js";
 import {
-  loadVisibleSkills,
+  prepareWorkspaceSkills,
   loadWorkspaceSkills,
 } from "../skills/loading/workspace-skill-loader.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../skills/runtime/session-snapshot.js";
@@ -108,7 +108,6 @@ vi.mock("../agents/auth-profiles/store-runtime.js", () => {
     ensureAuthProfileStoreAsync: vi.fn(async () => createEmptyStore()),
     ensureAuthProfileStoreForLocalUpdateAsync: vi.fn(async () => createEmptyStore()),
     ensureAuthProfileStoreWithoutExternalProfilesAsync: vi.fn(async () => createEmptyStore()),
-    ensureAuthProfileStoreForLocalUpdate: vi.fn(createEmptyStore),
     loadAuthProfileStore: vi.fn(createEmptyStore),
     loadAuthProfileStoreForRuntime: vi.fn(createEmptyStore),
     loadAuthProfileStoreForRuntimeAsync: vi.fn(async () => createEmptyStore()),
@@ -344,7 +343,7 @@ function mockUserInvocableSkills(params: {
       },
     } satisfies SkillEntry;
   });
-  vi.mocked(loadVisibleSkills).mockImplementation((_workspaceDir, opts) => {
+  vi.mocked(prepareWorkspaceSkills).mockImplementation(async (_workspaceDir, opts) => {
     const filter = opts?.skillFilter;
     return filter === undefined
       ? entries

@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import {
   createAssistantMessageEventStream,
   type Context,
@@ -43,7 +44,7 @@ const completedCompactionEvent = (reason: "threshold" | "overflow", willRetry: b
 describe("AgentSession loop correctness", () => {
   it("publishes a queued user message only after its transcript entry is committed", async () => {
     const { session, sessionManager } = await createTestSession();
-    type QueuedMessage = Parameters<SessionManager["appendMessage"]>[0];
+    type QueuedMessage = Parameters<SessionManager["appendMessageAsync"]>[0];
     const queuedMessages = (
       session.agent as unknown as { steeringQueue: { messages: QueuedMessage[] } }
     ).steeringQueue.messages;
@@ -93,7 +94,7 @@ describe("AgentSession loop correctness", () => {
 
   it("rejects a consumed steer immediately when its transcript append fails", async () => {
     const { session, sessionManager } = await createTestSession();
-    type QueuedMessage = Parameters<SessionManager["appendMessage"]>[0];
+    type QueuedMessage = Parameters<SessionManager["appendMessageAsync"]>[0];
     const queuedMessages = (
       session.agent as unknown as { steeringQueue: { messages: QueuedMessage[] } }
     ).steeringQueue.messages;
@@ -145,7 +146,7 @@ describe("AgentSession loop correctness", () => {
   it("confirms identical queued messages only after their own transcript commits", async () => {
     const waiterCount = 3;
     const { session, sessionManager } = await createTestSession();
-    type QueuedMessage = Parameters<SessionManager["appendMessage"]>[0];
+    type QueuedMessage = Parameters<SessionManager["appendMessageAsync"]>[0];
     const queuedMessages = (
       session.agent as unknown as { steeringQueue: { messages: QueuedMessage[] } }
     ).steeringQueue.messages;
@@ -268,8 +269,11 @@ describe("AgentSession loop correctness", () => {
   it("carries the canonical assistant entry id through ordered terminal listeners", async () => {
     const assistant = createAssistant(testModel, [{ type: "text", text: "same answer" }]);
     const sessionManager = SessionManager.inMemory();
-    sessionManager.appendMessage({ role: "user", content: "old prompt", timestamp: 1 });
-    const priorAssistantEntryId = sessionManager.appendMessage({ ...assistant });
+    await sessionManager.appendMessageAsync({ role: "user", content: "old prompt", timestamp: 1 });
+    const priorAssistantEntryId = expectDefined(
+      await sessionManager.appendMessageAsync({ ...assistant }),
+      "Expected appended message",
+    );
     streamMocks.streamSimple.mockImplementation(() => createAssistantResultStream(assistant));
     const { session } = await createTestSession({ sessionManager });
     const order: string[] = [];
@@ -442,8 +446,12 @@ describe("AgentSession loop correctness", () => {
       sessionManager,
       createAssistant(model, [{ type: "text", text: "old cumulative turn" }], "stop", 950),
     );
-    sessionManager.appendMessage({ role: "user", content: "CLI prompt", timestamp: Date.now() });
-    sessionManager.appendMessage({
+    await sessionManager.appendMessageAsync({
+      role: "user",
+      content: "CLI prompt",
+      timestamp: Date.now(),
+    });
+    await sessionManager.appendMessageAsync({
       ...createAssistant(model, [{ type: "text", text: "usage unavailable" }]),
       usage: {
         input: 0,

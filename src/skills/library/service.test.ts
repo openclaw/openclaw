@@ -113,37 +113,41 @@ describe("profile-owned skill publication and selection", () => {
       ),
     ).toThrow(expect.objectContaining({ code: "NOT_FOUND" }));
     const {
-      listSkillCommandsForWorkspace,
       listSkillCommandsForAgents,
+      prepareSkillCommandsForWorkspace,
       prepareSkillCommandsForAgents,
     } = await import("../discovery/chat-commands.js");
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       const cfg = { agents: { defaults: { skills: [] } } };
       const discover = (
-        overrides: Partial<Parameters<typeof listSkillCommandsForWorkspace>[0]> = {},
+        overrides: Partial<Parameters<typeof prepareSkillCommandsForWorkspace>[0]> = {},
       ) =>
-        listSkillCommandsForWorkspace({
+        prepareSkillCommandsForWorkspace({
           workspaceDir: stateDir,
           cfg,
           agentId: "main",
           sessionEntry: { skillLibrarySelections: pins },
           ...overrides,
         });
-      const commands = discover({ skillFilter: [saved.entry.name] });
+      const commands = await discover({ skillFilter: [saved.entry.name] });
       expect(commands).toHaveLength(1);
       expect(commands[0]).toMatchObject({
         name: saved.entry.name,
         skillFile: expect.stringContaining(saved.entry.revision),
       });
-      expect(discover()).toEqual([]);
-      expect(discover({ includeAllowlistHidden: true })).toContainEqual(commands[0]);
+      expect(await discover()).toEqual([]);
+      expect(await discover({ includeAllowlistHidden: true })).toContainEqual(commands[0]);
       expect(
-        discover({
-          includeAllowlistHidden: true,
-          cfg: { ...cfg, skills: { entries: { [saved.entry.name]: { enabled: false } } } },
-        }).map((entry) => entry.name),
+        (
+          await discover({
+            includeAllowlistHidden: true,
+            cfg: { ...cfg, skills: { entries: { [saved.entry.name]: { enabled: false } } } },
+          })
+        ).map((entry) => entry.name),
       ).not.toContain(saved.entry.name);
-      expect(discover({ sessionEntry: undefined, skillFilter: [saved.entry.name] })).toEqual([]);
+      expect(await discover({ sessionEntry: undefined, skillFilter: [saved.entry.name] })).toEqual(
+        [],
+      );
       const agentParams = {
         cfg: {
           agents: {

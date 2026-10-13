@@ -274,9 +274,9 @@ describe("CLI durable session context", () => {
 
   it("builds fresh-session caller-memory prompts from hook-mutated prompts", async () => {
     const { dir, sessionTarget } = fixture.session;
-    const manager = SessionManager.open(sessionTarget, dir);
-    manager.appendMessage({ role: "user", content: "earlier ask", timestamp: 1 });
-    manager.appendCompaction(
+    const manager = await SessionManager.openAsync(sessionTarget, dir);
+    await manager.appendMessageAsync({ role: "user", content: "earlier ask", timestamp: 1 });
+    await manager.appendCompactionAsync(
       "compacted earlier ask",
       expectDefined(manager.getLeafId(), "retained history entry"),
       10_000,

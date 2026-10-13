@@ -11,7 +11,7 @@ import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.j
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { getOpenIncognitoAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import { readAcpSessionEntry, upsertAcpSessionMeta } from "../runtime/session-meta.js";
+import { readAcpSessionEntryAsync, upsertAcpSessionMeta } from "../runtime/session-meta.js";
 import {
   readDurableAcpSignals,
   withAcpCancellationFixture,
@@ -151,7 +151,7 @@ it("preserves replacement metadata when a cancelled late handle fails its applie
       releasePublicationRead.resolve();
       await Promise.all([turnResult, cancelResult]);
       expect(await turnResult).toMatchObject([{ status: "rejected" }]);
-      expect(readAcpSessionEntry(f.target)?.acp).toMatchObject({
+      expect((await readAcpSessionEntryAsync(f.target))?.acp).toMatchObject({
         backend: "cancellation-proof",
         runtimeSessionName: "successor-runtime",
         state: "running",
@@ -212,7 +212,7 @@ it("preserves a durable replacement while cold cancellation ensure normalizes it
         });
         release.resolve();
         const outcomes = await result;
-        expect(readAcpSessionEntry(f.target)?.acp).toMatchObject({
+        expect((await readAcpSessionEntryAsync(f.target))?.acp).toMatchObject({
           backend: "cancellation-proof",
           runtimeSessionName: "successor-runtime",
           state: "running",
@@ -317,7 +317,9 @@ it.each([
             turnResult,
             "Normalization settled before its write gate.",
           );
-          expect(readAcpSessionEntry(f.target)?.acp?.runtimeSessionName).toBe("retained-runtime");
+          expect((await readAcpSessionEntryAsync(f.target))?.acp?.runtimeSessionName).toBe(
+            "retained-runtime",
+          );
           expect(f.runTurn).not.toHaveBeenCalled();
           const cancellation = f.manager.cancelSession({
             ...f.target,
@@ -355,7 +357,7 @@ it.each([
           await Promise.all([turnResult, cancelResult]);
           expect(turnSettled).toBe(true);
           expect(cancelSettled).toBe(true);
-          expect(readAcpSessionEntry(f.target)?.acp).toMatchObject({
+          expect((await readAcpSessionEntryAsync(f.target))?.acp).toMatchObject({
             backend: "cancellation-proof",
             runtimeSessionName: "successor-runtime",
             state: "running",

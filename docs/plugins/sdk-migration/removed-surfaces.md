@@ -369,7 +369,7 @@ timeline for current status.
     `target: { kind: "chat" | "channel" | "room" | "conversation", id }`;
     the old parallel `chatId`, `channelId`, `roomId`, and `conversationId`
     result fields are no longer accepted. The raw result type remains available
-    until the next plugin-SDK major release.
+    until removal after stable deprecation and a compatibility period.
 
   </Accordion>
 

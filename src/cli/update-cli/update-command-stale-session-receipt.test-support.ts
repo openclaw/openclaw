@@ -1,5 +1,5 @@
 import { expect, it, type Mock } from "vitest";
-import { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
+import { readAcpSessionEntryAsync } from "../../acp/runtime/session-meta.js";
 import { seedStaleDeferredPluginSessionImport } from "../../commands/doctor-session-sqlite.deferred-plugin.test-support.js";
 import { noteSessionTranscriptHealth } from "../../commands/doctor-session-transcripts.js";
 import { loadTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-read.js";
@@ -66,8 +66,14 @@ export function registerStaleSessionReceiptUpdateTest(mocks: {
       }
       expect(loadTranscriptEventsSync({ ...scope, sessionId: "legacy-kept" })).toHaveLength(2);
       expect(
-        readAcpSessionEntry({ cfg, env, agentId: "main", sessionKey: "agent:main:kept" })?.acp
-          ?.runtimeSessionName,
+        (
+          await readAcpSessionEntryAsync({
+            cfg,
+            env,
+            agentId: "main",
+            sessionKey: "agent:main:kept",
+          })
+        )?.acp?.runtimeSessionName,
       ).toBe("legacy-runtime");
       expect(mocks.restartService).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({

@@ -637,7 +637,7 @@ it.each(["direct owner", "compressed history", "current JSONL"])(
       const mainScope = scopeFor("main", mainKey);
       const opusScope = scopeFor("opus", opusKey);
       const writeArtifact = async (tokens: number) => {
-        archiveManager.appendMessage(usageMessage(tokens, timestamp));
+        await archiveManager.appendMessageAsync(usageMessage(tokens, timestamp));
         const content = [archiveManager.getHeader(), ...archiveManager.getEntries()]
           .map((entry) => JSON.stringify(entry))
           .join("\n");

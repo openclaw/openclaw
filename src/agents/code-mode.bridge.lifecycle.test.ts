@@ -75,8 +75,12 @@ describe("Code Mode subscribed bridge lifecycle", () => {
         storePath: resolveDefaultSessionStorePath("main"),
       };
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      const manager = SessionManager.open(scope);
-      manager.appendMessage({ role: "user", content: "Read both records", timestamp: 1 });
+      const manager = await SessionManager.openAsync(scope);
+      await manager.appendMessageAsync({
+        role: "user",
+        content: "Read both records",
+        timestamp: 1,
+      });
       const harness = createSubscribedCodeModeHarness({ name, sessionManager: manager });
       const target = fakeTool("read_record", "Read a record");
       applyCodeModeCatalog({ ...harness, tools: [...harness.tools, target] });
@@ -94,7 +98,7 @@ describe("Code Mode subscribed bridge lifecycle", () => {
             content: [toolCall],
             stopReason: "toolUse",
           });
-          manager.appendMessage(assistantMessage);
+          await manager.appendMessageAsync(assistantMessage);
           const result = resultDetails(
             await runWithAgentToolExecutionContext({ assistantMessage, toolCall }, () =>
               exec.execute(toolCall.id, toolCall.arguments),
@@ -114,7 +118,7 @@ describe("Code Mode subscribed bridge lifecycle", () => {
           "exec_0",
           "exec_0",
         ]);
-        const admitted = SessionManager.open(scope)
+        const admitted = (await SessionManager.openAsync(scope))
           .getEntries()
           .flatMap((entry) =>
             entry.type === "message" ? [readNestedToolActivity(entry.message)] : [],
@@ -139,8 +143,12 @@ describe("Code Mode subscribed bridge lifecycle", () => {
         storePath: resolveDefaultSessionStorePath("main"),
       };
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      const manager = SessionManager.open(scope);
-      manager.appendMessage({ role: "user", content: "Review this format", timestamp: 1 });
+      const manager = await SessionManager.openAsync(scope);
+      await manager.appendMessageAsync({
+        role: "user",
+        content: "Review this format",
+        timestamp: 1,
+      });
       const harness = createSubscribedCodeModeHarness({ name, sessionManager: manager });
       const target = createMessageTool({
         config,
@@ -172,7 +180,7 @@ describe("Code Mode subscribed bridge lifecycle", () => {
           { action: "send", message: "Review complete", final: true },
           { parentToolCallId: "code-call-1" },
         );
-        const messages = SessionManager.open(scope)
+        const messages = (await SessionManager.openAsync(scope))
           .getEntries()
           .flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
         expect(messages.filter((message) => message.role === "assistant")).toEqual([
@@ -261,7 +269,7 @@ describe("Code Mode subscribed bridge lifecycle", () => {
         replaceEntry: true,
         skipMaintenance: true,
       });
-      const manager = SessionManager.open(scope, dir);
+      const manager = await SessionManager.openAsync(scope, dir);
       const harness = createSubscribedCodeModeHarness({
         name: "nested-history",
         sessionManager: manager,
@@ -286,15 +294,15 @@ describe("Code Mode subscribed bridge lifecycle", () => {
           input: { path: "repeat-proof.txt" },
           acceptResultBeforeProjection: async (result) => result,
         });
-      const appendCall = (name: string) =>
-        manager.appendMessage({
+      const appendCall = async (name: string) =>
+        await manager.appendMessageAsync({
           role: "assistant",
           content: [{ type: "toolCall", id: name, name, arguments: {} }],
           stopReason: "toolUse",
           timestamp: Date.now(),
         } as never);
-      const appendResult = (name: string) =>
-        manager.appendMessage({
+      const appendResult = async (name: string) =>
+        await manager.appendMessageAsync({
           role: "toolResult",
           toolCallId: name,
           toolName: name,
@@ -303,8 +311,12 @@ describe("Code Mode subscribed bridge lifecycle", () => {
           timestamp: Date.now(),
         });
       try {
-        manager.appendMessage({ role: "user", content: "Read three times", timestamp: 1 });
-        appendCall("exec");
+        await manager.appendMessageAsync({
+          role: "user",
+          content: "Read three times",
+          timestamp: 1,
+        });
+        await appendCall("exec");
         const first = call(0);
         await firstStarted.promise;
         await call(1);
@@ -313,11 +325,11 @@ describe("Code Mode subscribed bridge lifecycle", () => {
         expect(
           manager.buildSessionContext().messages.some((message) => message.role === "toolResult"),
         ).toBe(false);
-        appendResult("exec");
-        appendCall("wait");
+        await appendResult("exec");
+        await appendCall("wait");
         await call(2);
-        appendResult("wait");
-        const reopened = SessionManager.open(scope, dir);
+        await appendResult("wait");
+        const reopened = await SessionManager.openAsync(scope, dir);
         const messages = reopened
           .getBranch()
           .flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
@@ -357,7 +369,10 @@ describe("Code Mode subscribed bridge lifecycle", () => {
           "assistant",
           "toolResult",
         ]);
-        const bounded = SessionManager.openBounded(scope, { maxEvents: 4, maxBytes: 4096 });
+        const bounded = await SessionManager.openBoundedAsync(scope, {
+          maxEvents: 4,
+          maxBytes: 4096,
+        });
         expect(bounded.buildSessionContext().messages).toEqual(replay.slice(-4));
         const events = reopened.getPersistedEntries();
         expect(estimateParentForkPromptTokens(resolveParentForkSourceTranscript(events))).toEqual(

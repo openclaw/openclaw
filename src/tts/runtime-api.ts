@@ -65,7 +65,7 @@ export type {
   TtsTelephonyResult,
 } from "./tts-runtime-types.js";
 
-/** @deprecated Use getTtsProviderAsync. Removed at the next Plugin SDK major. */
+/** @deprecated Use getTtsProviderAsync. Removed after stable deprecation and a compatibility period. */
 export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): TtsProvider {
   warnPluginSdkDeprecation({
     family: "tts",

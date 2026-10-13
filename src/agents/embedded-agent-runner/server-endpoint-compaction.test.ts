@@ -40,14 +40,14 @@ const openAIModel = {
   baseUrl: "https://api.openai.com/v1",
 } satisfies Model;
 
-function createSession(
+async function createSession(
   sessionModel: Model = model,
   providerReplay?: AssistantMessage["providerReplay"],
   userText = "remember copper",
 ) {
   const sessionManager = SessionManager.inMemory();
-  sessionManager.appendMessage({ role: "user", content: userText, timestamp: 1 });
-  sessionManager.appendMessage({
+  await sessionManager.appendMessageAsync({ role: "user", content: userText, timestamp: 1 });
+  await sessionManager.appendMessageAsync({
     role: "assistant",
     content: [{ type: "text", text: "remembered" }],
     api: sessionModel.api,
@@ -65,8 +65,10 @@ function createSession(
   return { sessionManager, messages };
 }
 
-function attempt(overrides: Partial<Parameters<typeof attemptServerEndpointCompaction>[0]> = {}) {
-  const session = createSession(overrides.model ?? model);
+async function attempt(
+  overrides: Partial<Parameters<typeof attemptServerEndpointCompaction>[0]> = {},
+) {
+  const session = await createSession(overrides.model ?? model);
   return {
     session,
     result: attemptServerEndpointCompaction({
@@ -114,6 +116,7 @@ describe("attemptServerEndpointCompaction", () => {
     "reports a committed $model.provider $trigger rewrite without fallback when observer throws=$throws",
     async ({ trigger, throws, model: requestModel }) => {
       requestPreparedCompactionMock.mockResolvedValueOnce(createCompactionResponse(requestModel));
+      const session = await createSession(requestModel);
       let committedOwner: ReturnType<SessionManager["getLeafEntry"]>;
       const observerError = new Error("committed observer failed");
       const onCompactionCommitted = vi.fn(() => {
@@ -122,8 +125,14 @@ describe("attemptServerEndpointCompaction", () => {
           throw observerError;
         }
       });
-      const request = { trigger, model: requestModel, onCompactionCommitted };
-      const { session, result } = attempt(request);
+      const request = {
+        trigger,
+        model: requestModel,
+        onCompactionCommitted,
+        sessionManager: session.sessionManager,
+        context: { systemPrompt: "system", messages: session.messages },
+      };
+      const { result } = await attempt(request);
 
       if (throws) {
         await expect(result).rejects.toBe(observerError);
@@ -178,7 +187,7 @@ describe("attemptServerEndpointCompaction", () => {
         sessionId: "session-1",
       }),
     });
-    const { session, result } = attempt();
+    const { session, result } = await attempt();
 
     await expect(result).resolves.toBeDefined();
     const owner = session.sessionManager
@@ -215,7 +224,7 @@ describe("attemptServerEndpointCompaction", () => {
         }),
     );
 
-    const { result } = attempt({ requestOptions: { apiKey: "test", timeoutMs: 10 } });
+    const { result } = await attempt({ requestOptions: { apiKey: "test", timeoutMs: 10 } });
 
     await expect(result).resolves.toBeUndefined();
     expect(requestAborted).toBe(true);
@@ -231,10 +240,10 @@ describe("attemptServerEndpointCompaction", () => {
     "compacts source text verbatim when its $source contains a configured pattern",
     async (testCase) => {
       const warn = vi.spyOn(log, "warn").mockClear();
-      const session = createSession(model, undefined, testCase.userText);
+      const session = await createSession(model, undefined, testCase.userText);
       const onUsage = vi.fn();
       requestPreparedCompactionMock.mockResolvedValueOnce(createCompactionResponse(model));
-      const { result } = attempt({
+      const { result } = await attempt({
         sessionManager: session.sessionManager,
         context: { systemPrompt: testCase.systemPrompt, messages: session.messages },
         config: redactSecrets,
@@ -249,10 +258,10 @@ describe("attemptServerEndpointCompaction", () => {
   );
 
   it("compacts through instructions when only the OpenAI system prompt holds a secret", async () => {
-    const session = createSession(openAIModel);
+    const session = await createSession(openAIModel);
     requestPreparedCompactionMock.mockResolvedValueOnce(createCompactionResponse(openAIModel));
     const onCompactionCommitted = vi.fn();
-    const { result } = attempt({
+    const { result } = await attempt({
       model: openAIModel,
       sessionManager: session.sessionManager,
       context: { systemPrompt: "session NORTH-SECRET-17", messages: session.messages },
@@ -267,7 +276,7 @@ describe("attemptServerEndpointCompaction", () => {
 
   it("preserves secret-shaped source text in returned compaction windows", async () => {
     const warn = vi.spyOn(log, "warn").mockClear();
-    const session = createSession();
+    const session = await createSession();
     const response = createCompactionResponse();
     response.output[0] = {
       type: "message",
@@ -277,7 +286,7 @@ describe("attemptServerEndpointCompaction", () => {
     requestPreparedCompactionMock.mockResolvedValueOnce(response);
     const onUsage = vi.fn();
     const onCompactionCommitted = vi.fn();
-    const { result } = attempt({
+    const { result } = await attempt({
       sessionManager: session.sessionManager,
       context: { systemPrompt: "system", messages: session.messages },
       config: redactSecrets,
@@ -299,7 +308,7 @@ describe("attemptServerEndpointCompaction", () => {
   it.each([model, openAIModel])(
     "does not call the $provider endpoint during overflow recovery",
     async (requestModel) => {
-      const { result } = attempt({ trigger: "overflow", model: requestModel });
+      const { result } = await attempt({ trigger: "overflow", model: requestModel });
 
       await expect(result).resolves.toBeUndefined();
       expect(requestPreparedCompactionMock).not.toHaveBeenCalled();
@@ -315,9 +324,9 @@ describe("attemptServerEndpointCompaction", () => {
       model,
       testing.buildOpenAIResponsesReasoningReplayMetadata(model, { sessionId: "session-1" }),
     );
-    const session = createSession(model, owner.providerReplay);
+    const session = await createSession(model, owner.providerReplay);
     const before = structuredClone(session.sessionManager.getBranch());
-    const { result } = attempt({
+    const { result } = await attempt({
       trigger: "budget",
       sessionManager: session.sessionManager,
       context: { systemPrompt: "system", messages: session.messages },
@@ -331,7 +340,7 @@ describe("attemptServerEndpointCompaction", () => {
   it("preserves the transcript for client recovery when the budget endpoint rejects", async () => {
     requestPreparedCompactionMock.mockRejectedValueOnce(new Error("Context window exceeded"));
     const onCompactionCommitted = vi.fn();
-    const { session, result } = attempt({ trigger: "budget", onCompactionCommitted });
+    const { session, result } = await attempt({ trigger: "budget", onCompactionCommitted });
     const before = structuredClone(session.sessionManager.getBranch());
 
     await expect(result).resolves.toBeUndefined();
@@ -344,7 +353,7 @@ describe("attemptServerEndpointCompaction", () => {
     "leaves an oversized retained-user window to client compaction after charging %s",
     async (reservedField) => {
       const userText = "source text ".repeat(400);
-      const session = createSession(openAIModel, undefined, userText);
+      const session = await createSession(openAIModel, undefined, userText);
       const before = structuredClone(session.sessionManager.getBranch());
       const response = createCompactionResponse(openAIModel);
       response.output[0] = {
@@ -355,7 +364,7 @@ describe("attemptServerEndpointCompaction", () => {
       requestPreparedCompactionMock.mockResolvedValueOnce(response);
       const onUsage = vi.fn();
       const onCompactionCommitted = vi.fn();
-      const { result } = attempt({
+      const { result } = await attempt({
         trigger: "budget",
         model: openAIModel,
         sessionManager: session.sessionManager,
@@ -379,10 +388,10 @@ describe("attemptServerEndpointCompaction", () => {
   );
 
   it("admits the returned window without recharging its covered transcript or fixed prompt", async () => {
-    const session = createSession(openAIModel, undefined, "old history ".repeat(4_000));
+    const session = await createSession(openAIModel, undefined, "old history ".repeat(4_000));
     requestPreparedCompactionMock.mockResolvedValueOnce(createCompactionResponse(openAIModel));
     const onCompactionCommitted = vi.fn();
-    const { result } = attempt({
+    const { result } = await attempt({
       trigger: "budget",
       model: openAIModel,
       sessionManager: session.sessionManager,
@@ -407,7 +416,7 @@ describe("attemptServerEndpointCompaction", () => {
   it.each([model, openAIModel])(
     "preserves $provider custom instructions by falling back to client compaction",
     async (requestModel) => {
-      const { result } = attempt({
+      const { result } = await attempt({
         model: requestModel,
         customInstructions: "Retain the security caveats.",
       });
@@ -418,8 +427,8 @@ describe("attemptServerEndpointCompaction", () => {
   );
 
   it("does not compact transcript entries that remain after the checkpoint owner", async () => {
-    const messages = createSession().messages.concat(makeUserMessage("trailing turn", 3));
-    const { result } = attempt({ context: { systemPrompt: "system", messages } });
+    const messages = (await createSession()).messages.concat(makeUserMessage("trailing turn", 3));
+    const { result } = await attempt({ context: { systemPrompt: "system", messages } });
 
     await expect(result).resolves.toBeUndefined();
     expect(requestPreparedCompactionMock).not.toHaveBeenCalled();

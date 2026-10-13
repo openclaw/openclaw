@@ -327,7 +327,7 @@ describe("historical page recovery context", () => {
   it("keeps a capped nonzero result neutral when its stop reason was not retained", async () => {
     const session = SessionManager.inMemory();
     installSessionToolResultGuard(session);
-    session.appendMessage({
+    await session.appendMessageAsync({
       role: "toolResult",
       toolCallId: "stopped",
       toolName: "process",

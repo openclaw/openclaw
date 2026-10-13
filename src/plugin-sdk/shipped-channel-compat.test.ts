@@ -38,9 +38,6 @@ describe("shipped external channel compatibility", () => {
     expectTypeOf<SessionBindingService["listBySession"]>().toEqualTypeOf<
       (targetSessionKey: string) => SessionBindingRecord[]
     >();
-    expectTypeOf<
-      SessionBindingService["resolveByConversation"]
-    >().returns.toEqualTypeOf<SessionBindingRecord | null>();
     expectTypeOf<AccountScopedConversationBindingManager["getByConversationId"]>().toEqualTypeOf<
       (conversationId: string) => AccountScopedConversationBindingRecord | undefined
     >();

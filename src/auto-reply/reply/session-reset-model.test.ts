@@ -7,7 +7,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
-import { resolveStoredModelOverride } from "../../sessions/stored-model-overrides.js";
+import { resolveStoredModelOverrideAsync } from "../../sessions/stored-model-overrides.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import type { ModelAliasIndex } from "./model-selection-directive.js";
 
@@ -245,7 +245,7 @@ describe("applyResetModelOverride", () => {
 
     expect(fixture.sessionEntry.modelOverrideSource).toBe("default");
     expect(
-      resolveStoredModelOverride({
+      await resolveStoredModelOverrideAsync({
         sessionEntry: fixture.sessionEntry,
         sessionStore: {
           [parentKey]: {

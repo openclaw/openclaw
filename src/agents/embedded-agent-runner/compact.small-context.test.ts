@@ -72,12 +72,12 @@ it("reclaims retained source turns when the endpoint cannot fit a small foregrou
   let manager = SessionManager.inMemory(prepared.workspaceDir);
   const source = "The module implements a deterministic source transform.\n".repeat(600);
   for (let turn = 0; turn < 3; turn++) {
-    manager.appendMessage({
+    await manager.appendMessageAsync({
       role: "user",
       content: `Remember code word copper. Document ${turn}.\n${source}`,
       timestamp: turn * 2 + 1,
     });
-    manager.appendMessage(createAssistant(model, [{ type: "text", text: "ACK" }]));
+    await manager.appendMessageAsync(createAssistant(model, [{ type: "text", text: "ACK" }]));
   }
   const original = structuredClone(manager.getBranch());
   const settingsManager = SettingsManager.inMemory({

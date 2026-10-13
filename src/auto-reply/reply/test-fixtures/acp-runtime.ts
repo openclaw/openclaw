@@ -3,6 +3,8 @@ import { vi } from "vitest";
 import type { SessionAcpMeta } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type {
+  ConversationRef,
+  SessionBindingRecord,
   SessionBindingService,
   SessionBindingServiceV2,
 } from "../../../infra/outbound/session-binding-service.js";
@@ -128,10 +130,9 @@ export function createAcpTestSessionBinding(
 }
 
 export function createAcpCommandSessionBindingService(
-  mocks: Pick<
-    SessionBindingService,
-    "bind" | "getCapabilities" | "listBySession" | "resolveByConversation" | "unbind"
-  >,
+  mocks: Pick<SessionBindingService, "bind" | "getCapabilities" | "listBySession" | "unbind"> & {
+    resolveByConversation: (ref: ConversationRef) => SessionBindingRecord | null;
+  },
 ): SessionBindingServiceV2 {
   return {
     bind: (input) => mocks.bind(input),
@@ -142,9 +143,7 @@ export function createAcpCommandSessionBindingService(
     }),
     listBySession: (targetSessionKey) => mocks.listBySession(targetSessionKey),
     listBySessionAsync: async (targetSessionKey) => mocks.listBySession(targetSessionKey),
-    resolveByConversation: (ref) => mocks.resolveByConversation(ref),
     resolveByConversationAsync: async (ref) => mocks.resolveByConversation(ref),
-    touch: vi.fn(),
     touchAsync: vi.fn(async () => {}),
     unbind: (input) => mocks.unbind(input),
   };

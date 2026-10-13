@@ -124,7 +124,7 @@ describe("agent session persistence during reclamation", () => {
         extensions.runtime,
       ),
     );
-    const manager = SessionManager.open(target, cwd);
+    const manager = await SessionManager.openAsync(target, cwd);
     const { session } = await createTestSession({ sessionManager: manager, resourceLoader });
     session.subscribe((event) => {
       if (
@@ -150,20 +150,20 @@ describe("agent session persistence during reclamation", () => {
     );
     await entered.promise;
     const owner = new CliPluginInvocationResources();
-    const readDurableMessages = () =>
-      SessionManager.open(target, cwd)
+    const readDurableMessages = async () =>
+      (await SessionManager.openAsync(target, cwd))
         .getEntries()
         .filter((entry) => entry.type === "custom_message")
         .map((entry) => ({ customType: entry.customType, content: entry.content }));
     let releaseStarted = false;
-    let durableAtRelease: ReturnType<typeof readDurableMessages> | undefined;
+    let durableAtRelease: Awaited<ReturnType<typeof readDurableMessages>> | undefined;
     try {
       await owner.run(() =>
         runWithAsyncWorkResources(async (onAcquired) => {
           onAcquired({
-            release: () => {
+            release: async () => {
               releaseStarted = true;
-              durableAtRelease = readDurableMessages();
+              durableAtRelease = await readDurableMessages();
               events.push("resource-released");
               session.dispose();
             },
@@ -214,7 +214,7 @@ describe("agent session persistence during reclamation", () => {
     ]);
     await replaceSessionEntry(unrelated, { sessionId: unrelated.sessionId, updatedAt });
     const { session } = await createTestSession({
-      sessionManager: SessionManager.open(unrelated, path.dirname(storePath)),
+      sessionManager: await SessionManager.openAsync(unrelated, path.dirname(storePath)),
     });
     let write: Promise<void> | undefined;
     const published: string[] = [];

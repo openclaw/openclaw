@@ -88,7 +88,7 @@ describe("session observer model preparation", () => {
         prepareModel: vi.fn(defaultPrepareModel),
         completeModel: vi.fn(defaultCompleteModel),
       });
-      startAndAddToolNotes(harness.observer);
+      await startAndAddToolNotes(harness.observer);
       await vi.advanceTimersByTimeAsync(12_000);
       await vi.dynamicImportSettled();
       await flushObserver();
@@ -110,7 +110,7 @@ describe("session observer model preparation", () => {
         expect.any(Set),
         expect.anything(),
       );
-      harness.observer.dispose();
+      await harness.observer.disposeAsync();
     },
   );
 
@@ -125,7 +125,7 @@ describe("session observer model preparation", () => {
         }),
     );
     const harness = createHarness({ prepareModel });
-    startAndAddToolNotes(harness.observer);
+    await startAndAddToolNotes(harness.observer);
     await vi.advanceTimersByTimeAsync(12_000);
     expect(prepareModel).toHaveBeenCalledOnce();
 
@@ -134,7 +134,7 @@ describe("session observer model preparation", () => {
     await flushObserver();
 
     expect(harness.completeModel).not.toHaveBeenCalled();
-    harness.observer.dispose();
+    await harness.observer.disposeAsync();
   });
 
   it("times out stalled model preparation without starting another preparation", async () => {
@@ -147,14 +147,14 @@ describe("session observer model preparation", () => {
         }),
     );
     const harness = createHarness({ prepareModel });
-    startAndAddToolNotes(harness.observer);
+    await startAndAddToolNotes(harness.observer);
 
     await vi.advanceTimersByTimeAsync(34_000);
     await flushObserver();
 
     expect(prepareModel).toHaveBeenCalledOnce();
     expect(harness.completeModel).not.toHaveBeenCalled();
-    harness.observer.dispose();
+    await harness.observer.disposeAsync();
   });
 
   it("retries after a rejected preparation", async () => {
@@ -165,7 +165,7 @@ describe("session observer model preparation", () => {
       .mockRejectedValueOnce(new Error("temporary preparation failure"))
       .mockResolvedValue(preparedModel());
     const harness = createHarness({ prepareModel });
-    startAndAddToolNotes(harness.observer);
+    await startAndAddToolNotes(harness.observer);
 
     await vi.advanceTimersByTimeAsync(24_000);
     await flushObserver();
@@ -173,7 +173,7 @@ describe("session observer model preparation", () => {
     expect(prepareModel).toHaveBeenCalledTimes(2);
     expect(harness.completeModel).toHaveBeenCalledOnce();
     expect(harness.broadcastToConnIds).toHaveBeenCalledOnce();
-    harness.observer.dispose();
+    await harness.observer.disposeAsync();
   });
 
   it.each([
@@ -197,20 +197,20 @@ describe("session observer model preparation", () => {
       ...(override ? { agentHarnessRuntimeOverride: override } : {}),
     }));
     const harness = createHarness({ prepareModel });
-    startAndAddToolNotes(harness.observer);
+    await startAndAddToolNotes(harness.observer);
 
     await vi.advanceTimersByTimeAsync(12_000);
     expect(prepareModel).toHaveBeenCalledOnce();
     expect(harness.completeModel).toHaveBeenCalledOnce();
 
-    harness.observer.handleEvent(
+    await harness.observer.handleEventAsync(
       event({ stream: "lifecycle", data: { phase: "end", startedAt: 0, endedAt: 40_000 } }),
     );
     await flushObserver();
 
     expect(harness.completeModel).toHaveBeenCalledTimes(2);
     expect(prepareModel).toHaveBeenCalledTimes(preparations);
-    harness.observer.dispose();
+    await harness.observer.disposeAsync();
   });
 
   it("routes the next digest over HTTP once a credential arrives mid-run", async () => {
@@ -222,7 +222,7 @@ describe("session observer model preparation", () => {
       ...(credentialPresent ? {} : { agentHarnessRuntimeOverride: "claude-cli" }),
     }));
     const harness = createHarness({ prepareModel });
-    startAndAddToolNotes(harness.observer);
+    await startAndAddToolNotes(harness.observer);
 
     await vi.advanceTimersByTimeAsync(12_000);
     expect(harness.completeModel.mock.calls[0]?.[0]).toMatchObject({
@@ -230,7 +230,7 @@ describe("session observer model preparation", () => {
     });
 
     credentialPresent = true;
-    harness.observer.handleEvent(
+    await harness.observer.handleEventAsync(
       event({ stream: "lifecycle", data: { phase: "end", startedAt: 0, endedAt: 40_000 } }),
     );
     await flushObserver();
@@ -239,6 +239,6 @@ describe("session observer model preparation", () => {
     expect(harness.completeModel.mock.calls[1]?.[0]).not.toHaveProperty(
       "agentHarnessRuntimeOverride",
     );
-    harness.observer.dispose();
+    await harness.observer.disposeAsync();
   });
 });

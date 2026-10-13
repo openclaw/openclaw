@@ -126,15 +126,23 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
           }
           const runId = `run-${sourceMessageIds.length}`;
           replyOptions?.onPreparedAgentRunStart?.({ runId, transcriptStart: null });
-          const manager = SessionManager.open(scope, root);
+          const manager = await SessionManager.openAsync(scope, root);
           const sourceAssistant = {
             ...makeAgentAssistantMessage({
               content: [{ type: "text", text: "Final answer" }],
             }),
             __openclaw: { runId },
           };
-          sourceMessageIds.push(manager.appendMessage(sourceAssistant));
-          manager.appendMessage({ role: "user", content: "Queued input", timestamp: Date.now() });
+          const sourceMessageId = await manager.appendMessageAsync(sourceAssistant);
+          if (!sourceMessageId) {
+            throw new Error("Expected the source assistant fixture message ID");
+          }
+          sourceMessageIds.push(sourceMessageId);
+          await manager.appendMessageAsync({
+            role: "user",
+            content: "Queued input",
+            timestamp: Date.now(),
+          });
           await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
           await dispatcherOptions.deliver(
             { text: "Tool output must not become a final mirror" },
@@ -143,7 +151,9 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
           return { queuedFinal: true, counts: { block: 0, final: 1, tool: 1 } };
         });
         for (const inboundId of [456, 457]) {
-          SessionManager.open(scope, root).appendMessage({
+          await (
+            await SessionManager.openAsync(scope, root)
+          ).appendMessageAsync({
             role: "user",
             content: "Repeat the answer",
             timestamp: Date.now(),
@@ -263,7 +273,7 @@ describeTelegramDispatch("dispatchTelegramMessage directive delivery", () => {
       await withSessionHistoryBudgetSweepsForTest(() =>
         patchSessionEntry({ ...scope, fallbackEntry: entry, update: () => entry }),
       );
-      const manager = SessionManager.open(scope, root);
+      const manager = await SessionManager.openAsync(scope, root);
       const transcript = await vi.importActual<typeof SessionTranscriptRuntime>(
         "openclaw/plugin-sdk/session-transcript-runtime",
       );
@@ -281,7 +291,7 @@ describeTelegramDispatch("dispatchTelegramMessage directive delivery", () => {
       dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
         async ({ dispatcherOptions, replyOptions }) => {
           await replyOptions?.onPartialReply?.({ text: prefix });
-          manager.appendMessage({
+          await manager.appendMessageAsync({
             ...makeAgentAssistantMessage({
               content: [
                 {

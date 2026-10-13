@@ -76,7 +76,7 @@ describe("Gateway OpenAI Responses compaction replay", () => {
         if (!sessionId) {
           throw new Error(`sessions.list omitted the durable id for ${SESSION_KEY}`);
         }
-        const manager = SessionManager.open({
+        const manager = await SessionManager.openAsync({
           agentId: "main",
           sessionId,
           sessionKey: SESSION_KEY,

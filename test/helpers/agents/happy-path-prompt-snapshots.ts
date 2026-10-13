@@ -22,7 +22,7 @@ import type {
   EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "../../../src/plugin-sdk/agent-harness-runtime.js";
 import { normalizeAgentRuntimeTools } from "../../../src/plugin-sdk/agent-harness-runtime.js";
-import { createOpenClawCodingTools } from "../../../src/plugin-sdk/agent-harness.js";
+import { createOpenClawCodingToolsAsync } from "../../../src/plugin-sdk/agent-harness.js";
 import type { PluginRegistry } from "../../../src/plugins/registry.js";
 import {
   getActivePluginRegistry,
@@ -213,7 +213,10 @@ async function loadScenarioChannelPluginFixture(
  * action discovery walks every loaded channel plugin, so registering more than
  * the scenario channel would change the generated message-tool schema bytes.
  */
-function withScenarioChannelRegistry<T>(fixture: ScenarioChannelPluginFixture, build: () => T): T {
+async function withScenarioChannelRegistry<T>(
+  fixture: ScenarioChannelPluginFixture,
+  build: () => Promise<T>,
+): Promise<T> {
   const previousRegistry: PluginRegistry | null = getActivePluginRegistry();
   setActivePluginRegistry(
     createTestRegistry([
@@ -226,7 +229,7 @@ function withScenarioChannelRegistry<T>(fixture: ScenarioChannelPluginFixture, b
     ]),
   );
   try {
-    return build();
+    return await build();
   } finally {
     if (previousRegistry) {
       setActivePluginRegistry(previousRegistry);
@@ -463,12 +466,12 @@ function createAttempt(params: {
   } as EmbeddedRunAttemptParams;
 }
 
-function createDynamicTools(params: {
+async function createDynamicTools(params: {
   codexApi: CodexPromptSnapshotApi;
   ctx: TemplateContext;
   trigger: "user" | "heartbeat";
-}): CodexDynamicToolSpec[] {
-  const tools = createOpenClawCodingTools({
+}): Promise<CodexDynamicToolSpec[]> {
+  const tools = await createOpenClawCodingToolsAsync({
     agentId: "main",
     workspaceDir: WORKSPACE_DIR,
     agentDir: AGENT_DIR,

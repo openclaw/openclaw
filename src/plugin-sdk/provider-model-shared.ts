@@ -9,7 +9,6 @@ import {
   buildPassthroughGeminiSanitizingReplayPolicy,
   buildStrictAnthropicReplayPolicy,
   resolveTaggedReasoningOutputMode,
-  sanitizeGoogleGeminiReplayHistory,
   sanitizeGoogleGeminiReplayHistoryAsync,
 } from "../plugins/provider-replay-helpers.js";
 import type { ProviderPlugin } from "../plugins/types.js";
@@ -201,7 +200,6 @@ export {
   buildOpenAICompatibleReplayPolicy,
   buildPassthroughGeminiSanitizingReplayPolicy,
   resolveTaggedReasoningOutputMode,
-  sanitizeGoogleGeminiReplayHistory,
   sanitizeGoogleGeminiReplayHistoryAsync,
   buildStrictAnthropicReplayPolicy,
 };
@@ -305,10 +303,7 @@ export type ProviderReplayFamily =
 
 type ProviderReplayFamilyHooks = Pick<
   ProviderPlugin,
-  | "buildReplayPolicy"
-  | "sanitizeReplayHistory"
-  | "sanitizeReplayHistoryAsync"
-  | "resolveReasoningOutputMode"
+  "buildReplayPolicy" | "sanitizeReplayHistoryAsync" | "resolveReasoningOutputMode"
 >;
 
 type BuildProviderReplayFamilyHooksOptions =
@@ -383,8 +378,6 @@ export function buildProviderReplayFamilyHooks(
     case "google-gemini":
       return {
         buildReplayPolicy: buildGoogleGeminiReplayPolicy,
-        // Retained adapter for third-party callers of the legacy family hook.
-        sanitizeReplayHistory: sanitizeGoogleGeminiReplayHistory,
         sanitizeReplayHistoryAsync: sanitizeGoogleGeminiReplayHistoryAsync,
         resolveReasoningOutputMode: resolveTaggedReasoningOutputMode,
       };

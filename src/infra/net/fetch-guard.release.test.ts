@@ -1,9 +1,13 @@
 import type { ServerResponse } from "node:http";
 import type { Dispatcher } from "undici";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createBoundedProviderBinaryStream } from "../../plugin-sdk/provider-binary-stream.js";
 import { withServer } from "../../plugin-sdk/test-helpers/http-test-server.js";
-import { captureHttpExchange } from "../../proxy-capture/runtime.js";
+import { installDebugProxyCaptureWriter } from "../../proxy-capture/runtime-writer.test-support.js";
+import {
+  captureHttpExchangeAsync,
+  finalizeDebugProxyCaptureAsync,
+} from "../../proxy-capture/runtime.js";
 import type { CaptureEventRecord } from "../../proxy-capture/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { readResponseTextPrefix, readResponseWithLimit } from "../http-body.js";
@@ -11,6 +15,23 @@ import { fetchWithSsrFGuard } from "./fetch-guard.js";
 import { wrapGuardedBodyStream } from "./guarded-body-stream.js";
 import { PinnedDispatcherPool } from "./pinned-dispatcher-pool.js";
 import { fetchWithRuntimeDispatcher, type DispatcherAwareRequestInit } from "./runtime-fetch.js";
+
+let captureSettings = {
+  enabled: true,
+  required: false,
+  dbPath: "unused-memory-sink",
+  blobDir: "unused-memory-sink",
+  certDir: "unused-memory-sink",
+  sessionId: "guard-release-test",
+  sourceProcess: "test",
+};
+beforeEach(() => {
+  captureSettings = { ...captureSettings };
+});
+afterEach(async () => {
+  await finalizeDebugProxyCaptureAsync(captureSettings);
+  vi.restoreAllMocks();
+});
 
 async function withinDeadline<T>(operation: Promise<T>): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -37,36 +58,19 @@ describe("guarded request release", () => {
       const dispatchers: Array<Dispatcher | undefined> = [];
       const captures = new Map<string, ReturnType<typeof createDeferredCore<CaptureEventRecord>>>();
       const releases: Array<() => Promise<void>> = [];
+      installDebugProxyCaptureWriter((event) => {
+        if (event.kind === "response" || event.kind === "error") {
+          captures.get(event.path ?? "")?.resolve(event);
+        }
+      });
       const fetchImpl = async (input: RequestInfo | URL, init?: DispatcherAwareRequestInit) => {
         dispatchers.push(init?.dispatcher);
         const url = input instanceof Request ? input.url : input.toString();
-        const captured = createDeferredCore<CaptureEventRecord>();
-        captures.set(new URL(url).pathname, captured);
+        captures.set(new URL(url).pathname, createDeferredCore<CaptureEventRecord>());
         const response = await fetchWithRuntimeDispatcher(input, init);
-        captureHttpExchange(
+        void captureHttpExchangeAsync(
           { url, method: "GET", response, signal: init?.signal ?? undefined },
-          {
-            enabled: true,
-            required: false,
-            dbPath: "unused-memory-sink",
-            blobDir: "unused-memory-sink",
-            certDir: "unused-memory-sink",
-            sessionId: "guard-release-test",
-            sourceProcess: "test",
-          },
-          {
-            getStore: () => ({
-              upsertSession() {},
-              endSession() {},
-              recordEvent(event) {
-                if (event.kind === "response" || event.kind === "error") {
-                  captured.resolve(event);
-                }
-              },
-            }),
-            persistEventPayload: (_store, { data }) =>
-              Buffer.isBuffer(data) ? { dataText: data.toString("utf8") } : {},
-          },
+          captureSettings,
         );
         return response;
       };

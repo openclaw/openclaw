@@ -8,7 +8,7 @@ export type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
 /**
  * Legacy raw send result shape accepted from channel SDK adapters.
  * @deprecated Return `OutboundDeliveryResult` and use
- * `createAttachedChannelResultAdapter`. Removal with the next plugin-SDK major.
+ * `createAttachedChannelResultAdapter`. Removal follows stable deprecation and a compatibility period.
  */
 export type ChannelSendRawResult = {
   /** Whether the channel send operation succeeded. */

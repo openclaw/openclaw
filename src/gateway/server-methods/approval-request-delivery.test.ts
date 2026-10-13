@@ -168,9 +168,13 @@ describe("handlePendingApprovalRequestWithDelivery", () => {
       const fixture = await createDeliveryFixture(test, caller);
       const release = createDeferredCore<boolean>();
       const started: string[] = [];
+      const routesStarted = createDeferredCore();
       let pendingRouteFinished = false;
       const route = async (name: "forward" | "push") => {
         started.push(name);
+        if (started.length === 2) {
+          routesStarted.resolve();
+        }
         if (name === successfulRoute) {
           return true;
         }
@@ -187,6 +191,7 @@ describe("handlePendingApprovalRequestWithDelivery", () => {
       let draining: Promise<void> | undefined;
       let drained = false;
       try {
+        await routesStarted.promise;
         expect(started).toEqual(["forward", "push"]);
         await vi.advanceTimersByTimeAsync(0);
         expectAccepted(fixture);
@@ -307,8 +312,12 @@ describe("handlePendingApprovalRequestWithDelivery", () => {
       const fixture = await createDeliveryFixture(test);
       const successfulResult = createDeferredCore<boolean>();
       const started: string[] = [];
+      const routesStarted = createDeferredCore();
       const route = (name: "forward" | "push") => {
         started.push(name);
+        if (started.length === 2) {
+          routesStarted.resolve();
+        }
         return name === failedRoute
           ? Promise.reject(new Error("offline"))
           : successfulResult.promise;
@@ -318,6 +327,7 @@ describe("handlePendingApprovalRequestWithDelivery", () => {
         getIosPushDelivery: () => ({ handleRequested: () => route("push") }),
       });
       try {
+        await routesStarted.promise;
         expect(started).toEqual(["forward", "push"]);
         successfulResult.resolve(true);
         await vi.advanceTimersByTimeAsync(0);

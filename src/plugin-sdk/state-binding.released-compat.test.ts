@@ -60,10 +60,6 @@ it("accepts a v2026.9.8 adapter without any newly introduced async capabilities"
   expectTypeOf<ReturnType<SessionBindingService["listBySession"]>>().toEqualTypeOf<
     SessionBindingRecord[]
   >();
-  expectTypeOf<
-    ReturnType<SessionBindingService["resolveByConversation"]>
-  >().toEqualTypeOf<SessionBindingRecord | null>();
-  expectTypeOf<ReturnType<SessionBindingService["touch"]>>().toEqualTypeOf<void>();
 });
 
 it("retains synchronous account-manager binding and expiry lookup results", () => {

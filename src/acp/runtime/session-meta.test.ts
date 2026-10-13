@@ -26,7 +26,7 @@ import { buildAcpDatabaseSessionKey, selectAcpSessionRow } from "./session-meta-
 import { readAcpSessionMetaForEntry } from "./session-meta-readonly.js";
 import {
   listAcpSessionEntries,
-  readAcpSessionEntry,
+  readAcpSessionEntryAsync,
   upsertAcpSessionMeta,
   writeAcpSessionMetaForMigration,
 } from "./session-meta.js";
@@ -108,7 +108,9 @@ describe("ACP session metadata SQLite store", () => {
       await closeOpenClawStateDatabaseAsync();
       const before = fs.readFileSync(databasePath);
 
-      expect(readAcpSessionEntry({ cfg, databasePath, env, sessionKey })?.acp).toMatchObject({
+      expect(
+        (await readAcpSessionEntryAsync({ cfg, databasePath, env, sessionKey }))?.acp,
+      ).toMatchObject({
         runtimeSessionName: "proof-runtime",
       });
       expect(fs.readFileSync(databasePath)).toEqual(before);
@@ -138,12 +140,24 @@ describe("ACP session metadata SQLite store", () => {
       }
 
       expect(
-        readAcpSessionEntry({ cfg, databasePath, sessionKey: "global", agentId: "research" })?.acp
-          ?.runtimeSessionName,
+        (
+          await readAcpSessionEntryAsync({
+            cfg,
+            databasePath,
+            sessionKey: "global",
+            agentId: "research",
+          })
+        )?.acp?.runtimeSessionName,
       ).toBe("research");
       expect(
-        readAcpSessionEntry({ cfg, databasePath, sessionKey: "global", agentId: "ops" })?.acp
-          ?.runtimeSessionName,
+        (
+          await readAcpSessionEntryAsync({
+            cfg,
+            databasePath,
+            sessionKey: "global",
+            agentId: "ops",
+          })
+        )?.acp?.runtimeSessionName,
       ).toBe("ops");
 
       await upsertAcpSessionMeta({
@@ -154,8 +168,14 @@ describe("ACP session metadata SQLite store", () => {
         mutate: () => null,
       });
       expect(
-        readAcpSessionEntry({ cfg, databasePath, sessionKey: "global", agentId: "ops" })?.acp
-          ?.runtimeSessionName,
+        (
+          await readAcpSessionEntryAsync({
+            cfg,
+            databasePath,
+            sessionKey: "global",
+            agentId: "ops",
+          })
+        )?.acp?.runtimeSessionName,
       ).toBe("ops");
     });
   });
@@ -184,7 +204,9 @@ describe("ACP session metadata SQLite store", () => {
       expect(storedEntry?.updatedAt).toEqual(expect.any(Number));
       expect(storedEntry?.sessionStartedAt).toBeGreaterThan(200);
       expect(storedEntry?.acp).toBeUndefined();
-      expect(readAcpSessionEntry({ cfg, databasePath, sessionKey })?.acp).toMatchObject({
+      expect(
+        (await readAcpSessionEntryAsync({ cfg, databasePath, sessionKey }))?.acp,
+      ).toMatchObject({
         runtimeSessionName: "codex-new",
         cwd: "/repo",
       });
@@ -229,11 +251,13 @@ describe("ACP session metadata SQLite store", () => {
       expect(storedEntry?.sessionId).toBe("sess-legacy");
       expect(storedEntry?.acp).toBeUndefined();
       expect(
-        readAcpSessionEntry({
-          cfg,
-          databasePath,
-          sessionKey: canonicalSessionKey,
-        })?.acp?.runtimeSessionName,
+        (
+          await readAcpSessionEntryAsync({
+            cfg,
+            databasePath,
+            sessionKey: canonicalSessionKey,
+          })
+        )?.acp?.runtimeSessionName,
       ).toBe("codex-alias");
       expect(await listAcpSessionEntries({ cfg, databasePath })).toHaveLength(1);
     });
@@ -262,7 +286,9 @@ describe("ACP session metadata SQLite store", () => {
         meta: createMeta("codex-stale"),
       });
 
-      expect(readAcpSessionEntry({ cfg, databasePath, sessionKey })?.acp).toBeUndefined();
+      expect(
+        (await readAcpSessionEntryAsync({ cfg, databasePath, sessionKey }))?.acp,
+      ).toBeUndefined();
       expect(await listAcpSessionEntries({ cfg, databasePath })).toHaveLength(0);
 
       writeAcpSessionMetaForMigration({
@@ -272,9 +298,10 @@ describe("ACP session metadata SQLite store", () => {
         meta: createMeta("codex-current", { lastActivityAt: 124 }),
       });
 
-      expect(readAcpSessionEntry({ cfg, databasePath, sessionKey })?.acp?.runtimeSessionName).toBe(
-        "codex-current",
-      );
+      expect(
+        (await readAcpSessionEntryAsync({ cfg, databasePath, sessionKey }))?.acp
+          ?.runtimeSessionName,
+      ).toBe("codex-current");
       expect(await listAcpSessionEntries({ cfg, databasePath })).toHaveLength(1);
     });
   });
@@ -437,12 +464,12 @@ describe("ACP raw alias lifecycle", () => {
       );
       expect(after.sources).toEqual(before.sources);
       expect(after.runs).toEqual(before.runs);
-      expect(readAcpSessionEntry(fixture.scope)?.acp).toEqual(updated);
+      expect((await readAcpSessionEntryAsync(fixture.scope))?.acp).toEqual(updated);
       await upsertAcpSessionMeta({ ...fixture.scope, mutate: () => null });
       expect(fixture.snapshot().rows).toEqual(retainedRows);
       await closeOpenClawAgentDatabasesAsync();
       await closeOpenClawStateDatabaseAsync();
-      expect(readAcpSessionEntry(fixture.scope)?.acp).toBeUndefined();
+      expect((await readAcpSessionEntryAsync(fixture.scope))?.acp).toBeUndefined();
     });
   });
 
@@ -481,7 +508,7 @@ describe("ACP raw alias lifecycle", () => {
           expect(mutate).toHaveBeenCalledOnce();
           expect(fixture.snapshot()).toEqual(before);
           expect(loadExactSessionEntry(fixture.scope)).toEqual(entryBefore);
-          expect(readAcpSessionEntry(fixture.scope)?.acp).toEqual(CANONICAL_META);
+          expect((await readAcpSessionEntryAsync(fixture.scope))?.acp).toEqual(CANONICAL_META);
           expect(changes).toEqual([]);
         } finally {
           unsubscribe();
@@ -578,11 +605,13 @@ it("persists bare global metadata under a configured fixed-store owner", async (
       lastActivityAt: 123,
     });
 
-    const observed: Array<string | undefined> = [];
+    const observed: Array<Promise<string | undefined>> = [];
     const unsubscribe = sessionChanges.subscribe((change) => {
       if ("sessionKey" in change && change.sessionKey === "global" && change.agentId === "ops") {
         observed.push(
-          readAcpSessionEntry({ cfg, databasePath, sessionKey: "global" })?.acp?.runtimeSessionName,
+          readAcpSessionEntryAsync({ cfg, databasePath, sessionKey: "global" }).then(
+            (entry) => entry?.acp?.runtimeSessionName,
+          ),
         );
       }
     });
@@ -596,11 +625,13 @@ it("persists bare global metadata under a configured fixed-store owner", async (
 
       expect(persisted?.acp?.runtimeSessionName).toBe("global");
       expect(
-        readAcpSessionEntry({
-          cfg,
-          databasePath,
-          sessionKey: "global",
-        })?.acp?.runtimeSessionName,
+        (
+          await readAcpSessionEntryAsync({
+            cfg,
+            databasePath,
+            sessionKey: "global",
+          })
+        )?.acp?.runtimeSessionName,
       ).toBe("global");
       const conflictingMutate = vi.fn(mutate);
       await expect(
@@ -627,13 +658,14 @@ it("persists bare global metadata under a configured fixed-store owner", async (
         }),
       ).rejects.toMatchObject({ code: "AGENT_SELECTION_REQUIRED" });
       expect(ownerlessMutate).not.toHaveBeenCalled();
-      expect(observed.at(-1)).toBe("global");
+      expect((await Promise.all(observed)).at(-1)).toBe("global");
       const beforeDelete = observed.length;
       await upsertAcpSessionMeta({ cfg, databasePath, sessionKey: "global", mutate: () => null });
       expect(observed.length).toBeGreaterThan(beforeDelete);
-      expect(observed.at(-1)).toBeUndefined();
+      expect((await Promise.all(observed)).at(-1)).toBeUndefined();
     } finally {
       unsubscribe();
+      await Promise.allSettled(observed);
     }
   });
 });

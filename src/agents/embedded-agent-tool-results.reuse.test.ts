@@ -42,7 +42,7 @@ it("preserves tool output across trajectory, delivery, and nested persistence", 
       args: {},
       execute: async (onImplementationStart) => {
         onImplementationStart();
-        sm.appendMessage({
+        await sm.appendMessageAsync({
           role: "toolResult",
           toolCallId: callId,
           toolName: "exec",

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { StatementSync } from "node:sqlite";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
 import { LEGACY_MISSING_TOOL_RESULT_TEXT } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
@@ -13,6 +13,7 @@ import {
   replaceTranscriptEvents,
   replaceTranscriptEventsSync,
 } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import * as transcriptAnchors from "../../config/sessions/session-transcript-anchor-read.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import * as contextWorker from "../../config/sessions/session-transcript-read-worker-runtime.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
@@ -33,8 +34,8 @@ it("reports context queue overload without losing context and completes every ad
       storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
     };
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    const source = SessionManager.open(scope);
-    source.appendMessage(makeUserMessage("retain this context", 1));
+    const source = await SessionManager.openAsync(scope);
+    await source.appendMessageAsync(makeUserMessage("retain this context", 1));
     await waitForSessionTranscriptProjection(scope);
     const expected = source.buildSessionContext();
     const release = createDeferredCore();
@@ -85,7 +86,7 @@ it("reports context queue overload without losing context and completes every ad
   });
 });
 
-it("acquires a long sparse context with bounded queries and preserved message order", async () => {
+it("acquires a long sparse context with preserved message order", async () => {
   await withOpenClawTestState({ label: "model-context-batch" }, async (state) => {
     const scope = {
       agentId: "main",
@@ -110,26 +111,12 @@ it("acquires a long sparse context with bounded queries and preserved message or
       { type: "session", version: CURRENT_SESSION_VERSION, id: scope.sessionId, cwd: "/synthetic" },
       ...messages,
     ]);
-    const database = openOpenClawAgentDatabase({ agentId: "main", path: scope.storePath });
-    const prototype = Object.getPrototypeOf(database.db.prepare("SELECT 1")) as StatementSync;
-    const iterate = vi.spyOn(prototype, "iterate");
-    const get = vi.spyOn(prototype, "get");
-    try {
-      const context = SessionManager.openModelContext(scope).buildSessionContext();
-      expect(context.messages.map((message) => "content" in message && message.content)).toEqual(
-        messages
-          .filter((entry) => !entry.message.excludeFromContext)
-          .map((entry) => entry.message.content),
-      );
-      // Protect acquisition cost independently of the exact chunk size or query implementation.
-      expect(iterate.mock.calls.length + get.mock.calls.length).toBeLessThan(20);
-      expect((await SessionManager.openModelContextAsync(scope)).buildSessionContext()).toEqual(
-        context,
-      );
-    } finally {
-      iterate.mockRestore();
-      get.mockRestore();
-    }
+    const context = (await SessionManager.openModelContextAsync(scope)).buildSessionContext();
+    expect(context.messages.map((message) => "content" in message && message.content)).toEqual(
+      messages
+        .filter((entry) => !entry.message.excludeFromContext)
+        .map((entry) => entry.message.content),
+    );
   });
 });
 
@@ -153,7 +140,7 @@ it.each([
         storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
       };
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      const source = SessionManager.open(scope);
+      const source = await SessionManager.openAsync(scope);
       const marker = "synthetic-native-memory:";
       const metadata = {
         upstreamUserText: marker + "x".repeat(256 * 1024),
@@ -165,27 +152,36 @@ it.each([
       };
       await source.appendThinkingLevelChange("high");
       await source.appendModelChange("openai", "gpt-5.6-luna");
-      const old = source.appendMessage({
-        role: "user",
-        content: "old",
-        timestamp: 1,
-        __openclaw: metadata,
-      } as Parameters<SessionManager["appendMessage"]>[0]);
-      const excluded = source.appendMessage({
-        role: "custom",
-        customType: "display",
-        content: marker + "d".repeat(256 * 1024),
-        display: true,
-        excludeFromContext: true,
-        timestamp: 1,
-      });
-      const kept = source.appendMessage({
-        role: "user",
-        content: "kept",
-        timestamp: 2,
-        __openclaw: metadata,
-      } as Parameters<SessionManager["appendMessage"]>[0]);
-      source.appendMessage(
+      const old = expectDefined(
+        await source.appendMessageAsync({
+          role: "user",
+          content: "old",
+          timestamp: 1,
+          __openclaw: metadata,
+        } as Parameters<SessionManager["appendMessageAsync"]>[0]),
+        "Expected appended message",
+      );
+      const excluded = expectDefined(
+        await source.appendMessageAsync({
+          role: "custom",
+          customType: "display",
+          content: marker + "d".repeat(256 * 1024),
+          display: true,
+          excludeFromContext: true,
+          timestamp: 1,
+        }),
+        "Expected appended message",
+      );
+      const kept = expectDefined(
+        await source.appendMessageAsync({
+          role: "user",
+          content: "kept",
+          timestamp: 2,
+          __openclaw: metadata,
+        } as Parameters<SessionManager["appendMessageAsync"]>[0]),
+        "Expected appended message",
+      );
+      await source.appendMessageAsync(
         makeAgentAssistantMessage({
           model: "gpt-5.6-luna",
           providerReplay: {
@@ -208,23 +204,30 @@ it.each([
           stopReason: "toolUse",
         }),
       );
-      const result = source.appendMessage({
-        role: "toolResult",
-        toolName: "read",
-        toolCallId: "paired",
-        isError: false,
-        timestamp: 3,
-        content: [{ type: "text", text: "tool output" }],
-      });
-      source.appendCustomMessageEntry("synthetic-context", "custom context", true, {
+      const result = expectDefined(
+        await source.appendMessageAsync({
+          role: "toolResult",
+          toolName: "read",
+          toolCallId: "paired",
+          isError: false,
+          timestamp: 3,
+          content: [{ type: "text", text: "tool output" }],
+        }),
+        "Expected appended message",
+      );
+      await source.appendCustomMessageEntryAsync("synthetic-context", "custom context", true, {
         source: "synthetic",
       });
-      source.branchWithSummary(source.getLeafId(), "branch summary");
+      await source.branchWithSummaryAsync(source.getLeafId(), "branch summary");
       if (scenario === "reset" || scenario === "reset-compaction") {
-        source.appendResetBoundary("new", kept);
+        await source.appendResetBoundaryAsync("new", kept);
       }
       if (scenario === "compaction" || scenario === "reset-compaction") {
-        source.appendCompaction("summary", scenario === "compaction" ? excluded : kept, 100);
+        await source.appendCompactionAsync(
+          "summary",
+          scenario === "compaction" ? excluded : kept,
+          100,
+        );
       }
       if (scenario === "opaque-compaction") {
         await appendTranscriptEvent(scope, {
@@ -232,21 +235,27 @@ it.each([
           id: "opaque-keep",
           parentId: kept,
         });
-        source.reloadPersistedTranscript();
-        source.appendCompaction("summary", "opaque-keep", 100);
+        await source.reloadPersistedTranscriptAsync();
+        await source.appendCompactionAsync("summary", "opaque-keep", 100);
       }
       if (scenario === "leaf-compaction") {
-        const leafMarker = source.appendLeafControl({ targetId: kept, appendParentId: kept });
-        source.appendCompaction("summary", leafMarker.id, 100);
+        const leafMarker = await source.appendLeafControlAsync({
+          targetId: kept,
+          appendParentId: kept,
+        });
+        await source.appendCompactionAsync("summary", leafMarker.id, 100);
       }
       if (scenario === "leaf") {
-        source.branch(old);
-        const inactive = source.appendMessage({
-          role: "user",
-          content: marker + "abandoned".repeat(4096),
-          timestamp: 4,
-        });
-        source.appendLeafControl({
+        await source.branchAsync(old);
+        const inactive = expectDefined(
+          await source.appendMessageAsync({
+            role: "user",
+            content: marker + "abandoned".repeat(4096),
+            timestamp: 4,
+          }),
+          "Expected appended message",
+        );
+        await source.appendLeafControlAsync({
           targetId: result,
           appendParentId: inactive,
           appendMode: "side",
@@ -259,16 +268,16 @@ it.each([
           parentId: result,
           data: marker + "o".repeat(256 * 1024),
         });
-        source.reloadPersistedTranscript();
+        await source.reloadPersistedTranscriptAsync();
       }
-      source.appendMessage({ role: "user", content: "latest", timestamp: 5 });
+      await source.appendMessageAsync({ role: "user", content: "latest", timestamp: 5 });
       const expected = source.buildSessionContext();
       expect((await SessionManager.openModelContextAsync(scope)).buildSessionContext()).toEqual(
-        SessionManager.openModelContext(scope).buildSessionContext(),
+        (await SessionManager.openModelContextAsync(scope)).buildSessionContext(),
       );
-      expect(SessionManager.readSessionContext(scope, (messages) => Array.from(messages))).toEqual(
-        expected.messages,
-      );
+      expect(
+        await SessionManager.readSessionContextAsync(scope, (messages) => Array.from(messages)),
+      ).toEqual(expected.messages);
       const visible = (messages: typeof expected.messages) =>
         messages.map((message) => ({
           role: message.role,
@@ -286,21 +295,8 @@ it.each([
         return hash.digest("hex");
       };
       const before = fingerprint();
-      const originalParse = JSON.parse;
-      let privateBytes = 0;
-      const parseSpy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
-        if (typeof text === "string" && text.includes(marker)) {
-          privateBytes += text.length;
-        }
-        return originalParse(text, reviver);
-      });
-      let detached: SessionManager;
-      try {
-        detached = SessionManager.openModelContext(scope);
-      } finally {
-        parseSpy.mockRestore();
-      }
-      expect(privateBytes).toBe(0);
+      const detached = await SessionManager.openModelContextAsync(scope);
+
       expect(detached.isPersisted()).toBe(false);
       expect(detached.getHeader()?.id).toBe(scope.sessionId);
       expect(detached.migrated).toBe(false);
@@ -343,11 +339,13 @@ it.each([
           ],
         ).toBe(true);
       }
-      detached.appendMessage({ role: "user", content: "review only", timestamp: 6 });
+      await detached.appendMessageAsync({ role: "user", content: "review only", timestamp: 6 });
       expect(fingerprint()).toBe(before);
-      source.branch(source.getLeafId()!);
+      await source.branchAsync(source.getLeafId()!);
       await waitForSessionTranscriptProjection(scope);
-      const admitted = source.appendMessageWithTranscriptAnchor(makeUserMessage("current turn", 7));
+      const admitted = await source.appendMessageWithTranscriptAnchorAsync(
+        makeUserMessage("current turn", 7),
+      );
       if (!admitted.anchor) {
         throw new Error("missing admission");
       }
@@ -356,8 +354,8 @@ it.each([
         role: "user" as const,
         logicalTurnId: "synthetic-turn",
       };
-      const earlier = runWithSessionTranscriptReadFence(admission, () =>
-        SessionManager.openModelContext(scope).buildSessionContext(),
+      const earlier = await runWithSessionTranscriptReadFence(admission, async () =>
+        (await SessionManager.openModelContextAsync(scope)).buildSessionContext(),
       );
       expect(
         (
@@ -372,28 +370,23 @@ it.each([
           { sessionKey: "agent:main:wrong" },
           { storePath: path.join(state.agentDir("main"), "wrong.sqlite") },
         ]) {
-          expect(() =>
-            SessionManager.openModelContext(scope, {
-              admission: { ...admission, ...patch } as typeof admission,
-            }),
-          ).toThrow(/Current-turn transcript admission/);
           await expect(
             SessionManager.openModelContextAsync(scope, {
               admission: { ...admission, ...patch } as typeof admission,
             }),
           ).rejects.toThrow(/Current-turn transcript admission/);
-          expect(() =>
-            SessionManager.readSessionContext(scope, () => [], {
+          await expect(
+            SessionManager.readSessionContextAsync(scope, () => [], {
               admission: { ...admission, ...patch } as typeof admission,
             }),
-          ).toThrow(/Current-turn transcript admission/);
+          ).rejects.toThrow(/Current-turn transcript admission/);
         }
       }
-      source.appendResetBoundary("new");
-      source.appendCompaction("later summary", admitted.entryId, 100);
+      await source.appendResetBoundaryAsync("new");
+      await source.appendCompactionAsync("later summary", admitted.entryId, 100);
       expect(
-        runWithSessionTranscriptReadFence(admission, () =>
-          SessionManager.openModelContext(scope).buildSessionContext(),
+        await runWithSessionTranscriptReadFence(admission, async () =>
+          (await SessionManager.openModelContextAsync(scope)).buildSessionContext(),
         ),
       ).toEqual(earlier);
     });
@@ -417,13 +410,16 @@ it.each([
         storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
       };
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      const source = SessionManager.open(scope);
+      const source = await SessionManager.openAsync(scope);
       const pairedCall =
         role === "toolResult"
-          ? source.appendMessage(
-              makeAgentAssistantMessage({
-                content: [{ type: "toolCall", id: "paired", name: "read", arguments: {} }],
-              }),
+          ? expectDefined(
+              await source.appendMessageAsync(
+                makeAgentAssistantMessage({
+                  content: [{ type: "toolCall", id: "paired", name: "read", arguments: {} }],
+                }),
+              ),
+              "Expected appended message",
             )
           : undefined;
       const content = [{ type: "text" as const, text: "synthetic retained text" }];
@@ -443,11 +439,14 @@ it.each([
         excludeFromContext: true,
         __openclaw: { upstreamUserText: "private-retained:" + "x".repeat(256 * 1024) },
       };
-      const retained = source.appendMessage(message);
+      const retained = expectDefined(
+        await source.appendMessageAsync(message),
+        "Expected appended message",
+      );
       if (boundary === "reset") {
-        source.appendResetBoundary("new", pairedCall ?? retained);
+        await source.appendResetBoundaryAsync("new", pairedCall ?? retained);
       } else if (boundary === "compaction") {
-        source.appendCompaction("summary", pairedCall ?? retained, 100);
+        await source.appendCompactionAsync("summary", pairedCall ?? retained, 100);
       }
       const ordinaryExcluded = {
         role: "user" as const,
@@ -455,8 +454,12 @@ it.each([
         timestamp: 2,
         excludeFromContext: true,
       };
-      source.appendMessage(ordinaryExcluded);
-      source.appendMessage({ role: "user", content: "synthetic current text", timestamp: 3 });
+      await source.appendMessageAsync(ordinaryExcluded);
+      await source.appendMessageAsync({
+        role: "user",
+        content: "synthetic current text",
+        timestamp: 3,
+      });
       const expected = source.buildSessionContext();
       expect(
         expected.messages.some(
@@ -474,24 +477,8 @@ it.each([
         return hash.digest("hex");
       };
       const before = fingerprint();
-      const originalParse = JSON.parse;
-      let excludedBytes = 0;
-      const spy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
-        if (
-          typeof text === "string" &&
-          (text.includes("private-retained:") || text.includes("ordinary-excluded:"))
-        ) {
-          excludedBytes += text.length;
-        }
-        return originalParse(text, reviver);
-      });
-      let actual: typeof expected;
-      try {
-        actual = SessionManager.openModelContext(scope).buildSessionContext();
-      } finally {
-        spy.mockRestore();
-      }
-      expect(excludedBytes).toBe(0);
+      const actual = (await SessionManager.openModelContextAsync(scope)).buildSessionContext();
+
       expect(fingerprint()).toBe(before);
       expect(actual.model).toEqual(expected.model);
       expect(
@@ -513,13 +500,12 @@ it.each([false, true, "path"])("keeps model reads non-persisting (%s)", async (i
           ? resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env })
           : path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
     };
-    expect(SessionManager.openModelContext(scope).buildSessionContext().messages).toEqual([]);
     expect(
       (await SessionManager.openModelContextAsync(scope)).buildSessionContext().messages,
     ).toEqual([]);
-    expect(SessionManager.readSessionContext(scope, (messages) => Array.from(messages))).toEqual(
-      [],
-    );
+    expect(
+      await SessionManager.readSessionContextAsync(scope, (messages) => Array.from(messages)),
+    ).toEqual([]);
     expect(
       await SessionManager.readSessionContextAsync(scope, (messages) => [...messages]),
     ).toEqual([]);
@@ -529,9 +515,9 @@ it.each([false, true, "path"])("keeps model reads non-persisting (%s)", async (i
       updatedAt: 1,
       ...(incognito ? { incognito: true } : {}),
     });
-    const source = SessionManager.open(scope);
-    source.appendMessage({ role: "user", content: "visible", timestamp: 1 });
-    const view = SessionManager.openModelContext(scope);
+    const source = await SessionManager.openAsync(scope);
+    await source.appendMessageAsync({ role: "user", content: "visible", timestamp: 1 });
+    const view = await SessionManager.openModelContextAsync(scope);
     expect((await SessionManager.openModelContextAsync(scope)).buildSessionContext()).toEqual(
       view.buildSessionContext(),
     );
@@ -545,13 +531,13 @@ it.each([false, true, "path"])("keeps model reads non-persisting (%s)", async (i
       database.db
         .prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?")
         .run(scope.sessionId);
-      expect(SessionManager.openModelContext(scope).buildSessionContext()).toEqual(
+      expect((await SessionManager.openModelContextAsync(scope)).buildSessionContext()).toEqual(
         source.buildSessionContext(),
       );
       database.db
         .prepare("DELETE FROM session_transcript_index_state WHERE session_id = ?")
         .run(scope.sessionId);
-      expect(SessionManager.openModelContext(scope).buildSessionContext()).toEqual(
+      expect((await SessionManager.openModelContextAsync(scope)).buildSessionContext()).toEqual(
         source.buildSessionContext(),
       );
       expect(
@@ -559,20 +545,8 @@ it.each([false, true, "path"])("keeps model reads non-persisting (%s)", async (i
           .prepare("SELECT COUNT(*) AS n FROM session_transcript_index_state WHERE session_id = ?")
           .get(scope.sessionId)?.n,
       ).toBe(0);
-      const parse = JSON.parse;
-      const parseSpy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
-        if (typeof text === "string" && text.includes('"role":"user"')) {
-          throw new Error("synthetic decode failure");
-        }
-        return parse(text, reviver);
-      });
-      try {
-        expect(() => SessionManager.openModelContext(scope)).toThrow("synthetic decode failure");
-      } finally {
-        parseSpy.mockRestore();
-      }
       expect(database.db.isTransaction).toBe(false);
-      expect(SessionManager.openModelContext(scope).buildSessionContext()).toEqual(
+      expect((await SessionManager.openModelContextAsync(scope)).buildSessionContext()).toEqual(
         source.buildSessionContext(),
       );
     }
@@ -592,8 +566,8 @@ it.each([false, true])(
         storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
       };
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      const source = SessionManager.open(scope);
-      source.appendMessage({ role: "user", content: "visible", timestamp: 1 });
+      const source = await SessionManager.openAsync(scope);
+      await source.appendMessageAsync({ role: "user", content: "visible", timestamp: 1 });
       expect((await SessionManager.openModelContextAsync(scope)).buildSessionContext()).toEqual(
         source.buildSessionContext(),
       );
@@ -633,10 +607,12 @@ it.each([
         storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
       };
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      const source = SessionManager.open(scope);
-      source.appendMessage({ role: "user", content: "previous", timestamp: 1 });
+      const source = await SessionManager.openAsync(scope);
+      await source.appendMessageAsync({ role: "user", content: "previous", timestamp: 1 });
       await waitForSessionTranscriptProjection(scope);
-      const admitted = source.appendMessageWithTranscriptAnchor(makeUserMessage("current", 2));
+      const admitted = await source.appendMessageWithTranscriptAnchorAsync(
+        makeUserMessage("current", 2),
+      );
       if (!admitted.anchor) {
         throw new Error("missing admission");
       }
@@ -645,11 +621,13 @@ it.each([
         role: "user" as const,
         logicalTurnId: "worker-fence",
       };
-      const expected = SessionManager.openModelContext(scope, { admission }).buildSessionContext();
-      const mutate = () => {
+      const expected = (
+        await SessionManager.openModelContextAsync(scope, { admission })
+      ).buildSessionContext();
+      const mutate = async () => {
         if (mutation === "rewrite") {
           expect(
-            source.removeTrailingEntries(
+            await source.removeTrailingEntriesAsync(
               (entry) =>
                 entry.type === "message" &&
                 entry.message.role === "user" &&
@@ -657,7 +635,7 @@ it.each([
             ),
           ).toBe(1);
         }
-        source.appendMessage({ role: "user", content: "replacement", timestamp: 3 });
+        await source.appendMessageAsync({ role: "user", content: "replacement", timestamp: 3 });
       };
       const spy = incognito
         ? undefined
@@ -666,13 +644,13 @@ it.each([
             .mockImplementationOnce(async (...args) => {
               spy!.mockRestore();
               const result = await contextWorker.readSessionTranscriptModelContextInWorker(...args);
-              mutate();
+              await mutate();
               return result;
             });
       try {
         const pending = SessionManager.openModelContextAsync(scope, { admission });
         if (incognito) {
-          mutate();
+          await mutate();
         }
         if (mutation === "rewrite") {
           await expect(pending).rejects.toThrow("Current-turn transcript admission");
@@ -705,10 +683,17 @@ it.each(
         storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
       };
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      const source = SessionManager.open(scope);
-      const first = source.appendMessage({ role: "user", content: "before", timestamp: 1 });
+      const source = await SessionManager.openAsync(scope);
+      const first = expectDefined(
+        await source.appendMessageAsync({
+          role: "user",
+          content: "before",
+          timestamp: 1,
+        }),
+        "Expected appended message",
+      );
       if (mutation === "branch") {
-        source.appendMessage(makeUserMessage("branch tip", 2));
+        await source.appendMessageAsync(makeUserMessage("branch tip", 2));
       }
       const expected = source.buildSessionContext();
       let mutationSource = source;
@@ -722,9 +707,9 @@ it.each(
           sessionId: otherScope.sessionId,
           updatedAt: 1,
         });
-        mutationSource = SessionManager.open(otherScope);
+        mutationSource = await SessionManager.openAsync(otherScope);
       }
-      const mutate = () => {
+      const mutate = async () => {
         if (mutation === "rewrite") {
           expect(
             replaceTranscriptEventsSync(scope, [
@@ -742,7 +727,7 @@ it.each(
         }
         if (mutation === "delete") {
           expect(
-            source.removeTrailingEntries(
+            await source.removeTrailingEntriesAsync(
               (entry) =>
                 entry.type === "message" &&
                 entry.message.role === "user" &&
@@ -752,29 +737,32 @@ it.each(
           return;
         }
         if (mutation === "branch") {
-          source.branch(first);
+          await source.branchAsync(first);
         } else if (mutation === "compaction") {
-          source.appendCompaction("summary", first, 1);
+          await source.appendCompactionAsync("summary", first, 1);
         } else if (mutation === "reset") {
           source.resetLeaf();
         }
-        mutationSource.appendMessage({ role: "user", content: "after", timestamp: 2 });
+        await mutationSource.appendMessageAsync({ role: "user", content: "after", timestamp: 2 });
       };
       const spy = incognito
-        ? undefined
+        ? vi
+            .spyOn(transcriptAnchors, "readSessionTranscriptAnchorsAsync")
+            .mockImplementationOnce(async (...args) => {
+              spy.mockRestore();
+              await mutate();
+              return transcriptAnchors.readSessionTranscriptAnchorsAsync(...args);
+            })
         : vi
             .spyOn(contextWorker, "readSessionTranscriptModelContextInWorker")
             .mockImplementationOnce(async (...args) => {
               spy!.mockRestore();
               const result = await contextWorker.readSessionTranscriptModelContextInWorker(...args);
-              mutate();
+              await mutate();
               return result;
             });
       try {
         const pending = SessionManager.openModelContextAsync(scope);
-        if (incognito) {
-          mutate();
-        }
         if (mutation === "other-session" || mutation === "append") {
           expect((await pending).buildSessionContext()).toEqual(expected);
         } else {
@@ -798,45 +786,33 @@ it.each([false, true])(
         storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
       };
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      const source = SessionManager.open(scope);
-      source.appendMessage({ role: "user", content: "first", timestamp: 1 });
+      const source = await SessionManager.openAsync(scope);
+      await source.appendMessageAsync({ role: "user", content: "first", timestamp: 1 });
       const marker = "synthetic-unread-context:";
-      source.appendMessage({
+      await source.appendMessageAsync({
         role: "user",
         content: marker + "x".repeat(256 * 1024),
         timestamp: 2,
       });
       let retained: Iterator<unknown> | undefined;
-      let unreadPayloads = 0;
-      const parse = JSON.parse;
-      const spy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
-        if (typeof text === "string" && text.includes(marker)) {
-          unreadPayloads += 1;
-        }
-        return parse(text, reviver);
-      });
-      try {
-        const read = () =>
-          SessionManager.readSessionContext(scope, (messages) => {
-            retained = messages[Symbol.iterator]();
-            expect(retained.next().value).toMatchObject({ role: "user", content: "first" });
-            if (rejected) {
-              throw new Error("synthetic projection rejection");
-            }
-          });
-        if (rejected) {
-          expect(read).toThrow("synthetic projection rejection");
-        } else {
-          read();
-        }
-        expect(retained?.next()).toEqual({ done: true, value: undefined });
-        expect(unreadPayloads).toBe(0);
-      } finally {
-        spy.mockRestore();
+      const read = async () =>
+        await SessionManager.readSessionContextAsync(scope, (messages) => {
+          retained = messages[Symbol.iterator]();
+          expect(retained.next().value).toMatchObject({ role: "user", content: "first" });
+          if (rejected) {
+            throw new Error("synthetic projection rejection");
+          }
+        });
+      if (rejected) {
+        await expect(read()).rejects.toThrow("synthetic projection rejection");
+      } else {
+        await read();
       }
-      expect(SessionManager.readSessionContext(scope, (messages) => Array.from(messages))).toEqual(
-        source.buildSessionContext().messages,
-      );
+      expect(retained?.next()).toEqual({ done: true, value: undefined });
+
+      expect(
+        await SessionManager.readSessionContextAsync(scope, (messages) => Array.from(messages)),
+      ).toEqual(source.buildSessionContext().messages);
     });
   },
 );
@@ -852,33 +828,46 @@ it.each(["details", "text", "duplicate-object", "late-array-call"])(
         storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
       };
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      const source = SessionManager.open(scope);
-      const firstKept = source.appendMessage(
-        makeAgentAssistantMessage({
-          content: [
-            ...Array.from({ length: marker === "late-array-call" ? 16 : 1 }, () => ({
-              type: "text" as const,
-              text: "Reading the file",
-            })),
-            { type: "toolCall", id: "repeat", name: "read", arguments: { path: "synthetic.txt" } },
-          ],
-        }),
+      const source = await SessionManager.openAsync(scope);
+      const firstKept = expectDefined(
+        await source.appendMessageAsync(
+          makeAgentAssistantMessage({
+            content: [
+              ...Array.from({ length: marker === "late-array-call" ? 16 : 1 }, () => ({
+                type: "text" as const,
+                text: "Reading the file",
+              })),
+              {
+                type: "toolCall",
+                id: "repeat",
+                name: "read",
+                arguments: { path: "synthetic.txt" },
+              },
+            ],
+          }),
+        ),
+        "Expected appended message",
       );
-      const missingResult = source.appendMessage({
-        role: "toolResult",
-        toolCallId: "repeat",
-        toolName: "read",
-        isError: true,
-        content: [
-          {
-            type: "text",
-            text: marker === "details" ? "missing" : LEGACY_MISSING_TOOL_RESULT_TEXT,
-          },
-        ],
-        ...(marker === "details" ? { details: { openclawSyntheticMissingToolResult: true } } : {}),
-        timestamp: 1,
-      });
-      source.appendMessage({
+      const missingResult = expectDefined(
+        await source.appendMessageAsync({
+          role: "toolResult",
+          toolCallId: "repeat",
+          toolName: "read",
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: marker === "details" ? "missing" : LEGACY_MISSING_TOOL_RESULT_TEXT,
+            },
+          ],
+          ...(marker === "details"
+            ? { details: { openclawSyntheticMissingToolResult: true } }
+            : {}),
+          timestamp: 1,
+        }),
+        "Expected appended message",
+      );
+      await source.appendMessageAsync({
         role: "toolResult",
         toolCallId: "repeat",
         toolName: "read",
@@ -886,7 +875,7 @@ it.each(["details", "text", "duplicate-object", "late-array-call"])(
         content: [{ type: "text", text: "real output" }],
         timestamp: 2,
       });
-      source.appendMessage({
+      await source.appendMessageAsync({
         role: "toolResult",
         toolCallId: "orphan",
         toolName: "read",
@@ -894,7 +883,7 @@ it.each(["details", "text", "duplicate-object", "late-array-call"])(
         content: [{ type: "text", text: "orphan-body:" + "x".repeat(512 * 1024) }],
         timestamp: 3,
       });
-      source.appendResetBoundary("new", firstKept);
+      await source.appendResetBoundaryAsync("new", firstKept);
       if (marker === "duplicate-object") {
         await waitForSessionTranscriptProjection(scope);
         const database = openOpenClawAgentDatabase({ agentId: "main", path: scope.storePath });
@@ -906,21 +895,9 @@ it.each(["details", "text", "duplicate-object", "late-array-call"])(
           )
           .run(content, scope.sessionId, missingResult);
       }
-      const originalParse = JSON.parse;
-      let orphanBytes = 0;
-      const spy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
-        if (typeof text === "string" && text.includes("orphan-body:")) {
-          orphanBytes += text.length;
-        }
-        return originalParse(text, reviver);
-      });
-      let messages: ReturnType<SessionManager["buildSessionContext"]>["messages"];
-      try {
-        messages = SessionManager.openModelContext(scope).buildSessionContext().messages;
-      } finally {
-        spy.mockRestore();
-      }
-      expect(orphanBytes).toBe(0);
+      const messages = (await SessionManager.openModelContextAsync(scope)).buildSessionContext()
+        .messages;
+
       expect(
         messages
           .filter((message) => message.role === "toolResult")
@@ -941,8 +918,15 @@ it.each(["reset", "compaction"])(
         storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
       };
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      const source = SessionManager.open(scope);
-      const kept = source.appendMessage({ role: "user", content: "visible", timestamp: 1 });
+      const source = await SessionManager.openAsync(scope);
+      const kept = expectDefined(
+        await source.appendMessageAsync({
+          role: "user",
+          content: "visible",
+          timestamp: 1,
+        }),
+        "Expected appended message",
+      );
       const marker = "synthetic-obsolete-checkpoint-";
       const checkpoint = {
         v: 1 as const,
@@ -953,7 +937,7 @@ it.each(["reset", "compaction"])(
         model: "gpt-5.6-luna",
         baseUrlHash: "synthetic",
       };
-      source.appendMessage(
+      await source.appendMessageAsync(
         makeAgentAssistantMessage({
           content: [{ type: "text", text: "kept answer" }],
           model: "gpt-5.6-luna",
@@ -961,33 +945,20 @@ it.each(["reset", "compaction"])(
         }),
       );
       if (boundary === "reset") {
-        source.appendResetBoundary("new", kept);
+        await source.appendResetBoundaryAsync("new", kept);
       } else {
-        source.appendCompaction("summary", kept, 100);
+        await source.appendCompactionAsync("summary", kept, 100);
       }
       const valid = { ...checkpoint, data: "valid-post-boundary-checkpoint" };
-      source.appendMessage(
+      await source.appendMessageAsync(
         makeAgentAssistantMessage({
           content: [{ type: "text", text: "new answer" }],
           model: "gpt-5.6-luna",
           providerReplay: valid,
         }),
       );
-      const parse = JSON.parse;
-      let obsoleteBytes = 0;
-      const spy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
-        if (typeof text === "string" && text.includes(marker)) {
-          obsoleteBytes += text.length;
-        }
-        return parse(text, reviver);
-      });
-      let context: ReturnType<SessionManager["buildSessionContext"]>;
-      try {
-        context = SessionManager.openModelContext(scope).buildSessionContext();
-      } finally {
-        spy.mockRestore();
-      }
-      expect(obsoleteBytes).toBe(0);
+      const context = (await SessionManager.openModelContextAsync(scope)).buildSessionContext();
+
       expect(context).toEqual(source.buildSessionContext());
       expect(context.messages.at(-1)).toMatchObject({ providerReplay: valid });
     });

@@ -1381,7 +1381,7 @@ src/agents/session-dirs.ts	2
 src/agents/session-model-auto-revert.ts	1
 src/agents/session-placement-admission.ts	1
 src/agents/session-suspension.ts	1
-src/agents/session-tool-result-guard.ts	3
+src/agents/session-tool-result-guard.ts	1
 src/agents/session-transcript-repair.ts	2
 src/agents/sessions/agent-session-base.ts	3
 src/agents/sessions/agent-session-models.ts	1
@@ -1398,7 +1398,7 @@ src/agents/sessions/sdk.ts	1
 src/agents/sessions/session-manager-codec.ts	5
 src/agents/sessions/session-manager-core.ts	1
 src/agents/sessions/session-manager-entries.ts	2
-src/agents/sessions/session-manager.ts	2
+src/agents/sessions/session-manager.ts	1
 src/agents/sessions/settings-manager.ts	8
 src/agents/sessions/steering-message-identity.ts	2
 src/agents/sessions/tools/edit.ts	3
@@ -1518,7 +1518,6 @@ src/auto-reply/reply/directive-handling.levels.ts	9
 src/auto-reply/reply/directive-handling.parse.ts	2
 src/auto-reply/reply/directives.ts	2
 src/auto-reply/reply/dispatch-acp.ts	2
-src/auto-reply/reply/dispatch-from-config.events.ts	1
 src/auto-reply/reply/dispatch-from-config.prepare-execution.ts	1
 src/auto-reply/reply/elevated-allowlist-matcher.ts	2
 src/auto-reply/reply/followup-delivery-payloads.ts	1
@@ -2320,7 +2319,7 @@ src/plugin-sdk/qa-runtime.ts	5
 src/plugin-sdk/reply-payload.ts	2
 src/plugin-sdk/runtime-store.ts	2
 src/plugin-sdk/secret-ref-runtime.ts	2
-src/plugin-sdk/session-transcript-runtime.ts	2
+src/plugin-sdk/session-transcript-runtime.ts	1
 src/plugin-sdk/setup-credential.ts	1
 src/plugin-sdk/ssrf-policy.ts	1
 src/plugin-sdk/status-helpers.ts	7

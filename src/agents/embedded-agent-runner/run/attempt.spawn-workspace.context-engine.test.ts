@@ -400,9 +400,11 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     ];
     const sessionManager = ActualSessionManager.inMemory();
     const appendSessionMessage = (message: AgentMessage) =>
-      sessionManager.appendMessage(message as Parameters<typeof sessionManager.appendMessage>[0]);
+      sessionManager.appendMessageAsync(
+        message as Parameters<typeof sessionManager.appendMessageAsync>[0],
+      );
     for (const message of sessionMessages) {
-      appendSessionMessage(message);
+      await appendSessionMessage(message);
     }
     const retryAssistant = signedAssistant(
       "fresh valid retry thinking",
@@ -500,7 +502,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
             timestamp: 3,
           } as AgentMessage;
           session.messages = [...session.messages, userMessage];
-          appendSessionMessage(userMessage);
+          await appendSessionMessage(userMessage);
           const stream = await session.agent.streamFn?.(
             {} as never,
             { messages: session.messages } as never,
@@ -510,7 +512,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
             stream as { result: () => Promise<AgentMessage> }
           ).result();
           session.messages = [...session.messages, assistantMessage];
-          appendSessionMessage(assistantMessage);
+          await appendSessionMessage(assistantMessage);
         };
         return session;
       },

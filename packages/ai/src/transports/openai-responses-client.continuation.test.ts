@@ -436,13 +436,13 @@ describe("native OpenAI Responses SSE continuation", () => {
       storePath: path.join(dir, "sessions.json"),
     };
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    const manager = SessionManager.open(scope, dir);
+    const manager = await SessionManager.openAsync(scope, dir);
     for (const message of messages) {
       // This append traverses the production transcript redactor and SQLite store.
-      manager.appendMessage(message);
+      await manager.appendMessageAsync(message);
     }
     cleanupSessionResources();
-    const reloaded = SessionManager.open(scope, dir).buildSessionContext().messages;
+    const reloaded = (await SessionManager.openAsync(scope, dir)).buildSessionContext().messages;
     expect(reloaded).toEqual(messages);
     const requestMessages = reloaded.map((message) => {
       if (message.role !== "user" && message.role !== "assistant") {

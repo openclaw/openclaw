@@ -219,7 +219,7 @@ export function createProviderAuthAvailability(
     return filterAuthProfileIds(store, profileIds, params).length > 0;
   }
 
-  /** @deprecated Use isProviderApiKeyConfiguredAsync. Removed at the next Plugin SDK major. */
+  /** @deprecated Use isProviderApiKeyConfiguredAsync. Removed after stable deprecation and a compatibility period. */
   function isProviderApiKeyConfigured(
     params: Parameters<typeof isProviderApiKeyConfiguredFromStore>[0],
   ): boolean {
@@ -263,7 +263,7 @@ export function createProviderAuthAvailability(
     return isProviderApiKeyConfiguredFromStore({ ...params, store }, persistedCredential);
   }
 
-  /** @deprecated Use listUsableProviderAuthProfileIdsAsync. Removed at the next Plugin SDK major. */
+  /** @deprecated Use listUsableProviderAuthProfileIdsAsync. Removed after stable deprecation and a compatibility period. */
   function listUsableProviderAuthProfileIds(params: ProviderAuthProfileLookup): {
     agentDir: string;
     profileIds: string[];
@@ -276,7 +276,7 @@ export function createProviderAuthAvailability(
     }
   }
 
-  /** @deprecated Use isProviderAuthProfileConfiguredAsync. Removed at the next Plugin SDK major. */
+  /** @deprecated Use isProviderAuthProfileConfiguredAsync. Removed after stable deprecation and a compatibility period. */
   function isProviderAuthProfileConfigured(params: ProviderAuthProfileLookup): boolean {
     return listUsableProviderAuthProfileIds(params).profileIds.length > 0;
   }

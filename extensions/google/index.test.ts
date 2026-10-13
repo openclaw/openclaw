@@ -91,9 +91,6 @@ describe("google provider plugin hooks", () => {
         messages: [structuredClone(assistantMessage)],
         sessionState: {
           getCustomEntries: () => customEntries,
-          appendCustomEntry: () => {
-            throw new Error("legacy persistence used");
-          },
           appendCustomEntryAsync: async (customType: string, data: unknown) => {
             customEntries.push({ customType, data });
             return "bootstrap";

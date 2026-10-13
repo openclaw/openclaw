@@ -95,14 +95,14 @@ function assistant(tokens: number): AssistantMessage {
   };
 }
 
-function transcript(tokens = 17): SessionManager {
+async function transcript(tokens = 17): Promise<SessionManager> {
   const manager = SessionManager.inMemory();
-  manager.appendMessage({
+  await manager.appendMessageAsync({
     role: "user",
     content: "retained archive prompt",
     timestamp: archiveTime,
   });
-  manager.appendMessage(assistant(tokens));
+  await manager.appendMessageAsync(assistant(tokens));
   return manager;
 }
 
@@ -308,7 +308,7 @@ describe("usage archive identity", () => {
         });
       }
     }
-    const legacy = transcript(11);
+    const legacy = await transcript(11);
     const legacyPath = path.join(
       path.dirname(storePath),
       `${legacy.getSessionId()}.jsonl.reset.${archiveStamp}`,
@@ -482,7 +482,7 @@ describe("usage archive identity", () => {
 
   it("discovers and reads compressed deleted archives for a non-main agent", async ({ signal }) => {
     const agentId = "worker";
-    const manager = transcript();
+    const manager = await transcript();
     const sessionId = manager.getSessionId();
     const sessionFile = await writeArchive({
       state,
@@ -560,7 +560,7 @@ describe("usage archive identity", () => {
 
   {
     it("excludes a compressed archive copy of SQLite only in its owning agent", async () => {
-      const manager = transcript(100);
+      const manager = await transcript(100);
       const sessionId = manager.getSessionId();
       const sessionKey = "agent:main:main";
       const storePath = path.join(state.sessionsDir(), "sessions.json");
@@ -608,7 +608,7 @@ describe("usage archive identity", () => {
     });
 
     it("keeps newest-archive and primary precedence with compressed archives", async () => {
-      const manager = transcript();
+      const manager = await transcript();
       const sessionId = manager.getSessionId();
       await writeArchive({ state, manager, reason: "reset" });
       const newestArchive = await writeArchive({
@@ -630,7 +630,7 @@ describe("usage archive identity", () => {
   }
 
   it("replaces compressed read bytes without changing the durable session identity", async () => {
-    const manager = transcript();
+    const manager = await transcript();
     const sessionId = manager.getSessionId();
     const sessionFile = await writeArchive({ state, manager });
     const lookup = { agentId: "main", sessionId, sessionFile, config };
@@ -642,7 +642,7 @@ describe("usage archive identity", () => {
     const originalRows = readSessionCostUsageRollupRows("main");
     expect(originalRows.map((row) => row.key)).toEqual([original.filePath]);
 
-    manager.appendMessage(assistant(29));
+    await manager.appendMessageAsync(assistant(29));
     expect(await writeArchive({ state, manager, mtime: archiveTime + 2000 })).toBe(sessionFile);
     const replacement = expectDefined(
       await resolveUsageCostTranscriptFile(sessionFile),
@@ -683,7 +683,7 @@ describe("usage archive identity", () => {
   });
 
   it("preserves rollups when a compressed source becomes unreadable", async () => {
-    const manager = transcript();
+    const manager = await transcript();
     const sessionFile = await writeArchive({ state, manager });
     await loadSessionCostSummary({ agentId: "main", sessionFile, config });
     const rows = readSessionCostUsageRollupRows("main");

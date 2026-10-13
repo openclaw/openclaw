@@ -63,7 +63,8 @@ export function createUserTurnProcessingCompletion(
         family: "session-input-completion",
         method: "UserTurnTranscriptRecorder.completeProcessing",
         replacement: "await UserTurnTranscriptRecorder.completeProcessingAsync(outcome)",
-        compatibility: "Synchronous completion remains supported until the next Plugin SDK major.",
+        compatibility:
+          "Synchronous completion remains supported for a compatibility period after stable deprecation.",
         code: "DEP_SESSION_INPUT_COMPLETION",
       });
       if (!processingCompletion) {

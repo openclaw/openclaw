@@ -133,7 +133,11 @@ describe("memory session delta publication", () => {
     expect(manager.status().dirty).toBe(true);
 
     activity.listener?.(false);
-    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(
+      readPublishedSessionIndex(database, "sessions/main/rebuild.jsonl", "stableproof"),
+    ).toEqual(before);
+    await vi.advanceTimersByTimeAsync(1);
     await (manager as unknown as { awaitManagerIdle(): Promise<void> }).awaitManagerIdle();
     expect(
       readPublishedSessionIndex(database, "sessions/main/rebuild.jsonl", "newproof").search,

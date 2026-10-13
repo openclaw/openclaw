@@ -30,11 +30,8 @@ import * as incognitoCorpus from "../config/sessions/session-incognito-memory-co
 import { resolveMemorySessionTargetsInWorker } from "../config/sessions/session-transcript-inventory-runtime.js";
 import { createIncognitoSessionComputeReader } from "../gateway/session-history-snapshot.js";
 import {
-  loadArchivedSessions,
   loadArchivedSessionsAsync,
-  loadMemorySessionMetadata,
   readTranscriptStatsBatchReadOnlySync,
-  resolveMemorySessionTargets,
   resolveMemorySessionTargetsAsync,
   statSessionEntrySync,
 } from "../plugin-sdk/memory-core-host-engine-sessions.js";
@@ -168,9 +165,6 @@ it("wires Memory callbacks, corpus and reset recall through the captured actor w
   const { reader, scope } = await session("callbacks-corpus");
   await withIncognitoSessionActor(actor, async () => {
     for (const read of [
-      () => loadArchivedSessions({ ...scope, sessionIds: [scope.sessionId] }),
-      () => loadMemorySessionMetadata(scope),
-      () => resolveMemorySessionTargets({ ...scope, sessionIds: [scope.sessionId] }),
       () => readTranscriptStatsBatchReadOnlySync([scope]),
       () => statSessionEntrySync("actor-memory", scope),
     ]) {
@@ -344,7 +338,7 @@ it("prepares real Active Memory prompt and status hooks from the actor SDK witho
   };
   const runtime = createPluginRuntime();
   runtime.config.current = () => config;
-  runtime.agent.resolveCliBackendDispatchEligibility = () => undefined;
+  runtime.agent.resolveCliBackendDispatchEligibilityAsync = async () => undefined;
   runtime.state.openKeyedStore = (options) =>
     createPluginStateKeyedStoreForTests("active-memory", { ...options, env });
   let beforePrompt: PluginHookHandlerMap["before_prompt_build"] | undefined;

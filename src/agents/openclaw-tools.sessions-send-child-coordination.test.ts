@@ -834,7 +834,7 @@ describe("sessions_send child coordination", () => {
       // The separate lookup can observe another entry snapshot; classification must
       // join its metadata against the entry already selected by sessions_send.
       readAcpSessionMetaMock.mockImplementation(
-        (params: Parameters<typeof metadata.readAcpSessionEntry>[0]) =>
+        (params: Parameters<typeof metadata.readAcpSessionEntryAsync>[0]) =>
           metadataRead.readAcpSessionMetaForEntryAsync({
             ...params,
             databasePath,

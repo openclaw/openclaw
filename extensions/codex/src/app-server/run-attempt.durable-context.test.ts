@@ -48,7 +48,7 @@ it("hands off durable notes once on resume without replaying transient context",
     sessionKey: params.sessionKey!,
     storePath: params.sessionTarget!.storePath!,
   };
-  const manager = SessionManager.open(target);
+  const manager = await SessionManager.openAsync(target);
   const note = {
     role: "custom" as const,
     customType: "openclaw.system-note",
@@ -57,14 +57,14 @@ it("hands off durable notes once on resume without replaying transient context",
     timestamp: Date.now(),
     idempotencyKey: "doctor:heartbeat-outcome:synthetic",
   };
-  manager.appendMessage(note);
+  await manager.appendMessageAsync(note);
   const excludedNote = {
     ...note,
     idempotencyKey: "excluded",
     content: "EXCLUDED_NOTE",
     excludeFromContext: true,
   };
-  manager.appendMessage(excludedNote);
+  await manager.appendMessageAsync(excludedNote);
   const transientNote = {
     ...note,
     idempotencyKey: "transient",
@@ -72,20 +72,20 @@ it("hands off durable notes once on resume without replaying transient context",
     content: "TRANSIENT_NOTE",
     details: { source: "openclaw-runtime-context", runtimeContextCarrier: true },
   };
-  manager.appendMessage(transientNote);
+  await manager.appendMessageAsync(transientNote);
   const coveredNote = {
     ...note,
     idempotencyKey: "covered",
     content: "ALREADY_COVERED_NOTE",
     timestamp: cutoff,
   };
-  manager.appendMessage(coveredNote);
+  await manager.appendMessageAsync(coveredNote);
   const nativeMirrorNote = {
     ...note,
     content: "NATIVE_MIRROR_NOTE",
     idempotencyKey: "codex-app-server:synthetic",
   };
-  manager.appendMessage(nativeMirrorNote);
+  await manager.appendMessageAsync(nativeMirrorNote);
   const threadId = "thread-existing";
   let turnNumber = 0;
   const harness = createStartedThreadHarness(

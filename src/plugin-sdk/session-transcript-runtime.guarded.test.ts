@@ -200,7 +200,7 @@ describe("guarded session transcript runtime SDK", () => {
       appendStrict({
         ...scope,
         message: { role: "user", content: "blocked" },
-        prepareMessageAfterIdempotencyCheck: () => undefined,
+        preparation: { prepareMessage: async () => undefined },
       }),
     ).resolves.toEqual({ kind: "suppressed" });
     const events = await readEvents(persistedScope);

@@ -2,7 +2,6 @@ import * as path from "node:path";
 import type { EventBus } from "../event-bus.js";
 import type { ExecOptions } from "../exec.js";
 import { execCommand } from "../exec.js";
-import { warnSessionPersistenceDeprecation } from "../session-persistence-deprecation.js";
 import { createSyntheticSourceInfo } from "../source-info.js";
 import type {
   Extension,
@@ -22,7 +21,7 @@ type HandlerFn = NonNullable<ReturnType<Extension["handlers"]["get"]>>[number];
  * Create a runtime with throwing stubs for action methods.
  * Runner.bindCore() replaces these with real implementations.
  */
-export function createExtensionRuntime(): ExtensionRuntime {
+export function createExtensionRuntime(): ExtensionRuntimeV2 {
   const notInitialized = () => {
     throw new Error(
       "Extension runtime not initialized. Action methods cannot be called during extension loading.",
@@ -38,12 +37,9 @@ export function createExtensionRuntime(): ExtensionRuntime {
   const runtime: ExtensionRuntimeV2 = {
     sendMessage: notInitialized,
     sendUserMessage: notInitialized,
-    appendEntry: notInitialized,
     appendEntryAsync: notInitialized,
-    setSessionName: notInitialized,
     setSessionNameAsync: notInitialized,
     getSessionName: notInitialized,
-    setLabel: notInitialized,
     setLabelAsync: notInitialized,
     getActiveTools: notInitialized,
     getAllTools: notInitialized,
@@ -63,7 +59,7 @@ export function createExtensionRuntime(): ExtensionRuntime {
         "This extension ctx is stale after session replacement or reload. Do not use a captured api or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().";
     },
     // Pre-bind: queue registrations so bindCore() can flush them once the
-    // model registry is available. bindCore() replaces both with direct calls.
+    // model registry is available. Binding replaces both with direct calls.
     registerProvider: (name, config, extensionPath = "<unknown>") => {
       runtime.pendingProviderRegistrations.push({ name, config, extensionPath });
     },
@@ -92,12 +88,9 @@ function createExtensionAPI(
     runtime.assertActive();
     return runtime;
   };
-  const persist = async <T>(action: (owner: ExtensionRuntime) => Promise<T> | undefined) => {
+  const persist = async <T>(action: (owner: ExtensionRuntime) => Promise<T>) => {
     const owner = activeRuntime();
     const pending = action(owner);
-    if (!pending) {
-      throw new Error("Extension host must bind worker persistence with bindCoreAsync");
-    }
     const result = await pending;
     owner.assertActive();
     return result;
@@ -171,24 +164,28 @@ function createExtensionAPI(
     sendUserMessage: (content, options) => {
       activeRuntime().sendUserMessage(content, options);
     },
-    // Retained synchronous adapters for third-party extensions until the next SDK major.
-    appendEntry: (customType, data) => {
-      warnSessionPersistenceDeprecation("ExtensionAPI.appendEntry", "appendEntryAsync");
-      activeRuntime().appendEntry(customType, data);
-    },
     appendEntryAsync: (customType, data) =>
-      persist((owner) => owner.appendEntryAsync?.(customType, data)),
-    setSessionName: (name) => {
-      warnSessionPersistenceDeprecation("ExtensionAPI.setSessionName", "setSessionNameAsync");
-      activeRuntime().setSessionName(name);
-    },
-    setSessionNameAsync: (name) => persist((owner) => owner.setSessionNameAsync?.(name)),
+      persist((owner) => {
+        if (!owner.appendEntryAsync) {
+          throw new Error("Extension host must bind worker persistence with bindCoreAsync");
+        }
+        return owner.appendEntryAsync(customType, data);
+      }),
+    setSessionNameAsync: (name) =>
+      persist((owner) => {
+        if (!owner.setSessionNameAsync) {
+          throw new Error("Extension host must bind worker persistence with bindCoreAsync");
+        }
+        return owner.setSessionNameAsync(name);
+      }),
     getSessionName: () => activeRuntime().getSessionName(),
-    setLabel: (entryId, label) => {
-      warnSessionPersistenceDeprecation("ExtensionAPI.setLabel", "setLabelAsync");
-      activeRuntime().setLabel(entryId, label);
-    },
-    setLabelAsync: (entryId, label) => persist((owner) => owner.setLabelAsync?.(entryId, label)),
+    setLabelAsync: (entryId, label) =>
+      persist((owner) => {
+        if (!owner.setLabelAsync) {
+          throw new Error("Extension host must bind worker persistence with bindCoreAsync");
+        }
+        return owner.setLabelAsync(entryId, label);
+      }),
     exec(command: string, args: string[], options?: ExecOptions) {
       runtime.assertActive();
       return execCommand(command, args, options?.cwd ?? cwd, options);

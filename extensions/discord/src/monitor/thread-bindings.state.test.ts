@@ -1,4 +1,3 @@
-import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
   OpenKeyedStoreOptions,
@@ -6,13 +5,6 @@ import type {
   PluginStateKeyedStore,
   PluginStateSyncKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
-import {
-  createPluginStateKeyedStoreForTests,
-  createPluginStateSyncKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-  openOpenClawStateDatabase,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { discordPlugin } from "../channel.js";
 import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
@@ -313,92 +305,5 @@ describe("Discord thread binding restoration", () => {
       await Promise.allSettled([touching, stopping, setting]);
       await manager.stop();
     }
-  });
-
-  it("keeps activity in memory after a real native read-only failure", async () => {
-    await withOpenClawTestState({ label: "discord-binding-native-readonly" }, async () => {
-      stores.openKeyedStore.mockImplementation((options) => {
-        return createPluginStateKeyedStoreForTests<ThreadBindingRecord>("discord", options);
-      });
-      let observed = false;
-      stores.openSyncKeyedStore.mockImplementation((options) => {
-        const store = createPluginStateSyncKeyedStoreForTests<ThreadBindingRecord>(
-          "discord",
-          options,
-        );
-        return {
-          ...store,
-          update: (...args: Parameters<NonNullable<typeof store.update>>) => {
-            const [key, update, updateOptions] = args;
-            if (!store.update) {
-              throw new Error("missing native atomic update");
-            }
-            return store.update(
-              key,
-              (current) => {
-                observed = true;
-                return update(current);
-              },
-              updateOptions,
-            );
-          },
-        };
-      });
-      const saved = persistedBinding();
-      const store = createPluginStateSyncKeyedStoreForTests<ThreadBindingRecord>("discord", {
-        namespace: "thread-bindings",
-        maxEntries: 10_000,
-      });
-      store.register(saved.key, saved.value);
-      const manager = await persistentManager();
-      const database = openOpenClawStateDatabase();
-      try {
-        database.db.exec("PRAGMA query_only = ON");
-        getSessionBindingService().touch(saved.key, 200, {
-          channel: "discord",
-          accountId: "work",
-        });
-        expect(observed).toBe(false);
-        expect(manager.getByThreadId("thread-1")?.lastActivityAt).toBe(200);
-      } finally {
-        database.db.exec("PRAGMA query_only = OFF");
-        await manager.stop();
-      }
-      expect(manager.getByThreadId("thread-1")?.targetSessionKey).toBe(
-        saved.value.targetSessionKey,
-      );
-      expect(store.lookup(saved.key)?.targetSessionKey).toBe(
-        manager.getByThreadId("thread-1")?.targetSessionKey,
-      );
-      await resetThreadBindingsForTests();
-      resetPluginStateStoreForTests();
-    });
-  });
-
-  it("keeps generic synchronous lifecycle setters synchronous", async () => {
-    stores.entries.mockResolvedValueOnce([persistedBinding()]);
-    const manager = await persistentManager();
-    let saved = persistedBinding().value;
-    stores.syncUpdate.mockImplementation((_key, update) => {
-      saved = update(saved) ?? saved;
-      return true;
-    });
-    const support = discordPlugin.conversationBindings!;
-    const idle = support.setIdleTimeoutBySessionKey!({
-      targetSessionKey: saved.targetSessionKey,
-      accountId: "work",
-      idleTimeoutMs: 500,
-    });
-    expect(Array.isArray(idle)).toBe(true);
-    expect(saved.idleTimeoutMs).toBe(500);
-    const age = support.setMaxAgeBySessionKey!({
-      targetSessionKey: saved.targetSessionKey,
-      accountId: "work",
-      maxAgeMs: 1000,
-    });
-    expect(Array.isArray(age)).toBe(true);
-    expect(saved.maxAgeMs).toBe(1000);
-    expect(stores.register).not.toHaveBeenCalled();
-    await manager.stop();
   });
 });

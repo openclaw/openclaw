@@ -51,33 +51,25 @@ export type ChannelConversationBindingSupport = {
       threadId?: string | number;
     };
   }) => boolean;
-  /** @deprecated Use setIdleTimeoutBySessionKeyAsync. Retained through the next Plugin SDK major. */
-  setIdleTimeoutBySessionKey?: (params: {
+  setIdleTimeoutBySessionKeyAsync?: (params: {
     targetSessionKey: string;
     accountId?: string | null;
     idleTimeoutMs: number;
-  }) => Array<{
-    boundAt: number;
-    lastActivityAt: number;
-    idleTimeoutMs?: number;
-    maxAgeMs?: number;
-  }>;
-  /** @deprecated Use setMaxAgeBySessionKeyAsync. Retained through the next Plugin SDK major. */
-  setMaxAgeBySessionKey?: (params: {
+  }) => Promise<
+    Array<{
+      boundAt: number;
+      lastActivityAt: number;
+      idleTimeoutMs?: number;
+      maxAgeMs?: number;
+    }>
+  >;
+  setMaxAgeBySessionKeyAsync?: (params: {
     targetSessionKey: string;
     accountId?: string | null;
     maxAgeMs: number;
-  }) => ReturnType<NonNullable<ChannelConversationBindingSupport["setIdleTimeoutBySessionKey"]>>;
-  setIdleTimeoutBySessionKeyAsync?: (
-    params: Parameters<
-      NonNullable<ChannelConversationBindingSupport["setIdleTimeoutBySessionKey"]>
-    >[0],
-  ) => Promise<
-    ReturnType<NonNullable<ChannelConversationBindingSupport["setIdleTimeoutBySessionKey"]>>
+  }) => ReturnType<
+    NonNullable<ChannelConversationBindingSupport["setIdleTimeoutBySessionKeyAsync"]>
   >;
-  setMaxAgeBySessionKeyAsync?: (
-    params: Parameters<NonNullable<ChannelConversationBindingSupport["setMaxAgeBySessionKey"]>>[0],
-  ) => Promise<ReturnType<NonNullable<ChannelConversationBindingSupport["setMaxAgeBySessionKey"]>>>;
   createManager?: (params: { cfg: OpenClawConfig; accountId?: string | null }) =>
     | {
         stop: () => void | Promise<void>;

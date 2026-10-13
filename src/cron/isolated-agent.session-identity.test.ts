@@ -78,11 +78,11 @@ function mockEmbeddedTranscriptWrite(
     const sessionKey = typeof input.sessionKey === "string" ? input.sessionKey : "";
     const workspaceDir =
       typeof input.workspaceDir === "string" ? input.workspaceDir : process.cwd();
-    const manager = SessionManager.open(
+    const manager = await SessionManager.openAsync(
       { agentId, sessionId, sessionKey, storePath },
       workspaceDir,
     );
-    manager.appendMessage({ role: "user", content, timestamp: Date.now() });
+    await manager.appendMessageAsync({ role: "user", content, timestamp: Date.now() });
     return {
       payloads: [{ text: "ok" }],
       meta: {

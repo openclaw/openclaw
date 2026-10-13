@@ -16,7 +16,6 @@ import { prepareTtsPreferences } from "./tts-preferences.js";
 import {
   buildTtsSystemPromptHint,
   resolveTtsConfig,
-  resolveTtsPrefsPath,
   resolveTtsPrefsPathAsync,
   setTtsMachinePrefsPathResolver,
 } from "./tts-settings.js";
@@ -57,7 +56,9 @@ it("carries the worker-read path through delivery and prompt rendering without c
     const input = { cfg, preparedTtsPreferences };
     expect(shouldAttemptTtsPayload(input)).toBe(true);
     expect(shouldCleanTtsDirectiveText(input)).toBe(true);
-    expect(resolveTtsPrefsPath(resolveTtsConfig(cfg), preparedTtsPreferences)).toBe(firstPath);
+    expect(await resolveTtsPrefsPathAsync(resolveTtsConfig(cfg), preparedTtsPreferences)).toBe(
+      firstPath,
+    );
     expect(await resolveTtsPrefsPathAsync(resolveTtsConfig(cfg))).toBe(firstPath);
     expect(buildTtsSystemPromptHint(cfg, "main", { preparedTtsPreferences })).toContain(
       "Keep spoken text ≤321 chars",

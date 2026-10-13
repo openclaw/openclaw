@@ -19,7 +19,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { repairAcpSessionMetaKeysForDoctor } from "./session-meta-doctor.js";
 import { buildAcpDatabaseSessionKey } from "./session-meta-keys.js";
 import { readAcpSessionMetaForEntry } from "./session-meta-readonly.js";
-import { readAcpSessionEntry, writeAcpSessionMetaForMigration } from "./session-meta.js";
+import { readAcpSessionEntryAsync, writeAcpSessionMetaForMigration } from "./session-meta.js";
 
 const cfg = { agents: { ownership: "explicit" as const, entries: { main: {} } } };
 const key = "agent:harness:acp:key-repair";
@@ -275,7 +275,9 @@ it.each([
         },
       ]);
       expect(readAcpSessionMetaForEntry(input)).toEqual(meta);
-      expect(readAcpSessionEntry({ cfg, env, agentId: "main", sessionKey })?.acp).toEqual(meta);
+      expect(
+        (await readAcpSessionEntryAsync({ cfg, env, agentId: "main", sessionKey }))?.acp,
+      ).toEqual(meta);
       expect(
         await repairAcpSessionMetaKeysForDoctor({
           cfg,

@@ -546,37 +546,3 @@ export const setTelegramThreadBindingIdleTimeoutBySessionKeyAsync =
   createAsyncLifecycleSetter("idleTimeoutMs");
 export const setTelegramThreadBindingMaxAgeBySessionKeyAsync =
   createAsyncLifecycleSetter("maxAgeMs");
-
-function createSyncLifecycleSetter<Field extends TelegramThreadBindingLifecycleField>(
-  field: Field,
-) {
-  return (params: TelegramThreadBindingLifecycleParams<Field>): TelegramThreadBindingRecord[] => {
-    const value = resolveNonNegativeIntegerOption(params[field], 0);
-    const prepared = { ...params };
-    const manager = getTelegramThreadBindingManager(prepared.accountId);
-    if (!manager) {
-      return [];
-    }
-    const targetSessionKey = prepared.targetSessionKey.trim();
-    const now = Date.now();
-    const updated: TelegramThreadBindingRecord[] = [];
-    for (const entry of manager.listBySessionKey(targetSessionKey)) {
-      const next = manager.updateConversationSync(entry.conversationId, (current) =>
-        current.targetSessionKey === targetSessionKey
-          ? { ...current, [field]: value, lastActivityAt: now }
-          : undefined,
-      );
-      if (next?.targetSessionKey === targetSessionKey) {
-        updated.push(next);
-      }
-    }
-    return updated;
-  };
-}
-
-/** @deprecated Use setTelegramThreadBindingIdleTimeoutBySessionKeyAsync; removed in the next Plugin SDK major. */
-export const setTelegramThreadBindingIdleTimeoutBySessionKey =
-  createSyncLifecycleSetter("idleTimeoutMs");
-
-/** @deprecated Use setTelegramThreadBindingMaxAgeBySessionKeyAsync; removed in the next Plugin SDK major. */
-export const setTelegramThreadBindingMaxAgeBySessionKey = createSyncLifecycleSetter("maxAgeMs");

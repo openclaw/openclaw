@@ -20,14 +20,14 @@ export async function seedMemoryAccountingTranscript(
   { customTail, newUser }: { customTail: number; newUser: boolean },
 ): Promise<void> {
   await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
-  const transcript = SessionManager.open(scope, workspaceDir);
+  const transcript = await SessionManager.openAsync(scope, workspaceDir);
   const user = {
     role: "user" as const,
     content: "Research this",
     timestamp: 1,
     __openclaw: { senderIsOwner: true },
   };
-  transcript.appendMessage(user);
+  await transcript.appendMessageAsync(user);
   const networkResult = {
     role: "toolResult" as const,
     toolCallId: "network-read",
@@ -37,7 +37,7 @@ export async function seedMemoryAccountingTranscript(
     timestamp: 2,
     __openclaw: { resultContentSource: "network" as const },
   };
-  transcript.appendMessage(networkResult);
+  await transcript.appendMessageAsync(networkResult);
   const answer = {
     ...makeAssistantMessageFixture({
       content: [{ type: "text", text: "network-derived answer" }],
@@ -51,13 +51,13 @@ export async function seedMemoryAccountingTranscript(
       totalTokens: 78_100,
     },
   };
-  transcript.appendMessage(answer);
+  await transcript.appendMessageAsync(answer);
   if (newUser) {
-    transcript.appendMessage({ ...user, content: "Save my own notes", timestamp: 3 });
+    await transcript.appendMessageAsync({ ...user, content: "Save my own notes", timestamp: 3 });
   }
   // The bounded case loses the original turn marker across this tail.
   for (let index = 0; index < customTail; index += 1) {
-    transcript.appendCustomEntry("fixture-tail", { index });
+    await transcript.appendCustomEntryAsync("fixture-tail", { index });
   }
 }
 

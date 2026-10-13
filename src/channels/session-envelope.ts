@@ -5,7 +5,7 @@ import { readSessionUpdatedAtCore } from "../config/sessions/session-accessor.js
 import { readSessionUpdatedAtInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
-/** @deprecated Use resolveInboundSessionEnvelopeContextAsync. Retained until the next Plugin SDK major. */
+/** @deprecated Use resolveInboundSessionEnvelopeContextAsync. Retained for a compatibility period after stable deprecation. */
 export function resolveInboundSessionEnvelopeContext(params: {
   cfg: OpenClawConfig;
   agentId: string;

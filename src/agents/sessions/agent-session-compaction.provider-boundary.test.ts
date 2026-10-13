@@ -80,12 +80,20 @@ describe("AgentSession compaction provider boundary", () => {
           ].join("\n\n")
         : "Core summary without required safeguard headings";
       const sessionManager = SessionManager.inMemory();
-      sessionManager.appendMessage({ role: "user", content: "old prompt", timestamp: 1 });
-      sessionManager.appendMessage({
+      await sessionManager.appendMessageAsync({
+        role: "user",
+        content: "old prompt",
+        timestamp: 1,
+      });
+      await sessionManager.appendMessageAsync({
         ...createAssistant(model, [{ type: "text", text: "old answer" }]),
         timestamp: 2,
       });
-      sessionManager.appendMessage({ role: "user", content: "latest prompt", timestamp: 3 });
+      await sessionManager.appendMessageAsync({
+        role: "user",
+        content: "latest prompt",
+        timestamp: 3,
+      });
       const providerStarted = createDeferred();
       const releaseProvider = createDeferred();
       const summarize = vi.fn<CompactionProvider["summarize"]>(async () => {

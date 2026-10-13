@@ -35,13 +35,13 @@ async function seedTranscript(state: OpenClawTestState) {
     storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
   };
   await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-  const source = SessionManager.open(target, "/stored");
-  source.appendMessage(makeUserMessage("first complete message", 1));
+  const source = await SessionManager.openAsync(target, "/stored");
+  await source.appendMessageAsync(makeUserMessage("first complete message", 1));
   // Three-byte characters cross the transport's binary frame boundaries.
   const text = "漢".repeat(400_000);
-  source.appendMessage(makeUserMessage(text, 2));
-  source.appendMessage(makeUserMessage(text, 3));
-  source.appendMessage(makeUserMessage("last complete message", 4));
+  await source.appendMessageAsync(makeUserMessage(text, 2));
+  await source.appendMessageAsync(makeUserMessage(text, 3));
+  await source.appendMessageAsync(makeUserMessage("last complete message", 4));
   await waitForSessionTranscriptProjection(target);
   return { target, entries: source.getPersistedEntries() };
 }
@@ -113,7 +113,9 @@ it("rejects a persisted quarantine through the history worker without retargetin
       storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
     };
     await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-    SessionManager.open(target).appendMessage(makeUserMessage("quarantined history", 1));
+    await (
+      await SessionManager.openAsync(target)
+    ).appendMessageAsync(makeUserMessage("quarantined history", 1));
     await waitForSessionTranscriptProjection(target);
     await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
     const reason = "synthetic persisted hydration quarantine";
@@ -126,7 +128,7 @@ it("rejects a persisted quarantine through the history worker without retargetin
       }),
     ).toBe(true);
     const manager = SessionManager.inMemory("/retained");
-    manager.appendMessage(makeUserMessage("keep the original view", 2));
+    await manager.appendMessageAsync(makeUserMessage("keep the original view", 2));
     const before = manager.getPersistedEntries();
     const priorTarget = manager.getSessionTarget();
     // The closed database makes this a cold read, which runs on the target-discovery lane.
@@ -159,7 +161,7 @@ it("rejects a persisted quarantine through the history worker without retargetin
 });
 
 it.each(["UTF-16le", "UTF-16be"] as const)(
-  "hydrates canonical %s transcripts with the same Unicode content as the synchronous reader",
+  "hydrates canonical %s transcripts with the same Unicode content as a complete transcript read",
   async (encoding) => {
     await withOpenClawTestState({ label: "session-hydration-stream-encoding" }, async (state) => {
       const target = {
@@ -183,11 +185,11 @@ it.each(["UTF-16le", "UTF-16be"] as const)(
         database.close();
       }
       await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-      const source = SessionManager.open(target, "/stored");
+      const source = await SessionManager.openAsync(target, "/stored");
       const message = makeUserMessage("雪 🦞 café العربية \uFEFF preserved", 1);
-      source.appendMessage(message);
+      await source.appendMessageAsync(message);
       await waitForSessionTranscriptProjection(target);
-      const expected = SessionManager.open(target).getPersistedEntries();
+      const expected = (await SessionManager.openAsync(target)).getPersistedEntries();
       const hydrated = await SessionManager.openAsync(target);
       expect(hydrated.getPersistedEntries()).toEqual(expected);
       expect(hydrated.buildSessionContext().messages).toEqual([message]);
@@ -204,7 +206,7 @@ it("hydrates events below, on, and above byte-slice boundaries without dropping 
       storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
     };
     await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-    const entries = SessionManager.open(target).getPersistedEntries();
+    const entries = (await SessionManager.openAsync(target)).getPersistedEntries();
     let parentId: string | null = null;
     for (const size of [65_535, 65_536, 65_537, 131_072]) {
       const event: SessionMessageEntry = {
@@ -235,7 +237,7 @@ it("hydrates one complete UTF-8 snapshot while a writer replaces rows between ch
     try {
       await gate.wait(pending);
       const replacement = SessionManager.inMemory("/replacement");
-      replacement.appendMessage(makeUserMessage("replacement history", 5));
+      await replacement.appendMessageAsync(makeUserMessage("replacement history", 5));
       const replacementEntries = replacement
         .getPersistedEntries()
         .map((entry) =>
@@ -281,10 +283,10 @@ it.each([
            )`,
         )
         .run(corrupt, Buffer.byteLength(corrupt), target.sessionId, target.sessionId);
-      expect(() => SessionManager.open(target)).toThrow(SyntaxError);
+      await expect(SessionManager.openAsync(target)).rejects.toThrow(SyntaxError);
     }
     const manager = SessionManager.inMemory("/retained");
-    manager.appendMessage(makeUserMessage("keep the original view", 10));
+    await manager.appendMessageAsync(makeUserMessage("keep the original view", 10));
     const before = manager.getPersistedEntries();
     const controller = new AbortController();
     const reason = new Error("cancelled streaming hydration");

@@ -1,14 +1,18 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
 import { SessionManager } from "../sessions/session-manager.js";
 import { rewriteTranscriptEntriesInSessionManager } from "./transcript-rewrite.js";
 
 it("preserves labels targeting asynchronously replayed model and thinking entries", async () => {
   const manager = SessionManager.inMemory();
-  const first = manager.appendMessage({ role: "user", content: "original", timestamp: 1 });
+  const first = expectDefined(
+    await manager.appendMessageAsync({ role: "user", content: "original", timestamp: 1 }),
+    "original fixture message ID",
+  );
   const modelEntryId = await manager.appendModelChange("openai", "test-model");
-  manager.appendLabelChange(modelEntryId, "model selection");
+  await manager.appendLabelChangeAsync(modelEntryId, "model selection");
   const thinkingEntryId = await manager.appendThinkingLevelChange("high");
-  manager.appendLabelChange(thinkingEntryId, "thinking selection");
+  await manager.appendLabelChangeAsync(thinkingEntryId, "thinking selection");
 
   const rewritten = await rewriteTranscriptEntriesInSessionManager({
     sessionManager: manager,

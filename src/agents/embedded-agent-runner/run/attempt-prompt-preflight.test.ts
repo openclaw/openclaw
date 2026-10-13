@@ -57,9 +57,11 @@ function makeToolResultMessage(text: string): AgentMessage {
   } as AgentMessage;
 }
 
-function createSessionManagerWithMessage(message: AgentMessage): SessionManager {
+async function createSessionManagerWithMessage(message: AgentMessage): Promise<SessionManager> {
   const sessionManager = SessionManager.inMemory();
-  sessionManager.appendMessage(message as Parameters<typeof sessionManager.appendMessage>[0]);
+  await sessionManager.appendMessageAsync(
+    message as Parameters<typeof sessionManager.appendMessageAsync>[0],
+  );
   return sessionManager;
 }
 
@@ -233,7 +235,7 @@ describe("attempt prompt preflight", () => {
 
   it("admits a retry without changing history when persisted truncation cannot help", async () => {
     const toolResult = makeToolResultMessage("already capped tool output");
-    const sessionManager = createSessionManagerWithMessage(toolResult);
+    const sessionManager = await createSessionManagerWithMessage(toolResult);
     const messagesBefore = sessionManager.buildSessionContext().messages;
     const replaceSessionMessages = vi.fn();
     const outcome = await handleEmbeddedAttemptMidTurnPrecheck({
@@ -275,7 +277,7 @@ describe("attempt prompt preflight", () => {
   });
 
   it("handles successful mid-turn tool-result truncation without a prompt error", async () => {
-    const sessionManager = createSessionManagerWithMessage(
+    const sessionManager = await createSessionManagerWithMessage(
       makeToolResultMessage("large tool output ".repeat(5_000)),
     );
     const replaceSessionMessages = vi.fn();
@@ -348,7 +350,7 @@ describe("attempt prompt preflight", () => {
       prompt: "hello",
     });
     const contextTokenBudget = estimatedPromptTokens - 200 + reserveTokens;
-    const sessionManager = createSessionManagerWithMessage(toolResult);
+    const sessionManager = await createSessionManagerWithMessage(toolResult);
 
     const result = await prepareEmbeddedAttemptPromptPreflight({
       attempt,

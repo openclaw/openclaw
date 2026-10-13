@@ -118,14 +118,14 @@ it("answers through a timed-out compaction summary and does not re-run it next t
         totalTokensFresh: true,
         totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
       });
-      const seed = SessionManager.open(scope, state.workspaceDir);
+      const seed = await SessionManager.openAsync(scope, state.workspaceDir);
       for (let turn = 0; turn < 12; turn += 1) {
-        seed.appendMessage({
+        await seed.appendMessageAsync({
           role: "user",
           content: `Earlier question ${turn}. ${"Background detail. ".repeat(250)}`,
           timestamp: turn + 1,
         });
-        seed.appendMessage(
+        await seed.appendMessageAsync(
           makeAssistantMessageFixture({
             provider: "test-provider",
             api: "openai-completions",

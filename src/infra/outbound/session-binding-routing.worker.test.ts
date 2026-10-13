@@ -13,7 +13,7 @@ import {
   resolveRuntimeConversationBindingRouteAsync,
 } from "../../plugin-sdk/conversation-binding-runtime.js";
 import {
-  createAccountScopedConversationBindingManager,
+  createAccountScopedConversationBindingManagerV2,
   resetAccountScopedConversationBindingsForTests,
 } from "../../plugin-sdk/thread-bindings-runtime.js";
 import {
@@ -58,7 +58,7 @@ describe("awaited conversation routing storage ownership", () => {
         matchedBy: "default",
       };
       const observer = observeParentSqlite();
-      let manager: ReturnType<typeof createAccountScopedConversationBindingManager> | undefined;
+      let manager: ReturnType<typeof createAccountScopedConversationBindingManagerV2> | undefined;
       try {
         const calibration = openNodeSqliteDatabase(":memory:");
         calibration.exec("CREATE TABLE calibration (value INTEGER)");
@@ -73,7 +73,7 @@ describe("awaited conversation routing storage ownership", () => {
         }
         observer.reset();
         if (kind === "account") {
-          manager = createAccountScopedConversationBindingManager({
+          manager = createAccountScopedConversationBindingManagerV2({
             channel,
             accountId: "default",
             cfg: { session: { threadBindings: { idleHours: 1, maxAgeHours: 0 } } },
@@ -141,7 +141,7 @@ it.each(
     ]);
   const manager =
     kind === "account"
-      ? createAccountScopedConversationBindingManager({
+      ? createAccountScopedConversationBindingManagerV2({
           channel,
           accountId: conversation.accountId,
           cfg: { session: { threadBindings: { idleHours: 1, maxAgeHours: 0 } } },

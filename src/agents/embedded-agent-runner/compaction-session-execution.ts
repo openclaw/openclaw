@@ -153,7 +153,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
       missingToolResultText: responsesApi ? "aborted" : undefined,
       allowedToolNames,
-      withCompactionPersistence: params.transcriptByteCompactionPersistence,
       withCompactionPersistenceAsync: params.transcriptByteCompactionPersistenceAsync,
     });
     compactionSessionManager = sessionManager;

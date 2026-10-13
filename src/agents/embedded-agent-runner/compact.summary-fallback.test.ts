@@ -1,6 +1,7 @@
 import { once } from "node:events";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -93,41 +94,50 @@ beforeEach(() => {
 const FILLER = "older context ".repeat(200);
 
 /** Appends user -> assistant tool call -> tool result turns and returns their entry ids. */
-function appendToolTurns(fixture: Fixture, first: number, count: number): string[] {
-  const manager = SessionManager.open(fixture.target, fixture.state.workspaceDir);
+async function appendToolTurns(fixture: Fixture, first: number, count: number): Promise<string[]> {
+  const manager = await SessionManager.openAsync(fixture.target, fixture.state.workspaceDir);
   const ids: string[] = [];
   for (let turn = first; turn < first + count; turn += 1) {
     ids.push(
-      manager.appendMessage({
-        role: "user",
-        content: `ask ${turn}: ${FILLER}`,
-        timestamp: turn * 10 + 1,
-      }),
-      manager.appendMessage({
-        role: "assistant",
-        content: [{ type: "toolCall", id: `call-${turn}`, name: "read", arguments: {} }],
-        api: "openai-completions",
-        provider: "fixture",
-        model: "model",
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "toolUse",
-        timestamp: turn * 10 + 2,
-      }),
-      manager.appendMessage({
-        role: "toolResult",
-        toolCallId: `call-${turn}`,
-        toolName: "read",
-        content: [{ type: "text", text: `result ${turn}: ${FILLER}` }],
-        isError: false,
-        timestamp: turn * 10 + 3,
-      }),
+      expectDefined(
+        await manager.appendMessageAsync({
+          role: "user",
+          content: `ask ${turn}: ${FILLER}`,
+          timestamp: turn * 10 + 1,
+        }),
+        "user fixture message ID",
+      ),
+      expectDefined(
+        await manager.appendMessageAsync({
+          role: "assistant",
+          content: [{ type: "toolCall", id: `call-${turn}`, name: "read", arguments: {} }],
+          api: "openai-completions",
+          provider: "fixture",
+          model: "model",
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "toolUse",
+          timestamp: turn * 10 + 2,
+        }),
+        "assistant fixture message ID",
+      ),
+      expectDefined(
+        await manager.appendMessageAsync({
+          role: "toolResult",
+          toolCallId: `call-${turn}`,
+          toolName: "read",
+          content: [{ type: "text", text: `result ${turn}: ${FILLER}` }],
+          isError: false,
+          timestamp: turn * 10 + 3,
+        }),
+        "tool result fixture message ID",
+      ),
     );
   }
   return ids;
@@ -216,20 +226,20 @@ function compactSession(
   );
 }
 
-function openSession(fixture: Fixture) {
-  return SessionManager.open(fixture.target, fixture.state.workspaceDir);
+async function openSession(fixture: Fixture) {
+  return await SessionManager.openAsync(fixture.target, fixture.state.workspaceDir);
 }
 
 describe("automatic compaction summary failure", () => {
   it("commits a deterministic reduction after a bodyless 408 summary timeout", async () => {
     await withSession(async (fixture) => {
-      const seeded = appendToolTurns(fixture, 0, 8);
+      const seeded = await appendToolTurns(fixture, 0, 8);
       summaryMode = "bare-408";
       const result = await compactSession(fixture);
 
       expect(result).toMatchObject({ ok: true, compacted: true });
       expect(summaryRequests.length).toBeGreaterThan(0);
-      const branch = openSession(fixture).getBranch();
+      const branch = (await openSession(fixture)).getBranch();
       const compactions = branch.filter((entry) => entry.type === "compaction");
       expect(compactions).toHaveLength(1);
       expect(compactions[0]?.summary).toContain("removed without a summary");
@@ -240,21 +250,20 @@ describe("automatic compaction summary failure", () => {
       const firstKept = seeded.indexOf(compactions[0]!.firstKeptEntryId);
       expect(firstKept).toBeGreaterThan(0);
       expect(firstKept % 3).not.toBe(2);
-      const context = openSession(fixture).buildSessionContext().messages;
+      const context = (await openSession(fixture)).buildSessionContext().messages;
       expect(context[0]?.role).toBe("compactionSummary");
       expect(context.slice(1)).toHaveLength(seeded.length - firstKept);
       expect(context.at(-1)).toMatchObject({ role: "toolResult", toolCallId: "call-7" });
 
       // A later turn's model compaction still works and carries the fallback summary forward.
-      appendToolTurns(fixture, 8, 4);
+      await appendToolTurns(fixture, 8, 4);
       summaryMode = "ok";
       summaryRequests = [];
       expect(await compactSession(fixture)).toMatchObject({ ok: true, compacted: true });
       expect(summaryRequests.join("\n")).toContain("removed without a summary");
       expect(
-        openSession(fixture)
-          .getBranch()
-          .findLast((entry) => entry.type === "compaction")?.summary,
+        (await openSession(fixture)).getBranch().findLast((entry) => entry.type === "compaction")
+          ?.summary,
       ).toContain("Model summary after recovery.");
     });
   });
@@ -262,7 +271,7 @@ describe("automatic compaction summary failure", () => {
   it("commits the reduction without trying a configured fallback model", async () => {
     await withSession(
       async (fixture) => {
-        appendToolTurns(fixture, 0, 8);
+        await appendToolTurns(fixture, 0, 8);
         summaryMode = "provider-timeout";
 
         expect(await compactSession(fixture)).toMatchObject({ ok: true, compacted: true });
@@ -271,7 +280,7 @@ describe("automatic compaction summary failure", () => {
           false,
         );
         expect(
-          openSession(fixture)
+          (await openSession(fixture))
             .getBranch()
             .filter((entry) => entry.type === "compaction")
             .map((entry) => entry.summary),
@@ -284,13 +293,13 @@ describe("automatic compaction summary failure", () => {
   it("commits the reduction after a provider-returned timeout in safeguard mode", async () => {
     await withSession(
       async (fixture) => {
-        appendToolTurns(fixture, 0, 8);
+        await appendToolTurns(fixture, 0, 8);
         summaryMode = "bare-408";
 
         expect(await compactSession(fixture)).toMatchObject({ ok: true, compacted: true });
         expect(summaryRequests.length).toBeGreaterThan(0);
         expect(
-          openSession(fixture)
+          (await openSession(fixture))
             .getBranch()
             .filter((entry) => entry.type === "compaction")
             .map((entry) => entry.summary),
@@ -307,7 +316,7 @@ describe("automatic compaction summary failure", () => {
     { failure: "a fast 500 summary error", mode: "server-error", trigger: "budget", stop: false },
   ] as const)("keeps $failure as a failed compaction", async ({ mode, trigger, stop }) => {
     await withSession(async (fixture) => {
-      appendToolTurns(fixture, 0, 8);
+      await appendToolTurns(fixture, 0, 8);
       summaryMode = mode;
       const caller = new AbortController();
       const pending = compactSession(fixture, { trigger, abortSignal: caller.signal });
@@ -319,9 +328,7 @@ describe("automatic compaction summary failure", () => {
       expect(await pending).toMatchObject({ ok: false, compacted: false });
       expect(summaryRequests.length).toBeGreaterThan(0);
       expect(
-        openSession(fixture)
-          .getBranch()
-          .some((entry) => entry.type === "compaction"),
+        (await openSession(fixture)).getBranch().some((entry) => entry.type === "compaction"),
       ).toBe(false);
     });
   });

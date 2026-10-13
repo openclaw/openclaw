@@ -70,10 +70,12 @@ function visible(messages: readonly unknown[]) {
   });
 }
 
-function seedPrevious() {
-  const manager = SessionManager.open(sessionTarget);
-  manager.appendMessage(makeAgentUserMessage({ content: "previous request", timestamp: 1 }));
-  const previousLeafId = manager.appendMessage(
+async function seedPrevious() {
+  const manager = await SessionManager.openAsync(sessionTarget);
+  await manager.appendMessageAsync(
+    makeAgentUserMessage({ content: "previous request", timestamp: 1 }),
+  );
+  const previousLeafId = await manager.appendMessageAsync(
     makeAgentAssistantMessage({
       content: [{ type: "text", text: "previous answer" }],
       timestamp: 2,
@@ -273,20 +275,26 @@ describe("worker detached model-context branch parity", () => {
   it.each([false, true])(
     "waits for context readiness and preserves the pre-persisted input prefix (side append=%s)",
     async (sideAppend) => {
-      const { manager, previousLeafId } = seedPrevious();
-      const currentId = manager.appendMessage(
+      const { manager, previousLeafId } = await seedPrevious();
+      const currentId = await manager.appendMessageAsync(
         makeAgentUserMessage({
           content: "current request",
           timestamp: 3,
         }),
       );
+      if (!currentId || !previousLeafId) {
+        throw new Error("Expected the current and previous fixture message IDs");
+      }
       let sideId: string | undefined;
       if (sideAppend) {
-        manager.branch(previousLeafId);
-        sideId = manager.appendMessage(
+        await manager.branchAsync(previousLeafId);
+        sideId = await manager.appendMessageAsync(
           makeAgentUserMessage({ content: "inactive side input", timestamp: 4 }),
         );
-        manager.appendLeafControl({
+        if (!sideId) {
+          throw new Error("Expected the side branch fixture message ID");
+        }
+        await manager.appendLeafControlAsync({
           targetId: currentId,
           appendParentId: sideId,
           appendMode: "side",
@@ -312,7 +320,7 @@ describe("worker detached model-context branch parity", () => {
         expect(result.launch).toEqual({ baseLeafId: currentId, history: priorAtModelBoundary });
         expect(result.outcome).toEqual({ kind: "rejected", error: result.deliberateStop });
         if (sideAppend) {
-          const after = SessionManager.open(sessionTarget);
+          const after = await SessionManager.openAsync(sessionTarget);
           expect(after.getLeafId()).toBe(currentId);
           expect(after.getAppendParentId()).toBe(sideId);
         }
@@ -326,7 +334,7 @@ describe("worker detached model-context branch parity", () => {
     "joins recorder admission before reading its prefix (%s)",
     async (state) => {
       if (state === "in-flight") {
-        seedPrevious();
+        await seedPrevious();
       } else {
         expect(readWorkerTurnTranscriptStorageRows()).toEqual([]);
       }
@@ -344,9 +352,9 @@ describe("worker detached model-context branch parity", () => {
         history: state === "in-flight" ? priorAtModelBoundary : [],
       });
       if (state === "first transcript") {
-        expect(visible(SessionManager.open(sessionTarget).buildSessionContext().messages)).toEqual([
-          { role: "user", text: "current request" },
-        ]);
+        expect(
+          visible((await SessionManager.openAsync(sessionTarget)).buildSessionContext().messages),
+        ).toEqual([{ role: "user", text: "current request" }]);
       }
     },
   );
@@ -357,8 +365,10 @@ describe("worker detached model-context branch parity", () => {
   ] as const)(
     "uses the recorder's admitted prefix with $appendAt activity (excluded input: $excludeFromContext)",
     async ({ excludeFromContext, appendAt }) => {
-      const { manager } = seedPrevious();
-      manager.appendMessage(makeAgentUserMessage({ content: "earlier unanswered input" }));
+      const { manager } = await seedPrevious();
+      await manager.appendMessageAsync(
+        makeAgentUserMessage({ content: "earlier unanswered input" }),
+      );
       const inputRecorder = createUserTurnTranscriptRecorder({
         target: { ...sessionTarget, sessionEntry: undefined },
         input: {
@@ -372,11 +382,11 @@ describe("worker detached model-context branch parity", () => {
       if (!receipt) {
         throw new Error("expected the canonical user admission");
       }
-      const writer = SessionManager.open(sessionTarget);
+      const writer = await SessionManager.openAsync(sessionTarget);
       const originalRows = readWorkerTurnTranscriptStorageRows();
       let appendedRows: ReturnType<typeof readWorkerTurnTranscriptStorageRows> | undefined;
       const appendLaterActivity = async () => {
-        writer.appendMessage(
+        await writer.appendMessageAsync(
           makeAgentAssistantMessage({ content: [{ type: "text", text: "later activity" }] }),
         );
         appendedRows = readWorkerTurnTranscriptStorageRows();
@@ -413,7 +423,7 @@ describe("worker detached model-context branch parity", () => {
   it.each(["current", "cancel"] as const)(
     "joins committed runtime persistence with %s authority without replaying its input",
     async (change) => {
-      const { manager } = seedPrevious();
+      const { manager } = await seedPrevious();
       const beforeRows = readWorkerTurnTranscriptStorageRows();
       const inputRecorder = recorder();
       const abort = new AbortController();
@@ -421,7 +431,7 @@ describe("worker detached model-context branch parity", () => {
         text: "current request",
         idempotencyKey: "synthetic-current-user",
       });
-      const persisted = manager.appendMessageWithTranscriptAnchor(message);
+      const persisted = await manager.appendMessageWithTranscriptAnchorAsync(message);
       if (!persisted.anchor) {
         throw new Error("expected canonical runtime anchor");
       }
@@ -465,10 +475,9 @@ describe("worker detached model-context branch parity", () => {
           expect(result.tunnelCalls).toBe(0);
           expect(result.outcome).toMatchObject({ kind: "rejected", error: expect.any(Error) });
         }
-        expect(visible(SessionManager.open(sessionTarget).buildSessionContext().messages)).toEqual([
-          ...prior,
-          { role: "user", text: "current request" },
-        ]);
+        expect(
+          visible((await SessionManager.openAsync(sessionTarget)).buildSessionContext().messages),
+        ).toEqual([...prior, { role: "user", text: "current request" }]);
         expect(readWorkerTurnTranscriptStorageRows().slice(0, beforeRows.length)).toEqual(
           beforeRows,
         );
@@ -482,7 +491,7 @@ describe("worker detached model-context branch parity", () => {
   );
 
   it("rejects a missing canonical user admission", async () => {
-    seedPrevious();
+    await seedPrevious();
     const inputRecorder = recorder();
     inputRecorder.markRuntimePersisted(buildPersistedUserTurnMessage({ text: "current request" }));
     const beforeRows = readWorkerTurnTranscriptStorageRows();
@@ -501,7 +510,7 @@ describe("worker detached model-context branch parity", () => {
   it("retains the initial-setup writer fence across the asynchronous context read", async ({
     signal,
   }) => {
-    seedPrevious();
+    await seedPrevious();
     const paused = createDeferredCore();
     const finishSetup = createDeferredCore();
     const dispatch = coordinateWorkerPlacementDispatch(
@@ -595,7 +604,7 @@ describe("worker detached model-context branch parity", () => {
   it.each(["cancel", "claim", "caller", "session", "blocked"] as const)(
     "refuses new effects after %s changes during the context read",
     async (change) => {
-      seedPrevious();
+      await seedPrevious();
       const inputRecorder = recorder();
       const abort = new AbortController();
       let callerCurrent = true;

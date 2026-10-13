@@ -63,9 +63,9 @@ export async function createStreamCustodyFixture(
     storePath: path.join(root, "agents", "main", "sessions", "sessions.json"),
   };
   await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: Date.now() });
-  const manager = SessionManager.open(target, root);
-  manager.appendMessage({ role: "user", content: "Synthetic history", timestamp: 1 });
-  manager.appendMessage(
+  const manager = await SessionManager.openAsync(target, root);
+  await manager.appendMessageAsync({ role: "user", content: "Synthetic history", timestamp: 1 });
+  await manager.appendMessageAsync(
     options.anthropicCompaction?.owner ?? {
       ...createAssistant(model, [
         ...(options.thinkingRecovery

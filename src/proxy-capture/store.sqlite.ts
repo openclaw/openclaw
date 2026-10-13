@@ -291,12 +291,7 @@ type DebugProxyCaptureStoreConstructor = {
 export const DebugProxyCaptureStore =
   DebugProxyCaptureStoreImpl as unknown as DebugProxyCaptureStoreConstructor;
 
-type CachedStoreEntry = {
-  store: DebugProxyCaptureStoreImpl;
-  leases: number;
-};
-
-const cachedStores = new Map<string, CachedStoreEntry>();
+const cachedStores = new Map<string, DebugProxyCaptureStoreImpl>();
 let unregisterExitClose: (() => void) | null = null;
 
 function resolveDebugProxyCaptureStoreKey(
@@ -314,11 +309,11 @@ function getDebugProxyCaptureStoreImpl(
 ): DebugProxyCaptureStoreImpl {
   const key = resolveDebugProxyCaptureStoreKey(optionsOrDbPath, legacyBlobDir);
   const cached = cachedStores.get(key);
-  if (cached && !cached.store.isClosed) {
-    return cached.store;
+  if (cached && !cached.isClosed) {
+    return cached;
   }
   const store = new DebugProxyCaptureStoreImpl(optionsOrDbPath, legacyBlobDir);
-  cachedStores.set(key, { store, leases: 0 });
+  cachedStores.set(key, store);
   // Safety net for legacy path-based stores that own their DatabaseSync;
   // shared-path stores only flip their closed flag here, never the shared DB.
   unregisterExitClose ??= registerSqliteCacheExitClose(closeDebugProxyCaptureStore);
@@ -341,16 +336,15 @@ export function getDebugProxyCaptureStore(
   return getDebugProxyCaptureStoreImpl(optionsOrDbPath, legacyBlobDir);
 }
 
-/** @deprecated Await each async capture lease's release instead. */
-export function closeDebugProxyCaptureStore(): void {
+function closeDebugProxyCaptureStore(): void {
   unregisterExitClose?.();
   unregisterExitClose = null;
   const stores = [...cachedStores.values()];
   cachedStores.clear();
   const errors: unknown[] = [];
-  for (const cached of stores) {
+  for (const store of stores) {
     try {
-      cached.store.close();
+      store.close();
     } catch (error) {
       errors.push(error);
     }
@@ -358,56 +352,6 @@ export function closeDebugProxyCaptureStore(): void {
   if (errors.length) {
     throw new AggregateError(errors, "Capture stores failed to close.");
   }
-}
-
-// Lease API keeps one cached capture-store wrapper alive across related
-// operations, then releases it without closing the shared state database.
-/** @deprecated Use acquireDebugProxyCaptureStoreAsync for shared-state access. */
-export function acquireDebugProxyCaptureStore(
-  dbPath: string,
-  blobDir: string,
-): {
-  store: LegacyDebugProxyCaptureStore;
-  release: () => void;
-};
-/** @deprecated Use acquireDebugProxyCaptureStoreAsync for shared-state access. */
-export function acquireDebugProxyCaptureStore(options?: DebugProxyCaptureStoreOptions): {
-  store: SharedDebugProxyCaptureStore;
-  release: () => void;
-};
-export function acquireDebugProxyCaptureStore(
-  optionsOrDbPath: DebugProxyCaptureStoreOptions | string = {},
-  legacyBlobDir?: string,
-): {
-  store: DebugProxyCaptureStore;
-  release: () => void;
-} {
-  const key = resolveDebugProxyCaptureStoreKey(optionsOrDbPath, legacyBlobDir);
-  const store = getDebugProxyCaptureStoreImpl(optionsOrDbPath, legacyBlobDir);
-  const cached = cachedStores.get(key);
-  if (!cached || cached.store !== store) {
-    throw new Error("debug proxy capture store cache changed while acquiring a lease");
-  }
-  cached.leases += 1;
-  let released = false;
-  return {
-    store,
-    release: () => {
-      if (released) {
-        return;
-      }
-      released = true;
-      const current = cachedStores.get(key);
-      if (!current || current.store !== store) {
-        return;
-      }
-      current.leases = Math.max(0, current.leases - 1);
-      if (current.leases === 0) {
-        cachedStores.delete(key);
-        current.store.close();
-      }
-    },
-  };
 }
 
 export function safeJsonString(value: unknown): string | undefined {

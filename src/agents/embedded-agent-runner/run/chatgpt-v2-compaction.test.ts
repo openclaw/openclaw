@@ -104,7 +104,7 @@ type Body = {
   hook_marker?: string;
 };
 let requests: Body[];
-let respond: (body: Body) => unknown[];
+let respond: (body: Body) => unknown[] | Promise<unknown[]>;
 beforeEach(() => {
   requests = [];
   let compactions = 0;
@@ -120,9 +120,7 @@ beforeEach(() => {
     ) as Body;
     requests.push(body);
     return new Response(
-      respond(body)
-        .map((event) => "data: " + JSON.stringify(event) + "\n\n")
-        .join(""),
+      (await respond(body)).map((event) => "data: " + JSON.stringify(event) + "\n\n").join(""),
       {
         headers: { "content-type": "text/event-stream" },
       },
@@ -147,8 +145,12 @@ async function fixture(
   } = {},
 ) {
   if (withHistory) {
-    sessionManager.appendMessage({ role: "user", content: "remember copper", timestamp: 1 });
-    sessionManager.appendMessage(
+    await sessionManager.appendMessageAsync({
+      role: "user",
+      content: "remember copper",
+      timestamp: 1,
+    });
+    await sessionManager.appendMessageAsync(
       createAssistant(model, [{ type: "text", text: "Old detail. ".repeat(3_500) }], "stop", 7_000),
     );
   }
@@ -366,8 +368,8 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
 
   it("compacts a settled 90% window before a large tool result reaches the next boundary", async () => {
     const manager = SessionManager.inMemory();
-    manager.appendMessage({ role: "user", content: "remember copper", timestamp: 1 });
-    manager.appendMessage(
+    await manager.appendMessageAsync({ role: "user", content: "remember copper", timestamp: 1 });
+    await manager.appendMessageAsync(
       createAssistant(model, [{ type: "text", text: "settled history" }], "stop", 465_674),
     );
     const f = await fixture(manager, false, {
@@ -490,8 +492,8 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
 
   it("continues normal requests after a soft V2 failure without retrying or client compaction", async () => {
     const manager = SessionManager.inMemory();
-    manager.appendMessage({ role: "user", content: "remember copper", timestamp: 1 });
-    manager.appendMessage(
+    await manager.appendMessageAsync({ role: "user", content: "remember copper", timestamp: 1 });
+    await manager.appendMessageAsync(
       createAssistant(model, [{ type: "text", text: "settled history" }], "stop", 465_674),
     );
     const f = await fixture(manager, false, {
@@ -590,8 +592,12 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
     "preflights retained users before paid V2 work ($userTokens tokens, native=$nativeProvider)",
     async ({ userTokens, fits, nativeProvider }) => {
       const manager = SessionManager.inMemory();
-      manager.appendMessage({ role: "user", content: "中".repeat(userTokens), timestamp: 1 });
-      manager.appendMessage(
+      await manager.appendMessageAsync({
+        role: "user",
+        content: "中".repeat(userTokens),
+        timestamp: 1,
+      });
+      await manager.appendMessageAsync(
         createAssistant(model, [{ type: "text", text: "old detail" }], "stop", 60_000),
       );
       const f = await fixture(manager, false, { nativeProvider });
@@ -746,8 +752,8 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
 
   it("does not cover transcript entries admitted while V2 is pending", async () => {
     const f = await fixture();
-    respond = () => {
-      f.sessionManager.appendMessage({
+    respond = async () => {
+      await f.sessionManager.appendMessageAsync({
         role: "user",
         content: "newly admitted input",
         timestamp: 3,

@@ -186,7 +186,7 @@ export function resolveTtsConfig(
   };
 }
 
-/** @deprecated Use resolveTtsPrefsPathAsync. Removed at the next Plugin SDK major. */
+/** @deprecated Use resolveTtsPrefsPathAsync. Removed after stable deprecation and a compatibility period. */
 export function resolveTtsPrefsPath(
   config: ResolvedTtsConfig,
   preparedTtsPreferences?: PreparedTtsPreferences,

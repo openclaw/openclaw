@@ -53,12 +53,6 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
       route,
       bindingResolution: null,
     }),
-    resolveRuntimeConversationBindingRoute: ({
-      route,
-    }: Parameters<typeof actual.resolveRuntimeConversationBindingRoute>[0]) => ({
-      route,
-      bindingRecord: null,
-    }),
   };
 });
 

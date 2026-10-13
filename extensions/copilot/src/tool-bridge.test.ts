@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { createOpenClawCodingTools as createRealOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
+import { createOpenClawCodingToolsAsync as createRealOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
 import {
   type AnyAgentTool,
   type SandboxContext,
@@ -232,8 +232,8 @@ describe("createCopilotToolBridge", () => {
             turnTainted = true;
           }
         });
-        const createTools = (options: CopilotCodingToolsOptions = {}) => {
-          const filesystemTools = createRealOpenClawCodingTools(options).filter((tool) =>
+        const createTools = async (options: CopilotCodingToolsOptions = {}) => {
+          const filesystemTools = (await createRealOpenClawCodingTools(options)).filter((tool) =>
             ["write", "edit", "apply_patch"].includes(tool.name),
           );
           const networkTool = wrapToolWithBeforeToolCallHook(

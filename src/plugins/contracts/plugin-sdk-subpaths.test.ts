@@ -955,7 +955,7 @@ describe("plugin-sdk subpath exports", () => {
       "removeAckReactionAfterReply",
       "recordInboundSession",
       "recordInboundSessionMetaSafe",
-      "resolveInboundSessionEnvelopeContext",
+      "resolveInboundSessionEnvelopeContextAsync",
       "resolveInboundMentionDecision",
       "resolveMentionGating",
       "resolveMentionGatingWithBypass",
@@ -1033,7 +1033,7 @@ describe("plugin-sdk subpath exports", () => {
       "createDirectDmPreCryptoGuardPolicy",
       "createChannelInboundDebouncer",
       "createInboundDebouncer",
-      "dispatchInboundDirectDmWithRuntime",
+      "dispatchInboundDirectDm",
       "formatInboundEnvelope",
       "formatInboundFromLabel",
       "formatLocationText",
@@ -1045,7 +1045,7 @@ describe("plugin-sdk subpath exports", () => {
       "normalizeMentionText",
       "resolveInboundDebounceMs",
       "resolveEnvelopeFormatOptions",
-      "resolveInboundSessionEnvelopeContext",
+      "resolveInboundSessionEnvelopeContextAsync",
       "shouldDebounceTextInbound",
       "toLocationContext",
     ]);
@@ -1133,9 +1133,7 @@ describe("plugin-sdk subpath exports", () => {
     ]);
     expectSourceMentions("channel-inbound", [
       "createDirectDmPreCryptoGuardPolicy",
-      "createPreCryptoDirectDmAuthorizer",
-      "dispatchInboundDirectDmWithRuntime",
-      "resolveInboundDirectDmAccessWithRuntime",
+      "dispatchInboundDirectDm",
     ]);
 
     expectSourceMentions("conversation-runtime", [

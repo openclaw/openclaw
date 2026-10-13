@@ -1,7 +1,4 @@
-import {
-  resolveCapabilityModelCandidates,
-  resolveCapabilityModelCandidatesAsync,
-} from "openclaw/plugin-sdk/image-generation-core";
+import { resolveCapabilityModelCandidatesAsync } from "openclaw/plugin-sdk/image-generation-core";
 import { parseModelRef } from "openclaw/plugin-sdk/model-ref-parse";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildComfyImageGenerationProvider } from "./image-generation-provider.js";
@@ -16,7 +13,7 @@ describe("Comfy provider discovery compatibility", () => {
     ["image", buildComfyImageGenerationProvider],
     ["music", buildComfyMusicGenerationProvider],
     ["video", buildComfyVideoGenerationProvider],
-  ] as const)("preserves sync and async %s workflow eligibility", async (capability, build) => {
+  ] as const)("preserves async %s workflow eligibility", async (capability, build) => {
     vi.stubEnv("COMFY_API_KEY", undefined);
     vi.stubEnv("COMFY_CLOUD_API_KEY", undefined);
     vi.stubEnv("COMFY_MISSING_PLUGIN_SECRET", undefined);
@@ -66,7 +63,6 @@ describe("Comfy provider discovery compatibility", () => {
         listProviders: () => [provider],
       };
       const expected = testCase.configured ? [{ provider: "comfy", model: "workflow" }] : [];
-      expect(resolveCapabilityModelCandidates(params), testCase.name).toEqual(expected);
       expect(await resolveCapabilityModelCandidatesAsync(params), testCase.name).toEqual(expected);
     }
   });

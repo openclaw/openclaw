@@ -9,16 +9,11 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
-import {
-  captureEnv,
-  createPathResolutionEnv,
-  withEnvAsync,
-  withPathResolutionEnv,
-} from "../../test-utils/env.js";
+import { captureEnv, createPathResolutionEnv, withEnvAsync } from "../../test-utils/env.js";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.js";
 import { listReservedChatSlashCommandNames } from "../discovery/chat-command-invocation.js";
-import { buildWorkspaceSkillCommandSpecs } from "../discovery/command-specs.js";
+import { prepareWorkspaceSkillCommandSpecs } from "../discovery/command-specs.js";
 import {
   applySkillEnvOverrides,
   applySkillEnvOverridesFromSnapshot,
@@ -51,10 +46,6 @@ const buildWorkspaceSkillsPrompt = async (
   opts?: Parameters<typeof buildSkillSnapshot>[1],
 ): Promise<string> => (await buildSkillSnapshot(workspaceDir, opts)).prompt;
 const apiKeyField = ["api", "Key"].join("");
-
-function withWorkspaceHome<T>(workspaceDir: string, cb: () => T): T {
-  return withPathResolutionEnv(workspaceDir, { PATH: "" }, () => cb());
-}
 
 async function writePromptLimitSkills(workspaceDir: string) {
   for (const name of ["alpha-skill", "beta-skill", "gamma-skill"]) {
@@ -186,7 +177,7 @@ afterEach(() => {
   setActiveDegradedSecretOwners([]);
 });
 
-describe("buildWorkspaceSkillCommandSpecs", () => {
+describe("prepareWorkspaceSkillCommandSpecs", () => {
   it.each([["dashboard", "dashboard_2"]])(
     "moves a colliding %s skill to the generated alias %s",
     async (skillName, commandName) => {
@@ -197,11 +188,14 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
         description: "Custom command skill",
       });
 
-      const [command] = withWorkspaceHome(workspaceDir, () =>
-        buildWorkspaceSkillCommandSpecs(workspaceDir, {
-          ...resolveTestSkillDirs(workspaceDir),
-          reservedNames: listReservedChatSlashCommandNames(),
-        }),
+      const [command] = await withEnvAsync(
+        createPathResolutionEnv(workspaceDir, { PATH: "" }),
+        () =>
+          prepareWorkspaceSkillCommandSpecs(workspaceDir, {
+            eligibility: {},
+            ...resolveTestSkillDirs(workspaceDir),
+            reservedNames: listReservedChatSlashCommandNames(),
+          }),
       );
 
       expect(command).toMatchObject({ name: commandName, skillName });
@@ -230,10 +224,10 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
       frontmatterExtra: "command-dispatch: tool\ncommand-tool: sessions_send",
     });
 
-    const commands = buildWorkspaceSkillCommandSpecs(
-      workspaceDir,
-      resolveTestSkillDirs(workspaceDir),
-    );
+    const commands = await prepareWorkspaceSkillCommandSpecs(workspaceDir, {
+      ...resolveTestSkillDirs(workspaceDir),
+      eligibility: {},
+    });
 
     const longCmd = commands.find((entry) => entry.skillName === "long-desc");
     const shortCmd = commands.find((entry) => entry.skillName === "short-desc");
@@ -258,8 +252,9 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
 
     // Prime plugin discovery before the bundle exists; clear the lifecycle cache
     // below to model the install/reload boundary that exposes new plugin files.
-    buildWorkspaceSkillCommandSpecs(workspaceDir, {
+    await prepareWorkspaceSkillCommandSpecs(workspaceDir, {
       ...resolveTestSkillDirs(workspaceDir),
+      eligibility: {},
       config,
     });
 
@@ -285,8 +280,9 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
     );
     clearPluginMetadataLifecycleCaches();
 
-    const commands = buildWorkspaceSkillCommandSpecs(workspaceDir, {
+    const commands = await prepareWorkspaceSkillCommandSpecs(workspaceDir, {
       ...resolveTestSkillDirs(workspaceDir),
+      eligibility: {},
       config,
     });
 

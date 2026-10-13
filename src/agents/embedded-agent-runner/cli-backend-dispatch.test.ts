@@ -18,7 +18,7 @@ import { createTestAdmittedRunContext } from "../admitted-run-context.test-suppo
 import { loadCliSessionHistoryMessages } from "../cli-runner/session-history.js";
 import type { RunCliAgentParams } from "../cli-runner/types.js";
 import { SessionManager } from "../sessions/index.js";
-import { resolveEmbeddedCliBackendDispatchEligibility } from "./cli-backend-dispatch-eligibility.js";
+import { resolveEmbeddedCliBackendDispatchEligibilityAsync } from "./cli-backend-dispatch-eligibility.js";
 import { runEmbeddedAgentViaCliBackendIfEligible } from "./cli-backend-dispatch.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 
@@ -130,8 +130,8 @@ beforeEach(() => {
   createCliDispatchTranscriptRecorder.mockClear();
 });
 
-describe("resolveEmbeddedCliBackendDispatchEligibility", () => {
-  it("honors an explicitly pinned API-key profile over subscription-first order", () => {
+describe("resolveEmbeddedCliBackendDispatchEligibilityAsync", () => {
+  it("honors an explicitly pinned API-key profile over subscription-first order", async () => {
     // A pinned profile is the credential the run executes on; order must not
     // override it in either direction.
     ensureAuthProfileStore.mockReturnValue({
@@ -142,7 +142,7 @@ describe("resolveEmbeddedCliBackendDispatchEligibility", () => {
     });
     resolveAuthProfileOrder.mockReturnValue(["anthropic:claude-cli", "anthropic:api"]);
     expect(
-      resolveEmbeddedCliBackendDispatchEligibility({
+      await resolveEmbeddedCliBackendDispatchEligibilityAsync({
         provider: "claude-cli",
         authProfileId: "anthropic:api",
       }),
@@ -150,7 +150,7 @@ describe("resolveEmbeddedCliBackendDispatchEligibility", () => {
     expect(resolveModelAuthMode).not.toHaveBeenCalled();
   });
 
-  it("honors an explicitly pinned OAuth profile over API-key-first order", () => {
+  it("honors an explicitly pinned OAuth profile over API-key-first order", async () => {
     ensureAuthProfileStore.mockReturnValue({
       profiles: {
         "anthropic:api": { type: "api_key", provider: "anthropic" },
@@ -159,27 +159,27 @@ describe("resolveEmbeddedCliBackendDispatchEligibility", () => {
     });
     resolveAuthProfileOrder.mockReturnValue(["anthropic:api", "anthropic:claude-cli"]);
     expect(
-      resolveEmbeddedCliBackendDispatchEligibility({
+      await resolveEmbeddedCliBackendDispatchEligibilityAsync({
         provider: "claude-cli",
         authProfileId: "anthropic:claude-cli",
       }),
     ).toEqual({ provider: "claude-cli" });
   });
 
-  it("falls back to ordered selection when the pinned profile is unknown", () => {
+  it("falls back to ordered selection when the pinned profile is unknown", async () => {
     ensureAuthProfileStore.mockReturnValue({
       profiles: { "anthropic:api": { type: "api_key", provider: "anthropic" } },
     });
     resolveAuthProfileOrder.mockReturnValue(["anthropic:api"]);
     expect(
-      resolveEmbeddedCliBackendDispatchEligibility({
+      await resolveEmbeddedCliBackendDispatchEligibilityAsync({
         provider: "claude-cli",
         authProfileId: "anthropic:missing",
       }),
     ).toBeUndefined();
   });
 
-  it("forwards the pinned auth profile into runtime resolution", () => {
+  it("forwards the pinned auth profile into runtime resolution", async () => {
     // The pin can be what maps a canonical ref onto its CLI runtime; the
     // resolver must see it or dispatch strands the run on the passthrough.
     resolveCliRuntimeExecutionProvider.mockReturnValue("claude-cli");
@@ -187,7 +187,7 @@ describe("resolveEmbeddedCliBackendDispatchEligibility", () => {
       profiles: { "anthropic:claude-cli": { type: "oauth", provider: "claude-cli" } },
     });
     expect(
-      resolveEmbeddedCliBackendDispatchEligibility({
+      await resolveEmbeddedCliBackendDispatchEligibilityAsync({
         provider: "anthropic",
         model: "claude-opus-4-8",
         agentId: "main",

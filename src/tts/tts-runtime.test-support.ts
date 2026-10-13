@@ -152,7 +152,7 @@ export const {
   listSpeechVoices,
   prepareTtsRequest,
   resolveTtsConfig,
-  resolveTtsPrefsPath,
+  resolveTtsPrefsPathAsync,
   setTtsMachinePrefsPathResolver,
   setSummarizationEnabled,
   setTtsMaxLength,

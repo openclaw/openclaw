@@ -7,17 +7,17 @@ export const CHANNEL_PAIRING_COMPAT_RECORD = {
   introduced: "2026-04-03",
   deprecated: "2026-10-03",
   warningStarts: "2026-10-03",
-  removalGate: "next-plugin-sdk-major",
+  removalGate: "after-stable-deprecation",
   replacement:
-    "Await readChannelAllowFromStore from channel-pairing. The released synchronous reader retains its signature and native behavior until the next Plugin SDK major and explicit breaking-release approval.",
+    "Await readChannelAllowFromStore from channel-pairing. The released synchronous reader retains its signature and native behavior until removal after stable deprecation and a compatibility period.",
   docsPath: "/plugins/sdk-migration/compatibility-policy#channel-pairing-allowlists",
   surfaces: ["openclaw/plugin-sdk/channel-pairing.readChannelAllowFromStoreSync"],
   diagnostics: [
     "TypeScript @deprecated annotation and migration documentation; no runtime warnings",
   ],
   tests: [
-    "src/plugins/compat/registry.test.ts",
     "src/plugin-sdk/channel-pairing-allowlist.test.ts",
+    "src/plugins/compat/registry.test.ts",
     "src/pairing/pairing-allowlist.worker.test.ts",
   ],
   releaseNote:

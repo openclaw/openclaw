@@ -359,17 +359,6 @@ export async function bindGenericCurrentConversation(
   );
 }
 
-/** Resolves a current-conversation binding and prunes it if its TTL has expired. */
-export function resolveGenericCurrentConversationBinding(
-  ref: ConversationRef,
-): SessionBindingRecord | null {
-  if (!supportsGenericCurrentConversationBinding(ref)) {
-    return null;
-  }
-  const record = resolveCurrentConversationBindingRecord(ref);
-  return record?.bindingId.startsWith(CURRENT_BINDINGS_ID_PREFIX) ? record : null;
-}
-
 /** Lists non-expired current-conversation bindings owned by one target session. */
 export function listGenericCurrentConversationBindingsBySession(
   targetSessionKey: string,
@@ -378,29 +367,6 @@ export function listGenericCurrentConversationBindingsBySession(
     (record) =>
       record.bindingId.startsWith(CURRENT_BINDINGS_ID_PREFIX) &&
       supportsGenericCurrentConversationBinding(record.conversation),
-  );
-}
-
-/** Persists last-activity metadata for an existing generic current-conversation binding. */
-export function touchGenericCurrentConversationBinding(
-  bindingId: string,
-  at = Date.now(),
-  scope?: SessionBindingScope,
-): void {
-  const conversation = bindingRefFromId(bindingId, scope);
-  if (!conversation || !supportsGenericCurrentConversationBinding(conversation)) {
-    return;
-  }
-  updateCurrentConversationBindingRecord(conversation, (current) =>
-    current?.bindingId === bindingId
-      ? {
-          ...current,
-          metadata: {
-            ...current.metadata,
-            lastActivityAt: at,
-          },
-        }
-      : current,
   );
 }
 

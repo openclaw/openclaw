@@ -1,6 +1,6 @@
 /**
  * @deprecated Compatibility shim for openclaw/skills' openclaw-zulip plugin and
- * tloncorp/tlon-apps. Removal is targeted for the next Plugin SDK major.
+ * tloncorp/tlon-apps. Removal follows stable deprecation and a compatibility period.
  */
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import { mapReplyDispatchCounts } from "../auto-reply/reply/reply-dispatcher.types.js";
@@ -28,7 +28,7 @@ type RecordInboundSessionFn = typeof import("../channels/session.js").recordInbo
 function withLegacyDispatchCounts(
   dispatch: DispatchReplyWithBufferedBlockDispatcher,
 ): DispatchReplyWithBufferedBlockDispatcher {
-  // @deprecated Remove this receipt-to-count projection with the shim in the next Plugin SDK major.
+  // @deprecated Remove this receipt-to-count projection with the shim after stable deprecation and a compatibility period.
   return async (params) => {
     const result = await dispatch(params);
     const receipt = result.settledReceipt;

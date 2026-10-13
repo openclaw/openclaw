@@ -118,7 +118,6 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/mcp-http.test.ts",
   "src/gateway/mcp-http/mediated-exec-policy.test.ts",
   "src/gateway/mention-directory.test.ts",
-  "src/gateway/mention-inbox.compat.test.ts",
   "src/gateway/mention-inbox.sharing-target.test.ts",
   "src/gateway/model-account-connect.compat.test.ts",
   "src/gateway/model-account-connect.worker.test.ts",

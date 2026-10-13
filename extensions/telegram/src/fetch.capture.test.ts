@@ -3,14 +3,13 @@ import { resolveTelegramTransport } from "./fetch.js";
 
 const mocks = vi.hoisted(() => ({
   capture: vi.fn<typeof import("openclaw/plugin-sdk/proxy-capture").captureHttpExchangeAsync>(),
-  syncCapture: vi.fn(),
   fetch: vi.fn<typeof fetch>(),
   dispatchers: [] as { destroy: ReturnType<typeof vi.fn> }[],
 }));
 
-vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
+vi.mock("openclaw/plugin-sdk/proxy-capture", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/proxy-capture")>()),
   captureHttpExchangeAsync: mocks.capture,
-  captureHttpExchange: mocks.syncCapture,
   resolveEffectiveDebugProxyUrl: () => undefined,
 }));
 
@@ -28,7 +27,6 @@ vi.mock("undici/index.js", async (importOriginal) => ({
 
 beforeEach(() => {
   mocks.capture.mockReset().mockResolvedValue(undefined);
-  mocks.syncCapture.mockReset();
   mocks.fetch.mockReset();
   mocks.dispatchers.length = 0;
   for (const name of [
@@ -91,7 +89,6 @@ it("preserves caller responses, errors, and dispatcher ownership when capture re
         meta: { subsystem: "telegram-fetch" },
       }),
     );
-    expect(mocks.syncCapture).not.toHaveBeenCalled();
   } finally {
     await transport.close();
   }

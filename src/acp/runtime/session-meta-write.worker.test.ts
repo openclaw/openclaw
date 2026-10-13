@@ -30,7 +30,7 @@ import * as entryWorker from "./session-meta-entry.js";
 import { buildAcpDatabaseSessionKey } from "./session-meta-keys.js";
 import { readAcpSessionMetaForEntries } from "./session-meta-readonly.js";
 import { upsertAcpSessionMeta } from "./session-meta-write.js";
-import { readAcpSessionEntry, writeAcpSessionMetaForMigration } from "./session-meta.js";
+import { readAcpSessionEntryAsync, writeAcpSessionMetaForMigration } from "./session-meta.js";
 
 const META: SessionAcpMeta = {
   backend: "fixture-backend",
@@ -104,7 +104,7 @@ it("does not publish a delayed ACP postimage over a newer native publication", a
         expect(superseded).toBe(true);
         expect(changes.length).toBeGreaterThan(0);
         expect(changes.every((change) => change === undefined)).toBe(true);
-        expect(readAcpSessionEntry(scope)?.acp).toEqual(native);
+        expect((await readAcpSessionEntryAsync(scope))?.acp).toEqual(native);
       } finally {
         release();
         intercept.mockRestore();
@@ -200,7 +200,7 @@ it.each(["incognito", "file"] as const)(
             throw new Error("Expected the initialized ACP session");
           }
           if (incognito) {
-            expect(readAcpSessionEntry(scope)?.acp).toEqual(META);
+            expect((await readAcpSessionEntryAsync(scope))?.acp).toEqual(META);
           } else {
             expect(await readMetadata(created)).toEqual([META]);
           }
@@ -233,7 +233,7 @@ it.each(["incognito", "file"] as const)(
             expect(updated?.acp).toEqual(updatedMeta);
             expect(observedAcp.at(-1)?.acp).toEqual(updatedMeta);
             if (incognito) {
-              expect(readAcpSessionEntry(scope)?.acp).toEqual(updatedMeta);
+              expect((await readAcpSessionEntryAsync(scope))?.acp).toEqual(updatedMeta);
             } else {
               expect(await readMetadata(created)).toEqual([updatedMeta]);
               expect(retainedMembership.length).toBeGreaterThan(0);
@@ -265,7 +265,7 @@ it.each(["incognito", "file"] as const)(
           observe.restore();
           maintenance.mockRestore();
         }
-        expect(readAcpSessionEntry(scope)?.acp).toBeUndefined();
+        expect((await readAcpSessionEntryAsync(scope))?.acp).toBeUndefined();
         const persisted = loadExactSessionEntry(scope)?.entry;
         expect(persisted?.sessionId).toBeTruthy();
         expect(persisted?.acp).toBeUndefined();
@@ -427,7 +427,7 @@ it.each([
           } else {
             expect(loadExactSessionEntry(scope)?.entry).toEqual(replacementEntry);
           }
-          expect(readAcpSessionEntry(scope)?.acp).toEqual(
+          expect((await readAcpSessionEntryAsync(scope))?.acp).toEqual(
             replacement === "same-lifecycle" ? updatedMeta : replacementMeta,
           );
         } finally {
@@ -515,7 +515,7 @@ it("does not close a lifecycle that appears after an absent-entry close was prep
         }
         expect(mutate).toHaveBeenCalledOnce();
         expect(loadExactSessionEntry(scope)?.entry).toEqual(appeared);
-        expect(readAcpSessionEntry(scope)?.acp).toEqual(META);
+        expect((await readAcpSessionEntryAsync(scope))?.acp).toEqual(META);
       } finally {
         release.resolve();
         await outcome;

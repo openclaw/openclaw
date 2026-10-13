@@ -317,15 +317,20 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
 
   it("rewinds the exact rejected branch before the hidden retry can choose NO_REPLY", async () => {
     const sessionManager = SessionManager.inMemory();
-    const promptId = sessionManager.appendMessage(makeUserMessage("Original request", 1));
-    const rejectedId = sessionManager.appendMessage({
+    const promptId = await sessionManager.appendMessageAsync(
+      makeUserMessage("Original request", 1),
+    );
+    if (!promptId) {
+      throw new Error("Expected the prompt fixture message ID");
+    }
+    const rejectedId = await sessionManager.appendMessageAsync({
       role: "assistant",
       content: [{ type: "text", text: "Rejected first answer" }],
       stopReason: "stop",
       timestamp: 2,
     } as never);
-    sessionManager.appendCustomEntry("trailing-metadata", { source: "hook" });
-    sessionManager.appendCompaction("Summary including rejected answer", promptId, 100);
+    await sessionManager.appendCustomEntryAsync("trailing-metadata", { source: "hook" });
+    await sessionManager.appendCompactionAsync("Summary including rejected answer", promptId, 100);
     const originalMessages = sessionManager.buildSessionContext().messages;
     const activeSession = {
       agent: { state: { messages: originalMessages } },
@@ -368,7 +373,7 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
     const revisedText = retryTranscript.includes("Rejected first answer")
       ? "NO_REPLY"
       : "Authoritative revised answer";
-    sessionManager.appendMessage({
+    await sessionManager.appendMessageAsync({
       role: "assistant",
       content: [{ type: "text", text: revisedText }],
       stopReason: "stop",
@@ -488,8 +493,10 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
 
   it("restores the rewound in-memory branch when settlement fails", async () => {
     const sessionManager = SessionManager.inMemory();
-    const promptId = sessionManager.appendMessage(makeUserMessage("Original request", 1));
-    const rejectedId = sessionManager.appendMessage({
+    const promptId = await sessionManager.appendMessageAsync(
+      makeUserMessage("Original request", 1),
+    );
+    const rejectedId = await sessionManager.appendMessageAsync({
       role: "assistant",
       content: [{ type: "text", text: "Rejected first answer" }],
       stopReason: "stop",

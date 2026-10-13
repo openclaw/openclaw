@@ -25,7 +25,6 @@ import {
 import { onSessionIdentityMutation } from "../../../sessions/session-lifecycle-events.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import { runOpenClawAgentWriteTransaction } from "../../../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import {
@@ -59,19 +58,19 @@ const initialWriteKinds = ["message", "model", "thinking"] as const;
 async function appendInitial(
   kind: (typeof initialWriteKinds)[number],
   manager: SessionManager,
-): Promise<string> {
+): Promise<string | undefined> {
   return kind === "model"
     ? manager.appendModelChange("test-provider", "test-model")
     : kind === "thinking"
       ? manager.appendThinkingLevelChange("high")
-      : manager.appendMessage(userMessage);
+      : await manager.appendMessageAsync(userMessage);
 }
 
 type InitialWriterFixture = {
   admission: PreparedAgentRunAdmission;
   controller: AbortController;
   manager: SessionManager;
-  openManager: () => SessionManager;
+  openManager: () => Promise<SessionManager>;
   promptState: Awaited<ReturnType<typeof createEmbeddedRunSessionPromptState>>;
   preparedSessionTarget: NonNullable<EmbeddedRunAttemptInternalParams["preparedSessionTarget"]>;
   replaceAdmission: () => Promise<void>;
@@ -159,12 +158,15 @@ async function withInitialWriter(
         });
         prepared = transcript;
         const openManager = () =>
-          SessionManager.open({ ...target, ...promptState.sessionWriterFence }, state.workspaceDir);
-        const runFixture = () =>
+          SessionManager.openAsync(
+            { ...target, ...promptState.sessionWriterFence },
+            state.workspaceDir,
+          );
+        const runFixture = async () =>
           run({
             admission,
             controller,
-            manager: openManager(),
+            manager: await openManager(),
             openManager,
             promptState,
             preparedSessionTarget,
@@ -582,7 +584,7 @@ describe("admitted lazy session writer", () => {
         const write = transcript.withOwnedTranscriptWrite(async () => {
           entered.resolve();
           await gate.promise;
-          manager.appendMessage(userMessage);
+          await manager.appendMessageAsync(userMessage);
         });
         await entered.promise;
         vi.useFakeTimers();
@@ -631,7 +633,7 @@ describe("admitted lazy session writer", () => {
 
   it("rejects an existing row before reacquiring its enclosing lifecycle mutation", async () => {
     await withInitialWriter(async ({ manager, runParams, target }) => {
-      manager.appendMessage(userMessage);
+      await manager.appendMessageAsync(userMessage);
       await runExclusiveSessionLifecycleMutation("create", {
         scope: target.storePath,
         identities: [target.sessionKey],
@@ -649,12 +651,14 @@ describe("admitted lazy session writer", () => {
     async (existing) => {
       await withInitialWriter(
         async ({ manager, promptState, target }) => {
-          manager.appendMessage(userMessage);
+          await manager.appendMessageAsync(userMessage);
           const owner = createAssistantErrorTranscript();
           installSessionToolResultGuard(manager, { assistantErrorTranscript: owner });
-          manager.appendMessage(makeAgentAssistantMessage({ content: [], stopReason: "error" }));
+          await manager.appendMessageAsync(
+            makeAgentAssistantMessage({ content: [], stopReason: "error" }),
+          );
           expect(
-            SessionManager.open(target)
+            (await SessionManager.openAsync(target))
               .getBranch()
               .filter((entry) => entry.type === "message"),
           ).toHaveLength(2);
@@ -662,7 +666,7 @@ describe("admitted lazy session writer", () => {
             await promptState[Symbol.asyncDispose]();
             owner.settle(true);
             expect(
-              SessionManager.open(target)
+              (await SessionManager.openAsync(target))
                 .getBranch()
                 .filter((entry) => entry.type === "message"),
             ).toHaveLength(2);
@@ -692,13 +696,13 @@ describe("admitted lazy session writer", () => {
               runId: runParams.runId,
             }),
           ).toBeUndefined();
-          manager.appendMessage(message);
+          await manager.appendMessageAsync(message);
           expect(loadSessionEntry(target)).toMatchObject({
             sessionId: target.sessionId,
             activeWriterRunId: runParams.runId,
           });
           expect(
-            SessionManager.open(target)
+            (await SessionManager.openAsync(target))
               .getBranch()
               .filter((entry) => entry.type === "message" && entry.message.role === "user"),
           ).toHaveLength(1);
@@ -735,7 +739,7 @@ describe("admitted lazy session writer", () => {
           expect(promptState.sessionWriterFence).toEqual(expectedFence);
           expect(isSessionWorkAdmissionActive(target.storePath, [target.sessionKey])).toBe(false);
           expect(manager.getSessionTarget()).toMatchObject(expectedFence);
-          manager.appendMessage(userMessage);
+          await manager.appendMessageAsync(userMessage);
           expect(loadTranscriptEventsSync(target)).toHaveLength(3);
           await claimAgentSessionWriter({ ...runParams, runId: "new-writer" });
           const before = loadTranscriptEventsSync(target);
@@ -766,9 +770,9 @@ describe("admitted lazy session writer", () => {
             await replaceAdmission();
           }
           if (loss === "abort") {
-            expect(() => manager.appendMessage(userMessage)).toThrow(callerError);
+            await expect(manager.appendMessageAsync(userMessage)).rejects.toThrow(callerError);
           } else {
-            expect(() => manager.appendMessage(userMessage)).toThrow(
+            await expect(manager.appendMessageAsync(userMessage)).rejects.toThrow(
               "admitted run authority is no longer active",
             );
           }
@@ -802,42 +806,6 @@ describe("admitted lazy session writer", () => {
     },
   );
 
-  it("publishes no initial claim or identity for a rolled-back outer transaction", async () => {
-    await withInitialWriter(async ({ manager, openManager, promptState, runParams, target }) => {
-      const rollback = new Error("roll back first persistence");
-      const identities: unknown[] = [];
-      const unsubscribe = onSessionIdentityMutation((event) => {
-        if (event.kind === "create" && event.current.sessionId === target.sessionId) {
-          identities.push(event);
-        }
-      });
-      try {
-        expect(() =>
-          runOpenClawAgentWriteTransaction(
-            () => {
-              manager.appendMessage(userMessage);
-              expect(promptState.sessionWriterFence).toBeUndefined();
-              throw rollback;
-            },
-            { agentId: target.agentId, path: target.storePath },
-          ),
-        ).toThrow(rollback);
-        expect(promptState.sessionWriterFence).toBeUndefined();
-        expect(loadSessionEntry(target)).toBeUndefined();
-        expect(loadTranscriptEventsSync(target)).toEqual([]);
-        expect(identities).toEqual([]);
-        expect(isSessionWorkAdmissionActive(target.storePath, [target.sessionKey])).toBe(true);
-
-        openManager().appendMessage(userMessage);
-        expect(promptState.sessionWriterFence?.expectedWriterRunId).toBe(runParams.runId);
-        expect(loadSessionEntry(target)).toMatchObject({ activeWriterRunId: runParams.runId });
-        expect(identities).toHaveLength(1);
-      } finally {
-        unsubscribe();
-      }
-    });
-  });
-
   it.each(["message", "model"] as const)(
     "captures the committed claim before identity-observer cancellation stops the first %s append",
     async (kind) => {
@@ -854,11 +822,14 @@ describe("admitted lazy session writer", () => {
         try {
           const failure = await appendInitial(kind, manager).catch((error: unknown) => error);
           if (kind === "message") {
-            expect(failure).toBe(callerError);
+            expect(failure).toMatchObject({
+              name: "SessionMessageCommittedError",
+              cause: callerError,
+            });
           } else {
             expect(failure).toBeInstanceOf(SessionMetadataCommittedError);
-            expect(isRecordedModelFallbackStop(failure)).toBe(true);
           }
+          expect(isRecordedModelFallbackStop(failure)).toBe(true);
           expect(observedFence).toEqual({
             expectedLifecycleRevision: undefined,
             expectedWriterRunId: runParams.runId,
@@ -869,16 +840,14 @@ describe("admitted lazy session writer", () => {
             activeWriterRunId: runParams.runId,
           });
           const events = loadTranscriptEventsSync(target);
-          if (kind === "message") {
-            expect(events).toEqual([]);
-          } else {
-            expect(events).toMatchObject([
-              { type: "session" },
-              kind === "model"
-                ? { type: "model_change", provider: "test-provider", modelId: "test-model" }
-                : { type: "thinking_level_change", thinkingLevel: "high" },
-            ]);
-          }
+          expect(events).toMatchObject([
+            { type: "session" },
+            kind === "message"
+              ? { type: "message", message: userMessage }
+              : { type: "model_change", provider: "test-provider", modelId: "test-model" },
+          ]);
+          await expect(manager.appendMessageAsync(userMessage)).rejects.toThrow();
+          expect(loadTranscriptEventsSync(target)).toEqual(events);
         } finally {
           unsubscribe();
         }
@@ -890,7 +859,7 @@ describe("admitted lazy session writer", () => {
     "uses the original manager admission for transcript rewrites (%s)",
     async (state) => {
       await withInitialWriter(async ({ admission, manager, replaceAdmission, target }) => {
-        const entryId = manager.appendMessage(userMessage);
+        const { entryId } = await manager.appendMessageWithTranscriptAnchorAsync(userMessage);
         const before = loadTranscriptEventsSync(target);
         if (state === "closed") {
           admission.close();
@@ -908,7 +877,7 @@ describe("admitted lazy session writer", () => {
           );
         if (state === "active") {
           expect((await rewrite()).changed).toBe(true);
-          expect(SessionManager.open(target).getBranch()).toMatchObject([
+          expect((await SessionManager.openAsync(target)).getBranch()).toMatchObject([
             { type: "message", message: { content: "Rewritten user turn" } },
           ]);
         } else {
@@ -924,7 +893,8 @@ describe("admitted lazy session writer", () => {
     "does not let a retained manager %s after its initial admission closes",
     async (operation) => {
       await withInitialWriter(async ({ admission, manager, target }) => {
-        const first = manager.appendMessage(userMessage);
+        const { entryId: first } =
+          await manager.appendMessageWithTranscriptAnchorAsync(userMessage);
         const before = loadTranscriptEventsSync(target);
         admission.close();
         if (operation === "branch") {
@@ -932,13 +902,13 @@ describe("admitted lazy session writer", () => {
             runWithoutOwnedSessionTranscriptWrites(() => manager.createBranchedSession(first)),
           ).rejects.toThrow("admitted run authority is no longer active");
         } else {
-          expect(() =>
-            runWithoutOwnedSessionTranscriptWrites(() =>
+          await expect(
+            runWithoutOwnedSessionTranscriptWrites(async () =>
               operation === "append"
-                ? manager.appendMessage(userMessage)
-                : manager.removeTrailingEntries(() => true),
+                ? await manager.appendMessageAsync(userMessage)
+                : await manager.removeTrailingEntriesAsync(() => true),
             ),
-          ).toThrow("admitted run authority is no longer active");
+          ).rejects.toThrow("admitted run authority is no longer active");
         }
         expect(loadTranscriptEventsSync(target)).toEqual(before);
         expect(loadSessionEntry(target)?.sessionId).toBe(target.sessionId);
@@ -949,9 +919,9 @@ describe("admitted lazy session writer", () => {
   it("retains its initial admission even before the first append", async () => {
     await withInitialWriter(async ({ admission, manager, target }) => {
       admission.close();
-      expect(() =>
-        runWithoutOwnedSessionTranscriptWrites(() => manager.appendMessage(userMessage)),
-      ).toThrow("admitted run authority is no longer active");
+      await expect(
+        runWithoutOwnedSessionTranscriptWrites(() => manager.appendMessageAsync(userMessage)),
+      ).rejects.toThrow("admitted run authority is no longer active");
       expect(loadTranscriptEventsSync(target)).toEqual([]);
       expect(loadSessionEntry(target)).toBeUndefined();
     });

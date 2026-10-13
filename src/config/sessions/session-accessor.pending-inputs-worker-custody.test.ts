@@ -11,7 +11,7 @@ import {
   rolePolicyConfig,
   sharingPolicyClient,
 } from "../../gateway/session-sharing.test-utils.js";
-import { withSessionTranscriptWriteLock } from "../../plugin-sdk/session-transcript-runtime.js";
+import { withSessionTranscriptWrite } from "../../plugin-sdk/session-transcript-runtime.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import type { StoreWriterTiming } from "../../shared/store-writer-queue.js";
 import {
@@ -350,7 +350,7 @@ it.each(["turn", "locked"] as const)(
                   sessionFile: "synthetic-custody-session.jsonl",
                   messages: [{ message: admitted!.message }],
                 })
-              : withSessionTranscriptWriteLock(scope, (locked) =>
+              : withSessionTranscriptWrite(scope, (locked) =>
                   locked.appendMessage({
                     message: {
                       ...admitted!.message,

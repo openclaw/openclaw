@@ -171,7 +171,7 @@ it("chat.send replays synthetic repairs through session history and the register
             ...target,
             entry: { sessionId, updatedAt: Date.now(), modelProvider: provider, model },
           });
-          const manager = SessionManager.open(target, state.workspaceDir);
+          const manager = await SessionManager.openAsync(target, state.workspaceDir);
           const timestamp = Date.now();
           const assistant = (
             content: AssistantMessage["content"],
@@ -186,10 +186,10 @@ it("chat.send replays synthetic repairs through session history and the register
               errorMessage: undefined,
               content,
             });
-          manager.appendMessage(makeUserMessage("Check service health.", timestamp));
-          manager.appendMessage(assistant([{ type: "text", text: "Checking." }]));
-          manager.appendMessage(makeUserMessage("[OpenClaw heartbeat poll]", timestamp));
-          manager.appendMessage(
+          await manager.appendMessageAsync(makeUserMessage("Check service health.", timestamp));
+          await manager.appendMessageAsync(assistant([{ type: "text", text: "Checking." }]));
+          await manager.appendMessageAsync(makeUserMessage("[OpenClaw heartbeat poll]", timestamp));
+          await manager.appendMessageAsync(
             assistant(
               ["missing", "real", "error", "quoted"].map((id) => ({
                 type: "toolCall",
@@ -205,9 +205,9 @@ it("chat.send replays synthetic repairs through session history and the register
             delete missing.details;
             missing.content = [{ type: "text", text: LEGACY_MISSING_TOOL_RESULT_TEXT }];
           }
-          manager.appendMessage(missing);
+          await manager.appendMessageAsync(missing);
           if (late) {
-            manager.appendMessage({
+            await manager.appendMessageAsync({
               ...missing,
               details: undefined,
               isError: false,
@@ -219,7 +219,7 @@ it("chat.send replays synthetic repairs through session history and the register
             { id: "error", text: "File not found", isError: true },
             { id: "quoted", text: DEFAULT_MISSING_TOOL_RESULT_TEXT, isError: false },
           ]) {
-            manager.appendMessage({
+            await manager.appendMessageAsync({
               role: "toolResult",
               toolCallId: `call${result.id}`,
               toolName: "read",
@@ -228,9 +228,9 @@ it("chat.send replays synthetic repairs through session history and the register
               content: [{ type: "text", text: result.text }],
             });
           }
-          manager.appendMessage(assistant([{ type: "text", text: "USEFUL_ALERT" }]));
-          manager.appendMessage(makeUserMessage("[OpenClaw heartbeat poll]", timestamp));
-          manager.appendMessage(assistant([{ type: "text", text: "HEARTBEAT_OK" }]));
+          await manager.appendMessageAsync(assistant([{ type: "text", text: "USEFUL_ALERT" }]));
+          await manager.appendMessageAsync(makeUserMessage("[OpenClaw heartbeat poll]", timestamp));
+          await manager.appendMessageAsync(assistant([{ type: "text", text: "HEARTBEAT_OK" }]));
           manager.flushPendingPersistence();
           const original = readStoredRows(target.storePath, sessionId);
           const requestCount = requests.length;

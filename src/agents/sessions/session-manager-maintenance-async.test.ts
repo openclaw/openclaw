@@ -59,16 +59,15 @@ it("settles queued suffix removals in order and rebuilds the pending branch proj
     (database) => markSessionTranscriptIndexDirtyInTransaction(database.db, scope.sessionId),
     { agentId: scope.agentId, path: resolveSessionTranscriptDatabasePath(scope) },
   );
-  vi.spyOn(manager, "removeTrailingEntries").mockImplementation(() => {
-    throw new Error("sync compatibility adapter used");
-  });
   const first = manager.removeTrailingEntriesAsync((entry) => entry.id === removed);
   const second = manager.removeTrailingEntriesAsync((entry) => entry.id === removed);
   expect(await Promise.all([first, second])).toEqual([1, 0]);
   expect(manager.getLeafId()).toBe(retained);
   await waitForSessionTranscriptProjection(scope);
   expect(
-    SessionManager.openBounded(scope, { maxEvents: 10, maxBytes: 64_000 }).buildSessionContext(),
+    (
+      await SessionManager.openBoundedAsync(scope, { maxEvents: 10, maxBytes: 64_000 })
+    ).buildSessionContext(),
   ).toEqual(manager.buildSessionContext());
   const reopened = await SessionManager.openAsync(scope);
   expect(reopened.getBranch()).toEqual(manager.getBranch());
@@ -122,7 +121,7 @@ it.each(["read", "receipt"] as const)(
                 ...prepared,
                 readMaintenance: async (request) => {
                   const facts = await prepared.readMaintenance(request);
-                  manager.branch(seed);
+                  await manager.branchAsync(seed);
                   return facts;
                 },
               };
@@ -162,9 +161,6 @@ it.each(["same", "independent"] as const)(
   async (writerKind) => {
     const { scope, manager } = await openSession();
     const sourceId = await appendUser(manager, "original");
-    vi.spyOn(manager, "prepareTranscriptRewrite").mockImplementation(() => {
-      throw new Error("sync compatibility adapter used");
-    });
     const rewrite = await manager.prepareTranscriptRewriteAsync();
     await rewrite.sessionManager.resetLeafAsync();
     const replacementId = await appendUser(rewrite.sessionManager, "replacement");
@@ -308,10 +304,12 @@ it("branches a large selected path and rebuilds its new session projection", asy
   expect(target).toBeDefined();
   await waitForSessionTranscriptProjection(target!);
   expect(
-    SessionManager.openBounded(target!, {
-      maxEvents: 10,
-      maxBytes: 8 * 1024 * 1024,
-    }).buildSessionContext(),
+    (
+      await SessionManager.openBoundedAsync(target!, {
+        maxEvents: 10,
+        maxBytes: 8 * 1024 * 1024,
+      })
+    ).buildSessionContext(),
   ).toEqual(manager.buildSessionContext());
   const reopened = await SessionManager.openAsync(target!);
   expect(reopened.getHeader()?.parentSession).toBe(previousSessionId);

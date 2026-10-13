@@ -427,7 +427,7 @@ async function runCase(params: {
         agentHarnessId: "openclaw",
       });
     }
-    const before = snapshotCompactionSession(runtime, gateway, proof);
+    const before = await snapshotCompactionSession(runtime, gateway, proof);
     evidence.before = before;
     const heartbeat = await forceHeartbeat(runtime, gateway, proof);
     evidence.heartbeat = heartbeat;
@@ -435,7 +435,7 @@ async function runCase(params: {
       proof.beforeHookHeld.promise,
       "session:compact:before heartbeat barrier",
     );
-    const held = snapshotCompactionSession(runtime, gateway, proof);
+    const held = await snapshotCompactionSession(runtime, gateway, proof);
     evidence.held = held;
     assertUncommittedCompactionHistory(before, held);
     const shouldCommit =
@@ -449,8 +449,8 @@ async function runCase(params: {
     let staleTurnStartsAtHold: AppServerRequest[] | undefined;
     let resetLifecycleRevision: string | undefined;
     let nativeCompactRequestId: unknown;
-    let preNativeDurableSnapshot: ReturnType<typeof snapshotCompactionSession> | undefined;
-    let restartDurableSnapshot: ReturnType<typeof snapshotCompactionSession> | undefined;
+    let preNativeDurableSnapshot: Awaited<ReturnType<typeof snapshotCompactionSession>> | undefined;
+    let restartDurableSnapshot: Awaited<ReturnType<typeof snapshotCompactionSession>> | undefined;
     let restartProviderCountersAtCommit: ReturnType<typeof snapshotProviderCounters> | undefined;
     let terminalHeartbeat = heartbeat;
 
@@ -572,7 +572,7 @@ async function runCase(params: {
         "summary",
         `Heartbeat terminated before host summary: ${JSON.stringify(progression)}`,
       );
-      evidence.summaryHeld = snapshotCompactionSession(runtime, gateway, proof);
+      evidence.summaryHeld = await snapshotCompactionSession(runtime, gateway, proof);
       proof.releaseSummary.resolve();
       await waitForCompactionProofCheckpoint(
         proof.summarySettled.promise,
@@ -592,7 +592,7 @@ async function runCase(params: {
           "Native compaction started before the host after hook settled",
         );
 
-        preNativeDurableSnapshot = snapshotCompactionSession(runtime, gateway, proof);
+        preNativeDurableSnapshot = await snapshotCompactionSession(runtime, gateway, proof);
         evidence.preNativeDurable = preNativeDurableSnapshot;
         const priorCompactionIds = new Set(held.compactionIds);
         const newCompactionIds = preNativeDurableSnapshot.compactionIds.filter(
@@ -655,7 +655,7 @@ async function runCase(params: {
           proof.hostCommitHeld.promise,
           "held atomic host compaction commit before restart",
         );
-        restartDurableSnapshot = snapshotCompactionSession(runtime, gateway, proof);
+        restartDurableSnapshot = await snapshotCompactionSession(runtime, gateway, proof);
         restartProviderCountersAtCommit = snapshotProviderCounters(proof);
         evidence.restartAtomicCommit = restartDurableSnapshot;
         const priorCompactionIds = new Set(held.compactionIds);
@@ -774,7 +774,7 @@ async function runCase(params: {
       );
     }
     evidence.terminal = terminal;
-    const afterTerminal = snapshotCompactionSession(runtime, gateway, proof);
+    const afterTerminal = await snapshotCompactionSession(runtime, gateway, proof);
     evidence.afterTerminal = afterTerminal;
 
     const requestsAtTerminal = await readJsonl(appServerLog);
@@ -957,7 +957,7 @@ async function runCase(params: {
     }
 
     evidence.successor = await runChat(runtime, state, gateway, proof, successorMarker);
-    const after = snapshotCompactionSession(runtime, gateway, proof);
+    const after = await snapshotCompactionSession(runtime, gateway, proof);
     evidence.after = after;
     const finalRequests = await readJsonl(appServerLog);
     const finalTurnStarts = inboundTurnStarts(finalRequests);
@@ -1060,7 +1060,7 @@ async function runCase(params: {
     evidence.codexRequests = failedRequests;
     evidence.channelTranscript = state.getSnapshot().messages;
     if (gateway) {
-      evidence.failureSnapshot = snapshotCompactionSession(runtime, gateway, proof);
+      evidence.failureSnapshot = await snapshotCompactionSession(runtime, gateway, proof);
     }
   } finally {
     proof.releaseBeforeHook.resolve();

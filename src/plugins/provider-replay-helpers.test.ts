@@ -10,7 +10,6 @@ import {
   buildOpenAICompatibleReplayPolicy,
   buildPassthroughGeminiSanitizingReplayPolicy,
   resolveTaggedReasoningOutputMode,
-  sanitizeGoogleGeminiReplayHistory,
   sanitizeGoogleGeminiReplayHistoryAsync,
   buildStrictAnthropicReplayPolicy,
 } from "./provider-replay-helpers.js";
@@ -312,44 +311,12 @@ describe("provider replay helpers", () => {
       buildPassthroughGeminiSanitizingReplayPolicy("anthropic/claude-sonnet-4-6"),
     ).not.toHaveProperty("sanitizeThoughtSignatures");
   });
-
-  it("retains the deprecated synchronous Gemini replay adapter", () => {
-    const customEntries: Array<{ customType: string; data: unknown }> = [];
-
-    const result = sanitizeGoogleGeminiReplayHistory({
-      provider: "google",
-      modelApi: "google-generative-ai",
-      modelId: "gemini-3.1-pro-preview",
-      sessionId: "session-1",
-      messages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "hello" }],
-        },
-      ],
-      sessionState: {
-        getCustomEntries: () => customEntries,
-        appendCustomEntry: (customType: string, data: unknown) => {
-          customEntries.push({ customType, data });
-        },
-      },
-    } as never);
-
-    const bootstrapMessage = result[0] as { role?: string; content?: unknown } | undefined;
-    expect(bootstrapMessage?.role).toBe("user");
-    expect(bootstrapMessage?.content).toBe("(session bootstrap)");
-    expect(customEntries[0]?.customType).toBe("google-turn-ordering-bootstrap");
-  });
 });
 
-it("awaits the Gemini bootstrap marker and propagates write failure without sync fallback", async () => {
+it("awaits the Gemini bootstrap marker and propagates write failure", async () => {
   const committed = createDeferredCore<string>();
-  const legacy = vi.fn(() => {
-    throw new Error("synchronous persistence called");
-  });
   const sessionState = {
     getCustomEntries: () => [],
-    appendCustomEntry: legacy,
     appendCustomEntryAsync: vi.fn(() => committed.promise),
   };
   const context = {
@@ -368,11 +335,9 @@ it("awaits the Gemini bootstrap marker and propagates write failure without sync
   committed.resolve("bootstrap-marker");
   const messages = await replay;
   expect(messages[0]).toMatchObject({ role: "user", content: "(session bootstrap)" });
-  expect(legacy).not.toHaveBeenCalled();
 
   sessionState.appendCustomEntryAsync.mockRejectedValueOnce(new Error("worker commit rejected"));
   await expect(sanitizeGoogleGeminiReplayHistoryAsync(context)).rejects.toThrow(
     "worker commit rejected",
   );
-  expect(legacy).not.toHaveBeenCalled();
 });

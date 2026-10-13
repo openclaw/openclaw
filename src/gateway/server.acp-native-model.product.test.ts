@@ -322,7 +322,7 @@ module.exports = {
         ).toEqual({
           text: acpAnswer,
         });
-        expect(manager.resolveSession({ cfg, agentId, sessionKey })).toMatchObject({
+        expect(await manager.resolveSessionAsync({ cfg, agentId, sessionKey })).toMatchObject({
           kind: "ready",
           entry: { sessionId: initialized.sessionEntry.sessionId },
           meta: {
@@ -361,15 +361,17 @@ module.exports = {
         await send(sessionKey, "Continue after the native failure.", "acp-after-failure"),
       ).toEqual({ text: acpAnswers.get("main") });
       expect(requests).toHaveLength(requestCount);
-      expect(manager.resolveSession({ cfg, agentId: "main", sessionKey })).toMatchObject({
-        kind: "ready",
-        entry: {
-          providerOverride: override.providerId,
-          modelOverride: override.modelId,
-          modelOverrideSource: "user",
+      expect(await manager.resolveSessionAsync({ cfg, agentId: "main", sessionKey })).toMatchObject(
+        {
+          kind: "ready",
+          entry: {
+            providerOverride: override.providerId,
+            modelOverride: override.modelId,
+            modelOverrideSource: "user",
+          },
+          meta: { runtimeOptions: { model: ACP_MODEL } },
         },
-        meta: { runtimeOptions: { model: ACP_MODEL } },
-      });
+      );
 
       await patchSessionEntryCore({ agentId: "main", sessionKey }, () => ({
         providerOverride: MISSING_AUTH_PROVIDER_ID,
@@ -410,15 +412,17 @@ module.exports = {
         await send(sessionKey, "Continue after the missing native auth.", "acp-after-missing-auth"),
       ).toEqual({ text: acpAnswers.get("main") });
       expect(requests).toHaveLength(requestCount);
-      expect(manager.resolveSession({ cfg, agentId: "main", sessionKey })).toMatchObject({
-        kind: "ready",
-        entry: {
-          providerOverride: MISSING_AUTH_PROVIDER_ID,
-          modelOverride: missingAuth.modelId,
-          modelOverrideSource: "user",
+      expect(await manager.resolveSessionAsync({ cfg, agentId: "main", sessionKey })).toMatchObject(
+        {
+          kind: "ready",
+          entry: {
+            providerOverride: MISSING_AUTH_PROVIDER_ID,
+            modelOverride: missingAuth.modelId,
+            modelOverrideSource: "user",
+          },
+          meta: { runtimeOptions: { model: ACP_MODEL } },
         },
-        meta: { runtimeOptions: { model: ACP_MODEL } },
-      });
+      );
     } finally {
       try {
         if (cfg) {

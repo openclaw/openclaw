@@ -102,13 +102,13 @@ const hoisted = vi.hoisted(() => {
       conversationId: string;
       parentConversationId?: string;
     } | null,
-    setIdleTimeoutBySessionKey: typeof setThreadBindingIdleTimeoutBySessionKeyMock,
-    setMaxAgeBySessionKey: typeof setThreadBindingMaxAgeBySessionKeyMock,
+    setIdleTimeoutBySessionKeyAsync: typeof setThreadBindingIdleTimeoutBySessionKeyMock,
+    setMaxAgeBySessionKeyAsync: typeof setThreadBindingMaxAgeBySessionKeyMock,
   ) {
     const conversationBindings: ChannelConversationBindingSupport = {
       supportsCurrentConversationBinding: true,
-      setIdleTimeoutBySessionKey,
-      setMaxAgeBySessionKey,
+      setIdleTimeoutBySessionKeyAsync,
+      setMaxAgeBySessionKeyAsync,
     };
     return {
       plugin: {
@@ -360,8 +360,14 @@ describe("/session conversation bindings", () => {
     hoisted.sessionBindingResolveByConversationMock.mockReset().mockReturnValue(null);
     hoisted.sessionBindingUnbindMock.mockReset().mockResolvedValue([]);
     for (const { plugin } of hoisted.runtimeChannelRegistry.channels) {
-      delete plugin.conversationBindings.setIdleTimeoutBySessionKeyAsync;
-      delete plugin.conversationBindings.setMaxAgeBySessionKeyAsync;
+      plugin.conversationBindings.setIdleTimeoutBySessionKeyAsync =
+        plugin.id === "thread-chat"
+          ? hoisted.setThreadBindingIdleTimeoutBySessionKeyMock
+          : hoisted.setMatrixThreadBindingIdleTimeoutBySessionKeyMock;
+      plugin.conversationBindings.setMaxAgeBySessionKeyAsync =
+        plugin.id === "thread-chat"
+          ? hoisted.setThreadBindingMaxAgeBySessionKeyMock
+          : hoisted.setMatrixThreadBindingMaxAgeBySessionKeyMock;
     }
     vi.useRealTimers();
   });

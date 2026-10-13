@@ -6,7 +6,7 @@ import { onInternalSessionTranscriptUpdate } from "openclaw/plugin-sdk/memory-co
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import {
   readSessionTranscriptEvents,
-  withSessionTranscriptWriteLock,
+  withSessionTranscriptWrite,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
@@ -70,7 +70,7 @@ describe("Codex app-server terminal settlement", () => {
       let writer: Promise<void> | undefined;
       const harness = createStartedThreadHarness(async (method) => {
         if (method === "turn/start") {
-          writer = withSessionTranscriptWriteLock(transcriptTarget, async () => {
+          writer = withSessionTranscriptWrite(transcriptTarget, async () => {
             writerAcquired.resolve();
             await held.promise;
           });
@@ -378,7 +378,7 @@ describe("Codex app-server terminal settlement", () => {
       const holdWriter = async () => {
         const writerAcquired = createDeferred<void>();
         checkpointWrites.push(
-          withSessionTranscriptWriteLock(transcriptTarget, async () => {
+          withSessionTranscriptWrite(transcriptTarget, async () => {
             writerAcquired.resolve();
             await checkpoint.promise;
           }),

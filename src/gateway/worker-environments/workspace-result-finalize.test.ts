@@ -89,8 +89,8 @@ describe("concurrent worker workspace results", () => {
       if (placement?.state !== "active") {
         throw new Error("expected active placement");
       }
-      const source = SessionManager.open(sessionTarget);
-      source.appendMessage(
+      const source = await SessionManager.openAsync(sessionTarget);
+      await source.appendMessageAsync(
         makeAgentUserMessage({ content: "Durable input 🦞\nunchanged", timestamp: 1 }),
       );
       const before = source.getPersistedEntries();
@@ -184,7 +184,7 @@ describe("concurrent worker workspace results", () => {
           expect(outcome).toMatchObject({ value: { paths: ["src/retained.ts"] } });
           expect(publish).toHaveBeenCalledOnce();
           expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
-          const after = SessionManager.open(sessionTarget).getPersistedEntries();
+          const after = (await SessionManager.openAsync(sessionTarget)).getPersistedEntries();
           expect(after.slice(0, before.length)).toEqual(before);
           expect(readWorkerTurnTranscriptStorageRows().slice(0, beforeRows.length)).toEqual(
             beforeRows,
@@ -200,7 +200,9 @@ describe("concurrent worker workspace results", () => {
             expect(quiesce).not.toHaveBeenCalled();
           }
           if (change !== "session") {
-            expect(SessionManager.open(sessionTarget).getPersistedEntries()).toEqual(before);
+            expect((await SessionManager.openAsync(sessionTarget)).getPersistedEntries()).toEqual(
+              before,
+            );
             expect(readWorkerTurnTranscriptStorageRows()).toEqual(beforeRows);
           }
         }

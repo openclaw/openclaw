@@ -2195,7 +2195,6 @@
     "test:sessions:history:bench": "node --import ./scripts/tsx.mjs scripts/bench-session-history.ts",
     "test:sessions:hydration-memory": "node --import ./scripts/tsx.mjs scripts/bench-session-manager-hydration-memory.ts",
     "test:sessions:paths:bench": "node --import ./scripts/tsx.mjs scripts/bench-session-paths.ts",
-    "test:sessions:write-hold": "node --import ./scripts/tsx.mjs scripts/bench-session-manager-write-hold.ts",
     "test:startup:memory": "node --import ./scripts/tsx.mjs scripts/ensure-cli-startup-build.mts && node scripts/check-cli-startup-memory.mjs",
     "test:ui": "pnpm lint:ui:no-raw-window-open && node --import ./scripts/tsx.mjs scripts/ensure-playwright-chromium.mts && pnpm --dir ui test",
     "test:ui:e2e": "node --import ./scripts/tsx.mjs scripts/ensure-playwright-chromium.mts && node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner",

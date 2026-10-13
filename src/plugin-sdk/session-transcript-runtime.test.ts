@@ -45,7 +45,7 @@ import {
   readSessionTranscriptEvents,
   readVisibleSessionTranscriptMessageEntries,
   resolveSessionTranscriptMemoryHitKeyToSessionKeys,
-  withSessionTranscriptWriteLock,
+  withSessionTranscriptWrite,
   type SessionTranscriptReadParams,
   createSessionCatalogGitHubLinker,
   createSessionCatalogSourceActorProjector,
@@ -162,7 +162,7 @@ describe("session transcript runtime SDK", () => {
     const stopped = new Error("yield settlement stopped");
     const writerEntered = createDeferredCore();
     const releaseWriter = createDeferredCore();
-    const heldWriter = withSessionTranscriptWriteLock(scope, async () => {
+    const heldWriter = withSessionTranscriptWrite(scope, async () => {
       writerEntered.resolve();
       await releaseWriter.promise;
     });
@@ -233,7 +233,7 @@ describe("session transcript runtime SDK", () => {
     });
     let enteredWrites = 0;
     const appendIfMissing = async () =>
-      await withSessionTranscriptWriteLock(scope, async (locked) => {
+      await withSessionTranscriptWrite(scope, async (locked) => {
         const label = ++enteredWrites === 1 ? "first" : "second";
         steps.push(`${label}:read`);
         const events = await locked.readEvents();

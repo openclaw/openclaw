@@ -5,16 +5,18 @@ import { registerSecretValueForRedaction } from "../logging/secret-redaction-reg
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import type { DebugProxySettings } from "./env.js";
 import {
-  captureHttpExchange,
-  captureWsEvent,
-  finalizeDebugProxyCapture,
-  initializeDebugProxyCapture,
-  type DebugProxyCaptureRuntimeDeps,
+  captureHttpExchangeAsync,
+  captureWsEventAsync,
+  finalizeDebugProxyCaptureAsync,
+  initializeDebugProxyCaptureAsync,
 } from "./runtime.js";
+import { finalizeCaptureStoreAsync } from "./store-lifecycle.js";
+import * as captureStore from "./store.async.js";
+import type { AsyncDebugProxyCaptureStore } from "./store.types.js";
 
 type StoreCall = { name: string; args: unknown[] };
 
-const settings: DebugProxySettings = {
+let settings: DebugProxySettings = {
   enabled: true,
   required: false,
   dbPath: "/tmp/openclaw-proxy-runtime-test.sqlite",
@@ -31,37 +33,79 @@ const fetchTarget: typeof globalThis = {
 
 const events: Record<string, unknown>[] = [];
 const calls: StoreCall[] = [];
-const store = {
-  upsertSession: (...args: unknown[]) => {
-    calls.push({ name: "upsertSession", args });
-  },
-  endSession: (...args: unknown[]) => {
-    calls.push({ name: "endSession", args });
-  },
-  recordEvent: (event: Record<string, unknown>) => {
-    events.push(event);
-  },
-};
-
-const deps: DebugProxyCaptureRuntimeDeps = {
+const deps = {
   fetchTarget,
-  getStore: () => store,
-  closeStore: () => {
-    calls.push({ name: "closeStore", args: [] });
-  },
-  persistEventPayload: (
-    _store: unknown,
-    payload: { data?: Buffer | string | null; contentType?: string },
-  ) => ({
-    contentType: payload.contentType,
-    ...(typeof payload.data === "string"
-      ? { dataText: payload.data }
-      : Buffer.isBuffer(payload.data)
-        ? { dataText: payload.data.toString("utf8") }
-        : {}),
-  }),
   safeJsonString: (value: unknown) => (value == null ? undefined : JSON.stringify(value)),
 };
+
+vi.mock("../state/openclaw-state-worker-context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/openclaw-state-worker-context.js")>()),
+  captureOpenClawStateWorkerContext: () => ({
+    admission: {
+      coordinationKey: "synthetic",
+      databasePath: "/synthetic/state.sqlite",
+      identity: { key: "synthetic", canonicalPath: "/synthetic/state.sqlite" },
+      assertCurrent() {},
+    },
+    environment: { OPENCLAW_STATE_DIR: "/synthetic" },
+  }),
+}));
+
+function createCaptureLease(): ReturnType<
+  typeof captureStore.createDebugProxyCaptureStoreForContext
+> {
+  let closed = false;
+  let closing: Promise<void> | undefined;
+  const unused = async (): Promise<never> => {
+    throw new Error("Unexpected capture read in writer fixture");
+  };
+  const store: AsyncDebugProxyCaptureStore = {
+    dbPath: "/synthetic/state.sqlite",
+    get isClosed() {
+      return closed;
+    },
+    upsertSession: async (...args) => {
+      calls.push({ name: "upsertSession", args });
+    },
+    endSession: async (...args) => {
+      calls.push({ name: "endSession", args });
+    },
+    recordEvent: async (event) => {
+      events.push({ ...event });
+    },
+    recordEventWithPayload: async (event, payload) => {
+      const data = payload.data;
+      events.push({
+        ...event,
+        contentType: payload.contentType,
+        ...(typeof data === "string"
+          ? { dataText: data }
+          : Buffer.isBuffer(data)
+            ? { dataText: data.toString("utf8") }
+            : {}),
+      });
+    },
+    persistPayload: unused,
+    listSessions: unused,
+    getSessionEvents: unused,
+    summarizeSessionCoverage: unused,
+    readBlob: unused,
+    queryPreset: unused,
+    deleteSessions: unused,
+    purgeAll: unused,
+    close: () =>
+      (closing ??= Promise.resolve().then(async () => {
+        await finalizeCaptureStoreAsync(store, store);
+        closed = true;
+      })),
+  };
+  return {
+    store,
+    ready: Promise.resolve(),
+    runOperation: (operation) => operation(store),
+    release: () => store.close(),
+  };
+}
 
 const ONE_MIB = 1024 * 1024;
 
@@ -99,33 +143,36 @@ async function waitForResponseSettled(): Promise<void> {
 
 describe("debug proxy runtime", () => {
   beforeEach(() => {
-    finalizeDebugProxyCapture(settings, deps);
-    // Each test owns a fresh injected store binding, including its admission.
-    deps.getStore = () => store;
+    settings = { ...settings };
+    vi.spyOn(captureStore, "createDebugProxyCaptureStoreForContext").mockImplementation(
+      createCaptureLease,
+    );
     events.length = 0;
     calls.length = 0;
     resetSecretRedactionRegistryForTest();
     fetchTarget.fetch = async () => new Response("{}", { status: 200 });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await finalizeDebugProxyCaptureAsync(settings, deps);
+    await finalizeDebugProxyCaptureAsync(undefined, deps);
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 
   it.each([
-    ["initialization", () => initializeDebugProxyCapture("test", undefined, deps)],
-    ["finalization", () => finalizeDebugProxyCapture(undefined, deps)],
+    ["initialization", () => initializeDebugProxyCaptureAsync("test", undefined, deps)],
+    ["finalization", () => finalizeDebugProxyCaptureAsync(undefined, deps)],
     [
       "HTTP exchange",
       () =>
-        captureHttpExchange(
+        captureHttpExchangeAsync(
           { url: "https://example.test", method: "GET", response: new Response(null) },
           undefined,
           deps,
         ),
     ],
-  ] as const)("does not discover capture paths for disabled %s", (_name, capture) => {
+  ] as const)("does not discover capture paths for disabled %s", async (_name, capture) => {
     // Exercise production path discovery rather than the test-only state-dir shortcut.
     vi.stubEnv("OPENCLAW_TEST_FAST", "0");
     vi.stubEnv("OPENCLAW_STATE_DIR", undefined);
@@ -133,7 +180,7 @@ describe("debug proxy runtime", () => {
     const existsSync = vi.spyOn(fs, "existsSync");
     const originalFetch = fetchTarget.fetch;
 
-    capture();
+    await capture();
 
     expect(existsSync).not.toHaveBeenCalled();
     expect(calls).toEqual([]);
@@ -141,7 +188,7 @@ describe("debug proxy runtime", () => {
     expect(fetchTarget.fetch).toBe(originalFetch);
   });
 
-  it("observes environment changes while explicit capture settings remain authoritative", () => {
+  it("observes environment changes while explicit capture settings remain authoritative", async () => {
     const frame = {
       url: "wss://example.test",
       direction: "outbound",
@@ -151,23 +198,25 @@ describe("debug proxy runtime", () => {
     } as const;
     vi.stubEnv("OPENCLAW_DEBUG_PROXY_SESSION_ID", "ambient-capture");
     vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", "0");
-    captureWsEvent(frame, undefined, deps);
+    await captureWsEventAsync(frame, undefined, deps);
     expect(events).toEqual([]);
 
     vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", "1");
-    captureWsEvent(frame, undefined, deps);
+    await captureWsEventAsync(frame, undefined, deps);
     expect(events.map((event) => event.sessionId)).toEqual(["ambient-capture"]);
-    captureWsEvent(frame, { ...settings, enabled: false }, deps);
+    await captureWsEventAsync(frame, { ...settings, enabled: false }, deps);
     expect(events).toHaveLength(1);
 
     vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", "0");
-    captureWsEvent(frame, undefined, deps);
+    await captureWsEventAsync(frame, undefined, deps);
     expect(events).toHaveLength(1);
-    captureWsEvent(frame, settings, deps);
+    await captureWsEventAsync(frame, settings, deps);
     expect(events.map((event) => event.sessionId)).toEqual([
       "ambient-capture",
       "runtime-test-session",
     ]);
+    vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", "1");
+    await finalizeDebugProxyCaptureAsync(undefined, deps);
   });
 
   it("normalizes symbol-bearing request headers before calling patched fetch targets", async () => {
@@ -189,7 +238,7 @@ describe("debug proxy runtime", () => {
       enumerable: false,
     });
 
-    initializeDebugProxyCapture("test", settings, deps);
+    await initializeDebugProxyCaptureAsync("test", settings, deps);
     await fetchTarget.fetch("https://api.example.com/messages#%", {
       method: "POST",
       headers,
@@ -198,7 +247,7 @@ describe("debug proxy runtime", () => {
     await new Promise((resolve) => {
       setImmediate(resolve);
     });
-    finalizeDebugProxyCapture(settings, deps);
+    await finalizeDebugProxyCaptureAsync(settings, deps);
 
     const request = events.find((event) => event.kind === "request");
     expect(JSON.parse(String(request?.headersJson))).toStrictEqual({
@@ -213,8 +262,8 @@ describe("debug proxy runtime", () => {
     const pathSecret = "capture/path secret";
     registerSecretValueForRedaction(secret);
     registerSecretValueForRedaction(pathSecret);
-    initializeDebugProxyCapture("test", settings, deps);
-    captureHttpExchange(
+    await initializeDebugProxyCaptureAsync("test", settings, deps);
+    void captureHttpExchangeAsync(
       {
         url: `https://api.example.com/models/${encodeURIComponent(pathSecret)}?key=${encodeURIComponent(secret)}`,
         method: "GET",
@@ -242,7 +291,7 @@ describe("debug proxy runtime", () => {
     await new Promise((resolve) => {
       setImmediate(resolve);
     });
-    finalizeDebugProxyCapture(settings, deps);
+    await finalizeDebugProxyCaptureAsync(settings, deps);
 
     const request = events.find((event) => event.kind === "request");
     expect(request?.path).toBe("/models/%5BREDACTED%5D?key=%5BREDACTED%5D");
@@ -262,11 +311,11 @@ describe("debug proxy runtime", () => {
     });
   });
 
-  it("redacts registered values from every persisted WebSocket field", () => {
+  it("redacts registered values from every persisted WebSocket field", async () => {
     const secret = 'mattermost-"capture\\secret\nline';
     registerSecretValueForRedaction(secret);
 
-    captureWsEvent(
+    await captureWsEventAsync(
       {
         url: `wss://chat.example.test/api/v4/websocket?token=${encodeURIComponent(secret)}`,
         direction: "outbound",
@@ -279,7 +328,7 @@ describe("debug proxy runtime", () => {
       settings,
       deps,
     );
-    captureWsEvent(
+    await captureWsEventAsync(
       {
         url: "wss://chat.example.test/api/v4/websocket",
         direction: "inbound",
@@ -304,7 +353,7 @@ describe("debug proxy runtime", () => {
     expect(JSON.stringify(events)).not.toContain(JSON.stringify(secret).slice(1, -1));
   });
 
-  it("redacts registered credential bytes from otherwise non-UTF-8 frames", () => {
+  it("redacts registered credential bytes from otherwise non-UTF-8 frames", async () => {
     const secret = "binary-frame-capture-secret";
     registerSecretValueForRedaction(secret);
     const payload = Buffer.concat([
@@ -313,7 +362,7 @@ describe("debug proxy runtime", () => {
       Buffer.from([0xfe]),
     ]);
 
-    captureWsEvent(
+    await captureWsEventAsync(
       {
         url: "wss://chat.example.test/api/v4/websocket",
         direction: "outbound",
@@ -341,7 +390,7 @@ describe("debug proxy runtime", () => {
       registerSecretValueForRedaction(contentTypeSecret);
       const requestHeaders = { "content-type": `application/json; token=${contentTypeSecret}` };
 
-      captureHttpExchange(
+      void captureHttpExchangeAsync(
         {
           url: "https://api.example.test/v1/messages",
           method: "POST",
@@ -380,10 +429,11 @@ describe("debug proxy runtime", () => {
     fetchTarget.fetch = vi.fn(async () => {
       throw new Error(`request failed for ${secret}`);
     }) as typeof fetch;
-    initializeDebugProxyCapture("test", settings, deps);
+    await initializeDebugProxyCaptureAsync("test", settings, deps);
 
     await expect(fetchTarget.fetch(secretUrl)).rejects.toThrow("request failed");
 
+    await finalizeDebugProxyCaptureAsync(settings, deps);
     const event = events.find((candidate) => candidate.kind === "error");
     expect(event?.host).toBe("redacted.invalid");
     expect(event?.path).toBe("/%5BREDACTED%5D");
@@ -393,7 +443,7 @@ describe("debug proxy runtime", () => {
   it("gives up on a stalled response body and lets the caller's cancellation settle", async () => {
     vi.useFakeTimers();
     try {
-      initializeDebugProxyCapture("test", settings, deps);
+      await initializeDebugProxyCaptureAsync("test", settings, deps);
       // Headers plus one chunk, then the remote stops without EOF. clone() tees
       // the body, and a tee branch cancels only once both branches cancel or the
       // source ends — so a capture read with no idle bound holds the caller's
@@ -409,7 +459,7 @@ describe("debug proxy runtime", () => {
       // Capture clones internally, exactly as the patched fetch does, so the
       // caller keeps the branch this response already holds. Cloning here first
       // would leave a third, unread branch that no one ever cancels.
-      captureHttpExchange(
+      void captureHttpExchangeAsync(
         { url: "https://api.example.com/stalls", method: "GET", response: upstream },
         settings,
         deps,
@@ -435,13 +485,13 @@ describe("debug proxy runtime", () => {
       expect(events.some((event) => event.kind === "error")).toBe(false);
     } finally {
       vi.useRealTimers();
-      finalizeDebugProxyCapture(settings, deps);
+      await finalizeDebugProxyCaptureAsync(settings, deps);
     }
   });
 
   it("skips capturing the body when Content-Length exceeds the cap", async () => {
-    initializeDebugProxyCapture("test", settings, deps);
-    captureHttpExchange(
+    await initializeDebugProxyCaptureAsync("test", settings, deps);
+    void captureHttpExchangeAsync(
       {
         url: "https://api.openai.com/v1/files/big",
         method: "GET",
@@ -457,7 +507,7 @@ describe("debug proxy runtime", () => {
       deps,
     );
     await waitForResponseSettled();
-    finalizeDebugProxyCapture(settings, deps);
+    await finalizeDebugProxyCaptureAsync(settings, deps);
 
     const response = events.find((event) => event.kind === "response");
     expect(response).toBeDefined();
@@ -469,8 +519,8 @@ describe("debug proxy runtime", () => {
   });
 
   it("skips capturing decimal Content-Length values above the safe integer range", async () => {
-    initializeDebugProxyCapture("test", settings, deps);
-    captureHttpExchange(
+    await initializeDebugProxyCaptureAsync("test", settings, deps);
+    void captureHttpExchangeAsync(
       {
         url: "https://api.openai.com/v1/files/huge",
         method: "GET",
@@ -486,7 +536,7 @@ describe("debug proxy runtime", () => {
       deps,
     );
     await waitForResponseSettled();
-    finalizeDebugProxyCapture(settings, deps);
+    await finalizeDebugProxyCaptureAsync(settings, deps);
 
     const response = events.find((event) => event.kind === "response");
     expect(JSON.parse(String(response?.metaJson))).toMatchObject({ bodyCapture: "too-large" });
@@ -495,8 +545,8 @@ describe("debug proxy runtime", () => {
   });
 
   it("streams non-decimal Content-Length values through the body cap", async () => {
-    initializeDebugProxyCapture("test", settings, deps);
-    captureHttpExchange(
+    await initializeDebugProxyCaptureAsync("test", settings, deps);
+    void captureHttpExchangeAsync(
       {
         url: "https://api.openai.com/v1/files/small",
         method: "GET",
@@ -512,7 +562,7 @@ describe("debug proxy runtime", () => {
       deps,
     );
     await waitForResponseSettled();
-    finalizeDebugProxyCapture(settings, deps);
+    await finalizeDebugProxyCaptureAsync(settings, deps);
 
     const response = events.find((event) => event.kind === "response");
     expect(response).toBeDefined();
@@ -522,10 +572,10 @@ describe("debug proxy runtime", () => {
   });
 
   it("fails closed on chunked responses that stream past the cap", async () => {
-    initializeDebugProxyCapture("test", settings, deps);
+    await initializeDebugProxyCaptureAsync("test", settings, deps);
     // 20 MiB streamed without a Content-Length header: the bounded reader must
     // cancel the clone at the cap and record metadata instead of buffering it.
-    captureHttpExchange(
+    void captureHttpExchangeAsync(
       {
         url: "https://api.anthropic.com/v1/messages",
         method: "POST",
@@ -535,7 +585,7 @@ describe("debug proxy runtime", () => {
       deps,
     );
     await waitForResponseSettled();
-    finalizeDebugProxyCapture(settings, deps);
+    await finalizeDebugProxyCaptureAsync(settings, deps);
 
     const response = events.find((event) => event.kind === "response");
     expect(response).toBeDefined();
@@ -545,8 +595,8 @@ describe("debug proxy runtime", () => {
   });
 
   it("records Response-like status metadata when the Headers API is absent", async () => {
-    initializeDebugProxyCapture("test", settings, deps);
-    captureHttpExchange(
+    await initializeDebugProxyCaptureAsync("test", settings, deps);
+    void captureHttpExchangeAsync(
       {
         url: "https://api.openai.com/v1/no-headers-api",
         method: "GET",
@@ -556,7 +606,7 @@ describe("debug proxy runtime", () => {
       deps,
     );
     await waitForResponseSettled();
-    finalizeDebugProxyCapture(settings, deps);
+    await finalizeDebugProxyCaptureAsync(settings, deps);
 
     const response = events.find((event) => event.kind === "response");
     expect(response?.status).toBe(204);

@@ -6,7 +6,7 @@ import {
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "openclaw/plugin-sdk/agent-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { upsertAuthProfile } from "openclaw/plugin-sdk/provider-auth";
+import { upsertAuthProfileAsync } from "openclaw/plugin-sdk/provider-auth";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it as baseIt, vi } from "vitest";
 import {
@@ -321,8 +321,8 @@ function readProfile(agentDir?: string) {
   return loadAuthProfileStoreForSecretsRuntime(agentDir).profiles["openai:work"];
 }
 
-function persistProfile(agentDir: string, credential: AuthProfileCredential): void {
-  upsertAuthProfile({ agentDir, profileId: "openai:work", credential });
+async function persistProfile(agentDir: string, credential: AuthProfileCredential): Promise<void> {
+  await upsertAuthProfileAsync({ agentDir, profileId: "openai:work", credential });
 }
 
 function expectApiKeyLogin(
@@ -670,7 +670,7 @@ describe("Codex auth bridge", () => {
       clearEnv: ["CODEX_HOME", "HOME", "FOO"],
     });
 
-    upsertAuthProfile({
+    await upsertAuthProfileAsync({
       agentDir,
       profileId: "openai:default",
       credential: oauthProfile("test", {
@@ -818,7 +818,7 @@ describe("Codex auth bridge", () => {
     const startOptions = createStartOptions({ clearEnv: ["FOO"] });
     const tokenLikeKey = "eyJhbGciOiJub25l.eyJzdWIiOiJjb2RleCJ9.signature123456";
 
-    persistProfile(agentDir, {
+    await persistProfile(agentDir, {
       type: "api_key",
       provider: "openai",
       key: tokenLikeKey,
@@ -848,7 +848,7 @@ describe("Codex auth bridge", () => {
   });
 
   it("fingerprints token auth-profile secret refs", async ({ agentDir }) => {
-    persistProfile(agentDir, {
+    await persistProfile(agentDir, {
       type: "token",
       provider: "openai",
       tokenRef: { source: "env", provider: "default", id: "OPENAI_CODEX_TEST_TOKEN" },
@@ -948,7 +948,7 @@ describe("Codex auth bridge", () => {
       },
     });
     try {
-      persistProfile(
+      await persistProfile(
         agentDir,
         oauthProfile("test", {
           access: "access-token",
@@ -984,14 +984,14 @@ describe("Codex auth bridge", () => {
       expires: Date.now() + 60 * 60_000,
       accountId: "rotating-account",
     });
-    persistProfile(agentDir, credential);
+    await persistProfile(agentDir, credential);
     const authProfileStore = loadAuthProfileStoreForSecretsRuntime(agentDir);
     const currentCredential = {
       ...credential,
       refresh: "updated-refresh",
       expires: credential.expires + 60_000,
     };
-    persistProfile(agentDir, currentCredential);
+    await persistProfile(agentDir, currentCredential);
     oauth.refresh
       .mockImplementationOnce(async () => {
         expect(readProfile(agentDir)).toEqual(currentCredential);
@@ -1064,7 +1064,7 @@ describe("Codex auth bridge", () => {
       },
     });
     try {
-      persistProfile(agentDir, oauthProfile("initial", { accountId: "account-a" }));
+      await persistProfile(agentDir, oauthProfile("initial", { accountId: "account-a" }));
       const authProfileStore = loadAuthProfileStoreForSecretsRuntime(agentDir);
       ensureCodexAppServerClientRuntime(harness.client, profileParams(agentDir, authProfileStore));
       recordCodexAppServerAuthHandoff(
@@ -1167,7 +1167,7 @@ describe("Codex auth bridge", () => {
       accountId: "account-b",
     });
 
-    persistProfile(agentDir, credential);
+    await persistProfile(agentDir, credential);
     const authProfileStore = loadAuthProfileStoreForSecretsRuntime(agentDir);
 
     await expect(
@@ -1224,7 +1224,7 @@ describe("Codex auth bridge", () => {
         }),
     );
 
-    persistProfile(agentDir, oauthProfile("initial", { accountId: "initial-account" }));
+    await persistProfile(agentDir, oauthProfile("initial", { accountId: "initial-account" }));
     const authProfileStore = loadAuthProfileStoreForSecretsRuntime(agentDir);
 
     const refresh = refreshTokens(profileParams(agentDir, authProfileStore));
@@ -1259,7 +1259,7 @@ describe("Codex auth bridge", () => {
     });
     providerRuntimeMocks.formatProviderAuthProfileApiKeyWithPlugin.mockImplementationOnce(
       async ({ context }) => {
-        persistProfile(
+        await persistProfile(
           agentDir,
           oauthProfile("replacement", { access: replacementAccess, expires: Date.now() + 60_000 }),
         );
@@ -1267,7 +1267,7 @@ describe("Codex auth bridge", () => {
       },
     );
 
-    persistProfile(
+    await persistProfile(
       agentDir,
       oauthProfile("initial", { access: initialAccess, expires: Date.now() - 60_000 }),
     );
@@ -1298,7 +1298,7 @@ describe("Codex auth bridge", () => {
       accountId: "shared-account",
     });
 
-    persistProfile(agentDir, oauthProfile("persisted", { accountId: "shared-account" }));
+    await persistProfile(agentDir, oauthProfile("persisted", { accountId: "shared-account" }));
     const scopedCredential = {
       ...oauthProfile("scoped", {
         access: "scoped-expired-access",
@@ -1341,7 +1341,7 @@ describe("Codex auth bridge", () => {
       accountId: "account-a",
     });
 
-    persistProfile(
+    await persistProfile(
       agentDir,
       oauthProfile("account-a", {
         access: chatgptAccessToken("account-a", "expired"),
@@ -1351,7 +1351,7 @@ describe("Codex auth bridge", () => {
     );
     const authProfileStore = loadAuthProfileStoreForSecretsRuntime(agentDir);
     expect(authProfileStore.runtimePersistedProfileIds).toContain("openai:work");
-    persistProfile(
+    await persistProfile(
       agentDir,
       oauthProfile("account-b", { access: replacementAccess, email: "codex@example.test" }),
     );
@@ -1734,7 +1734,7 @@ describe("Codex auth bridge", () => {
   }) => {
     const request = vi.fn(async () => ({ type: "chatgptAuthTokens" }));
 
-    persistProfile(agentDir, {
+    await persistProfile(agentDir, {
       type: "token",
       provider: "openai-codex",
       token: "legacy-access-token",
@@ -1761,7 +1761,7 @@ describe("Codex auth bridge", () => {
   it("rejects callback workspace changes against token claims before refresh", async ({
     agentDir,
   }) => {
-    persistProfile(
+    await persistProfile(
       agentDir,
       oauthProfile("test", {
         access: chatgptAccessToken("workspace-selected"),
@@ -1793,7 +1793,7 @@ describe("Codex auth bridge", () => {
     });
 
     await fs.mkdir(childAgentDir, { recursive: true });
-    persistProfile(
+    await persistProfile(
       childAgentDir,
       oauthProfile("test", {
         access: "child-stale-access-token",
@@ -1803,7 +1803,7 @@ describe("Codex auth bridge", () => {
         email: "main-codex@example.test",
       }),
     );
-    upsertAuthProfile({
+    await upsertAuthProfileAsync({
       profileId: "openai:work",
       credential: oauthProfile("test", {
         access: "main-current-access-token",

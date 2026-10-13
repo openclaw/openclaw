@@ -93,7 +93,7 @@ function prepareExplicitTtsOverrides(params: ExplicitTtsOverrideParams) {
   return { cfg, providerInput, modelId, voiceId, config };
 }
 
-/** @deprecated Use resolveExplicitTtsOverridesAsync. Removed at the next Plugin SDK major. */
+/** @deprecated Use resolveExplicitTtsOverridesAsync. Removed after stable deprecation and a compatibility period. */
 export function resolveExplicitTtsOverrides(
   params: ExplicitTtsOverrideParams,
 ): TtsDirectiveOverrides {

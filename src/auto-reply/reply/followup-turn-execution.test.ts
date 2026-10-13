@@ -224,7 +224,8 @@ describe("executeFollowupTurn", () => {
 
   it("freezes commentary ownership for a queued on-to-off transition", async () => {
     let verboseLevel: "on" | "off" = "off";
-    let isVerboseProgressActive = () => true;
+    let isVerboseProgressActive = async () => true;
+    let verboseProgressVisible = true;
     const turn = createTurn({
       session: {
         kind: "session",
@@ -238,7 +239,7 @@ describe("executeFollowupTurn", () => {
       expect(params.resolvedVerboseLevel).toBe("off");
       expect(params.opts?.commentaryPayloadsEnabled).toBe(false);
       verboseLevel = "on";
-      expect(isVerboseProgressActive()).toBe(false);
+      expect(await isVerboseProgressActive()).toBe(false);
       return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
     });
 
@@ -247,9 +248,10 @@ describe("executeFollowupTurn", () => {
       defaults: {
         opts: {
           commentaryPayloadsEnabled: true,
-          shouldDeliverCommentaryPayloads: () => isVerboseProgressActive(),
-          onVerboseProgressVisibility: (getter) => {
+          shouldDeliverCommentaryPayloads: () => verboseProgressVisible,
+          onVerboseProgressVisibilityAsync: async (getter) => {
             isVerboseProgressActive = getter;
+            verboseProgressVisible = await getter();
           },
         },
       },

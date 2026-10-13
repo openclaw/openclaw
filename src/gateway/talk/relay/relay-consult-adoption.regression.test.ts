@@ -123,8 +123,8 @@ describe("Talk relay keyed consult adoption", () => {
       (await loadTranscriptEvents(scope))
         .filter(isIndexedSessionEntry)
         .filter((entry) => entry.type === "message");
-    const openManager = () =>
-      SessionManager.openBounded(scope, { maxBytes: 100_000, maxEvents: 100 });
+    const openManager = async () =>
+      await SessionManager.openBoundedAsync(scope, { maxBytes: 100_000, maxEvents: 100 });
     return { scope, consult, recordSpeech, messages, openManager };
   }
 
@@ -149,15 +149,17 @@ describe("Talk relay keyed consult adoption", () => {
         })),
       ]);
 
-      const manager = openManager();
-      expect(manager.appendMessageWithTranscriptAnchor(consult)).toMatchObject({
+      const manager = await openManager();
+      expect(await manager.appendMessageWithTranscriptAnchorAsync(consult)).toMatchObject({
         entryId: "keyed-consult-turn",
         message: consult,
         anchor: { entryId: "keyed-consult-turn", idempotencyKey: consult.idempotencyKey },
         appended: false,
       });
       expect(manager.getAppendParentId()).toBe(beforeAdoption.at(-1)?.id);
-      const answerId = manager.appendMessage(assistantMessage("You have one meeting tomorrow."));
+      const answerId = await manager.appendMessageAsync(
+        assistantMessage("You have one meeting tomorrow."),
+      );
       expect(await messages()).toMatchObject([
         ...beforeAdoption,
         { id: answerId, parentId: beforeAdoption.at(-1)?.id },
@@ -190,9 +192,9 @@ describe("Talk relay keyed consult adoption", () => {
     }
     const beforeAdoption = await messages();
 
-    expect(() => openManager().appendMessage(consult)).toThrow(
-      "Session transcript keyed user is outside the current turn",
-    );
+    await expect(
+      (async () => await (await openManager()).appendMessageAsync(consult))(),
+    ).rejects.toThrow("Session transcript keyed user is outside the current turn");
     expect(await messages()).toEqual(beforeAdoption);
   });
 
@@ -201,9 +203,12 @@ describe("Talk relay keyed consult adoption", () => {
     await recordSpeech(["assistant"]);
     const beforeAdoption = await messages();
 
-    expect(() =>
-      openManager().appendMessage({ ...consult, content: "Publish a different task." }),
-    ).toThrow(
+    await expect(
+      (async () =>
+        await (
+          await openManager()
+        ).appendMessageAsync({ ...consult, content: "Publish a different task." }))(),
+    ).rejects.toThrow(
       'Transcript idempotency key "talk-consult:user" conflicts with the admitted message.',
     );
     expect(await messages()).toEqual(beforeAdoption);

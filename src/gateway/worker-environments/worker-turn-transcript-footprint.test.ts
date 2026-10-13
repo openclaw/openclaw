@@ -44,14 +44,17 @@ function textOf(message: unknown): string {
     : "";
 }
 
-function seedBranchedHistory(persistCurrentInput: boolean): number {
-  const manager = SessionManager.open(sessionTarget);
-  const anchor = manager.appendMessage(
+async function seedBranchedHistory(persistCurrentInput: boolean): Promise<number> {
+  const manager = await SessionManager.openAsync(sessionTarget);
+  const anchor = await manager.appendMessageAsync(
     makeAgentUserMessage({ content: "Starting the conversation.", timestamp: 1 }),
   );
+  if (!anchor) {
+    throw new Error("Expected the branch anchor fixture message ID");
+  }
   for (let index = 0; index < 64; index++) {
     const text = `${INACTIVE_MARKER}${index}`.padEnd(1024, ".");
-    manager.appendMessage(
+    await manager.appendMessageAsync(
       index % 2 === 0
         ? makeAgentUserMessage({ content: text, timestamp: index + 2 })
         : makeAgentAssistantMessage({
@@ -60,18 +63,18 @@ function seedBranchedHistory(persistCurrentInput: boolean): number {
           }),
     );
   }
-  manager.branch(anchor);
-  manager.appendMessage(
+  await manager.branchAsync(anchor);
+  await manager.appendMessageAsync(
     makeAgentUserMessage({ content: "Continue on the selected branch.", timestamp: 66 }),
   );
-  manager.appendMessage(
+  await manager.appendMessageAsync(
     makeAgentAssistantMessage({
       content: [{ type: "text", text: "Selected branch is ready." }],
       timestamp: 67,
     }),
   );
   if (persistCurrentInput) {
-    manager.appendMessage(makeAgentUserMessage({ content: INPUT_TEXT, timestamp: 68 }));
+    await manager.appendMessageAsync(makeAgentUserMessage({ content: INPUT_TEXT, timestamp: 68 }));
   }
   return persistCurrentInput ? 4 : 3;
 }
@@ -93,7 +96,7 @@ describe("Gateway worker-turn selected transcript preparation", () => {
   it.each(["already-persisted", "recorder-owned"] as const)(
     "does not hydrate inactive branches for %s input",
     async (persistence) => {
-      const expectedMessages = seedBranchedHistory(persistence === "already-persisted");
+      const expectedMessages = await seedBranchedHistory(persistence === "already-persisted");
       await seedActivePlacement();
       const reachedCredential = createDeferredCore();
       const releaseCredential = createDeferredCore();

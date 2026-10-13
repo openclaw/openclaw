@@ -91,7 +91,7 @@ describe("plugin runtime ACP session creation", () => {
       });
       expect(created.entry.initializationPending).toBeUndefined();
       expect(
-        acpSessionMeta.readAcpSessionEntry({ cfg: {}, sessionKey: created.key })?.acp,
+        (await acpSessionMeta.readAcpSessionEntryAsync({ cfg: {}, sessionKey: created.key }))?.acp,
       ).toMatchObject({
         backend: "acpx",
         agent: "pi",
@@ -220,7 +220,9 @@ describe("plugin runtime ACP session creation", () => {
 
       expect(recovered.entry.initializationPending).toBeUndefined();
       expect(recovered.entry.acpSessionBinding).toBeUndefined();
-      expect(acpSessionMeta.readAcpSessionEntry({ cfg: {}, sessionKey: key })?.acp).toMatchObject({
+      expect(
+        (await acpSessionMeta.readAcpSessionEntryAsync({ cfg: {}, sessionKey: key }))?.acp,
+      ).toMatchObject({
         backend: "acpx",
         agent: "pi",
         identity: { agentSessionId: "pi-source" },

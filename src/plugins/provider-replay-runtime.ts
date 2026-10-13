@@ -1,5 +1,4 @@
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
-import { warnSessionPersistenceDeprecation } from "../agents/sessions/session-persistence-deprecation.js";
 import {
   ensureProviderRuntimePluginHandle,
   resolveProviderRuntimePlugin,
@@ -17,21 +16,12 @@ type ProviderReplayRuntimeLookup = Pick<
   "provider" | "config" | "workspaceDir" | "env"
 >;
 
-/** Prefer worker-backed hooks; retain the legacy hook solely for third-party providers. */
 export async function sanitizeProviderReplayHistoryWithPluginAsync(
   params: ProviderReplayRuntimeLookup & { context: ProviderSanitizeReplayHistoryContextV2 },
 ) {
   const plugin = resolveProviderRuntimePlugin(params);
   if (plugin?.sanitizeReplayHistoryAsync) {
     return await plugin.sanitizeReplayHistoryAsync(params.context);
-  }
-  if (plugin?.sanitizeReplayHistory) {
-    warnSessionPersistenceDeprecation(
-      "ProviderPlugin.sanitizeReplayHistory",
-      "sanitizeReplayHistoryAsync",
-      plugin.pluginId ? { pluginId: plugin.pluginId } : undefined,
-    );
-    return await plugin.sanitizeReplayHistory(params.context);
   }
   return undefined;
 }

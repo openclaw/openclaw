@@ -33,18 +33,18 @@ export const loadAuthProfileStoreForSecretsRuntime =
  */
 export const saveAuthProfileStore = nativePluginBindings.authStore.saveAuthProfileStore;
 
-/** @deprecated Use loadAuthProfileStoreForRuntimeAsync. Removed at the next Plugin SDK major. */
+/** @deprecated Use loadAuthProfileStoreForRuntimeAsync. Removed after stable deprecation and a compatibility period. */
 export const loadAuthProfileStoreForRuntime =
   nativePluginBindings.authStore.loadAuthProfileStoreForRuntime;
 
-/** @deprecated Use loadAuthProfileStoreWithoutExternalProfilesAsync. Removed at the next Plugin SDK major. */
+/** @deprecated Use loadAuthProfileStoreWithoutExternalProfilesAsync. Removed after stable deprecation and a compatibility period. */
 export const loadAuthProfileStoreWithoutExternalProfiles =
   nativePluginBindings.authStore.loadAuthProfileStoreWithoutExternalProfiles;
-/** @deprecated Use ensureAuthProfileStoreAsync. Removed at the next Plugin SDK major. */
+/** @deprecated Use ensureAuthProfileStoreAsync. Removed after stable deprecation and a compatibility period. */
 export const ensureAuthProfileStore = nativePluginBindings.authStore.ensureAuthProfileStore;
-/** @deprecated Use ensureAuthProfileStoreWithoutExternalProfilesAsync. Removed at the next Plugin SDK major. */
+/** @deprecated Use ensureAuthProfileStoreWithoutExternalProfilesAsync. Removed after stable deprecation and a compatibility period. */
 export const ensureAuthProfileStoreWithoutExternalProfiles =
   nativePluginBindings.authStore.ensureAuthProfileStoreWithoutExternalProfiles;
-/** @deprecated Use ensureAuthProfileStoreForLocalUpdateAsync. Removed at the next Plugin SDK major. */
+/** @deprecated Use ensureAuthProfileStoreForLocalUpdateAsync. Removed after stable deprecation and a compatibility period. */
 export const ensureAuthProfileStoreForLocalUpdate =
   nativePluginBindings.authStore.ensureAuthProfileStoreForLocalUpdate;

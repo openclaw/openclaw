@@ -1,7 +1,6 @@
 // Command spec tests cover skill-provided command metadata and filtering.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createFixtureSkillEntry } from "../test-support/test-helpers.js";
-import type { SkillEntry } from "../types.js";
 
 const bundleCommandState = vi.hoisted(() => ({
   entries: [] as Array<{
@@ -24,14 +23,6 @@ vi.mock("../../logging/subsystem.js", () => ({
 
 vi.mock("../../plugins/bundle-commands.js", () => ({
   loadEnabledClaudeBundleCommands: () => bundleCommandState.entries,
-}));
-
-vi.mock("../loading/workspace-skill-loader.js", () => ({
-  loadVisibleSkills: () => [],
-}));
-
-vi.mock("../loading/workspace-skill-filter.js", () => ({
-  filterSkillEntries: (entries: SkillEntry[]) => entries,
 }));
 
 beforeEach(() => {
@@ -77,9 +68,7 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
     entry.skill.displayName = "Emoji Skill";
     entry.skill.description = `${prefix}😀 extra text beyond the limit`;
 
-    const specs = buildWorkspaceSkillCommandSpecs("/workspace", {
-      entries: [entry],
-    });
+    const specs = buildWorkspaceSkillCommandSpecs("/workspace", { entries: [entry] });
 
     expect(specs[0]?.displayName).toBe("Emoji Skill");
     expect(specs[0]?.description).toBe(entry.skill.description);
@@ -101,9 +90,7 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
       },
     ];
 
-    const specs = buildWorkspaceSkillCommandSpecs("/workspace", {
-      entries: [],
-    });
+    const specs = buildWorkspaceSkillCommandSpecs("/workspace", { entries: [] });
 
     expect(specs[0]).toMatchObject({
       skillName: "bundle-emoji",

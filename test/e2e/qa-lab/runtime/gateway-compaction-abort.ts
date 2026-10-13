@@ -254,7 +254,7 @@ async function runCases(runtime: Runtime, repoRoot: string, artifactBase: string
       };
       try {
         await seedTranscript(runtime, gateway, proof);
-        const before = snapshot(runtime, gateway, proof);
+        const before = await snapshot(runtime, gateway, proof);
         evidence.before = before;
         assert.equal(
           before.toolChars,
@@ -276,12 +276,12 @@ async function runCases(runtime: Runtime, repoRoot: string, artifactBase: string
           proof.summaryHeld.promise,
           "the actual compaction summary request",
         );
-        const held = snapshot(runtime, gateway, proof);
+        const held = await snapshot(runtime, gateway, proof);
         evidence.held = held;
         assertUncommittedHistory(before, held);
         if (mode === "cancel") {
           evidence.abort = await abortChat(runtime, gateway, proof, runId);
-          const cancellation = snapshot(runtime, gateway, proof);
+          const cancellation = await snapshot(runtime, gateway, proof);
           evidence.cancellation = cancellation;
           inspectInvariant(() => assertUncommittedHistory(held, cancellation));
         } else if (mode === "writer-replaced") {
@@ -300,7 +300,7 @@ async function runCases(runtime: Runtime, repoRoot: string, artifactBase: string
             proof.afterHookHeld.promise,
             "the real session:compact:after hook",
           );
-          committed = snapshot(runtime, gateway, proof);
+          committed = await snapshot(runtime, gateway, proof);
           evidence.committedBeforeAbort = committed;
           assert.equal(
             committed.compactionIds.length,
@@ -322,7 +322,7 @@ async function runCases(runtime: Runtime, repoRoot: string, artifactBase: string
             } catch (error) {
               invariantFailures.push(error instanceof Error ? error.message : String(error));
             }
-            const abortedWhileHookHeld = snapshot(runtime, gateway, proof);
+            const abortedWhileHookHeld = await snapshot(runtime, gateway, proof);
             evidence.abortedWhileHookHeld = abortedWhileHookHeld;
             recordCompactionProofCheckpoint(proof, "aborted-bookkeeping-observed-while-hook-held", {
               compactionCount: abortedWhileHookHeld.compactionCount,
@@ -343,7 +343,7 @@ async function runCases(runtime: Runtime, repoRoot: string, artifactBase: string
           ended = await terminal(runtime, gateway, runId);
         }
         evidence.terminal = ended;
-        const afterTerminal = snapshot(runtime, gateway, proof);
+        const afterTerminal = await snapshot(runtime, gateway, proof);
         evidence.afterTerminal = afterTerminal;
         if (uncommitted) {
           inspectInvariant(() => assertUncommittedHistory(held, afterTerminal));
@@ -379,7 +379,7 @@ async function runCases(runtime: Runtime, repoRoot: string, artifactBase: string
           proof.successorHeld.promise,
           "same-session successor provider admission",
         );
-        const settled = snapshot(runtime, gateway, proof);
+        const settled = await snapshot(runtime, gateway, proof);
         evidence.settled = settled;
         proof.releaseSuccessor.resolve();
         const successorTerminal = await terminal(runtime, gateway, successorId);
@@ -395,7 +395,7 @@ async function runCases(runtime: Runtime, repoRoot: string, artifactBase: string
           assert.deepEqual(stopped.errors, [], "Gateway stop failed before the final snapshot");
           recordCompactionProofCheckpoint(proof, "owned-gateway-joined");
         }
-        const after = snapshot(runtime, gateway, proof);
+        const after = await snapshot(runtime, gateway, proof);
         evidence.after = after;
         runtimeSettled = true;
         assertOriginalRows(before, after);

@@ -26,53 +26,19 @@ export type CommittedCompactionAppend = {
   after: SessionTranscriptContextVersion;
 };
 
-export type CompactionAppendPersistence = (
-  prepared: PreparedCompactionAppend,
-) => CommittedCompactionAppend;
-
 export type CompactionAppendPersistenceAsync = (
   prepared: PreparedCompactionAppend,
 ) => Promise<CommittedCompactionAppend>;
 
-type CompactionInvocation<Persist = CompactionAppendPersistence> = {
+type CompactionInvocation = {
   manager: object;
-  persist: Persist;
+  persist: CompactionAppendPersistenceAsync;
   active: boolean;
 };
 
-// Native core and separately loaded SDK graphs must observe the same invocation.
-const invocation = resolveGlobalSingleton(
-  Symbol.for("openclaw.sessionCompactionPersistence"),
-  () => new AsyncLocalStorage<CompactionInvocation>(),
-);
-
-/** Bind host accounting only to this exact manager's synchronous compaction invocation. */
-export function withSessionCompactionPersistence(
-  manager: object,
-  persist: CompactionAppendPersistence | undefined,
-  append: () => string,
-): string {
-  if (!persist) {
-    return append();
-  }
-  const current = { manager, persist, active: true };
-  try {
-    return invocation.run(current, append);
-  } finally {
-    current.active = false;
-  }
-}
-
-export function getSessionCompactionPersistence(
-  manager: object,
-): CompactionAppendPersistence | undefined {
-  const current = invocation.getStore();
-  return current?.active && current.manager === manager ? current.persist : undefined;
-}
-
 const asyncInvocation = resolveGlobalSingleton(
   Symbol.for("openclaw.sessionCompactionPersistenceAsync"),
-  () => new AsyncLocalStorage<CompactionInvocation<CompactionAppendPersistenceAsync>>(),
+  () => new AsyncLocalStorage<CompactionInvocation>(),
 );
 
 /** Retain accounting authority until this exact manager's awaited append settles. */

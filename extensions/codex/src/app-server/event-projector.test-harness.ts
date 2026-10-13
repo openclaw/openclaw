@@ -10,7 +10,6 @@ import {
   resetAgentEventsForTest,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { openFileBackedSessionManagerForTest } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
-import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -44,7 +43,6 @@ export {
   it,
   onInternalDiagnosticEvent,
   path,
-  SessionManager,
   vi,
 };
 export type { EmbeddedRunAttemptParams, DiagnosticEventPayload };

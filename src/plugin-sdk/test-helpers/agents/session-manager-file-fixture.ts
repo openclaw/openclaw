@@ -34,7 +34,6 @@ function attachFilePersistence(params: {
     fs.writeFileSync(target, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
   };
   const originalNewSession = manager.newSession.bind(manager);
-  const originalRemoveTrailingEntries = manager.removeTrailingEntries.bind(manager);
   const originalRemoveTrailingEntriesAsync = manager.removeTrailingEntriesAsync.bind(manager);
   const originalPrepareTranscriptRewriteAsync = manager.prepareTranscriptRewriteAsync.bind(manager);
   Object.assign(manager, {
@@ -46,13 +45,6 @@ function attachFilePersistence(params: {
       const result = originalNewSession({ ...options, id: sessionId });
       writeFullFile();
       return result;
-    },
-    removeTrailingEntries(...args: Parameters<SessionManager["removeTrailingEntries"]>) {
-      const removed = originalRemoveTrailingEntries(...args);
-      if (removed > 0) {
-        writeFullFile();
-      }
-      return removed;
     },
     async removeTrailingEntriesAsync(
       ...args: Parameters<SessionManager["removeTrailingEntriesAsync"]>

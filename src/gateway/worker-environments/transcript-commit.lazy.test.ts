@@ -81,7 +81,7 @@ async function createFixture() {
     store,
     target,
     committer: owner.createWorkerTranscriptCommitter({ getConfig: () => cfg, store }),
-    readEntries: () => sessions.SessionManager.open(target).getEntries(),
+    readEntries: async () => (await sessions.SessionManager.openAsync(target)).getEntries(),
     async cleanup() {
       config.clearRuntimeConfigSnapshot();
       await reconcile.waitForSessionTranscriptIndexReconcilesInStateDir(root);
@@ -143,7 +143,7 @@ describe("worker transcript runtime loading", () => {
       });
     try {
       await awaitGateBeforeSettlement(began.promise, pending, "commit settled before begin");
-      expect(fixture.readEntries()).toEqual([]);
+      expect(await fixture.readEntries()).toEqual([]);
       expect(replied).toBe(false);
       releaseBegin.resolve();
       await awaitGateBeforeSettlement(
@@ -151,7 +151,7 @@ describe("worker transcript runtime loading", () => {
         pending,
         "commit settled before completion",
       );
-      expect(fixture.readEntries()).toHaveLength(1);
+      expect(await fixture.readEntries()).toHaveLength(1);
       expect(replied).toBe(false);
       releaseComplete.resolve();
       await expect(pending).resolves.toMatchObject({ ok: true });
@@ -205,11 +205,11 @@ describe("worker transcript runtime loading", () => {
         if (scenario === "current") {
           await expect(commit).resolves.toMatchObject({ ok: true });
           expect(begin).toHaveBeenCalledOnce();
-          expect(fixture.readEntries()).toHaveLength(1);
+          expect(await fixture.readEntries()).toHaveLength(1);
         } else {
           await expect(commit).rejects.toBe(failure);
           expect(begin).not.toHaveBeenCalled();
-          expect(fixture.readEntries()).toEqual([]);
+          expect(await fixture.readEntries()).toEqual([]);
         }
       } finally {
         releaseLoad.resolve();

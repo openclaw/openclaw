@@ -133,14 +133,14 @@ describe("transcript-byte preflight authority", () => {
   it("retains the exact claim across wrapper delegation", () => {
     const runtimeContext = { sessionTarget };
     const wrapper = () => consume(runtimeContext);
-    const withCompactionPersistence =
+    const withCompactionPersistenceAsync =
       vi.fn<NonNullable<Parameters<typeof setTranscriptBytePreflightClaim>[2]>>();
 
-    setTranscriptBytePreflightClaim(runtimeContext, authority, withCompactionPersistence);
+    setTranscriptBytePreflightClaim(runtimeContext, authority, withCompactionPersistenceAsync);
     expect(wrapper()).toMatchObject({
       authority,
       sessionTarget,
-      withCompactionPersistence,
+      withCompactionPersistenceAsync,
     });
     expect(wrapper()).toBeUndefined();
   });

@@ -6,10 +6,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
 } from "../../state/openclaw-agent-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
-import {
-  resolveSessionEntryResetFreshness,
-  resolveSessionEntryResetFreshnessAsync,
-} from "./entry-freshness.js";
+import { resolveSessionEntryResetFreshnessAsync } from "./entry-freshness.js";
 import {
   appendTranscriptEvent,
   replaceSessionEntry,
@@ -18,7 +15,7 @@ import {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-describe("resolveSessionEntryResetFreshness", () => {
+describe("resolveSessionEntryResetFreshnessAsync", () => {
   let tempDirs: string[] = [];
   let tempDir: string;
   let storePath: string;
@@ -36,29 +33,26 @@ describe("resolveSessionEntryResetFreshness", () => {
     cleanupTempDirs(tempDirs);
   });
 
-  it.each([resolveSessionEntryResetFreshness, resolveSessionEntryResetFreshnessAsync])(
-    "returns missing state with a resolved reset policy for absent entries (%s)",
-    async (resolveFreshness) => {
-      const result = await resolveFreshness({
-        sessionKey: "agent:main:missing:thread:100.000",
-        storePath,
-        sessionCfg: {},
-        resetType: "thread",
-        now: new Date("2026-01-02T12:00:00Z").getTime(),
-      });
+  it("returns missing state with a resolved reset policy for absent entries", async () => {
+    const result = await resolveSessionEntryResetFreshnessAsync({
+      sessionKey: "agent:main:missing:thread:100.000",
+      storePath,
+      sessionCfg: {},
+      resetType: "thread",
+      now: new Date("2026-01-02T12:00:00Z").getTime(),
+    });
 
-      expect(result).toMatchObject({
-        state: "missing",
-        entry: undefined,
-        freshness: undefined,
-        resetType: "thread",
-        resetPolicy: {
-          mode: "none",
-          atHour: 4,
-        },
-      });
-    },
-  );
+    expect(result).toMatchObject({
+      state: "missing",
+      entry: undefined,
+      freshness: undefined,
+      resetType: "thread",
+      resetPolicy: {
+        mode: "none",
+        atHour: 4,
+      },
+    });
+  });
 
   it("uses the configured default agent for an unqualified session key", async () => {
     const sessionKey = "global";
@@ -73,7 +67,7 @@ describe("resolveSessionEntryResetFreshness", () => {
       },
     );
 
-    const result = resolveSessionEntryResetFreshness({
+    const result = await resolveSessionEntryResetFreshnessAsync({
       defaultAgentId: "ops",
       sessionKey,
       storePath,
@@ -103,7 +97,7 @@ describe("resolveSessionEntryResetFreshness", () => {
       },
     );
 
-    const result = resolveSessionEntryResetFreshness({
+    const result = await resolveSessionEntryResetFreshnessAsync({
       sessionKey,
       storePath,
       sessionCfg: {},
@@ -129,7 +123,7 @@ describe("resolveSessionEntryResetFreshness", () => {
       },
     );
 
-    const result = resolveSessionEntryResetFreshness({
+    const result = await resolveSessionEntryResetFreshnessAsync({
       sessionKey,
       sessionCfg: { store: configuredStorePath, reset: { mode: "idle", idleMinutes: 30 } },
       resetType: "thread",
@@ -148,35 +142,32 @@ describe("resolveSessionEntryResetFreshness", () => {
     });
   });
 
-  it.each([resolveSessionEntryResetFreshness, resolveSessionEntryResetFreshnessAsync])(
-    "uses the SQLite transcript header when lifecycle metadata is missing (%s)",
-    async (resolveFreshness) => {
-      const sessionKey = "agent:main:main:thread:header";
-      const sessionId = "session-header-fallback";
-      const now = new Date("2026-01-02T12:00:00Z").getTime();
-      const headerTimestamp = new Date(now - 2 * DAY_MS).toISOString();
-      const target = { agentId: "main", sessionId, sessionKey, storePath };
-      const entry = await replaceSessionEntry(target, { sessionId, updatedAt: now });
-      expect(entry?.sessionStartedAt).toBeUndefined();
-      await appendTranscriptEvent(target, {
-        type: "session",
-        version: 3,
-        id: sessionId,
-        timestamp: headerTimestamp,
-        cwd: tempDir,
-      });
+  it("uses the SQLite transcript header when lifecycle metadata is missing", async () => {
+    const sessionKey = "agent:main:main:thread:header";
+    const sessionId = "session-header-fallback";
+    const now = new Date("2026-01-02T12:00:00Z").getTime();
+    const headerTimestamp = new Date(now - 2 * DAY_MS).toISOString();
+    const target = { agentId: "main", sessionId, sessionKey, storePath };
+    const entry = await replaceSessionEntry(target, { sessionId, updatedAt: now });
+    expect(entry?.sessionStartedAt).toBeUndefined();
+    await appendTranscriptEvent(target, {
+      type: "session",
+      version: 3,
+      id: sessionId,
+      timestamp: headerTimestamp,
+      cwd: tempDir,
+    });
 
-      const result = await resolveFreshness({
-        sessionKey,
-        storePath,
-        sessionCfg: { reset: { mode: "daily" } },
-        resetType: "thread",
-        now,
-      });
+    const result = await resolveSessionEntryResetFreshnessAsync({
+      sessionKey,
+      storePath,
+      sessionCfg: { reset: { mode: "daily" } },
+      resetType: "thread",
+      now,
+    });
 
-      expect(result.state).toBe("stale");
-      expect(result.lifecycleTimestamps.sessionStartedAt).toBe(Date.parse(headerTimestamp));
-      expect(result.freshness).toMatchObject({ fresh: false, staleReason: "daily" });
-    },
-  );
+    expect(result.state).toBe("stale");
+    expect(result.lifecycleTimestamps.sessionStartedAt).toBe(Date.parse(headerTimestamp));
+    expect(result.freshness).toMatchObject({ fresh: false, staleReason: "daily" });
+  });
 });

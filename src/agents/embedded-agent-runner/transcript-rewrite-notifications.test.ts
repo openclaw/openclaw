@@ -87,7 +87,7 @@ describe("committed transcript rewrite notifications", () => {
               }
             : assistant,
       });
-      const manager = SessionManager.open(scope);
+      const manager = await SessionManager.openAsync(scope);
       const before = loadTranscriptEventsSync(scope);
       const context = new AsyncLocalStorage<string>();
       const internal: Array<{
@@ -176,7 +176,7 @@ describe("committed transcript rewrite notifications", () => {
             context: "caller-context",
           },
         ]);
-        const messages = SessionManager.open(scope).buildSessionContext().messages;
+        const messages = (await SessionManager.openAsync(scope)).buildSessionContext().messages;
         if (kind === "thinking") {
           expect(messages.at(-1)).toMatchObject({
             content: [{ type: "text", text: "visible answer" }],
@@ -198,7 +198,7 @@ describe("committed transcript rewrite notifications", () => {
 
   it("retains a file-only replay notification without a persisted manager target", async () => {
     const manager = SessionManager.inMemory();
-    manager.appendMessage(
+    await manager.appendMessageAsync(
       makeAgentAssistantMessage({ content: [{ type: "thinking", thinking: "stale" }] }),
     );
     const internal = vi.fn();
@@ -230,7 +230,7 @@ describe("committed transcript rewrite notifications", () => {
 
   it("retains explicit identity-only truncation notification without a manager target", async () => {
     const manager = SessionManager.inMemory();
-    manager.appendMessage({
+    await manager.appendMessageAsync({
       role: "toolResult",
       toolCallId: "call",
       toolName: "read",

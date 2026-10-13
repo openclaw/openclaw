@@ -6,7 +6,6 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   resolveDirectStoredModelOverride,
-  resolveStoredModelOverride,
   resolveStoredModelOverrideAsync,
 } from "./stored-model-overrides.js";
 
@@ -19,10 +18,10 @@ function resolveParentOverride(parent: Partial<SessionEntry>) {
   });
 }
 
-describe("resolveStoredModelOverride", () => {
-  it("recovers resolved provenance for legacy auto-fallback overrides", () => {
+describe("resolveStoredModelOverrideAsync", () => {
+  it("recovers resolved provenance for legacy auto-fallback overrides", async () => {
     expect(
-      resolveStoredModelOverride({
+      await resolveStoredModelOverrideAsync({
         defaultProvider: "openai",
         sessionEntry: {
           sessionId: "legacy-fallback",
@@ -106,9 +105,9 @@ describe("resolveStoredModelOverride", () => {
     ).toBeNull();
   });
 
-  it("does not inherit stale fields from a parent that explicitly selected Default", () => {
+  it("does not inherit stale fields from a parent that explicitly selected Default", async () => {
     expect(
-      resolveStoredModelOverride({
+      await resolveStoredModelOverrideAsync({
         defaultProvider: "openai",
         sessionKey: "agent:main:dashboard:parent:thread:child",
         sessionStore: {
@@ -124,9 +123,9 @@ describe("resolveStoredModelOverride", () => {
     ).toBeNull();
   });
 
-  it("does not inherit a parent pin after the child explicitly selects default", () => {
+  it("does not inherit a parent pin after the child explicitly selects default", async () => {
     expect(
-      resolveStoredModelOverride({
+      await resolveStoredModelOverrideAsync({
         defaultProvider: "openai",
         sessionEntry: {
           sessionId: "child-session",

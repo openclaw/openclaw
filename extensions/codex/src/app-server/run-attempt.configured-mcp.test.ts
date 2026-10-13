@@ -176,17 +176,21 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
     const sessionManager = openFileBackedSessionManagerForTest(sessionFile, {
       sessionId: "session-1",
     });
-    sessionManager.appendMessage(userMessage("ordinary-thread covered context", cutoff - 1_000));
+    await sessionManager.appendMessageAsync(
+      userMessage("ordinary-thread covered context", cutoff - 1_000),
+    );
     for (let index = 0; index < 10; index += 1) {
-      sessionManager.appendMessage(
+      await sessionManager.appendMessageAsync(
         assistantMessage(
           `scheduled ownership continuity block ${index}: ${"x".repeat(128_000)}`,
           cutoff + 2_000 + index,
         ),
       );
     }
-    sessionManager.appendMessage(userMessage("new scheduled ownership question", cutoff + 20_000));
-    sessionManager.appendMessage(
+    await sessionManager.appendMessageAsync(
+      userMessage("new scheduled ownership question", cutoff + 20_000),
+    );
+    await sessionManager.appendMessageAsync(
       assistantMessage("recent scheduled ownership answer", cutoff + 21_000),
     );
 

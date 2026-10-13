@@ -103,7 +103,7 @@ function pollFixture(output = "") {
       }),
     );
   const persist = (id: string, result: AgentToolResult<unknown>) =>
-    manager.appendMessage(toolResultMessage(id, result));
+    manager.appendMessageAsync(toolResultMessage(id, result));
   return { session, manager, guard, turn, poll, persist };
 }
 
@@ -137,23 +137,23 @@ test("retains a waiting poll completion through failed persistence and acknowled
   await vi.advanceTimersByTimeAsync(250);
   const result = await pending;
   expect(resultText(result)).toContain("terminal output");
-  const append = h.manager.appendMessageWithTranscriptAnchor.bind(h.manager);
+  const append = h.manager.appendMessageWithTranscriptAnchorAsync.bind(h.manager);
   let rejectAppend = true;
-  vi.spyOn(h.manager, "appendMessageWithTranscriptAnchor").mockImplementation(
-    (message, options) => {
+  vi.spyOn(h.manager, "appendMessageWithTranscriptAnchorAsync").mockImplementation(
+    async (message, options) => {
       if (message.role === "toolResult" && rejectAppend) {
         throw new Error("result persistence failed");
       }
-      return append(message, options);
+      return await append(message, options);
     },
   );
   h.guard();
-  h.manager.appendMessage(h.turn("persist-notify").assistantMessage);
-  expect(() => h.persist("persist-notify", result)).toThrow("result persistence failed");
+  await h.manager.appendMessageAsync(h.turn("persist-notify").assistantMessage);
+  await expect(h.persist("persist-notify", result)).rejects.toThrow("result persistence failed");
   recordCompletion();
   expect(peekSystemEventEntries(sessionKey)).toHaveLength(2);
   rejectAppend = false;
-  h.persist("persist-notify", result);
+  await h.persist("persist-notify", result);
   expect(peekSystemEventEntries(sessionKey)).toEqual([unrelated]);
   expect(resultText(await h.poll("observed"))).not.toContain("terminal output");
   recordCompletion();
@@ -171,12 +171,12 @@ test("replays repaired poll output and consumes it after transformed persistence
   });
   const dropped = snapshotToolSearchTargetTranscriptResult(await h.poll("dropped"));
   expect(resultText(dropped)).toContain("running-output");
-  h.manager.appendMessage(h.turn("dropped").assistantMessage);
-  guard.flushPendingToolResults();
+  await h.manager.appendMessageAsync(h.turn("dropped").assistantMessage);
+  await guard.flushPendingToolResultsAsync();
   const retry = snapshotToolSearchTargetTranscriptResult(await h.poll("retry"));
   expect(resultText(retry)).toContain("running-output");
-  h.manager.appendMessage(h.turn("retry").assistantMessage);
-  h.persist("retry", retry);
+  await h.manager.appendMessageAsync(h.turn("retry").assistantMessage);
+  await h.persist("retry", retry);
   expect(resultText(await h.poll("observed"))).not.toContain("running-output");
 });
 
@@ -319,12 +319,12 @@ test("a retained old snapshot cannot consume a successor poll delivery", async (
   h.guard();
   const result = await h.poll("old-result");
   const retained = snapshotToolSearchTargetTranscriptResult(result);
-  h.manager.appendMessage(h.turn("old-result").assistantMessage);
-  h.persist("old-result", result);
+  await h.manager.appendMessageAsync(h.turn("old-result").assistantMessage);
+  await h.persist("old-result", result);
   appendOutput(h.session, "stdout", "successor-output\n");
   expect(resultText(await h.poll("successor-dropped"))).toContain("successor-output");
-  h.manager.appendMessage(h.turn("retained-old-result").assistantMessage);
-  h.persist("retained-old-result", retained);
+  await h.manager.appendMessageAsync(h.turn("retained-old-result").assistantMessage);
+  await h.persist("retained-old-result", retained);
   expect(resultText(await h.poll("successor-retry"))).toContain("successor-output");
 });
 
@@ -345,8 +345,8 @@ test("replays blocked poll output immediately when the retry has a timeout", asy
         : undefined,
   });
   const dropped = await h.poll("blocked-result");
-  h.manager.appendMessage(h.turn("blocked-result").assistantMessage);
-  expect(h.persist("blocked-result", dropped)).toBeUndefined();
+  await h.manager.appendMessageAsync(h.turn("blocked-result").assistantMessage);
+  expect(await h.persist("blocked-result", dropped)).toBeUndefined();
   vi.useFakeTimers();
   let settled = false;
   const retry = h.poll("blocked-retry", 30_000).then((result) => {

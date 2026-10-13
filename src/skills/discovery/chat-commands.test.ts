@@ -4,8 +4,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createEmptyPluginMetadataSnapshot } from "../../plugins/plugin-metadata-empty.test-support.js";
 
-let listSkillCommandsForAgents: typeof import("./chat-commands.js").listSkillCommandsForAgents;
-let listSkillCommandsForWorkspace: typeof import("./chat-commands.js").listSkillCommandsForWorkspace;
+let prepareSkillCommandsForAgents: typeof import("./chat-commands.js").prepareSkillCommandsForAgents;
+let prepareSkillCommandsForWorkspace: typeof import("./chat-commands.js").prepareSkillCommandsForWorkspace;
 let expandExplicitSkillReferences: typeof import("./chat-commands.js").expandExplicitSkillReferences;
 let resolveSkillCommandInvocation: typeof import("./chat-commands.js").resolveSkillCommandInvocation;
 let lastCommandBuildOptions:
@@ -70,7 +70,7 @@ function resolveWorkspaceSkills(
   return [];
 }
 
-function buildWorkspaceSkillCommandSpecs(
+function prepareWorkspaceSkillCommandSpecs(
   workspaceDir: string,
   opts?: {
     reservedNames?: Set<string>;
@@ -115,8 +115,14 @@ vi.mock("../../auto-reply/commands-registry.data.js", () => ({
   getChatCommands: () => [],
 }));
 
-vi.mock("./command-specs.js", () => ({
-  buildWorkspaceSkillCommandSpecs,
+vi.mock("./command-specs.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./command-specs.js")>()),
+  prepareWorkspaceSkillCommandSpecs,
+}));
+
+vi.mock("../runtime/remote-skills.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../runtime/remote-skills.js")>()),
+  prepareRemoteSkillConnections: async () => {},
 }));
 
 vi.mock("../runtime/remote.js", () => ({
@@ -154,8 +160,8 @@ vi.mock("./agent-filter.js", () => ({
 beforeAll(async () => {
   ({
     expandExplicitSkillReferences,
-    listSkillCommandsForAgents,
-    listSkillCommandsForWorkspace,
+    prepareSkillCommandsForAgents,
+    prepareSkillCommandsForWorkspace,
     resolveSkillCommandInvocation,
   } = await import("./chat-commands.js"));
 });
@@ -318,12 +324,12 @@ describe("expandExplicitSkillReferences", () => {
   });
 });
 
-describe("listSkillCommandsForAgents", () => {
+describe("prepareSkillCommandsForAgents", () => {
   it("deduplicates by skillName across agents, keeping the first registration", async () => {
     const { mainWorkspace, researchWorkspace } =
       await createMainAndResearchWorkspaces("openclaw-skills-");
 
-    const commands = listSkillCommandsForAgents({
+    const commands = await prepareSkillCommandsForAgents({
       cfg: {
         agents: {
           entries: {
@@ -344,7 +350,7 @@ describe("listSkillCommandsForAgents", () => {
     const validWorkspace = await createWorkspace(baseDir, "research");
     const missingWorkspace = path.join(baseDir, "nonexistent");
 
-    const commands = listSkillCommandsForAgents({
+    const commands = await prepareSkillCommandsForAgents({
       cfg: {
         agents: {
           entries: {
@@ -362,7 +368,7 @@ describe("listSkillCommandsForAgents", () => {
   });
 });
 
-describe("listSkillCommandsForWorkspace", () => {
+describe("prepareSkillCommandsForWorkspace", () => {
   it("inherits defaults while preserving session context and the admitted plugin generation", async () => {
     const baseDir = tempDirs.make("openclaw-skills-workspace-defaults-");
     const sharedWorkspace = await createWorkspace(baseDir, "shared-defaults");
@@ -372,7 +378,7 @@ describe("listSkillCommandsForWorkspace", () => {
       { skillId: "library-guide", revision: "revision", name: "guide", ownerProfileId: "profile" },
     ];
 
-    const commands = listSkillCommandsForWorkspace({
+    const commands = await prepareSkillCommandsForWorkspace({
       workspaceDir: sharedWorkspace,
       cfg: {
         agents: {

@@ -73,7 +73,7 @@ describe("submitEmbeddedAttemptPrompt runtime replay", () => {
         });
         const createPersistedSession = async () => {
           const sessionManager = guardSessionManager(
-            SessionManager.open(target, state.workspaceDir),
+            await SessionManager.openAsync(target, state.workspaceDir),
           );
           const { session } = await createTestSession({ sessionManager, settingsManager });
           await prepareEmbeddedAttemptSessionBoundary({
@@ -174,7 +174,7 @@ describe("submitEmbeddedAttemptPrompt runtime replay", () => {
           );
         }
 
-        reopened.sessionManager.appendResetBoundary("new");
+        await reopened.sessionManager.appendResetBoundaryAsync("new");
         const reset = await createPersistedSession();
         await submit(reset, "after reset");
         expect(JSON.stringify(requests.at(-1))).not.toContain(RUNTIME_EVENT_USER_PROMPT);

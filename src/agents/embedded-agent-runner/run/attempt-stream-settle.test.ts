@@ -397,9 +397,9 @@ describe("attempt projection persistence through settlement", () => {
     const model = { ...testModel, provider: "anthropic", id: "claude-sonnet-4-6" };
     try {
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      let manager = SessionManager.open(scope, dir);
-      manager.appendMessage({ role: "user", content: "read file", timestamp: 1 });
-      manager.appendMessage(
+      let manager = await SessionManager.openAsync(scope, dir);
+      await manager.appendMessageAsync({ role: "user", content: "read file", timestamp: 1 });
+      await manager.appendMessageAsync(
         createAssistant(
           model,
           [{ type: "toolCall", id: "read-1", name: "read", arguments: {} }],
@@ -414,8 +414,10 @@ describe("attempt projection persistence through settlement", () => {
         isError: false,
         timestamp: 2,
       };
-      manager.appendMessage(toolResult);
-      manager.appendMessage(createAssistant(model, [{ type: "text", text: "read complete" }]));
+      await manager.appendMessageAsync(toolResult);
+      await manager.appendMessageAsync(
+        createAssistant(model, [{ type: "text", text: "read complete" }]),
+      );
       let previousSnapshot: ReturnType<typeof serializeCacheTtlToolResultProjections> | undefined;
       for (let turn = 0; turn < 3; turn++) {
         using turnLease = retainEmbeddedSessionPromptState(scope.sessionId);
@@ -504,7 +506,7 @@ describe("attempt projection persistence through settlement", () => {
         session.dispose();
         manager.flushPendingPersistence();
         clearEmbeddedSessionPromptStates([scope.sessionId]);
-        manager = SessionManager.open(scope, dir);
+        manager = await SessionManager.openAsync(scope, dir);
       }
     } finally {
       clearEmbeddedSessionPromptStates([scope.sessionId]);

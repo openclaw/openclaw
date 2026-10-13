@@ -9,12 +9,12 @@ export type AssistantBeforeMessageWrite = (params: {
 }) => AgentMessage | null;
 
 export function applyBeforeMessageWriteToAssistant(params: {
-  message: Parameters<SessionManager["appendMessage"]>[0];
+  message: Parameters<SessionManager["appendMessageAsync"]>[0];
   beforeMessageWrite?: AssistantBeforeMessageWrite;
   explicitIdempotencyKey?: string;
   agentId?: string;
   sessionKey: string;
-}): Parameters<SessionManager["appendMessage"]>[0] | undefined {
+}): Parameters<SessionManager["appendMessageAsync"]>[0] | undefined {
   const nextMessage = params.beforeMessageWrite
     ? params.beforeMessageWrite({
         message: params.message as AgentMessage,
@@ -28,5 +28,5 @@ export function applyBeforeMessageWriteToAssistant(params: {
   return Object.assign(
     applyAssistantDeliveryDirectives(nextMessage),
     params.explicitIdempotencyKey ? { idempotencyKey: params.explicitIdempotencyKey } : {},
-  ) as Parameters<SessionManager["appendMessage"]>[0];
+  ) as Parameters<SessionManager["appendMessageAsync"]>[0];
 }

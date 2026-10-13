@@ -36,9 +36,7 @@ import {
 } from "./thread-bindings.state.js";
 import type { ThreadBindingRecord, ThreadBindingTargetKind } from "./thread-bindings.types.js";
 export {
-  setThreadBindingIdleTimeoutBySessionKey,
   setThreadBindingIdleTimeoutBySessionKeyAsync,
-  setThreadBindingMaxAgeBySessionKey,
   setThreadBindingMaxAgeBySessionKeyAsync,
 } from "./thread-bindings.session-updates.js";
 

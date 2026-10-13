@@ -20,7 +20,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import { withCodexSessionTranscriptMirrorWriteLock as withMirrorLock } from "./codex-session-transcript-runtime.js";
+import { withCodexSessionTranscriptMirrorWrite as withMirrorLock } from "./codex-session-transcript-runtime.js";
 import { getSessionEntry, upsertSessionEntry } from "./session-store-runtime.js";
 import {
   appendAssistantMirrorMessageByIdentity as appendMirror,
@@ -32,7 +32,7 @@ import {
   readSessionTranscriptVisibleMessageDelta,
   readVisibleSessionTranscriptMessageEntries,
   resolveSessionTranscriptTarget,
-  withSessionTranscriptWriteLock as withWriteLock,
+  withSessionTranscriptWrite as withWriteLock,
   type SessionTranscriptMessageEntry,
   type SessionTranscriptReadParams,
   appendSessionTranscriptMessageByIdentity,

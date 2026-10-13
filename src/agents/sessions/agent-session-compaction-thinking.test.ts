@@ -34,13 +34,21 @@ describe("AgentSession threshold compaction thinking", () => {
         ...(providerDefault ? { compactionThinkingDefault: providerDefault } : {}),
       };
       const sessionManager = SessionManager.inMemory();
-      sessionManager.appendMessage({ role: "user", content: "old prompt", timestamp: 1 });
-      sessionManager.appendMessage({
+      await sessionManager.appendMessageAsync({
+        role: "user",
+        content: "old prompt",
+        timestamp: 1,
+      });
+      await sessionManager.appendMessageAsync({
         ...createAssistant(model, [{ type: "text", text: "old answer" }]),
         timestamp: 2,
       });
-      sessionManager.appendMessage({ role: "user", content: "latest prompt", timestamp: 3 });
-      sessionManager.appendMessage({
+      await sessionManager.appendMessageAsync({
+        role: "user",
+        content: "latest prompt",
+        timestamp: 3,
+      });
+      await sessionManager.appendMessageAsync({
         ...createAssistant(model, [{ type: "text", text: "latest answer" }]),
         timestamp: 4,
       });

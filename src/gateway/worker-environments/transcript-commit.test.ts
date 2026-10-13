@@ -74,7 +74,7 @@ const IDENTITY = createTranscriptCommitIdentity(SESSION_ID, RUN_EPOCH);
 
 function requireAppendableWorkerMessage(
   message: unknown,
-): Parameters<SessionManager["appendMessage"]>[0] {
+): Parameters<SessionManager["appendMessageAsync"]>[0] {
   if (!message || typeof message !== "object" || Array.isArray(message)) {
     throw new Error("expected committed worker message");
   }
@@ -82,7 +82,7 @@ function requireAppendableWorkerMessage(
   if (role !== "assistant" && role !== "toolResult" && role !== "user") {
     throw new Error("expected committed worker message");
   }
-  return message as Parameters<SessionManager["appendMessage"]>[0];
+  return message as Parameters<SessionManager["appendMessageAsync"]>[0];
 }
 
 describe("worker transcript commit application", () => {
@@ -285,7 +285,7 @@ describe("worker transcript commit application", () => {
       messages: [prefixMessage, ...createTurnMessages()],
     });
     const manager = await SessionManager.openAsync(sessionTarget);
-    const persistedMessage: Parameters<SessionManager["appendMessage"]>[0] & {
+    const persistedMessage: Parameters<SessionManager["appendMessageAsync"]>[0] & {
       idempotencyKey: string;
     } = {
       ...prefixMessage,
@@ -681,7 +681,7 @@ describe("worker transcript commit application", () => {
       throw new Error(`expected initial transcript commit success, received ${first.reason}`);
     }
     const manager = await SessionManager.openAsync(sessionTarget);
-    const abandonedMessage: Parameters<SessionManager["appendMessage"]>[0] & {
+    const abandonedMessage: Parameters<SessionManager["appendMessageAsync"]>[0] & {
       idempotencyKey: string;
     } = {
       role: "user",

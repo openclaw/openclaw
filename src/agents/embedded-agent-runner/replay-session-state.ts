@@ -7,7 +7,6 @@ import type {
 import { rethrowIncognitoSessionError } from "../../state/incognito-session-error.js";
 import { withSessionManagerWriteAssertion } from "../sessions/session-manager-write-admission.js";
 import type { SessionManager } from "../sessions/session-manager.js";
-import { warnSessionPersistenceDeprecation } from "../sessions/session-persistence-deprecation.js";
 
 export function createProviderReplaySessionState(sessionManager: SessionManager): {
   state: ProviderReplaySessionStateV2;
@@ -38,20 +37,6 @@ export function createProviderReplaySessionState(sessionManager: SessionManager)
         } catch (error) {
           rethrowIncognitoSessionError(error);
           return [];
-        }
-      },
-      // Retained third-party adapter preserves the legacy synchronous error behavior.
-      appendCustomEntry(customType: string, data: unknown) {
-        assertCurrent();
-        warnSessionPersistenceDeprecation(
-          "ProviderReplaySessionState.appendCustomEntry",
-          "appendCustomEntryAsync",
-        );
-        try {
-          sessionManager.appendCustomEntry(customType, data);
-        } catch (error) {
-          rethrowIncognitoSessionError(error);
-          // Legacy providers ignored persistence failures; V2 propagates them.
         }
       },
       async appendCustomEntryAsync(customType: string, data: unknown) {

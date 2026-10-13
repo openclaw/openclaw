@@ -437,52 +437,6 @@ export function resolveCaptureOwnerForTransport(
   }
 }
 
-// Legacy finalization settles legacy work synchronously. Worker-backed claims
-// retain their lifecycle owner and end the shared session when they also close.
-/** @deprecated Use finalizeDebugProxyCaptureAsync to drain asynchronous capture work. */
-export function finalizeDebugProxyCapture(
-  resolved?: DebugProxySettings,
-  deps: DebugProxyCaptureRuntimeDeps = {},
-): void {
-  const settings = resolveEnabledDebugProxySettings(resolved);
-  if (!settings) {
-    return;
-  }
-  const runtime = resolveRuntimeDeps(deps);
-  const session = captureOwners.get(runtime.getStore)?.owners.get(captureOwnerKey(settings));
-  if (!session) {
-    return;
-  }
-  const owners = [...session.claims].filter((owner) => !owner.asynchronous);
-  session.syncClosed = true;
-  if (owners.length === session.claims.size) {
-    session.closing = true;
-    uninstallDebugProxyGlobalFetchPatch(session.runtime, session.admission);
-  }
-  const errors: unknown[] = [];
-  for (const owner of owners) {
-    try {
-      finishCaptureOwner(owner);
-    } catch (error) {
-      errors.push(error);
-    }
-  }
-  try {
-    if (owners.length > 0 && runtime.closeStore) {
-      runtime.closeStore();
-    } else {
-      for (const store of new Set(owners.map((owner) => owner.syncStore))) {
-        store?.close?.();
-      }
-    }
-  } catch (error) {
-    errors.push(error);
-  }
-  if (errors.length) {
-    throw new AggregateError(errors, "Capture finalization failed.");
-  }
-}
-
 function sealCaptureOwner(owner: CaptureOwner): void {
   revokeCaptureOwner(owner);
   for (const finish of owner.pending) {

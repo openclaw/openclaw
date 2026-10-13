@@ -7,9 +7,9 @@ export const TTS_PREFERENCES_COMPAT_RECORD = {
   introduced: "2026-10-03",
   deprecated: "2026-10-03",
   warningStarts: "2026-10-03",
-  removalGate: "next-plugin-sdk-major",
+  removalGate: "after-stable-deprecation",
   replacement:
-    "Await resolveTtsPrefsPathAsync(config) for the machine-owned path. Host dispatch carries worker-prepared preferences into synchronous prompt helpers. Retain released resolveTtsPrefsPath(config) and buildTtsSystemPromptHint(config, agentId, options) signatures until published plugin readers migrate and a breaking Plugin SDK release is explicitly approved.",
+    "Await resolveTtsPrefsPathAsync(config) for the machine-owned path. Host dispatch carries worker-prepared preferences into synchronous prompt helpers. Retain released resolveTtsPrefsPath(config) and buildTtsSystemPromptHint(config, agentId, options) signatures until stable deprecation has shipped, a compatibility period has passed, published plugin readers migrate, and maintainer approval is granted.",
   docsPath: "/plugins/sdk-migration/compatibility-policy#tts-preference-resolution",
   surfaces: [
     "openclaw/plugin-sdk/agent-runtime resolveTtsPrefsPath",

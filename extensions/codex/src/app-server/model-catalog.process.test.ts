@@ -2,7 +2,7 @@ import * as childProcess from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { upsertAuthProfile } from "openclaw/plugin-sdk/provider-auth";
+import { upsertAuthProfileAsync } from "openclaw/plugin-sdk/provider-auth";
 import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import {
   fixtureReceiptClientSource,
@@ -125,7 +125,7 @@ process.stdin.on("end", () => process.exit(0));
         const agentDir = path.join(root, mode);
         vi.stubEnv("OPENAI_API_KEY", mode === "absent-key" ? "" : "synthetic-environment-key");
         if (mode === "api-key-profile" || mode === "subscription-profile") {
-          upsertAuthProfile({
+          await upsertAuthProfileAsync({
             agentDir,
             profileId: "openai:catalog",
             credential:

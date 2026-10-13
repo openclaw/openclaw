@@ -36,7 +36,7 @@ describe("ACP session metadata store ownership", () => {
   });
 
   it.each([
-    new IncognitoSessionSyncAccessError("readAcpSessionEntry", "readAcpSessionEntryAsync"),
+    new IncognitoSessionSyncAccessError("readSessionEntryFromStore", "readAcpSessionEntryAsync"),
     new AggregateError([new IncognitoSessionEndedError()], "Session read failed"),
   ])("propagates incognito refusal instead of reporting an unreadable store: %s", (error) => {
     mocks.loadSessionEntryReadOnly.mockImplementation(() => {

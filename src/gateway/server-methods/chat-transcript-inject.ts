@@ -16,7 +16,7 @@ import {
 } from "../../shared/assistant-display-content.js";
 import type { ChatAbortOrigin } from "./chat-aborted-partial.js";
 
-type AppendMessageArg = Parameters<SessionManager["appendMessage"]>[0];
+type AppendMessageArg = Parameters<SessionManager["appendMessageAsync"]>[0];
 
 /** Metadata persisted on gateway-injected assistant messages that mark a stopped run. */
 type GatewayInjectedAbortMeta = {

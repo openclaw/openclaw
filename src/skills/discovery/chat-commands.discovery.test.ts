@@ -12,25 +12,11 @@ import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
 import {
   expandExplicitSkillReferences,
-  listSkillCommandsForWorkspace,
-  listSkillCommandsForAgents,
+  prepareSkillCommandsForWorkspace,
   prepareSkillCommandsForAgents,
 } from "./chat-commands.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => afterEach(cleanup));
-
-function menuNames(cfg: OpenClawConfig, workspace: string) {
-  const agentMenu = listSkillCommandsForAgents({ cfg, agentIds: ["main"] });
-  const workspaceMenu = listSkillCommandsForWorkspace({
-    cfg,
-    workspaceDir: workspace,
-    agentId: "main",
-  });
-  expect(workspaceMenu.map((command) => command.skillName)).toEqual(
-    agentMenu.map((command) => command.skillName),
-  );
-  return agentMenu.map((command) => command.skillName);
-}
 
 describe("skill command discovery through workspace loading", () => {
   it("keeps distinct commands across workspaces with truncated-name collisions", async () => {
@@ -106,7 +92,6 @@ describe("skill command discovery through workspace loading", () => {
           (command) => command.skillName,
         ),
       ).toEqual(["hello"]);
-      expect(listSkillCommandsForAgents({ cfg, agentIds: ["main"] })).toEqual([]);
       const loaders = createSkillCommandLoaders(() => import("./chat-commands.runtime.js"), {
         workspaceDir: gateway,
         cfg,
@@ -236,8 +221,8 @@ describe("skill command discovery through workspace loading", () => {
         { OPENCLAW_STATE_DIR: root, OPENCLAW_BUNDLED_SKILLS_DIR: bundledSkillsDir },
         async () => {
           const params = { workspaceDir, cfg: config, agentId: "alpha" };
-          const skillCommands = listSkillCommandsForWorkspace(params);
-          const allSkillCommands = listSkillCommandsForWorkspace({
+          const skillCommands = await prepareSkillCommandsForWorkspace(params);
+          const allSkillCommands = await prepareSkillCommandsForWorkspace({
             ...params,
             includeAllowlistHidden: true,
           });
@@ -264,7 +249,7 @@ describe("skill command discovery through workspace loading", () => {
             });
           }
           expect(
-            listSkillCommandsForWorkspace({ ...params, skillFilter: ["hidden"] }).map(
+            (await prepareSkillCommandsForWorkspace({ ...params, skillFilter: ["hidden"] })).map(
               (command) => command.skillName,
             ),
           ).toEqual(["hidden"]);
@@ -272,44 +257,4 @@ describe("skill command discovery through workspace loading", () => {
       );
     },
   );
-
-  it("keeps Gateway commands without exposing a stale remote workspace copy", async () => {
-    const root = tempDirs.make("remote-skill-menu-");
-    const workspace = path.join(root, "workspace");
-    const gatewaySkills = path.join(root, "gateway-skills");
-    await writeSkill({
-      dir: path.join(gatewaySkills, "gateway-command"),
-      name: "gateway-command",
-      description: "Gateway-owned command",
-    });
-    await writeSkill({
-      dir: path.join(workspace, "skills", "workspace-command"),
-      name: "workspace-command",
-      description: "Stale Gateway workspace copy",
-    });
-    const cfg: OpenClawConfig = {
-      plugins: { enabled: false },
-      skills: { load: { extraDirs: [gatewaySkills] } },
-      agents: {
-        entries: {
-          main: { workspace, skills: ["gateway-command", "workspace-command"] },
-        },
-      },
-    };
-    const loadSkills = vi.fn(() => {
-      throw new Error("Harness unavailable");
-    });
-    const release = registerAgentWorkspaceAccess(workspace, {
-      bridge: { readFile: vi.fn(), writeFile: vi.fn(), stat: vi.fn() },
-      loadSkills,
-    });
-    try {
-      expect(menuNames(cfg, workspace)).toEqual(["gateway-command"]);
-      expect(loadSkills).not.toHaveBeenCalled();
-    } finally {
-      release();
-    }
-    expect(menuNames(cfg, workspace)).toEqual(["gateway-command"]);
-    expect(loadSkills).not.toHaveBeenCalled();
-  });
 });

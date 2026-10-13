@@ -22,7 +22,6 @@ import {
   type SessionBindingAdapter,
   type SessionBindingBindInput,
   type SessionBindingRecord,
-  type SessionBindingService,
 } from "./session-binding-service.js";
 
 type SessionBindingServiceModule = typeof import("./session-binding-service.js");
@@ -57,32 +56,6 @@ function setMinimalCurrentConversationRegistry(): void {
     ),
   );
 }
-
-it("keeps the stable session-binding service shape structurally assignable", () => {
-  const service: SessionBindingService = {
-    bind: async () => {
-      throw new Error("not implemented");
-    },
-    getCapabilities: () => ({
-      adapterAvailable: false,
-      bindSupported: false,
-      unbindSupported: false,
-      placements: [],
-    }),
-    listBySession: () => [],
-    resolveByConversation: () => null,
-    touch: () => {},
-    unbind: async () => [],
-  };
-
-  expect(
-    service.resolveByConversation({
-      channel: "demo",
-      accountId: "default",
-      conversationId: "room-1",
-    }),
-  ).toBeNull();
-});
 
 async function importSessionBindingServiceModule(
   cacheBust: string,
@@ -181,13 +154,10 @@ describe("session binding service", () => {
         gate.reject(failure);
         await rejection;
         expect(touch).not.toHaveBeenCalled();
-        expect(() => service.touch("binding-1", 1, scope)).toThrow(failure);
       } else {
         gate.resolve();
         await pending;
         expect(settled).toBe(true);
-        service.touch("binding-1", 456, scope);
-        expect(touch).toHaveBeenCalledWith("binding-1", 456);
         expect(touchAsync).toHaveBeenCalledTimes(1);
       }
     },
@@ -371,21 +341,23 @@ describe("session binding service", () => {
     expect(service.listBySession(first.targetSessionKey)).toEqual(bindings);
 
     const scope = { channel: " CHANNEL-A ", accountId: " DEFAULT " };
-    service.touch(first.bindingId, 1234, scope);
-    expect(service.resolveByConversation(first.conversation)?.metadata?.lastActivityAt).toBe(1234);
-    expect(service.resolveByConversation(second.conversation)).toEqual(second);
+    await service.touchAsync(first.bindingId, 1234, scope);
+    expect(
+      (await service.resolveByConversationAsync(first.conversation))?.metadata?.lastActivityAt,
+    ).toBe(1234);
+    expect(await service.resolveByConversationAsync(second.conversation)).toEqual(second);
     await expect(
       service.unbind({ bindingId: first.bindingId, scope, reason: "manual" }),
     ).resolves.toHaveLength(1);
-    expect(service.resolveByConversation(first.conversation)).toBeNull();
-    expect(service.resolveByConversation(second.conversation)).toEqual(second);
+    expect(await service.resolveByConversationAsync(first.conversation)).toBeNull();
+    expect(await service.resolveByConversationAsync(second.conversation)).toEqual(second);
 
     await service.unbind({
       bindingId: second.bindingId,
       scope: { ...scope, accountId: "missing" },
       reason: "manual",
     });
-    expect(service.resolveByConversation(second.conversation)).toEqual(second);
+    expect(await service.resolveByConversationAsync(second.conversation)).toEqual(second);
     const rebound = await service.bind({
       targetSessionKey: first.targetSessionKey,
       targetKind: first.targetKind,
@@ -410,13 +382,15 @@ describe("session binding service", () => {
       targetKind: "session",
       conversation: { channel: "teamchat", accountId: "default", conversationId: "room-1" },
     });
-    service.touch(first.bindingId, 1234, second.conversation);
-    expect(service.resolveByConversation(first.conversation)).toEqual(first);
+    await service.touchAsync(first.bindingId, 1234, second.conversation);
+    expect(await service.resolveByConversationAsync(first.conversation)).toEqual(first);
     await expect(
       service.unbind({ bindingId: first.bindingId, scope: second.conversation, reason: "manual" }),
     ).resolves.toEqual([]);
-    service.touch(first.bindingId, 1234, first.conversation);
-    expect(service.resolveByConversation(first.conversation)?.metadata?.lastActivityAt).toBe(1234);
+    await service.touchAsync(first.bindingId, 1234, first.conversation);
+    expect(
+      (await service.resolveByConversationAsync(first.conversation))?.metadata?.lastActivityAt,
+    ).toBe(1234);
     await expect(
       service.unbind({
         targetSessionKey: first.targetSessionKey,
@@ -424,9 +398,9 @@ describe("session binding service", () => {
         reason: "session-ended",
       }),
     ).resolves.toHaveLength(1);
-    expect(service.resolveByConversation(first.conversation)).toBeNull();
+    expect(await service.resolveByConversationAsync(first.conversation)).toBeNull();
     closeOpenClawStateDatabaseForTest();
-    expect(service.resolveByConversation(second.conversation)).toEqual(second);
+    expect(await service.resolveByConversationAsync(second.conversation)).toEqual(second);
   });
 
   it.each(["adapter-chat", "legacy-adapter-chat"])(
@@ -540,7 +514,7 @@ describe("session binding service", () => {
       label: "workspace-dm",
     });
 
-    const resolved = service.resolveByConversation({
+    const resolved = await service.resolveByConversationAsync({
       channel: "workspace",
       accountId: "default",
       conversationId: "user:U123",
@@ -551,8 +525,8 @@ describe("session binding service", () => {
     });
     expect(service.listBySession("agent:codex:acp:workspace-dm")).toEqual([resolved]);
 
-    service.touch(bound.bindingId, 1234);
-    expect(service.resolveByConversation(bound.conversation)?.metadata).toMatchObject({
+    await service.touchAsync(bound.bindingId, 1234);
+    expect((await service.resolveByConversationAsync(bound.conversation))?.metadata).toMatchObject({
       label: "workspace-dm",
       lastActivityAt: 1234,
     });
@@ -564,7 +538,7 @@ describe("session binding service", () => {
     expect(unbound).toHaveLength(1);
     expect(unbound[0]?.bindingId).toBe(bound.bindingId);
     expect(
-      service.resolveByConversation({
+      await service.resolveByConversationAsync({
         channel: "workspace",
         accountId: "default",
         conversationId: "user:U123",
@@ -583,7 +557,6 @@ describe("session binding service", () => {
       metadata: { boundBy: "system" },
     });
 
-    expect(service.resolveByConversation(current)).toBeNull();
     await expect(service.resolveByConversationAsync(current)).resolves.toBeNull();
     expect(inspectSessionBindingByConversation(current)).toMatchObject({ binding: null });
     expect(service.listBySession(workerKey)).toEqual([]);
@@ -595,7 +568,7 @@ describe("session binding service", () => {
       conversation: current,
       metadata: { boundBy: "U123" },
     });
-    expect(service.resolveByConversation(current)?.targetSessionKey).toBe(
+    expect((await service.resolveByConversationAsync(current))?.targetSessionKey).toBe(
       "agent:codex:acp:user-owned",
     );
 
@@ -613,7 +586,9 @@ describe("session binding service", () => {
         metadata: { boundBy: "system" },
       }),
     });
-    expect(service.resolveByConversation(childThread)?.targetSessionKey).toBe(workerKey);
+    expect((await service.resolveByConversationAsync(childThread))?.targetSessionKey).toBe(
+      workerKey,
+    );
   });
 
   it("shares registered adapters across duplicate module instances", async () => {

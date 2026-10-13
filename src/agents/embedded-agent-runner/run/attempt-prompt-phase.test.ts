@@ -206,17 +206,17 @@ describe("runEmbeddedAttemptPromptPhase", () => {
       }
       const manager = SessionManager.inMemory();
       if (queued) {
-        manager.appendMessage({
+        await manager.appendMessageAsync({
           role: "user",
           content: "Earlier project archive. ".repeat(1_500),
           timestamp: 1,
         });
-        manager.appendMessage(
+        await manager.appendMessageAsync(
           createAssistant(testModel, [
             { type: "text", text: "Recorded project facts. ".repeat(900) },
           ]),
         );
-        manager.appendMessage({
+        await manager.appendMessageAsync({
           role: "user",
           content: "Current project archive. ".repeat(1_500),
           timestamp: 3,
@@ -247,10 +247,10 @@ describe("runEmbeddedAttemptPromptPhase", () => {
         };
         expect(prior.usage.totalTokens).toBeGreaterThan(24_576);
         expect(prior.usage.totalTokens).toBeLessThan(testModel.contextWindow!);
-        manager.appendMessage(prior);
+        await manager.appendMessageAsync(prior);
       }
-      manager.appendMessage(currentUser);
-      manager.appendCustomMessageEntry(
+      await manager.appendMessageAsync(currentUser);
+      await manager.appendCustomMessageEntryAsync(
         oldCarrier.customType,
         oldCarrier.content,
         oldCarrier.display,

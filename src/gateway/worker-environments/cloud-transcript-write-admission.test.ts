@@ -133,7 +133,7 @@ describe("cloud transcript write admission", () => {
         expect(await Promise.race([gate.entered.promise.then(() => "queued"), operation])).toBe(
           "queued",
         );
-        expect(SessionManager.open(sessionTarget).getBranch()).toEqual([]);
+        expect((await SessionManager.openAsync(sessionTarget)).getBranch()).toEqual([]);
         expect(notified).not.toHaveBeenCalled();
         expect(launch).not.toHaveBeenCalled();
         if (change === "run") {
@@ -168,14 +168,14 @@ describe("cloud transcript write admission", () => {
         const outcome = await operation;
         if (change === "current") {
           expect(outcome).toMatchObject({ message: "fixture reached worker launch" });
-          expect(SessionManager.open(sessionTarget).getBranch()).toMatchObject([
+          expect((await SessionManager.openAsync(sessionTarget)).getBranch()).toMatchObject([
             { type: "message", message: { role: "user" } },
           ]);
           expect(notified).toHaveBeenCalledOnce();
           expect(launch).toHaveBeenCalledOnce();
         } else {
           expect(outcome).toBeInstanceOf(Error);
-          expect(SessionManager.open(sessionTarget).getBranch()).toEqual([]);
+          expect((await SessionManager.openAsync(sessionTarget)).getBranch()).toEqual([]);
           expect(notified).not.toHaveBeenCalled();
           expect(launch).not.toHaveBeenCalled();
         }
@@ -271,7 +271,7 @@ describe("cloud transcript write admission", () => {
         expect(await Promise.race([gate.entered.promise.then(() => "queued"), operation])).toBe(
           "queued",
         );
-        expect(SessionManager.open(sessionTarget).getBranch()).toEqual([]);
+        expect((await SessionManager.openAsync(sessionTarget)).getBranch()).toEqual([]);
         expect(publish).not.toHaveBeenCalled();
         expect(placements.validateWorkspaceResultClaim(turnClaim)).toBe(true);
         if (change === "draining") {
@@ -301,7 +301,7 @@ describe("cloud transcript write admission", () => {
           } else {
             expect(outcome).toMatchObject({ paths: ["src/local.ts"] });
           }
-          expect(SessionManager.open(sessionTarget).getBranch()).toMatchObject([
+          expect((await SessionManager.openAsync(sessionTarget)).getBranch()).toMatchObject([
             {
               type: "custom_message",
               customType: cleared ? "cloud-workspace-conflict-cleared" : "cloud-workspace-conflict",
@@ -311,7 +311,7 @@ describe("cloud transcript write admission", () => {
           expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
         } else {
           expect(outcome).toBeInstanceOf(Error);
-          expect(SessionManager.open(sessionTarget).getBranch()).toEqual([]);
+          expect((await SessionManager.openAsync(sessionTarget)).getBranch()).toEqual([]);
           expect(publish).not.toHaveBeenCalled();
           expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
         }

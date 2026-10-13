@@ -251,12 +251,12 @@ function resolveCodexPluginRoot(): string {
   return path.resolve(process.cwd(), "extensions", metadata.dirName);
 }
 
-function resolveBoundSessionKey(params: {
+async function resolveBoundSessionKey(params: {
   channel: string;
   accountId: string;
   conversationId: string;
-}): string {
-  const binding = getSessionBindingService().resolveByConversation({
+}): Promise<string> {
+  const binding = await getSessionBindingService().resolveByConversationAsync({
     channel: params.channel,
     accountId: params.accountId,
     conversationId: params.conversationId,
@@ -488,7 +488,7 @@ describeLive("gateway live (native Codex conversation binding)", () => {
           timeoutMs: CODEX_BIND_REQUEST_TIMEOUT_MS,
         });
         expect(bindReply.matchedText).toContain("The next message will initialize it.");
-        const boundSessionKey = resolveBoundSessionKey({
+        const boundSessionKey = await resolveBoundSessionKey({
           channel: "slack",
           accountId,
           conversationId,

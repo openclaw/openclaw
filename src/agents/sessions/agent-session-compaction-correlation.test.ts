@@ -26,8 +26,12 @@ describe("AgentSession compaction correlation", () => {
     async (mode) => {
       const runId = "run-tokens-after";
       const sessionManager = guardSessionManager(SessionManager.inMemory(), { runId });
-      sessionManager.appendMessage({ role: "user", content: "old prompt", timestamp: 1 });
-      sessionManager.appendMessage({
+      await sessionManager.appendMessageAsync({
+        role: "user",
+        content: "old prompt",
+        timestamp: 1,
+      });
+      await sessionManager.appendMessageAsync({
         ...createAssistant(testModel, [{ type: "text", text: "retained answer" }]),
         timestamp: 2,
       });
@@ -49,8 +53,12 @@ describe("AgentSession compaction correlation", () => {
       try {
         for (const prompt of ["first long request", "second long request"]) {
           if (mode === "manual") {
-            sessionManager.appendMessage({ role: "user", content: prompt, timestamp: 3 });
-            sessionManager.appendMessage(
+            await sessionManager.appendMessageAsync({
+              role: "user",
+              content: prompt,
+              timestamp: 3,
+            });
+            await sessionManager.appendMessageAsync(
               createAssistant(testModel, [{ type: "text", text: "answer" }]),
             );
             await session.compact();

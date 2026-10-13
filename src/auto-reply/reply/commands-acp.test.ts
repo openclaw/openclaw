@@ -95,7 +95,6 @@ vi.mock("../../acp/runtime/registry.js", () => ({
 vi.mock("../../acp/runtime/session-meta.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../acp/runtime/session-meta.js")>()),
   listAcpSessionEntries: (args: unknown) => hoisted.listAcpSessionEntriesMock(args),
-  readAcpSessionEntry: (args: unknown) => hoisted.readAcpSessionEntryMock(args),
   readAcpSessionEntryAsync: hoisted.readAcpSessionEntryAsyncMock,
   upsertAcpSessionMeta: (args: unknown) => hoisted.upsertAcpSessionMetaMock(args),
   resolveSessionStorePathForAcp: (args: unknown) => hoisted.resolveSessionStorePathForAcpMock(args),
@@ -895,9 +894,6 @@ describe("/acp command", () => {
 
     hoisted.upsertAcpSessionMetaMock.mockImplementation((input) =>
       sessionMeta.upsertAcpSessionMeta({ ...input, cfg, databasePath, now: () => 1 }),
-    );
-    hoisted.readAcpSessionEntryMock.mockImplementation((input) =>
-      sessionMeta.readAcpSessionEntry({ ...input, cfg, databasePath }),
     );
     hoisted.readAcpSessionEntryAsyncMock.mockImplementation((input) =>
       sessionMeta.readAcpSessionEntryAsync({ ...input, cfg, databasePath }),

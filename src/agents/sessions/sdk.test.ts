@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { createAssistantMessageEventStream, type AssistantMessage } from "openclaw/plugin-sdk/llm";
 // Agent session SDK tests cover prepared tool wiring, prompt preservation, and
 // session write-settlement behavior.
@@ -220,20 +221,29 @@ describe("AgentSession tree navigation", () => {
     const authStorage = AuthStorage.inMemory();
     authStorage.setRuntimeApiKey(testModel.provider, "test-api-key");
     const sessionManager = SessionManager.inMemory();
-    const rootId = sessionManager.appendMessage(makeUserMessage("shared root", 1));
-    const abandonedLeafId = sessionManager.appendMessage(makeUserMessage("abandoned branch", 2));
-    sessionManager.branch(rootId);
-    const targetId = sessionManager.appendMessage({
-      role: "assistant",
-      content: [{ type: "text", text: "target branch" }],
-      api: testModel.api,
-      provider: testModel.provider,
-      model: testModel.id,
-      usage: createZeroUsageFixture(),
-      stopReason: "stop",
-      timestamp: 3,
-    });
-    sessionManager.branch(abandonedLeafId);
+    const rootId = expectDefined(
+      await sessionManager.appendMessageAsync(makeUserMessage("shared root", 1)),
+      "Expected appended message",
+    );
+    const abandonedLeafId = expectDefined(
+      await sessionManager.appendMessageAsync(makeUserMessage("abandoned branch", 2)),
+      "Expected appended message",
+    );
+    await sessionManager.branchAsync(rootId);
+    const targetId = expectDefined(
+      await sessionManager.appendMessageAsync({
+        role: "assistant",
+        content: [{ type: "text", text: "target branch" }],
+        api: testModel.api,
+        provider: testModel.provider,
+        model: testModel.id,
+        usage: createZeroUsageFixture(),
+        stopReason: "stop",
+        timestamp: 3,
+      }),
+      "Expected appended message",
+    );
+    await sessionManager.branchAsync(abandonedLeafId);
     streamMocks.streamSimple.mockReset();
     streamMocks.streamSimple.mockImplementation(() =>
       createAssistantResultStream({
@@ -525,12 +535,12 @@ describe("createAgentSession tool defaults", () => {
   it("keeps the public manual compaction result inside its write settlement", async () => {
     const observed: unknown[] = [];
     const sessionManager = SessionManager.inMemory();
-    sessionManager.appendMessage({
+    await sessionManager.appendMessageAsync({
       role: "user",
       content: "Earlier context. ".repeat(100),
       timestamp: 1,
     });
-    sessionManager.appendMessage(makeUserMessage("Current question", 2));
+    await sessionManager.appendMessageAsync(makeUserMessage("Current question", 2));
     const authStorage = AuthStorage.inMemory();
     authStorage.setRuntimeApiKey(testModel.provider, "test-api-key");
     const { session } = await createSdkSession({

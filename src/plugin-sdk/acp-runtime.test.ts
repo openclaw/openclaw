@@ -2,7 +2,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildTestCtx } from "../auto-reply/reply/test-ctx.js";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
-import { PluginInstance } from "../plugins/plugin-instance.js";
 
 const { bypassMock, dispatchMock } = vi.hoisted(() => ({
   bypassMock: vi.fn(),
@@ -15,7 +14,6 @@ vi.mock("../auto-reply/reply/dispatch-acp.runtime.js", () => ({
 }));
 
 import {
-  readAcpSessionEntry,
   registerAcpRuntimeBackend,
   resolveAcpSessionAvailability,
   testing,
@@ -267,23 +265,4 @@ describe("resolveAcpSessionAvailability", () => {
       }),
     ).toMatchObject({ available: false, message: expect.stringContaining("dispatch is disabled") });
   });
-});
-
-it("warns once when a plugin uses the deprecated synchronous ACP reader", async () => {
-  const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
-  const plugin = new PluginInstance("acp-sync-reader-compat");
-  try {
-    plugin.run(() => {
-      expect(readAcpSessionEntry({ sessionKey: " " })).toBeNull();
-      expect(readAcpSessionEntry({ sessionKey: " " })).toBeNull();
-    });
-    expect(warning).toHaveBeenCalledTimes(1);
-    expect(warning).toHaveBeenCalledWith(expect.stringContaining("readAcpSessionEntryAsync"), {
-      code: "DEP_PLUGIN_SDK",
-      type: "DeprecationWarning",
-    });
-  } finally {
-    warning.mockRestore();
-    await plugin.dispose();
-  }
 });

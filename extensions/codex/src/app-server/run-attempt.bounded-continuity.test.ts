@@ -27,7 +27,7 @@ async function createHistory(provider = "codex") {
   await attachSqliteSessionTarget(params, path.join(tempDir, "session.sqlite"), sessionId);
   params.contextTokenBudget = 1_024;
   params.prompt = "Give me the TLDR of your explanation.";
-  const manager = SessionManager.open(
+  const manager = await SessionManager.openAsync(
     {
       agentId: "main",
       sessionId,
@@ -50,13 +50,13 @@ async function readHistory(params: ReturnType<typeof createParams>) {
   });
 }
 
-function appendToolPair(manager: SessionManager, index: number) {
-  manager.appendMessage({
+async function appendToolPair(manager: SessionManager, index: number) {
+  await manager.appendMessageAsync({
     ...assistantMessage("", index * 2 + 2),
     content: [{ type: "toolCall", id: `call-${index}`, name: "read", arguments: {} }],
     stopReason: "toolUse",
   });
-  manager.appendMessage({
+  await manager.appendMessageAsync({
     role: "toolResult",
     toolCallId: `call-${index}`,
     toolName: "read",
@@ -69,16 +69,16 @@ function appendToolPair(manager: SessionManager, index: number) {
 describe("Codex bounded assistant continuity", () => {
   it("retains an assistant-only bounded suffix on a rotated native thread", async () => {
     const { params, manager } = await createHistory();
-    manager.appendMessage(userMessage("Explain the synthetic migration plan.", 1));
+    await manager.appendMessageAsync(userMessage("Explain the synthetic migration plan.", 1));
     for (let index = 0; index < 4; index++) {
-      appendToolPair(manager, index);
+      await appendToolPair(manager, index);
     }
     const explanation = "Migrate the blue database first, verify the checksum, then switch reads.";
     const mirroredAnswer = {
       ...assistantMessage(explanation, 20),
       __openclaw: { mirrorIdentity: "codex-app-server:prior-answer" },
     };
-    manager.appendMessage(mirroredAnswer);
+    await manager.appendMessageAsync(mirroredAnswer);
     const history = await readHistory(params);
     expect(history?.length).toBeGreaterThan(1);
     expect(history?.every((message) => ["assistant", "toolResult"].includes(message.role))).toBe(
@@ -153,7 +153,7 @@ describe("Codex bounded assistant continuity", () => {
     );
     const { params, manager } = await createHistory("openai");
     params.prompt = "hello";
-    manager.appendMessage(assistantMessage("previous turn", Date.now()));
+    await manager.appendMessageAsync(assistantMessage("previous turn", Date.now()));
     const harness = createStartedThreadHarness();
     params.inputProvenance = { kind: "inter_session", sourceTool: "sessions_send" };
     params.config = {

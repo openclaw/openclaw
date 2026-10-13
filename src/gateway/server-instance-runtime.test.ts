@@ -321,14 +321,14 @@ describe("createGatewayInstanceRuntime", () => {
       expiresAtMs: 2,
     } as ExecApprovalRequest;
 
-    expect(second.approvalEvents.publishRequested("exec", request)).toBe(0);
-    expect(first.approvalEvents.publishRequested("plugin", request)).toBe(0);
-    expect(first.approvalEvents.publishRequested("exec", request)).toBe(1);
+    expect(await second.approvalEvents.publishRequestedAsync("exec", request)).toBe(0);
+    expect(await first.approvalEvents.publishRequestedAsync("plugin", request)).toBe(0);
+    expect(await first.approvalEvents.publishRequestedAsync("exec", request)).toBe(1);
     expect(onRequested).toHaveBeenCalledOnce();
 
     unsubscribe();
     unsubscribe();
-    expect(first.approvalEvents.publishRequested("exec", request)).toBe(0);
+    expect(await first.approvalEvents.publishRequestedAsync("exec", request)).toBe(0);
 
     const declined = vi.fn();
     first.nativeApprovals.subscribe({
@@ -343,47 +343,6 @@ describe("createGatewayInstanceRuntime", () => {
     expect(getGatewayRecoveryRuntime()).toBe(second.recovery);
     second.close();
     expect(getGatewayRecoveryRuntime()).toBeUndefined();
-  });
-
-  it("refuses synchronous publication before sending when a subscriber requires async eligibility", async () => {
-    const logError = vi.fn();
-    const runtime = createGatewayInstanceRuntime({
-      getContext: createContext,
-      getMethodRegistry: () => createRegistry({}),
-      isDispatchAvailable: () => true,
-      logError,
-    });
-    const pending = createDeferred<boolean>();
-    const onRequested = vi.fn();
-    runtime.nativeApprovals.subscribe({
-      eventKinds: new Set(["exec"]),
-      shouldHandle: () => true,
-      onRequested,
-      onResolved: vi.fn(),
-    });
-    runtime.nativeApprovals.subscribe({
-      eventKinds: new Set(["exec"]),
-      shouldHandle: () => pending.promise,
-      onRequested,
-      onResolved: vi.fn(),
-    });
-    try {
-      expect(() =>
-        runtime.approvalEvents.publishRequested("exec", {
-          id: "legacy-async-eligibility",
-          request: {},
-          createdAtMs: 1,
-          expiresAtMs: 2,
-        }),
-      ).toThrow("use approvalEvents.publishRequestedAsync");
-      expect(onRequested).not.toHaveBeenCalled();
-      pending.reject(new Error("eligibility rejected"));
-      await Promise.resolve();
-      expect(logError).toHaveBeenCalledWith(expect.stringContaining("eligibility rejected"));
-      expect(onRequested).not.toHaveBeenCalled();
-    } finally {
-      runtime.close();
-    }
   });
 
   it.each(["unsubscribe", "resolve", "close"] as const)(

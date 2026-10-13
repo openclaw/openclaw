@@ -382,7 +382,7 @@ describe("embedded retry transcript ownership", () => {
               expect(firstManager).toBe(callerManager);
             }
             for (const message of history) {
-              firstManager!.appendMessage(message);
+              await firstManager!.appendMessageAsync(message);
             }
           } else {
             expect(firstManager).toBeUndefined();

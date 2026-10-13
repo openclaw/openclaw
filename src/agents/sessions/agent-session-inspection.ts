@@ -12,16 +12,8 @@ import {
 import type { ContextUsage } from "./extensions/index.js";
 import { withSessionManagerWriteAssertion } from "./session-manager-write-admission.js";
 import { getLatestCompactionEntry } from "./session-manager.js";
-import { warnSessionPersistenceDeprecation } from "./session-persistence-deprecation.js";
 
 export abstract class AgentSessionInspection extends AgentSessionModels {
-  /** @deprecated Use setSessionNameAsync; removed in the next Plugin SDK major. */
-  setSessionName(name: string): void {
-    warnSessionPersistenceDeprecation("AgentSession.setSessionName", "setSessionNameAsync");
-    this.sessionManager.appendSessionInfo(name);
-    this.emit({ type: "session_info_changed", name: this.sessionManager.getSessionName() });
-  }
-
   /** Persist the display name before publishing its changed event. */
   async setSessionNameAsync(name: string): Promise<void> {
     const manager = this.sessionManager;

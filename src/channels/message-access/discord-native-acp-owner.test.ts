@@ -133,7 +133,7 @@ it.each([
         }
         await writeFile(effectsPath, "");
         const target = { cfg, agentId: "main", sessionKey: binding.statefulTarget.sessionKey };
-        const before = manager.resolveSession(target);
+        const before = await manager.resolveSessionAsync(target);
         if (
           commandName === "think" &&
           ["initialize", "configure", "replace"].includes(preparation)
@@ -143,12 +143,12 @@ it.each([
             expect.arrayContaining([expect.objectContaining({ value: "high" })]),
           );
           expect(await readFile(effectsPath, "utf8")).toBe("");
-          expect(manager.resolveSession(target)).toEqual(before);
+          expect(await manager.resolveSessionAsync(target)).toEqual(before);
           setUserProfileRole(profile.id, "member");
           const revoked = await autocomplete();
           expect(revoked.respond).toHaveBeenCalledWith([]);
           expect(await readFile(effectsPath, "utf8")).toBe("");
-          expect(manager.resolveSession(target)).toEqual(before);
+          expect(await manager.resolveSessionAsync(target)).toEqual(before);
           setUserProfileRole(profile.id, "admin");
         }
         const denied = await run({
@@ -158,8 +158,8 @@ it.each([
         });
         if (commandName === "status") {
           let lastUpdatedAt: number | undefined;
-          const expectUnchangedAcpOwner = () => {
-            const after = manager.resolveSession(target);
+          const expectUnchangedAcpOwner = async () => {
+            const after = await manager.resolveSessionAsync(target);
             if (
               before.kind !== "ready" ||
               after.kind !== "ready" ||
@@ -182,7 +182,7 @@ it.each([
             }),
           );
           expect(await readFile(effectsPath, "utf8")).toBe("");
-          expectUnchangedAcpOwner();
+          await expectUnchangedAcpOwner();
           const ownerStatus = await run({ commandName });
           expect(ownerStatus.followUp).toHaveBeenCalledWith(
             expect.objectContaining({
@@ -190,7 +190,7 @@ it.each([
             }),
           );
           expect(await readFile(effectsPath, "utf8")).toBe("");
-          expectUnchangedAcpOwner();
+          await expectUnchangedAcpOwner();
           expect(dispatch).not.toHaveBeenCalled();
           return;
         }
@@ -199,7 +199,7 @@ it.each([
           ephemeral: true,
         });
         expect(await readFile(effectsPath, "utf8")).toBe("");
-        expect(manager.resolveSession(target)).toEqual(before);
+        expect(await manager.resolveSessionAsync(target)).toEqual(before);
         expect(dispatch).not.toHaveBeenCalled();
 
         pauseReadiness = true;
@@ -217,7 +217,7 @@ it.each([
             ephemeral: true,
           });
           expect(dispatch).not.toHaveBeenCalled();
-          const after = manager.resolveSession(target);
+          const after = await manager.resolveSessionAsync(target);
           if (preparation === "revoke") {
             expect(await readFile(effectsPath, "utf8")).toBe("");
             expect(after).toEqual(before);
@@ -243,7 +243,7 @@ it.each([
               ? ["close", "initialize"]
               : ["initialize"],
         );
-        const after = manager.resolveSession(target);
+        const after = await manager.resolveSessionAsync(target);
         expect(after.kind).toBe("ready");
         if (after.kind === "ready") {
           expect(after.meta.runtimeOptions).toMatchObject({

@@ -104,8 +104,10 @@ it.each([
     };
     try {
       if (recovery === "removed") {
-        const manager = SessionManager.open(target, base.workspaceDir);
-        expect(manager.removeTrailingEntries((entry) => entry.type === "message")).toBe(1);
+        const manager = await SessionManager.openAsync(target, base.workspaceDir);
+        expect(await manager.removeTrailingEntriesAsync((entry) => entry.type === "message")).toBe(
+          1,
+        );
       }
       const mirror = {
         params,

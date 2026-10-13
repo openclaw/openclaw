@@ -1,16 +1,46 @@
 import { createServer } from "node:http";
 import type { Socket } from "node:net";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { captureHttpExchange, type CaptureEventRecord } from "openclaw/plugin-sdk/proxy-capture";
+import {
+  acquireDebugProxyCaptureStoreAsync,
+  captureHttpExchangeAsync,
+  createDebugProxyCaptureReaderAsync,
+  finalizeDebugProxyCaptureAsync,
+} from "openclaw/plugin-sdk/proxy-capture";
 import { fetchWithRuntimeDispatcher } from "openclaw/plugin-sdk/runtime-fetch";
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 const fixture = vi.hoisted(() => ({
   url: "",
   release: async () => {},
   received: undefined as ((response: Response) => void) | undefined,
-  captured: undefined as ((event: CaptureEventRecord) => void) | undefined,
+  capture: Promise.resolve(),
 }));
+
+let state: OpenClawTestState;
+let releaseCaptureStore: () => Promise<void>;
+let captureSettings = {
+  enabled: true,
+  required: false,
+  dbPath: "googlechat-reader-test",
+  blobDir: "googlechat-reader-test",
+  certDir: "googlechat-reader-test",
+  sessionId: "googlechat-reader-test",
+  sourceProcess: "test",
+};
+beforeAll(async () => {
+  state = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "googlechat-capture-",
+  });
+  const lease = await acquireDebugProxyCaptureStoreAsync();
+  releaseCaptureStore = lease.release;
+});
+afterEach(async () => {
+  await finalizeDebugProxyCaptureAsync(captureSettings);
+  vi.restoreAllMocks();
+});
 
 // Change only the destination to our owned server; keep the real guard,
 // dispatcher, response reader, capture tee, and request cleanup.
@@ -25,31 +55,9 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
         policy: { allowPrivateNetwork: true, hostnameAllowlist: ["127.0.0.1"] },
         fetchImpl: async (input, init) => {
           const response = await fetchWithRuntimeDispatcher(input, init);
-          const captured = fixture.captured;
-          captureHttpExchange(
+          fixture.capture = captureHttpExchangeAsync(
             { url: fixture.url, method: "GET", response },
-            {
-              enabled: true,
-              required: false,
-              dbPath: "unused-memory-sink",
-              blobDir: "unused-memory-sink",
-              certDir: "unused-memory-sink",
-              sessionId: "googlechat-reader-test",
-              sourceProcess: "test",
-            },
-            {
-              getStore: () => ({
-                upsertSession() {},
-                endSession() {},
-                recordEvent(event) {
-                  if (event.kind === "response" || event.kind === "error") {
-                    captured?.(event);
-                  }
-                },
-              }),
-              persistEventPayload: (_store, { data }) =>
-                Buffer.isBuffer(data) ? { dataText: data.toString("utf8") } : {},
-            },
+            captureSettings,
           );
           return response;
         },
@@ -64,9 +72,14 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
 const { getGoogleAuthTransport, loadGoogleAuthRuntime } = await import("./google-auth.runtime.js");
 const { verifyGoogleChatRequest } = await import("./auth.js");
 
-afterAll(() => {
-  vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
-  vi.resetModules();
+afterAll(async () => {
+  try {
+    await releaseCaptureStore?.();
+  } finally {
+    await state?.cleanup();
+    vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+    vi.resetModules();
+  }
 });
 
 describe("Google Chat captured response cleanup", () => {
@@ -74,7 +87,6 @@ describe("Google Chat captured response cleanup", () => {
     "settles %s through the guarded transport before fixture cleanup",
     async (kind) => {
       const closed = createDeferred<void>();
-      const captured = createDeferred<CaptureEventRecord>();
       const received = createDeferred<Response>();
       const sockets = new Map<Socket, Promise<void>>();
       const completeBody = '{"access_token":"fixture"}';
@@ -84,7 +96,8 @@ describe("Google Chat captured response cleanup", () => {
         received.resolve(response);
       };
       fixture.release = async () => {};
-      fixture.captured = captured.resolve;
+      fixture.capture = Promise.resolve();
+      captureSettings = { ...captureSettings, sessionId: `googlechat-reader-${kind}` };
       const server = createServer((request, response) => {
         request.resume();
         request.socket.once("close", () => closed.resolve());
@@ -153,10 +166,13 @@ describe("Google Chat captured response cleanup", () => {
         await Promise.race([closed.promise, deadline]);
         const response = await Promise.race([received.promise, deadline]);
         expect(response.body?.locked).toBe(false);
-        const event = await Promise.race([captured.promise, deadline]);
-        expect(event.kind).toBe(kind === "auth-complete" ? "response" : "error");
+        await Promise.race([fixture.capture, deadline]);
+        const reader = createDebugProxyCaptureReaderAsync({ env: state.env });
+        const events = await reader.getSessionEvents(captureSettings.sessionId);
+        const event = events.find((entry) => entry.kind !== "request");
+        expect(event?.kind).toBe(kind === "auth-complete" ? "response" : "error");
         if (kind === "auth-complete") {
-          expect(event.dataText).toBe(completeBody);
+          expect(event?.dataText).toBe(completeBody);
         }
       } finally {
         clearTimeout(timer);
@@ -171,10 +187,9 @@ describe("Google Chat captured response cleanup", () => {
         await operation?.catch(() => undefined);
         await fixture.release();
         if (receivedResponse) {
-          await captured.promise;
+          await fixture.capture;
         }
         verifyJwt.mockRestore();
-        fixture.captured = undefined;
         fixture.received = undefined;
       }
     },

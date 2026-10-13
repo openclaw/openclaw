@@ -170,8 +170,8 @@ suite.define(() => {
         launchTurn: async (request) => {
           request.onDispatchReady?.();
           launched.push(request.turnClaim.runId);
-          const manager = SessionManager.open(scope);
-          const leaf = manager.appendMessage(
+          const manager = await SessionManager.openAsync(scope);
+          const leaf = await manager.appendMessageAsync(
             makeAgentAssistantMessage({
               content: [{ type: "text", text: `Worker reply ${launched.length}` }],
               timestamp: Date.now(),

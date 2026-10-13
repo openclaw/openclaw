@@ -12,6 +12,12 @@ OpenClaw replaced a broad backwards-compatibility layer with a modern plugin
 architecture built from small, focused imports. If your plugin predates that
 change, this guide gets it onto the current contracts.
 
+The [deprecated SQLite API proposal](/plugins/sdk-migration/deprecated-sqlite) documents
+draft removals, stable deprecation status, and remaining bundled migration blockers.
+Deprecated APIs are removed in a later normal release after the deprecation has shipped
+in stable and a compatibility period has passed. No removal release or date has been
+announced.
+
 ## What changed
 
 Several wide-open import surfaces used to let plugins reach almost anything
@@ -67,13 +73,12 @@ bindings when that flag is set. Unbound legacy ACP metadata can still accompany
 that flag; it does not certify the session row. Source retirement and worker failures reject
 the read and must not be treated as an absent session.
 
-The synchronous `readAcpSessionEntry` and
-`getAcpSessionManager().resolveSession()` contracts shipped in `v2026.9.4`
-remain available for existing consumers of that compatibility export. They are
-deprecated for runtime use. Ordinary ACP manager and Gateway callers use
-`readAcpSessionEntryAsync` and `getAcpSessionManager().resolveSessionAsync()`.
-Discord and Telegram startup binding cleanup retain their existing synchronous
-reader until conditional deletion can validate metadata at the mutation owner.
+The [removal proposal](/plugins/sdk-migration/deprecated-sqlite) removes
+`readAcpSessionEntry` and `getAcpSessionManager().resolveSession()`, whose
+deprecations shipped in stable `v2026.9.7`. Use `readAcpSessionEntryAsync` and
+`getAcpSessionManager().resolveSessionAsync()`. Discord and Telegram startup
+binding cleanup retain an internal synchronous reader until conditional deletion
+can validate metadata at the mutation owner; it is not a public SDK fallback.
 Their inactive incognito composition accepts a prepared session reader whose
 current-source assertion reaches the binding transaction and commit grants.
 The preparation retains the original actor revision and ACP metadata publication
@@ -86,9 +91,9 @@ cleanup remains separate work.
 the local `openclaw/plugin-sdk/acp-runtime` facade, must propagate through cleanup and status
 probes. Use `rethrowIncognitoSessionError(error)` before treating other failures
 as an absent session or an uncertain probe; it also recognizes nested refusals.
-Removing the synchronous contracts
-requires a separately announced breaking SDK release. Incognito reads retain
-their existing native in-memory owner until that owner's worker migration.
+The proposal remains a draft without an announced removal release. Incognito
+reads retain their existing native in-memory owner until that owner's worker
+migration.
 
 ### Session and command preparation
 
@@ -104,15 +109,15 @@ awaited replacements preserve ordered events and transcript statistics while
 keeping durable reads off the Gateway thread.
 
 Await `UserTurnTranscriptRecorder.completeProcessingAsync(outcome)` to settle an
-accepted input through its session owner. The deprecated `completeProcessing`
-method preserves synchronous completion and returns after the terminal outcome
-commits, with a migration warning, until the next Plugin SDK major. Recorders
-without an accepted input keep their existing no-op behavior.
+accepted input through its session owner. The deprecated `completeProcessing` method
+preserves synchronous completion and returns after the terminal outcome commits, with a
+migration warning, until removal after stable deprecation and a compatibility period.
+Recorders without an accepted input keep their existing no-op behavior.
 
 Use `readSessionTranscriptCatalogTitleAsync` from
 `openclaw/plugin-sdk/session-transcript-runtime` for catalog titles. The
-synchronous `readSessionTranscriptCatalogTitle` remains deprecated until the
-next Plugin SDK major.
+synchronous `readSessionTranscriptCatalogTitle` remains deprecated until removal after stable
+deprecation and a compatibility period.
 
 Use `resolveStoredModelOverrideAsync` and `resolveCommandArgMenuAsync` from
 `openclaw/plugin-sdk/command-auth-native` when preparing native commands.
@@ -121,10 +126,10 @@ Use `resolveStoredModelOverrideAsync` and `resolveCommandArgMenuAsync` from
 return a promise; direct overrides still need no parent read. Menu preparation
 reads the current session's verbose setting before returning its choices.
 
-The corresponding synchronous APIs are deprecated for ordinary runtime use.
-Released signatures remain supported until the next Plugin SDK major. New
-legacy calls emit a bounded deprecation warning. Bundled callers use the awaited
-operations; final tool, disclosure, and mutation authority checks retain their
+The corresponding synchronous APIs are deprecated for ordinary runtime use. Released
+signatures remain supported until removal after stable deprecation and a compatibility
+period. New legacy calls emit a bounded deprecation warning. Bundled callers use the
+awaited operations; final tool, disclosure, and mutation authority checks retain their
 current owner and timing.
 
 For a complete cross-session store view, await
@@ -132,16 +137,18 @@ For a complete cross-session store view, await
 `openclaw/plugin-sdk/session-transcript-hit`. It preserves full session entries
 and excludes incognito sessions while reading durable stores through the existing
 database worker. The synchronous `loadCombinedSessionStoreForGateway` retains its
-return value and emits a bounded deprecation warning; it remains supported until
-the next Plugin SDK major.
+return value and emits a bounded deprecation warning; it remains supported until removal after
+stable
+deprecation and a compatibility period.
 
 ### Exec approval reads
 
 Await `loadExecApprovalsReadOnlyAsync` or `readExecApprovalsSnapshotAsync` from
 `openclaw/plugin-sdk/exec-approvals-runtime`. Both use the existing shared-state
 read worker. The synchronous `loadExecApprovals` and `readExecApprovalsSnapshot`
-exports retain their signatures for the current Plugin SDK major, emit a bounded
-deprecation warning, and are scheduled for removal in the next major. Bundled
+exports retain their signatures and emit a bounded
+deprecation warning until removal after
+stable deprecation and a compatibility period. Bundled
 runtime callers use the awaited reads. The execution owner still checks current
 approval policy immediately before command execution using committed in-process
 policy publications; that final check does not query SQLite.
@@ -155,7 +162,8 @@ timestamps are read from the same worker snapshot, with the original database
 owner retained through validation and cleanup. The synchronous
 `resolveEntryResetFreshness(...)` method shipped in `v2026.9.8` remains available
 for existing JavaScript consumers and is deprecated for runtime use; removal
-requires the next Plugin SDK major and explicit breaking-release approval. Both methods retain the
+requires stable deprecation, a compatibility period, and maintainer
+approval. Both methods retain the
 existing reset policy and process-held incognito behavior.
 
 ### Why

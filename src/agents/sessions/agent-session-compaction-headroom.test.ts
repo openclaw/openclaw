@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import type { Context, Model, SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
 import { expect, it, vi } from "vitest";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
@@ -50,7 +51,7 @@ it.each([
     const oldInput = "Archived project facts. ".repeat(420);
     const pendingInput = "Incoming request data. ".repeat(records) + "Reply ACK after processing.";
     const sessionManager = SessionManager.inMemory();
-    sessionManager.appendMessage({ role: "user", content: oldInput, timestamp: 1 });
+    await sessionManager.appendMessageAsync({ role: "user", content: oldInput, timestamp: 1 });
     const priorTokens = inputTokens(systemPrompt, sessionManager.buildSessionContext().messages);
     const pendingOnlyTokens = inputTokens(systemPrompt, [{ role: "user", content: pendingInput }]);
     expect(priorTokens).toBeGreaterThan(3_072);
@@ -61,7 +62,7 @@ it.each([
       expect(pendingOnlyTokens).toBeGreaterThan(3_072);
     }
     expect(pendingOnlyTokens + model.maxTokens).toBeLessThan(model.contextWindow);
-    sessionManager.appendMessage(
+    await sessionManager.appendMessageAsync(
       createAssistant(model, [{ type: "text", text: "Archive recorded." }], "stop", priorTokens),
     );
     const pendingKey = ingress === "new" ? undefined : "pending-ingress";
@@ -72,14 +73,14 @@ it.each([
         timestamp: 3,
         idempotencyKey: pendingKey,
       };
-      sessionManager.appendMessage(pendingUser);
+      await sessionManager.appendMessageAsync(pendingUser);
     }
     if (ingress.endsWith("carrier")) {
       const carrier = buildRuntimeContextCustomMessage("Retained runtime context");
       if (!carrier) {
         throw new Error("Expected runtime context carrier");
       }
-      sessionManager.appendCustomMessageEntry(
+      await sessionManager.appendCustomMessageEntryAsync(
         carrier.customType,
         carrier.content,
         carrier.display,
@@ -203,10 +204,15 @@ it.each([
     retry: { enabled: false },
   });
   const sessionManager = SessionManager.inMemory();
-  const keptId = sessionManager.appendMessage(makeUserMessage("Continue the project.", 1));
+  const keptId = expectDefined(
+    await sessionManager.appendMessageAsync(makeUserMessage("Continue the project.", 1)),
+    "Expected appended message",
+  );
   const originalSummary = "The project uses blue buttons. ".repeat(40);
-  sessionManager.appendCompaction(originalSummary, keptId, 2_000);
-  sessionManager.appendMessage(createAssistant(model, [{ type: "text", text: "Ready." }]));
+  await sessionManager.appendCompactionAsync(originalSummary, keptId, 2_000);
+  await sessionManager.appendMessageAsync(
+    createAssistant(model, [{ type: "text", text: "Ready." }]),
+  );
   const pending = "Pending project material. ".repeat(550);
   const pendingKey = outcome.endsWith("pending user") ? "protected-pending" : undefined;
   let firstKeptEntryId = keptId;
@@ -217,8 +223,8 @@ it.each([
       idempotencyKey: pendingKey,
       timestamp: 3,
     };
-    sessionManager.appendMessage(pendingUser);
-    firstKeptEntryId = sessionManager.appendCustomMessageEntry(
+    await sessionManager.appendMessageAsync(pendingUser);
+    firstKeptEntryId = await sessionManager.appendCustomMessageEntryAsync(
       "runtime-context",
       "Retained context",
       false,

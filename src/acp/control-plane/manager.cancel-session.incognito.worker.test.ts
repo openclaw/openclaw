@@ -13,8 +13,30 @@ import {
 import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import { buildAcpDatabaseSessionKey } from "../runtime/session-meta-keys.js";
 import { applyAcpSessionMutation } from "../runtime/session-meta-write.kernel.js";
-import { readAcpSessionEntry, writeAcpSessionMetaForMigration } from "../runtime/session-meta.js";
+import {
+  readAcpSessionEntryAsync,
+  upsertAcpSessionMeta,
+  writeAcpSessionMetaForMigration,
+} from "../runtime/session-meta.js";
 import { withAcpCancellationFixture } from "./manager.cancel-session.worker.test-support.js";
+
+it("ignores an incognito session without ACP metadata only when requested", async () => {
+  await withAcpCancellationFixture(
+    async (f) => {
+      await upsertAcpSessionMeta({ ...f.target, mutate: () => null });
+      await expect(f.manager.cancelSession(f.target)).rejects.toMatchObject({
+        code: "ACP_SESSION_INIT_FAILED",
+        message: expect.stringContaining("Session is not ACP-enabled"),
+      });
+      await expect(
+        f.manager.cancelSession({ ...f.target, ignoreMissing: true }),
+      ).resolves.toBeUndefined();
+      expect(f.ensureSession).not.toHaveBeenCalled();
+      expect(f.cancel).not.toHaveBeenCalled();
+    },
+    { sessionKey: "agent:main:dashboard:incognito-no-acp" },
+  );
+});
 
 it.each([
   ["incognito", "rebind", "live"],
@@ -35,7 +57,7 @@ it.each([
           expect(memory).toBeDefined();
           expect(fs.existsSync(path)).toBe(false);
         }
-        const originalMeta = readAcpSessionEntry(f.target)?.acp;
+        const originalMeta = (await readAcpSessionEntryAsync(f.target))?.acp;
         if (!originalMeta) {
           throw new Error("Expected canonical global ACP metadata.");
         }

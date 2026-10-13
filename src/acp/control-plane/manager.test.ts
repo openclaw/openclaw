@@ -94,9 +94,9 @@ describe("AcpSessionManager", () => {
     });
   }
 
-  it("marks ACP-shaped sessions without metadata as stale", () => {
+  it("marks ACP-shaped sessions without metadata as stale", async () => {
     hoisted.readAcpSessionEntryMock.mockReturnValue(null);
-    const resolved = new AcpSessionManager().resolveSession(target);
+    const resolved = await new AcpSessionManager().resolveSessionAsync(target);
     expect(resolved.kind).toBe("stale");
     if (resolved.kind !== "stale") {
       return;

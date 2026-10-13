@@ -1,4 +1,5 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, expect, it } from "vitest";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
@@ -47,7 +48,10 @@ function tool(text: string): Extract<AgentMessage, { role: "toolResult" }> {
 async function seedProjection(sessionId: string, afterReset = false, cacheTouches = 0) {
   const { dir, scope } = await createSessionScope(sessionId);
   const source = await SessionManager.openAsync(scope, dir);
-  const olderId = await source.appendMessageAsync(makeUserMessage("read files", 1));
+  const olderId = expectDefined(
+    await source.appendMessageAsync(makeUserMessage("read files", 1)),
+    "Expected appended message",
+  );
   if (!olderId) {
     throw new Error("Missing fixture user entry");
   }
@@ -79,7 +83,10 @@ async function seedProjection(sessionId: string, afterReset = false, cacheTouche
       { timestamp: index, provider: "anthropic", modelId: "claude-sonnet-4-6" },
     );
   }
-  const retainedId = await source.appendMessageAsync(tool("retained"));
+  const retainedId = expectDefined(
+    await source.appendMessageAsync(tool("retained")),
+    "Expected appended message",
+  );
   if (!retainedId) {
     throw new Error("Missing retained fixture tool result");
   }
@@ -267,7 +274,7 @@ it.each(["async", "sync"] as const)(
     const detached =
       mode === "async"
         ? await SessionManager.openDetachedBoundedAsync(fixture.scope, options)
-        : SessionManager.openDetachedBounded(fixture.scope, options);
+        : await SessionManager.openDetachedBoundedAsync(fixture.scope, options);
     expect(detached.getSessionTarget()).toBeUndefined();
     expect(detached.getBranch().map((entry) => entry.id)).toEqual([
       fixture.retainedId,
@@ -362,7 +369,10 @@ it.each([
     expect(manager.buildSessionContext().messages).toEqual([]);
     expect(serializeCacheTtlToolResultProjections(restore(manager))).toEqual(expected);
     if (action === "continue") {
-      const id = await manager.appendMessageAsync(makeUserMessage("continue", 3));
+      const id = expectDefined(
+        await manager.appendMessageAsync(makeUserMessage("continue", 3)),
+        "Expected appended message",
+      );
       if (!id) {
         throw new Error("Missing continuation fixture entry");
       }
@@ -452,7 +462,10 @@ it("preserves projection dependencies when a rewrite replaces the bounded anchor
       if (entry.message.role !== "toolResult") {
         throw new Error("Unexpected non-tool message in projection rewrite fixture");
       }
-      const replacementId = await rewrite.sessionManager.appendMessageAsync(entry.message);
+      const replacementId = expectDefined(
+        await rewrite.sessionManager.appendMessageAsync(entry.message),
+        "Expected appended message",
+      );
       if (!replacementId) {
         throw new Error("Missing rewritten fixture message");
       }

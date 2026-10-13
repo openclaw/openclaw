@@ -1,4 +1,5 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import type {
   AssistantMessage,
   Context,
@@ -106,13 +107,21 @@ describe("AgentSession compaction", () => {
     "prepares $name for core without changing the extension input",
     async ({ instructions, expectedFocus }) => {
       const sessionManager = SessionManager.inMemory();
-      sessionManager.appendMessage({ role: "user", content: "old prompt", timestamp: 1 });
-      sessionManager.appendMessage({
+      await sessionManager.appendMessageAsync({
+        role: "user",
+        content: "old prompt",
+        timestamp: 1,
+      });
+      await sessionManager.appendMessageAsync({
         ...createAssistant(testModel, [{ type: "text", text: "old answer" }]),
         timestamp: 2,
       });
-      sessionManager.appendMessage({ role: "user", content: "split prompt", timestamp: 3 });
-      sessionManager.appendMessage({
+      await sessionManager.appendMessageAsync({
+        role: "user",
+        content: "split prompt",
+        timestamp: 3,
+      });
+      await sessionManager.appendMessageAsync({
         ...createAssistant(testModel, [{ type: "text", text: "retained answer" }]),
         timestamp: 4,
       });
@@ -229,9 +238,9 @@ describe("AgentSession compaction", () => {
       sessionId: scope.sessionId,
       updatedAt: 1,
     });
-    const sessionManager = SessionManager.open(scope, dir);
-    sessionManager.appendMessage({ role: "user", content: "old prompt", timestamp: 1 });
-    sessionManager.appendMessage({
+    const sessionManager = await SessionManager.openAsync(scope, dir);
+    await sessionManager.appendMessageAsync({ role: "user", content: "old prompt", timestamp: 1 });
+    await sessionManager.appendMessageAsync({
       ...createAssistant(
         testModel,
         [{ type: "text", text: "old answer" }],
@@ -246,7 +255,10 @@ describe("AgentSession compaction", () => {
       idempotencyKey: "agent-session-compaction-keyed-user:user",
       timestamp: 3,
     };
-    const currentUserId = sessionManager.appendMessage(currentUser);
+    const currentUserId = expectDefined(
+      await sessionManager.appendMessageAsync(currentUser),
+      "Expected appended message",
+    );
     guardSessionManager(sessionManager, { preparedUserTurnMessage: currentUser });
     const requests: Context[] = [];
     streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
@@ -302,12 +314,16 @@ describe("AgentSession compaction", () => {
 
   it("accounts every automatic compaction response before summary validation", async () => {
     const sessionManager = SessionManager.inMemory();
-    sessionManager.appendMessage({ role: "user", content: "old prompt", timestamp: 1 });
-    sessionManager.appendMessage({
+    await sessionManager.appendMessageAsync({ role: "user", content: "old prompt", timestamp: 1 });
+    await sessionManager.appendMessageAsync({
       ...createAssistant(testModel, [{ type: "text", text: "old answer" }]),
       timestamp: 2,
     });
-    sessionManager.appendMessage({ role: "user", content: "latest prompt", timestamp: 3 });
+    await sessionManager.appendMessageAsync({
+      role: "user",
+      content: "latest prompt",
+      timestamp: 3,
+    });
     const requestCount = mockInvalidThenTextSummary("condensed history");
     const { session } = await createTestSession({
       sessionManager,
@@ -327,14 +343,27 @@ describe("AgentSession compaction", () => {
 
   it("accounts branch-summary responses through the same run owner", async () => {
     const sessionManager = SessionManager.inMemory();
-    const rootId = sessionManager.appendMessage({ role: "user", content: "root", timestamp: 1 });
-    const abandonedId = sessionManager.appendMessage(makeUserMessage("abandoned branch", 2));
-    sessionManager.branch(rootId);
-    const targetId = sessionManager.appendMessage({
-      ...createAssistant(testModel, [{ type: "text", text: "target branch" }]),
-      timestamp: 3,
-    });
-    sessionManager.branch(abandonedId);
+    const rootId = expectDefined(
+      await sessionManager.appendMessageAsync({
+        role: "user",
+        content: "root",
+        timestamp: 1,
+      }),
+      "Expected appended message",
+    );
+    const abandonedId = expectDefined(
+      await sessionManager.appendMessageAsync(makeUserMessage("abandoned branch", 2)),
+      "Expected appended message",
+    );
+    await sessionManager.branchAsync(rootId);
+    const targetId = expectDefined(
+      await sessionManager.appendMessageAsync({
+        ...createAssistant(testModel, [{ type: "text", text: "target branch" }]),
+        timestamp: 3,
+      }),
+      "Expected appended message",
+    );
+    await sessionManager.branchAsync(abandonedId);
     streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
       createAssistantResultStream(
         createAssistant(activeModel, [{ type: "text", text: "branch summary" }], "stop", 7),
@@ -423,8 +452,8 @@ describe("AgentSession compaction", () => {
 
   it("projects a rejected manual cancellation as aborted without recording compaction", async () => {
     const sessionManager = SessionManager.inMemory();
-    sessionManager.appendMessage({ role: "user", content: "old prompt", timestamp: 1 });
-    sessionManager.appendMessage({
+    await sessionManager.appendMessageAsync({ role: "user", content: "old prompt", timestamp: 1 });
+    await sessionManager.appendMessageAsync({
       ...createAssistant(testModel, [{ type: "text", text: "old answer" }]),
       timestamp: 2,
     });
@@ -474,8 +503,8 @@ describe("AgentSession compaction", () => {
 
   it("caps extension summaries before persistence and manual return", async () => {
     const sessionManager = SessionManager.inMemory();
-    sessionManager.appendMessage({ role: "user", content: "old prompt", timestamp: 1 });
-    sessionManager.appendMessage({
+    await sessionManager.appendMessageAsync({ role: "user", content: "old prompt", timestamp: 1 });
+    await sessionManager.appendMessageAsync({
       ...createAssistant(testModel, [{ type: "text", text: "old answer" }]),
       timestamp: 2,
     });
@@ -566,14 +595,20 @@ describe("AgentSession compaction", () => {
   it("reports replacement tokens and the exact equal-summary entry before a post-commit hook finishes", async () => {
     const sessionManager = SessionManager.inMemory();
     const summary = "The same bounded summary";
-    const oldUserId = sessionManager.appendMessage(makeUserMessage("old prompt", 1));
-    sessionManager.appendMessage({
+    const oldUserId = expectDefined(
+      await sessionManager.appendMessageAsync(makeUserMessage("old prompt", 1)),
+      "Expected appended message",
+    );
+    await sessionManager.appendMessageAsync({
       ...createAssistant(testModel, [{ type: "text", text: "old answer" }]),
       timestamp: 2,
     });
-    const oldCompactionId = sessionManager.appendCompaction(summary, oldUserId, 100);
-    const recentUserId = sessionManager.appendMessage(makeUserMessage("recent prompt", 3));
-    sessionManager.appendMessage({
+    const oldCompactionId = await sessionManager.appendCompactionAsync(summary, oldUserId, 100);
+    const recentUserId = expectDefined(
+      await sessionManager.appendMessageAsync(makeUserMessage("recent prompt", 3)),
+      "Expected appended message",
+    );
+    await sessionManager.appendMessageAsync({
       ...createAssistant(testModel, [{ type: "text", text: "recent answer" }]),
       timestamp: 4,
     });
@@ -715,15 +750,18 @@ describe("AgentSession compaction", () => {
 
   it("strips stale thinking signatures before continuing after auto-compaction", async () => {
     const sessionManager = SessionManager.inMemory();
-    sessionManager.appendMessage({
+    await sessionManager.appendMessageAsync({
       role: "user",
       content: "old prompt",
       timestamp: Date.now() - 3,
     });
-    const retainedAssistantId = sessionManager.appendMessage({
-      ...createAssistant(testModel, createStaleThinkingContent()),
-      timestamp: Date.now() - 2,
-    });
+    const retainedAssistantId = expectDefined(
+      await sessionManager.appendMessageAsync({
+        ...createAssistant(testModel, createStaleThinkingContent()),
+        timestamp: Date.now() - 2,
+      }),
+      "Expected appended message",
+    );
     const handlers = createCompactionHandlers();
     handlers.set("session_before_compact", [
       async (event: unknown) => ({
@@ -775,18 +813,25 @@ describe("AgentSession compaction", () => {
     const model = { ...testModel, contextWindow: 1_000 };
     const sessionManager = SessionManager.inMemory();
     const now = Date.now();
-    sessionManager.appendMessage({ role: "user", content: "old prompt", timestamp: now - 2 });
-    const retainedAssistantId = sessionManager.appendMessage({
-      ...createAssistant(model, createStaleThinkingContent(), "stop", 950),
-      timestamp: now - 1,
+    await sessionManager.appendMessageAsync({
+      role: "user",
+      content: "old prompt",
+      timestamp: now - 2,
     });
-    sessionManager.appendCompaction("condensed history", retainedAssistantId, 950);
-    sessionManager.appendMessage({
+    const retainedAssistantId = expectDefined(
+      await sessionManager.appendMessageAsync({
+        ...createAssistant(model, createStaleThinkingContent(), "stop", 950),
+        timestamp: now - 1,
+      }),
+      "Expected appended message",
+    );
+    await sessionManager.appendCompactionAsync("condensed history", retainedAssistantId, 950);
+    await sessionManager.appendMessageAsync({
       role: "user",
       content: "post-compaction prompt",
       timestamp: now + 1_000,
     });
-    sessionManager.appendMessage({
+    await sessionManager.appendMessageAsync({
       ...createAssistant(model, [], "error"),
       usage: {
         input: 0,

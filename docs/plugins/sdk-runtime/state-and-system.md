@@ -191,9 +191,9 @@ closing the connection.
 
     `count()` returns the number of live stored rows in the runtime-bound plugin and namespace without loading or decoding their JSON values. A row expires when its expiry timestamp is at or before the call's cutoff. Counting does not delete expired rows, create a missing database, or join the writable database lifecycle. Corrupt JSON still occupies a live row and is counted; `lookup` and `entries` retain their decoding errors. Database acquisition and query failures propagate with operation `count`. A count and a later write are separate operations; the write remains responsible for enforcing capacity.
 
-    Current host factories provide `count`, but it remains optional in the public async and synchronous store types for shipped hosts and adapters through the next Plugin SDK major. Callers supporting those stores can use `store.count ? await store.count() : (await store.entries()).length`; synchronous callers omit `await`. The fallback retains the older store's enumeration and decoding behavior. Only fall back when the method is absent, never after a failed count.
+    Current host factories provide `count`, but it remains optional in the public async and synchronous store types for shipped hosts and adapters during their compatibility period. Callers supporting those stores can use `store.count ? await store.count() : (await store.entries()).length`; synchronous callers omit `await`. The fallback retains the older store's enumeration and decoding behavior. Only fall back when the method is absent, never after a failed count.
 
-    `openSyncKeyedStore<T>(...)` remains available for callers that cannot await, with its existing synchronous return values and errors. It is deprecated through the `next-plugin-sdk-major` compatibility gate. See [Synchronous keyed store migration](/plugins/sdk-runtime/state-and-system#synchronous-keyed-store-migration).
+    `openSyncKeyedStore<T>(...)` remains available for callers that cannot await, with its existing synchronous return values and errors. It uses the `after-stable-deprecation` compatibility gate: removal in a later normal release requires deprecation in stable and a compatibility period. No removal release or date is announced. See [Synchronous keyed store migration](/plugins/sdk-runtime/state-and-system#synchronous-keyed-store-migration).
 
     `openBlobStore<TMetadata>(...)` stores bounded binary payloads in shared SQLite without base64 or file sidecars. It requires per-entry, per-namespace byte, and row limits; copies byte arrays at the API boundary; and lists metadata without loading every BLOB. `register(...)` is an explicit upsert, including for expired keys. `registerIfAbsent(...)` provides collision-safe creation: an expired key remains occupied until its owner claims it with `deleteExpiredKey(key)` or `deleteExpired()`, preserving metadata needed to remove related named artifacts after the SQLite commit. Any row with a TTL is transient and excluded from backup/restore even before it expires; omit TTL for durable, restorable state. Host fuses cap each BLOB at 100 MiB, each plugin at 512 MiB of physically stored BLOBs, and each plugin at 50,000 physically stored rows, including expired rows awaiting owner cleanup. Use `registerIfAbsent(...)` with `overflowPolicy: "reject-new"` when external materializations must not be silently orphaned by replacement or eviction.
 
@@ -201,7 +201,7 @@ closing the connection.
 
     `openChannelIngressQueue<TPayload>(...)` opens a persisted ingress queue scoped to the calling plugin, for buffering inbound events that need at-least-once processing across restarts. When stale-claim recovery uses `shouldRecover`, also provide `shouldRecoverCorrupt` if corrupt claimed payloads should be quarantined: its payload-independent claim identity lets the plugin preserve live owner and lane policy before the queue tombstones the row.
 
-    Host ingress queues provide `listUnsettled({ orderBy })`, returning `{ pending, claims }` from one snapshot in the shared-state broker, ordered with queue mutations. The shared drain uses this coherent view so a claim released during inspection cannot let a later event overtake its lane head. The method remains optional through the next Plugin SDK major for existing external queue implementations; only those implementations retain the separate `listPending`/`listClaims` path. A failed snapshot read never falls back to separate reads.
+    Host ingress queues provide `listUnsettled({ orderBy })`, returning `{ pending, claims }` from one snapshot in the shared-state broker, ordered with queue mutations. The shared drain uses this coherent view so a claim released during inspection cannot let a later event overtake its lane head. The method remains optional during the compatibility period for existing external queue implementations; only those implementations retain the separate `listPending`/`listClaims` path. A failed snapshot read never falls back to separate reads.
 
     Plugin-state leases were removed in 2026.8.1. Use short SQLite transactions for atomic database work and plugin-scoped keyed stores (`openKeyedStore` or `openSyncKeyedStore`) for bounded durable state.
 
@@ -224,8 +224,9 @@ closing the connection.
 `api.runtime.state.openSyncKeyedStore` and `PluginStateSyncKeyedStore` are deprecated
 as of September 11, 2026. The existing `createPluginStateSyncKeyedStore` factory is
 the named `plugin-state-sync-keyed-store` compatibility adapter. Existing methods
-remain supported through the next Plugin SDK major; removal also requires a
-supported external-plugin migration and explicit breaking-release approval.
+remain supported during the deprecation period. Removal in a later normal release
+requires deprecation shipped in stable, a compatibility period, a supported
+external-plugin migration, and maintainer approval.
 
 Use `api.runtime.state.openKeyedStoreV2` with the same namespace and options, then
 await its operations. The opener itself still returns a store synchronously.
@@ -293,7 +294,8 @@ that native work has stopped.
 The async store's `update` updater and `deleteIf` predicate are deprecated
 compatibility methods. They still run synchronously on the main thread inside
 the transaction containing the authoritative read and mutation, and remain
-supported until they are removed in the next Plugin SDK major. Actual legacy
+supported until removal in a later normal release after stable deprecation and
+a compatibility period. Actual legacy
 calls emit one deprecation diagnostic per plugin and capability family per
 Gateway process; importing the SDK does not warn. Synchronous methods still
 commit and install their facts before returning.
@@ -489,7 +491,8 @@ This remains an internal runtime facade, not a typed public SDK entrypoint for
 third-party plugins.
 
 The deprecated `withOpenClawAgentDatabaseWrite` and raw-handle exports retain
-their native callback ordering until the next Plugin SDK major. Awaiting their
+their native callback ordering until removal after stable deprecation and a
+compatibility period. Awaiting their
 admission does not move callbacks off the host. Actual legacy use shares the
 per-plugin capability-family warning budget; explicit read-only inspection,
 offline maintenance, and worker kernels keep their scoped contracts.
@@ -509,12 +512,12 @@ before commit. See the [complete session migration table](/plugins/sdk-migration
 
 Use `await SessionManager.appendMessageToTranscriptAsync(...)` for static appends
 of ordinary, custom, or Bash execution messages. It resolves to the persisted
-message ID after the worker commits. `SessionManager.appendMessageToTranscript`
-retains its synchronous return contract for third-party plugins using the
-v2026.9.5 API, emits a deprecation warning once per process, and can still perform
-SQLite work on the calling thread. The `session-manager-sync-persistence` record
-sets removal at the next Plugin SDK major. Bundled production paths use awaited
-operations.
+message ID after the worker commits. The
+[removal proposal](/plugins/sdk-migration/deprecated-sqlite) removes
+`SessionManager.appendMessageToTranscript`, deprecated in stable `v2026.9.7`,
+and the other synchronous persistence entrypoints deprecated in stable
+`v2026.10.1` or earlier. Bundled production paths use awaited operations.
+The newer `SessionManager.readSessionContext` deprecation remains supported.
 
 Core failed-image settlement uses the internal `appendSessionTranscriptNote`
 operation, which accepts a custom message and returns a promise for its persisted `messageId`, stored
@@ -547,9 +550,10 @@ and symlink spelling are preserved.
 File-backed transcript writes execute through the underlying agent database
 worker. Queued extension actions retain their original runtime and session
 authority through transaction and commit admission. Runtime session hydration
-uses the existing read worker. Deprecated third-party synchronous adapters and
-incognito transcript persistence retain their native owners; the awaited API
-does not move incognito storage off-thread before its separate worker cutover.
+uses the existing read worker. Incognito transcript persistence retains its
+native owner; the awaited API does not move incognito storage off-thread before
+its separate worker cutover. Retained raw SQLite and opaque callback contracts
+also keep their documented compatibility owners.
 
 Committed metadata updates the bound session's model or thinking state alongside
 transcript-view adoption, before asynchronous cleanup. Settings setters retain

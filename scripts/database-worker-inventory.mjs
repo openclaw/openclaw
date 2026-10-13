@@ -889,9 +889,10 @@ const reviewedOperations = new Map([
           "bind",
           "completeMutation",
           "retire",
+          "find",
         ],
         evidence:
-          "List/mutations run only in node-worker-journal.worker.ts:14,19,26,31,36; selectRow/write are mutation-only helpers; native findSync at node-worker-prepared-workspace-store.ts:31 reaches only find, which stays T1",
+          "node-worker-journal.worker.ts owns workspace list/find/mutations; selectRow/write are mutation-only helpers after the deprecated findSync removal.",
       },
     ],
   ],

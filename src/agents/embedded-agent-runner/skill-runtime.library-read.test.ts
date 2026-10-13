@@ -12,7 +12,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  listSkillCommandsForWorkspace,
+  prepareSkillCommandsForWorkspace,
   resolveSkillCommandInvocation,
 } from "../../skills/discovery/chat-commands.js";
 import { skillLibraryRevisionDir } from "../../skills/library/bundle.js";
@@ -102,7 +102,7 @@ describe("manual library resources through embedded and host-bound reads", () =>
         const { skillsSnapshot, ...rest } = options;
         // Codex supplies the prompt snapshot; Copilot must also work when its
         // factory options omit it. Neither caller supplies private read resources.
-        return host.hostCapabilities.createToolSurface!({
+        return host.hostCapabilities.createToolSurfaceAsync!({
           ...rest,
           ...(toolOwner === "codex-host" ? { skillsSnapshot } : {}),
         });
@@ -194,7 +194,7 @@ describe("manual library resources through embedded and host-bound reads", () =>
       expect(snapshot.resolvedSkills?.map((skill) => skill.name)).not.toContain(saved.entry.name);
       const invocation = resolveSkillCommandInvocation({
         commandBodyNormalized: `/skill ${saved.entry.name} use the pinned resources`,
-        skillCommands: listSkillCommandsForWorkspace({
+        skillCommands: await prepareSkillCommandsForWorkspace({
           workspaceDir,
           cfg: config,
           agentId: "main",
@@ -473,7 +473,7 @@ describe("host skill resource construction boundaries", () => {
     const attempt = await setup("host-no-fs");
     const host = await createAdmittedHostCapabilityTestFixture(attempt);
     hosts.push(host);
-    const tools = host.hostCapabilities.createToolSurface!({
+    const tools = await host.hostCapabilities.createToolSurfaceAsync!({
       config: attempt.config,
       workspaceDir: attempt.workspaceDir,
       includeCoreTools: false,
@@ -505,7 +505,7 @@ describe("host skill resource construction boundaries", () => {
         ...(preResolved ? { sandbox } : {}),
       });
       hosts.push(host);
-      const tools = host.hostCapabilities.createToolSurface!({
+      const tools = await host.hostCapabilities.createToolSurfaceAsync!({
         workspaceDir: attempt.workspaceDir,
         config: attempt.config,
         sandbox,

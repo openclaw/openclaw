@@ -4,7 +4,6 @@ import { createNativeCommandItem } from "./event-projector-command.test-support.
 import {
   describe,
   registerCodexEventProjectorTestLifecycle,
-  SessionManager,
   expect,
   it,
   vi,
@@ -158,7 +157,6 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
       agentHookContext,
       onContextCompacted,
     });
-    const openSpy = vi.spyOn(SessionManager, "open");
 
     await projector.handleNotification(
       forCurrentTurn("item/started", {
@@ -175,7 +173,6 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
         item: { type: "contextCompaction", id: "compact-1" },
       }),
     );
-    expect(openSpy).not.toHaveBeenCalled();
     expect(projector.buildResult(buildEmptyToolTelemetry()).compactionCount).toBe(1);
     expect(onContextCompacted).toHaveBeenCalledOnce();
     expect(beforeCompaction).toHaveBeenCalledOnce();

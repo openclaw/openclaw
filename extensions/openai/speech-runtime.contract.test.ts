@@ -18,7 +18,7 @@ const REQUEST_TIMEOUT_MS = 100;
 const STALLED_REQUEST_WATCHDOG_MS = 1_000;
 const TIMEOUT_CASE_MS = 2_000;
 
-const { resolveTtsConfig, getTtsProvider } = ttsRuntime;
+const { resolveTtsConfig, getTtsProviderAsync } = ttsRuntime;
 const { parseTtsDirectives, resolveModelOverridePolicy, getResolvedSpeechProviderConfig } =
   ttsRuntime.testApi;
 
@@ -158,9 +158,9 @@ describe("OpenAI speech public runtime contract", () => {
   it.each([
     { name: "configured environment key", apiKey: "test-openai-key", expected: "openai" },
     { name: "missing environment key", apiKey: "", expected: "" },
-  ])("selects OpenAI through public readiness resolution: $name", ({ apiKey, expected }) => {
+  ])("selects OpenAI through public readiness resolution: $name", async ({ apiKey, expected }) => {
     vi.stubEnv("OPENAI_API_KEY", apiKey);
-    expect(getTtsProvider(resolveTtsConfig({ tts: {} }), prefsPath)).toBe(expected);
+    expect(await getTtsProviderAsync(resolveTtsConfig({ tts: {} }), prefsPath)).toBe(expected);
   });
 
   describe("parseTtsDirectives", () => {

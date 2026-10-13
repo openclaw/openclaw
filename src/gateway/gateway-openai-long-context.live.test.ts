@@ -315,7 +315,7 @@ async function requestTurn(params: {
     stopReason: response.result.meta?.stopReason,
     transport,
   };
-  const state = observeOpenAICompactionState({
+  const state = await observeOpenAICompactionState({
     agentId: AGENT_ID,
     sessionId: params.sessionId,
     sessionKey: SESSION_KEY,
@@ -546,7 +546,7 @@ describeLive("Gateway OpenAI long-context compaction (live)", () => {
         expect(result.text).toContain(acknowledgement);
         peakPromptTokens = Math.max(peakPromptTokens, promptTokens(result) ?? 0);
         peakInputItems = Math.max(peakInputItems, result.transport.inputItems);
-        const observed = observeOpenAICompactionState({
+        const observed = await observeOpenAICompactionState({
           agentId: AGENT_ID,
           sessionId,
           sessionKey: SESSION_KEY,
@@ -682,7 +682,7 @@ describeLive("Gateway OpenAI long-context compaction (live)", () => {
       });
       expectAllMarkers(recalled.text, markers);
 
-      const beforeRestart = observeOpenAICompactionState({
+      const beforeRestart = await observeOpenAICompactionState({
         agentId: AGENT_ID,
         sessionId,
         sessionKey: SESSION_KEY,
@@ -714,7 +714,7 @@ describeLive("Gateway OpenAI long-context compaction (live)", () => {
       });
       clients.push(client);
       await assertSessionIdentity(client, profile, sessionId);
-      const afterRestart = observeOpenAICompactionState({
+      const afterRestart = await observeOpenAICompactionState({
         agentId: AGENT_ID,
         sessionId,
         sessionKey: SESSION_KEY,

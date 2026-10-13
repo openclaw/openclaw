@@ -1,6 +1,6 @@
 import type { Tool as SdkTool, ToolInvocation } from "@github/copilot-sdk";
 import { expectDefined } from "@openclaw/normalization-core";
-import { createOpenClawCodingTools as createRealOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
+import { createOpenClawCodingToolsAsync as createRealOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createCopilotTestHostCapabilities } from "./host-capability.test-support.js";
 import { createCopilotToolBridge as createCopilotToolBridgeImpl } from "./tool-bridge.js";
@@ -12,7 +12,7 @@ type CopilotToolBridgeTestInput = Omit<
   "agentId" | "attemptParams" | "modelId" | "modelProvider" | "sessionId" | "spawnWorkspaceDir"
 > &
   Partial<Pick<CopilotToolBridgeInput, "agentId" | "modelId" | "modelProvider" | "sessionId">> & {
-    createOpenClawCodingTools?: typeof createRealOpenClawCodingTools;
+    createOpenClawCodingTools?: Parameters<typeof createCopilotTestHostCapabilities>[0];
     sessionKey?: string;
     abortSignal?: AbortSignal;
     spawnWorkspaceDir?: CopilotToolBridgeInput["spawnWorkspaceDir"];

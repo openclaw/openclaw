@@ -21,7 +21,10 @@ import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js"
 import { listSessionStateEventsSince, registerSessionStateWatch } from "./session-state-events.js";
 import * as upstreamRuntime from "./session-upstream-links-runtime.js";
 import * as upstreamLinks from "./session-upstream-links.js";
-import { deleteSessionUpstreamLink, upsertSessionUpstreamLink } from "./session-upstream-links.js";
+import {
+  deleteSessionUpstreamLinkAsync,
+  upsertSessionUpstreamLink,
+} from "./session-upstream-links.js";
 import { readSessionUpstreamLinkInDatabase } from "./session-upstream-links.kernel.js";
 import { startSessionUpstreamMonitor } from "./session-upstream-monitor.js";
 import { runSessionUpstreamMonitorTick } from "./session-upstream-monitor.test-support.js";
@@ -655,7 +658,7 @@ describe("session upstream monitor", () => {
 
     await runSessionUpstreamMonitorTick(options, missingCounts);
     expect(missingCounts.size).toBe(1);
-    deleteSessionUpstreamLink(sessionKey, "main", database);
+    await deleteSessionUpstreamLinkAsync(sessionKey, "main", database);
     await runSessionUpstreamMonitorTick(options, missingCounts);
 
     expect(check).toHaveBeenCalledOnce();

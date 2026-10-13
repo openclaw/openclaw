@@ -9,6 +9,12 @@ sidebarTitle: "Removal timeline"
 
 The dates and gates that govern when deprecated surfaces become removable. Part of the [Plugin SDK migration](/plugins/sdk-migration) guide.
 
+OpenClaw ships the replacement and deprecation in a stable release, then removes the
+deprecated API after a compatibility period in a later normal release. Beta releases and
+compatibility-record dates do not establish stable deprecation. The [deprecated SQLite
+API proposal](/plugins/sdk-migration/deprecated-sqlite) remains an unmerged draft, with
+no announced removal release or date.
+
 `pnpm plugin-sdk:surface:check` enforces the latest stable release's committed
 typed public surface independently of export-count budgets. Removing a shipped
 subpath or named export requires a covering `deprecated`, `removal-pending`, or
@@ -19,13 +25,13 @@ they are not declared typed-public contracts.
 
 ## Removal timeline
 
-| When                                                     | What happens                                                                                                                                                                                                                                                                                                                                       |
-| -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Now**                                                  | Warning-capable deprecated surfaces emit runtime warnings; repository guards reject deprecated SDK imports from core and bundled plugins.                                                                                                                                                                                                          |
-| **Pending owner decision**                               | Records without `removeAfter` or `removalGate` remain deprecated and ineligible until their owner publishes a gate.                                                                                                                                                                                                                                |
-| **Day after a `deprecated` record's `removeAfter` date** | At 00:00 UTC, that record becomes date-eligible and `pnpm plugins:boundary-report --fail-on-eligible-compat` exits non-zero. The date itself is the final compatibility day.                                                                                                                                                                       |
-| **A `removal-pending` record's `removeAfter` date**      | At 00:00 UTC, the report marks the record due for review and lists its blockers. It does not trigger the compatibility fail flag.                                                                                                                                                                                                                  |
-| **Next Plugin SDK major**                                | `inbound-reply-dispatch`, synchronous plugin keyed stores, memory session inventory readers, deprecated Mention Inbox signatures (native synchronous persistence is retired), and synchronous session/extension/provider replay persistence reach their explicit `next-plugin-sdk-major` gate; none is date-eligible before that version boundary. |
+| When                                                     | What happens                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Now**                                                  | Warning-capable deprecated surfaces emit runtime warnings; repository guards reject deprecated SDK imports from core and bundled plugins.                                                                                                                                                                                                                                                                                                            |
+| **Pending owner decision**                               | Records without `removeAfter` or `removalGate` remain deprecated and ineligible until their owner publishes a gate.                                                                                                                                                                                                                                                                                                                                  |
+| **Day after a `deprecated` record's `removeAfter` date** | At 00:00 UTC, that record becomes date-eligible and `pnpm plugins:boundary-report --fail-on-eligible-compat` exits non-zero. The date itself is the final compatibility day.                                                                                                                                                                                                                                                                         |
+| **A `removal-pending` record's `removeAfter` date**      | At 00:00 UTC, the report marks the record due for review and lists its blockers. It does not trigger the compatibility fail flag.                                                                                                                                                                                                                                                                                                                    |
+| **After stable deprecation and a compatibility period**  | `inbound-reply-dispatch`, synchronous plugin keyed stores, memory session inventory readers, deprecated Mention Inbox signatures (native synchronous persistence is retired), and synchronous session/extension/provider replay persistence use the `after-stable-deprecation` gate. Removal waits for a stable-shipped deprecation, a compatibility period, and maintainer review in a later normal release; the gate alone is never date-eligible. |
 
 The remaining public SDK subpaths below have registry-backed removal windows.
 The July 30 rows were removed after their early maintainer-authorized sweep:
@@ -38,7 +44,7 @@ The August 15 compatibility subpaths `agent-config-primitives`,
 explicit SDK-owner approval in August 2026. Use the focused replacements in
 the [Plugin SDK subpath catalog](/plugins/sdk-subpaths), and import `zod`
 directly from the `zod` package. `inbound-reply-dispatch` remains available
-until the next Plugin SDK major.
+until removal after stable deprecation and a compatibility period.
 
 The beta.5 whole-session-store bridge was retired with explicit SDK-owner
 approval on September 30, 2026, ahead of its former October 12 deadline.

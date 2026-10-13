@@ -7,7 +7,6 @@
  */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
-import { loadExactSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import { withSessionStoreReaderInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { resolveStateDir } from "../config/state-dir.js";
@@ -17,7 +16,6 @@ import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js
 import { resolveSandboxSessionToolsVisibility } from "../plugin-sdk/session-visibility.js";
 import { buildAgentMainSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
 import { prepareAmbientGroupWatchTargetsRead } from "../sessions/session-state-events.ambient-read.js";
-import { listAmbientGroupWatchTargets } from "../sessions/session-state-events.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
 
@@ -89,34 +87,6 @@ function watchedSessionRow(key: string, entry?: SessionEntry) {
     row.title = truncateUtf16Safe(title, WATCHED_SESSION_TITLE_MAX_CHARS);
   }
   return row;
-}
-
-/** Released synchronous SDK compatibility; bundled runtimes use the async preparer. */
-export function prepareWatchedSessionsPrompt(
-  params: WatchedSessionsPromptParams,
-): PreparedWatchedSessionsPrompt | undefined {
-  const access = resolveWatchedSessionsPromptAccess(params);
-  if (!access) {
-    return undefined;
-  }
-  // Sorted by key, not recency: recency-ordered rows would reshuffle prompt
-  // bytes on every group message and defeat provider prompt caching.
-  const targets = [...listAmbientGroupWatchTargets(access.sessionKey)].toSorted();
-  if (targets.length === 0) {
-    return undefined;
-  }
-  const sessions = targets.slice(0, WATCHED_SESSIONS_PROMPT_LIMIT).map((key) => {
-    // Exact persisted-key probe: watch cursors store canonical keys, so the
-    // alias-resolving loader's full-snapshot scan is wasted work here.
-    const entry = loadExactSessionEntryReadOnly({ sessionKey: key, clone: false })?.entry;
-    return watchedSessionRow(key, entry);
-  });
-  return {
-    sessions,
-    hiddenCount: targets.length - sessions.length,
-    readToolNames: access.readToolNames,
-    listToolAvailable: access.listToolAvailable,
-  };
 }
 
 /** Resolve durable watched-session facts without executing SQL on the caller thread. */

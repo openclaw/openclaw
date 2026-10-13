@@ -3,6 +3,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { parseSessionEntries, SessionManager } from "../sessions/index.js";
 import { textToolResult } from "../test-helpers/sparse-transcript.test-support.js";
@@ -72,7 +73,7 @@ describe("readTranscriptState", () => {
     });
     const state = await readTranscriptState(sessionFile);
 
-    const entry = state.getEntry(state.appendSessionInfo("  first\nsecond\r\nthird  "))!;
+    const entry = state.getEntry(await state.appendSessionInfoAsync("  first\nsecond\r\nthird  "))!;
 
     expect(entry).toMatchObject({ name: "first second third" });
     expect(state.getEntries().at(-1)).toMatchObject({ name: "first second third" });
@@ -153,7 +154,14 @@ describe("readTranscriptState", () => {
     const state = await readTranscriptState(sessionFile);
     const activeLeafId = state.getLeafId();
     const appended = state.getEntry(
-      state.appendMessage({ role: "user", content: "continued", timestamp: Date.now() }),
+      expectDefined(
+        await state.appendMessageAsync({
+          role: "user",
+          content: "continued",
+          timestamp: Date.now(),
+        }),
+        "continued fixture message ID",
+      ),
     )!;
     await persistTranscriptStateMutation({
       sessionFile,
@@ -297,7 +305,14 @@ describe("readTranscriptState", () => {
       { role: "user", content: "kept through cycle" },
     ]);
     const appended = state.getEntry(
-      state.appendMessage({ role: "user", content: "continued", timestamp: Date.now() }),
+      expectDefined(
+        await state.appendMessageAsync({
+          role: "user",
+          content: "continued",
+          timestamp: Date.now(),
+        }),
+        "continued fixture message ID",
+      ),
     )!;
     expect(appended.parentId).toBe("active-entry");
     expect(state.getBranch().map((entry) => entry.id)).toEqual(["active-entry", appended.id]);
@@ -488,7 +503,14 @@ describe("readTranscriptState", () => {
     expect(state.getAppendMode()).toBe("side");
 
     const nextUser = state.getEntry(
-      state.appendMessage({ role: "user", content: "next question", timestamp: Date.now() }),
+      expectDefined(
+        await state.appendMessageAsync({
+          role: "user",
+          content: "next question",
+          timestamp: Date.now(),
+        }),
+        "next fixture message ID",
+      ),
     )!;
     expect(state.getBranch(nextUser.id).map((entry) => entry.id)).toEqual([
       "active-root",
@@ -534,7 +556,14 @@ describe("readTranscriptState", () => {
 
     const state = await readTranscriptState(sessionFile);
     const appended = state.getEntry(
-      state.appendMessage({ role: "user", content: "continued", timestamp: Date.now() }),
+      expectDefined(
+        await state.appendMessageAsync({
+          role: "user",
+          content: "continued",
+          timestamp: Date.now(),
+        }),
+        "continued fixture message ID",
+      ),
     )!;
     await persistTranscriptStateMutation({
       sessionFile,
@@ -590,7 +619,14 @@ describe("readTranscriptState", () => {
 
     const state = await readTranscriptState(sessionFile);
     const appended = state.getEntry(
-      state.appendMessage({ role: "user", content: "continued", timestamp: Date.now() }),
+      expectDefined(
+        await state.appendMessageAsync({
+          role: "user",
+          content: "continued",
+          timestamp: Date.now(),
+        }),
+        "continued fixture message ID",
+      ),
     )!;
     await persistTranscriptStateMutation({
       sessionFile,

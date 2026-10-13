@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -208,15 +208,20 @@ describe("runSessionCompactionIfNeeded stale totalTokens gating", () => {
     };
     const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
     await upsertSessionEntryCore(scope, sessionEntry);
-    const transcript = SessionManager.open(scope, rootDir);
-    transcript.appendMessage({
+    const transcript = await SessionManager.openAsync(scope, rootDir);
+    await transcript.appendMessageAsync({
       role: "user",
       content: "superseded history ".repeat(25_000),
       timestamp: 1,
     });
-    const retained = transcript.appendMessage({ role: "user", content: "keep", timestamp: 2 });
-    transcript.appendCompaction("Short summary", retained, 100_000);
-    transcript.appendMessage({ role: "user", content: "latest", timestamp: 3 });
+    const retained = await transcript.appendMessageAsync({
+      role: "user",
+      content: "keep",
+      timestamp: 2,
+    });
+    assert.isDefined(retained);
+    await transcript.appendCompactionAsync("Short summary", retained, 100_000);
+    await transcript.appendMessageAsync({ role: "user", content: "latest", timestamp: 3 });
     await runWithEntry(sessionEntry, path.join(rootDir, "session.jsonl"));
     expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
   });

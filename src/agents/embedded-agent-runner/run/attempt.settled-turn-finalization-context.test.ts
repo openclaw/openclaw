@@ -64,9 +64,9 @@ describe("settled post-tool turn finalization context", () => {
       attemptOverrides: { sessionManager: manager, sessionPersistence: "detached" },
       sessionPrompt: async (session, prompt) => {
         const user = { role: "user" as const, content: prompt, timestamp: 1 };
-        session.sessionManager!.appendMessage(user);
-        session.sessionManager!.appendMessage(toolAssistant);
-        session.sessionManager!.appendMessage(toolResult);
+        await session.sessionManager!.appendMessageAsync(user);
+        await session.sessionManager!.appendMessageAsync(toolAssistant);
+        await session.sessionManager!.appendMessageAsync(toolResult);
         session.messages = [...session.messages, user, toolAssistant, toolResult];
         subscription.toolMetas.push({ toolCallId: "call-read", toolName: "read", isError: false });
         toolCompleted = true;
@@ -97,13 +97,17 @@ describe("settled post-tool turn finalization context", () => {
         sessionMessages: attempt.sessionManager?.buildSessionContext().messages ?? [],
         sessionPrompt: async (session, prompt) => {
           finalizerContexts.push([...session.messages]);
-          session.sessionManager!.appendMessage({ role: "user", content: prompt, timestamp: 4 });
+          await session.sessionManager!.appendMessageAsync({
+            role: "user",
+            content: prompt,
+            timestamp: 4,
+          });
           const assistant = buildEmbeddedRunnerAssistant({
             content:
               finalizerContexts.length === 1 ? [] : [{ type: "text", text: "Read completed." }],
           });
           finalAssistant = assistant;
-          session.sessionManager!.appendMessage(assistant);
+          await session.sessionManager!.appendMessageAsync(assistant);
           session.messages = [...session.messages, assistant];
         },
       });
@@ -138,7 +142,7 @@ describe("settled post-tool turn finalization context", () => {
           .map((message) => message.content),
       ).toEqual(["hello"]);
       const genuineUser = { role: "user" as const, content: "Read the next file", timestamp: 5 };
-      manager.appendMessage(genuineUser);
+      await manager.appendMessageAsync(genuineUser);
       expect(manager.buildSessionContext().messages).toContainEqual(
         expect.objectContaining(genuineUser),
       );

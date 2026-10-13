@@ -4432,20 +4432,32 @@ describe("prepareCliRunContext", () => {
       fixture.run(async () => {
         const { dir, sessionTarget: fixtureTarget } = fixture.session;
         const sessionTarget = fixtureTarget;
-        const durable = SessionManager.open(fixtureTarget, dir);
-        const retained = durable.appendMessage(makeUserMessage("BORROWED_RETAINED", 1));
-        durable.appendCompaction("BORROWED_SUMMARY", retained, 1000);
-        durable.appendMessage({ role: "user", content: "BORROWED_TAIL", timestamp: 2 });
+        const durable = await SessionManager.openAsync(fixtureTarget, dir);
+        const retained = await durable.appendMessageAsync(makeUserMessage("BORROWED_RETAINED", 1));
+        if (!retained) {
+          throw new Error("Expected the retained fixture message ID");
+        }
+        await durable.appendCompactionAsync("BORROWED_SUMMARY", retained, 1000);
+        await durable.appendMessageAsync({ role: "user", content: "BORROWED_TAIL", timestamp: 2 });
         durable.flushPendingPersistence();
         const eventsBefore = loadTranscriptEventsSync(fixtureTarget);
         const entryBefore = loadSessionEntryReadOnly(fixtureTarget);
         const sessionManager = SessionManager.inMemory(dir);
         if (scenario === "raw" || scenario === "compacted") {
-          const kept = sessionManager.appendMessage(makeUserMessage("OWNED_RETAINED", 1));
-          if (scenario === "compacted") {
-            sessionManager.appendCompaction("OWNED_SUMMARY", kept, 1000);
+          const kept = await sessionManager.appendMessageAsync(
+            makeUserMessage("OWNED_RETAINED", 1),
+          );
+          if (!kept) {
+            throw new Error("Expected the retained fixture message ID");
           }
-          sessionManager.appendMessage({ role: "user", content: "OWNED_TAIL", timestamp: 2 });
+          if (scenario === "compacted") {
+            await sessionManager.appendCompactionAsync("OWNED_SUMMARY", kept, 1000);
+          }
+          await sessionManager.appendMessageAsync({
+            role: "user",
+            content: "OWNED_TAIL",
+            timestamp: 2,
+          });
         }
         const memoryBefore = structuredClone(sessionManager.getEntries());
         const outgoing: CliBackendExecuteContext[] = [];
@@ -4715,9 +4727,14 @@ describe("prepareCliRunContext", () => {
       if (testCase.provider === "claude-cli") {
         setCliBackendForPrepareTest({ modelAliases: testCase.modelAliases });
       }
-      const manager = SessionManager.open(sessionTarget, dir);
-      const firstKeptEntryId = manager.appendMessage(makeUserMessage("RESEED_RETAINED_PREFIX", 1));
-      manager.appendCompaction(
+      const manager = await SessionManager.openAsync(sessionTarget, dir);
+      const firstKeptEntryId = await manager.appendMessageAsync(
+        makeUserMessage("RESEED_RETAINED_PREFIX", 1),
+      );
+      if (!firstKeptEntryId) {
+        throw new Error("Expected the reseed fixture message ID");
+      }
+      await manager.appendCompactionAsync(
         `${testCase.marker} ${"x".repeat(testCase.padding)}`,
         firstKeptEntryId,
         100_000,

@@ -78,14 +78,14 @@ describe("persistent automation terminal error identity", () => {
       runIds.push(request.runId);
       request.onExecutionStarted?.();
       await request.userTurnTranscriptRecorder?.persistApproved({ cwd: root });
-      const manager = guardSessionManager(SessionManager.open(target, root), {
+      const manager = guardSessionManager(await SessionManager.openAsync(target, root), {
         runId: request.runId,
         assistantErrorTranscript: request.assistantErrorTranscript,
       });
       const message = messages[index];
       const failure = failures[index];
       assert(message && failure);
-      manager.appendMessage(message);
+      await manager.appendMessageAsync(message);
       throw new FailoverError(failure, { reason: "server_error" });
     });
     const params = makeIsolatedAgentParamsFixture({
@@ -103,11 +103,11 @@ describe("persistent automation terminal error identity", () => {
     expect(second).toMatchObject({ status: "error", error: expect.stringContaining(failures[1]) });
     expect(new Set(runIds).size).toBe(2);
     expect(loadSessionEntry(target)?.sessionId).toBe(target.sessionId);
-    const readErrors = () =>
-      SessionManager.open(target, root)
+    const readErrors = async () =>
+      (await SessionManager.openAsync(target, root))
         .getBranch()
         .filter((entry) => entry.type === "message" && entry.message.role === "assistant");
-    expect(readErrors()).toMatchObject(
+    expect(await readErrors()).toMatchObject(
       messages.map((message, index) => ({
         message: {
           errorMessage: message.errorMessage,
@@ -173,12 +173,16 @@ describe("synthetic exact cron terminal error persistence", () => {
             withTranscriptWrite: async (run) => await run(),
           },
           async () => {
-            const manager = SessionManager.open(fenced, state.workspaceDir);
-            manager.appendMessage({ role: "user", content: "Synthetic task", timestamp: 1 });
+            const manager = await SessionManager.openAsync(fenced, state.workspaceDir);
+            await manager.appendMessageAsync({
+              role: "user",
+              content: "Synthetic task",
+              timestamp: 1,
+            });
             installSessionToolResultGuard(manager, {
               assistantErrorTranscript: params.assistantErrorTranscript,
             });
-            manager.appendMessage(
+            await manager.appendMessageAsync(
               makeAgentAssistantMessage({
                 content: [],
                 stopReason: "error",
@@ -219,12 +223,14 @@ describe("synthetic exact cron terminal error persistence", () => {
       );
       expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
       expect(result.error ?? "").not.toContain("session rebound");
-      const messages = SessionManager.open({
-        agentId: "main",
-        sessionId,
-        sessionKey: runKey,
-        storePath,
-      })
+      const messages = (
+        await SessionManager.openAsync({
+          agentId: "main",
+          sessionId,
+          sessionKey: runKey,
+          storePath,
+        })
+      )
         .getBranch()
         .filter((e) => e.type === "message");
       expect(messages).toHaveLength(2);

@@ -1297,7 +1297,7 @@ describe("truncateOversizedToolResultsInSession", () => {
     const listener = vi.fn();
     const cleanup = onInternalSessionTranscriptUpdate(listener);
     const result = await truncateOversizedToolResultsInSessionManager({
-      sessionManager: SessionManager.open(scope),
+      sessionManager: await SessionManager.openAsync(scope),
       ...scope,
       contextWindowTokens: 100,
     });
@@ -1335,7 +1335,7 @@ describe("truncateOversizedToolResultsInSession", () => {
       .map(getFirstToolResultText);
     expect(originalToolResultTexts).toEqual([medium, medium, medium]);
 
-    const activeMessages = SessionManager.open(scope)
+    const activeMessages = (await SessionManager.openAsync(scope))
       .getBranch()
       .flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
     const toolResultTexts = activeMessages.flatMap((message) =>
@@ -1388,7 +1388,7 @@ describe("truncateOversizedToolResultsInSession", () => {
     const staleProjectionState = createToolResultPromptProjectionState(projectionState);
 
     const result = await truncateOversizedToolResultsInSessionManager({
-      sessionManager: SessionManager.open(scope),
+      sessionManager: await SessionManager.openAsync(scope),
       ...scope,
       contextWindowTokens: 128_000,
       maxCharsOverride: 12_000,
@@ -1402,13 +1402,13 @@ describe("truncateOversizedToolResultsInSession", () => {
     expect(projectionState.frozen.size).toBe(0);
     await preparePromptProjectionStateForTest({
       sessionId,
-      messages: SessionManager.open(scope).buildSessionContext().messages,
+      messages: (await SessionManager.openAsync(scope)).buildSessionContext().messages,
       state: staleProjectionState,
     });
     expect(staleProjectionState.sourceHashByKey.size).toBe(0);
     expect(staleProjectionState.replacements.size).toBe(0);
     expect(staleProjectionState.frozen.size).toBe(0);
-    const activeToolResult = SessionManager.open(scope)
+    const activeToolResult = (await SessionManager.openAsync(scope))
       .getBranch()
       .find((entry) => entry.type === "message" && entry.message.role === "toolResult");
     expect(activeToolResult?.type === "message" ? activeToolResult.message : undefined).toEqual(
@@ -1458,7 +1458,7 @@ describe("truncateOversizedToolResultsInSession", () => {
     // A provider context failure then demands recovery under a tighter budget:
     // frozen history is the only reducible mass and must still shrink.
     const result = await truncateOversizedToolResultsInSessionManager({
-      sessionManager: SessionManager.open(scope),
+      sessionManager: await SessionManager.openAsync(scope),
       ...scope,
       contextWindowTokens: 128_000,
       maxCharsOverride: 8_000,
@@ -1467,7 +1467,7 @@ describe("truncateOversizedToolResultsInSession", () => {
     });
 
     expect(result.truncated).toBe(true);
-    const recovered = SessionManager.open(scope)
+    const recovered = (await SessionManager.openAsync(scope))
       .getBranch()
       .filter((entry) => entry.type === "message" && entry.message.role === "toolResult")
       .map((entry) => (entry.type === "message" ? entry.message : undefined));
@@ -1535,7 +1535,7 @@ describe("truncateOversizedToolResultsInSession", () => {
     ]);
 
     const result = await truncateOversizedToolResultsInSessionManager({
-      sessionManager: SessionManager.open(scope),
+      sessionManager: await SessionManager.openAsync(scope),
       ...scope,
       contextWindowTokens: 100,
     });
@@ -1559,7 +1559,7 @@ describe("truncateOversizedToolResultsInSession", () => {
       (message): message is ToolResultMessage =>
         message.role === "toolResult" && message.toolCallId === "call_inactive",
     );
-    const selectedTool = SessionManager.open(scope)
+    const selectedTool = (await SessionManager.openAsync(scope))
       .getBranch()
       .filter((entry) => entry.type === "message")
       .map((entry) => entry.message)

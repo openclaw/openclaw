@@ -402,7 +402,7 @@ describe("native completion final-effect authority", () => {
         finishModel?.();
       };
       signal.addEventListener("abort", release, { once: true });
-      const sessionManager = SessionManager.open(completion.sessionScope);
+      const sessionManager = await SessionManager.openAsync(completion.sessionScope);
       guardSessionManager(sessionManager);
       await appendHistory(
         sessionManager,

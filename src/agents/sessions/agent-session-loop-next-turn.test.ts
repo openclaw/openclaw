@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import {
   createAssistantMessageEventStream,
   type AssistantMessage,
@@ -573,7 +574,10 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
           }
         },
       });
-      const entryId = guard.appendMessage(message);
+      const entryId = expectDefined(
+        await guard.appendMessageAsync(message),
+        "Expected appended message",
+      );
       const acceptedContent = accepted[0]?.role === "user" ? accepted[0].content : undefined;
       const firstBlock = Array.isArray(acceptedContent) ? acceptedContent[0] : undefined;
       const acceptedText =

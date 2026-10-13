@@ -1,7 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { createOpenClawCodingTools, type AnyAgentTool } from "openclaw/plugin-sdk/agent-harness";
+import {
+  createOpenClawCodingToolsAsync,
+  type AnyAgentTool,
+} from "openclaw/plugin-sdk/agent-harness";
 import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
 import { resolvePreferredOpenClawTmpDir, tempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { describe, expect, test } from "vitest";
@@ -153,7 +156,7 @@ describe("MXC public coding-tool composition", () => {
       await fs.writeFile(path.join(agentWorkspaceDir, "agent.txt"), "AGENT_READ_MARKER");
       await fs.writeFile(path.join(workspaceDir, "agent.txt"), "WORKSPACE_SHADOW_MARKER");
       await fs.writeFile(path.join(root, "outside.txt"), "OUTSIDE_MARKER");
-      const makeTools = (workspaceAccess: "none" | "ro" | "rw") => {
+      const makeTools = async (workspaceAccess: "none" | "ro" | "rw") => {
         const sandbox: SandboxContext = {
           enabled: true,
           backendId: "mxc",
@@ -180,7 +183,7 @@ describe("MXC public coding-tool composition", () => {
           tools: { allow: [], deny: [] },
         };
         sandbox.fsBridge = createMxcFsBridge({ sandbox });
-        const tools = createOpenClawCodingTools({
+        const tools = await createOpenClawCodingToolsAsync({
           sandbox,
           workspaceDir,
           cwd: workspaceDir,
@@ -216,7 +219,7 @@ describe("MXC public coding-tool composition", () => {
           .filter((part) => part.type === "text")
           .map((part) => part.text)
           .join("\n");
-      const rw = makeTools("rw");
+      const rw = await makeTools("rw");
       for (const filePath of ["note.txt", path.join(workspaceDir, "note.txt")]) {
         await rw("write").execute("write", { path: filePath, content: "ORIGINAL_MARKER\n" });
         await rw("edit").execute("edit", {
@@ -246,7 +249,7 @@ describe("MXC public coding-tool composition", () => {
       expect(await fs.readFile(path.join(workspaceDir, "agent.txt"), "utf8")).toBe(
         "WORKSPACE_SHADOW_MARKER",
       );
-      const ro = makeTools("ro");
+      const ro = await makeTools("ro");
       expect(
         text(
           await ro("read").execute("read-agent", {
@@ -283,7 +286,7 @@ describe("MXC public coding-tool composition", () => {
           "Path escapes sandbox root",
         );
       }
-      const none = makeTools("none");
+      const none = await makeTools("none");
       await expect(
         none("read").execute("deny-agent", { path: path.join(agentWorkspaceDir, "agent.txt") }),
       ).rejects.toThrow("Path escapes sandbox root");

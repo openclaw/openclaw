@@ -577,15 +577,6 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
     );
   }
 
-  /** @deprecated Await appendMessageAsync. This method will be removed in the next Plugin SDK major. */
-  appendMessage(
-    message: Message | CustomMessage | BashExecutionMessage,
-    options?: AppendPersistenceOptions,
-  ): string {
-    prepareSessionManagerSync("appendMessage", this.persistenceTarget, this);
-    return this.appendMessageWithTranscriptAnchorSync(message, options).entryId;
-  }
-
   async appendMessageAsync(
     message: Message | CustomMessage | BashExecutionMessage,
     options?: AppendPersistenceOptions,
@@ -596,11 +587,14 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
   async appendMessageWithTranscriptAnchorAsync(
     message: Message | CustomMessage | BashExecutionMessage,
     options?: AppendPersistenceOptions,
-  ): Promise<
-    ReturnType<SessionManagerAppend["appendMessageWithTranscriptAnchor"]> & {
-      viewWasSuperseded?: true;
-    }
-  > {
+  ): Promise<{
+    entryId: string;
+    message: SessionMessageEntry["message"];
+    anchor?: TranscriptEntryAnchor;
+    lifecycleRevision?: string;
+    appended: boolean;
+    viewWasSuperseded?: true;
+  }> {
     if (message.role === "assistant") {
       applyAssistantDeliveryDirectives(message);
     }
@@ -622,15 +616,6 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
       appended: appended.appended,
       ...(appended.viewWasSuperseded ? { viewWasSuperseded: true as const } : {}),
     };
-  }
-
-  /** @deprecated Await appendMessageWithTranscriptAnchorAsync. This method will be removed in the next Plugin SDK major. */
-  appendMessageWithTranscriptAnchor(
-    message: Message | CustomMessage | BashExecutionMessage,
-    options?: AppendPersistenceOptions,
-  ) {
-    prepareSessionManagerSync("appendMessageWithTranscriptAnchor", this.persistenceTarget, this);
-    return this.appendMessageWithTranscriptAnchorSync(message, options);
   }
 
   protected appendMessageWithTranscriptAnchorSync(

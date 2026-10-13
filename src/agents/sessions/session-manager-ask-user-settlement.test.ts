@@ -1,4 +1,5 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, assert, beforeAll, expect, it, vi } from "vitest";
 import {
   loadTranscriptEvents,
@@ -134,10 +135,13 @@ for (const outcome of ["timeout", "answer"] as const) {
             : manager;
         const rewrite = await owner.prepareTranscriptRewriteAsync();
         await rewrite.sessionManager.branchAsync(userId);
-        const rewrittenId = await rewrite.sessionManager.appendMessageAsync({
-          ...call,
-          content: [...call.content, { type: "text", text: "Rewritten assistant context" }],
-        });
+        const rewrittenId = expectDefined(
+          await rewrite.sessionManager.appendMessageAsync({
+            ...call,
+            content: [...call.content, { type: "text", text: "Rewritten assistant context" }],
+          }),
+          "Expected appended message",
+        );
         assert(rewrittenId);
         // Keep the admitted user and tool-call identity; only the assistant entry is rewritten.
         commit = rewrite.commit(new Map([[callId, rewrittenId]])).then(

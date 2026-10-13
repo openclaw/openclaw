@@ -10,7 +10,6 @@ import { persistCompactionBoundaryWithSessionEntryAsync } from "../../config/ses
 import * as hostTranscriptWriter from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { SessionManager } from "../../plugin-sdk/agent-sessions.js";
-import { withPluginRuntimePluginScope } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -322,23 +321,4 @@ it("adopts a compaction owner's canonical parent without a host reload", async (
     expect(reopened.getEntries()).toEqual(manager.getEntries());
     expect(reopened.getBranch()).toEqual(manager.getBranch());
   });
-});
-
-it("deduplicates legacy session methods across managers while preserving immediate results", () => {
-  const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
-  withPluginRuntimePluginScope({ pluginId: "session-compat-family" }, () => {
-    for (let index = 0; index < 2; index++) {
-      const manager = SessionManager.inMemory();
-      const id = manager.appendCustomEntry("legacy", { index });
-      expect(manager.getEntry(id)).toMatchObject({ id, customType: "legacy", data: { index } });
-      const info = manager.appendSessionInfo("Legacy name");
-      expect(manager.getEntry(info)).toMatchObject({ id: info, type: "session_info" });
-    }
-  });
-  expect(warning).toHaveBeenCalledExactlyOnceWith(
-    expect.stringContaining(
-      "Plugin session-compat-family: SessionManager.appendCustomEntry is deprecated; use appendCustomEntryAsync",
-    ),
-    { code: "DEP_SESSION_PERSISTENCE", type: "DeprecationWarning" },
-  );
 });

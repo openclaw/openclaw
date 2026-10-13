@@ -15,7 +15,7 @@ export type MatrixThreadBindingRecord =
     maxAgeMs?: number;
   };
 
-export type MatrixThreadBindingManager = {
+type MatrixThreadBindingManager = {
   accountId: string;
   getIdleTimeoutMs: () => number;
   getMaxAgeMs: () => number;

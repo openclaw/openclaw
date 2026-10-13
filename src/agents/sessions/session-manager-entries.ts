@@ -8,7 +8,6 @@ import type { SessionTreeEntry as CoreSessionTreeEntry } from "../runtime/index.
 import { withSessionManagerAppend } from "./session-manager-append-admission.js";
 import { SessionManagerAppend } from "./session-manager-append.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
-import { prepareSessionManagerSync } from "./session-manager-incognito-scope.js";
 import { SessionManagerActorCommittedError } from "./session-manager-persistence-error.js";
 import type {
   BranchSummaryEntry,
@@ -66,33 +65,6 @@ export class SessionManagerEntries extends SessionManagerAppend {
     return entry.id;
   }
 
-  /** @deprecated Await appendCompactionAsync. This method will be removed in the next Plugin SDK major. */
-  appendCompaction(
-    summary: string,
-    firstKeptEntryId: string,
-    tokensBefore: number,
-    details?: unknown,
-    fromHook?: boolean,
-    metadata?: CompactionEntry["__openclaw"],
-    tokensAfter?: number,
-  ): string {
-    prepareSessionManagerSync("appendCompaction", this.persistenceTarget, this);
-    const entry: CompactionEntry = this.createEntry({
-      type: "compaction",
-      summary,
-      firstKeptEntryId,
-      tokensBefore,
-      ...(tokensAfter !== undefined ? { tokensAfter } : {}),
-      details,
-      fromHook,
-      ...(metadata?.runId || metadata?.itemId ? { __openclaw: metadata } : {}),
-    });
-    this.appendEntry(entry, {
-      invalidateSerializedPrefixCache: fromHook === true || details !== undefined,
-    });
-    return entry.id;
-  }
-
   async appendResetBoundaryAsync(reason: ResetReason, firstKeptEntryId?: string): Promise<string> {
     const entry: ResetEntry = this.createEntry({
       type: "reset",
@@ -100,18 +72,6 @@ export class SessionManagerEntries extends SessionManagerAppend {
       ...(firstKeptEntryId ? { firstKeptEntryId } : {}),
     });
     await this.appendEntryAsync(entry);
-    return entry.id;
-  }
-
-  /** @deprecated Await appendResetBoundaryAsync. This method will be removed in the next Plugin SDK major. */
-  appendResetBoundary(reason: ResetReason, firstKeptEntryId?: string): string {
-    prepareSessionManagerSync("appendResetBoundary", this.persistenceTarget, this);
-    const entry: ResetEntry = this.createEntry({
-      type: "reset",
-      reason,
-      ...(firstKeptEntryId ? { firstKeptEntryId } : {}),
-    });
-    this.appendEntry(entry);
     return entry.id;
   }
 
@@ -126,36 +86,12 @@ export class SessionManagerEntries extends SessionManagerAppend {
     return entry.id;
   }
 
-  /** @deprecated Await appendCustomEntryAsync. This method will be removed in the next Plugin SDK major. */
-  appendCustomEntry(customType: string, data?: unknown): string {
-    prepareSessionManagerSync("appendCustomEntry", this.persistenceTarget, this);
-    const entry: CustomEntry = this.createEntry({
-      type: "custom",
-      customType,
-      data,
-      timestamp: new Date().toISOString(),
-    });
-    this.appendEntry(entry, { invalidateSerializedPrefixCache: true });
-    return entry.id;
-  }
-
   async appendSessionInfoAsync(name: string): Promise<string> {
     const entry: SessionInfoEntry = this.createEntry({
       type: "session_info",
       name: name.replace(/[\r\n]+/g, " ").trim(),
     });
     await this.appendEntryAsync(entry);
-    return entry.id;
-  }
-
-  /** @deprecated Await appendSessionInfoAsync. This method will be removed in the next Plugin SDK major. */
-  appendSessionInfo(name: string): string {
-    prepareSessionManagerSync("appendSessionInfo", this.persistenceTarget, this);
-    const entry: SessionInfoEntry = this.createEntry({
-      type: "session_info",
-      name: name.replace(/[\r\n]+/g, " ").trim(),
-    });
-    this.appendEntry(entry);
     return entry.id;
   }
 
@@ -172,23 +108,6 @@ export class SessionManagerEntries extends SessionManagerAppend {
       timestamp,
     );
     await this.appendEntryAsync(entry, { invalidateSerializedPrefixCache: true });
-    return entry.id;
-  }
-
-  /** @deprecated Await appendCustomMessageEntryAsync. This method will be removed in the next Plugin SDK major. */
-  appendCustomMessageEntry(
-    customType: string,
-    content: string | (TextContent | ImageContent)[],
-    display: boolean,
-    details?: unknown,
-    timestamp?: number,
-  ): string {
-    prepareSessionManagerSync("appendCustomMessageEntry", this.persistenceTarget, this);
-    const entry: CustomMessageEntry = this.createEntry(
-      { type: "custom_message", customType, content, display, details },
-      timestamp,
-    );
-    this.appendEntry(entry, { invalidateSerializedPrefixCache: true });
     return entry.id;
   }
 
@@ -252,12 +171,6 @@ export class SessionManagerEntries extends SessionManagerAppend {
     });
   }
 
-  /** @deprecated Await appendLeafControlAsync. This method will be removed in the next Plugin SDK major. */
-  appendLeafControl(params: LeafControlSelection): SessionLeafControl {
-    prepareSessionManagerSync("appendLeafControl", this.persistenceTarget, this);
-    return this.appendLeafControlSync(params);
-  }
-
   private validateLeafControl(params: LeafControlSelection): void {
     this.assertTranscriptViewAvailable();
     if (params.targetId !== null && !this.byId.has(params.targetId)) {
@@ -313,22 +226,6 @@ export class SessionManagerEntries extends SessionManagerAppend {
     return entry.id;
   }
 
-  /** @deprecated Await appendLabelChangeAsync. This method will be removed in the next Plugin SDK major. */
-  appendLabelChange(targetId: string, label: string | undefined): string {
-    prepareSessionManagerSync("appendLabelChange", this.persistenceTarget, this);
-    this.assertTranscriptViewAvailable();
-    if (!this.byId.has(targetId)) {
-      throw new Error(`Entry ${targetId} not found`);
-    }
-    const entry: LabelEntry = this.createEntry({
-      type: "label",
-      targetId,
-      label,
-    });
-    this.appendEntry(entry);
-    return entry.id;
-  }
-
   buildSessionContext(): SessionContext {
     return buildCoreSessionContext(this.getBranch() as CoreSessionTreeEntry[]) as SessionContext;
   }
@@ -354,20 +251,6 @@ export class SessionManagerEntries extends SessionManagerAppend {
       }
       this.selectBranch(branchFromId);
     });
-  }
-
-  /** @deprecated Await branchAsync. This method will be removed in the next Plugin SDK major. */
-  branch(branchFromId: string): void {
-    prepareSessionManagerSync("branch", this.persistenceTarget, this);
-    this.branchSync(branchFromId);
-  }
-
-  protected branchSync(branchFromId: string): void {
-    this.assertTranscriptViewAvailable();
-    if (!this.byId.has(branchFromId)) {
-      this.ensureCompletePersistedHistory();
-    }
-    this.selectBranch(branchFromId);
   }
 
   private selectBranch(branchFromId: string): void {
@@ -415,24 +298,6 @@ export class SessionManagerEntries extends SessionManagerAppend {
       );
       return entry.id;
     });
-  }
-
-  /** @deprecated Await branchWithSummaryAsync. This method will be removed in the next Plugin SDK major. */
-  branchWithSummary(
-    branchFromId: string | null,
-    summary: string,
-    details?: unknown,
-    fromHook?: boolean,
-  ): string {
-    prepareSessionManagerSync("branchWithSummary", this.persistenceTarget, this);
-    if (branchFromId !== null && !this.byId.has(branchFromId)) {
-      this.ensureCompletePersistedHistory();
-    }
-    const entry = this.createBranchSummary(branchFromId, summary, details, fromHook);
-    this.appendEntry(entry, {
-      invalidateSerializedPrefixCache: fromHook === true || details !== undefined,
-    });
-    return entry.id;
   }
 
   private createBranchSummary(

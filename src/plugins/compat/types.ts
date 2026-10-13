@@ -19,7 +19,8 @@ export type PluginCompatRecord<Code extends string = string> = {
   deprecated?: string;
   warningStarts?: string;
   removeAfter?: string;
-  removalGate?: "next-plugin-sdk-major";
+  // Requires a stable-shipped deprecation and compatibility period; never date-eligible by itself.
+  removalGate?: "after-stable-deprecation";
   replacement?: string;
   docsPath: string;
   surfaces: readonly string[];

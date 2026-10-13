@@ -7,7 +7,6 @@ import {
   type HarnessContextEngine as ContextEngine,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { openFileBackedSessionManagerForTest } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
-import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -111,11 +110,13 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       sessionId: "session-1",
     });
     const summary = "The durable code is summary-only-engine-code-8516.";
-    const retainedId = sessionManager.appendMessage(
+    const retainedId = await sessionManager.appendMessageAsync(
       assistantMessage("ACK: existing context", Date.now()),
     );
-    sessionManager.appendCompaction(summary, retainedId, 1_000);
-    const openSpy = vi.spyOn(SessionManager, "open");
+    if (!retainedId) {
+      throw new Error("Expected the retained fixture message ID");
+    }
+    await sessionManager.appendCompactionAsync(summary, retainedId, 1_000);
     const contextEngine = createContextEngine();
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
@@ -218,7 +219,6 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
 
     await harness.completeTurn();
     await run;
-    expect(openSpy).not.toHaveBeenCalled();
   });
 
   it("places inert sender provenance beside a continuity-projected request without escaping request mentions", async () => {
@@ -519,8 +519,12 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
         const manager = openFileBackedSessionManagerForTest(sessionFile, {
           sessionId: "session-1",
         });
-        manager.appendMessage(userMessage("previous stale-bootstrap request", Date.now()));
-        manager.appendMessage(assistantMessage("previous stale-bootstrap answer", Date.now() + 1));
+        await manager.appendMessageAsync(
+          userMessage("previous stale-bootstrap request", Date.now()),
+        );
+        await manager.appendMessageAsync(
+          assistantMessage("previous stale-bootstrap answer", Date.now() + 1),
+        );
       }
       if (scenario !== "token pressure") {
         params.config = {
@@ -573,8 +577,10 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     const sessionManager = openFileBackedSessionManagerForTest(sessionFile, {
       sessionId: "session-1",
     });
-    sessionManager.appendMessage(userMessage("previous per-turn request", 10) as never);
-    sessionManager.appendMessage(assistantMessage("previous per-turn answer", 11) as never);
+    await sessionManager.appendMessageAsync(userMessage("previous per-turn request", 10) as never);
+    await sessionManager.appendMessageAsync(
+      assistantMessage("previous per-turn answer", 11) as never,
+    );
     await writeCodexAppServerBinding(sessionFile, {
       threadId: "thread-per-turn-context",
       cwd: workspaceDir,
@@ -895,12 +901,12 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   it("logs assemble failures as a formatted message instead of the raw error object", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" }).appendMessage(
-      assistantMessage("first baseline message", 1) as never,
-    );
-    openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" }).appendMessage(
-      userMessage("second baseline message", 2) as never,
-    );
+    await openFileBackedSessionManagerForTest(sessionFile, {
+      sessionId: "session-1",
+    }).appendMessageAsync(assistantMessage("first baseline message", 1) as never);
+    await openFileBackedSessionManagerForTest(sessionFile, {
+      sessionId: "session-1",
+    }).appendMessageAsync(userMessage("second baseline message", 2) as never);
     let preassemblyMessages: AgentMessage[] = [];
     let promptHookMessages: AgentMessage[] = [];
     initializeGlobalHookRunner(

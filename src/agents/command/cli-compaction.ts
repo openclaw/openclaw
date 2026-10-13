@@ -56,7 +56,7 @@ import { normalizeSessionTokenCount, recordCliCompactionInStore } from "./sessio
 
 const CODEX_APP_SERVER_OWNS_AUTO_COMPACTION_REASON = "codex app-server owns automatic compaction";
 
-type SessionManagerLike = ReturnType<typeof SessionManager.open>;
+type SessionManagerLike = Awaited<ReturnType<typeof SessionManager.openAsync>>;
 type NativeHarnessCliCompactionOutcome = {
   compacted: boolean;
   result?: EmbeddedAgentCompactResult;

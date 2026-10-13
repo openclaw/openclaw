@@ -1,6 +1,6 @@
+import { resolveRuntimeConversationBindingRouteAsync } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import {
   registerSessionBindingAdapter,
-  resolveRuntimeConversationBindingRoute,
   unregisterSessionBindingAdapter,
   type SessionBindingAdapter,
 } from "openclaw/plugin-sdk/conversation-runtime";
@@ -64,7 +64,7 @@ describe("broadcast routing", () => {
       };
       registerSessionBindingAdapter(adapter);
       try {
-        const { route } = resolveRuntimeConversationBindingRoute({
+        const { route } = await resolveRuntimeConversationBindingRouteAsync({
           route: resolveAgentRoute({
             cfg,
             channel: "feishu",

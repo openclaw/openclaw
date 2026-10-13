@@ -8,13 +8,11 @@ import {
   type OpenClawDatabaseMaintenanceScope,
 } from "../state/openclaw-state-db-async-lifecycle.js";
 import type { OpenClawStateWorkerLease } from "../state/openclaw-state-worker-store.js";
-import { resolveDebugProxySettings, type DebugProxySettings } from "./env.js";
+import { resolveDebugProxySettings } from "./env.js";
 import { withDeferredDebugProxyCapture } from "./runtime-deferral.js";
 import {
   captureWsEventAsync,
-  finalizeDebugProxyCapture,
   finalizeDebugProxyCaptureAsync,
-  initializeDebugProxyCapture,
   initializeDebugProxyCaptureAsync,
   prepareHttpCaptureForTransport,
 } from "./runtime.js";
@@ -55,69 +53,6 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
-
-it.each([
-  { phase: "selection", outcome: "success" },
-  { phase: "continuation", outcome: "failure" },
-] as const)(
-  "keeps transport $outcome independent of $phase capture admission and retains the diagnostic",
-  async ({ phase, outcome }) => {
-    const admissionFailure = new Error("synthetic admission refusal");
-    const transportFailure = new Error("synthetic transport rejection");
-    let refuse = phase === "selection";
-    const transport = vi.fn(async () => {
-      refuse = true;
-      if (outcome === "failure") {
-        throw transportFailure;
-      }
-      return new Response("transport succeeded");
-    });
-    const target: typeof globalThis = { ...globalThis, fetch: transport };
-    const store = { upsertSession: vi.fn(), endSession: vi.fn(), recordEvent: vi.fn() };
-    const deps = { getStore: () => store, fetchTarget: target };
-    const settings: DebugProxySettings = {
-      enabled: true,
-      required: false,
-      dbPath: "/synthetic/capture.sqlite",
-      blobDir: "/synthetic/blobs",
-      certDir: "/synthetic/certs",
-      sessionId: "transport-admission",
-      sourceProcess: "fixture",
-    };
-    initializeDebugProxyCapture("fixture", settings, deps);
-    control.scope = createOpenClawDatabaseMaintenanceScope();
-    vi.spyOn(control.scope, "assertAdmission").mockImplementation(() => {
-      if (refuse) {
-        throw admissionFailure;
-      }
-    });
-    const own = vi.spyOn(control.scope, "own");
-    try {
-      const result = target.fetch("https://synthetic.invalid/capture");
-      if (outcome === "success") {
-        expect(await (await result).text()).toBe("transport succeeded");
-      } else {
-        await expect(result).rejects.toBe(transportFailure);
-      }
-      expect(transport).toHaveBeenCalledTimes(1);
-      expect(own).toHaveBeenCalledTimes(phase === "selection" ? 0 : 1);
-      expect(store.recordEvent).not.toHaveBeenCalled();
-      let diagnostic: unknown;
-      try {
-        finalizeDebugProxyCapture(settings, deps);
-      } catch (error) {
-        diagnostic = error;
-      }
-      expect(collectNestedErrorCandidates(diagnostic)).toContain(admissionFailure);
-      expect(store.endSession).toHaveBeenCalledOnce();
-    } finally {
-      const scope = control.scope;
-      control.scope = undefined;
-      finalizeDebugProxyCapture(settings, deps);
-      await scope.close();
-    }
-  },
-);
 
 function stubGuardedCaptureEnv(sessionId: string) {
   vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", "1");
@@ -168,25 +103,24 @@ it.each(["fresh", "cached-worker", "saved-fetch"] as const)(
     vi.stubEnv("OPENCLAW_DEBUG_PROXY_REQUIRE", "1");
     const settings = resolveDebugProxySettings();
     const committed = vi.fn<OpenClawStateWorkerLease["execute"]>().mockResolvedValue(undefined);
+    const captureOperations: Promise<unknown>[] = [];
     createWorkerLease.mockImplementation((_context, finalize) => {
       const scope = { execute: committed };
       let closing: Promise<void> | undefined;
       return {
         ready: Promise.resolve(),
         execute: committed,
-        runOperation: async (operation) => await operation(scope),
+        runOperation: (operation) => {
+          const pending = operation(scope);
+          captureOperations.push(pending);
+          return pending;
+        },
         release: () => (closing ??= Promise.resolve().then(() => finalize?.(scope))),
         retire: async () => {},
       };
     });
-    const store = { upsertSession: vi.fn(), endSession: vi.fn(), recordEvent: vi.fn() };
     const transport = vi.fn<typeof fetch>(async () => new Response(null, { status: 204 }));
     const target: typeof globalThis = { ...globalThis, fetch: transport };
-    const deps = {
-      getStore: vi.fn(() => store),
-      persistEventPayload: () => ({}),
-      fetchTarget: target,
-    };
     const params = {
       url: "https://synthetic.invalid/deferred-capture",
       method: "GET",
@@ -194,10 +128,12 @@ it.each(["fresh", "cached-worker", "saved-fetch"] as const)(
     };
     let exercise: () => Promise<void>;
     if (mode === "saved-fetch") {
-      initializeDebugProxyCapture("fixture", settings, deps);
+      await initializeDebugProxyCaptureAsync("fixture", settings, { fetchTarget: target });
       const savedFetch = target.fetch;
       exercise = async () => {
         expect((await savedFetch(params.url)).status).toBe(204);
+        // Fetch settles before its detached capture; join the admitted worker operation.
+        await Promise.all(captureOperations.splice(0));
       };
     } else if (mode === "cached-worker") {
       await initializeDebugProxyCaptureAsync("fixture", settings, { fetchTarget: target });
@@ -218,17 +154,13 @@ it.each(["fresh", "cached-worker", "saved-fetch"] as const)(
     const clearWrites = () => {
       committed.mockClear();
       createWorkerLease.mockClear();
-      store.upsertSession.mockClear();
-      store.recordEvent.mockClear();
     };
     const expectNoWrites = () => {
       expect(committed).not.toHaveBeenCalled();
       expect(createWorkerLease).not.toHaveBeenCalled();
-      expect(store.upsertSession).not.toHaveBeenCalled();
-      expect(store.recordEvent).not.toHaveBeenCalled();
     };
     const expectWrites = () => {
-      expect(committed.mock.calls.length + store.recordEvent.mock.calls.length).toBeGreaterThan(0);
+      expect(committed.mock.calls.length).toBeGreaterThan(0);
     };
     const continueAfterClose = createDeferredCore();
     const continueWithoutCapture = createDeferredCore();
@@ -279,7 +211,6 @@ it.each(["fresh", "cached-worker", "saved-fetch"] as const)(
       await late;
       await uncapturedLate;
       await finalizeDebugProxyCaptureAsync(settings, { fetchTarget: target });
-      finalizeDebugProxyCapture(settings, deps);
     }
   },
 );

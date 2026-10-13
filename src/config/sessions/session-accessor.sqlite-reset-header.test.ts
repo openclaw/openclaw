@@ -105,12 +105,14 @@ describe("SQLite reset boundary transcript header", () => {
       await reset(writer, sessionKey, "next-custom");
 
       expect(
-        SessionManager.open({
-          agentId: "main",
-          sessionKey,
-          sessionId: "custom-window",
-          storePath,
-        }).getHeader(),
+        (
+          await SessionManager.openAsync({
+            agentId: "main",
+            sessionKey,
+            sessionId: "custom-window",
+            storePath,
+          })
+        ).getHeader(),
       ).toMatchObject({ version: CURRENT_SESSION_VERSION, cwd: expectedCwd });
       const events = readEvents("custom-window");
       expect(events[0]).toMatchObject({ type: "session", version: CURRENT_SESSION_VERSION });

@@ -342,7 +342,7 @@ describe.skipIf(process.env.TEST_NATIVE_WORKER_BUNDLE !== "1" || process.platfor
       if (receipt?.state !== "completed" || !receipt.resultJson) {
         throw new Error("Missing completed supervisor receipt");
       }
-      const transcript = SessionManager.open(owner.sessionTarget);
+      const transcript = await SessionManager.openAsync(owner.sessionTarget);
       const messages = transcript
         .getEntries()
         .flatMap((entry) => (entry.type === "message" ? [entry.message] : []));

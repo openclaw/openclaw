@@ -72,15 +72,13 @@ that introduces its replacement. Migration sequence:
 3. Emit diagnostics or warnings when plugin authors can act.
 4. Document the replacement and timeline.
 5. Test both old and new paths.
-6. Wait through the announced migration window.
-7. Remove only with explicit breaking-release approval.
+6. Ship the deprecation and replacement in a stable release, then wait through the compatibility period.
+7. Remove in a later normal release after maintainer review.
 
-Deprecated records must include a warning start date, replacement, docs link,
-and either a final removal date no more than three months after the warning
-starts or an explicit version boundary such as `next-plugin-sdk-major`. Do not
-add a deprecated compatibility path with an open-ended removal window unless
-maintainers explicitly decide it is permanent compatibility and mark it
-`active` instead.
+Deprecated records must include a warning start date, replacement, docs link, and either
+an approved final removal date or the `after-stable-deprecation` gate. That gate
+requires deprecation in a stable release and a compatibility period; it is not
+date-eligible by itself and does not promise a removal release.
 
 ## Current compatibility areas
 
@@ -156,14 +154,14 @@ and legacy-state import and Doctor migrations remain unchanged.
 ### Synchronous plugin state
 
 `plugin-state-sync-keyed-store` names the existing synchronous keyed-store adapter.
-Its September 11, 2026 deprecation uses the `next-plugin-sdk-major` removal gate.
+Its September 11, 2026 deprecation uses the `after-stable-deprecation` removal gate.
 Actual legacy calls emit one diagnostic per plugin and capability family per
 Gateway process; module imports remain silent.
 Existing synchronous methods, plugin trust eligibility, and transactional callback
 semantics remain unchanged. Migrate to data-only `openKeyedStoreV2` operations using
 the [state-store migration guide](/plugins/sdk-runtime/state-and-system#synchronous-keyed-store-migration).
-Removal still requires a supported external-plugin migration and explicit
-breaking-release approval.
+Removal still requires a stable-shipped deprecation, a compatibility period,
+a supported external-plugin migration, and maintainer approval.
 
 ### Session agent resolution aliases
 
@@ -176,8 +174,7 @@ exports preserve ambient system-agent fallback only when strict resolution
 fails because no owner was supplied. These aliases treat empty or whitespace-only
 agent IDs as omitted; strict resolvers reject supplied blank IDs. They do not override explicit,
 agent-scoped, persisted, conflicting, or retired owner outcomes. These aliases
-are deprecated as of August 29, 2026, and remain available through November 29, 2026. Removal also requires a published-plugin reader sweep and explicit
-breaking-release approval.
+are deprecated as of August 29, 2026, and remain available through November 29, 2026. Removal also requires deprecation shipped in stable, a compatibility period, a published-plugin reader sweep, and maintainer approval.
 
 ### Auth profile cooldown classifications
 
@@ -200,8 +197,8 @@ New channel plugins should use `MsgContext.ChannelPromptContext`,
 `UntrustedStructuredContextEntry`, and supplemental `untrustedContext` names
 remain as deprecated SDK aliases. Their 2026-09-08 removal review date is
 unchanged, but registry record `sdk-untrusted-context-identifier-aliases` is now
-`removal-pending`: removal still requires verified migration of published plugin
-readers and explicit breaking-release approval. Inbound finalization folds those
+`removal-pending`: removal still requires deprecation shipped in stable, a compatibility
+period, verified migration of published plugin readers, and maintainer approval. Inbound finalization folds those
 deprecated fields into the channel-named fields and removes the old keys from
 runtime context.
 

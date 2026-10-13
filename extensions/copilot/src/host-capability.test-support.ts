@@ -4,11 +4,15 @@ type HostCapabilities = AgentHarnessAttemptParamsV2["hostCapabilities"];
 
 /** Minimal host authority for tests that do not exercise host policy or approvals. */
 export function createCopilotTestHostCapabilities(
-  createToolSurface?: HostCapabilities["createToolSurface"],
+  createToolSurface?: (
+    ...args: Parameters<NonNullable<HostCapabilities["createToolSurfaceAsync"]>>
+  ) =>
+    | ReturnType<HostCapabilities["bindToolSurface"]>
+    | Promise<ReturnType<HostCapabilities["bindToolSurface"]>>,
   bindToolSurface: HostCapabilities["bindToolSurface"] = (tools) => tools,
 ): HostCapabilities {
   const construct: HostCapabilities["createToolSurfaceAsync"] = createToolSurface
-    ? async (options, binding) => bindToolSurface(createToolSurface(options), binding)
+    ? async (options, binding) => bindToolSurface(await createToolSurface(options), binding)
     : undefined;
   return Object.freeze({
     kind: "agent-harness-host-capability",

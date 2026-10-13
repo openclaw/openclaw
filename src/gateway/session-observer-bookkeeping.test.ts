@@ -41,7 +41,7 @@ describe("session observer run bookkeeping", () => {
     expect(runs.has("run-599")).toBe(true);
   });
 
-  it("reads a persisted global companion through its canonical agent store key", () => {
+  it("reads a persisted global companion through its canonical agent store key", async () => {
     const config = {
       gateway: { controlUi: { sessionObserver: true } },
       session: { scope: "global" as const },
@@ -58,10 +58,10 @@ describe("session observer run bookkeeping", () => {
     }));
     const harness = createHarness({ subscribe: false, config, readSession });
 
-    const snapshot = harness.observer.getCompanionSnapshot("agent:work:main");
+    const snapshot = await harness.observer.getCompanionSnapshotAsync("agent:work:main");
 
     expect(readSession).toHaveBeenCalledWith("global", "work");
     expect(snapshot).toMatchObject({ agentId: "work", digest, runId: digest.runId });
-    harness.observer.dispose();
+    await harness.observer.disposeAsync();
   });
 });

@@ -134,21 +134,22 @@ each selected adapter, dispatch checks that its registration is still current.
 It skips retired registrations without adopting their replacements.
 
 Use `resolveRuntimeConversationBindingRouteAsync` for routing that records activity.
-It waits for the selected mutation and then rechecks the current binding before
-returning its route. Prepare ownership facts with
+It waits for the selected mutation before returning the prepared route. Delivery
+admission checks live ownership before an effect. Prepare ownership facts with
 `await service.inspectByConversationAsync(conversation)`, then pass those facts to
 `inspectRuntimeConversationBindingRoute({ route, inspection })`. This synchronous
 projection performs no storage access. Inspection preserves the distinction
 between a missing binding and an unavailable adapter without creating a missing
 store or pruning expired rows.
 
-`inspectRuntimeConversationBindingRoute` and the synchronous
-`resolveRuntimeConversationBindingRoute` also accept a deferred `resolveRoute` callback
+`inspectRuntimeConversationBindingRoute` and
+`resolveRuntimeConversationBindingRouteAsync` also accept a deferred `resolveRoute` callback
 instead of a completed `route`.
 Pass exactly one of `route` or `resolveRoute`; the input type rejects supplying both
 or neither. Existing callers can keep passing a completed route.
 The callback receives `{ inspection, bindingOwnerAvailable, bindingRecord, boundAgentId }`
-after the owner has classified the binding, before ordinary agent selection:
+after the owner has classified the binding, before ordinary agent selection.
+The async route helper also awaits an asynchronous callback:
 
 ```ts
 const result = inspectRuntimeConversationBindingRoute({
@@ -202,19 +203,16 @@ Lifecycle setters have explicit Promise-returning counterparts:
 `setMaxAgeBySessionKeyAsync`. Channel adapters expose the same suffixed methods.
 Callers await their results before reporting the affected bindings.
 
-The existing synchronous lookup, touch, route resolver, and lifecycle setter contracts
-remain deprecated through the next Plugin SDK major. The resolver's staged
-migration is recorded here and in the compatibility registry; its broad barrel
-is already deprecated, while its per-function IDE annotation is deferred until
-the caller migration is complete. Synchronous entry points call only synchronous
-implementations; they never start an async mutation whose result would be lost.
-An adapter exposing both variants keeps them under the same state owner.
+The synchronous host service `resolveByConversation` and `touch` methods,
+`resolveRuntimeConversationBindingRoute`, and generic lifecycle setter fields
+were deprecated in stable v2026.9.6 and have been removed. Lifecycle dispatch
+requires the awaited adapter methods and has no synchronous fallback.
 
-During the staged migration, async dispatch falls back to an adapter's existing
-synchronous method when its async counterpart is absent. This preserves external
-plugin compatibility; that fallback does not make a legacy adapter nonblocking.
-Generic and account-scoped bind/unbind operations and bundled session listings
-use the shared-state worker. Their released synchronous selectors remain available
-through the compatibility boundary. Separate lifecycle setters and other bundled
-stores retain their existing behavior until their respective cutovers; this
-execution change does not strengthen their durability contracts.
+Legacy `SessionBindingAdapter.resolveByConversation` and `touch` callbacks remain
+available because the retained adapter registration and inspection contracts
+still require them. Awaited service dispatch uses those callbacks only when the
+adapter has no asynchronous counterpart; an asynchronous failure never retries
+through the synchronous callback. Generic and account-scoped bind/unbind
+operations and bundled session listings use the shared-state worker. Their
+released synchronous list and inspection selectors remain available through the
+compatibility boundary until their own stable deprecation window completes.

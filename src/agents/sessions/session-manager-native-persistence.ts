@@ -17,19 +17,16 @@ import {
 } from "../../config/sessions/transcript-write-context.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import type { AgentMessage } from "../runtime/index.js";
-import { getSessionCompactionPersistence } from "./session-compaction-persistence.js";
 import { isIndexedSessionEntry, parseOpaqueLeafEntry } from "./session-manager-codec.js";
 import { SessionManagerCore } from "./session-manager-core.js";
-import { prepareSessionManagerSync } from "./session-manager-incognito-scope.js";
 import {
   adoptPersistedMessage,
   transcriptAppendNeedsReload,
   type PersistRecordOptions,
   type PersistRecordResult,
 } from "./session-manager-persistence-entry.js";
-import type { SessionEntry } from "./session-manager-types.js";
 
-/** Released synchronous SDK methods keep their native transaction and publication contract. */
+/** Native persistence for detached and process-owned incognito writes. */
 export class SessionManagerNativePersistence extends SessionManagerCore {
   #initialWriter: InitialSessionTranscriptWriter | undefined;
   #navigationEpoch = 0;
@@ -97,27 +94,17 @@ export class SessionManagerNativePersistence extends SessionManagerCore {
     );
   }
 
-  /** @deprecated Await persistAsync. Removal: next Plugin SDK major. */
-  public persist(entry: SessionEntry, options?: PersistRecordOptions): PersistRecordResult {
-    prepareSessionManagerSync("persist", this.persistenceTarget, this);
-    return this.persistRecord(entry, options);
-  }
-
   protected persistRecord(
     entry: unknown,
     options?: PersistRecordOptions,
     preparedMessage?: PreparedTranscriptMessageAppend<AgentMessage>,
   ): PersistRecordResult {
     if (!this.persistenceTarget) {
-      if (getSessionCompactionPersistence(this)) {
-        throw new Error("Compaction boundary validation failed");
-      }
       return undefined;
     }
     this.assertTranscriptWriteActive();
     const scope = this.persistenceTarget;
     const initialWriter = this.#initialWriter;
-    const persistCompaction = getSessionCompactionPersistence(this);
     const sessionId = this.sessionId;
     const isCurrentView = () =>
       this.sessionId === sessionId &&
@@ -159,35 +146,6 @@ export class SessionManagerNativePersistence extends SessionManagerCore {
       this.transcriptMutationAt = committed.after.updatedAt;
       return committed;
     };
-    if (persistCompaction && isIndexedSessionEntry(entry) && entry.type === "compaction") {
-      // Atomic accounting accepts exactly one boundary, never lazy transcript initialization.
-      if (this.persistenceHeaderPending) {
-        throw new Error("Compaction boundary validation failed");
-      }
-      const loadedVersion = this.transcriptVersion;
-      const expectedMutationAt =
-        options?.expectedMutationAt !== undefined
-          ? options.expectedMutationAt
-          : this.transcriptMutationAt;
-      const committed = persistCompaction({
-        scope: { ...scope },
-        event: entry,
-        ...(options?.appendIntent ? { appendIntent: options.appendIntent } : {}),
-        ...(expectedMutationAt !== undefined ? { expectedMutationAt } : {}),
-        ...(initialWriter && !initialWriter.committedFence ? { initializeEntry: true } : {}),
-      });
-      if (initialWriter?.committedFence) {
-        Object.assign(scope, initialWriter.committedFence);
-      }
-      this.transcriptVersion = committed.after;
-      this.transcriptMutationAt = committed.after.updatedAt;
-      const reloadAfterAppend = transcriptAppendNeedsReload(committed.before, loadedVersion);
-      return {
-        appended: true,
-        effectiveParentId: committed.result.parentId,
-        ...(reloadAfterAppend ? { reloadAfterAppend: true } : {}),
-      };
-    }
     if (this.persistenceHeaderPending || (initialWriter && !initialWriter.committedFence)) {
       if (
         !ensureSessionEntrySync(scope, {

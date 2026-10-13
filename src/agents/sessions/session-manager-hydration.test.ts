@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { StatementSync } from "node:sqlite";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import * as configEnv from "../../config/config-env-vars.js";
@@ -61,14 +62,16 @@ it.each(["canonical", "shared"])(
             : path.join(state.root, "shared.sqlite"),
       };
       await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-      const source = SessionManager.open(target, "/stored");
+      const source = await SessionManager.openAsync(target, "/stored");
       for (let index = 0; index < 12; index++) {
-        source.appendMessage(makeUserMessage(`message ${index}`, index));
+        await source.appendMessageAsync(makeUserMessage(`message ${index}`, index));
       }
       await waitForSessionTranscriptProjection(target);
       const expected = source.getPersistedEntries();
       const limits = { maxBytes: 4096, maxEvents: 3 };
-      const expectedBounded = SessionManager.openBounded(target, limits).buildSessionContext();
+      const expectedBounded = (
+        await SessionManager.openBoundedAsync(target, limits)
+      ).buildSessionContext();
       const database = openOpenClawAgentDatabase({ agentId: "main", path: target.storePath });
       const statement = Object.getPrototypeOf(database.db.prepare("SELECT 1")) as StatementSync;
       const probes = [
@@ -80,7 +83,7 @@ it.each(["canonical", "shared"])(
         vi.spyOn(Object.getPrototypeOf(database.db), "prepare"),
       ];
       try {
-        SessionManager.open(target);
+        database.db.prepare("SELECT 1").get();
         expect(probes.some((probe) => probe.mock.calls.length > 0)).toBe(true);
         await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
         probes.forEach((probe) => probe.mockClear());
@@ -97,7 +100,7 @@ it.each(["canonical", "shared"])(
         const detached = await SessionManager.openDetachedBoundedAsync(target, limits);
         expect(detached.isPersisted()).toBe(false);
         expect(detached.buildSessionContext()).toEqual(expectedBounded);
-        detached.appendMessage(makeUserMessage("detached only", 20));
+        await detached.appendMessageAsync(makeUserMessage("detached only", 20));
         expect(probes.flatMap((probe) => probe.mock.calls)).toEqual([]);
         // Warm admission must use the requested lane, not the cold reader's reserved-lane fallback.
         const warm = openOpenClawAgentDatabase({ agentId: database.agentId, path: database.path });
@@ -169,8 +172,11 @@ it("preserves the shipped SDK omitted-history option for bounded views", async (
   await withOpenClawTestState({ label: "sdk-omitted-history" }, async (state) => {
     const target = canonicalTarget(state, "sdk-omitted-history");
     await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-    const source = SessionManager.open(target);
-    const userId = source.appendMessage(makeUserMessage("current SDK user", 1));
+    const source = await SessionManager.openAsync(target);
+    const userId = expectDefined(
+      await source.appendMessageAsync(makeUserMessage("current SDK user", 1)),
+      "Expected appended message",
+    );
     const activity = {
       role: "custom" as const,
       customType: "sdk-activity",
@@ -179,8 +185,14 @@ it("preserves the shipped SDK omitted-history option for bounded views", async (
       excludeFromContext: true as const,
       timestamp: 2,
     };
-    const activityId = source.appendMessage(activity);
-    const bounded = SessionManager.openBounded(target, { maxBytes: 4096, maxEvents: 10 });
+    const activityId = expectDefined(
+      await source.appendMessageAsync(activity),
+      "Expected appended message",
+    );
+    const bounded = await SessionManager.openBoundedAsync(target, {
+      maxBytes: 4096,
+      maxEvents: 10,
+    });
     const isActivity = (entry: SessionEntry) =>
       entry.type === "message" &&
       entry.message.role === "custom" &&
@@ -190,8 +202,14 @@ it("preserves the shipped SDK omitted-history option for bounded views", async (
     expect(
       bounded.resolveCurrentTurnEntryId(isActivity, { includeOmittedCustomMessages: true }),
     ).toBe(userId);
-    const unrelatedId = source.appendMessage({ ...activity, customType: "unrelated-activity" });
-    bounded.reloadPersistedTranscript();
+    const unrelatedId = expectDefined(
+      await source.appendMessageAsync({
+        ...activity,
+        customType: "unrelated-activity",
+      }),
+      "Expected appended message",
+    );
+    await bounded.reloadPersistedTranscriptAsync();
     expect(
       bounded.resolveCurrentTurnEntryId(isActivity, { includeOmittedCustomMessages: true }),
     ).toBe(unrelatedId);
@@ -214,9 +232,15 @@ it.each(["file", "incognito"])(
         updatedAt: 1,
         ...(storage === "incognito" ? { incognito: true } : {}),
       });
-      const source = SessionManager.open(target);
-      const beforeEntryId = source.appendMessage(makeUserMessage("earlier user", 0));
-      const entryId = source.appendMessage(makeUserMessage("current user", 1));
+      const source = await SessionManager.openAsync(target);
+      const beforeEntryId = expectDefined(
+        await source.appendMessageAsync(makeUserMessage("earlier user", 0)),
+        "Expected appended message",
+      );
+      const entryId = expectDefined(
+        await source.appendMessageAsync(makeUserMessage("current user", 1)),
+        "Expected appended message",
+      );
       await waitForSessionTranscriptProjection(target);
       const reader = prepareSessionTranscriptHydration(target, { maxBytes: 4096, maxEvents: 5 });
       const { snapshot } = await reader.read();
@@ -236,7 +260,10 @@ it.each(["file", "incognito"])(
           "changed before replay admission",
         );
       }
-      const laterEntryId = source.appendMessage(makeUserMessage("newer user", 2));
+      const laterEntryId = expectDefined(
+        await source.appendMessageAsync(makeUserMessage("newer user", 2)),
+        "Expected appended message",
+      );
       await waitForSessionTranscriptProjection(target);
       await expect(reader.readCurrentTurnEntry(request)).rejects.toThrow(
         "changed before replay admission",
@@ -284,8 +311,8 @@ it("does not publish a stale retarget over a manager changed while its worker re
   await withOpenClawTestState({ label: "session-hydration-retarget" }, async (state) => {
     const target = canonicalTarget(state, "retarget");
     await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-    const source = SessionManager.open(target);
-    source.appendMessage(makeUserMessage("persisted", 1));
+    const source = await SessionManager.openAsync(target);
+    await source.appendMessageAsync(makeUserMessage("persisted", 1));
     const manager = SessionManager.inMemory("/detached");
     const release = createDeferredCore();
     const entered = createDeferredCore();
@@ -306,7 +333,7 @@ it("does not publish a stale retarget over a manager changed while its worker re
           throw new Error("Retarget settled before the intercepted worker read");
         }),
       ]);
-      manager.appendMessage(makeUserMessage("newer detached view", 2));
+      await manager.appendMessageAsync(makeUserMessage("newer detached view", 2));
       release.resolve();
       await refused;
       expect(manager.isPersisted()).toBe(false);
@@ -330,8 +357,11 @@ it.each(["hydration", "current-turn"] as const)(
     await withOpenClawTestState({ label: "session-hydration-queued-abort" }, async (state) => {
       const target = canonicalTarget(state, "queued-abort");
       await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-      const entryId = SessionManager.open(target).appendMessage(
-        makeUserMessage("preserved predecessor", 1),
+      const entryId = expectDefined(
+        await (
+          await SessionManager.openAsync(target)
+        ).appendMessageAsync(makeUserMessage("preserved predecessor", 1)),
+        "Expected appended message",
       );
       const { snapshot } = await prepareSessionTranscriptHydration(target).read();
       const entered = createDeferredCore();
@@ -428,7 +458,7 @@ it("keeps absent storage absent, lazy headers unpersisted, and malformed retarge
     });
     await replaceTranscriptEvents(target, [{ type: "future-row", id: "opaque" }]);
     const manager = SessionManager.inMemory("/retained");
-    manager.appendMessage(makeUserMessage("keep", 1));
+    await manager.appendMessageAsync(makeUserMessage("keep", 1));
     const before = manager.getPersistedEntries();
     await expect(manager.setSessionTargetAsync(target)).rejects.toThrow();
     expect(manager.getPersistedEntries()).toEqual(before);
@@ -443,7 +473,9 @@ it.each(["abort", "database-close"] as const)(
     await withOpenClawTestState({ label: "session-hydration-revoked" }, async (state) => {
       const target = canonicalTarget(state, "revoked");
       await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-      SessionManager.open(target).appendMessage(makeUserMessage("retained", 1));
+      await (
+        await SessionManager.openAsync(target)
+      ).appendMessageAsync(makeUserMessage("retained", 1));
       const controller = new AbortController();
       const received = createDeferredCore();
       const release = createDeferredCore();
@@ -501,7 +533,9 @@ it.each(["full", "bounded"])(
         updatedAt: 1,
         incognito: true,
       });
-      SessionManager.open(target).appendMessage(makeUserMessage("process local", 1));
+      await (
+        await SessionManager.openAsync(target)
+      ).appendMessageAsync(makeUserMessage("process local", 1));
       expect((await open()).buildSessionContext().messages).toEqual([
         makeUserMessage("process local", 1),
       ]);
@@ -531,10 +565,10 @@ it.each([
         updatedAt: 1,
         incognito: true,
       });
-      const source = SessionManager.open(target);
-      source.appendMessage(makeUserMessage("discarded private history", 1));
+      const source = await SessionManager.openAsync(target);
+      await source.appendMessageAsync(makeUserMessage("discarded private history", 1));
       if (entry === "bounded-callback") {
-        source.appendMessage(makeUserMessage("latest private history", 2));
+        await source.appendMessageAsync(makeUserMessage("latest private history", 2));
       }
       const onTruncated = vi.fn(() => closeOpenClawAgentDatabases(state.root));
       const receiver = entry === "replay" ? source : SessionManager.inMemory();
@@ -591,8 +625,13 @@ it.each([
             }),
           ]);
           await closeOpenClawAgentDatabasesAsync(state.root);
-          const replacement = SessionManager.open(target);
-          replacement.appendMessage(makeUserMessage("replacement private history", 2));
+          await upsertSessionEntryCore(target, {
+            sessionId: target.sessionId,
+            updatedAt: 2,
+            incognito: true,
+          });
+          const replacement = await SessionManager.openAsync(target);
+          await replacement.appendMessageAsync(makeUserMessage("replacement private history", 2));
           expect(replacement.buildSessionContext().messages).toEqual([
             makeUserMessage("replacement private history", 2),
           ]);
@@ -633,7 +672,9 @@ it.each([
         updatedAt: 1,
         incognito: true,
       });
-      SessionManager.open(target).appendMessage(makeUserMessage("original private history", 1));
+      await (
+        await SessionManager.openAsync(target)
+      ).appendMessageAsync(makeUserMessage("original private history", 1));
       const originalEnvironment = process.env.OPENCLAW_STATE_DIR;
       const env = { OPENCLAW_STATE_DIR: state.stateDir };
       const input = environment === "explicit" ? { ...target, env } : target;
@@ -661,9 +702,9 @@ it.each([
         expect(manager.buildSessionContext().messages).toEqual([
           makeUserMessage("original private history", 1),
         ]);
-        manager.appendMessage(makeUserMessage("same private owner", 2));
+        await manager.appendMessageAsync(makeUserMessage("same private owner", 2));
         const original = { ...target, env: { OPENCLAW_STATE_DIR: state.stateDir } };
-        expect(SessionManager.open(original).buildSessionContext().messages).toEqual([
+        expect((await SessionManager.openAsync(original)).buildSessionContext().messages).toEqual([
           makeUserMessage("original private history", 1),
           makeUserMessage("same private owner", 2),
         ]);
@@ -691,7 +732,9 @@ it.each(["process", "explicit"])(
       async (state) => {
         const target = canonicalTarget(state, "file-environment");
         await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-        SessionManager.open(target).appendMessage(makeUserMessage("file history", 1));
+        await (
+          await SessionManager.openAsync(target)
+        ).appendMessageAsync(makeUserMessage("file history", 1));
         await waitForSessionTranscriptProjection(target);
         await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
         const originalEnvironment = process.env.OPENCLAW_STATE_DIR;
@@ -714,7 +757,9 @@ it.each(["process", "explicit"])(
           await manager.appendThinkingLevelChange("high");
           expect(fs.existsSync(path.join(otherState, "state", "openclaw.sqlite"))).toBe(false);
           const original = { ...target, env: { OPENCLAW_STATE_DIR: state.stateDir } };
-          expect(SessionManager.open(original).buildSessionContext().thinkingLevel).toBe("high");
+          expect(
+            (await SessionManager.openAsync(original)).buildSessionContext().thinkingLevel,
+          ).toBe("high");
         } finally {
           if (originalEnvironment === undefined) {
             delete process.env.OPENCLAW_STATE_DIR;
@@ -742,7 +787,9 @@ it.each(["completed-drain", "active-drain", "terminal-owner"])(
           storePath: state.path("shared.sqlite"),
         };
         await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-        SessionManager.open(target).appendMessage(makeUserMessage("durable shared history", 1));
+        await (
+          await SessionManager.openAsync(target)
+        ).appendMessageAsync(makeUserMessage("durable shared history", 1));
         await waitForSessionTranscriptProjection(target);
         await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
         const received = createDeferredCore();
@@ -826,7 +873,9 @@ it.each(["canonical", "custom"])(
             : state.path("windows-shared.sqlite"),
       };
       await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-      SessionManager.open(target).appendMessage(makeUserMessage("captured store", 1));
+      await (
+        await SessionManager.openAsync(target)
+      ).appendMessageAsync(makeUserMessage("captured store", 1));
       const hostPlatform = process.platform;
       const env = { ...state.env };
       for (const key of Object.keys(env)) {

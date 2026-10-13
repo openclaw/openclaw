@@ -44,7 +44,6 @@ import type {
   ProviderReasoningOutputMode,
   ProviderReplayPolicy,
   ProviderReplayPolicyContext,
-  ProviderSanitizeReplayHistoryContext,
   ProviderSanitizeReplayHistoryContextV2,
   ProviderValidateReplayTurnsContext,
   ProviderNormalizeToolSchemasContext,
@@ -237,18 +236,7 @@ export type ProviderPlugin = {
    * rules that are more expressive than the static `capabilities` bag.
    */
   buildReplayPolicy?: (ctx: ProviderReplayPolicyContext) => ProviderReplayPolicy | null | undefined;
-  /**
-   * @deprecated Use sanitizeReplayHistoryAsync; removed in the next Plugin SDK major.
-   * Provider-owned replay-history sanitization.
-   *
-   * Runs after OpenClaw performs generic transcript cleanup. Use this for
-   * provider-specific replay rewrites that should stay with the provider
-   * plugin rather than in shared core compaction helpers.
-   */
-  sanitizeReplayHistory?: (
-    ctx: ProviderSanitizeReplayHistoryContext,
-  ) => Promise<AgentMessage[] | null | undefined> | AgentMessage[] | null | undefined;
-  /** Replay hook with worker-backed persistence; preferred over the legacy hook when both exist. */
+  /** Provider-owned replay hook with worker-backed persistence. */
   sanitizeReplayHistoryAsync?: (
     ctx: ProviderSanitizeReplayHistoryContextV2,
   ) => Promise<AgentMessage[] | null | undefined> | AgentMessage[] | null | undefined;

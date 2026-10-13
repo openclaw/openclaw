@@ -16,7 +16,7 @@ import { sanitizeTranscriptMessage } from "./transcript-sanitize.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-type AppendMessage = Parameters<SessionManager["appendMessage"]>[0];
+type AppendMessage = Parameters<SessionManager["appendMessageAsync"]>[0];
 const asAppendMessage = (message: unknown) => message as AppendMessage;
 const call = (id = "call_1", name = "read") =>
   makeAgentAssistantMessage({
@@ -47,7 +47,7 @@ function resultText(sm: SessionManager) {
 }
 
 describe("installSessionToolResultGuard", () => {
-  it("keeps the exec retention-loss disclosure through the session result cap", () => {
+  it("keeps the exec retention-loss disclosure through the session result cap", async () => {
     const { sm } = setup({ maxToolResultChars: 4_000 });
     const output = buildExecForegroundResult({
       outcome: {
@@ -64,17 +64,17 @@ describe("installSessionToolResultGuard", () => {
     if (!content || content.type !== "text") {
       throw new Error("expected text result");
     }
-    sm.appendMessage(call());
-    sm.appendMessage(result(content.text));
+    await sm.appendMessageAsync(call());
+    await sm.appendMessageAsync(result(content.text));
     expect(resultText(sm)).toMatch(
       /^\[earlier output was discarded at the retention cap and cannot be recovered\]/,
     );
     expect(resultText(sm)).toMatch(/\[\.\.\. \d+ more characters truncated/);
   });
 
-  it("preserves ordering with multiple tool calls and partial results", () => {
+  it("preserves ordering with multiple tool calls and partial results", async () => {
     const { sm, guard } = setup();
-    sm.appendMessage(
+    await sm.appendMessageAsync(
       asAppendMessage({
         role: "assistant",
         content: [
@@ -83,7 +83,7 @@ describe("installSessionToolResultGuard", () => {
         ],
       }),
     );
-    sm.appendMessage(
+    await sm.appendMessageAsync(
       asAppendMessage({
         role: "toolResult",
         toolUseId: "call_a",
@@ -91,27 +91,27 @@ describe("installSessionToolResultGuard", () => {
         isError: false,
       }),
     );
-    sm.appendMessage(assistant("after tools"));
+    await sm.appendMessageAsync(assistant("after tools"));
     const persisted = roles(sm, ["assistant", "toolResult", "toolResult", "assistant"]);
     expect(persisted[2]).toMatchObject({ toolCallId: "call_b", isError: true });
     expect(guard.getPendingIds()).toEqual([]);
   });
 
-  it("does not synthesize older pending results before a new assistant tool-call turn", () => {
+  it("does not synthesize older pending results before a new assistant tool-call turn", async () => {
     const { sm, guard } = setup();
-    sm.appendMessage(call());
-    sm.appendMessage(call("call_2", "exec"));
-    sm.appendMessage(result("real output"));
+    await sm.appendMessageAsync(call());
+    await sm.appendMessageAsync(call("call_2", "exec"));
+    await sm.appendMessageAsync(result("real output"));
     const persisted = roles(sm, ["assistant", "assistant", "toolResult"]);
     expect(persisted[2]).toMatchObject({ toolCallId: "call_1", isError: false });
     expect(JSON.stringify(persisted)).not.toContain("missing tool result");
     expect(guard.getPendingIds()).toEqual(["call_2"]);
   });
 
-  it("repairs pending calls only after the streamed response changes", () => {
+  it("repairs pending calls only after the streamed response changes", async () => {
     const { sm, guard } = setup({ missingToolResultText: "aborted" });
-    sm.appendMessage({ ...call(), turnId: "turn_1" });
-    sm.appendMessage({
+    await sm.appendMessageAsync({ ...call(), turnId: "turn_1" });
+    await sm.appendMessageAsync({
       ...assistant("Checking now."),
       turnId: "turn_1",
       responseId: "resp_1",
@@ -119,18 +119,18 @@ describe("installSessionToolResultGuard", () => {
     });
     roles(sm, ["assistant", "assistant"]);
     expect(guard.getPendingIds()).toEqual(["call_1"]);
-    sm.appendMessage({ ...assistant("Done."), responseId: "resp_2" });
+    await sm.appendMessageAsync({ ...assistant("Done."), responseId: "resp_2" });
     roles(sm, ["assistant", "assistant", "toolResult", "assistant"]);
     expect(resultText(sm)).toBe("aborted");
     expect(guard.getPendingIds()).toEqual([]);
   });
 
-  it("clears disabled-synthesis pending state across replacement and dropped calls", () => {
+  it("clears disabled-synthesis pending state across replacement and dropped calls", async () => {
     const { sm, guard } = setup({ allowSyntheticToolResults: false, allowedToolNames: ["read"] });
-    sm.appendMessage(call());
-    sm.appendMessage(call("call_2"));
+    await sm.appendMessageAsync(call());
+    await sm.appendMessageAsync(call("call_2"));
     expect(guard.getPendingIds()).toEqual(["call_2"]);
-    sm.appendMessage(
+    await sm.appendMessageAsync(
       asAppendMessage({
         role: "assistant",
         content: [
@@ -144,7 +144,7 @@ describe("installSessionToolResultGuard", () => {
     expect(guard.getPendingIds()).toEqual([]);
   });
 
-  it("blocks user persistence and reports the blocked message", () => {
+  it("blocks user persistence and reports the blocked message", async () => {
     const blocked: AgentMessage[] = [];
     const { sm } = setup({
       beforeMessageWriteHook: () => ({ block: true }),
@@ -152,33 +152,33 @@ describe("installSessionToolResultGuard", () => {
         blocked.push(message);
       },
     });
-    sm.appendMessage(makeUserMessage("hidden", 1));
+    await sm.appendMessageAsync(makeUserMessage("hidden", 1));
     expect(messages(sm)).toEqual([]);
     expect(blocked).toMatchObject([{ role: "user", content: "hidden" }]);
   });
 
-  it("consumes runtime attribution when a hook blocks the marker before the next user", () => {
+  it("consumes runtime attribution when a hook blocks the marker before the next user", async () => {
     let writes = 0;
     const { sm, guard } = setup({
       beforeMessageWriteHook: () => (writes++ === 0 ? { block: true } : undefined),
     });
     guard.setNextUserMessagePersistence("runtime");
-    sm.appendMessage(makeUserMessage("runtime-only marker", 1));
-    sm.appendMessage(makeUserMessage("actual user", 2));
+    await sm.appendMessageAsync(makeUserMessage("runtime-only marker", 1));
+    await sm.appendMessageAsync(makeUserMessage("actual user", 2));
 
     expect(messages(sm)).toEqual([{ role: "user", content: "actual user", timestamp: 2 }]);
   });
 
-  it("preserves correlation IDs while backfilling names through persistence transforms", () => {
+  it("preserves correlation IDs while backfilling names through persistence transforms", async () => {
     const { sm, guard } = setup({
       beforeMessageWriteHook: ({ message }) => ({
         message: sanitizeTranscriptMessage(message),
       }),
     });
     const id = "call_fixture|fc-" + "a".repeat(24);
-    sm.appendMessage(asAppendMessage({ role: "assistant", content: call(id).content }));
-    sm.appendMessage({ ...result("observed", "   "), toolCallId: id });
-    guard.flushPendingToolResults();
+    await sm.appendMessageAsync(asAppendMessage({ role: "assistant", content: call(id).content }));
+    await sm.appendMessageAsync({ ...result("observed", "   "), toolCallId: id });
+    await guard.flushPendingToolResultsAsync();
     expect(roles(sm, ["assistant", "toolResult"])[1]).toMatchObject({
       toolName: "read",
       toolCallId: id,
@@ -187,7 +187,7 @@ describe("installSessionToolResultGuard", () => {
     expect(guard.getPendingIds()).toEqual([]);
   });
 
-  it("repairs blocked results with canonical synthetic IDs after transforms", () => {
+  it("repairs blocked results with canonical synthetic IDs after transforms", async () => {
     const { sm, guard } = setup({
       transformMessageForPersistence: (message) => {
         if (message.role === "assistant") {
@@ -207,10 +207,12 @@ describe("installSessionToolResultGuard", () => {
             : { message: { ...message, content: [{ type: "text", text: "safe failure" }] } }
           : undefined,
     });
-    sm.appendMessage(call());
-    expect(sm.appendMessage({ ...result("blocked"), toolCallId: "p:call_1" })).toBeUndefined();
+    await sm.appendMessageAsync(call());
+    expect(
+      await sm.appendMessageAsync({ ...result("blocked"), toolCallId: "p:call_1" }),
+    ).toBeUndefined();
     expect(guard.getPendingIds()).toEqual(["p:call_1"]);
-    guard.flushPendingToolResults();
+    await guard.flushPendingToolResultsAsync();
     expect(roles(sm, ["assistant", "toolResult"])[1]).toMatchObject({
       toolCallId: "p:call_1",
       toolName: "read",
@@ -233,8 +235,12 @@ describe("installSessionToolResultGuard", () => {
     const sm = guardSessionManager(SessionManager.inMemory(), {
       config: { logging: { redactPatterns: ["fixture-token-[a-z0-9]+"] } },
     });
-    sm.appendMessage(call());
-    sm.appendMessage({ ...result(""), content: output.content, details: output.details });
+    await sm.appendMessageAsync(call());
+    await sm.appendMessageAsync({
+      ...result(""),
+      content: output.content,
+      details: output.details,
+    });
     expect(output.content).toEqual([{ type: "text", text }]);
     expect(resultText(sm)).toBe(text);
     const modelResult = sm
@@ -243,27 +249,29 @@ describe("installSessionToolResultGuard", () => {
     expect(modelResult?.content).toEqual([{ type: "text", text }]);
   });
 
-  it("applies before_message_write to synthetic tool-result flushes", () => {
+  it("applies before_message_write to synthetic tool-result flushes", async () => {
     const { sm, guard } = setup({
       beforeMessageWriteHook: ({ message }) =>
         message.role === "toolResult" ? { block: true } : undefined,
     });
-    sm.appendMessage(call());
-    guard.flushPendingToolResults();
+    await sm.appendMessageAsync(call());
+    await guard.flushPendingToolResultsAsync();
     roles(sm, ["assistant"]);
   });
 
-  it("suppresses only the next persisted user message when requested", () => {
+  it("suppresses only the next persisted user message when requested", async () => {
     const { sm } = setup({ suppressNextUserMessagePersistence: true });
-    sm.appendMessage(makeUserMessage("first", 1));
-    sm.appendMessage(makeUserMessage("second", 2));
+    await sm.appendMessageAsync(makeUserMessage("first", 1));
+    await sm.appendMessageAsync(makeUserMessage("second", 2));
     expect(messages(sm)).toMatchObject([{ role: "user", content: "second" }]);
   });
 
-  it("suppresses transcript-only assistants while retaining tool calls", () => {
+  it("suppresses transcript-only assistants while retaining tool calls", async () => {
     const { sm } = setup({ suppressTranscriptOnlyAssistantPersistence: true });
-    sm.appendMessage(asAppendMessage({ role: "assistant", content: "private room-event note" }));
-    sm.appendMessage(call("call_1", "message"));
+    await sm.appendMessageAsync(
+      asAppendMessage({ role: "assistant", content: "private room-event note" }),
+    );
+    await sm.appendMessageAsync(call("call_1", "message"));
     expect(messages(sm)).toMatchObject([
       {
         role: "assistant",

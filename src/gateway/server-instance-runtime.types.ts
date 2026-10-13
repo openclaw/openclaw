@@ -38,7 +38,7 @@ export type GatewayInstanceAgentDispatchOptions = {
 };
 
 export type GatewayApprovalEventPublisher = {
-  /** @deprecated Use publishRequestedAsync; removed in the next Plugin SDK major. */
+  /** @deprecated Use publishRequestedAsync; removed after stable deprecation and a compatibility period. */
   publishRequested: (kind: ChannelApprovalKind, request: unknown) => number;
   publishRequestedAsync?: (kind: ChannelApprovalKind, request: unknown) => Promise<number>;
   publishResolved: (kind: ChannelApprovalKind, resolved: unknown) => void;

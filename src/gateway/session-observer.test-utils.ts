@@ -184,15 +184,17 @@ export function declareObserverVisibility(
   observer.setConnectionVisibility(connId, true);
 }
 
-export function startAndAddToolNotes(
+export async function startAndAddToolNotes(
   observer: ReturnType<typeof createSessionObserver>,
   params: { runId?: string; sessionKey?: string; count?: number } = {},
-): void {
+): Promise<void> {
   const runId = params.runId ?? "run-1";
   const sessionKey = params.sessionKey ?? "agent:main:session-1";
-  observer.handleEvent(event({ runId, sessionKey, stream: "lifecycle", data: { phase: "start" } }));
+  await observer.handleEventAsync(
+    event({ runId, sessionKey, stream: "lifecycle", data: { phase: "start" } }),
+  );
   for (let index = 0; index < (params.count ?? 3); index += 1) {
-    observer.handleEvent(
+    await observer.handleEventAsync(
       event({
         runId,
         sessionKey,

@@ -89,22 +89,22 @@ type SessionBindingAdapterCapabilities = {
   unbindSupported?: boolean;
 };
 
-/** @deprecated Implement SessionBindingAdapterV2; removed in the next Plugin SDK major. */
+/** @deprecated Implement SessionBindingAdapterV2; removed in a later normal release after stable deprecation and a compatibility period. */
 export type SessionBindingAdapter = {
   channel: string;
   accountId: string;
   capabilities?: SessionBindingAdapterCapabilities;
   bind?: (input: SessionBindingBindInput) => Promise<SessionBindingRecord | null>;
-  /** @deprecated Use listBySessionAsync; removed in the next Plugin SDK major. */
+  /** @deprecated Use listBySessionAsync; removed in a later normal release after stable deprecation and a compatibility period. */
   listBySession: (targetSessionKey: string) => SessionBindingRecord[];
-  /** @deprecated Use resolveByConversationAsync. The synchronous form will be removed in the next Plugin SDK major. */
+  /** @deprecated Use resolveByConversationAsync. The synchronous form will be removed in a later normal release after stable deprecation and a compatibility period. */
   resolveByConversation: (ref: ConversationRef) => SessionBindingRecord | null;
-  /** @deprecated Use inspectByConversationAsync; removed in the next Plugin SDK major. */
+  /** @deprecated Use inspectByConversationAsync; removed in a later normal release after stable deprecation and a compatibility period. */
   inspectByConversation?: (ref: ConversationRef) => SessionBindingRecord | null;
   /** Inspects committed ownership without creating storage or pruning rows. */
   inspectByConversationAsync?: (ref: ConversationRef) => Promise<SessionBindingRecord | null>;
   resolveByConversationAsync?: (ref: ConversationRef) => Promise<SessionBindingRecord | null>;
-  /** @deprecated Use touchAsync. The synchronous form will be removed in the next Plugin SDK major. */
+  /** @deprecated Use touchAsync. The synchronous form will be removed in a later normal release after stable deprecation and a compatibility period. */
   touch?: (bindingId: string, at?: number) => void;
   /** Settles accepted persistence before resolving. */
   touchAsync?: (bindingId: string, at?: number) => Promise<void>;

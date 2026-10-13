@@ -118,9 +118,9 @@ describe("doctor SQLite session transcript header repair", () => {
         .run(1_000_000, 999_000, SESSION_ID);
     }, databaseOptions);
 
-    expect(() => SessionManager.open(scope, state.workspaceDir)).toThrow(
-      "require doctor/import migration before runtime use",
-    );
+    await expect(
+      (async () => await SessionManager.openAsync(scope, state.workspaceDir))(),
+    ).rejects.toThrow("require doctor/import migration before runtime use");
 
     await expect(
       noteSessionTranscriptHeaderHealth({ cfg, env: state.env, shouldRepair: false }),
@@ -188,7 +188,7 @@ describe("doctor SQLite session transcript header repair", () => {
         .prepare("SELECT transcript_updated_at AS value FROM session_windows WHERE session_id = ?")
         .get(SESSION_ID),
     ).toEqual({ value: 1_000_001 });
-    const repairedManager = SessionManager.open(scope, state.workspaceDir);
+    const repairedManager = await SessionManager.openAsync(scope, state.workspaceDir);
     expect(repairedManager.getEntries().map((entry) => entry.id)).toEqual(["model-1", "user-1"]);
     expect(repairedManager.buildSessionContext().messages).toEqual([
       { role: "user", content: userText },
@@ -289,9 +289,9 @@ describe("doctor SQLite session transcript header repair", () => {
     ).resolves.toEqual({ found: 0, repaired: 0 });
 
     expect(readTranscriptStorageRows(database, SESSION_ID)).toEqual(before);
-    expect(() => SessionManager.open(scope, state.workspaceDir)).toThrow(
-      "require doctor/import migration before runtime use",
-    );
+    await expect(
+      (async () => await SessionManager.openAsync(scope, state.workspaceDir))(),
+    ).rejects.toThrow("require doctor/import migration before runtime use");
     expect(note).not.toHaveBeenCalled();
   });
 

@@ -170,16 +170,17 @@ async function seedFixture(state: OpenClawTestState, shape: typeof fixture) {
     }),
   );
   await persistSessionTranscriptTurn(target, { messages: seed, touchSessionEntry: false });
-  // branch() is an in-memory cursor move. Appending an anchor persists the selected branch.
-  const seeded = SessionManager.open(target);
-  seeded.branch(`seed-${shape.activeEvents - 2}`);
-  const baseLeafId = seeded.appendMessage({
+  // branchAsync() updates the selected cursor. Appending an anchor persists the selected branch.
+  const seeded = await SessionManager.openAsync(target);
+  await seeded.branchAsync(`seed-${shape.activeEvents - 2}`);
+  const baseLeafId = await seeded.appendMessageAsync({
     role: "user",
     content: "Benchmark anchor",
     timestamp: 1,
   });
+  assert.ok(baseLeafId, "Benchmark anchor must be persisted");
   await waitForSessionTranscriptIndexReconcilesInStateDir(state.stateDir);
-  const verifiedSeed = SessionManager.open(target);
+  const verifiedSeed = await SessionManager.openAsync(target);
   assert.equal(verifiedSeed.getLeafId(), baseLeafId);
   assert.equal(
     verifiedSeed.getBranch().filter((entry) => entry.type === "message").length,
@@ -286,7 +287,7 @@ async function runSample(shape: typeof fixture, profilePath?: string) {
           lastOutcome,
         );
         assert.equal(updates.length, publicationCount, "ledger replay must not publish again");
-        const final = SessionManager.open(target);
+        const final = await SessionManager.openAsync(target);
         assert.equal(final.getLeafId(), leaf);
         assert.equal(loadSessionEntry(target)?.skillsSnapshot?.prompt, skillsPrompt);
         assert.deepEqual(

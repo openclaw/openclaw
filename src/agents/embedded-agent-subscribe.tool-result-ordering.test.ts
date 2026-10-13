@@ -83,7 +83,7 @@ describe("tool result ordering", () => {
       for (let stage = 0; stage < 2; stage += 1) {
         const toolCallId = `code-call-stage-${stage}`;
         const args = { code: 'await yield_control("pause"); return await finish_stage({});' };
-        h.sessionManager.appendMessage(
+        await h.sessionManager.appendMessageAsync(
           makeAgentAssistantMessage({
             content: [{ type: "toolCall", id: toolCallId, name: "exec", arguments: args }],
             stopReason: "toolUse",
@@ -101,7 +101,7 @@ describe("tool result ordering", () => {
             );
           },
         });
-        h.sessionManager.appendMessage({
+        await h.sessionManager.appendMessageAsync({
           role: "toolResult",
           toolCallId,
           toolName: "exec",

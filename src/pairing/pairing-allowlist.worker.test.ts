@@ -11,7 +11,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { writeChannelPairingStateSnapshot } from "./pairing-store-sqlite.test-helpers.js";
-import { readChannelAllowFromStore, readChannelAllowFromStoreSync } from "./pairing-store.js";
+import { readChannelAllowFromStore } from "./pairing-store.js";
 
 const directories = useAutoCleanupTempDirTracker((cleanup) =>
   afterAll(async () => {
@@ -71,32 +71,26 @@ it("returns no permission without creating a missing store and still validates k
   );
 });
 
-it.each(["__proto__", "constructor"])(
-  "preserves the native refusal for inherited account key %s",
-  async (accountId) => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", root);
-    expect(() => readChannelAllowFromStoreSync("demo", env, accountId)).toThrow(TypeError);
-    await expect(readChannelAllowFromStore("demo", env, accountId)).rejects.toBeInstanceOf(
-      TypeError,
-    );
-    const ingress = await resolveStableChannelIngressPolicy({
-      channelId: "demo",
-      accountId,
-      subject: { stableId: "first" },
-      conversation: { kind: "direct", id: "first" },
-      dmPolicy: "pairing",
-      useDefaultPairingStore: true,
-    });
-    expect(ingress.senderAccess.allowed).toBe(false);
-    expect(ingress.senderAccess.effectiveAllowFrom).toEqual([]);
-    expect(ingress.ingress.admission).not.toBe("dispatch");
-    const missing = path.join(root, `missing-${accountId}`);
-    await expect(
-      readChannelAllowFromStore("demo", { ...env, OPENCLAW_STATE_DIR: missing }, accountId),
-    ).rejects.toBeInstanceOf(TypeError);
-    expect(fs.existsSync(missing)).toBe(false);
-  },
-);
+it.each(["__proto__", "constructor"])("refuses inherited account key %s", async (accountId) => {
+  vi.stubEnv("OPENCLAW_STATE_DIR", root);
+  await expect(readChannelAllowFromStore("demo", env, accountId)).rejects.toBeInstanceOf(TypeError);
+  const ingress = await resolveStableChannelIngressPolicy({
+    channelId: "demo",
+    accountId,
+    subject: { stableId: "first" },
+    conversation: { kind: "direct", id: "first" },
+    dmPolicy: "pairing",
+    useDefaultPairingStore: true,
+  });
+  expect(ingress.senderAccess.allowed).toBe(false);
+  expect(ingress.senderAccess.effectiveAllowFrom).toEqual([]);
+  expect(ingress.ingress.admission).not.toBe("dispatch");
+  const missing = path.join(root, `missing-${accountId}`);
+  await expect(
+    readChannelAllowFromStore("demo", { ...env, OPENCLAW_STATE_DIR: missing }, accountId),
+  ).rejects.toBeInstanceOf(TypeError);
+  expect(fs.existsSync(missing)).toBe(false);
+});
 
 it("captures the original store before yielding and preserves normalized persisted account ordering", async () => {
   writeChannelPairingStateSnapshot(
@@ -111,7 +105,6 @@ it("captures the original store before yielding and preserves normalized persist
   const result = readChannelAllowFromStore("legacy", capturedEnv, " ALPHA ");
   capturedEnv.OPENCLAW_STATE_DIR = path.join(root, "replacement");
   await expect(result).resolves.toEqual(["last", "first"]);
-  expect(readChannelAllowFromStoreSync("legacy", env, " ALPHA ")).toEqual(["last", "first"]);
   expect(fs.existsSync(capturedEnv.OPENCLAW_STATE_DIR)).toBe(false);
 });
 

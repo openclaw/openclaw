@@ -15,8 +15,18 @@ import {
   type MockInstance,
 } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  spoken,
+  answer,
+  consultAnswer,
+  consultCommentary,
+  consultToolResult,
+  args,
+  syntheticMarkers,
+  expectNoGeneratedInput,
+  expectVisibleSpeechOnly,
+} from "../../test/helpers/talk-consult-history.js";
 import { extractText } from "../../ui/src/lib/chat/message-extract.ts";
-import { buildChatMarkdown } from "../../ui/src/pages/chat/export.ts";
 import { createHostWorkspaceWriteTool } from "../agents/agent-tools.read.js";
 import { createExecTool } from "../agents/bash-tools.js";
 import * as embeddedAgent from "../agents/embedded-agent.js";
@@ -85,17 +95,6 @@ let sessionKey = "agent:main:main";
 let canonicalKey = sessionKey;
 let sessionId: string;
 const connectionId = "talk-consult-history-ui";
-const spoken = "SPOKEN_133855: Keep the literal labels Context: and Spoken style: in my note.";
-const answer = "ANSWER_133855: Both labels are preserved.";
-const consultAnswer = "INTERNAL_FINAL_133855: The note contains both requested labels.";
-const consultCommentary = "COMMENTARY_133855: Checking the saved note.";
-const consultToolResult = "TOOL_RESULT_133855: Context: and Spoken style: are present.";
-const args = {
-  question: "GENERATED_QUESTION_133855: Check the note requested by the speaker.",
-  context: "GENERATED_CONTEXT_133855: The call already has a finalized human transcript.",
-  responseStyle: "GENERATED_STYLE_133855: Speak one short sentence.",
-};
-const syntheticMarkers = Object.values(args);
 const broadcast = vi.fn<GatewayBroadcastToConnIdsFn>();
 let harness: Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
 let context: GatewayRequestContext;
@@ -294,43 +293,6 @@ function liveMessages() {
     return event === "session.message" && message ? [message] : [];
   });
 }
-function expectNoGeneratedInput(messages: unknown[], surface: string) {
-  const markdown = buildChatMarkdown(messages, "Voice test assistant");
-  const serialized = JSON.stringify(messages);
-  expect
-    .soft(
-      syntheticMarkers.filter((marker) => serialized.includes(marker)),
-      surface,
-    )
-    .toEqual([]);
-  expect
-    .soft(
-      syntheticMarkers.filter((marker) => markdown?.includes(marker)),
-      `${surface} Markdown`,
-    )
-    .toEqual([]);
-}
-function expectVisibleSpeechOnly(messages: unknown[], surface: string, hasAnswer: boolean) {
-  const users = messages.filter((message) => asOptionalRecord(message)?.role === "user");
-  expect.soft(users.map(extractText), surface).toEqual([spoken]);
-  const markdown = buildChatMarkdown(messages, "Voice test assistant");
-  expect.soft(markdown, `${surface} Markdown`).toContain(spoken);
-  expect
-    .soft(markdown?.match(/^## Message(?: \(|$)/gm), `${surface} input headings`)
-    .toHaveLength(1);
-  expectNoGeneratedInput(messages, surface);
-  expect
-    .soft(
-      messages.map(extractText).filter((text) => text === answer),
-      `${surface} spoken answer`,
-    )
-    .toHaveLength(hasAnswer ? 1 : 0);
-  expect
-    .soft(markdown?.split(answer).length, `${surface} spoken answer in Markdown`)
-    .toBe(hasAnswer ? 2 : 1);
-  expect.soft(JSON.stringify(messages), `${surface} internal final`).not.toContain(consultAnswer);
-  expect.soft(markdown, `${surface} internal final in Markdown`).not.toContain(consultAnswer);
-}
 async function historyMessages() {
   const result = await rpc("chat.history", { sessionKey: canonicalKey, agentId });
   expect(Array.isArray(result.messages)).toBe(true);
@@ -491,7 +453,7 @@ describe("Browser Talk consult input custody", () => {
         "held model implementation",
       );
       let modelReply = consultAnswer;
-      let modelMessages: Parameters<SessionManager["appendMessage"]>[0][] = [
+      let modelMessages: Parameters<SessionManager["appendMessageAsync"]>[0][] = [
         Object.assign(
           makeAgentAssistantMessage({
             content: [{ type: "text", text: consultCommentary }],
@@ -528,14 +490,14 @@ describe("Browser Talk consult input custody", () => {
         params.onExecutionPhase?.({ phase: "model_call_started" });
         const result = await completeModel(params);
         params.abortSignal?.throwIfAborted();
-        const manager = guardSessionManager(SessionManager.open(scope()), {
+        const manager = guardSessionManager(await SessionManager.openAsync(scope()), {
           agentId: params.agentId,
           sessionKey: params.sessionKey,
           runId: params.runId,
           prepareAssistantTranscriptMessage: params.prepareAssistantTranscriptMessage,
         });
         for (const message of modelMessages) {
-          manager.appendMessage(message);
+          await manager.appendMessageAsync(message);
         }
         return { ...result, payloads: [{ text: modelReply }] };
       });
@@ -634,8 +596,8 @@ describe("Browser Talk consult input custody", () => {
       clearSessionStoreCacheForTest();
       expectVisibleSpeechOnly(await historyMessages(), "reopened chat.history", true);
       for (const manager of [
-        SessionManager.open(scope()),
-        SessionManager.openModelContext(scope()),
+        await SessionManager.openAsync(scope()),
+        await SessionManager.openModelContextAsync(scope()),
       ]) {
         const messages = manager.buildSessionContext().messages;
         expectNoGeneratedInput(messages, "reopened model context");
@@ -704,13 +666,13 @@ describe("Direct Talk consult history after call closure", () => {
         expect(recorder.hasPersisted()).toBe(true);
         const result = await completeModel(params);
         params.abortSignal?.throwIfAborted();
-        const manager = guardSessionManager(SessionManager.open(scope()), {
+        const manager = guardSessionManager(await SessionManager.openAsync(scope()), {
           agentId: params.agentId,
           sessionKey: params.sessionKey,
           runId: params.runId,
           prepareAssistantTranscriptMessage: params.prepareAssistantTranscriptMessage,
         });
-        manager.appendMessage(
+        await manager.appendMessageAsync(
           makeAgentAssistantMessage({ content: [{ type: "text", text: directAnswer }] }),
         );
         finalCommitted.resolve();
@@ -795,8 +757,9 @@ describe("Direct Talk consult history after call closure", () => {
             .toEqual([directAnswer]);
           expectNoGeneratedInput(messages, `closed direct call ${view}`);
         }
-        const modelContext =
-          SessionManager.openModelContext(scope()).buildSessionContext().messages;
+        const modelContext = (
+          await SessionManager.openModelContextAsync(scope())
+        ).buildSessionContext().messages;
         expectNoGeneratedInput(modelContext, "closed direct call model context");
         expect(modelContext.map(extractText)).toContain(directAnswer);
       } finally {

@@ -19,7 +19,10 @@ import {
 import * as sqliteReaders from "../infra/session-sqlite-migration-readers.js";
 import * as sqlitePrivateDirectory from "../infra/sqlite-private-directory.js";
 import * as windowsPrivateDirectory from "../infra/windows-private-directory.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
 import { runOutsideOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
 import { retireSessionSqliteRecovery } from "./doctor-session-sqlite-retirement.js";
@@ -529,7 +532,7 @@ describe("runDoctorSessionSqlite", () => {
         sessionId: "session-1",
       }),
     ).toEqual(["session-1", "user-1", "reply-1"].map((id) => expect.objectContaining({ id })));
-    const manager = SessionManager.open(
+    const manager = await SessionManager.openAsync(
       {
         agentId: "main",
         sessionId: "session-1",
@@ -538,11 +541,12 @@ describe("runDoctorSessionSqlite", () => {
       },
       store.tempDir,
     );
-    manager.appendMessage({
+    await manager.appendMessageAsync({
       role: "user",
       content: "history written after the upgrade",
       timestamp: Date.now(),
     });
+    await closeOpenClawAgentDatabasesAsync(store.tempDir);
     closeOpenClawAgentDatabasesForTest();
     const sqlitePath = imported.targets[0]!.sqlitePath;
     const databaseBefore = fs.readFileSync(sqlitePath);

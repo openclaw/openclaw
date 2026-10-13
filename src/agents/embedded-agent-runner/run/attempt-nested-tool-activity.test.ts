@@ -85,7 +85,7 @@ describe("nested tool activity ownership", () => {
           storePath: resolveDefaultSessionStorePath("main"),
         };
         await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: Date.now() });
-        const manager = SessionManager.open(target);
+        const manager = await SessionManager.openAsync(target);
         const { session } = await createTestSession({ sessionManager: manager });
         const originalEntries = manager.getEntries();
         let aborted = false;
@@ -171,7 +171,7 @@ describe("nested tool activity ownership", () => {
           }
           await parent.release();
           expect(await prepared.readActivities()).toHaveLength(owner === "current" ? 1 : 0);
-          expect(SessionManager.open(target).getEntries()).toHaveLength(
+          expect((await SessionManager.openAsync(target)).getEntries()).toHaveLength(
             originalEntries.length + (owner === "current" || owner === "committed-abort" ? 1 : 0),
           );
         } finally {

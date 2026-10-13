@@ -248,7 +248,7 @@ export class ExtensionRunner {
     this.uiContext = noOpUIContext;
   }
 
-  /** Bind host actions with worker-backed persistence; legacy bindCore remains source-compatible. */
+  /** Bind host actions with worker-backed persistence. */
   bindCoreAsync(
     actions: ExtensionActionsV2,
     contextActions: ExtensionContextActions,
@@ -258,7 +258,6 @@ export class ExtensionRunner {
     bindExtensionPersistenceActions(this.sessionManager, this.runtime, actions);
   }
 
-  /** @deprecated Use bindCoreAsync with ExtensionActionsV2; removed in the next Plugin SDK major. */
   bindCore(
     actions: ExtensionActions,
     contextActions: ExtensionContextActions,
@@ -270,10 +269,7 @@ export class ExtensionRunner {
     // Copy actions into the shared runtime (all extension APIs reference this)
     this.runtime.sendMessage = actions.sendMessage;
     this.runtime.sendUserMessage = actions.sendUserMessage;
-    this.runtime.appendEntry = actions.appendEntry;
-    this.runtime.setSessionName = actions.setSessionName;
     this.runtime.getSessionName = actions.getSessionName;
-    this.runtime.setLabel = actions.setLabel;
     this.runtime.getActiveTools = actions.getActiveTools;
     this.runtime.getAllTools = actions.getAllTools;
     this.runtime.setActiveTools = actions.setActiveTools;

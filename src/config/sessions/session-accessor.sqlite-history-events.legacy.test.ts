@@ -183,12 +183,14 @@ describe("SQLite imported transcript history", () => {
           0,
         ),
       });
-      const messages = SessionManager.openBounded(
-        { ...scope, storePath: database.path },
-        {
-          maxBytes: 64 * 1024,
-          maxEvents: 20,
-        },
+      const messages = (
+        await SessionManager.openBoundedAsync(
+          { ...scope, storePath: database.path },
+          {
+            maxBytes: 64 * 1024,
+            maxEvents: 20,
+          },
+        )
       ).buildSessionContext().messages;
       expect(messages.map((message) => message.role)).toEqual([
         "user",

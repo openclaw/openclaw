@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it } from "vitest";
 import { openFileBackedSessionManagerForTest } from "../../../test/helpers/session-manager-file-fixture.js";
@@ -68,7 +69,7 @@ function row(type: string, id: string, parent: string | null, fields: Record<str
 describe("SessionManager persistence compatibility", () => {
   it("persists canonical delivery facts and keeps the live assistant bytes identical", async () => {
     const { dir, scope } = createScope("directive-session");
-    const manager = SessionManager.open(scope, dir);
+    const manager = await SessionManager.openAsync(scope, dir);
     const tagged = buildAssistantMessage(
       [
         "[[reply_to_current]]",
@@ -92,7 +93,7 @@ describe("SessionManager persistence compatibility", () => {
           "  Leading  spaces\r\n\r\n\r\n    indented code\r\n```ts\r\nconst value = 1;\r\n```\r\n",
       },
     ];
-    manager.appendMessage(tagged);
+    await manager.appendMessageAsync(tagged);
     expect(tagged.content).toEqual([{ type: "text", text: "Final answer" }]);
     expect(tagged).toMatchObject({
       openclawDelivery: {
@@ -107,19 +108,23 @@ describe("SessionManager persistence compatibility", () => {
     });
     const messages = [
       tagged,
-      ...cases.map(({ input, expected }) => {
-        const message = buildAssistantMessage(input);
-        manager.appendMessage(message);
-        expect(message.content).toEqual([{ type: "text", text: expected ?? input }]);
-        expect(message).not.toHaveProperty("openclawDelivery");
-        return message;
-      }),
+      ...(await Promise.all(
+        cases.map(async ({ input, expected }) => {
+          const message = buildAssistantMessage(input);
+          await manager.appendMessageAsync(message);
+          expect(message.content).toEqual([{ type: "text", text: expected ?? input }]);
+          expect(message).not.toHaveProperty("openclawDelivery");
+          return message;
+        }),
+      )),
     ];
     const persisted = (await loadTranscriptEvents(scope)).flatMap((event) =>
       isRecord(event) && event.type === "message" ? [event.message] : [],
     );
     expect(persisted).toEqual(messages);
-    expect(SessionManager.open(scope, dir).buildSessionContext().messages).toEqual(messages);
+    expect((await SessionManager.openAsync(scope, dir)).buildSessionContext().messages).toEqual(
+      messages,
+    );
   });
 
   it("removes an active tail followed by a later inactive raw row", async () => {
@@ -142,8 +147,8 @@ describe("SessionManager persistence compatibility", () => {
       path: path.join(dir, "openclaw-agent.sqlite"),
     });
 
-    const manager = SessionManager.open(scope, dir);
-    expect(manager.removeTrailingEntries((entry) => entry.id === "active")).toBe(1);
+    const manager = await SessionManager.openAsync(scope, dir);
+    expect(await manager.removeTrailingEntriesAsync((entry) => entry.id === "active")).toBe(1);
 
     const events = await loadTranscriptEvents(scope);
     expect(events).not.toContainEqual(expect.objectContaining({ id: "active" }));
@@ -156,10 +161,10 @@ describe("SessionManager persistence compatibility", () => {
     const { dir, scope, persist } = createScope("sqlite-remove-concurrent-noop-session");
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     await persist("base", { role: "user", content: "question" });
-    const manager = SessionManager.open(scope, dir);
+    const manager = await SessionManager.openAsync(scope, dir);
     await persist("concurrent", { role: "user", content: "concurrent" });
 
-    expect(manager.removeTrailingEntries((entry) => entry.id === "absent")).toBe(0);
+    expect(await manager.removeTrailingEntriesAsync((entry) => entry.id === "absent")).toBe(0);
     expect(manager.buildSessionContext().messages).toMatchObject([
       { role: "user", content: "question" },
     ]);
@@ -175,12 +180,12 @@ describe("SessionManager persistence compatibility", () => {
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     await persist("base", { role: "user", content: "question" });
     await persist("temporary", buildAssistantMessage("temporary"));
-    const manager = SessionManager.open(scope, dir);
+    const manager = await SessionManager.openAsync(scope, dir);
     await persist("concurrent", { role: "user", content: "concurrent" });
 
-    expect(() => manager.removeTrailingEntries((entry) => entry.id === "temporary")).toThrow(
-      "SQLite transcript changed while preparing suffix removal",
-    );
+    await expect(
+      manager.removeTrailingEntriesAsync((entry) => entry.id === "temporary"),
+    ).rejects.toThrow("SQLite transcript changed while preparing suffix removal");
     expect(manager.buildSessionContext().messages).toMatchObject([
       { role: "user", content: "question" },
       { role: "assistant", content: [{ type: "text", text: "temporary" }] },
@@ -196,8 +201,11 @@ describe("SessionManager persistence compatibility", () => {
     const { dir, scope, persist } = createScope("sqlite-append-fence-session");
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     await persist("base", { role: "user", content: "question" });
-    const manager = SessionManager.open(scope, dir);
-    const temporaryId = manager.appendMessage(buildAssistantMessage("temporary"));
+    const manager = await SessionManager.openAsync(scope, dir);
+    const temporaryId = expectDefined(
+      await manager.appendMessageAsync(buildAssistantMessage("temporary")),
+      "Expected appended message",
+    );
     const afterAppend = await loadTranscriptEvents(scope);
     const base = afterAppend[1];
     if (!base || typeof base !== "object") {
@@ -211,9 +219,9 @@ describe("SessionManager persistence compatibility", () => {
       ]),
     ).toBe(true);
 
-    expect(() => manager.removeTrailingEntries((entry) => entry.id === temporaryId)).toThrow(
-      "SQLite transcript changed while preparing suffix removal",
-    );
+    await expect(
+      manager.removeTrailingEntriesAsync((entry) => entry.id === temporaryId),
+    ).rejects.toThrow("SQLite transcript changed while preparing suffix removal");
     expect(await loadTranscriptEvents(scope)).toMatchObject([
       { type: "session" },
       { id: "base", message: { role: "user", content: "rewritten question" } },
@@ -232,14 +240,27 @@ describe("SessionManager persistence compatibility", () => {
         lifecycleRevision: "original-lifecycle",
       };
       await upsertSessionEntryCore(scope, initialEntry);
-      const seed = SessionManager.open(scope, dir);
-      const earlierId = seed.appendMessage(makeUserMessage("earlier history", 1));
-      const questionId = seed.appendMessage({ role: "user", content: "question", timestamp: 2 });
-      const temporaryId = seed.appendMessage(buildAssistantMessage("temporary error"));
-      const metadataId = seed.appendCustomEntry("preserved-state", { retained: true });
-      const labelId = seed.appendLabelChange(temporaryId, "temporary label");
+      const seed = await SessionManager.openAsync(scope, dir);
+      const earlierId = expectDefined(
+        await seed.appendMessageAsync(makeUserMessage("earlier history", 1)),
+        "Expected appended message",
+      );
+      const questionId = expectDefined(
+        await seed.appendMessageAsync({
+          role: "user",
+          content: "question",
+          timestamp: 2,
+        }),
+        "Expected appended message",
+      );
+      const temporaryId = expectDefined(
+        await seed.appendMessageAsync(buildAssistantMessage("temporary error")),
+        "Expected appended message",
+      );
+      const metadataId = await seed.appendCustomEntryAsync("preserved-state", { retained: true });
+      const labelId = await seed.appendLabelChangeAsync(temporaryId, "temporary label");
       const originalEvents = loadTranscriptEventsSync(scope);
-      const manager = SessionManager.open(
+      const manager = await SessionManager.openAsync(
         scope,
         dir,
         failure === "bounded-sqlite" ? { maxEvents: 3, maxBytes: 4096 } : undefined,
@@ -276,8 +297,8 @@ describe("SessionManager persistence compatibility", () => {
               : { lifecycleRevision: "replacement-lifecycle" },
         );
       }
-      const remove = () =>
-        manager.removeTrailingEntries((entry) => entry.id === temporaryId, {
+      const remove = async () =>
+        await manager.removeTrailingEntriesAsync((entry) => entry.id === temporaryId, {
           preserveTrailing: (entry) => entry.type === "custom" || entry.type === "label",
         });
       const rewrite = () =>
@@ -294,7 +315,7 @@ describe("SessionManager persistence compatibility", () => {
               : {}),
             withTranscriptWrite: async (run) => await run(),
           },
-          async () => remove(),
+          async () => await remove(),
         );
 
       await expect(rewrite()).rejects.toThrow();
@@ -312,8 +333,8 @@ describe("SessionManager persistence compatibility", () => {
       // The next reader must work immediately, without waiting for a projection rebuild.
       const reopened =
         failure === "bounded-sqlite"
-          ? SessionManager.open(scope, dir, { maxEvents: 3, maxBytes: 4096 })
-          : SessionManager.open(scope, dir);
+          ? await SessionManager.openAsync(scope, dir, { maxEvents: 3, maxBytes: 4096 })
+          : await SessionManager.openAsync(scope, dir);
       if (failure === "bounded-sqlite") {
         const expectedRetained = structuredClone(
           originalEvents.filter(
@@ -332,7 +353,7 @@ describe("SessionManager persistence compatibility", () => {
         expect(control).toMatchObject({ parentId: metadataId, targetId: questionId });
         expect(control?.appendParentId ?? control?.targetId).toBe(questionId);
         expect(durable.filter((event) => !parseOpaqueLeafEntry(event))).toEqual(expectedRetained);
-        const full = SessionManager.open(scope, dir);
+        const full = await SessionManager.openAsync(scope, dir);
         expect(full.getBranch().map((entry) => entry.id)).toEqual([earlierId, questionId]);
         expect(reopened.getBranch()).toEqual(full.getBranch());
         expect(reopened.buildSessionContext()).toEqual(full.buildSessionContext());
@@ -361,11 +382,11 @@ it("keeps file fixture appends and rewrites readable after an unterminated recor
   const file = path.join(dir, "unterminated.jsonl");
   await fs.writeFile(file, JSON.stringify(header("unterminated", dir)));
   const manager = openFileBackedSessionManagerForTest(file, dir);
-  manager.appendMessage(makeUserMessage("appended", 1));
+  await manager.appendMessageAsync(makeUserMessage("appended", 1));
   expect(openFileBackedSessionManagerForTest(file, dir).buildSessionContext().messages).toEqual([
     expect.objectContaining({ content: "appended", role: "user" }),
   ]);
-  expect(manager.removeTrailingEntries((entry) => entry.type === "message")).toBe(1);
+  expect(await manager.removeTrailingEntriesAsync((entry) => entry.type === "message")).toBe(1);
   expect(openFileBackedSessionManagerForTest(file, dir).buildSessionContext().messages).toEqual([]);
 });
 
@@ -391,14 +412,19 @@ function expectSingleUser(events: unknown[], key: string) {
 }
 
 describe("SessionManager user idempotency", () => {
-  it("allows an explicitly caller-checked keyed user append", () => {
+  it("allows an explicitly caller-checked keyed user append", async () => {
     const manager = SessionManager.inMemory();
     const message = {
       ...makeUserMessage("caller-owned user", 1),
       idempotencyKey: "caller-checked:user",
     };
-    const first = manager.appendMessage(message);
-    expect(manager.appendMessage(message, { idempotencyLookup: "caller-checked" })).not.toBe(first);
+    const first = expectDefined(
+      await manager.appendMessageAsync(message),
+      "Expected appended message",
+    );
+    expect(
+      await manager.appendMessageAsync(message, { idempotencyLookup: "caller-checked" }),
+    ).not.toBe(first);
   });
 
   it("rejects a keyed user collision behind an excluded assistant", async () => {
@@ -410,12 +436,12 @@ describe("SessionManager user idempotency", () => {
       { ...buildAssistantMessage("answer"), excludeFromContext: true },
       "pre-persisted-user",
     );
-    const manager = SessionManager.openBounded(scope, {
+    const manager = await SessionManager.openBoundedAsync(scope, {
       cwd: dir,
       maxBytes: 100_000,
       maxEvents: 100,
     });
-    expect(() => manager.appendMessage(excluded)).toThrow(
+    await expect(manager.appendMessageAsync(excluded)).rejects.toThrow(
       "Session transcript keyed user is outside the current turn",
     );
     expect(manager.getAppendParentId()).toBe("persisted-assistant");
@@ -426,18 +452,21 @@ describe("SessionManager user idempotency", () => {
   it("adopts a keyed user persisted after the manager loaded", async () => {
     const { dir, scope, user, persist } = await userSession();
     await persist("existing-assistant", buildAssistantMessage("previous answer"));
-    const manager = SessionManager.open(scope, dir);
+    const manager = await SessionManager.openAsync(scope, dir);
     await persist("ingress-persisted-user", user, "existing-assistant");
     const modelId = await manager.appendModelChange("openai", "gpt-5.5");
     const thinkingId = await manager.appendThinkingLevelChange("off");
-    const metadataId = manager.appendCustomEntry("model-snapshot", {
+    const metadataId = await manager.appendCustomEntryAsync("model-snapshot", {
       modelApi: "openai-responses",
       modelId: "gpt-5.5",
       provider: "openai",
     });
-    expect(manager.appendMessage(user)).toBe("ingress-persisted-user");
+    expect(await manager.appendMessageAsync(user)).toBe("ingress-persisted-user");
     expect(manager.getAppendParentId()).toBe(metadataId);
-    const assistantId = manager.appendMessage(buildAssistantMessage("answer"));
+    const assistantId = expectDefined(
+      await manager.appendMessageAsync(buildAssistantMessage("answer")),
+      "Expected appended message",
+    );
     const events = await loadTranscriptEvents(scope);
     expect(events).toMatchObject([
       { type: "session" },
@@ -455,25 +484,30 @@ describe("SessionManager user idempotency", () => {
     const { dir, scope, user, persist } = await userSession();
     const excluded = { ...user, excludeFromContext: true };
     await persist("pre-persisted-user", excluded);
-    const manager = SessionManager.openBounded(scope, {
+    const manager = await SessionManager.openBoundedAsync(scope, {
       cwd: dir,
       maxBytes: 100_000,
       maxEvents: 100,
     });
     await manager.appendModelChange("openai", "gpt-5.5");
     await manager.appendThinkingLevelChange("off");
-    const metadataId = manager.appendCustomEntry("model-snapshot", {
+    const metadataId = await manager.appendCustomEntryAsync("model-snapshot", {
       modelApi: "openai-responses",
       modelId: "gpt-5.5",
       provider: "openai",
     });
-    expect(manager.appendMessageWithTranscriptAnchor({ ...excluded, timestamp: 2 })).toMatchObject({
+    expect(
+      await manager.appendMessageWithTranscriptAnchorAsync({ ...excluded, timestamp: 2 }),
+    ).toMatchObject({
       entryId: "pre-persisted-user",
       message: excluded,
       anchor: { entryId: "pre-persisted-user", idempotencyKey: user.idempotencyKey },
     });
     expect(manager.getAppendParentId()).toBe(metadataId);
-    const id = manager.appendMessage(buildAssistantMessage("answer"));
+    const id = expectDefined(
+      await manager.appendMessageAsync(buildAssistantMessage("answer")),
+      "Expected appended message",
+    );
     const events = await loadTranscriptEvents(scope);
     expect(events).toContainEqual(expect.objectContaining({ id, parentId: metadataId }));
     expectSingleUser(events, user.idempotencyKey);
@@ -483,16 +517,23 @@ describe("SessionManager user idempotency", () => {
     const { dir, scope, user, persist } = await userSession();
     await persist("requester-final", buildAssistantMessage("Earlier requester turn is complete"));
     await persist("pre-persisted-user", user);
-    const manager = SessionManager.open(scope, dir);
-    manager.appendCustomMessageEntry(
+    const manager = await SessionManager.openAsync(scope, dir);
+    await manager.appendCustomMessageEntryAsync(
       OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
       "Child completed; summarize its result.",
       false,
     );
-    const compactionId = manager.appendCompaction("Compacted history", "pre-persisted-user", 100);
-    expect(manager.appendMessage(user)).toBe("pre-persisted-user");
+    const compactionId = await manager.appendCompactionAsync(
+      "Compacted history",
+      "pre-persisted-user",
+      100,
+    );
+    expect(await manager.appendMessageAsync(user)).toBe("pre-persisted-user");
     expect(manager.getAppendParentId()).toBe(compactionId);
-    const id = manager.appendMessage(buildAssistantMessage("answer"));
+    const id = expectDefined(
+      await manager.appendMessageAsync(buildAssistantMessage("answer")),
+      "Expected appended message",
+    );
     const events = await loadTranscriptEvents(scope);
     expect(events).toContainEqual(expect.objectContaining({ id, parentId: compactionId }));
     expectSingleUser(events, user.idempotencyKey);

@@ -104,19 +104,9 @@ it("retains synchronous placement and publication contracts from the released Ga
   type ReleasedReclaimSourceCheck = (predecessor?: Parameters<ReclaimSourceCheck>[0]) => void;
   expectTypeOf<ReleasedReclaimSourceCheck>().toExtend<ReclaimSourceCheck>();
   expectTypeOf<ReturnType<ReclaimSourceCheck>>().toEqualTypeOf<void>();
-  type PendingReader = NonNullable<Placements["listPendingWorkspaceResults"]>;
-  type ReconciliationReader = NonNullable<Placements["getWorkspaceResultReconcilingSessionIds"]>;
-
-  expectTypeOf<Parameters<PendingReader>>().toEqualTypeOf<[sessionId?: string]>();
-  expectTypeOf<ReturnType<PendingReader>>().toExtend<
-    Array<{ sessionId: string; claimId: string }>
+  expectTypeOf<ReturnType<NonNullable<Placements["listPendingWorkspaceResultsAsync"]>>>().toExtend<
+    Promise<Array<{ sessionId: string; claimId: string }>>
   >();
-  expectTypeOf<Parameters<ReconciliationReader>>().toEqualTypeOf<[sessionIds: readonly string[]]>();
-  expectTypeOf<ReturnType<ReconciliationReader>>().toEqualTypeOf<ReadonlySet<string>>();
-  expectTypeOf<ReturnType<Publications["deferOrphanedRequests"]>>().toEqualTypeOf<void>();
-  expectTypeOf<
-    ReturnType<NonNullable<Placements["listPendingWorkspaceResultsAsync"]>>
-  >().toEqualTypeOf<Promise<ReturnType<PendingReader>>>();
   expectTypeOf<
     ReturnType<NonNullable<Placements["getWorkspaceResultReconcilingSessionIdsAsync"]>>
   >().toEqualTypeOf<Promise<ReadonlySet<string>>>();

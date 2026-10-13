@@ -45,12 +45,12 @@ describe("sessions_yield transcript handoff", () => {
         };
         await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
         const seed = SessionManager.fromEntries(
-          SessionManager.open(target, state.workspaceDir).getPersistedEntries(),
+          (await SessionManager.openAsync(target, state.workspaceDir)).getPersistedEntries(),
           state.workspaceDir,
         );
         // Seed a large clean projection in one commit; yield still owns the later rewrite.
         for (let index = 0; index < 4_001; index += 1) {
-          seed.appendCustomEntry("fixture-history", { index });
+          await seed.appendCustomEntryAsync("fixture-history", { index });
         }
         const scope = resolveSqliteTranscriptScope(target);
         const history = seed.getPersistedEntries();
@@ -65,12 +65,12 @@ describe("sessions_yield transcript handoff", () => {
           ),
         ).toBe(false);
         const manager = bounded
-          ? SessionManager.openBounded(target, {
+          ? await SessionManager.openBoundedAsync(target, {
               cwd: state.workspaceDir,
               maxBytes: 4096,
               maxEvents: 20,
             })
-          : SessionManager.open(target, state.workspaceDir);
+          : await SessionManager.openAsync(target, state.workspaceDir);
         expect(manager.getLeafId()).toBe(seed.getLeafId());
         expect(manager.getAppendParentId()).toBe(seed.getAppendParentId());
         const { session } = await createTestSession({ sessionManager: manager });
@@ -84,13 +84,13 @@ describe("sessions_yield transcript handoff", () => {
           timestamp: 2,
         };
         const aborted = createAssistant(testModel, [], "aborted");
-        manager.appendMessage(user);
-        manager.appendMessage(toolResult);
-        manager.appendMessage(aborted);
+        await manager.appendMessageAsync(user);
+        await manager.appendMessageAsync(toolResult);
+        await manager.appendMessageAsync(aborted);
         const metadata = { text: "x".repeat(retainedBytes) };
         const metadataId =
           retainedBytes > 0
-            ? manager.appendCustomEntry("retained-plugin-state", metadata)
+            ? await manager.appendCustomEntryAsync("retained-plugin-state", metadata)
             : undefined;
         // A live yield still has the synthetic abort that normal history loading omits.
         session.agent.state.messages = [user, toolResult, aborted];
@@ -108,7 +108,7 @@ describe("sessions_yield transcript handoff", () => {
             yieldMessage,
           });
           // Reopen exactly as the next queued attempt does, with no unrelated await.
-          const reopened = SessionManager.open(target, state.workspaceDir, {
+          const reopened = await SessionManager.openAsync(target, state.workspaceDir, {
             maxBytes: retainedBytes > 0 ? 8 * 1024 * 1024 : 4096,
             maxEvents: 20,
           });

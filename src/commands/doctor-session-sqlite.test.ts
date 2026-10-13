@@ -178,9 +178,9 @@ describe("runDoctorSessionSqlite", () => {
       firstKeptEntryId: message.id,
       parentId: message.id,
     });
-    const manager = SessionManager.open(sessionScope(store), store.tempDir);
+    const manager = await SessionManager.openAsync(sessionScope(store), store.tempDir);
     expect(
-      manager.appendMessage({
+      await manager.appendMessageAsync({
         content: "post-import message",
         role: "user",
         timestamp: Date.now(),

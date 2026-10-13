@@ -161,8 +161,8 @@ export function createFeishuTestRoute(
 }
 
 type ConfiguredBindingRoute = ReturnType<typeof resolveConfiguredBindingRoute>;
-type BoundConversation = ReturnType<
-  ReturnType<typeof getSessionBindingService>["resolveByConversation"]
+type BoundConversation = Awaited<
+  ReturnType<ReturnType<typeof getSessionBindingService>["resolveByConversationAsync"]>
 >;
 type BindingReadiness = Awaited<ReturnType<typeof ensureConfiguredBindingRouteReady>>;
 

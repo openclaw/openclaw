@@ -57,6 +57,40 @@ function fixture(parented = true) {
 describe("AcpSessionManager cancelSession", () => {
   installAcpSessionManagerTestLifecycle();
 
+  it.each([false, true])(
+    "only ignores an absent non-ACP session when requested (ignoreMissing=%s)",
+    async (ignoreMissing) => {
+      const f = fixture(false);
+      hoisted.readAcpSessionEntryMock.mockReturnValue(null);
+      const cancellation = f.manager.cancelSession({
+        ...target,
+        sessionKey: "agent:codex:main",
+        ignoreMissing,
+      });
+      if (ignoreMissing) {
+        await expect(cancellation).resolves.toBeUndefined();
+      } else {
+        await expect(cancellation).rejects.toMatchObject({
+          code: "ACP_SESSION_INIT_FAILED",
+          message: expect.stringContaining("Session is not ACP-enabled"),
+        });
+      }
+      expect(f.cancel).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not suppress stale ACP metadata when ignoring absent sessions", async () => {
+    const f = fixture(false);
+    hoisted.readAcpSessionEntryMock.mockReturnValue(null);
+    await expect(f.manager.cancelSession({ ...target, ignoreMissing: true })).rejects.toMatchObject(
+      {
+        code: "ACP_SESSION_INIT_FAILED",
+        message: expect.stringContaining("ACP metadata is missing"),
+      },
+    );
+    expect(f.cancel).not.toHaveBeenCalled();
+  });
+
   it("records idle cancellation failure and preserves its cause", async () => {
     const f = fixture(false);
     const error = new Error("Cancel transport failed");

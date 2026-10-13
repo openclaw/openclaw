@@ -63,9 +63,9 @@ it("keeps widened model previews bound to their prepared storage environment", a
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     const history = SessionManager.inMemory("/synthetic/preview-capture");
     history.newSession({ id: scope.sessionId });
-    history.appendMessage({ role: "user", content: "Retained question", timestamp: 1 });
+    await history.appendMessageAsync({ role: "user", content: "Retained question", timestamp: 1 });
     for (let index = 0; index < 65; index++) {
-      history.appendMessage({
+      await history.appendMessageAsync({
         role: "toolResult",
         toolCallId: `synthetic-call-${index}`,
         toolName: "synthetic_tool",
@@ -131,8 +131,8 @@ it("restores cold Talk history through its existing owner before bounded hydrati
     );
     const history = SessionManager.inMemory("/synthetic/cold-history");
     history.newSession({ id: fixture.scope.sessionId });
-    history.appendMessage({ role: "user", content: "Archived question", timestamp: 1 });
-    history.appendMessage({ role: "user", content: "Archived followup", timestamp: 2 });
+    await history.appendMessageAsync({ role: "user", content: "Archived question", timestamp: 1 });
+    await history.appendMessageAsync({ role: "user", content: "Archived followup", timestamp: 2 });
     await replaceTranscriptEvents(fixture.scope, history.getPersistedEntries());
     await waitForSessionTranscriptProjection(fixture.scope);
     fixture
@@ -174,7 +174,9 @@ it("rejects Talk history when its live authority is revoked during real hydratio
       storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
     };
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    SessionManager.open(scope).appendMessage({
+    await (
+      await SessionManager.openAsync(scope)
+    ).appendMessageAsync({
       role: "user",
       content: "retained history",
       timestamp: 1,

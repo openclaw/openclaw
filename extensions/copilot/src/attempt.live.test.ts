@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CopilotClient } from "@github/copilot-sdk";
 import type { SessionConfig } from "@github/copilot-sdk";
-import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
+import { createOpenClawCodingToolsAsync } from "openclaw/plugin-sdk/agent-harness";
 import type {
   AgentMessage,
   AgentHarnessAttemptParamsV2 as AgentHarnessAttemptParams,
@@ -67,7 +67,7 @@ vi.mock("openclaw/plugin-sdk/agent-harness", async (importOriginal) => {
 
   return {
     ...actual,
-    createOpenClawCodingTools: vi.fn(() => [
+    createOpenClawCodingToolsAsync: vi.fn(() => [
       {
         name: liveToolState.toolName,
         label: liveToolState.toolName,
@@ -351,7 +351,7 @@ async function createAttemptParams(params: {
     authProfileId: params.facts.authProfileId,
     copilotHome: params.copilotHome,
     cwd: process.cwd(),
-    hostCapabilities: createCopilotTestHostCapabilities(createOpenClawCodingTools),
+    hostCapabilities: createCopilotTestHostCapabilities(createOpenClawCodingToolsAsync),
     messages: [userMessage],
     model: params.facts.model,
     modelId: params.facts.model.id,

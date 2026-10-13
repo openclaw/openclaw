@@ -29,7 +29,6 @@ import { writePluginWithSkill } from "../test-support/skill-plugin-fixtures.test
 import type { OpenClawSkillMetadata, SkillEligibilityContext } from "../types.js";
 import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
 import {
-  loadVisibleSkills,
   loadWorkspaceSkills,
   prepareWorkspaceSkills,
   resolveWorkspaceSkillPromptEntries,
@@ -512,7 +511,8 @@ describe("loadWorkspaceSkills", () => {
       { name: "execution-only", description: "Unrelated execution skill" },
     ]);
 
-    const visible = loadVisibleSkills(workspaceDir, {
+    const visible = await prepareWorkspaceSkills(workspaceDir, {
+      eligibility: {},
       config: {},
       bundledSkillsDir,
       managedSkillsDir: path.join(workspaceDir, ".managed"),

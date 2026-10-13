@@ -137,7 +137,9 @@ describe("account-scoped conversation binding expiry", () => {
       closeOpenClawStateDatabaseForTest();
       createManager({ cfg });
 
-      expect(getSessionBindingService().resolveByConversation(conversation)).toMatchObject({
+      expect(
+        await getSessionBindingService().resolveByConversationAsync(conversation),
+      ).toMatchObject({
         bindingId: "ttl-owner:chat:opaque-metadata",
         targetKind: "session",
         metadata,
@@ -145,7 +147,7 @@ describe("account-scoped conversation binding expiry", () => {
     },
   );
 
-  it("keeps the previously committed account binding visible when its replacement write fails", () => {
+  it("keeps the previously committed account binding visible when its replacement write fails", async () => {
     const manager = createManager();
     const original = bindConversation(manager, {
       conversationId: "chat:write-failure",
@@ -168,11 +170,13 @@ describe("account-scoped conversation binding expiry", () => {
 
     expect(manager.getByConversationId(original.conversationId)).toEqual(original);
     expect(
-      getSessionBindingService().resolveByConversation({
-        channel: "imessage",
-        accountId: manager.accountId,
-        conversationId: original.conversationId,
-      })?.targetSessionKey,
+      (
+        await getSessionBindingService().resolveByConversationAsync({
+          channel: "imessage",
+          accountId: manager.accountId,
+          conversationId: original.conversationId,
+        })
+      )?.targetSessionKey,
     ).toBe(original.targetSessionKey);
   });
 
@@ -213,14 +217,14 @@ describe("account-scoped conversation binding expiry", () => {
       closeOpenClawStateDatabaseForTest();
       createManager();
 
-      expect(service.resolveByConversation(conversation)).toMatchObject({
+      expect(await service.resolveByConversationAsync(conversation)).toMatchObject({
         targetSessionKey,
         metadata: {
           agentId: replace ? "main" : "previous-agent",
           label: "updated",
         },
       });
-      const resolvedMetadata = service.resolveByConversation(conversation)?.metadata;
+      const resolvedMetadata = (await service.resolveByConversationAsync(conversation))?.metadata;
       for (const key of [
         "pluginBindingOwner",
         "pluginId",
@@ -233,26 +237,30 @@ describe("account-scoped conversation binding expiry", () => {
     },
   );
 
-  it("enforces maximum age even when activity refreshes the idle deadline", () => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(startedAt);
+  it("enforces maximum age even when activity refreshes the idle deadline", async () => {
+    // The async resolver's worker uses the real clock.
+    const bindingStartedAt = Date.now();
+    const now = vi.spyOn(Date, "now").mockReturnValue(bindingStartedAt);
     const manager = createManager({
       cfg: { session: { threadBindings: { idleHours: 2, maxAgeHours: 1 } } },
     });
     const binding = bindConversation(manager);
 
-    now.mockReturnValue(startedAt + 30 * 60_000);
+    now.mockReturnValue(bindingStartedAt + 30 * 60_000);
     expect(manager.touchConversation(binding.conversationId)?.lastActivityAt).toBe(
-      startedAt + 30 * 60_000,
+      bindingStartedAt + 30 * 60_000,
     );
     expect(
-      getSessionBindingService().resolveByConversation({
-        channel: "imessage",
-        accountId: manager.accountId,
-        conversationId: binding.conversationId,
-      })?.expiresAt,
-    ).toBe(startedAt + 60 * 60_000);
+      (
+        await getSessionBindingService().resolveByConversationAsync({
+          channel: "imessage",
+          accountId: manager.accountId,
+          conversationId: binding.conversationId,
+        })
+      )?.expiresAt,
+    ).toBe(bindingStartedAt + 60 * 60_000);
 
-    now.mockReturnValue(startedAt + 60 * 60_000);
+    now.mockReturnValue(bindingStartedAt + 60 * 60_000);
 
     expect(manager.getByConversationId(binding.conversationId)).toBeUndefined();
     expect(manager.listBySessionKey(binding.targetSessionKey)).toEqual([]);

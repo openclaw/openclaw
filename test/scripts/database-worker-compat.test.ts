@@ -1,41 +1,31 @@
 import { expect, it } from "vitest";
 import { inspectDatabaseWorkerBoundaries } from "../../scripts/lib/database-worker-compat.mts";
 
-const legacyFile = "src/plugin-sdk/sqlite-runtime-legacy.ts";
-const secondFile = "src/sessions/session-upstream-links.ts";
-const first = "sdkExecuteSqliteQueryTakeFirstSync";
-const second = "deleteSessionUpstreamLink";
+const compatFile = "extensions/matrix/auth-presence.ts";
+const apiName = "hasAnyMatrixAuth";
 const legacy = `
 /** @deprecated Use the worker API; removal follows a stable deprecation window. */
-export function ${first}() { return 1; }
-`;
-const owner = `
-import { ${first} } from '../plugin-sdk/sqlite-runtime-legacy.js';
-/** @deprecated Use the worker API; removal follows a stable deprecation window. */
-export function ${second}() { return ${first}(); }
+export function ${apiName}() { return 1; }
 `;
 
 function inspect(extra: Record<string, string>, source = legacy) {
   return inspectDatabaseWorkerBoundaries(
     process.cwd(),
-    new Map(Object.entries({ [legacyFile]: source, [secondFile]: owner, ...extra })),
+    new Map(Object.entries({ [compatFile]: source, ...extra })),
   );
 }
 
 it("retains deprecated-only operations through pure reexports and type-only references", () => {
   const result = inspect({
-    "src/plugin-sdk/barrel.ts": `export { ${first} as oldQuery } from './sqlite-runtime-legacy.js';`,
+    "src/plugin-sdk/barrel.ts": `export { ${apiName} as oldQuery } from '../../extensions/matrix/auth-presence.js';`,
     "src/types.ts": `
       import type { oldQuery } from './plugin-sdk/barrel.js';
-      import { ${second} } from './sessions/session-upstream-links.js';
       export type Query = typeof oldQuery;
-      export type OtherQuery = typeof ${second};
-      export function unrelated(${first}: () => number) { return ${first}(); }
+      export function unrelated(${apiName}: () => number) { return ${apiName}(); }
     `,
   });
   expect(result.violations).toEqual([]);
-  expect(result.operations.get(legacyFile)).toEqual(new Set([first]));
-  expect(result.operations.get(secondFile)).toEqual(new Set([second]));
+  expect(result.operations.get(compatFile)).toEqual(new Set([apiName]));
 });
 
 it.each([
@@ -81,51 +71,49 @@ it.each([
   ],
 ])("rejects a bundled %s without allowing it to hide the live operation", (_name, consumer) => {
   const result = inspect({
-    "src/plugin-sdk/barrel.ts": `export { ${first} as oldQuery } from './sqlite-runtime-legacy.js';`,
+    "src/plugin-sdk/barrel.ts": `export { ${apiName} as oldQuery } from '../../extensions/matrix/auth-presence.js';`,
     "src/consumer.ts": consumer,
   });
   expect(result.violations).toEqual([
     expect.stringMatching(/src\/consumer.ts:\d+:\d+: bundled runtime reference/),
   ]);
-  expect(result.operations.has(legacyFile)).toBe(false);
-  expect(result.operations.get(secondFile)).toEqual(new Set([second]));
+  expect(result.operations.has(compatFile)).toBe(false);
 });
 
-it("checks same-file calls and propagates reachability through reviewed wrappers", () => {
+it("checks same-file calls and propagates reachability to discovered helpers", () => {
   const result = inspect(
     {
-      "extensions/plugin/runtime.ts": `import { ${second} } from '../../src/sessions/session-upstream-links.js'; ${second}();`,
+      "src/helper.ts": "export function helper() { return 1; }",
+      "extensions/plugin/runtime.ts": `import { ${apiName} } from '../matrix/auth-presence.js'; ${apiName}();`,
     },
-    `${legacy}\nimport { ${second} } from '../sessions/session-upstream-links.js';
-    function bundled() { return ${second}(); }`,
+    `import { helper } from '../../src/helper.js';
+    /** @deprecated Use workers. */
+    export function ${apiName}() { return helper(); }
+    function bundled() { return ${apiName}(); }`,
   );
   expect(result.operations.size).toBe(0);
   expect(result.violations).toEqual([
+    expect.stringContaining(`${compatFile}:`),
     expect.stringContaining("extensions/plugin/runtime.ts:"),
-    expect.stringContaining(`${legacyFile}:`),
-    expect.stringContaining(
-      `${legacyFile}:${first}: reviewed compatibility operation is reachable`,
-    ),
   ]);
 });
 
 it("requires the reviewed declaration's deprecation marker", () => {
   const result = inspect({}, legacy.replace("@deprecated", "Legacy:"));
-  expect(result.operations.has(legacyFile)).toBe(false);
-  expect(result.operations.get(secondFile)).toEqual(new Set([second]));
+  expect(result.operations.has(compatFile)).toBe(false);
   expect(result.violations).toEqual([
-    `${legacyFile}:${first}: reviewed compatibility operation must be @deprecated`,
+    `${compatFile}:${apiName}: reviewed compatibility operation must be @deprecated`,
   ]);
 });
 
 it("permits a deprecated API only from an exact reviewed one-shot entry", () => {
   const doctorFile = "src/flows/doctor-tool-schema-projection.ts";
-  const doctor = `import { ${first} } from '../plugin-sdk/sqlite-runtime-legacy.js';
-    export function collectAgentRuntimeToolSchemaFindings() { return ${first}(); }`;
+  const doctor = `import { ${apiName} } from '../../extensions/matrix/auth-presence.js';
+    export function collectAgentRuntimeToolSchemaFindings() { return ${apiName}(); }`;
   const inspectDoctor = (file: string, source: string) =>
     inspectDatabaseWorkerBoundaries(
       process.cwd(),
-      new Map(Object.entries({ [legacyFile]: legacy, [file]: source })),
+      new Map(Object.entries({ [compatFile]: legacy, [file]: source })),
       (candidate) => candidate === doctorFile,
       (candidate, operation) =>
         candidate === doctorFile && operation === "collectAgentRuntimeToolSchemaFindings"
@@ -136,7 +124,7 @@ it("permits a deprecated API only from an exact reviewed one-shot entry", () => 
   for (const [file, source] of [
     [doctorFile, doctor.replace("collectAgentRuntimeToolSchemaFindings", "unreviewed")],
     ["src/flows/unreviewed.ts", doctor],
-    [doctorFile, doctor.replace(`return ${first}()`, `return () => ${first}()`)],
+    [doctorFile, doctor.replace(`return ${apiName}()`, `return () => ${apiName}()`)],
   ] as const) {
     expect(inspectDoctor(file, source).violations).toEqual([
       expect.stringContaining("bundled runtime reference"),
@@ -147,17 +135,16 @@ it("permits a deprecated API only from an exact reviewed one-shot entry", () => 
 it("does not classify deprecated methods or their unverified factory objects", () => {
   const result = inspect({
     "src/gateway/github-publication-coordinator-methods.ts": `
-      import { ${first} } from '../plugin-sdk/sqlite-runtime-legacy.js';
+      import { ${apiName} } from '../../extensions/matrix/auth-presence.js';
       export function createGitHubPublicationCoordinatorMethods() {
         return {
           /** @deprecated Use the awaited replacement. */
-          markReported() { return ${first}(); },
+          markReported() { return ${apiName}(); },
         };
       }
     `,
   });
-  expect(result.operations.has(legacyFile)).toBe(false);
-  expect(result.operations.get(secondFile)).toEqual(new Set([second]));
+  expect(result.operations.has(compatFile)).toBe(false);
   expect(result.operations.has("src/gateway/github-publication-coordinator-methods.ts")).toBe(
     false,
   );
@@ -254,7 +241,7 @@ it("does not trust a same-named deprecated member on another factory", () => {
 
 it("allows async-only members selected from a dynamic namespace import", () => {
   const result = inspect({
-    "src/plugin-sdk/barrel.ts": `export { ${first} as oldQuery } from './sqlite-runtime-legacy.js';
+    "src/plugin-sdk/barrel.ts": `export { ${apiName} as oldQuery } from '../../extensions/matrix/auth-presence.js';
       export async function queryAsync() { return 1; }`,
     "src/consumer.ts": `const { queryAsync } = await import('./plugin-sdk/barrel.js'); await queryAsync();`,
   });
@@ -265,7 +252,7 @@ it.each([".queryAsync", "['queryAsync']"])(
   "allows a statically selected async member from an inline dynamic import: %s",
   (selector) => {
     const result = inspect({
-      "src/plugin-sdk/barrel.ts": `export { ${first} as oldQuery } from './sqlite-runtime-legacy.js';
+      "src/plugin-sdk/barrel.ts": `export { ${apiName} as oldQuery } from '../../extensions/matrix/auth-presence.js';
         export async function queryAsync() { return 1; }`,
       "src/consumer.ts": `await (await import('./plugin-sdk/barrel.js'))${selector}();`,
     });
@@ -277,7 +264,7 @@ it.each([".oldQuery", "['oldQuery']", "[key]"])(
   "rejects a legacy or computed member from an inline dynamic import: %s",
   (selector) => {
     const result = inspect({
-      "src/plugin-sdk/barrel.ts": `export { ${first} as oldQuery } from './sqlite-runtime-legacy.js';`,
+      "src/plugin-sdk/barrel.ts": `export { ${apiName} as oldQuery } from '../../extensions/matrix/auth-presence.js';`,
       "src/consumer.ts": `const key = 'oldQuery'; (await import('./plugin-sdk/barrel.js'))${selector}();`,
     });
     expect(result.violations).toEqual([expect.stringContaining("src/consumer.ts:")]);
@@ -286,11 +273,11 @@ it.each([".oldQuery", "['oldQuery']", "[key]"])(
 
 it("follows renamed namespace reexports and default exports", () => {
   const result = inspect({
-    "src/plugin-sdk/barrel.ts": `export * as old from './sqlite-runtime-legacy.js';
-      export { ${second} as default } from '../sessions/session-upstream-links.js';`,
+    "src/plugin-sdk/barrel.ts": `export * as old from '../../extensions/matrix/auth-presence.js';
+      export { ${apiName} as default } from '../../extensions/matrix/auth-presence.js';`,
     "src/consumer.ts": `
       import query, { old as api } from './plugin-sdk/barrel.js';
-      api.${first}();
+      api.${apiName}();
       query();
     `,
   });
@@ -302,7 +289,7 @@ it.each(["openclaw/plugin-sdk", "@openclaw/plugin-sdk"])(
   "resolves the root SDK alias %s",
   (specifier) => {
     const result = inspect({
-      "src/plugin-sdk/index.ts": `export { ${first} as oldQuery } from './sqlite-runtime-legacy.js';`,
+      "src/plugin-sdk/index.ts": `export { ${apiName} as oldQuery } from '../../extensions/matrix/auth-presence.js';`,
       "src/consumer.ts": `import { oldQuery } from '${specifier}'; oldQuery();`,
     });
     expect(result.violations).toEqual([expect.stringContaining("src/consumer.ts:")]);
@@ -310,10 +297,7 @@ it.each(["openclaw/plugin-sdk", "@openclaw/plugin-sdk"])(
 );
 
 it("retires deleted operations even when their module keeps other exports", () => {
-  const result = inspect(
-    { [secondFile]: "export {};" },
-    `export function ${first}Async() { return 1; }`,
-  );
+  const result = inspect({}, `export function ${apiName}Async() { return 1; }`);
   expect(result.operations.size).toBe(0);
   expect(result.violations).toEqual([]);
 });
@@ -331,19 +315,19 @@ it("does not read missing compatibility files from the current checkout", () => 
 const kernelFile = "src/session-kernel.ts";
 const kernel = `export function readKernel() { return 1; }`;
 const sharedOwner = `
-  import { readKernel } from '../session-kernel.js';
+  import { readKernel } from '../../src/session-kernel.js';
   /** @deprecated Use workers. */
-  export function ${second}() { return readKernel(); }
+  export function ${apiName}() { return readKernel(); }
 `;
 const receiverOwner = `
-  import { readKernel } from '../session-kernel.js';
+  import { readKernel } from '../../src/session-kernel.js';
   /** @deprecated Use workers. */
-  export function ${second}() { return { read() { return readKernel(); } }; }
+  export function ${apiName}() { return { read() { return readKernel(); } }; }
 `;
 
 it("proves a transitive mixed kernel with only worker and deprecated callers", () => {
   const result = inspect({
-    [secondFile]: sharedOwner,
+    [compatFile]: sharedOwner,
     [kernelFile]: `import { leaf } from './leaf.js';
       export function readKernel() { return leaf(); }`,
     "src/leaf.ts": `export function leaf() { return 1; }`,
@@ -360,7 +344,7 @@ it.each([
   ["namespace escape", "export const callback = kernelApi;"],
 ])("keeps a mixed kernel live after a bundled %s", (_label, consumer) => {
   const result = inspect({
-    [secondFile]: sharedOwner,
+    [compatFile]: sharedOwner,
     [kernelFile]: `import { leaf } from './leaf.js';
       export function readKernel() { return leaf(); }`,
     "src/leaf.ts": `export function leaf() { return 1; }`,
@@ -370,14 +354,14 @@ it.each([
   expect(result.violations).toEqual([]);
   expect(result.operations.has(kernelFile)).toBe(false);
   expect(result.operations.has("src/leaf.ts")).toBe(false);
-  expect(result.operations.get(secondFile)).toEqual(new Set([second]));
+  expect(result.operations.get(compatFile)).toEqual(new Set([apiName]));
 });
 
 it.each(["register(readKernel)", "register(() => readKernel())"])(
   "keeps an escaped worker callback live: %s",
   (registration) => {
     const result = inspect({
-      [secondFile]: sharedOwner,
+      [compatFile]: sharedOwner,
       [kernelFile]: kernel,
       "src/reader.worker.ts": `import { readKernel } from './session-kernel.js';
       ${registration};`,
@@ -394,25 +378,25 @@ it.each([
   ["returned function", "function () { return readKernel(); }"],
 ])("proves kernels reached only through a deprecated factory's %s", (_label, value) => {
   const result = inspect({
-    [secondFile]: `
-      import { readKernel } from '../session-kernel.js';
+    [compatFile]: `
+      import { readKernel } from '../../src/session-kernel.js';
       /** @deprecated Use workers. */
-      export function ${second}() { return ${value}; }`,
+      export function ${apiName}() { return ${value}; }`,
     [kernelFile]: kernel,
   });
   expect(result.violations).toEqual([]);
   expect(result.operations.get(kernelFile)).toEqual(new Set(["readKernel"]));
-  expect(result.operations.get(secondFile)?.has(second)).toBe(true);
+  expect(result.operations.get(compatFile)?.has(apiName)).toBe(true);
 });
 
 it.each([
   [
     "direct factory call",
-    `import { ${second} } from './sessions/session-upstream-links.js'; ${second}().read();`,
+    `import { ${apiName} } from '../extensions/matrix/auth-presence.js'; ${apiName}().read();`,
   ],
   [
     "aliased factory call",
-    `import { ${second} as create } from './sessions/session-upstream-links.js'; create().read();`,
+    `import { ${apiName} as create } from '../extensions/matrix/auth-presence.js'; create().read();`,
   ],
   [
     "reexported factory call",
@@ -432,39 +416,39 @@ it.each([
   ],
   [
     "returned object escape",
-    `import { ${second} } from './sessions/session-upstream-links.js'; register(${second}());`,
+    `import { ${apiName} } from '../extensions/matrix/auth-presence.js'; register(${apiName}());`,
   ],
 ])("keeps a receiver family live after a bundled %s", (_label, consumer) => {
   const result = inspect({
-    [secondFile]: receiverOwner,
+    [compatFile]: receiverOwner,
     [kernelFile]: kernel,
-    "src/plugin-sdk/receivers.ts": `export { ${second} as create } from '../sessions/session-upstream-links.js';`,
+    "src/plugin-sdk/receivers.ts": `export { ${apiName} as create } from '../../extensions/matrix/auth-presence.js';`,
     "src/consumer.ts": consumer,
   });
   expect(result.operations.has(kernelFile)).toBe(false);
-  expect(result.operations.has(secondFile)).toBe(false);
+  expect(result.operations.has(compatFile)).toBe(false);
   expect(result.violations).toEqual([expect.stringContaining("src/consumer.ts:")]);
 });
 
 it("keeps a returned callback live when bundled code registers it", () => {
   const result = inspect({
-    [secondFile]: `import { readKernel } from '../session-kernel.js';
+    [compatFile]: `import { readKernel } from '../../src/session-kernel.js';
       /** @deprecated Use workers. */
-      export function ${second}() { return () => readKernel(); }`,
+      export function ${apiName}() { return () => readKernel(); }`,
     [kernelFile]: kernel,
-    "src/consumer.ts": `import { ${second} } from './sessions/session-upstream-links.js';
-      register(${second}());`,
+    "src/consumer.ts": `import { ${apiName} } from '../extensions/matrix/auth-presence.js';
+      register(${apiName}());`,
   });
   expect(result.operations.has(kernelFile)).toBe(false);
-  expect(result.operations.has(secondFile)).toBe(false);
+  expect(result.operations.has(compatFile)).toBe(false);
   expect(result.violations).toEqual([expect.stringContaining("src/consumer.ts:")]);
 });
 
 it("keeps shared receiver methods live when an async factory also creates them", () => {
   const result = inspect({
-    [secondFile]: `import { createReceiver } from '../receiver.js';
+    [compatFile]: `import { createReceiver } from '../../src/receiver.js';
       /** @deprecated Use workers. */
-      export function ${second}() { return createReceiver(); }`,
+      export function ${apiName}() { return createReceiver(); }`,
     [kernelFile]: kernel,
     "src/receiver.ts": `import { readKernel } from './session-kernel.js';
       export function createReceiver() { return { read() { return readKernel(); } }; }
@@ -472,7 +456,7 @@ it("keeps shared receiver methods live when an async factory also creates them",
   });
   expect(result.operations.has(kernelFile)).toBe(false);
   expect(result.operations.has("src/receiver.ts")).toBe(false);
-  expect(result.operations.get(secondFile)).toEqual(new Set([second]));
+  expect(result.operations.get(compatFile)).toEqual(new Set([apiName]));
   expect(result.violations).toEqual([]);
 });
 
@@ -480,15 +464,15 @@ it.each(["() => readKernel()", "function () { return readKernel(); }"])(
   "keeps a function-valued receiver property live when it escapes: %s",
   (value) => {
     const result = inspect({
-      [secondFile]: `import { readKernel } from '../session-kernel.js';
+      [compatFile]: `import { readKernel } from '../../src/session-kernel.js';
         /** @deprecated Use workers. */
-        export function ${second}() {
+        export function ${apiName}() {
           return { read: ${value}, start() { register(this.read); } };
         }`,
       [kernelFile]: kernel,
     });
     expect(result.operations.has(kernelFile)).toBe(false);
-    expect(result.operations.has(secondFile)).toBe(false);
+    expect(result.operations.has(compatFile)).toBe(false);
     expect(result.violations).toEqual([]);
   },
 );
@@ -504,62 +488,63 @@ it("keeps unregistered nondeprecated receiver factories live", () => {
   expect(result.violations).toEqual([]);
 });
 
-it("retains a receiver escaped by a deprecated wrapper without inventing a factory caller", () => {
+it("keeps a receiver live when its reviewed wrapper escapes a method", () => {
   const result = inspect({
-    [secondFile]: receiverOwner,
-    [kernelFile]: kernel,
-    [legacyFile]: `import { ${second} } from '../sessions/session-upstream-links.js';
+    [compatFile]: `import { createReceiver } from '../../src/receiver.js';
       /** @deprecated Use workers. */
-      export function ${first}() {
-        const receiver = ${second}();
+      export function ${apiName}() {
+        const receiver = createReceiver();
         register(receiver.read);
       }`,
+    "src/receiver.ts": `import { readKernel } from './session-kernel.js';
+      export function createReceiver() { return { read() { return readKernel(); } }; }`,
+    [kernelFile]: kernel,
   });
   expect(result.operations.has(kernelFile)).toBe(false);
-  expect(result.operations.has(secondFile)).toBe(false);
+  expect(result.operations.has("src/receiver.ts")).toBe(false);
   expect(result.violations).toEqual([]);
 });
 
 it("proves kernels reached only through a deprecated class receiver", () => {
   const result = inspect({
-    [secondFile]: `import { readKernel } from '../session-kernel.js';
+    [compatFile]: `import { readKernel } from '../../src/session-kernel.js';
       /** @deprecated Use workers. */
-      export class ${second} {
+      export class ${apiName} {
         constructor() { readKernel(); }
         read() { return readKernel(); }
       }`,
     [kernelFile]: kernel,
   });
   expect(result.operations.get(kernelFile)).toEqual(new Set(["readKernel"]));
-  expect(result.operations.get(secondFile)?.has(second)).toBe(true);
+  expect(result.operations.get(compatFile)?.has(apiName)).toBe(true);
   expect(result.violations).toEqual([]);
 });
 
 it("rejects bundled construction of a deprecated class receiver", () => {
   const result = inspect({
-    [secondFile]: `import { readKernel } from '../session-kernel.js';
+    [compatFile]: `import { readKernel } from '../../src/session-kernel.js';
       /** @deprecated Use workers. */
-      export class ${second} { read() { return readKernel(); } }`,
+      export class ${apiName} { read() { return readKernel(); } }`,
     [kernelFile]: kernel,
-    "src/consumer.ts": `import { ${second} as Receiver } from './sessions/session-upstream-links.js';
+    "src/consumer.ts": `import { ${apiName} as Receiver } from '../extensions/matrix/auth-presence.js';
       new Receiver().read();`,
   });
   expect(result.operations.has(kernelFile)).toBe(false);
-  expect(result.operations.has(secondFile)).toBe(false);
+  expect(result.operations.has(compatFile)).toBe(false);
   expect(result.violations).toEqual([expect.stringContaining("src/consumer.ts:")]);
 });
 
 it("keeps a deprecated receiver live when a bundled class extends it", () => {
   const result = inspect({
-    [secondFile]: `import { readKernel } from '../session-kernel.js';
+    [compatFile]: `import { readKernel } from '../../src/session-kernel.js';
       /** @deprecated Use workers. */
-      export class ${second} { read() { return readKernel(); } }`,
+      export class ${apiName} { read() { return readKernel(); } }`,
     [kernelFile]: kernel,
-    "src/consumer.ts": `import { ${second} as Receiver } from './sessions/session-upstream-links.js';
+    "src/consumer.ts": `import { ${apiName} as Receiver } from '../extensions/matrix/auth-presence.js';
       export class ActiveReceiver extends Receiver {}`,
   });
   expect(result.operations.has(kernelFile)).toBe(false);
-  expect(result.operations.has(secondFile)).toBe(false);
+  expect(result.operations.has(compatFile)).toBe(false);
   expect(result.violations).toEqual([expect.stringContaining("src/consumer.ts:")]);
 });
 
@@ -576,43 +561,40 @@ it.each([
   ],
 ])("keeps deprecated classes with %s live", (_label, heritage, member) => {
   const result = inspect({
-    [secondFile]: `import { readKernel } from '../session-kernel.js';
+    [compatFile]: `import { readKernel } from '../../src/session-kernel.js';
       class Base {}
       /** @deprecated Use workers. */
-      export class ${second} ${heritage} { ${member} }`,
+      export class ${apiName} ${heritage} { ${member} }`,
     [kernelFile]: kernel,
   });
   expect(result.operations.has(kernelFile)).toBe(false);
-  expect(result.operations.has(secondFile)).toBe(false);
+  expect(result.operations.has(compatFile)).toBe(false);
   expect(result.violations).toEqual([]);
 });
 
-it("rejects a deprecated factory reached through a live receiver method", () => {
+it("rejects a reviewed API reached through a live receiver method", () => {
   const result = inspect({
-    [secondFile]: `import { createReceiver } from '../receiver.js';
-      /** @deprecated Use workers. */
-      export function ${second}() { return createReceiver(); }`,
     [kernelFile]: kernel,
     "src/receiver.ts": `import { readKernel } from './session-kernel.js';
-      import { ${first} } from './plugin-sdk/sqlite-runtime-legacy.js';
+      import { ${apiName} } from '../extensions/matrix/auth-presence.js';
       export function createReceiver() {
-        return { read() { ${first}(); return readKernel(); } };
+        return { read() { ${apiName}(); return readKernel(); } };
       }
       export async function createReceiverAsync() { return createReceiver(); }`,
   });
-  expect(result.operations.has(legacyFile)).toBe(false);
-  expect(result.violations).toEqual([expect.stringContaining(`${legacyFile}:${first}:`)]);
+  expect(result.operations.has(compatFile)).toBe(false);
+  expect(result.violations).toEqual([expect.stringContaining("src/receiver.ts:")]);
 });
 
 it("records SQL inside a closed receiver method as compatibility-only", () => {
   const result = inspect({
-    [secondFile]: `/** @deprecated Use workers. */
-export function ${second}() {
+    [compatFile]: `/** @deprecated Use workers. */
+export function ${apiName}() {
   return { read() { return executeSqliteQuerySync(query); } };
 }`,
   });
-  expect(result.operations.get(secondFile)?.has(`${second}.read`)).toBe(true);
-  expect(result.callLocations.get(secondFile)).toEqual(new Set(["3:28"]));
+  expect(result.operations.get(compatFile)?.has(`${apiName}.read`)).toBe(true);
+  expect(result.callLocations.get(compatFile)).toEqual(new Set(["3:28"]));
   expect(result.violations).toEqual([]);
 });
 
@@ -620,9 +602,9 @@ it.each(["register(() => readKernel())", "return register(() => readKernel())"])
   "does not inherit a compatibility scope through callback arguments: %s",
   (registration) => {
     const result = inspect({
-      [secondFile]: `import { readKernel } from '../session-kernel.js';
+      [compatFile]: `import { readKernel } from '../../src/session-kernel.js';
       /** @deprecated Use workers. */
-      export function ${second}() { ${registration}; }`,
+      export function ${apiName}() { ${registration}; }`,
       [kernelFile]: kernel,
     });
     expect(result.operations.has(kernelFile)).toBe(false);
@@ -631,13 +613,13 @@ it.each(["register(() => readKernel())", "return register(() => readKernel())"])
 
 it("rejects a reviewed API escaped by a discovered helper", () => {
   const result = inspect({
-    [secondFile]: `import { helper } from '../helper.js';
+    [compatFile]: `import { helper } from '../../src/helper.js';
       /** @deprecated Use workers. */
-      export function ${second}() { helper(); }`,
-    "src/helper.ts": `import { ${first} } from './plugin-sdk/sqlite-runtime-legacy.js';
-      export function helper() { register(${first}); }`,
+      export function ${apiName}() { helper(); }`,
+    "src/helper.ts": `import { ${apiName} } from '../extensions/matrix/auth-presence.js';
+      export function helper() { register(${apiName}); }`,
   });
-  expect(result.operations.has(legacyFile)).toBe(false);
+  expect(result.operations.has(compatFile)).toBe(false);
   expect(result.violations).toEqual([expect.stringContaining("src/helper.ts:")]);
 });
 
@@ -645,12 +627,12 @@ it("records direct call locations but excludes nested callback SQL", () => {
   const result = inspect(
     {},
     `/** @deprecated Use workers. */
-export function ${first}() {
+export function ${apiName}() {
   executeSqliteQuerySync(query);
   register(() => executeSqliteQuerySync(query));
 }`,
   );
-  expect(result.callLocations.get(legacyFile)).toEqual(new Set(["3:3", "4:3"]));
+  expect(result.callLocations.get(compatFile)).toEqual(new Set(["3:3", "4:3"]));
 });
 
 it("records profile reads inside the exact synchronous alias resolver", () => {
@@ -662,9 +644,9 @@ export function selectResolvedUserProfile() {
   return readResolvedUserProfile('id', (id) => executeSqliteQueryTakeFirstSync(db, query));
 }`,
     },
-    `import { selectResolvedUserProfile } from '../state/user-profiles-internal.js';
+    `import { selectResolvedUserProfile } from '../../src/state/user-profiles-internal.js';
 /** @deprecated Use workers. */
-export function ${first}() { return selectResolvedUserProfile(); }`,
+export function ${apiName}() { return selectResolvedUserProfile(); }`,
   );
   expect(result.violations).toEqual([]);
   expect(result.callLocations.get(profileFile)).toEqual(new Set(["1:53", "3:10", "3:48"]));
@@ -672,9 +654,9 @@ export function ${first}() { return selectResolvedUserProfile(); }`,
 
 it("does not confuse a nested function path with a live top-level namesake", () => {
   const result = inspect({
-    [secondFile]: `import { wrapper } from '../wrapper.js';
+    [compatFile]: `import { wrapper } from '../../src/wrapper.js';
       /** @deprecated Use workers. */
-      export function ${second}() { wrapper(); }`,
+      export function ${apiName}() { wrapper(); }`,
     "src/wrapper.ts": `export function wrapper() {
       const local = () => { function same() { return 1; } return 1; };
       return local;

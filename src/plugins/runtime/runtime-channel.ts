@@ -49,9 +49,7 @@ import {
   resolveStableChannelIngressPolicy,
 } from "../../channels/message-access/runtime.js";
 import {
-  setChannelConversationBindingIdleTimeoutBySessionKey,
   setChannelConversationBindingIdleTimeoutBySessionKeyAsync,
-  setChannelConversationBindingMaxAgeBySessionKey,
   setChannelConversationBindingMaxAgeBySessionKeyAsync,
 } from "../../channels/plugins/conversation-bindings.js";
 import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.js";
@@ -263,8 +261,6 @@ export function createRuntimeChannel(options?: {
     threadBindings: {
       setIdleTimeoutBySessionKeyAsync: setChannelConversationBindingIdleTimeoutBySessionKeyAsync,
       setMaxAgeBySessionKeyAsync: setChannelConversationBindingMaxAgeBySessionKeyAsync,
-      setIdleTimeoutBySessionKey: setChannelConversationBindingIdleTimeoutBySessionKey,
-      setMaxAgeBySessionKey: setChannelConversationBindingMaxAgeBySessionKey,
     },
     runtimeContexts: createChannelRuntimeContextRegistry(),
   } satisfies PluginRuntime["channel"];

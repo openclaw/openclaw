@@ -118,7 +118,7 @@ it.each(["current", "capability lookup", "accepted control"])(
         ).toMatchObject({ ok: true });
         effects.length = 0;
         const target = { cfg, agentId: "main", sessionKey: binding.statefulTarget.sessionKey };
-        const before = manager.resolveSession(target);
+        const before = await manager.resolveSessionAsync(target);
         pause = true;
         pending = invokeTopic();
         if (phase !== "current") {
@@ -132,7 +132,7 @@ it.each(["current", "capability lookup", "accepted control"])(
           finish.resolve();
         }
         await pending;
-        const after = manager.resolveSession(target);
+        const after = await manager.resolveSessionAsync(target);
         if (phase === "current") {
           expect(effects).toEqual(["configure:model", "configure:thinking"]);
           expect(handler).toHaveBeenCalledOnce();

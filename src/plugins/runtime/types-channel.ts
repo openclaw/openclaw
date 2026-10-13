@@ -117,7 +117,7 @@ export type PluginRuntimeChannel = {
   session: {
     /** @deprecated Prefer channel turn helpers that record inbound sessions as part of dispatch. */
     resolveStorePath: typeof import("../../config/sessions/paths.js").resolveSessionStorePathCore;
-    /** @deprecated Use readSessionUpdatedAtAsync. Retained until the next Plugin SDK major. */
+    /** @deprecated Use readSessionUpdatedAtAsync. Retained for a compatibility period after stable deprecation. */
     readSessionUpdatedAt: ReadSessionUpdatedAt;
     readSessionUpdatedAtAsync: (
       ...params: Parameters<ReadSessionUpdatedAt>
@@ -176,26 +176,18 @@ export type PluginRuntimeChannel = {
   /** @deprecated Compatibility for shipped plugins; use `channel.inbound`. */
   turn: PluginRuntimeChannel["inbound"];
   threadBindings: {
-    setIdleTimeoutBySessionKeyAsync: (
-      params: Parameters<PluginRuntimeChannel["threadBindings"]["setIdleTimeoutBySessionKey"]>[0],
-    ) => Promise<RuntimeThreadBindingLifecycleRecord[]>;
-    setMaxAgeBySessionKeyAsync: (
-      params: Parameters<PluginRuntimeChannel["threadBindings"]["setMaxAgeBySessionKey"]>[0],
-    ) => Promise<RuntimeThreadBindingLifecycleRecord[]>;
-    /** @deprecated Use setIdleTimeoutBySessionKeyAsync. Retained through the next Plugin SDK major. */
-    setIdleTimeoutBySessionKey: (params: {
+    setIdleTimeoutBySessionKeyAsync: (params: {
       channelId: string;
       targetSessionKey: string;
       accountId?: string;
       idleTimeoutMs: number;
-    }) => RuntimeThreadBindingLifecycleRecord[];
-    /** @deprecated Use setMaxAgeBySessionKeyAsync. Retained through the next Plugin SDK major. */
-    setMaxAgeBySessionKey: (params: {
+    }) => Promise<RuntimeThreadBindingLifecycleRecord[]>;
+    setMaxAgeBySessionKeyAsync: (params: {
       channelId: string;
       targetSessionKey: string;
       accountId?: string;
       maxAgeMs: number;
-    }) => RuntimeThreadBindingLifecycleRecord[];
+    }) => Promise<RuntimeThreadBindingLifecycleRecord[]>;
   };
   runtimeContexts: ChannelRuntimeContextRegistry;
 };

@@ -1,4 +1,3 @@
-import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { WorkerSessionPlacementProjection } from "./placement-read-projection.types.js";
@@ -7,7 +6,6 @@ import {
   preparePlacementWorkspaceResultAuthority,
   readPlacementWorkspaceResultAuthority,
 } from "./placement-turn-authority.js";
-import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
 
 export function createPlacementWorkspaceResultReader(
   runtime: { path: string; instanceId: string },
@@ -28,32 +26,6 @@ export function createPlacementWorkspaceResultReader(
     validateWorkspaceResultClaim: (claim: WorkerSessionTurnClaim) => Boolean(current(claim)),
     preparedWorkspaceResult: (claim: WorkerSessionTurnClaim) => current(claim)?.pendingResult,
     preparedWorkspaceResultPlacement: (claim: WorkerSessionTurnClaim) => current(claim)?.placement,
-    /** @deprecated Await listPendingWorkspaceResultsAsync; retained for released plugin contexts. */
-    listPendingWorkspaceResults(sessionId?: string): WorkerWorkspacePendingResult[] {
-      void sessionId;
-      warnPluginSdkDeprecation({
-        family: "worker-placement-sync-readers",
-        method: "listPendingWorkspaceResults",
-        replacement: "listPendingWorkspaceResultsAsync",
-        compatibility: "Synchronous placement inventory reads now fail with migration guidance.",
-      });
-      throw new Error(
-        "Await listPendingWorkspaceResultsAsync; synchronous placement inventory reads are no longer supported.",
-      );
-    },
-    /** @deprecated Await getWorkspaceResultReconcilingSessionIdsAsync. */
-    getWorkspaceResultReconcilingSessionIds(sessionIds: readonly string[]): ReadonlySet<string> {
-      void sessionIds;
-      warnPluginSdkDeprecation({
-        family: "worker-placement-sync-readers",
-        method: "getWorkspaceResultReconcilingSessionIds",
-        replacement: "getWorkspaceResultReconcilingSessionIdsAsync",
-        compatibility: "Synchronous placement inventory reads now fail with migration guidance.",
-      });
-      throw new Error(
-        "Await getWorkspaceResultReconcilingSessionIdsAsync; synchronous placement inventory reads are no longer supported.",
-      );
-    },
     async getWorkspaceResultReconcilingSessionIdsAsync(
       sessionIds: readonly string[],
     ): Promise<ReadonlySet<string>> {

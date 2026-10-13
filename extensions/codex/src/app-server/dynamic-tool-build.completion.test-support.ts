@@ -1,6 +1,6 @@
 import "./dynamic-tool-build.test-support.js";
 import { expectDefined, isRecord } from "@openclaw/normalization-core";
-import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
+import { createOpenClawCodingToolsAsync } from "openclaw/plugin-sdk/agent-harness";
 import {
   abortAndDrainAgentHarnessRun,
   clearActiveEmbeddedRun,
@@ -32,7 +32,7 @@ const {
   createParams,
 } = await import("./dynamic-tool-build.test-support.js");
 
-type ToolOptions = Parameters<typeof createOpenClawCodingTools>[0];
+type ToolOptions = Parameters<typeof createOpenClawCodingToolsAsync>[0];
 
 export function registerCodexCompletionCommandTest() {
   it("marks a command started by a conversation's completion turn as the conversation's own", async () => {
@@ -90,8 +90,8 @@ export function registerCodexCompletionCommandTest() {
               delivery: normalizeSessionDeliveryState({ context: route }),
             },
           });
-          const factory = vi.fn((options: ToolOptions) =>
-            createOpenClawCodingTools(options).filter((tool) =>
+          const factory = vi.fn(async (options: ToolOptions) =>
+            (await createOpenClawCodingToolsAsync(options)).filter((tool) =>
               ["exec", "process"].includes(tool.name),
             ),
           );

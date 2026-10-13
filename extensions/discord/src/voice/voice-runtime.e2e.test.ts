@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough, type Readable } from "node:stream";
-import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
+import { createOpenClawCodingToolsAsync } from "openclaw/plugin-sdk/agent-harness";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
 
@@ -48,18 +48,20 @@ defineDiscordVoiceTests(
     handleSpeakingStart,
     receiveRecordedSpeech,
   }) => {
-    const lastAgentCommandToolNames = () => {
+    const lastAgentCommandToolNames = async () => {
       const args = lastAgentCommandArgs();
       if (typeof args.senderIsOwner !== "boolean") {
         throw new Error("expected agent command owner identity");
       }
-      return createOpenClawCodingTools({
-        config: {},
-        senderIsOwner: args.senderIsOwner,
-        messageProvider: "discord",
-        workspaceDir: "/tmp/openclaw-discord-voice-tools",
-        agentDir: "/tmp/openclaw-discord-voice-agent",
-      }).map((tool) => tool.name);
+      return (
+        await createOpenClawCodingToolsAsync({
+          config: {},
+          senderIsOwner: args.senderIsOwner,
+          messageProvider: "discord",
+          workspaceDir: "/tmp/openclaw-discord-voice-tools",
+          agentDir: "/tmp/openclaw-discord-voice-agent",
+        })
+      ).map((tool) => tool.name);
     };
 
     it("composes join, audio ingress, agent dispatch, playback, and leave", async () => {
@@ -202,7 +204,7 @@ defineDiscordVoiceTests(
           );
         }
         if ("toolNames" in scenario && scenario.toolNames) {
-          const toolNames = lastAgentCommandToolNames();
+          const toolNames = await lastAgentCommandToolNames();
           scenario.toolNames.include.forEach((name) => expect(toolNames).toContain(name));
           scenario.toolNames.exclude.forEach((name) => expect(toolNames).not.toContain(name));
         }

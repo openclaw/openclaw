@@ -44,7 +44,6 @@ export const openAIRealtimeHost = {
   | "isProviderApiKeyConfigured"
   | "isProviderApiKeyConfiguredAsync"
   | "resolveApiKeyForProvider"
-  | "captureWsEvent"
   | "captureWsEventAsync"
 > &
   Partial<Pick<PluginCapabilityCatalogHostContext, "captureWsEventAsync">>;

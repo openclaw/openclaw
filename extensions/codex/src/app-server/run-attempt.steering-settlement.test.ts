@@ -5,7 +5,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   appendSessionTranscriptMessageByIdentity,
   readSessionTranscriptEvents,
-  withSessionTranscriptWriteLock,
+  withSessionTranscriptWrite,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { expect, it, vi } from "vitest";
 import type { CodexSteeringQueueOptions } from "./attempt-steering.js";
@@ -156,7 +156,7 @@ it("seals native steering when terminal receipt arrives behind its queued prefix
   try {
     await fixture.started.promise;
     await fixture.completePrefix();
-    writer = withSessionTranscriptWriteLock(fixture.target, async () => {
+    writer = withSessionTranscriptWrite(fixture.target, async () => {
       acquired.resolve();
       await release.promise;
     });
@@ -248,7 +248,7 @@ it("keeps one steering prefix and source through degraded tainted native complet
       steerText,
     ]);
 
-    writer = withSessionTranscriptWriteLock(fixture.target, async () => {
+    writer = withSessionTranscriptWrite(fixture.target, async () => {
       acquired.resolve();
       await release.promise;
     });

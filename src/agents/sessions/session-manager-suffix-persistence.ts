@@ -31,7 +31,6 @@ import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import { isIndexedSessionEntry, parseOpaqueLeafEntry } from "./session-manager-codec.js";
-import { prepareSessionManagerSync } from "./session-manager-incognito-scope.js";
 import { prepareSessionManagerHydration } from "./session-manager-incognito.js";
 import { receiveSessionManagerCommit } from "./session-manager-persistence-error.js";
 import { SessionManagerPersistence } from "./session-manager-persistence.js";
@@ -45,15 +44,6 @@ import {
 } from "./session-persistence-operation.js";
 
 export class SessionManagerSuffixPersistence extends SessionManagerPersistence {
-  /** @deprecated Use removeTrailingEntriesAsync; removed in the next Plugin SDK major. */
-  removeTrailingEntries(
-    predicate: (entry: SessionEntry) => boolean,
-    options?: { preserveTrailing?: (entry: SessionEntry) => boolean },
-  ): number {
-    prepareSessionManagerSync("removeTrailingEntries", this.persistenceTarget, this);
-    return runSessionPersistenceSync(this.prepareTrailingEntriesRemoval(predicate, options));
-  }
-
   async removeTrailingEntriesAsync(
     predicate: (entry: SessionEntry) => boolean,
     options?: { preserveTrailing?: (entry: SessionEntry) => boolean },

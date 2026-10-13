@@ -234,7 +234,7 @@ describe("AgentSession runtime and transcript projections", () => {
       storePath: path.join(dir, "sessions.json"),
     };
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    const sessionManager = SessionManager.open(scope, dir);
+    const sessionManager = await SessionManager.openAsync(scope, dir);
     guardSessionManager(sessionManager, { config: {}, allowedToolNames: ["lookup"] });
     const ids = ["call_lookup|fc-jztpgrWaMLTnokJk", "call_lookup|fc-jztDifferentokJk"];
     streamMocks.streamSimple
@@ -272,7 +272,7 @@ describe("AgentSession runtime and transcript projections", () => {
 
     expect(started).toEqual(ids);
     expect(streamMocks.streamSimple).toHaveBeenCalledTimes(2);
-    const stored = SessionManager.open(scope, dir)
+    const stored = (await SessionManager.openAsync(scope, dir))
       .getBranch()
       .flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
     expect(stored.find((message) => message.role === "assistant")).toMatchObject({
@@ -303,7 +303,7 @@ describe("AgentSession runtime and transcript projections", () => {
         storePath: path.join(dir, "sessions.json"),
       };
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      const sessionManager = SessionManager.open(scope, dir);
+      const sessionManager = await SessionManager.openAsync(scope, dir);
       guardSessionManager(sessionManager, { config: {}, allowedToolNames: ["lookup"] });
       const calls = vi.fn();
       const values = ["alpha", "beta"];
@@ -405,7 +405,7 @@ describe("AgentSession runtime and transcript projections", () => {
         ],
         openclawDelivery: { replyToCurrent: true },
       });
-      const reopened = SessionManager.open(scope, dir);
+      const reopened = await SessionManager.openAsync(scope, dir);
       const stored = reopened.getBranch().find((entry) => {
         return entry.type === "message" && entry.message.role === "assistant";
       });

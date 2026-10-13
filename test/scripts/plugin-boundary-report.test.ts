@@ -63,7 +63,7 @@ describe("plugin-boundary-report", () => {
     expect(summary.compat?.removalPending?.[0]).toMatchObject({
       removeAfter: "2026-09-08",
       blocker: expect.stringContaining(
-        "migration of published plugin readers is verified and explicit breaking-release approval is granted",
+        "stable deprecation has shipped, a compatibility period has passed, migration of published plugin readers is verified, and maintainer approval is granted",
       ),
     });
     for (const record of summary.compat?.removalPending ?? []) {
@@ -110,7 +110,7 @@ describe("plugin-boundary-report", () => {
     expect(result.stdout).toMatch(/readerRefs=\d+ readers=/u);
   });
 
-  it("reports the inbound reply dispatch major-version gate as date-ineligible", () => {
+  it("reports the inbound reply dispatch stable-deprecation gate as date-ineligible", () => {
     const jsonResult = createPluginBoundaryReport(["--json", "--owner", "channel"]);
     const report = JSON.parse(jsonResult.stdout) as {
       compat?: {
@@ -128,14 +128,14 @@ describe("plugin-boundary-report", () => {
 
     expect(jsonResult.exitCode).toBe(0);
     expect(record).toMatchObject({
-      removalGate: "next-plugin-sdk-major",
+      removalGate: "after-stable-deprecation",
       eligibleForRemoval: false,
     });
     expect(record?.removeAfter).toBeUndefined();
 
     const textResult = createPluginBoundaryReport(["--owner", "channel"]);
     expect(textResult.stdout).toContain(
-      "next-plugin-sdk-major plugin-sdk-inbound-reply-dispatch-subpath",
+      "after-stable-deprecation plugin-sdk-inbound-reply-dispatch-subpath",
     );
     expect(textResult.stdout).not.toContain("no-date plugin-sdk-inbound-reply-dispatch-subpath");
   });

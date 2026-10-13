@@ -4,7 +4,6 @@ import { describe, expect, it } from "vitest";
 import { buildDashscopeVideoGenerationProvider } from "../plugin-sdk/video-generation.js";
 import {
   normalizeDurationToClosestMax,
-  resolveCapabilityModelCandidates,
   resolveCapabilityModelCandidatesAsync,
   resolveClosestAspectRatio,
   resolveClosestResolution,
@@ -40,7 +39,7 @@ describe("media-generation runtime shared candidates", () => {
     ["subscription-key", "https://dashscope.example.test", false],
     ["standard-key", "https://coding.example.test", false],
   ] as const)(
-    "preserves DashScope factory policy in sync and async discovery (%s, %s)",
+    "preserves DashScope factory policy in async discovery (%s, %s)",
     async (apiKey, baseUrl, allowed) => {
       const provider = buildDashscopeVideoGenerationProvider({
         providerId: "qwen",
@@ -66,7 +65,6 @@ describe("media-generation runtime shared candidates", () => {
         listProviders: () => [provider],
       };
       const expected = allowed ? [{ provider: "qwen", model: provider.defaultModel }] : [];
-      expect(resolveCapabilityModelCandidates(params)).toEqual(expected);
       expect(await resolveCapabilityModelCandidatesAsync(params)).toEqual(expected);
     },
   );

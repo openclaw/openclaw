@@ -59,7 +59,7 @@ describe("native video transcript replay", () => {
         now: 1,
       });
 
-      const reopened = SessionManager.open(target, stateDir).buildSessionContext();
+      const reopened = (await SessionManager.openAsync(target, stateDir)).buildSessionContext();
       const provider = await materializeProviderContext({
         context: { systemPrompt: "system", messages: convertToLlm(reopened.messages), tools: [] },
         workspaceDir: stateDir,

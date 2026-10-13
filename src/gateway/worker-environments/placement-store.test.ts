@@ -40,12 +40,6 @@ describe("worker session placement store", () => {
   it("directs retired synchronous inventory and mutation APIs to their async replacements", () => {
     expect(() => store.list()).toThrow("Await listAsync");
     expect(() => store.listForReconcile()).toThrow("Await listForReconcileAsync");
-    expect(() => store.listPendingWorkspaceResults()).toThrow(
-      "Await listPendingWorkspaceResultsAsync",
-    );
-    expect(() => store.getWorkspaceResultReconcilingSessionIds([])).toThrow(
-      "Await getWorkspaceResultReconcilingSessionIdsAsync",
-    );
     expect(() => store.clearLocalTurnClaimsAfterRestart()).toThrow(
       "Await clearLocalTurnClaimsAfterRestartAsync",
     );

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { serialize } from "node:v8";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
@@ -17,16 +18,15 @@ import {
   loadSessionEntry,
   loadTranscriptEvents,
   readTranscriptRawDelta,
-  resolveSessionTranscriptDatabasePath,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { replaceTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createNestedToolActivity } from "../../sessions/nested-tool-activity.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
+import * as metadataRuntime from "./session-manager-metadata-runtime.js";
 import { buildSessionContext, CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -55,19 +55,24 @@ function sessionHeader(id: string, cwd: string, version = CURRENT_SESSION_VERSIO
   return { type: "session" as const, version, id, timestamp: "2026-01-01T00:00:00.000Z", cwd };
 }
 
-function openMarker(marker: string, sessionKey: string, cwd: string): SessionManager {
+async function openMarker(
+  marker: string,
+  sessionKey: string,
+  cwd: string,
+): Promise<SessionManager> {
   const target = parseSqliteSessionFileMarker(marker);
   if (!target) {
     throw new Error("expected SQLite transcript marker fixture");
   }
-  return SessionManager.open({ ...target, sessionKey }, cwd);
+  return await SessionManager.openAsync({ ...target, sessionKey }, cwd);
 }
 
 describe("SessionManager.open", () => {
   it("commits ordered metadata and custom messages with Windows environment semantics off-thread", async () => {
     const { dir, scope: target } = createScope("metadata-worker");
     target.storePath = path.join(dir, "agents", "main", "agent", "openclaw-agent.sqlite");
-    const manager = SessionManager.open(target, dir);
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const manager = await SessionManager.openAsync(target, dir);
     const sql = observeHostDataSql();
     const cloneEnv = configEnv.cloneEnvWithPlatformSemantics;
     const clone = vi.spyOn(configEnv, "cloneEnvWithPlatformSemantics").mockImplementation((env) => {
@@ -127,7 +132,9 @@ describe("SessionManager.open", () => {
         message: { role: "custom", content: "saved on the canonical worker" },
       },
     ]);
-    expect(SessionManager.open(target, dir).getEntries()).toEqual(manager.getEntries());
+    expect((await SessionManager.openAsync(target, dir)).getEntries()).toEqual(
+      manager.getEntries(),
+    );
     expect(loadSessionEntry(target)?.sessionId).toBe(target.sessionId);
   });
 
@@ -143,15 +150,18 @@ describe("SessionManager.open", () => {
       cwd: dir,
       message: { role: "user", content: "question" },
     });
-    const manager = openMarker(marker, scope.sessionKey, dir);
+    const manager = await openMarker(marker, scope.sessionKey, dir);
     expect(manager.buildSessionContext().messages).toMatchObject([
       { content: "question", role: "user" },
     ]);
-    const assistantId = manager.appendMessage(buildAssistantMessage("answer"));
+    const assistantId = expectDefined(
+      await manager.appendMessageAsync(buildAssistantMessage("answer")),
+      "Expected appended message",
+    );
     const thinkingId = await manager.appendThinkingLevelChange("high");
     const modelId = await manager.appendModelChange("openai", "gpt-5.5");
-    const compactionId = manager.appendCompaction("summary", "assistant-1", 42);
-    const resetId = manager.appendResetBoundary("new", assistantId);
+    const compactionId = await manager.appendCompactionAsync("summary", "assistant-1", 42);
+    const resetId = await manager.appendResetBoundaryAsync("new", assistantId);
     expect(manager.getBoundaryCount()).toBe(2);
     await expect(fs.stat(path.join(process.cwd(), marker))).rejects.toMatchObject({
       code: "ENOENT",
@@ -170,7 +180,9 @@ describe("SessionManager.open", () => {
       { type: "compaction", id: compactionId, firstKeptEntryId: "assistant-1", summary: "summary" },
       { type: "reset", id: resetId, firstKeptEntryId: assistantId, reason: "new" },
     ]);
-    expect(openMarker(marker, scope.sessionKey, dir).getEntries()).toEqual(manager.getEntries());
+    expect((await openMarker(marker, scope.sessionKey, dir)).getEntries()).toEqual(
+      manager.getEntries(),
+    );
   });
 
   it("does not overwrite a rebound session row when the first append seeds its header", async () => {
@@ -181,11 +193,11 @@ describe("SessionManager.open", () => {
       label: "preserved",
     });
     const before = loadSessionEntry(scope);
-    const manager = SessionManager.open(scope, dir);
+    const manager = await SessionManager.openAsync(scope, dir);
 
-    expect(() =>
-      manager.appendMessage({ role: "user", content: "stale message", timestamp: 1 }),
-    ).toThrow("Session transcript header was not persisted");
+    await expect(
+      manager.appendMessageAsync({ role: "user", content: "stale message", timestamp: 1 }),
+    ).rejects.toThrow("Session transcript header was not persisted");
     expect(loadSessionEntry(scope)).toEqual(before);
   });
 
@@ -201,27 +213,48 @@ describe("SessionManager.open", () => {
     expect(manager.getAppendParentId()).toBeNull();
   });
 
-  it("uses the selected logical leaf immediately after a side append control", () => {
+  it("uses the selected logical leaf immediately after a side append control", async () => {
     const manager = SessionManager.inMemory("/tmp");
-    const firstId = manager.appendMessage({ role: "user", content: "first", timestamp: 1 });
-    const secondId = manager.appendMessage({ role: "user", content: "second", timestamp: 2 });
-    const control = manager.appendLeafControl({
+    const firstId = expectDefined(
+      await manager.appendMessageAsync({
+        role: "user",
+        content: "first",
+        timestamp: 1,
+      }),
+      "Expected appended message",
+    );
+    const secondId = expectDefined(
+      await manager.appendMessageAsync({
+        role: "user",
+        content: "second",
+        timestamp: 2,
+      }),
+      "Expected appended message",
+    );
+    const control = await manager.appendLeafControlAsync({
       targetId: firstId,
       appendParentId: secondId,
       appendMode: "side",
     });
 
-    const thirdId = manager.appendMessage({ role: "user", content: "third", timestamp: 3 });
+    const thirdId = expectDefined(
+      await manager.appendMessageAsync({
+        role: "user",
+        content: "third",
+        timestamp: 3,
+      }),
+      "Expected appended message",
+    );
 
     expect(manager.getBranch().map((entry) => entry.id)).toEqual([firstId, thirdId]);
-    manager.branch(control.id);
+    await manager.branchAsync(control.id);
     expect(manager.getLeafId()).toBe(firstId);
-    expect(() =>
-      manager.appendLeafControl({
+    await expect(
+      manager.appendLeafControlAsync({
         targetId: thirdId,
         appendParentId: "missing-parent",
       }),
-    ).toThrow("Append parent missing-parent not found");
+    ).rejects.toThrow("Append parent missing-parent not found");
   });
 
   it("refreshes cwd when switching persisted targets and rejects identity reset", async () => {
@@ -242,10 +275,14 @@ describe("SessionManager.open", () => {
       sessionHeader(secondTarget.sessionId, path.join(dir, "second-workspace")),
     ]);
 
-    const manager = SessionManager.open(firstTarget);
+    const manager = await SessionManager.openAsync(firstTarget);
     const leaf = manager.getLeafId();
-    manager.appendLeafControl({ targetId: leaf, appendParentId: leaf, appendMode: "side" });
-    manager.setSessionTarget(secondTarget);
+    await manager.appendLeafControlAsync({
+      targetId: leaf,
+      appendParentId: leaf,
+      appendMode: "side",
+    });
+    await manager.setSessionTargetAsync(secondTarget);
     expect(manager.getAppendMode()).toBeUndefined();
 
     expect(manager.getCwd()).toBe(path.join(dir, "second-workspace"));
@@ -297,15 +334,17 @@ describe("SessionManager.open", () => {
       throw new Error("expected initial raw cursor page");
     }
 
-    const staleManager = openMarker(marker, scope.sessionKey, dir);
-    const resetManager = openMarker(marker, scope.sessionKey, dir);
-    resetManager.appendResetBoundary("reset");
-    expect(() => staleManager.appendMessage(buildAssistantMessage("late append"))).not.toThrow();
+    const staleManager = await openMarker(marker, scope.sessionKey, dir);
+    const resetManager = await openMarker(marker, scope.sessionKey, dir);
+    await resetManager.appendResetBoundaryAsync("reset");
+    await staleManager.appendMessageAsync(buildAssistantMessage("late append"));
 
     expect(readTranscriptRawDelta(scope, { cursor: cursor.cursor }).kind).toBe("page");
     const events = await loadTranscriptEvents(scope);
     expect(events.map((event) => (event as { type?: unknown }).type)).toContain("reset");
-    const context = JSON.stringify(openMarker(marker, scope.sessionKey, dir).buildSessionContext());
+    const context = JSON.stringify(
+      (await openMarker(marker, scope.sessionKey, dir)).buildSessionContext(),
+    );
     expect(context).not.toContain("before reset");
     expect(context).toContain("late append");
 
@@ -316,13 +355,16 @@ describe("SessionManager.open", () => {
     });
   });
 
-  it("reads the latest normalized name even off the selected branch", () => {
+  it("reads the latest normalized name even off the selected branch", async () => {
     const manager = SessionManager.inMemory();
     expect(manager.getSessionName()).toBeUndefined();
-    const root = manager.appendMessage({ role: "user", content: "root", timestamp: 1 });
-    manager.appendSessionInfo("old name");
-    manager.appendSessionInfo("  first\nsecond\r\nthird  ");
-    manager.branch(root);
+    const root = expectDefined(
+      await manager.appendMessageAsync({ role: "user", content: "root", timestamp: 1 }),
+      "Expected appended message",
+    );
+    await manager.appendSessionInfoAsync("old name");
+    await manager.appendSessionInfoAsync("  first\nsecond\r\nthird  ");
+    await manager.branchAsync(root);
     expect(manager.getSessionName()).toBe("first second third");
   });
 
@@ -345,7 +387,7 @@ describe("SessionManager.open", () => {
       message: buildAssistantMessage("answer"),
       parentId: user.messageId,
     });
-    const sessionManager = openMarker(marker, sessionKey, dir);
+    const sessionManager = await openMarker(marker, sessionKey, dir);
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey, storePath },
       { sessionId: "replacement-session", updatedAt: 20 },
@@ -366,22 +408,30 @@ describe("SessionManager.open", () => {
       }
       throw new Error("expected rebound transcript persistence to fail");
     };
-    const compactionError = await captureError(() =>
-      sessionManager.appendCompaction("late summary", assistant.messageId, 42),
+    const compactionError = await captureError(
+      async () =>
+        await sessionManager.appendCompactionAsync("late summary", assistant.messageId, 42),
     );
     expect(compactionError).toMatchObject({ cause: expectedCause });
 
     const entriesBeforeRejectedAppends = sessionManager.getEntries();
     const leafBeforeRejectedAppends = sessionManager.getLeafId();
     const appendParentBeforeRejectedAppends = sessionManager.getAppendParentId();
-    expect(() => sessionManager.branchWithSummary(null, "late summary")).toThrow(
+    await expect(sessionManager.branchWithSummaryAsync(null, "late summary")).rejects.toThrow(
       "entry was not persisted",
     );
     const eventError = await captureError(() =>
       sessionManager.appendModelChange("openai", "gpt-5.5"),
     );
-    const messageError = await captureError(() =>
-      sessionManager.appendMessage({ role: "user", content: "late message", timestamp: 1 }),
+    const messageError = await captureError(async () =>
+      expectDefined(
+        await sessionManager.appendMessageAsync({
+          role: "user",
+          content: "late message",
+          timestamp: 1,
+        }),
+        "Expected appended message",
+      ),
     );
     for (const error of [eventError, messageError]) {
       expect(error).toMatchObject({ cause: expectedCause });
@@ -463,7 +513,7 @@ async function setup(content = "base") {
     dir,
     target,
     persist,
-    manager: SessionManager.open(target, dir),
+    manager: await SessionManager.openAsync(target, dir),
     events: () => loadTranscriptEvents(target),
   };
 }
@@ -474,7 +524,10 @@ describe("SessionManager stale-parent rebase", () => {
     const { role, content, timestamp } = rebaseAssistant("late");
     await persist("out-of-band", { role, content, timestamp });
     const message = makeUserMessage("next", 3);
-    const id = manager.appendMessage(message);
+    const id = expectDefined(
+      await manager.appendMessageAsync(message),
+      "Expected appended message",
+    );
     expect(await events()).toMatchObject([
       { type: "session" },
       { id: "base", parentId: null },
@@ -526,7 +579,10 @@ describe("SessionManager stale-parent rebase", () => {
       3,
     );
     const continuation = rebaseAssistant("stale reply", 4);
-    const id = manager.appendMessage(continuation);
+    const id = expectDefined(
+      await manager.appendMessageAsync(continuation),
+      "Expected appended message",
+    );
     expect(await events()).toMatchObject([
       { type: "session" },
       { id: "base", message: { role: "user", content: "base" } },
@@ -542,7 +598,7 @@ describe("SessionManager stale-parent rebase", () => {
       makeUserMessage("base", 1),
       continuation,
     ]);
-    expect(SessionManager.open(target, dir).buildSessionContext()).toEqual(
+    expect((await SessionManager.openAsync(target, dir)).buildSessionContext()).toEqual(
       manager.buildSessionContext(),
     );
   });
@@ -566,11 +622,11 @@ describe("SessionManager stale-parent rebase", () => {
       await persist("new-user", { ...makeUserMessage("/status", 2), ...metadata });
       const beforeBranch = manager.getBranch();
       const beforeEvents = await events();
-      expect(() =>
-        manager.appendMessage(
+      await expect(
+        manager.appendMessageAsync(
           kind === "assistant" ? rebaseAssistant("stale reply", 3) : nestedTool(3),
         ),
-      ).toThrow("SQLite transcript changed while preparing rewrite");
+      ).rejects.toThrow("SQLite transcript changed while preparing rewrite");
       expect(manager.getBranch()).toEqual(beforeBranch);
       expect(await events()).toEqual(beforeEvents);
     },
@@ -581,15 +637,15 @@ describe("SessionManager stale-parent rebase", () => {
     await persist("delivered-reply", rebaseAssistant("stale reply"));
     const beforeBranch = manager.getBranch();
     const beforeEvents = await events();
-    expect(() =>
-      manager.appendMessage({
+    await expect(
+      manager.appendMessageAsync({
         role: "custom",
         customType: "extension-input",
         content: "Additional instructions",
         display: true,
         timestamp: 3,
       }),
-    ).toThrow("SQLite transcript changed while preparing rewrite");
+    ).rejects.toThrow("SQLite transcript changed while preparing rewrite");
     expect(manager.getBranch()).toEqual(beforeBranch);
     expect(await events()).toEqual(beforeEvents);
   });
@@ -598,33 +654,42 @@ describe("SessionManager stale-parent rebase", () => {
     const { target, manager, persist, events } = await setup();
     await persist("intermediate-assistant", rebaseAssistant("late"));
     const beforeBranch = manager.getBranch().map((entry) => entry.id);
-    const { db } = openOpenClawAgentDatabase({
-      agentId: target.agentId,
-      path: resolveSessionTranscriptDatabasePath(target),
-    });
-    const exec = db.exec.bind(db);
-    let injected = false;
-    const spy = vi.spyOn(db, "exec").mockImplementation((statement) => {
-      if (statement === "BEGIN IMMEDIATE" && !injected) {
-        injected = true;
-        expect(
-          appendTranscriptMessageSync(target, {
-            appendIntent: "active-branch",
-            eventId: "new-user",
-            message: makeUserMessage("new", 3),
-            now: 3,
-          }).ok,
-        ).toBe(true);
-      }
-      return exec(statement);
-    });
+    const withWorker = metadataRuntime.withSessionMetadataWorker;
+    let appends = 0;
+    const spy = vi
+      .spyOn(metadataRuntime, "withSessionMetadataWorker")
+      .mockImplementation((options, database, assertCurrent, operation, controls) =>
+        withWorker(
+          options,
+          database,
+          assertCurrent,
+          (worker) =>
+            operation({
+              execute: async (command, commandOptions) => {
+                if (command.type === "session.metadata.append" && ++appends === 2) {
+                  expect(
+                    appendTranscriptMessageSync(target, {
+                      appendIntent: "active-branch",
+                      eventId: "new-user",
+                      message: makeUserMessage("new", 3),
+                      now: 3,
+                    }).ok,
+                  ).toBe(true);
+                }
+                return await worker.execute(command, commandOptions);
+              },
+            }),
+          controls,
+        ),
+      );
     try {
-      expect(() => manager.appendMessage(rebaseAssistant("stale reply", 4))).toThrow(
+      await expect(manager.appendMessageAsync(rebaseAssistant("stale reply", 4))).rejects.toThrow(
         "SQLite transcript changed while preparing rewrite",
       );
     } finally {
       spy.mockRestore();
     }
+    expect(appends).toBe(2);
     expect(manager.getBranch().map((entry) => entry.id)).toEqual(beforeBranch);
     expect(await events()).toMatchObject([
       { type: "session" },
@@ -636,14 +701,17 @@ describe("SessionManager stale-parent rebase", () => {
 
   it("rejects a prepared nested tool after a newer user outside the restored active ancestry", async () => {
     const { dir, target, manager: source, events } = await setup();
-    const parentId = source.appendMessage(rebaseAssistant("ready"));
-    const stale = SessionManager.open(target, dir);
-    source.branch("base");
-    source.appendMessage(makeUserMessage("side user", 3));
-    source.branch(parentId);
+    const parentId = expectDefined(
+      await source.appendMessageAsync(rebaseAssistant("ready")),
+      "Expected appended message",
+    );
+    const stale = await SessionManager.openAsync(target, dir);
+    await source.branchAsync("base");
+    await source.appendMessageAsync(makeUserMessage("side user", 3));
+    await source.branchAsync(parentId);
     const beforeBranch = stale.getBranch();
     const beforeEvents = await events();
-    expect(() => stale.appendMessage(nestedTool(4))).toThrow(
+    await expect(stale.appendMessageAsync(nestedTool(4))).rejects.toThrow(
       "SQLite transcript changed while preparing rewrite",
     );
     expect(stale.getBranch()).toEqual(beforeBranch);
@@ -653,9 +721,12 @@ describe("SessionManager stale-parent rebase", () => {
   it("preserves a stale manager branch when the concurrent tail is unrelated", async () => {
     const { dir, target, persist, events } = await setup("first");
     await persist("first-tail", rebaseAssistant("first"));
-    const manager = SessionManager.open(target, dir);
+    const manager = await SessionManager.openAsync(target, dir);
     await persist("second-root", makeUserMessage("second", 3), 3, null);
-    const id = manager.appendMessage(makeUserMessage("branch", 4));
+    const id = expectDefined(
+      await manager.appendMessageAsync(makeUserMessage("branch", 4)),
+      "Expected appended message",
+    );
     expect(manager.getEntry(id)?.parentId).toBe("first-tail");
     expect(manager.getBranch().map((entry) => entry.id)).toEqual(["base", "first-tail", id]);
     expect(buildSessionContext(manager.getEntries(), "first-tail").messages).toMatchObject([
@@ -667,13 +738,20 @@ describe("SessionManager stale-parent rebase", () => {
 
   it("retries a stale side append against its unchanged explicit parent", async () => {
     const { dir, target, manager, persist, events } = await setup();
-    manager.appendLeafControl({ targetId: "base", appendParentId: "base", appendMode: "side" });
-    const reopened = SessionManager.open(target, dir);
+    await manager.appendLeafControlAsync({
+      targetId: "base",
+      appendParentId: "base",
+      appendMode: "side",
+    });
+    const reopened = await SessionManager.openAsync(target, dir);
     expect(reopened.getLeafId()).toBe("base");
     expect(reopened.getAppendParentId()).toBe("base");
     expect(reopened.getAppendMode()).toBe("side");
     await persist("concurrent-tail", rebaseAssistant("concurrent"), 2, "base");
-    const id = manager.appendMessage(makeUserMessage("side", 3));
+    const id = expectDefined(
+      await manager.appendMessageAsync(makeUserMessage("side", 3)),
+      "Expected appended message",
+    );
     expect(await events()).toContainEqual(expect.objectContaining({ id, parentId: "base" }));
     expect(manager.getEntries()).toEqual(
       expect.arrayContaining([
@@ -681,14 +759,17 @@ describe("SessionManager stale-parent rebase", () => {
         expect.objectContaining({ id }),
       ]),
     );
-    expect(() => manager.prepareTranscriptRewrite()).not.toThrow();
+    await manager.prepareTranscriptRewriteAsync();
   });
 
   it("retries a stale deliberate branch against an unchanged explicit parent", async () => {
     const { manager, persist, events } = await setup();
-    manager.branch("base");
+    await manager.branchAsync("base");
     await persist("concurrent-tail", rebaseAssistant("concurrent"), 2, "base");
-    const id = manager.appendMessage(makeUserMessage("branch", 3));
+    const id = expectDefined(
+      await manager.appendMessageAsync(makeUserMessage("branch", 3)),
+      "Expected appended message",
+    );
     expect(await events()).toContainEqual(expect.objectContaining({ id, parentId: "base" }));
     expect(manager.getChildren("base").map((entry) => entry.id)).toEqual(["concurrent-tail", id]);
   });

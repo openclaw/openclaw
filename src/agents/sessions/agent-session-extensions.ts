@@ -147,21 +147,11 @@ export abstract class AgentSessionExtensions extends AgentSessionCompaction {
             reportSendError("send_user_message", err),
           );
         },
-        // Retained third-party synchronous persistence adapters.
-        appendEntry: (customType, data) => {
-          this.sessionManager.appendCustomEntry(customType, data);
-        },
         appendEntryAsync: (customType, data) =>
           this.sessionManager.appendCustomEntryAsync(customType, data),
-        setSessionName: (name) => {
-          this.setSessionName(name);
-        },
         setSessionNameAsync: (name) => this.setSessionNameAsync(name),
         getSessionName: () => {
           return this.sessionManager.getSessionName();
-        },
-        setLabel: (entryId, label) => {
-          this.sessionManager.appendLabelChange(entryId, label);
         },
         setLabelAsync: async (entryId, label) => {
           await this.sessionManager.appendLabelChangeAsync(entryId, label);

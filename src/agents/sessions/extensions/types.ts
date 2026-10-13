@@ -1018,22 +1018,13 @@ export interface ExtensionAPI {
     options?: { deliverAs?: "steer" | "followUp" },
   ): void;
 
-  /** @deprecated Use appendEntryAsync; removed in the next Plugin SDK major. */
-  appendEntry(customType: string, data?: unknown): void;
-
   /** Persist a custom entry and return its id after the worker commits. */
   appendEntryAsync(customType: string, data?: unknown): Promise<string>;
-
-  /** @deprecated Use setSessionNameAsync; removed in the next Plugin SDK major. */
-  setSessionName(name: string): void;
 
   /** Set the display name and publish the change after the worker commits. */
   setSessionNameAsync(name: string): Promise<void>;
 
   getSessionName(): string | undefined;
-
-  /** @deprecated Use setLabelAsync; removed in the next Plugin SDK major. */
-  setLabel(entryId: string, label: string | undefined): void;
 
   /** Set or clear an entry label after the worker commits. */
   setLabelAsync(entryId: string, label: string | undefined): Promise<void>;
@@ -1153,7 +1144,6 @@ export interface ExtensionShortcut {
 
 type HandlerFn = (...args: unknown[]) => Promise<unknown>;
 
-export type SetSessionNameHandler = ExtensionAPI["setSessionName"];
 export type GetSessionNameHandler = ExtensionAPI["getSessionName"];
 export type RefreshToolsHandler = () => void;
 
@@ -1190,16 +1180,12 @@ export interface ExtensionRuntimeState {
 /**
  * Action implementations for ExtensionAPI methods.
  * Provided to runner.initialize(), copied into the shared runtime.
- * @deprecated Use ExtensionActionsV2; removed in the next Plugin SDK major.
  */
 export interface ExtensionActions extends Pick<
   ExtensionAPI,
   | "sendMessage"
   | "sendUserMessage"
-  | "appendEntry"
-  | "setSessionName"
   | "getSessionName"
-  | "setLabel"
   | "getActiveTools"
   | "getAllTools"
   | "setActiveTools"
@@ -1241,7 +1227,6 @@ export interface ExtensionCommandContextActions extends Pick<
 /**
  * Full runtime = state + actions.
  * Created by loader with throwing action stubs, completed by runner.initialize().
- * @deprecated Use ExtensionRuntimeV2; removed in the next Plugin SDK major.
  */
 export interface ExtensionRuntime
   extends
@@ -1271,7 +1256,7 @@ export interface LoadExtensionsResult {
   extensions: Extension[];
   errors: Array<{ path: string; error: string }>;
   /** Shared runtime - actions are throwing stubs until runner.initialize() */
-  runtime: ExtensionRuntime;
+  runtime: ExtensionRuntimeV2;
 }
 
 export interface ExtensionError {

@@ -664,8 +664,10 @@ async function createCliHistoryFixture() {
   const credential = { type: "token" as const, provider: "test-cli", token: "account-a" };
   const writer = await prepareCliHistoryBoundary(params, { credential });
   expect(writer).toBeDefined();
-  runWithCliHistoryWriter(writer, () => {
-    SessionManager.open(scope).appendMessage({
+  await runWithCliHistoryWriter(writer, async () => {
+    await (
+      await SessionManager.openAsync(scope)
+    ).appendMessageAsync({
       role: "user",
       content: "Prior account-owned request",
       timestamp: 1_000,

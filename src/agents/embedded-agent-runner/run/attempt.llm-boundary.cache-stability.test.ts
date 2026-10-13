@@ -200,9 +200,9 @@ describe("prompt-cache boundary regressions", () => {
                 `\n## Code Mode Tools\n${buildCodeModeCatalogPrompt(toolContext, catalogRef.current!.entries)}`,
               entries: manager.getBranch(),
             });
-            manager.appendMessage(user(`Turn ${turn}`, TS + turn * 60000));
+            await manager.appendMessageAsync(user(`Turn ${turn}`, TS + turn * 60000));
             if (projection.update) {
-              manager.appendMessage(projection.update);
+              await manager.appendMessageAsync(projection.update);
             }
             const context = {
               systemPrompt: projection.systemPrompt,
@@ -238,9 +238,9 @@ describe("prompt-cache boundary regressions", () => {
             clearToolSearchCatalog({ catalogRef });
             projection.commit();
             await persistSessionSystemPrompt(lease.state, (customType, data) =>
-              manager.appendCustomEntry(customType, data),
+              manager.appendCustomEntryAsync(customType, data),
             );
-            manager.appendMessage({
+            await manager.appendMessageAsync({
               ...answer,
               api,
               provider: api === "anthropic-messages" ? "anthropic" : "openai",
@@ -410,10 +410,10 @@ describe("prompt-cache boundary regressions", () => {
         const first = await captureRequest(messages);
         const manager = SessionManager.inMemory();
         for (const message of messages) {
-          manager.appendMessage(message);
+          await manager.appendMessageAsync(message);
         }
-        manager.appendMessage(answer);
-        manager.appendMessage(user("Next run", TS + 60000));
+        await manager.appendMessageAsync(answer);
+        await manager.appendMessageAsync(user("Next run", TS + 60000));
         const policy: TranscriptPolicy = {
           sanitizeMode: "images-only",
           sanitizeToolCallIds: false,
@@ -788,7 +788,11 @@ describe("active prompt steering context", () => {
 
   it("keeps keyless context on the original prompt through pre-prompt rebuilding and initial steering", async () => {
     const manager = SessionManager.inMemory();
-    const kept = manager.appendMessage({ role: "user", content: "older request", timestamp: 1 });
+    const { entryId: kept } = await manager.appendMessageWithTranscriptAnchorAsync({
+      role: "user",
+      content: "older request",
+      timestamp: 1,
+    });
     const requests: string[] = [];
     const agent = new Agent({
       initialState: { model: testModel, messages: manager.buildSessionContext().messages },
@@ -812,7 +816,7 @@ describe("active prompt steering context", () => {
     const message = runtimeContext();
     const cleanupCarrier = installRuntimeContextMessageForPrompt({ session, message });
     const retainedPrompt = agent.prompt.bind(agent);
-    manager.appendCompaction("Older history summarized.", kept, 100);
+    await manager.appendCompactionAsync("Older history summarized.", kept, 100);
     agent.state.messages = manager.buildSessionContext().messages;
     agent.steer({ role: "user", content: "steering", timestamp: 2 });
     await agent.prompt({ role: "user", content: "original", timestamp: 2 });
@@ -848,7 +852,7 @@ describe("active prompt steering context", () => {
       if (capturedPrompt?.role !== "user") {
         throw new Error("Expected the captured source user prompt");
       }
-      const persisted = manager.appendMessageWithTranscriptAnchor({
+      const persisted = await manager.appendMessageWithTranscriptAnchorAsync({
         ...capturedPrompt,
         ...(mode === "keyless" ? {} : { idempotencyKey: "canonical-key" }),
       });
@@ -856,8 +860,12 @@ describe("active prompt steering context", () => {
       normalizeMessagesForLlmBoundary(await session.agent.transformContext(session.messages), {
         userTranscriptContexts: contexts.list(),
       });
-      const steering = manager.appendMessageWithTranscriptAnchor(steeringUser());
-      manager.appendCompaction("Earlier context was summarized.", persisted.entryId, 100);
+      const steering = await manager.appendMessageWithTranscriptAnchorAsync(steeringUser());
+      await manager.appendCompactionAsync(
+        "Earlier context was summarized.",
+        persisted.entryId,
+        100,
+      );
       session.agent.state.messages = manager.buildSessionContext().messages;
       await session.agent.continue();
       const retry = session.messages;
@@ -885,9 +893,9 @@ describe("active prompt steering context", () => {
     session.agent.state.messages.push(original);
     await session.agent.transformContext(session.messages);
     const manager = SessionManager.inMemory();
-    manager.appendMessage(original);
-    const kept = manager.appendMessageWithTranscriptAnchor(steeringUser());
-    manager.appendCompaction("Original request was summarized.", kept.entryId, 100);
+    await manager.appendMessageAsync(original);
+    const kept = await manager.appendMessageWithTranscriptAnchorAsync(steeringUser());
+    await manager.appendCompactionAsync("Original request was summarized.", kept.entryId, 100);
     session.agent.state.messages = manager.buildSessionContext().messages;
     await session.agent.continue();
     const projected = await session.agent.transformContext(session.messages);

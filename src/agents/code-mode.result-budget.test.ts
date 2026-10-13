@@ -256,7 +256,7 @@ describe("fresh producer results through persistence and model guards", () => {
           storePath: join(state.sessionsDir(), "sessions.json"),
         };
         await upsertSessionEntryCore(scope, { sessionId, updatedAt: 1 });
-        const manager = SessionManager.open(scope, state.workspaceDir);
+        const manager = await SessionManager.openAsync(scope, state.workspaceDir);
         const maxChars = resolveLiveToolResultMaxChars({ contextWindowTokens: context });
         installSessionToolResultGuard(manager, { maxToolResultChars: maxChars });
         for (const [index, frame] of [first, empty, final].entries()) {
@@ -268,11 +268,12 @@ describe("fresh producer results through persistence and model guards", () => {
           const rawWeight = estimateToolResultTextChars(frameText, { minimumRawWeight: 2 });
           expect(rawWeight).toBeLessThanOrEqual(context);
           expectCodeModeSharedBudget(resultDetails(frame), cap);
-          manager.appendMessage(frame);
+          await manager.appendMessageAsync(frame);
         }
         manager.flushPendingPersistence();
-        const reloaded = SessionManager.open(scope, state.workspaceDir).buildSessionContext()
-          .messages;
+        const reloaded = (
+          await SessionManager.openAsync(scope, state.workspaceDir)
+        ).buildSessionContext().messages;
         expect(text(toolResult(reloaded, 2))).toBe(finalText);
         expect(text(toolResult(await dispatch(reloaded, context), 2))).toBe(finalText);
       } finally {

@@ -50,7 +50,7 @@ it.each(["CLI", "ACP"] as const)(
         prepareAssistantTranscriptMessage: (message) => ({ ...message, display: true }),
       });
     }
-    const messages = SessionManager.open(target).buildSessionContext().messages;
+    const messages = (await SessionManager.openAsync(target)).buildSessionContext().messages;
     expect(messages).toHaveLength(runtime === "CLI" ? 1 : 2);
     expect(messages.at(-1)).toMatchObject({
       role: "assistant",

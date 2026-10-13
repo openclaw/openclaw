@@ -5,15 +5,13 @@ import {
 } from "@openclaw/llm-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "../agents/runtime/index.js";
-import { warnSessionPersistenceDeprecation } from "../agents/sessions/session-persistence-deprecation.js";
 import { sanitizeGoogleAssistantFirstOrdering } from "../shared/google-turn-ordering.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import type {
   ProviderReasoningOutputMode,
   ProviderReplayPolicy,
   ProviderReplayPolicyContext,
-  ProviderReplaySessionState,
-  ProviderSanitizeReplayHistoryContext,
+  ProviderReplaySessionStateV2,
   ProviderSanitizeReplayHistoryContextV2,
 } from "./types.js";
 
@@ -161,16 +159,10 @@ export function buildHybridAnthropicOrOpenAIReplayPolicy(
 
 const GOOGLE_TURN_ORDERING_CUSTOM_TYPE = "google-turn-ordering-bootstrap";
 
-function hasGoogleTurnOrderingMarker(sessionState: ProviderReplaySessionState): boolean {
+function hasGoogleTurnOrderingMarker(sessionState: ProviderReplaySessionStateV2): boolean {
   return sessionState
     .getCustomEntries()
     .some((entry) => entry.customType === GOOGLE_TURN_ORDERING_CUSTOM_TYPE);
-}
-
-function markGoogleTurnOrderingMarker(sessionState: ProviderReplaySessionState): void {
-  sessionState.appendCustomEntry(GOOGLE_TURN_ORDERING_CUSTOM_TYPE, {
-    timestamp: Date.now(),
-  });
 }
 
 /** @deprecated Google provider replay helper; prefer provider-local replay hooks. */
@@ -211,25 +203,6 @@ export function buildPassthroughGeminiSanitizingReplayPolicy(
         }
       : {}),
   };
-}
-
-/** @deprecated Use sanitizeGoogleGeminiReplayHistoryAsync; removed in the next Plugin SDK major. */
-export function sanitizeGoogleGeminiReplayHistory(
-  ctx: ProviderSanitizeReplayHistoryContext,
-): AgentMessage[] {
-  warnSessionPersistenceDeprecation(
-    "sanitizeGoogleGeminiReplayHistory",
-    "sanitizeGoogleGeminiReplayHistoryAsync",
-  );
-  const messages = sanitizeGoogleAssistantFirstOrdering(ctx.messages);
-  if (
-    messages !== ctx.messages &&
-    ctx.sessionState &&
-    !hasGoogleTurnOrderingMarker(ctx.sessionState)
-  ) {
-    markGoogleTurnOrderingMarker(ctx.sessionState);
-  }
-  return messages;
 }
 
 /** Sanitize replay and await the worker commit before returning the rewritten history. */

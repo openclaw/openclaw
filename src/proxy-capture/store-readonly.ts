@@ -7,8 +7,6 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import type {
   CaptureObservedDimension,
@@ -22,11 +20,6 @@ type DebugProxyCaptureDatabase = Pick<
   "capture_sessions" | "capture_events" | "capture_blobs"
 >;
 type NodeSqliteDatabase = Parameters<typeof getNodeSqliteKysely>[0];
-
-export type DebugProxyCaptureReader = {
-  getSessionEvents(sessionId: string, limit?: number): Array<Record<string, unknown>>;
-  readBlob(blobId: string): string | null;
-};
 
 export function listDebugProxyCaptureSessions(db: NodeSqliteDatabase, limit = 50) {
   const kysely = getNodeSqliteKysely<DebugProxyCaptureDatabase>(db);
@@ -318,33 +311,4 @@ export function readDebugProxyCaptureBlob(db: NodeSqliteDatabase, blobId: string
   }
   const data = Buffer.from(row.data);
   return (row.encoding === "gzip" ? gunzipSync(data) : data).toString("utf8");
-}
-
-/** @deprecated Use createDebugProxyCaptureReaderAsync for worker-backed, noncreating reads. */
-export function createDebugProxyCaptureReader(params: {
-  env: NodeJS.ProcessEnv;
-}): DebugProxyCaptureReader {
-  warnPluginSdkDeprecation({
-    family: "proxy-capture-reader",
-    method: "createDebugProxyCaptureReader",
-    replacement: "createDebugProxyCaptureReaderAsync()",
-  });
-  return {
-    getSessionEvents(sessionId, limit) {
-      return (
-        withExistingOpenClawStateDatabaseReadOnly(
-          ({ db }) => readDebugProxyCaptureSessionEvents(db, sessionId, limit),
-          { env: params.env },
-        ) ?? []
-      );
-    },
-    readBlob(blobId) {
-      return (
-        withExistingOpenClawStateDatabaseReadOnly(
-          ({ db }) => readDebugProxyCaptureBlob(db, blobId),
-          { env: params.env },
-        ) ?? null
-      );
-    },
-  };
 }

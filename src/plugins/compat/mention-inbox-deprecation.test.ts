@@ -7,7 +7,7 @@ it("warns once per plugin and Inbox family, including after a plugin reload", as
   const first = new PluginInstance("mention-compat-first");
   const second = new PluginInstance("mention-compat-second");
   const reloaded = new PluginInstance("mention-compat-first");
-  const methods = ["list", "dismiss", "recordCommittedInput", "invalidate"] as const;
+  const methods = ["validateRecipients"] as const;
   try {
     first.run(() => {
       for (const method of methods) {
@@ -16,8 +16,8 @@ it("warns once per plugin and Inbox family, including after a plugin reload", as
       }
     });
     second.run(() => {
-      warnMentionInboxDeprecation("list");
-      warnMentionInboxDeprecation("list");
+      warnMentionInboxDeprecation("validateRecipients");
+      warnMentionInboxDeprecation("validateRecipients");
     });
     reloaded.run(() => {
       for (const method of methods) {
@@ -26,8 +26,8 @@ it("warns once per plugin and Inbox family, including after a plugin reload", as
     });
     expect(warning).toHaveBeenCalledTimes(2);
     for (const { plugin, method } of [
-      { plugin: "mention-compat-first", method: "list" },
-      { plugin: "mention-compat-second", method: "list" },
+      { plugin: "mention-compat-first", method: "validateRecipients" },
+      { plugin: "mention-compat-second", method: "validateRecipients" },
     ]) {
       const calls = warning.mock.calls.filter(
         ([message]) =>

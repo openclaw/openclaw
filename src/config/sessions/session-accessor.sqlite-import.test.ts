@@ -532,11 +532,11 @@ it.each(["implicit", "root", "opaque"])(
             ]
           : []),
       ]);
-      const manager = SessionManager.open(transcript, state.workspaceDir);
+      const manager = await SessionManager.openAsync(transcript, state.workspaceDir);
       expect(manager.buildSessionContext().messages.map((entry) => entry.role)).toEqual(
         leafControl ? ["assistant", "user", "assistant"] : ["user"],
       );
-      const nextId = manager.appendMessage({
+      const nextId = await manager.appendMessageAsync({
         role: "user",
         content: "continued",
         timestamp: Date.now(),
@@ -548,7 +548,9 @@ it.each(["implicit", "root", "opaque"])(
         type: "message",
         parentId: appendParentId,
       });
-      expect(SessionManager.open(transcript, state.workspaceDir).getLeafId()).toBe(nextId);
+      expect((await SessionManager.openAsync(transcript, state.workspaceDir)).getLeafId()).toBe(
+        nextId,
+      );
       expect(fs.readFileSync(filename, "utf8")).toBe(sourceBytes);
     });
   },

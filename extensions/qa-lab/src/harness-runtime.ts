@@ -52,9 +52,6 @@ export function createQaRunnerRuntime(): PluginRuntime {
         resolveStorePath(_store: string | undefined, { agentId }: { agentId: string }) {
           return agentId;
         },
-        readSessionUpdatedAt({ sessionKey }: { sessionKey: string }) {
-          return sessions.has(sessionKey) ? Date.now() : undefined;
-        },
         async readSessionUpdatedAtAsync({ sessionKey }: { sessionKey: string }) {
           return sessions.has(sessionKey) ? Date.now() : undefined;
         },

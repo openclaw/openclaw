@@ -1,6 +1,7 @@
 import { realpathSync } from "node:fs";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -43,11 +44,18 @@ registerAgentSessionLoopTestLifecycle();
 
 type BeforeCompactionEvent = Extract<ExtensionEvent, { type: "session_before_compact" }>;
 
-function seedHistory(manager: SessionManager): string {
-  const firstUser = manager.appendMessage(makeUserMessage("old prompt", 1));
-  manager.appendMessage(createAssistant(testModel, [{ type: "text", text: "old answer" }]));
-  manager.appendMessage(makeUserMessage("recent prompt", 3));
-  manager.appendMessage(createAssistant(testModel, [{ type: "text", text: "recent answer" }]));
+async function seedHistory(manager: SessionManager): Promise<string> {
+  const firstUser = expectDefined(
+    await manager.appendMessageAsync(makeUserMessage("old prompt", 1)),
+    "Expected appended message",
+  );
+  await manager.appendMessageAsync(
+    createAssistant(testModel, [{ type: "text", text: "old answer" }]),
+  );
+  await manager.appendMessageAsync(makeUserMessage("recent prompt", 3));
+  await manager.appendMessageAsync(
+    createAssistant(testModel, [{ type: "text", text: "recent answer" }]),
+  );
   return firstUser;
 }
 
@@ -84,8 +92,8 @@ describe("context replacement after write admission", () => {
       cwd: dir,
       message: { role: "user", content: "authoritative question", timestamp: 1 },
     });
-    const sessionManager = SessionManager.open(target, dir);
-    sessionManager.appendMessage(
+    const sessionManager = await SessionManager.openAsync(target, dir);
+    await sessionManager.appendMessageAsync(
       createAssistant(testModel, [{ type: "text", text: "authoritative answer" }]),
     );
     const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
@@ -115,7 +123,7 @@ describe("context replacement after write admission", () => {
 
     const databasePath = resolveSqliteTargetFromSessionStorePath(target.storePath).path;
     expect(await closeOpenClawAgentDatabaseByPathAsync(databasePath)).toBe(true);
-    const reopened = SessionManager.open(target, dir);
+    const reopened = await SessionManager.openAsync(target, dir);
     try {
       expect(reopened.getBranch()).toEqual(persistedBefore.slice(1));
       expect(reopened.getBranch().some((entry) => entry.type === "compaction")).toBe(false);
@@ -136,8 +144,8 @@ describe("context replacement after write admission", () => {
         storePath: path.join(root, "sessions.json"),
       };
       await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
-      const manager = SessionManager.open(target, root);
-      const firstUser = seedHistory(manager);
+      const manager = await SessionManager.openAsync(target, root);
+      const firstUser = await seedHistory(manager);
       const summaryReady = createDeferred();
       const published: string[] = [];
       const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
@@ -235,7 +243,7 @@ describe("context replacement after write admission", () => {
 
   it("does not adopt a successor's context authority after in-memory summarization", async () => {
     const manager = SessionManager.inMemory();
-    seedHistory(manager);
+    await seedHistory(manager);
     const summaryReady = createDeferred();
     const release = createDeferred();
     const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([

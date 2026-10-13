@@ -39,7 +39,6 @@ import { createToolPolicyMatcher } from "../agents/tool-policy-match.js";
 import { expandToolGroups } from "../agents/tool-policy-shared.js";
 import {
   buildWatchedSessionsPromptLines,
-  prepareWatchedSessionsPrompt,
   prepareWatchedSessionsPromptAsync,
 } from "../agents/watched-sessions-prompt.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -66,32 +65,15 @@ export {
 /** Core exec mode algebra for plugin-owned policy adapters. */
 export const execPolicy = Object.freeze({ resolveExecModePolicy, minSecurity, maxAsk });
 
-/**
- * Renders the Watched Sessions prompt block for plugin-owned harness prompts.
- * Harness runtimes that assemble their own instruction layers (e.g. Codex)
- * must surface the same watched-session facts as the embedded prompt, or the
- * model keeps refusing cross-session questions on those runtimes (openclaw#114797).
- * @deprecated Await prepareWatchedSessionsHarnessContext with current host authority.
- */
-export function buildWatchedSessionsHarnessContext(params: {
+/** Prepares current watched-session facts through the worker before rendering them. */
+export async function prepareWatchedSessionsHarnessContext(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
   sandboxed?: boolean;
   toolNames: Iterable<string>;
   capabilityToolNames?: Iterable<string>;
-}): string | undefined {
-  const lines = buildWatchedSessionsPromptLines(
-    prepareWatchedSessionsPrompt({ enabled: true, ...params }),
-  );
-  return lines.length > 0 ? lines.join("\n").trimEnd() : undefined;
-}
-
-/** Prepares current watched-session facts through the worker before rendering them. */
-export async function prepareWatchedSessionsHarnessContext(
-  params: Parameters<typeof buildWatchedSessionsHarnessContext>[0] & {
-    assertCurrent: () => void;
-  },
-): Promise<string | undefined> {
+  assertCurrent: () => void;
+}): Promise<string | undefined> {
   const prepared = await prepareWatchedSessionsPromptAsync({ enabled: true, ...params });
   params.assertCurrent();
   const lines = buildWatchedSessionsPromptLines(prepared);

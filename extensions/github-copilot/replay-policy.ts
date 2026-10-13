@@ -1,7 +1,7 @@
 import type {
   ProviderReplayPolicy,
   ProviderReplayPolicyContext,
-  ProviderSanitizeReplayHistoryContext,
+  ProviderSanitizeReplayHistoryContextV2,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { buildStrictAnthropicReplayPolicy } from "openclaw/plugin-sdk/provider-model-shared";
 import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -52,7 +52,7 @@ export function buildGithubCopilotReplayPolicy(
   });
 }
 
-export function sanitizeGithubCopilotReplayHistory(ctx: ProviderSanitizeReplayHistoryContext) {
+export function sanitizeGithubCopilotReplayHistory(ctx: ProviderSanitizeReplayHistoryContextV2) {
   return ctx.modelApi === "openai-responses" || ctx.modelApi === "anthropic-messages"
     ? stripCopilotAssistantThinkingMessages(ctx.messages)
     : ctx.messages;

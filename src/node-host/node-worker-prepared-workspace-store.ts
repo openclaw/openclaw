@@ -5,30 +5,18 @@ import type {
 } from "../worker/node-workspace-prepared-protocol.js";
 import { NodeWorkerJournalWorker } from "./node-worker-journal-worker.js";
 import type { NodeWorkerJournalAuthority } from "./node-worker-journal.types.js";
-import {
-  NodeWorkerPreparedWorkspaceKernel,
-  type NodeWorkerPreparedWorkspaceRow,
-} from "./node-worker-prepared-workspace-store.kernel.js";
+import type { NodeWorkerPreparedWorkspaceRow } from "./node-worker-prepared-workspace-store.kernel.js";
 
 export type { NodeWorkerPreparedWorkspaceRow } from "./node-worker-prepared-workspace-store.kernel.js";
 
 /** Prepared workspace persistence shares the node journal's admission and settlement owner. */
 export class NodeWorkerPreparedWorkspaceStore {
   private readonly worker: NodeWorkerJournalWorker;
-  private readonly mutations = new Set<string>();
-  constructor(private readonly options: Pick<OpenClawStateDatabaseOptions, "env" | "path">) {
+  constructor(options: Pick<OpenClawStateDatabaseOptions, "env" | "path">) {
     this.worker = new NodeWorkerJournalWorker({
       env: options.env,
       path: options.path,
     });
-  }
-
-  /** @deprecated Only the synchronous public plugin workspace capability retains this path. */
-  findSync(environmentId: string): NodeWorkerPreparedWorkspaceRow | undefined {
-    if (this.mutations.size > 0) {
-      throw new Error("INVALID_REQUEST: prepared workspace mutation is in progress");
-    }
-    return new NodeWorkerPreparedWorkspaceKernel(this.options).find(environmentId);
   }
 
   find(environmentId: string): Promise<NodeWorkerPreparedWorkspaceRow | undefined> {
@@ -74,33 +62,18 @@ export class NodeWorkerPreparedWorkspaceStore {
   async beginMutation(
     expected: NodeWorkerPreparedWorkspaceRow,
     authority?: NodeWorkerJournalAuthority,
-  ): Promise<{ complete: () => Promise<void>; close: () => void }> {
+  ): Promise<{ complete: () => Promise<void> }> {
     if (expected.state !== "bound") {
       throw new Error("INVALID_REQUEST: prepared workspace is not bound");
     }
-    const key = expected.preparation_key;
-    if (this.mutations.has(key)) {
-      throw new Error("INVALID_REQUEST: prepared workspace mutation is in progress");
-    }
-    // Legacy acquisition cannot wait for the async workspace serializer or tombstone.
-    this.mutations.add(key);
-    const close = () => this.mutations.delete(key);
-    let retiring: NodeWorkerPreparedWorkspaceRow;
-    try {
-      retiring = await this.retire(expected, false, authority);
-    } catch (error) {
-      close();
-      throw error;
-    }
+    const retiring = await this.retire(expected, false, authority);
     return {
       complete: async () => {
         await this.worker.execute(
           { type: "nodeWorker.prepared.completeMutation", input: [retiring] },
           authority,
         );
-        close();
       },
-      close,
     };
   }
 

@@ -92,7 +92,7 @@ it.each([
         : path.join(dir, "sessions.json"),
     };
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: Date.now() });
-    const sessionManager = SessionManager.open(scope, dir);
+    const sessionManager = await SessionManager.openAsync(scope, dir);
     guardSessionManager(sessionManager);
     const { session } = await createTestSession({ sessionManager });
     let finishInitialResponse: (() => void) | undefined;
@@ -204,7 +204,7 @@ it.each([
         expect((await send).details).toMatchObject({ status: "accepted" });
         expect(session.pendingMessageCount).toBe(1);
         expect(
-          SessionManager.open(scope, dir)
+          (await SessionManager.openAsync(scope, dir))
             .getEntries()
             .filter((entry) => entry.type === "message" && entry.message.role === "user"),
         ).toHaveLength(1);
@@ -223,7 +223,7 @@ it.each([
         mode === "steer" ? false : supportsTranscriptCommitWait ? true : undefined,
       );
       expect(queueMessage.mock.calls[0]?.[1]?.isInboundUserMessage).toBeUndefined();
-      const entries = SessionManager.open(scope, dir).getEntries();
+      const entries = (await SessionManager.openAsync(scope, dir)).getEntries();
       expect(
         entries.filter((entry) => entry.type === "message" && entry.message.role === "user"),
       ).toHaveLength(2);

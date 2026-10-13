@@ -107,14 +107,16 @@ describe("voice consult concrete store ownership", () => {
       });
       expect(params.runId).toBe(runIds.at(-1));
       expect(params.runId.startsWith(runIdPrefix)).toBe(true);
-      const manager = SessionManager.open(target, state.workspaceDir);
-      guardSessionManager(manager, {
+      const manager = await SessionManager.openAsync(target, state.workspaceDir);
+      await guardSessionManager(manager, {
         config: cfg,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
         runId: params.runId,
-      }).appendMessage(makeAgentAssistantMessage({ content: [{ type: "text", text: secret }] }));
-      const persisted = SessionManager.open(target, state.workspaceDir)
+      }).appendMessageAsync(
+        makeAgentAssistantMessage({ content: [{ type: "text", text: secret }] }),
+      );
+      const persisted = (await SessionManager.openAsync(target, state.workspaceDir))
         .getEntries()
         .filter((entry) => entry.type === "message");
       expect(persisted.map((entry) => readSessionMessageIdentity(entry.message)?.runId)).toEqual(

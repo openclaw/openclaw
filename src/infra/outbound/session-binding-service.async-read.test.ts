@@ -153,7 +153,7 @@ describe("awaited binding read ownership", () => {
     );
   });
 
-  it("warns once for actual legacy binding use while V2 construction and reads stay silent", async () => {
+  it("keeps V2 binding construction and reads silent", async () => {
     const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
     const run = <T>(body: () => T) =>
       withPluginRuntimePluginScope({ pluginId: "binding-sdk-compat-fixture" }, body);
@@ -185,20 +185,7 @@ describe("awaited binding read ownership", () => {
           await getSessionBindingService().resolveByConversationAsync(record.conversation),
         ).toEqual(record);
         expect(warning).not.toHaveBeenCalled();
-        expect(getSessionBindingService().resolveByConversation(record.conversation)).toEqual(
-          record,
-        );
-        getSessionBindingService().touch("", undefined, record.conversation);
       });
-      run(() => getSessionBindingService().resolveByConversation(record.conversation));
-      expect(warning).toHaveBeenCalledTimes(1);
-      expect(warning.mock.calls[0]?.[0]).toContain(
-        "Plugin binding-sdk-compat-fixture: SessionBindingService.resolveByConversation",
-      );
-      expect(warning.mock.calls[0]?.[0]).toContain(
-        "SessionBindingService.resolveByConversationAsync",
-      );
-      expect(warning.mock.calls[0]?.[0]).toContain("later release after stable deprecation");
     } finally {
       warning.mockRestore();
     }

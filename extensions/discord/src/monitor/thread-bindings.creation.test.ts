@@ -157,7 +157,7 @@ describe("thread binding creation and ACP startup reconciliation", () => {
         targetSessionKey: replace ? "agent:main:acp:replacement" : original.targetSessionKey,
         metadata: { label: "updated" },
       });
-      const resolved = service.resolveByConversation(conversation);
+      const resolved = await service.resolveByConversationAsync(conversation);
       expect(resolved).toMatchObject({
         conversation: { ...conversation, parentConversationId: conversation.conversationId },
         metadata: {

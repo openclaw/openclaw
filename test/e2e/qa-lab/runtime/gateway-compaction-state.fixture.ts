@@ -17,7 +17,7 @@ type StateRuntime = {
   sessions: {
     SessionManager: Pick<
       typeof import("openclaw/plugin-sdk/agent-sessions").SessionManager,
-      "open"
+      "openAsync"
     >;
   };
   store: Pick<
@@ -413,14 +413,14 @@ export async function patchCompactionSessionOwnership(
   return updated;
 }
 
-export function snapshotCompactionSession(
+export async function snapshotCompactionSession(
   runtime: StateRuntime,
   gateway: GatewayState,
   proof: ProofCase,
 ) {
   const target = targetFor(runtime, gateway, proof);
   const entry = readCompactionEntry(runtime, gateway, proof);
-  const manager = runtime.sessions.SessionManager.open(target, gateway.workspaceDir);
+  const manager = await runtime.sessions.SessionManager.openAsync(target, gateway.workspaceDir);
   const branch = manager.getBranch();
   const compactions = manager.getEntries().filter((event) => event.type === "compaction");
   const toolEntries = branch.filter(
@@ -457,7 +457,7 @@ export function snapshotCompactionSession(
   };
 }
 
-export type CompactionProofSnapshot = ReturnType<typeof snapshotCompactionSession>;
+export type CompactionProofSnapshot = Awaited<ReturnType<typeof snapshotCompactionSession>>;
 
 export function assertOriginalCompactionRows(
   before: CompactionProofSnapshot,

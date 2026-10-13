@@ -80,7 +80,6 @@ vi.mock("../../tts/tts-settings.js", async (importOriginal) => ({
 vi.mock("../../tts/tts.js", () => ({
   getResolvedSpeechProviderConfig: vi.fn(),
   getTtsPersona: vi.fn(() => undefined),
-  getTtsProvider: vi.fn(() => "openai"),
   isTtsEnabled: vi.fn(() => true),
   isTtsProviderConfiguredAsync: mocks.isTtsProviderConfiguredAsync,
   listTtsPersonas: vi.fn(() => []),

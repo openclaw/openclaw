@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
 import { SessionManager, buildSessionContext } from "./session-manager.js";
 
@@ -33,7 +34,7 @@ it("creates sessions and builds context without loading agent runtime facades", 
     const entryIds = [
       await manager.appendThinkingLevelChange("high"),
       await manager.appendModelChange("test-provider", "test-model"),
-      manager.appendMessage(message),
+      expectDefined(await manager.appendMessageAsync(message), "Expected appended message"),
     ];
     for (const id of entryIds) {
       expect(id).toMatch(/^[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}$/);

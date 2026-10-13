@@ -57,7 +57,10 @@ const model: Model = { ...testModel, api: "compaction-test-api", contextWindow: 
 async function reopen(target: { storePath: string }, dir: string): Promise<SessionManager> {
   const databasePath = resolveSqliteTargetFromSessionStorePath(target.storePath).path;
   expect(await closeOpenClawAgentDatabaseByPathAsync(databasePath)).toBe(true);
-  return SessionManager.open(target as Parameters<typeof SessionManager.open>[0], dir);
+  return await SessionManager.openAsync(
+    target as Parameters<typeof SessionManager.openAsync>[0],
+    dir,
+  );
 }
 
 function lastCompaction(sessionManager: SessionManager) {
@@ -81,15 +84,22 @@ describe("AgentSession degraded compaction reload", () => {
       storePath: path.join(dir, "sessions.json"),
     };
     await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-    let sessionManager = SessionManager.open(target, dir);
+    let sessionManager = await SessionManager.openAsync(target, dir);
     if (priorBoundary) {
       // The boundary shape written before this change: no qualityDegraded field.
-      sessionManager.appendMessage({ role: "user", content: "earliest prompt", timestamp: 1 });
-      const keptId = sessionManager.appendMessage({
-        ...createAssistant(model, [{ type: "text", text: "earliest answer" }]),
-        timestamp: 2,
+      await sessionManager.appendMessageAsync({
+        role: "user",
+        content: "earliest prompt",
+        timestamp: 1,
       });
-      sessionManager.appendCompaction(
+      const keptId = expectDefined(
+        await sessionManager.appendMessageAsync({
+          ...createAssistant(model, [{ type: "text", text: "earliest answer" }]),
+          timestamp: 2,
+        }),
+        "Expected appended message",
+      );
+      await sessionManager.appendCompactionAsync(
         PRIOR_SUMMARY,
         keptId,
         1_000,
@@ -99,16 +109,20 @@ describe("AgentSession degraded compaction reload", () => {
       sessionManager.flushPendingPersistence();
       sessionManager = await reopen(target, dir);
     }
-    sessionManager.appendMessage({
+    await sessionManager.appendMessageAsync({
       role: "user",
       content: `${LATEST_ASK} ${OVERSIZED_IDENTIFIER}`,
       timestamp: 3,
     });
-    sessionManager.appendMessage({
+    await sessionManager.appendMessageAsync({
       ...createAssistant(model, [{ type: "text", text: "old answer" }]),
       timestamp: 4,
     });
-    sessionManager.appendMessage({ role: "user", content: "latest prompt", timestamp: 5 });
+    await sessionManager.appendMessageAsync({
+      role: "user",
+      content: "latest prompt",
+      timestamp: 5,
+    });
     setCompactionSafeguardRuntime(sessionManager, {
       model,
       recentTurnsPreserve: 0,

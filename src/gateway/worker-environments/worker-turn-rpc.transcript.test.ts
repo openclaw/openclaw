@@ -155,7 +155,7 @@ describe("worker transcript claim fences", () => {
         releaseWriter.resolve();
         await blocker;
         await expect(commit).resolves.toEqual({ ok: false, closeReason: "placement-mismatch" });
-        expect(SessionManager.open(target).getEntries()).toEqual([]);
+        expect((await SessionManager.openAsync(target)).getEntries()).toEqual([]);
         expect(loadSessionEntry(target)).toEqual(entryBefore);
         expect(updates).toEqual([]);
         expect(store.get(claim.sessionId)?.lastTranscriptAckCursor).toBeNull();
@@ -201,7 +201,7 @@ describe("worker transcript claim fences", () => {
             support.transcriptRequest(admitted.identity, "replacement can commit", { seq }),
           ),
         ).resolves.toMatchObject({ ok: true });
-        expect(SessionManager.open(target).getEntries()).toHaveLength(1);
+        expect((await SessionManager.openAsync(target)).getEntries()).toHaveLength(1);
         expect(updates).toHaveLength(1);
         expect(store.get(claim.sessionId)?.lastTranscriptAckCursor).toBe(seq);
       } finally {
@@ -283,7 +283,7 @@ describe("worker transcript claim fences", () => {
         );
         if (scenario === "current") {
           await expect(result).resolves.toMatchObject({ ok: true });
-          expect(SessionManager.open(original).getEntries()).toEqual([
+          expect((await SessionManager.openAsync(original)).getEntries()).toEqual([
             expect.objectContaining({
               message: expect.objectContaining({
                 role: "user",
@@ -297,7 +297,7 @@ describe("worker transcript claim fences", () => {
           expect(loadSessionEntry(original)).toBeUndefined();
           expect(store.get(claim.sessionId)?.lastTranscriptAckCursor).toBeNull();
         }
-        expect(SessionManager.open(replacement).getEntries()).toEqual([]);
+        expect((await SessionManager.openAsync(replacement)).getEntries()).toEqual([]);
         expect(loadSessionEntry(replacement)).toEqual(replacementBefore);
       } finally {
         if (store.validateTurnClaim(claim)) {

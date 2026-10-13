@@ -31,10 +31,7 @@ import type { AgentMessage } from "./runtime/index.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 import { resolveMaxToolResultChars } from "./session-tool-result-guard.payload.js";
 import type { SessionManager } from "./sessions/index.js";
-import type {
-  CompactionAppendPersistence,
-  CompactionAppendPersistenceAsync,
-} from "./sessions/session-compaction-persistence.js";
+import type { CompactionAppendPersistenceAsync } from "./sessions/session-compaction-persistence.js";
 import { setSessionToolResultPreparer } from "./sessions/session-tool-result-preparation.js";
 import { sanitizeTranscriptMessage } from "./transcript-sanitize.js";
 
@@ -43,7 +40,6 @@ type GuardedSessionManager = SessionManager &
     Pick<
       ReturnType<typeof installSessionToolResultGuard>,
       | "hasPendingToolResults"
-      | "flushPendingToolResults"
       | "flushPendingToolResultsAsync"
       | "clearPendingToolResults"
       | "setNextUserMessagePersistence"
@@ -129,7 +125,6 @@ export function guardSessionManager(
     ) => void;
     onUserMessageBlocked?: (message: Extract<AgentMessage, { role: "user" }>) => void;
     onMessagePersisted?: (message: AgentMessage) => void | Promise<void>;
-    withCompactionPersistence?: CompactionAppendPersistence;
     withCompactionPersistenceAsync?: CompactionAppendPersistenceAsync;
   },
 ): GuardedSessionManager {
@@ -336,7 +331,6 @@ export function guardSessionManager(
     suppressTranscriptOnlyAssistantPersistence: opts?.suppressTranscriptOnlyAssistantPersistence,
     assistantErrorTranscript: opts?.assistantErrorTranscript,
     onMessagePersisted: opts?.onMessagePersisted,
-    withCompactionPersistence: opts?.withCompactionPersistence,
     withCompactionPersistenceAsync: opts?.withCompactionPersistenceAsync,
     onUserMessagePersisted: async (message, persistence) => {
       const runtimeMessage = runtimeUserMessageByPersistedMessage.get(message);
@@ -373,7 +367,6 @@ export function guardSessionManager(
     cap: (message) => truncateToolResultMessage(message, maxToolResultChars),
   });
   guardedSessionManager.hasPendingToolResults = guard.hasPendingToolResults;
-  guardedSessionManager.flushPendingToolResults = guard.flushPendingToolResults;
   guardedSessionManager.flushPendingToolResultsAsync = guard.flushPendingToolResultsAsync;
   guardedSessionManager.clearPendingToolResults = guard.clearPendingToolResults;
   guardedSessionManager.setNextUserMessagePersistence = guard.setNextUserMessagePersistence;

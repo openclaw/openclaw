@@ -116,23 +116,21 @@ async function withSurface(
     };
     await fs.mkdir(workspaceDir, { recursive: true });
     setRuntimeConfigSnapshot(config, config);
-    const tools = withPluginCache(createPluginCache(), () => {
+    const tools = await withPluginCache(createPluginCache(), async () => {
       resetPluginRuntimeStateForTest();
       setGatewayPluginMetadataSnapshot(
         loadPluginMetadataSnapshot({ config, workspaceDir, env: process.env }),
       );
       host = createAgentHarnessHostCapabilities({ attempt, pluginId: "test-host" });
       afterCapture?.(attempt);
-      return (
-        host.capabilities.createToolSurface?.({
-          config,
-          sessionKey: attempt.sessionKey,
-          workspaceDir,
-          cwd: workspaceDir,
-          agentDir: path.join(tempDir, "agent"),
-          ...harnessOptions,
-        }) ?? []
-      );
+      return await host.capabilities.createToolSurfaceAsync!({
+        config,
+        sessionKey: attempt.sessionKey,
+        workspaceDir,
+        cwd: workspaceDir,
+        agentDir: path.join(tempDir, "agent"),
+        ...harnessOptions,
+      });
     });
     await check(tools);
   } finally {

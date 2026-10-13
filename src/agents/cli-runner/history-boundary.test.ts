@@ -66,7 +66,7 @@ async function fixture(withHeader = true) {
       timestamp: new Date(0).toISOString(),
     });
   }
-  const manager = () => SessionManager.open(target, dir);
+  const manager = async () => await SessionManager.openAsync(target, dir);
   let runNumber = 0;
   const withRun = async <T>(
     runId: string,
@@ -119,7 +119,9 @@ async function fixture(withHeader = true) {
   const seed = async () =>
     await run("epoch-a", async (allowed) => {
       expect(allowed).toBe(true);
-      manager().appendMessage({ role: "user", content: "A private canary", timestamp: 1 });
+      await (
+        await manager()
+      ).appendMessageAsync({ role: "user", content: "A private canary", timestamp: 1 });
     });
   return { target, manager, run, seed, withRun };
 }
@@ -201,14 +203,22 @@ describe("CLI transcript account boundary", () => {
               if (change === "revocation") {
                 abort.abort();
               } else {
-                const manager = f.manager();
+                const manager = await f.manager();
                 if (change === "append") {
-                  manager.appendMessage({ role: "user", content: "intervening", timestamp: 2 });
+                  await manager.appendMessageAsync({
+                    role: "user",
+                    content: "intervening",
+                    timestamp: 2,
+                  });
                 } else if (change === "rewrite") {
-                  manager.appendMessage({ role: "user", content: "intervening", timestamp: 2 });
-                  manager.removeTrailingEntries((entry) => entry.type === "message");
+                  await manager.appendMessageAsync({
+                    role: "user",
+                    content: "intervening",
+                    timestamp: 2,
+                  });
+                  await manager.removeTrailingEntriesAsync((entry) => entry.type === "message");
                 } else {
-                  manager.appendResetBoundary("reset");
+                  await manager.appendResetBoundaryAsync("reset");
                 }
               }
               return planned;
@@ -250,11 +260,15 @@ describe("CLI transcript account boundary", () => {
             async (...args) => {
               const planned = await update(...args);
               // A finished run settles its own rows after the lane moved on.
-              const manager = f.manager();
+              const manager = await f.manager();
               if (change === "append") {
-                manager.appendMessage({ role: "user", content: "late settle", timestamp: 2 });
+                await manager.appendMessageAsync({
+                  role: "user",
+                  content: "late settle",
+                  timestamp: 2,
+                });
               } else {
-                manager.removeTrailingEntries((entry) => entry.type === "message");
+                await manager.removeTrailingEntriesAsync((entry) => entry.type === "message");
               }
               return planned;
             },
@@ -279,12 +293,12 @@ describe("CLI transcript account boundary", () => {
     await f.seed();
     await f.run("epoch-a", async (allowed, params) => {
       expect(await history(allowed, params)).toContain("A private canary");
-      const manager = f.manager();
+      const manager = await f.manager();
       const leaf = manager.getLeafId();
       if (!leaf) {
         throw new Error("Missing seeded transcript leaf");
       }
-      manager.appendCompaction("A private summary", leaf, 1000);
+      await manager.appendCompactionAsync("A private summary", leaf, 1000);
     });
     await f.run("epoch-a", async (allowed, params) => {
       expect(await history(allowed, params)).toContain("A private summary");
@@ -311,7 +325,9 @@ describe("CLI transcript account boundary", () => {
       undefined,
       async (allowed) => {
         expect(allowed).toBe(true);
-        f.manager().appendMessage({ role: "user", content: "named account", timestamp: 1 });
+        await (
+          await f.manager()
+        ).appendMessageAsync({ role: "user", content: "named account", timestamp: 1 });
       },
       {},
       { ...credential, accountId: "account-a" },
@@ -339,7 +355,9 @@ describe("CLI transcript account boundary", () => {
       undefined,
       async (allowed) => {
         expect(allowed).toBe(true);
-        f.manager().appendMessage({ role: "user", content: "prior token", timestamp: 1 });
+        await (
+          await f.manager()
+        ).appendMessageAsync({ role: "user", content: "prior token", timestamp: 1 });
       },
       {},
       { type: "token", provider: "test-cli", token: "resolved-a", tokenRef },
@@ -358,18 +376,22 @@ describe("CLI transcript account boundary", () => {
     if (!writer) {
       throw new Error("Missing admitted history writer");
     }
-    const before = f.manager().getEntries();
+    const before = (await f.manager()).getEntries();
     await expect(writer.assertReadable()).rejects.toThrow();
-    expect(() =>
-      runWithCliHistoryWriter(writer, () =>
-        f.manager().appendMessage({
-          role: "user",
-          content: "late write",
-          timestamp: 1,
-        }),
+    await expect(
+      runWithCliHistoryWriter(
+        writer,
+        async () =>
+          await (
+            await f.manager()
+          ).appendMessageAsync({
+            role: "user",
+            content: "late write",
+            timestamp: 1,
+          }),
       ),
-    ).toThrow();
-    expect(f.manager().getEntries()).toEqual(before);
+    ).rejects.toThrow();
+    expect((await f.manager()).getEntries()).toEqual(before);
   });
 
   it("detaches background persistence without lending it the closed CLI history proof", async () => {
@@ -378,12 +400,14 @@ describe("CLI transcript account boundary", () => {
     const { background } = await f.run("epoch-a", async () => ({
       background: runWithoutOwnedSessionTranscriptWrites(async () => {
         await release.promise;
-        f.manager().appendMessage({ role: "user", content: "detached result", timestamp: 1 });
+        await (
+          await f.manager()
+        ).appendMessageAsync({ role: "user", content: "detached result", timestamp: 1 });
       }),
     }));
     release.resolve();
     await expect(background).resolves.toBeUndefined();
-    expect(JSON.stringify(f.manager().getEntries())).toContain("detached result");
+    expect(JSON.stringify((await f.manager()).getEntries())).toContain("detached result");
     await f.run("epoch-a", async (allowed) => expect(allowed).toBe(false));
   });
 
@@ -392,7 +416,9 @@ describe("CLI transcript account boundary", () => {
     await f.seed();
     await f.run("epoch-b", async (allowed, params) => {
       expect(await history(allowed, params)).toBeUndefined();
-      f.manager().appendMessage({ role: "user", content: "B private canary", timestamp: 2 });
+      await (
+        await f.manager()
+      ).appendMessageAsync({ role: "user", content: "B private canary", timestamp: 2 });
     });
     for (const epoch of ["epoch-a", "epoch-b"]) {
       await f.run(epoch, async (allowed, params) => {
@@ -408,10 +434,12 @@ describe("CLI transcript account boundary", () => {
       await f.seed();
       if (change === "unrecorded append") {
         // Models run by an older binary cannot advance the new coverage proof.
-        f.manager().appendMessage({ role: "user", content: "unverified account", timestamp: 2 });
+        await (
+          await f.manager()
+        ).appendMessageAsync({ role: "user", content: "unverified account", timestamp: 2 });
       } else if (change === "rewrite") {
-        const manager = f.manager();
-        manager.appendResetBoundary("reset", manager.getLeafId() ?? undefined);
+        const manager = await f.manager();
+        await manager.appendResetBoundaryAsync("reset", manager.getLeafId() ?? undefined);
       } else if (change === "missing provenance") {
         await patchSessionEntryCore(f.target, (entry) => ({
           ...entry,
@@ -450,10 +478,12 @@ describe("CLI transcript account boundary", () => {
     const f = await fixture();
     await f.seed();
     await f.run("epoch-b", async (allowed) => expect(allowed).toBe(false));
-    f.manager().appendResetBoundary("reset");
+    await (await f.manager()).appendResetBoundaryAsync("reset");
     await f.run("epoch-b", async (allowed) => {
       expect(allowed).toBe(true);
-      f.manager().appendMessage({ role: "user", content: "B fresh canary", timestamp: 2 });
+      await (
+        await f.manager()
+      ).appendMessageAsync({ role: "user", content: "B fresh canary", timestamp: 2 });
     });
     await f.run("epoch-b", async (allowed, params) => {
       const prompt = await history(allowed, params);
@@ -520,7 +550,7 @@ describe("CLI transcript account boundary", () => {
         authProfileId: "test-cli:saved",
       });
     });
-    expect(JSON.stringify(f.manager().getEntries())).toContain("recovered CLI answer");
+    expect(JSON.stringify((await f.manager()).getEntries())).toContain("recovered CLI answer");
   });
 
   it("rechecks a revived foreign writer after metadata planning yields", async () => {
@@ -590,7 +620,7 @@ describe("CLI transcript account boundary", () => {
                 ? "admitted run authority is no longer active"
                 : "CLI history authority changed",
             );
-          const before = f.manager().getEntries();
+          const before = (await f.manager()).getEntries();
           await runWithCliHistoryWriter(writer, async () => {
             const result = await persistCliAssistantTranscript({
               runParams: { ...params, persistAssistantTranscript: true },
@@ -600,7 +630,7 @@ describe("CLI transcript account boundary", () => {
             });
             expect.soft(result.terminalAnchor).toBeUndefined();
           });
-          expect(f.manager().getEntries()).toEqual(before);
+          expect((await f.manager()).getEntries()).toEqual(before);
           const beforeBindingSettlement = loadSessionEntryReadOnly(f.target);
           await settleNativeBinding(params, writer.assertCurrent);
           expect(loadSessionEntryReadOnly(f.target)).toEqual(beforeBindingSettlement);

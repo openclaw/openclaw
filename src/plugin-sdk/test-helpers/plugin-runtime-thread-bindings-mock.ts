@@ -8,7 +8,5 @@ export function createPluginThreadBindingsRuntimeMock(): ThreadBindingsRuntime {
     setIdleTimeoutBySessionKeyAsync:
       vi.fn<ThreadBindingsRuntime["setIdleTimeoutBySessionKeyAsync"]>(),
     setMaxAgeBySessionKeyAsync: vi.fn<ThreadBindingsRuntime["setMaxAgeBySessionKeyAsync"]>(),
-    setIdleTimeoutBySessionKey: vi.fn<ThreadBindingsRuntime["setIdleTimeoutBySessionKey"]>(),
-    setMaxAgeBySessionKey: vi.fn<ThreadBindingsRuntime["setMaxAgeBySessionKey"]>(),
   };
 }

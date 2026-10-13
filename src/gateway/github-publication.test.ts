@@ -2,7 +2,6 @@ import os from "node:os";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { loadTranscriptEvents } from "../config/sessions/session-accessor.js";
-import { withPluginRuntimePluginScope } from "../plugins/runtime/gateway-request-scope.js";
 import { githubPublicationReceipts } from "../state/github-publication-receipts.js";
 import * as publicationLifecycles from "../state/github-publication-session-lifecycles.js";
 import { holdNextReply } from "../state/github-publication.worker.test-support.js";
@@ -48,28 +47,6 @@ const mocks = githubPublicationTestMocks();
 
 describe("Gateway GitHub publication", () => {
   installGitHubPublicationTestHarness();
-  it("warns that retired publication methods fail instead of promising continued support", () => {
-    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
-    try {
-      const coordinator = createGitHubPublicationCoordinator({
-        placements: createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() }),
-      });
-      withPluginRuntimePluginScope({ pluginId: "publication-compat-diagnostic" }, () => {
-        for (let attempt = 0; attempt < 2; attempt += 1) {
-          expect(() => coordinator.deferOrphanedRequests()).toThrow(
-            "Use deferOrphanedRequestsAsync and await completion.",
-          );
-        }
-      });
-      expect(warning).toHaveBeenCalledExactlyOnceWith(
-        "Plugin publication-compat-diagnostic: deferOrphanedRequests is deprecated; use deferOrphanedRequestsAsync instead. This method no longer performs publication work; use its replacement. It will be removed in a later release after stable deprecation.",
-        { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
-      );
-    } finally {
-      warning.mockRestore();
-    }
-  });
-
   it("does not create publication state when reading an absent receipt", async () => {
     const database = openOpenClawStateDatabase();
     // Older admitted stores can lack this additive, first-publication table.

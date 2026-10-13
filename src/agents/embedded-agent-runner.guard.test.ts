@@ -44,7 +44,9 @@ function assistantToolCall(id: string): AgentMessage {
 }
 
 function appender(sm: ReturnType<typeof guardSessionManager>) {
-  return sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+  return sm.appendMessageAsync.bind(sm) as unknown as (
+    message: AgentMessage,
+  ) => Promise<string | undefined>;
 }
 
 function getMessages(sm: ReturnType<typeof guardSessionManager>): AgentMessage[] {
@@ -57,18 +59,20 @@ function getMessages(sm: ReturnType<typeof guardSessionManager>): AgentMessage[]
 describe("guardSessionManager integration", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  it("keeps real toolResult pending across delivery-mirror assistant messages", () => {
+  it("keeps real toolResult pending across delivery-mirror assistant messages", async () => {
     const sm = guardSessionManager(SessionManager.inMemory());
     const appendMessage = appender(sm);
 
-    appendMessage(assistantToolCall("call_1"));
-    appendMessage({
+    await appendMessage(assistantToolCall("call_1"));
+    await appendMessage({
       role: "assistant",
       provider: "openclaw",
       model: "delivery-mirror",
       content: [{ type: "text", text: "display copy" }],
     } as AgentMessage);
-    appendMessage(textToolResult("call_1", "n", "real output", { isError: false }) as AgentMessage);
+    await appendMessage(
+      textToolResult("call_1", "n", "real output", { isError: false }) as AgentMessage,
+    );
 
     const messages = getMessages(sm);
 
@@ -81,35 +85,7 @@ describe("guardSessionManager integration", () => {
     expect(JSON.stringify(messages)).not.toContain("missing tool result");
   });
 
-  it("correlates nested user persists with their exact runtime messages", () => {
-    const outerRuntime = { role: "user", content: "outer" } as AgentMessage;
-    const nestedRuntime = { role: "user", content: "nested" } as AgentMessage;
-    const correlations: Array<{ persisted: AgentMessage; runtime?: AgentMessage }> = [];
-    let nested = false;
-    installWriteHook((...args: unknown[]) => {
-      const { message } = args[0] as { message: AgentMessage };
-      if (!nested && message.role === "user" && message.content === "outer") {
-        nested = true;
-        appendMessage(nestedRuntime);
-      }
-      return undefined;
-    });
-    const sm = guardSessionManager(SessionManager.inMemory(), {
-      onUserMessagePersisted: (persisted, runtime) => {
-        correlations.push({ persisted, runtime });
-      },
-    });
-    const appendMessage = appender(sm);
-
-    appendMessage(outerRuntime);
-
-    expect(correlations).toEqual([
-      { persisted: nestedRuntime, runtime: nestedRuntime },
-      { persisted: outerRuntime, runtime: outerRuntime },
-    ]);
-  });
-
-  it("correlates a suppressed user persist with its exact runtime message", () => {
+  it("correlates a suppressed user persist with its exact runtime message", async () => {
     const runtimeMessage = { role: "user", content: "already durable" } as AgentMessage;
     const suppressed: Array<{ persisted: AgentMessage; runtime?: AgentMessage }> = [];
     const sm = guardSessionManager(SessionManager.inMemory(), {
@@ -126,7 +102,7 @@ describe("guardSessionManager integration", () => {
     });
 
     const appendMessage = appender(sm);
-    appendMessage(runtimeMessage);
+    await appendMessage(runtimeMessage);
 
     expect(sm.getEntries()).toEqual([]);
     expect(suppressed).toEqual([
@@ -142,7 +118,7 @@ describe("guardSessionManager integration", () => {
 
   it.each(["user", "assistant"] as const)(
     "sender provenance repair preserves runtime hook %s rewrites and display redaction",
-    (role) => {
+    async (role) => {
       const prepared: PersistedUserTurnMessage = {
         role: "user",
         content: "private",
@@ -170,7 +146,7 @@ describe("guardSessionManager integration", () => {
       const sm = guardSessionManager(SessionManager.inMemory(), {
         preparedUserTurnMessage: prepared,
       });
-      sm.appendMessage({ role: "user", content: "runtime", timestamp: 3 });
+      await sm.appendMessageAsync({ role: "user", content: "runtime", timestamp: 3 });
       expect(getMessages(sm)).toEqual([
         role === "user"
           ? { ...replacement, __openclaw: { hookOwned: true, senderIsOwner: true } }
@@ -181,7 +157,7 @@ describe("guardSessionManager integration", () => {
 
   it.each(["retain", "in-place", "forge"] as const)(
     "sender provenance survives only unchanged queued hook evidence: %s",
-    (mode) => {
+    async (mode) => {
       installWriteHook((event) => {
         const message = (event as { message: PersistedUserTurnMessage }).message;
         const metadata = message["__openclaw"]!;
@@ -208,7 +184,7 @@ describe("guardSessionManager integration", () => {
         target: createTestUserTurnTranscriptTarget(),
       });
       const sm = guardSessionManager(SessionManager.inMemory());
-      sm.appendMessage(
+      await sm.appendMessageAsync(
         attachRuntimeUserTurnTranscriptContext(
           { role: "user", content: "runtime", timestamp: 2 },
           { message: recorder.message!, recorder },
@@ -224,7 +200,7 @@ describe("guardSessionManager integration", () => {
     },
   );
 
-  it("commits queued group sender metadata to JSONL and completes its recorder", () => {
+  it("commits queued group sender metadata to JSONL and completes its recorder", async () => {
     const dir = tempDirs.make("openclaw-queued-group-turn-");
     const sessionManager = createFileBackedSessionManagerForTest(dir, dir);
     const sessionFile = expectDefined(
@@ -251,8 +227,8 @@ describe("guardSessionManager integration", () => {
       { message: preparedMessage, recorder },
     );
 
-    sm.appendMessage(runtimeMessage);
-    sm.appendMessage(
+    await sm.appendMessageAsync(runtimeMessage);
+    await sm.appendMessageAsync(
       makeAgentAssistantMessage({
         content: [{ type: "text", text: "acknowledged" }],
       }),
@@ -275,7 +251,7 @@ describe("guardSessionManager integration", () => {
     expect(recorder.hasPersisted()).toBe(true);
   });
 
-  it("marks the exact queued recorder blocked when a write hook suppresses its user message", () => {
+  it("marks the exact queued recorder blocked when a write hook suppresses its user message", async () => {
     installWriteHook(() => ({ block: true }));
     const recorder = createUserTurnTranscriptRecorder({
       input: { text: "queued prompt" },
@@ -288,13 +264,13 @@ describe("guardSessionManager integration", () => {
     );
     const sm = guardSessionManager(SessionManager.inMemory());
 
-    sm.appendMessage(runtimeMessage);
+    await sm.appendMessageAsync(runtimeMessage);
 
     expect(getMessages(sm)).toEqual([]);
     expect(recorder.isBlocked()).toBe(true);
   });
 
-  it("does not consume prepared user persistence for before-agent-run blocked messages", () => {
+  it("does not consume prepared user persistence for before-agent-run blocked messages", async () => {
     const prepared = {
       role: "user",
       content: "visible prompt",
@@ -309,14 +285,14 @@ describe("guardSessionManager integration", () => {
     });
     const appendMessage = appender(sm);
 
-    appendMessage({
+    await appendMessage({
       role: "user",
       content: [{ type: "text", text: "blocked" }],
       timestamp: 124,
       __openclaw: { beforeAgentRunBlocked: { blockedBy: "test", blockedAt: 123 } },
     } as AgentMessage);
-    appendMessage({ role: "user", content: "runtime prompt" } as AgentMessage);
-    appendMessage({ role: "user", content: "follow-up" } as AgentMessage);
+    await appendMessage({ role: "user", content: "runtime prompt" } as AgentMessage);
+    await appendMessage({ role: "user", content: "follow-up" } as AgentMessage);
 
     const messages = getMessages(sm);
 
@@ -330,7 +306,7 @@ describe("guardSessionManager integration", () => {
     expect(messages[1]).toMatchObject(prepared);
   });
 
-  it("skips plugin hooks while preserving every persisted transcript content field", () => {
+  it("skips plugin hooks while preserving every persisted transcript content field", async () => {
     installWriteHook(() => ({
       message: makeAgentAssistantMessage({
         content: [{ type: "text", text: "changed by hook" }],
@@ -348,7 +324,7 @@ describe("guardSessionManager integration", () => {
     });
     const appendMessage = appender(sm);
 
-    appendMessage({
+    await appendMessage({
       role: "assistant",
       content: [
         { type: "thinking", thinking: "the email is peter@dc.io", thinkingSignature: "sig" },
@@ -357,7 +333,7 @@ describe("guardSessionManager integration", () => {
       ],
       stopReason: "toolUse",
     } as AgentMessage);
-    appendMessage(
+    await appendMessage(
       textToolResult("call_1", "read", "peter@dc.io\n", { isError: false }) as AgentMessage,
     );
 
@@ -403,7 +379,7 @@ describe("flushPendingToolResultsAfterIdle", () => {
     const idle = createDeferredCore();
     const agent = { waitForIdle: () => idle.promise };
 
-    appendMessage(idleToolCall("call_retry_1"));
+    await appendMessage(idleToolCall("call_retry_1"));
     const flushPromise = flushPendingToolResultsAfterIdle({
       agent,
       sessionManager: sm,
@@ -413,7 +389,7 @@ describe("flushPendingToolResultsAfterIdle", () => {
     await Promise.resolve();
     expect(getMessages(sm).map((message) => message.role)).toEqual(["assistant"]);
 
-    appendMessage(toolResult("call_retry_1", "command output here"));
+    await appendMessage(toolResult("call_retry_1", "command output here"));
     idle.resolve();
     await flushPromise;
     expect(vi.getTimerCount()).toBe(0);
@@ -431,7 +407,7 @@ describe("flushPendingToolResultsAfterIdle", () => {
     const appendMessage = appender(sm);
     vi.useFakeTimers();
 
-    appendMessage(idleToolCall("call_orphan_2"));
+    await appendMessage(idleToolCall("call_orphan_2"));
     const flushPromise = flushPendingToolResultsAfterIdle({
       agent: { waitForIdle: () => new Promise<void>(() => {}) },
       sessionManager: sm,
@@ -448,7 +424,7 @@ describe("flushPendingToolResultsAfterIdle", () => {
       isError: true,
     });
 
-    appendMessage({
+    await appendMessage({
       role: "user",
       content: "still there?",
       timestamp: Date.now(),

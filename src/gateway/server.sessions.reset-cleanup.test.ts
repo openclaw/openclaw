@@ -12,7 +12,7 @@ import {
   observeHostDataSql,
 } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
-import { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
+import { readAcpSessionEntryAsync } from "../acp/runtime/session-meta.js";
 import { listRegisteredAgentHarnesses, registerAgentHarness } from "../agents/harness/registry.js";
 import { restoreRegisteredAgentHarnesses } from "../agents/harness/registry.test-support.js";
 import * as preparedModelRuntime from "../agents/prepared-model-runtime.js";
@@ -514,7 +514,7 @@ test("sessions.reset finishes after lifecycle rotation during destructive cleanu
   });
 
   expect(reset.ok).toBe(true);
-  expectResetAcpState(readAcpSessionEntry({ sessionKey: "agent:main:main" })?.acp);
+  expectResetAcpState((await readAcpSessionEntryAsync({ sessionKey: "agent:main:main" }))?.acp);
   expect(prepareFreshSession).not.toHaveBeenCalled();
 });
 

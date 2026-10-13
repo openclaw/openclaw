@@ -7,10 +7,6 @@ export {
   type NativeSessionBindingStateStoreV2,
 } from "../agents/harness/native-session/binding-lifecycle.js";
 export {
-  captureNativeSessionGenerationAuthority,
-  reclaimNativeSessionGeneration,
-  resolveNativeSessionBinding,
-  type NativeSessionGenerationOperations,
   type NativeSessionGenerationReclaimPlan,
   type NativeSessionGenerationAdoptionResult,
 } from "../agents/harness/native-session/binding-generation.js";

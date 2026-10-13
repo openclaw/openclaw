@@ -1788,7 +1788,9 @@ describe("initSessionState RawBody", () => {
       sessionEntry: { sessionId: result.sessionId },
     });
     expect({ ...readSessionStoreFast(storePath) }[targetSessionKey]).toEqual(targetBefore);
-    expect(getSessionBindingService().resolveByConversation(conversation)).toEqual(binding);
+    expect(await getSessionBindingService().resolveByConversationAsync(conversation)).toEqual(
+      binding,
+    );
   });
 
   it("does not apply a source admission id to a bound conversation target", async () => {

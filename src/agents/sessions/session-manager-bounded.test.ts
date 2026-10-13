@@ -1,6 +1,6 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
-import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
@@ -26,9 +26,7 @@ import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/se
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
-  deferOpenClawAgentPostCommitPublication,
   openOpenClawAgentDatabase,
-  runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { SessionManager } from "./session-manager.js";
 
@@ -104,7 +102,7 @@ it("keeps generated entry ids unique outside a bounded transcript tail", async (
     message: { role: "user", content: "retained" },
   });
 
-  const manager = SessionManager.openBounded(scope, {
+  const manager = await SessionManager.openBoundedAsync(scope, {
     cwd: dir,
     maxBytes: 4096,
     maxEvents: 1,
@@ -114,7 +112,9 @@ it("keeps generated entry ids unique outside a bounded transcript tail", async (
   const messageId = "deadbeef-0000-4000-8000-000000000000";
   const thinkingId = "deadbeef-0000-4000-8000-000000000001";
   uuidQueue.push(messageId);
-  const appended = manager.appendMessageWithTranscriptAnchor(makeUserMessage("persisted", 2));
+  const appended = await manager.appendMessageWithTranscriptAnchorAsync(
+    makeUserMessage("persisted", 2),
+  );
 
   expect(appended).toMatchObject({ entryId: messageId, anchor: { effectiveParentId: "tail" } });
   uuidQueue.push(thinkingId);
@@ -140,7 +140,7 @@ it("retries a stale bounded append without parsing transcript rows outside the b
     parentId: "excluded",
     message: { role: "user", content: "retained" },
   });
-  const manager = SessionManager.openBounded(scope, {
+  const manager = await SessionManager.openBoundedAsync(scope, {
     cwd: dir,
     maxBytes: 4096,
     maxEvents: 1,
@@ -184,8 +184,8 @@ it("accepts a prepared assistant whose parent is the admitted user", async () =>
     storePath: path.join(dir, "sessions.json"),
   };
   await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-  const manager = SessionManager.open(scope, dir);
-  const admitted = manager.appendMessageWithTranscriptAnchor({
+  const manager = await SessionManager.openAsync(scope, dir);
+  const admitted = await manager.appendMessageWithTranscriptAnchorAsync({
     role: "user",
     content: "current",
     timestamp: 1,
@@ -194,32 +194,19 @@ it("accepts a prepared assistant whose parent is the admitted user", async () =>
     throw new Error("missing admission anchor");
   }
 
-  const database = openOpenClawAgentDatabase({
-    agentId: scope.agentId,
-    path: resolveSessionTranscriptDatabasePath(scope),
-  });
-  const reads = trackSqliteStatementExecutions(database.db, ["identity"], (sql) =>
-    /^select\b/iu.test(sql) &&
-    /from "transcript_event_identities" where/iu.test(sql) &&
-    /"event_id" = \?/u.test(sql)
-      ? "identity"
-      : null,
-  );
   const reply = buildAssistantMessage("reply");
-  let replyId: string;
-  try {
-    replyId = runWithSessionTranscriptReadFence(
+  const replyId = expectDefined(
+    await runWithSessionTranscriptReadFence(
       { ...admitted.anchor, logicalTurnId: "current", role: "user" },
-      () => manager.appendMessage(reply),
-    );
-  } finally {
-    reads.restore();
-  }
+      () => manager.appendMessageAsync(reply),
+    ),
+    "reply append must persist",
+  );
 
   expect(manager.getBranch().map((entry) => entry.id)).toEqual([admitted.entryId, replyId]);
   await closeOpenClawAgentDatabasesAsync(dir);
   closeOpenClawAgentDatabasesForTest(dir);
-  const reopened = SessionManager.open(scope, dir);
+  const reopened = await SessionManager.openAsync(scope, dir);
   expect(reopened.getBranch().map((entry) => entry.id)).toEqual([admitted.entryId, replyId]);
   expect(reopened.getEntry(replyId)).toMatchObject({
     type: "message",
@@ -230,70 +217,16 @@ it("accepts a prepared assistant whose parent is the admitted user", async () =>
     { role: "user", content: "current", timestamp: 1 },
     reply,
   ]);
-  expect(reads.counts.identity).toBeGreaterThan(0);
-  expect(reads.counts.identity).toBeLessThanOrEqual(2);
 });
 
-it.each(["sync", "async"] as const)(
-  "rebases a fenced %s append without reading the obsolete payloads",
-  async (mode) => {
-    const { dir, scope } = await createSessionScope("fenced-assistant-rebase");
-    const seed = SessionManager.open(scope, dir);
-    const earlierUserId = seed.appendMessage(makeUserMessage("earlier retained payload", 0));
-    const admission = seed.appendMessageWithTranscriptAnchor({
-      role: "user",
-      content: "current",
-      timestamp: 1,
-    });
-    if (!admission.anchor) {
-      throw new Error("missing admission anchor");
-    }
-
-    await runWithSessionTranscriptReadFence(
-      { ...admission.anchor, logicalTurnId: "current", role: "user" },
-      async () => {
-        const fenced = SessionManager.open(scope, dir);
-        expect(
-          appendTranscriptMessageSync(scope, {
-            eventId: "concurrent-assistant",
-            message: buildAssistantMessage("concurrent"),
-            now: 2,
-          }).ok,
-        ).toBe(true);
-        const retained = fenced.getEntry(earlierUserId);
-        if (retained?.type !== "message" || retained.message.role !== "user") {
-          throw new Error("missing retained user");
-        }
-        const content = retained.message.content;
-        const readObsoletePayload = vi.fn(() => content);
-        Object.defineProperty(retained.message, "content", {
-          enumerable: true,
-          get: readObsoletePayload,
-        });
-        const reply = buildAssistantMessage("reply");
-        const replyId =
-          mode === "sync" ? fenced.appendMessage(reply) : await fenced.appendMessageAsync(reply);
-        // Reload already carries canonical rows; walking the old payloads copies discarded history.
-        expect(readObsoletePayload).not.toHaveBeenCalled();
-        expect(fenced.getBranch().map((entry) => entry.id)).toEqual([
-          earlierUserId,
-          admission.entryId,
-          "concurrent-assistant",
-          replyId,
-        ]);
-        expect(fenced.buildSessionContext().messages.at(-1)).toMatchObject({
-          role: "assistant",
-          content: [{ text: "reply" }],
-        });
-      },
-    );
-  },
-);
-
-it("adopts a fenced assistant when another append commits before its reload", async () => {
-  const { dir, scope } = await createSessionScope("post-commit-append");
-  const seed = SessionManager.open(scope, dir);
-  const admission = seed.appendMessageWithTranscriptAnchor({
+it("rebases a fenced append without reading the obsolete payloads", async () => {
+  const { dir, scope } = await createSessionScope("fenced-assistant-rebase");
+  const seed = await SessionManager.openAsync(scope, dir);
+  const earlierUserId = expectDefined(
+    await seed.appendMessageAsync(makeUserMessage("earlier retained payload", 0)),
+    "Expected appended message",
+  );
+  const admission = await seed.appendMessageWithTranscriptAnchorAsync({
     role: "user",
     content: "current",
     timestamp: 1,
@@ -302,74 +235,75 @@ it("adopts a fenced assistant when another append commits before its reload", as
     throw new Error("missing admission anchor");
   }
 
-  runWithSessionTranscriptReadFence(
+  await runWithSessionTranscriptReadFence(
     { ...admission.anchor, logicalTurnId: "current", role: "user" },
-    () => {
-      const fenced = SessionManager.open(scope, dir);
-      const corePrototype = Object.getPrototypeOf(
-        Object.getPrototypeOf(Object.getPrototypeOf(fenced)),
-      ) as { reloadPersistedTranscriptAfterAppend: () => void };
-      const originalReload = corePrototype.reloadPersistedTranscriptAfterAppend;
-      vi.spyOn(corePrototype, "reloadPersistedTranscriptAfterAppend").mockImplementation(function (
-        this: SessionManager,
-        ...args: unknown[]
-      ) {
-        expect(
-          appendTranscriptMessageSync(scope, {
-            appendIntent: "active-branch",
-            eventId: "post-commit-user",
-            message: { role: "user", content: "later", timestamp: 3 },
-            now: 3,
-          }).ok,
-        ).toBe(true);
-        return originalReload.apply(this, args as []);
+    async () => {
+      const fenced = await SessionManager.openAsync(scope, dir);
+      expect(
+        appendTranscriptMessageSync(scope, {
+          eventId: "concurrent-assistant",
+          message: buildAssistantMessage("concurrent"),
+          now: 2,
+        }).ok,
+      ).toBe(true);
+      const retained = fenced.getEntry(earlierUserId);
+      if (retained?.type !== "message" || retained.message.role !== "user") {
+        throw new Error("missing retained user");
+      }
+      const content = retained.message.content;
+      const readObsoletePayload = vi.fn(() => content);
+      Object.defineProperty(retained.message, "content", {
+        enumerable: true,
+        get: readObsoletePayload,
       });
-
-      const replyId = fenced.appendMessage(buildAssistantMessage("reply"));
-
-      expect(fenced.getBranch().map((entry) => entry.id)).toEqual([admission.entryId, replyId]);
-      expect(fenced.getBranch().some((entry) => entry.id === "post-commit-user")).toBe(false);
+      const reply = buildAssistantMessage("reply");
+      const replyId = expectDefined(
+        await fenced.appendMessageAsync(reply),
+        "Expected appended message",
+      );
+      // Reload already carries canonical rows; walking the old payloads copies discarded history.
+      expect(readObsoletePayload).not.toHaveBeenCalled();
+      expect(fenced.getBranch().map((entry) => entry.id)).toEqual([
+        earlierUserId,
+        admission.entryId,
+        "concurrent-assistant",
+        replyId,
+      ]);
+      expect(fenced.buildSessionContext().messages.at(-1)).toMatchObject({
+        role: "assistant",
+        content: [{ text: "reply" }],
+      });
     },
   );
 });
 
-it("adopts suffix cleanup before earlier-queued post-commit observers run", async () => {
-  const { dir, scope } = await createSessionScope("suffix-commit-order");
-  const manager = SessionManager.open(scope, dir);
-  const retainedId = manager.appendMessage({ role: "user", content: "keep", timestamp: 1 });
-  const removedId = manager.appendMessage(buildAssistantMessage("remove"));
-  let observedIds: string[] | undefined;
-
-  runOpenClawAgentWriteTransaction((database) => {
-    expect(
-      deferOpenClawAgentPostCommitPublication(database, () => {
-        observedIds = manager.getBranch().map((entry) => entry.id);
-      }),
-    ).toBe(true);
-    expect(manager.removeTrailingEntries((entry) => entry.id === removedId)).toBe(1);
-  }, scope);
-
-  expect(observedIds).toEqual([retainedId]);
-  expect(manager.getBranch().map((entry) => entry.id)).toEqual([retainedId]);
-});
-
 it("excludes interleaved display payloads without inventing events or losing fenced append ancestry", async () => {
   const { dir, scope } = await createSessionScope("display");
-  const manager = SessionManager.open(scope, dir);
-  const userId = manager.appendMessage({ role: "user", content: "retained", timestamp: 1 });
-  const display = () =>
-    manager.appendMessage({
-      role: "custom",
-      customType: "display-test",
-      content: "x".repeat(20_000),
-      display: true,
-      excludeFromContext: true,
+  const manager = await SessionManager.openAsync(scope, dir);
+  const userId = expectDefined(
+    await manager.appendMessageAsync({
+      role: "user",
+      content: "retained",
       timestamp: 1,
-    });
-  display();
-  manager.appendMessage({ role: "user", content: "also retained", timestamp: 1 });
-  manager.appendCompaction("summary", userId, 100);
-  const tailId = display();
+    }),
+    "Expected appended message",
+  );
+  const display = async () =>
+    expectDefined(
+      await manager.appendMessageAsync({
+        role: "custom",
+        customType: "display-test",
+        content: "x".repeat(20_000),
+        display: true,
+        excludeFromContext: true,
+        timestamp: 1,
+      }),
+      "Expected appended message",
+    );
+  await display();
+  await manager.appendMessageAsync({ role: "user", content: "also retained", timestamp: 1 });
+  await manager.appendCompactionAsync("summary", userId, 100);
+  const tailId = await display();
   const limits = { maxEvents: 3, maxBytes: 4096 };
   const read = () => readSessionTranscriptBoundedActiveContextCore(scope, limits);
   const context = read();
@@ -382,113 +316,113 @@ it("excludes interleaved display payloads without inventing events or losing fen
   );
   expect(context.serializedBytes).toBeLessThan(limits.maxBytes);
   expect(context.activeLeafEntryId).toBe(tailId);
-  const bounded = SessionManager.openBounded(scope, limits);
+  const bounded = await SessionManager.openBoundedAsync(scope, limits);
   expect(bounded.getAppendParentId()).toBe(tailId);
   expect(bounded.buildSessionContext()).toEqual(manager.buildSessionContext());
-  const appended = bounded.appendMessageWithTranscriptAnchor(makeUserMessage("current", 2));
+  const appended = await bounded.appendMessageWithTranscriptAnchorAsync(
+    makeUserMessage("current", 2),
+  );
   expect(appended.anchor?.effectiveParentId).toBe(tailId);
   if (!appended.anchor) {
     throw new Error("missing admission anchor");
   }
-  runWithSessionTranscriptReadFence(
+  await runWithSessionTranscriptReadFence(
     { ...appended.anchor, logicalTurnId: "display-turn", role: "user" },
-    () => {
+    async () => {
       expect(read().events).toEqual(context.events);
-      const fenced = SessionManager.openBounded(scope, limits);
+      const fenced = await SessionManager.openBoundedAsync(scope, limits);
       expect(fenced.getAppendParentId()).toBe(tailId);
       expect(fenced.buildSessionContext()).toEqual(manager.buildSessionContext());
-      expect(SessionManager.open(scope, dir).buildSessionContext()).toEqual(
+      expect((await SessionManager.openAsync(scope, dir)).buildSessionContext()).toEqual(
         manager.buildSessionContext(),
       );
       const retargeted = SessionManager.inMemory(dir);
-      retargeted.setSessionTarget(scope);
+      await retargeted.setSessionTargetAsync(scope);
       expect(retargeted.buildSessionContext()).toEqual(manager.buildSessionContext());
     },
   );
-  expect(SessionManager.open(scope, dir).getBranch().at(-1)?.id).toBe(appended.entryId);
+  expect((await SessionManager.openAsync(scope, dir)).getBranch().at(-1)?.id).toBe(
+    appended.entryId,
+  );
 });
 
-it.each(["sync", "async"])(
-  "keeps appended display payloads out of a bounded view (%s)",
-  async (mode) => {
-    const { dir, scope } = await createSessionScope(`display-append-${mode}`);
-    const manager = await SessionManager.openBoundedAsync(scope, {
-      cwd: dir,
-      maxBytes: 4096,
-      maxEvents: 10,
-    });
-    const user = await manager.appendMessageWithTranscriptAnchorAsync(makeUserMessage("keep", 1));
-    const side = await manager.appendMessageWithTranscriptAnchorAsync(makeUserMessage("side", 2));
-    await manager.appendLeafControlAsync({
-      targetId: user.entryId,
-      appendParentId: side.entryId,
-      appendMode: "side",
-    });
-    const displayIds: string[] = [];
-    for (let index = 0; index < 3; index++) {
-      const message = {
-        role: "custom" as const,
-        customType: "display-test",
-        content: `display-${index}:` + "x".repeat(20_000),
-        display: true,
-        excludeFromContext: true as const,
-        timestamp: index + 2,
-      };
-      const appended =
-        mode === "async"
-          ? await manager.appendMessageWithTranscriptAnchorAsync(message)
-          : manager.appendMessageWithTranscriptAnchor(message);
-      displayIds.push(appended.entryId);
-      expect(manager.getEntry(appended.entryId)).toBeUndefined();
-      expect(manager.getAppendParentId()).toBe(appended.entryId);
-      expect(manager.getBranch().map((entry) => entry.id)).toEqual([user.entryId]);
-    }
-    const answer = await manager.appendMessageWithTranscriptAnchorAsync(
-      buildAssistantMessage("reply"),
-    );
-    expect(manager.getBranch().map((entry) => entry.id)).toEqual([user.entryId, answer.entryId]);
-    await waitForSessionTranscriptIndexReconcile({
-      agentId: scope.agentId,
-      path: resolveSessionTranscriptDatabasePath(scope),
-    });
-    const reopened = await SessionManager.openBoundedAsync(scope, {
-      maxBytes: 4096,
-      maxEvents: 10,
-    });
-    expect(manager.getBranch()).toEqual(reopened.getBranch());
-    const events = await loadTranscriptEvents(scope);
-    expect(
-      events.filter((entry) => displayIds.includes((entry as { id: string }).id)),
-    ).toHaveLength(3);
-    expect(
-      [...displayIds, answer.entryId].map((id) =>
-        events.find((entry) => (entry as { id: string }).id === id),
-      ),
-    ).toEqual(
-      [side.entryId, ...displayIds].map((parentId) => expect.objectContaining({ parentId })),
-    );
-  },
-);
+it.each(["async"])("keeps appended display payloads out of a bounded view (%s)", async (mode) => {
+  const { dir, scope } = await createSessionScope(`display-append-${mode}`);
+  const manager = await SessionManager.openBoundedAsync(scope, {
+    cwd: dir,
+    maxBytes: 4096,
+    maxEvents: 10,
+  });
+  const user = await manager.appendMessageWithTranscriptAnchorAsync(makeUserMessage("keep", 1));
+  const side = await manager.appendMessageWithTranscriptAnchorAsync(makeUserMessage("side", 2));
+  await manager.appendLeafControlAsync({
+    targetId: user.entryId,
+    appendParentId: side.entryId,
+    appendMode: "side",
+  });
+  const displayIds: string[] = [];
+  for (let index = 0; index < 3; index++) {
+    const message = {
+      role: "custom" as const,
+      customType: "display-test",
+      content: `display-${index}:` + "x".repeat(20_000),
+      display: true,
+      excludeFromContext: true as const,
+      timestamp: index + 2,
+    };
+    const appended = await manager.appendMessageWithTranscriptAnchorAsync(message);
+    displayIds.push(appended.entryId);
+    expect(manager.getEntry(appended.entryId)).toBeUndefined();
+    expect(manager.getAppendParentId()).toBe(appended.entryId);
+    expect(manager.getBranch().map((entry) => entry.id)).toEqual([user.entryId]);
+  }
+  const answer = await manager.appendMessageWithTranscriptAnchorAsync(
+    buildAssistantMessage("reply"),
+  );
+  expect(manager.getBranch().map((entry) => entry.id)).toEqual([user.entryId, answer.entryId]);
+  await waitForSessionTranscriptIndexReconcile({
+    agentId: scope.agentId,
+    path: resolveSessionTranscriptDatabasePath(scope),
+  });
+  const reopened = await SessionManager.openBoundedAsync(scope, {
+    maxBytes: 4096,
+    maxEvents: 10,
+  });
+  expect(manager.getBranch()).toEqual(reopened.getBranch());
+  const events = await loadTranscriptEvents(scope);
+  expect(events.filter((entry) => displayIds.includes((entry as { id: string }).id))).toHaveLength(
+    3,
+  );
+  expect(
+    [...displayIds, answer.entryId].map((id) =>
+      events.find((entry) => (entry as { id: string }).id === id),
+    ),
+  ).toEqual([side.entryId, ...displayIds].map((parentId) => expect.objectContaining({ parentId })));
+});
 
 it("rejects a fenced assistant when a later hidden user has advanced the turn", async () => {
   const { dir, scope } = await createSessionScope("fenced-assistant");
-  const manager = SessionManager.open(scope, dir);
-  manager.appendMessage({ role: "user", content: "previous", timestamp: 1 });
-  const admission = manager.appendMessageWithTranscriptAnchor({
+  const manager = await SessionManager.openAsync(scope, dir);
+  await manager.appendMessageAsync({ role: "user", content: "previous", timestamp: 1 });
+  const admission = await manager.appendMessageWithTranscriptAnchorAsync({
     role: "user",
     content: "admitted",
     timestamp: 2,
   });
-  manager.appendMessage({ role: "user", content: "newer", timestamp: 3 });
+  await manager.appendMessageAsync({ role: "user", content: "newer", timestamp: 3 });
   if (!admission.anchor) {
     throw new Error("missing current-turn anchor");
   }
 
-  runWithSessionTranscriptReadFence(
+  await runWithSessionTranscriptReadFence(
     { ...admission.anchor, logicalTurnId: "fenced-assistant", role: "user" },
-    () => {
-      const fenced = SessionManager.openBounded(scope, { cwd: dir, maxBytes: 4096, maxEvents: 8 });
-      expect(() => fenced.appendMessage(buildAssistantMessage("stale reply"))).toThrow(
+    async () => {
+      const fenced = await SessionManager.openBoundedAsync(scope, {
+        cwd: dir,
+        maxBytes: 4096,
+        maxEvents: 8,
+      });
+      await expect(fenced.appendMessageAsync(buildAssistantMessage("stale reply"))).rejects.toThrow(
         "SQLite transcript changed while preparing rewrite",
       );
     },
@@ -497,24 +431,28 @@ it("rejects a fenced assistant when a later hidden user has advanced the turn", 
 
 it("rejects a fenced tool result when a later hidden user has advanced the turn", async () => {
   const { dir, scope } = await createSessionScope("fenced-tool-result");
-  const manager = SessionManager.open(scope, dir);
-  manager.appendMessage({ role: "user", content: "previous", timestamp: 1 });
-  const admission = manager.appendMessageWithTranscriptAnchor({
+  const manager = await SessionManager.openAsync(scope, dir);
+  await manager.appendMessageAsync({ role: "user", content: "previous", timestamp: 1 });
+  const admission = await manager.appendMessageWithTranscriptAnchorAsync({
     role: "user",
     content: "admitted",
     timestamp: 2,
   });
-  manager.appendMessage({ role: "user", content: "newer", timestamp: 3 });
+  await manager.appendMessageAsync({ role: "user", content: "newer", timestamp: 3 });
   if (!admission.anchor) {
     throw new Error("missing current-turn anchor");
   }
 
-  runWithSessionTranscriptReadFence(
+  await runWithSessionTranscriptReadFence(
     { ...admission.anchor, logicalTurnId: "fenced-tool-result", role: "user" },
-    () => {
-      const fenced = SessionManager.openBounded(scope, { cwd: dir, maxBytes: 4096, maxEvents: 8 });
-      expect(() =>
-        fenced.appendMessage({
+    async () => {
+      const fenced = await SessionManager.openBoundedAsync(scope, {
+        cwd: dir,
+        maxBytes: 4096,
+        maxEvents: 8,
+      });
+      await expect(
+        fenced.appendMessageAsync({
           role: "toolResult",
           toolCallId: "stale-tool-call",
           toolName: "test_tool",
@@ -522,35 +460,38 @@ it("rejects a fenced tool result when a later hidden user has advanced the turn"
           isError: false,
           timestamp: 4,
         }),
-      ).toThrow("SQLite transcript changed while preparing rewrite");
+      ).rejects.toThrow("SQLite transcript changed while preparing rewrite");
     },
   );
 });
 
 it("rejects suffix cleanup when the admission fence hides later transcript rows", async () => {
   const { dir, scope } = await createSessionScope("fenced-cleanup");
-  const manager = SessionManager.open(scope, dir);
-  manager.appendMessage({ role: "user", content: "retained", timestamp: 1 });
-  const removableId = manager.appendMessage(buildAssistantMessage("temporary"));
-  const admission = manager.appendMessageWithTranscriptAnchor({
+  const manager = await SessionManager.openAsync(scope, dir);
+  await manager.appendMessageAsync({ role: "user", content: "retained", timestamp: 1 });
+  const removableId = expectDefined(
+    await manager.appendMessageAsync(buildAssistantMessage("temporary")),
+    "Expected appended message",
+  );
+  const admission = await manager.appendMessageWithTranscriptAnchorAsync({
     role: "user",
     content: "current turn",
     timestamp: 2,
   });
-  manager.appendMessage(buildAssistantMessage("hidden response"));
+  await manager.appendMessageAsync(buildAssistantMessage("hidden response"));
   const raw = await loadTranscriptEvents(scope);
   if (!admission.anchor) {
     throw new Error("missing current-turn anchor");
   }
 
-  runWithSessionTranscriptReadFence(
+  await runWithSessionTranscriptReadFence(
     { ...admission.anchor, logicalTurnId: "fenced-cleanup", role: "user" },
-    () => {
-      const fenced = SessionManager.open(scope, dir);
+    async () => {
+      const fenced = await SessionManager.openAsync(scope, dir);
       const entries = fenced.getEntries();
-      expect(() => fenced.removeTrailingEntries((entry) => entry.id === removableId)).toThrow(
-        /admission hides rows needed for suffix mutation/,
-      );
+      await expect(
+        fenced.removeTrailingEntriesAsync((entry) => entry.id === removableId),
+      ).rejects.toThrow(/admission hides rows needed for suffix mutation/);
       expect(fenced.getEntries()).toEqual(entries);
     },
   );
@@ -560,58 +501,75 @@ it("rejects suffix cleanup when the admission fence hides later transcript rows"
 it("retains the forward cut after consecutive excluded first-kept entries", async () => {
   const count = 2;
   const { dir, scope } = await createSessionScope("excluded-cut", "openclaw-agent.sqlite");
-  const manager = SessionManager.open(scope, dir);
-  manager.appendMessage({ role: "user", content: "summarized away", timestamp: 1 });
-  const excluded = Array.from({ length: count }, () =>
-    manager.appendMessage({
-      role: "custom",
-      customType: "display-test",
-      content: "display only",
-      display: true,
-      excludeFromContext: true,
-      timestamp: 2,
-    }),
+  const manager = await SessionManager.openAsync(scope, dir);
+  await manager.appendMessageAsync({ role: "user", content: "summarized away", timestamp: 1 });
+  const excluded = await Promise.all(
+    Array.from({ length: count }, async () =>
+      expectDefined(
+        await manager.appendMessageAsync({
+          role: "custom",
+          customType: "display-test",
+          content: "display only",
+          display: true,
+          excludeFromContext: true,
+          timestamp: 2,
+        }),
+        "Expected appended message",
+      ),
+    ),
   );
   const firstKept = excluded.at(0);
   if (!firstKept) {
     throw new Error("missing first-kept fixture");
   }
-  manager.appendMessage({ role: "user", content: "retained", timestamp: 3 });
-  manager.appendCompaction("summary", firstKept, 100);
+  await manager.appendMessageAsync({ role: "user", content: "retained", timestamp: 3 });
+  await manager.appendCompactionAsync("summary", firstKept, 100);
   const expected = manager.buildSessionContext();
   expect(expected.messages).toMatchObject([
     { role: "compactionSummary", summary: "summary" },
     { role: "user", content: "retained" },
   ]);
-  const bounded = SessionManager.openBounded(scope, { maxEvents: 4, maxBytes: 4096 });
+  const bounded = await SessionManager.openBoundedAsync(scope, { maxEvents: 4, maxBytes: 4096 });
   expect(bounded.buildSessionContext()).toEqual(expected);
-  bounded.appendMessage({ role: "user", content: "after reopen", timestamp: 4 });
-  expect(SessionManager.open(scope, dir).buildSessionContext().messages).toMatchObject([
-    ...expected.messages,
-    { role: "user", content: "after reopen" },
-  ]);
+  await bounded.appendMessageAsync({ role: "user", content: "after reopen", timestamp: 4 });
+  expect((await SessionManager.openAsync(scope, dir)).buildSessionContext().messages).toMatchObject(
+    [...expected.messages, { role: "user", content: "after reopen" }],
+  );
 });
 
 it("preserves the durable leaf when bounded cleanup removes the whole selected window", async () => {
   const { dir, scope } = await createSessionScope("whole-window-session");
-  const seed = SessionManager.open(scope, dir);
-  const durableId = seed.appendMessage({ role: "user", content: "durable", timestamp: 1 });
-  const removableId = seed.appendMessage(buildAssistantMessage("temporary"));
+  const seed = await SessionManager.openAsync(scope, dir);
+  const durableId = expectDefined(
+    await seed.appendMessageAsync({
+      role: "user",
+      content: "durable",
+      timestamp: 1,
+    }),
+    "Expected appended message",
+  );
+  const removableId = expectDefined(
+    await seed.appendMessageAsync(buildAssistantMessage("temporary")),
+    "Expected appended message",
+  );
   await waitForSessionTranscriptIndexReconcile({
     agentId: scope.agentId,
     path: path.join(dir, "openclaw-agent.sqlite"),
   });
 
-  const bounded = SessionManager.openBounded(scope, { cwd: dir, maxBytes: 4096, maxEvents: 1 });
-  expect(bounded.removeTrailingEntries((entry) => entry.id === removableId)).toBe(1);
-  const reopened = SessionManager.open(scope, dir);
+  const bounded = await SessionManager.openBoundedAsync(scope, {
+    cwd: dir,
+    maxBytes: 4096,
+    maxEvents: 1,
+  });
+  expect(await bounded.removeTrailingEntriesAsync((entry) => entry.id === removableId)).toBe(1);
+  const reopened = await SessionManager.openAsync(scope, dir);
   expect(reopened.getAppendParentId()).toBe(durableId);
   expect(reopened.buildSessionContext().messages).toMatchObject([{ content: "durable" }]);
-  reopened.appendMessage({ role: "user", content: "after cleanup", timestamp: 2 });
-  expect(SessionManager.open(scope, dir).buildSessionContext().messages).toMatchObject([
-    { content: "durable" },
-    { content: "after cleanup" },
-  ]);
+  await reopened.appendMessageAsync({ role: "user", content: "after cleanup", timestamp: 2 });
+  expect((await SessionManager.openAsync(scope, dir)).buildSessionContext().messages).toMatchObject(
+    [{ content: "durable" }, { content: "after cleanup" }],
+  );
 });
 
 it("bounds runtime hydration while preserving older durable transcript rows on rewrites", async () => {
@@ -628,7 +586,7 @@ it("bounds runtime hydration while preserving older durable transcript rows on r
     await appendTranscriptMessage(scope, { cwd: dir, message: { role: "user", content } });
   }
 
-  const manager = SessionManager.openBounded(scope, {
+  const manager = await SessionManager.openBoundedAsync(scope, {
     cwd: dir,
     maxBytes: 4096,
     maxEvents: 2,
@@ -640,7 +598,7 @@ it("bounds runtime hydration while preserving older durable transcript rows on r
   ]);
   expect(manager.getEntries()).toHaveLength(2);
   expect(
-    manager.removeTrailingEntries(
+    await manager.removeTrailingEntriesAsync(
       (entry) =>
         entry.type === "message" &&
         "content" in entry.message &&
@@ -656,21 +614,25 @@ it("bounds runtime hydration while preserving older durable transcript rows on r
 
 it("rejects bounded cleanup across opaque hydration-boundary rows", async () => {
   const { dir, scope } = await createSessionScope("bounded-opaque-boundary");
-  const seed = SessionManager.open(scope, dir);
-  seed.appendMessage({ role: "user", content: "retained", timestamp: 1 });
-  seed.appendMessage({ role: "user", content: "remove", timestamp: 2 });
+  const seed = await SessionManager.openAsync(scope, dir);
+  await seed.appendMessageAsync({ role: "user", content: "retained", timestamp: 1 });
+  await seed.appendMessageAsync({ role: "user", content: "remove", timestamp: 2 });
   await appendTranscriptEvent(scope, {
     type: "future-metadata",
     id: "opaque-boundary",
     parentId: null,
   });
-  seed.reloadPersistedTranscript();
-  seed.appendMessage({ role: "user", content: "remove", timestamp: 3 });
+  await seed.reloadPersistedTranscriptAsync();
+  await seed.appendMessageAsync({ role: "user", content: "remove", timestamp: 3 });
   await waitForSessionTranscriptIndexReconcile({
     agentId: scope.agentId,
     path: resolveSessionTranscriptDatabasePath(scope),
   });
-  const manager = SessionManager.openBounded(scope, { cwd: dir, maxBytes: 4096, maxEvents: 1 });
+  const manager = await SessionManager.openBoundedAsync(scope, {
+    cwd: dir,
+    maxBytes: 4096,
+    maxEvents: 1,
+  });
   openOpenClawAgentDatabase({
     agentId: scope.agentId,
     path: resolveSessionTranscriptDatabasePath(scope),
@@ -678,14 +640,14 @@ it("rejects bounded cleanup across opaque hydration-boundary rows", async () => 
     .db.prepare("UPDATE transcript_events SET event_json = '{' WHERE session_id = ? AND seq = 3")
     .run(scope.sessionId);
 
-  expect(() =>
-    manager.removeTrailingEntries(
+  await expect(
+    manager.removeTrailingEntriesAsync(
       (entry) =>
         entry.type === "message" &&
         "content" in entry.message &&
         entry.message.content === "remove",
     ),
-  ).toThrow("Bounded transcript cleanup cannot cross the hydrated removal window");
+  ).rejects.toThrow("Bounded transcript cleanup cannot cross the hydrated removal window");
 });
 
 it("ignores inactive matching rows before the bounded active cleanup window", async () => {
@@ -701,23 +663,26 @@ it("ignores inactive matching rows before the bounded active cleanup window", as
     message: { role: "assistant", content: "remove" },
     parentId: root.messageId,
   });
-  const branchManager = SessionManager.open(scope, dir);
-  branchManager.branch(root.messageId);
-  const activeId = branchManager.appendMessage(buildAssistantMessage("remove"));
+  const branchManager = await SessionManager.openAsync(scope, dir);
+  await branchManager.branchAsync(root.messageId);
+  const activeId = expectDefined(
+    await branchManager.appendMessageAsync(buildAssistantMessage("remove")),
+    "Expected appended message",
+  );
   await waitForSessionTranscriptIndexReconcile({
     agentId: scope.agentId,
     path: resolveSessionTranscriptDatabasePath(scope),
   });
 
-  const manager = SessionManager.openBounded(scope, {
+  const manager = await SessionManager.openBoundedAsync(scope, {
     cwd: dir,
     maxBytes: 4096,
     maxEvents: 1,
   });
-  expect(manager.removeTrailingEntries((entry) => entry.id === activeId)).toBe(1);
-  expect(SessionManager.open(scope, dir).buildSessionContext().messages).toMatchObject([
-    { content: "retained" },
-  ]);
+  expect(await manager.removeTrailingEntriesAsync((entry) => entry.id === activeId)).toBe(1);
+  expect((await SessionManager.openAsync(scope, dir)).buildSessionContext().messages).toMatchObject(
+    [{ content: "retained" }],
+  );
 });
 
 it("keeps the original hydration boundary after a partial bounded trim", async () => {
@@ -729,9 +694,12 @@ it("keeps the original hydration boundary after a partial bounded trim", async (
       now: index + 1,
     });
   }
-  const manager = SessionManager.open(scope, dir, { maxBytes: 1024 * 1024, maxEvents: 8 });
-  expect(manager.removeTrailingEntries((entry) => entry.id === "event-11")).toBe(1);
-  expect(manager.removeTrailingEntries((entry) => entry.id !== "event-3")).toBe(7);
+  const manager = await SessionManager.openAsync(scope, dir, {
+    maxBytes: 1024 * 1024,
+    maxEvents: 8,
+  });
+  expect(await manager.removeTrailingEntriesAsync((entry) => entry.id === "event-11")).toBe(1);
+  expect(await manager.removeTrailingEntriesAsync((entry) => entry.id !== "event-3")).toBe(7);
   expect(
     (await loadTranscriptEvents(scope))
       .map((entry) => (entry as { id?: string }).id)
@@ -760,14 +728,14 @@ it("keeps an all-preserved bounded window as a no-op", async () => {
       })),
     ]),
   ).toBe(true);
-  const manager = SessionManager.openBounded(scope, {
+  const manager = await SessionManager.openBoundedAsync(scope, {
     cwd: dir,
     maxBytes: 4096,
     maxEvents: 2,
   });
 
   expect(
-    manager.removeTrailingEntries(() => true, {
+    await manager.removeTrailingEntriesAsync(() => true, {
       preserveTrailing: (entry) => entry.type === "custom",
     }),
   ).toBe(0);
@@ -788,16 +756,23 @@ it.each([
     storePath: path.join(dir, "sessions.json"),
   };
   await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-  const seed = SessionManager.open(scope, dir);
-  seed.appendMessage({ role: "user", content: "older", timestamp: 1 });
-  seed.appendMessage({ role: "user", content: "middle", timestamp: 2 });
-  seed.appendMessage({ role: "user", content: "retained", timestamp: 3 });
-  const removableId = seed.appendMessage(buildAssistantMessage("temporary"));
+  const seed = await SessionManager.openAsync(scope, dir);
+  await seed.appendMessageAsync({ role: "user", content: "older", timestamp: 1 });
+  await seed.appendMessageAsync({ role: "user", content: "middle", timestamp: 2 });
+  await seed.appendMessageAsync({ role: "user", content: "retained", timestamp: 3 });
+  const removableId = expectDefined(
+    await seed.appendMessageAsync(buildAssistantMessage("temporary")),
+    "Expected appended message",
+  );
   await waitForSessionTranscriptIndexReconcile({
     agentId: scope.agentId,
     path: path.join(dir, "openclaw-agent.sqlite"),
   });
-  const manager = SessionManager.openBounded(scope, { cwd: dir, maxBytes: 4096, maxEvents: 2 });
+  const manager = await SessionManager.openBoundedAsync(scope, {
+    cwd: dir,
+    maxBytes: 4096,
+    maxEvents: 2,
+  });
 
   const database = openOpenClawAgentDatabase({
     agentId: scope.agentId,
@@ -807,7 +782,7 @@ it.each([
     .prepare("UPDATE transcript_events SET event_json = ? WHERE session_id = ? AND seq = ?")
     .run("{excluded-row-is-not-json", scope.sessionId, corruptSeq);
 
-  expect(manager.removeTrailingEntries((entry) => entry.id === removableId)).toBe(1);
+  expect(await manager.removeTrailingEntriesAsync((entry) => entry.id === removableId)).toBe(1);
   expect(manager.buildSessionContext().messages).toMatchObject([{ content: "retained" }]);
   expect(
     database.db
@@ -818,9 +793,12 @@ it.each([
 
 it("invalidates raw and visible cursors while keeping the projection available", async () => {
   const { dir, scope } = await createSessionScope("cursor-rewrite-session");
-  const manager = SessionManager.open(scope, dir);
-  manager.appendMessage({ role: "user", content: "retained", timestamp: 1 });
-  const removableId = manager.appendMessage(buildAssistantMessage("temporary"));
+  const manager = await SessionManager.openAsync(scope, dir);
+  await manager.appendMessageAsync({ role: "user", content: "retained", timestamp: 1 });
+  const removableId = expectDefined(
+    await manager.appendMessageAsync(buildAssistantMessage("temporary")),
+    "Expected appended message",
+  );
   await waitForSessionTranscriptIndexReconcile({
     agentId: scope.agentId,
     path: path.join(dir, "openclaw-agent.sqlite"),
@@ -831,8 +809,8 @@ it("invalidates raw and visible cursors while keeping the projection available",
     throw new Error("missing cursor fixture");
   }
 
-  expect(manager.removeTrailingEntries((entry) => entry.id === removableId)).toBe(1);
-  manager.appendMessage(buildAssistantMessage("replacement"));
+  expect(await manager.removeTrailingEntriesAsync((entry) => entry.id === removableId)).toBe(1);
+  await manager.appendMessageAsync(buildAssistantMessage("replacement"));
 
   expect(readTranscriptRawDelta(scope, { cursor: raw.cursor })).toMatchObject({
     kind: "reset",
@@ -841,9 +819,7 @@ it("invalidates raw and visible cursors while keeping the projection available",
   expect(
     readSessionTranscriptVisibleMessageDeltaCore(scope, { cursor: visible.cursor }),
   ).toMatchObject({ kind: "reset", reason: "generation_mismatch" });
-  expect(() =>
-    SessionManager.openBounded(scope, { cwd: dir, maxBytes: 4096, maxEvents: 4 }),
-  ).not.toThrow();
+  await SessionManager.openBoundedAsync(scope, { cwd: dir, maxBytes: 4096, maxEvents: 4 });
 });
 
 it("keeps a long transcript projection available when removing a trailing entry", async () => {
@@ -871,23 +847,23 @@ it("keeps a long transcript projection available when removing a trailing entry"
   });
   const generationBefore = readSessionTranscriptWatermark(scope)?.generation;
 
-  const manager = SessionManager.openBounded(scope, {
+  const manager = await SessionManager.openBoundedAsync(scope, {
     cwd: dir,
     maxBytes: 4096,
     maxEvents: 4,
   });
   expect(
-    manager.removeTrailingEntries((entry) => entry.id === `message-${SYNC_REBUILD_MAX_ROWS - 1}`),
+    await manager.removeTrailingEntriesAsync(
+      (entry) => entry.id === `message-${SYNC_REBUILD_MAX_ROWS - 1}`,
+    ),
   ).toBe(1);
 
   expect(readSessionTranscriptWatermark(scope)?.generation).not.toBe(generationBefore);
-  expect(() =>
-    SessionManager.openBounded(scope, {
-      cwd: dir,
-      maxBytes: 4096,
-      maxEvents: 4,
-    }),
-  ).not.toThrow();
+  await SessionManager.openBoundedAsync(scope, {
+    cwd: dir,
+    maxBytes: 4096,
+    maxEvents: 4,
+  });
 });
 
 it.each([
@@ -895,30 +871,31 @@ it.each([
   { oversized: "removed suffix", temporaryContent: "x".repeat(SYNC_REBUILD_MAX_BYTES + 1) },
 ])("removes a trailing entry with an oversized $oversized", async ({ temporaryContent }) => {
   const { dir, scope } = await createSessionScope("large-byte-suffix-session");
-  const manager = SessionManager.open(scope, dir);
-  manager.appendMessage({
+  const manager = await SessionManager.openAsync(scope, dir);
+  await manager.appendMessageAsync({
     role: "user",
     content: temporaryContent === "temporary" ? "x".repeat(SYNC_REBUILD_MAX_BYTES + 1) : "retained",
     timestamp: 1,
   });
-  const removableId = manager.appendMessage({
-    role: "user",
-    content: temporaryContent,
-    timestamp: 2,
-  });
+  const removableId = expectDefined(
+    await manager.appendMessageAsync({
+      role: "user",
+      content: temporaryContent,
+      timestamp: 2,
+    }),
+    "Expected appended message",
+  );
   await waitForSessionTranscriptIndexReconcile({
     agentId: scope.agentId,
     path: path.join(dir, "openclaw-agent.sqlite"),
   });
 
-  expect(manager.removeTrailingEntries((entry) => entry.id === removableId)).toBe(1);
+  expect(await manager.removeTrailingEntriesAsync((entry) => entry.id === removableId)).toBe(1);
   await waitForSessionTranscriptIndexReconcile({
     agentId: scope.agentId,
     path: path.join(dir, "openclaw-agent.sqlite"),
   });
-  expect(() =>
-    SessionManager.openBounded(scope, { cwd: dir, maxBytes: 4096, maxEvents: 4 }),
-  ).not.toThrow();
+  await SessionManager.openBoundedAsync(scope, { cwd: dir, maxBytes: 4096, maxEvents: 4 });
 });
 
 it("preserves inactive siblings when the bounded active branch fits its limits", async () => {
@@ -934,31 +911,38 @@ it("preserves inactive siblings when the bounded active branch fits its limits",
     message: { role: "assistant", content: "inactive" },
     parentId: root.messageId,
   });
-  const branchManager = SessionManager.open(scope, dir);
-  branchManager.branch(root.messageId);
-  const activeId = branchManager.appendMessage({ role: "user", content: "active", timestamp: 3 });
+  const branchManager = await SessionManager.openAsync(scope, dir);
+  await branchManager.branchAsync(root.messageId);
+  const activeId = expectDefined(
+    await branchManager.appendMessageAsync({
+      role: "user",
+      content: "active",
+      timestamp: 3,
+    }),
+    "Expected appended message",
+  );
 
-  const openBounded = () =>
-    SessionManager.openBounded(scope, {
+  const openBounded = async () =>
+    await SessionManager.openBoundedAsync(scope, {
       cwd: dir,
       maxBytes: 4096,
       maxEvents: 3,
     });
-  expect(openBounded).toThrow(SessionTranscriptProjectionUnavailableError);
+  await expect(openBounded()).rejects.toThrow(SessionTranscriptProjectionUnavailableError);
   await waitForSessionTranscriptIndexReconcile({
     agentId: scope.agentId,
     path: path.join(dir, "openclaw-agent.sqlite"),
   });
-  const manager = openBounded();
+  const manager = await openBounded();
   const generationBefore = readSessionTranscriptWatermark(scope).generation;
 
   expect(manager.buildSessionContext().messages).toMatchObject([
     { content: "root" },
     { content: "active" },
   ]);
-  expect(manager.removeTrailingEntries((entry) => entry.id === activeId)).toBe(1);
+  expect(await manager.removeTrailingEntriesAsync((entry) => entry.id === activeId)).toBe(1);
   expect(readSessionTranscriptWatermark(scope).generation).not.toBe(generationBefore);
-  expect(openBounded).not.toThrow();
+  await openBounded();
   await expect(loadTranscriptEvents(scope)).resolves.toEqual(
     expect.arrayContaining([
       expect.objectContaining({
@@ -971,40 +955,47 @@ it("preserves inactive siblings when the bounded active branch fits its limits",
 
 it("preserves explicit reset retention of excluded user input in a bounded reopen", async () => {
   const { dir, scope } = await createSessionScope("reset-excluded");
-  const manager = SessionManager.open(scope, dir);
-  manager.appendMessage({ role: "user", content: "discarded", timestamp: 1 });
-  const retained = manager.appendMessage({
-    role: "user",
-    content: "explicitly retained",
-    timestamp: 2,
-    display: false,
-    excludeFromContext: true,
-  } as Parameters<SessionManager["appendMessage"]>[0]);
-  manager.appendResetBoundary("new", retained);
-  const current = manager.appendMessageWithTranscriptAnchor(makeUserMessage("fresh", 3));
+  const manager = await SessionManager.openAsync(scope, dir);
+  await manager.appendMessageAsync({ role: "user", content: "discarded", timestamp: 1 });
+  const retained = expectDefined(
+    await manager.appendMessageAsync({
+      role: "user",
+      content: "explicitly retained",
+      timestamp: 2,
+      display: false,
+      excludeFromContext: true,
+    } as Parameters<SessionManager["appendMessageAsync"]>[0]),
+    "Expected appended message",
+  );
+  await manager.appendResetBoundaryAsync("new", retained);
+  const current = await manager.appendMessageWithTranscriptAnchorAsync(makeUserMessage("fresh", 3));
   const raw = await loadTranscriptEvents(scope);
   expect(manager.buildSessionContext().messages).toMatchObject([
     { content: "explicitly retained" },
     { content: "fresh" },
   ]);
   expect(
-    SessionManager.openBounded(scope, { maxEvents: 8, maxBytes: 4096 }).buildSessionContext(),
+    (
+      await SessionManager.openBoundedAsync(scope, { maxEvents: 8, maxBytes: 4096 })
+    ).buildSessionContext(),
   ).toEqual(manager.buildSessionContext());
   expect(await loadTranscriptEvents(scope)).toEqual(raw);
-  manager.appendResetBoundary("new");
+  await manager.appendResetBoundaryAsync("new");
   expect(
-    SessionManager.openBounded(scope, { maxEvents: 8, maxBytes: 4096 }).buildSessionContext()
-      .messages,
+    (
+      await SessionManager.openBoundedAsync(scope, { maxEvents: 8, maxBytes: 4096 })
+    ).buildSessionContext().messages,
   ).toEqual([]);
   if (!current.anchor) {
     throw new Error("Missing current-turn anchor");
   }
-  runWithSessionTranscriptReadFence(
+  await runWithSessionTranscriptReadFence(
     { ...current.anchor, logicalTurnId: "current", role: "user" },
-    () => {
+    async () => {
       expect(
-        SessionManager.openBounded(scope, { maxEvents: 8, maxBytes: 4096 }).buildSessionContext()
-          .messages,
+        (
+          await SessionManager.openBoundedAsync(scope, { maxEvents: 8, maxBytes: 4096 })
+        ).buildSessionContext().messages,
       ).toMatchObject([{ content: "explicitly retained" }]);
     },
   );

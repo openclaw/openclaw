@@ -3,7 +3,7 @@ import {
   loadSessionEntryReadOnly,
   loadTranscriptEvents,
 } from "../config/sessions/session-accessor.js";
-import { withSessionTranscriptWriteLock } from "../plugin-sdk/session-transcript-runtime.js";
+import { withSessionTranscriptWrite } from "../plugin-sdk/session-transcript-runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewaySession } from "./session-create-service.js";
 
@@ -13,7 +13,7 @@ async function appendImportedMessage(params: {
   sessionKey: string;
   storePath: string;
 }) {
-  await withSessionTranscriptWriteLock(
+  await withSessionTranscriptWrite(
     {
       agentId: params.agentId,
       sessionId: params.sessionId,

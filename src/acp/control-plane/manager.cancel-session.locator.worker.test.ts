@@ -4,7 +4,7 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers
 import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import { getOpenIncognitoAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import { readAcpSessionEntry, upsertAcpSessionMeta } from "../runtime/session-meta.js";
+import { readAcpSessionEntryAsync, upsertAcpSessionMeta } from "../runtime/session-meta.js";
 import {
   readDurableAcpSignals,
   withAcpCancellationFixture,
@@ -86,7 +86,7 @@ it.each([
           await replaceRuntime();
           release.resolve();
           const outcomes = await result;
-          const current = readAcpSessionEntry(f.target);
+          const current = await readAcpSessionEntryAsync(f.target);
           expect(current?.acp).toMatchObject({
             backend: "cancellation-proof",
             runtimeSessionName: "successor-runtime",
@@ -126,7 +126,7 @@ it.each([
             handle: expect.objectContaining({ runtimeSessionName: "successor-runtime" }),
             reason: "successor-retry",
           });
-          expect(readAcpSessionEntry(f.target)?.acp).toMatchObject({
+          expect((await readAcpSessionEntryAsync(f.target))?.acp).toMatchObject({
             runtimeSessionName: "successor-runtime",
             state: "idle",
           });
@@ -184,7 +184,7 @@ it.each([
             }),
             reason: "normalized-cancel",
           });
-          expect(readAcpSessionEntry(f.target)?.acp).toMatchObject({
+          expect((await readAcpSessionEntryAsync(f.target))?.acp).toMatchObject({
             backend: "cancellation-proof",
             runtimeSessionName: "normalized-runtime",
             mode: "persistent",
@@ -332,7 +332,7 @@ it.each([
           await Promise.all([turnResult, cancelResult]);
           expect(turnSettled).toBe(true);
           expect(cancelSettled).toBe(true);
-          expect(readAcpSessionEntry(f.target)?.acp).toMatchObject({
+          expect((await readAcpSessionEntryAsync(f.target))?.acp).toMatchObject({
             backend: "cancellation-proof",
             runtimeSessionName: "successor-runtime",
             mode: "persistent",

@@ -91,7 +91,7 @@ describe("plugin conversation bindings through SQLite", () => {
         if (requested.status !== "pending") {
           throw new Error("Expected a plugin binding approval request");
         }
-        expect(service.resolveByConversation(conversation)).toBeNull();
+        expect(await service.resolveByConversationAsync(conversation)).toBeNull();
         await expect(
           resolvePluginConversationBindingApproval({
             approvalId: requested.approvalId,
@@ -104,7 +104,7 @@ describe("plugin conversation bindings through SQLite", () => {
       }
 
       const record = expectDefined(
-        service.resolveByConversation(conversation),
+        await service.resolveByConversationAsync(conversation),
         "approved plugin binding persisted",
       );
       expect(record.targetSessionKey).toMatch(/^plugin-binding:fixture-runtime:/);
@@ -120,7 +120,7 @@ describe("plugin conversation bindings through SQLite", () => {
       if (workRequest.status !== "pending") {
         throw new Error("A different account must require its own approval");
       }
-      expect(service.resolveByConversation(workConversation)).toBeNull();
+      expect(await service.resolveByConversationAsync(workConversation)).toBeNull();
       await expect(
         resolvePluginConversationBindingApproval({
           approvalId: workRequest.approvalId,
@@ -129,7 +129,7 @@ describe("plugin conversation bindings through SQLite", () => {
         }),
       ).resolves.toMatchObject({ status: "approved" });
       const workRecord = expectDefined(
-        service.resolveByConversation(workConversation),
+        await service.resolveByConversationAsync(workConversation),
         "separate account binding persisted",
       );
       expect(workRecord.targetSessionKey).not.toBe(record.targetSessionKey);
@@ -150,10 +150,10 @@ describe("plugin conversation bindings through SQLite", () => {
       expect(service.listBySession(record.targetSessionKey)).toEqual([record]);
       expect(service.listBySession(workRecord.targetSessionKey)).toEqual([workRecord]);
       const touchedAt = record.boundAt + 1_000;
-      service.touch(record.bindingId, touchedAt, record.conversation);
+      await service.touchAsync(record.bindingId, touchedAt, record.conversation);
       await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
-      expect(service.resolveByConversation(conversation)?.metadata).toMatchObject({
+      expect((await service.resolveByConversationAsync(conversation))?.metadata).toMatchObject({
         ...record.metadata,
         lastActivityAt: touchedAt,
       });
@@ -171,16 +171,16 @@ describe("plugin conversation bindings through SQLite", () => {
       await expect(detachPluginConversationBinding({ ...owner, conversation })).resolves.toEqual({
         removed: true,
       });
-      expect(service.resolveByConversation(conversation)).toBeNull();
+      expect(await service.resolveByConversationAsync(conversation)).toBeNull();
       expect(service.listBySession(record.targetSessionKey)).toEqual([]);
-      expect(service.resolveByConversation(workConversation)).toEqual(workRecord);
+      expect(await service.resolveByConversationAsync(workConversation)).toEqual(workRecord);
 
       await expect(
         service.unbind({ targetSessionKey: workRecord.targetSessionKey, reason: "session-ended" }),
       ).resolves.toEqual([workRecord]);
       await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
-      expect(service.resolveByConversation(workConversation)).toBeNull();
+      expect(await service.resolveByConversationAsync(workConversation)).toBeNull();
       expect(service.listBySession(workRecord.targetSessionKey)).toEqual([]);
     },
   );

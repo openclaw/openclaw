@@ -1,19 +1,13 @@
 import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   appendTranscriptMessage,
-  loadTranscriptEventsSync,
   resolveSessionTranscriptDatabasePath,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import { replaceTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
-import {
-  deferOpenClawAgentPostCommitPublication,
-  openOpenClawAgentDatabase,
-  runOpenClawAgentWriteTransaction,
-} from "../../state/openclaw-agent-db.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { rewriteTranscriptEntriesInSessionManager } from "../embedded-agent-runner/transcript-rewrite.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
@@ -41,125 +35,6 @@ afterEach(async () => {
   tempDirs.cleanup();
 });
 
-it("keeps deprecated sync rewrite publication ahead of synchronous commit observers", async () => {
-  const dir = tempDirs.make("openclaw-rewrite-observer-");
-  const scope = {
-    agentId: "main",
-    sessionId: "rewrite-observer",
-    sessionKey: "agent:main:rewrite-observer",
-    storePath: path.join(dir, "sessions.json"),
-  };
-  await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-  const manager = SessionManager.open(scope, dir);
-  const first = manager.appendMessage({ role: "user", content: "first", timestamp: 1 });
-  const tail = manager.appendMessage({ role: "user", content: "tail", timestamp: 2 });
-  const database = openOpenClawAgentDatabase({
-    agentId: scope.agentId,
-    path: resolveSessionTranscriptDatabasePath(scope),
-  });
-  database.db.function("queue_observer_append", () => {
-    expect(
-      deferOpenClawAgentPostCommitPublication(database, () => {
-        manager.appendMessage({ role: "user", content: "observer", timestamp: 3 });
-      }),
-    ).toBe(true);
-    return 0;
-  });
-  database.db.exec(
-    "CREATE TRIGGER append_from_observer AFTER INSERT ON transcript_events WHEN json_extract(NEW.event_json, '$.message.content') = 'replacement' BEGIN SELECT queue_observer_append(); END;",
-  );
-  const rewrite = manager.prepareTranscriptRewrite();
-  rewrite.sessionManager.resetLeaf();
-  const replacement = rewrite.sessionManager.appendMessage({
-    role: "user",
-    content: "replacement",
-    timestamp: 1,
-  });
-  const copiedTail = rewrite.sessionManager.appendMessage({
-    role: "user",
-    content: "tail",
-    timestamp: 2,
-  });
-  rewrite.commit(
-    new Map([
-      [first, replacement],
-      [tail, copiedTail],
-    ]),
-  );
-  const expected = [
-    { message: { content: "replacement" } },
-    { message: { content: "tail" } },
-    { message: { content: "observer" } },
-  ];
-  expect(manager.getBranch()).toMatchObject(expected);
-  expect(SessionManager.open(scope).getBranch()).toEqual(manager.getBranch());
-});
-
-it("does not certify stale navigation with a post-commit replacement version", async () => {
-  const dir = tempDirs.make("openclaw-postcommit-rewrite-race-");
-  const scope = {
-    agentId: "main",
-    sessionId: "postcommit-race",
-    sessionKey: "agent:main:postcommit-race",
-    storePath: path.join(dir, "sessions.json"),
-  };
-  await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-  const manager = SessionManager.open(scope, dir);
-  const first = manager.appendMessage({ role: "user", content: "first", timestamp: 1 });
-  const second = manager.appendMessage({ role: "user", content: "second", timestamp: 2 });
-  const control = manager.appendLeafControl({
-    targetId: first,
-    appendParentId: second,
-    appendMode: "side",
-  });
-  const kept = manager.appendMessage({ role: "user", content: "kept-after-trim", timestamp: 3 });
-  manager.appendMessage({ role: "user", content: "remove-tail", timestamp: 4 });
-  let published = false;
-  runOpenClawAgentWriteTransaction(
-    (database) => {
-      expect(
-        deferOpenClawAgentPostCommitPublication(database, () => {
-          published = true;
-          const events = loadTranscriptEventsSync(scope);
-          for (const event of events) {
-            if (isRecord(event) && event.id === control.id) {
-              event.targetId = second;
-            }
-          }
-          replaceTranscriptEventsSync(scope, events);
-        }),
-      ).toBe(true);
-      expect(
-        manager.removeTrailingEntries(
-          (entry) =>
-            entry.type === "message" &&
-            entry.message.role === "user" &&
-            entry.message.content === "remove-tail",
-        ),
-      ).toBe(1);
-    },
-    { agentId: scope.agentId, path: resolveSessionTranscriptDatabasePath(scope) },
-  );
-  expect(published).toBe(true);
-  const committed = loadTranscriptEventsSync(scope);
-  const rewrite = () =>
-    rewriteTranscriptEntriesInSessionManager({
-      sessionManager: manager,
-      replacements: [
-        { entryId: kept, message: { role: "user", content: "replacement", timestamp: 3 } },
-      ],
-    });
-  await expect(rewrite()).rejects.toThrow("Session transcript changed");
-  expect(loadTranscriptEventsSync(scope)).toEqual(committed);
-  manager.reloadPersistedTranscript();
-  expect((await rewrite()).changed).toBe(true);
-  expect(SessionManager.open(scope).getBranch()).toMatchObject([
-    { message: { content: "first" } },
-    { message: { content: "second" } },
-    { message: { content: "replacement" } },
-  ]);
-});
-
 it.each(["compaction", "reset"] as const)(
   "adopts canonical boundary counts and navigation after replaying %s",
   async (kind) => {
@@ -171,16 +46,22 @@ it.each(["compaction", "reset"] as const)(
       storePath: path.join(dir, "sessions.json"),
     };
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    const full = SessionManager.open(scope, dir);
-    const first = full.appendMessage({ role: "user", content: "first", timestamp: 1 });
-    full.appendMessage({ role: "user", content: "second", timestamp: 2 });
+    const full = await SessionManager.openAsync(scope, dir);
+    const first = expectDefined(
+      await full.appendMessageAsync({ role: "user", content: "first", timestamp: 1 }),
+      "Expected appended message",
+    );
+    await full.appendMessageAsync({ role: "user", content: "second", timestamp: 2 });
     if (kind === "reset") {
-      full.appendResetBoundary("reset", first);
+      await full.appendResetBoundaryAsync("reset", first);
     } else {
-      full.appendCompaction("summary", first, 100);
+      await full.appendCompactionAsync("summary", first, 100);
     }
-    full.appendMessage({ role: "user", content: "last", timestamp: 3 });
-    const manager = SessionManager.openBounded(scope, { maxEvents: 10, maxBytes: 16384 });
+    await full.appendMessageAsync({ role: "user", content: "last", timestamp: 3 });
+    const manager = await SessionManager.openBoundedAsync(scope, {
+      maxEvents: 10,
+      maxBytes: 16384,
+    });
     expect(manager.getBoundaryCount()).toBe(1);
     await rewriteTranscriptEntriesInSessionManager({
       sessionManager: manager,
@@ -188,7 +69,7 @@ it.each(["compaction", "reset"] as const)(
         { entryId: first, message: { role: "user", content: "rewritten", timestamp: 1 } },
       ],
     });
-    const reopened = SessionManager.open(scope, dir);
+    const reopened = await SessionManager.openAsync(scope, dir);
     expect(reopened.getBoundaryCount()).toBe(1);
     expect(manager.getBoundaryCount()).toBe(reopened.getBoundaryCount());
     expect(manager.getBranch()).toEqual(reopened.getBranch());
@@ -207,17 +88,28 @@ it.each(["compaction", "reset"] as const)(
       storePath: path.join(dir, "sessions.json"),
     };
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    const writer = SessionManager.open(scope, dir);
-    const first = writer.appendMessage({ role: "user", content: "first", timestamp: 1 });
-    const stale = SessionManager.openBounded(scope, { cwd: dir, maxEvents: 20, maxBytes: 4096 });
+    const writer = await SessionManager.openAsync(scope, dir);
+    const first = expectDefined(
+      await writer.appendMessageAsync({ role: "user", content: "first", timestamp: 1 }),
+      "Expected appended message",
+    );
+    const stale = await SessionManager.openBoundedAsync(scope, {
+      cwd: dir,
+      maxEvents: 20,
+      maxBytes: 4096,
+    });
     expect(stale.getBoundaryCount()).toBe(0);
-    writer.appendCustomEntry("concurrent-metadata", { keep: true });
+    await writer.appendCustomEntryAsync("concurrent-metadata", { keep: true });
     if (kind === "compaction") {
-      stale.appendCompaction("summary", first, 100);
+      await stale.appendCompactionAsync("summary", first, 100);
     } else {
-      stale.appendResetBoundary("reset", first);
+      await stale.appendResetBoundaryAsync("reset", first);
     }
-    const reopened = SessionManager.openBounded(scope, { cwd: dir, maxEvents: 20, maxBytes: 4096 });
+    const reopened = await SessionManager.openBoundedAsync(scope, {
+      cwd: dir,
+      maxEvents: 20,
+      maxBytes: 4096,
+    });
     expect(reopened.getBoundaryCount()).toBe(1);
     expect(stale.getBoundaryCount()).toBe(reopened.getBoundaryCount());
     expect(stale.getBranch()).toEqual(reopened.getBranch());
@@ -245,7 +137,7 @@ it("appends an assistant without parsing transcript rows outside the bounded con
     parentId: "excluded",
     message: { role: "user", content: "retained" },
   });
-  const manager = SessionManager.openBounded(scope, {
+  const manager = await SessionManager.openBoundedAsync(scope, {
     cwd: dir,
     maxBytes: 4096,
     maxEvents: 1,
@@ -267,16 +159,19 @@ it("appends an assistant without parsing transcript rows outside the bounded con
     .run("{", scope.sessionId, excludedSeq);
   expect(poisoned.changes).toBe(1);
 
-  const assistantId = manager.appendMessage({
-    role: "assistant",
-    content: [{ type: "text", text: "bounded reply" }],
-    api: "messages",
-    provider: "anthropic",
-    model: "sonnet-4.6",
-    usage: createZeroUsageFixture(),
-    stopReason: "stop",
-    timestamp: Date.now(),
-  });
+  const assistantId = expectDefined(
+    await manager.appendMessageAsync({
+      role: "assistant",
+      content: [{ type: "text", text: "bounded reply" }],
+      api: "messages",
+      provider: "anthropic",
+      model: "sonnet-4.6",
+      usage: createZeroUsageFixture(),
+      stopReason: "stop",
+      timestamp: Date.now(),
+    }),
+    "Expected appended message",
+  );
 
   expect(manager.getEntry(assistantId)).toMatchObject({ parentId: "retained" });
   const stored = database.db

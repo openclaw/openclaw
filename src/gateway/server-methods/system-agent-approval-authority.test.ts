@@ -157,7 +157,7 @@ describe("prepareDelegatedSystemAgentApproval", () => {
     const context = {
       systemAgentApprovalManager: manager,
       broadcast: vi.fn(),
-      approvalEvents: { publishRequested: vi.fn(), publishResolved },
+      approvalEvents: { publishRequestedAsync: vi.fn(async () => 0), publishResolved },
     } as unknown as GatewayRequestContext;
     const operationalRunInstance = createOperationalRunInstanceRef("delegated-run-race");
     const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
@@ -294,7 +294,7 @@ describe("prepareDelegatedSystemAgentApproval", () => {
     const context = {
       systemAgentApprovalManager: manager,
       broadcast: vi.fn(),
-      approvalEvents: { publishRequested: vi.fn(), publishResolved },
+      approvalEvents: { publishRequestedAsync: vi.fn(async () => 0), publishResolved },
     } as unknown as GatewayRequestContext;
     const operationalRunInstance = createOperationalRunInstanceRef("delegated-run-applied");
     claimAgentRunDelegatedAuthority(operationalRunInstance);
@@ -363,7 +363,7 @@ describe("prepareDelegatedSystemAgentApproval", () => {
     const context = {
       systemAgentApprovalManager: manager,
       broadcast: vi.fn(),
-      approvalEvents: { publishRequested: vi.fn(), publishResolved: vi.fn() },
+      approvalEvents: { publishRequestedAsync: vi.fn(async () => 0), publishResolved: vi.fn() },
       validateAgentRuntimeApprovalAuthority: () => workerTurnActive,
     } as unknown as GatewayRequestContext;
     const operationalRunInstance = createOperationalRunInstanceRef("delegated-worker-run");

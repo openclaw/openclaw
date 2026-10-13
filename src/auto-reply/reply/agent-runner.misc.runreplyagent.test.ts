@@ -382,7 +382,7 @@ describe("runReplyAgent auto-compaction token update", () => {
           memoryScope = getPluginRuntimeGatewayRequestScope();
           const privateTranscript = expectDefined(params.sessionManager, "memory transcript");
           expect(privateTranscript.getSessionTarget()).toBeUndefined();
-          privateTranscript.appendMessage(terminalMessage(7_039, 34));
+          await privateTranscript.appendMessageAsync(terminalMessage(7_039, 34));
           return {
             payloads: [],
             meta: { agentMeta: { lastCallUsage: { input: 7_039, output: 34 } } },
@@ -409,7 +409,9 @@ describe("runReplyAgent auto-compaction token update", () => {
         // with the queued turn so the selected model cannot escape into real catalog discovery.
         setRuntimeConfigSnapshot(config, config);
         await replaceSessionEntry(scope, sessionEntry);
-        SessionManager.open(scope, tmp).appendMessage(terminalMessage(10_920, 10));
+        await (
+          await SessionManager.openAsync(scope, tmp)
+        ).appendMessageAsync(terminalMessage(10_920, 10));
         const turn = createBaseRun({
           followup: { prompt },
           run: {

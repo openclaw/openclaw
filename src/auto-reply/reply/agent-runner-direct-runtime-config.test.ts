@@ -394,7 +394,7 @@ describe("runReplyAgent runtime config", () => {
         const onReplyOperationOwned = vi.fn<(operation: ReplyOperation) => void>();
         replyParams.opts = { onBlockReply, onReplyOperationOwned };
         executeAgentTurnMock.mockImplementation(async () => {
-          expect(SessionManager.open(scope).buildSessionContext().messages).toEqual(
+          expect((await SessionManager.openAsync(scope)).buildSessionContext().messages).toEqual(
             messages.map((message) => expect.objectContaining(message)),
           );
           return {

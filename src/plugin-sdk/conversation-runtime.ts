@@ -6,7 +6,6 @@
 export {
   ensureConfiguredBindingRouteReady,
   resolveConfiguredBindingRoute,
-  resolveRuntimeConversationBindingRoute,
 } from "../channels/plugins/binding-routing.js";
 export type {
   ConfiguredBindingRouteResult,

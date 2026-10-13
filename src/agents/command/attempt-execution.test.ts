@@ -206,11 +206,15 @@ describe("sessionTranscriptHasContent", () => {
   it("marks fallback history only after SQLite contains an assistant turn", async () => {
     expect(await sessionTranscriptHasContent(undefined)).toBe(false);
     expect(await sessionTranscriptHasContent(target)).toBe(false);
-    const manager = SessionManager.open(target, tmpDir);
-    manager.appendMessage({ role: "user", content: "x".repeat(300 * 1024), timestamp: 1 });
+    const manager = await SessionManager.openAsync(target, tmpDir);
+    await manager.appendMessageAsync({
+      role: "user",
+      content: "x".repeat(300 * 1024),
+      timestamp: 1,
+    });
     manager.flushPendingPersistence();
     expect(await sessionTranscriptHasContent(target)).toBe(false);
-    manager.appendMessage(assistantMessage());
+    await manager.appendMessageAsync(assistantMessage());
     manager.flushPendingPersistence();
 
     const sessionHasHistory = await sessionTranscriptHasContent(target);
@@ -221,19 +225,22 @@ describe("sessionTranscriptHasContent", () => {
   });
 
   it("ignores abandoned assistants and clears history at reset boundaries", async () => {
-    const manager = SessionManager.open(target, tmpDir);
-    const root = manager.appendMessage({ role: "user", content: "root", timestamp: 1 });
-    manager.appendMessage(assistantMessage());
-    manager.branch(root);
-    manager.appendMessage({ role: "user", content: "active branch", timestamp: 3 });
+    const manager = await SessionManager.openAsync(target, tmpDir);
+    const root = await manager.appendMessageAsync({ role: "user", content: "root", timestamp: 1 });
+    if (!root) {
+      throw new Error("Expected the root fixture message ID");
+    }
+    await manager.appendMessageAsync(assistantMessage());
+    await manager.branchAsync(root);
+    await manager.appendMessageAsync({ role: "user", content: "active branch", timestamp: 3 });
     manager.flushPendingPersistence();
     expect(await sessionTranscriptHasContent(target)).toBe(false);
 
-    manager.appendMessage(assistantMessage());
+    await manager.appendMessageAsync(assistantMessage());
     manager.flushPendingPersistence();
     expect(await sessionTranscriptHasContent(target)).toBe(true);
-    manager.appendResetBoundary("new");
-    manager.appendMessage({ role: "user", content: "fresh turn", timestamp: 4 });
+    await manager.appendResetBoundaryAsync("new");
+    await manager.appendMessageAsync({ role: "user", content: "fresh turn", timestamp: 4 });
     manager.flushPendingPersistence();
     expect(await sessionTranscriptHasContent(target)).toBe(false);
   });

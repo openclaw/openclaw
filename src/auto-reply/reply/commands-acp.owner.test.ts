@@ -126,7 +126,7 @@ it.each(
         const target = { cfg, sessionKey: params.sessionKey, agentId: params.agentId };
         await manager.initializeSession({ ...target, agent: "main", mode: "persistent" });
         await writeFile(effectsPath, "");
-        const before = manager.resolveSession(target);
+        const before = await manager.resolveSessionAsync(target);
 
         commandStarted = true;
         commandRun = handleAcpCommand(params, true);
@@ -152,7 +152,7 @@ it.each(
         const applied =
           principal !== "channel-member" && (transition === "none" || transition === "accepted");
         expect(await readFile(effectsPath, "utf8")).toBe(applied ? `${effect}\n` : "");
-        const after = manager.resolveSession(target);
+        const after = await manager.resolveSessionAsync(target);
         if (applied) {
           expect(result?.reply?.text).toContain("Updated ACP");
           expect(after.kind).toBe("ready");

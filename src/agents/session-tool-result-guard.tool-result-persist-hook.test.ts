@@ -32,18 +32,18 @@ afterEach(resetGlobalHookRunner);
 
 const createGuardedSession = () =>
   guardSessionManager(SessionManager.inMemory(), { agentId: "main", sessionKey: "main" });
-function appendToolResultDetails(
+async function appendToolResultDetails(
   sm: SessionManager,
   details: Record<string, unknown>,
   text = "visible output stays small",
   toolName = "exec",
 ) {
-  sm.appendMessage(
+  await sm.appendMessageAsync(
     makeAgentAssistantMessage({
       content: [{ type: "toolCall", id: "call_1", name: toolName, arguments: {} }],
     }),
   );
-  sm.appendMessage({ ...makeTextToolResult("call_1", "", text, false, 1), details });
+  await sm.appendMessageAsync({ ...makeTextToolResult("call_1", "", text, false, 1), details });
 }
 function hasRecordDetails(message: ToolResultMessage): message is PersistedToolResultMessage {
   return (
@@ -87,7 +87,7 @@ function expectPersistedToolResultDetailsCapped(sm: SessionManager) {
 }
 
 describe("session persistence hooks", () => {
-  it("caps text and details expanded by before_message_write", () => {
+  it("caps text and details expanded by before_message_write", async () => {
     installHook("before_message_write", ({ message }) =>
       message.role === "toolResult"
         ? {
@@ -104,12 +104,12 @@ describe("session persistence hooks", () => {
       sessionKey: "main",
       contextWindowTokens: 100,
     });
-    appendToolResultDetails(sm, { big: "x".repeat(10_000) }, "ok", "read");
+    await appendToolResultDetails(sm, { big: "x".repeat(10_000) }, "ok", "read");
     expectPersistedToolResultTextCapped(sm);
     expectPersistedToolResultDetailsCapped(sm);
   });
 
-  it("preserves small recursive details byte-for-byte", () => {
+  it("preserves small recursive details byte-for-byte", async () => {
     const tokenValue = "abcdefghijklmnopqrstuvwx1234567890";
     let deepDetails: Record<string, unknown> = { token: tokenValue };
     for (let index = 0; index < 10; index++) {
@@ -125,30 +125,30 @@ describe("session persistence hooks", () => {
       nested: { apiKey: { value: tokenValue }, stdout: "Authorization: Bearer " + tokenValue },
     };
     const sm = createGuardedSession();
-    appendToolResultDetails(sm, details);
+    await appendToolResultDetails(sm, details);
     const toolResult = requirePersistedToolResult(sm);
     expect(toolResultText(toolResult)).toBe("visible output stays small");
     expect(JSON.stringify(toolResult.details)).toBe(JSON.stringify(details));
   });
 
-  it("keeps logging patterns out of tool persistence", () => {
+  it("keeps logging patterns out of tool persistence", async () => {
     const customSecret = "customsecret=abcdef1234567890ghij";
     const sm = guardSessionManager(SessionManager.inMemory(), {
       agentId: "main",
       sessionKey: "main",
       config: { logging: { redactPatterns: [String.raw`customsecret=([^\s]+)`] } },
     });
-    appendToolResultDetails(sm, { diagnostic: customSecret }, customSecret);
+    await appendToolResultDetails(sm, { diagnostic: customSecret }, customSecret);
     const toolResult = requirePersistedToolResult(sm);
     expect(toolResult.details).toEqual({ diagnostic: customSecret });
     expect(toolResultText(toolResult)).toBe(customSecret);
   });
 
-  it("caps oversized summary fields without masking or splitting surrogate pairs", () => {
+  it("caps oversized summary fields without masking or splitting surrogate pairs", async () => {
     const tokenValue = "ghp_" + "a".repeat(36);
     const originalTail = tokenValue + " " + "x".repeat(1_959) + "😀" + "y".repeat(6_000);
     const sm = createGuardedSession();
-    appendToolResultDetails(sm, {
+    await appendToolResultDetails(sm, {
       status: { state: "completed", token: tokenValue },
       sessionId: "exec-1",
       aggregated: "x".repeat(120_000),
@@ -168,7 +168,7 @@ describe("session persistence hooks", () => {
     expect(Buffer.byteLength(JSON.stringify(details), "utf8")).toBeLessThan(8_192);
   });
 
-  it("preserves retained structured fields in fallback oversized details summaries", () => {
+  it("preserves retained structured fields in fallback oversized details summaries", async () => {
     const tokenValue = "fallback-token-abcdefghijklmnopqrstuv";
     const spill = Object.freeze({
       path: "/tmp/web-fetch-output",
@@ -176,7 +176,7 @@ describe("session persistence hooks", () => {
       truncated: true,
     });
     const sm = createGuardedSession();
-    appendToolResultDetails(sm, {
+    await appendToolResultDetails(sm, {
       status: { state: "completed", token: tokenValue },
       sessionId: "exec-1",
       cwd: "/tmp/".concat("workspace/".repeat(400)),
@@ -212,7 +212,7 @@ describe("session persistence hooks", () => {
     expect(serialized).toContain(tokenValue);
   });
 
-  it("caps oversized toolResult details without serializing the original payload", () => {
+  it("caps oversized toolResult details without serializing the original payload", async () => {
     const sm = createGuardedSession();
     const oversizedDetails = { aggregated: "x".repeat(200_000) };
     const originalStringify = JSON.stringify;
@@ -224,7 +224,7 @@ describe("session persistence hooks", () => {
     });
 
     try {
-      appendToolResultDetails(sm, oversizedDetails);
+      await appendToolResultDetails(sm, oversizedDetails);
     } finally {
       stringifySpy.mockRestore();
     }
@@ -234,7 +234,7 @@ describe("session persistence hooks", () => {
     expectPersistedToolResultDetailsCapped(sm);
   });
 
-  it("caps wide toolResult details without materializing every entry up front", () => {
+  it("caps wide toolResult details without materializing every entry up front", async () => {
     const sm = createGuardedSession();
     const wideDetails: Record<string, unknown> = {
       status: "completed",
@@ -259,7 +259,7 @@ describe("session persistence hooks", () => {
     });
 
     try {
-      appendToolResultDetails(sm, wideDetails);
+      await appendToolResultDetails(sm, wideDetails);
     } finally {
       entriesSpy.mockRestore();
       keysSpy.mockRestore();
@@ -273,23 +273,23 @@ describe("session persistence hooks", () => {
     expect(details.originalDetailKeys).toContain("debug_0");
   });
 
-  it("caps oversized details returned by tool_result_persist", () => {
+  it("caps oversized details returned by tool_result_persist", async () => {
     const hookDetails = { aggregated: "x".repeat(20_000) };
     installHook("tool_result_persist", ({ message }) =>
       message.role === "toolResult" ? { message: { ...message, details: hookDetails } } : undefined,
     );
     const sm = createGuardedSession();
-    appendToolResultDetails(sm, { big: "x".repeat(10_000) }, "ok", "read");
+    await appendToolResultDetails(sm, { big: "x".repeat(10_000) }, "ok", "read");
     expectPersistedToolResultDetailsCapped(sm);
   });
-  it("refreshes skipped write hooks when reusing a session manager", () => {
+  it("refreshes skipped write hooks when reusing a session manager", async () => {
     installHook("before_message_write", ({ message }) =>
       message.role === "user" ? { message: { ...message, content: "hooked" } } : undefined,
     );
     const sm = SessionManager.inMemory();
     for (const skipBeforeMessageWriteHooks of [true, false, true]) {
       guardSessionManager(sm, { skipBeforeMessageWriteHooks });
-      sm.appendMessage(makeUserMessage("original", 1));
+      await sm.appendMessageAsync(makeUserMessage("original", 1));
     }
     expect(
       sm
@@ -310,7 +310,7 @@ const entries = (manager: SessionManager) =>
   manager.getEntries().filter((entry) => entry.type === "message");
 
 describe("tool-result persistence ordering", () => {
-  it("tracks a committed assistant call even when its callback throws", () => {
+  it("tracks a committed assistant call even when its callback throws", async () => {
     const manager = SessionManager.inMemory();
     const guard = installSessionToolResultGuard(manager, {
       onMessagePersisted(message) {
@@ -319,38 +319,42 @@ describe("tool-result persistence ordering", () => {
         }
       },
     });
-    expect(() => manager.appendMessage(call)).toThrow("assistant callback failed after commit");
+    await expect(manager.appendMessageAsync(call)).rejects.toThrow(
+      "assistant callback failed after commit",
+    );
     expect(guard.getPendingIds()).toEqual(["call_order"]);
-    guard.flushPendingToolResults();
+    await guard.flushPendingToolResultsAsync();
     expect(entries(manager)).toMatchObject([
       { message: call },
       { message: { role: "toolResult", toolCallId: "call_order", isError: true } },
     ]);
   });
 
-  it("does not repair a committed result during a reentrant user append", () => {
+  it("does not repair a committed result during a reentrant user append", async () => {
     const manager = SessionManager.inMemory();
+    let reentrantAppend: Promise<string | undefined> | undefined;
     const guard = installSessionToolResultGuard(manager, {
       onMessagePersisted(message) {
         if (message.role === "toolResult" && !message.isError) {
-          manager.appendMessage(makeUserMessage("next message", 1));
+          reentrantAppend = manager.appendMessageAsync(makeUserMessage("next message", 1));
         }
       },
     });
-    manager.appendMessage(call);
-    manager.appendMessage(result);
-    guard.flushPendingToolResults();
+    await manager.appendMessageAsync(call);
+    await manager.appendMessageAsync(result);
+    await reentrantAppend;
+    await guard.flushPendingToolResultsAsync();
     expect(guard.getPendingIds()).toEqual([]);
     expect(
       entries(manager).flatMap(({ message }) => (message.role === "toolResult" ? [message] : [])),
     ).toEqual([result]);
   });
 
-  it("keeps an uncommitted result pending when the raw append fails", () => {
+  it("keeps an uncommitted result pending when the raw append fails", async () => {
     const manager = SessionManager.inMemory();
-    const append = manager.appendMessageWithTranscriptAnchor.bind(manager);
+    const append = manager.appendMessageWithTranscriptAnchorAsync.bind(manager);
     const spy = vi
-      .spyOn(manager, "appendMessageWithTranscriptAnchor")
+      .spyOn(manager, "appendMessageWithTranscriptAnchorAsync")
       .mockImplementation((message, options) => {
         if (message.role === "toolResult" && !message.isError) {
           throw new Error("append failed before commit");
@@ -359,10 +363,12 @@ describe("tool-result persistence ordering", () => {
       });
     try {
       const guard = installSessionToolResultGuard(manager);
-      manager.appendMessage(call);
-      expect(() => manager.appendMessage(result)).toThrow("append failed before commit");
+      await manager.appendMessageAsync(call);
+      await expect(manager.appendMessageAsync(result)).rejects.toThrow(
+        "append failed before commit",
+      );
       expect(guard.getPendingIds()).toEqual(["call_order"]);
-      guard.flushPendingToolResults();
+      await guard.flushPendingToolResultsAsync();
       expect(entries(manager)).toMatchObject([
         { message: call },
         { message: { role: "toolResult", toolCallId: "call_order", isError: true } },
@@ -389,7 +395,7 @@ async function openPersistedSessionManager() {
     storePath: path.join(root, "openclaw-agent.sqlite"),
   };
   await upsertSessionEntry({ ...target, entry: { sessionId: target.sessionId, updatedAt: 1 } });
-  return { target, sessionManager: SessionManager.open(target, root) };
+  return { target, sessionManager: await SessionManager.openAsync(target, root) };
 }
 const assistantText = (text: string, timestamp: number) =>
   makeAgentAssistantMessage({ content: [{ type: "text", text }], timestamp });
@@ -405,19 +411,19 @@ describe("guardSessionManager transcript visibility", () => {
       trigger: "user",
       inputProvenance: { kind: "internal_system", sourceTool: "progress_card_refresh" },
     });
-    guarded.appendMessage(makeUserMessage("Review the worker result", 1));
-    guarded.appendMessage(
+    await guarded.appendMessageAsync(makeUserMessage("Review the worker result", 1));
+    await guarded.appendMessageAsync(
       makeAgentAssistantMessage({
         content: [{ type: "toolCall", id: "read-result", name: "read", arguments: {} }],
         stopReason: "toolUse",
         timestamp: 2,
       }),
     );
-    guarded.appendMessage(
+    await guarded.appendMessageAsync(
       makeTextToolResult("read-result", "read", "The regression is fixed", false, 3),
     );
-    guarded.appendMessage(assistantText("The repair passed validation", 4));
-    const persisted = SessionManager.open(target).buildSessionContext().messages;
+    await guarded.appendMessageAsync(assistantText("The repair passed validation", 4));
+    const persisted = (await SessionManager.openAsync(target)).buildSessionContext().messages;
     expect(persisted).toMatchObject([
       { role: "user", content: "Review the worker result" },
       { role: "assistant", content: [{ type: "toolCall", id: "read-result" }] },
@@ -441,27 +447,27 @@ describe("guardSessionManager transcript visibility", () => {
       sourceTool: "  sessions_send\t",
       sourceRole: "subagent" as const,
     };
-    guardSessionManager(sessionManager, { runId: "human-run" }).appendMessage(
+    await guardSessionManager(sessionManager, { runId: "human-run" }).appendMessageAsync(
       applyInputProvenanceToUserMessage(
         makeUserMessage("Worker finished the reproduction", 1),
         childProvenance,
       ),
     );
-    sessionManager.appendMessage(assistantText("I found the cause of your bug", 2));
-    guardSessionManager(sessionManager, {
+    await sessionManager.appendMessageAsync(assistantText("I found the cause of your bug", 2));
+    await guardSessionManager(sessionManager, {
       runId: "coordination-run",
       inputProvenance: childProvenance,
-    }).appendMessage(
+    }).appendMessageAsync(
       applyInputProvenanceToUserMessage(makeUserMessage("Answer my follow-up", 3), {
         kind: "external_user",
       }),
     );
-    sessionManager.appendMessage(assistantText("Report received", 4));
-    guardSessionManager(sessionManager, {
+    await sessionManager.appendMessageAsync(assistantText("Report received", 4));
+    await guardSessionManager(sessionManager, {
       runId: "completion-run",
       inputProvenance: { ...childProvenance, sourceTool: "subagent_announce" },
-    }).appendMessage(assistantText("Your bug is fixed and tested", 5));
-    const messages = SessionManager.open(target).buildSessionContext().messages;
+    }).appendMessageAsync(assistantText("Your bug is fixed and tested", 5));
+    const messages = (await SessionManager.openAsync(target)).buildSessionContext().messages;
     expect(messages).toHaveLength(5);
     expect(messages.map((message) => Reflect.get(message, "display") === false)).toEqual([
       true,
@@ -480,7 +486,7 @@ describe("guardSessionManager transcript visibility", () => {
     });
   });
 
-  it("keeps the user-turn recorder attached when hiding memory maintenance", () => {
+  it("keeps the user-turn recorder attached when hiding memory maintenance", async () => {
     const sm = SessionManager.inMemory();
     const markRuntimePersisted = vi.fn();
     const recorder = {
@@ -492,11 +498,11 @@ describe("guardSessionManager transcript visibility", () => {
       message: { ...runtimeMessage },
       recorder,
     });
-    guardSessionManager(sm, {
+    await guardSessionManager(sm, {
       agentId: "main",
       sessionKey: "agent:main:memory",
       trigger: "memory",
-    }).appendMessage(runtimeMessage);
+    }).appendMessageAsync(runtimeMessage);
     expect(markRuntimePersisted).toHaveBeenCalledTimes(1);
     expect(markRuntimePersisted.mock.calls[0]?.[0]).toMatchObject({ display: false, role: "user" });
     expect(markRuntimePersisted.mock.calls[0]?.[2]).toEqual({ appended: true });

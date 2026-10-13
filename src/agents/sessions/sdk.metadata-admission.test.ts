@@ -1,5 +1,6 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
 import {
   loadTranscriptEvents,
@@ -40,10 +41,10 @@ it("restores prepared session context without waiting for an unrelated database 
       storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
     };
     await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
-    const manager = SessionManager.open(target, state.workspaceDir);
+    const manager = await SessionManager.openAsync(target, state.workspaceDir);
     await manager.appendThinkingLevelChange("off");
     const message = { role: "user" as const, content: "Restore these exact bytes", timestamp: 1 };
-    manager.appendMessage(message);
+    await manager.appendMessageAsync(message);
     const before = await loadTranscriptEvents(target);
     const entered = createDeferredCore();
     const release = createDeferredCore();
@@ -109,14 +110,16 @@ it.each(["model", "thinking", "context loading"] as const)(
       };
       await replaceSessionEntry(original, { sessionId: original.sessionId, updatedAt: 1 });
       await replaceSessionEntry(replacement, { sessionId: replacement.sessionId, updatedAt: 1 });
-      SessionManager.open(replacement, state.workspaceDir).appendMessage({
+      await (
+        await SessionManager.openAsync(replacement, state.workspaceDir)
+      ).appendMessageAsync({
         role: "user",
         content: "Preserve replacement history",
         timestamp: 1,
       });
       const replacementBefore = await loadTranscriptEvents(replacement);
       const originalBefore = await loadTranscriptEvents(original);
-      const manager = SessionManager.open(original, state.workspaceDir);
+      const manager = await SessionManager.openAsync(original, state.workspaceDir);
       const completed: {
         entry?: ModelChangeEntry | ThinkingLevelChangeEntry;
         records?: Awaited<ReturnType<typeof loadTranscriptEvents>>;
@@ -132,7 +135,7 @@ it.each(["model", "thinking", "context loading"] as const)(
         // Inspect committed fixture bytes while the SDK still owns metadata admission.
         completed.records = loadTranscriptEventsSync(original);
         completed.watermark = readSessionTranscriptWatermark(original);
-        manager.setSessionTarget(replacement);
+        await manager.setSessionTargetAsync(replacement);
         return id;
       };
       const appendModel = manager.appendModelChange.bind(manager);
@@ -151,7 +154,7 @@ it.each(["model", "thinking", "context loading"] as const)(
                 .mockImplementation((level) => retargetAfterAppend(() => appendThinking(level)))
             : vi.spyOn(manager, sessionManagerReadInitialContext).mockImplementation(async () => {
                 const context = await readInitialContext();
-                manager.setSessionTarget(replacement);
+                await manager.setSessionTargetAsync(replacement);
                 return context;
               });
       const model = {
@@ -243,18 +246,22 @@ it.each([
         storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
       };
       await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
-      const source = SessionManager.open(target, state.workspaceDir);
+      const source = await SessionManager.openAsync(target, state.workspaceDir);
       await source.appendThinkingLevelChange("off");
       const first = { role: "user" as const, content: "Selected branch", timestamp: 1 };
-      const firstId = source.appendMessage(first);
-      source.appendMessage({ role: "user", content: "Other branch", timestamp: 2 });
+      const firstId = expectDefined(
+        await source.appendMessageAsync(first),
+        "Expected appended message",
+      );
+      await source.appendMessageAsync({ role: "user", content: "Other branch", timestamp: 2 });
       const manager = await SessionManager.openBoundedAsync(target, {
         cwd: state.workspaceDir,
         maxBytes: 64_000,
         maxEvents: 20,
       });
       const before = await loadTranscriptEvents(target);
-      const select = () => (selection === "branch" ? manager.branch(firstId) : manager.resetLeaf());
+      const select = async () =>
+        selection === "branch" ? await manager.branchAsync(firstId) : manager.resetLeaf();
       const entered = createDeferredCore();
       const release = createDeferredCore();
       const readContext = contextWorker.readSessionTranscriptModelContextInWorker;
@@ -270,7 +277,7 @@ it.each([
               })
           : undefined;
       if (timing === "before") {
-        select();
+        await select();
       }
       const authStorage = AuthStorage.inMemory();
       const pending = createAgentSession({
@@ -294,7 +301,7 @@ it.each([
             pending.then(() => false),
           ]);
           expect(reachedReader, "SDK history completed before the reader pause").toBe(true);
-          select();
+          await select();
           release.resolve();
         }
         const outcome = await pending;
@@ -315,7 +322,7 @@ it.each([
               content: "Continue selected branch",
               timestamp: 3,
             };
-            manager.appendMessage(next);
+            await manager.appendMessageAsync(next);
             expect(manager.buildSessionContext().messages).toEqual([...expected, next]);
             expect((await loadTranscriptEvents(target)).slice(0, before.length)).toEqual(before);
           }
@@ -554,7 +561,9 @@ it.each(["SDK initialization", "model transition"] as const)(
       };
       await replaceSessionEntry(first, { sessionId: first.sessionId, updatedAt: 1 });
       await replaceSessionEntry(second, { sessionId: second.sessionId, updatedAt: 1 });
-      SessionManager.open(second, secondDir).appendMessage({
+      await (
+        await SessionManager.openAsync(second, secondDir)
+      ).appendMessageAsync({
         role: "user",
         content: "Leave the other physical database unchanged",
         timestamp: 1,
@@ -564,7 +573,7 @@ it.each(["SDK initialization", "model transition"] as const)(
       let restoreAppend: (() => void) | undefined;
       try {
         process.chdir(firstDir);
-        const manager = SessionManager.open(relativeTarget, firstDir);
+        const manager = await SessionManager.openAsync(relativeTarget, firstDir);
         const capturedTarget = manager.getSessionTarget();
         const reasoningModel = {
           ...testModel,

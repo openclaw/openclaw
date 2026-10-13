@@ -65,34 +65,34 @@ export type AccountScopedConversationBindingRecord<TKind extends string = string
 };
 
 /**
- * Released synchronous thread-bindings-runtime SDK contract, retained until the next SDK major.
- * @deprecated Use AccountScopedConversationBindingManagerV2; removed in the next Plugin SDK major.
+ * Released synchronous thread-bindings-runtime SDK contract, retained for a compatibility period after stable deprecation.
+ * @deprecated Use AccountScopedConversationBindingManagerV2; removed after stable deprecation and a compatibility period.
  */
 export type AccountScopedConversationBindingManager<TKind extends string = string> = {
   accountId: string;
-  /** @deprecated Use getByConversationIdAsync on AccountScopedConversationBindingManagerV2; removed in the next Plugin SDK major. */
+  /** @deprecated Use getByConversationIdAsync on AccountScopedConversationBindingManagerV2; removed after stable deprecation and a compatibility period. */
   getByConversationId: (
     conversationId: string,
   ) => AccountScopedConversationBindingRecord<TKind> | undefined;
-  /** @deprecated Use listBySessionKeyAsync on AccountScopedConversationBindingManagerV2; removed in the next Plugin SDK major. */
+  /** @deprecated Use listBySessionKeyAsync on AccountScopedConversationBindingManagerV2; removed after stable deprecation and a compatibility period. */
   listBySessionKey: (targetSessionKey: string) => AccountScopedConversationBindingRecord<TKind>[];
-  /** @deprecated Use bindConversationAsync on AccountScopedConversationBindingManagerV2; removed in the next Plugin SDK major. */
+  /** @deprecated Use bindConversationAsync on AccountScopedConversationBindingManagerV2; removed after stable deprecation and a compatibility period. */
   bindConversation: (params: {
     conversationId: string;
     targetKind: BindingTargetKind;
     targetSessionKey: string;
     metadata?: Record<string, unknown>;
   }) => AccountScopedConversationBindingRecord<TKind> | null;
-  /** @deprecated Use touchConversationAsync on AccountScopedConversationBindingManagerV2; removed in the next Plugin SDK major. */
+  /** @deprecated Use touchConversationAsync on AccountScopedConversationBindingManagerV2; removed after stable deprecation and a compatibility period. */
   touchConversation: (
     conversationId: string,
     at?: number,
   ) => AccountScopedConversationBindingRecord<TKind> | null;
-  /** @deprecated Use unbindConversationAsync on AccountScopedConversationBindingManagerV2; removed in the next Plugin SDK major. */
+  /** @deprecated Use unbindConversationAsync on AccountScopedConversationBindingManagerV2; removed after stable deprecation and a compatibility period. */
   unbindConversation: (
     conversationId: string,
   ) => AccountScopedConversationBindingRecord<TKind> | null;
-  /** @deprecated Use unbindBySessionKeyAsync on AccountScopedConversationBindingManagerV2; removed in the next Plugin SDK major. */
+  /** @deprecated Use unbindBySessionKeyAsync on AccountScopedConversationBindingManagerV2; removed after stable deprecation and a compatibility period. */
   unbindBySessionKey: (targetSessionKey: string) => AccountScopedConversationBindingRecord<TKind>[];
   stop: () => void;
 };
@@ -140,7 +140,7 @@ type AccountBindingManagerParams<TKind extends string> = {
   toSessionBindingTargetKind: (raw: TKind) => BindingTargetKind;
 };
 
-/** @deprecated Use createAccountScopedConversationBindingManagerV2; removed in the next Plugin SDK major. */
+/** @deprecated Use createAccountScopedConversationBindingManagerV2; removed after stable deprecation and a compatibility period. */
 export function createAccountScopedConversationBindingManager<TKind extends string>(
   params: AccountBindingManagerParams<TKind>,
 ): AccountScopedConversationBindingManager<TKind> {

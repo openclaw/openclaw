@@ -155,12 +155,6 @@ export class NodeWorkerWorkspaceRuntime {
     return this.acquireManagedWorkspaceAsync({ ...request, sessionKey: request.sessionKey });
   }
 
-  /** @deprecated Retained for the public synchronous plugin workspace capability. */
-  acquireManagedWorkspace(request: NodeWorkerManagedWorkspaceRequest) {
-    const prepared = this.prepared.store?.findSync(request.environmentId);
-    return this.acquireWorkspaceIdentity(request, prepared);
-  }
-
   async acquireManagedWorkspaceAsync(
     request: NodeWorkerManagedWorkspaceRequest,
   ): Promise<{ workspaceDir: string; homeDir?: string; release: () => void }> {

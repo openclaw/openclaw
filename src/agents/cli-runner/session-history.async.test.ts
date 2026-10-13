@@ -287,7 +287,9 @@ it.each(["persisted", "process-local"] as const)(
       await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
       const reason = "synthetic quarantine";
       if (kind === "persisted") {
-        SessionManager.open(target).appendMessage({
+        await (
+          await SessionManager.openAsync(target)
+        ).appendMessageAsync({
           role: "user",
           content: "retained bytes",
           timestamp: 1,

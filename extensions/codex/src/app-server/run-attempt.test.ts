@@ -2266,7 +2266,9 @@ describe("runCodexAppServerAttempt", () => {
       createMockPluginRegistry([{ hookName: "before_prompt_build", handler: beforePromptBuild }]),
     );
     const { sessionFile, workspaceDir } = createRunPaths();
-    openRunSession(sessionFile).appendMessage(userMessage("previous request", Date.now()));
+    await openRunSession(sessionFile).appendMessageAsync(
+      userMessage("previous request", Date.now()),
+    );
     const { closeAndWait, events, retireSpy, state } = installCleanupTrackingClient();
     const abortController = new AbortController();
     const removeAbortListener = vi.spyOn(abortController.signal, "removeEventListener");
@@ -2390,12 +2392,14 @@ describe("runCodexAppServerAttempt", () => {
           updatedAt: Date.now(),
         },
       });
-      SessionManager.open({
-        agentId: "main",
-        sessionKey,
-        sessionId: node,
-        storePath,
-      }).appendMessage(
+      await (
+        await SessionManager.openAsync({
+          agentId: "main",
+          sessionKey,
+          sessionId: node,
+          storePath,
+        })
+      ).appendMessageAsync(
         userMessage("Inspect the completed tool evidence, then delegate analysis.", 1),
       );
       const prior = new CodexAppServerEventProjector(params, "parent-thread", "parent-turn");
@@ -2453,15 +2457,15 @@ describe("runCodexAppServerAttempt", () => {
       sessionKey: `agent:main:${sessionId}`,
       storePath,
     };
-    const sessionManager = SessionManager.open(target, workspaceDir);
+    const sessionManager = await SessionManager.openAsync(target, workspaceDir);
     const summary = "The durable code is summary-only-code-7429.";
-    sessionManager.appendMessage(userMessage("discarded seed question", Date.now()));
-    sessionManager.appendMessage(assistantMessage("discarded seed ACK", Date.now() + 1));
+    await sessionManager.appendMessageAsync(userMessage("discarded seed question", Date.now()));
+    await sessionManager.appendMessageAsync(assistantMessage("discarded seed ACK", Date.now() + 1));
     sessionManager.resetLeaf();
-    sessionManager.branchWithSummary(null, summary);
+    await sessionManager.branchWithSummaryAsync(null, summary);
     await sessionManager.appendThinkingLevelChange("off");
     expect(
-      SessionManager.openModelContext(target)
+      (await SessionManager.openModelContextAsync(target))
         .buildSessionContext()
         .messages.map((message) => message.role),
     ).toEqual(["branchSummary"]);
@@ -2507,8 +2511,10 @@ describe("runCodexAppServerAttempt", () => {
     );
     const { sessionFile, workspaceDir } = createRunPaths();
     const sessionManager = openRunSession(sessionFile);
-    sessionManager.appendMessage(userMessage("prior visible context", Date.now()));
-    sessionManager.appendMessage(assistantMessage("prior assistant context", Date.now() + 1));
+    await sessionManager.appendMessageAsync(userMessage("prior visible context", Date.now()));
+    await sessionManager.appendMessageAsync(
+      assistantMessage("prior assistant context", Date.now() + 1),
+    );
     const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
     await harness.waitForMethod("turn/start");
@@ -2647,18 +2653,20 @@ describe("runCodexAppServerAttempt", () => {
       throw new Error("expected valid Codex binding timestamp");
     }
     const sessionManager = openRunSession(sessionFile);
-    sessionManager.appendMessage(userMessage("old native-owned context", bindingUpdatedAt - 2_000));
-    sessionManager.appendMessage(
+    await sessionManager.appendMessageAsync(
+      userMessage("old native-owned context", bindingUpdatedAt - 2_000),
+    );
+    await sessionManager.appendMessageAsync(
       userMessage("we were discussing the Sonnet leak screenshots", bindingUpdatedAt + 1_000),
     );
-    sessionManager.appendMessage(
+    await sessionManager.appendMessageAsync(
       assistantMessage("David Ondrej was mentioned in that prior thread", bindingUpdatedAt + 2_000),
     );
     const copilotMirrorMessage = {
       ...assistantMessage("copilot mirror context also matters", bindingUpdatedAt + 3_000),
       __openclaw: { mirrorIdentity: "copilot:assistant-1" },
     } as ReturnType<typeof assistantMessage> & { __openclaw: { mirrorIdentity: string } };
-    sessionManager.appendMessage(copilotMirrorMessage);
+    await sessionManager.appendMessageAsync(copilotMirrorMessage);
     const harness = createResumeHarness();
     const params = createParams(sessionFile, workspaceDir);
     params.prompt = "is the previous message trustworthy?";
@@ -2696,14 +2704,14 @@ describe("runCodexAppServerAttempt", () => {
     }
     const sessionManager = openRunSession(sessionFile);
     for (let index = 0; index < 12; index += 1) {
-      sessionManager.appendMessage(
+      await sessionManager.appendMessageAsync(
         assistantMessage(
           `calibrated delta block ${index}: ${"x".repeat(128_000)}`,
           bindingUpdatedAt + 1_000 + index,
         ),
       );
     }
-    sessionManager.appendMessage(
+    await sessionManager.appendMessageAsync(
       assistantMessage("calibrated recent anchor: continue the audit", bindingUpdatedAt + 2_000),
     );
     const harness = createResumeHarness();
@@ -2731,11 +2739,11 @@ describe("runCodexAppServerAttempt", () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     const sessionManager = openRunSession(sessionFile);
     for (let index = 0; index < 12; index += 1) {
-      sessionManager.appendMessage(
+      await sessionManager.appendMessageAsync(
         assistantMessage(`density block ${index}: ${"x".repeat(128_000)}`, Date.now() + 1 + index),
       );
     }
-    sessionManager.appendMessage(
+    await sessionManager.appendMessageAsync(
       userMessage("density anchor: keep going with the migration", Date.now() + 20),
     );
     const harness = createStartedThreadHarness();
@@ -2823,10 +2831,10 @@ describe("runCodexAppServerAttempt", () => {
       historyCoveredThrough: new Date(oldBindingUpdatedAt).toISOString(),
     });
     const sessionManager = openRunSession(sessionFile);
-    sessionManager.appendMessage(
+    await sessionManager.appendMessageAsync(
       userMessage("we were discussing the Sonnet leak screenshots", oldBindingUpdatedAt + 1_000),
     );
-    sessionManager.appendMessage(
+    await sessionManager.appendMessageAsync(
       assistantMessage(
         "David Ondrej was mentioned in that prior thread",
         oldBindingUpdatedAt + 2_000,
@@ -2976,7 +2984,9 @@ describe("runCodexAppServerAttempt", () => {
       await fs.writeFile(path.join(workspaceDir, "BOOTSTRAP.md"), bootstrap);
       let oversizedPrefix = scenario === "dropped by fitting";
       if (oversizedPrefix) {
-        openRunSession(sessionFile).appendMessage(userMessage("Earlier conversation", Date.now()));
+        await openRunSession(sessionFile).appendMessageAsync(
+          userMessage("Earlier conversation", Date.now()),
+        );
         initializeGlobalHookRunner(
           createMockPluginRegistry([
             {
@@ -4384,23 +4394,23 @@ describe("runCodexAppServerAttempt", () => {
       throw new Error("expected valid Codex binding timestamp");
     }
     const sessionManager = openRunSession(sessionFile);
-    sessionManager.appendMessage(
+    await sessionManager.appendMessageAsync(
       userMessage(
         "pre-binding native-owned context: keep the original plan",
         bindingUpdatedAt - 2_000,
       ),
     );
-    sessionManager.appendMessage(
+    await sessionManager.appendMessageAsync(
       userMessage(
         "post-binding user context: resume the release checklist",
         bindingUpdatedAt + 1_000,
       ),
     );
-    sessionManager.appendMessage(
+    await sessionManager.appendMessageAsync(
       assistantMessage("post-binding assistant context", bindingUpdatedAt + 2_000),
     );
     for (let index = 0; index < 8; index += 1) {
-      sessionManager.appendMessage(
+      await sessionManager.appendMessageAsync(
         assistantMessage(
           `post-binding continuity filler ${index}: ${"x".repeat(4_000)}`,
           bindingUpdatedAt + 3_000 + index,

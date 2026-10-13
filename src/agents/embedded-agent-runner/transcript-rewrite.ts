@@ -70,7 +70,7 @@ async function appendBranchEntry(params: {
         params.replacement === undefined
           ? stripStalePrefixReplay(entry.message)
           : params.replacement
-      ) as Parameters<typeof sessionManager.appendMessage>[0];
+      ) as Parameters<typeof sessionManager.appendMessageAsync>[0];
       return withSessionPendingInputRelocation(entry.id, message, () => appendMessage(message));
     }
     case "compaction": {

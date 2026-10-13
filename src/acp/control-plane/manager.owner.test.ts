@@ -13,7 +13,6 @@ import { AcpRuntimeError } from "../runtime/errors.js";
 import { buildAcpDatabaseSessionKey } from "../runtime/session-meta-keys.js";
 import { readAcpSessionMetaForEntry } from "../runtime/session-meta-readonly.js";
 import {
-  readAcpSessionEntry,
   readAcpSessionEntryAsync,
   writeAcpSessionMetaForMigration,
   upsertAcpSessionMeta,
@@ -60,7 +59,6 @@ describe("ACP manager with real owner-scoped metadata", () => {
       } satisfies AcpRuntime;
       const manager = new AcpSessionManager({
         ...DEFAULT_DEPS,
-        loadSessionEntry: (input) => readAcpSessionEntry({ ...input, databasePath }),
         loadSessionEntryAsync: (input) => readAcpSessionEntryAsync({ ...input, databasePath }),
         upsertSessionMeta: (input) => upsertAcpSessionMeta({ ...input, databasePath }),
         requireRuntimeBackend: () => ({ id: "synthetic", runtime }),
@@ -99,10 +97,10 @@ describe("ACP manager with real owner-scoped metadata", () => {
             meta,
             databasePath,
           });
-          expect(readAcpSessionEntry({ ...input, databasePath })?.acp).toEqual(
+          expect((await readAcpSessionEntryAsync({ ...input, databasePath }))?.acp).toEqual(
             readAcpSessionMetaForEntry({ ...input, entry, databasePath }),
           );
-          expect(manager.resolveSession(input)).toMatchObject({
+          expect(await manager.resolveSessionAsync(input)).toMatchObject({
             kind: "ready",
             agentId,
             sessionKey,
@@ -113,7 +111,7 @@ describe("ACP manager with real owner-scoped metadata", () => {
         }
         for (const agentId of ["main", "work"]) {
           const target = { cfg, sessionKey, agentId };
-          expect(manager.resolveSession(target)).toMatchObject({
+          expect(await manager.resolveSessionAsync(target)).toMatchObject({
             kind: "ready",
             agentId,
             sessionKey,
@@ -123,18 +121,21 @@ describe("ACP manager with real owner-scoped metadata", () => {
             },
           });
           await manager.updateSessionRuntimeOptions({ ...target, patch: { model: agentId } });
-          expect(readAcpSessionEntry({ ...target, databasePath })?.acp?.runtimeOptions?.model).toBe(
-            agentId,
-          );
+          expect(
+            (await readAcpSessionEntryAsync({ ...target, databasePath }))?.acp?.runtimeOptions
+              ?.model,
+          ).toBe(agentId);
         }
         if (sessionKey === "global") {
-          expect(manager.resolveSession({ cfg, sessionKey: "agent:work:main" })).toMatchObject({
+          expect(
+            await manager.resolveSessionAsync({ cfg, sessionKey: "agent:work:main" }),
+          ).toMatchObject({
             kind: "ready",
             agentId: "work",
             sessionKey: "global",
           });
           const mismatch = { cfg, sessionKey: "agent:work:main", agentId: "main" };
-          expect(() => manager.resolveSession(mismatch)).toThrowError(
+          await expect(manager.resolveSessionAsync(mismatch)).rejects.toThrowError(
             expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }),
           );
         }
@@ -222,8 +223,6 @@ it("retains canonical metadata when an unmigrated backend locator blocks status 
     } satisfies AcpRuntime;
     const deps = {
       ...DEFAULT_DEPS,
-      loadSessionEntry: (input: Parameters<typeof readAcpSessionEntry>[0]) =>
-        readAcpSessionEntry({ ...input, databasePath }),
       loadSessionEntryAsync: (input: Parameters<typeof readAcpSessionEntryAsync>[0]) =>
         readAcpSessionEntryAsync({ ...input, databasePath }),
       upsertSessionMeta: (input: Parameters<typeof upsertAcpSessionMeta>[0]) =>
@@ -237,7 +236,7 @@ it("retains canonical metadata when an unmigrated backend locator blocks status 
     } finally {
       await disposeAcpSessionManagerInstance(initial, "restart");
     }
-    const before = readAcpSessionEntry({ ...target, databasePath })?.acp;
+    const before = (await readAcpSessionEntryAsync({ ...target, databasePath }))?.acp;
     const repairError = new AcpRuntimeError(
       "ACP_SESSION_INIT_FAILED",
       "Run offline Doctor repair",
@@ -259,7 +258,7 @@ it("retains canonical metadata when an unmigrated backend locator blocks status 
             allowBackendUnavailable: true,
           }),
         ).rejects.toBe(repairError);
-        expect(readAcpSessionEntry({ ...target, databasePath })?.acp).toEqual(before);
+        expect((await readAcpSessionEntryAsync({ ...target, databasePath }))?.acp).toEqual(before);
       }
       expect(runtime.close).not.toHaveBeenCalled();
     } finally {

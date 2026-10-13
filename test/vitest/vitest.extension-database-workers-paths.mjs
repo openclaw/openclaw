@@ -6,6 +6,7 @@ export const databaseWorkerExtensionTestRoots = [
 ];
 
 export const databaseWorkerExtensionTestFiles = [
+  "extensions/alibaba/video-generation-provider.test.ts",
   "extensions/codex/src/conversation-binding.test.ts",
   "extensions/codex/src/conversation-control.test.ts",
   "extensions/codex/src/app-server/native-execution-policy.incognito.test.ts",
@@ -37,6 +38,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/qa-lab/src/gateway-child-lifecycle.test.ts",
   "extensions/qa-lab/src/gateway-child.test.ts",
   "extensions/qa-lab/src/providers/shared/auth-store.test.ts",
+  "extensions/qa-lab/src/scenario-catalog.delegation.test.ts",
   "extensions/codex/src/app-server/auth-refresh-authority.integration.test.ts",
   "extensions/codex/src/app-server/responses-oauth.authority.test.ts",
   "extensions/codex/src/app-server/auth-bridge.test.ts",
@@ -59,6 +61,8 @@ export const databaseWorkerExtensionTestFiles = [
   // Provider-owned embedding auth resolves shared-store ownership through the host broker.
   "extensions/google/embedding-provider.test.ts",
   "extensions/openai/binary-transport.test.ts",
+  "extensions/openai/embedding-provider.test.ts",
+  "extensions/openai/realtime-voice-provider-routing.test.ts",
   "extensions/openai/tts.test.ts",
   "extensions/microsoft/speech-provider.test.ts",
   "extensions/minimax/speech-provider.test.ts",
@@ -132,6 +136,8 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/imessage/src/test-plugin.test.ts",
   "extensions/mattermost/src/outbound-delivery.test.ts",
   "extensions/googlechat/src/api.fetchok.transport.test.ts",
+  "extensions/googlechat/src/auth.capture.transport.test.ts",
+  "extensions/googlechat/src/googlechat-session-target-case.transport.test.ts",
   "extensions/googlechat/src/sender-authority.transport.test.ts",
   "extensions/matrix/src/actions.credentials.test.ts",
   "extensions/matrix/src/matrix/monitor/inbound-dedupe.test.ts",

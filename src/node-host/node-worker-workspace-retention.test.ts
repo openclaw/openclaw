@@ -104,7 +104,7 @@ afterEach(() => {
 });
 
 describe("node worker workspace retention", () => {
-  it("preserves legacy synchronous plugin acquisition for the exact canonical placement workspace identity", () => {
+  it("requires the exact canonical placement workspace identity", async () => {
     const root = fs.realpathSync.native(tempDirs.make("node-worker-workspace-managed-identity-"));
     const workspace = new NodeWorkerWorkspaceRuntime({ root });
     const input = testWorkerLaunchInput("/unused", "managed-identity");
@@ -118,7 +118,7 @@ describe("node worker workspace retention", () => {
       sessionKey: "agent:main:managed",
     };
 
-    const claim = workspace.acquireManagedWorkspace(request);
+    const claim = await workspace.acquireManagedWorkspaceAsync(request);
     expect(claim.workspaceDir).toBe(workspaceDir);
     claim.release();
     claim.release();
@@ -130,16 +130,16 @@ describe("node worker workspace retention", () => {
       { ownerEpoch: ownerEpoch + 1 },
       { sessionKey: "" },
     ]) {
-      expect(() => workspace.acquireManagedWorkspace({ ...request, ...changed })).toThrow(
-        "does not own the requested workspace",
-      );
+      await expect(
+        workspace.acquireManagedWorkspaceAsync({ ...request, ...changed }),
+      ).rejects.toThrow("does not own the requested workspace");
     }
 
     const linked = path.join(path.dirname(workspaceDir), "linked-workspace");
     fs.symlinkSync(workspaceDir, linked, process.platform === "win32" ? "junction" : "dir");
-    expect(() => workspace.acquireManagedWorkspace({ ...request, workspaceDir: linked })).toThrow(
-      "does not own the requested workspace",
-    );
+    await expect(
+      workspace.acquireManagedWorkspaceAsync({ ...request, workspaceDir: linked }),
+    ).rejects.toThrow("does not own the requested workspace");
   });
 
   it("protects a claimed placement workspace until its owner releases it", async () => {

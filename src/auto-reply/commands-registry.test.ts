@@ -17,7 +17,7 @@ import {
   normalizeCommandBody,
   parseCommandArgs,
   resolveCommandArgChoices,
-  resolveCommandArgMenu,
+  resolveCommandArgMenuAsync,
   resolveTextCommand,
   serializeCommandArgs,
   shouldHandleTextCommands,
@@ -170,10 +170,10 @@ function requireCommandArg(
   return arg;
 }
 
-function requireCommandArgMenu(
-  params: Parameters<typeof resolveCommandArgMenu>[0],
-): NonNullable<ReturnType<typeof resolveCommandArgMenu>> {
-  const menu = resolveCommandArgMenu(params);
+async function requireCommandArgMenu(
+  params: Parameters<typeof resolveCommandArgMenuAsync>[0],
+): Promise<NonNullable<Awaited<ReturnType<typeof resolveCommandArgMenuAsync>>>> {
+  const menu = await resolveCommandArgMenuAsync(params);
   if (!menu) {
     throw new Error(`Expected arg menu for ${params.command.key}`);
   }
@@ -506,7 +506,7 @@ describe("commands registry", () => {
     }
   });
 
-  it("registers fast mode as a first-class options command", () => {
+  it("registers fast mode as a first-class options command", async () => {
     const fast = requireChatCommand("fast");
     expect(fast.nativeName).toBe("fast");
     expect(fast.textAliases).toEqual(["/fast"]);
@@ -514,7 +514,7 @@ describe("commands registry", () => {
     const modeArg = requireCommandArg(fast, "mode");
     expect(modeArg.description).toContain("ultrafast");
     expect(typeof modeArg.choices).toBe("function");
-    const menu = requireCommandArgMenu({
+    const menu = await requireCommandArgMenu({
       command: fast,
       args: undefined,
       cfg: {
@@ -711,10 +711,10 @@ describe("commands registry args", () => {
     },
   );
 
-  it("does not show menus when arg already provided", () => {
+  it("does not show menus when arg already provided", async () => {
     const command = createUsageModeCommand();
 
-    const menu = resolveCommandArgMenu({
+    const menu = await resolveCommandArgMenuAsync({
       command,
       args: { values: { mode: "tokens" } },
       cfg: {} as never,
@@ -722,7 +722,7 @@ describe("commands registry args", () => {
     expect(menu).toBeNull();
   });
 
-  it("resolves function-based choices with a default provider/model context", () => {
+  it("resolves function-based choices with a default provider/model context", async () => {
     const seen: CommandArgChoiceContext[] = [];
 
     const command: ChatCommandDefinition = {
@@ -745,7 +745,7 @@ describe("commands registry args", () => {
       ],
     };
 
-    const menu = requireCommandArgMenu({
+    const menu = await requireCommandArgMenu({
       command,
       args: undefined,
       cfg: {} as never,
@@ -777,9 +777,9 @@ describe("commands registry args", () => {
     { model: "gpt-5.6-luna", agentRuntime: "openclaw", supportsUltra: true },
   ])(
     "uses the $agentRuntime thinking profile for openai/$model native menus",
-    ({ model, agentRuntime, supportsUltra }) => {
+    async ({ model, agentRuntime, supportsUltra }) => {
       const command = requireNativeCommand("think");
-      const menu = requireCommandArgMenu({
+      const menu = await requireCommandArgMenu({
         command,
         args: undefined,
         cfg: {} as never,
@@ -813,10 +813,10 @@ describe("commands registry args", () => {
         { provider: "ollama", id: "glm-5.2:cloud", name: "GLM 5.2 Cloud", reasoning: true },
       ],
     },
-  ])("uses $source model catalog reasoning for /think arg menus", ({ cfg, catalog }) => {
+  ])("uses $source model catalog reasoning for /think arg menus", async ({ cfg, catalog }) => {
     installOllamaThinkingProvider();
     const command = requireNativeCommand("think");
-    const menu = requireCommandArgMenu({
+    const menu = await requireCommandArgMenu({
       command,
       args: undefined,
       cfg: cfg as never,
@@ -839,10 +839,10 @@ describe("commands registry args", () => {
     );
   });
 
-  it("uses configured model compat for /think arg menus", () => {
+  it("uses configured model compat for /think arg menus", async () => {
     const command = requireNativeCommand("think");
 
-    const menu = requireCommandArgMenu({
+    const menu = await requireCommandArgMenu({
       command,
       args: undefined,
       cfg: {
@@ -869,10 +869,10 @@ describe("commands registry args", () => {
     expect(formatCommandArgMenuTitle({ command, menu })).toContain("xhigh");
   });
 
-  it("does not show menus when args were provided as raw text only", () => {
+  it("does not show menus when args were provided as raw text only", async () => {
     const command = createUsageModeCommand("none", "on or off");
 
-    const menu = resolveCommandArgMenu({
+    const menu = await resolveCommandArgMenuAsync({
       command,
       args: { raw: "on" },
       cfg: {} as never,

@@ -251,9 +251,9 @@ describe("incognito transcript access", () => {
         sessionKey,
         storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
       };
-      const firstTurn = SessionManager.open(target, cwd);
-      firstTurn.appendMessage({ role: "user", content: "first question", timestamp: 1 });
-      firstTurn.appendMessage({
+      const firstTurn = await SessionManager.openAsync(target, cwd);
+      await firstTurn.appendMessageAsync({ role: "user", content: "first question", timestamp: 1 });
+      await firstTurn.appendMessageAsync({
         role: "assistant",
         content: [{ type: "text", text: "first answer" }],
         api: "openai-responses",
@@ -271,8 +271,12 @@ describe("incognito transcript access", () => {
         timestamp: 2,
       });
 
-      const secondTurn = SessionManager.open(target, cwd);
-      secondTurn.appendMessage({ role: "user", content: "second question", timestamp: 3 });
+      const secondTurn = await SessionManager.openAsync(target, cwd);
+      await secondTurn.appendMessageAsync({
+        role: "user",
+        content: "second question",
+        timestamp: 3,
+      });
       const messages = secondTurn.buildSessionContext().messages;
 
       expect(messages.map((message) => message.role)).toEqual(["user", "assistant", "user"]);

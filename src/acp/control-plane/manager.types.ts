@@ -26,7 +26,6 @@ import type {
 } from "../runtime/session-meta-control.types.js";
 import {
   listAcpSessionEntries,
-  readAcpSessionEntry,
   readAcpSessionEntryAsync,
   prepareAcpSessionControlRead,
   upsertAcpSessionMeta,
@@ -182,7 +181,6 @@ export type TurnLatencyStats = {
 
 export type AcpSessionManagerDeps = {
   listAcpSessions: typeof listAcpSessionEntries;
-  loadSessionEntry: typeof readAcpSessionEntry;
   loadSessionEntryAsync: (
     params: Parameters<typeof readAcpSessionEntryAsync>[0],
   ) => ReturnType<typeof readAcpSessionEntryAsync>;
@@ -274,7 +272,6 @@ export type WithManagerSessionActor = <T>(
 
 export const DEFAULT_DEPS: AcpSessionManagerDeps = {
   listAcpSessions: listAcpSessionEntries,
-  loadSessionEntry: readAcpSessionEntry,
   loadSessionEntryAsync: readAcpSessionEntryAsync,
   prepareSessionControlRead: prepareAcpSessionControlRead,
   upsertSessionMeta: upsertAcpSessionMeta,

@@ -364,9 +364,9 @@ describe("Codex attempt subscription recovery", () => {
     async (nativeOwned) => {
       const sessionFile = path.join(tempDir, "session.jsonl");
       const workspaceDir = path.join(tempDir, "workspace");
-      openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" }).appendMessage(
-        assistantMessage("pre-compaction context", Date.now()) as never,
-      );
+      await openFileBackedSessionManagerForTest(sessionFile, {
+        sessionId: "session-1",
+      }).appendMessageAsync(assistantMessage("pre-compaction context", Date.now()) as never);
       const nativeModel = threadStartResult("thread-old");
       await writeCodexAppServerBinding(sessionFile, {
         threadId: "thread-old",

@@ -254,7 +254,7 @@ export async function createRegisteredCompletionPair(context: GatewayRequestCont
             timestamp: Date.now(),
             __openclaw: { runId: run.runId },
           };
-          SessionManager.open(childScope).appendMessage(message);
+          await (await SessionManager.openAsync(childScope)).appendMessageAsync(message);
           return {
             payloads: [{ text: run.result, mediaUrl: null }],
             meta: {

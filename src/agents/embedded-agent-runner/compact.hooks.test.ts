@@ -1133,7 +1133,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         ]);
       const sessionManager = SessionManager.inMemory(TEST_WORKSPACE_DIR);
       for (const content of ["Review the checklist.", "Compare options.", "Keep the notes."]) {
-        sessionManager.appendMessage({ role: "user", content, timestamp: 1 });
+        await sessionManager.appendMessageAsync({ role: "user", content, timestamp: 1 });
       }
       const streamStarted = createDeferred();
       const stream = vi.fn<StreamFn>((activeModel, _context, options) => {
@@ -1834,7 +1834,9 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
             result: { sessionTarget: successorTarget, tokensBefore: 90_000, tokensAfter: 100 },
           },
         });
-        SessionManager.open(successorTarget).appendMessage({
+        await (
+          await SessionManager.openAsync(successorTarget)
+        ).appendMessageAsync({
           role: "user",
           content: [{ type: "text", text: "Retain this successor history." }],
           timestamp: 1,

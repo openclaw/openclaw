@@ -13,7 +13,6 @@ export async function withNodeHostPluginInvocation<T>(
   },
   operation: (context: OpenClawPluginNodeHostCommandContext | undefined) => Promise<T>,
 ): Promise<T> {
-  const acquireManagedWorkspace = context?.acquireManagedWorkspace;
   const acquireManagedWorkspaceAsync = context?.acquireManagedWorkspaceAsync;
   let pluginInvocationActive = true;
   const assertCurrent = (requestedSessionKey: string) => {
@@ -27,7 +26,7 @@ export async function withNodeHostPluginInvocation<T>(
     }
   };
   const invokeContext =
-    context && (sessionKey || signal || acquireManagedWorkspace || acquireManagedWorkspaceAsync)
+    context && (sessionKey || signal || acquireManagedWorkspaceAsync)
       ? {
           ...context,
           ...(sessionKey ? { sessionKey } : {}),
@@ -47,16 +46,6 @@ export async function withNodeHostPluginInvocation<T>(
                     workspace.release();
                     throw error;
                   }
-                },
-              }
-            : {}),
-          ...(acquireManagedWorkspace
-            ? {
-                acquireManagedWorkspace: (
-                  request: Parameters<typeof acquireManagedWorkspace>[0],
-                ) => {
-                  assertCurrent(request.sessionKey);
-                  return acquireManagedWorkspace(request);
                 },
               }
             : {}),

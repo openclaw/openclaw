@@ -166,6 +166,7 @@ function seedTestAuthProfile(params: {
   testAuthProfileStores.set(key, store);
 }
 
+// mock-isolation: Auth-choice fixtures persist credentials only in testAuthProfileStores, never host stores.
 vi.mock("../agents/auth-profiles.js", () => ({
   persistAuthProfileBatch: async (params: {
     profiles: readonly {
@@ -184,7 +185,7 @@ vi.mock("../agents/auth-profiles.js", () => ({
     }
     return { rollback() {} };
   },
-  upsertAuthProfile: (params: {
+  upsertAuthProfileAsync: async (params: {
     profileId: string;
     credential: StoredAuthProfile;
     agentDir?: string;

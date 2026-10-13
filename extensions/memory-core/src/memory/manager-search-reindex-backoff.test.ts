@@ -171,10 +171,10 @@ describe("memory search reindex backoff", () => {
         sessionKey,
         messages: [{ role: "user", timestamp: 2, content: "Jade pending marker." }],
       });
-      await manager.sync({ reason: "search" });
+      await manager.sync({ reason: "session-startup-catchup" });
       expect(embedding).not.toHaveBeenCalled();
       now += 30_000;
-      await manager.sync({ reason: "search" });
+      await manager.sync({ reason: "session-startup-catchup" });
       expect(embedding).toHaveBeenCalledTimes(1);
       expect(manager.status().lastSyncError).toBeUndefined();
       expect(

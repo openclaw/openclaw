@@ -8,7 +8,7 @@ export const AUTH_ASYNC_COMPAT_RECORD = {
   introduced: "2026-10-01",
   deprecated: "2026-10-11",
   warningStarts: "2026-10-11",
-  removalGate: "next-plugin-sdk-major",
+  removalGate: "after-stable-deprecation",
   replacement:
     "Await the Async-suffixed auth-store, AuthStorage, profile-upsert, provider-availability, profile-metadata, model-auth, model-header, provider-selection, and TTS methods. For secret-read preparation, use loadAuthProfileStoreForRuntimeAsync from agent-runtime with readOnly: true and allowKeychainPrompt: false. Replace saveAuthProfileStore with the owner-backed updateAuthProfileStoreWithLock from provider-auth. New SDK displays should use resolveProviderAuthProfileMetadataAsync from provider-auth-runtime; resolveAuthStorePathForDisplay remains supported until removal in a later stable release after deprecation ships and its async path replacement is core-internal. Implement isConfiguredAsync for media, speech, and realtime providers, and resolveConfigAsync for realtime voice providers. Released synchronous methods retain their signatures, immediate results, and completion timing until removal in a later stable release after deprecation ships.",
   docsPath:
@@ -75,5 +75,5 @@ export const AUTH_ASYNC_COMPAT_RECORD = {
     "src/plugins/compat/registry.test.ts",
   ],
   releaseNote:
-    "Auth-profile reads and writes, provider availability, and model selection use the existing database workers. Bundled callers await the new APIs; released synchronous contracts remain supported through the next Plugin SDK major. Stored data, schemas, and update behavior are unchanged.",
+    "Auth-profile reads and writes, provider availability, and model selection use the existing database workers. Bundled callers await the new APIs; released synchronous contracts remain supported through the compatibility period after stable deprecation. Stored data, schemas, and update behavior are unchanged.",
 } as const satisfies PluginCompatRecord;

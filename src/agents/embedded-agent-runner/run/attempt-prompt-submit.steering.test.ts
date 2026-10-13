@@ -324,20 +324,20 @@ it("keeps source validation until foreground delivery after pre-prompt compactio
   const { leasedSteering } = await prepareSteering();
   const model = { ...testModel, contextWindow: 4_096, maxTokens: 512 };
   const sessionManager = SessionManager.inMemory();
-  sessionManager.appendMessage({
+  await sessionManager.appendMessageAsync({
     role: "user",
     content: "Earlier investigation details. ".repeat(650),
     timestamp: 1,
   });
-  sessionManager.appendMessage(
+  await sessionManager.appendMessageAsync(
     createAssistant(model, [{ type: "text", text: "Earlier result." }], "stop", 5_000),
   );
-  sessionManager.appendMessage({
+  await sessionManager.appendMessageAsync({
     role: "user",
     content: "Keep the latest observation.",
     timestamp: 3,
   });
-  sessionManager.appendMessage(
+  await sessionManager.appendMessageAsync(
     createAssistant(model, [{ type: "text", text: "Observation kept." }], "stop", 5_000),
   );
   const { session } = await createTestSession({

@@ -26,7 +26,6 @@ import {
 } from "./session-manager-codec.js";
 import { createManagedSessionId, generateSessionEntryId } from "./session-manager-id.js";
 import {
-  prepareSessionManagerSync,
   captureSessionManagerIncognitoBinding,
   installSessionManagerIncognitoBinding,
 } from "./session-manager-incognito-scope.js";
@@ -108,12 +107,6 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     } else {
       this.newSession();
     }
-  }
-
-  /** @deprecated Runtime callers should await setSessionTargetAsync; removed in the next Plugin SDK major. */
-  setSessionTarget(target: SessionTranscriptRuntimeTarget): void {
-    prepareSessionManagerSync("setSessionTarget", target, this);
-    this.setSessionTargetSync(target);
   }
 
   protected setSessionTargetSync(target: SessionTranscriptRuntimeTarget): void {
@@ -235,18 +228,6 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     await this.hydrateSessionTarget(this.persistenceTarget, true, signal);
   }
 
-  /** Active-only loads can omit sibling rows even when they fit the context limits. */
-  protected ensureCompletePersistedHistory(): void {
-    this.assertTranscriptViewAvailable();
-    if (!this.persistenceTarget || !this.boundedContextIncomplete) {
-      return;
-    }
-    const limits = this.boundedContextLimits;
-    this.boundedContextLimits = undefined;
-    this.setSessionTargetSync(this.persistenceTarget);
-    this.boundedContextLimits = limits;
-  }
-
   protected async ensureCompletePersistedHistoryAsync(): Promise<void> {
     this.assertTranscriptViewAvailable();
     if (this.persistenceTarget && this.boundedContextIncomplete) {
@@ -359,12 +340,6 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
       appendMode: this.appendMode,
       pendingDeliberateAppend: this.pendingDeliberateAppend,
     };
-  }
-
-  /** @deprecated Runtime callers should await reloadPersistedTranscriptAsync; removed in the next Plugin SDK major. */
-  reloadPersistedTranscript(): void {
-    prepareSessionManagerSync("reloadPersistedTranscript", this.persistenceTarget, this);
-    this.reloadPersistedTranscriptSync();
   }
 
   protected reloadPersistedTranscriptSync(): void {

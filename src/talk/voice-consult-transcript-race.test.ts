@@ -51,9 +51,9 @@ async function prepareConsultTurn(label: string) {
   const sessionKey = `agent:${agentId}:${label}`;
   const sessionId = await ensureClientVoiceAgentSessionEntry({ agentId, sessionKey, storePath });
   const scope = { agentId, sessionId, sessionKey, storePath };
-  const manager = SessionManager.open(scope, dir);
-  manager.appendMessage({ role: "user", content: "earlier question", timestamp: 1 });
-  const admission = manager.appendMessageWithTranscriptAnchor({
+  const manager = await SessionManager.openAsync(scope, dir);
+  await manager.appendMessageAsync({ role: "user", content: "earlier question", timestamp: 1 });
+  const admission = await manager.appendMessageWithTranscriptAnchorAsync({
     role: "user",
     content: "what is on the calendar tomorrow?",
     timestamp: 2,
@@ -63,17 +63,21 @@ async function prepareConsultTurn(label: string) {
     throw new Error("missing current-turn anchor");
   }
   const appendConsultReply = () =>
-    runWithSessionTranscriptReadFence({ ...anchor, logicalTurnId: label, role: "user" }, () =>
-      SessionManager.openBounded(scope, {
-        cwd: dir,
-        maxBytes: 8192,
-        maxEvents: 16,
-      }).appendMessage(
-        makeAgentAssistantMessage({
-          content: [{ type: "text", text: CONSULT_REPLY }],
-          timestamp: 5,
-        }),
-      ),
+    runWithSessionTranscriptReadFence(
+      { ...anchor, logicalTurnId: label, role: "user" },
+      async () =>
+        await (
+          await SessionManager.openBoundedAsync(scope, {
+            cwd: dir,
+            maxBytes: 8192,
+            maxEvents: 16,
+          })
+        ).appendMessageAsync(
+          makeAgentAssistantMessage({
+            content: [{ type: "text", text: CONSULT_REPLY }],
+            timestamp: 5,
+          }),
+        ),
     );
   return { appendConsultReply, scope, sessionKey, storePath };
 }
@@ -118,7 +122,7 @@ it("keeps the voice transcript from failing an in-flight agent consult", async (
     text: "I'll check that request.",
   });
 
-  expect(() => appendConsultReply()).not.toThrow();
+  await expect(appendConsultReply()).resolves.toBeDefined();
 
   expect(readMessageTexts(scope)).toEqual([
     "earlier question",
@@ -155,7 +159,9 @@ it.each([
       now: 3,
     });
 
-    expect(() => appendConsultReply()).toThrow("SQLite transcript changed while preparing rewrite");
+    await expect(appendConsultReply()).rejects.toThrow(
+      "SQLite transcript changed while preparing rewrite",
+    );
     expect(readMessageTexts(scope)).not.toContain(CONSULT_REPLY);
   },
 );

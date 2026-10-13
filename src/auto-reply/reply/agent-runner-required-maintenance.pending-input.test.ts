@@ -64,7 +64,7 @@ describe("required maintenance with restart-safe admitted input", () => {
           "Approved current request: preserve ünicode 🦞 and exact newlines.\n" +
           "Current background information.\n".repeat(1_600) +
           "Keep the current request active.";
-        let observeForeground: (() => void) | undefined;
+        let observeForeground: (() => Promise<void>) | undefined;
         const foregroundRequests: ModelRequest[] = [];
         const checkpointRequests: ModelRequest[] = [];
         const checkpointText = "# Durable checkpoint\nArchive policy preserved.\n";
@@ -75,7 +75,7 @@ describe("required maintenance with restart-safe admitted input", () => {
           request.on("data", (chunk: string) => {
             body += chunk;
           });
-          request.on("end", () => {
+          const respond = async () => {
             requests.push(JSON.parse(body) as ModelRequest);
             const received = requests.at(-1)!;
             const lastUser = received.messages.findLast(
@@ -114,7 +114,7 @@ describe("required maintenance with restart-safe admitted input", () => {
             }
             if (foreground) {
               foregroundRequests.push(received);
-              observeForeground?.();
+              await observeForeground?.();
             }
             const text = foreground
               ? "FOREGROUND_READY"
@@ -172,6 +172,11 @@ describe("required maintenance with restart-safe admitted input", () => {
               })}\n\n`,
             );
             response.end("data: [DONE]\n\n");
+          };
+          request.on("end", () => {
+            respond().catch((error: unknown) => {
+              response.destroy(error instanceof Error ? error : new Error(String(error)));
+            });
           });
         });
         await new Promise<void>((resolve) => {
@@ -245,7 +250,7 @@ describe("required maintenance with restart-safe admitted input", () => {
             totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
           };
           await replaceSessionEntry(scope, entry);
-          const seed = SessionManager.open(scope, state.workspaceDir);
+          const seed = await SessionManager.openAsync(scope, state.workspaceDir);
           // One archive continues after a retention no-op; two archives leave
           // a complete prefix for the earlier retention-only pass.
           const priorTurns =
@@ -256,12 +261,12 @@ describe("required maintenance with restart-safe admitted input", () => {
                   [1_400, priorInputTokens],
                 ] as const);
           for (const [rows, inputTokens] of priorTurns) {
-            seed.appendMessage({
+            await seed.appendMessageAsync({
               role: "user",
               content: "Earlier archive context.\n".repeat(rows),
               timestamp: 1,
             });
-            seed.appendMessage(
+            await seed.appendMessageAsync(
               makeAssistantMessageFixture({
                 provider: "test-provider",
                 api: "openai-completions",
@@ -354,9 +359,9 @@ describe("required maintenance with restart-safe admitted input", () => {
             relativePath: "memory/checkpoint.md",
           }));
           const foregroundContexts: unknown[][] = [];
-          observeForeground = () => {
+          observeForeground = async () => {
             foregroundContexts.push(
-              SessionManager.open(scope, state.workspaceDir)
+              (await SessionManager.openAsync(scope, state.workspaceDir))
                 .buildSessionContext()
                 .messages.filter(
                   (message) => message.role === "user" || message.role === "assistant",

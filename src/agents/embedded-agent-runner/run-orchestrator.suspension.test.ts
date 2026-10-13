@@ -437,7 +437,7 @@ describe("embedded run detached session metadata", () => {
       const { resolveExistingAttemptTranscriptState } =
         await import("./run/attempt-transcript-helpers.js");
       if (hasMessages) {
-        params.sessionManager.appendMessage({
+        await params.sessionManager.appendMessageAsync({
           role: "user",
           content: "in-memory history",
           timestamp: 1,
@@ -470,13 +470,17 @@ describe("embedded run detached session metadata", () => {
       params.config.agents!.defaults!.compaction = { mode: "default", keepRecentTokens: 1 };
       setRuntimeConfigSnapshot(params.config);
       const manager = params.sessionManager;
-      manager.appendMessage(makeUserMessage("Remember the memory-only project.", 1));
-      manager.appendMessage(
+      await manager.appendMessageAsync(makeUserMessage("Remember the memory-only project.", 1));
+      await manager.appendMessageAsync(
         buildEmbeddedRunnerAssistant({
           content: [{ type: "text", text: "The project is called Blue Heron." }],
         }),
       );
-      manager.appendMessage({ role: "user", content: "What is the project called?", timestamp: 3 });
+      await manager.appendMessageAsync({
+        role: "user",
+        content: "What is the project called?",
+        timestamp: 3,
+      });
       if (existing) {
         await upsertSessionEntryCore(scope, {
           sessionId: params.sessionId,
@@ -485,15 +489,15 @@ describe("embedded run detached session metadata", () => {
           providerOverride: "openai",
           modelOverride: "mock-1",
         });
-        SessionManager.open({ ...scope, sessionId: params.sessionId }).appendMessage(
-          makeUserMessage("BORROWED DURABLE HISTORY MUST NOT BE READ", 1),
-        );
+        await (
+          await SessionManager.openAsync({ ...scope, sessionId: params.sessionId })
+        ).appendMessageAsync(makeUserMessage("BORROWED DURABLE HISTORY MUST NOT BE READ", 1));
       }
       const before = loadSessionEntry(scope);
       await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
       const databaseBefore = existing ? await fs.readFile(database) : undefined;
-      const open = vi.spyOn(SessionManager, "open");
+      const open = vi.spyOn(SessionManager, "openAsync");
       const targetResolver =
         await import("../../config/sessions/session-accessor.transcript-target.js");
       const resolveTarget = vi.spyOn(targetResolver, "resolveSessionTranscriptRuntimeTarget");
@@ -592,7 +596,11 @@ describe("embedded run detached session metadata", () => {
       .mockImplementationOnce(async (attempt) => {
         firstManager = attempt.sessionManager;
         expect(firstManager).toBeDefined();
-        firstManager!.appendMessage({ role: "user", content: "retained history", timestamp: 1 });
+        await firstManager!.appendMessageAsync({
+          role: "user",
+          content: "retained history",
+          timestamp: 1,
+        });
         return makeEmbeddedRunnerAttempt({
           sessionIdUsed: params.sessionId,
           terminal: {

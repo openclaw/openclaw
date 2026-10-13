@@ -80,7 +80,7 @@ async function getContractApi<T extends Record<string, unknown>>(
   return await next;
 }
 
-function expectResolvedSessionBinding(params: {
+async function expectResolvedSessionBinding(params: {
   channel: string;
   accountId: string;
   conversationId: string;
@@ -89,7 +89,7 @@ function expectResolvedSessionBinding(params: {
   metadata?: Record<string, unknown>;
 }) {
   expect(
-    getSessionBindingService().resolveByConversation({
+    await getSessionBindingService().resolveByConversationAsync({
       channel: params.channel,
       accountId: params.accountId,
       conversationId: params.conversationId,
@@ -108,21 +108,7 @@ async function unbindAndExpectClearedSessionBinding(binding: SessionBindingRecor
     reason: "contract-test",
   });
   expect(removed.map((entry) => entry.bindingId)).toContain(binding.bindingId);
-  expect(service.resolveByConversation(binding.conversation)).toBeNull();
-}
-
-function expectClearedSessionBinding(params: {
-  channel: string;
-  accountId: string;
-  conversationId: string;
-}) {
-  expect(
-    getSessionBindingService().resolveByConversation({
-      channel: params.channel,
-      accountId: params.accountId,
-      conversationId: params.conversationId,
-    }),
-  ).toBeNull();
+  expect(await service.resolveByConversationAsync(binding.conversation)).toBeNull();
 }
 
 function resetMatrixSessionBindingStateDir() {
@@ -368,13 +354,13 @@ function createSessionBindingContractEntry(
       if (fixture.metadata) {
         expect(binding.metadata).toMatchObject(fixture.metadata);
       }
-      expectResolvedSessionBinding({
+      await expectResolvedSessionBinding({
         ...conversation,
         targetSessionKey: fixture.targetSessionKey,
       });
       if (fixture.restartBindingManager) {
         await fixture.restartBindingManager();
-        expectResolvedSessionBinding({
+        await expectResolvedSessionBinding({
           ...conversation,
           targetSessionKey: fixture.targetSessionKey,
           metadata: fixture.metadata,
@@ -385,7 +371,7 @@ function createSessionBindingContractEntry(
     unbindAndVerify: unbindAndExpectClearedSessionBinding,
     cleanup: async () => {
       await fixture.stopManager?.();
-      expectClearedSessionBinding(conversation);
+      expect(getSessionBindingService().getCapabilities(conversation).adapterAvailable).toBe(false);
     },
   };
 }

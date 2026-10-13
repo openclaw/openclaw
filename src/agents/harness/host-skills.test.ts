@@ -68,10 +68,10 @@ it("binds skill reads to a late sandbox and refuses reads after host closure", a
   });
   try {
     const createToolSurface = expectDefined(
-      host.hostCapabilities.createToolSurface,
+      host.hostCapabilities.createToolSurfaceAsync,
       "admitted host tool surface",
     );
-    const tools = createToolSurface({
+    const tools = await createToolSurface({
       workspaceDir: "/host",
       config: { plugins: { enabled: false } },
       sandbox,
@@ -214,8 +214,8 @@ it("keeps the host-owned skill root when plugin options widen placement or repla
     },
   });
   try {
-    const createTools = expectDefined(host.hostCapabilities.createToolSurface, "host tools");
-    const tools = createTools({
+    const createTools = expectDefined(host.hostCapabilities.createToolSurfaceAsync, "host tools");
+    const tools = await createTools({
       workspaceDir: parent,
       cwd: parent,
       requireWorkspaceOnly: undefined,
@@ -239,9 +239,9 @@ it("keeps the host-owned skill root when plugin options widen placement or repla
     await expect(read.execute("outside", { name: "outside" })).rejects.toThrow(
       "is not available to this agent",
     );
-    expect(() => createTools({ sessionPermissionPolicy: { root: parent, mode: "full" } })).toThrow(
-      "escapes the captured required workspace",
-    );
+    await expect(
+      createTools({ sessionPermissionPolicy: { root: parent, mode: "full" } }),
+    ).rejects.toThrow("escapes the captured required workspace");
   } finally {
     host.closeHost();
     host.closeAdmission();

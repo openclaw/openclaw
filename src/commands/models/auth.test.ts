@@ -56,7 +56,6 @@ const mocks = vi.hoisted(() => ({
   resolveAgentWorkspaceDir: vi.fn(),
   resolveDefaultAgentWorkspaceDir: vi.fn(),
   isCliProvider: vi.fn(),
-  upsertAuthProfile: vi.fn(),
   upsertAuthProfileWithLock: vi.fn(),
   persistProviderAuthProfilesAfterLogin: vi.fn(),
   removeProviderAuthProfilesWithLock: vi.fn(),
@@ -89,10 +88,10 @@ vi.mock("../../secrets/store/secret-store.js", () => ({
   deleteSecretStoreEntry: mocks.deleteSecretStoreEntry,
 }));
 
+// mock-isolation: Auth command fixtures record profile mutations without changing durable credentials or order.
 vi.mock("../../agents/auth-profiles/profiles.js", () => ({
   promoteAuthProfileInOrder: mocks.promoteAuthProfileInOrder,
   removeProviderAuthProfilesWithLock: mocks.removeProviderAuthProfilesWithLock,
-  upsertAuthProfile: mocks.upsertAuthProfile,
   upsertAuthProfileWithLock: mocks.upsertAuthProfileWithLock,
   upsertAuthProfileWithLockOrThrow: mocks.upsertAuthProfileWithLock,
 }));

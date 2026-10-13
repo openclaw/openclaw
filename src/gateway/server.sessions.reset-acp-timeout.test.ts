@@ -4,7 +4,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import { AcpRuntimeError } from "../acp/runtime/errors.js";
 import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
 import { buildAcpDatabaseSessionKey } from "../acp/runtime/session-meta-keys.js";
-import { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
+import { readAcpSessionEntryAsync } from "../acp/runtime/session-meta.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import { drainSystemEventEntries, peekSystemEvents } from "../infra/system-events.js";
@@ -222,7 +222,7 @@ test.each(["source-and-acp", "acp", "committed-callback"])(
     const current = loadSessionEntry({ storePath, sessionKey });
     expect(current?.lifecycleRevision).toEqual(expect.any(String));
     expect(current?.lifecycleRevision).not.toBe(previous?.lifecycleRevision);
-    expectResetAcpState(readAcpSessionEntry({ sessionKey: "agent:main:main" })?.acp);
+    expectResetAcpState((await readAcpSessionEntryAsync({ sessionKey: "agent:main:main" }))?.acp);
   },
 );
 
@@ -259,7 +259,7 @@ test.each(["cancelSession", "closeSession"] as const)(
       expect(loadSessionEntry({ storePath, sessionKey: "agent:main:main" })).not.toHaveProperty(
         "acp",
       );
-      expectResetAcpState(readAcpSessionEntry({ sessionKey: "agent:main:main" })?.acp);
+      expectResetAcpState((await readAcpSessionEntryAsync({ sessionKey: "agent:main:main" }))?.acp);
     } finally {
       release?.();
       timeoutSpy.mockRestore();
@@ -281,7 +281,9 @@ test.each([true, false])(
     expect(reset.ok).toBe(true);
     const entry = loadSessionEntry({ storePath, sessionKey: "agent:main:main" });
     expect(entry?.lifecycleRevision).toEqual(expect.any(String));
-    const meta = readAcpSessionEntry({ sessionKey: "agent:main:main", agentId: "main" })?.acp;
+    const meta = (
+      await readAcpSessionEntryAsync({ sessionKey: "agent:main:main", agentId: "main" })
+    )?.acp;
     expect(meta).toMatchObject({ backend: "acpx", agent: "codex", identity: { state: "pending" } });
     expect(loadSessionEntry({ storePath, sessionKey: "main" })?.sessionId).toBe(entry?.sessionId);
   },
@@ -303,14 +305,16 @@ test.each(["global", "agent:work:main"])(
         sessionKey: buildAcpDatabaseSessionKey("global", "work"),
         meta: workMeta,
       });
-      const before = readAcpSessionEntry({ cfg, sessionKey: "global", agentId: "main" })?.acp;
+      const before = (
+        await readAcpSessionEntryAsync({ cfg, sessionKey: "global", agentId: "main" })
+      )?.acp;
       const reset = await directSessionReq("sessions.reset", { key, agentId: "work" });
       expect(reset.ok).toBe(true);
-      expect(readAcpSessionEntry({ cfg, sessionKey: "global", agentId: "main" })?.acp).toEqual(
-        before,
-      );
       expect(
-        readAcpSessionEntry({ cfg, sessionKey: "global", agentId: "work" })?.acp,
+        (await readAcpSessionEntryAsync({ cfg, sessionKey: "global", agentId: "main" }))?.acp,
+      ).toEqual(before);
+      expect(
+        (await readAcpSessionEntryAsync({ cfg, sessionKey: "global", agentId: "work" }))?.acp,
       ).toMatchObject({
         runtimeSessionName: "work-owned",
         identity: { state: "pending" },

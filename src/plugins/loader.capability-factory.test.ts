@@ -65,7 +65,6 @@ function createContext(): PluginCapabilityCatalogHostContext {
     resolveProviderRequestHeaders: unavailable,
     resolveProviderAuthProfileApiKey: unavailable,
     resolveApiKeyForProvider: unavailable,
-    captureWsEvent: unavailable,
     captureWsEventAsync: unavailable,
     createDebugProxyWebSocketAgent: unavailable,
     resolveDebugProxySettings: unavailable,

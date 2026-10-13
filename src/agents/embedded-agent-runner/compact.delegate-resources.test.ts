@@ -537,7 +537,7 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
             storePath: state.path("transcripts", "openclaw-agent.sqlite"),
           };
           await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-          const manager = SessionManager.open(target, state.workspaceDir);
+          const manager = await SessionManager.openAsync(target, state.workspaceDir);
           await manager.appendModelChange(model.provider, model.id);
           await manager.appendThinkingLevelChange("off");
           for (const text of [
@@ -545,8 +545,8 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
             "Compare the remaining options.",
             "Keep the rollout notes.",
           ]) {
-            manager.appendMessage({ role: "user", content: text, timestamp: 1 });
-            manager.appendMessage(assistant(model, `Recorded: ${text}`));
+            await manager.appendMessageAsync({ role: "user", content: text, timestamp: 1 });
+            await manager.appendMessageAsync(assistant(model, `Recorded: ${text}`));
           }
           const toolCall = {
             ...assistant(model, ""),
@@ -560,8 +560,8 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
             ],
             stopReason: "toolUse" as const,
           };
-          manager.appendMessage(toolCall);
-          manager.appendMessage({
+          await manager.appendMessageAsync(toolCall);
+          await manager.appendMessageAsync({
             role: "toolResult",
             toolCallId: "completed-tool",
             toolName: "exec",
@@ -569,7 +569,7 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
             isError: false,
             timestamp: 2,
           });
-          manager.appendMessage(assistant(model, "The action is complete."));
+          await manager.appendMessageAsync(assistant(model, "The action is complete."));
           manager.flushPendingPersistence();
           const originalMessages = manager.getBranch().filter((entry) => entry.type === "message");
           // A distinct compaction workspace requires a new prepared owner instead of
@@ -713,7 +713,7 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
                   expect(current.admittedMetadata).toBe(replacementMetadata);
                   expect(result.compacted).toBe(mode !== "reload-abort-before-commit");
                   expect(
-                    SessionManager.open(target, state.workspaceDir)
+                    (await SessionManager.openAsync(target, state.workspaceDir))
                       .getBranch()
                       .filter((entry) => entry.type === "message"),
                   ).toEqual(originalMessages);
@@ -735,7 +735,7 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
                 expect(recordUsage.mock.calls.length).toBe(usageCount);
                 const committed = mode !== "reload-abort-before-commit" && !preparationFailed;
                 expect(
-                  SessionManager.open(target, state.workspaceDir)
+                  (await SessionManager.openAsync(target, state.workspaceDir))
                     .getBranch()
                     .filter((entry) => entry.type === "compaction").length,
                 ).toBe(committed ? 1 : 0);

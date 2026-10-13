@@ -13,7 +13,6 @@ import {
 import { readAcpSessionMetaForEntries } from "../acp/runtime/session-meta-readonly.js";
 import * as metadataReader from "../acp/runtime/session-meta-readonly.js";
 import { upsertAcpSessionMeta } from "../acp/runtime/session-meta-write.js";
-import { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
 import { withIncognitoSessionActor } from "../config/sessions/session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
@@ -520,7 +519,6 @@ it.each(["revision", "consume-release", "prepared-release"] as const)(
     try {
       await expect(
         withIncognitoSessionActor(borrowed, async () => {
-          expect(() => readAcpSessionEntry(input)).toThrow("Await readAcpSessionEntryAsync");
           if (change === "prepared-release") {
             const preparation = prepareAcpSessionEntryRead(input);
             assert(preparation);

@@ -20,11 +20,9 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
-  loadArchivedSessions,
   loadArchivedSessionsAsync,
   loadMemorySessionMetadataAsync,
   loadMemorySessionMetadataBatchAsync,
-  resolveMemorySessionTargets,
   resolveMemorySessionTargetsAsync,
 } from "./memory-core-host-engine-sessions.js";
 
@@ -85,9 +83,9 @@ describe("memory source sessions", () => {
             sessions: [{ sessionId, sessionKey: "agent:main:another-session" }],
           }),
         ).toEqual([]);
-        expect(resolveMemorySessionTargets({ ...scope, sessionIds: [sessionId] })).toEqual([
-          expect.objectContaining({ sessionId, sessionKey, resolution: "live" }),
-        ]);
+        expect(
+          await resolveMemorySessionTargetsAsync({ ...scope, sessionIds: [sessionId] }),
+        ).toEqual([expect.objectContaining({ sessionId, sessionKey, resolution: "live" })]);
         const targetSql = observeHostDataSql();
         try {
           expect(await loadMemorySessionMetadataAsync({ ...scope, sessionId })).toMatchObject({
@@ -141,15 +139,14 @@ describe("memory source sessions", () => {
         await closeOpenClawAgentDatabasesAsync();
         closeOpenClawAgentDatabasesForTest();
         const archiveName = path.basename(deletion.archivedTranscripts[0]?.archivedPath ?? "");
-        expect(loadArchivedSessions({ ...scope, sessionIds: [sessionKey] })).toEqual([
+        expect(await loadArchivedSessionsAsync({ ...scope, sessionIds: [sessionKey] })).toEqual([
           expect.objectContaining({ sessionId, sessionKey }),
         ]);
-        const expectedArchives = loadArchivedSessions({ ...scope, archiveNames: [archiveName] });
         const hostSql = observeHostDataSql();
         try {
           expect(
             await loadArchivedSessionsAsync({ ...scope, archiveNames: [archiveName] }),
-          ).toEqual(expectedArchives);
+          ).toEqual([expect.objectContaining({ archiveName, sessionId, sessionKey })]);
           expect(hostSql.queries).toEqual([]);
           for (const call of hostSql.calls) {
             expect(call).not.toHaveBeenCalled();
@@ -157,9 +154,6 @@ describe("memory source sessions", () => {
         } finally {
           hostSql.restore();
         }
-        expect(expectedArchives).toEqual([
-          expect.objectContaining({ archiveName, sessionId, sessionKey }),
-        ]);
         expect(
           await resolveMemorySessionTargetsAsync({ ...scope, sessionIds: [sessionKey] }),
         ).toEqual([expect.objectContaining({ sessionId, sessionKey, resolution: "archived" })]);

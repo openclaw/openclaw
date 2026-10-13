@@ -9,7 +9,6 @@ import {
   type ConversationRef,
   type SessionBindingRecord,
 } from "../../infra/outbound/session-binding-service.js";
-import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import type { ResolvedAgentRoute } from "../../routing/resolve-route.js";
 import { deriveLastRoutePolicy } from "../../routing/resolve-route.js";
 import {
@@ -252,32 +251,6 @@ export async function resolveRuntimeConversationBindingRouteAsync(
     );
   }
   // A concurrent rebind may leave one activity stamp on its successor; delivery checks live ownership.
-  return result;
-}
-
-/** @deprecated Use resolveRuntimeConversationBindingRouteAsync; removed in the next Plugin SDK major. */
-export function resolveRuntimeConversationBindingRoute(
-  params: RuntimeConversationBindingRouteInput & {
-    touchBinding?: boolean;
-  } & ConfiguredBindingRouteConversationInput,
-): RuntimeConversationBindingRouteResult {
-  warnPluginSdkDeprecation({
-    family: "conversation-bindings",
-    method: "resolveRuntimeConversationBindingRoute",
-    replacement: "resolveRuntimeConversationBindingRouteAsync",
-    compatibility: "The synchronous route retains its immediate inspection and touch behavior.",
-  });
-  const inspection = inspectSessionBindingByConversation(
-    resolveConfiguredBindingConversationRef(params),
-  );
-  const result = inspectRuntimeConversationBindingRoute({ ...params, inspection });
-  if (params.touchBinding !== false && result.bindingRecord) {
-    getSessionBindingService().touch(
-      result.bindingRecord.bindingId,
-      undefined,
-      result.bindingRecord.conversation,
-    );
-  }
   return result;
 }
 

@@ -26,7 +26,7 @@ describe("plugin compatibility registry", () => {
         expect(record.deprecated, record.code).toMatch(datePattern);
         expect(record.warningStarts, record.code).toMatch(datePattern);
         if (record.removalGate !== undefined) {
-          expect(record.removalGate, record.code).toBe("next-plugin-sdk-major");
+          expect(record.removalGate, record.code).toBe("after-stable-deprecation");
           expect(record.removeAfter, record.code).toBeUndefined();
         } else if (removalDatePendingCompatCodes.has(record.code)) {
           expect(record.removeAfter, record.code).toBeUndefined();

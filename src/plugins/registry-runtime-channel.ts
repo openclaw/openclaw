@@ -179,10 +179,6 @@ export function createScopedPluginChannelRuntime(
       loadAdapter: (...args) => invokeSelectedRuntime(() => channel.outbound.loadAdapter(...args)),
     },
     threadBindings: {
-      setIdleTimeoutBySessionKey: (...args) =>
-        invokeSelectedRuntime(() => channel.threadBindings.setIdleTimeoutBySessionKey(...args)),
-      setMaxAgeBySessionKey: (...args) =>
-        invokeSelectedRuntime(() => channel.threadBindings.setMaxAgeBySessionKey(...args)),
       setIdleTimeoutBySessionKeyAsync: (...args) =>
         invokeSelectedRuntime(() =>
           channel.threadBindings.setIdleTimeoutBySessionKeyAsync(...args),

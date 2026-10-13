@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import type { InternalRealtimeVoiceProviderApi } from "./provider-internal.js";
 import {
-  resolveConfiguredRealtimeVoiceProvider,
   resolveConfiguredRealtimeVoiceProviderAsync,
   resolveRealtimeVoiceProviderCapabilitiesAsync,
 } from "./provider-resolver.js";
@@ -134,26 +133,26 @@ describe("realtime voice provider resolver", () => {
     },
   );
 
-  it("preserves the typed availability error when every auto provider is unavailable", () => {
+  it("preserves the typed availability error when every auto provider is unavailable", async () => {
     class ProviderUnavailableError extends Error {}
     const unavailable = new ProviderUnavailableError("provider owner is unavailable");
     const assertProviderAvailable = vi.fn(() => {
       throw unavailable;
     });
 
-    expect(() =>
-      resolveConfiguredRealtimeVoiceProvider({
+    await expect(
+      resolveConfiguredRealtimeVoiceProviderAsync({
         cfg: {},
         providers,
         isProviderAvailable: () => false,
         assertProviderAvailable,
       }),
-    ).toThrow(unavailable);
+    ).rejects.toThrow(unavailable);
     expect(assertProviderAvailable).toHaveBeenCalledOnce();
     expect(assertProviderAvailable).toHaveBeenCalledWith(providers[0]);
   });
 
-  it("passes the requested agent scope to explicitly selected provider checks", () => {
+  it("passes the requested agent scope to explicitly selected provider checks", async () => {
     const isConfigured = vi.fn(() => true);
     const provider: RealtimeVoiceProviderPlugin = {
       id: "agent-scoped",
@@ -164,7 +163,7 @@ describe("realtime voice provider resolver", () => {
       },
     };
 
-    resolveConfiguredRealtimeVoiceProvider({
+    await resolveConfiguredRealtimeVoiceProviderAsync({
       agentId: "voice-agent",
       cfg: {},
       configuredProviderId: provider.id,
@@ -178,7 +177,7 @@ describe("realtime voice provider resolver", () => {
     });
   });
 
-  it("keeps browser-only providers out of bridge auto-selection", () => {
+  it("keeps browser-only providers out of bridge auto-selection", async () => {
     const isBrowserSessionConfigured = vi.fn(
       ({ agentId }: { agentId?: string }) => agentId === "voice-agent",
     );
@@ -205,25 +204,29 @@ describe("realtime voice provider resolver", () => {
     };
 
     expect(
-      resolveConfiguredRealtimeVoiceProvider({
-        cfg: {},
-        providers: [browserOnly, bridge],
-      }).provider.id,
+      (
+        await resolveConfiguredRealtimeVoiceProviderAsync({
+          cfg: {},
+          providers: [browserOnly, bridge],
+        })
+      ).provider.id,
     ).toBe("bridge");
     expect(
-      resolveConfiguredRealtimeVoiceProvider({
-        cfg: {},
-        agentId: "voice-agent",
-        providers: [browserOnly, bridge],
-        surface: "browser-session",
-      }).provider.id,
+      (
+        await resolveConfiguredRealtimeVoiceProviderAsync({
+          cfg: {},
+          agentId: "voice-agent",
+          providers: [browserOnly, bridge],
+          surface: "browser-session",
+        })
+      ).provider.id,
     ).toBe("browser-only");
     expect(isBrowserSessionConfigured).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "voice-agent" }),
     );
   });
 
-  it("limits internal relay readiness to the gateway-relay surface", () => {
+  it("limits internal relay readiness to the gateway-relay surface", async () => {
     const relayOnly: RealtimeVoiceProviderPlugin = {
       id: "relay-only",
       label: "Relay only",
@@ -237,24 +240,26 @@ describe("realtime voice provider resolver", () => {
       isGatewayRelayConfigured: () => true,
     });
 
-    expect(() =>
-      resolveConfiguredRealtimeVoiceProvider({
+    await expect(
+      resolveConfiguredRealtimeVoiceProviderAsync({
         configuredProviderId: "relay-only",
         providers: [relayOnly],
         surface: "bridge",
       }),
-    ).toThrow('Realtime voice provider "relay-only" is not configured');
+    ).rejects.toThrow('Realtime voice provider "relay-only" is not configured');
     expect(
-      resolveConfiguredRealtimeVoiceProvider({
-        configuredProviderId: "relay-only",
-        providers: [relayOnly],
-        surface: "gateway-relay",
-      }).provider,
+      (
+        await resolveConfiguredRealtimeVoiceProviderAsync({
+          configuredProviderId: "relay-only",
+          providers: [relayOnly],
+          surface: "gateway-relay",
+        })
+      ).provider,
     ).toBe(relayOnly);
   });
 
-  it("applies a default model before provider config resolution", () => {
-    const resolution = resolveConfiguredRealtimeVoiceProvider({
+  it("applies a default model before provider config resolution", async () => {
+    const resolution = await resolveConfiguredRealtimeVoiceProviderAsync({
       cfg: {},
       configuredProviderId: "second",
       defaultModel: "gpt-realtime",

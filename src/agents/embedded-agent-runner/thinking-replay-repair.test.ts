@@ -9,7 +9,7 @@ import {
   repairRejectedThinkingReplayInSessionManager,
 } from "./thinking-replay-repair.js";
 
-type AppendMessage = Parameters<SessionManager["appendMessage"]>[0];
+type AppendMessage = Parameters<SessionManager["appendMessageAsync"]>[0];
 
 function asAppendMessage(message: unknown): AppendMessage {
   return message as AppendMessage;
@@ -33,8 +33,10 @@ function branchAssistantContents(sessionManager: SessionManager): unknown[] {
 describe("repairRejectedThinkingReplayInSessionManager", () => {
   it("strips thinking blocks from active-branch assistant messages and preserves visible content", async () => {
     const sessionManager = SessionManager.inMemory();
-    sessionManager.appendMessage(asAppendMessage({ role: "user", content: "first", timestamp: 1 }));
-    sessionManager.appendMessage(
+    await sessionManager.appendMessageAsync(
+      asAppendMessage({ role: "user", content: "first", timestamp: 1 }),
+    );
+    await sessionManager.appendMessageAsync(
       asAppendMessage({
         role: "assistant",
         content: [
@@ -44,7 +46,7 @@ describe("repairRejectedThinkingReplayInSessionManager", () => {
         timestamp: 2,
       }),
     );
-    sessionManager.appendMessage(
+    await sessionManager.appendMessageAsync(
       asAppendMessage({ role: "user", content: "second", timestamp: 3 }),
     );
 
@@ -63,8 +65,10 @@ describe("repairRejectedThinkingReplayInSessionManager", () => {
 
   it("keeps thinking-only assistant turns as omitted-reasoning placeholders", async () => {
     const sessionManager = SessionManager.inMemory();
-    sessionManager.appendMessage(asAppendMessage({ role: "user", content: "first", timestamp: 1 }));
-    sessionManager.appendMessage(
+    await sessionManager.appendMessageAsync(
+      asAppendMessage({ role: "user", content: "first", timestamp: 1 }),
+    );
+    await sessionManager.appendMessageAsync(
       asAppendMessage({
         role: "assistant",
         content: [{ type: "thinking", thinking: "private", thinkingSignature: "sig_bad" }],
@@ -82,8 +86,10 @@ describe("repairRejectedThinkingReplayInSessionManager", () => {
 
   it("preserves downstream branch suffix entries after rewriting the first repaired assistant", async () => {
     const sessionManager = SessionManager.inMemory();
-    sessionManager.appendMessage(asAppendMessage({ role: "user", content: "first", timestamp: 1 }));
-    sessionManager.appendMessage(
+    await sessionManager.appendMessageAsync(
+      asAppendMessage({ role: "user", content: "first", timestamp: 1 }),
+    );
+    await sessionManager.appendMessageAsync(
       asAppendMessage({
         role: "assistant",
         content: [
@@ -93,10 +99,12 @@ describe("repairRejectedThinkingReplayInSessionManager", () => {
         timestamp: 2,
       }),
     );
-    sessionManager.appendMessage(
+    await sessionManager.appendMessageAsync(
       asAppendMessage({ role: "user", content: "follow-up", timestamp: 3 }),
     );
-    sessionManager.appendMessage(asAppendMessage(timestampedTextAssistant("follow-up answer", 4)));
+    await sessionManager.appendMessageAsync(
+      asAppendMessage(timestampedTextAssistant("follow-up answer", 4)),
+    );
 
     const result = await repairRejectedThinkingReplayInSessionManager({ sessionManager });
 
@@ -115,8 +123,12 @@ describe("repairRejectedThinkingReplayInSessionManager", () => {
 
   it("does not rewrite sessions without active-branch thinking blocks", async () => {
     const sessionManager = SessionManager.inMemory();
-    sessionManager.appendMessage(asAppendMessage({ role: "user", content: "first", timestamp: 1 }));
-    sessionManager.appendMessage(asAppendMessage(timestampedTextAssistant("visible answer", 2)));
+    await sessionManager.appendMessageAsync(
+      asAppendMessage({ role: "user", content: "first", timestamp: 1 }),
+    );
+    await sessionManager.appendMessageAsync(
+      asAppendMessage(timestampedTextAssistant("visible answer", 2)),
+    );
 
     const beforeLeafId = sessionManager.getLeafId();
     const result = await repairRejectedThinkingReplayInSessionManager({ sessionManager });
@@ -133,12 +145,14 @@ describe("repairRejectedThinkingReplayInSessionManager", () => {
 describe("repairRejectedCompactionReplayInSessionManager", () => {
   it("rewrites from the checkpoint identity that supplied the rejected request", async () => {
     const sessionManager = SessionManager.inMemory();
-    sessionManager.appendMessage(asAppendMessage({ role: "user", content: "first", timestamp: 1 }));
+    await sessionManager.appendMessageAsync(
+      asAppendMessage({ role: "user", content: "first", timestamp: 1 }),
+    );
     for (const [data, id, timestamp] of [
       ["rejected-ciphertext", "cmp_rejected", 2],
       ["newer-ciphertext", "cmp_newer", 4],
     ] as const) {
-      sessionManager.appendMessage(
+      await sessionManager.appendMessageAsync(
         asAppendMessage({
           role: "assistant",
           content: [{ type: "text", text: id }],
@@ -155,7 +169,7 @@ describe("repairRejectedCompactionReplayInSessionManager", () => {
           timestamp,
         }),
       );
-      sessionManager.appendMessage(
+      await sessionManager.appendMessageAsync(
         asAppendMessage({ role: "user", content: `after ${id}`, timestamp: timestamp + 1 }),
       );
     }

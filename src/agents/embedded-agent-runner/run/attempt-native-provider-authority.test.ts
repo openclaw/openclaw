@@ -122,7 +122,7 @@ describe("embedded native provider authority", () => {
           externalAbortController: { arm: () => {}, throwIfFiredAfterPrepCleanup: async () => {} },
         });
         fixture.input.sessionLock = transcript;
-        const manager = SessionManager.open({ ...target, ...writer });
+        const manager = await SessionManager.openAsync({ ...target, ...writer });
         const session = fixture.input.prepared.sessionRuntime.agentSession.activeSession;
         bindStreamLlmRuntime(session.agent.streamFn!, defaultLlmRuntime);
         try {
@@ -178,7 +178,7 @@ describe("embedded native provider authority", () => {
             expect(result.stopReason).toBe("aborted");
             expect(result.errorMessage).toContain("original session generation no longer accepts");
             await expect(
-              transcript.withOwnedTranscriptWrite(() => manager.appendMessage(result)),
+              transcript.withOwnedTranscriptWrite(() => manager.appendMessageAsync(result)),
             ).rejects.toThrow();
             expect(loadTranscriptEventsSync(target)).toEqual([]);
           } else {
@@ -186,7 +186,7 @@ describe("embedded native provider authority", () => {
             expect(result.content).toEqual([{ type: "text", text: "NATIVE_OK" }]);
             expect(send).toHaveBeenCalledOnce();
             expect(send.mock.calls[0]?.[1].abortSignal?.aborted).toBe(false);
-            await transcript.withOwnedTranscriptWrite(() => manager.appendMessage(result));
+            await transcript.withOwnedTranscriptWrite(() => manager.appendMessageAsync(result));
             expect(loadTranscriptEventsSync(target)).toMatchObject([
               { type: "session" },
               { type: "message", message: { role: "assistant", content: result.content } },

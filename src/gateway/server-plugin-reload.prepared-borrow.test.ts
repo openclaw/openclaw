@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { upsertAuthProfile } from "../agents/auth-profiles/profiles.js";
+import { upsertAuthProfileAsync } from "../agents/auth-profiles/profiles.js";
 import { resolveOpenClawPluginToolsForOptions } from "../agents/openclaw-plugin-tools.js";
 import {
   acquireAgentRunPreparedModelRuntime,
@@ -303,7 +303,7 @@ describe("prepared Gateway plugin borrowing", () => {
             // Credential changes republish the owner while reusing its plugin generation.
             const before = await loadPublishedGatewayReplyDispatchRuntime({ agentId: "main" });
             assert(before);
-            upsertAuthProfile({
+            await upsertAuthProfileAsync({
               profileId: "fixture:borrow",
               credential: { type: "api_key", provider: "fixture", key: "synthetic-borrow-key" },
               agentDir: before.agentDir,

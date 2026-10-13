@@ -210,7 +210,7 @@ describe("session tool outcomes", () => {
         if (!persistedTarget) {
           throw new Error("Expected a saved transcript target");
         }
-        const events = SessionManager.open(persistedTarget).getEntries();
+        const events = (await SessionManager.openAsync(persistedTarget)).getEntries();
         expect(
           events.flatMap((event) =>
             event.type === "message" && event.message.role === "toolResult" ? [event.message] : [],

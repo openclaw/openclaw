@@ -184,7 +184,7 @@ export function validateCodexSessionTranscriptContextVersion(
   validateSessionTranscriptContextVersion(...args);
 }
 
-/** @deprecated Use createCodexSessionContextReader; synchronous compatibility is removed in the next SDK major. */
+/** @deprecated Use createCodexSessionContextReader; synchronous compatibility is removed after stable deprecation and a compatibility period. */
 export function readCodexSessionContext<T>(
   target: SessionTranscriptRuntimeTarget,
   read: (
@@ -258,7 +258,7 @@ export type CodexSessionTranscriptMirrorWriteLockContext = Omit<
   }>;
 };
 
-/** @deprecated Use withCodexSessionTranscriptMirrorWrite. Removed at the next Plugin SDK major. */
+/** @deprecated Use withCodexSessionTranscriptMirrorWrite. Removed after stable deprecation and a compatibility period. */
 export async function withCodexSessionTranscriptMirrorWriteLock<T>(
   params: InternalSessionTranscriptWriteLockParams,
   run: (context: CodexSessionTranscriptMirrorWriteLockContext) => Promise<T> | T,

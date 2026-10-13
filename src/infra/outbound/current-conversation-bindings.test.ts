@@ -20,8 +20,8 @@ import {
   bindGenericCurrentConversation,
   getGenericCurrentConversationBindingCapabilities,
   listGenericCurrentConversationBindingsBySession,
-  resolveGenericCurrentConversationBinding,
-  touchGenericCurrentConversationBinding,
+  resolveGenericCurrentConversationBindingAsync,
+  touchGenericCurrentConversationBindingAsync,
   unbindGenericCurrentConversationBindings,
 } from "./current-conversation-bindings.js";
 import { inspectSessionBindingByConversation } from "./session-binding-service.js";
@@ -193,8 +193,10 @@ async function bindWorkspaceConversation(
   });
 }
 
-function resolveWorkspaceConversation(conversationId: string): SessionBindingRecord | null {
-  return resolveGenericCurrentConversationBinding(workspaceConversation(conversationId));
+function resolveWorkspaceConversation(
+  conversationId: string,
+): Promise<SessionBindingRecord | null> {
+  return resolveGenericCurrentConversationBindingAsync(workspaceConversation(conversationId));
 }
 
 describe("generic current-conversation bindings", () => {
@@ -222,21 +224,13 @@ describe("generic current-conversation bindings", () => {
   });
 
   it("inspects expired ownership without deleting the durable row", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date(1_000_000));
-    const binding = await bindWorkspaceConversation("user:inspection", { ttlMs: 1_000 });
-    expect(binding).not.toBeNull();
-    vi.setSystemTime(new Date(1_002_000));
+    const binding = expectSessionBinding(await bindWorkspaceConversation("user:inspection"));
+    const expired = { ...binding, expiresAt: 1 };
+    replacePersistedBinding(expired);
     expect(
-      inspectSessionBindingByConversation({
-        channel: "workspace",
-        accountId: "default",
-        conversationId: "user:inspection",
-      }),
+      inspectSessionBindingByConversation(workspaceConversation("user:inspection")),
     ).toMatchObject({ status: "available", binding: null });
-    // Rewinding exposes whether inspection pruned the existing SQLite row.
-    vi.setSystemTime(new Date(1_000_500));
-    expect(resolveWorkspaceConversation("user:inspection")).not.toBeNull();
+    expect(readPersistedBinding("user:inspection")).toEqual(expired);
   });
 
   it("stores Control UI session-key conversations without a channel plugin", async () => {
@@ -268,7 +262,7 @@ describe("generic current-conversation bindings", () => {
       },
     });
     expectBindingFields(
-      resolveGenericCurrentConversationBinding({
+      await resolveGenericCurrentConversationBindingAsync({
         channel: "webchat",
         accountId: "default",
         conversationId: "agent:main:adopted",
@@ -311,11 +305,11 @@ describe("generic current-conversation bindings", () => {
             await bindWorkspaceConversation("user:replacement");
             break;
           case "touch":
-            touchGenericCurrentConversationBinding(owned.bindingId, 1_000_500);
+            await touchGenericCurrentConversationBindingAsync(owned.bindingId, 1_000_500);
             break;
           case "expiry cleanup":
             vi.setSystemTime(new Date(1_002_000));
-            expect(resolveWorkspaceConversation("user:expired")).toBeNull();
+            expect(await resolveWorkspaceConversation("user:expired")).toBeNull();
             break;
           case "unbind":
             await unbindGenericCurrentConversationBindings({
@@ -337,10 +331,10 @@ describe("generic current-conversation bindings", () => {
         });
 
         closeOpenClawStateDatabaseForTest();
-        expect(resolveWorkspaceConversation("user:inserted")?.targetSessionKey).toBe(
+        expect((await resolveWorkspaceConversation("user:inserted"))?.targetSessionKey).toBe(
           "agent:codex:acp:inserted-target",
         );
-        expect(resolveWorkspaceConversation("user:updated")?.targetSessionKey).toBe(
+        expect((await resolveWorkspaceConversation("user:updated"))?.targetSessionKey).toBe(
           "agent:codex:acp:latest-target",
         );
       },
@@ -362,7 +356,7 @@ describe("generic current-conversation bindings", () => {
         },
       });
 
-      touchGenericCurrentConversationBinding(initial.bindingId, 20);
+      await touchGenericCurrentConversationBindingAsync(initial.bindingId, 20);
 
       expectBindingFields(readPersistedBinding("user:owner"), {
         targetSessionKey: "agent:codex:acp:latest-target",
@@ -371,71 +365,10 @@ describe("generic current-conversation bindings", () => {
         opaque: { nested: ["latest", { preserved: true }] },
         lastActivityAt: 20,
       });
-      expect(resolveWorkspaceConversation("user:owner")?.targetSessionKey).toBe(
+      expect((await resolveWorkspaceConversation("user:owner"))?.targetSessionKey).toBe(
         "agent:codex:acp:latest-target",
       );
     });
-
-    it.each(["rebind", "delete"] as const)(
-      "never restores a stale row when another owner commits a %s during normalization",
-      (mutation) => {
-        const initial: SessionBindingRecord = {
-          bindingId: "generic:workspace\u241fdefault\u241f\u241fuser:normalization-race",
-          targetSessionKey: " agent:codex:acp:stale-target ",
-          targetKind: "session",
-          conversation: workspaceConversation("user:normalization-race"),
-          status: "active",
-          boundAt: 1_000,
-          metadata: { version: "stale" },
-        };
-        seedPersistedBinding(initial);
-        const latest: SessionBindingRecord = {
-          ...initial,
-          targetSessionKey: "agent:codex:acp:latest-target",
-          metadata: { version: "latest", opaque: { preserved: true } },
-        };
-        const parseJson = JSON.parse;
-        let committed = false;
-        const parseSpy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
-          const parsed = parseJson(text, reviver);
-          if (!committed && text.includes("user:normalization-race")) {
-            committed = true;
-            if (mutation === "rebind") {
-              replacePersistedBinding(latest);
-            } else {
-              runOpenClawStateWriteTransaction(({ db }) => {
-                const bindingDb = getNodeSqliteKysely<CurrentConversationBindingDatabase>(db);
-                executeSqliteQuerySync(
-                  db,
-                  bindingDb
-                    .deleteFrom("current_conversation_bindings")
-                    .where("binding_key", "=", buildConversationKey(initial.conversation)),
-                );
-              });
-            }
-          }
-          return parsed;
-        });
-
-        try {
-          const resolved = resolveWorkspaceConversation("user:normalization-race");
-          if (mutation === "delete") {
-            expect(resolved).toBeNull();
-            expect(readPersistedBinding("user:normalization-race")).toBeNull();
-            return;
-          }
-          expectBindingFields(resolved, {
-            targetSessionKey: "agent:codex:acp:latest-target",
-          });
-          expectBindingMetadata(readPersistedBinding("user:normalization-race"), {
-            version: "latest",
-            opaque: { preserved: true },
-          });
-        } finally {
-          parseSpy.mockRestore();
-        }
-      },
-    );
 
     it("does not hide another owner's committed row after a failed write", async () => {
       const owned = expectSessionBinding(await bindWorkspaceConversation("user:owner"));
@@ -455,10 +388,10 @@ describe("generic current-conversation bindings", () => {
         ),
       ).rejects.toThrow();
 
-      expect(resolveWorkspaceConversation("user:owner")?.targetSessionKey).toBe(
+      expect((await resolveWorkspaceConversation("user:owner"))?.targetSessionKey).toBe(
         owned.targetSessionKey,
       );
-      expect(resolveWorkspaceConversation("user:external")?.targetSessionKey).toBe(
+      expect((await resolveWorkspaceConversation("user:external"))?.targetSessionKey).toBe(
         "agent:codex:acp:external-target",
       );
       expectBindingMetadata(readPersistedBinding("user:external"), {
@@ -485,7 +418,7 @@ describe("generic current-conversation bindings", () => {
       },
     });
 
-    const resolved = resolveGenericCurrentConversationBinding({
+    const resolved = await resolveGenericCurrentConversationBindingAsync({
       channel: "forum",
       accountId: "default",
       conversationId: "6098642967",
@@ -512,7 +445,7 @@ describe("generic current-conversation bindings", () => {
     });
 
     expect(
-      resolveGenericCurrentConversationBinding({
+      await resolveGenericCurrentConversationBindingAsync({
         channel: "forum",
         accountId: "default",
         conversationId: "6098642967",
@@ -545,8 +478,8 @@ describe("generic current-conversation bindings", () => {
       expect(listed.bindingId).toBe("generic:forum\u241fdefault\u241f\u241f6098642967");
 
       if (operation === "touch") {
-        touchGenericCurrentConversationBinding(listed.bindingId, 9_876);
-        expectBindingMetadata(resolveGenericCurrentConversationBinding(conversation), {
+        await touchGenericCurrentConversationBindingAsync(listed.bindingId, 9_876);
+        expectBindingMetadata(await resolveGenericCurrentConversationBindingAsync(conversation), {
           opaque: { preserved: true },
           lastActivityAt: 9_876,
         });
@@ -609,7 +542,9 @@ describe("generic current-conversation bindings", () => {
       expiresAt: 8_640_000_000_000_001,
     });
 
-    expect(resolveGenericCurrentConversationBinding(workspaceConversation("user:U123"))).toBeNull();
+    expect(
+      await resolveGenericCurrentConversationBindingAsync(workspaceConversation("user:U123")),
+    ).toBeNull();
   });
 
   it("does not bind generic current conversations when ttl expiry overflows", async () => {
@@ -623,7 +558,9 @@ describe("generic current-conversation bindings", () => {
         ttlMs: 1,
       }),
     ).resolves.toBeNull();
-    expect(resolveGenericCurrentConversationBinding(workspaceConversation("user:U123"))).toBeNull();
+    expect(
+      await resolveGenericCurrentConversationBindingAsync(workspaceConversation("user:U123")),
+    ).toBeNull();
   });
 
   describe("SQLite write failures", () => {
@@ -634,28 +571,24 @@ describe("generic current-conversation bindings", () => {
       const originalActivity = bound.metadata?.lastActivityAt;
 
       await expect(
-        withReadOnlyStateDatabase(() =>
-          touchGenericCurrentConversationBinding(bound.bindingId, 9_999_999),
+        withRejectedBindingCommit(() =>
+          touchGenericCurrentConversationBindingAsync(bound.bindingId, 9_999_999),
         ),
       ).rejects.toThrow();
 
-      expect(resolveWorkspaceConversation("user:U1")?.metadata?.lastActivityAt).toBe(
+      expect((await resolveWorkspaceConversation("user:U1"))?.metadata?.lastActivityAt).toBe(
         originalActivity,
       );
     });
 
     it("keeps an expired binding when prune-on-resolve fails", async () => {
-      vi.useFakeTimers();
-      vi.setSystemTime(new Date(1_000_000));
-      await bindWorkspaceConversation("user:U1", { ttlMs: 1_000 });
-
-      vi.setSystemTime(new Date(1_002_000));
+      const binding = expectSessionBinding(await bindWorkspaceConversation("user:U1"));
+      const expired = { ...binding, expiresAt: 1 };
+      replacePersistedBinding(expired);
       await expect(
-        withReadOnlyStateDatabase(() => resolveWorkspaceConversation("user:U1")),
+        withRejectedBindingCommit(() => resolveWorkspaceConversation("user:U1")),
       ).rejects.toThrow();
-
-      vi.setSystemTime(new Date(1_000_500));
-      expect(resolveWorkspaceConversation("user:U1")).not.toBeNull();
+      expect(readPersistedBinding("user:U1")).toEqual(expired);
     });
 
     it("keeps expired list entries when their cleanup write fails", async () => {

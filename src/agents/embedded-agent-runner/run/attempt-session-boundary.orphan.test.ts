@@ -76,11 +76,11 @@ async function withPersistedOrphanBoundary(
     };
     setRuntimeConfigSnapshot({});
     await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-    const seed = SessionManager.open(target, state.workspaceDir);
+    const seed = await SessionManager.openAsync(target, state.workspaceDir);
     if (options.parent) {
       await seed.appendModelChange("openai", "gpt-5.5");
     }
-    const orphanId = seed.appendMessage({
+    const { entryId: orphanId } = await seed.appendMessageWithTranscriptAnchorAsync({
       role: "user",
       content: "orphan wake",
       timestamp: 1,
@@ -95,7 +95,7 @@ async function withPersistedOrphanBoundary(
       await seed.appendModelChange("openai", "gpt-5.5");
     }
     const manager = guardSessionManager(
-      SessionManager.openBounded(target, {
+      await SessionManager.openBoundedAsync(target, {
         cwd: state.workspaceDir,
         maxBytes: 4096,
         maxEvents: 20,
@@ -389,7 +389,10 @@ describe("prepareEmbeddedAttemptSessionBoundary orphan recovery", () => {
           const boundary = await prepareEmbeddedAttemptSessionBoundary(input);
           expect(boundary.orphanRepair?.removeLeaf).toBe(false);
           expect(manager.getBranch().map((entry) => entry.id)).toContain(orphanId);
-          const reopened = SessionManager.openBounded(target, { maxBytes: 4096, maxEvents: 20 });
+          const reopened = await SessionManager.openBoundedAsync(target, {
+            maxBytes: 4096,
+            maxEvents: 20,
+          });
           expect(reopened.getBranch().map((entry) => entry.id)).toContain(orphanId);
           expect(loadTranscriptEventsSync(target)).toEqual(
             expect.arrayContaining([expect.objectContaining({ id: orphanId })]),
@@ -403,7 +406,7 @@ describe("prepareEmbeddedAttemptSessionBoundary orphan recovery", () => {
             }),
           ).toBe(false);
           const leafBeforeAppend = manager.getLeafId();
-          const appended = manager.appendMessageWithTranscriptAnchor(
+          const appended = await manager.appendMessageWithTranscriptAnchorAsync(
             makeAssistantMessageFixture({
               content: [{ type: "text", text: "recovery reply" }],
               stopReason: "stop",
@@ -575,7 +578,10 @@ describe("prepareEmbeddedAttemptSessionBoundary orphan recovery", () => {
               idempotencyKey: "accepted-user:user",
             }),
           );
-          const reopened = SessionManager.openBounded(target, { maxBytes: 4096, maxEvents: 20 });
+          const reopened = await SessionManager.openBoundedAsync(target, {
+            maxBytes: 4096,
+            maxEvents: 20,
+          });
           expect(reopened.getBranch().filter((entry) => entry.id === orphanId)).toEqual([original]);
           // A failed continuation may persist its own input before producing an assistant.
           const announcement: PersistedUserTurnMessage = {
@@ -584,7 +590,7 @@ describe("prepareEmbeddedAttemptSessionBoundary orphan recovery", () => {
             provenance,
             timestamp: 2,
           };
-          manager.appendMessage(announcement);
+          await manager.appendMessageAsync(announcement);
         }
         expect(manager.buildSessionContext().messages).toMatchObject([
           { role: "user", content: "orphan wake", idempotencyKey: "accepted-user:user" },
@@ -634,7 +640,7 @@ describe("prepareEmbeddedAttemptSessionBoundary orphan recovery", () => {
         expect(boundary.orphanRepair?.contextEnginePrompt).toContain("orphan wake");
         expect(boundary.orphanRepair?.contextEnginePrompt).toContain(recoveryPrompt);
         const mergedPrompt = boundary.orphanRepair!.contextEnginePrompt;
-        const appendedUser = manager.appendMessage({
+        const appendedUser = await manager.appendMessageAsync({
           role: "user",
           content: mergedPrompt,
           timestamp: 3,
@@ -642,7 +648,7 @@ describe("prepareEmbeddedAttemptSessionBoundary orphan recovery", () => {
         expect(typeof appendedUser).toBe(
           suppressNextUserMessagePersistence ? "undefined" : "string",
         );
-        manager.appendMessage(
+        await manager.appendMessageAsync(
           makeAssistantMessageFixture({
             content: [{ type: "text", text: "recovery reply" }],
             stopReason: "stop",
@@ -650,7 +656,10 @@ describe("prepareEmbeddedAttemptSessionBoundary orphan recovery", () => {
           }),
         );
 
-        const reopened = SessionManager.openBounded(target, { maxBytes: 4096, maxEvents: 20 });
+        const reopened = await SessionManager.openBoundedAsync(target, {
+          maxBytes: 4096,
+          maxEvents: 20,
+        });
         expect(reopened.getBranch().some((entry) => entry.id === orphanId)).toBe(
           suppressNextUserMessagePersistence,
         );

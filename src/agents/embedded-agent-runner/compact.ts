@@ -397,12 +397,6 @@ export async function compactEmbeddedAgentSessionDirect(
                       transcriptBytePreflightClaim.withCompactionPersistenceAsync,
                   }
                 : {}),
-              ...(transcriptBytePreflightClaim.withCompactionPersistence
-                ? {
-                    transcriptByteCompactionPersistence:
-                      transcriptBytePreflightClaim.withCompactionPersistence,
-                  }
-                : {}),
             }
           : {}),
       };

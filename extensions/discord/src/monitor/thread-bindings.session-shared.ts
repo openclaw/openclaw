@@ -1,7 +1,6 @@
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import {
   commitBindingRecord,
-  updateBindingRecordSync,
   runThreadBindingAccountOperation,
   runThreadBindingMutation,
   shouldPersistBindingMutations,
@@ -82,32 +81,4 @@ export function mutateBindingsForTargetSession(
       return updated;
     }),
   );
-}
-
-/** @deprecated Generic SDK synchronous lifecycle compatibility. */
-export function updateBindingsForTargetSessionSync(
-  ids: string[],
-  update: (existing: ThreadBindingRecord, now: number) => ThreadBindingRecord,
-): ThreadBindingRecord[] {
-  const now = Date.now();
-  const updated: ThreadBindingRecord[] = [];
-  for (const bindingKey of ids) {
-    const existing = BINDINGS_BY_THREAD_ID.get(bindingKey);
-    if (!existing) {
-      continue;
-    }
-    if (MANAGERS_BY_ACCOUNT_ID.get(existing.accountId)?.isStopping()) {
-      throw new Error("Discord thread binding manager is stopping");
-    }
-    const next = updateBindingRecordSync({
-      bindingKey,
-      transform: (record) =>
-        record.targetSessionKey === existing.targetSessionKey ? update(record, now) : record,
-      persist: shouldPersistBindingMutations(),
-    });
-    if (next?.targetSessionKey === existing.targetSessionKey) {
-      updated.push(next);
-    }
-  }
-  return updated;
 }

@@ -112,22 +112,6 @@ export class AcpSessionManager {
     });
   }
 
-  /** @deprecated Use resolveSessionAsync; retained for the v2026.9.4 Plugin SDK contract. */
-  resolveSession(params: {
-    cfg: OpenClawConfig;
-    sessionKey: string;
-    agentId?: string;
-  }): AcpSessionResolution {
-    if (!params.sessionKey.trim()) {
-      return { kind: "none", sessionKey: "" };
-    }
-    const target = resolveAcpSessionTarget(params);
-    return resolveStoredAcpSession(
-      target,
-      this.deps.loadSessionEntry({ cfg: params.cfg, ...target, clone: false }),
-    );
-  }
-
   async resolveSessionAsync(params: {
     cfg: OpenClawConfig;
     sessionKey: string;
@@ -400,6 +384,7 @@ export class AcpSessionManager {
     expectedRunId?: string;
     expectedInstanceId?: string;
     expectedOwnerKey?: string;
+    ignoreMissing?: boolean;
   }): Promise<void> {
     const target = resolveAcpSessionTarget(params);
     await runManagerCancelSession({
@@ -410,6 +395,7 @@ export class AcpSessionManager {
       expectedRunId: params.expectedRunId,
       expectedInstanceId: params.expectedInstanceId,
       expectedOwnerKey: params.expectedOwnerKey,
+      ignoreMissing: params.ignoreMissing,
       acceptedTurns: this.acceptedTurns,
       activeTurnBySession: this.activeTurnBySession,
       withSessionActor: this.withSessionActor.bind(this),

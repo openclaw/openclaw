@@ -33,7 +33,7 @@ export function createWorkerProcessTestHarness(makeTempDir: (prefix: string) => 
     descriptor: WorkerLaunchDescriptor;
     startup?: NativeInferenceStartup;
     signal: AbortSignal;
-    diagnostics?: () => Record<string, unknown>;
+    diagnostics?: () => Record<string, unknown> | Promise<Record<string, unknown>>;
   }) => {
     const sdkHost = createCompiledSdkHost(
       [
@@ -147,7 +147,7 @@ export function createWorkerProcessTestHarness(makeTempDir: (prefix: string) => 
               error: String(error),
               stdout,
               stderr,
-              ...diagnostics?.(),
+              ...(await diagnostics?.()),
             }),
             { cause: error },
           );

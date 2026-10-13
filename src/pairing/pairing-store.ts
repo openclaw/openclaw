@@ -130,7 +130,7 @@ function mutatePairing(params: PairingOptions, mutation: PairingMutation) {
   );
 }
 
-/** @deprecated Use readChannelAllowFromStore; retained for the v2026.9.8 SDK until the next Plugin SDK major. */
+/** @deprecated Use readChannelAllowFromStore; retained for the v2026.9.8 SDK until its stable deprecation compatibility period ends. */
 export function readChannelAllowFromStoreSync(
   channel: PairingChannel,
   env: NodeJS.ProcessEnv = process.env,

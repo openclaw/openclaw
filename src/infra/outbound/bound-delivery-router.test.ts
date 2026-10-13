@@ -7,7 +7,7 @@ import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
-import { createAccountScopedConversationBindingManager } from "./account-scoped-conversation-bindings.js";
+import { createAccountScopedConversationBindingManagerV2 } from "./account-scoped-conversation-bindings.js";
 import { resolveBoundDeliveryDestination } from "./bound-delivery-router.js";
 import {
   testing,
@@ -150,7 +150,7 @@ describe("bound delivery router", () => {
 it("lists account and generic destinations and prunes expiry without host SQL", async () => {
   await withOpenClawTestState({ label: "bound-destination-worker-list" }, async () => {
     testing.resetSessionBindingAdaptersForTests();
-    const manager = createAccountScopedConversationBindingManager({
+    const manager = createAccountScopedConversationBindingManagerV2({
       channel: "fixture",
       accountId: "owner",
       cfg: {},
@@ -159,7 +159,7 @@ it("lists account and generic destinations and prunes expiry without host SQL", 
       toSessionBindingTargetKind: (kind) => kind,
     });
     try {
-      manager.bindConversation({
+      await manager.bindConversationAsync({
         conversationId: "owned-room",
         targetSessionKey: TARGET_SESSION_KEY,
         targetKind: "session",

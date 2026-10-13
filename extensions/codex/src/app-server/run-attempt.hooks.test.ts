@@ -99,7 +99,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
       const sessionManager = openFileBackedSessionManagerForTest(sessionFile, {
         sessionId: "diagnostic-session-1",
       });
-      sessionManager.appendMessage(assistantMessage("existing context", Date.now()));
+      await sessionManager.appendMessageAsync(assistantMessage("existing context", Date.now()));
       params.runtimePlan = createCodexRuntimePlanFixture();
       params.config = {
         diagnostics: {

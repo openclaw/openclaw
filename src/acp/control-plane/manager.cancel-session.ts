@@ -43,6 +43,7 @@ export async function runManagerCancelSession(params: {
   expectedRunId?: string;
   expectedInstanceId?: string;
   expectedOwnerKey?: string;
+  ignoreMissing?: boolean;
   activeTurnBySession: Map<string, ActiveTurnState>;
   acceptedTurns: AcceptedTurns;
   withSessionActor: WithManagerSessionActor;
@@ -197,26 +198,39 @@ export async function runManagerCancelSession(params: {
   await params.withSessionActor(params, async (isCurrentActor) => {
     const control = await params.prepareSessionControlRead(target);
     let runtimeLocator: AcpSessionRuntimeLocator | undefined;
-    const assertTargetCurrent = () => {
+    const assertSourceCurrent = () => {
       control.assertCurrent(params.cfg);
-      control.assertNativeAcpCurrent?.(params.cfg, runtimeLocator);
       if (!isCurrentActor()) {
         throw new AcpRuntimeError("ACP_TURN_FAILED", "ACP session actor was replaced.");
       }
       requireExpectedTurn(params.activeTurnBySession.get(actorKey));
+    };
+    const assertTargetCurrent = () => {
+      assertSourceCurrent();
+      control.assertNativeAcpCurrent?.(params.cfg, runtimeLocator);
+    };
+    const assertSourceAdmission = () => {
+      assertSourceCurrent();
+      params.assertActive?.();
     };
     const assertAdmission = () => {
       assertTargetCurrent();
       params.assertActive?.();
     };
     try {
-      assertAdmission();
+      assertSourceAdmission();
       if (expectedOwnerKey) {
         await requireExpectedOwner(control);
-        assertAdmission();
+        assertSourceAdmission();
       }
-      const resolution = await params.resolveSession({ ...target, assertCurrent: assertAdmission });
-      assertAdmission();
+      const resolution = await params.resolveSession({
+        ...target,
+        assertCurrent: assertSourceAdmission,
+      });
+      assertSourceAdmission();
+      if (params.ignoreMissing && resolution.kind === "none") {
+        return;
+      }
       const resolvedMeta = requireReadySessionMeta(resolution);
       const { entry, constraint } = await requireExpectedOwner(control);
       assertAdmission();

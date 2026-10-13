@@ -7,7 +7,7 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   getSessionBindingService,
-  resolveRuntimeConversationBindingRoute,
+  resolveRuntimeConversationBindingRouteAsync,
 } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { resolvePluginConversationBindingApproval } from "openclaw/plugin-sdk/conversation-runtime";
 import { createInteractiveConversationBindingHelpers } from "openclaw/plugin-sdk/plugin-runtime";
@@ -59,7 +59,7 @@ it("approves, routes, and detaches an opaque Feishu plugin target without invent
       ).resolves.toMatchObject({ status: "approved", binding: { ...owner, ...binding } });
 
       const approvedRecord = expectDefined(
-        getSessionBindingService().resolveByConversation(conversation),
+        await getSessionBindingService().resolveByConversationAsync(conversation),
         "approved Feishu plugin binding",
       );
       const record = await getSessionBindingService().bind({
@@ -75,7 +75,9 @@ it("approves, routes, and detaches an opaque Feishu plugin target without invent
         accountId: "default",
         peer: { kind: "group", id: conversation.conversationId },
       });
-      expect(resolveRuntimeConversationBindingRoute({ route, conversation })).toMatchObject({
+      expect(
+        await resolveRuntimeConversationBindingRouteAsync({ route, conversation }),
+      ).toMatchObject({
         pluginId: owner.pluginId,
         route,
         bindingRecord: record,
@@ -85,7 +87,7 @@ it("approves, routes, and detaches an opaque Feishu plugin target without invent
         ...binding,
       });
       await expect(helpers.detachConversationBinding()).resolves.toEqual({ removed: true });
-      expect(getSessionBindingService().resolveByConversation(conversation)).toBeNull();
+      expect(await getSessionBindingService().resolveByConversationAsync(conversation)).toBeNull();
     } finally {
       manager.stop();
     }

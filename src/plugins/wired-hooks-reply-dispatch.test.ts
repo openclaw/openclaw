@@ -19,6 +19,8 @@ const replyDispatchEvent = {
   shouldRouteToOriginating: false,
   shouldSendToolSummaries: true,
   shouldSendFullToolDetails: false,
+  shouldSendToolSummariesAsync: async () => true,
+  shouldSendFullToolDetailsAsync: async () => false,
   sendPolicy: "allow" as const,
 };
 

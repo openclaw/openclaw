@@ -202,9 +202,9 @@ it.each([
           })),
         ).not.toBeNull();
       } else if (scenario === "changed-branch") {
-        const other = SessionManager.open(target, dir);
+        const other = await SessionManager.openAsync(target, dir);
         other.resetLeaf();
-        other.appendMessage({ role: "user", content: "Another branch", timestamp: 5 });
+        await other.appendMessageAsync({ role: "user", content: "Another branch", timestamp: 5 });
       }
       releaseAppend.resolve();
       const result = await outcome;

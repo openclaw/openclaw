@@ -1,7 +1,7 @@
 import type {
   CaptureQueryPreset as StoredCaptureQueryPreset,
   CaptureQueryRow,
-  DebugProxyCaptureStore,
+  AsyncDebugProxyCaptureStore,
   CaptureSessionSummary,
 } from "openclaw/plugin-sdk/proxy-capture";
 import type {
@@ -119,7 +119,9 @@ export type CaptureQueryEnvelope = {
   rows: CaptureQueryRow[];
 };
 
-type CaptureCoverageSummary = ReturnType<DebugProxyCaptureStore["summarizeSessionCoverage"]>;
+type CaptureCoverageSummary = Awaited<
+  ReturnType<AsyncDebugProxyCaptureStore["summarizeSessionCoverage"]>
+>;
 
 export type CaptureCoverageEnvelope = {
   coverage: CaptureCoverageSummary;
