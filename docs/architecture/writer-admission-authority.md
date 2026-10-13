@@ -62,6 +62,15 @@ mixed production admission still uses the host and does not add a second service
 round trip until the remaining owners can transfer. It grants only broker custody,
 never policy authority, native COMMIT or receipt settlement.
 
+The execution slice gives each logical owner, native generation and borrower its
+own shared lifetime. Logical close publishes `closing` before cleanup and can
+reopen after failed cleanup; revocation and native retirement remain permanent.
+Borrower release closes new calls and claims, while accepted operations retain
+logical/native custody through settlement. Warm operations carry those exact
+cells and their admitted physical identity to native stages and the service.
+Cold creation, readiness, deletion and policy still require their host owners;
+the service transport remains unbound to mixed production admission.
+
 ## Current owners and required transfers
 
 Source locations below refer to commit

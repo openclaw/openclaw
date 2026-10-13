@@ -1,8 +1,8 @@
 import { createSignal, For, merge, onSettled, Show } from "solid-js";
 import type { UiSettings } from "../../../app/settings.ts";
 import { BoardGrantedCapabilities } from "../../../components/board/board-widget-capabilities.solid.tsx";
+import type { BoardWidgetPageMenu } from "../../../components/board/board-widget-cell-options.ts";
 import { BoardWidgetMenuItems } from "../../../components/board/board-widget-cell-render.solid.tsx";
-import type { BoardWidgetPageMenu } from "../../../components/board/board-widget-cell-render.ts";
 import { activateMenuShortcut } from "../../../components/menu-shortcuts.ts";
 import {
   EMPTY_SESSION_MENU_DATA,

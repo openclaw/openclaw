@@ -38,7 +38,10 @@ import {
   type SqliteWorkerReply,
   type SqliteWorkerRequest,
 } from "./sqlite-worker-contract.js";
-import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
+import {
+  createSqliteWorkerOperationAdmission,
+  readSqliteWorkerExecutionAuthority,
+} from "./sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "./sqlite-worker-operation-settlement.js";
 import { readSqliteWorkerRequestCustody } from "./sqlite-worker-request-custody.js";
 import {
@@ -244,6 +247,7 @@ function prepareSqliteWorkerOperationAdmission(
       () => retained.admission.service(),
     ),
   };
+  job.request.executionAuthority = readSqliteWorkerExecutionAuthority(retained.admission);
   return retained.admission.port;
 }
 

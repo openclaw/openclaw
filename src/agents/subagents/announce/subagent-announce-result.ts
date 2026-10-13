@@ -132,7 +132,8 @@ function describeSubagentOutcome(child: ChildCompletionRow): string {
     return error ? `cancelled: ${error}` : "cancelled";
   }
   if (child.execution.interruptionReason === "gateway-restart") {
-    return "interrupted by gateway restart";
+    const error = outcome?.error?.trim();
+    return error ? `interrupted by gateway restart: ${error}` : "interrupted by gateway restart";
   }
   if (!outcome) {
     return "unknown";

@@ -895,6 +895,11 @@ For native children with completion notifications disabled, recovery sends a
 private continuation to the original parent when its saved session identity still
 matches. Normal successful completion stays quiet. A reset or cancellation does
 not authorize a continuation into a replacement parent session.
+If the child session was reset or replaced, recovery settles the old task with
+that reason and notifies its original parent without changing the replacement
+child session. A quiet child's original parent receives this private outcome too.
+Resetting the parent retires that old task's pending notice without attempting
+to stop the replacement child session or its descendants.
 Cancelled turns can retain a cleanup lease briefly. That lease does not make them
 restart candidates; an immediate Gateway restart preserves their terminal outcome.
 Finished executions whose final reply is still pending retain their recovery

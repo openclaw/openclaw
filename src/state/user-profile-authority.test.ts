@@ -1,5 +1,6 @@
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { assertExistingOpenClawStateRuntimeSchema } from "./openclaw-state-db-existing-schema.js";
 import { ensureSecretStoreSchema } from "./openclaw-state-db-schema-additive.js";
@@ -55,6 +56,23 @@ it("preserves profile authority through unrelated feature schema admission", asy
   expect(readProfileAuthority(bound.transferable)).toBe("current");
   expect(readProfileAuthority(settled)).toBe("current");
   expect(() => authority.assertSettled(profile.id)).not.toThrow();
+
+  const repeatedDdl: string[] = [];
+  const observation = observeHostDataSql((sql, database) => {
+    if (database === db && /\b(?:CREATE|ALTER|DROP)\b/iu.test(sql)) {
+      repeatedDdl.push(sql);
+    }
+  });
+  try {
+    runOpenClawStateWriteTransaction(() => ensureSecretStoreSchema(db), options);
+    expect(bound()).toBe(true);
+    expect(readProfileAuthority(bound.transferable)).toBe("current");
+    expect(readProfileAuthority(settled)).toBe("current");
+    expect(() => authority.assertSettled(profile.id)).not.toThrow();
+    expect(repeatedDdl).toEqual([]);
+  } finally {
+    observation.restore();
+  }
 
   setUserProfileRole(profile.id, "member", options);
   expect(bound()).toBe(false);

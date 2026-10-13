@@ -22,6 +22,7 @@ import { normalizeStrictOpenAIJsonSchema } from "./openai-tool-schema.js";
 import { stripUnsupportedSchemaKeywords } from "./schema-keyword-strip.js";
 import { toolSchemaDepthEntrypoint } from "./tool-schema-depth-runtime.test-support.js";
 import { MAX_TOOL_SCHEMA_DEPTH, truncateToolSchemaDepth } from "./tool-schema-depth.js";
+import { publishRuntimeToolInputSchema } from "./tool-schema-json-projection.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -79,6 +80,7 @@ describe("shared tool schema depth budget", () => {
 
   it.each([
     ["raw", (schema: unknown) => schema],
+    ["published", (schema: unknown) => publishRuntimeToolInputSchema(schema).schema],
     ["host normalized", normalizeToolParameterSchema],
     ["strict normalized", normalizeStrictOpenAIJsonSchema],
     ["compat normalized", normalizeOpenAIStrictCompatSchema],

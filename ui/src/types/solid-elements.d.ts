@@ -12,6 +12,7 @@ import type { JSX } from "@solidjs/web";
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
 import type { ControlUiSurfaceProps } from "../../../src/plugin-sdk/control-ui.js";
 import type { ClawHubRecommendation } from "../../../src/shared/clawhub-recommendations.js";
+import type { LobsterPetProps } from "../components/lobster-pet-contract.ts";
 import type { MascotMood } from "../components/mascot-pose.ts";
 import type { SelectPicker } from "../components/select-picker.ts";
 import type { MessageActionDetails } from "../pages/chat/components/chat-message-markdown.types.ts";
@@ -40,6 +41,7 @@ declare module "@solidjs/web" {
       messageActions: MessageActionDetails | null | undefined;
     }
     interface IntrinsicElements {
+      "openclaw-lobster-pet": HTMLAttributes<HTMLElement> & ElementProperties<LobsterPetProps>;
       "wa-select": HTMLAttributes<WaSelect> & { "prop:value": WaSelect["value"] };
       "wa-option": HTMLAttributes<WaOption> & {
         value: WaOption["value"];
@@ -97,8 +99,10 @@ declare module "@solidjs/web" {
       };
       "wa-popup": LegacyAttributes<WaPopup> & {
         active?: boolean;
+        anchor?: WaPopup["anchor"];
         placement?: WaPopup["placement"];
         strategy?: WaPopup["strategy"];
+        sync?: WaPopup["sync"];
         "onWa-reposition"?: EventHandlerUnion<WaPopup, CustomEvent>;
       };
       "wa-switch": LegacyAttributes<WaSwitch> & {

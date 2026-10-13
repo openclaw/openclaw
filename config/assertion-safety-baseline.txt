@@ -960,7 +960,6 @@ extensions/whatsapp/src/session-errors.ts	15
 extensions/whatsapp/src/session.ts	1
 extensions/whatsapp/src/setup-finalize.ts	2
 extensions/whatsapp/src/targets-runtime.ts	1
-extensions/workboard/browser/lib/workboard/metadata-contract-normalization.ts	1
 extensions/workboard/browser/lib/workboard/normalization.ts	5
 extensions/workboard/src/cli.ts	1
 extensions/workboard/src/command.ts	1
@@ -1062,7 +1061,7 @@ packages/ai/src/transports/openai-responses-params-internal.ts	2
 packages/ai/src/transports/openai-responses-payload-policy.ts	3
 packages/ai/src/transports/openai-responses-prompt-observer-internal.ts	2
 packages/ai/src/transports/openai-responses-replay-internal.ts	10
-packages/ai/src/transports/openai-responses-replay-messages-internal.ts	8
+packages/ai/src/transports/openai-responses-replay-messages-internal.ts	7
 packages/ai/src/transports/openai-responses-stream-observer-internal.ts	1
 packages/ai/src/transports/openai-responses-stream-slots-internal.ts	2
 packages/ai/src/transports/openai-responses-stream-terminal-internal.ts	2
@@ -2735,7 +2734,6 @@ ui/src/pages/config/view-diff.ts	2
 ui/src/pages/custodian/session-lifecycle.ts	1
 ui/src/pages/labs/labs-registry.ts	4
 ui/src/pages/new-session/draft-place-browser.ts	2
-ui/src/pages/new-session/place-browser.ts	1
 ui/src/pages/new-session/preferences.ts	1
 ui/src/pages/plugin/route.ts	1
 ui/src/pages/portals/portal-reachability.ts	1

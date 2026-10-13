@@ -242,7 +242,8 @@ test.each([false, true])(
         ).toBeUndefined();
         return;
       }
-      await expect(archive).resolves.toMatchObject({ ok: true });
+      const archived = await archive;
+      expect(archived, JSON.stringify(archived)).toMatchObject({ ok: true });
       expect(placements.get(REQUEST.sessionId)?.state).toBe("local");
       expect(harness.environments.get(harness.ready.environmentId)?.state).toBe("destroyed");
       expect(loadSessionEntry({ storePath, sessionKey: REQUEST.sessionKey })?.archivedAt).toEqual(

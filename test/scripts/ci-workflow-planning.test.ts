@@ -10462,7 +10462,7 @@ describe("ci workflow guards", () => {
             : `checks-ui-e2e-real-gateway (${matrix.shard}/${matrix.shard_count})`,
         setup: realGatewaySetup,
         matrix,
-        blacksmithRunner: "blacksmith-32vcpu-ubuntu-2404",
+        blacksmithRunner: "blacksmith-16vcpu-ubuntu-2404",
       })),
     ] as const;
     expect(new Set(routedUiE2eJobs.map((job) => job.name)).size).toBe(routedUiE2eJobs.length);
