@@ -193,18 +193,28 @@ describe("session index scheduling", () => {
       operation: "batch",
       cause: "embedding backend failed",
     });
-    index.mockRejectedValue(error);
+    let lastAttemptAt = 0;
+    index.mockImplementation(async () => {
+      lastAttemptAt = Date.now();
+      throw error;
+    });
     harness["syncArchiveFiles"] = index;
     harness["activateFallbackProvider"] = vi.fn(async () => true);
+    let deferForRebuildCooldown = false;
     harness["sync"] = async (params) => {
       harness.syncCalls.push(params ?? {});
+      if (deferForRebuildCooldown) {
+        deferForRebuildCooldown = false;
+        await harness.runSyncForTest(params);
+        return;
+      }
       await harness["syncTargetedSessions"](new Set([sessionFile]));
     };
 
     await vi.advanceTimersByTimeAsync(30_000);
     expect(index).toHaveBeenCalledTimes(1);
     for (const [attempt, delay] of [60_000, 300_000, 900_000].entries()) {
-      await vi.advanceTimersByTimeAsync(delay - 1);
+      await vi.advanceTimersByTimeAsync(lastAttemptAt + delay - Date.now() - 1);
       expect(index).toHaveBeenCalledTimes(attempt + 1);
       if (attempt === 1) {
         activity.listener?.(true);
@@ -227,8 +237,14 @@ describe("session index scheduling", () => {
     activity.listener?.(true);
     await vi.advanceTimersByTimeAsync(30_000);
     expect(index).toHaveBeenCalledTimes(4);
+    harness["recordFullReindexFailure"](false);
+    deferForRebuildCooldown = true;
     activity.listener?.(false);
     await vi.advanceTimersByTimeAsync(1);
+    expect(index).toHaveBeenCalledTimes(4);
+    await vi.advanceTimersByTimeAsync(59_998);
+    expect(index).toHaveBeenCalledTimes(4);
+    await vi.advanceTimersByTimeAsync(2);
     expect(index).toHaveBeenCalledTimes(5);
     await vi.advanceTimersByTimeAsync(3_600_000);
     expect(index).toHaveBeenCalledTimes(5);

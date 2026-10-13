@@ -316,6 +316,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       if (deferAutomaticFullReindex && !hasTargetArchiveFiles) {
         // Automatic identity repair honors the failure cooldown. An explicit
         // CLI index request still retries immediately.
+        this.requestSessionIndexRetry();
         return MEMORY_SYNC_DEFERRED;
       }
       needsFullReindex =
