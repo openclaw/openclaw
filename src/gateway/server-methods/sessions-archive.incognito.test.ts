@@ -53,7 +53,13 @@ function archive(key: string, entry: SessionEntry, placement: PlacementContext =
       canonicalKey: key,
       fullPatch: { key, archived: true, expectedSessionId: entry.sessionId },
       initialEntry: entry,
-      initialStoreKeys: [key],
+      initialTarget: {
+        agentId: "main",
+        canonicalKey: key,
+        storePath,
+        storeKeys: [key],
+        store: { [key]: entry },
+      },
       key,
       lifecycleIdentities: [key, entry.sessionId],
       requestedAgentId: "main",
@@ -100,7 +106,7 @@ it("prepares archive and restores an admitted human turn without opening host SQ
     const prepared = await archive(key, entry);
     assert(prepared.ok, prepared.ok ? "" : prepared.error.message);
     expect(prepared.value.entry).toMatchObject(entry);
-    releaseSessionPatchArchive(prepared.value);
+    await releaseSessionPatchArchive(prepared.value);
     expect(await restore(key, entry)).toMatchObject({ sessionId: entry.sessionId });
     expect(loadSessionEntry({ sessionKey: key, storePath })?.archivedAt).toBeUndefined();
     expect(sql.queries).toEqual([]);

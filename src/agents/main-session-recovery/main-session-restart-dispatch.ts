@@ -6,6 +6,7 @@ import { sanitizePendingFinalDeliveryText } from "../../auto-reply/reply/pending
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { applySessionEntryReplacements } from "../../config/sessions/session-accessor.js";
 import { retainPreparedSessionEntryPredicate } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
+import type { SessionEntryCurrentFacts } from "../../config/sessions/session-entry-current.types.js";
 import { withSessionEntriesFromStoreInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
@@ -58,7 +59,10 @@ import {
   prepareRestartRecoveryDeliveryCurrent,
   resolveRestartRecoveryDeliveryContext,
 } from "./main-session-restart-recovery-delivery.js";
-import { mainSessionRecoveryLog as log } from "./main-session-restart-recovery-shared.js";
+import {
+  mainSessionRecoveryLog as log,
+  readInterruptedRunId,
+} from "./main-session-restart-recovery-shared.js";
 
 const RESTART_RECOVERY_RESUME_MESSAGE = formatSystemTurnPrompt(
   `${RESTART_RECOVERY_INTERRUPTION_NOTE} The restart did not cancel the user's task. ` +
@@ -88,15 +92,6 @@ function buildResumeMessage(
 }
 
 type MainSessionResumeResult = "started" | "settled" | "skipped" | "failed";
-
-function readInterruptedRunId(entry: SessionEntry): string | undefined {
-  const runs = entry.restartRecoveryRuns;
-  return runs?.length === 1
-    ? runs[0]?.runId
-    : !runs?.length
-      ? normalizeOptionalString(entry.lifecycleRunId)
-      : undefined;
-}
 
 async function rollbackRestartRecoveryReservation(
   params: MainSessionRecoveryStoreTarget & {
@@ -165,6 +160,9 @@ export async function resumeMainSession(
   params: ResumeMainSessionParams,
 ): Promise<MainSessionResumeResult> {
   const source = captureSessionEntryMetadataRead(params, () => {});
+  const matchesRequester = (current: SessionEntryCurrentFacts | undefined) =>
+    current?.sessionId === params.entry.sessionId &&
+    current.lifecycleRevision === params.entry.lifecycleRevision;
   let retained: ReturnType<typeof retainPreparedSessionEntryPredicate> | undefined;
   using _ = { [Symbol.dispose]: () => retained?.release() };
   if (!source) {
@@ -180,7 +178,7 @@ export async function resumeMainSession(
             databaseIdentity,
             sessionKey: params.sessionKey,
             entry,
-            matches: (_before, current) => current?.sessionId === params.entry.sessionId,
+            matches: (_before, current) => matchesRequester(current),
           });
         }
       },
@@ -191,9 +189,7 @@ export async function resumeMainSession(
     );
   }
   const isCurrent = () => {
-    return source
-      ? source.readCurrent()?.sessionId === params.entry.sessionId
-      : retained?.isCurrent() === true;
+    return source ? matchesRequester(source.readCurrent()) : retained?.isCurrent() === true;
   };
   return (
     (await runWithMainSessionRecoveryAdmission({
@@ -220,6 +216,7 @@ async function resumeMainSessionWithinAdmission(
   const harnessCompletion = params.entry.restartRecoveryHarnessCompletion;
   const source = captureSessionEntryMetadataRead(params, () => {});
   const taskRemainsOwed = () => {
+    params.completionSource?.();
     if (!harnessCompletion) {
       return true;
     }

@@ -158,7 +158,9 @@ function buildSessionsListResult(
         }
       : {}),
     defaults: policy ? policy.defaults(defaults) : defaults,
-    ...(opts.rowMode === "sidebar" ? shareSidebarSessionRows(sessions) : { sessions }),
+    ...(opts.rowMode === "sidebar"
+      ? shareSidebarSessionRows(sessions, opts.ifRowsRevision)
+      : { sessions }),
   };
 }
 

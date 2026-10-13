@@ -77,6 +77,58 @@ afterEach(() => {
 });
 
 describe("resident sessions.list", () => {
+  it("omits unchanged sidebar rows without reusing membership or revoked access", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const config = await seedSessions();
+      const context = requestContext(config);
+      const client = identifiedClient("owner@example.com");
+      const request = { agentId: "main", rowMode: "sidebar", limit: 50 } as const;
+      // Cold admission can publish enriched facts after the first selected page.
+      await listSessions({ client, context, request });
+      const initial = await listSessions({ client, context, request });
+      expect(initial.sessions.length).toBeGreaterThan(0);
+      expect(initial.rowsRevision).toEqual(expect.any(String));
+      vi.spyOn(Date, "now").mockReturnValue(Date.now() + 1_000);
+      const conditional = { ...request, ifRowsRevision: initial.rowsRevision };
+      const unchanged = await listSessions({ client, context, request: conditional });
+      expect(unchanged).toMatchObject({
+        sessions: [],
+        rowsUnchanged: true,
+        rowsRevision: initial.rowsRevision,
+        count: initial.count,
+        totalCount: initial.totalCount,
+        ts: initial.ts + 1_000,
+      });
+      expect(unchanged.sharedFacts).toBeUndefined();
+      const filtered = await listSessions({
+        client,
+        context,
+        request: { ...conditional, search: "no matching session" },
+      });
+      expect(filtered.rowsUnchanged).toBeUndefined();
+      expect(filtered.totalCount).toBe(0);
+      const scope = { agentId: "main", sessionKey: "agent:main:active" };
+      await replaceSessionEntry(scope, {
+        ...loadSessionEntry(scope)!,
+        label: "Renamed sidebar row",
+      });
+      const changed = await listSessions({ client, context, request: conditional });
+      expect(changed.rowsUnchanged).toBeUndefined();
+      expect(changed.rowsRevision).not.toBe(initial.rowsRevision);
+      expect(changed.sessions.find((row) => row.key === scope.sessionKey)?.label).toBe(
+        "Renamed sidebar row",
+      );
+      await replaceSessionEntry(scope, { ...loadSessionEntry(scope)!, visibility: "draft" });
+      const revoked = await listSessions({
+        client: identifiedClient("other@example.com"),
+        context,
+        request: { ...request, ifRowsRevision: changed.rowsRevision },
+      });
+      expect(revoked.rowsUnchanged).toBeUndefined();
+      expect(revoked.sessions.some((row) => row.key === scope.sessionKey)).toBe(false);
+    });
+  });
+
   it.each([{ search: "live" }])(
     "refreshes reply activity including previously rejected candidates (%j)",
     async (filter: SessionsListParams) => {

@@ -13,8 +13,9 @@ sidebarTitle: "Chat"
 How the chat pane behaves: the session rail, the composer, and how the transcript renders.
 
 When the latest history page has no visible messages, for example because tool
-activity is hidden, the pane loads earlier history automatically. An incomplete
-history page does not show the new-chat welcome screen.
+activity is hidden, the pane keeps **Show earlier** available. Scroll upward or
+select it to load earlier history; reloading does not fetch unrequested older
+pages. An incomplete history page does not show the new-chat welcome screen.
 
 Enable **Settings → Labs → Speech bubbles** to try the experimental view (off by default).
 While enabled, Home uses bubbles by default. The session menu’s **View → Speech bubbles**
@@ -138,9 +139,10 @@ another agent's history. Select that pane, then choose **Home** or a conversatio
 in the sidebar. Home works even when you are already on its route; the other
 panes stay unchanged.
 
-When the macOS app embeds a single conversation beside its native sidebar, the
-chat header fills the window's titlebar row. Drag an empty area of the header to
-move the window; its buttons keep their normal actions.
+When the macOS app embeds a single conversation beside its native sidebar, the chat header fills the window's titlebar row.
+In the macOS Web experience and Tauri desktop app on macOS, Linux, and Windows, the navigation panel header and content header share the 52px titlebar row, with back/forward before the conversation title and search in the persistent rail.
+Collapsing the panel leaves only expand-sidebar beside the rail, which keeps New session and search; the content header still starts with back/forward.
+Drag an empty area of the titlebar row to move the window; its buttons keep their normal actions.
 
 ## Collaborator drafts
 

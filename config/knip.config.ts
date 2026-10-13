@@ -856,6 +856,9 @@ const config = {
         // Solid plugin builds createRequire the compiler from the plugin author's package.json;
         // the host never resolves or ships it (docs/plugins/feature-plugins.md).
         "@solidjs/compiler",
+        // Canvas bundling resolves these from extensions/canvas/package.json.
+        "@solidjs/web",
+        "solid-js",
         "playwright-core",
         "partial-json",
         // The native Canvas bundle falls back without optional Markdown support.

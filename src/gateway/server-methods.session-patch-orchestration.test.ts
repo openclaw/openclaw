@@ -420,9 +420,9 @@ describe("sessions.patchMany orchestration", () => {
       } as never);
 
       expect(assertCurrent).not.toHaveBeenCalled();
-      expect([
-        ...new Set(assertTargetCurrent.mock.calls.map(([target]) => target.sessionKey)),
-      ]).toEqual(targets.map(({ key }) => key));
+      expect(new Set(assertTargetCurrent.mock.calls.map(([target]) => target.sessionKey))).toEqual(
+        new Set(targets.map(({ key }) => key)),
+      );
       expect(respond).toHaveBeenCalledWith(
         true,
         {

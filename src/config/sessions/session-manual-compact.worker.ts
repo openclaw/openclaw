@@ -19,6 +19,7 @@ import type {
   SessionSourcePredicate,
   SessionSourceValidation,
 } from "./session-source-authority.js";
+import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 
 export type ManualCompactInput = {
   scope: ResolvedTranscriptScope;
@@ -37,7 +38,6 @@ export type ManualCompactValidation = {
 export type ManualCompactCommitted = {
   kind: "session-manual-compact";
   result: SessionTranscriptManualTrimResult;
-  projectionNeedsReconcile: boolean;
   publication?: SessionEntryReplacementPublication;
 };
 
@@ -86,7 +86,6 @@ export function compactManualTranscript(
       const candidate: ManualCompactCommitted = {
         kind: "session-manual-compact",
         result: selected.result,
-        projectionNeedsReconcile: false,
       };
       if (selected.result.compacted) {
         const identity = applyManualCompactInTransaction(
@@ -100,11 +99,10 @@ export function compactManualTranscript(
           },
           {
             scheduleProjectionReconcile: false,
-            onProjectionReconcileNeeded: () => {
-              candidate.projectionNeedsReconcile = true;
-            },
           },
         );
+        // Finish the retained projection before the next turn can use this generation.
+        reconcileSessionTranscriptIndexInTransaction(current.db, input.scope.sessionId);
         candidate.publication = prepareSessionEntryReplacementPublication(
           {
             ...identity,
