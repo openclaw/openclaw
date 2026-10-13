@@ -90,7 +90,12 @@ it("prepares the selected realtime catalog once per request and refreshes availa
         model: rawConfig.model ?? (await readDefault()),
       }),
       isConfiguredAsync: readAvailability,
-      capabilities: { transports: ["gateway-relay"], supportsToolCalls: false },
+      capabilities: {
+        transports: ["gateway-relay"],
+        inputAudioFormats: [],
+        outputAudioFormats: [],
+        supportsToolCalls: false,
+      },
       createBridge: () => {
         throw new Error("catalog must not create a session");
       },
