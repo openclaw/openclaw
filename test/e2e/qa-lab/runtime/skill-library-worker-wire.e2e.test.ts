@@ -5,7 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
-import { buildQaGatewayConfig } from "../../../../extensions/qa-lab/src/qa-gateway-config.js";
+import { buildQaGatewayConfig } from "../../../../extensions/qa-lab/test-api.js";
 import type {
   SkillsLibraryActivateResult,
   SkillsLibraryListResult,
