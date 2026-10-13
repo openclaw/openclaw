@@ -40,11 +40,13 @@ type ClaudeCliRunDiagnosticParams = Pick<
   RunCliAgentParams,
   | "abortSignal"
   | "agentId"
+  | "inputProvenance"
   | "messageChannel"
   | "messageProvider"
   | "model"
   | "modelProvider"
   | "runId"
+  | "sessionEntry"
   | "sessionId"
   | "sessionKey"
   | "trigger"
@@ -54,11 +56,17 @@ type ClaudeCliRunDiagnosticParams = Pick<
 function diagnosticBase(params: ClaudeCliRunDiagnosticParams, trace: DiagnosticTraceContext) {
   const channel = params.messageChannel ?? params.messageProvider;
   const trigger = params.isolatedCompletionPurpose ?? params.trigger;
+  // sessions_send stamps the sender on input provenance; spawned children keep their parent.
+  const requesterSessionKey =
+    params.inputProvenance?.sourceSessionKey ?? params.sessionEntry?.spawnedBy;
   return {
     runId: params.runId,
     ...(params.agentId ? { agentId: params.agentId } : {}),
     sessionId: params.sessionId,
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    ...(requesterSessionKey && requesterSessionKey !== params.sessionKey
+      ? { requesterSessionKey }
+      : {}),
     provider: params.modelProvider ?? "anthropic",
     ...(params.model ? { model: params.model } : {}),
     ...(trigger ? { trigger } : {}),

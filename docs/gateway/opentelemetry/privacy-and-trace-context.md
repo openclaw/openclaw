@@ -47,7 +47,8 @@ request trace; longer values make the request frame invalid. `tracestate` and
 Raw model/tool content is **not** exported by default. Spans carry bounded
 identifiers (channel, provider, model, error category, hash-only request ids,
 tool source, tool owner, skill name/source) and never include prompt text,
-response text, tool inputs, tool outputs, skill file paths, or session keys.
+response text, tool inputs, tool outputs, skill file paths, or session keys
+unless you opt in (see [Session identity](#session-identity)).
 Values that look like scoped agent session keys (for example starting with
 `agent:`) are replaced with `unknown` on low-cardinality attributes. OTLP log
 records keep severity, logger, code location, trusted trace context, and
@@ -56,6 +57,23 @@ when `diagnostics.otel.captureContent` is `true`. Talk metrics export only
 bounded event metadata (mode, transport, provider, event type) - no
 transcripts, audio payloads, session ids, turn ids, call ids, room ids, or
 handoff tokens.
+
+## Session identity
+
+Set `diagnostics.otel.captureSessionIdentity` to `true` to let trace backends
+group turns into conversations. Run, harness, model-call, model-usage, and tool
+spans then carry:
+
+- `gen_ai.conversation.id`: the raw session key (for example
+  `agent:main:main`), which can include channel peer ids.
+- `gen_ai.agent.id`: the agent id that owns the run.
+- `openclaw.requester.conversation.id`: on Claude CLI runs started by
+  `sessions_send` or `sessions_spawn`, the session key of the requesting
+  session, so a target run can be traced back to its caller.
+
+The default is off. Session keys are stable identifiers of a person or chat, so
+enable this only when the collector is approved for that data. It does not
+change metric attributes, which stay low-cardinality.
 
 When `diagnostics-otel` tracing is active, outbound model requests may include
 a W3C `traceparent` header from the actual exporter-owned model-call span.

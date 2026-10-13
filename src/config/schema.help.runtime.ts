@@ -431,6 +431,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Interval in milliseconds for periodic telemetry flush from buffers to the collector. Increase to reduce export chatter, or lower for faster visibility during active incident response.",
   "diagnostics.otel.captureContent":
     "Opt-in OTEL span content capture. Defaults to off; true captures non-system message and tool content.",
+  "diagnostics.otel.captureSessionIdentity":
+    "Opt-in session identity on run, model, and tool spans. Defaults to off; true exports the raw session key as gen_ai.conversation.id and the agent id as gen_ai.agent.id so trace backends can group turns into conversations. Claude CLI runs started by sessions_send or sessions_spawn also carry the requester session key.",
   "diagnostics.cacheTrace.enabled":
     "Log cache trace snapshots for embedded agent runs (default: false).",
   "tools.exec.applyPatch.enabled":

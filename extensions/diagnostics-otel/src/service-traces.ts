@@ -21,7 +21,10 @@ import {
   normalizeTraceContext,
 } from "./service-trace-context.js";
 
-export function createDiagnosticsTraceRuntime(tracer: Tracer) {
+export function createDiagnosticsTraceRuntime(
+  tracer: Tracer,
+  options: { captureSessionIdentity?: boolean } = {},
+) {
   const activeTrustedSpans = new Map<string, ReturnType<typeof tracer.startSpan>>();
   const activeTrustedSpanAliases = new Map<
     string,
@@ -313,6 +316,7 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
       runId?: string;
       sessionKey?: string;
       sessionId?: string;
+      requesterSessionKey?: string;
       agentId?: string;
       provider?: string;
       model?: string;
@@ -334,6 +338,18 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
     }
     if (evt.agentId) {
       spanAttrs["openclaw.agent"] = normalizeDiagnosticValue(evt.agentId);
+    }
+    // Opt-in GenAI identity: lets trace backends group turns into conversations.
+    if (options.captureSessionIdentity) {
+      if (evt.sessionKey) {
+        spanAttrs["gen_ai.conversation.id"] = evt.sessionKey;
+      }
+      if (evt.agentId) {
+        spanAttrs["gen_ai.agent.id"] = evt.agentId;
+      }
+      if (evt.requesterSessionKey) {
+        spanAttrs["openclaw.requester.conversation.id"] = evt.requesterSessionKey;
+      }
     }
   };
 
