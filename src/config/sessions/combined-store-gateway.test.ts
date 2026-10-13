@@ -83,20 +83,17 @@ it("admits repeated default-layout fleet reads without stat or realpath calls", 
       })),
     );
     await withAgentDatabaseStartupAdmission(async () => {
+      const options = {
+        preserveSentinelOwners: "physical" as const,
+        discovery: { env: state.env, snapshot: undefined },
+      };
+      // The generation's first read prepares configured directories and their path set.
+      expect(applyGatewaySessionStoreAdmission(cfg, options, targets)).toBe(targets);
       const stat = vi.spyOn(fsSync, "statSync");
       const realpath = vi.spyOn(realpathSync, "native");
       try {
         for (let read = 0; read < 5; read++) {
-          expect(
-            applyGatewaySessionStoreAdmission(
-              cfg,
-              {
-                preserveSentinelOwners: "physical",
-                discovery: { env: state.env, snapshot: undefined },
-              },
-              targets,
-            ),
-          ).toBe(targets);
+          expect(applyGatewaySessionStoreAdmission(cfg, options, targets)).toBe(targets);
         }
         expect(stat).not.toHaveBeenCalled();
         expect(realpath).not.toHaveBeenCalled();
