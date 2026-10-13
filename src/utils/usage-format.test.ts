@@ -10,7 +10,10 @@ import {
   resetUsageFormatCachesForTest,
   formatUsd,
   resolveModelCostConfig,
+  resolveModelCostConfigFingerprint,
 } from "./usage-format.js";
+
+type ModelCostConfig = NonNullable<ReturnType<typeof resolveModelCostConfig>>;
 
 function pricingModel(id: string, cost: ModelDefinitionConfig["cost"]): ModelDefinitionConfig {
   return { id, name: id, reasoning: false, input: ["text"], maxTokens: 1, cost };
@@ -141,22 +144,51 @@ describe("usage-format", () => {
   const firstRates = { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0.2 };
   const laterRates = { input: 7, output: 8, cacheRead: 0.7, cacheWrite: 0.8 };
 
-  it("keeps first-authored pricing across replacement config snapshots", () => {
-    for (const rates of [firstRates, laterRates]) {
-      const config = pricingConfig("demo-duplicates", [
-        pricingModel("priced-fixture", rates),
-        pricingModel("priced-fixture", { input: 99, output: 99, cacheRead: 99, cacheWrite: 99 }),
-      ]);
-      expect(
-        resolveModelCostConfig({
-          config,
-          agentDir,
-          provider: "demo-duplicates",
-          model: "priced-fixture",
-          allowPluginNormalization: false,
-        }),
-      ).toEqual(rates);
-    }
+  it("refreshes duplicate model prices and fingerprints after ordered source mutations", () => {
+    type SourceModel = { id: string; cost?: Partial<ModelDefinitionConfig["cost"]> };
+    const first: SourceModel = { id: "priced-fixture", cost: { ...firstRates } };
+    const later: SourceModel = { id: "priced-fixture", cost: { ...laterRates } };
+    const models = [first, later];
+    const config = {
+      models: { providers: { venice: { models } } },
+    } as unknown as OpenClawConfig;
+    let previousFingerprint: string | undefined;
+    const check = (label: string, expected: ModelCostConfig | undefined) => {
+      expect
+        .soft(
+          resolveModelCostConfig({ config, agentDir, provider: "venice", model: "priced-fixture" }),
+          label,
+        )
+        .toEqual(expected);
+      const fingerprint = resolveModelCostConfigFingerprint(config, agentDir);
+      expect.soft(fingerprint, label).not.toBe(previousFingerprint);
+      previousFingerprint = fingerprint;
+      // Fingerprinting refreshes the full index; it must agree with direct lookups.
+      expect
+        .soft(
+          resolveModelCostConfig({ config, agentDir, provider: "venice", model: "priced-fixture" }),
+          label,
+        )
+        .toEqual(expected);
+    };
+    check("initial duplicates", firstRates);
+    first.cost!.input = 9;
+    check("mutated first cost", { ...firstRates, input: 9 });
+    delete first.cost;
+    check("removed first cost", laterRates);
+    first.cost = { output: 0 };
+    check("restored partial cost", { ...laterRates, output: 0 });
+    const inserted = { id: "priced-fixture", cost: { ...firstRates, input: 3 } };
+    models.unshift(inserted);
+    check("inserted duplicate", inserted.cost);
+    models.reverse();
+    check("reordered duplicates", laterRates);
+    models[0] = { id: "priced-fixture", cost: { ...firstRates, input: 4 } };
+    check("replaced same-id row", { ...firstRates, input: 4 });
+    models.shift();
+    check("removed duplicate", { ...inserted.cost, output: 0 });
+    models.splice(0);
+    check("removed all rows", undefined);
   });
 
   it("skips metadata-only model rows while caching configured pricing", async () => {
@@ -194,6 +226,15 @@ describe("usage-format", () => {
         config,
       })?.input,
     ).toBe(1);
+
+    metadataOnlyModel.cost = { input: 9, output: 8, cacheRead: 7, cacheWrite: 6 };
+    expect(
+      resolveModelCostConfig({
+        provider: "demo-metadata-row",
+        model: "metadata-only",
+        config,
+      })?.input,
+    ).toBe(9);
 
     await fs.writeFile(
       path.join(agentDir, "models.json"),
