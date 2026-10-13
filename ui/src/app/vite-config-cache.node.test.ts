@@ -1,4 +1,5 @@
 // @vitest-environment node
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { cp, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -59,7 +60,7 @@ describe("Control UI cached output identity", () => {
 
       const html = readFileSync(path.join(output, "index.html"), "utf8");
       const identityScript = html.match(
-        /<script id="openclaw-control-ui-build-info"[^>]*>(.*?)<\/script>/u,
+        /<script\b[^>]*\bid="openclaw-control-ui-build-info"[^>]*>(.*?)<\/script>/u,
       )?.[1];
       expect(identityScript).toBeDefined();
       expect(
@@ -69,7 +70,9 @@ describe("Control UI cached output identity", () => {
       expect(html).not.toContain(first.buildId);
       const worker = readFileSync(path.join(output, "sw.js"), "utf8");
       expect(worker).toContain('const EMBEDDED_CACHE_VERSION = "second-build";');
-      const offline = JSON.parse(worker.match(/^const OFFLINE_BOOT = (.+);$/mu)![1]);
+      const encodedOffline = worker.match(/^const OFFLINE_BOOT = (.+);$/mu)?.[1];
+      assert.ok(encodedOffline, "service worker must contain the offline build inventory");
+      const offline = JSON.parse(encodedOffline);
       expect(offline.html).toBe(html);
       expect(offline.csp).toContain(
         `sha256-${createHash("sha256").update(identityScript!).digest("base64")}`,

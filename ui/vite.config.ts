@@ -436,11 +436,15 @@ export function resolveTsconfigPathAliasesForVite(): ControlUiViteAlias[] {
 const controlUiBuildInfoScriptId = "openclaw-control-ui-build-info";
 
 function controlUiBuildIdentityHtml(html: string, buildInfo: ControlUiBuildInfo, cacheId?: string) {
-  const script = `<script id="${controlUiBuildInfoScriptId}" data-cfasync="false">globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO=${JSON.stringify(buildInfo).replaceAll("<", "\\u003c")};</script>`;
+  const script = `<script data-cfasync="false" id="${controlUiBuildInfoScriptId}">globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO=${JSON.stringify(buildInfo).replaceAll("<", "\\u003c")};</script>`;
   const withoutIdentity = html
-    .replace(/<script id="openclaw-control-ui-build-info"[^>]*>[\s\S]*?<\/script>/u, "")
+    .replace(/<script\b[^>]*\bid="openclaw-control-ui-build-info"[^>]*>[\s\S]*?<\/script>/u, "")
     .replace(new RegExp(` ${CONTROL_UI_BUILD_ID_ATTRIBUTE}="[^"]*"`, "u"), "");
-  const withIdentity = withoutIdentity.replace("<head>", `<head>${script}`);
+  const insertion =
+    withoutIdentity.match(/<head\b[^>]*>/iu) ?? withoutIdentity.match(/<html\b[^>]*>/iu);
+  const withIdentity = insertion
+    ? withoutIdentity.replace(insertion[0], `${insertion[0]}${script}`)
+    : `${script}${withoutIdentity}`;
   return cacheId
     ? withIdentity.replace(/<html\b/iu, `<html ${CONTROL_UI_BUILD_ID_ATTRIBUTE}="${cacheId}"`)
     : withIdentity;
@@ -451,10 +455,11 @@ export async function refreshControlUiBuildOutput(
   buildOutDir: string,
   buildInfo: ControlUiBuildInfo = resolveControlUiBuildInfo(),
   bootAssets?: string[],
+  publicDir: string | false = path.join(here, "public"),
 ) {
-  const publicContent = collectControlUiPublicAssets(path.join(here, "public"));
-  const publicAssets = publicContent.paths;
-  const cacheId = `${buildInfo.buildId}-${publicContent.hash}`;
+  const publicContent = publicDir ? collectControlUiPublicAssets(publicDir) : undefined;
+  const publicAssets = publicContent?.paths ?? [];
+  const cacheId = publicContent ? `${buildInfo.buildId}-${publicContent.hash}` : undefined;
   let selectedBootAssets = bootAssets;
   if (!selectedBootAssets) {
     // Reuse the build-owned graph already serialized by this producer, never a fetched document.
@@ -473,26 +478,28 @@ export async function refreshControlUiBuildOutput(
     htmlPath,
     controlUiBuildIdentityHtml(fs.readFileSync(htmlPath, "utf8"), buildInfo, cacheId),
   );
-  for (const asset of publicAssets) {
-    const fontStylesheet = asset.startsWith("fonts/") && asset.endsWith(".css");
-    if (!fontStylesheet && asset !== "manifest.webmanifest") {
-      continue;
-    }
-    const filePath = path.join(buildOutDir, asset);
-    const assetSource = fs.readFileSync(path.join(here, "public", asset), "utf8");
-    if (fontStylesheet) {
-      // Relative CSS URLs do not inherit their parent stylesheet's query.
-      const versioned = assetSource.replace(
-        /url\("([^"/?#]+\.woff2)"\)/gu,
-        `url("$1?v=${cacheId}")`,
-      );
-      fs.writeFileSync(filePath, versioned);
-    } else {
-      const manifest = JSON.parse(assetSource) as { icons: Array<{ src: string }> };
-      for (const icon of manifest.icons) {
-        icon.src += `?v=${cacheId}`;
+  if (publicDir) {
+    for (const asset of publicAssets) {
+      const fontStylesheet = asset.startsWith("fonts/") && asset.endsWith(".css");
+      if (!fontStylesheet && asset !== "manifest.webmanifest") {
+        continue;
       }
-      fs.writeFileSync(filePath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const filePath = path.join(buildOutDir, asset);
+      const assetSource = fs.readFileSync(path.join(publicDir, asset), "utf8");
+      if (fontStylesheet) {
+        // Relative CSS URLs do not inherit their parent stylesheet's query.
+        const versioned = assetSource.replace(
+          /url\("([^"/?#]+\.woff2)"\)/gu,
+          `url("$1?v=${cacheId}")`,
+        );
+        fs.writeFileSync(filePath, versioned);
+      } else {
+        const manifest = JSON.parse(assetSource) as { icons: Array<{ src: string }> };
+        for (const icon of manifest.icons) {
+          icon.src += `?v=${cacheId}`;
+        }
+        fs.writeFileSync(filePath, `${JSON.stringify(manifest, null, 2)}\n`);
+      }
     }
   }
   const swPath = path.join(buildOutDir, "sw.js");
@@ -550,9 +557,13 @@ export async function refreshControlUiBuildOutput(
 }
 
 function controlUiBuildOutputPlugin(buildInfo: ControlUiBuildInfo): Plugin {
+  let publicDir: string | false = false;
   return {
     name: "control-ui-build-output",
     apply: "build",
+    configResolved(config) {
+      publicDir = (config.build.copyPublicDir && config.publicDir) || false;
+    },
     transformIndexHtml: {
       order: "post",
       handler(html) {
@@ -612,11 +623,12 @@ function controlUiBuildOutputPlugin(buildInfo: ControlUiBuildInfo): Plugin {
         .toSorted();
       fs.writeFileSync(path.join(buildOutDir, ".build-inputs.json"), JSON.stringify(inputs));
       const bootAssets = collectControlUiBootAssets(bundle);
-      await refreshControlUiBuildOutput(buildOutDir, buildInfo, [
-        ...bootAssets.chat,
-        ...bootAssets.new,
-        ...bootAssets.login,
-      ]);
+      await refreshControlUiBuildOutput(
+        buildOutDir,
+        buildInfo,
+        [...bootAssets.chat, ...bootAssets.new, ...bootAssets.login],
+        publicDir,
+      );
     },
   };
 }
