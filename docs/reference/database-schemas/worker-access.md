@@ -28,6 +28,12 @@ and the agent's
 The lifecycle owner closes its read scope and drains accepted writes before
 retiring the store.
 
+Auth-file observers capture the Gateway's read-only scope and spawn broker when
+admitting a directory. Detached filesystem notifications reuse that scope's
+serialized child; they do not launch a native process for each WAL change.
+Every refresh still re-admits the current database source and checks its authority.
+Gateway retirement stops the captured callbacks and joins the retained reader.
+
 Synchronous boot admission, migrations, Doctor/CLI one-shots, and lock primitives
 are the limited exceptions. Runtime access still using them is migration debt.
 For engine stores, the synchronous `withEngineStoreAdmission` scope is lexical:

@@ -8,12 +8,17 @@ import {
 import { hasErrnoCode } from "../../infra/errno.js";
 import { observeOwnedDirectory } from "../../infra/owned-directory-observation.js";
 import {
+  captureSqliteReadOnlyWorkerScope,
+  readOnlyWorkerScope,
+} from "../../infra/sqlite-readonly-worker-context.js";
+import {
   inspectDatabasePathIdentitySync,
   readDatabasePathIdentity,
   databaseFileIdentityKey,
   readDatabaseIdentityBirthtime,
   type DatabasePathIdentity,
 } from "../../infra/sqlite-worker-identity.js";
+import { getSpawnBroker, runWithSpawnBroker } from "../../process/spawn-broker/context.js";
 import { isArtifactPreservingStateRead } from "../../state/artifact-preserving-state-reads.js";
 import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw-state-db-cache.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-maintenance-context.js";
@@ -31,6 +36,7 @@ type DirectoryState = {
   presence: Map<string, boolean>;
   sourceVersions: Map<string, string | undefined>;
   observation: { close(): void };
+  refreshSources: () => Promise<void>;
   refresh?: Promise<void>;
   dirty: boolean;
 };
@@ -199,11 +205,24 @@ function directoryState(directory: string): DirectoryState {
     return existing;
   }
   const identities: DirectoryState["identities"] = new Map();
+  const broker = getSpawnBroker();
+  const runWithReaders = captureSqliteReadOnlyWorkerScope();
+  const signal = readOnlyWorkerScope.getStore()?.controller.signal;
   const state: DirectoryState = {
     identities,
     presence: new Map(),
     sourceVersions: new Map(),
     dirty: false,
+    // Shared watchers are detached. Carry only the host readers through observation
+    // and any credential refresh it publishes, never the registering request's authority.
+    async refreshSources() {
+      if (signal?.aborted || directories.get(directory) !== state) {
+        return;
+      }
+      await runWithSpawnBroker(broker, () =>
+        runWithReaders(() => refreshDirectory(directory, state)),
+      );
+    },
     observation: observeOwnedDirectory(directory, (filename) => {
       if (
         filename === undefined ||
@@ -214,7 +233,7 @@ function directoryState(directory: string): DirectoryState {
             filename === `${path.basename(databasePath)}-wal`,
         )
       ) {
-        void refreshDirectory(directory, state);
+        void state.refreshSources();
       }
     }),
   };
@@ -303,9 +322,7 @@ export function registerAuthProfileFileChangeListener(listener: FileChangeListen
 
 /** Explicit refresh joins observation without retiring unchanged file authority. */
 export async function refreshAuthProfileFileState(): Promise<void> {
-  await Promise.all(
-    [...directories].map(([directory, state]) => refreshDirectory(directory, state)),
-  );
+  await Promise.all([...directories.values()].map((state) => state.refreshSources()));
 }
 
 function closeAuthProfileFileState(): void {
