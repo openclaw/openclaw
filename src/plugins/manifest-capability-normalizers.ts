@@ -5,6 +5,8 @@ import {
   normalizeTrimmedStringList,
 } from "../../packages/normalization-core/src/string-normalization.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import { parseOpenClawInstallSpec } from "../skills/loading/frontmatter.js";
+import { resolveOpenClawManifestInstall } from "../shared/frontmatter.js";
 import { PLUGIN_MANIFEST_CONTRACT_KEYS } from "./manifest-contract-keys.js";
 import type {
   DecisionProviderCapabilities,
@@ -132,7 +134,16 @@ export function normalizeManifestStringRecord(value: unknown): Record<string, st
 export function normalizeManifestMcpServers(
   value: unknown,
 ): Record<string, PluginManifestMcpServer> | undefined {
-  return normalizeNamedMetadataRecord(value, (server) => ({ ...server }));
+  return normalizeNamedMetadataRecord(value, (rawServer) => {
+    const server: PluginManifestMcpServer = { ...rawServer };
+    const install = resolveOpenClawManifestInstall(rawServer, parseOpenClawInstallSpec);
+    if (install.length > 0) {
+      server.install = install;
+    } else {
+      delete server.install;
+    }
+    return server;
+  });
 }
 
 function normalizeManifestRecord<T>(

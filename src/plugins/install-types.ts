@@ -5,6 +5,7 @@ import type { PluginInstallArtifactInspection } from "./install-artifact-inspect
 import type { InstallSafetyOverrides } from "./install-security-scan.js";
 import type { InstallPolicyWarningDetails } from "./install-security-scan.types.js";
 import type { PackageManifest as PluginPackageManifest, PluginManifestSetup } from "./manifest.js";
+import type { PluginManifestMcpServer } from "./manifest-types.js";
 
 export type PluginInstallLogger = import("../infra/install-progress.js").InstallActivityObserver & {
   info?: (message: string) => void;
@@ -48,6 +49,7 @@ export type InstallPluginResult =
       version?: string;
       extensions: string[];
       setup?: PluginManifestSetup;
+      mcpServers?: Record<string, PluginManifestMcpServer>;
       artifactInspection?: PluginInstallArtifactInspection;
       npmResolution?: NpmSpecResolution;
       integrityDrift?: NpmIntegrityDrift;

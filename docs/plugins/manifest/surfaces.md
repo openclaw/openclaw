@@ -385,14 +385,15 @@ plugin can recreate.
   "mcpServers": {
     "example": {
       "transport": "stdio",
-      "command": "node",
-      "args": ["./mcp-server.js"]
+      "command": "uvx",
+      "args": ["example-mcp"],
+      "install": { "kind": "uv", "package": "example-mcp" }
     }
   }
 }
 ```
 
-OpenClaw includes these servers only while the owning plugin is enabled. Relative `command`, `args`, `cwd`, and `workingDirectory` paths resolve from the plugin root. User configuration remains authoritative: `mcp.servers.<name>` can replace a plugin default or set `enabled: false` to omit it. MCP App rendering and server-tool calls still require the normal MCP Apps setting and effective tool policy; declaring a server does not bypass either boundary.
+OpenClaw includes these servers only while the owning plugin is enabled. Relative `command`, `args`, `cwd`, and `workingDirectory` paths resolve from the plugin root. An `install` object (or list) declares the host-tool recipes required by that server. They use the same safe recipe shapes as skill metadata (`brew`, `node`, `go`, or `uv`) and run only during the explicit plugin install or update flow — never when an MCP server starts. User configuration remains authoritative: `mcp.servers.<name>` can replace a plugin default or set `enabled: false` to omit it. MCP App rendering and server-tool calls still require the normal MCP Apps setting and effective tool policy; declaring a server does not bypass either boundary.
 
 ## UI capabilities
 

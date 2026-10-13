@@ -159,7 +159,7 @@ export function ensureOpenClawExtensions(params: { manifest: PackageManifest }):
 export function buildDirectoryInstallResult(
   params: Pick<
     Extract<InstallPluginResult, { ok: true }>,
-    "pluginId" | "targetDir" | "manifestName" | "version" | "extensions" | "setup"
+    "pluginId" | "targetDir" | "manifestName" | "version" | "extensions" | "setup" | "mcpServers"
   >,
 ): InstallPluginResult {
   return {
@@ -170,6 +170,7 @@ export function buildDirectoryInstallResult(
     version: params.version,
     extensions: params.extensions,
     ...(params.setup ? { setup: params.setup } : {}),
+    ...(params.mcpServers ? { mcpServers: params.mcpServers } : {}),
   };
 }
 

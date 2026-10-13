@@ -5,6 +5,7 @@ import { hasPackageRuntimeDependencies } from "../infra/install-package-dir.js";
 import { packageNameMatchesId } from "../infra/install-safe-path.js";
 import type { InstallPolicySource } from "../security/install-policy.js";
 import { matchesExpectedPluginId, validatePluginId } from "./install-paths.js";
+import { installPluginMcpDependencies } from "./install-mcp-dependencies.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.types.js";
 import {
   buildDirectoryInstallResult,
@@ -261,6 +262,7 @@ export async function installPluginFromInstalledPackageDir(
     additionalDependencyPackageDirs?: string[];
     packageDir: string;
     dependencyScanRootDir?: string;
+    installMcpDependencies?: boolean;
   } & PackageInstallCommonParams,
 ): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();
@@ -302,8 +304,21 @@ export async function installPluginFromInstalledPackageDir(
   if (postInstallError) {
     return postInstallError;
   }
-  return buildDirectoryInstallResult({
+  const result = buildDirectoryInstallResult({
     ...validated.plugin,
     targetDir: params.packageDir,
   });
+  if (params.installMcpDependencies !== false && !params.dryRun && validated.plugin.mcpServers) {
+    const dependencyResult = await installPluginMcpDependencies({
+      pluginId: validated.plugin.pluginId,
+      mcpServers: validated.plugin.mcpServers,
+      config: params.config,
+      timeoutMs: params.timeoutMs ?? 120_000,
+      logger,
+    });
+    if (!dependencyResult.ok) {
+      return dependencyResult;
+    }
+  }
+  return result;
 }

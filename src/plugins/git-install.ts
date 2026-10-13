@@ -35,6 +35,7 @@ import {
   resolvePluginInstallTransactionRequest,
   type PluginInstallTransaction,
 } from "./install-transaction.js";
+import { installPluginMcpDependencies } from "./install-mcp-dependencies.js";
 import type { PluginInstallArtifactConsentHandler, PluginInstallLogger } from "./install-types.js";
 import {
   installPluginFromInstalledPackageDir,
@@ -450,6 +451,7 @@ export async function installPluginFromGitSpec(
       expectedPluginId: params.expectedPluginId,
       logger: params.logger,
       mode: effectiveMode,
+      installMcpDependencies: false,
       installPolicyRequest,
     });
     if (!result.ok) {
@@ -477,6 +479,40 @@ export async function installPluginFromGitSpec(
         return replaceResult;
       }
       transaction = replaceResult.transaction;
+      if (transaction && result.mcpServers) {
+        const baseTx = transaction;
+        transaction = {
+          commit: async () => {
+            transactionRequest?.assertOwned?.();
+            const depResult = await installPluginMcpDependencies({
+              pluginId: result.pluginId,
+              mcpServers: result.mcpServers,
+              config: params.config,
+              timeoutMs: params.timeoutMs ?? DEFAULT_GIT_TIMEOUT_MS,
+              assertOwned: transactionRequest?.assertOwned,
+              logger: params.logger ?? {},
+            });
+            if (!depResult.ok) {
+              await baseTx.rollback();
+              throw new Error(depResult.error);
+            }
+            transactionRequest?.assertOwned?.();
+            await baseTx.commit();
+          },
+          rollback: () => baseTx.rollback(),
+        };
+      } else if (result.mcpServers) {
+        const depResult = await installPluginMcpDependencies({
+          pluginId: result.pluginId,
+          mcpServers: result.mcpServers,
+          config: params.config,
+          timeoutMs: params.timeoutMs ?? DEFAULT_GIT_TIMEOUT_MS,
+          logger: params.logger ?? {},
+        });
+        if (!depResult.ok) {
+          return depResult;
+        }
+      }
       emitPluginInstallSecurityEvent({
         pluginId: result.pluginId,
         mode: effectiveMode,

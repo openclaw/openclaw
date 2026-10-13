@@ -68,7 +68,11 @@ export function resolveOpenClawManifestInstall<T>(
   metadataObj: Record<string, unknown>,
   parseInstallSpec: (input: unknown) => T | undefined,
 ): T[] {
-  const installRaw = Array.isArray(metadataObj.install) ? (metadataObj.install as unknown[]) : [];
+  const installRaw = Array.isArray(metadataObj.install)
+    ? (metadataObj.install as unknown[])
+    : metadataObj.install && typeof metadataObj.install === "object"
+      ? [metadataObj.install]
+      : [];
   return installRaw
     .map((entry) => parseInstallSpec(entry))
     .filter((entry): entry is T => Boolean(entry));
