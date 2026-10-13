@@ -15,7 +15,6 @@ import type {
   SessionSharingEntry,
 } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import { readCommittedIncognitoSessionSharing } from "../config/sessions/session-accessor.sqlite-incognito-sharing.js";
-import type { SessionSharingRetentionRequest } from "../config/sessions/session-accessor.sqlite-sharing-acquisition.js";
 import { SessionCanonicalKeyMigrationRequiredError } from "../config/sessions/session-canonical-key-error.js";
 import { readSessionEntriesFromStoreInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
@@ -81,7 +80,6 @@ type SessionFactsRequest = {
   agentId: string;
   preserveQualifiedAddress?: boolean;
   storageReady?: Promise<void>;
-  matchesPendingEntry?: SessionSharingRetentionRequest["matchesPendingEntry"];
 };
 export type SessionFactsRead<Facts extends PreparedSessionMutationFacts> = {
   readonly storageTarget: Pick<GatewaySessionStoreTarget, "agentId" | "canonicalKey" | "storePath">;
@@ -151,7 +149,6 @@ export async function prepareSessionMutationFacts(
           databaseIdentity: identity.key,
           sessionKey,
           acquiring: true,
-          matchesPendingEntry: params.matchesPendingEntry,
         });
         acquiringReads.set(key, retained);
         releases.push(retained.release);
@@ -673,6 +670,15 @@ export async function prepareSessionMutationFacts(
           entry: projectSessionSharingEntry(match.entry),
           storeKey: match.key,
         };
+        facts = {
+          sourcePath: sharing.source.path,
+          sourceAgentId: sharing.source.agentId,
+          readSource,
+          target,
+          membership: new Set(
+            sharing.members.find((member) => member.sessionKey === match.key)?.identityIds,
+          ),
+        };
         const retained = retainedReads.get(`${sharing.databaseIdentity}\0${target.storeKey}`);
         if (!retained) {
           throw new SessionMutationFactsUnavailableError();
@@ -690,7 +696,6 @@ export async function prepareSessionMutationFacts(
             membership: current.membership,
           };
         };
-        facts = readFacts();
       }
       assertSource = () => {
         inventoryRead.assertRegistryCurrent();

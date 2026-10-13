@@ -4,11 +4,6 @@ import {
   retainPreparedSessionSharingFacts,
   projectSessionSharingEntry,
 } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
-import {
-  sessionSharingEntriesEqual,
-  type SessionSharingEntry,
-} from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
-import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { errorShapeFromError } from "./error-shape.js";
 import { isSessionTargetMethod } from "./session-method-policy.js";
@@ -30,33 +25,9 @@ import {
   resolveDirectSessionTargets,
   resolveSessionMutationTargets,
   resolveTalkSessionTargetInput,
-  readSessionSharingStringParam,
 } from "./session-sharing-target-input.js";
 import { resolveSessionMutationAuthorization } from "./session-sharing.js";
 import { prepareTalkSessionTarget } from "./talk/session-target.js";
-
-function captureAbortMetadataMatch(params: SessionMutationAuthorizationParams) {
-  const runId =
-    (params.method === "sessions.abort" || params.method === "chat.abort") &&
-    readSessionSharingStringParam(params.requestParams, "runId");
-  if (!runId) {
-    return undefined;
-  }
-  return (previous: SessionSharingEntry, current: InternalSessionEntry) => {
-    for (const field of ["lifecycleRunId", "activeWriterRunId"] as const) {
-      const value = current[field];
-      if (value !== previous[field] && value !== undefined && value !== runId) {
-        return false;
-      }
-    }
-    // Exact Stop may observe either side of its own run's metadata write, never a successor's.
-    return sessionSharingEntriesEqual(previous, {
-      ...current,
-      lifecycleRunId: previous.lifecycleRunId,
-      activeWriterRunId: previous.activeWriterRunId,
-    });
-  };
-}
 
 /** Read participation in the worker while retaining its owner through authorization. */
 export async function resolveSessionMutationAuthorizationAsync(
@@ -112,7 +83,6 @@ export async function resolveSessionMutationAuthorizationAsync(
     return resolveSessionMutationAuthorization(params);
   }
   const cfg = params.context.getRuntimeConfig();
-  const matchesPendingEntry = captureAbortMetadataMatch(params);
   const preparedProfiles = await prepareSessionSharingProfiles(params.client);
   const reads: Array<{ release: () => void }> = [];
   const creationReleases: Array<() => void> = [];
@@ -167,7 +137,6 @@ export async function resolveSessionMutationAuthorizationAsync(
         sessionKey: target.sessionKey,
         agentId: input.agentId,
         allowMissing: true,
-        matchesPendingEntry,
       });
       reads.push(retained);
       const initialFacts = retained.readCurrent(cfg);

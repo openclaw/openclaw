@@ -47,7 +47,6 @@ export type SessionSharingRetentionRequest = {
   databaseIdentity: string;
   sessionKey: string;
   predicate?: PreparedSessionEntryPredicate;
-  matchesPendingEntry?: (previous: SessionSharingEntry, current: SessionEntry) => boolean;
 } & (
   | { acquiring: true }
   | (CommittedSessionSharingFacts & { generation?: PreparedSessionSharingRead["generation"] })
