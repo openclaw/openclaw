@@ -12,7 +12,7 @@ import {
   surface,
   trigger,
 } from "../../test-helpers/solid-menu.tsx";
-import { Menu, type MenuItem } from "./menu.tsx";
+import { Menu, type MenuItem, type MenuProps } from "./menu.tsx";
 
 afterEach(cleanup);
 
@@ -62,7 +62,7 @@ describe("Solid menu navigation", () => {
       { id: "gamma", label: "Gamma" },
     ];
     const view = mountMenu({
-      get triggerAttributes() {
+      get triggerAttributes(): MenuProps["triggerAttributes"] {
         return { id: "provider-trigger", "data-value": selected(), "aria-busy": "false" };
       },
       get items() {
