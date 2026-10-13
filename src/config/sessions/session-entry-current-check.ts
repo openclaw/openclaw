@@ -158,7 +158,14 @@ async function prepareSessionEntryCurrentCheck(inputParams: SessionEntryCurrentC
         : undefined;
     const selectedStore = owner.selectedStore;
     const native = owner.kind === "native";
+    let active = true;
+    const release = () => {
+      active = false;
+    };
     const sourceIsCurrent = () => {
+      if (!active) {
+        return false;
+      }
       if (incognito) {
         incognito.admissionSignal?.throwIfAborted();
         if ("kind" in incognito) {
@@ -448,6 +455,7 @@ async function prepareSessionEntryCurrentCheck(inputParams: SessionEntryCurrentC
       assertCurrentAsync,
       source: preparedSource,
       entryCurrent,
+      release,
     };
   });
 }
@@ -463,5 +471,6 @@ export async function captureSessionEntryCurrentCheckAsyncInternal(
     assertCurrent: prepared.assertCurrentAsync,
     source: prepared.source,
     entryCurrent: prepared.entryCurrent,
+    release: prepared.release,
   };
 }

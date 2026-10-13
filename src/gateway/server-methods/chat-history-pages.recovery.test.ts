@@ -430,6 +430,31 @@ describe("historical page recovery context", () => {
     },
   );
 
+  it("recovers a failed page across a hidden runtime continuation without rewriting history", async () => {
+    await withTranscript(
+      [
+        ["user", user],
+        ["failed", failed],
+        [
+          "continuation",
+          {
+            role: "user",
+            content: "Continue from the current transcript.",
+            display: false,
+            provenance: { kind: "internal_system" },
+          },
+        ],
+        ["answer", answer],
+      ],
+      async ({ read, raw }) => {
+        const original = await raw();
+        const page = await read({ offset: undefined, messageId: "failed" });
+        expect(page.messages.map(readChatHistoryMessageId)).toEqual([]);
+        expect(await raw()).toEqual(original);
+      },
+    );
+  });
+
   it.each([
     { reason: "later turn", offset: 2, messageId: undefined },
     { reason: "byte budget", offset: 1, messageId: undefined },

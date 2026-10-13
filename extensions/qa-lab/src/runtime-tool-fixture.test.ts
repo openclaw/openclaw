@@ -2,6 +2,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import {
+  getRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { nestedToolActivityFixture } from "../test/nested-tool-activity-fixture.js";
 import {
@@ -880,6 +884,32 @@ async function runTranscriptFixture(
 }
 
 describe("runtime tool fixture transcript evidence", () => {
+  it("prepares the authored config instead of seeding a stale runtime store", async () => {
+    const env = await makeEnv();
+    const staleStorePath = path.join(env.gateway.tempRoot, "state", "stale.sqlite");
+    env.cfg = { agents: { defaults: { workspace: env.gateway.workspaceDir } } };
+    setRuntimeConfigSnapshot({ session: { store: staleStorePath } });
+
+    await writeRuntimeToolTranscripts(
+      env,
+      "read",
+      [
+        transcriptToolCall("read", "happy", { path: "README.md" }),
+        transcriptToolResult("read", "happy", "README contents"),
+      ],
+      [
+        transcriptToolCall("read", "failure", { path: "/missing" }),
+        transcriptToolResult("read", "failure", "permission denied", true),
+      ],
+    );
+
+    expect(getRuntimeConfigSnapshot()).toEqual(env.cfg);
+    await expect(runLiveRuntimeToolFixture(env)).resolves.toContain(
+      "read live provider happy planned args",
+    );
+    await expect(fs.access(staleStorePath)).rejects.toThrow();
+  });
+
   it.each([
     {
       name: "native cell wait control output",

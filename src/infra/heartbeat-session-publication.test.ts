@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import type { StatementSync } from "node:sqlite";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { buildEmbeddedRunPayloads } from "../agents/embedded-agent-runner/run/payloads.js";
 import { createHeartbeatToolResponsePayload } from "../auto-reply/heartbeat-tool-response.js";
@@ -22,6 +23,7 @@ import {
   type InternalSessionTranscriptUpdate,
 } from "../sessions/transcript-events.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { publishHeartbeatSessionReply } from "./heartbeat-session-publication.js";
 
@@ -87,6 +89,39 @@ async function withTarget(
 }
 
 describe("publishHeartbeatSessionReply", () => {
+  it("publishes through worker reads and observes a later committed reset", async () => {
+    await withTarget(async ({ params, scope, entry }) => {
+      const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId, path: scope.storePath });
+      const prototype: StatementSync = Object.getPrototypeOf(db.prepare("SELECT 1"));
+      const reads: string[] = [];
+      const observers = (["all", "get", "iterate", "run"] as const).map((method) => {
+        const original = prototype[method];
+        return vi.spyOn(prototype, method).mockImplementation(
+          new Proxy(original, {
+            apply(read, receiver: StatementSync, args) {
+              if (/\b(?:session_nodes|session_windows)\b/iu.test(receiver.sourceSQL)) {
+                reads.push(receiver.sourceSQL);
+              }
+              return Reflect.apply(read, receiver, args);
+            },
+          }),
+        );
+      });
+      try {
+        expect(await publishHeartbeatSessionReply(params)).toMatchObject({ ok: true });
+        expect(reads).toEqual([]);
+        await replaceSessionEntry(scope, { ...entry, lifecycleRevision: "reset-generation" });
+        reads.length = 0;
+        expect(
+          await publishHeartbeatSessionReply({ ...params, occurrenceIds: ["after-reset"] }),
+        ).toMatchObject({ ok: false });
+        expect(reads).toEqual([]);
+      } finally {
+        observers.forEach((observer) => observer.mockRestore());
+      }
+    });
+  });
+
   it.each(["abort", "authority"] as const)(
     "accepts the committed occurrence before queued %s and publishes a later occurrence once",
     async (change) => {

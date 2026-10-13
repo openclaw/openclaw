@@ -20,6 +20,7 @@ import {
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
   NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
   NODE_WORKER_WORKSPACE_EXEC_COMMAND,
+  NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
 } from "../infra/node-commands.js";
 import {
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
@@ -825,6 +826,54 @@ describe("gateway/node-registry", () => {
       await expect(outcome).resolves.toMatchObject({ ok: false });
       expect(frames).toEqual([]);
       expect(dispatched).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["current", "owner-revoked", "node-revoked"] as const)(
+    "settles a dispatched maintenance response with %s completion custody",
+    async (completion) => {
+      const { nodeRegistry: registry, nodeWorkerSupervisorTransport: transport } =
+        createPrivateRegistry();
+      const frames: string[] = [];
+      registerNodeSession(
+        registry,
+        makeClient("conn-1", "node-1", frames, {
+          clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+          commands: [NODE_WORKER_WORKSPACE_RETAIN_COMMAND],
+        }),
+        pairingA,
+      );
+      publishRunner(registry, { enabled: true, capacity: { total: 1, available: 1 } });
+      const proof = expectDefined((await transport.listCurrentNodes())[0], "runner proof");
+      const dispatched = createDeferred();
+      let dispatchCurrent = true;
+      let completionCurrent = true;
+      const invocation = transport.invoke({
+        node: proof,
+        command: NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
+        isDispatchAuthorized: () => dispatchCurrent,
+        isCompletionAuthorized: () => completionCurrent,
+        onDispatchReady: () => dispatched.resolve(),
+      });
+      await dispatched.promise;
+      dispatchCurrent = false;
+      if (completion === "owner-revoked") {
+        completionCurrent = false;
+      } else if (completion === "node-revoked") {
+        publishRunner(registry, { enabled: false });
+      }
+      const payloadJSON = JSON.stringify({ applied: true, deleted: 0, hasMore: false });
+      expect(finish(registry, readRequest(frames).id, { ok: true, payloadJSON })).toBe(
+        completion === "current",
+      );
+      if (completion === "current") {
+        await expect(invocation).resolves.toMatchObject({ ok: true, payloadJSON });
+      } else {
+        await expect(invocation).resolves.toMatchObject({
+          ok: false,
+          error: { code: "APPROVAL_AUTHORITY_CLOSED" },
+        });
+      }
     },
   );
 

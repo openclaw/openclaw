@@ -35,6 +35,7 @@ import type {
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
 import type { SessionColdArchive } from "./session-cold-storage-state.js";
 import { assertSessionEntryCohortScope } from "./session-entry-cohort-scope.js";
+import type { SessionEntryCreationCommit } from "./session-entry-creation.types.js";
 import type { SessionEntryCohortReader } from "./session-entry-read-runtime.types.js";
 import {
   SessionEntryLifecycleUpsertConflictError,
@@ -260,6 +261,7 @@ function createStaleReplySessionInitializationResult(
 /** Persists one reply-session initialization result with its in-place reset boundary. */
 export async function commitReplySessionInitialization(params: {
   bindCreation?: (operation: SessionEntryCreationOperation) => () => void;
+  onCreated?: (created: SessionEntryCreationCommit) => void;
   commitGuard?: () => void;
   activeSessionKey: string;
   agentId: string;
@@ -418,6 +420,22 @@ export async function commitReplySessionInitialization(params: {
               },
               { ...captured, path: database.path },
             );
+            if (staleCommit === undefined) {
+              params.onCreated?.({
+                agentId: params.agentId,
+                sessionKey,
+                storePath,
+                sessionId: committedSessionEntry.sessionId,
+                lifecycleRevision: committedSessionEntry.lifecycleRevision,
+                readSource: {
+                  agentId: captured.agentId,
+                  path: database.path,
+                  databaseIdentity: source.key.slice("file:".length),
+                  databaseBirthtime: source.birthtime,
+                },
+                entry: committedSessionEntry,
+              });
+            }
           },
         );
       } else {

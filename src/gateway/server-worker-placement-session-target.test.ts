@@ -23,7 +23,7 @@ import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-cloc
 import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
 import { resolveWorkerPlacementSessionTarget } from "./server-worker-placement-session-target.js";
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
-import { resolveGatewaySessionStoreTargetWithStore } from "./session-utils-store-lookup.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 import { resolveCanonicalSessionEntryFromStoreKeys } from "./session-utils-store.js";
 import {
   REQUEST,
@@ -36,6 +36,64 @@ import { createWorkerEnvironmentService } from "./worker-environments/service.js
 import { createWorkerEnvironmentStore } from "./worker-environments/store.js";
 
 afterEach(() => resetConfigRuntimeState());
+
+test("guards a durable workspace with committed facts and no host session SQL", async () => {
+  await withStateDirEnv("durable-placement-source-", async () => {
+    setRuntimeConfigSnapshot({});
+    const identity = {
+      agentId: "main",
+      sessionKey: "agent:main:placement-source",
+      sessionId: "placement-source",
+    };
+    await replaceSessionEntry(identity, {
+      sessionId: identity.sessionId,
+      updatedAt: 1,
+      lifecycleRevision: "original",
+      worktree: { id: "original", branch: "synthetic", repoRoot: "/synthetic" },
+    });
+    const sql = observeHostDataSql();
+    let resolved: Awaited<ReturnType<typeof resolveWorkerPlacementSessionTarget>> | undefined;
+    try {
+      try {
+        resolved = await resolveWorkerPlacementSessionTarget({
+          ...identity,
+          config: {},
+          errorMessage: "placement source changed",
+          sessionRuntime: {
+            resolveGatewaySessionStoreTargetInWorker,
+            resolveCanonicalSessionEntryFromStoreKeys,
+            managedWorktrees: {
+              findLiveByOwner: async () => ({
+                id: "original",
+                ownerId: identity.sessionKey,
+                path: "/synthetic",
+              }),
+            },
+          },
+        });
+        expect(resolved.workspace).toEqual({ kind: "local", path: "/synthetic" });
+        resolved.assertCurrent();
+        expect(sql.queries).toEqual([]);
+      } finally {
+        sql.restore();
+      }
+      await patchSessionEntryCore(identity, () => ({ label: "unrelated" }));
+      expect(resolved.assertCurrent).not.toThrow();
+      await patchSessionEntryCore(identity, () => ({
+        worktree: { id: "replacement", branch: "synthetic", repoRoot: "/synthetic" },
+      }));
+      const effectSql = observeHostDataSql();
+      try {
+        expect(resolved.assertCurrent).toThrow("placement source changed");
+        expect(effectSql.queries).toEqual([]);
+      } finally {
+        effectSql.restore();
+      }
+    } finally {
+      resolved?.[Symbol.dispose]();
+    }
+  });
+});
 
 test("prepares an actor workspace and guards exact placement metadata without host session SQL", async () => {
   await withStateDirEnv("actor-placement-source-", async () => {
@@ -70,13 +128,13 @@ test("prepares an actor workspace and guards exact placement metadata without ho
     const sql = observeHostDataSql();
     try {
       await withIncognitoSessionActor(actor, async () => {
-        const resolved = await resolveWorkerPlacementSessionTarget({
+        using resolved = await resolveWorkerPlacementSessionTarget({
           ...identity,
           config: {},
           errorMessage: "placement source changed",
           sessionRuntime: {
             managedWorktrees,
-            resolveGatewaySessionStoreTargetWithStore,
+            resolveGatewaySessionStoreTargetInWorker,
             resolveCanonicalSessionEntryFromStoreKeys,
           },
         });
@@ -323,7 +381,7 @@ test("rejects stale repository selection and refreshes the accepted checkpoint a
       },
     );
     const sessionRuntime = {
-      resolveGatewaySessionStoreTargetWithStore,
+      resolveGatewaySessionStoreTargetInWorker,
       resolveCanonicalSessionEntryFromStoreKeys,
       managedWorktrees: { findLiveByOwner: async () => undefined },
     };
@@ -334,7 +392,7 @@ test("rejects stale repository selection and refreshes the accepted checkpoint a
         ...REQUEST,
         errorMessage: "repository selection changed",
       });
-    const selected = await select();
+    using selected = await select();
     selected.assertCurrent();
     const accepted = await repositories.acceptCheckpoint({
       workspaceId: bound.workspaceId,
@@ -346,7 +404,7 @@ test("rejects stale repository selection and refreshes the accepted checkpoint a
     expect(selected.workspace).toEqual({ kind: "repository", repository: bound });
     expect(() => selected.assertCurrent()).toThrow("repository selection changed");
     selected.assertBindingCurrent();
-    const refreshed = await select();
+    using refreshed = await select();
     refreshed.assertCurrent();
     expect(refreshed.workspace).toEqual({ kind: "repository", repository: accepted });
 
@@ -465,9 +523,9 @@ test("resolves consecutive placement workspaces without decoding unrelated sessi
     const parse = vi.spyOn(JSON, "parse");
     try {
       for (const sessionKey of keys) {
-        const resolved = await resolveWorkerPlacementSessionTarget({
+        using resolved = await resolveWorkerPlacementSessionTarget({
           sessionRuntime: {
-            resolveGatewaySessionStoreTargetWithStore,
+            resolveGatewaySessionStoreTargetInWorker,
             resolveCanonicalSessionEntryFromStoreKeys,
             managedWorktrees: {
               findLiveByOwner: async (_kind, ownerId) => ({

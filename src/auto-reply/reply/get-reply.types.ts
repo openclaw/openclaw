@@ -5,6 +5,7 @@ import {
 } from "../../agents/admitted-run-context.js";
 import type { CronCreatorAuthorityCapability } from "../../agents/cron-creator-authority-context.js";
 import type { ReplyDeliveryObserver } from "../../agents/reply-completion.js";
+import type { SessionEntryCreationCommit } from "../../config/sessions/session-entry-creation.types.js";
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
 import type { SessionEntry, SessionToolOverrides } from "../../config/sessions/types.js";
 // Shared get-reply type contracts for command, directive, and runtime layers.
@@ -68,6 +69,8 @@ type InternalReplySessionOptions = {
   /** Current external dashboard turn only; never persisted or inherited by another run. */
   dashboardReadAdmission?: DashboardMessageReadAdmission;
   expectedExistingSessionId?: string;
+  /** Activity committed with this input before ACK; initialization reuses its timestamp. */
+  recordedSessionActivity?: { sessionId: string; sessionKey: string; at: number };
   /** Retained predecessor evidence; reply admission must verify its session lineage and store. */
   expectedActiveReplyOperation?: ReplyOperation;
   /** First dispatch only: admission created this exact pinned session before reply initialization. */
@@ -81,6 +84,8 @@ type InternalReplySessionOptions = {
   cleanupBundleMcpOnRunEnd?: boolean;
   /** Defers the child-completion wake until the visible waiting status is delivered. */
   onPendingContinuation?: (settlement?: PendingContinuationSettlement) => void;
+  bindSessionCreation?: SessionEventExecution["bindSessionCreation"];
+  onSessionCreated?: (created: SessionEntryCreationCommit) => void;
   onSessionPrepared?: (binding: ReplySessionBinding) => void;
   /** Observes one transcript-start reader preparation; completion cannot control the run. */
   onTranscriptStartPreparation?: () => (() => void) | undefined;

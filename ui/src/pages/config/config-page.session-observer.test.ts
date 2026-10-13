@@ -274,7 +274,7 @@ describe("ConfigPage navigation", () => {
         await waitForSolid(() => expect(page.querySelector(`#${visibleId}`)).not.toBeNull());
         expect(page.querySelector(`#${absentId}`)).toBeNull();
         if (pageId === "communications") {
-          expect(page.querySelector('wa-tab[aria-selected="true"]')?.textContent?.trim()).toBe(
+          expect(page.querySelector('.hub-tab[aria-selected="true"]')?.textContent?.trim()).toBe(
             search ? "Voice" : "Messages",
           );
         }
@@ -709,10 +709,12 @@ describe("ConfigPage meeting capture", () => {
       const container = view.container;
       flush();
       expect(container.querySelector("openclaw-meeting-capture-settings")).toBeNull();
-      const captureTab = container.querySelector<HTMLElement>('wa-tab[panel="transcripts"]')!;
+      const captureTab = container.querySelector<HTMLElement>(
+        '.hub-tab[data-tab-value="transcripts"]',
+      )!;
       expect(captureTab.textContent?.trim()).toBe("Meeting capture");
-      const tabs = captureTab.closest("wa-tab-group") as HTMLElement & { active: string };
-      expect(tabs.active).toBe("messages");
+      const tabs = captureTab.closest(".hub-tabs")!;
+      expect(tabs.querySelector("[active]")?.getAttribute("data-tab-value")).toBe("messages");
       captureTab.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
       flush();
       const capture = container.querySelector("openclaw-meeting-capture-settings") as HTMLElement;
@@ -749,7 +751,9 @@ describe("ConfigPage meeting capture", () => {
       expect(container.querySelector("openclaw-meeting-capture-settings")).toBe(capture);
       expect(capture.querySelector("details")).toBe(advanced);
       await advancedToggled;
-      const messagesTab = container.querySelector<HTMLElement>('wa-tab[panel="messages"]')!;
+      const messagesTab = container.querySelector<HTMLElement>(
+        '.hub-tab[data-tab-value="messages"]',
+      )!;
       messagesTab.focus();
       messagesTab.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
       flush();

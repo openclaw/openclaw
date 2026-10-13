@@ -58,8 +58,8 @@ function describeAvailableTool(tool: AnyAgentTool, availableTools: ReadonlySet<s
     if (availableTools.has("conversations_list") && deliveryTools.length > 0) {
       const guidance = `For an exact external destination, use \`conversations_list\` plus ${deliveryTools.map((name) => `\`${name}\``).join("/")}.`;
       description = description.replace(
-        " Thread chats rejected:",
-        ` ${guidance} Thread chats rejected:`,
+        / (?=Thread chats rejected:|Missing configured-agent main created\.)/,
+        ` ${guidance} `,
       );
     }
   }

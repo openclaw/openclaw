@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { onTestFinished, afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -82,6 +82,7 @@ it.each([
       sessionKey: SESSION_KEY,
       sessionLoadOptions: { agentId: "main" },
     });
+    onTestFinished(scope.release);
     const opened = createDeferred();
     const release = createDeferred();
     const audioReadCounts: Array<() => number> = [];
@@ -158,6 +159,7 @@ it("preserves already-produced text after its turn is aborted", async () => {
     agentId: "main",
     sessionKey: SESSION_KEY,
   });
+  onTestFinished(scope.release);
   const controller = new AbortController();
   controller.abort();
   const { assistantContent } = await prepareWebchatReplyMediaForDisplay({

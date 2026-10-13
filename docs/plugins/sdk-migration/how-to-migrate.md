@@ -331,6 +331,39 @@ contracts through the next Plugin SDK major compatibility window. Use the narrow
 subpaths above for new imports; broad compatibility barrels retain existing APIs
 without duplicating the replacements.
 
+## Await session-backed approval routing
+
+Use the async approval-routing replacements when selecting an account, resolving
+a session target, or constructing native approval routes. They read delivery
+facts through the session worker instead of querying SQLite on the Gateway
+thread. Each synchronous API below is deprecated; append `Async` to its name
+to select the replacement:
+
+| SDK subpath                 | Deprecated APIs                                                                                                                                                                                                                                                                                                                                                       |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `approval-native-runtime`   | `createNativeApprovalChannelRouteGates`, `createChannelNativeOriginTargetResolver`, `resolveExecApprovalSessionTarget`, `resolveApprovalRequestSessionTarget`, `resolveApprovalRequestOriginTarget`, `resolveApprovalRequestAccountId`, `resolveApprovalRequestChannelAccountId`, `doesApprovalRequestMatchChannelAccount`, `doesApprovalRequestSelectChannelAccount` |
+| `approval-client-runtime`   | `createChannelExecApprovalProfile`                                                                                                                                                                                                                                                                                                                                    |
+| `approval-delivery-runtime` | `createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutes`                                                                                                                                                                                                                                                                                                |
+
+The factories still return their adapters synchronously. Await the resulting
+session-dependent routing and eligibility methods. The direct account and target
+resolvers return promises. The existing `approval-runtime` facade also exposes
+the replacements for its retained APIs.
+
+For a routing operation that needs several decisions, call
+`resolveApprovalRequestSessionDeliveryAsync` once and pass its `sessionDelivery`
+result to the async helpers. `null` records that the session has no delivery
+facts. The `ApprovalRequestSessionDelivery` type describes this prepared value.
+Use `createChannelApproverDmTargetResolverAsync` and
+`createNativeApprovalForwardingFallbackSuppressorAsync` when their callbacks
+need asynchronous routing.
+
+Prepared delivery facts select a route; they do not authorize an approval.
+Keep the host's current-authority check at the actual approval effect. The
+deprecated synchronous APIs emit a migration warning and remain available during
+their deprecation period. They will be removed in a later release after stable
+deprecation. This changes no stored format, permissions, or update behavior.
+
 ## Await Gateway approval publication
 
 Use `await context.approvalEvents.publishRequestedAsync(kind, request)` to prepare
@@ -577,6 +610,19 @@ The synchronous fingerprint, projection, binding, and injection methods are depr
 `reply-tool-authority-sync-preparation`, with removal gated on the next Plugin
 SDK major and explicit breaking-release approval. No runtime warning, schema
 change, retention change, or update migration is introduced.
+
+## Prepare harness tool surfaces
+
+Use `await createAgentHarnessToolSurfaceRuntimeAsync(params)` from
+`openclaw/plugin-sdk/agent-harness-tool-runtime` before compacting a harness tool
+catalog. The returned runtime keeps the same synchronous `compactTools` and
+`cleanup` methods. When local-model lean filtering is enabled, construction
+prepares its session policy through the session worker; compaction reuses those
+facts. Other surfaces do not load session metadata for lean filtering.
+
+The synchronous `createAgentHarnessToolSurfaceRuntime` remains supported during
+its deprecation period, warns once per plugin, and will be removed in a later
+release after stable deprecation. Bundled harnesses use the asynchronous factory.
 
 ## Prepare session catalog identities
 

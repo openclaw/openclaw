@@ -10,6 +10,7 @@ import {
   type FixtureReceiptChannel,
 } from "../../test/helpers/fixture-receipts.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { useSqliteWorkerFault } from "../../test/helpers/sqlite-worker-fault.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
@@ -54,6 +55,16 @@ import { waitForFixtureEntry } from "./openclaw-agent-worker-store.wait.test-sup
 import { readOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 import { retainOpenClawStateDatabaseForIdle } from "./openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
+
+const leaseCleanupFault = useSqliteWorkerFault([
+  {
+    name: "refuse_worker_lease_cleanup",
+    match: /^delete from agent_database_leases\b/u,
+    sql: `CREATE TEMP TRIGGER refuse_worker_lease_cleanup
+      BEFORE DELETE ON main.agent_database_leases
+      BEGIN SELECT RAISE(ABORT, 'controlled worker lease cleanup failure'); END;`,
+  },
+]);
 
 // Vitest can enter teardown while a timed-out body is still closing its native owners.
 const fixture = createFixtureLifetime();
@@ -842,27 +853,22 @@ describe("pooled agent publication owner (captured source)", () => {
       (row) => !hostLeases.some((host) => host.lease_id === row.lease_id),
     );
     expect(workerLeases).toHaveLength(1);
-    const leaseId = workerLeases[0]?.lease_id;
-    if (typeof leaseId !== "string") {
-      throw new Error("Expected the canonical worker's new lease");
-    }
-    const literal = shared.db.prepare("SELECT quote(?) AS literal").get(leaseId)?.literal;
-    if (typeof literal !== "string") {
-      throw new Error("Expected an escaped SQLite lease identifier");
-    }
     const selection = { agentId: options.agentId, path: options.path };
-    shared.db.exec(`CREATE TRIGGER refuse_worker_lease_cleanup
-      BEFORE DELETE ON agent_database_leases WHEN OLD.lease_id = ${literal}
-      BEGIN SELECT RAISE(ABORT, 'controlled worker lease cleanup failure'); END`);
+    leaseCleanupFault.enable();
     const failures: unknown[] = [];
     try {
       const closing = await Promise.allSettled(revokeAgentDatabaseResources(selection));
-      expect(closing).toContainEqual({
-        status: "rejected",
-        reason: expect.objectContaining({
-          message: "controlled worker lease cleanup failure",
-        }),
+      const cleanupErrors = closing.flatMap((result): unknown[] => {
+        if (result.status === "fulfilled") {
+          return [];
+        }
+        const reason: unknown = result.reason;
+        return reason instanceof AggregateError ? reason.errors : [reason];
       });
+      expect(cleanupErrors.length).toBeGreaterThan(0);
+      for (const error of cleanupErrors) {
+        expect(error).toMatchObject({ message: "controlled worker lease cleanup failure" });
+      }
       expect(readLeases()).toEqual(retainedLeases);
       await expect(
         worker.run(
@@ -877,7 +883,7 @@ describe("pooled agent publication owner (captured source)", () => {
         });
       await expect(open()).rejects.toThrow("resources are closing");
       expect(readLeases()).toEqual(retainedLeases);
-      shared.db.exec("DROP TRIGGER refuse_worker_lease_cleanup");
+      leaseCleanupFault.disable();
       const retried = await Promise.allSettled(revokeAgentDatabaseResources(selection));
       expect(retried).not.toContainEqual(expect.objectContaining({ status: "rejected" }));
       expect(readLeases()).toEqual(hostLeases);
@@ -895,11 +901,7 @@ describe("pooled agent publication owner (captured source)", () => {
     } catch (error) {
       failures.push(error);
     } finally {
-      try {
-        shared.db.exec("DROP TRIGGER IF EXISTS refuse_worker_lease_cleanup");
-      } catch (error) {
-        failures.push(error);
-      }
+      leaseCleanupFault.disable();
       const cleanup = await Promise.allSettled(revokeAgentDatabaseResources(selection));
       for (const result of cleanup) {
         if (result.status === "rejected") {
