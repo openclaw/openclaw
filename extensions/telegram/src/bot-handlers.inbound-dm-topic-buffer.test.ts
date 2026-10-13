@@ -2,7 +2,7 @@
 import type { Bot } from "grammy";
 import type { Message } from "grammy/types";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { normalizeAllowFrom } from "./bot-access.js";
 import { buildTelegramInboundDebounceConversationKey } from "./bot-handlers.debounce-key.js";
 import { createTelegramInboundProcessing } from "./bot-handlers.inbound-processing.js";
@@ -48,7 +48,12 @@ function textMessage(messageId: number, text: string): Message {
 }
 
 describe("private DM topic inbound debounce", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("keeps two private topics in separate buffers and still coalesces a non-topic DM", async () => {
+    vi.useFakeTimers();
     const cfg = {
       messages: { inbound: { debounceMs: 40 } },
     } as OpenClawConfig;
@@ -141,12 +146,7 @@ describe("private DM topic inbound debounce", () => {
       await send(nonTopicDm, "plain-1"),
       await send(nonTopicDm, "plain-2"),
     ];
-    const deadline = Date.now() + 2_000;
-    while (flushed.length < 3 && Date.now() < deadline) {
-      await new Promise((resolve) => {
-        setTimeout(resolve, 20);
-      });
-    }
+    await vi.advanceTimersByTimeAsync(40);
 
     console.log(
       `DM_TOPIC_DEBOUNCE_PROOF ${JSON.stringify({ keys, dispositions, flushed }, null, 2)}`,
