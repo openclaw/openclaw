@@ -1,4 +1,5 @@
 import { Type, type Static } from "typebox";
+import { GatewayProtocolRequestTimeoutError } from "../../../packages/gateway-client/src/protocol-request.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
@@ -497,21 +498,34 @@ export function createSessionsSearchTool(opts?: {
           offset += SESSIONS_SEARCH_MAX_SESSION_KEYS
         ) {
           const chunk = candidates.slice(offset, offset + SESSIONS_SEARCH_MAX_SESSION_KEYS);
-          const runSearch = () =>
-            gatewayCall<{
-              results?: GatewaySearchHit[];
-              indexing?: boolean;
-              archivedTranscriptsExcluded?: number;
-              truncated?: boolean;
-            }>({
-              method: "sessions.search",
-              params: {
-                agentId,
-                query,
-                limit: SESSIONS_SEARCH_MAX_LIMIT,
-                sessionKeys: chunk.map((candidate) => candidate.key),
-              },
-            });
+          const runSearch = async () => {
+            try {
+              return await gatewayCall<{
+                results?: GatewaySearchHit[];
+                indexing?: boolean;
+                archivedTranscriptsExcluded?: number;
+                truncated?: boolean;
+              }>({
+                method: "sessions.search",
+                // Transcript readers own a 60-second budget, including worker admission.
+                timeoutMs: 60_000,
+                params: {
+                  agentId,
+                  query,
+                  limit: SESSIONS_SEARCH_MAX_LIMIT,
+                  sessionKeys: chunk.map((candidate) => candidate.key),
+                },
+              });
+            } catch (error) {
+              if (error instanceof GatewayProtocolRequestTimeoutError) {
+                throw new Error(
+                  "Session transcript search timed out. Retry sessions_search with a sessionKey to search one session or more specific query keywords. A timeout does not mean that no matching conversation exists.",
+                  { cause: error },
+                );
+              }
+              throw error;
+            }
+          };
           const scopedCandidate = chunk.length === 1 ? chunk[0] : undefined;
           const result = scopedCandidate?.expectedSessionId
             ? await runWithScopedSessionAccess({
