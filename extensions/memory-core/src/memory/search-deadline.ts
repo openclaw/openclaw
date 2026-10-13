@@ -41,7 +41,9 @@ export async function runMemorySearchWithDeadline<T>(params: {
   const timeoutOutcome = { type: "timeout" } as const;
   const parentAbortOutcome = { type: "parent-abort" } as const;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const deadlineStartedAt = Date.now();
+  // setTimeout follows the monotonic clock. A wall-clock jump must not expire
+  // a search whose timer has not fired, or accept one whose timer already has.
+  const deadlineStartedAt = performance.now();
   let removeParentAbort: (() => void) | undefined;
   let resolveTimeout!: (outcome: typeof timeoutOutcome) => void;
   const timeoutPromise = new Promise<typeof timeoutOutcome>((resolve) => {
@@ -85,7 +87,7 @@ export async function runMemorySearchWithDeadline<T>(params: {
     if (parentSignal?.aborted) {
       throw resolveMemorySearchAbortError(parentSignal);
     }
-    if (timer !== undefined && Date.now() - deadlineStartedAt >= params.timeoutMs) {
+    if (timer !== undefined && performance.now() - deadlineStartedAt >= params.timeoutMs) {
       reachDefaultDeadline();
       throw timeoutError;
     }
