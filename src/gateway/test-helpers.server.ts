@@ -79,6 +79,10 @@ import { resetGatewayLifecycleTestState } from "./test-helpers.server-lifecycle.
 import { closeGatewayTestHomeDatabases } from "./test-helpers.server-storage.js";
 
 const getServerModule = createLazyRuntimeModule(() => import("./server.js"));
+// Startup module evaluation belongs to fixture setup, before behavior budgets begin.
+const prepareGatewayServerImplementationForTest = createLazyRuntimeModule(
+  () => import("./server-start.js"),
+);
 
 let gatewayEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
 let tempHome: string | undefined;
@@ -538,6 +542,7 @@ export function installGatewayTestHooks(
     let fixtureSetup: Promise<void> | undefined;
     let suiteCleanup: Promise<void> | undefined;
     let caseReset: Promise<void> | undefined;
+    let interrupted = false;
     beforeAll(() => {
       gatewayFixtureLifetime.assertAdmission();
       const createHome = activeSuiteHookScopeCount === 0;
@@ -546,11 +551,13 @@ export function installGatewayTestHooks(
       }
       fixtureSetup = undefined;
       suiteCleanup = undefined;
+      interrupted = false;
       homeSetup = (async () => {
         vi.useRealTimers();
         activeSuiteHookScopeCount += 1;
         if (createHome) {
           await setupGatewayTestHome();
+          await prepareGatewayServerImplementationForTest();
           await resetGatewayTestState({ uniqueConfigRoot: false });
         }
       })();
@@ -576,7 +583,8 @@ export function installGatewayTestHooks(
         })()),
       60_000,
     );
-    afterEach(async () => {
+    afterEach(async ({ signal }) => {
+      interrupted ||= signal.aborted;
       await caseReset?.catch(() => {});
       await gatewayFixtureLifetime.settlePendingWork();
       if (gatewayFixtureLifetime.hasActiveServers()) {
@@ -602,8 +610,15 @@ export function installGatewayTestHooks(
           // Inner scopes may finish around a live shared server; the final scope
           // keeps its home and selectors until every Gateway owner has closed.
           if (activeSuiteHookScopeCount === 1) {
+            await gatewayFixtureLifetime.settlePendingWork();
+            const leaked = gatewayFixtureLifetime.hasActiveServers();
             await gatewayFixtureLifetime.closeAll();
             await cleanupGatewayTestHome({ restoreEnv: true });
+            activeSuiteHookScopeCount -= 1;
+            if (leaked && !interrupted) {
+              throw new Error("suite left a Gateway open; closed during teardown");
+            }
+            return;
           }
           activeSuiteHookScopeCount -= 1;
         },
@@ -619,17 +634,23 @@ export function installGatewayTestHooks(
     return (testSetup = (async () => {
       vi.useRealTimers();
       await setupGatewayTestHome();
+      await prepareGatewayServerImplementationForTest();
       await resetGatewayTestState({ uniqueConfigRoot: false });
     })());
   }, 60_000);
 
-  afterEach(async () => {
+  afterEach(async ({ signal }) => {
     if (!testSetup) {
       return;
     }
     await testSetup.catch(() => {});
+    await gatewayFixtureLifetime.settlePendingWork();
+    const leaked = gatewayFixtureLifetime.hasActiveServers();
     await gatewayFixtureLifetime.closeAll();
     await cleanupGatewayTestHome({ restoreEnv: true });
+    if (leaked && !signal.aborted) {
+      throw new Error("test left a Gateway open; closed during teardown");
+    }
   });
 }
 
