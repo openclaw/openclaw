@@ -250,6 +250,17 @@ describe("createTtsDirectiveTextStreamCleaner", () => {
     [["Go [[tts:\nhello]] now"], "Go hello now"],
     [["[[tts]]read", " this[[/tts]] now"], "read this now"],
     [["See [[note"], "See [[note"],
+    [
+      ["[[tts:text]]Press the ` key.[[/tts:text]] Visible. [[tts:text]]Audio only.[[/tts:text]]"],
+      " Visible. ",
+    ],
+    [
+      [
+        "[[tts:text]]Press the ` key.[[/tts:text]]",
+        " Visible. [[tts:text]]Audio only.[[/tts:text]]",
+      ],
+      " Visible. ",
+    ],
   ] as const)("preserves visible reply text across chunks: %j", (chunks, expected) => {
     const cleaner = createTtsDirectiveTextStreamCleaner();
     expect(chunks.map((chunk) => cleaner.push(chunk)).join("") + cleaner.flush()).toBe(expected);

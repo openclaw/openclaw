@@ -104,11 +104,19 @@ export function createTtsDirectiveTextStreamCleaner(): TtsDirectiveTextStreamCle
   let insideHiddenTextBlock = false;
   let inlineCode = createInlineCodeState();
   let fence: FenceScanState = {};
+  // Speech-only Markdown must not change the code ownership of later visible text.
+  const trackVisibleText = (
+    text: string,
+    code = buildCodeSpanIndex(text, inlineCode, fence),
+  ): string => {
+    inlineCode = code.inlineState;
+    fence = code.fenceState;
+    return text;
+  };
 
   return {
     push(text: string): string {
       const input = pending + text;
-      const code = buildCodeSpanIndex(input, inlineCode, fence);
       pending = "";
       let output = "";
       let index = 0;
@@ -120,48 +128,50 @@ export function createTtsDirectiveTextStreamCleaner(): TtsDirectiveTextStreamCle
           // complete "[[" instead of leaking markup or swallowing the rest.
           const tail = input.endsWith("[") ? input.length - 1 : input.length;
           if (!insideHiddenTextBlock) {
-            output += input.slice(index, tail);
+            output += trackVisibleText(input.slice(index, tail));
           }
           pending = input.slice(tail);
           break;
-        }
-
-        if (!insideHiddenTextBlock) {
-          output += input.slice(index, tagStart);
         }
 
         const tagEnd = input.indexOf("]]", tagStart + 2);
         if (tagEnd === -1) {
           // Directive delimiters can cross chunk boundaries; buffer from the
           // opener so a partial tag never leaks to a streamed client.
+          if (!insideHiddenTextBlock) {
+            output += trackVisibleText(input.slice(index, tagStart));
+          }
           pending = input.slice(tagStart);
           break;
+        }
+        if (!insideHiddenTextBlock) {
+          const segment = input.slice(index, tagEnd + 2);
+          const code = buildCodeSpanIndex(segment, inlineCode, fence);
+          if (code.isInside(tagStart - index)) {
+            output += trackVisibleText(segment, code);
+            index = tagEnd + 2;
+            continue;
+          }
+          output += trackVisibleText(input.slice(index, tagStart));
         }
 
         const rawTag = input.slice(tagStart, tagEnd + 2);
         const tag = classifyTtsTag(input.slice(tagStart + 2, tagEnd));
-        if (code.isInside(tagStart) && !insideHiddenTextBlock) {
-          output += rawTag;
-        } else if (tag === "hidden-open") {
+        if (tag === "hidden-open") {
           insideHiddenTextBlock = true;
         } else if (tag === "hidden-close") {
           insideHiddenTextBlock = false;
         } else if (tag === "other" && !insideHiddenTextBlock) {
-          output += rawTag;
+          output += trackVisibleText(rawTag);
         } else if (tag === "tts" && !insideHiddenTextBlock) {
           const body = /^\s*tts\s*:([\s\S]*)$/i.exec(input.slice(tagStart + 2, tagEnd))?.[1];
           if (body !== undefined) {
-            output += resolveTtsDirectiveBody(body) ?? "";
+            output += trackVisibleText(resolveTtsDirectiveBody(body) ?? "");
           }
         }
 
         index = tagEnd + 2;
       }
-      const consumed = pending
-        ? buildCodeSpanIndex(input.slice(0, input.length - pending.length), inlineCode, fence)
-        : code;
-      inlineCode = consumed.inlineState;
-      fence = consumed.fenceState;
 
       return output;
     },
