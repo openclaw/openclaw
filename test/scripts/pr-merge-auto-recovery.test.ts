@@ -4,7 +4,7 @@ import { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-suppor
 const { fixture, reuseCompletedSetup, outcomeRef, describePosix } =
   createMergeOutcomeFixtureHarness();
 
-const changedAutoHead = reuseCompletedSetup(function (variant = "") {
+const changedAutoHead = reuseCompletedSetup(function (variant: string) {
   const f = fixture();
   f.save({
     ...f.state(),
