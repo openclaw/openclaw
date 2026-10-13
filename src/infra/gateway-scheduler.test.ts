@@ -82,6 +82,27 @@ describe("Gateway timed work", () => {
     await scheduler.stop();
   });
 
+  it("keeps maintenance cadence after a forward wall-clock jump is corrected", async () => {
+    const { time, scheduler } = fixture();
+    const run = vi.fn();
+    scheduler.schedule({
+      id: "maintenance",
+      delayMs: 30_000,
+      everyMs: 30_000,
+      phase: "maintenance",
+      run,
+    });
+    time.setTime(301_000);
+    await time.wake();
+    expect(run).toHaveBeenCalledOnce();
+    time.setTime(30_000);
+    await time.advanceBy(29_999);
+    expect(run).toHaveBeenCalledOnce();
+    await time.advanceBy(1);
+    expect(run).toHaveBeenCalledTimes(2);
+    await scheduler.stop();
+  });
+
   it.each(["root", "scope"] as const)(
     "releases the retiring caller while its %s abort signal remains reachable",
     (kind) => {
