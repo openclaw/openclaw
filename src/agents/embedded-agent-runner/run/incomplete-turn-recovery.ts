@@ -112,6 +112,11 @@ function shouldSkipNonVisibleTurnRetry(params: {
   attempt: IncompleteTurnAttempt;
   /** Silent classification can tolerate completed effects, never unfinished work or replay. */
   tolerateSideEffects?: boolean;
+  /**
+   * Only a transcript-proven settled tool error may relax the lastToolError
+   * veto; unfinished, async or unattributed failure evidence stays blocking.
+   */
+  tolerateSettledToolError?: boolean;
 }): boolean {
   return Boolean(
     params.aborted ||
@@ -120,7 +125,7 @@ function shouldSkipNonVisibleTurnRetry(params: {
     params.attempt.clientToolCalls ||
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||
-    params.attempt.lastToolError ||
+    (params.attempt.lastToolError && !params.tolerateSettledToolError) ||
     hasAcceptedSessionSpawn(params.attempt.acceptedSessionSpawns) ||
     params.attempt.itemLifecycle.activeCount > 0 ||
     params.attempt.itemLifecycle.completedCount < params.attempt.itemLifecycle.startedCount ||
@@ -388,7 +393,28 @@ export function resolveEmptyResponseRetryInstruction(
     readSettledToolCalls(assistant).length === 0;
   // Settled earlier effects are tolerated only for a call that never ran;
   // unfinished, async or failed work still blocks the continuation.
-  if (shouldSkipNonVisibleTurnRetry({ ...params, tolerateSideEffects: rejectedBeforeDispatch })) {
+  // A rejected call never ran either, so a tool error whose failed result is
+  // already proven settled in this turn's transcript cannot veto the bounded
+  // continuation: the model saw that failure and issued the call that arrived
+  // malformed. Without transcript provenance the veto stays fail-closed.
+  const settledToolErrorEvidence = rejectedBeforeDispatch
+    ? resolveSettledToolBatchEvidence(params.attempt)
+    : undefined;
+  const tolerateSettledToolError = Boolean(
+    rejectedBeforeDispatch &&
+    params.attempt.lastToolError &&
+    settledToolErrorEvidence?.allToolsProvenSettled &&
+    !settledToolErrorEvidence.hasUnsettledToolError &&
+    (settledToolErrorEvidence.hasStaleToolError ||
+      settledToolErrorEvidence.failedToolNames.has(params.attempt.lastToolError.toolName)),
+  );
+  if (
+    shouldSkipNonVisibleTurnRetry({
+      ...params,
+      tolerateSideEffects: rejectedBeforeDispatch,
+      tolerateSettledToolError,
+    })
+  ) {
     return null;
   }
 
