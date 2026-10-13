@@ -16,6 +16,7 @@ import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import {
+  createAgentDatabaseInspectionRefusal,
   inspectAgentDatabaseAdmission,
   readAgentDatabaseAdmissionRefusal,
   recordAgentDatabaseAdmissions,
@@ -128,6 +129,83 @@ it.runIf(process.platform !== "win32")(
         expect(applyGatewaySessionStoreAdmission(cfg, options, targets).durableTargets).toEqual([]);
         const next = freezeJsonSnapshot<OpenClawConfig>({ session: { store: replacement } });
         expect(applyGatewaySessionStoreAdmission(next, options, targets)).toBe(targets);
+      });
+    });
+  },
+);
+
+it.runIf(process.platform !== "win32").each([
+  { layout: "shared", phase: "stat", code: "EACCES" },
+  { layout: "shared", phase: "identity", code: "ELOOP" },
+  { layout: "templated", phase: "stat", code: "EACCES" },
+  { layout: "templated", phase: "identity", code: "ELOOP" },
+])(
+  "isolates $code sibling $phase failures for $layout aliases but propagates requested-target failures",
+  async ({ layout, phase, code }) => {
+    await withOpenClawTestState({ label: "admission-unreadable-sibling" }, async (state) => {
+      const healthy = state.statePath("main.sqlite");
+      const brokenDir = state.statePath("broken-agent");
+      const broken =
+        layout === "shared"
+          ? path.join(brokenDir, "openclaw-agent.sqlite")
+          : state.statePath("broken.sqlite");
+      await fs.mkdir(brokenDir);
+      await fs.writeFile(healthy, "healthy");
+      await fs.writeFile(broken, "unreadable");
+      const aliases = [state.statePath("alias.sqlite"), state.statePath("second-alias.sqlite")];
+      await Promise.all(aliases.map((alias) => fs.symlink(healthy, alias)));
+      const cfg = freezeJsonSnapshot<OpenClawConfig>({
+        agents: { entries: { broken: { agentDir: brokenDir }, main: {} } },
+        session: { store: layout === "shared" ? healthy : state.statePath("{agentId}.sqlite") },
+      });
+      const targets = admissionTargets(
+        aliases.map((storePath) => ({ agentId: "main", storePath })),
+      );
+      const error = Object.assign(new Error("synthetic filesystem inspection failure"), { code });
+      recordAgentDatabaseAdmissions(
+        [
+          createAgentDatabaseInspectionRefusal({
+            agentId: "broken",
+            paths: [broken],
+            reason: error.message,
+            cause: error,
+          }),
+        ],
+        { env: state.env, source: "startup" },
+      );
+      await withAgentDatabaseStartupAdmission(async () => {
+        let failingPath = broken;
+        let failures = 0;
+        const stat = fsSync.statSync;
+        const native = realpathSync.native;
+        const statSpy = vi.spyOn(fsSync, "statSync").mockImplementation((...args) => {
+          if (phase === "stat" && args[0] === failingPath) {
+            failures++;
+            throw error;
+          }
+          return stat(...args);
+        });
+        const realpathSpy = vi.spyOn(realpathSync, "native").mockImplementation((...args) => {
+          if (phase === "identity" && args[0] === failingPath) {
+            failures++;
+            throw error;
+          }
+          return native(...args);
+        });
+        const options = {
+          preserveSentinelOwners: "physical" as const,
+          discovery: { env: state.env, snapshot: undefined },
+        };
+        try {
+          expect(applyGatewaySessionStoreAdmission(cfg, options, targets)).toBe(targets);
+          expect(failures).toBe(layout === "shared" ? 0 : 1);
+          expect(readAgentDatabaseAdmissionRefusal("broken", { env: state.env })).toBeDefined();
+          failingPath = aliases[0]!;
+          expect(() => applyGatewaySessionStoreAdmission(cfg, options, targets)).toThrow(error);
+        } finally {
+          statSpy.mockRestore();
+          realpathSpy.mockRestore();
+        }
       });
     });
   },
