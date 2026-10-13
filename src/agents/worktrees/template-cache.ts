@@ -10,7 +10,7 @@ import { OpenClawStateLeaseError } from "../../state/openclaw-state-lease-error.
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import {
   withWorktreeMutationLease,
-  WORKTREE_CREATE_LEASE_WAIT_MS,
+  startWorktreeWait,
   type WorktreeAllocationGuard,
 } from "./allocation.js";
 import { hasWorktreeUnknownOutcome } from "./errors.js";
@@ -231,12 +231,9 @@ export async function prepareWorktreeTemplate(params: {
       }
       // Wait for local publication, then acquire our own reader. Idle templates
       // still need validation; the persisted lease coordinates other processes.
-      const started = performance.now();
+      const waiting = startWorktreeWait(params.options.waitBudget);
       const finishWait = startWorktreePreparationPhase("mutationWait");
-      const budget = params.options.waitBudget;
-      const deadline = AbortSignal.timeout(
-        Math.max(0, Math.floor(budget?.remainingMs ?? WORKTREE_CREATE_LEASE_WAIT_MS)),
-      );
+      const deadline = AbortSignal.timeout(waiting.waitMs);
       try {
         await racePromiseWithAbortSignal(
           pending,
@@ -246,16 +243,19 @@ export async function prepareWorktreeTemplate(params: {
       } catch (error) {
         assertCallerCurrent();
         if (deadline.aborted) {
-          throw new OpenClawStateLeaseError("managed worktree template preparation wait expired", {
-            code: "OPENCLAW_STATE_LEASE_HELD",
-            cause: error,
-          });
+          const timeout = new OpenClawStateLeaseError(
+            "managed worktree template preparation wait expired",
+            {
+              code: "OPENCLAW_STATE_LEASE_HELD",
+              cause: error,
+            },
+          );
+          waiting.end(timeout);
+          throw timeout;
         }
         throw error;
       } finally {
-        if (budget) {
-          budget.remainingMs = Math.max(0, budget.remainingMs - (performance.now() - started));
-        }
+        waiting.end();
         finishWait();
       }
     }

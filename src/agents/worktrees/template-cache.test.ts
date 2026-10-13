@@ -156,6 +156,34 @@ describe("worktree template custody", () => {
     },
   );
 
+  it("preserves recovery guidance when a shared preparation exhausts the caller wait budget", async () => {
+    const entered = createDeferred();
+    const finish = createDeferred();
+    const first = prepareWorktreeTemplate({
+      ...params,
+      prepare: async (...args) => {
+        entered.resolve();
+        await finish.promise;
+        await params.prepare(...args);
+      },
+    });
+    await entered.promise;
+    const timeout = AbortSignal.timeout.bind(AbortSignal);
+    vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) =>
+      ms === 0 ? AbortSignal.abort(new DOMException("Expired", "TimeoutError")) : timeout(ms),
+    );
+    const waitBudget = { remainingMs: 0 };
+    try {
+      await expect(
+        prepareWorktreeTemplate({ ...params, options: { ...options, waitBudget } }),
+      ).rejects.toThrow(/timed out.*openclaw worktrees list.*openclaw worktrees gc/);
+      expect(waitBudget.remainingMs).toBe(0);
+    } finally {
+      finish.resolve();
+      await (await first)?.release();
+    }
+  });
+
   it("reuses a retained ready generation and revalidates it once readers settle", async () => {
     const first = await prepareWorktreeTemplate(params);
     expect(first).toBeDefined();
