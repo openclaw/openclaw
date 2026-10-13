@@ -34,10 +34,7 @@ import type { AgentCommandOpts } from "./types.js";
 const log = createSubsystemLogger("agents/agent-command");
 
 export function prepareCommandSessionRecoveryEntry(
-  params: Omit<
-    Parameters<typeof prepareCommandHarnessCompletionRecovery>[0],
-    "hasDeliveryContext"
-  > & {
+  params: Parameters<typeof prepareCommandHarnessCompletionRecovery>[0] & {
     deliveryContext?: DeliveryContext;
     now: number;
     lifecycleGeneration: string;
@@ -47,10 +44,7 @@ export function prepareCommandSessionRecoveryEntry(
 ) {
   const { entry, sessionId, runId, opts, now, isSessionRollover } = params;
   const { harnessCompletion, guardedHarnessCompletion, sourceOptions, isCompletionCurrent } =
-    prepareCommandHarnessCompletionRecovery({
-      ...params,
-      hasDeliveryContext: Boolean(params.deliveryContext),
-    });
+    prepareCommandHarnessCompletionRecovery(params);
   const directOperatorSource =
     !sourceOptions.sourceRunId &&
     entry.restartRecoveryDeliveryRunId !== runId &&

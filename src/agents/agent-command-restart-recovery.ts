@@ -415,7 +415,7 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
   };
 }
 
-/** Prepare only an admitted channel completion, or the exact saved recovery claim. */
+/** Prepare an admitted completion independently of how its reply will be delivered. */
 export function prepareCommandHarnessCompletionRecovery(params: {
   entry: SessionEntry;
   sessionId: string;
@@ -423,18 +423,15 @@ export function prepareCommandHarnessCompletionRecovery(params: {
   runId: string;
   agentId: string;
   opts: AgentCommandOpts;
-  hasDeliveryContext: boolean;
 }) {
   const { entry, sessionId, sessionKey, runId, agentId, opts } = params;
-  const harnessCompletion = params.hasDeliveryContext
-    ? captureHarnessCompletionRecovery({
-        agentId,
-        sessionKey,
-        entry: { ...entry, sessionId },
-        runId,
-        inputProvenance: opts.inputProvenance,
-      })
-    : undefined;
+  const harnessCompletion = captureHarnessCompletionRecovery({
+    agentId,
+    sessionKey,
+    entry: { ...entry, sessionId },
+    runId,
+    inputProvenance: opts.inputProvenance,
+  });
   const generatedMediaSourceRunId =
     opts.internalDeliveryMediaUrls !== undefined &&
     opts.inputProvenance?.kind === "inter_session" &&

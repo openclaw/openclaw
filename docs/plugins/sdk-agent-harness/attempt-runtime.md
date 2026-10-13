@@ -155,10 +155,18 @@ turn's context. Keep context out of the original user transcript and pending
 question answer text. Conversation fields are model context, not tool authority.
 
 At the plugin handoff, the host projects task-completion events and supplemental
-runtime fragments into `currentInboundContext`, preserving instruction fragments
-and quoting result data. It clears the raw event inputs in that prepared copy so
-plugins do not project them again. The original user transcript and the built-in
-harness's event projection are unchanged.
+runtime fragments into `currentInboundContext`, preserving instructions and event
+metadata while quoting result data. Completion results and supplemental
+conversation-data fragments share a 10,000-character preview budget before
+escaping. This is a data-preview limit, not a limit on the entire model input.
+Truncated previews are marked; instructions, existing inbound context, and the
+original user transcript remain unchanged.
+
+The raw `internalEvents` and `runtimeContextFragments` remain available to the
+plugin. Use the prepared context once, rather than also projecting the raw inputs.
+Plugins that need omitted result details can access the original event or their
+native history through their existing authorized facilities. This does not grant
+new history or tool permissions. The built-in harness retains its own projection.
 
 `resolveAgentHarnessBeforePromptBuildResult` from
 `openclaw/plugin-sdk/agent-harness-runtime` runs prompt hooks with prepared history

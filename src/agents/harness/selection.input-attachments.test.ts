@@ -135,12 +135,84 @@ describe("registered harness input attachment preparation", () => {
       expect(received?.currentInboundContext?.resumableText).toContain("NEW_INFO_42");
       expect(received?.currentInboundContext?.text).toContain("Supplemental fact");
       expect(received?.prompt).toBe(params.prompt);
-      expect(received?.internalEvents).toBeUndefined();
-      expect(received?.runtimeContextFragments).toBeUndefined();
+      expect(received?.internalEvents).toBe(params.internalEvents);
+      expect(received?.runtimeContextFragments).toBe(params.runtimeContextFragments);
     }
     expect(params.currentInboundContext.text).toBe("Quoted reply");
     expect(params.internalEvents[0]?.result).toBe("NEW_INFO_42");
   });
+
+  it.each(["large results", "many supplemental fragments"])(
+    "bounds completion data previews while preserving instructions and raw plugin inputs: %s",
+    async (scenario) => {
+      const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
+        makeEmbeddedRunnerAttempt({ sessionIdUsed: "session-1" }),
+      );
+      registerAgentHarness(
+        {
+          id: "context-fixture",
+          label: "Context fixture",
+          supports: () => ({ supported: true, priority: 100 }),
+          runAttempt,
+        },
+        { ownerPluginId: "context-fixture" },
+      );
+      const instruction = `Keep this instruction whole: ${"Do not duplicate replies. ".repeat(500)}`;
+      const internalEvents = ["first", "second"].map((child) => ({
+        type: "task_completion" as const,
+        source: "subagent" as const,
+        childSessionKey: `codex-thread:${child}`,
+        childSessionId: child,
+        announceType: "task_completion",
+        taskLabel: child,
+        status: "ok" as const,
+        statusLabel: "completed",
+        result: `${child} result: ${'🦞"\n'.repeat(300_000)}RESULT_TAIL`,
+        statsLine: `${child} statistics survive`,
+        replyInstruction: instruction,
+      }));
+      const runtimeContextFragments = [
+        ...Array.from({ length: scenario === "large results" ? 1 : 200 }, () => ({
+          kind: "conversation-data" as const,
+          text: `Extra data: ${"x".repeat(30_000)}DATA_TAIL`,
+        })),
+        { kind: "runtime-instruction" as const, text: "Only send genuinely new information." },
+      ];
+      const params = {
+        ...createAttemptParams(),
+        agentHarnessId: "context-fixture",
+        prompt: "Continue the OpenClaw runtime event.",
+        internalEvents,
+        runtimeContextFragments,
+      };
+      await runAgentHarnessAttempt(params);
+      const received = runAttempt.mock.calls[0]?.[0];
+      const projected = received?.currentInboundContext;
+      const data = projected?.fragments?.filter(
+        (fragment) => fragment.kind === "conversation-data",
+      );
+      expect(data?.map((fragment) => fragment.text).join("").length).toBeLessThan(12_000);
+      expect(projected?.text.length).toBeLessThan(100_000);
+      expect(projected?.text).not.toContain("RESULT_TAIL");
+      expect(projected?.text).not.toContain("DATA_TAIL");
+      expect(projected?.text).toContain(scenario === "large results" ? "preview truncated" : "…");
+      for (const child of ["first", "second"]) {
+        expect(projected?.text).toContain(`codex-thread:${child}`);
+        expect(projected?.text).toContain(`${child} statistics survive`);
+        expect(projected?.text).toContain(`${child} result:`);
+      }
+      expect(
+        projected?.fragments?.filter((fragment) => fragment.kind === "runtime-instruction"),
+      ).toContainEqual({ kind: "runtime-instruction", text: instruction });
+      expect(projected?.text).toContain("Only send genuinely new information.");
+      expect(projected?.text).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
+      expect(received?.internalEvents).toBe(internalEvents);
+      expect(received?.internalEvents?.[1]?.result).toMatch(/RESULT_TAIL$/);
+      expect(received?.runtimeContextFragments).toBe(runtimeContextFragments);
+      expect(received?.runtimeContextFragments?.[0]?.text).toMatch(/DATA_TAIL$/);
+      expect(received?.prompt).toBe(params.prompt);
+    },
+  );
 
   it.each<{ name: string; hook?: PluginHookName; bootstrap?: boolean; waits: boolean }>([
     ...(

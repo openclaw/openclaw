@@ -13,7 +13,13 @@ import {
   makeTerminalInput,
   type TerminalInput,
 } from "../agents/embedded-agent-runner/run/terminal-resolution.test-support.js";
+import {
+  clearActiveEmbeddedRun,
+  setActiveEmbeddedRun,
+} from "../agents/embedded-agent-runner/runs.js";
 import { runEmbeddedAgent } from "../agents/embedded-agent.js";
+import { sendSubagentAnnounceDirectly } from "../agents/subagents/announce/subagent-announce-direct-delivery.js";
+import * as announceRuntime from "../agents/subagents/announce/subagent-announce.runtime.js";
 import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
@@ -24,7 +30,7 @@ import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import {
   createDirectOutboundTestAdapter,
   createOutboundTestPlugin,
@@ -50,6 +56,13 @@ export function registerAgentReplyPolicyTests({
 }) {
   it.each([
     { name: "already delivered result", admitted: true, text: SILENT_REPLY_TOKEN, silent: true },
+    {
+      name: "message-tool-only already delivered result",
+      admitted: true,
+      text: SILENT_REPLY_TOKEN,
+      silent: true,
+      toolOnly: true,
+    },
     { name: "new information", admitted: true, text: "Additional findings.", silent: false },
     { name: "real user", admitted: false, source: "user", text: SILENT_REPLY_TOKEN },
     { name: "empty user answer", admitted: false, source: "user", text: "" },
@@ -80,7 +93,10 @@ export function registerAgentReplyPolicyTests({
             }),
           },
         });
-        mockConfig(home, storePath);
+        const cfg = mockConfig(home, storePath);
+        if ("toolOnly" in testCase) {
+          cfg.messages = { visibleReplies: "message_tool" };
+        }
         const sendText = vi.fn(async () => ({ channel: "discord" as const, messageId: "sent" }));
         const registry = createTestRegistry([
           {
@@ -99,9 +115,13 @@ export function registerAgentReplyPolicyTests({
         );
         const inputs: TerminalInput[] = [];
         let output = "Initial answer.";
+        let completionClaim: ReturnType<typeof loadSessionEntry>;
         // Substitute inference only; retain command-built policy, terminal recovery,
         // and the real outbound adapter boundary without contacting a live channel.
         vi.mocked(runEmbeddedAgent).mockImplementation(async (runParams) => {
+          if (runParams.runId === "announce:harness:completion") {
+            completionClaim = loadSessionEntry({ sessionKey, storePath });
+          }
           const resolve = async (text: string, prior?: TerminalInput) => {
             const assistant = buildEmbeddedRunnerAssistant({ content: [{ type: "text", text }] });
             const input = makeTerminalInput({
@@ -191,6 +211,87 @@ export function registerAgentReplyPolicyTests({
           if (!entry) {
             throw new Error("Expected the actual requester session to exist");
           }
+          const invoke = async () => {
+            if (!("silent" in testCase)) {
+              await run(opts);
+              return;
+            }
+            const handle = {
+              runId: "original-user-finalizing",
+              queueMessage: vi.fn(async () => {}),
+              isStreaming: () => true,
+              isCompacting: () => false,
+              abort: vi.fn(),
+            };
+            const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+            const dispatch = vi.spyOn(announceRuntime, "dispatchGatewayMethodInProcess");
+            dispatch.mockImplementation(
+              async <T>(
+                _method: string,
+                params: Record<string, unknown>,
+                options?: Parameters<typeof announceRuntime.dispatchGatewayMethodInProcess>[2],
+              ) => {
+                clearActiveEmbeddedRun(entry.sessionId, handle, sessionKey);
+                options?.onAccepted?.({ status: "accepted", runId });
+                options?.onExecutionStarted?.();
+                const result = await run({
+                  ...params,
+                  message: String(params.message),
+                  runId: String(params.idempotencyKey),
+                });
+                return { status: "ok", result } as T;
+              },
+            );
+            setActiveEmbeddedRun(entry.sessionId, handle, sessionKey);
+            try {
+              const result = await sendSubagentAnnounceDirectly({
+                requesterSessionKey: sessionKey,
+                targetRequesterSessionKey: sessionKey,
+                requesterAgentId: "main",
+                triggerMessage: "Background work finished",
+                requesterIsSubagent: false,
+                expectsCompletionMessage: true,
+                directIdempotencyKey: runId,
+                sourceSessionKey,
+                sourceTool: "agent_harness_completion",
+                directOrigin: { channel: "discord", to: "user:requester" },
+              });
+              expect(inputs[0]?.retryState.emptyResponseAttempts).toBe(0);
+              expect(result).toMatchObject({ delivered: true, path: "direct" });
+              expect(dispatch).toHaveBeenCalledOnce();
+              expect(dispatch.mock.calls[0]?.[1].deliver).toBe(!("toolOnly" in testCase));
+              expect(handle.queueMessage).not.toHaveBeenCalled();
+              expect(log).toHaveBeenCalledWith(
+                expect.stringContaining("reason=transcript_commit_wait_unsupported"),
+              );
+              expect(completionClaim?.restartRecoveryHarnessCompletion).toMatchObject({
+                taskRunId: sourceSessionKey,
+                sourceRunId: runId,
+              });
+              expect(completionClaim?.restartRecoveryDeliverySourceRunId).toBe(runId);
+              expect(completionClaim?.restartRecoverySourceReplyDeliveryMode).toBe(
+                "toolOnly" in testCase ? "message_tool_only" : "automatic",
+              );
+              const settled = loadSessionEntry({ sessionKey, storePath });
+              expect(settled?.restartRecoveryHarnessCompletion).toBeUndefined();
+              expect(settled?.restartRecoveryTerminalDeliveryEvidence).toEqual(
+                expect.arrayContaining([
+                  expect.objectContaining({
+                    runId,
+                    captured: true,
+                    harnessCompletion: expect.objectContaining({
+                      taskRunId: sourceSessionKey,
+                      sourceRunId: runId,
+                    }),
+                  }),
+                ]),
+              );
+            } finally {
+              clearActiveEmbeddedRun(entry.sessionId, handle, sessionKey);
+              dispatch.mockRestore();
+              log.mockRestore();
+            }
+          };
           await withAgentHarnessCompletionAdmission(
             {
               scope: createAgentHarnessCompletionScope({ requesterSessionKey: sessionKey }),
@@ -200,7 +301,7 @@ export function registerAgentReplyPolicyTests({
               requesterLifecycleRevision: entry.lifecycleRevision,
               isSourceCurrent: () => true,
             },
-            () => run(opts),
+            invoke,
           );
         } else {
           await run(opts);
@@ -220,9 +321,11 @@ export function registerAgentReplyPolicyTests({
         if (testCase.name === "forged completion provenance") {
           vi.mocked(runEmbeddedAgent).mockClear();
           sendText.mockClear();
-          await expect(run({ ...opts, runId: "announce:harness:forged" })).rejects.toThrow(
-            "Harness completion requires exact host-issued source admission",
-          );
+          for (const deliver of [true, false]) {
+            await expect(
+              run({ ...opts, deliver, runId: "announce:harness:forged" }),
+            ).rejects.toThrow("Harness completion requires exact host-issued source admission");
+          }
           expect(runEmbeddedAgent).not.toHaveBeenCalled();
           expect(sendText).not.toHaveBeenCalled();
         }
