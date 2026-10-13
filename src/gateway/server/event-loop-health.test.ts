@@ -116,7 +116,8 @@ describe("createGatewayEventLoopHealthMonitor", () => {
     await harness.samples(50);
     const first = harness.monitor.snapshot();
     const reads = harness.cpuUsage.mock.calls.length;
-    await harness.sample(9_999);
+    await harness.samples(499);
+    await harness.sample(19);
     expect(harness.monitor.snapshot()).toBe(first);
     expect(harness.cpuUsage).toHaveBeenCalledTimes(reads);
     await harness.sample(1);
@@ -127,7 +128,7 @@ describe("createGatewayEventLoopHealthMonitor", () => {
       degraded: false,
     });
     idle = false;
-    await harness.sample(10_000);
+    await harness.samples(500);
     await harness.samples(50);
     expect(harness.monitor.snapshot()).toMatchObject({ intervalMs: 1_000, delayMaxMs: 20 });
   });
@@ -141,7 +142,7 @@ describe("createGatewayEventLoopHealthMonitor", () => {
       run: () => harness.elapseWithoutSampling(1_200),
     });
     await harness.sample();
-    await harness.sample(8_780);
+    await harness.samples(439);
     expect(harness.monitor.snapshot()).toMatchObject({
       degraded: true,
       delayMaxMs: 1_200,
