@@ -128,6 +128,7 @@ complete schema still enforces constraints such as `oneOf` exclusivity.
 - Tool start/update/end events emit on the `tool` stream.
 - Tool results are sanitized for size and image payloads before logging/emitting.
 - Messaging tool sends are tracked to suppress duplicate assistant confirmations.
+- A confirmed final send, reply, thread reply, or poll to the current source conversation ends the run loop in both automatic and message-tool delivery modes. An added reaction with explicit `final: true` on the current source message also ends it. Progress actions (`final: false`), reactions elsewhere, removals, and unconfirmed actions do not.
 
 ## Reply shaping
 

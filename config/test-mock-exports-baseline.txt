@@ -632,7 +632,6 @@
 ["extensions/feishu/src/monitor.reaction.test.ts","./monitor.transport.js","2738866fcb429c1ddf483cf96cf0805895176271816a6bbae0c576fe12e516e1",1]
 ["extensions/feishu/src/monitor.reaction.test.ts","./thread-bindings.js","96b2208302dee8aa2fa66b754f298f71a0363bf8858a8bd34fa0f0885121979f",1]
 ["extensions/feishu/src/monitor.startup.test.ts","./bot-identity-cache.js","2376dfe8c7e119b5b078569bce8784971dfc1d2aa9702ca6957ca92e7dae7964",1]
-["extensions/feishu/src/monitor.startup.test.ts","./client.js","a9d1481c70b0837eef1d03d2761c4e3e46e247fa7e44bb03cbbfc503aed44852",1]
 ["extensions/feishu/src/monitor.startup.test.ts","./probe.js","5cec988e06fd94efa03b5bf55648728cbd0c652276d7dbd68de017e926846f6f",1]
 ["extensions/feishu/src/monitor.startup.test.ts","./runtime.js","83026e6e475f0b07906857be9f84e8832708539c8f4fd5206629f5b24dd678fc",1]
 ["extensions/feishu/src/monitor.vc-meeting-invited-handler.test.ts","./client.js","98ed9ab085f9bd25cda59171ea7ac225986f080b260510f0176dee52061ff9f0",1]

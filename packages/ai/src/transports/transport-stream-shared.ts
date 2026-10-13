@@ -501,6 +501,12 @@ export function assignTransportErrorDetails(
 ): ProviderErrorProjection {
   const projection = projectProviderError(error, signal);
   Object.assign(output, projection);
+  // A failure after terminal accounting cannot erase it. Earlier cumulative
+  // snapshots and initial zeros never establish a complete response total.
+  if (output.usage.usageReport?.state !== "available") {
+    output.usage.usageReport = { state: "unavailable" };
+    output.usage.contextUsage = { state: "unavailable" };
+  }
   if (
     projection.stopReason === "error" &&
     output.content.length === 0 &&

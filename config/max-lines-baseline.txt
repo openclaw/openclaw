@@ -303,7 +303,6 @@ src/cli/config-cli.test.ts
 src/cli/daemon-cli/status.gather.test.ts
 src/cli/devices-cli.runtime.ts
 src/cli/exec-approvals-cli.ts
-src/cli/gateway-cli/register.ts
 src/cli/gateway-cli/run-loop.test.ts
 src/cli/gateway-cli/run-loop.ts
 src/cli/gateway-cli/run.option-collisions.test.ts

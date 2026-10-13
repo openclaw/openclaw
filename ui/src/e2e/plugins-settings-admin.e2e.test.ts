@@ -535,7 +535,7 @@ suite.define(() => {
             gap: control.left - copy.right,
             top: copy.top - control.top,
             menuTop:
-              row.querySelector('button[slot="trigger"]')!.getBoundingClientRect().top -
+              row.querySelector('button[aria-haspopup="menu"]')!.getBoundingClientRect().top -
               control.top,
           };
         });
@@ -603,7 +603,8 @@ suite.define(() => {
           .getByRole("button", { name: "Actions for Workspace label", exact: true })
           .click();
         await page
-          .locator('[data-setting="workspaceLabel"] wa-dropdown-item[value="reset"]')
+          .locator('[data-setting="workspaceLabel"]')
+          .getByRole("menuitem", { name: "Reset value", exact: true })
           .click();
         const resetSave = await gateway.waitForRequest("config.set", { after: 2 });
         const resetConfig = JSON.parse(String(asRecord(resetSave.params).raw));

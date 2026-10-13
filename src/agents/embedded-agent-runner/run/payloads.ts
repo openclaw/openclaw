@@ -139,11 +139,12 @@ export function buildEmbeddedRunPayloads(params: {
     params.didSendDeterministicApprovalPrompt === true ||
     (params.sourceReplyDeliveryMode === "message_tool_only" &&
       ordinarySourceReplies.hasSourceReplyPayload) ||
-    deliveredSourceReplyViaMessageTool;
+    (deliveredSourceReplyViaMessageTool &&
+      (params.sourceReplyDeliveryMode === "message_tool_only" ||
+        completedSourceReplyViaMessageTool));
   const suppressFailureArtifacts =
     params.didSendDeterministicApprovalPrompt === true ||
-    (params.sourceReplyDeliveryMode === "message_tool_only" &&
-      ordinarySourceReplies.completedSourceReplyViaMessageTool);
+    ordinarySourceReplies.completedSourceReplyViaMessageTool;
   let hasUserFacingReply =
     completedSourceReplyViaMessageTool || params.heartbeatToolResponse?.notify === true;
   let hasIntentionalSilentFinal = false;

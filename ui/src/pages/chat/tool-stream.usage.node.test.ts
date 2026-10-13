@@ -57,6 +57,22 @@ describe("app-tool-stream run usage", () => {
     handleAgentEvent(host, agentEvent("client-run", 7, "lifecycle", { phase: "start" }, "main"));
     handleAgentEvent(host, agentEvent("client-run", 7, "usage", { outputTokens: 150 }, "main"));
     expect(host.chatRunUsageById?.get("client-run")?.outputTokens).toBe(115);
+    handleAgentEvent(
+      host,
+      agentEvent(
+        "client-run",
+        10,
+        "usage",
+        {
+          outputTokens: 115,
+          usageReport: { state: "unavailable" },
+        },
+        "main",
+      ),
+    );
+    resetToolStream(host);
+    handleAgentEvent(host, agentEvent("client-run", 9, "usage", { outputTokens: 115 }, "main"));
+    expect(host.chatRunUsageById?.get("client-run")).toEqual({ outputTokens: null, seq: 10 });
   });
 
   it("projects provider-independent system warnings into the visible session transcript", () => {
