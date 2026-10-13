@@ -262,6 +262,7 @@ export function deleteLegacySessionEntryRows(
         db.deleteFrom("session_nodes").where("session_key", "=", legacyKey),
       ),
     );
+    retireSqliteDatabaseWriteScopes(database.db, [legacyKey]);
     options.postimages?.delete(legacyKey);
     const canonicalPostimage = options.postimages?.get(sessionKey);
     if (canonicalPostimage) {

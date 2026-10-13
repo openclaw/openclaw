@@ -138,6 +138,37 @@ describe("SQLite session deletion receipts", () => {
     expect(read(baseKey)?.sessionId).toBe(unrelatedSessionId);
   });
 
+  it("retires a replaced legacy key while retaining the transferred window scope", async () => {
+    await seed();
+    const database = openOpenClawAgentDatabase(
+      toDatabaseOptions(resolveSqliteScope({ sessionKey, storePath })),
+    );
+    readSqliteDatabaseScopedWriteTokenForPath(database.path, [
+      sessionKey,
+      baseKey,
+      sqliteSessionIdWriteScope(sessionId),
+    ]);
+    const scopes = () =>
+      captureSqliteDatabaseAdmissions().find((record) => record.location === database.path)!
+        .writeScopes;
+    const retained = new Map(scopes());
+    expect(retained.delete(JSON.stringify(["key", sessionKey]))).toBe(true);
+    const stale = structuredClone(captureSqliteDatabaseAdmissions());
+
+    await applySessionEntryLifecycleMutation({
+      storePath,
+      removals: [{ sessionKey }],
+      upserts: [{ sessionKey: baseKey, entry: read()! }],
+      skipMaintenance: true,
+    });
+
+    expect(scopes()).toEqual(retained);
+    installSqliteDatabaseAdmissions(stale);
+    expect(scopes()).toEqual(retained);
+    expect(read()).toBeUndefined();
+    expect(read(baseKey)?.sessionId).toBe(sessionId);
+  });
+
   it("removes a deleted incognito session's personal receipt during maintenance", async () => {
     const incognitoKey = "agent:main:dashboard:incognito-maintenance-receipt";
     const env = { OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR };
