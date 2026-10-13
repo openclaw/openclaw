@@ -116,11 +116,23 @@ type OpenClawPluginSessionStateApi = {
   registerSessionExtension: (extension: PluginSessionExtensionRegistration) => void;
 };
 
+export type PluginActiveRunSteerParams = {
+  sessionKey: string;
+  text: string;
+  idempotencyKey?: string;
+};
+
+export type PluginActiveRunSteerResult =
+  | { steered: true; runId?: string }
+  | { steered: false; reason: string };
+
 type OpenClawPluginSessionWorkflowApi = {
   /** Queue one plugin-owned context injection for the next agent turn in a session. */
   enqueueNextTurnInjection: (
     injection: PluginNextTurnInjection,
   ) => Promise<PluginNextTurnInjectionEnqueueResult>;
+  /** Deliver hidden plugin-authored guidance to a session's current run, without starting a turn. */
+  steerActiveRun: (params: PluginActiveRunSteerParams) => Promise<PluginActiveRunSteerResult>;
   /**
    * Register cleanup metadata for a plugin-owned session scheduler job.
    * This does not schedule work or create task records; it only lets the host
@@ -395,6 +407,8 @@ export type OpenClawPluginApi = {
    * @deprecated Use `api.session.workflow.enqueueNextTurnInjection(...)`.
    */
   enqueueNextTurnInjection: OpenClawPluginSessionWorkflowApi["enqueueNextTurnInjection"];
+  /** Backs `api.session.workflow.steerActiveRun(...)`; plugins call the workflow facade. */
+  steerActiveRun: OpenClawPluginSessionWorkflowApi["steerActiveRun"];
   /**
    * Register a trusted pre-tool policy. Installed plugins must declare the
    * policy id in `contracts.trustedToolPolicies`.

@@ -124,6 +124,10 @@ Confirmed rollback preserves the previous committed facts. A lost reply is not
 proof of rollback and must not trigger blind replay. Facts install before public
 observers, through
 [`sqlite-post-commit.ts`](https://github.com/openclaw/openclaw/blob/main/src/infra/sqlite-post-commit.ts).
+Exec allowlist usage writes retain receipt and supersession tracking without
+publishing a pending denial: recording last-used metadata cannot revoke another
+command's authorization. Policy edits and durable allow-always grants still
+publish pending denials; unknown outcomes still invalidate the policy view.
 Personal credential and GitHub publication owners are concrete examples:
 [`user-model-account-authority.ts`](https://github.com/openclaw/openclaw/blob/main/src/state/user-model-account-authority.ts)
 and [`github-publication-receipts.ts`](https://github.com/openclaw/openclaw/blob/main/src/state/github-publication-receipts.ts).
@@ -143,8 +147,8 @@ writers do not yet publish complete authority facts retain their documented
 
 ## Session actor and memory indexing
 
-The [session actor](#session-phase-actor) owns the hot state of each active
-session inside the existing agent writer queue. The main thread keeps an
+For durable, file-backed sessions, the [session actor](#session-phase-actor) owns
+hot state inside the existing agent writer queue. The main thread keeps an
 immutable receipt-maintained replica, shared across short-lived caller handles.
 A cold actor hydrates entry, membership, pending-input custody, and transcript
 metadata in one statement; a cold mutation hydrates inside its own transaction.
@@ -164,8 +168,10 @@ COMMIT authorization, and receipt settlement. Schemas, durability, and update
 behavior are unchanged.
 
 Session memory indexing is background work. It batches transcript changes after
-an idle gap, pauses while the agent is busy, and yields between bounded source
-batches to foreground work. Search reads the last indexed state; it does not
+30 seconds without transcript changes or running turns. Pending work keeps its
+original age across turns; after five minutes it can start in the next idle gap
+without another quiet period. Running turns still take priority, and a pass yields
+between bounded source batches. Search reads the last indexed state; it does not
 flush pending transcript indexing. The active turn already has its conversation
 context. See [built-in memory freshness](/concepts/memory-builtin) for timing,
 shutdown, and restart catch-up, and
@@ -690,6 +696,12 @@ and remain counted as native work until the incognito owner cutover.
 Committed entry metadata preserves an active trajectory-retention sweep through
 its existing owner. Unknown local writes still invalidate
 the sweep; rollback publishes no acknowledgment.
+Durable trajectory retention is triggered by appends, with one aggregate per
+hourly pass. Appends share a pending pass; an invalidated or failed pass waits
+until the next hourly opportunity instead of restarting on every append. The
+existing bounded deletion batches consume the pass's summary and committed
+trajectory receipts. Snapshot invalidation and run-content checks still protect
+history from deletion when concurrent writes change the retention decision.
 The v2026.9.8 `plugin-sdk/session-store-runtime` entry and last-route contracts
 retain their opaque `assertCommitAllowed` callbacks inside the native transaction.
 Released model-selection validators and synchronous Stop currentness callbacks keep
@@ -4201,6 +4213,13 @@ known write receipt and explicit blocking checkpoint policies retain their timed
 cadence. Close removes the write notification along with the timer.
 Page reclamation and blocking checkpoint modes keep their zero-timeout scope.
 
+Other empty maintenance owners park their timers too. Auth-rate-limit pruning
+starts when failure history exists and stops when it is empty. The device-pair
+notifier scans once, then parks when both its subscriber and seen-request stores
+are empty. An owned write wakes it for the next ten-second scan, including a write
+whose reply failed. Pairing authorization and notification receipt checks remain
+at their existing boundaries.
+
 Completed checkpoint-only passes publish their write revision through the existing
 physical database admission. Other connections to that WAL reuse the completion
 instead of copying the same frames again. A later in-process write invalidates it;
@@ -5613,6 +5632,10 @@ including unchanged projection revisions, and returns only matching messages.
 Cold archive decoding and restoration retain the existing archive worker and
 host generation/commit authorization; transcript read fences still bind the
 subsequent read. No validation cache or new restoration owner is introduced.
+The archive FIFO can hand its idle worker between scopes using the same captured
+state directory. Each request closes its native handles before handoff; the new
+scope supplies its own authority. Different state directories and retiring workers
+still require native exit before replacement. Schema and update behavior are unchanged.
 
 Single-message lookups and display-message counts use that same history worker.
 Session-message broadcasts await the stored content and sequence in their existing

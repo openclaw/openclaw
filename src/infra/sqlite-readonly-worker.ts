@@ -300,22 +300,41 @@ export async function runSqliteReadOnlyOperation<Key extends keyof SqliteReadOnl
   pathname: string,
   command: { type: Key; input: SqliteReadOnlyOperations[Key]["input"] },
   options: Omit<SqliteReadOnlyOperationOptions, "mode" | "command">,
-): Promise<SqliteReadOnlyOperations[Key]["output"]> {
+): Promise<Awaited<SqliteReadOnlyOperations[Key]["output"]>> {
   const capturedCommand = structuredClone(command);
   const result = await runSqliteReadOnlyWorker(pathname, {
     ...options,
     mode: "operation",
     command: capturedCommand,
   });
-  if (
-    typeof result !== "object" ||
-    !("operation" in result) ||
-    result.operation !== capturedCommand.type
-  ) {
+  return readOperationResult(capturedCommand.type, result);
+}
+
+/** Reuse a caller-owned native session without creating a canonical-read broker. */
+export async function runScopedSqliteReadOnlyOperation<Key extends keyof SqliteReadOnlyOperations>(
+  worker: ReturnType<typeof createScopedSqliteReadOnlyWorker>,
+  pathname: string,
+  command: { type: Key; input: SqliteReadOnlyOperations[Key]["input"] },
+  options: Omit<SqliteReadOnlyOperationOptions, "mode" | "command">,
+): Promise<Awaited<SqliteReadOnlyOperations[Key]["output"]>> {
+  const capturedCommand = structuredClone(command);
+  const result = await worker.run(pathname, {
+    ...options,
+    mode: "operation",
+    command: capturedCommand,
+  });
+  return readOperationResult(capturedCommand.type, result);
+}
+
+function readOperationResult<Key extends keyof SqliteReadOnlyOperations>(
+  type: Key,
+  result: SqliteReadOnlyWorkerValue,
+): Awaited<SqliteReadOnlyOperations[Key]["output"]> {
+  if (typeof result !== "object" || !("operation" in result) || result.operation !== type) {
     throw new Error("SQLite read-only worker returned a different operation");
   }
   // SAFETY: The registered handler and validated transfer envelope bind this command to its result.
-  return result.value as SqliteReadOnlyOperations[Key]["output"];
+  return result.value as Awaited<SqliteReadOnlyOperations[Key]["output"]>;
 }
 
 export function runSqliteReadOnlyWorker(

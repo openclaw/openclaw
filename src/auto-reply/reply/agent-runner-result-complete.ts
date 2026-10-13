@@ -271,7 +271,7 @@ export async function completeReplyAgentRun(input: {
   }
   activeSessionEntry = (await completion?.complete()) ?? activeSessionEntry;
   const result = returnWithQueuedFollowupDrain(
-    finalPayloads.length === 1 ? finalPayloads[0] : finalPayloads,
+    finalPayloads.length <= 1 ? finalPayloads[0] : finalPayloads,
   );
   scheduleReplySessionMaintenance({ context, accounting, sessionEntry: activeSessionEntry });
   return result;
