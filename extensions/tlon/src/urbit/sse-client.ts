@@ -248,6 +248,7 @@ export class UrbitSSEClient {
     let buffer = "";
     let bufferBytes = 0;
     let pendingDelimiterNewline = false;
+    let pendingCarriageReturn = false;
 
     const appendPending = (text: string) => {
       const previousCodeUnit = buffer.charCodeAt(buffer.length - 1);
@@ -267,7 +268,14 @@ export class UrbitSSEClient {
       buffer += text;
       bufferBytes = nextBytes;
     };
-    const consumeText = async (text: string) => {
+    const consumeText = async (rawText: string) => {
+      if (rawText.length === 0) {
+        return;
+      }
+      // Normalize SSE line endings without treating a split CRLF as two lines.
+      const startsWithPendingLineFeed = pendingCarriageReturn && rawText.startsWith("\n");
+      pendingCarriageReturn = rawText.endsWith("\r");
+      const text = (startsWithPendingLineFeed ? rawText.slice(1) : rawText).replace(/\r\n?/g, "\n");
       let offset = 0;
       if (pendingDelimiterNewline && text.length > 0) {
         pendingDelimiterNewline = false;
@@ -327,8 +335,8 @@ export class UrbitSSEClient {
   }
 
   async processEvent(eventData: string): Promise<void> {
-    const lines = eventData.split("\n");
-    let data: string | null = null;
+    const lines = eventData.split(/\r\n|\r|\n/);
+    const dataLines: string[] = [];
     let eventId: number | null = null;
 
     for (const line of lines) {
@@ -337,10 +345,12 @@ export class UrbitSSEClient {
         eventId = parseUrbitSseEventId(line.slice("id:".length).trim());
       }
       if (line.startsWith("data:")) {
-        data = line.slice("data:".length).trim();
+        const value = line.slice("data:".length);
+        dataLines.push(value.startsWith(" ") ? value.slice(1) : value);
       }
     }
 
+    const data = dataLines.join("\n");
     if (!data) {
       return;
     }

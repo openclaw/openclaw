@@ -1,11 +1,12 @@
+import { flush } from "solid-js";
 import { afterEach, describe, expect, it } from "vitest";
-import { duringElementAnimation } from "../test-helpers/web-awesome-animation.ts";
-import "@awesome.me/webawesome/dist/styles/themes/default.css";
+import { expectSharedTooltipSkin } from "./tooltip.test-support.ts";
+import type { TooltipElement } from "./tooltip.ts";
 import "./tooltip.ts";
+import "../styles/base.css";
 
 afterEach(() => document.body.replaceChildren());
 
-type TooltipSurface = HTMLElementTagNameMap["wa-tooltip"];
 type TooltipOperation = "show" | "hide";
 const tooltipEvents = {
   opening: "wa-show",
@@ -40,135 +41,132 @@ function afterPhase(tooltip: HTMLElement, phase: keyof typeof tooltipEvents) {
   });
 }
 
-function afterTransition(tooltip: HTMLElement, operation: TooltipOperation) {
-  return afterPhase(tooltip, completionPhase(operation));
+async function commitTooltip(tooltip: TooltipElement) {
+  await tooltip.updateComplete;
+  await Promise.resolve();
+  flush();
 }
 
-function commitTooltip(tooltip: { updateComplete: Promise<unknown> }) {
-  return tooltip.updateComplete;
+function tooltipBody(tooltip: TooltipElement) {
+  const body = tooltip.shadowRoot?.querySelector<HTMLElement>(".tooltip-surface");
+  if (!body) {
+    throw new Error("Tooltip did not mount its native surface");
+  }
+  return body;
 }
 
-function positionTooltip(tooltip: TooltipSurface) {
-  return tooltip.popup.updateComplete;
+async function fixture(disabled = false) {
+  const host = document.createElement("div");
+  const tooltip = document.createElement("openclaw-tooltip");
+  tooltip.content = "More information about this action";
+  tooltip.disabled = disabled;
+  tooltip.delay = 0;
+  const trigger = document.createElement("button");
+  trigger.textContent = "Details";
+  trigger.style.cssText = "position: fixed; left: 200px; top: 200px";
+  trigger.setAttribute("aria-describedby", "original-description");
+  tooltip.append(trigger);
+  host.append(tooltip);
+  document.body.append(host);
+  await commitTooltip(tooltip);
+  return { host, tooltip, trigger, events: recordLifecycle(tooltip) };
 }
 
-function wrappedTooltipSurface(tooltip: HTMLElement) {
-  return tooltip.shadowRoot!.querySelector("wa-tooltip")!;
-}
+type Fixture = Awaited<ReturnType<typeof fixture>>;
 
-function tooltipBody(tooltip: TooltipSurface) {
-  return tooltip.shadowRoot!.querySelector<HTMLElement>('[part="body"]')!;
-}
-
-function tooltipIsOpen(tooltip: TooltipSurface) {
-  return tooltip.open;
-}
-
-function tooltipIsHidden(tooltip: TooltipSurface) {
-  return tooltip.body.hidden;
-}
-
-function tooltipIsActive(tooltip: TooltipSurface) {
-  return tooltip.popup.active;
-}
-
-function openTooltip(tooltip: TooltipSurface) {
-  return tooltip.show();
-}
-
-function closeTooltip(tooltip: TooltipSurface) {
-  return tooltip.hide();
-}
-
-function transitionTooltip(tooltip: TooltipSurface, operation: TooltipOperation) {
-  return operation === "show" ? openTooltip(tooltip) : closeTooltip(tooltip);
-}
-
-function vetoNextTransition(tooltip: TooltipSurface, operation: TooltipOperation) {
-  tooltip.addEventListener(
-    tooltipEvents[requestPhase(operation)],
-    (event) => event.preventDefault(),
-    {
-      once: true,
-    },
-  );
-}
-
-function vetoTooltipClosing(tooltip: TooltipSurface) {
-  tooltip.addEventListener(tooltipEvents.closing, (event) => event.preventDefault());
-}
-
-function duringTooltipOpening(
-  tooltip: TooltipSurface,
-  request: () => unknown,
-  action: () => void | Promise<void>,
-) {
-  return duringElementAnimation(tooltip.popup.popup, "show-with-scale", request, action);
-}
-
-function tooltipOpeningDuration(tooltip: TooltipSurface) {
-  return Number.parseFloat(getComputedStyle(tooltip.popup.popup).animationDuration);
-}
-
-function withoutTooltipMotion(tooltip: TooltipSurface) {
-  tooltip.popup.style.setProperty("--show-duration", "0ms");
-  tooltip.popup.style.setProperty("--hide-duration", "0ms");
-}
-
-function onPositionedAfterOpening(tooltip: TooltipSurface, action: () => void) {
-  let handled = false;
-  tooltip.addEventListener("wa-reposition", () => {
-    if (handled || tooltip.popup.popup.classList.contains("show-with-scale")) {
-      return;
-    }
-    handled = true;
-    action();
-  });
-}
-
-function anchorListenerSignal(tooltip: TooltipSurface) {
-  // The retirement reason must not retain a detached anchor through an Error stack.
-  return (tooltip as unknown as { eventController: AbortController }).eventController.signal;
-}
-
-async function expectVisibility(tooltip: TooltipSurface, open: boolean) {
-  await positionTooltip(tooltip);
-  expect(tooltipIsOpen(tooltip)).toBe(open);
-  expect(tooltipIsActive(tooltip)).toBe(open);
-  expect(tooltipIsHidden(tooltip)).toBe(!open);
-  if (open) {
-    await expect.element(tooltipBody(tooltip)).toBeVisible();
+function requestVisibility(f: Fixture, operation: TooltipOperation) {
+  if (operation === "show") {
+    // A rejected focus request leaves the trigger focused; a fresh focus entry retries it.
+    f.trigger.blur();
+    f.trigger.focus();
   } else {
-    await expect.element(tooltipBody(tooltip)).not.toBeVisible();
+    f.trigger.blur();
   }
 }
 
+async function openTooltip(f: Fixture) {
+  const done = afterPhase(f.tooltip, "opened");
+  requestVisibility(f, "show");
+  await done;
+}
+
+async function expectVisibility(f: Fixture, open: boolean) {
+  const body = tooltipBody(f.tooltip);
+  expect(f.tooltip.hasAttribute("open")).toBe(open);
+  expect(body.matches(":popover-open")).toBe(open);
+  expect(body.dataset.phase).toBe(open ? "open" : "hidden");
+  expect(body.inert).toBe(!open);
+  if (open) {
+    await expect.element(body).toBeVisible();
+  } else {
+    await expect.element(body).not.toBeVisible();
+  }
+}
+
+function vetoNextTransition(f: Fixture, operation: TooltipOperation) {
+  f.tooltip.addEventListener(
+    tooltipEvents[requestPhase(operation)],
+    (event) => event.preventDefault(),
+    { once: true },
+  );
+}
+
+function frame() {
+  return new Promise<void>((resolve) => {
+    requestAnimationFrame(() => resolve());
+  });
+}
+
+async function duringTransition(
+  f: Fixture,
+  operation: TooltipOperation,
+  action: () => void | Promise<void>,
+) {
+  const body = tooltipBody(f.tooltip);
+  // Hold real native presentation work without spending its wall-clock duration.
+  // The lifecycle must fence completion when user input supersedes this animation.
+  const animation = body.animate({ outlineOffset: ["0px", "1px"] }, { duration: 60_000 });
+  animation.pause();
+  try {
+    requestVisibility(f, operation);
+    await frame();
+    expect(body.dataset.phase).toBe(operation === "show" ? "opening" : "closing");
+    await action();
+  } finally {
+    animation.cancel();
+  }
+}
+
+function withoutTooltipMotion(f: Fixture) {
+  const body = tooltipBody(f.tooltip);
+  body.style.setProperty("--openclaw-tooltip-popup-show-duration", "0ms");
+  body.style.setProperty("--openclaw-tooltip-popup-hide-duration", "0ms");
+}
+
 describe.runIf("__vitest_browser__" in globalThis)("tooltip pointer ownership", () => {
+  it("skins the body and removes the arrow through shared overlay tokens", async () => {
+    const f = await fixture();
+    expect(getComputedStyle(f.tooltip).display).toBe("contents");
+    await openTooltip(f);
+    expectSharedTooltipSkin(f.tooltip);
+  });
+
   async function mountOpenTooltip(rich: boolean) {
-    const tooltip = document.createElement("openclaw-tooltip");
-    const trigger = document.createElement("button");
-    trigger.textContent = "Details";
-    trigger.style.cssText = "position: fixed; left: 200px; top: 200px";
-    tooltip.append(trigger);
+    const f = await fixture();
     let link: HTMLAnchorElement | undefined;
     if (rich) {
+      f.tooltip.content = "";
       link = document.createElement("a");
       link.slot = "content";
       link.href = "#details";
       link.textContent = "Read documentation";
-      tooltip.append(link);
-    } else {
-      tooltip.content = "More information about this action";
+      f.tooltip.append(link);
+      await commitTooltip(f.tooltip);
     }
-    document.body.append(tooltip);
-    await commitTooltip(tooltip);
-    const shown = afterPhase(tooltip, "opened");
-    trigger.focus();
-    await shown;
-    const popup = wrappedTooltipSurface(tooltip);
-    const body = tooltipBody(popup);
+    await openTooltip(f);
+    const body = tooltipBody(f.tooltip);
     await expect.poll(() => body.getBoundingClientRect().width).toBeGreaterThan(0);
-    return { tooltip, trigger, popup, body, link };
+    return { ...f, body, link };
   }
 
   it.each(["body", "bridge"] as const)(
@@ -207,6 +205,10 @@ describe.runIf("__vitest_browser__" in globalThis)("tooltip pointer ownership", 
   it("keeps rich tooltip links pointer-accessible", async () => {
     const { page } = await import("vitest/browser");
     const { link } = await mountOpenTooltip(true);
+    const bounds = link!.getBoundingClientRect();
+    expect(
+      document.elementFromPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2),
+    ).toBe(link);
     let activated = false;
     link!.addEventListener("click", (event) => {
       event.preventDefault();
@@ -218,301 +220,282 @@ describe.runIf("__vitest_browser__" in globalThis)("tooltip pointer ownership", 
 });
 
 describe.runIf("__vitest_browser__" in globalThis)("tooltip transition ownership", () => {
-  async function fixture(zeroDuration = false) {
-    const tooltip = document.createElement("openclaw-tooltip");
-    tooltip.content = "More information about this action";
-    const trigger = document.createElement("button");
-    trigger.textContent = "Details";
-    trigger.style.cssText = "position: fixed; left: 200px; top: 200px";
-    tooltip.append(trigger);
-    document.body.append(tooltip);
-    await commitTooltip(tooltip);
-    // Materialize with canceled intent so each transition test starts closed.
-    trigger.focus();
-    trigger.blur();
-    await commitTooltip(tooltip);
-    await customElements.whenDefined("wa-tooltip");
-    const native = wrappedTooltipSurface(tooltip);
-    await commitTooltip(native);
-    await positionTooltip(native);
-    if (zeroDuration) {
-      withoutTooltipMotion(native);
-    }
-    return { tooltip, trigger, native, events: recordLifecycle(native) };
-  }
-
   it.each([false, true])(
     "keeps a keyboard-reopened tooltip visible after an interrupted hide (zero duration=%s)",
     async (zeroDuration) => {
-      const { tooltip, trigger, native, events } = await fixture(zeroDuration);
-      const shown = afterTransition(native, "show");
-      const opening = afterPhase(native, "opening");
-      trigger.focus();
-      await opening;
-      await commitTooltip(native);
-      const duration = tooltipOpeningDuration(native);
+      const f = await fixture();
+      if (zeroDuration) {
+        withoutTooltipMotion(f);
+      }
+      await openTooltip(f);
+      const duration = Number.parseFloat(
+        getComputedStyle(tooltipBody(f.tooltip)).transitionDuration,
+      );
       if (zeroDuration) {
         expect(duration).toBe(0);
       } else {
         expect(duration).toBeGreaterThan(0);
       }
-      await shown;
-      await expect.element(tooltipBody(native)).toBeVisible();
-      events.length = 0;
+      await expectVisibility(f, true);
+      f.events.length = 0;
 
-      trigger.blur();
-      // Join the reactive close, not its animation. Native focus then admits
-      // the next opening before even a zero-duration hide's frame boundary.
-      await commitTooltip(native);
-      expect(events).toEqual(["closing"]);
-      const reopened = afterTransition(native, "show");
-      trigger.focus();
+      const reopened = afterPhase(f.tooltip, "opened");
+      f.trigger.blur();
+      await commitTooltip(f.tooltip);
+      expect(f.events).toEqual(["closing"]);
+      f.trigger.focus();
       await reopened;
-      await positionTooltip(native);
-
-      expect(document.activeElement).toBe(trigger);
-      expect(tooltip.hasAttribute("open")).toBe(true);
-      expect(tooltipIsOpen(native)).toBe(true);
-      expect(tooltipIsHidden(native)).toBe(false);
-      expect(tooltipIsActive(native)).toBe(true);
-      await expect.element(tooltipBody(native)).toBeVisible();
-      expect(events).toEqual(["closing", "opening", "opened"]);
+      expect(document.activeElement).toBe(f.trigger);
+      await expectVisibility(f, true);
+      expect(f.events).toEqual(["closing", "opening", "opened"]);
     },
   );
 
   it("keeps a tooltip dismissed when Escape interrupts its opening animation", async () => {
     const { userEvent } = await import("vitest/browser");
-    const { tooltip, trigger, native, events } = await fixture();
-    const hidden = afterTransition(native, "hide");
-    await duringTooltipOpening(
-      native,
-      () => trigger.focus(),
-      async () => {
-        await userEvent.keyboard("{Escape}");
-        await commitTooltip(native);
-      },
-    );
+    const f = await fixture();
+    const hidden = afterPhase(f.tooltip, "closed");
+    await duringTransition(f, "show", async () => {
+      await userEvent.keyboard("{Escape}");
+      await commitTooltip(f.tooltip);
+    });
     await hidden;
-    await positionTooltip(native);
-
-    expect(document.activeElement).toBe(trigger);
-    expect(tooltip.hasAttribute("open")).toBe(false);
-    expect(tooltipIsOpen(native)).toBe(false);
-    expect(tooltipIsHidden(native)).toBe(true);
-    expect(tooltipIsActive(native)).toBe(false);
-    await expect.element(tooltipBody(native)).not.toBeVisible();
-    expect(events).toEqual(["opening", "closing", "closed"]);
+    expect(document.activeElement).toBe(f.trigger);
+    await expectVisibility(f, false);
+    expect(f.events).toEqual(["opening", "closing", "closed"]);
   });
 });
 
 describe.runIf("__vitest_browser__" in globalThis)("tooltip public lifecycle", () => {
-  async function fixture(initial?: { open: boolean; disabled: boolean }) {
-    const host = document.createElement("div");
-    const trigger = document.createElement("button");
-    trigger.id = "tooltip-lifecycle-trigger";
-    trigger.textContent = "Details";
-    trigger.style.cssText = "position: fixed; left: 200px; top: 200px";
-    const tooltip = document.createElement("wa-tooltip");
-    tooltip.for = trigger.id;
-    tooltip.trigger = "manual";
-    tooltip.open = initial?.open ?? false;
-    tooltip.disabled = initial?.disabled ?? false;
-    tooltip.textContent = "More information about this action";
-    host.append(trigger, tooltip);
-    document.body.append(host);
-    await commitTooltip(tooltip);
-    await positionTooltip(tooltip);
-    return { host, trigger, tooltip, events: recordLifecycle(tooltip) };
-  }
+  it.each(["trigger", "ancestor"] as const)(
+    "does not open a duplicate label or capture Escape during a %s entrance fade",
+    async (target) => {
+      const { userEvent } = await import("vitest/browser");
+      const f = await fixture();
+      f.tooltip.content = f.trigger.textContent!;
+      await commitTooltip(f.tooltip);
+      const animation = (target === "trigger" ? f.trigger : f.host).animate(
+        { opacity: [0, 1] },
+        { duration: 140 },
+      );
+      animation.pause();
+      animation.currentTime = 0;
+      let escapes = 0;
+      f.host.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          escapes += 1;
+        }
+      });
+      try {
+        expect(f.trigger.checkVisibility({ checkOpacity: true })).toBe(false);
+        f.trigger.focus();
+        await commitTooltip(f.tooltip);
+        expect(f.tooltip.hasAttribute("open")).toBe(false);
+        expect(tooltipBody(f.tooltip).matches(":popover-open")).toBe(false);
+        await userEvent.keyboard("{Escape}");
+        expect(escapes).toBe(1);
+        expect(f.events).toEqual([]);
+      } finally {
+        animation.cancel();
+      }
+    },
+  );
 
-  it.each([false, true])("honors initial open intent when disabled=%s", async (disabled) => {
-    const { tooltip } = await fixture({ open: true, disabled });
-    if (!disabled) {
-      await openTooltip(tooltip);
+  it("repositions an open tooltip after placement changes without reopening or moving focus", async () => {
+    const f = await fixture();
+    await openTooltip(f);
+    const body = tooltipBody(f.tooltip);
+    const triggerBounds = f.trigger.getBoundingClientRect();
+    expect(body.getBoundingClientRect().bottom).toBeLessThanOrEqual(triggerBounds.top);
+    f.events.length = 0;
+
+    f.tooltip.placement = "bottom";
+    await commitTooltip(f.tooltip);
+
+    await expect
+      .poll(() => body.getBoundingClientRect().top)
+      .toBeGreaterThanOrEqual(triggerBounds.bottom);
+    expect(body.getAttribute("placement")).toBe("bottom");
+    expect(body.matches(":popover-open")).toBe(true);
+    expect(body.dataset.phase).toBe("open");
+    expect(document.activeElement).toBe(f.trigger);
+    expect(f.events).toEqual([]);
+  });
+
+  it.each([false, true])("honors immediate focus input when disabled=%s", async (disabled) => {
+    const f = await fixture(disabled);
+    if (disabled) {
+      f.trigger.focus();
+      await frame();
+    } else {
+      await openTooltip(f);
     }
-    await expectVisibility(tooltip, !disabled);
+    await expectVisibility(f, !disabled);
   });
 
   it.each([
-    { mode: "click", dismissal: "trigger" },
-    { mode: "click manual", dismissal: "trigger" },
-    { mode: "click", dismissal: "outside" },
-    { mode: "hover", dismissal: "outside" },
-  ])("reveals from $mode and dismisses on $dismissal click", async ({ mode, dismissal }) => {
-    const { page } = await import("vitest/browser");
-    const { host, trigger, tooltip, events } = await fixture();
-    const outside = document.createElement("button");
-    outside.textContent = "Outside";
-    outside.style.cssText = "position: fixed; left: 20px; top: 20px";
-    host.append(outside);
-    tooltip.trigger = mode;
-    tooltip.showDelay = 0;
-    tooltip.hideDelay = 0;
-    await commitTooltip(tooltip);
-    if (dismissal === "trigger") {
-      trigger.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-      expect(tooltipIsOpen(tooltip)).toBe(false);
-      expect(events).toEqual([]);
-    }
-    const shown = afterTransition(tooltip, "show");
-    if (mode === "hover") {
-      await page.elementLocator(trigger).hover();
-    } else {
-      await page.elementLocator(trigger).click();
-    }
-    await shown;
-    await expectVisibility(tooltip, true);
-    const hidden = afterTransition(tooltip, "hide");
-    await page.elementLocator(dismissal === "trigger" ? trigger : outside).click();
-    await hidden;
-    await expectVisibility(tooltip, false);
-    expect(events).toEqual(["opening", "opened", "closing", "closed"]);
-  });
+    { input: "click", dismissal: "trigger" },
+    { input: "focus", dismissal: "trigger" },
+    { input: "click", dismissal: "outside" },
+    { input: "hover", dismissal: "outside" },
+  ] as const)(
+    "reveals from $input and dismisses on $dismissal click",
+    async ({ input, dismissal }) => {
+      const { page } = await import("vitest/browser");
+      const f = await fixture();
+      const outside = document.createElement("button");
+      outside.textContent = "Outside";
+      outside.style.cssText = "position: fixed; left: 20px; top: 20px";
+      f.host.append(outside);
+      f.tooltip.openOnClick = input === "click";
+      await commitTooltip(f.tooltip);
+      f.trigger.dispatchEvent(
+        new PointerEvent("pointerdown", { bubbles: true, pointerType: "mouse" }),
+      );
+      expect(f.tooltip.hasAttribute("open")).toBe(false);
+      expect(f.events).toEqual([]);
+      const shown = afterPhase(f.tooltip, "opened");
+      if (input === "hover") {
+        await page.elementLocator(f.trigger).hover();
+      } else if (input === "click") {
+        await page.elementLocator(f.trigger).click();
+      } else {
+        f.trigger.focus();
+      }
+      await shown;
+      await expectVisibility(f, true);
+      const hidden = afterPhase(f.tooltip, "closed");
+      await page.elementLocator(dismissal === "trigger" ? f.trigger : outside).click();
+      await hidden;
+      await expectVisibility(f, false);
+      expect(f.events).toEqual(["opening", "opened", "closing", "closed"]);
+    },
+  );
 
-  it("keeps manual press passive and rearms focus after a press dismissal blurs", async () => {
-    const { trigger, tooltip, events } = await fixture();
-    await openTooltip(tooltip);
-    trigger.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-    trigger.click();
-    expect(tooltipIsOpen(tooltip)).toBe(true);
-    await closeTooltip(tooltip);
-    tooltip.trigger = "focus";
-    await commitTooltip(tooltip);
-    const shown = afterTransition(tooltip, "show");
-    trigger.focus();
-    await shown;
-    const hidden = afterTransition(tooltip, "hide");
-    trigger.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+  it("keeps pointer press passive before reveal and rearms focus after a press dismissal blurs", async () => {
+    const f = await fixture();
+    f.trigger.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    expect(f.events).toEqual([]);
+    await openTooltip(f);
+    const hidden = afterPhase(f.tooltip, "closed");
+    f.trigger.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    f.trigger.click();
     await hidden;
-    events.length = 0;
-    trigger.dispatchEvent(new FocusEvent("focus"));
-    expect(tooltipIsOpen(tooltip)).toBe(false);
-    expect(events).toEqual([]);
-    trigger.blur();
-    const reopened = afterTransition(tooltip, "show");
-    trigger.focus();
-    await reopened;
-    await expectVisibility(tooltip, true);
-    expect(events).toEqual(["opening", "opened"]);
+    f.events.length = 0;
+    f.trigger.focus();
+    await commitTooltip(f.tooltip);
+    await expectVisibility(f, false);
+    expect(f.events).toEqual([]);
+    await openTooltip(f);
+    await expectVisibility(f, true);
+    expect(f.events).toEqual(["opening", "opened"]);
   });
 
   it.each(["hide", "disconnect"] as const)(
-    "does not complete an opening revoked by a reposition listener (%s)",
+    "does not complete an opening revoked after its first usable frame (%s)",
     async (action) => {
-      const { host, tooltip, events } = await fixture();
-      let opening: Promise<void> | undefined;
-      let interrupted = false;
-      await duringTooltipOpening(
-        tooltip,
-        () => {
-          opening = openTooltip(tooltip);
-        },
-        () => {
-          onPositionedAfterOpening(tooltip, () => {
-            interrupted = true;
-            if (action === "disconnect") {
-              host.remove();
-            } else {
-              void closeTooltip(tooltip);
-            }
-          });
-        },
-      );
-      await opening;
-      expect(interrupted).toBe(true);
-      if (action === "hide") {
-        await closeTooltip(tooltip);
-        await expectVisibility(tooltip, false);
-        expect(events).toEqual(["opening", "closing", "closed"]);
+      const f = await fixture();
+      const hidden = action === "hide" ? afterPhase(f.tooltip, "closed") : undefined;
+      await duringTransition(f, "show", () => {
+        expect(tooltipBody(f.tooltip).matches(":popover-open")).toBe(true);
+        if (action === "disconnect") {
+          f.host.remove();
+        } else {
+          requestVisibility(f, "hide");
+        }
+      });
+      if (hidden) {
+        await hidden;
+        await expectVisibility(f, false);
+        expect(f.events).toEqual(["opening", "closing", "closed"]);
       } else {
-        expect(tooltipIsHidden(tooltip)).toBe(true);
-        expect(tooltipIsActive(tooltip)).toBe(false);
-        expect(events).toEqual(["opening"]);
+        await frame();
+        expect(f.tooltip.hasAttribute("open")).toBe(false);
+        expect(f.events).toEqual(["opening"]);
       }
     },
   );
 
   it("disabling during an opening retires it even when a hide listener vetoes", async () => {
-    const { tooltip, events } = await fixture();
-    vetoTooltipClosing(tooltip);
-    const opening = openTooltip(tooltip);
-    await commitTooltip(tooltip);
-    expect(events).toEqual(["opening"]);
-    tooltip.disabled = true;
-    await commitTooltip(tooltip);
-    await Promise.all([opening, closeTooltip(tooltip)]);
-    await expectVisibility(tooltip, false);
-    expect(events).toEqual(["opening", "closing", "closed"]);
+    const f = await fixture();
+    f.tooltip.addEventListener("wa-hide", (event) => event.preventDefault());
+    const hidden = afterPhase(f.tooltip, "closed");
+    await duringTransition(f, "show", async () => {
+      f.tooltip.disabled = true;
+      await commitTooltip(f.tooltip);
+      expect(f.tooltip.hasAttribute("open")).toBe(false);
+    });
+    await hidden;
+    await expectVisibility(f, false);
+    expect(f.events).toEqual(["opening", "closing", "closed"]);
   });
 
-  it("honors a hide requested immediately after reconnecting an open tooltip", async () => {
-    const { host, tooltip, events } = await fixture();
-    await openTooltip(tooltip);
-    host.remove();
-    events.length = 0;
-    document.body.append(host);
-    await closeTooltip(tooltip);
-    await expectVisibility(tooltip, false);
-    expect(events).toEqual([]);
+  it("keeps a reconnected tooltip closed until fresh focus input", async () => {
+    const f = await fixture();
+    await openTooltip(f);
+    f.host.remove();
+    f.events.length = 0;
+    document.body.append(f.host);
+    await commitTooltip(f.tooltip);
+    await expectVisibility(f, false);
+    expect(f.events).toEqual([]);
+    await openTooltip(f);
+    await expectVisibility(f, true);
   });
 
-  it("moves focus listeners and preserves other labels when replacing the anchor", async () => {
-    const { host, trigger, tooltip } = await fixture();
-    trigger.setAttribute("aria-labelledby", "original-label " + tooltip.id);
+  it("moves focus listeners and preserves other descriptions when replacing the anchor", async () => {
+    const f = await fixture();
+    f.trigger.setAttribute("aria-labelledby", "original-label");
+    const description = f.trigger
+      .getAttribute("aria-describedby")!
+      .split(" ")
+      .find((id) => id !== "original-description")!;
     const replacement = document.createElement("button");
-    replacement.id = "replacement-tooltip-trigger";
     replacement.textContent = "Replacement";
     replacement.setAttribute("aria-labelledby", "replacement-label");
-    host.append(replacement);
-    tooltip.trigger = "focus";
-    tooltip.for = replacement.id;
-    await commitTooltip(tooltip);
-    expect(trigger.getAttribute("aria-labelledby")).toBe("original-label");
-    expect(replacement.getAttribute("aria-labelledby")).toBe("replacement-label " + tooltip.id);
-    trigger.focus();
-    expect(tooltipIsOpen(tooltip)).toBe(false);
-    const shown = afterTransition(tooltip, "show");
+    replacement.setAttribute("aria-describedby", "replacement-description");
+    f.host.append(replacement);
+    f.tooltip.anchor = replacement;
+    await commitTooltip(f.tooltip);
+    expect(f.trigger.getAttribute("aria-labelledby")).toBe("original-label");
+    expect(f.trigger.getAttribute("aria-describedby")).toBe("original-description");
+    expect(replacement.getAttribute("aria-labelledby")).toBe("replacement-label");
+    expect(replacement.getAttribute("aria-describedby")).toBe(
+      `replacement-description ${description}`,
+    );
+    f.trigger.focus();
+    expect(f.tooltip.hasAttribute("open")).toBe(false);
+    const shown = afterPhase(f.tooltip, "opened");
     replacement.focus();
     await shown;
-    await expectVisibility(tooltip, true);
+    await expectVisibility(f, true);
   });
 
-  it("retires anchor listeners without retaining a disconnect exception", async () => {
+  it("retires old-anchor input and descriptions across disconnect and remount", async () => {
     const { userEvent } = await import("vitest/browser");
-    const { host, trigger, tooltip, events } = await fixture();
-    tooltip.trigger = "focus";
-    await commitTooltip(tooltip);
-    // Observe the native signal: a default abort exception can retain detached
-    // anchors through its stack while this tooltip waits in the title cache.
-    const retired = anchorListenerSignal(tooltip);
-    expect(retired.aborted).toBe(false);
-
-    tooltip.remove();
-    expect(retired.aborted).toBe(true);
-    expect(retired.reason).toBeNull();
-
+    const f = await fixture();
+    f.tooltip.remove();
+    await Promise.resolve();
+    expect(f.trigger.getAttribute("aria-describedby")).toBe("original-description");
     const replacement = document.createElement("button");
-    replacement.id = "reconnected-tooltip-trigger";
     replacement.textContent = "Replacement";
-    host.append(replacement);
-    tooltip.for = replacement.id;
-    host.append(tooltip);
-    await commitTooltip(tooltip);
-    expect(anchorListenerSignal(tooltip)).not.toBe(retired);
-    expect(anchorListenerSignal(tooltip).aborted).toBe(false);
-
-    trigger.dispatchEvent(new FocusEvent("focus"));
-    await commitTooltip(tooltip);
-    expect(tooltipIsOpen(tooltip)).toBe(false);
-    expect(events).toEqual([]);
-    const shown = afterTransition(tooltip, "show");
+    f.host.append(replacement);
+    f.tooltip.anchor = replacement;
+    f.host.append(f.tooltip);
+    await commitTooltip(f.tooltip);
+    f.trigger.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+    f.trigger.dispatchEvent(new PointerEvent("pointerenter", { pointerType: "mouse" }));
+    await frame();
+    expect(f.tooltip.hasAttribute("open")).toBe(false);
+    expect(f.events).toEqual([]);
+    const shown = afterPhase(f.tooltip, "opened");
     replacement.focus();
     await shown;
-    await expectVisibility(tooltip, true);
-    const hidden = afterTransition(tooltip, "hide");
+    await expectVisibility(f, true);
+    const hidden = afterPhase(f.tooltip, "closed");
     await userEvent.keyboard("{Escape}");
     await hidden;
-    await expectVisibility(tooltip, false);
+    await expectVisibility(f, false);
   });
 
   it.each([
@@ -521,75 +504,71 @@ describe.runIf("__vitest_browser__" in globalThis)("tooltip public lifecycle", (
     { operation: "show", veto: true },
     { operation: "hide", veto: true },
   ] as const)(
-    "settles an interrupted public $operation without stale completion (veto=$veto)",
+    "fences superseded $operation input without stale completion (veto=$veto)",
     async ({ operation, veto }) => {
-      const { tooltip, events } = await fixture();
+      const f = await fixture();
       if (operation === "hide") {
-        await openTooltip(tooltip);
-        events.length = 0;
+        await openTooltip(f);
+        f.events.length = 0;
       }
       if (veto) {
-        vetoNextTransition(tooltip, operation);
+        vetoNextTransition(f, operation);
       }
-      let settled = false;
-      const pending = transitionTooltip(tooltip, operation).then(() => {
-        settled = true;
-      });
-      await commitTooltip(tooltip);
-      expect(events).toEqual([requestPhase(operation)]);
-      if (veto) {
-        await expect.poll(() => settled).toBe(true);
-        await pending;
-        await expectVisibility(tooltip, operation === "hide");
-        expect(events).toEqual([requestPhase(operation)]);
+      const body = tooltipBody(f.tooltip);
+      const animation = body.animate({ outlineOffset: ["0px", "1px"] }, { duration: 60_000 });
+      animation.pause();
+      try {
+        requestVisibility(f, operation);
+        await commitTooltip(f.tooltip);
+        expect(f.events).toEqual([requestPhase(operation)]);
+        if (veto) {
+          await expectVisibility(f, operation === "hide");
+          if (operation === "hide") {
+            f.trigger.focus();
+          }
+        }
+        const replacement = veto ? operation : operation === "show" ? "hide" : "show";
+        const done = afterPhase(f.tooltip, completionPhase(replacement));
+        requestVisibility(f, replacement);
+        animation.cancel();
+        await done;
+        await expectVisibility(f, replacement === "show");
+        expect(f.events).toEqual([
+          requestPhase(operation),
+          requestPhase(replacement),
+          completionPhase(replacement),
+        ]);
+      } finally {
+        animation.cancel();
       }
-      const replacement = veto ? operation : operation === "show" ? "hide" : "show";
-      await Promise.all([pending, transitionTooltip(tooltip, replacement)]);
-      await expectVisibility(tooltip, replacement === "show");
-      expect(events).toEqual([
-        requestPhase(operation),
-        requestPhase(replacement),
-        completionPhase(replacement),
-      ]);
     },
   );
 
   it.each(["show", "hide"] as const)(
-    "retires a public %s on disconnect before a fresh keyboard reveal",
+    "retires a pending %s on disconnect before a fresh keyboard reveal",
     async (operation) => {
       const { userEvent } = await import("vitest/browser");
-      const { host, trigger, tooltip, events } = await fixture();
+      const f = await fixture();
       if (operation === "hide") {
-        await openTooltip(tooltip);
-        events.length = 0;
+        await openTooltip(f);
+        f.events.length = 0;
       }
-      const pending = transitionTooltip(tooltip, operation);
-      await commitTooltip(tooltip);
-      expect(events).toEqual([requestPhase(operation)]);
-      host.remove();
-      expect(tooltipIsActive(tooltip)).toBe(false);
-      expect(tooltipIsHidden(tooltip)).toBe(true);
-      expect(events).toEqual([requestPhase(operation)]);
-
-      // Reconnect before the retired promise settles. Explicit closed intent
-      // and the next focus must survive the previous connection's cleanup.
-      tooltip.open = false;
-      tooltip.trigger = "focus";
-      document.body.append(host);
-      await commitTooltip(tooltip);
-      expect(tooltipIsOpen(tooltip)).toBe(false);
-      expect(tooltipIsActive(tooltip)).toBe(false);
-      expect(tooltipIsHidden(tooltip)).toBe(true);
-      const shown = afterTransition(tooltip, "show");
-      trigger.focus();
-      await Promise.all([pending, shown]);
-      await expectVisibility(tooltip, true);
-      const hidden = afterTransition(tooltip, "hide");
+      await duringTransition(f, operation, () => {
+        expect(f.events).toEqual([requestPhase(operation)]);
+        f.host.remove();
+        expect(f.tooltip.hasAttribute("open")).toBe(false);
+      });
+      document.body.append(f.host);
+      await commitTooltip(f.tooltip);
+      await expectVisibility(f, false);
+      await openTooltip(f);
+      await expectVisibility(f, true);
+      const hidden = afterPhase(f.tooltip, "closed");
       await userEvent.keyboard("{Escape}");
       await hidden;
-      await expectVisibility(tooltip, false);
-      expect(document.activeElement).toBe(trigger);
-      expect(events).toEqual([requestPhase(operation), "opening", "opened", "closing", "closed"]);
+      await expectVisibility(f, false);
+      expect(document.activeElement).toBe(f.trigger);
+      expect(f.events).toEqual([requestPhase(operation), "opening", "opened", "closing", "closed"]);
     },
   );
 });

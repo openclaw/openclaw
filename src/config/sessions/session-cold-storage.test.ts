@@ -36,6 +36,7 @@ import * as archiveWorkers from "./session-accessor.sqlite-archive.js";
 import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
 import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-delete-snapshot.js";
 import { readSessionTranscriptHistoryEvents } from "./session-accessor.sqlite-history.test-support.js";
+import { deleteMaterializedSessionStatePlans } from "./session-accessor.sqlite-lifecycle-state.js";
 import {
   loadTranscriptEventsSync,
   loadTranscriptHeaderSync,
@@ -45,7 +46,10 @@ import { readTranscriptContextVersionInTransaction } from "./session-accessor.sq
 import { appendTranscriptEvent } from "./session-accessor.sqlite-transcript-write.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSessionColdArchivePath } from "./session-cold-storage-codec.js";
-import { readSessionColdTranscript } from "./session-cold-storage-state.js";
+import {
+  assertSessionTranscriptHot,
+  readSessionColdTranscript,
+} from "./session-cold-storage-state.js";
 import { getSessionColdStorageStatus } from "./session-cold-storage-status.js";
 import {
   restoreSessionColdTranscript,
@@ -589,7 +593,26 @@ describe("cold transcript storage workers", () => {
       historicalId,
     );
     const events = loadTranscriptEventsSync(fixture.scope);
+    assertSessionTranscriptHot(fixture.database(), historicalId);
+    const hotPlan = planSessionStateDeleteIfUnreferenced({
+      archiveDirectory: path.dirname(fixture.scope.storePath),
+      archiveTranscript: false,
+      database: openOpenClawAgentDatabase(fixture.options),
+      referencedSessionIds: new Set(),
+      sessionId: historicalId,
+    });
+    expect(hotPlan).not.toBeNull();
+    const preparedDeletion = await archiveWorkers.materializeSessionStateDeletePlans([hotPlan!]);
     await archiveFixture(fixture);
+    expect(
+      runOpenClawAgentWriteTransaction(
+        (database) => deleteMaterializedSessionStatePlans(database, preparedDeletion),
+        fixture.options,
+      ),
+    ).toEqual([]);
+    expect(() => assertSessionTranscriptHot(fixture.database(), historicalId)).toThrow(
+      expect.objectContaining({ code: "TRANSCRIPT_COLD" }),
+    );
     expect(readTranscriptStatsSync(fixture.scope)).toEqual(stats);
     expect(
       readTranscriptContextVersionInTransaction({ db: fixture.database() }, historicalId),
@@ -616,6 +639,7 @@ describe("cold transcript storage workers", () => {
     } finally {
       hostSql.restore();
     }
+    assertSessionTranscriptHot(fixture.database(), historicalId);
     expect(fixture.snapshot()).toEqual(fixture.original);
   });
 

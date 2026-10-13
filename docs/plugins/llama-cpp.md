@@ -33,6 +33,11 @@ same provider. It never creates another provider namespace.
 
 ## Managed local server
 
+The managed loopback server does not need an API key. Fresh setup leaves `apiKey`
+unset; the provider supplies its non-secret authentication marker at runtime.
+Existing configured credentials are preserved for Doctor and explicit secret
+migration, and external servers retain their own authentication requirements.
+
 Choose **Managed local server** when OpenClaw should install, start, and stop
 the server. Setup reads the **Gateway host's** hardware and recommends a model
 from its available memory, GPU capability, and free disk space. A browser

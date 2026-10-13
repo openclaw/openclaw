@@ -59,6 +59,15 @@ incognito owner during its separate migration.
 
 ### Retained helper contracts
 
+`openclaw/plugin-sdk/sandbox.resolveSandboxRuntimeStatus` is deprecated. Await
+`resolveSandboxRuntimeStatusAsync` for a session lookup, or use
+`resolvePreparedSandboxRuntimeStatus` with an already selected full session entry
+(or `null` for acknowledged absence). The synchronous adapter retains its old
+behavior and emits one bounded `sandbox-runtime-status` warning per plugin. It
+will be removed in a later release after stable deprecation. Bundled execution
+paths prepare policy through the session worker and retain its authority through the effect;
+this migration changes no schema, retention, or update behavior.
+
 Transcript append and lock preparation now uses
 [`preparation.prepareMessage`, `preparation.source`, and `withSessionTranscriptWrite`](/plugins/sdk-migration/how-to-migrate#await-locked-transcript-preparation).
 The `transcript-lock-sync-message-preparation` and
@@ -251,10 +260,26 @@ activity and never replace current channel or session authority.
 
 The synchronous timestamp and envelope APIs shipped in OpenClaw 2026.9.8 remain
 deprecated compatibility until the next Plugin SDK major and explicit breaking-release
-approval. This includes the callback-based `inbound-envelope` helpers and
+approval. Calling `readSessionUpdatedAt` through either the SDK subpath or
+`runtime.channel.session` emits the same deprecation warning. The compatibility
+window includes the callback-based `inbound-envelope` helpers and
 `dispatchInboundDirectDmWithRuntime`; bundled callers use the awaited preparation
 and `dispatchInboundDirectDm`. Existing synchronous signatures and callback timing
 remain unchanged. No schema, stored data, retention, or update migration is required.
+
+### Combined session-store reads
+
+Await `loadCombinedSessionStoreForGatewayAsync` from
+`openclaw/plugin-sdk/session-transcript-hit`. It preserves the full-entry result
+and excludes incognito sessions while reading durable stores and foreign parent
+metadata in the database workers. Each call observes committed in-process writes;
+its returned view retains the facts captured for that call.
+
+The synchronous `loadCombinedSessionStoreForGateway` emits a deprecation warning
+and keeps its existing signature and behavior during its deprecation period. It
+will be removed in a later release after stable deprecation. Bundled Memory search
+uses the async method.
+No schema, retained data, or update migration is required.
 
 ### Progress card handoff
 
@@ -476,6 +501,13 @@ these APIs remain supported, with no deprecation warning or required migration.
 Worker activation must preserve them; changing these released contracts requires
 an explicitly approved Plugin SDK major release.
 
+The synchronous `readAcpSessionEntry` export remains available for the
+`v2026.9.4` contract, but is deprecated. Await `readAcpSessionEntryAsync` to read
+through the existing worker. Bundled callers have migrated. Legacy use emits
+one `DEP_PLUGIN_SDK` warning per plugin and ACP-session family per process;
+removal will follow in a later stable release after deprecation ships. The asynchronous signatures
+above remain supported without warnings. This changes no schema or stored data.
+
 ### Memory session binding compatibility
 
 `openclaw/plugin-sdk/memory-core-host-engine-sessions` retains the readers
@@ -485,9 +517,13 @@ published in `v2026.9.8`: `buildSessionEntry(path, options?)`,
 `onTranscriptMessage(message, observedAt)` observer remain unchanged. Internal
 incognito actor sources are not plugin arguments.
 
+Corpus discovery accepts `options.config` to use the caller's prepared config
+and session store without reading the host's global runtime snapshot. Memory
+Core passes its manager or dreaming config through this option. Callers that
+omit it continue to use the prepared host runtime config.
+
 The `memory-session-released-signatures` compatibility record is active. These
-APIs remain supported without warnings or a required migration; changing their
-released contracts requires an explicitly approved Plugin SDK major release.
+APIs remain supported without warnings or a required migration.
 
 ### Session upstream-link writes
 
@@ -602,12 +638,11 @@ missing result, while a retained ended actor rejects. Archive discovery returns
 no durable artifacts for that actor. Private transcripts are not added to the
 durable Memory ingestion corpus.
 
-The synchronous `loadMemorySessionMetadata` and
-`loadMemorySessionMetadataBatch` helpers are deprecated. Await
+The synchronous `loadMemorySessionMetadata` helper is deprecated. Await
 `loadMemorySessionMetadataAsync` and `loadMemorySessionMetadataBatchAsync`
 instead; bundled ingestion resolves each store batch in the existing history
-worker. The synchronous helpers retain their signatures until the next Plugin
-SDK major. Main-thread calls emit one shared Memory session deprecation warning
+worker. The synchronous helper retains its signature through the deprecation
+period and may be removed in a later release. Main-thread calls emit one shared Memory session deprecation warning
 per plugin. Batch transcript statistics now offer
 `readTranscriptStatsBatchReadOnlyAsync`; `session-store-runtime` offers
 `readTranscriptStatsAsync` for individual transcripts. Their synchronous
@@ -637,6 +672,16 @@ including empty results without range metadata. Only an explicit
 `status: "not_found"` reports absence. New producers must emit that status for
 missing files; registered-input normalization remains available through the
 next Plugin SDK major.
+
+### Runtime config snapshot reads
+
+`runtime-config-snapshot.getRuntimeConfig` and
+`memory-core-host-runtime-core.getRuntimeConfig` retain their released synchronous
+cold-load contract but are deprecated. Use `readRuntimeConfig` for a prepared
+snapshot, or await `captureRuntimeConfigAsyncReader()()` at a cold preparation
+boundary. Legacy use emits one `DEP_SESSION_PERSISTENCE` warning per plugin and
+runtime-config family per process. Removal will follow in a later stable release
+after deprecation ships. This changes no stored-config format.
 
 ### Config record migrations
 
@@ -825,8 +870,9 @@ Anthropic Vertex and Kilocode providers. Their `2026.7.1` and `2026.7.33` throug
 for new code, but these aliases retain their reader-dependent removal condition.
 
 The unused private memory-host `loadConfig` re-exports have been removed.
-Memory implementations use `getRuntimeConfig` or caller-provided config;
-custom-table migration behavior remains intact.
+Memory implementations use `readRuntimeConfig` or caller-provided config;
+cold entrypoints await `captureRuntimeConfigAsyncReader()()`. Custom-table
+migration behavior remains intact.
 
 ### Published channel setup compatibility
 

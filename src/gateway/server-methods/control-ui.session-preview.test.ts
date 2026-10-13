@@ -3,6 +3,7 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as subagentState from "../../agents/subagents/registry/subagent-registry-state.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   persistSessionTranscriptTurn,
   replaceSessionEntry,
@@ -33,6 +34,7 @@ async function createPreviewContext(cfg: OpenClawConfig = {}, getRuntimeConfig =
 describe("controlUi.sessionPreview", () => {
   it("replies in the same authorization frame before queued visibility revocation", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const sessionKey = "agent:main:dashboard:preview-response-frame";
       const scope = { agentId: "main", sessionKey };
       const entry = {
@@ -86,6 +88,7 @@ describe("controlUi.sessionPreview", () => {
 
   it("rechecks exact-key visibility after compact registry preparation", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const sessionKey = "agent:main:dashboard:preparing-preview";
       const scope = { agentId: "main", sessionKey };
       const entry = {
@@ -136,6 +139,7 @@ describe("controlUi.sessionPreview", () => {
         session: { scope: "global" },
         agents: { entries: { main: {}, research: {} } },
       };
+      setRuntimeConfigSnapshot(cfg);
       for (const agentId of ["main", "research"]) {
         const scope = { agentId, sessionKey: "global", sessionId: `hover-${agentId}` };
         await replaceSessionEntry(scope, {
@@ -198,6 +202,7 @@ describe("controlUi.sessionPreview", () => {
 
   it("returns bounded, original metadata for one session", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const secret = "sk-test-session-preview-secret-1234567890";
       const scope = {
         agentId: "main",

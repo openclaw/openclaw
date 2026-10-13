@@ -1,13 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { assertOpenClawStateDatabaseOwner } from "../state/openclaw-state-db-maintenance.js";
-import {
-  isArtifactPreservingStateRead,
-  withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
-  withExistingOpenClawStateDatabaseReadOnly,
-} from "../state/openclaw-state-db-readonly.js";
+import { isArtifactPreservingStateRead } from "../state/openclaw-state-db-readonly.js";
 import {
   registerOpenClawStateDatabaseLifecycleListener,
   type OpenClawStateDatabaseOptions,
@@ -15,10 +9,7 @@ import {
 import { resolveDatabasePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
-import {
-  readClawInstallSchemaVersionRows,
-  type ClawInstallSchemaVersionRow,
-} from "./provenance-runtime-read.kernel.js";
+import type { ClawInstallSchemaVersionRow } from "./provenance-runtime-read.kernel.js";
 import { parseClawInstallRecordSchemaVersion } from "./provenance-schema-version.js";
 
 type ClawInstallSchemaVersionRead =
@@ -78,14 +69,6 @@ function decodeSchemaVersions(
     }
   }
   return { kind: "ready", schemaVersions };
-}
-
-function readSchemaVersions(db: DatabaseSync): ClawInstallSchemaVersionSnapshot {
-  try {
-    return decodeSchemaVersions(readClawInstallSchemaVersionRows(db));
-  } catch (error) {
-    return failedSchemaVersionSnapshot(error);
-  }
 }
 
 function knownAgentIds(
@@ -211,31 +194,6 @@ export function readCachedClawInstallSchemaVersions(
   );
 }
 
-export function initializeCachedClawInstallSchemaVersions(
-  options: ClawInstallSchemaVersionReadOptions = {},
-): void {
-  if (readHandedOffFacts(options)) {
-    notifySnapshotListeners();
-    return;
-  }
-  const path = resolveSnapshotPath(options);
-  const previous = snapshotsByPath.get(path);
-  try {
-    const read =
-      options.artifactPreservingReadOnly === false
-        ? withExistingOpenClawStateDatabaseReadOnly
-        : withExistingOpenClawStateDatabaseArtifactPreservingReadOnly;
-    const snapshot = read(({ db, path: pathname }) => {
-      assertOpenClawStateDatabaseOwner(db, { pathname });
-      return readSchemaVersions(db);
-    }, options);
-    snapshotsByPath.set(path, resolveSchemaVersionSnapshot(snapshot, previous));
-  } catch (error) {
-    snapshotsByPath.set(path, failedSchemaVersionSnapshot(error, previous));
-  }
-  notifySnapshotListeners();
-}
-
 function resolveSchemaVersionSnapshot(
   snapshot: ClawInstallSchemaVersionSnapshot | undefined,
   previous: ClawInstallSchemaVersionSnapshot | undefined,
@@ -264,22 +222,26 @@ export async function prepareClawInstallSchemaVersions(
   try {
     const context = captureOpenClawStateWorkerContext({ path, env: options.env });
     assertCurrent = context.admission.assertCurrent;
-    const rows = await runOpenClawStateWorkerOperation(
-      context,
-      (scope) =>
-        scope.execute({
-          type: "claws.install-schema-versions",
-          input: {
-            artifactPreservingReadOnly:
-              options.artifactPreservingReadOnly !== false || isArtifactPreservingStateRead(),
-          },
-        }),
-      { existingOnly: true },
-    );
-    snapshot = resolveSchemaVersionSnapshot(
-      rows === undefined ? undefined : decodeSchemaVersions(rows),
-      previous,
-    );
+    if (previous?.kind === "ready") {
+      snapshot = previous;
+    } else {
+      const rows = await runOpenClawStateWorkerOperation(
+        context,
+        (scope) =>
+          scope.execute({
+            type: "claws.install-schema-versions",
+            input: {
+              artifactPreservingReadOnly:
+                options.artifactPreservingReadOnly !== false || isArtifactPreservingStateRead(),
+            },
+          }),
+        { existingOnly: true },
+      );
+      snapshot = resolveSchemaVersionSnapshot(
+        rows === undefined ? undefined : decodeSchemaVersions(rows),
+        previous,
+      );
+    }
   } catch (error) {
     snapshot = failedSchemaVersionSnapshot(error, previous);
   }

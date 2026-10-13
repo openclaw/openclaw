@@ -6,11 +6,13 @@ import { installSessionPlacementAdmissionProvider } from "../../../src/agents/se
 import { SessionManager } from "../../../src/agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../../src/agents/test-helpers/agent-message-fixtures.js";
 import { createSessionsSendTool } from "../../../src/agents/tools/sessions-send-tool.js";
+import { setRuntimeConfigSnapshot } from "../../../src/config/runtime-snapshot.js";
 import {
   listSessionPendingInputs,
   upsertSessionEntryCore,
 } from "../../../src/config/sessions/session-accessor.js";
 import { resolveSessionStorePathForScope } from "../../../src/config/sessions/session-store-path.js";
+import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
 import { coordinateWorkerPlacementDispatch } from "../../../src/gateway/worker-environments/placement-dispatch-coordinator.js";
 import { createCoordinatorTestService } from "../../../src/gateway/worker-environments/placement-dispatch-coordinator.test-support.js";
@@ -70,7 +72,7 @@ suite.define(() => {
     try {
       const workspace = state.path("workspace");
       await mkdir(workspace, { recursive: true });
-      await state.writeConfig({
+      const config: OpenClawConfig = {
         plugins: { enabled: false },
         tools: { sessions: { visibility: "all" } },
         agents: {
@@ -106,8 +108,10 @@ suite.define(() => {
           controlUi: { allowedOrigins: [new URL(suite.server.baseUrl).origin], enabled: false },
           port,
         },
-      });
+      };
+      await state.writeConfig(config);
       state.applyEnv();
+      setRuntimeConfigSnapshot(config);
       const scope = {
         agentId: "main",
         sessionKey,

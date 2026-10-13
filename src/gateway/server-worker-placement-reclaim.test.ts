@@ -6,6 +6,7 @@ import { setImmediate } from "node:timers/promises";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { loadTranscriptEvents, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { clearAgentRunContext } from "../infra/agent-run-registry.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -21,6 +22,8 @@ import {
   admitWorkerStopChat,
   createWorkerStopChatContext,
 } from "./server-worker-placement.test-harness.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
+import { resolveCanonicalSessionEntryFromStoreKeys } from "./session-utils-store.js";
 import { coordinateWorkerPlacementDispatch } from "./worker-environments/placement-dispatch-coordinator.js";
 import { REQUEST } from "./worker-environments/placement-dispatch-test-fixtures.js";
 import { createHarness } from "./worker-environments/placement-dispatch-test-harness.js";
@@ -39,6 +42,14 @@ vi.mock("../config/config.js", async (importOriginal) => ({
   getRuntimeConfig: () => ({}),
 }));
 const roots: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+function resolveFixtureTarget(storePath: string): typeof resolveGatewaySessionStoreTargetInWorker {
+  return (params) =>
+    resolveGatewaySessionStoreTargetInWorker({
+      ...params,
+      cfg: { ...params.cfg, session: { ...params.cfg.session, store: storePath } },
+    });
+}
 afterEach(async () => {
   closeOpenClawAgentDatabasesForTest();
   await closeStateDatabaseForTest();
@@ -114,8 +125,8 @@ async function scenario(
                   path: worktreePath,
                 },
         },
-        resolveGatewaySessionStoreTargetWithStore: () => target,
-        resolveCanonicalSessionEntryFromStoreKeys: () => entry,
+        resolveGatewaySessionStoreTargetInWorker: resolveFixtureTarget(storePath),
+        resolveCanonicalSessionEntryFromStoreKeys,
       }) as never,
     cancelSessionWork: async (request) => {
       cancellationEntered.resolve();
@@ -204,8 +215,8 @@ async function scenario(
                   path: worktreePath,
                 }),
               },
-              resolveGatewaySessionStoreTargetWithStore: () => target,
-              resolveCanonicalSessionEntryFromStoreKeys: () => entry,
+              resolveGatewaySessionStoreTargetInWorker: resolveFixtureTarget(storePath),
+              resolveCanonicalSessionEntryFromStoreKeys,
             }) as never,
         )
       : (_request, run) => run(),
@@ -390,7 +401,11 @@ async function scenario(
       }
     }
     if (pendingDispatch) {
-      await setImmediate();
+      await awaitGateBeforeSettlement(
+        cancellationEntered.promise,
+        reclaim,
+        "Stop settled before fencing provisioning ingress",
+      );
       reserveOld();
       releaseProvision.resolve();
       active = await dispatching!;
@@ -552,15 +567,9 @@ it.each([false, true])(
 );
 
 it("an idempotent failed-cleanup result does not cancel work already on the local placement", async () => {
-  const storePath = path.join(os.tmpdir(), "failed-already-local.sqlite");
+  const storePath = path.join(tempDirs.make("failed-already-local-"), "sessions.sqlite");
   const entry = { sessionId: REQUEST.sessionId, updatedAt: Date.now() };
-  const target = {
-    storePath,
-    canonicalKey: REQUEST.sessionKey,
-    storeKeys: [REQUEST.sessionKey],
-    agentId: REQUEST.agentId,
-    store: { [REQUEST.sessionKey]: entry },
-  };
+  await replaceSessionEntry({ ...REQUEST, storePath }, entry);
   const local = { state: "local", sessionId: REQUEST.sessionId, generation: 4 };
   const cancel = vi.fn();
   const barriers = createGatewayWorkerPlacementReclaimBarriers({
@@ -572,8 +581,8 @@ it("an idempotent failed-cleanup result does not cancel work already on the loca
     loadSessionRuntime: async () =>
       ({
         managedWorktrees: { findLiveByOwner: async () => undefined },
-        resolveGatewaySessionStoreTargetWithStore: () => target,
-        resolveCanonicalSessionEntryFromStoreKeys: () => entry,
+        resolveGatewaySessionStoreTargetInWorker: resolveFixtureTarget(storePath),
+        resolveCanonicalSessionEntryFromStoreKeys,
       }) as never,
     cancelSessionWork: cancel,
     revokeSessionAuthority: vi.fn(),
@@ -645,8 +654,8 @@ it.each(["missing", "local"] as const)(
     }
     const sessionRuntime = {
       managedWorktrees: { findLiveByOwner: async () => undefined },
-      resolveGatewaySessionStoreTargetWithStore: () => target,
-      resolveCanonicalSessionEntryFromStoreKeys: () => entry,
+      resolveGatewaySessionStoreTargetInWorker: resolveFixtureTarget(storePath),
+      resolveCanonicalSessionEntryFromStoreKeys,
     };
     const context = createWorkerStopChatContext();
     const cancelApprovals = vi.fn();

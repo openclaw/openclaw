@@ -116,6 +116,9 @@ format when rewriting existing data also counts as a writer. A format last
 written before the cutoff may be retired together with its Doctor checks.
 When Doctor refuses a retired input, it names an intermediate release to upgrade
 through before retrying. Retirement must leave persisted source data untouched.
+Doctor checks retired runtime files and referenced OAuth sidecars before entering
+repair maintenance or preparing database migrations. A refusal leaves the database
+schemas and running Gateway unchanged, so the intermediate upgrade remains usable.
 
 Except for the deferred readers recorded below, legacy normalization belongs to
 Doctor and migration owners, with the existing backup and verification flow.

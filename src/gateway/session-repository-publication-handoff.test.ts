@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { managedWorktrees } from "../agents/worktrees/service.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import * as backoff from "../infra/backoff.js";
 import { registerClonedProjectRegistry } from "../projects/project-registry.test-support.js";
@@ -31,7 +32,10 @@ import { insertGitHubPublicationRequest } from "./github-publication-store.worke
 import { assertGitHubPublicationWorkflowChangesAllowed } from "./github-publication-workflows.js";
 import { REMOTE_GITHUB_PUBLICATION_SNAPSHOT_JS } from "./github-repository-publication-snapshot.js";
 import { repositoryGitHubPublicationDigest } from "./github-repository-publication-store.js";
-import { assertReceiptOwner } from "./github-repository-publication-workspace.js";
+import {
+  assertReceiptOwner,
+  prepareReceiptOwner,
+} from "./github-repository-publication-workspace.js";
 import { materializeSessionRepositoryWorkspaceOnGateway } from "./session-repository-materialization.js";
 import { stageSessionRepositoryCheckpoint } from "./worker-environments/session-repository-checkpoints.js";
 import { captureWorkspaceManifest } from "./worker-environments/workspace-manifest-worker.js";
@@ -66,6 +70,7 @@ it.each([
       mocked.timed.mockImplementation(actual.runCommandWithTimeout);
       const cfg = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
       await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot(cfg);
       const source = state.path("source"),
         bare = state.path("origin.git"),
         cloud = state.path("cloud");
@@ -355,7 +360,8 @@ it.each([
         return;
       }
       await move();
-      const receiptWorkspace = await store.prepare(row.workspace_id);
+      const receiptWorkspace = await prepareReceiptOwner(row);
+      using _ = { [Symbol.dispose]: () => receiptWorkspace.release() };
       expect(() => assertReceiptOwner(row, receiptWorkspace)).toThrow();
       expect(readRepositoryGitHubPublication(row.request_id)?.pushed_head_commit).toBe(
         publishedHead,

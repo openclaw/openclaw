@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { assignSessionOwner, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -67,6 +68,7 @@ describe("creator namespace authorization", () => {
           },
         },
       };
+      setRuntimeConfigSnapshot(cfg);
       const context = { getRuntimeConfig: () => cfg } as GatewayRequestContext;
       const actors = [
         { type: "human", source: "profile" },
@@ -130,8 +132,10 @@ describe("creator namespace authorization", () => {
 
   it("resolves profile tombstones after warming event snapshots without rewriting creators", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const old = ensureProfileForEmail("old@example.test");
       const current = ensureProfileForEmail("current@example.test");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const client = {
         connect: { scopes: ["operator.read"] },
         authenticatedUserProfile: { profileId: current.id },

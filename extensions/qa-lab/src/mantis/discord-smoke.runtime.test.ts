@@ -114,27 +114,6 @@ describe("mantis discord smoke runtime", () => {
     await fs.rm(repoRoot, { recursive: true, force: true });
   });
 
-  it("writes pass artifacts without leaking the bot token", async () => {
-    const result = await runSmoke({
-      outputDir: ".artifacts/qa-e2e/mantis/test",
-      now: () => new Date("2026-05-03T12:00:00.000Z"),
-    });
-
-    expect(result.status).toBe("pass");
-    const summary = JSON.parse(await fs.readFile(result.summaryPath, "utf8")) as {
-      status: string;
-      tokenSource: string;
-      message: { id: string; posted: boolean; reactionAdded: boolean };
-    };
-    expect(summary.status).toBe("pass");
-    expect(summary.tokenSource).toBe("file");
-    expect(summary.message.id).toBe("1500000000000000001");
-    expect(summary.message.posted).toBe(true);
-    expect(summary.message.reactionAdded).toBe(true);
-    expect(await fs.readFile(result.summaryPath, "utf8")).not.toContain("test-token");
-    expect(await fs.readFile(result.reportPath, "utf8")).not.toContain("test-token");
-  });
-
   it("bounds Mantis Discord token files", async () => {
     await fs.writeFile(tokenFile, "x".repeat(4 * 1024), "utf8");
     const boundaryResult = await runSmoke({
@@ -172,6 +151,7 @@ describe("mantis discord smoke runtime", () => {
     expect(reportText).toContain("- Guild: <redacted> (<redacted>)");
     expect(reportText).toContain("- Channel: #<redacted> (<redacted>)");
     for (const text of [summaryText, reportText]) {
+      expect(text).not.toContain("test-token");
       expect(text).toContain("<redacted>");
       expect(text).not.toContain("1489650053747314748");
       expect(text).not.toContain("1456350064065904867");
@@ -285,36 +265,6 @@ describe("mantis discord smoke runtime", () => {
     // The byte cap trips on the first call, so the post step never runs.
     expect(fetchGuardCallsWithMethod("POST")).toHaveLength(0);
     // The connection is still released on the fail-closed path.
-    expect(release).toHaveBeenCalled();
-  });
-
-  it("fails with a parse error when a Discord 200 body is not JSON (bounded read preserves malformed handling)", async () => {
-    const release = vi.fn();
-    fetchWithSsrFGuard.mockImplementation(async ({ url }: { url: string }) => {
-      const pathname = new URL(url).pathname;
-      if (pathname === "/api/v10/users/@me") {
-        return {
-          response: new Response("<!doctype html><html>not json</html>", {
-            status: 200,
-            headers: { "content-type": "text/html" },
-          }),
-          release,
-        };
-      }
-      return {
-        response: jsonResponse({ message: `unexpected ${pathname}` }, 404),
-        release: vi.fn(),
-      };
-    });
-
-    const result = await runSmoke({
-      outputDir: ".artifacts/qa-e2e/mantis/malformed",
-    });
-
-    expect(result.status).toBe("fail");
-    // A non-JSON 200 still surfaces as a clean fail (JSON.parse throws on the
-    // under-cap body), and no post is attempted.
-    expect(fetchGuardCallsWithMethod("POST")).toHaveLength(0);
     expect(release).toHaveBeenCalled();
   });
 

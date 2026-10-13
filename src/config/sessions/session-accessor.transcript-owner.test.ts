@@ -9,6 +9,7 @@ import { resolveZstdCodec } from "../../infra/zstd-codec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { retainLegacyDefaultAgentId } from "../legacy.default-agent-owner.js";
+import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {
   appendTranscriptMessage,
@@ -535,6 +536,7 @@ it.each(["authority", "idempotency"] as const)(
   "commits a %s-guarded turn without decoding unrelated tool results",
   async (guardKind) => {
     await withOpenClawTestState({ label: "guarded-turn-write-hold" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const scope = {
         agentId: "main",
         sessionId: "guarded-turn",

@@ -12,6 +12,10 @@ import { encodeMemoryEmbedding } from "openclaw/plugin-sdk/memory-core-host-engi
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { registerEmbeddingProvider } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
 import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
 import {
@@ -127,6 +131,7 @@ describe("memory manager reindex recovery", () => {
     closeOpenClawAgentDatabasesForTest();
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
+    clearRuntimeConfigSnapshot();
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
@@ -158,6 +163,7 @@ describe("memory manager reindex recovery", () => {
   }
 
   async function openManager(cfg: OpenClawConfig): Promise<MemoryIndexManager> {
+    setRuntimeConfigSnapshot(cfg);
     const { getMemorySearchManager } = await import("./index.js");
     const result = await getMemorySearchManager({
       runInBackgroundContext: runInMemoryTestBackgroundContext,

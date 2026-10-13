@@ -869,8 +869,9 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
     }
   };
   const completeBoot = (completion: GatewayBootLifecycleCompletion) => {
-    completeGatewayBootLifecycle(activeBootId, completion, process.env);
+    const bootId = activeBootId;
     activeBootId = undefined;
+    return completeGatewayBootLifecycle(bootId, completion, process.env);
   };
   const startLoop = async (lifecycleLockDeadlineMs?: number) => {
     const code = await runGatewayLoop({
@@ -997,7 +998,6 @@ const testing = {
   createConfiguredGatewayHealthProbe,
   isGatewayHealthzResponse,
   resolveGatewayLockErrorExitCode,
-  resolveGatewayStartupFailureExitCode,
   runGatewayLoopWithSupervisedLockRecovery,
 };
 

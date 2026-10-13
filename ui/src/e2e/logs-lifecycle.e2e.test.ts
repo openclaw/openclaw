@@ -228,6 +228,9 @@ suite.define(() => {
             await expect
               .poll(() => visibleMessages(page))
               .toEqual([messageBRestartPrefix, "source B restart tail"]);
+            // The preview build differs from this cross-origin source Gateway; reloading
+            // the preview cannot change that, so the status must settle as connected.
+            await expect.poll(() => page.locator(".gateway-status__label").count()).toBe(0);
             await appendFile(sourceB, `${lineBAfterReconnect}\n`, "utf8");
             await expect
               .poll(() => visibleMessages(page))

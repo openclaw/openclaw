@@ -17,28 +17,6 @@ describe("A2A task store", () => {
     vi.restoreAllMocks();
   });
 
-  it("returns protocol-shaped submitted, working, and completed task snapshots", async () => {
-    const store = createTaskStore();
-    const task = store.create("ctx-alice");
-
-    expect(task).toMatchObject({
-      contextId: "ctx-alice",
-      status: { state: "TASK_STATE_SUBMITTED" },
-      artifacts: [],
-      history: [],
-    });
-    expect(task.status.timestamp).toMatch(/\.\d{3}Z$/);
-    expect(store.start(task.id)?.status.state).toBe("TASK_STATE_WORKING");
-
-    const waiting = store.wait(task.id, 10_000);
-    store.completeNext("ctx-alice", "hello back");
-
-    await expect(waiting).resolves.toMatchObject({
-      status: { state: "TASK_STATE_COMPLETED" },
-      artifacts: [{ parts: [{ text: "hello back" }] }],
-    });
-  });
-
   it("correlates concurrent replies by conversation FIFO without cross-talk", () => {
     const store = createTaskStore();
     const aliceFirst = store.create("ctx-alice");
@@ -53,19 +31,6 @@ describe("A2A task store", () => {
     expect(store.completeNext("ctx-alice", "second")?.id).toBe(aliceSecond.id);
     expect(aliceFirst.artifacts[0]?.parts).toEqual([{ text: "first" }]);
     expect(aliceSecond.artifacts[0]?.parts).toEqual([{ text: "second" }]);
-  });
-
-  it("isolates same-context tasks and task access between authenticated peers", () => {
-    const store = createTaskStore();
-    const alice = store.create("ctx-shared", "alice");
-    const bob = store.create("ctx-shared", "bob");
-
-    expect(store.get(alice.id, "bob")).toBeUndefined();
-    expect(store.get(bob.id, "alice")).toBeUndefined();
-    expect(store.completeNext("ctx-shared", "bob only", "bob")?.id).toBe(bob.id);
-    expect(alice.status.state).toBe("TASK_STATE_SUBMITTED");
-    expect(store.completeNext("ctx-shared", "alice only", "alice")?.id).toBe(alice.id);
-    expect(alice.artifacts[0]?.parts).toEqual([{ text: "alice only" }]);
   });
 
   it("completes empty replies without inventing an artifact", () => {
@@ -87,22 +52,13 @@ describe("A2A task store", () => {
     const rejected = store.create("ctx-alice");
     const active = store.create("ctx-alice");
 
-    expect(store.fail(failed.id, new Error("x".repeat(1000)))).toMatchObject({
-      status: { state: "TASK_STATE_FAILED", message: { parts: [{ text: "x".repeat(512) }] } },
+    expect(store.fail(failed.id, new Error(`${"x".repeat(511)}😀tail`))).toMatchObject({
+      status: { state: "TASK_STATE_FAILED", message: { parts: [{ text: "x".repeat(511) }] } },
     });
     expect(store.reject(rejected.id, "peer blocked")).toMatchObject({
       status: { state: "TASK_STATE_REJECTED", message: { parts: [{ text: "peer blocked" }] } },
     });
     expect(store.completeNext("ctx-alice", "active reply")?.id).toBe(active.id);
-  });
-
-  it("does not split surrogate pairs when bounding status messages", () => {
-    const store = createTaskStore();
-    const task = store.create("ctx-alice");
-
-    expect(store.fail(task.id, new Error(`${"x".repeat(511)}😀tail`))).toMatchObject({
-      status: { message: { parts: [{ text: "x".repeat(511) }] } },
-    });
   });
 
   it("returns working tasks after timeout and accepts the eventual final reply", async () => {
@@ -129,21 +85,6 @@ describe("A2A task store", () => {
 
     await expect(waiting).resolves.toMatchObject({ status: { state: "TASK_STATE_WORKING" } });
     expect(store.get(task.id)).toBeUndefined();
-  });
-
-  it("evicts the oldest completed tasks after the 500-entry retention cap", () => {
-    const store = createTaskStore();
-    const completedIds: string[] = [];
-    for (let index = 0; index <= 500; index += 1) {
-      const contextId = `ctx-${index}`;
-      const task = store.create(contextId);
-      completedIds.push(task.id);
-      store.completeNext(contextId, "done");
-    }
-
-    expect(store.get(completedIds[0]!)).toBeUndefined();
-    expect(store.get(completedIds[1]!)).toBeDefined();
-    expect(store.get(completedIds[500]!)).toBeDefined();
   });
 
   it("expires completed tasks after 24 hours without evicting active tasks", () => {

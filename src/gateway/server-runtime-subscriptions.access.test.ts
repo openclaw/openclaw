@@ -2,6 +2,7 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { acceptCompactionSuccessor } from "../agents/embedded-agent-runner/compaction-successor.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   applySessionEntryLifecycleMutation,
   loadSessionEntry,
@@ -49,6 +50,7 @@ async function withAccessFixture(
   }) => Promise<void>,
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    setRuntimeConfigSnapshot({});
     const scope = {
       agentId: "main",
       sessionKey: "agent:main:identity-access",

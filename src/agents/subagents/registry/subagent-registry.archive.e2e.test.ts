@@ -8,6 +8,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { getRuntimeConfig } from "../../../config/config.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/io.js";
 import { ensureContextEnginesInitialized } from "../../../context-engine/init.js";
 import { resolveContextEngine } from "../../../context-engine/registry.js";
 import { callGateway } from "../../../gateway/call.js";
@@ -160,6 +161,7 @@ describe("subagent registry archive behavior", () => {
     currentConfig = {
       agents: { defaults: { subagents: { archiveAfterMinutes: 60 } } },
     };
+    setRuntimeConfigSnapshot(currentConfig);
     vi.mocked(callGateway).mockReset();
     vi.mocked(callGateway).mockImplementation(respondToGatewayRequest);
     loadConfigMock.mockReset().mockImplementation(() => currentConfig);
@@ -180,6 +182,7 @@ describe("subagent registry archive behavior", () => {
     } finally {
       await mod.resetSubagentRegistryForTests({ persist: false });
       vi.useRealTimers();
+      clearRuntimeConfigSnapshot();
     }
   });
 
@@ -187,6 +190,7 @@ describe("subagent registry archive behavior", () => {
     currentConfig = {
       agents: { defaults: { subagents: { archiveAfterMinutes: 1 } } },
     };
+    setRuntimeConfigSnapshot(currentConfig);
     vi.mocked(getAgentRunContext).mockReturnValue({} as never);
     vi.mocked(captureSubagentCompletionReply).mockResolvedValue("completed result");
     vi.mocked(runSubagentAnnounceFlow).mockResolvedValue("retryable");
@@ -361,6 +365,7 @@ describe("subagent registry archive behavior", () => {
     currentConfig = {
       agents: { defaults: { subagents: { archiveAfterMinutes: 1 } } },
     };
+    setRuntimeConfigSnapshot(currentConfig);
     const onSubagentEnded = vi.fn(async () => undefined);
     const attachmentsRootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sweep-retry-"));
     const attachmentsDir = path.join(attachmentsRootDir, "child");
@@ -451,6 +456,7 @@ describe("subagent registry archive behavior", () => {
     currentConfig = {
       agents: { defaults: { subagents: { archiveAfterMinutes: 1 } } },
     };
+    setRuntimeConfigSnapshot(currentConfig);
     const deleteGate = createDeferred();
     const deleteEntered = createDeferred();
     sessionAccessorMocks.readSessionEntryReadOnlyInWorker.mockResolvedValue({
@@ -585,6 +591,7 @@ describe("subagent registry archive behavior", () => {
     currentConfig = {
       agents: { defaults: { subagents: { archiveAfterMinutes: 1 } } },
     };
+    setRuntimeConfigSnapshot(currentConfig);
 
     await mod.registerSubagentRun({
       runId: "run-delete-old",

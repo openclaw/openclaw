@@ -48,7 +48,7 @@ import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import { resolvePluginNpmGenerationProjectDir } from "../../../plugins/install-paths.js";
 import {
   loadInstalledPluginIndexInstallRecords,
-  readPersistedInstalledPluginIndexInstallRecords,
+  readPersistedInstalledPluginIndexInstallRecordsAsync,
 } from "../../../plugins/installed-plugin-index-records.js";
 import { seedInstalledPluginIndex } from "../../../plugins/test-helpers/installed-plugin-index.js";
 import { VERSION } from "../../../version.js";
@@ -878,7 +878,7 @@ describe("runPostCorePluginConvergence", () => {
     expect(installAttempts).toBe(0);
     expect(projectsAfterFirst).toHaveLength(1);
     expect(fs.readdirSync(path.join(stateDir, "npm", "projects"))).toEqual(projectsAfterFirst);
-    expect(readPersistedInstalledPluginIndexInstallRecords({ env })).not.toHaveProperty(
+    expect(await readPersistedInstalledPluginIndexInstallRecordsAsync({ env })).not.toHaveProperty(
       "bundleddemo",
     );
     expect(first.installRecords).not.toHaveProperty("bundleddemo");

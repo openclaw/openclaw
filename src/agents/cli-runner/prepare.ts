@@ -1,7 +1,4 @@
-import {
-  ensureSystemPromptCacheBoundary,
-  splitSystemPromptRelocatableBoundary,
-} from "@openclaw/ai/internal/shared";
+import { ensureSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
@@ -301,7 +298,7 @@ async function prepareCliRunContextWithinReadFence(
     workspaceDir,
     cwd,
   });
-  const toolPolicy = resolveCliRuntimeToolPolicy({
+  const toolPolicy = await resolveCliRuntimeToolPolicy({
     params,
     policySessionKey,
     policyAgentId,
@@ -1055,7 +1052,7 @@ async function prepareCliRunContextWithinReadFence(
       rawLoopbackServerConfig && backendResolved.bundleMcpMode === "claude-config-file"
         ? applyClaudeManagedMcpTimeout(rawLoopbackServerConfig)
         : rawLoopbackServerConfig;
-    const nativeMcpCapabilityProfile = mcp.resolveCliNativeMcpPolicy(params, {
+    const nativeMcpCapabilityProfile = await mcp.resolveCliNativeMcpPolicy(params, {
       config: runConfig,
       policySessionKey,
       policyAgentId,
@@ -1189,7 +1186,7 @@ async function prepareCliRunContextWithinReadFence(
       skipLocalCredential: skipLocalCredentialEpoch,
     });
     const authBindingFingerprint = params.onSuccessfulAuthBinding
-      ? resolveCliAuthBindingFingerprint({
+      ? await resolveCliAuthBindingFingerprint({
           provider: params.provider,
           config: runConfig,
           agentDir,
@@ -1449,11 +1446,7 @@ async function prepareCliRunContextWithinReadFence(
               : [],
         }) ?? builtSystemPrompt)
       : builtSystemPrompt;
-    const turnRuntimeFacts =
-      params.runtimeFactsInTurn && !skipsTurnPreparation
-        ? splitSystemPromptRelocatableBoundary(transformedSystemPrompt)
-        : undefined;
-    let systemPrompt = turnRuntimeFacts?.remainingPrompt ?? transformedSystemPrompt;
+    let systemPrompt = transformedSystemPrompt;
     const allowRawTranscriptReseed =
       backendResolved.config.reseedFromRawTranscriptWhenUncompacted === true;
     const historyParams = (params = await admitCliRunParams(params, workspaceResolution.agentId));
@@ -1517,6 +1510,8 @@ async function prepareCliRunContextWithinReadFence(
         prompt: preparedPrompt,
         systemPrompt,
         privateContext: executionTarget.kind === "plugin",
+        backendId: backendResolved.id,
+        runtimeFactsInTurn: params.runtimeFactsInTurn,
         deliveryGuidance: effectiveReplyGuidance,
         hookResult: promptBuildHookResult,
         prependContext: [
@@ -1535,11 +1530,7 @@ async function prepareCliRunContextWithinReadFence(
         runtimeContextFragments: params.runtimeContextFragments,
         // Caller-owned memory cannot grant access to persisted interrupted inputs.
         sessionTarget: params.isolatedCompletion ? undefined : cliHistoryWriter?.target,
-        context: [
-          turnRuntimeFacts?.relocatable,
-          promptBuildHookResult?.appendContext,
-          authorizedPromptBuildResult?.appendContext,
-        ],
+        context: [promptBuildHookResult?.appendContext, authorizedPromptBuildResult?.appendContext],
       }));
       params.assertCurrent?.();
       params.abortSignal?.throwIfAborted();

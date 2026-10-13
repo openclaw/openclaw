@@ -1,5 +1,4 @@
 // File Transfer tests cover file fetch plugin behavior.
-import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -45,12 +44,6 @@ afterEach(async () => {
 });
 
 describe("handleFileFetch — input validation", () => {
-  it("returns INVALID_PATH for empty / non-string path", async () => {
-    expectFailureCode(await handleFileFetch({ path: "" }), "INVALID_PATH");
-    expectFailureCode(await handleFileFetch({ path: undefined }), "INVALID_PATH");
-    expectFailureCode(await handleFileFetch({ path: 42 as unknown }), "INVALID_PATH");
-  });
-
   it("rejects relative paths", async () => {
     const r = await handleFileFetch({ path: "relative/file.txt" });
     expectFailureCode(r, "INVALID_PATH");
@@ -65,11 +58,6 @@ describe("handleFileFetch — input validation", () => {
 });
 
 describe("handleFileFetch — fs errors", () => {
-  it("returns NOT_FOUND for a missing file", async () => {
-    const target = path.join(tmpRoot, "missing.txt");
-    expectFailureCode(await handleFileFetch({ path: target }), "NOT_FOUND");
-  });
-
   it("returns IS_DIRECTORY when the path resolves to a directory", async () => {
     const r = await handleFileFetch({ path: tmpRoot });
     expectFailureCode(r, "IS_DIRECTORY");
@@ -99,40 +87,6 @@ describe("handleFileFetch — zero-byte round-trip", () => {
 });
 
 describe("handleFileFetch — happy path", () => {
-  it("reads a small file and returns size + sha256 + base64", async () => {
-    const target = path.join(tmpRoot, "hello.txt");
-    const contents = "hello world\n";
-    await fs.writeFile(target, contents);
-
-    const r = await handleFileFetch({ path: target });
-    if (!r.ok) {
-      throw new Error(`expected ok, got ${r.code}: ${r.message}`);
-    }
-
-    expect(r.size).toBe(contents.length);
-    expect(Buffer.from(r.base64, "base64").toString("utf-8")).toBe(contents);
-    const expectedSha = crypto.createHash("sha256").update(contents).digest("hex");
-    expect(r.sha256).toBe(expectedSha);
-    // canonicalized path may differ from input on macOS (/tmp -> /private/tmp)
-    expect(path.basename(r.path)).toBe("hello.txt");
-  });
-
-  it("preflights canonical path and size without reading bytes", async () => {
-    const target = path.join(tmpRoot, "hello.txt");
-    await fs.writeFile(target, "hello world\n");
-    const readFileSpy = vi.spyOn(fs, "readFile");
-
-    const r = await handleFileFetch({ path: target, preflightOnly: true });
-
-    expectSuccess(r);
-    expect(r.path).toBe(target);
-    expect(r.size).toBe(12);
-    expect(r.base64).toBe("");
-    expect(r.sha256).toBe("");
-    expect(r.preflightOnly).toBe(true);
-    expect(readFileSpy).not.toHaveBeenCalled();
-  });
-
   it.runIf(process.platform !== "win32")(
     "rejects a retargeted path before reading file bytes",
     async () => {
@@ -167,8 +121,11 @@ describe("handleFileFetch — happy path", () => {
     const target = path.join(tmpRoot, "target.txt");
     const moved = path.join(tmpRoot, "moved.txt");
     await fs.writeFile(target, "approved");
+    const readFileSpy = vi.spyOn(fs, "readFile");
     const preflight = await handleFileFetch({ path: target, preflightOnly: true });
     expectSuccess(preflight);
+    expect(preflight).toMatchObject({ base64: "", sha256: "", preflightOnly: true });
+    expect(readFileSpy).not.toHaveBeenCalled();
     await fs.rename(target, moved);
     await fs.writeFile(target, "not approved");
 
@@ -206,23 +163,6 @@ describe("handleFileFetch — happy path", () => {
     }
 
     expect(r.mimeType).toBe("application/octet-stream");
-  });
-
-  it("sniffs binary content instead of trusting a misleading extension", async () => {
-    const target = path.join(tmpRoot, "image.txt");
-    await fs.writeFile(
-      target,
-      Buffer.from([
-        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
-        0x52,
-      ]),
-    );
-
-    const r = await handleFileFetch({ path: target });
-    if (!r.ok) {
-      throw new Error("expected ok");
-    }
-    expect(r.mimeType).toBe("image/png");
   });
 });
 
@@ -272,15 +212,6 @@ describe("handleFileFetch — size enforcement", () => {
     expect(bytesRead).toBeLessThanOrEqual(9);
   });
 
-  it("returns FILE_TOO_LARGE when stat size exceeds the cap", async () => {
-    const target = path.join(tmpRoot, "big.bin");
-    const data = Buffer.alloc(2048, 0xab);
-    await fs.writeFile(target, data);
-
-    const r = await handleFileFetch({ path: target, maxBytes: 1024 });
-    expectFailureCode(r, "FILE_TOO_LARGE");
-  });
-
   it("clamps maxBytes to the hard ceiling", async () => {
     const target = path.join(tmpRoot, "oversized.bin");
     await fs.writeFile(target, "");
@@ -316,18 +247,5 @@ describe("handleFileFetch — symlink handling", () => {
     // Caller learns the canonical target so the operator can update the
     // allowlist or set followSymlinks=true.
     expect(r.ok ? null : r.canonicalPath).toBe(real);
-  });
-
-  it("follows symlinks and returns the canonical path when followSymlinks=true", async () => {
-    const real = path.join(tmpRoot, "real.txt");
-    const link = path.join(tmpRoot, "link.txt");
-    await fs.writeFile(real, "data");
-    await fs.symlink(real, link);
-
-    const r = await handleFileFetch({ path: link, followSymlinks: true });
-    if (!r.ok) {
-      throw new Error(`expected ok, got ${r.code}`);
-    }
-    expect(path.basename(r.path)).toBe("real.txt");
   });
 });

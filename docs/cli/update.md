@@ -702,6 +702,15 @@ source checkouts remain untouched. Failed updates and rollbacks preserve those
 historical backups, and separately retained database snapshots keep their own
 recovery lifetime.
 
+Optional Doctor inspections that have matching lint checks can run after the
+restarted Gateway is ready. The target Doctor reports the checks it actually
+deferred; the updater runs those checks against the updated installation and
+current configuration. Older update parents or targets keep these inspections
+inside Doctor. If the target does not provide a usable report, the updater records
+an advisory rather than claiming that the post-restart inspections completed.
+On the first upgrade from an older updater, that retained parent can still report
+its own post-restart inspection warning even though the target ran checks inline.
+
 Post-plugin config validation and readiness checks use the measured shared and
 agent database sizes after Doctor finishes, including WAL files. Post-core plugin
 installation and update work have no default deadline when `--timeout` is omitted;
@@ -774,6 +783,12 @@ updater can read shared state, target-release preflight also checks configured,
 retired, and registered custom agent stores and names every incompatible store
 before changing the installation or stopping the Gateway. State newer than the
 updater can read retains a single install-compatible-build or restore-backup refusal.
+
+During candidate validation, Doctor leaves bookkeeping-only version, wizard, and
+migration stamps out of the copied config so older updaters do not mistake them
+for required config repairs. Webhook completion without endpoint changes is
+recorded in the rehearsal state. Real config migrations still run; normal config
+writes after activation record the candidate's version and migration metadata.
 
 If database schema preflight cannot inspect the configured paths because the
 config is invalid, its refusal lists the config file and invalid fields. Run

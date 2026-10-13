@@ -333,6 +333,11 @@ export async function withSubagentKillScope<T>(
     const pending: PendingKillTree[] = [];
     capture(pending, runs, trees, owner, parent, ownsRoot);
     captureResidentDescendants(pending);
+    // Hold every resident target before preparing the caller's source generation.
+    const preparation = params.prepareRead?.();
+    if (preparation) {
+      await preparation;
+    }
     for (const item of pending) {
       await item.prepare();
     }
@@ -589,6 +594,16 @@ export async function withSubagentKillScope<T>(
   // after the selected snapshot publishes (including failure), before releasing a
   // scheduler hold that can itself await that cleanup.
   retirements.forEach(({ completePublication }) => completePublication());
+  const withdrawRetainedKills = (selectedTrees: KillTree[]) => {
+    for (const tree of selectedTrees) {
+      // A committed kill still owns its reservation when a later session read fails.
+      if (tree.entry.killIntent && tree.ownsRun()) {
+        tree.dispatchHold?.withdraw();
+      }
+      withdrawRetainedKills(tree.children);
+    }
+  };
+  withdrawRetainedKills(trees);
   const settleQueued = async (tree: KillTree): Promise<void> => {
     const { entry, session, dispatchHold } = tree;
     const executionTail =

@@ -270,9 +270,9 @@ export async function handleOpenResponsesHttpRequest(
     sendInvalidRequest(res, "invalid tool configuration");
     return true;
   }
-  let resolved: ReturnType<typeof resolveGatewayRequestContext>;
+  let resolved: Awaited<ReturnType<typeof resolveGatewayRequestContext>>;
   try {
-    resolved = resolveGatewayRequestContext({
+    resolved = await resolveGatewayRequestContext({
       req,
       model,
       user,
@@ -316,7 +316,7 @@ export async function handleOpenResponsesHttpRequest(
   }
   const sessionKey = previousSessionKey ?? resolved.sessionKey;
   const messageChannel = resolved.messageChannel;
-  const sessionAuth = authorizeOpenAiCompatibleHttpSession({
+  const sessionAuth = await authorizeOpenAiCompatibleHttpSession({
     agentId: resolved.agentId,
     sessionKey,
     requestAuth: handled.requestAuth,

@@ -1,6 +1,7 @@
 // Gateway startup config loads, repairs, validates, and activates runtime config
 // plus secrets snapshots before the server exposes user-facing surfaces.
 import { hasLegacyAuthProfileSourcesForStartup } from "../agents/auth-profiles/legacy-source-diagnostic.js";
+import { resolveSharedAuthStoreOwnershipAsync } from "../agents/auth-profiles/path-resolve.js";
 import { getRuntimeAuthProfileStoreSnapshotsRevision } from "../agents/auth-profiles/runtime-snapshots.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { measureDiagnosticsTimelineSpan } from "../infra/diagnostics-timeline.js";
@@ -38,6 +39,7 @@ import {
   registerProviderAuthRuntimeSnapshotActivationOwner,
 } from "../secrets/runtime-state.js";
 import { logRuntimeSecretWarnings } from "../secrets/runtime-warning-log.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
   assertRuntimeGatewayAuthNotKnownWeak,
   hasActiveGatewayAuthSecretRef,
@@ -406,6 +408,9 @@ export function createRuntimeSecretsActivator(params: {
           !params.activateRuntimeSecretsSnapshot
         ) {
           const startupEnv = activationParams.env ?? process.env;
+          await resolveSharedAuthStoreOwnershipAsync(
+            captureOpenClawStateWorkerContext({ env: startupEnv }),
+          );
           const fastPath = hasLegacyAuthProfileSourcesForStartup({
             agentDirs: collectCandidateAgentDirs(sourceConfig, startupEnv),
             env: startupEnv,

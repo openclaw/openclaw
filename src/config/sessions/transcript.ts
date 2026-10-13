@@ -12,6 +12,7 @@ import {
   scopeLegacySessionKeyToAgent,
 } from "../../routing/session-key.js";
 import { ASSISTANT_DISPLAY_CONTENT_FIELD } from "../../shared/assistant-display-content.js";
+import type { ModelFallbackNotice } from "../../shared/model-fallback-notice.js";
 import type { SkillWorkshopChangeNotice } from "../../shared/skill-workshop-change-notice.js";
 import {
   CRON_DIRECT_DELIVERY_CONTEXT_KIND,
@@ -101,7 +102,8 @@ type InternalSessionTranscriptDeliveryMirror =
   | {
       kind: typeof CRON_DIRECT_DELIVERY_CONTEXT_KIND;
     }
-  | SkillWorkshopChangeNotice;
+  | SkillWorkshopChangeNotice
+  | ModelFallbackNotice;
 
 export type SessionTranscriptAssistantMessage = Parameters<SessionManager["appendMessage"]>[0] & {
   role: "assistant";

@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
   assertConfigWriteAllowedInCurrentMode,
-  getRuntimeConfig,
+  captureRuntimeConfigAsyncReader,
   readConfigFileSnapshotForWrite,
   replaceConfigFile,
 } from "../config/config.js";
@@ -133,7 +133,7 @@ function mayMutatePluginInstallRecord(
   return Boolean(record?.marketplaceSource && record.marketplacePlugin);
 }
 
-function pluginConfigReferencesId(config: ReturnType<typeof getRuntimeConfig>, pluginId: string) {
+function pluginConfigReferencesId(config: OpenClawConfig, pluginId: string) {
   const plugins = config.plugins;
   return (
     plugins?.allow?.includes(pluginId) ||
@@ -146,7 +146,7 @@ function pluginConfigReferencesId(config: ReturnType<typeof getRuntimeConfig>, p
 
 function shouldPreserveEmptyPlugins(params: {
   parsed: unknown;
-  sourceConfig: ReturnType<typeof getRuntimeConfig>;
+  sourceConfig: OpenClawConfig;
 }): boolean {
   const plugins = params.sourceConfig.plugins;
   const parsedPlugins =
@@ -252,7 +252,8 @@ async function runPluginUpdateCommandUnlocked(
   }
   // Bind selection, updater input, ownership checks, and persistence to one
   // mutation-start snapshot so concurrent config changes cannot be resurrected.
-  const cfg = mutationSnapshot?.snapshot.runtimeConfig ?? getRuntimeConfig();
+  const cfg =
+    mutationSnapshot?.snapshot.runtimeConfig ?? (await captureRuntimeConfigAsyncReader()());
   const sourceCfg = mutationSnapshot?.snapshot.sourceConfig ?? cfg;
   const pluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
   const cfgWithPluginInstallRecords = withPluginInstallRecords(cfg, pluginInstallRecords);

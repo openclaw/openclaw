@@ -24,6 +24,22 @@ export type DiagnosticWorkerRequestFields = {
   queueDepth: number;
   queueWaitMs?: number;
   durationMs?: number;
+  /** Opt-in monotonic process timestamps; framed requests expose only their initial exchange. */
+  timing?: Partial<
+    Record<
+      | "enqueued"
+      | "dispatched"
+      | "posted"
+      | "postFinished"
+      | "received"
+      | "executeStarted"
+      | "executeFinished"
+      | "serialized"
+      | "replied"
+      | "replyReceived",
+      number
+    >
+  >;
 };
 
 export type DiagnosticAsyncQueueDroppedFields = {

@@ -207,6 +207,7 @@ describe("private session source staging", () => {
     const resume = createDeferred<void>();
     const timedOut = createDeferred<void>();
     let shadowPath: string | undefined;
+    let shadowDatabase: DatabaseSync | undefined;
     // oxlint-disable-next-line typescript/unbound-method -- Invoked with the intercepted database owner.
     const prepareVector = MemoryIndexDatabase.prototype.prepareVector;
     vi.spyOn(MemoryIndexDatabase.prototype, "prepareVector").mockImplementation(async function (
@@ -216,6 +217,7 @@ describe("private session source staging", () => {
       if (!this.isShadow) {
         return prepareVector.apply(this, args);
       }
+      shadowDatabase = this.db;
       shadowPath = this.db.location()!;
       entered.resolve();
       await resume.promise;
@@ -242,7 +244,23 @@ describe("private session source staging", () => {
         return Promise.reject(new Error(message));
       },
     );
-    const run = vi.spyOn(MemoryIndexDatabase.prototype, "replaceSource");
+    let replacementSettled = false;
+    // oxlint-disable-next-line typescript/unbound-method -- Invoked with the intercepted database owner.
+    const replace = MemoryIndexDatabase.prototype.replaceSource;
+    const run = vi
+      .spyOn(MemoryIndexDatabase.prototype, "replaceSource")
+      .mockImplementation(async function (
+        this: MemoryIndexDatabase,
+        input,
+        assertCurrent,
+        prepare,
+      ) {
+        try {
+          return await replace.call(this, input, assertCurrent, prepare);
+        } finally {
+          replacementSettled = true;
+        }
+      });
     const sync = manager.sync({ reason: "cli", force: true });
     void sync.catch(() => undefined);
     let close: Promise<void> | undefined;
@@ -251,16 +269,32 @@ describe("private session source staging", () => {
       await Promise.race([Promise.all([entered.promise, timedOut.promise]), sync]);
       await nextTurn();
       expect(shadowPath).toBeDefined();
-      expect(run).not.toHaveBeenCalled();
+      const shadow = shadowDatabase;
+      if (!shadow) {
+        throw new Error("Expected the retained shadow database");
+      }
+      const expectPendingSetup = () => {
+        expect(shadow.isOpen).toBe(true);
+        expect(replacementSettled).toBe(false);
+        expect(
+          shadow
+            .prepare(
+              "SELECT path FROM memory_index_sources UNION ALL SELECT path FROM memory_index_chunks",
+            )
+            .all(),
+        ).toEqual([]);
+      };
+      expectPendingSetup();
       close = manager.close().then(() => {
         closed = true;
       });
       await nextTurn();
       expect(closed).toBe(false);
-      expect(run).not.toHaveBeenCalled();
+      expectPendingSetup();
       resume.resolve();
       await Promise.all([sync, close]);
       expect(run).toHaveBeenCalledTimes(1);
+      expect(replacementSettled).toBe(true);
       expect(await fs.readdir(path.dirname(shadowPath!))).not.toContain(path.basename(shadowPath!));
     } finally {
       resume.resolve();

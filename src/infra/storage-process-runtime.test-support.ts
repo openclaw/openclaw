@@ -60,4 +60,9 @@ export const storageProcessTestEntrypoints = {
     sourceWorkerName: "sqlite-worker-shared-state-idle-fixture.test-support",
     distWorkerPath: "infra/sqlite-worker-shared-state-idle-fixture.test-support.js",
   },
+  sharedStateWalFixture: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../state/openclaw-state-worker-wal.test-support",
+    distWorkerPath: "state/openclaw-state-worker-wal.test-support.js",
+  },
 } as const;

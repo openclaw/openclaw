@@ -201,6 +201,9 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
       "openclaw/plugin-sdk/session-catalog.deleteSessionUpstreamLink",
       "openclaw/plugin-sdk/agent-harness-session-runtime.createNativeSessionInitializationOwner().prepare().link",
     ],
+    diagnostics: [
+      "TypeScript @deprecated annotations and one shared DEP_SESSION_PERSISTENCE warning per plugin and upstream-link capability family; unscoped consumers share one SDK-level warning",
+    ],
     tests: [
       "src/plugin-sdk/session-catalog-upstream-compat.test.ts",
       "src/plugin-sdk/agent-harness-session-compat.test.ts",
@@ -531,6 +534,23 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
     ],
     releaseNote:
       "Agent execution reuses completed native preparation while explicit host admission refreshes schema proof. Released execution objects do not require private host capabilities; preparation calls and implementations retain their Promise contract. Schemas, stored data, and update behavior are unchanged.",
+  },
+  {
+    code: "acp-session-sync-read",
+    ...DEPRECATED_SESSION_COMPAT,
+    introduced: "2026-09-04",
+    deprecated: "2026-10-11",
+    warningStarts: "2026-10-11",
+    replacement:
+      "Await readAcpSessionEntryAsync. Bundled consumers use the existing worker-backed reader; the released synchronous reader keeps its result contract until removal in a later stable release after deprecation ships.",
+    docsPath: "/plugins/sdk-migration/compatibility-policy#acp-metadata-binding-compatibility",
+    surfaces: ["openclaw/plugin-sdk/acp-runtime.readAcpSessionEntry"],
+    diagnostics: [
+      "TypeScript @deprecated annotation and one shared DEP_PLUGIN_SDK warning per plugin and ACP-session family per process on legacy use",
+    ],
+    tests: ["src/plugin-sdk/acp-runtime.test.ts", "src/acp/runtime/session-meta-read.test.ts"],
+    releaseNote:
+      "ACP session reads run through the existing worker. Bundled callers await metadata while the released synchronous SDK reader remains deprecated and supported; schemas, stored data, and update behavior are unchanged.",
   },
   {
     code: "acp-session-metadata-released-signatures",

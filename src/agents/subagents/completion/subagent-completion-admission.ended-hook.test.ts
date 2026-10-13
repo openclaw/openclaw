@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as hookRunnerGlobal from "../../../plugins/hook-runner-global.js";
 import { createHookRunner } from "../../../plugins/hooks.js";
@@ -27,6 +28,7 @@ it.each(["transition", "complete"] as const)(
   "publishes a requester wake %s before recording its concurrent ended hook",
   async (operation) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const input = armRequesterWake(records());
       await admitCompletionFixtureDatabase();
       seedSubagentCompletionDelivery({ subagent: input.subagent });

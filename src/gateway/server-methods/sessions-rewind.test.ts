@@ -9,6 +9,11 @@ import { enqueueFollowupRun, getFollowupQueueDepth } from "../../auto-reply/repl
 import { clearFollowupQueue } from "../../auto-reply/reply/queue/state.js";
 import type { FollowupRun } from "../../auto-reply/reply/queue/types.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
+import {
   clearCommandLane,
   CommandLaneClearedError,
   enqueueCommandInLane,
@@ -25,8 +30,10 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
-import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
-import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import {
+  ensureCanonicalUserProfileForEmail,
+  setCanonicalUserProfileRole,
+} from "../../state/user-profile-writes.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import type { GatewayRequestContext, RespondFn, GatewayClient } from "./types.js";
 
@@ -114,6 +121,7 @@ beforeEach(async () => {
   });
   setActivePluginRegistry(createEmptyPluginRegistry());
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-rewind-handler-"));
+  setRuntimeConfigSnapshot(context().getRuntimeConfig());
   await upsertSessionEntryCore(
     { agentId: "main", sessionKey },
     {
@@ -173,6 +181,7 @@ beforeEach(async () => {
       await appendTranscriptEvent(scope, event);
     }
   }
+  await waitForSessionTranscriptIndexReconcile({ agentId: "main" });
 });
 
 afterEach(async () => {
@@ -189,6 +198,7 @@ afterEach(async () => {
       await cleanupSessionStateForTest({ stateDir });
     }
     resetPluginRuntimeStateForTest();
+    clearRuntimeConfigSnapshot();
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
     tempDirs.cleanup();
@@ -342,19 +352,15 @@ async function expectSessionWorkCleared(work: QueuedSessionWork): Promise<void> 
 }
 
 async function archiveSourceSession(storePath?: string): Promise<void> {
-  const entry = expectDefined(
-    loadSessionEntry({ agentId: "main", sessionKey, storePath }),
-    "source session",
-  );
-  await upsertSessionEntryCore(
-    { agentId: "main", sessionKey, storePath },
-    { ...entry, archivedAt: Date.now() },
-  );
+  const entry = await patchSessionEntryCore({ agentId: "main", sessionKey, storePath }, () => ({
+    archivedAt: Date.now(),
+  }));
+  expectDefined(entry, "source session");
 }
 
-function restrictedOperator(email: string, agentId: string, sandbox?: "required") {
-  const profile = ensureProfileForEmail(email);
-  setUserProfileRole(profile.id, "guest");
+async function restrictedOperator(email: string, agentId: string, sandbox?: "required") {
+  const profile = await ensureCanonicalUserProfileForEmail(email);
+  await setCanonicalUserProfileRole(profile.id, "guest");
   const client: GatewayClient = {
     connect: {
       minProtocol: 1,
@@ -390,7 +396,7 @@ function restrictedOperator(email: string, agentId: string, sandbox?: "required"
 
 describe("session message-cut methods", () => {
   it("rejects a disallowed agent fork without restricting existing-session rewind", async () => {
-    const { client, runtimeConfig } = restrictedOperator(
+    const { client, runtimeConfig } = await restrictedOperator(
       "restricted-fork-creator@example.com",
       "guest-only",
     );
@@ -412,7 +418,7 @@ describe("session message-cut methods", () => {
   });
 
   it("stamps a required sandbox on a session fork created by a restricted operator", async () => {
-    const { profile, client, runtimeConfig } = restrictedOperator(
+    const { profile, client, runtimeConfig } = await restrictedOperator(
       "sandbox-required-fork-creator@example.com",
       "main",
       "required",

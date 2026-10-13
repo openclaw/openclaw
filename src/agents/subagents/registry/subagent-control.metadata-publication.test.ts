@@ -2,9 +2,9 @@
 // oxfmt-ignore
 import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
-import { getRuntimeConfig } from "../../../config/config.js";
+import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../../config/config.js";
 import { loadExactSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import { applySessionEntryExactReplacements } from "../../../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import { withSessionEntryWorker } from "../../../config/sessions/session-accessor.sqlite-replacement-worker.js";
@@ -28,6 +28,10 @@ import { registerSubagentRun } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
 
 const fixture = useSubagentControlFixture();
+
+beforeEach(async () => {
+  await captureRuntimeConfigAsyncReader()();
+});
 
 it.for([
   { replacement: true, competingIdle: false, publication: "tombstone" },

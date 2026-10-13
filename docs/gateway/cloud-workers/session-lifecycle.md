@@ -15,6 +15,8 @@ Gateway workspace preflight has a ten-minute budget covering both Git enumeratio
 
 Starting a cloud session in the Control UI shows your submitted prompt immediately and keeps it visible while the worker starts. Provisioning and workspace preparation appear beneath it in the chat. The prompt is sent only after placement is active; opening an already-provisioning session also shows its progress in the conversation.
 
+Session lifecycle admission refreshes its maintenance inventory once if another session's worker placement changes during preparation. A change to the admitting session's placement, or another inventory change during the retry, still rejects admission. This requires only a Gateway update and changes no stored data or worker protocol.
+
 ## Update the Gateway and worker runtime
 
 Gateway updates retain an attached cloud machine and install the new worker bundle in place. The Gateway stops the old worker and revokes its credential before admitting the new build. The machine's workspace, installed packages, and desktop remain available. Failed installation retains the lease for recovery rather than allocating a replacement. The node must support the current bundle installer and reconnect before recovery can finish. Node bundle cleanup keeps the Gateway's current build until every live environment on that node has recorded it, so cleanup that runs while provisioning or an in-place update is finishing cannot remove the bundle the next turn launches.
@@ -48,7 +50,7 @@ for implementation and benchmarking details.
 
 Workspace manifest downloads use gzip when the node supports it and remain compatible with uncompressed transfers. Both the compressed response and its decoded manifest stay within the 64 MiB safety limit; the node verifies the decoded manifest before changing the workspace.
 
-For a Gateway-source worktree, synchronization is not continuous: OpenClaw sends a fresh eligible inventory at dispatch, not before every turn on an existing worker. Files created only on the Gateway after dispatch remain local and outside the accepted manifest. To send those new inputs, finish the current turn, stop the cloud worker, and dispatch again.
+For a Gateway-source worktree, synchronization is not continuous: OpenClaw sends a fresh eligible inventory at dispatch, not before every turn on an existing worker. Files created only on the Gateway after dispatch remain local until explicitly staged with `git add`. Staged paths join the accepted manifest at the next completed worker reconciliation. Unstaged new inputs require a fresh dispatch.
 
 ### Deliver skills to the worker
 
@@ -109,6 +111,10 @@ For each OpenClaw `worker-turn`, the Gateway binds its effective shared GitHub i
 Codex `remote-exec` sessions and the Control UI **Publish PR** action use the Gateway publication broker; remote-exec agents request publication with `github_publish`. Repository-only publication uses an accepted Git-normalized checkpoint without creating a Gateway checkout. Shared or explicitly selected personal publication can use that checkpoint after Stop; personal credentials remain on the Gateway. See [Publish with your account](/concepts/user-model#publish-with-your-account).
 
 ### Resolve conflicts and queued follow-ups
+
+Stage new Gateway files with `git add` to include them in the next worker reconciliation. Unstaged local-only files remain outside the worker workspace, including files selected by worker changes to ignore rules.
+
+Recovery of an already accepted result preserves its accepted workspace baseline while inspecting local conflicts. A later worker deletion of a previously synchronized Gateway file still applies after recovery; staging another Gateway file does not retroactively include it in that accepted result.
 
 For Gateway-source worktrees, apply uses the latest accepted manifest as the merge base, initialized at dispatch and advanced after each accepted reconciliation. Cloud-only changes are applied, local-only changes stay in place, and paths changed on both sides use a three-way keep-local policy. When reconciliation finishes with conflicts, a separate transcript notice follows the final reply with the bounded path summary and staged result ref. This notice is not a new agent turn. The placement exposes the same conflict for the Control UI, and non-conflicting cloud changes remain applied. The notice includes `git show <ref>:<path>` to inspect a present cloud file and a top-level literal-pathspec `git checkout <ref> -- <path>` command to take it from any workspace directory. Run the commands in Bash or zsh (Git Bash on Windows). If inspect says the path does not exist, the cloud result deleted it; verify and remove the retained local path manually. If checkout reports a file/directory obstruction, move or remove the blocking local path and retry. If the staged ref itself is gone, treat the notice as stale and do not change the local path. Conflicted staged refs remain available after the normal turn fence is released; a later clean result clears the notice and retires the old ref, while explicit fence removal is the final cleanup boundary.
 
@@ -229,7 +235,7 @@ Reconciliation compares files with the last synchronized workspace, not the work
 
 An active worker turn keeps the session store selected when the Gateway admitted it. Changing session routing does not redirect that turn's transcript, live diagnostics, or auth-profile updates to another store. A replaced session or closed turn loses write authority; reconnecting a worker does not select a new store for the old turn.
 
-The Gateway owns the canonical session transcript in both modes. Worker-turn commits each complete user, assistant, and tool-result message before the worker's session write settles; remote-exec uses the normal local harness transcript path because the Codex app-server stays on the Gateway. If the machine disappears mid-message, durable history ends at the last committed message. Partial text or tool progress already shown by the live stream may disappear; the failed turn remains visible, and the failed placement records a bounded terminal reason above the composer.
+The Gateway owns the canonical session transcript in both modes. Worker-turn commits each complete user, assistant, and tool-result message before the worker's session write settles; remote-exec uses the normal local harness transcript path because the Codex app-server stays on the Gateway. If a native worker disappears mid-message while the Gateway remains running, the Gateway saves its uncommitted assistant text as an interrupted reply before releasing the turn. This save is best effort; tool progress and text not yet received by the Gateway can still be lost. The failed turn remains visible, and the failed placement records a bounded terminal reason above the composer.
 
 Worker-turn transcript commits validate the session in their existing database worker, avoiding a separate session-entry read before each commit. The captured session revision is checked again before writing and retained through publication. Final replies follow durable transcript completion; workspace reconciliation and its separate conflict or recovery notices finish in the background. This optimization needs only a Gateway update; transcript storage and the worker protocol are unchanged.
 

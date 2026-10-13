@@ -14,7 +14,7 @@ import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import { rotateDeviceToken } from "../infra/device-pairing-tokens.js";
 import { requestDevicePairing } from "../infra/device-pairing.js";
 import { resetLogger } from "../logging/logger.js";
-import { readPersistedInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
+import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "../plugins/installed-plugin-index-records.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -390,7 +390,7 @@ describe("gateway plugin install authority", () => {
             },
           });
         }
-        const records = readPersistedInstalledPluginIndexInstallRecords();
+        const records = await readPersistedInstalledPluginIndexInstallRecordsAsync();
         const after = await admin.client.request<ConfigSnapshot>("config.get");
         const revoked = action === "revoke" || action === "disconnect-revoke";
         const committed = !revoked || phase === "runtime";

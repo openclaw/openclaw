@@ -17,6 +17,11 @@ While an update is active, the table shows its phase instead of advertising anot
 update, and the final line points to `openclaw update status`. JSON still includes
 registry/Git `availability` separately from `activeRun`.
 
+When a package publication journal no longer matches its installation, status
+names the changed parent, control directory, or journal bindings with their
+recorded and current `dev:ino` values. It identifies device-number-only changes
+and directs you to `openclaw update repair` for verified recovery.
+
 Git availability checks, including the Gateway's background check after startup,
 refresh only the selected upstream. They do not import other remote branches or
 tags, prune existing refs, or change shallow-history boundaries. A fresh detached

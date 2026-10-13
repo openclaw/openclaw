@@ -307,7 +307,7 @@ function prepareConsoleMetaRecord(meta: Record<string, unknown>): Record<string,
 function formatConsoleMeta(meta: Record<string, unknown>): string {
   let redacted: Record<string, unknown>;
   try {
-    redacted = redactLogRecordForTransport(prepareConsoleMetaRecord(meta), { format: "console" });
+    redacted = redactLogRecordForTransport(prepareConsoleMetaRecord(meta));
   } catch {
     // A record this sink cannot serialize must not cost the console its message.
     // The file log and `openclaw logs --json` remain the full-fidelity record.

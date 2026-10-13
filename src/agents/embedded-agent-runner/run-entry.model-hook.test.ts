@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   initializeGlobalHookRunner,
@@ -34,6 +35,20 @@ it.each([
     locked: false,
   },
   {
+    name: "null",
+    fallbacksOverride: null as unknown as string[],
+    expected: ["local"],
+    succeeds: false,
+    locked: false,
+  },
+  {
+    name: "bare string",
+    fallbacksOverride: "fixture/local-backup" as unknown as string[],
+    expected: ["local"],
+    succeeds: false,
+    locked: false,
+  },
+  {
     name: "omitted",
     fallbacksOverride: undefined,
     expected: ["primary", "configured-backup"],
@@ -57,6 +72,7 @@ it.each([
         },
       },
     };
+    setRuntimeConfigSnapshot(cfg);
     const hook = vi.fn(() => ({
       providerOverride: "fixture",
       modelOverride: "local",

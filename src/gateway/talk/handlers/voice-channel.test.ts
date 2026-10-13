@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
 import {
   claimAgentRunDelegatedAuthority,
   clearAgentRunContext,
@@ -180,9 +181,17 @@ describe("channel-owned voice selection RPC", () => {
     "rechecks %s ownership after replacement preparation",
     async (retired) => {
       const ready = createDeferredCore();
-      const call = managedCall(async () => await ready.promise);
+      const entered = createDeferredCore();
+      const call = managedCall(async () => {
+        entered.resolve();
+        await ready.promise;
+      });
       const changing = start("talk.voice.set", { voice: "cedar" }, call.client);
-      expect(call.apply).toHaveBeenCalledOnce();
+      await awaitGateBeforeSettlement(
+        entered.promise,
+        changing.completed,
+        "Voice change settled before replacement preparation",
+      );
       expect(changing.respond).not.toHaveBeenCalled();
       expect(await invoke("talk.voice.set", { voice: "cedar" }, call.client)).toHaveBeenCalledWith(
         false,
