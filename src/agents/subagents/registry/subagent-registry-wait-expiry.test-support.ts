@@ -209,6 +209,45 @@ export function registerSubagentWaitExpiryTests(params: {
     },
   );
 
+  it("forwards the recorded requester incarnation on a private provisional notice", async () => {
+    // A parent-only child binds its private results to the requester session id
+    // *and* the lifecycle revision recorded at spawn. Direct delivery compares
+    // both; forwarding only the id leaves it testing a populated revision
+    // against `undefined`, reporting `intentional_non_delivery` for a requester
+    // that is still the right one. This reporter treats that as settled and
+    // writes `waitExpiryAnnouncedAt`, so the wake is dropped for good.
+    const startedAt = Date.now() - 1_000;
+    const runId = "run-expiry-private-requester-incarnation";
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) =>
+      request.method === "agent.wait" ? { status: "timeout", startedAt } : {},
+    );
+
+    void params.getRegistry().registerSubagentRun({
+      runId,
+      task: "wake a private parent whose requester incarnation is recorded",
+      runTimeoutSeconds: 1,
+      expectsCompletionMessage: true,
+      completionTarget: "parent",
+      completionRequesterSessionId: "proof-requester-session",
+      completionRequesterLifecycleRevision: "proof-requester-revision",
+    });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await waitForFast(() => expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledOnce());
+    expect(
+      getMockCallArg(mocks.runSubagentAnnounceFlow, 0, 0, "private wait-expiry announce"),
+    ).toMatchObject({
+      deliveryPhase: "wait-expiry",
+      completionTarget: "parent",
+      completionRequesterSessionId: "proof-requester-session",
+      completionRequesterLifecycleRevision: "proof-requester-revision",
+    });
+    // The forwarded binding is the run's recorded one, not a value invented here.
+    expect(findRequesterRun(runId)?.completionRequesterLifecycleRevision).toBe(
+      "proof-requester-revision",
+    );
+  });
+
   it.each(["intentional_non_delivery", "permanent_failure", "delivered"] as const)(
     "settles a provisional notification with %s without settling its child",
     async (notificationOutcome) => {

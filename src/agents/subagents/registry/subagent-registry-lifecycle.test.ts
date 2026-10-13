@@ -1665,7 +1665,18 @@ describe("subagent registry lifecycle hardening", () => {
         }),
       );
 
-      const outcome = { status: "timeout", startedAt: 2_000, endedAt: 5_000, elapsedMs: 3_000 };
+      // The clamp to the 5,000 ms deadline rewrites the reason to `complete`,
+      // which is what the cancellation normalization keys off — so this run
+      // used to publish no disposition at all, and the total read of an absent
+      // disposition is `exited`. The clamped `timeout` status and deadline end
+      // are the intended report; only who stopped the child is restored.
+      const outcome = {
+        status: "timeout",
+        disposition: "killed",
+        startedAt: 2_000,
+        endedAt: 5_000,
+        elapsedMs: 3_000,
+      };
       expect(readLifecycleRun(entry)).toMatchObject({
         endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
         execution: { endedAt: 5_000, outcome },
@@ -1673,6 +1684,8 @@ describe("subagent registry lifecycle hardening", () => {
         suppressAnnounceReason,
       });
       expect(readLifecycleRun(entry).killReconciliation).toBeUndefined();
+      // The preimage the result capture was prepared against must carry the
+      // same fact, or the committed plan and its capture disagree.
       expect(captureSubagentCompletionReply).toHaveBeenCalledWith(
         entry.childSessionKey,
         expect.objectContaining({ outcome }),

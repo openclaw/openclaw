@@ -104,6 +104,13 @@ export async function reportSubagentWaitExpiry({
     expectsCompletionMessage: observedRun.expectsCompletionMessage,
     completionTarget: observedRun.completionTarget,
     completionRequesterSessionId: observedRun.completionRequesterSessionId,
+    // A parent-only child binds its private results to the requester
+    // incarnation recorded at spawn, which is the session id *and* its
+    // lifecycle revision. Forwarding only the id leaves direct delivery
+    // comparing a populated revision against `undefined`, so it reports
+    // `intentional_non_delivery` for a requester that is still the right one —
+    // and this reporter accepts that as settled, permanently dropping the wake.
+    completionRequesterLifecycleRevision: observedRun.completionRequesterLifecycleRevision,
     spawnMode: observedRun.spawnMode,
     wakeOnDescendantSettle: observedRun.wakeOnDescendantSettle,
     suppressChildSessionEffects: true,

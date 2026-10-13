@@ -108,10 +108,18 @@ function resolveTerminalRequest(
     endedAt = effectiveEndedAt;
     // Clamping the reported end to the deadline does not re-observe the run,
     // so the caller's disposition is the only liveness evidence there is.
-    completionOutcome = {
-      status: "timeout",
+    const clampedOutcome = {
+      status: "timeout" as const,
       ...(completionOutcome.disposition ? { disposition: completionOutcome.disposition } : {}),
     };
+    // The clamp also rewrites the reason to `complete`, and that reason is what
+    // the cancellation normalization below keys off. Stamp the producer's fact
+    // here or it is lost and the parent is told a killed child exited on its
+    // own. The clamped `timeout` status is the intended report and is kept.
+    completionOutcome =
+      completionReason === SUBAGENT_ENDED_REASON_KILLED
+        ? withCancellationDisposition(clampedOutcome)
+        : clampedOutcome;
     completionReason = SUBAGENT_ENDED_REASON_COMPLETE;
   }
   // Reply evidence follows producer order; duplicate receipts may still drain cleanup.
@@ -575,7 +583,10 @@ function planTerminalCompletion(
     }
   }
   // Captured before the required-reply rewrite below can retarget the reason:
-  // a cancellation stays a cancellation even when the child owed a reply.
+  // a cancellation stays a cancellation even when the child owed a reply. A
+  // cancellation clamped to the stored deadline was already stamped inside
+  // `resolveTerminalRequest`, because the clamp retires the killed reason
+  // before this point and the capture preimage has to agree with it.
   const cancelledCompletion = completionReason === SUBAGENT_ENDED_REASON_KILLED;
   // Lifecycle events and agent.wait both settle here. A required success
   // needs producer evidence before any transcript fallback can freeze it.

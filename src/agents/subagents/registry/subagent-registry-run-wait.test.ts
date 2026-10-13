@@ -146,6 +146,41 @@ describe("subagent run wait disposition", () => {
     },
   );
 
+  // The same cancellation snapshots, but observed after the stored deadline.
+  // `completeWithDeadline` clamps the reported end back to the deadline and
+  // settles through `completeAsRunTimeout`, which never reaches the killed
+  // branch in the fallback below it — so the publication read `exited` for a
+  // child that was cancelled, which is the disposition a parent uses to decide
+  // whether a successor may take the child's workspace.
+  it.each([
+    { stopReason: "rpc", status: "error" },
+    { stopReason: "aborted", status: "ok" },
+    { stopReason: "superseded", status: "ok" },
+  ] as const)(
+    "retains killed disposition when a $stopReason cancellation lands past the stored deadline",
+    async ({ stopReason, status }) => {
+      const startedAt = Date.now() - (RUN_TIMEOUT_SECONDS + 3) * 1_000;
+      const deadlineAt = startedAt + RUN_TIMEOUT_SECONDS * 1_000;
+      const entry = createRunningEntry(startedAt);
+      const { manager, completions, waitExpiries } = createWaitManager({
+        entry,
+        wait: { status, startedAt, endedAt: deadlineAt + 1_000, stopReason },
+      });
+
+      await manager.waitForSubagentCompletion(RUN_ID, entry, 50);
+
+      expect(waitExpiries).toHaveLength(0);
+      expect(completions).toHaveLength(1);
+      // The clamp keeps the intended timeout framing — the reported end is the
+      // deadline and the status is `timeout`. Only who stopped the run changes.
+      expect(completions[0]).toMatchObject({
+        endedAt: deadlineAt,
+        reason: "subagent-complete",
+        outcome: { status: "timeout", disposition: "killed" },
+      });
+    },
+  );
+
   // A re-arm counted on a mocked reporter proved nothing durable. The
   // settlement regression that observes a committed row after an injected
   // marker-write failure lives with the real registry owner, in

@@ -256,9 +256,13 @@ export abstract class SubagentWaitManager {
           assertCurrent,
         }));
       entry = currentEntry();
-      const completeAsRunTimeout = (endedAt?: number, startedAt?: number) =>
+      const completeAsRunTimeout = (
+        endedAt?: number,
+        startedAt?: number,
+        disposition: "exited" | "killed" = "exited",
+      ) =>
         complete({
-          outcome: { status: "timeout", disposition: "exited" },
+          outcome: { status: "timeout", disposition },
           reason: SUBAGENT_ENDED_REASON_COMPLETE,
           terminalReply: wait.terminalReply,
           ...(typeof endedAt === "number" ? { endedAt } : {}),
@@ -269,6 +273,11 @@ export abstract class SubagentWaitManager {
         endedAt: number | undefined,
         now: number,
         fallback: () => Promise<void>,
+        // Clamping to the stored deadline skips the fallback that would stamp
+        // the killed disposition, so the producer's cancellation fact has to
+        // travel with the clamp. The clamped status stays `timeout`; only who
+        // stopped the run changes.
+        cancelled = false,
       ) => {
         const timeoutAt = resolveCompletionAfterHardRunDeadline({
           entry,
@@ -276,7 +285,9 @@ export abstract class SubagentWaitManager {
           observedEndedAt: endedAt,
           now,
         });
-        return timeoutAt === undefined ? fallback() : completeAsRunTimeout(timeoutAt, startedAt);
+        return timeoutAt === undefined
+          ? fallback()
+          : completeAsRunTimeout(timeoutAt, startedAt, cancelled ? "killed" : "exited");
       };
       if (waitStatus === "timeout") {
         const isTerminalWaitTimeout =
@@ -303,13 +314,18 @@ export abstract class SubagentWaitManager {
         entry = currentEntry();
         if (completion) {
           const completionStartedAt = observedStartedAt ?? completion.startedAt;
-          await completeWithDeadline(completionStartedAt, completion.endedAt, now, () =>
-            complete({
-              endedAt: completion.endedAt,
-              outcome: completion.outcome,
-              reason: completion.reason,
-              startedAt: completionStartedAt,
-            }),
+          await completeWithDeadline(
+            completionStartedAt,
+            completion.endedAt,
+            now,
+            () =>
+              complete({
+                endedAt: completion.endedAt,
+                outcome: completion.outcome,
+                reason: completion.reason,
+                startedAt: completionStartedAt,
+              }),
+            completion.reason === SUBAGENT_ENDED_REASON_KILLED,
           );
           return;
         }
@@ -388,27 +404,33 @@ export abstract class SubagentWaitManager {
         );
         return;
       }
-      await completeWithDeadline(observedStartedAt, wait.endedAt, Date.now(), () => {
-        const endedAt = typeof wait.endedAt === "number" ? wait.endedAt : Date.now();
-        // A cancellation stays a cancellation even once `observedCompletion`
-        // has normalized it to a plain error: `resolveSubagentRunDisposition`
-        // reads an absent disposition as `exited`, so the kill would publish
-        // as a clean exit.
-        const outcome =
-          observedCompletion.reason === SUBAGENT_ENDED_REASON_KILLED
-            ? { ...observedCompletion.outcome, disposition: "killed" as const }
-            : observedCompletion.outcome;
-        return complete({
-          endedAt,
-          outcome: withSubagentOutcomeTiming(outcome, {
-            startedAt: observedStartedAt ?? entry.execution.startedAt,
+      await completeWithDeadline(
+        observedStartedAt,
+        wait.endedAt,
+        Date.now(),
+        () => {
+          const endedAt = typeof wait.endedAt === "number" ? wait.endedAt : Date.now();
+          // A cancellation stays a cancellation even once `observedCompletion`
+          // has normalized it to a plain error: `resolveSubagentRunDisposition`
+          // reads an absent disposition as `exited`, so the kill would publish
+          // as a clean exit.
+          const outcome =
+            observedCompletion.reason === SUBAGENT_ENDED_REASON_KILLED
+              ? { ...observedCompletion.outcome, disposition: "killed" as const }
+              : observedCompletion.outcome;
+          return complete({
             endedAt,
-          }),
-          reason: observedCompletion.reason,
-          startedAt: observedStartedAt,
-          terminalReply: wait.terminalReply,
-        });
-      });
+            outcome: withSubagentOutcomeTiming(outcome, {
+              startedAt: observedStartedAt ?? entry.execution.startedAt,
+              endedAt,
+            }),
+            reason: observedCompletion.reason,
+            startedAt: observedStartedAt,
+            terminalReply: wait.terminalReply,
+          });
+        },
+        observedCompletion.reason === SUBAGENT_ENDED_REASON_KILLED,
+      );
     } catch (error) {
       if (hasSqliteWorkerOutcomeUnknown(error)) {
         throw error;
