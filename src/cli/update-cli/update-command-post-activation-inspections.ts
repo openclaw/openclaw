@@ -7,7 +7,10 @@ import {
 import { resolveStateDir } from "../../config/paths.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { parseUpdateDoctorLintReport } from "../../infra/update-doctor-lint.js";
-import { UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV } from "../../infra/update-doctor-result.js";
+import {
+  UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
+  UpdateDoctorDeferredInspectionCheckIdsSchema,
+} from "../../infra/update-doctor-result.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { redactSupportString } from "../../logging/diagnostic-support-redaction.js";
@@ -15,6 +18,7 @@ import { formatCommandOutput, formatCommandResult } from "../../process/command-
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
+import { quoteCliArg, quotePowerShellArg } from "../quote-cli-arg.js";
 import { resolveNodeRunner } from "./shared.js";
 import {
   disableUpdatedPackageCompileCacheEnv,
@@ -47,7 +51,7 @@ export async function runPostActivationInspections(params: {
   const incomplete = (reason: string): UpdateRunResult => {
     step.advisory = {
       kind: "recoverable-maintenance",
-      message: `Deferred Doctor inspections did not complete after restart (${reason}). Run \`openclaw ${step.command.replace(" --json", "")}\` to inspect them.`,
+      message: `Deferred Doctor inspections did not complete after restart (${reason}). Run \`openclaw doctor --lint --severity-min info\` to inspect them.`,
     };
     defaultRuntime.error(step.advisory.message);
     return { ...params.result, steps: [...params.result.steps, step] };
@@ -56,19 +60,29 @@ export async function runPostActivationInspections(params: {
     return incomplete("Gateway readiness was not verified");
   }
   try {
-    // Keep Doctor's plugin graph out of the updater bootstrap; load it only for this pass.
-    const { resolvePostActivationInspectionCheckIds } =
-      await import("../../flows/doctor-health-contributions.js");
-    const checkIds = await resolvePostActivationInspectionCheckIds();
+    // The last target Doctor owns this policy; the replaced parent graph does not.
+    const selectors = UpdateDoctorDeferredInspectionCheckIdsSchema.safeParse(
+      params.result.steps.findLast(
+        (candidate) => candidate.deferredInspectionCheckIds !== undefined,
+      )?.deferredInspectionCheckIds,
+    );
+    if (!selectors.success) {
+      return incomplete("the target Doctor did not report usable deferred inspection selectors");
+    }
+    const checkIds = selectors.data;
+    if (checkIds.length === 0) {
+      return params.result;
+    }
     const args = [
       "doctor",
       "--lint",
       "--json",
-      ...checkIds.flatMap((id) => ["--only", id]),
+      ...checkIds.map((id) => `--only=${id}`),
       "--severity-min",
       "info",
     ];
-    step.command = args.join(" ");
+    const quote = process.platform === "win32" ? quotePowerShellArg : quoteCliArg;
+    step.command = args.map(quote).join(" ");
     const entryPath = await resolveGatewayInstallEntrypoint(params.root);
     if (!entryPath) {
       return incomplete("updated OpenClaw entrypoint not found");
@@ -129,6 +143,9 @@ export async function runPostActivationInspections(params: {
     }
     const report = parseUpdateDoctorLintReport(execution.stdout);
     step.doctorLintFindings = report.doctorLintFindings;
+    if (report.checksRun !== new Set(checkIds).size) {
+      return incomplete("the target lint did not run every deferred inspection");
+    }
     const warnings = report.doctorLintFindings
       .filter((finding) => finding.severity !== "info")
       .map((finding) => `${finding.checkId}: ${finding.message}`);

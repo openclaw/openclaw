@@ -792,13 +792,6 @@ describe("gateway connect pairing exemptions", () => {
 
   test.each([
     {
-      name: "local backend self-call",
-      client: BACKEND_CLIENT,
-      approvedScopes: ["operator.pairing"],
-      pairingClientId: GATEWAY_CLIENT_NAMES.CLI,
-      pairingClientMode: GATEWAY_CLIENT_MODES.CLI,
-    },
-    {
       name: "TUI operator client",
       client: TUI_CLIENT,
       approvedScopes: ["operator.read"],

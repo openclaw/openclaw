@@ -153,7 +153,7 @@ describe("config-eval helpers", () => {
 });
 
 describe("prepared binary availability", () => {
-  it("sees an installation on the next operation while preserving successful cache reuse", async () => {
+  it("sees installations and removals even after a synchronous lookup cached the binary", async () => {
     const binDir = tempDirs.make("openclaw-prepared-binary-");
     vi.stubEnv("PATH", binDir);
     const executable = path.join(binDir, "fixture-tool");
@@ -162,10 +162,14 @@ describe("prepared binary availability", () => {
     );
     fs.writeFileSync(executable, "#!/bin/sh\nexit 0\n");
     fs.chmodSync(executable, 0o755);
+    expect(hasBinary("fixture-tool")).toBe(true);
     expect((await prepareBinaryAvailability(["fixture-tool"])).hasBinary("fixture-tool")).toBe(
       true,
     );
     fs.unlinkSync(executable);
+    expect((await prepareBinaryAvailability(["fixture-tool"])).hasBinary("fixture-tool")).toBe(
+      false,
+    );
     expect(hasBinary("fixture-tool")).toBe(true);
     vi.stubEnv("PATH", path.join(binDir, "other"));
     expect(hasBinary("fixture-tool")).toBe(false);

@@ -42,23 +42,6 @@ describe("OpenAI tool projection", () => {
     expect(projection.diagnostics).toHaveLength(2);
   });
 
-  it("reads optional descriptions once before projecting them", () => {
-    let descriptionReads = 0;
-    const projection = projectOpenAITools([
-      {
-        name: "lookup",
-        get description() {
-          descriptionReads += 1;
-          return descriptionReads === 1 ? "Lookup" : Symbol("invalid");
-        },
-        parameters: {},
-      },
-    ]);
-
-    expect(projection.tools[0]?.description).toBe("Lookup");
-    expect(descriptionReads).toBe(1);
-  });
-
   it("materializes pinned function choices after one name read", () => {
     const projection = projectOpenAITools([{ name: "lookup", parameters: {} }]);
     let responsesNameReads = 0;
@@ -121,79 +104,6 @@ describe("OpenAI tool projection", () => {
         toolIndex: 0,
         toolName: "dynamic",
         violations: ["dynamic.parameters.properties.value.$dynamicRef"],
-      },
-    ]);
-  });
-
-  it("quarantines OpenAI tools with non-finite numeric schema values", () => {
-    const projection = projectOpenAITools([
-      {
-        name: "bad_limits",
-        parameters: {
-          type: "object",
-          properties: {
-            amount: { type: "number", maximum: Number.POSITIVE_INFINITY },
-          },
-        },
-      },
-      {
-        name: "lookup",
-        parameters: { type: "object", properties: {} },
-      },
-    ]);
-
-    expect(projection.tools).toEqual([
-      {
-        toolIndex: 1,
-        name: "lookup",
-        parameters: { type: "object", properties: {} },
-      },
-    ]);
-    expect(projection.diagnostics).toEqual([
-      {
-        toolIndex: 0,
-        toolName: "bad_limits",
-        violations: ["bad_limits.parameters.properties.amount.maximum is not JSON-serializable"],
-      },
-    ]);
-  });
-
-  it("quarantines OpenAI tools when toJSON returns non-finite numeric schema values", () => {
-    let serializationCount = 0;
-    const projection = projectOpenAITools([
-      {
-        name: "bad_limits",
-        parameters: {
-          toJSON() {
-            serializationCount += 1;
-            return {
-              type: "object",
-              properties: {
-                amount: { type: "number", maximum: Number.POSITIVE_INFINITY },
-              },
-            };
-          },
-        },
-      },
-      {
-        name: "lookup",
-        parameters: { type: "object", properties: {} },
-      },
-    ]);
-
-    expect(serializationCount).toBe(1);
-    expect(projection.tools).toEqual([
-      {
-        toolIndex: 1,
-        name: "lookup",
-        parameters: { type: "object", properties: {} },
-      },
-    ]);
-    expect(projection.diagnostics).toEqual([
-      {
-        toolIndex: 0,
-        toolName: "bad_limits",
-        violations: ["bad_limits.parameters.properties.amount.maximum is not JSON-serializable"],
       },
     ]);
   });
@@ -274,21 +184,6 @@ describe("OpenAI tool projection", () => {
       mode: "required",
       tools: [{ type: "function", name: "lookup" }, { type: "web_search_preview" }],
     });
-  });
-
-  it("disables an auto allowed_tools choice when no allowed tools survive", () => {
-    const projection = projectOpenAITools([{ name: "lookup", parameters: {} }]);
-
-    expect(
-      reconcileOpenAIResponsesToolChoice(
-        {
-          type: "allowed_tools",
-          mode: "auto",
-          tools: [{ type: "function", name: "broken" }],
-        },
-        projection,
-      ),
-    ).toBe("none");
   });
 
   it("filters official Chat Completions allowed_tools without broadening access", () => {

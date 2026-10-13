@@ -119,7 +119,7 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
       expect(readExpired).not.toHaveBeenCalled();
       state.deps.cronConfig = { sessionRetention: "24h" };
       await onTimer(state);
-      expect(isAgentAvailable).toHaveBeenCalledExactlyOnceWith("main");
+      expect(isAgentAvailable).toHaveBeenCalledExactlyOnceWith("main", { deletionBlocked: false });
       expect(readExpired).toHaveBeenCalledOnce();
       expect(entries(sessionStorePath)).toHaveLength(1);
       await seedSessions(sessionStorePath, now - 3_600_000);
@@ -281,7 +281,10 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
     await withCronServiceStateForTest(state, async () => {
       await onTimer(state);
       await onTimer(state);
-      expect(isAgentAvailable.mock.calls).toEqual([["live"], ["blocked"]]);
+      expect(isAgentAvailable.mock.calls).toEqual([
+        ["live", { deletionBlocked: false }],
+        ["blocked", { deletionBlocked: false }],
+      ]);
       expect(readExpired).toHaveBeenCalledExactlyOnceWith({
         agentId: "live",
         env: { OPENCLAW_STATE_DIR: resolveStateDir() },

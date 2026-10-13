@@ -4,6 +4,7 @@ import { createReplyTurnParticipants } from "../../auto-reply/reply/reply-run-re
 import {
   prepareReplyToolAuthority,
   type ReplyToolAuthorityInput,
+  type ReplyToolAuthorityNarrow,
 } from "../../auto-reply/reply/reply-tool-authority.js";
 import { readChannelSourceTurnId } from "../../auto-reply/reply/source-turn-id.js";
 import { withSessionTranscriptQuestionAnswers } from "../../config/sessions/session-transcript-read-fence.js";
@@ -45,7 +46,7 @@ type ToolAuthorityAttempt = Pick<
 export async function withPreparedEmbeddedRunToolAuthority<T, Attempt extends ToolAuthorityAttempt>(
   internal: Pick<EmbeddedRunAttemptInternalParams, "admittedRunContext" | "replyOperation">,
   attempt: Attempt,
-  narrow: ((input: ReplyToolAuthorityInput) => ReplyToolAuthorityInput) | undefined,
+  narrow: ReplyToolAuthorityNarrow | undefined,
   run: (prepared: Attempt & { toolAuthorityFingerprint?: string }) => Promise<T>,
 ): Promise<T> {
   const admitted = internal.admittedRunContext;
@@ -87,9 +88,15 @@ export async function withPreparedEmbeddedRunToolAuthority<T, Attempt extends To
   if (operation) {
     assertActive();
   }
-  const fingerprint = operation
-    ? await operation.bindToolAuthorityRouteAsync(route)
-    : await direct?.fingerprintAsync();
+  let fingerprint: string | undefined;
+  try {
+    fingerprint = operation
+      ? await operation.bindToolAuthorityRouteAsync(route)
+      : await direct?.fingerprintAsync();
+  } catch (error) {
+    direct?.close();
+    throw error;
+  }
   assertActive();
   const personalToolParticipants = operation
     ? operation.personalToolParticipants
@@ -260,6 +267,7 @@ export async function withPreparedEmbeddedRunToolAuthority<T, Attempt extends To
     // Retained ALS callbacks do not extend the attempt's authority.
     live = false;
     if (!operation) {
+      direct?.close();
       personalToolParticipants?.close();
     }
   }

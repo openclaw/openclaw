@@ -38,7 +38,7 @@ export function markServiceCronJobActive(
     context.admission.assertCurrent();
     if (
       resolveCronRunReceiptAgentId(state, job) !== runReceipt.agentId ||
-      state.deps.isAgentAvailable?.(runReceipt.agentId, undefined, {
+      state.deps.isAgentAvailable?.(runReceipt.agentId, {
         deletionBlocked: false,
       }) === false
     ) {

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import * as stateReads from "../../state/openclaw-state-db-readonly.js";
@@ -60,6 +61,44 @@ describe("worker placement read cache", () => {
     expect(await reader.readRecoveryCandidates()).toEqual([]);
     expect(await writer.readRecoveryCandidates()).toEqual([]);
     expect(recoveryReadCount()).toBe(4);
+  });
+
+  it("returns overlapping recovery snapshots without caching an invalidated empty result", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-recovery-overlap-"));
+    const database = openOpenClawStateDatabase();
+    const reader = createWorkerSessionPlacementStore({ database });
+    const writer = createWorkerSessionPlacementStore({ database });
+    const captured = createDeferred();
+    const release = createDeferred();
+    const execute = stateReads.executeExistingOpenClawStateRead;
+    let hold = true;
+    vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockImplementation(async (...args) => {
+      const result = await execute(...args);
+      if (args[1].type === "workers.placementRecoveryCandidates" && hold) {
+        hold = false;
+        captured.resolve();
+        await release.promise;
+      }
+      return result;
+    });
+
+    const reading = reader.readRecoveryCandidates();
+    try {
+      await awaitGateBeforeSettlement(captured.promise, reading, "recovery snapshot");
+      const remote = await writer.startDispatch({
+        sessionId: "overlapping-recovery",
+        agentId: "main",
+        sessionKey: "agent:main:overlapping-recovery",
+      });
+      release.resolve();
+      await expect(reading).resolves.toEqual([]);
+      expect(await reader.readRecoveryCandidates()).toEqual([
+        { sessionId: remote.sessionId, environmentId: null, state: "requested" },
+      ]);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([reading]);
+    }
   });
 
   it("reuses the disk sweep inventory and observes committed placement transitions", async () => {
@@ -181,7 +220,7 @@ describe("worker placement read cache", () => {
     },
   );
 
-  it("reuses preservation until a writer adds a non-local placement", async () => {
+  it("updates prepared preservation from non-local writer receipts", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-preservation-cache-"));
     const database = openOpenClawStateDatabase();
     const reader = createWorkerSessionPlacementStore({ database });
@@ -200,13 +239,15 @@ describe("worker placement read cache", () => {
     await writer.releaseTurnIfOwned(claim);
     const unchanged = await reader.prepareMaintenancePlacements();
     expect(unchanged.placements).toEqual([]);
-    unchanged.release();
     expect(reads).not.toHaveBeenCalled();
     const remote = await writer.startDispatch({
       sessionId: "remote",
       agentId: "main",
       sessionKey: "agent:main:remote",
     });
+    expect(unchanged.placements).toEqual([remote]);
+    unchanged.assertCurrent();
+    unchanged.release();
     const changed = await reader.prepareMaintenancePlacements();
     expect(changed.placements).toEqual([remote]);
     changed.assertCurrent();

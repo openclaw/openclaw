@@ -2,7 +2,7 @@ import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expandHomePrefix } from "../../infra/home-dir.js";
 import { resolveConfigDir } from "../../utils.js";
-import { readCronStoreStatePath } from "./config-state.js";
+import { readCronStoreStatePath, readCronStoreStatePathAsync } from "./config-state.js";
 
 function resolveDefaultCronDir(env: NodeJS.ProcessEnv): string {
   return path.join(resolveConfigDir(env), "cron");
@@ -45,4 +45,16 @@ export function resolveCronJobsStorePathFromConfig(
 ): string {
   const store = asOptionalRecord(cfg.cron)?.store;
   return resolveCronJobsStorePath(typeof store === "string" ? store : undefined, env, stateEnv);
+}
+
+/** Select the partition once through the shared reader before constructing Gateway cron. */
+export async function resolveCronJobsStorePathFromConfigAsync(
+  cfg: { cron?: unknown },
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<string> {
+  const store = asOptionalRecord(cfg.cron)?.store;
+  const selected =
+    (typeof store === "string" ? store.trim() : undefined) ||
+    (await readCronStoreStatePathAsync(env));
+  return resolveSelectedCronJobsStorePath(selected, env);
 }

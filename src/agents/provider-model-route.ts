@@ -5,14 +5,17 @@ import {
   projectModelProviderConfig,
   resolveMergedModelProviderConfig,
 } from "../config/model-provider-config.js";
+import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source-projection.js";
 import type { ModelApi, ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderModelRouteCandidate } from "../plugin-sdk/provider-model-types.js";
+import { getCurrentPluginMetadataSnapshotRequiredRuntime } from "../plugins/plugin-metadata-snapshot-required.js";
 import {
   resolveProviderModelCatalogId,
   resolveProviderModelPolicySurface,
   resolveProviderModelRoutes,
 } from "../plugins/provider-model-routes.js";
+import { listProviderPolicyOwners } from "../plugins/provider-policy-owners.js";
 import type { ModelCatalogRoutePolicy } from "./model-catalog-route.js";
 import { normalizeCatalogRouteBaseUrl } from "./model-compat-catalog.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
@@ -23,11 +26,7 @@ export function canonicalizeProviderModelId(providerId: string, modelId: string)
   return (provider && resolveProviderModelCatalogId({ provider, modelId })) || modelId;
 }
 
-/**
- * Wire-id normalization is not a model switch, nor is a response model that provider
- * policy declares equivalent. An authored row's `responseModelEquivalent` accepts any
- * response model and overrides that policy; a different effective model never matches.
- */
+/** Provider and authored custom-row equivalence do not change the selected OpenClaw route. */
 export function isProviderModelRerouted(
   requested: { provider: string; model: string },
   effective: { provider: string; model: string; responseModel?: string },
@@ -48,19 +47,34 @@ export function isProviderModelRerouted(
   if (responseModel === undefined || canonicalize(responseModel) === model) {
     return false;
   }
-  const declaredEquivalent =
+  if (
     surface?.isResponseModelEquivalent?.({
       provider,
       requestedModelId: requested.model,
       responseModelId: responseModel,
-    }) === true ||
-    findConfiguredProviderModel(
-      resolveMergedModelProviderConfig(config, provider),
-      provider,
-      requested.model,
-      canonicalize,
-    )?.responseModelEquivalent === true;
-  return !declaredEquivalent;
+    }) === true
+  ) {
+    return false;
+  }
+  if (surface || !config) {
+    return true;
+  }
+  const source = projectConfigOntoRuntimeSourceSnapshot(config);
+  const row = findConfiguredProviderModel(
+    resolveMergedModelProviderConfig(source, provider),
+    provider,
+    requested.model,
+    canonicalize,
+  );
+  if (row?.responseModelEquivalent !== true || row.metadataSource === "models-add") {
+    return true;
+  }
+  // Official ownership remains authoritative even when it supplies no policy artifact.
+  const metadata = getCurrentPluginMetadataSnapshotRequiredRuntime({
+    allowScopedSnapshot: true,
+    allowWorkspaceScopedSnapshot: true,
+  });
+  return metadata ? listProviderPolicyOwners(provider, metadata).length > 0 : false;
 }
 
 function routeTupleMatches(

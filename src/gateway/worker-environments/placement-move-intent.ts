@@ -8,14 +8,13 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
-import { extractSqliteTableSchema } from "../../infra/sqlite-schema-sql.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { ensureColumn, tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type {
   DB as StateDatabase,
   WorkerSessionPlacementMoves,
 } from "../../state/openclaw-state-db.generated.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
+import { getOpenClawStateFeatureSchemaSql } from "../../state/openclaw-state-feature-schema.js";
 import { drainWorkerSessionPlacement } from "./placement-drain.js";
 import type {
   WorkerPlacementMoveIntent,
@@ -59,7 +58,7 @@ function ensureWorkerPlacementMoveSchema(db: DatabaseSync): void {
   }
   // sqlite-allow-raw -- Canonical feature-owned additive DDL only.
   db.exec(
-    extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "worker_session_placement_moves", {
+    getOpenClawStateFeatureSchemaSql("worker_session_placement_moves", {
       errorMessage: "Worker placement move schema marker is missing",
     }),
   );

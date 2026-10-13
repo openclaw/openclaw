@@ -4,7 +4,7 @@ import {
   setActiveEmbeddedRun,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
-import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
+import { resolveSandboxRuntimeStatusAsync } from "../../agents/sandbox/runtime-status.js";
 import {
   loadSessionEntry,
   upsertSessionEntryCore,
@@ -103,8 +103,12 @@ export function registerSessionSandboxMutationTests({
           undefined,
         );
         expect(loadSessionEntry(scope)?.sandboxMode).toBe("off");
-        expect(resolveSandboxRuntimeStatus({ cfg, sessionKey: key }).sandboxed).toBe(false);
-        expect(resolveSandboxRuntimeStatus({ cfg, sessionKey: sibling }).sandboxed).toBe(true);
+        expect((await resolveSandboxRuntimeStatusAsync({ cfg, sessionKey: key })).sandboxed).toBe(
+          false,
+        );
+        expect(
+          (await resolveSandboxRuntimeStatusAsync({ cfg, sessionKey: sibling })).sandboxed,
+        ).toBe(true);
         expect(await patch(null, null)).toHaveBeenCalledWith(
           false,
           undefined,
@@ -115,7 +119,9 @@ export function registerSessionSandboxMutationTests({
         expect(loadSessionEntry(scope)?.sandboxMode).toBe("off");
         expect(await patch(null, "off")).toHaveBeenCalledWith(true, expect.any(Object), undefined);
         expect(loadSessionEntry(scope)).not.toHaveProperty("sandboxMode");
-        expect(resolveSandboxRuntimeStatus({ cfg, sessionKey: key }).sandboxed).toBe(true);
+        expect((await resolveSandboxRuntimeStatusAsync({ cfg, sessionKey: key })).sandboxed).toBe(
+          true,
+        );
         expect(cfg.agents?.defaults?.sandbox?.mode).toBe("all");
       });
     });

@@ -26,6 +26,7 @@ import {
   stageOpenClawAgentDatabaseSchemaExtension,
   supportsNodeSqliteExtensionLoading,
   tableExists,
+  withSqliteDatabaseWriteScope,
   type SqliteWorkerBackend,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { hasMemorySessionTombstone } from "../memory-session-tombstones.js";
@@ -33,10 +34,10 @@ import { publishMemoryDatabaseTables } from "./manager-db-kernel.js";
 import {
   clearMemoryEmbeddingCacheIdentities,
   countMemoryEmbeddingCache,
-  loadMemoryEmbeddingCache,
   pruneMemoryEmbeddingCache,
   upsertMemoryEmbeddingCache,
 } from "./manager-embedding-cache.js";
+import { readMemoryIndex } from "./manager-index-read.js";
 import type {
   MemoryEmbeddingCacheEntry,
   MemoryEmbeddingCacheHeader,
@@ -55,15 +56,10 @@ import {
 } from "./manager-shadow-task.js";
 import {
   MemorySourceIndexKernel,
-  readMemorySourceChunks,
-  readMemorySourceHash,
   type MemorySourceIndexHeader,
   type MemorySourceIndexRow,
 } from "./manager-source-index-kernel.js";
-import {
-  loadMemorySourceFileState,
-  refreshMemorySessionSourceState,
-} from "./manager-source-state.js";
+import { refreshMemorySessionSourceState } from "./manager-source-state.js";
 
 type PublicationConnection =
   | MemoryShadowConnection
@@ -288,7 +284,8 @@ function createPublicationBackend(
         db,
         () => {
           hooks.onBegin();
-          return run();
+          // Index writes do not change session facts. DDL still invalidates all scopes.
+          return withSqliteDatabaseWriteScope(db, [], run);
         },
         { withCommit: hooks.withCommit },
       ),
@@ -312,7 +309,9 @@ function createPublicationBackend(
       restoredBusyTimeout = false;
       let value: T;
       try {
-        value = runSqliteSingleStatementSync(db, statement);
+        value = withSqliteDatabaseWriteScope(db, [], () =>
+          runSqliteSingleStatementSync(db, statement),
+        );
       } catch (error) {
         const nativeCode = failure(error).errcode;
         // Lock refusal leaves no durable write, so the preparing host may retry.
@@ -379,8 +378,15 @@ function createPublicationBackend(
             }
           : input;
       }
-      if (command.type === "index.facts") {
-        return readMemoryDatabaseFacts(db);
+      if (
+        command.type === "index.facts" ||
+        command.type === "source.state" ||
+        command.type === "source.hash" ||
+        command.type === "source.chunks" ||
+        command.type === "cache.read" ||
+        command.type === "session.current"
+      ) {
+        return readMemoryIndex(db, command).value;
       }
       if (command.type === "schema.admit") {
         // Storage/STRICT migration must disable foreign keys before BEGIN.
@@ -397,31 +403,14 @@ function createPublicationBackend(
           }
         }
       }
-      if (command.type === "source.hash") {
-        return readMemorySourceHash(db, command.input.source, command.input.path);
-      }
-      if (command.type === "source.chunks") {
-        return readMemorySourceChunks(db, command.input.source, command.input.path);
-      }
       if (command.type === "index.writeMetadata") {
         const serialized = JSON.stringify(command.input);
         return withFacts(writeSingleStatement(() => writeMeta(serialized)));
-      }
-      if (command.type === "source.state") {
-        return loadMemorySourceFileState({ db, ...command.input });
       }
       if (command.type === "source.refresh") {
         return withFacts(
           writeSingleStatement(() => refreshMemorySessionSourceState(db, command.input)),
         );
-      }
-      if (command.type === "session.current") {
-        return hasMemorySessionTombstone(db, command.input.agentId, command.input.sessionId)
-          ? "forgotten"
-          : "current";
-      }
-      if (command.type === "cache.read") {
-        return loadMemoryEmbeddingCache({ ...command.input, db });
       }
       if (command.type === "stage.start" || command.type === "cache.stage.start") {
         staged =
@@ -584,12 +573,9 @@ function createPublicationBackend(
             "A session was forgotten while memory indexing was running; retry the memory index.",
           );
         }
-        const { retainedDrift } = new MemorySourceIndexKernel(db, command.input.state).replaceRows(
-          header,
-          rows,
-        );
-        facts = readMemoryDatabaseFacts(db);
-        return { retainedDrift };
+        new MemorySourceIndexKernel(db, command.input.state).replaceRows(header, rows);
+        facts = readMemoryDatabaseFacts(db, command.input.state.hasVectorTable);
+        return true;
       });
       const published = outcome.ok ? { ...outcome, facts } : outcome;
       return command.type === "source.replace.inline" ? published : finish(published);

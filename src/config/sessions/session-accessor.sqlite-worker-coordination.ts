@@ -5,7 +5,10 @@ import { withSqliteDatabaseAdmissionExchange } from "../../infra/sqlite-database
 import { retainSqliteWriteAdmissionService } from "../../infra/sqlite-transaction.js";
 import { exchangeSqliteDatabaseAdmissions } from "../../infra/sqlite-worker-database-admission-relay.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
-import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
+import {
+  createSqliteDatabaseAdmissionRelay,
+  createSqliteWorkerOperationAdmission,
+} from "../../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db.js";
 import { resolveQuarantineStorePath } from "../../state/openclaw-state-db.paths.js";
@@ -65,11 +68,19 @@ export async function withSqliteWorkerLifecycleCoordination<T>(
   if (mode === "reconciliation") {
     context.admission.assertCurrent();
   }
+  let active = true;
   const admission = assertRequestCurrent
     ? createSqliteWorkerOperationAdmission(() => {
         throw new Error("SQLite mutation file admission does not grant transaction authority");
       })
-    : undefined;
+    : mode === "reconciliation"
+      ? createSqliteDatabaseAdmissionRelay(() => {
+          // Accepted lease cleanup remains valid after new read admission closes.
+          if (!active) {
+            throw new Error("SQLite reconciliation metadata outlived its operation");
+          }
+        })
+      : undefined;
   if (admission && assertRequestCurrent) {
     admission.bindDatabaseAuthority({
       databasePath: context.admission.databasePath,
@@ -128,6 +139,7 @@ export async function withSqliteWorkerLifecycleCoordination<T>(
     // A refused grant retires the worker; confirmed exit must not hide the owner's refusal.
     throw admission?.failure ?? error;
   } finally {
+    active = false;
     admission?.finish();
     releaseService?.();
   }
@@ -135,7 +147,7 @@ export async function withSqliteWorkerLifecycleCoordination<T>(
 
 export async function runWithSqliteMutationWorkerCoordination<
   T,
-  Options extends OpenClawAgentDatabaseOptions,
+  Options extends Pick<OpenClawAgentDatabaseOptions, "env">,
 >(
   coordination: SqliteMutationWorkerCoordination,
   options: Options,

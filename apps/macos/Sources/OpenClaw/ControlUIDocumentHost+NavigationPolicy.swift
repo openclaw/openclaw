@@ -81,6 +81,30 @@ extension ControlUIDocumentHost {
         return scheme == "about" || scheme == "blob" || scheme == "data" || self.isHTTPURL(url)
     }
 
+    static func shouldShowDashboardResponseFailure(
+        _ response: URLResponse,
+        isMainFrame: Bool,
+        dashboardURL: URL) -> Bool
+    {
+        guard isMainFrame,
+              let response = response as? HTTPURLResponse,
+              response.statusCode >= 400,
+              let url = response.url,
+              self.sameOrigin(url, dashboardURL)
+        else { return false }
+        let mimeType = response.mimeType?.lowercased()
+        return mimeType != "text/html" && mimeType != "application/xhtml+xml"
+    }
+
+    static func shouldIgnoreDashboardPolicyInterruption(
+        _ error: NSError,
+        isShowingFailurePage: Bool) -> Bool
+    {
+        // WKError.Code has no case for the legacy policy interruption (102).
+        // Ignore it only after the response policy has installed its failure page.
+        isShowingFailurePage && error.domain == "WebKitErrorDomain" && error.code == 102
+    }
+
     static func browserResponseAction(
         for url: URL?,
         canShowMIMEType: Bool,

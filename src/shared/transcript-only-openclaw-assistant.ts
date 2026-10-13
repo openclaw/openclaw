@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { MODEL_FALLBACK_NOTICE_KIND } from "./model-fallback-notice.js";
 
 // Identifies OpenClaw-authored assistant rows that are transcript bookkeeping,
 // not provider model output. Some history surfaces keep gateway-injected rows
@@ -21,6 +22,7 @@ const OPENCLAW_DELIVERY_MIRROR_KINDS = new Set([
   "message-tool-source-reply",
   CRON_DIRECT_DELIVERY_CONTEXT_KIND,
   SKILL_WORKSHOP_CHANGE_NOTICE_KIND,
+  MODEL_FALLBACK_NOTICE_KIND,
 ]);
 
 function isOpenClawDeliveryMirrorMarker(value: unknown): boolean {

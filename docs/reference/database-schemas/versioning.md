@@ -32,12 +32,12 @@ Changes may stay at the same schema version only when downgraded readers remain 
 
 Agent deletion adds a nullable `phase TEXT` column to its existing journal on
 first deletion or Doctor reconstruction. `draining` closes ingress while existing
-runs abort and settle before database retirement. Admitted usage refreshes release
-their exact refresh locks through their retained database executions. The history
+runs abort and settle before database retirement. Admitted usage refreshes retain
+their database executions until writes settle, then release their process-local
+refresh reservations. The history
 resource owner drains their work and cleanup for the selected agent and captured
 database paths before native writers retire; unrelated stores keep running. A
-lost native execution can recover lock cleanup only through ordinary admission to
-the same physical file, so deletion still refuses new work. Cleanup failures remain
+retired native execution cannot admit new refresh writes. Cleanup failures remain
 visible and retain drainage custody; intervening reads cannot replace that retired
 resource before cleanup settles, so deletion retries drain the same owner. The deletion owner then records
 `retiring` and completes cleanup. Recovery resumes the recorded phase after a

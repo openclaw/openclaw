@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeEach, describe, expect, onTestFinished, test, vi } from "vitest";
-import { resolveExecDefaults } from "../agents/exec-defaults.js";
+import { resolveExecDefaultsAsync } from "../agents/exec-defaults.js";
 import { resolveLegacyInheritedAuthAgentId } from "../agents/legacy-inherited-auth-dir.js";
 import { SESSION_PERMISSION_BY_EXEC_MODE } from "../agents/session-permission-exec-mode.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
@@ -439,6 +439,8 @@ describe("gateway session utils", () => {
 
   test("Activity lists select newest interactions and completions before the 100-row page", async () => {
     const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
+    setRuntimeConfigSnapshot(cfg);
+    onTestFinished(() => resetConfigRuntimeState());
     const now = Date.now();
     const store: Record<string, SessionEntry> = Object.fromEntries(
       Array.from({ length: 101 }, (_, index) => [
@@ -494,6 +496,8 @@ describe("gateway session utils", () => {
 
   test("Activity time filters use activity age without changing ordinary metadata filters", async () => {
     const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
+    setRuntimeConfigSnapshot(cfg);
+    onTestFinished(() => resetConfigRuntimeState());
     const now = 1_800_000_000_000;
     const cutoff = now - 60 * 60_000;
     const clock = vi.spyOn(Date, "now").mockReturnValue(now);
@@ -545,6 +549,8 @@ describe("gateway session utils", () => {
 
   test("session lists page from an offset after filtering and sorting", async () => {
     const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
+    setRuntimeConfigSnapshot(cfg);
+    onTestFinished(() => resetConfigRuntimeState());
     const store = Object.fromEntries(
       Array.from({ length: 6 }, (_value, index) => [
         `session-${index}`,
@@ -737,7 +743,6 @@ describe("gateway session utils", () => {
         cfg,
         key: "agent:main:cron:job1",
         lightweightListRow: true,
-        skipTranscriptUsageFallback: true,
       });
       expect(bound.hasAutomation).toBe(true);
       expect(buildGatewaySessionSnapshot({ sessionRow: bound }).hasAutomation).toBe(true);
@@ -746,7 +751,6 @@ describe("gateway session utils", () => {
         cfg,
         key: "agent:main:other",
         lightweightListRow: true,
-        skipTranscriptUsageFallback: true,
       });
       expect(plain.hasAutomation).toBeUndefined();
       expect(buildGatewaySessionSnapshot({ sessionRow: plain }).hasAutomation).toBe(false);
@@ -757,6 +761,8 @@ describe("gateway session utils", () => {
 
   test("session list thinking cache preserves case-distinct model catalog entries", async () => {
     const cfg = createModelDefaultsConfig({ primary: "custom/CaseModel" });
+    setRuntimeConfigSnapshot(cfg);
+    onTestFinished(() => resetConfigRuntimeState());
     const modelCatalog = [
       {
         provider: "custom",
@@ -879,6 +885,8 @@ describe("gateway session utils", () => {
     "projects the private native model instead of outer or observed guesses (lightweight=%s)",
     async (lightweightListRow) => {
       const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.6-sol" });
+      setRuntimeConfigSnapshot(cfg);
+      onTestFinished(() => resetConfigRuntimeState());
       const entry = (sessionId: string): InternalSessionEntry => ({
         sessionId,
         updatedAt: 1,
@@ -955,7 +963,6 @@ describe("gateway session utils", () => {
           entry: store[key],
           rowContext,
           lightweightListRow,
-          skipTranscriptUsageFallback: true,
         });
       const nativeRow = readRow(nativeKey);
       expect(nativeRow).toMatchObject({ modelProvider: "openai", model: "gpt-5.6-luna" });
@@ -1807,7 +1814,7 @@ describe("gateway session utils", () => {
         expect(agent).toHaveProperty("defaultPermissionMode", expected);
       }
       for (const sessionKey of ["agent:main:main", "agent:main:other"]) {
-        const resolved = resolveExecDefaults({ cfg, agentId: "main", sessionKey });
+        const resolved = await resolveExecDefaultsAsync({ cfg, agentId: "main", sessionKey });
         expect([undefined, SESSION_PERMISSION_BY_EXEC_MODE[resolved.mode]]).toContain(
           agent?.defaultPermissionMode,
         );

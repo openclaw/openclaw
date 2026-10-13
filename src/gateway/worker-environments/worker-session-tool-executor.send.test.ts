@@ -5,6 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DecisionReceiptV1 } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { configureRuntimeActionDecisionSink } from "../../audit/runtime-action-decision.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { releaseAgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
 import {
   initializeGlobalHookRunner,
@@ -24,6 +28,8 @@ const fixtureMocks = workerSessionToolTestMocks();
 const { sessionEntries, sessionStorePaths, delivered, gatewayRequest, scopedSessionAccess } =
   fixtureMocks;
 
+afterEach(() => clearRuntimeConfigSnapshot());
+
 describe("worker session tool send delivery", () => {
   const getFixture = installWorkerSessionToolTestFixture(fixtureMocks);
   let placements: ReturnType<typeof getFixture>["placements"];
@@ -36,6 +42,7 @@ describe("worker session tool send delivery", () => {
   let send: ReturnType<typeof getFixture>["send"];
 
   beforeEach(() => {
+    setRuntimeConfigSnapshot({});
     resetGlobalHookRunner();
     ({
       placements,
@@ -417,6 +424,7 @@ describe.each([false, true])(
     const getFixture = installWorkerSessionToolTestFixture(fixtureMocks, {
       collectExecutionIdentity,
     });
+    beforeEach(() => setRuntimeConfigSnapshot({}));
 
     it("does not deliver to a sibling after the source owner closes during admission", async () => {
       const { setEntry, send, placements, sourceClaim, delegatedAuthorities } = getFixture();

@@ -12,7 +12,7 @@ import { isGatewayMethodAdvertised } from "./gateway-methods.ts";
 
 const discoveryRequests = new WeakMap<
   GatewayBrowserClient,
-  { invalidation?: object; pending: Map<string, Promise<McpAppDiscoverResult>> }
+  Map<string, Promise<McpAppDiscoverResult>>
 >();
 
 type McpAppCatalogHost = {
@@ -62,7 +62,7 @@ export class McpAppCatalogController {
       this.cleanup.push(
         context.gateway.subscribeEvents((event) => {
           if (event.event === "config.changed") {
-            void this.refresh(event);
+            void this.refresh();
           }
         }),
       );
@@ -102,10 +102,10 @@ export class McpAppCatalogController {
     this.error = null;
     this.loading = false;
     if (gateway.snapshot.phase === "connected" && this.available && target.sessionKey) {
-      void this.refresh(null);
+      void this.refresh();
     }
   }
-  async refresh(invalidation: object | null = {}) {
+  async refresh() {
     const context = this.context();
     const client = context?.gateway.snapshot.client;
     const target = this.target();
@@ -120,18 +120,12 @@ export class McpAppCatalogController {
     }
     const generation = ++this.generation;
     const scope = gatewayPresentationScope(context.gateway).key;
-    let discovery = discoveryRequests.get(client);
-    if (!discovery) {
-      discovery = { pending: new Map() };
-      discoveryRequests.set(client, discovery);
+    let pending = discoveryRequests.get(client);
+    if (!pending) {
+      pending = new Map();
+      discoveryRequests.set(client, pending);
     }
-    // Gateway observers receive the same event object; retire old reads once
-    // before any consumer awaits session preparation or issues its replacement.
-    if (invalidation && discovery.invalidation !== invalidation) {
-      discovery.invalidation = invalidation;
-      discovery.pending.clear();
-    }
-    const pending = discovery.pending;
+    // A config change during discovery may show the older catalog until the next refresh.
     const requestKey = JSON.stringify([scope, target.agentId, target.sessionKey]);
     this.loading = true;
     this.error = null;

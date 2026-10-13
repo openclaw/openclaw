@@ -5,7 +5,7 @@ import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { isToolAllowedByPolicies } from "../tool-policy-match.js";
-import { resolvePluginHarnessToolPolicies } from "./execution-environment.js";
+import { preparePluginHarnessToolPolicies } from "./execution-environment.js";
 
 const codex = await loadBundledPluginFacade<{
   CODEX_NATIVE_TOOL_REQUIREMENTS: readonly string[];
@@ -19,9 +19,9 @@ const codex = await loadBundledPluginFacade<{
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 
 describe("Codex subagent native tool policy", () => {
-  it("preserves native tools for OpenClaw admin/status-only denial", () => {
+  it("preserves native tools for OpenClaw admin/status-only denial", async () => {
     const deny = ["agents_list", "openclaw", "session_status", "progress_card"];
-    const policy = resolvePluginHarnessToolPolicies(
+    const policy = await preparePluginHarnessToolPolicies(
       {
         sessionKey: "agent:main:main",
         sessionId: "policy-root",
@@ -85,7 +85,7 @@ describe("Codex subagent native tool policy", () => {
         inheritedToolDeny: testCase.inheritedToolDeny,
       },
     );
-    const policy = resolvePluginHarnessToolPolicies(
+    const policy = await preparePluginHarnessToolPolicies(
       {
         sessionKey,
         sessionId: "policy-child",

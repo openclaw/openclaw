@@ -125,14 +125,10 @@ export function GroupedMessage(props: GroupedMessageProps) {
                 <InlineToolCards cards={state().toolCards} options={state().toolRenderOptions} />
               </Match>
               <Match when={state().isStandaloneToolMessage}>
-                <ToolMessage
-                  state={state}
-                  messageKey={props.messageKey}
-                  options={props.options}
-                  onOpenSidebar={props.onOpenSidebar}
-                />
+                <ToolMessage {...props} state={state} />
               </Match>
               <Match when={true}>
+                {/* Keep preparation out of this boundary so refreshes retain embedded media. */}
                 <BubbleContents
                   state={state}
                   messageKey={props.messageKey}
@@ -394,13 +390,7 @@ function BubbleContents(props: ContentProps) {
   const previewCount = createMemo(() => props.state().videoPreviews.length);
   const previews = createMemo(() =>
     Array.from({ length: previewCount() }, (_, index) => (
-      <VideoPreview
-        state={props.state}
-        messageKey={props.messageKey}
-        options={props.options}
-        onOpenSidebar={props.onOpenSidebar}
-        item={() => props.state().videoPreviews[index]}
-      />
+      <VideoPreview {...props} item={() => props.state().videoPreviews[index]} />
     )),
   );
   const hasText = () =>
@@ -550,20 +540,7 @@ function ToolMessageFallback(props: ContentProps) {
 }
 
 function ToolMessage(props: ContentProps) {
-  const fallback = solidContent(ToolMessageFallback, {
-    get state() {
-      return props.state;
-    },
-    get messageKey() {
-      return props.messageKey;
-    },
-    get options() {
-      return props.options;
-    },
-    get onOpenSidebar() {
-      return props.onOpenSidebar;
-    },
-  });
+  const fallback = solidContent(ToolMessageFallback, props);
   return (
     <LitContent
       value={renderPluginToolResult(

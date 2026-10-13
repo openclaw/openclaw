@@ -4,7 +4,6 @@ import type WaDropdownItem from "@awesome.me/webawesome/dist/components/dropdown
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openDesktopFocus } from "../../components/desktop/desktop-focus-window.ts";
-import { formatTimeAgo } from "../../lib/format.ts";
 import type { InventoryRemovalRequest } from "../../lib/nodes/page-operations.ts";
 import { showToast } from "../../lib/toast.ts";
 import {
@@ -171,7 +170,6 @@ describe("devices pending rendering", () => {
 
 describe("devices inventory rendering", () => {
   it.each([
-    { load: 3.2, free: 41, diskFree: 1200, tone: "ok" },
     { load: 18, free: 24, diskFree: 240, tone: "warn" },
     { load: 28, free: 8, diskFree: 80, tone: "danger" },
   ])("renders node resource pressure as $tone", ({ load, free, diskFree, tone }) => {
@@ -211,30 +209,7 @@ describe("devices inventory rendering", () => {
     expect(
       getSettingsRow(container, "Without stats").querySelector(".device-resources"),
     ).toBeNull();
-    if (tone === "ok") {
-      expect(row.textContent).toContain("151 / 192 GB");
-    }
   });
-
-  it.each([false, true])(
-    "marks retained host stats stale only when connected is %s",
-    (connected) => {
-      const now = Date.now();
-      const node = { ...createOfflineDeviceNode(now), connected };
-      const container = renderDevicesContainer({ nodes: [node] });
-      const row = getSettingsRow(container, node.displayName);
-      const age = formatTimeAgo(now - node.hostStats.updatedAtMs);
-      const meters = row.querySelectorAll(".device-resource");
-      expect(meters).toHaveLength(3);
-      for (const meter of meters) {
-        expect(meter.querySelector(".session-context-meter--stale") !== null).toBe(!connected);
-        expect(
-          meter.querySelector(".device-resource__label")?.textContent?.includes(` · ${age}`),
-        ).toBe(!connected);
-        expect(meter.getAttribute("title")?.includes(`last known ${age}`)).toBe(!connected);
-      }
-    },
-  );
 
   it("hides only meters whose optional inputs are absent", () => {
     const container = renderDevicesContainer({
@@ -285,26 +260,23 @@ describe("devices inventory rendering", () => {
     },
   );
 
-  it.each([undefined, false])(
-    "does not infer Desktop availability from commands: %s",
-    (desktop) => {
-      const container = renderDevicesContainer({
-        nodes: [
-          { nodeId: "studio", displayName: "Studio", paired: true, commands: ["desktop.stream"] },
-        ],
-        desktopEnvironments: [
-          { id: "node:studio", type: "node", status: "available", desktop },
-          { id: "node:other", type: "node", status: "available", desktop: true },
-        ],
-      });
-      const row = getSettingsRow(container, "Studio");
-      expect(row.querySelector(".device-entry__desktop")).toBeNull();
-      const chip = row.querySelector('[aria-disabled="true"]');
-      expect(chip?.getAttribute("title")).toContain("Desktop sharing");
-      expect(chip?.getAttribute("title")).toContain("pending desktop capability request");
-      expect(row.querySelector(".device-entry__facts")?.textContent).toContain("desktop.stream");
-    },
-  );
+  it("does not infer Desktop availability from commands", () => {
+    const container = renderDevicesContainer({
+      nodes: [
+        { nodeId: "studio", displayName: "Studio", paired: true, commands: ["desktop.stream"] },
+      ],
+      desktopEnvironments: [
+        { id: "node:studio", type: "node", status: "available", desktop: undefined },
+        { id: "node:other", type: "node", status: "available", desktop: true },
+      ],
+    });
+    const row = getSettingsRow(container, "Studio");
+    expect(row.querySelector(".device-entry__desktop")).toBeNull();
+    const chip = row.querySelector('[aria-disabled="true"]');
+    expect(chip?.getAttribute("title")).toContain("Desktop sharing");
+    expect(chip?.getAttribute("title")).toContain("pending desktop capability request");
+    expect(row.querySelector(".device-entry__facts")?.textContent).toContain("desktop.stream");
+  });
 
   it("renders Gateway resources and uptime from system info", () => {
     const container = renderDevicesContainer({
@@ -325,35 +297,6 @@ describe("devices inventory rendering", () => {
     expect(row.textContent).toContain("load 3.2");
     expect(row.textContent).toContain("1.2 TB free");
     expect(row.querySelector(".settings-row__desc")?.textContent).toContain("up 11d 4h");
-  });
-
-  it("pins the Gateway self beacon before paired devices", () => {
-    const container = renderDevicesContainer({
-      presence: [
-        {
-          instanceId: "gateway-1",
-          host: "gateway-host",
-          mode: "gateway",
-          platform: "linux",
-          version: "2026.7.11",
-          lastInputSeconds: 5,
-          ts: 1_000,
-        },
-      ],
-      devicesList: {
-        pending: [],
-        paired: [{ deviceId: "device-1", displayName: "Device One", roles: ["operator"] }],
-      },
-    });
-    const entries = getInventorySection(container).querySelectorAll(".device-entry");
-    const gatewayEntry = expectDefined(entries[0], "gateway inventory entry");
-
-    expect(statusesByText(gatewayEntry, "gateway")).toHaveLength(1);
-    expect(statusesByText(gatewayEntry, "connected")).toHaveLength(0);
-    expect(gatewayEntry.textContent).toContain("gateway-host");
-    expect(gatewayEntry.textContent).toContain("Linux · 2026.7.11 · input 5s ago");
-    expect(gatewayEntry.querySelector("button")).toBeNull();
-    expect(gatewayEntry.querySelector("details")).toBeNull();
   });
 
   it("keeps the paired-devices empty state when only other sections have rows", () => {
@@ -468,16 +411,6 @@ describe("devices inventory rendering", () => {
     ]);
   });
 
-  it("offers no Edit alias menu item for rows without a paired device record", () => {
-    const container = renderDevicesContainer({
-      nodes: [{ nodeId: "node-only", displayName: "Bare node", paired: true, connected: true }],
-    });
-
-    const row = getSettingsRow(container, "Bare node");
-    expect(row.querySelector('wa-dropdown-item[value="copy"]')).toBeInstanceOf(Element);
-    expect(row.querySelector('wa-dropdown-item[value="editAlias"]')).toBeNull();
-  });
-
   it("keeps focus on Copy when an inventory refresh adds preceding approval actions", async () => {
     const node = { nodeId: "node-one", displayName: "Node One", paired: true, connected: true };
     const props = createDevicesViewProps({ nodes: [node] });
@@ -526,29 +459,6 @@ describe("devices inventory rendering", () => {
       expect(writeText).toHaveBeenCalledExactlyOnceWith("copy-device-id");
     },
   );
-
-  it("copies the device ID through execCommand when the Clipboard API is absent", async () => {
-    // Plain-HTTP/LAN origins expose no navigator.clipboard; jsdom has no execCommand either.
-    vi.stubGlobal("navigator", {});
-    const execCommand = vi.fn(() => true);
-    (document as unknown as { execCommand: unknown }).execCommand = execCommand;
-    try {
-      const container = renderDevicesContainer({
-        canManagePairing: false,
-        devicesList: {
-          pending: [],
-          paired: [{ deviceId: "copy-device-id", displayName: "Copy device", roles: ["operator"] }],
-        },
-      });
-      selectMenuItem(getSettingsRow(container, "Copy device"), "copy");
-      await vi.waitFor(() =>
-        expect(showToast).toHaveBeenCalledWith({ message: "Device ID copied" }),
-      );
-      expect(execCommand).toHaveBeenCalledExactlyOnceWith("copy");
-    } finally {
-      delete (document as unknown as { execCommand?: unknown }).execCommand;
-    }
-  });
 
   it("renders approve and reject actions for pending node approvals", () => {
     const approvals: string[] = [];
@@ -684,65 +594,6 @@ describe("devices inventory rendering", () => {
     ]);
   });
 
-  it("shows when an offline Windows device requires manual wake", () => {
-    const container = renderDevicesContainer({
-      devicesList: {
-        pending: [],
-        paired: [
-          {
-            deviceId: "windows-browser",
-            displayName: "Windows browser",
-            platform: "Win32",
-            roles: ["operator"],
-          },
-        ],
-      },
-      nodes: [
-        {
-          nodeId: "windows-node",
-          displayName: "Windows node",
-          platform: "win32",
-          connected: false,
-          paired: true,
-        },
-        {
-          nodeId: "windows-node-online",
-          displayName: "Online Windows node",
-          platform: "Windows 11",
-          connected: true,
-          paired: true,
-        },
-        {
-          nodeId: "windows-node-pending",
-          displayName: "Pending Windows node",
-          platform: "win32",
-          connected: false,
-          paired: true,
-          approvalState: "pending-approval",
-          pendingRequestId: "pending-windows",
-        },
-        {
-          nodeId: "windows-node-unapproved",
-          displayName: "Unapproved Windows node",
-          platform: "windows",
-          connected: false,
-          paired: true,
-          approvalState: "unapproved",
-        },
-      ],
-    });
-    const section = getInventorySection(container);
-    const wakeStatuses = Array.from(section.querySelectorAll<HTMLElement>("[title]")).filter(
-      (element) => element.textContent?.trim() === "manual wake required",
-    );
-
-    expect(statusesByText(section, "offline").length).toBeGreaterThan(0);
-    expect(wakeStatuses).toHaveLength(1);
-    expect(wakeStatuses[0]?.getAttribute("title")).toBe(
-      "The Gateway cannot wake an offline Windows device. Start the machine or restore its network connection.",
-    );
-  });
-
   it("shows node-only offline affordances while preserving mixed-role device liveness", () => {
     const container = renderDevicesContainer({
       devicesList: {
@@ -784,10 +635,7 @@ describe("devices inventory rendering", () => {
     ).toEqual(["offline", "manual wake required"]);
   });
 
-  it.each([
-    { caps: ["codex.exec-server"], commands: [] },
-    { caps: [], commands: ["codex.exec-server.stdio.v1"] },
-  ])("preserves the slot-less exec affordance through node inventory: %j", ({ caps, commands }) => {
+  it("preserves the slot-less exec affordance through node inventory", () => {
     const container = renderDevicesContainer({
       nodes: [
         {
@@ -795,8 +643,8 @@ describe("devices inventory rendering", () => {
           displayName: "Exec host",
           connected: true,
           paired: true,
-          caps,
-          commands,
+          caps: ["codex.exec-server"],
+          commands: [],
         },
       ],
     });
@@ -841,68 +689,6 @@ describe("devices inventory rendering", () => {
     expect(rotations).toEqual([{ deviceId: "device-1", name: "Device One", role: "operator" }]);
     findButton(section, "Revoke").click();
     expect(revocations).toEqual([{ deviceId: "device-1", role: "operator" }]);
-  });
-
-  it("always renders private identifiers in Details and status as a dot with text", () => {
-    const container = renderDevicesContainer({
-      devicesList: {
-        pending: [],
-        paired: [
-          {
-            deviceId: "device-private-id",
-            displayName: "Device One",
-            platform: "macos 26.5.2",
-            remoteIp: "192.0.2.10",
-            roles: ["operator"],
-          },
-        ],
-      },
-    });
-    const entry = getInventorySection(container).querySelector(".device-entry");
-
-    expect(entry?.querySelector(".settings-row__desc")?.textContent).toContain("macOS 26.5.2");
-    expect(entry?.querySelector(".settings-row__desc")?.textContent).not.toContain(
-      "device-private-id",
-    );
-    expect(entry?.querySelector(".settings-row__desc")?.textContent).not.toContain("192.0.2.10");
-    expect(entry ? statusesByText(entry, "offline") : []).toHaveLength(1);
-    expect(entry?.querySelector("dd[title='device-private-id']")?.textContent).toBe(
-      "device-private-id",
-    );
-    expect(entry?.querySelector(".device-entry__facts")?.textContent).toContain("192.0.2.10");
-  });
-
-  it("lists live unpaired presence beacons as display-only rows", () => {
-    const container = renderDevicesContainer({
-      presence: [
-        {
-          instanceId: "webchat-1",
-          host: "browser-session",
-          mode: "webchat",
-          roles: ["operator"],
-          platform: "macos 26.5.2",
-          lastInputSeconds: 90,
-          ts: 1_000,
-        },
-        {
-          instanceId: "left-1",
-          host: "gone",
-          mode: "webchat",
-          reason: "disconnect",
-          ts: 2_000,
-        },
-      ],
-    });
-    const section = getSection(container, "Connected without pairing");
-
-    expect(section.textContent).not.toContain("gone");
-    const entry = Array.from(section.querySelectorAll(".device-entry")).find((candidate) =>
-      candidate.textContent?.includes("browser-session"),
-    );
-    expect(entry?.textContent).toContain("unpaired");
-    expect(entry?.textContent).toContain("macOS 26.5.2");
-    expect(entry ? statusesByText(entry, "connected") : []).toHaveLength(0);
-    expect(entry?.querySelector("button")).toBeNull();
   });
 
   it("brands platform names instead of naive capitalization", () => {

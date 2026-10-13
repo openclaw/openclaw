@@ -14,7 +14,7 @@ How plugin code reads the runtime config snapshot, persists config writes, and r
 
 Prefer config that was already passed into the active call path, for example `api.config` during registration or a `cfg` argument on channel/provider callbacks. This keeps one process snapshot flowing through the work instead of reparsing config on hot paths.
 
-Use `api.runtime.config.current()` only when a long-lived handler needs the current process snapshot and no config was passed to that function. The returned value is readonly; clone or use a mutation helper before editing.
+Use `api.runtime.config.current()` only when a long-lived handler needs the current process snapshot and no config was passed to that function. The returned value is readonly. Use `api.runtime.config.current({ clone: true })` when a downstream API needs an independent mutable copy; the copy retains resolved-secret metadata. Persist edits through the mutation helpers below.
 
 Tool factories receive `ctx.runtimeConfig` plus `ctx.getRuntimeConfig()`. Use the getter inside a long-lived tool's `execute` callback when config can change after the tool definition was created.
 

@@ -17,7 +17,7 @@ import { resolveInstallableChannelPlugin } from "../commands/channel-setup/chann
 import { parseAccountSelector } from "../commands/channels/account-selector.js";
 import { parseChannelSelector } from "../commands/channels/channel-selector.js";
 import { requireValidConfigForWrite } from "../commands/config-validation.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { danger } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -138,7 +138,7 @@ export function registerDirectoryCli(program: Command) {
     }
     // Config writes refresh the active runtime snapshot. Directory execution must use that
     // prepared view, never the authored config that was just persisted.
-    const runtimeConfig = getRuntimeConfig();
+    const runtimeConfig = await captureRuntimeConfigAsyncReader()();
     const selection = explicitChannel
       ? {
           channel: resolvedExplicit?.channelId,

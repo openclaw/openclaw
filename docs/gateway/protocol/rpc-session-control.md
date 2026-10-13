@@ -25,6 +25,10 @@ Model-catalog reads in `sessions.create`, `sessions.patch`, `sessions.patchMany`
 
 Session list orders update incrementally as committed session metadata changes. Each request still applies current visibility, activity, and time filters before pagination. Archived sessions retain their list position when their display rows are released from memory.
 
+Project recents batch repository-workspace reads using the selected sessions’ physical agent owners.
+
+GitHub publication options read independent account status and publication receipts concurrently. The response still checks current session access and personal account authority after those reads settle.
+
 ## Session control
 
 - `sessions.catalog.list` lists external session catalogs. Pass `metadataOnly: true` when a client needs catalog IDs, labels, capabilities, and share-route metadata without enumerating hosts or sessions. This mode returns the normal catalog objects with `hosts: []`; it retains agent and catalog selection, skips row filtering/pagination, and emits no host progress events. Omit the flag for full listing, including the host availability needed for terminal selection. The Control UI uses metadata-only discovery for the new-session picker and hidden-source labels in Settings.
@@ -70,6 +74,7 @@ Session list orders update incrementally as committed session metadata changes. 
 
 - `chat.send`, `sessions.send`, and initial-turn `sessions.create` acknowledgments report admission separately from transcript persistence. Optional `messageSeq` is the one-based position from an actual committed user-turn receipt; it is absent while the input exists only in pending custody. `status: "started"` and `runStarted: true` alone do not establish a transcript row. Reconcile provisional input by its submission identity against accepted custody or canonical transcript identity, never a predicted position or matching content.
 
+- `sessions.create` with `fork: true` checks the parent transcript against the child's selected runtime capacity and authored model caps. Native runtimes do not borrow the same model's API capacity. When the selected runtime has no known or configured capacity, the existing 100,000-token fork limit applies; oversized parents return `INVALID_REQUEST` before copying history.
 - `sessions.create.fastMode` accepts `true`, `false`, or `"auto"` and persists that speed override before the initial turn starts.
 - `sessions.create.label` claims an explicit label within the physical session store, including archived sessions. Labels are trimmed and case-sensitive. Concurrent creations with distinct keys cannot claim the same label: the losing request receives `INVALID_REQUEST` with `label already in use: <label>` and must choose another label. A rejected fork does not retain copied history. Agents configured to share a store share its label namespace; separate stores do not.
 - `sessions.title.prepare` (`{ agentId, message, model?, catalogId?, incognito? }`, `operator.write`, rate-limited as a control-plane write) returns `{ title }` from the selected agent's utility model only, without creating or renaming a session; it returns `title: null` for incognito, empty, slash-command, or unavailable-utility input and never falls back to the primary model. A client passes a ready result as `sessions.create.displayName`: a presentation title stored like a generated first-message title, so it is not unique, never claims `label`, and is ignored when adopting an existing key.

@@ -8,7 +8,7 @@ import {
   setActiveEmbeddedRun,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
-import { getRuntimeConfig } from "../../config/config.js";
+import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../config/config.js";
 import {
   patchSessionEntryCore,
   replaceSessionEntry,
@@ -64,6 +64,7 @@ it.each(["rollback", "rollback during recovery"] as const)(
           },
         },
       });
+      await captureRuntimeConfigAsyncReader()();
       const scope = { agentId: "doomed", env: state.env, sessionKey: "agent:doomed:pending" };
       await expect(
         replaceSessionEntry(scope, { sessionId: "pending", updatedAt: 1 }),

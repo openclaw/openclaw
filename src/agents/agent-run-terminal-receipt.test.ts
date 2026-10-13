@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { captureRuntimeConfigWithSource } from "../config/runtime-config-capture-state.js";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import {
   formatAgentRunRouteChange,
   type AgentRunTerminalReceipt,
@@ -35,26 +39,12 @@ describe("isProviderModelRerouted", () => {
     ).toBeUndefined();
   });
 
-  it("keeps a provider-declared equivalent response model from producing a model-switch fact", () => {
-    const requested = { provider: "openai", model: "gpt-5.6" };
-    const effective = { provider: "openai", model: "gpt-5.6", responseModel: "gpt-5.6-sol" };
-    expect(isProviderModelRerouted(requested, effective)).toBe(false);
-  });
-
-  it.each([
-    { provider: "openai", model: "gpt-5.6", responseModel: "gpt-5.6-luna" },
-    { provider: "openai", model: "gpt-5.6-sol", responseModel: "gpt-5.6-sol" },
-  ])(
-    "retains a change the provider does not declare equivalent: $model with response $responseModel",
-    (effective) => {
-      expect(isProviderModelRerouted({ provider: "openai", model: "gpt-5.6" }, effective)).toBe(
-        true,
-      );
-    },
-  );
-
   describe("with a configured model row declaring response model equivalence", () => {
-    const declaredConfig = (provider: string, modelId: string): OpenClawConfig => ({
+    const declaredConfig = (
+      provider: string,
+      modelId: string,
+      overrides: Partial<ModelDefinitionConfig> = {},
+    ): OpenClawConfig => ({
       models: {
         providers: {
           [provider]: {
@@ -69,6 +59,7 @@ describe("isProviderModelRerouted", () => {
                 contextWindow: 128_000,
                 maxTokens: 8_192,
                 responseModelEquivalent: true,
+                ...overrides,
               },
             ],
           },
@@ -91,14 +82,94 @@ describe("isProviderModelRerouted", () => {
       expect(isProviderModelRerouted(requested, effective, config)).toBe(true);
     });
 
-    it("accepts any response model on a bundled-provider row, overriding provider policy", () => {
+    it.each([false, undefined])("requires an explicit true declaration (%s)", (value) => {
+      expect(
+        isProviderModelRerouted(
+          requested,
+          { ...requested, responseModel: "upstream-model" },
+          declaredConfig("broker", "team/chat", { responseModelEquivalent: value }),
+        ),
+      ).toBe(true);
+    });
+
+    it.each([{}, declaredConfig("broker", "team/chat", { responseModelEquivalent: false })])(
+      "ignores a declaration contributed only to runtime config",
+      (source) => {
+        expect(
+          isProviderModelRerouted(
+            requested,
+            { ...requested, responseModel: "upstream-model" },
+            captureRuntimeConfigWithSource(config, source),
+          ),
+        ).toBe(true);
+      },
+    );
+
+    it("ignores a catalog-authored row", () => {
+      expect(
+        isProviderModelRerouted(
+          requested,
+          { ...requested, responseModel: "upstream-model" },
+          declaredConfig("broker", "team/chat", { metadataSource: "models-add" }),
+        ),
+      ).toBe(true);
+    });
+
+    it("keeps bundled provider policy authoritative", () => {
       const openaiRequested = { provider: "openai", model: "gpt-5.6" };
       const effective = { ...openaiRequested, responseModel: "gpt-5.6-luna" };
       expect(isProviderModelRerouted(openaiRequested, effective)).toBe(true);
       expect(
         isProviderModelRerouted(openaiRequested, effective, declaredConfig("openai", "gpt-5.6")),
-      ).toBe(false);
+      ).toBe(true);
     });
+
+    it.each([
+      { origin: "bundled" as const },
+      { origin: "global" as const, trustedOfficialInstall: true },
+    ])("ignores declarations for official owners without a policy artifact ($origin)", (owner) => {
+      const snapshot = createPluginMetadataSnapshotFixture({
+        plugins: [{ id: "cohere", providers: ["cohere"], ...owner }],
+      });
+      withPluginMetadataSnapshotScope(snapshot, () => {
+        const cohere = { provider: "cohere", model: "command-a" };
+        expect(
+          isProviderModelRerouted(
+            cohere,
+            { ...cohere, responseModel: "different-model" },
+            declaredConfig("cohere", "command-a"),
+          ),
+        ).toBe(true);
+      });
+    });
+  });
+
+  it.each([
+    { requested: "gpt-5.6", response: "gpt-5.6-sol", rerouted: false },
+    { requested: "gpt-5.6", response: "gpt-5.6-sol-2026-08-01", rerouted: false },
+    { requested: "gpt-5.6-luna", response: "gpt-5.6-luna-2026-08-02", rerouted: false },
+    { requested: "gpt-5.6", response: "gpt-5.6-luna", rerouted: true },
+    { requested: "gpt-5.6", response: "gpt-5.6-luna-2026-08-02", rerouted: true },
+    { requested: "gpt-5.6", response: "gpt-5.6", rerouted: false },
+  ])(
+    "classifies an OpenAI $requested run answered as $response as rerouted=$rerouted",
+    ({ requested, response, rerouted }) => {
+      expect(
+        isProviderModelRerouted(
+          { provider: "openai", model: requested },
+          { provider: "openai", model: requested, responseModel: response },
+        ),
+      ).toBe(rerouted);
+    },
+  );
+
+  it("retains a change of effective model even when its response is declared equivalent", () => {
+    expect(
+      isProviderModelRerouted(
+        { provider: "openai", model: "gpt-5.6" },
+        { provider: "openai", model: "gpt-5.6-sol", responseModel: "gpt-5.6-sol" },
+      ),
+    ).toBe(true);
   });
 
   it.each([

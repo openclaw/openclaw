@@ -11,6 +11,11 @@ title: "Database schemas"
 
 OpenClaw stores control-plane state in the shared state database and agent data in one SQLite database per agent. Schema migrations run forward when a database opens. Older OpenClaw builds refuse databases written by a newer schema.
 
+PostgreSQL shared-state generation requires PostgreSQL 16+, preserves lazy feature
+fragments, and keeps engine schema versions in lockstep. See
+[shared-state schema generation](/reference/database-schemas/storage-changes#shared-state-postgresql-schema-generation)
+for catalog equivalence and the explicit v22 pending-promotion exceptions.
+
 The Gateway process is the single owner of every OpenClaw database and its state.
 Its workers and native handles share that ownership. Committed write receipts
 invalidate in-process row caches before their next use; a cache without complete
@@ -28,6 +33,9 @@ physical shared database's process-owned facts. Journal writers publish pending,
 completed, and removed status at commit through the existing worker fact transport;
 rollback preserves the previous status. Session admission reuses this fact and the
 deletion owner's queue closure instead of reading the journal on every turn.
+Synchronous runtime guards reuse the same committed fact rather than copying the
+shared database for each check. Guards inside a native transaction still read
+that transaction's current journal, including its uncommitted changes.
 Restart loads persisted tombstones again. Destructive cleanup retains its current
 journal-authority checks; schema, retention, and update behavior are unchanged.
 
@@ -72,6 +80,12 @@ does not redirect that operation to the replacement file; the next admission or
 open detects it through the database lifecycle owner. Commit authority checks and
 Doctor's explicit verification remain in place.
 
+Chat input actors reuse their native owner’s admitted physical identity and
+canonical location, without queuing another writer reservation just to acquire
+the actor. Cold owners still prepare their database identity first. Captured
+session reads constrain the same physical file; actual input writes retain FIFO
+admission and current authority checks.
+
 Managed writes publish committed facts before their public observers. Private
 receipts distinguish explicit absence from incomplete coverage and preserve known
 commits independently of reply delivery. See
@@ -79,9 +93,9 @@ commits independently of reply delivery. See
 for ordering, rollback, and the writer families that still retain native guards.
 
 SQLite format, schema-version, integrity, canonical-index, and
-table-existence validation runs once per physical database per process load,
-on its first admission. The admitted facts are shared with all workers and
-handles, including later opens and reopens after idle close. File identity uses
+table-existence validation runs on a physical database's first admission.
+The admitted facts are shared with all workers and handles while any connection
+remains open. Final close retires those facts; a later reopen validates again. File identity uses
 volume, inode, and stable birthtime captured once with `fstat` on the retained
 admission descriptor, not SQL. Admission lookups and established borrowers reuse
 those shared facts without checking the pathname again. Native open and reopen
@@ -101,8 +115,17 @@ Current-row authority checks remain at their effect boundaries. Cached rows insi
 an active SQLite snapshot use that snapshot's identity and the connection's local
 mutation revision. They never carry a current committed-write revision or become
 reusable after the snapshot ends. Autocommit caches use the owning writer's receipts.
-Closing a connection clears its prepared statements
-and row caches, while physical-database admission survives for the process lifetime.
+Closing a connection clears its prepared statements and row caches. Final close
+also retires physical-database admission, keeping only the host's identity descriptor
+until explicit retirement can safely close it without releasing sibling POSIX locks.
+
+Canonical auth reads pass a compact projection of the live owner's schema facts
+(user version and the two auth table classifications) to the isolated child. The
+child reads current credential rows and closes its native reader before transferring
+them, without repeating schema admission on each request. It retains neither schema
+catalogs nor open handles between requests. Cold, snapshot, and artifact-preserving
+reads still admit their own database; owner DDL invalidates the next projection,
+and a replacement physical file cannot borrow the previous file's facts.
 
 Worker dispatch carries snapshots prepared by the admission owner when it publishes
 facts or writer custody. Unchanged requests reuse the registry revision without
@@ -111,8 +134,8 @@ invalidate transferred facts immediately; retirement removes the published snaps
 This changes no schema, stored bytes, or update behavior.
 
 Shared-state content-version checks reuse the physical database's admitted version
-facts across handles and workers. Ordinary commits, transactions, and connection
-closure do not force another marker read. The migration owner publishes replacement
+facts across open handles and workers. Ordinary commits, transactions, and closing
+one of several connections do not force another marker read. The migration owner publishes replacement
 facts with its committed schema. Observed DDL without replacement facts expires
 the content-version admission: an unchanged catalog shape does not prove that the
 `config_machine_state` marker survived. The next owner lookup validates it once,
@@ -151,6 +174,13 @@ transaction, which publishes the new schema facts on commit; rollback cannot
 publish a schema that did not commit. Ordinary connection replacement and data
 commits do not repeat schema validation. Schemas, stored bytes, and update behavior
 are unchanged.
+
+Shared-state bootstrap checks native table options once after installing the
+canonical schema. When every ordinary table is already STRICT, it skips legacy
+STRICT rebuild planning and duplicate schema installation. Existing non-STRICT
+tables still use the transactional migration, and final canonical table and index
+validation remains mandatory. Doctor's explicit repair and version refusal are
+unchanged; this changes no stored format or upgrade/downgrade contract.
 
 Admitted schema facts survive data-only transaction settlement. Committed write
 receipts invalidate cached row facts. A settled write releases its receipt fence

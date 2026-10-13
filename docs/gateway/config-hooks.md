@@ -48,6 +48,16 @@ data and restrict the target agent's tools and workspace separately.
 | `gmail`                     | unset                           | Gmail transport and processing defaults; see [Gmail integration](/gateway/config-hooks#gmail-integration).                                                                                                        |
 | `internal`                  | separate subsystem              | Internal event-hook configuration; see [Hooks](/automation/hooks). It does not enable HTTP ingress.                                                                                                               |
 
+If an enabled hook token contains an unresolved authored environment reference,
+Gateway startup continues with external HTTP hooks disabled and logs a warning.
+Supply the referenced secret to the Gateway process and reload or restart to
+enable the endpoints. An unresolved token in a hot reload is rejected; the
+previous valid hooks configuration remains active. Internal event hooks are a
+separate subsystem. `openclaw doctor` reports unresolved hook credentials in its
+current environment and gives recovery guidance; it does not generate a
+replacement secret or overwrite the configured reference. The CLI and Gateway
+service can have different environments.
+
 `hooks.token` should be distinct from active Gateway shared-secret auth
 (`gateway.auth.token` / `OPENCLAW_GATEWAY_TOKEN` or `gateway.auth.password` /
 `OPENCLAW_GATEWAY_PASSWORD`). Startup logs a non-fatal warning on reuse;

@@ -7,7 +7,10 @@ import type {
   SqliteWorkerOperationAdmission,
 } from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
+import { createSqliteWorkerTransferCollector } from "../../infra/sqlite-worker-transfer.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
+import { publishRetainedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication-state.js";
+import { projectSessionSharingEntry } from "./session-accessor.sqlite-entry-cache.types.js";
 import type {
   SessionActorAuthority,
   SessionActorAuthorityFacts,
@@ -22,7 +25,9 @@ import type {
   SessionActorTarget,
 } from "./session-actor-contract.js";
 import type { SessionActorExecutor, SessionActorExecutorGuards } from "./session-actor-executor.js";
+import { SessionActorReadInvalidatedError } from "./session-actor-read-error.js";
 import type { createSessionActorReplica } from "./session-actor-replica.js";
+import { publishCommittedSessionTranscriptReceipts } from "./session-transcript-authority.js";
 
 type NativeAdmission = {
   admission: Pick<SqliteWorkerOperationAdmission, "committed" | "settlement"> &
@@ -92,7 +97,12 @@ export function createSqliteSessionActorExecutor(
   let fenced = false;
   const authorize = (
     authority: SessionActorAuthority,
-    observe?: (native: NativeAdmission) => void,
+    observe?: (
+      native: NativeAdmission,
+      publication: unknown,
+      stage: "transaction" | "commit",
+      snapshot: SessionActorAuthorityFacts,
+    ) => void,
   ) => {
     let actorAdmissionSeen = false;
     return (
@@ -119,8 +129,15 @@ export function createSqliteSessionActorExecutor(
         }
         // SAFETY: The private MessagePort already detached this snapshot from the paired kernel.
         const snapshot = freezeJsonSnapshot(facts.snapshot as SessionActorAuthorityFacts);
-        authority.authorize(request.stage, snapshot, facts.publication);
-        observe?.(native);
+        const publication = facts.publication;
+        observe?.(native, publication, request.stage, snapshot);
+        authority.authorize(
+          request.stage,
+          snapshot,
+          isRecord(publication) && publication.kind === "session-actor-outcome"
+            ? publication.publication
+            : publication,
+        );
       } else if (
         actorAdmissionSeen &&
         (request.stage === "commit" || (request.stage === "transaction" && facts !== undefined))
@@ -151,7 +168,7 @@ export function createSqliteSessionActorExecutor(
         }
       }
       if (!snapshot) {
-        throw new Error("Session actor changed before its read could publish");
+        throw new SessionActorReadInvalidatedError();
       }
       fenced = false;
       params.assertReadable();
@@ -172,8 +189,16 @@ export function createSqliteSessionActorExecutor(
     const captured = input;
     type Outcome = SessionActorOutcome<SessionActorPhaseResults[Phase]>;
     let native: NativeAdmission | undefined;
+    let previousEntry: SessionActorAuthorityFacts["entry"];
     let running: Promise<Outcome> | undefined;
     let committed: Extract<Outcome, { kind: "committed" }> | undefined;
+    let candidate: unknown;
+    const transfer = createSqliteWorkerTransferCollector("outcome", (value) => {
+      if (candidate !== undefined) {
+        throw new Error("Session actor transferred more than one outcome");
+      }
+      candidate = value;
+    });
     const unknown = (error: unknown): Outcome => ({
       kind: "unknown",
       target,
@@ -214,7 +239,13 @@ export function createSqliteSessionActorExecutor(
             let result: Outcome;
             if (native) {
               const settled = await native.retained.settled;
-              const evidence = native.admission.committed?.facts;
+              const witness = native.admission.committed?.facts;
+              const evidence =
+                isRecord(witness) && witness.kind === "session-actor-committed-transfer"
+                  ? transfer.completed && witness.transferId === transfer.id
+                    ? candidate
+                    : undefined
+                  : witness;
               const receipt = isRecord(evidence) ? evidence.receipt : undefined;
               if (
                 isRecord(evidence) &&
@@ -234,12 +265,28 @@ export function createSqliteSessionActorExecutor(
                 }
                 result = committed;
                 try {
+                  // Retained effect predicates must observe this commit before its callbacks.
+                  if (target.database.kind === "file") {
+                    const entry = committed.receipt.postimage.entry;
+                    publishRetainedSessionEntryChange(
+                      target.database.physicalIdentity,
+                      target.sessionKey,
+                      entry ? projectSessionSharingEntry(entry) : undefined,
+                      previousEntry,
+                      true,
+                      entry,
+                    );
+                  }
+                  // Partial transcript publication precedes installation of the full actor replica.
+                  publishCommittedSessionTranscriptReceipts(
+                    committed.receipt.transcript.authorityReceipts,
+                  );
                   observer?.committed(committed);
                 } catch (error) {
                   result = preserveFailure(error);
                 }
               } else if (
-                evidence === undefined &&
+                witness === undefined &&
                 reply.ok &&
                 (reply.value.kind === "rolled-back" || reply.value.kind === "stale-version") &&
                 (settled.kind === "not-entered" ||
@@ -296,8 +343,14 @@ export function createSqliteSessionActorExecutor(
           })();
           return running;
         },
-        authorize(authority, (admission) => {
+        authorize(authority, (admission, publication, stage, snapshot) => {
           native = admission;
+          if (stage === "transaction") {
+            previousEntry = snapshot.entry;
+          }
+          if (isRecord(publication) && publication.kind === "session-actor-outcome") {
+            transfer.accept(publication.transfer);
+          }
         }),
       );
     } catch (error) {

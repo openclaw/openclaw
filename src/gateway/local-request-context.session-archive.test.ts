@@ -14,6 +14,7 @@ import {
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import type { CliDeps } from "../cli/deps.types.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { assignSessionOwner } from "../config/sessions/session-accessor.sqlite-owner.js";
@@ -53,6 +54,7 @@ function withSessionToolsFixture(run: (cfg: OpenClawConfig) => Promise<void>) {
       tools: { sessions: { visibility: "all" } },
     };
     await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey: TARGET },
       {

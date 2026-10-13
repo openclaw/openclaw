@@ -7,6 +7,7 @@ import {
   retainSqliteWorkerErrorCode,
   SqliteWorkerError,
 } from "../../infra/sqlite-worker-contract.js";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerOperationAdmission,
@@ -97,6 +98,10 @@ export async function withSessionEntryWorker<T>(
       assertAgentSessionWriteAdmission(options);
     }
     env = Object.freeze({ ...(options.env ?? process.env) });
+    const targetIdentity =
+      !retainedExecution && !databaseIdentity
+        ? readDatabasePathIdentitySync(options.path)
+        : undefined;
     execution =
       retainedExecution ??
       captureOpenClawAgentDatabaseExecution(
@@ -109,7 +114,9 @@ export async function withSessionEntryWorker<T>(
                 nativeLocation: options.path,
               },
             }
-          : {},
+          : targetIdentity?.key.startsWith("path:")
+            ? { expectedCreationIdentity: targetIdentity }
+            : {},
       );
   } catch (error) {
     try {
@@ -321,12 +328,19 @@ export function prepareSessionEntryReplacementDatabase(
   options: ReplacementDatabaseOptions,
   assertCurrent: () => void,
   retainedExecution?: OpenClawAgentDatabaseExecution,
+  followRegistration?: AgentDatabaseRequestExecutionSource["onRegistryChange"],
 ): Promise<void> {
+  const prepared = retainedExecution?.capturePreparedGenerationClaim();
+  if (prepared) {
+    assertCurrent();
+    prepared.assertCurrent();
+    return Promise.resolve();
+  }
   return withSessionEntryWorker(
     options,
     undefined,
     assertCurrent,
-    (execution, source) => execution.prepare(source),
+    (execution, source) => execution.prepare({ ...source, onRegistryChange: followRegistration }),
     undefined,
     retainedExecution,
   );
@@ -562,6 +576,11 @@ export async function runSessionEntryWorkerMutation<T>(
         committed.sharingUnchangedKeys,
         committed.generationUnchangedKeys,
         committed.transcriptPublication,
+        new Map(
+          [...committed.current].filter(
+            ([key]) => !committed.unavailableParticipantKeys?.includes(key),
+          ),
+        ),
       );
     },
     executionOptions.retainedExecution,

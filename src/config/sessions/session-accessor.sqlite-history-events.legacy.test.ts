@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { createNestedToolActivity } from "../../sessions/nested-tool-activity.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { appendTranscriptEvent, persistSessionTranscriptTurn } from "./session-accessor.js";
 import { readRecentSessionTranscriptHistoryEvents } from "./session-accessor.sqlite-history-events.js";
 import {
@@ -19,7 +20,9 @@ import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-wr
 import { transcriptMessage } from "./transcript-message.test-support.js";
 
 describe("SQLite imported transcript history", () => {
+  afterAll(clearRuntimeConfigSnapshot);
   const scope = useHistoryEventScope();
+  beforeEach(() => setRuntimeConfigSnapshot({}));
 
   async function seedRows(jsonRows: string[], updatedAt = 100) {
     const events = jsonRows.map((event_json, seq) => ({

@@ -2,9 +2,13 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import * as fsSafe from "../infra/fs-safe.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import * as playback from "../media/playback-transcode.js";
@@ -18,7 +22,9 @@ vi.mock("../media/ffmpeg-exec.js", async (importOriginal) => ({
   runFfprobe,
 }));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+beforeEach(() => setRuntimeConfigSnapshot({}));
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   vi.restoreAllMocks();
   runFfprobe.mockReset();
 });

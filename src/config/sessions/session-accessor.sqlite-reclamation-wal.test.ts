@@ -409,7 +409,6 @@ test("periodic vacuum waits for an admitted reclamation to settle", async () => 
   };
   try {
     const reclamation = runSqliteSessionReclamation({
-      forceInProcess: false,
       plan,
     });
     await expect(reclamation).resolves.toMatchObject({

@@ -107,11 +107,13 @@ if (!isMainThread) {
     await withEnvAsync(
       { OPENCLAW_STATE_DIR: tempDir, ...sqliteWorkerPreloadEnv(preload) },
       async () => {
+        const config = {};
         const range = {
           startMs: Date.UTC(2026, 6, 6),
           endMs: Date.UTC(2026, 6, 7),
         };
         await loadCostUsageSummary({
+          config,
           ...range,
           agentId: "main",
         });
@@ -124,6 +126,7 @@ if (!isMainThread) {
         try {
           await work.track(async () =>
             requestCostUsageCacheRefresh({
+              config,
               agentId: "main",
               storePath: path.join(sessionsDir, "sessions.json"),
             }),
@@ -134,6 +137,7 @@ if (!isMainThread) {
         }
         const readSummary = () =>
           loadCostUsageSummaryFromCache({
+            config,
             ...range,
             agentId: "main",
             requestRefresh: false,

@@ -1,7 +1,10 @@
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import { getRuntimeConfigSourceSnapshot } from "../config/runtime-snapshot.js";
-import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/targets.js";
+import {
+  isConfiguredAgentDatabaseTarget,
+  resolveConfiguredAgentDatabaseTargets,
+} from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
@@ -16,16 +19,8 @@ function assertAgentDatabaseConfiguration(
   paths: readonly string[],
   env: NodeJS.ProcessEnv,
 ) {
-  const configuredPaths = resolveConfiguredAgentDatabaseTargets(cfg, { env }).filter(
-    (target) => target.agentId === agentId,
-  );
-  if (
-    configuredPaths.length === 0 ||
-    paths.some(
-      (pathname) =>
-        !configuredPaths.some((target) => isSameOpenClawAgentDatabasePath(target.path, pathname)),
-    )
-  ) {
+  const targets = resolveConfiguredAgentDatabaseTargets(cfg, { env });
+  if (paths.some((pathname) => !isConfiguredAgentDatabaseTarget(targets, agentId, pathname))) {
     throw new Error(`Agent ${agentId} database configuration changed during startup inspection`);
   }
 }

@@ -185,6 +185,7 @@ export async function updateMigrateCommand(backupRoot: string): Promise<void> {
         stateDir: resolveStateDir(env),
         config: source.config,
         env,
+        stopped: true,
       });
       lock.assertCurrent();
       const databases = [

@@ -135,6 +135,8 @@ describe("model-switch tool continuity terminal evidence", () => {
         "the **model handoff** preserved the QA mission after rereading the scenario pack",
       alternateOutboundText:
         "the model handoff preserved the QA mission after rereading the scenario pack",
+      alternateResponseModel: "alternate-model-concrete",
+      alternateRerouted: false,
     });
 
     expect(result.status).toBe("pass");
@@ -155,16 +157,6 @@ describe("model-switch tool continuity terminal evidence", () => {
     expect(result.steps[0]?.details).toBe(
       "the **model handoff** preserved the QA mission after rereading the scenario pack",
     );
-  });
-
-  // Receipt-contract coverage: the producer's rerouted:false stands for a differing response id.
-  it("accepts an unmarked alternate receipt whose response model differs from the request", async () => {
-    const { result } = await runToolContinuity(["read"], {
-      alternateResponseModel: "alternate-model-concrete",
-      alternateRerouted: false,
-    });
-
-    expect(result.status).toBe("pass");
   });
 
   it.each([

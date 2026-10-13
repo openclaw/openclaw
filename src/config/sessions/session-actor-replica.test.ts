@@ -11,6 +11,7 @@ import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transactio
 import type { SqliteWorkerStore } from "../../infra/sqlite-worker-contract.js";
 import { patchSessionEntry as patchSdkSessionEntry } from "../../plugin-sdk/session-store-runtime.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
   openOpenClawAgentDatabase,
@@ -141,28 +142,37 @@ function hydrate({ replica, load }: Fixture, epoch = "first", sequence = 0) {
   return snapshot;
 }
 
-it("retains a new session's committed entry before its first reader and invalidates later writes", async () => {
-  await withReplica(async ({ scope, load, database }) => {
+it("retains the first creation after restart before any replica reader and applies later writes", async () => {
+  await drainGlobalSingletonLifecycleState("restart");
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
     const sessionKey = "agent:main:first-reader";
-    const target = { ...load().target, sessionKey };
-    if (target.database.kind !== "file") {
-      throw new Error("Expected durable session target");
-    }
-    const durableTarget = { ...target, database: target.database };
-    const createdScope = { ...scope, sessionKey };
-    expect(readSessionActorEntryFacts(durableTarget)).toBeUndefined();
+    const createdScope = { agentId: "main", sessionKey, storePath: database.path, env };
     const created = await createSessionEntryWithTranscript(createdScope, () => ({
       ok: true,
       entry: { sessionId: "first-reader-session", updatedAt: 1, label: "created" },
     }));
     expect(created.ok).toBe(true);
+    const identity = readOpenClawAgentDatabaseIdentity(database);
+    if (typeof identity.identity !== "string") {
+      throw new Error("Expected durable session target");
+    }
+    const durableTarget = {
+      sessionKey,
+      database: {
+        kind: "file" as const,
+        physicalIdentity: identity.identity,
+        birthtime: identity.birthtime,
+        nativeLocation: database.path,
+      },
+    };
     expect(readSessionActorEntryFacts(durableTarget)?.entry).toMatchObject({ label: "created" });
     await patchSessionEntryCore(createdScope, () => ({ updatedAt: 2, label: "updated" }));
     expect(readSessionActorEntryFacts(durableTarget)?.entry).toMatchObject({ label: "updated" });
     runOpenClawAgentWriteTransaction((current) => deleteSessionEntryRows(current, sessionKey), {
-      agentId: scope.agentId,
+      agentId: createdScope.agentId,
       path: database.path,
-      env: scope.env,
+      env,
     });
     expect(readSessionActorEntryFacts(durableTarget)).toBeUndefined();
   });

@@ -12,6 +12,7 @@ import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import { runWithAgentCreationClaim } from "./agent-creation-claim.js";
+import { AgentDatabaseSchemaAdmissionChangedError } from "./agent-database-admission-error.js";
 import { completeAgentDeletionJournalInDatabase } from "./agent-deletion-journal.js";
 import {
   assertNoOpenClawAgentDatabaseLeases,
@@ -305,11 +306,12 @@ it("admits cold storage in its worker and lends facts to every later native hand
   expect(freshValidation.schema?.facts.textEncoding).toBe("UTF-8");
   expect(Atomics.load(new Int32Array(freshValidation.canonicalReady), 0)).toBe(1);
 
-  // The next synchronous caller and an idle-reopened handle consume the same worker admission.
-  expectAdmittedSchemaObjects(openOpenClawAgentDatabase(options).db);
-  await closeOpenClawAgentDatabaseByPathAsync(pathname);
+  // A synchronous caller shares the live worker admission; final close retires its catalog.
   expectAdmittedSchemaObjects(openOpenClawAgentDatabase(options).db);
   expect(inspections).toEqual([]);
+  await closeOpenClawAgentDatabaseByPathAsync(pathname);
+  expectAdmittedSchemaObjects(openOpenClawAgentDatabase(options).db);
+  expect(inspections).toEqual([expect.stringMatching(/\bFROM main\.sqlite_schema\b/iu)]);
 });
 
 it("publishes freshly verified proof to a previously admitted alias after stale lease cleanup", async () => {
@@ -573,6 +575,82 @@ it.each([
       }
     } finally {
       await retainedExecution?.release();
+    }
+  },
+);
+
+it.each(["once", "always", "source-revoked", "after-entry"] as const)(
+  "recovers schema publication before execution without replaying admitted work: %s",
+  async (failure) => {
+    const options = {
+      agentId: "main",
+      env: { OPENCLAW_STATE_DIR: tempDirs.make("agent-schema-publication-") },
+    };
+    const database = openOpenClawAgentDatabase(options);
+    const expectedIdentity = readDatabasePathIdentitySync(database.path);
+    const execution = captureOpenClawAgentDatabaseExecution(options);
+    let current = true;
+    const assertCurrent = () => {
+      if (!current) {
+        throw new Error("Fixture request authority revoked");
+      }
+    };
+    const source: AgentDatabaseRequestExecutionSource = {
+      assertCurrent,
+      createAdmission: (binding) => () => ({
+        nativeLocations: binding.nativeLocations,
+        admission: createSqliteWorkerOperationAdmission((request, grant) => {
+          binding.authorize(request);
+          assertCurrent();
+          if (!grant()) {
+            throw new Error("Fixture native admission expired");
+          }
+        }, binding.attachment),
+      }),
+    };
+    let publications = 0;
+    const capture = validationCache.captureOpenClawAgentDatabaseAdmissionPublication;
+    vi.spyOn(
+      validationCache,
+      "captureOpenClawAgentDatabaseAdmissionPublication",
+    ).mockImplementation((target) => {
+      const publish = capture(target);
+      return (identity, received) => {
+        publications += 1;
+        if (failure !== "after-entry" && (failure === "always" || publications === 1)) {
+          // Revoke actual captured proof at the worker-to-host publication boundary.
+          validationCache.invalidateOpenClawAgentDatabaseValidation(target.path);
+          if (failure === "source-revoked") {
+            current = false;
+          }
+        }
+        publish(identity, received);
+      };
+    });
+    const operation = vi.fn(async () => {
+      if (failure === "after-entry") {
+        throw new AgentDatabaseSchemaAdmissionChangedError();
+      }
+      return "executed";
+    });
+    try {
+      const result = execution.runExisting(source, operation);
+      if (failure === "once") {
+        await expect(result).resolves.toBe("executed");
+        expect(operation).toHaveBeenCalledTimes(1);
+        expect(publications).toBe(2);
+      } else {
+        await expect(result).rejects.toThrow(
+          failure === "source-revoked"
+            ? "Fixture request authority revoked"
+            : "Agent schema admission changed before publication",
+        );
+        expect(operation).toHaveBeenCalledTimes(failure === "after-entry" ? 1 : 0);
+        expect(publications).toBe(failure === "always" ? 2 : 1);
+      }
+      expect(`file:${execution.fileIdentity?.physicalIdentity}`).toBe(expectedIdentity.key);
+    } finally {
+      await execution.release();
     }
   },
 );

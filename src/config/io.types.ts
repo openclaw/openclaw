@@ -39,6 +39,8 @@ export type ConfigWriteAuditOrigin =
   | "cli";
 
 export type ConfigWriteOptions = {
+  /** Doctor/update supplies inspected facts; ordinary writes do not query migration state. */
+  deferredPluginMigrations?: readonly DeferredPluginMigration[];
   /** Candidate's source/runtime basis within its write snapshot; omitted inputs use active globals. */
   inputBase?: ConfigMutationBase;
   /** Semantic writer label recorded in the config audit journal. */
@@ -116,7 +118,7 @@ export class ConfigRuntimeRefreshError extends Error {
 export type ConfigIoFactoryOptions = ConfigIoDeps & {
   pluginValidation?: "full" | "skip" | "core-only";
   preservedLegacyRootKeys?: readonly string[];
-  /** Admission can prepare migration facts before their checkpoint is writable. */
+  /** Doctor supplies pending facts; normal config reads never inspect migration state. */
   deferredPluginMigrations?: readonly DeferredPluginMigration[];
   shellEnvFallback?: "load" | "defer";
 };

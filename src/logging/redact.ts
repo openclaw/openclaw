@@ -6,6 +6,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { compileConfigRegex } from "../security/config-regex.js";
 import { readLoggingConfig } from "./config.js";
+import { getFileLogRedactionMessage } from "./logger-file-message.js";
 import { replacePatternBounded } from "./redact-bounded.js";
 import {
   applyRedactionEdits,
@@ -14,7 +15,6 @@ import {
 } from "./redact-edit-composition.js";
 import {
   redactJsonRecord,
-  getPatternRedactionEdits,
   type RedactionMessage,
   type RedactionCapture,
   type RedactionField,
@@ -927,11 +927,7 @@ function getTextRecordEdits(
   return combined;
 }
 
-function getLegacyFieldRecordEdits(
-  field: RedactionField,
-  value: string,
-  beforeConversion = false,
-): RedactionEdit[] {
+function getLegacyFieldRecordEdits(field: RedactionField, value: string): RedactionEdit[] {
   const { key, value: original, path, objectPath } = field;
   if (field.isKey || !field.origin.structured || !field.string) {
     return [];
@@ -955,12 +951,12 @@ function getLegacyFieldRecordEdits(
     return edits;
   }
   const protection = classifyLogFieldProtection(key, path, objectPath, value);
-  return protection === "legacy" || (beforeConversion && protection === "header")
+  return protection === "legacy"
     ? [{ start: 0, end: value.length, replacement: maskToken(value) }]
     : [];
 }
 
-export function resolveFileLogRedactOptions(): ResolvedRedactOptions {
+export function resolveLogTailRedactOptions(): ResolvedRedactOptions {
   return resolveRedactOptions(resolveToolPayloadRedaction());
 }
 
@@ -1023,100 +1019,16 @@ const preparationPatterns: ResolvedRedactPattern[] = [
 ];
 const CONSOLE_STRUCTURAL_FIELDS = new Set(["time", "level"]);
 
-function prepareFileToJsonReceivers(
-  record: Record<string, unknown>,
-  patterns: ResolvedRedactPattern[],
-) {
-  const decoded = new WeakSet<object>();
-  const active = new WeakSet<object>();
-  const visit = (
-    value: unknown,
-    key: string,
-    path: string[],
-    objectPath: boolean,
-    decode: boolean,
-  ): unknown => {
-    if (typeof value === "string" && decode) {
-      const field: RedactionField = {
-        key,
-        path,
-        objectPath,
-        value,
-        isKey: false,
-        string: true,
-        origin: { structured: true, primitiveMask: false },
-      };
-      let current = applyRedactionEdits(value, getTextRecordEdits(field, "tools", true));
-      if (!isPublicShareIdPath(path)) {
-        for (const pattern of patterns) {
-          current = applyRedactionEdits(
-            current,
-            getPatternRedactionEdits(current, pattern, prepareRedactionCapture),
-          );
-        }
-      }
-      return applyRedactionEdits(current, getLegacyFieldRecordEdits(field, current, true));
-    }
-    if (value === null || typeof value !== "object") {
-      return decode &&
-        ["number", "boolean", "bigint"].includes(typeof value) &&
-        classifyLogFieldProtection(key, path, objectPath, undefined)
-        ? "***"
-        : value;
-    }
-    if (!Array.isArray(value) && !isPlainRedactableObject(value)) {
-      return value;
-    }
-    if (active.has(value)) {
-      return "[Circular]";
-    }
-    active.add(value);
-    let clone: object;
-    let decodeFields = decode;
-    if (Array.isArray(value)) {
-      clone = value.map((entry) => visit(entry, key, path, false, decodeFields));
-    } else {
-      const entries = Object.entries(value);
-      decodeFields ||= entries.some(
-        ([name, entry]) => name === "toJSON" && typeof entry === "function",
-      );
-      clone = Object.fromEntries(
-        entries.map(([name, entry]) => [
-          name,
-          visit(entry, name, [...path, name], objectPath, decodeFields),
-        ]),
-      );
-    }
-    if (decodeFields) {
-      decoded.add(clone);
-    }
-    active.delete(value);
-    return clone;
-  };
-  return { record: visit(record, "", [], true, false), decoded };
-}
-
-type LogRecordRedactionOptions = {
-  format?: "file" | "console";
-  deriveMessage?: (record: Record<string, unknown>) => RedactionMessage | undefined;
-  decodedOptions?: ResolvedRedactOptions;
-};
-
 /** Converts native values once and applies configured and structural protection before output. */
-function redactLogRecord<Result>(
+export function redactLogRecordForTransport(
   record: Record<string, unknown>,
-  options: LogRecordRedactionOptions,
-  finish: (redacted: string, canonical: string | undefined) => Result,
-): Result {
+  tail?: { redaction: ResolvedRedactOptions; message?: RedactionMessage },
+): Record<string, unknown> {
   const finishMeasurement = startRedactionMeasurement("log-record");
   let outcome: "ok" | "error" = "error";
   let inputChars: number | undefined;
   try {
-    const resolved = resolveRedactOptions();
-    const prepared =
-      options.format === "console"
-        ? { record, decoded: new WeakSet<object>() }
-        : prepareFileToJsonReceivers(record, options.decodedOptions?.patterns ?? resolved.patterns);
+    const resolved = tail?.redaction ?? resolveRedactOptions();
     const ordinary = { structured: true, primitiveMask: false };
     const origins: RedactionOrigins = { value: ordinary, children: new Map() };
     const ancestors: {
@@ -1126,7 +1038,7 @@ function redactLogRecord<Result>(
       origins: RedactionOrigins;
       structured: boolean;
     }[] = [];
-    const json = JSON.stringify(prepared.record, function (this: object, key, value: unknown) {
+    const json = JSON.stringify(record, function (this: object, key, value: unknown) {
       while (ancestors.length > 0 && ancestors.at(-1)?.value !== this) {
         ancestors.pop();
       }
@@ -1134,19 +1046,13 @@ function redactLogRecord<Result>(
       const array = Array.isArray(this);
       const fieldKey = array && parent ? parent.key : key;
       const path = array && parent ? parent.path : parent ? [...parent.path, key] : [];
-      // Prepared plain holders contain data properties; native holders need no legacy field walk.
-      const source: unknown = !parent
-        ? prepared.record
-        : parent.structured && options.format !== "console"
-          ? Reflect.get(this, key)
-          : value;
+      const source = value;
       const structured =
         (parent?.structured ?? true) &&
         (source === null ||
           typeof source !== "object" ||
-          (!prepared.decoded.has(source) &&
-            source === value &&
-            (Array.isArray(source) || isPlainRedactableObject(source))));
+          Array.isArray(source) ||
+          isPlainRedactableObject(source));
       const primitiveMask =
         structured &&
         ["number", "boolean", "bigint"].includes(typeof source) &&
@@ -1175,31 +1081,13 @@ function redactLogRecord<Result>(
       return emitted;
     });
     inputChars = json.length;
-    let materialized: Record<string, unknown> = JSON.parse(json);
-    const message = options.deriveMessage?.(materialized);
-    if (message) {
-      origins.children.set("message", { value: ordinary, children: new Map() });
-      if (Object.hasOwn(materialized, "message")) {
-        materialized.message = message.text;
-      } else {
-        // Serialized-context rules observe the file message immediately after hostname.
-        const entries = Object.entries(materialized);
-        entries.splice(entries.findIndex(([key]) => key === "hostname") + 1, 0, [
-          "message",
-          message.text,
-        ]);
-        materialized = Object.fromEntries(entries);
-      }
-    }
-    const serialized = message ? JSON.stringify(materialized) : json;
-    const decodedPatterns = options.decodedOptions?.patterns ?? resolved.patterns;
     const couldMatch = createRedactPrefilter(couldMatchDefaultFullContextPatterns);
-    const result = finish(
+    const result = JSON.parse(
       redactJsonRecord(
-        serialized,
+        json,
         origins,
         [
-          [{ patterns: decodedPatterns }],
+          [{ patterns: resolved.patterns }],
           [
             { patterns: preparationPatterns },
             {
@@ -1209,43 +1097,20 @@ function redactLogRecord<Result>(
           ],
         ],
         prepareRedactionCapture,
-        options.format === "console" ? () => [] : getLegacyFieldRecordEdits,
+        tail ? getLegacyFieldRecordEdits : () => [],
         (field) => getFieldRecordEdits(field, resolved.mode),
-        (field) => getTextRecordEdits(field, resolved.mode, options.format !== "console"),
+        (field) => getTextRecordEdits(field, resolved.mode, tail !== undefined),
         (field, currentValue) =>
-          (options.format === "console"
-            ? field.path.length === 1 && CONSOLE_STRUCTURAL_FIELDS.has(field.key)
-            : !field.origin.structured ||
-              field.origin.primitiveMask ||
-              isPublicShareIdPath(field.path)) ||
-          (decodedPatterns === defaultResolvedPatterns && !couldMatch(currentValue)),
-        message,
+          (field.path.length === 1 && CONSOLE_STRUCTURAL_FIELDS.has(field.key)) ||
+          (resolved.patterns === defaultResolvedPatterns && !couldMatch(currentValue)),
+        tail?.message,
       ),
-      // Native conversion can preserve proxy key order; only the materialized tree is canonical.
-      message ? serialized : undefined,
     );
     outcome = "ok";
     return result;
   } finally {
     finishMeasurement?.(outcome, inputChars);
   }
-}
-
-export function redactLogRecordForTransport(
-  record: Record<string, unknown>,
-  options: LogRecordRedactionOptions = {},
-): Record<string, unknown> {
-  return redactLogRecord(record, options, (redacted) => JSON.parse(redacted));
-}
-
-export function serializeRedactedFileLogRecord(
-  record: Record<string, unknown>,
-  options: Omit<LogRecordRedactionOptions, "format"> = {},
-): string {
-  return redactLogRecord(record, options, (redacted, canonical) =>
-    // Key edits can collide or reorder integer keys; edited UTF-16 may need escaping.
-    redacted === canonical ? redacted : JSON.stringify(JSON.parse(redacted)),
-  );
 }
 
 /** The full default policy, programmatic matchers included; keep only the strings for `logging.redactPatterns`. */
@@ -1262,8 +1127,34 @@ export function redactSensitiveLines(
   if (lines.length === 0 || resolved.mode === "off") {
     return selectedLines ? lines.filter((_, index) => selectedLines[index]) : lines;
   }
+  const recordRedaction = {
+    ...resolved,
+    // Partial PEM context belongs to the complete batch, not each JSON record.
+    patterns: resolved.patterns.map((pattern) =>
+      pattern.source === PEM_REDACT_PATTERN_SOURCE ? PEM_REDACT_MATCHER : pattern,
+    ),
+  };
   return redactJsonRecord(
-    lines.join("\n"),
+    lines
+      .map((line) => {
+        let record: unknown;
+        try {
+          record = JSON.parse(line);
+        } catch {
+          return line;
+        }
+        if (record === null || typeof record !== "object" || !isPlainRedactableObject(record)) {
+          return line;
+        }
+        const redacted = JSON.stringify(
+          redactLogRecordForTransport(record, {
+            redaction: recordRedaction,
+            message: getFileLogRedactionMessage(record),
+          }),
+        );
+        return redacted === JSON.stringify(record) ? line : redacted;
+      })
+      .join("\n"),
     { value: { structured: false, primitiveMask: false }, children: new Map() },
     [[], [{ patterns: [...preparationPatterns, ...resolved.patterns] }]],
     prepareRedactionCapture,

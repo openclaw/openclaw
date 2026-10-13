@@ -2,6 +2,10 @@
  * Gateway runtime service lifecycle tests.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { notifyOutboundDeliveryEnqueued } from "../infra/delivery-queue-cache.js";
 import { captureDeliveryQueueStateContext } from "../infra/delivery-queue-sqlite.js";
 import {
@@ -57,6 +61,7 @@ describe("server-runtime-services", () => {
     vi.useRealTimers();
     vi.unstubAllEnvs();
     resetGatewayWorkAdmission();
+    clearRuntimeConfigSnapshot();
   });
 
   it("starts channel health without activating scheduled services", () => {
@@ -789,6 +794,7 @@ function activateScheduledServicesForTest(
 ) {
   const log = overrides.log ?? createLog();
   const cfgAtStart = overrides.cfgAtStart ?? ({} as never);
+  setRuntimeConfigSnapshot(cfgAtStart, cfgAtStart);
   const services = activateGatewayScheduledServices({
     scheduler: createTestGatewayScheduler(vi.isFakeTimers() ? "fake-timers" : undefined),
     minimalTestGateway: false,

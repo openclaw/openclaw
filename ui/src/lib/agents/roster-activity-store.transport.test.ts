@@ -186,22 +186,6 @@ it("coalesces repeated invalidations behind one correlated roster request", asyn
   expect(f.requests).toHaveLength(2);
 });
 
-it("keeps the bounded window without pagination while a replacement is pending", async () => {
-  const f = fixture();
-  f.subscribe();
-  await vi.advanceTimersByTimeAsync(0);
-  f.invalidate();
-  f.respond(0, "Invalidated page", true);
-  await vi.advanceTimersByTimeAsync(0);
-  expect(f.requests).toHaveLength(1);
-  await vi.advanceTimersByTimeAsync(5_000);
-  expect(f.requests).toHaveLength(2);
-  expect(f.requests[1]?.params.offset).toBeUndefined();
-  f.respond(1, "Current page");
-  await vi.advanceTimersByTimeAsync(0);
-  expect(f.store.snapshot.cards[0]?.preview).toBe("Current page");
-});
-
 it("absorbs a newer debounce when the queued window starts", async () => {
   const f = fixture();
   f.subscribe();

@@ -626,7 +626,6 @@ it("publishes exact archived keys without worktrees after Worker planning", asyn
     try {
       const result = await reclamationRun.runSqliteSessionReclamation({
         diagnostics,
-        forceInProcess: false,
         plan: {
           kind: "maintenance-plan",
           databaseOptions: reclamation.resolveSessionReclamationDatabaseOptions(databaseOptions),
@@ -725,7 +724,6 @@ it("publishes only committed removal keys after Worker finalization", async () =
     try {
       const result = await reclamationRun.runSqliteSessionReclamation({
         diagnostics,
-        forceInProcess: false,
         plan,
       });
       expect(diagnostics).toMatchObject({ workerThreadId: expect.any(Number) });
@@ -784,7 +782,6 @@ it("preserves committed statistics and Worker reuse after a retired predicate", 
         }
       },
       diagnostics: first,
-      forceInProcess: false,
       onWorkerResult: () => {
         current = false;
       },
@@ -800,7 +797,6 @@ it("preserves committed statistics and Worker reuse after a retired predicate", 
     await expect(
       reclamationRun.runSqliteSessionReclamation({
         diagnostics: second,
-        forceInProcess: false,
         plan: reclamation.createSessionMaintenanceStatisticsOperation(databaseOptions),
       }),
     ).resolves.toEqual({ kind: "maintenance-statistics", value: true });

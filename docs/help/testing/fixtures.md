@@ -118,15 +118,18 @@ Otherwise the raw connection can fail with `SQLITE_BUSY`, or the snapshot can
 change underneath the test. `PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE` on
 a raw connection proves that no other connection remains.
 
-## Skills watchers
+<a id="skills-watchers" />
 
-`skills.status` and skill snapshot preparation start real `@openclaw/fs-safe`
-watchers. In shared-worker lanes, the non-isolated runner closes any watchers a
-file leaves open and fails that file with `skills watchers failed`; otherwise
-their re-armed timers land on a later file's fake clock and abort its
-`vi.runAllTimersAsync()`. Close them in `afterEach` with
-`closeSkillsWatchers(true)`, or set `skills.load.watch: false` when the test
-does not exercise watching.
+## Skills discovery
+
+`skills.status` and skill snapshot preparation share a background discovery
+worker. Close it in `afterEach` with `await closeSkillsWatchers(true)` before
+removing its temporary roots or restoring fake timers. Shared-worker lanes
+also drain this owner through the generic singleton lifecycle between files.
+
+Set `skills.load.watch: false` when a test does not exercise passive refresh.
+This disables periodic scans; initial discovery and explicit skill changes still
+use the worker and must finish before cleanup.
 
 ## Compiled subprocesses and timeout helpers
 

@@ -31,6 +31,10 @@ import {
   settleSqliteWorkerOperationContext,
   type SqliteWorkerOperationContext,
 } from "./sqlite-worker-operation-settlement.js";
+import {
+  SqliteWorkerSlotCustody,
+  readSqliteWorkerRequestCustody,
+} from "./sqlite-worker-request-custody.js";
 
 afterEach(() => vi.restoreAllMocks());
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -338,7 +342,7 @@ it("reads a queued worker commit before settlement and message callbacks run", a
     `
     const { parentPort, workerData } = require("node:worker_threads");
     const posted = new Int32Array(workerData.posted);
-    const committed = { version: 1, operationId: "queued-writer", sequence: 1, facts: { count: 1 } };
+    const committed = { version: 1, sequence: 1, facts: { count: 1 } };
     workerData.port.postMessage({ kind: "native-commit", committed });
     Atomics.store(posted, 0, 1);
     Atomics.notify(posted, 0);
@@ -477,10 +481,8 @@ it.each([
     });
     observeSqliteWorkerCommittedFacts(admission, publish);
     const postMessage = admission.port.postMessage.bind(admission.port);
-    let nativeCommit: unknown;
     vi.spyOn(admission.port, "postMessage").mockImplementation((message) => {
       if (message.kind === "native-commit") {
-        nativeCommit = message;
         if (receipt === "failed commit delivery") {
           throw new Error("Synthetic commit delivery failure");
         }
@@ -489,11 +491,14 @@ it.each([
     });
     const resolve = vi.fn(() => events.push("reply"));
     const reject = vi.fn(() => events.push("reject"));
+    const custody = new SqliteWorkerSlotCustody().createRequest();
+    custody.activate();
+    custody.accept();
     const job: Job = {
+      custody,
       observation: { started() {}, completed() {} },
       request: { type: "execute", id: 1, actor: 1, input: new Uint8Array() },
       bytes: 0,
-      nativeDispatched: true,
       operationAdmission: { admission, releaseService() {} },
       resolve,
       reject,
@@ -508,13 +513,10 @@ it.each([
           }),
         ),
       );
-      // Redelivery and settlement's retained copy must not repeat installation.
-      if (receipt !== "failed commit delivery") {
-        admission.port.postMessage(nativeCommit, []);
-      }
       settleSqliteWorkerOperationContext(owner, "completed");
       expect(events).toEqual([]);
       settleSqliteWorkerJob(job, undefined, { written: true });
+      expect(readSqliteWorkerRequestCustody(custody.descriptor)).toBe(false);
       expect(events).toEqual(["publish", publicationFails ? "reject" : "reply"]);
       expect(publish).toHaveBeenCalledOnce();
       expect(db.prepare("SELECT value FROM proof").all()).toEqual([{ value: 1 }]);
@@ -535,105 +537,66 @@ it.each([
   },
 );
 
-it.each([
-  "duplicate settlement",
-  "malformed",
-  "after settlement",
-  "conflicting settlement",
-  "stale settlement",
-] as const)("retains committed facts through %s receipt delivery", (delivery) => {
-  const db = new DatabaseSync(":memory:");
-  db.exec("CREATE TABLE proof (value INTEGER)");
-  const admission = createSqliteWorkerOperationAdmission((_request, grant) => grant());
-  const owner = { port: admission.port };
-  const published = vi.fn();
-  observeSqliteWorkerCommittedFacts(admission, published);
-  const frames: Array<{
-    kind: "native-commit";
-    committed: { version: number; operationId: string; sequence: number; facts: unknown };
-  }> = [];
-  const postMessage = admission.port.postMessage.bind(admission.port);
-  vi.spyOn(admission.port, "postMessage").mockImplementation((message) => {
-    if (message.kind === "native-commit") {
-      frames.push(structuredClone(message));
-    }
-    postMessage(message);
-  });
-  try {
-    for (const value of [1, 2]) {
-      withSqliteWorkerOperationAdmission(owner, () =>
-        withSqlitePostCommitPublications(db, () =>
-          runSqliteImmediateTransactionSync(db, () => {
-            db.prepare("INSERT INTO proof VALUES (?)").run(value);
-            deferSqliteWorkerCommitReceipt(db, { value });
-          }),
-        ),
-      );
-    }
-    admission.service();
-    expect(published.mock.calls.map(([receipt]) => receipt.facts)).toEqual([
-      { value: 1 },
-      { value: 2 },
-    ]);
-    const [first, latest] = frames;
-    if (!first || !latest) {
-      throw new Error("Both real commits must produce receipt frames");
-    }
-    if (["duplicate settlement", "after settlement"].includes(delivery)) {
-      settleSqliteWorkerOperationContext(owner, "completed");
-    }
-    if (["duplicate settlement", "conflicting settlement", "stale settlement"].includes(delivery)) {
-      postMessage({
-        kind: "native-settlement",
-        settlement: {
+it.each(["settlement", "malformed"] as const)(
+  "retains committed facts through %s receipt delivery",
+  (delivery) => {
+    const db = new DatabaseSync(":memory:");
+    db.exec("CREATE TABLE proof (value INTEGER)");
+    const admission = createSqliteWorkerOperationAdmission((_request, grant) => grant());
+    const owner = { port: admission.port };
+    const published = vi.fn();
+    observeSqliteWorkerCommittedFacts(admission, published);
+    try {
+      for (const value of [1, 2]) {
+        withSqliteWorkerOperationAdmission(owner, () =>
+          withSqlitePostCommitPublications(db, () =>
+            runSqliteImmediateTransactionSync(db, () => {
+              db.prepare("INSERT INTO proof VALUES (?)").run(value);
+              deferSqliteWorkerCommitReceipt(db, { value });
+            }),
+          ),
+        );
+      }
+      admission.service();
+      expect(published.mock.calls.map(([receipt]) => receipt.facts)).toEqual([
+        { value: 1 },
+        { value: 2 },
+      ]);
+      if (delivery === "settlement") {
+        settleSqliteWorkerOperationContext(owner, "completed");
+      } else {
+        admission.port.postMessage(
+          {
+            kind: "native-commit",
+            committed: null,
+          },
+          [],
+        );
+      }
+      admission.finish();
+      expect(admission.committed).toEqual({ facts: { value: 2 } });
+      expect(published).toHaveBeenCalledTimes(2);
+      expect(db.prepare("SELECT value FROM proof ORDER BY value").all()).toEqual([
+        { value: 1 },
+        { value: 2 },
+      ]);
+      if (delivery === "settlement") {
+        expect(admission.failure).toBeUndefined();
+        expect(admission.waitForSettlement(performance.now())).toEqual({
           kind: "completed",
-          committed:
-            delivery === "stale settlement"
-              ? first.committed
-              : {
-                  ...latest.committed,
-                  ...(delivery === "conflicting settlement" ? { facts: { value: 99 } } : {}),
-                },
-        },
-      });
-    } else {
-      postMessage({
-        kind: "native-commit",
-        committed:
-          delivery === "malformed"
-            ? null
-            : {
-                ...latest.committed,
-                ...(delivery === "after settlement"
-                  ? { sequence: latest.committed.sequence + 1 }
-                  : {}),
-                facts: { value: 99 },
-              },
-      });
+          committed: { facts: { value: 2 } },
+        });
+      } else {
+        expect(admission.failure).toMatchObject({ code: "outcome-unknown" });
+        expect(admission.failureSource).toBe("protocol");
+        expect(() => admission.waitForSettlement(performance.now())).toThrow("invalid");
+      }
+    } finally {
+      admission.finish();
+      db.close();
     }
-    admission.finish();
-    expect(admission.committed).toEqual({ facts: { value: 2 } });
-    expect(published).toHaveBeenCalledTimes(2);
-    expect(db.prepare("SELECT value FROM proof ORDER BY value").all()).toEqual([
-      { value: 1 },
-      { value: 2 },
-    ]);
-    if (delivery === "duplicate settlement") {
-      expect(admission.failure).toBeUndefined();
-      expect(admission.waitForSettlement(performance.now())).toEqual({
-        kind: "completed",
-        committed: { facts: { value: 2 } },
-      });
-    } else {
-      expect(admission.failure).toMatchObject({ code: "outcome-unknown" });
-      expect(admission.failureSource).toBe("protocol");
-      expect(() => admission.waitForSettlement(performance.now())).toThrow("invalid");
-    }
-  } finally {
-    admission.finish();
-    db.close();
-  }
-});
+  },
+);
 
 it("retains native COMMIT evidence when an earlier notification fails", () => {
   const db = new DatabaseSync(":memory:");

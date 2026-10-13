@@ -285,7 +285,7 @@ async function collectBindingOwners(
         storePath,
         transcriptPath: legacyTranscriptPath,
         ...(entry.lifecycleRevision ? { lifecycleRevision: entry.lifecycleRevision } : {}),
-        ...(entry.agentHarnessId?.trim() ? { agentHarnessId: entry.agentHarnessId.trim() } : {}),
+        agentHarnessId: entry.agentHarnessId?.trim(),
         ...(entry.updatedAt !== undefined ? { updatedAt: entry.updatedAt } : {}),
       };
       const candidates =
@@ -407,6 +407,12 @@ async function migrateSource(
         // current owners are indeterminate, so preserve the source without writes.
         return retain(`${candidates.length} matching session owners make ownership ambiguous`);
       }
+      if (owner?.agentHarnessId === "") {
+        return retain(
+          "its session owner changed before Codex ownership could be recorded",
+          "notice",
+        );
+      }
       if (owner?.agentHarnessId && owner.agentHarnessId !== CODEX_AGENT_HARNESS_ID) {
         // Explicit foreign ownership is a complete decision, not an unsafe
         // migration conflict. Preserve the sidecar for that harness without
@@ -457,22 +463,16 @@ async function migrateSource(
         if (!observe || !compareAndApply) {
           return `canonical plugin state could not be normalized at ${key}`;
         }
-        let observation = await observe(key);
-        for (;;) {
-          const candidateParsed = readStoredCodexAppServerBinding(observation.value);
-          if (!candidateParsed || !isDeepStrictEqual(candidateParsed, parsed)) {
-            break;
-          }
-          const result = await compareAndApply(key, observation.comparison, {
+        const observation = await observe(key);
+        const candidateParsed = readStoredCodexAppServerBinding(observation.value);
+        if (candidateParsed && isDeepStrictEqual(candidateParsed, parsed)) {
+          await compareAndApply(key, observation.comparison, {
             operation: "update",
             action: "set",
             value: normalized,
           });
-          if (result.status !== "conflict") {
-            break;
-          }
-          observation = result.current;
         }
+        // Offline migration is best effort: a conflicting writer leaves the sidecar for the next run.
         const persisted = readStoredCodexAppServerBinding(await store.lookup(key));
         if (!persisted || !isDeepStrictEqual(persisted, normalized)) {
           return `canonical plugin state changed at ${key}`;
@@ -549,17 +549,13 @@ async function migrateSource(
             if (!observe || !compareAndApply) {
               return retain(`${ownershipWarning}; its stale session binding could not be retired`);
             }
-            let observation = await observe(sessionEntry.key);
-            for (;;) {
-              const parsed = readStoredCodexAppServerBinding(observation.value);
-              if (parsed?.lease && parsed.lease.expiresAt > Date.now()) {
-                break;
-              }
-              if (!hasExpected(observation.value, sessionEntry.value)) {
-                // A concurrent runtime owner replaced or removed this row.
-                break;
-              }
-              const result = await compareAndApply(sessionEntry.key, observation.comparison, {
+            const observation = await observe(sessionEntry.key);
+            const parsed = readStoredCodexAppServerBinding(observation.value);
+            if (
+              !(parsed?.lease && parsed.lease.expiresAt > Date.now()) &&
+              hasExpected(observation.value, sessionEntry.value)
+            ) {
+              await compareAndApply(sessionEntry.key, observation.comparison, {
                 operation: "update",
                 action: "set",
                 value: {
@@ -569,10 +565,6 @@ async function migrateSource(
                   retired: true,
                 },
               });
-              if (result.status !== "conflict") {
-                break;
-              }
-              observation = result.current;
             }
             if (hasExpected(await store.lookup(sessionEntry.key), sessionEntry.value)) {
               return retain(`${ownershipWarning}; its stale session binding could not be retired`);
@@ -627,41 +619,7 @@ async function recordSessionOwner(
   },
 ): Promise<string | { deleted: true } | undefined> {
   const { prepareSessionEntryPatch } = await import("openclaw/plugin-sdk/session-store-runtime");
-  const currentIndex = await readLegacySessionIndex(owner.storePath);
-  if ("failure" in currentIndex) {
-    return "its legacy session owner could not be revalidated";
-  }
-  const currentOwner = currentIndex.entries.find(
-    ({ sessionKey }) => sessionKey === owner.sessionKey,
-  );
-  if (!currentOwner || currentOwner.entry.sessionId !== owner.sessionId) {
-    return "its session owner changed before Codex ownership could be recorded";
-  }
-  let currentTranscriptPath: string;
-  try {
-    currentTranscriptPath = await resolveLegacySessionFileLocator(
-      path.dirname(owner.storePath),
-      currentOwner.entry,
-      currentOwner.entry.sessionId,
-    );
-  } catch {
-    return "its session owner changed before Codex ownership could be recorded";
-  }
-  if (
-    (await canonicalPathFromExistingAncestor(currentTranscriptPath)) !==
-      (await canonicalPathFromExistingAncestor(owner.transcriptPath)) ||
-    currentOwner.entry.lifecycleRevision !== owner.lifecycleRevision
-  ) {
-    return "its session owner changed before Codex ownership could be recorded";
-  }
-  const legacyHarnessId = currentOwner.entry.agentHarnessId?.trim();
-  if (currentOwner.entry.agentHarnessId !== undefined && !legacyHarnessId) {
-    return "its session owner changed before Codex ownership could be recorded";
-  }
-  if (legacyHarnessId && legacyHarnessId !== CODEX_AGENT_HARNESS_ID) {
-    return `its session is owned by agent harness ${legacyHarnessId}`;
-  }
-
+  // Legacy indexes are offline inputs; only the canonical session can change ownership now.
   let observedForeignHarness: string | undefined;
   let observedCanonicalEntry = false;
   const updated = await prepareSessionEntryPatch({
@@ -671,7 +629,7 @@ async function recordSessionOwner(
       ? {
           fallbackEntry: {
             sessionId: owner.sessionId,
-            updatedAt: currentOwner.entry.updatedAt ?? owner.updatedAt ?? 0,
+            updatedAt: owner.updatedAt ?? 0,
             ...(owner.lifecycleRevision ? { lifecycleRevision: owner.lifecycleRevision } : {}),
           },
         }

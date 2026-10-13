@@ -187,6 +187,7 @@ export function assertCanInsertPluginStateEntry(params: {
   overflowPolicy: PluginStateOverflowPolicy;
   now: number;
   retention?: PluginStateRetention;
+  additionalEntries?: 0 | 1;
 }): void {
   if (isRetainedPluginStateNamespace(params.namespace)) {
     return;
@@ -208,7 +209,7 @@ export function assertCanInsertPluginStateEntry(params: {
       namespace: params.namespace,
       now: params.now,
     });
-  if (namespaceCount >= params.maxEntries) {
+  if (namespaceCount + (params.additionalEntries ?? 1) > params.maxEntries) {
     throw createPluginStateError({
       code: "PLUGIN_STATE_LIMIT_EXCEEDED",
       operation: "register",

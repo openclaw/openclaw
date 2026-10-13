@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import * as gitExec from "../../infra/git-exec.js";
 import * as commandRunner from "../../process/exec-runner.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
@@ -38,6 +39,7 @@ describe("managed removal custody", () => {
     root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-removal-"));
     repo = await initializeRepository(root);
     env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
+    await captureRuntimeConfigAsyncReader()();
     service = new ManagedWorktreeService({ env });
     const withWorktreeGitConfig = checkoutGitOwner.withWorktreeGitConfig;
     // The native policy captures its functions at module initialization. Route

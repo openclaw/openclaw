@@ -6,11 +6,16 @@ import {
   openOpenClawAgentDatabaseReadOnly,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
+  captureOpenClawAgentDatabaseExecution,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
   tableExists,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { observeHostDataSql } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  openNodeSqliteDatabase,
+  readSqliteDatabaseWriteTokenForPath,
+} from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { describe, expect, it } from "vitest";
 import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
@@ -78,6 +83,48 @@ describe("memory index schema admission", () => {
     }
   });
 
+  it("starts a fresh agent index and makes a subsequent turn searchable", async () => {
+    const cfg = fixture.createConfig({
+      provider: "none",
+      vectorEnabled: false,
+      sources: ["memory", "sessions"],
+      sessionMemory: true,
+    });
+    const agentPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+    await expect(fs.access(agentPath)).rejects.toThrow("ENOENT");
+    await fs.mkdir(path.dirname(agentPath), { recursive: true });
+    const canonicalPath = path.join(
+      await fs.realpath(path.dirname(agentPath)),
+      path.basename(agentPath),
+    );
+    const creator = captureOpenClawAgentDatabaseExecution(
+      { agentId: "main" },
+      {
+        expectedCreationIdentity: { key: `path:${canonicalPath}`, canonicalPath },
+      },
+    );
+    try {
+      const manager = await fixture.getFreshManager(cfg);
+      await fixture.seedSessionTranscript({
+        sessionId: "fresh-agent-turn",
+        messages: [
+          { role: "user", content: "Remember the cobalt telescope.", timestamp: 1 },
+          {
+            role: "assistant",
+            content: "The cobalt telescope is stored in the observatory.",
+            timestamp: 2,
+          },
+        ],
+      });
+      await manager.sync({ reason: "test", force: true });
+      expect(await manager.search("cobalt telescope")).toEqual(
+        expect.arrayContaining([expect.objectContaining({ source: "sessions" })]),
+      );
+    } finally {
+      await creator.release();
+    }
+  });
+
   it.each([false, true])(
     "admits published and shadow schemas off-thread (vectors: %s)",
     async (vectorEnabled) => {
@@ -130,6 +177,11 @@ describe("memory index schema admission", () => {
   it("retains admission when the publication owner creates vectors on an admitted agent", async () => {
     const options = { agentId: "main" };
     const database = openOpenClawAgentDatabase(options);
+    // Retain quarantine admission too: the observer includes its checks during writer reopen.
+    const quarantinePath = path.join(fixture.paths.stateDir, "state", "openclaw-quarantine.sqlite");
+    expect(readSqliteDatabaseWriteTokenForPath(quarantinePath)).toBeDefined();
+    using quarantine = openNodeSqliteDatabase(quarantinePath, { readOnly: true });
+    expect(quarantine.isOpen).toBe(true);
     const loaded = await loadSqliteVecExtension({ db: database.db });
     expect(loaded.ok, loaded.error).toBe(true);
     const reader = openOpenClawAgentDatabaseReadOnly(options, { allowExtension: true });
