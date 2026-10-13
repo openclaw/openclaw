@@ -420,9 +420,7 @@ export function readSessionActorEntryFacts(
     return undefined;
   }
   const { cell, state, incarnation } = current;
-  const snapshots: SessionActorEntryFacts["snapshots"] = cell.snapshot
-    ? "full"
-    : (cell.entry?.snapshots ?? "full");
+  const snapshots = cell.snapshot ? "full" : (cell.entry?.snapshots ?? "full");
   // Project a shallow shell before cloning potentially large, unrequested snapshots.
   return structuredClone({
     target,
