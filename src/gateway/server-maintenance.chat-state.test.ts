@@ -233,7 +233,7 @@ describe("gateway chat-state maintenance", () => {
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     const timers = startGatewayMaintenanceTimers(deps);
     try {
-      await vi.advanceTimersByTimeAsync(29_000);
+      await vi.advanceTimersByTimeAsync(27_000);
       toolEventRecipients.add("finalized-expired", "conn-final");
       toolEventRecipients.markFinal("finalized-expired");
       toolEventRecipients.add("recent", "conn-recent");
@@ -241,7 +241,7 @@ describe("gateway chat-state maintenance", () => {
       toolEventRecipients.add("finalized-grace", "conn-grace");
       toolEventRecipients.markFinal("finalized-grace");
 
-      // The first maintenance tick is the first operation after either expiry.
+      // The aligned tick at minute ten falls between the two finalization deadlines.
       await vi.advanceTimersByTimeAsync(29_000);
       expect(runs.has("active-expired")).toBe(false);
       expect(runs.has("finalized-expired")).toBe(false);

@@ -62,8 +62,17 @@ export async function applyPostPluginUpdateReadiness(params: {
   pluginUpdate: PostCorePluginUpdateResult;
   timeoutMs: number;
   nodeRunner?: string;
+  includeOptionalInspections?: boolean;
 }): Promise<PostCorePluginUpdateResult> {
-  const args = [params.entryPath, "doctor", "--lint", "--json", "--severity-min", "error"];
+  const args = [
+    params.entryPath,
+    "doctor",
+    "--lint",
+    "--json",
+    "--severity-min",
+    "error",
+    ...(params.includeOptionalInspections ? ["--all"] : []),
+  ];
   const baseEnv = stripGatewayServiceMarkerEnv(disableUpdatedPackageCompileCacheEnv(process.env));
   delete baseEnv[UPDATE_POST_CORE_CONVERGENCE_ENV];
   const startedAt = Date.now();
@@ -149,6 +158,9 @@ export async function applyPostPluginUpdateReadiness(params: {
     ];
   }
   if (passed) {
+    if (params.includeOptionalInspections) {
+      doctorLint.deferredInspectionCheckIds = [];
+    }
     return pluginUpdate;
   }
   if (report.findings.length === 0) {

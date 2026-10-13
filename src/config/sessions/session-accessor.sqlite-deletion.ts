@@ -263,10 +263,7 @@ async function withSqliteSessionMutations<T>(
     ) => {
       const currentReads = new Map<
         string,
-        {
-          current: Extract<CapturedSessionEntryCurrentRead, { kind: "file" }>;
-          readPresent: (assertSourceCurrent: () => void) => Promise<boolean>;
-        }
+        Extract<CapturedSessionEntryCurrentRead, { kind: "file" }>
       >();
       const assertCurrent = () => {
         memory?.assertCurrent();
@@ -275,7 +272,7 @@ async function withSqliteSessionMutations<T>(
           execution?.assertCurrent();
         }
         for (const read of currentReads.values()) {
-          read.current.assertSourceCurrent();
+          read.assertSourceCurrent();
         }
         targets.forEach(assertTargetIdle);
         for (const mutations of prepared.values()) {
@@ -319,36 +316,10 @@ async function withSqliteSessionMutations<T>(
                 `file:${captured.source.databaseIdentity}`,
                 captured.source.databaseBirthtime,
               );
-              return { current: captured, scope: { ...owner.scope, projection: "full" as const } };
+              return captured;
             },
           );
-          currentReads.set(workspace.workspaceId, {
-            current: current.current,
-            readPresent: async (assertSourceCurrent) =>
-              await withSessionEntryReadOnlyInWorker(
-                current.scope,
-                assertSourceCurrent,
-                async (read, owner) => {
-                  if (!read.ok) {
-                    throw read.error;
-                  }
-                  const refreshed = captureSessionEntryCurrentRead(current.scope, owner);
-                  const original = current.current.source;
-                  if (
-                    refreshed.kind !== "file" ||
-                    refreshed.source.agentId !== original.agentId ||
-                    refreshed.source.path !== original.path ||
-                    refreshed.source.databaseIdentity !== original.databaseIdentity ||
-                    refreshed.source.databaseBirthtime !== original.databaseBirthtime ||
-                    refreshed.source.sessionKey !== original.sessionKey
-                  ) {
-                    throw new Error("Repository cleanup session source changed before deletion");
-                  }
-                  assertSourceCurrent();
-                  return read.value !== undefined;
-                },
-              ),
-          });
+          currentReads.set(workspace.workspaceId, current);
         }
       }
       const receiptDeletions = new Map<
@@ -433,7 +404,7 @@ async function withSqliteSessionMutations<T>(
                 }
                 repositorySource?.admission.assertCurrent();
                 execution?.assertCurrent();
-                currentRead?.current.assertSourceCurrent();
+                currentRead?.assertSourceCurrent();
                 memory?.assertCurrent();
               };
               const currentEntry = () =>
@@ -448,14 +419,14 @@ async function withSqliteSessionMutations<T>(
                     )?.entry;
               assertSourceCurrent();
               const present = currentRead
-                ? await currentRead.readPresent(assertSourceCurrent)
+                ? (await currentRead.readCurrent()) !== undefined
                 : currentEntry() !== undefined;
               if (present) {
                 continue;
               }
               const sessionEntryCurrent = currentRead
                 ? {
-                    source: currentRead.current.source,
+                    source: currentRead.source,
                     assertCurrent: (entry: SessionEntryCurrentFacts | undefined) => {
                       assertSourceCurrent();
                       if (entry !== undefined) {
