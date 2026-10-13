@@ -580,6 +580,7 @@ src/config/model-provider-config.ts
 src/config/model-provider-overlay-ids.ts
 src/config/model-provider-rows.ts
 src/config/mutate.include-io.ts
+src/config/mutate.snapshot.ts
 src/config/mutate.ts
 src/config/mutation-conflict.ts
 src/config/normalize-exec-safe-bin.ts

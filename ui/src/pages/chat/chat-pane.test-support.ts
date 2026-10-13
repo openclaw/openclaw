@@ -96,7 +96,7 @@ export interface TestChatPane extends HTMLElement, ReactiveControllerHost {
   sessionSnapshotStore?: SessionSnapshotStore;
   chatState: Pick<
     ChatStateController<ChatPageHost>,
-    "attach" | "composerPersistence" | "createRenderLifecycle"
+    "attach" | "composerPersistence" | "createRenderLifecycle" | "requestBackgroundUpdate"
   >;
   context: ApplicationContext;
   state: ChatPageHost;

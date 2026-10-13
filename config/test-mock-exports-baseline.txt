@@ -4912,7 +4912,6 @@
 ["src/cli/update-cli/status.recovery.test.ts","../../daemon/service.js","6149b62dc565c252e1c4d9fd6d406cf7bebea7a6692dc9d173d402aa68a4073d",1]
 ["src/cli/update-cli/status.recovery.test.ts","../../gateway/call.js","bc093907ec9a2523db37a45601f7a1e7dfb6825d930c3dd711e60fa3243e13ca",1]
 ["src/cli/update-cli/status.recovery.test.ts","../../infra/channels-status-issues.js","0eb80a045066263d12f641df7092a3f4e13bc83de5f764b742b12443edb451cf",1]
-["src/cli/update-cli/status.recovery.test.ts","../../infra/deferred-plugin-migrations.js","31f32e70b8c5817a2e0f1df67bc709e3ef15aecae47adc99e59dd234b49e540b",1]
 ["src/cli/update-cli/status.recovery.test.ts","../../infra/update-run-reader.js","66e9cf45e6992cbbcfa82b944c5272e78cd236fe90f4a25ea20b429b54ad9ace",1]
 ["src/cli/update-cli/status.recovery.test.ts","../../infra/update-run-status.js","3cfbf202af11e28023b8e07ce73d6bc14b622765c7ffff1cb9686bb258500b29",1]
 ["src/cli/update-cli/status.recovery.test.ts","../../runtime.js","b39e58ebecc837f8861cbb640689f45e27d6e6c21e86581fef7fb3b06f48c64e",1]

@@ -104,6 +104,7 @@ function ChatHeaderSessionMenuContent(
 ) {
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   const [compactView, setCompactView] = createSignal<CompactMenuView>("root");
+  const [opened, setOpened] = createSignal(false);
   let dropdown: HTMLElement & { open: boolean };
   const state = merge(props, { selectionCount: 1, navigationAllowed: true, disabled: false });
   const readState = () => state;
@@ -477,6 +478,7 @@ function ChatHeaderSessionMenuContent(
         }
       }}
       onWa-show={() => {
+        setOpened(true);
         setCompactView("root");
         actions.loadOwners();
         props.onOpen();
@@ -493,8 +495,10 @@ function ChatHeaderSessionMenuContent(
       >
         <Icon name="moreHorizontal" />
       </button>
-      <Show when={props.compact && compactView() !== "root"} fallback={<Root />}>
-        <Compact />
+      <Show when={opened()}>
+        <Show when={props.compact && compactView() !== "root"} fallback={<Root />}>
+          <Compact />
+        </Show>
       </Show>
     </wa-dropdown>
   );

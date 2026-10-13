@@ -55,12 +55,12 @@ export async function prepareHostConfigSnapshot(
   return prepareConfigSnapshotValidation(request);
 }
 
-/** Both explicit CLI validation and an admitted host read prepare database facts before validation. */
+/** Runtime validation consumes canonical config; Doctor supplies its own pending facts. */
 export async function prepareConfigSnapshotValidation(
   request: ValidationRequest,
 ): Promise<PreparedValidation> {
   const { context, metadata } = request;
-  const pending = await context.resolveDeferredPluginMigrationsAsync();
+  const pending = context.options.deferredPluginMigrations;
   const validate =
     request.prepareValidation === "strict"
       ? validateConfigObjectWithStrictFactsAsync
