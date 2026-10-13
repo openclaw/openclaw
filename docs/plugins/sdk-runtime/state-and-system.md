@@ -235,6 +235,32 @@ keep the existing synchronous fallback.
   </Accordion>
 </AccordionGroup>
 
+## Prepared keyed-state effect guards
+
+`preparePluginStateRead(store, key)` from
+`openclaw/plugin-sdk/plugin-state-runtime` prepares a current read for stores
+created by the host. It returns `{ read, release }`; call `read()` immediately
+before a tool, disclosure, or external send, and call `release()` in `finally`.
+Preparation uses the state worker when the owner has no published row or absence.
+The final read uses memory, follows committed replacements and deletions, and
+honors expiry and runtime retirement.
+
+Queued mutations deny these reads before commit. Known rollback preserves the
+prior facts; compound binding cleanup publishes deletion or compensation before
+releasing denial. An unknown outcome keeps effect guards denied for that database
+identity until the Gateway restarts. Ordinary descriptive reads remain available.
+
+Custom store adapters return `undefined` because the host cannot observe their
+writers. Keep the adapter's authoritative reader for that case. A failed prepared
+read is a denial, never permission to fall back to an older value. Preparation
+and its receipt do not replace account, session-incarnation, or other independent
+security checks.
+
+Retained synchronous effect guards can call `assertPluginStateReadAvailable(store)`
+with the host-created async store before their native read. This checks the same
+pending, unknown, and runtime state without depending on a cached row. Use it at
+the effect boundary, not inside a writer's own admission callback.
+
 ## Synchronous keyed store migration
 
 `api.runtime.state.openSyncKeyedStore` and `PluginStateSyncKeyedStore` are deprecated

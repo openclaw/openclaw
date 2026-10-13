@@ -424,6 +424,63 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
         return true
     }
 
+    private func finishCanonicalRepair(
+        receipt: PostAppUpdateReceipt,
+        generation: UInt64) async -> PostAppUpdateReceipt?
+    {
+        let manager = GatewayProcessManager.shared
+        let targetVersion = receipt.toVersion
+        let checkCurrent: @MainActor @Sendable () async throws -> Void = {
+            guard !Task.isCancelled, !manager.isTerminating,
+                  manager.gatewayStartGeneration == generation,
+                  GatewayEnvironment.appVersionString() == targetVersion
+            else { throw CancellationError() }
+        }
+        do {
+            // Package recovery precedes selected-service work and notification.
+            // Neither an absent node service nor a healthy companion settles it.
+            try await checkCurrent()
+            let result: CLIInstaller.CanonicalUpdateResult = if let observed = manager.canonicalUpdateResult(
+                for: receipt,
+                generation: generation)
+            {
+                observed
+            } else {
+                try await CLIInstaller.repairCanonicalUpdateIfNeeded(
+                    receipt: receipt,
+                    checkCurrent: checkCurrent,
+                    statusHandler: { [weak self] message in
+                        self?.model.phase = .updating
+                        self?.model.message = message
+                        self?.show()
+                    })
+            }
+            try await checkCurrent()
+            manager.recordCanonicalUpdate(result, generation: generation)
+            let receipt = result.receipt
+            self.receipt = receipt
+            if case let .superseded(checkpoint, _, _) = result {
+                self.migrationOnlyLaunchCheck = true
+                self.supersededCanonicalCheckpoint = checkpoint
+            }
+            if self.retryCoreRepair {
+                self.retryCoreRepair = false
+                self.retryNodeMigration = Self.allowsNodeMigration(
+                    paused: AppStateStore.shared.isPaused,
+                    canActivate: manager.desiredActive && !manager.isTerminating)
+            }
+            return result.receipt
+        } catch {
+            if error is CancellationError, AppStateStore.shared.isPaused {
+                self.deferRuntimeVerification()
+            } else {
+                self.show()
+                self.fail(message: String(localized: "Gateway update failed."), details: error.localizedDescription)
+            }
+            return nil
+        }
+    }
+
     private func finishUpdate(
         receipt: PostAppUpdateReceipt,
         source: GatewayProcessManager.ActivationSource,
@@ -447,57 +504,10 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
             return
         }
 
-        let manager = GatewayProcessManager.shared
         if receipt.coreUpdate == .legacyCanonical {
-            let targetVersion = receipt.toVersion
-            let checkCurrent: @MainActor @Sendable () async throws -> Void = {
-                guard !Task.isCancelled, !manager.isTerminating,
-                      manager.gatewayStartGeneration == generation,
-                      GatewayEnvironment.appVersionString() == targetVersion
-                else { throw CancellationError() }
-            }
-            do {
-                // Package recovery precedes selected-service work and notification.
-                // Neither an absent node service nor a healthy companion settles it.
-                try await checkCurrent()
-                let result: CLIInstaller.CanonicalUpdateResult = if let observed = manager.canonicalUpdateResult(
-                    for: receipt,
-                    generation: generation)
-                {
-                    observed
-                } else {
-                    try await CLIInstaller.repairCanonicalUpdateIfNeeded(
-                        receipt: receipt,
-                        checkCurrent: checkCurrent,
-                        statusHandler: { [weak self] message in
-                            self?.model.phase = .updating
-                            self?.model.message = message
-                            self?.show()
-                        })
-                }
-                try await checkCurrent()
-                manager.recordCanonicalUpdate(result, generation: generation)
-                receipt = result.receipt
-                self.receipt = receipt
-                if case let .superseded(checkpoint, _, _) = result {
-                    self.migrationOnlyLaunchCheck = true
-                    self.supersededCanonicalCheckpoint = checkpoint
-                }
-                if self.retryCoreRepair {
-                    self.retryCoreRepair = false
-                    self.retryNodeMigration = Self.allowsNodeMigration(
-                        paused: AppStateStore.shared.isPaused,
-                        canActivate: manager.desiredActive && !manager.isTerminating)
-                }
-            } catch {
-                if error is CancellationError, AppStateStore.shared.isPaused {
-                    self.deferRuntimeVerification()
-                } else {
-                    self.show()
-                    self.fail(message: String(localized: "Gateway update failed."), details: error.localizedDescription)
-                }
-                return
-            }
+            guard let repaired = await self.finishCanonicalRepair(receipt: receipt, generation: generation)
+            else { return }
+            receipt = repaired
         }
 
         if await self.finishNodeMigrationIfNeeded(receipt: receipt, connectionMode: connectionMode) { return }
@@ -798,7 +808,15 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
         case .ready:
             gatewayUpdateIncomplete ? .repair : .none
         case let .incompatible(_, found, required):
-            CLIInstallPrompter.isManagedUpgrade(found: found, required: required) ? .update : .none
+            if CLIInstallPrompter.isManagedUpgrade(found: found, required: required) {
+                .update
+            } else if gatewayUpdateIncomplete,
+                      CLIInstaller.satisfiesUpdateTarget(installedVersion: found, targetVersion: required)
+            {
+                .repair
+            } else {
+                .none
+            }
         case .missing, .unusable:
             .install
         }
@@ -1161,7 +1179,9 @@ extension PostUpdateController {
     {
         switch outcome {
         case let .success(_, installedVersion):
-            guard installedVersion == receipt.toVersion else {
+            guard CLIInstaller.satisfiesUpdateTarget(
+                installedVersion: installedVersion, targetVersion: receipt.toVersion)
+            else {
                 self.fail(
                     message: String(localized: "Gateway verification failed."),
                     details: String(localized: "The managed runtime does not match the updated Mac app."))
@@ -1341,9 +1361,11 @@ extension PostUpdateController {
             }
         }
         let runtimeStatus = await CLIInstaller.managedStatus(
-            expectedVersion: receipt.toVersion, installedCLI: verifiedCLI, usesBundledRuntime: false)
+            expectedVersion: nil, installedCLI: verifiedCLI, usesBundledRuntime: false)
         guard AppStateStore.shared.connectionMode == connectionMode else { return .deferred }
-        guard case .ready = runtimeStatus else {
+        guard case let .ready(_, installedVersion) = runtimeStatus,
+              CLIInstaller.satisfiesUpdateTarget(installedVersion: installedVersion, targetVersion: receipt.toVersion)
+        else {
             self.fail(
                 message: String(localized: "Gateway verification failed."),
                 details: String(localized: "The managed runtime does not match the updated Mac app."))

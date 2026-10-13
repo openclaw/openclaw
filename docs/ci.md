@@ -21,6 +21,10 @@ Native video smoke coverage uses four shards of four providers. Each provider ha
 Broad PRs retain their compact selected-owner Node plan when time-based splitting
 would exceed the 130-row matrix cap. See [Node test lanes](/ci/scope-and-routing/node-test-lanes).
 
+Agent auth-store admission and configured model-owner changes explicitly select
+the Gateway agent-config readiness suite. Its lazy startup path is not fully
+visible to the bounded import graph; the owner watch preserves overlap coverage.
+
 This page is an index. CI is documented on nine pages, one per reader
 job. Open the page that matches your task.
 

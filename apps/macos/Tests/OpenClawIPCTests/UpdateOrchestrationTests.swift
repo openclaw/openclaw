@@ -345,6 +345,13 @@ struct UpdateOrchestrationTests {
             ownsManagedRuntime: true,
             gatewayUpdateIncomplete: false) == .none)
         #expect(PostUpdateController.gatewayAction(
+            status: CLIInstaller.classifyVersion(
+                location: managed, output: "OpenClaw 2026.10.2-beta.1", expectedVersion: "2026.10.1"),
+            ownsManagedRuntime: true,
+            gatewayUpdateIncomplete: true) == .repair)
+        #expect(CLIInstaller.satisfiesUpdateTarget(
+            installedVersion: "2026.10.2+fixture", targetVersion: "2026.10.2"))
+        #expect(PostUpdateController.gatewayAction(
             status: .incompatible(location: managed, found: "2026.7.3", required: "2026.7.4"),
             ownsManagedRuntime: false,
             gatewayUpdateIncomplete: false) == .none)

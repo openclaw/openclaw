@@ -5,6 +5,7 @@ import { toUSVString } from "node:util";
 import { serialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
+import { sqlPublicationAnchor } from "../infra/sql-connection.js";
 import {
   createSqliteCommitReceipt,
   hasSqliteCommitReceiptCoverage,
@@ -58,18 +59,21 @@ const state = resolveGlobalSingleton(Symbol.for("openclaw.pluginStatePublication
   capture: new AsyncLocalStorage<Map<string, SqliteCommittedFact<PluginStateRow>>>(),
   reads: new AsyncLocalStorage<PluginStateReadCapture>(),
   installingFacts: 0,
+  pending: new Map<string | symbol, Set<string>>(),
+  unavailable: new Set<string | symbol>(),
   facts: new Set<(change: PluginStateChange) => void>(),
   observers: new Set<(change: PluginStateChange) => void>(),
 }));
 
 function sourceFor(db: DatabaseSync): SqliteCommitSource {
-  let source = state.sources.get(db);
+  const anchor = sqlPublicationAnchor(db);
+  let source = state.sources.get(anchor);
   if (!source) {
     source = {
-      identity: readTrackedStateDatabaseIdentity(db)?.key ?? Symbol("untracked-plugin-state"),
+      identity: readTrackedStateDatabaseIdentity(anchor)?.key ?? Symbol("untracked-plugin-state"),
       incarnation: randomUUID(),
     };
-    state.sources.set(db, source);
+    state.sources.set(anchor, source);
   }
   return source;
 }
@@ -92,6 +96,19 @@ function captureReceipt(
 }
 
 function install(change: PluginStateChange): void {
+  if (change.kind === "pending") {
+    const pending = state.pending.get(change.identity) ?? new Set<string>();
+    pending.add(change.operationId);
+    state.pending.set(change.identity, pending);
+  } else if (change.kind === "settled") {
+    const pending = state.pending.get(change.identity);
+    pending?.delete(change.operationId);
+    if (!pending?.size) {
+      state.pending.delete(change.identity);
+    }
+  } else if (change.kind === "unknown") {
+    state.unavailable.add(change.identity);
+  }
   const errors: unknown[] = [];
   state.installingFacts++;
   try {
@@ -120,23 +137,6 @@ function publication(receipt: Receipt) {
 export const pluginStatePublication = {
   stagePostimage: stagePluginStatePostimage,
   stageDeletions: stagePluginStateDeletions,
-  /** A compound native owner settled these keys without plugin-state postimages. */
-  invalidateEntries(source: SqliteCommitSource, rows: readonly EntryKey[]): void {
-    const keys = rows.map(pluginStatePublicationKey);
-    if (keys.length === 0) {
-      return;
-    }
-    publishSqliteCommittedState(
-      publication(
-        createSqliteCommitReceipt<PluginStateRow, SqliteCommitSource>({
-          source,
-          domain: "plugin-state",
-          keys,
-          readFact: () => ({ kind: "unknown" }),
-        }),
-      ),
-    );
-  },
   /** Install/invalidate prepared facts only; storage mutations belong in postcommit observers. */
   subscribeFacts: (listener: (change: PluginStateChange) => void) =>
     registerListener(state.facts, listener),
@@ -252,10 +252,11 @@ function stage(db: DatabaseSync, facts: Map<string, SqliteCommittedFact<PluginSt
   if (state.installingFacts) {
     throw new Error("Plugin state cannot mutate during fact installation");
   }
+  const anchor = sqlPublicationAnchor(db);
   const capture = state.capture.getStore();
   if (capture) {
     const previous = new Map([...facts.keys()].map((key) => [key, capture.get(key)]));
-    stageSqliteTransactionState(db, {
+    stageSqliteTransactionState(anchor, {
       stage: () => {
         for (const [key, fact] of facts) {
           capture.set(key, fact);
@@ -274,7 +275,7 @@ function stage(db: DatabaseSync, facts: Map<string, SqliteCommittedFact<PluginSt
     });
   }
   const next = publication(captureReceipt(db, facts));
-  if (!stageSqliteCommittedPublication(db, next) && !db.isTransaction) {
+  if (!stageSqliteCommittedPublication(anchor, next) && !db.isTransaction) {
     publishSqliteCommittedState(next);
   }
 }
@@ -288,29 +289,36 @@ function stagePluginStateDeletions(db: DatabaseSync, rows: readonly EntryKey[]):
   stage(db, new Map(rows.map((row) => [pluginStatePublicationKey(row), { kind: "absent" }])));
 }
 
+export type PluginStateCommitReceipt = Receipt;
+
+/** Lend exact staged facts to a compound owner's existing settlement receipt. */
+export function capturePluginStateReceipt<T>(db: DatabaseSync, write: () => T) {
+  return state.capture.run(new Map(), () => ({
+    result: write(),
+    receipt: captureReceipt(db, state.capture.getStore()!),
+  }));
+}
+
 /** Capture the whole native transaction before COMMIT, including keys changed by retention. */
 export function withPluginStateWorkerReceipt<T>(
   db: DatabaseSync,
   write: () => T,
   additionalFacts?: (result: T) => Record<string, unknown>,
 ): T {
-  return state.capture.run(new Map(), () => {
-    const result = write();
-    const facts = state.capture.getStore()!;
-    // Empty receipts distinguish a confirmed no-op from missing commit evidence.
-    const metadata = additionalFacts?.(result);
-    const receipt = { ...metadata, ...captureReceipt(db, facts) };
-    // Publication cannot make a previously valid large clear/import fail to commit.
-    // Unbounded retained namespaces may exceed the transport even with keys alone.
-    deferSqliteWorkerCommitReceipt(
-      db,
-      serialize(receipt).byteLength <= SQLITE_WORKER_MAX_MESSAGE_BYTES
-        ? receipt
-        : { ...metadata, kind: "unknown", identity: receipt.source.identity },
-      facts.size === 0 ? "settlement" : "commit",
-    );
-    return result;
-  });
+  const { result, receipt: captured } = capturePluginStateReceipt(db, write);
+  // Empty receipts distinguish a confirmed no-op from missing commit evidence.
+  const metadata = additionalFacts?.(result);
+  const receipt = { ...metadata, ...captured };
+  // Publication cannot make a previously valid large clear/import fail to commit.
+  // Unbounded retained namespaces may exceed the transport even with keys alone.
+  deferSqliteWorkerCommitReceipt(
+    sqlPublicationAnchor(db),
+    serialize(receipt).byteLength <= SQLITE_WORKER_MAX_MESSAGE_BYTES
+      ? receipt
+      : { ...metadata, kind: "unknown", identity: receipt.source.identity },
+    captured.facts.size === 0 ? "settlement" : "commit",
+  );
+  return result;
 }
 
 function isRow(value: unknown): value is PluginStateRow {
@@ -354,6 +362,98 @@ function readReceipt(value: unknown): Receipt {
   return value as Receipt;
 }
 
+/** External effects cannot use facts while a writer is pending or its outcome is unknown. */
+export function assertPluginStatePublicationSettled(identity: string): void {
+  if (state.pending.has(identity) || state.unavailable.has(identity)) {
+    throw new Error("Plugin state authority is unavailable");
+  }
+}
+
+/** Start denial before queueing work; committed-only lease checks remain usable by its owner. */
+export function beginPluginStatePublication(
+  identity: () => string | symbol,
+  assertCurrent?: () => void,
+) {
+  const operationId = randomUUID();
+  const superseded = new Set<string>();
+  let installing = false;
+  let unknown = false;
+  let finished = false;
+  const unsubscribe = pluginStatePublication.subscribeFacts((change) => {
+    if (installing) {
+      return;
+    }
+    if (change.kind === "committed" && change.receipt.source.identity === identity()) {
+      for (const key of change.receipt.facts.keys()) {
+        superseded.add(key);
+      }
+    } else if (change.kind === "unknown" && change.identity === identity()) {
+      unknown = true;
+    }
+  });
+  const pendingIdentity = identity();
+  try {
+    install({ kind: "pending", identity: pendingIdentity, operationId });
+  } catch (error) {
+    unsubscribe();
+    try {
+      install({ kind: "settled", identity: pendingIdentity, operationId });
+    } catch {
+      // The writer never started; retain the original observer failure after clearing denial.
+    }
+    throw error;
+  }
+  return {
+    install(facts: unknown) {
+      try {
+        assertCurrent?.();
+        if (finished) {
+          throw new Error("Plugin state publication is closed");
+        }
+        if (isRecord(facts) && facts.kind === "unknown" && facts.identity === identity()) {
+          install({ kind: "unknown", identity: identity() });
+          return;
+        }
+        const receipt = readReceipt(facts);
+        if (receipt.source.identity !== identity()) {
+          throw new Error("Plugin state receipt changed owner");
+        }
+        installing = true;
+        publishSqliteCommittedState(
+          publication({
+            ...receipt,
+            facts: new Map(
+              [...receipt.facts].map(([key, fact]) => [
+                key,
+                unknown || superseded.has(key) ? { kind: "unknown" } : fact,
+              ]),
+            ),
+          }),
+        );
+      } catch (error) {
+        install({ kind: "unknown", identity: identity() });
+        throw error;
+      } finally {
+        installing = false;
+      }
+    },
+    finish(outcome: "completed" | "unknown") {
+      if (finished) {
+        return;
+      }
+      finished = true;
+      unsubscribe();
+      try {
+        if (outcome === "unknown") {
+          install({ kind: "unknown", identity: identity() });
+        }
+      } finally {
+        install({ kind: "settled", identity: pendingIdentity, operationId });
+      }
+    },
+  };
+}
+
 /** A late worker reply cannot overwrite a newer native publication or reopen a closed owner. */
 export function withPluginStatePublication(
   createAdmission: SqliteWorkerAdmissionFactory,
@@ -362,79 +462,35 @@ export function withPluginStatePublication(
 ): SqliteWorkerAdmissionFactory {
   return (operation) => {
     const owner = createAdmission(operation);
-    const identity = () => context.admission.identity.key;
-    const superseded = new Set<string>();
-    const operationId = randomUUID();
-    let installing = false;
-    let unknown = false;
-    let received = false;
-    let finished = false;
-    const unsubscribe = pluginStatePublication.subscribeFacts((change) => {
-      if (installing) {
-        return;
-      }
-      if (change.kind === "committed" && change.receipt.source.identity === identity()) {
-        for (const key of change.receipt.facts.keys()) {
-          superseded.add(key);
-        }
-      } else if (change.kind === "unknown" && change.identity === identity()) {
-        unknown = true;
-      }
-    });
+    let pending: ReturnType<typeof beginPluginStatePublication>;
+    try {
+      pending = beginPluginStatePublication(
+        () => context.admission.identity.key,
+        context.assertPublicationCurrent ?? context.admission.assertCurrent,
+      );
+    } catch (error) {
+      owner.admission.finish();
+      throw error;
+    }
+    let installed = false;
     const finish = owner.admission.finish.bind(owner.admission);
     owner.admission.finish = () => {
       try {
         finish();
       } finally {
-        if (!finished) {
-          finished = true;
-          unsubscribe();
-          if (!received || owner.admission.settlement?.kind !== "completed") {
-            install({ kind: "unknown", identity: identity() });
-          }
-          install({ kind: "settled", identity: identity(), operationId });
-        }
+        const settlement = owner.admission.settlement;
+        // A completed rollback has no receipt; a committed write must publish before denial ends.
+        pending.finish(
+          settlement?.kind === "completed" && (!settlement.committed || installed)
+            ? "completed"
+            : "unknown",
+        );
       }
     };
-    try {
-      install({ kind: "pending", identity: identity(), operationId });
-    } catch (error) {
-      unsubscribe();
-      owner.admission.finish();
-      throw error;
-    }
     observeSqliteWorkerCommittedFacts(owner.admission, ({ facts }) => {
-      try {
-        if (isRecord(facts) && facts.kind === "unknown" && facts.identity === identity()) {
-          received = true;
-          install({ kind: "unknown", identity: identity() });
-          onCommitted?.(facts);
-          return;
-        }
-        const receipt = readReceipt(facts);
-        (context.assertPublicationCurrent ?? context.admission.assertCurrent)();
-        if (receipt.source.identity !== identity()) {
-          throw new Error("Plugin state receipt changed owner");
-        }
-        const current: Receipt = {
-          ...receipt,
-          facts: new Map(
-            [...receipt.facts].map(([key, fact]) => [
-              key,
-              unknown || superseded.has(key) ? { kind: "unknown" } : fact,
-            ]),
-          ),
-        };
-        installing = true;
-        publishSqliteCommittedState(publication(current));
-        received = true;
-        onCommitted?.(facts);
-      } catch (error) {
-        install({ kind: "unknown", identity: identity() });
-        throw error;
-      } finally {
-        installing = false;
-      }
+      pending.install(facts);
+      installed = true;
+      onCommitted?.(facts);
     });
     return owner;
   };
