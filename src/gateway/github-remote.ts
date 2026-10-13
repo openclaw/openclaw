@@ -6,9 +6,12 @@ export function parseGitHubRemoteUrl(
   const trimmed = raw.trim();
   let path: string | undefined;
   const escapedHost = githubHost.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-  const scpMatch = new RegExp(`^git@${escapedHost}:(.+)$`, "iu").exec(trimmed);
-  if (scpMatch) {
-    path = scpMatch[1];
+  const scpMatch = new RegExp(`^([^@:/]+)@${escapedHost}:(.+)$`, "iu").exec(trimmed);
+  const gheUser = githubHost.toLowerCase().endsWith(".ghe.com")
+    ? githubHost.split(".")[0]?.toLowerCase()
+    : undefined;
+  if (scpMatch && ["git", gheUser].includes(scpMatch[1]?.toLowerCase())) {
+    path = scpMatch[2];
   } else {
     const url = URL.parse(trimmed);
     if (

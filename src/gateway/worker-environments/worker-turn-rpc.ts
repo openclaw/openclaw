@@ -6,10 +6,6 @@ import type {
   WorkerTranscriptCommitParams,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type {
-  WorkerGatewayToolCancelParams,
-  WorkerGatewayToolInvokeParams,
-} from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
-import type {
   WorkerInferenceCancelParams,
   WorkerInferenceStartParams,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
@@ -29,13 +25,17 @@ import { sameWorkerSessionTurnClaim } from "./placement-record.js";
 import {
   acknowledgeWorkerTurnFinishing,
   getWorkerTurnToolSurface,
+  getWorkerTurnGitHubGrant,
+  assertWorkerTurnGitHubGrantCurrent,
   type WorkerTurnExecutionIdentityCapability,
 } from "./placement-turn-claim-events.js";
 import type { WorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerEnvironmentStore } from "./store.js";
 import type { WorkerTranscriptCommitApplication } from "./transcript-commit.js";
-import type { WorkerGatewayToolSink } from "./worker-gateway-tool-contract.js";
-import { workerSessionToolErrorResult } from "./worker-session-tool-result.js";
+import {
+  createWorkerGatewayToolRpc,
+  runWorkerTurnRequestOperation,
+} from "./worker-gateway-tool-runtime.js";
 import {
   createWorkerComputerRpc,
   type WorkerComputerExecutor,
@@ -263,7 +263,7 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
       const isReplay =
         (request.kind === "transcript" && request.seq <= terminalFence.transcriptSeq) ||
         (request.kind === "live" && request.seq <= terminalFence.liveSeq);
-      if (!isReplay) {
+      if (!isReplay && request.kind !== "heartbeat") {
         return { ok: false, closeReason: "placement-mismatch" };
       }
     }
@@ -383,49 +383,42 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
     },
   });
 
-  const withToolSurface = async <T>(
-    identity: WorkerConnectionIdentity,
-    run: (runtime: NonNullable<ReturnType<typeof getWorkerTurnToolSurface>>) => Promise<T> | T,
-  ) => {
-    const runtime = getWorkerTurnToolSurface(identity);
-    const validate = () =>
+  const { getToolSurface, invokeGatewayTool, cancelGatewayTool } = createWorkerGatewayToolRpc(
+    (identity, surface) =>
       validateAttachedWorkerRequest(identity, identity.ownerEpoch, {
         kind: "tool-surface",
-        surface: runtime,
-      });
-    const admitted = validate();
-    if (!admitted.ok) {
-      return "closeReason" in admitted
-        ? admitted
-        : { ok: false as const, closeReason: "placement-mismatch" as const };
+        surface,
+      }),
+  );
+  const refreshGitHubBinding = async (identity: WorkerConnectionIdentity, generation?: number) => {
+    const source = sourceFor(identity);
+    if (!source) {
+      return { ok: false as const, closeReason: "placement-mismatch" as const };
     }
-    if (!runtime) {
-      return { ok: false as const, closeReason: "method-not-allowed" as const };
+    const grant = getWorkerTurnGitHubGrant(identity);
+    const turn = processTurnBinding(identity);
+    const isTerminal = () => {
+      const fence = identity.sessionId ? terminalTurnFences.get(identity.sessionId) : undefined;
+      return Boolean(turn && fence && matchesTurnBinding(turn, fence));
+    };
+    const outcome = await runWorkerTurnRequestOperation({
+      validate: () =>
+        validateAttachedWorkerRequest(identity, identity.ownerEpoch, { kind: "heartbeat" }),
+      run: () => source.run(() => (isTerminal() ? undefined : grant?.refresh?.(generation))),
+    });
+    if (!outcome.ok) {
+      return outcome;
     }
-    const result = await run(runtime);
-    const current = validate();
-    return current.ok
-      ? { ok: true as const, result }
-      : "closeReason" in current
-        ? current
-        : { ok: false as const, closeReason: "placement-mismatch" as const };
+    return {
+      ok: true as const,
+      // Terminal ACK can arrive during issuance or before the dispatcher consumes this result.
+      // Heartbeats remain control traffic, but cannot publish more credentials after settlement.
+      get result() {
+        return isTerminal() ? undefined : outcome.result;
+      },
+      assertCurrent: () => assertWorkerTurnGitHubGrantCurrent(identity, grant),
+    };
   };
-  const getToolSurface = (identity: WorkerConnectionIdentity) =>
-    withToolSurface(identity, (runtime) => runtime.getSurface(identity));
-  const invokeGatewayTool = (
-    identity: WorkerConnectionIdentity,
-    request: WorkerGatewayToolInvokeParams,
-    sink: WorkerGatewayToolSink,
-    signal?: AbortSignal,
-  ) =>
-    withToolSurface(identity, (runtime) =>
-      runtime.invoke(identity, request, sink, signal).catch(workerSessionToolErrorResult),
-    );
-  const cancelGatewayTool = (
-    identity: WorkerConnectionIdentity,
-    request: WorkerGatewayToolCancelParams,
-  ) => withToolSurface(identity, (runtime) => runtime.cancel(request));
-
   const validateLiveEvent = (
     identity: WorkerConnectionIdentity,
     request: WorkerLiveEventParams,
@@ -718,6 +711,7 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
     commitTranscript,
     pushLiveEvent,
     getToolSurface,
+    refreshGitHubBinding,
     invokeGatewayTool,
     cancelGatewayTool,
     executeComputer,

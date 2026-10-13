@@ -9,6 +9,7 @@ import {
 } from "../agents/worktrees/registry.js";
 import { findLiveRegistryWorktreeByOwner } from "../agents/worktrees/registry.test-support.js";
 import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
+import { recordCommittedSessionMetadataPublication } from "../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { withIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
@@ -152,6 +153,7 @@ beforeEach(async () => {
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("publication-worktree-read-"));
   mocks.config.mockReset().mockReturnValue({});
   mocks.session.mockReset().mockReturnValue({
+    storePath: "/synthetic/admitted.sqlite",
     canonicalKey: session.sessionKey,
     agentId: session.agentId,
     entry: {
@@ -237,6 +239,17 @@ it.each(["unbound", "replaced-session", "replaced-lifecycle", "replaced-writer"]
     );
   },
 );
+
+it("checks retained worktree retirement without caller-thread registry SQL", async () => {
+  const prepared = await prepareGitHubPublicationWorkspaceOwner(session);
+  using _ = { [Symbol.dispose]: () => prepared.release() };
+  expect(prepared.current().kind).toBe("worktree");
+  await updateRegistryWorktree(process.env, worktree.id, { removedAt: 2 });
+  const sql = observeMainThreadSql();
+  sql.calibrate();
+  expect(() => prepared.current()).toThrow("changed");
+  sql.expectIdle();
+});
 
 it("rejects a worktree retired while publication identity is prepared", async () => {
   mocks.identity.mockImplementationOnce(async () => {
@@ -377,6 +390,99 @@ it.each(["branch replacement", "turn cancellation and release"])(
       sql.restore();
       await discovery.stop();
       await scheduler.stop();
+      await actor.close();
+    }
+  },
+);
+
+it("invalidates a credential-only disk owner when its admitted writer changes", async () => {
+  const entry = {
+    sessionId: session.sessionId,
+    lifecycleRevision: "lifecycle",
+    activeWriterRunId: "writer",
+  };
+  mocks.admittedSessionRead.mockResolvedValue({
+    entries: [{ sessionKey: session.sessionKey, entry }],
+  });
+  const prepared = await prepareGitHubPublicationWorkspaceOwner(session, {
+    allowMissingWorkspace: true,
+    sessionTarget: {
+      ...session,
+      storePath: "/synthetic/admitted.sqlite",
+      expectedLifecycleRevision: "lifecycle",
+      expectedWriterRunId: "writer",
+    },
+  });
+  using _ = { [Symbol.dispose]: () => prepared.release() };
+  expect(prepared.current().kind).toBe("none");
+  recordCommittedSessionMetadataPublication(
+    "publication-worker-fixture",
+    session.sessionKey,
+    undefined,
+    {
+      ...entry,
+      activeWriterRunId: "replacement",
+    },
+  );
+  expect(() => prepared.current()).toThrow("changed");
+  expect(mocks.session).not.toHaveBeenCalled();
+});
+
+it.each(["cancelled authority", "worktree reassignment"] as const)(
+  "retains an incognito actor outside admission and rejects %s",
+  async (change) => {
+    const authority = { assertCurrent() {} };
+    const actor = await captureOpenClawAgentDatabaseExecution({
+      kind: "ephemeral",
+      agentId: "main",
+      env: process.env,
+      authority,
+    });
+    assert(actor);
+    const selected = {
+      ...session,
+      sessionKey: "agent:main:dashboard:incognito-publication-retained",
+    };
+    await actor.sessions.create(authority, {
+      sessionKey: selected.sessionKey,
+      entry: {
+        sessionId: selected.sessionId,
+        lifecycleRevision: "lifecycle",
+        updatedAt: 1,
+        ...(change === "worktree reassignment"
+          ? { worktree: { id: worktree.id, branch: worktree.branch, repoRoot: worktree.repoRoot } }
+          : {}),
+      },
+    });
+    if (change === "worktree reassignment") {
+      await deleteRegistryWorktree(process.env, worktree.id);
+      await insertRegistryWorktree(process.env, { ...worktree, ownerId: selected.sessionKey });
+    }
+    const turn = new AbortController();
+    const prepared = await withIncognitoSessionBinding(
+      { actor, admissionSignal: turn.signal },
+      () => prepareGitHubPublicationWorkspaceOwner(selected, { allowMissingWorkspace: true }),
+    );
+    try {
+      const kind = change === "worktree reassignment" ? "worktree" : "none";
+      expect(prepared.current().kind).toBe(kind);
+      expect((await prepared.read()).kind).toBe(kind);
+      if (change === "worktree reassignment") {
+        await withIncognitoSessionBinding({ actor }, () =>
+          patchSessionEntryCore({ ...selected, storePath: actor.path }, () => ({
+            worktree: {
+              id: "replacement-worktree",
+              branch: worktree.branch,
+              repoRoot: worktree.repoRoot,
+            },
+          })),
+        );
+      } else {
+        turn.abort();
+      }
+      expect(() => prepared.current()).toThrow();
+    } finally {
+      prepared.release();
       await actor.close();
     }
   },

@@ -1,7 +1,12 @@
 import { once } from "node:events";
+import type { WorkerGitHubBindingRefresh } from "openclaw/plugin-sdk/github-worker-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { useIsolatedStateGuard } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  encodeCodexNodeGitHubControl,
+  parseCodexNodeGitHubControl,
+} from "../node-github-refresh.js";
 import { sandboxExecServerRegistry } from "./sandbox-exec-server-registry.js";
 import {
   ensureCodexSandboxExecServerEnvironment,
@@ -16,6 +21,13 @@ import {
 } from "./sandbox-exec-server.test-helpers.js";
 
 const customLoggingPattern = vi.hoisted(() => ({ value: "" }));
+const githubGrant = vi.hoisted(() => ({
+  prepare: vi.fn(),
+}));
+// mock-isolation: Relay tests supply grants without accessing Gateway identities or credential renewal.
+vi.mock("openclaw/plugin-sdk/github-worker-runtime", () => ({
+  prepareWorkerGitHubBindingGrant: githubGrant.prepare,
+}));
 vi.mock("openclaw/plugin-sdk/logging-core", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/logging-core")>();
   return {
@@ -68,13 +80,14 @@ function createNodeChannel() {
   };
 }
 
-function createNodeSandbox() {
+function createNodeSandbox(agentId?: string) {
   return {
     ...createSandboxContext({}),
     backendId: "node",
     backend: undefined,
     fsBridge: undefined,
     placementExecutionMode: "remote-exec" as const,
+    ...(agentId !== undefined ? { placementAgentId: agentId } : {}),
     placementNodeId: "paired-device-1",
     placementEnvironmentId: "environment-paired-device-1",
     placementSessionId: "session-paired-device-1",
@@ -83,8 +96,16 @@ function createNodeSandbox() {
   };
 }
 
-function createNodeRuntime(openDuplex: PluginRuntime["nodes"]["openDuplex"]): PluginRuntime {
-  return { nodes: { openDuplex } } as PluginRuntime;
+function createNodeRuntime(
+  openDuplex: PluginRuntime["nodes"]["openDuplex"],
+  features?: Record<string, string[]>,
+): PluginRuntime {
+  return {
+    nodes: {
+      openDuplex,
+      list: async () => ({ nodes: [{ nodeId: "paired-device-1", commandFeatures: features }] }),
+    },
+  } as PluginRuntime;
 }
 
 async function registerNodeRelay(onExecutionDisconnect?: (error: Error) => void) {
@@ -164,11 +185,182 @@ async function expectPairedNodeHttpCredentialRejection(params: {
 useIsolatedStateGuard();
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   customLoggingPattern.value = "";
+  githubGrant.prepare.mockReset();
   await sandboxExecServerRegistry.closeAll();
 });
 
 describe("Codex paired-device exec-server relay", () => {
+  it("releases the new GitHub grant when feature discovery rejects before launch", async () => {
+    const revoke = vi.fn(async () => {});
+    githubGrant.prepare.mockResolvedValue({
+      binding: { token: "synthetic-unclaimed", login: "personal-alice", branch: "fixture" },
+      revoke,
+      startRenewal: () => () => {},
+    });
+    const openDuplex = vi.fn<PluginRuntime["nodes"]["openDuplex"]>();
+    const runtime = createNodeRuntime(openDuplex);
+    vi.spyOn(runtime.nodes, "list").mockRejectedValueOnce(
+      new Error("synthetic metadata lookup failed"),
+    );
+    const sandbox = createNodeSandbox("main");
+    await expect(
+      ensureCodexSandboxExecServerEnvironment({
+        client: createClient() as never,
+        sandbox,
+        runtime,
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow("metadata lookup failed");
+    expect(revoke).toHaveBeenCalledOnce();
+    expect(openDuplex).not.toHaveBeenCalled();
+  });
+
+  it("rejects a GitHub selection retired during discovery and forwards its assertion to final dispatch", async () => {
+    const transport = createNodeChannel();
+    const revoke = vi.fn(async () => {});
+    let current = true;
+    const assertCurrent = () => {
+      if (!current) {
+        throw new Error("selected account changed");
+      }
+    };
+    githubGrant.prepare.mockResolvedValue({
+      binding: { token: "synthetic-selected", login: "system-bot" },
+      revoke,
+      startRenewal: () => () => {},
+      assertCurrent,
+    });
+    const openDuplex = vi.fn<PluginRuntime["nodes"]["openDuplex"]>(async () => transport.channel);
+    const runtime = createNodeRuntime(openDuplex, {
+      "codex.exec-server.stdio.v1": ["github-profile-refresh"],
+    });
+    vi.spyOn(runtime.nodes, "list").mockImplementationOnce(async () => {
+      current = false;
+      return {
+        nodes: [
+          {
+            nodeId: "paired-device-1",
+            commandFeatures: { "codex.exec-server.stdio.v1": ["github-profile-refresh"] },
+          },
+        ],
+      };
+    });
+    const sandbox = createNodeSandbox("main");
+    const prepare = () =>
+      ensureCodexSandboxExecServerEnvironment({
+        client: createClient() as never,
+        sandbox,
+        runtime,
+        signal: new AbortController().signal,
+      });
+    await expect(prepare()).rejects.toThrow("selected account changed");
+    expect(openDuplex).not.toHaveBeenCalled();
+    expect(revoke).toHaveBeenCalledOnce();
+    current = true;
+    const environment = await prepare();
+    expect(openDuplex.mock.calls[0]![0].assertCurrent).toBe(assertCurrent);
+    current = false;
+    expect(() => openDuplex.mock.calls[0]![0].assertCurrent?.()).toThrow(
+      "selected account changed",
+    );
+    transport.channel.close();
+    await releaseCodexSandboxExecServerEnvironment(sandbox, environment);
+  });
+
+  it.each([
+    { supported: false, login: "personal-alice" },
+    { supported: true, login: "personal-alice" },
+  ])(
+    "starts $login GitHub delivery only after node refresh support: $supported",
+    async ({ supported, login }) => {
+      if (login === "personal-alice") {
+        vi.stubEnv("GITHUB_APP_ID", "");
+        vi.stubEnv("GITHUB_INSTALLATION_ID", "");
+        vi.stubEnv("GITHUB_APP_PRIVATE_KEY", "");
+      }
+      const transport = createNodeChannel();
+      let install: ((snapshot: WorkerGitHubBindingRefresh) => Promise<void>) | undefined;
+      const stop = vi.fn();
+      const startRenewal = vi.fn(
+        (writer: (snapshot: WorkerGitHubBindingRefresh) => Promise<void>) => {
+          install = writer;
+          return stop;
+        },
+      );
+      const revoke = vi.fn(async () => {});
+      githubGrant.prepare.mockResolvedValue({
+        binding: { token: "synthetic-initial", login, branch: "fixture" },
+        revoke,
+        startRenewal,
+        assertCurrent: () => {},
+      });
+      const openDuplex = vi.fn<PluginRuntime["nodes"]["openDuplex"]>(async () => transport.channel);
+      const client = createClient();
+      const sandbox = createNodeSandbox("main");
+      const prepared = ensureCodexSandboxExecServerEnvironment({
+        client: client as never,
+        sandbox,
+        runtime: createNodeRuntime(
+          openDuplex,
+          supported ? { "codex.exec-server.stdio.v1": ["github-profile-refresh"] } : undefined,
+        ),
+        signal: new AbortController().signal,
+      });
+      if (!supported) {
+        await expect(prepared).rejects.toThrow("GitHub profile refresh");
+        expect(revoke).toHaveBeenCalledOnce();
+        expect(openDuplex).not.toHaveBeenCalled();
+        expect(startRenewal).not.toHaveBeenCalled();
+        return;
+      }
+      await prepared;
+      expect(openDuplex.mock.calls[0]![0].params).toMatchObject({
+        github: { token: "synthetic-initial", login },
+      });
+      const socket = await openSocket(execServerUrlFromClient(client));
+      try {
+        await Promise.resolve();
+        {
+          expect(openDuplex.mock.calls[0]![0]).toHaveProperty("requiredCommandFeatures", [
+            "github-profile-refresh",
+          ]);
+          const snapshot = {
+            generation: 1,
+            token: "synthetic-refreshed",
+            expiresAtMs: Date.now() + 3_600_000,
+          };
+          const delivered = install!(snapshot);
+          await Promise.resolve();
+          expect(
+            parseCodexNodeGitHubControl(transport.channel.send.mock.calls[0]![0]),
+          ).toMatchObject(snapshot);
+          await transport.receive(
+            encodeCodexNodeGitHubControl({
+              type: "openclaw.github.profile.ack",
+              generation: 2,
+              ok: true,
+            }),
+          );
+          await transport.receive(
+            encodeCodexNodeGitHubControl({
+              type: "openclaw.github.profile.ack",
+              generation: 1,
+              ok: true,
+            }),
+          );
+          await delivered;
+          transport.channel.close();
+          await transport.channel.closed;
+          await expect(install!(snapshot)).rejects.toThrow("lease closed");
+        }
+      } finally {
+        socket.close();
+      }
+    },
+  );
+
   it("authorizes one bounded attempt-owned node channel before registering the local environment", async () => {
     const transport = createNodeChannel();
     const openDuplex = vi.fn<PluginRuntime["nodes"]["openDuplex"]>(async () => transport.channel);
@@ -208,6 +400,58 @@ describe("Codex paired-device exec-server relay", () => {
       client.request.mock.invocationCallOrder[0] ?? Infinity,
     );
     expect(execServerUrlFromClient(client)).toMatch(/^ws:\/\/127\.0\.0\.1:\d+\/openclaw-/);
+  });
+
+  it("fences grant authority and preserves a closed node lease when credential cleanup fails", async () => {
+    const binding = {
+      token: "synthetic-node-personal-token",
+      login: "personal-alice",
+      branch: "openclaw/session-worker",
+      host: "fixture.ghe.com",
+      remoteUrl: "https://fixture.ghe.com/example/repo.git",
+    };
+    const revoke = vi.fn(async () => {
+      throw new Error("synthetic revoke transport failure");
+    });
+    const grantAuthority = new AbortController();
+    const attempt = new AbortController();
+    githubGrant.prepare.mockResolvedValue({ binding, revoke, signal: grantAuthority.signal });
+    const transport = createNodeChannel();
+    const openDuplex = vi.fn<PluginRuntime["nodes"]["openDuplex"]>(async () => transport.channel);
+    const sandbox = createNodeSandbox("main");
+    const client = createClient();
+    let observeDisconnect: () => void = () => {};
+    const disconnected = new Promise<void>((resolve) => {
+      observeDisconnect = resolve;
+    });
+    const onExecutionDisconnect = vi.fn<(error: Error) => void>(observeDisconnect);
+    const environment = await ensureCodexSandboxExecServerEnvironment({
+      client: client as never,
+      sandbox,
+      runtime: createNodeRuntime(openDuplex),
+      signal: attempt.signal,
+      onExecutionDisconnect,
+    });
+
+    expect(githubGrant.prepare).toHaveBeenCalledWith(expect.objectContaining({ agentId: "main" }));
+    expect(openDuplex).toHaveBeenCalledWith(
+      expect.objectContaining({ params: expect.objectContaining({ github: binding }) }),
+    );
+    const channelSignal = openDuplex.mock.calls[0]![0].signal;
+    grantAuthority.abort();
+    expect(channelSignal?.aborted).toBe(true);
+    expect(attempt.signal.aborted).toBe(false);
+    transport.channel.close();
+    await disconnected;
+    expect(onExecutionDisconnect).toHaveBeenCalledOnce();
+    expect(onExecutionDisconnect.mock.calls[0]?.[0].message).toContain(
+      "(execution node disconnected)",
+    );
+    expect(onExecutionDisconnect.mock.calls[0]?.[0].message).not.toContain(
+      "synthetic revoke transport failure",
+    );
+    expect(revoke).toHaveBeenCalledOnce();
+    await releaseCodexSandboxExecServerEnvironment(sandbox, environment);
   });
 
   it.each([

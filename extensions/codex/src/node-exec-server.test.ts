@@ -447,99 +447,142 @@ describe("Codex node exec-server", () => {
       "exactly one message",
     );
     await expect(frames.sendRaw(Uint8Array.of(0xff, 0xfe))).rejects.toThrow("malformed UTF-8");
-    await expect(frames.sendRaw(new Uint8Array(64 * 1024 * 1024 + 1))).rejects.toThrow("64 MiB");
+    const oversized = new Uint8Array(64 * 1024 * 1024 + 1);
+    oversized[0] = 0x7b;
+    await expect(frames.sendRaw(oversized)).rejects.toThrow("64 MiB");
     frames.controller.abort(new Error("malformed-frame fixture closed"));
     await expect(invocation).rejects.toThrow("malformed-frame fixture closed");
     expect(workspace.release).toHaveBeenCalledOnce();
     expect(command.hasActiveWork?.() ?? false).toBe(false);
   });
 
-  it("uses prepared HOME with the actual pinned binary while keeping Codex state private", async ({
-    signal,
-  }) => {
-    pendingNodeProof = withTempWorkspace(
-      { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "codex-prepared-home-" },
-      async ({ dir }) => {
-        const cwd = await realpath(dir);
-        const homeDir = path.join(cwd, "prepared-home");
-        await mkdir(homeDir);
-        await writeFile(path.join(homeDir, "prepared-cache"), "retained build state");
-        const frames = createNodeFrames(signal);
-        const command = createCodexNodeExecServerCommand();
-        const workspace = createManagedWorkspaceInvocation(cwd, homeDir);
-        const invocation = command.handle(
-          JSON.stringify({ placement: workspace.placement, authorization: "human-approved" }),
-          frames.io,
-          workspace.context,
-        );
-        void invocation.catch((error: unknown) => frames.controller.abort(error));
-        let isolatedCodexHome: string | undefined;
-        try {
-          await Promise.race([frames.ready, invocation]);
-          await frames.send({
-            id: 1,
-            method: "initialize",
-            params: { clientName: "openclaw-node" },
-          });
-          await readNodeResponse(frames, 1);
-          await frames.send({ method: "initialized", params: {} });
-          const script = `const fs = require('node:fs'); const path = require('node:path');
-process.stdout.write(JSON.stringify({home: process.env.HOME, codexHome: process.env.CODEX_HOME,
-  cached: fs.existsSync(path.join(process.env.HOME ?? '.', 'prepared-cache'))}) + '\\n');`;
-          await frames.send({
-            id: 2,
-            method: "process/start",
-            params: {
-              processId: "prepared-home",
-              argv: [process.execPath, "-e", script],
-              cwd: pathToFileURL(cwd).href,
-              env: {},
-              envPolicy: {
-                inherit: "all",
-                ignoreDefaultExcludes: true,
-                exclude: [],
-                set: {},
-                includeOnly: [],
-              },
-              tty: false,
-              pipeStdin: false,
-              arg0: null,
-            },
-          });
-          await readNodeResponse(frames, 2);
-          const notifications = await readNodeProcessNotifications(frames, "prepared-home", 3);
-          const output = notifications.find(
-            (message) => message.method === "process/output",
-          )?.params;
-          if (!isRecord(output) || typeof output.chunk !== "string") {
-            throw new Error("Pinned exec-server omitted process output");
-          }
-          const observed: unknown = JSON.parse(
-            Buffer.from(output.chunk, "base64").toString("utf8"),
+  it.for([
+    { host: "fixture.ghe.com", remoteUrl: "https://fixture.ghe.com/example/repo.git" },
+    { host: "github.com", remoteUrl: "https://github.com/example/repo.git" },
+  ])(
+    "uses prepared HOME with the actual pinned binary for $host",
+    async ({ host, remoteUrl }, { signal }) => {
+      pendingNodeProof = withTempWorkspace(
+        { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "codex-prepared-home-" },
+        async ({ dir }) => {
+          const cwd = await realpath(dir);
+          const homeDir = path.join(cwd, "prepared-home");
+          await mkdir(homeDir);
+          await writeFile(path.join(homeDir, "prepared-cache"), "retained build state");
+          const frames = createNodeFrames(signal);
+          const command = createCodexNodeExecServerCommand();
+          const workspace = createManagedWorkspaceInvocation(cwd, homeDir);
+          const github = {
+            token: "synthetic-node-installation-token",
+            login: "worker-bot",
+            branch: "openclaw/session-worker",
+            host,
+            remoteUrl,
+          };
+          const invocation = command.handle(
+            JSON.stringify({
+              placement: workspace.placement,
+              authorization: "human-approved",
+              github,
+            }),
+            frames.io,
+            workspace.context,
           );
-          expect(observed).toMatchObject({ home: homeDir, cached: true });
-          if (!isRecord(observed) || typeof observed.codexHome !== "string") {
-            throw new Error("Pinned exec-server omitted its private Codex home");
+          void invocation.catch((error: unknown) => frames.controller.abort(error));
+          let isolatedCodexHome: string | undefined;
+          let isolatedGitHubProfile: string | undefined;
+          try {
+            await Promise.race([frames.ready, invocation]);
+            await frames.send({
+              id: 1,
+              method: "initialize",
+              params: { clientName: "openclaw-node" },
+            });
+            await readNodeResponse(frames, 1);
+            await frames.send({ method: "initialized", params: {} });
+            const script = `const fs = require('node:fs'); const path = require('node:path');
+process.stdout.write(JSON.stringify({home: process.env.HOME, codexHome: process.env.CODEX_HOME,
+  githubProfile: process.env.GH_CONFIG_DIR, githubHost: process.env.GH_HOST,
+  githubTokenEmpty: !process.env.GH_TOKEN,
+  enterpriseTokenEmpty: !process.env.GH_ENTERPRISE_TOKEN,
+  cached: fs.existsSync(path.join(process.env.HOME ?? '.', 'prepared-cache'))}) + '\\n');`;
+            await frames.send({
+              id: 2,
+              method: "process/start",
+              params: {
+                processId: "prepared-home",
+                argv: [process.execPath, "-e", script],
+                cwd: pathToFileURL(cwd).href,
+                env: {
+                  GH_CONFIG_DIR: "/synthetic-other-profile",
+                  GH_HOST: "other-host.example",
+                  GH_TOKEN: "synthetic-caller-token",
+                  GH_ENTERPRISE_TOKEN: "synthetic-caller-enterprise-token",
+                },
+                envPolicy: {
+                  inherit: "all",
+                  ignoreDefaultExcludes: true,
+                  exclude: [],
+                  set: {},
+                  includeOnly: ["HOME", "CODEX_HOME"],
+                },
+                tty: false,
+                pipeStdin: false,
+                arg0: null,
+              },
+            });
+            await readNodeResponse(frames, 2);
+            const notifications = await readNodeProcessNotifications(frames, "prepared-home", 3);
+            const output = notifications.find(
+              (message) => message.method === "process/output",
+            )?.params;
+            if (!isRecord(output) || typeof output.chunk !== "string") {
+              throw new Error("Pinned exec-server omitted process output");
+            }
+            const observed: unknown = JSON.parse(
+              Buffer.from(output.chunk, "base64").toString("utf8"),
+            );
+            expect(observed).toMatchObject({
+              home: homeDir,
+              cached: true,
+              githubHost: host,
+              githubTokenEmpty: true,
+              enterpriseTokenEmpty: true,
+            });
+            if (!isRecord(observed) || typeof observed.codexHome !== "string") {
+              throw new Error("Pinned exec-server omitted its private Codex home");
+            }
+            if (typeof observed.githubProfile !== "string") {
+              throw new Error("Pinned exec-server omitted its private GitHub profile");
+            }
+            isolatedGitHubProfile = observed.githubProfile;
+            const hosts = await readFile(path.join(isolatedGitHubProfile, "hosts.yml"), "utf8");
+            expect(hosts).toContain(host);
+            expect(hosts).toContain(github.token);
+            isolatedCodexHome = observed.codexHome;
+            expect(isolatedCodexHome).not.toBe(path.join(homeDir, ".codex"));
+          } finally {
+            frames.controller.abort(new Error("prepared-home proof completed"));
+            await expect(invocation).rejects.toBe(frames.io.signal.reason);
+            await command.onDisconnect?.();
+            expect(workspace.release).toHaveBeenCalledOnce();
           }
-          isolatedCodexHome = observed.codexHome;
-          expect(isolatedCodexHome).not.toBe(path.join(homeDir, ".codex"));
-        } finally {
-          frames.controller.abort(new Error("prepared-home proof completed"));
-          await expect(invocation).rejects.toBe(frames.io.signal.reason);
-          await command.onDisconnect?.();
-          expect(workspace.release).toHaveBeenCalledOnce();
-        }
-        expect(await readFile(path.join(homeDir, "prepared-cache"), "utf8")).toBe(
-          "retained build state",
-        );
-        if (!isolatedCodexHome) {
-          throw new Error("Private Codex home was not observed");
-        }
-        await expect(access(isolatedCodexHome)).rejects.toMatchObject({ code: "ENOENT" });
-      },
-    );
-    await pendingNodeProof;
-  });
+          expect(await readFile(path.join(homeDir, "prepared-cache"), "utf8")).toBe(
+            "retained build state",
+          );
+          if (!isolatedCodexHome) {
+            throw new Error("Private Codex home was not observed");
+          }
+          await expect(access(isolatedCodexHome)).rejects.toMatchObject({ code: "ENOENT" });
+          if (!isolatedGitHubProfile) {
+            throw new Error("Private GitHub profile was not observed");
+          }
+          await expect(access(isolatedGitHubProfile)).rejects.toMatchObject({ code: "ENOENT" });
+        },
+      );
+      await pendingNodeProof;
+    },
+  );
 
   it("relays the actual pinned Codex binary, isolates credentials, and removes its private home", async (context) => {
     const { signal } = context;

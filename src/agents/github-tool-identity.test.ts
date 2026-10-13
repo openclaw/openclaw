@@ -2,6 +2,7 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { parse as parseYaml } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveCommandEnv } from "../process/exec-spawn.js";
 import { clearGitHubCredentialVerificationCache } from "./github-oauth-client.js";
@@ -147,6 +148,96 @@ describe("GitHub tool identity", () => {
     expect(first).not.toBe(second);
     expect(resolveManagedGitHubAgentKey(" reviewer-one ")).toBe(first);
   });
+
+  it.each([
+    { identity: "native", managed: false },
+    { identity: "managed", managed: true },
+  ])("prepares exact secret scrubs for $identity identity", ({ managed }) => {
+    const identityConfig = managed
+      ? { tools: { github: { profileId: "ghp_99999999999999999999999999999999" } } }
+      : {};
+    const envScrub = prepareGitHubToolEnvironment({
+      config: identityConfig,
+      sourceConfig: {
+        gateway: {
+          controlUi: {
+            github: {
+              token: { source: "env", provider: "default", id: "PREVIEW_SERVICE_TOKEN" },
+            },
+          },
+        },
+      },
+      agentId: "main",
+    });
+    expect(envScrub.credentialScrubEnv).toEqual({
+      GITHUB_APP_PRIVATE_KEY: "",
+      ...(managed
+        ? {
+            GH_TOKEN: "",
+            GH_ENTERPRISE_TOKEN: "",
+            GITHUB_TOKEN: "",
+            GITHUB_ENTERPRISE_TOKEN: "",
+          }
+        : {}),
+      PREVIEW_SERVICE_TOKEN: "",
+    });
+    expect(envScrub.localIdentityEnv).toEqual(
+      managed ? { GH_CONFIG_DIR: expect.any(String), GH_HOST: "github.com" } : {},
+    );
+    expect(envScrub.excludedStoreNames).toEqual([]);
+
+    const storeScrub = prepareGitHubToolEnvironment({
+      config: identityConfig,
+      sourceConfig: {
+        gateway: {
+          controlUi: {
+            github: {
+              token: { source: "store", provider: "default", id: "PREVIEW_STORE_TOKEN" },
+            },
+          },
+        },
+      },
+      agentId: "main",
+    });
+    expect(storeScrub.credentialScrubEnv).toEqual({
+      GITHUB_APP_PRIVATE_KEY: "",
+      ...(managed
+        ? {
+            GH_TOKEN: "",
+            GH_ENTERPRISE_TOKEN: "",
+            GITHUB_TOKEN: "",
+            GITHUB_ENTERPRISE_TOKEN: "",
+          }
+        : {}),
+      PREVIEW_STORE_TOKEN: "",
+    });
+    expect(storeScrub.excludedStoreNames).toEqual(["PREVIEW_STORE_TOKEN"]);
+  });
+
+  it.each([
+    { source: "env", id: "GH_TOKEN", expected: { GH_TOKEN: "" } },
+    { source: "store", id: "GITHUB_TOKEN", expected: { GITHUB_TOKEN: "" } },
+  ] as const)(
+    "scrubs the App key and explicit $source preview ref $id",
+    ({ source, id, expected }) => {
+      const prepared = prepareGitHubToolEnvironment({
+        config: {},
+        sourceConfig: {
+          gateway: {
+            controlUi: {
+              github: {
+                token: { source, provider: "default", id },
+              },
+            },
+          },
+        },
+        agentId: "main",
+        env: { GH_TOKEN: "test-token", GITHUB_TOKEN: "fallback-token" },
+      });
+      expect(prepared.credentialScrubEnv).toEqual({ GITHUB_APP_PRIVATE_KEY: "", ...expected });
+      expect(prepared.excludedStoreNames).toEqual(source === "store" ? [id] : []);
+    },
+  );
 
   it("keeps the selected scope distinct from the effective agent override", async () => {
     const root = tempDirs.make("openclaw-github-scope-status-");
@@ -511,6 +602,58 @@ describe("GitHub tool identity", () => {
       true,
     );
     expect(JSON.stringify(status)).not.toContain("private diagnostics");
+  });
+
+  it("atomically refreshes the credential seen by an already-prepared stable profile", async () => {
+    vi.stubEnv("GITHUB_HOST", "fixture.ghe.com");
+    vi.stubEnv("GITHUB_API_BASE_URL", "https://api.fixture.ghe.com");
+    const root = tempDirs.make("openclaw-github-stable-refresh-");
+    const env = { OPENCLAW_STATE_DIR: root };
+    const profileId = "ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const config = { tools: { github: { profileId, kind: "oauth" as const } } };
+    const profileDir = resolveManagedGitHubProfileDir({
+      agentId: "main",
+      scope: "system",
+      profileId,
+      env,
+    });
+    await writeProfile(profileDir, "old-credential");
+    const admitted = prepareGitHubToolEnvironment({ config, agentId: "main", env });
+    vi.mocked(fetch).mockImplementation(
+      async () => new Response(JSON.stringify({ id: 202, login: "renamed-user" })),
+    );
+    await fs.writeFile(path.join(profileDir, "config.yml"), "version: 1\neditor: vim\n", {
+      mode: 0o600,
+    });
+    const account = await refreshManagedGitHubProfile({
+      profileDir,
+      token: "rotated-access-token",
+      expectedAccountId: 202,
+    });
+
+    expect(account.login).toBe("renamed-user");
+    expect(parseYaml(await fs.readFile(path.join(profileDir, "hosts.yml"), "utf8"))).toEqual({
+      "github.com": {
+        user: "renamed-user",
+        oauth_token: "rotated-access-token",
+        users: { "renamed-user": { oauth_token: "rotated-access-token" } },
+      },
+    });
+    expect(vi.mocked(fetch).mock.calls.map(([url]) => url)).toContain(
+      "https://api.github.com/user",
+    );
+    expect(vi.mocked(fetch).mock.calls.map(([url]) => url)).not.toContain(
+      "https://api.fixture.ghe.com/user",
+    );
+    expect(admitted.localIdentityEnv.GH_CONFIG_DIR).toBe(profileDir);
+    await expect(
+      fs.readFile(path.join(String(admitted.localIdentityEnv.GH_CONFIG_DIR), "hosts.yml"), "utf8"),
+    ).resolves.toContain("oauth_token: rotated-access-token");
+    expect(await fs.readFile(path.join(profileDir, "config.yml"), "utf8")).toBe(
+      "version: 1\neditor: vim\n",
+    );
+    const publication = await prepareGitHubPublicationIdentity({ config, agentId: "main", env });
+    expect(publication).toMatchObject({ profileId, account: { login: "renamed-user" } });
   });
 
   it.each(["verification", "staging"] as const)(

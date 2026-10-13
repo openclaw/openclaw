@@ -40,6 +40,7 @@ import {
   attachWorkerTurnExecutionIdentityStore,
   bindWorkerTurnOwner,
   bindWorkerTurnCapabilities,
+  bindWorkerTurnGitHubGrant,
   getWorkerTurnExecutionIdentityCapability,
 } from "./placement-turn-claim-events.js";
 import { createWorkerEnvironmentService, type WorkerEnvironmentService } from "./service.js";
@@ -719,5 +720,7 @@ export async function bindPlacementHarness(
     releaseSource,
     bindToolSurface: (surface: Parameters<typeof bindWorkerTurnCapabilities>[2]["toolSurface"]) =>
       bindWorkerTurnCapabilities(executionStore, claim, { toolSurface: surface }),
+    bindGitHubGrant: (grant: Parameters<typeof bindWorkerTurnGitHubGrant>[2]) =>
+      bindWorkerTurnGitHubGrant(executionStore, claim, grant),
   };
 }

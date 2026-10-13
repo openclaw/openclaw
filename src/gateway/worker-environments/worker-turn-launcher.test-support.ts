@@ -189,6 +189,7 @@ export async function setupWorkerTurnLauncherTest(): Promise<void> {
     fallbackEntry: entry,
     skipMaintenance: true,
   });
+  setRuntimeConfigSnapshot({ session: { store: sessionTarget.storePath } });
   await SessionManager.openAsync(sessionTarget);
   setRuntimeConfigSnapshot({ session: { store: sessionTarget.storePath } });
   sessionFile = SESSION_KEY;

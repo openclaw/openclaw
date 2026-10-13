@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { WORKER_GITHUB_REFRESH_PROTOCOL_FEATURE } from "../../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
   WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
   WORKER_GATEWAY_TOOL_METHODS,
@@ -14,6 +15,68 @@ const request = { generation: "surface", toolId: "tool", toolCallId: "call", arg
 
 describe("worker Gateway tool dispatch", () => {
   setupWorkerProtocolTestState();
+
+  it.each(["current", "legacy", "missing-feature", "revoked"] as const)(
+    "keeps GitHub refresh bound to the %s heartbeat owner",
+    async (mode) => {
+      vi.useFakeTimers();
+      const harness = attachHarness({
+        identity: {
+          ...ATTACHED_IDENTITY,
+          protocolFeatures: [
+            ...ATTACHED_IDENTITY.protocolFeatures,
+            ...(mode === "missing-feature" ? [] : [WORKER_GITHUB_REFRESH_PROTOCOL_FEATURE]),
+          ],
+        },
+      });
+      const snapshot = {
+        generation: 1,
+        token: "synthetic-heartbeat-token",
+        expiresAtMs: Date.now() + 3_600_000,
+      };
+      const assertCurrent = vi.fn();
+      harness.service.refreshGitHubBinding.mockImplementation(async () => {
+        await Promise.resolve();
+        if (mode === "revoked") {
+          harness.service.validateWorkerConnection.mockReturnValue("placement-mismatch");
+        }
+        return { ok: true, result: snapshot, assertCurrent };
+      });
+      harness.sendConnect();
+      await vi.advanceTimersByTimeAsync(0);
+      harness.sendRequest(
+        "worker.heartbeat",
+        { sentAtMs: 1, status: "busy", ...(mode === "legacy" ? {} : { githubGeneration: 0 }) },
+        "refresh",
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      if (mode === "current") {
+        expect(harness.responses).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              id: "refresh",
+              ok: true,
+              payload: expect.objectContaining({ github: snapshot }),
+            }),
+          ]),
+        );
+        expect(assertCurrent).toHaveBeenCalledOnce();
+      } else {
+        expect(JSON.stringify(harness.responses)).not.toContain(snapshot.token);
+        if (mode === "legacy") {
+          expect(harness.service.refreshGitHubBinding).not.toHaveBeenCalled();
+          expect(harness.responses).toEqual(
+            expect.arrayContaining([expect.objectContaining({ id: "refresh", ok: true })]),
+          );
+        } else {
+          expect(harness.close).toHaveBeenCalledWith(
+            1008,
+            mode === "missing-feature" ? "invalid-heartbeat" : "placement-mismatch",
+          );
+        }
+      }
+    },
+  );
 
   it("keeps control frames usable at capacity and retains invocations across socket loss", async () => {
     vi.useFakeTimers();

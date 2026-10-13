@@ -56,6 +56,28 @@ export async function runQaGatewayCliCommand(params: {
   stdin?: string;
 }): Promise<string> {
   params.lifetime.assertOpen();
+  const startedAt = performance.now();
+  const commandKind =
+    params.args[0] === "models" && params.args[1] === "auth"
+      ? "mock-auth"
+      : params.args[0] === "update" && params.args[1] === "repair"
+        ? params.args.includes("--help")
+          ? "repair-help"
+          : "repair"
+        : "fixture-command";
+  const reportPhase = (phase: string, succeeded?: boolean) => {
+    process.stderr.write(
+      "QA_CLI_PHASE " +
+        JSON.stringify({
+          commandKind,
+          phase,
+          succeeded,
+          elapsedMs: Math.round(performance.now() - startedAt),
+        }) +
+        "\n",
+    );
+  };
+  reportPhase("start");
   const hasStdin = params.stdin !== undefined;
   const child = spawn(params.executablePath, [...params.argsPrefix, ...params.args], {
     cwd: params.cwd,
@@ -68,12 +90,21 @@ export async function runQaGatewayCliCommand(params: {
   const owned = params.lifetime.register(child, null, "cli");
   const repair =
     params.args[0] === "update" && params.args[1] === "repair" && !params.args.includes("--help");
-  const result = readQaGatewayCliCommand(child, params.lifetime, owned, repair);
+  const result = readQaGatewayCliCommand(child, params.lifetime, owned, repair, (phase, status) =>
+    reportPhase(`${phase}:${status}`),
+  );
   params.lifetime.completeCli(owned, result);
   if (hasStdin) {
     child.stdin?.end(params.stdin);
   }
-  return await result;
+  let succeeded = false;
+  try {
+    const output = await result;
+    succeeded = true;
+    return output;
+  } finally {
+    reportPhase("settled", succeeded);
+  }
 }
 
 async function readQaGatewayCliCommand(
@@ -81,6 +112,7 @@ async function readQaGatewayCliCommand(
   lifetime: QaGatewayChildLifecycle,
   owned: ReturnType<QaGatewayChildLifecycle["register"]>,
   repair: boolean,
+  onRepairProgress: (phase: string, status: "in_progress" | "completed") => void,
 ): Promise<string> {
   const stdout = createQaChildOutputCapture();
   const stderr = createQaChildOutputTail();
@@ -114,9 +146,10 @@ async function readQaGatewayCliCommand(
   );
   let observingProgress = true;
   const observeProgress = repair
-    ? createQaRepairProgressObserver(() => {
+    ? createQaRepairProgressObserver((phase, status) => {
         if (observingProgress) {
           executionTimer.refresh();
+          onRepairProgress(phase, status);
         }
       })
     : undefined;

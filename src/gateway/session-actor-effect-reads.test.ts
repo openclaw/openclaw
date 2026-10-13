@@ -1,4 +1,8 @@
 import { afterEach, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { SessionActorAuthority } from "../config/sessions/session-actor-contract.js";
 import { createMemorySessionActorOwner } from "../config/sessions/session-actor-memory.js";
 import { runWithSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
@@ -9,7 +13,11 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import { resolveApprovalRequestChannelAccountId } from "../infra/approval-request-account-binding.js";
 import { withControlUiSessionPrSource } from "./control-ui-session-pr-source.js";
-import { readGitHubPublicationSession } from "./github-publication-availability.js";
+import {
+  prepareGitHubPublicationSession,
+  prepareGitHubPublicationWorkspaceOwner,
+  readGitHubPublicationSession,
+} from "./github-publication-availability.js";
 import { withSessionFileRoot } from "./server-methods/sessions-files.js";
 
 vi.mock("node:sqlite", async (importOriginal) => ({
@@ -29,6 +37,7 @@ const authority: SessionActorAuthority = { assertCurrent() {}, authorize() {} };
 const sessionKey = "agent:main:dashboard:incognito-effects";
 const owners: ReturnType<typeof createMemorySessionActorOwner>[] = [];
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   for (const owner of owners.splice(0)) {
     owner.close();
   }
@@ -153,4 +162,56 @@ it("revokes a retained PR publication source when its session actor closes", asy
   expect(() => assertCurrent()).not.toThrow();
   owner.closeSession(sessionKey);
   expect(() => assertCurrent()).toThrow();
+});
+
+it("retains publication metadata after leaving memory admission and refuses a closed actor", async () => {
+  const { owner, binding, patch } = await fixture();
+  const prepared = await runWithSessionActorStorage(binding, () =>
+    prepareGitHubPublicationSession(sessionKey, { agentId: "main" }),
+  );
+  try {
+    expect(prepared.readCurrent().entry?.sessionId).toBe("private-effects");
+    await patch({ lifecycleRevision: "replacement" });
+    expect(prepared.readCurrent().entry?.lifecycleRevision).toBe("replacement");
+    owner.closeSession(sessionKey);
+    expect(() => prepared.readCurrent()).toThrow();
+  } finally {
+    prepared.release();
+  }
+});
+
+it.each([
+  { activeWriterRunId: "replacement" },
+  { lifecycleRevision: "replacement" },
+  { archivedAt: 1 },
+  { repositoryWorkspaceId: "replacement" },
+])("revokes credential-only memory publication after metadata changes: %j", async (change) => {
+  const { binding, patch } = await fixture();
+  await patch({ activeWriterRunId: "writer" });
+  setRuntimeConfigSnapshot({});
+  const prepared = await runWithSessionActorStorage(binding, () =>
+    prepareGitHubPublicationWorkspaceOwner(
+      { sessionKey, sessionId: "private-effects", agentId: "main" },
+      {
+        allowMissingWorkspace: true,
+        sessionTarget: {
+          sessionKey,
+          sessionId: "private-effects",
+          agentId: "main",
+          storePath: binding.path,
+          expectedLifecycleRevision: "original",
+          expectedWriterRunId: "writer",
+        },
+      },
+    ),
+  );
+  try {
+    expect(prepared.current().kind).toBe("none");
+    expect((await prepared.read()).kind).toBe("none");
+    await patch(change);
+    expect(() => prepared.current()).toThrow("changed");
+  } finally {
+    prepared.release();
+  }
+  expect(() => prepared.current()).toThrow();
 });

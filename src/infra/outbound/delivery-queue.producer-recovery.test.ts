@@ -296,13 +296,16 @@ describe("exhausted delivery producer recovery", () => {
       throw new Error("Expected the live platform owner to renew");
     }
     // Fix only the host clock after real worker renewal and before recovery
-    // captures its deadline. Expire the detached view, not the authoritative row.
+    // captures its deadline. Expire the detached views, not the authoritative row,
+    // so both inventory filtering and the claimed reload reach the SQLite fence.
     vi.spyOn(Date, "now").mockReturnValue(renewedUntil - 1);
-    vi.spyOn(queueStorage, "loadUnfinishedDelivery").mockResolvedValueOnce({
-      ...snapshot,
-      availableAt: renewedUntil - 2,
-    });
+    const staleSnapshot = { ...snapshot, availableAt: renewedUntil - 2 };
+    vi.spyOn(queueStorage, "loadUnfinishedDeliveries").mockResolvedValueOnce([staleSnapshot]);
+    const reload = vi
+      .spyOn(queueStorage, "loadUnfinishedDelivery")
+      .mockResolvedValueOnce(staleSnapshot);
     await recover("startup");
+    expect(reload).toHaveBeenCalledWith(id, tmpDir(), expect.anything());
     expect(await queueStorage.loadPendingDelivery(id, tmpDir())).toMatchObject({
       recoveryState: "send_attempt_started",
       platformSendAttemptId: claimId,

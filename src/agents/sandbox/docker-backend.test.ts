@@ -582,14 +582,17 @@ describe("docker sandbox backend manager", () => {
     await expect(backend.finalizeExec?.(finalization)).resolves.toBeUndefined();
   });
 
-  it.skipIf(process.platform === "win32").each(["docker", "podman"] as const)(
-    "%s binds the current managed identity at launch without staging its token",
-    async (engine) => {
+  it.skipIf(process.platform === "win32").each([
+    { engine: "docker", host: "github.com" },
+    { engine: "podman", host: "ghe.example.test" },
+  ] as const)(
+    "$engine binds the current $host identity at launch without staging its token",
+    async ({ engine, host }) => {
       const root = tempDirs.make("github-sandbox-launch-");
       const profile = path.join(root, "profile");
       fs.mkdirSync(profile, { mode: 0o700 });
       const hosts = path.join(profile, "hosts.yml");
-      fs.writeFileSync(hosts, "github.com:\n  oauth_token: synthetic-before-launch\n", {
+      fs.writeFileSync(hosts, `${host}:\n  oauth_token: synthetic-before-launch\n`, {
         mode: 0o600,
       });
       fs.writeFileSync(path.join(root, "package.json"), '{"type":"commonjs"}\n');
@@ -600,8 +603,8 @@ const fs = require("node:fs");
 const args = process.argv.slice(2);
 process.stdout.write(JSON.stringify({
   args,
-  selected: process.env.GH_TOKEN === "synthetic-after-preparation",
-  cleared: !process.env.GITHUB_TOKEN,
+  selected: process.env.GH_TOKEN === "synthetic-after-preparation" && process.env.GH_ENTERPRISE_TOKEN === process.env.GH_TOKEN,
+  cleared: !process.env.GITHUB_TOKEN && !process.env.GITHUB_ENTERPRISE_TOKEN,
   staged: fs.readFileSync(args[args.indexOf("--env-file") + 1], "utf8"),
 }));
 `,
@@ -629,6 +632,7 @@ process.stdout.write(JSON.stringify({
           credentialScrubEnv: { GH_TOKEN: "", GITHUB_TOKEN: "", PREVIEW_TOKEN: "" },
           localIdentityEnv: managedGitHubIdentityEnvironment({
             profileDir: profile,
+            host,
             gitAuthor: { name: "Release Agent", email: "release@example.test" },
           }),
           excludedStoreNames: [],
@@ -666,7 +670,7 @@ process.stdout.write(JSON.stringify({
         return { code, stdout, stderr };
       };
       try {
-        fs.writeFileSync(hosts, "github.com:\n  oauth_token: synthetic-after-preparation\n");
+        fs.writeFileSync(hosts, `${host}:\n  oauth_token: synthetic-after-preparation\n`);
         const result = await execute();
         expect(result.code).toBe(0);
         expect(result.stderr).toBe("");
@@ -677,9 +681,14 @@ process.stdout.write(JSON.stringify({
           "--env",
           "GH_TOKEN",
           "--env",
+          "GH_ENTERPRISE_TOKEN",
+          "--env",
           "GITHUB_TOKEN",
+          "--env",
+          "GITHUB_ENTERPRISE_TOKEN",
         ]);
         expect(delivered.staged).toContain("GH_CONFIG_DIR=/openclaw/github\n");
+        expect(delivered.staged).toContain(`GH_HOST=${host}\n`);
         expect(delivered.staged).toContain("GIT_AUTHOR_NAME=Release Agent\n");
         expect(delivered.staged).toContain("GIT_AUTHOR_EMAIL=release@example.test\n");
         expect(delivered.staged).toContain("GH_TOKEN=\n");

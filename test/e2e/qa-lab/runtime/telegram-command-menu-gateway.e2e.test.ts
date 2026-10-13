@@ -114,6 +114,15 @@ async function settleCleanup(...cleanups: Array<() => Promise<void>>) {
 }
 test("registers pressure-prioritized Telegram menus through a real Gateway", async () => {
   const calls: Array<{ token: string; body: Body }> = [];
+  const startedAt = performance.now();
+  const reportPhase = (phase: string) => {
+    process.stderr.write(
+      "TELEGRAM_MENU_PHASE " +
+        JSON.stringify({ phase, elapsedMs: Math.round(performance.now() - startedAt) }) +
+        "\n",
+    );
+  };
+  reportPhase("fixture-start");
   const polled = new Set<string>();
   let retryRejected = false;
   const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
@@ -183,9 +192,11 @@ test("registers pressure-prioritized Telegram menus through a real Gateway", asy
             customCommands: commands,
           });
           mock = await startQaMockOpenAiServer();
+          reportPhase("gateway-start");
           await gatewayOwner.start({
             repoRoot,
             command: createQaPreparedRepoCliCommand(repoRoot),
+            onListening: () => reportPhase("gateway-listening"),
             providerBaseUrl: `${mock.baseUrl}/v1`,
             transportBaseUrl: apiRoot,
             transport: {
@@ -234,6 +245,7 @@ test("registers pressure-prioritized Telegram menus through a real Gateway", asy
               return cfg;
             },
           });
+          reportPhase("gateway-ready");
           const scoped = (token: string, group = false, languageCode?: string) =>
             calls.filter((call) => {
               const isGroup = call.body.scope?.type === "all_group_chats";
@@ -260,6 +272,7 @@ test("registers pressure-prioritized Telegram menus through a real Gateway", asy
               { interval: 50, timeout: 30_000 },
             )
             .toBe(true);
+          reportPhase("menus-observed");
           expect(payload(COUNT_TOKEN)).toEqual(countCustom);
           const textPayload = payload(TEXT_TOKEN);
           expect(textPayload.length).toBeLessThan(100);
@@ -316,12 +329,19 @@ test("registers pressure-prioritized Telegram menus through a real Gateway", asy
                 (command) => Object.keys(command).toSorted().join(",") === "command,description",
               ),
           ).toBe(true);
+          reportPhase("assertions-complete");
         } finally {
+          reportPhase("cleanup-start");
           await settleCleanup(
-            async () => await stopQaGatewayFixture(gatewayOwner),
+            async () => {
+              await stopQaGatewayFixture(gatewayOwner);
+              reportPhase("gateway-stopped");
+            },
             async () => await mock?.stop(),
           );
+          reportPhase("cleanup-complete");
         }
       }),
   );
+  reportPhase("api-closed");
 }, 120_000);

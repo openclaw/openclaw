@@ -52,6 +52,7 @@ import {
 // mock-isolation: This fixture clones a local Git origin without GitHub credentials.
 vi.mock("./worker-github-binding.js", () => ({
   prepareGitHubPublicationFact: async () => undefined,
+  prepareWorkerGitHubBindingGrant: async () => undefined,
 }));
 
 describe("repository workspace result ownership", () => {

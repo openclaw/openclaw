@@ -8549,7 +8549,6 @@
 ["src/node-host/runner.test-support.ts","../infra/path-env.js","10c329f76fc97497015b5bb1aec4879d3d93bb415602bd6744c4aa05fc139276",1]
 ["src/node-host/runner.test-support.ts","./config.js","9cc3fc62eea02b22ab3344e94e774888a3e18ac170cefeac8a919a94bf91c9f8",1]
 ["src/node-host/runner.test-support.ts","./mcp.js","03e7e8c172696ec5860baed855f2687b520e4d27a1bdc2c29ae9266ff9575932",1]
-["src/node-host/runner.test-support.ts","./plugin-node-host.js","c02c2778ff9df03ae141c0eeb40e54ae03f7ef75f41b1dda8aa9959ab52a5813",1]
 ["src/node-host/runner.test-support.ts","./skills.js","a997b6494c021e7a1ec84d684075bdefae07d2e8f8292a01243eb2964ebd0382",1]
 ["src/node-host/runner.test-support.ts","./startup-state-readiness.js","05062cb72d6099c1fcca1444463f552980b4b2fadcb68ba698c9bdfb3dc02648",1]
 ["src/node-host/runtime.commands.test.ts","../infra/path-env.js","a9614f85c0216d8b45f7ff68922336716a93b133a7108595edc8d57cf3c74696",1]

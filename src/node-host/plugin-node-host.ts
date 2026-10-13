@@ -77,6 +77,7 @@ export function listRegisteredNodeHostCapsAndCommands(
   return withPluginRuntimeRegistryScope(registry, () => {
     const caps = new Set<string>();
     const commands = new Set<string>();
+    const commandFeatures: Record<string, string[]> = {};
     let computerUse: ComputerUseCapabilityDescriptor | undefined;
     const nodePluginTools = new Map<string, NodePluginToolDescriptor>();
     for (const entry of registry?.nodeHostCommands ?? []) {
@@ -92,6 +93,9 @@ export function listRegisteredNodeHostCapsAndCommands(
         caps.add(entry.command.cap);
       }
       commands.add(entry.command.command);
+      if (entry.command.features?.length) {
+        commandFeatures[entry.command.command] = [...new Set(entry.command.features)].toSorted();
+      }
       if (!options.commandAllowlist && entry.command.computerUse) {
         computerUse = parseComputerUseCapabilityDescriptor(entry.command.computerUse(context));
       }
@@ -101,6 +105,7 @@ export function listRegisteredNodeHostCapsAndCommands(
       }
     }
     return {
+      ...(Object.keys(commandFeatures).length ? { commandFeatures } : {}),
       caps: [...caps].toSorted((left, right) => left.localeCompare(right)),
       commands: [...commands].toSorted((left, right) => left.localeCompare(right)),
       ...(computerUse ? { computerUse } : {}),

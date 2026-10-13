@@ -978,6 +978,9 @@
       ],
       "openclaw/plugin-sdk/codex-client-version-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/codex-client-version-runtime.d.ts"
+      ],
+      "openclaw/plugin-sdk/github-worker-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/github-worker-runtime.d.ts"
       ]
     }
   }

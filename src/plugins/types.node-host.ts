@@ -54,6 +54,8 @@ export type OpenClawPluginNodeHostCommandContext = {
 type OpenClawPluginNodeHostCommandBase = {
   command: string;
   cap?: string;
+  /** Optional command behavior; declarations never grant command or pairing permission. */
+  features?: readonly string[];
   dangerous?: boolean;
   /** Settle node-local startup before the initial capability declaration; registration stays synchronous. */
   prepare?: (context: OpenClawPluginNodeHostCommandAvailabilityContext) => Promise<void> | void;

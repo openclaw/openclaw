@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
-const DEFAULT_GITHUB_HOST = "github.com";
-const DEFAULT_GITHUB_API_BASE_URL = "https://api.github.com";
+export const GITHUB_PUBLIC_HOST = "github.com";
+export const GITHUB_PUBLIC_API_BASE_URL = "https://api.github.com";
 
 export const CLEARED_GITHUB_CREDENTIALS = {
   GH_TOKEN: "",
@@ -21,7 +21,7 @@ export function withGitHubToken(env: NodeJS.ProcessEnv, token: string): NodeJS.P
 }
 
 export function resolveConfiguredGitHubHost(config?: OpenClawConfig | null): string {
-  const host = config?.gateway?.github?.host?.trim().toLowerCase() || DEFAULT_GITHUB_HOST;
+  const host = config?.gateway?.github?.host?.trim().toLowerCase() || GITHUB_PUBLIC_HOST;
   if (!/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/u.test(host) || host.includes("..")) {
     throw new Error("gateway.github.host must be a hostname");
   }
@@ -29,7 +29,7 @@ export function resolveConfiguredGitHubHost(config?: OpenClawConfig | null): str
 }
 
 export function resolveConfiguredGitHubApiBaseUrl(config?: OpenClawConfig | null): string {
-  const raw = config?.gateway?.github?.apiBaseUrl?.trim() || DEFAULT_GITHUB_API_BASE_URL;
+  const raw = config?.gateway?.github?.apiBaseUrl?.trim() || GITHUB_PUBLIC_API_BASE_URL;
   const parsed = new URL(raw);
   if (
     parsed.protocol !== "https:" ||

@@ -24,6 +24,7 @@ import type { WorkerGitHubLaunchBinding } from "../../worker/launch-descriptor.j
 import type { PreparedWorkerComputer } from "./computer-transport.js";
 import * as skillTransfer from "./skill-resource-transfer.js";
 import { WorkerRunnerCapacityError, type WorkerTunnelHandle } from "./tunnel-contract.js";
+import type { WorkerGitHubBindingGrant } from "./worker-github-binding.js";
 import {
   createWorkerTurnTunnel,
   ENVIRONMENT_ID,
@@ -51,6 +52,15 @@ import {
 
 afterAll(closeStateDatabaseForTest);
 
+const prepareGitHubBinding = vi.hoisted(() => vi.fn());
+// mock-isolation: Launch tests own grant preparation and revocation without real GitHub credentials.
+vi.mock("./worker-github-binding.js", () => ({
+  prepareWorkerGitHubBindingGrant: prepareGitHubBinding,
+  revokeWorkerGitHubBindingGrant: async (grant: WorkerGitHubBindingGrant | undefined) => {
+    await grant?.revoke();
+  },
+}));
+
 const readGitHubFact = vi.hoisted(() => vi.fn());
 // mock-isolation: Worker launches consume facts without starting identity discovery.
 vi.mock("../github-publication-discovery.js", () => ({
@@ -61,6 +71,7 @@ describe("worker launch capabilities", () => {
   beforeEach(setupWorkerTurnLauncherTest);
   beforeEach(() => {
     readGitHubFact.mockReset().mockReturnValue({ available: false });
+    prepareGitHubBinding.mockReset().mockResolvedValue(undefined);
   });
   afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
 
@@ -79,9 +90,22 @@ describe("worker launch capabilities", () => {
         remoteUrl: "https://github.com/owner/repo.git",
         gitAuthor: { name: "Shared Bot", email: "shared@example.test" },
       };
-      readGitHubFact.mockReturnValue(
-        available ? { available: true, github } : { available: false },
+      let current = true;
+      const revoke = vi.fn(async () => {});
+      prepareGitHubBinding.mockResolvedValue(
+        available
+          ? {
+              binding: github,
+              revoke,
+              assertCurrent: () => {
+                if (!current) {
+                  throw new Error("GitHub identity changed before worker launch; retry the turn.");
+                }
+              },
+            }
+          : undefined,
       );
+      readGitHubFact.mockReturnValue({ available });
       const launchTurn = vi.fn<NonNullable<WorkerTunnelHandle["launchTurn"]>>(async ({ plan }) => {
         if (available) {
           expect(plan.assignment.github).toEqual(github);
@@ -95,7 +119,7 @@ describe("worker launch capabilities", () => {
         measureLaunchTurn: (plan, claim) => {
           if (revoked) {
             expect(plan.assignment.github).toEqual(github);
-            readGitHubFact.mockReturnValue({ available: true });
+            current = false;
           }
           return measureLaunchTurn(plan, claim);
         },
@@ -125,6 +149,7 @@ describe("worker launch capabilities", () => {
         await expect(execution).rejects.toBeInstanceOf(WorkerRunnerCapacityError);
         expect(launchTurn).toHaveBeenCalledOnce();
       }
+      expect(revoke).toHaveBeenCalledTimes(available ? 1 : 0);
     },
   );
 

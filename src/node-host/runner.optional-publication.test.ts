@@ -17,11 +17,25 @@ function getPublications(client: CapturedClient, method = NODE_PLUGIN_TOOLS_UPDA
   return client.request.mock.calls.filter(([calledMethod]) => calledMethod === method);
 }
 
-function receiveHello(options: GatewayClientOptions | undefined, protocol = 4) {
+function receiveHello(
+  options: GatewayClientOptions | undefined,
+  protocol = 4,
+  capabilities: string[] = [],
+) {
   options?.onHelloOk?.({
+    type: "hello-ok",
     protocol,
-    features: { methods: [], events: [] },
-  } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
+    server: { version: "test", connId: "node-publication-test" },
+    features: { methods: [], events: [], capabilities },
+    snapshot: {
+      presence: [],
+      health: {},
+      stateVersion: { presence: 0, health: 0 },
+      uptimeMs: 0,
+    },
+    auth: { role: "node", scopes: [] },
+    policy: { maxPayload: 1_000_000, maxBufferedBytes: 1_000_000, tickIntervalMs: 60_000 },
+  });
 }
 
 async function settlePublications() {
@@ -104,6 +118,33 @@ async function withReadyNodeHost(
 describe("runNodeHost connection and optional publications", () => {
   beforeEach(resetRunnerTestState);
   afterEach(() => vi.restoreAllMocks());
+
+  it.each([false, true])(
+    "publishes command features only to a supporting Gateway: %s",
+    async (supported) => {
+      mocks.nodeHostCommands = ["test.node"];
+      mocks.commandFeatures = { "test.node": ["profile-refresh"] };
+      await withReadyNodeHost(async ({ client, options }) => {
+        client.request.mockClear();
+        receiveHello(options, 4, supported ? ["node-command-features"] : []);
+        await Promise.resolve();
+        await Promise.resolve();
+        const expected = [
+          "node.event",
+          expect.objectContaining({
+            event: "node.command.features",
+            payloadJSON: JSON.stringify({ features: mocks.commandFeatures }),
+          }),
+        ];
+        if (supported) {
+          expect(client.request.mock.calls).toEqual(expect.arrayContaining([expected]));
+        } else {
+          expect(client.request.mock.calls).not.toEqual(expect.arrayContaining([expected]));
+        }
+        expect(options?.caps).not.toContain("profile-refresh");
+      });
+    },
+  );
 
   it("exits after three identical permanent Gateway upgrade rejections", async () => {
     await withReadyNodeHost(async ({ client, options }) => {

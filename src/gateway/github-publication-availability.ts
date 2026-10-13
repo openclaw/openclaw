@@ -30,6 +30,14 @@ import {
   type PreparedRepositoryWorkspace,
 } from "../state/session-repository-workspaces.js";
 import { requestCurrentGitHubOAuthRefresh } from "./github-oauth-lifecycle.js";
+import type {
+  ExpectedWorktree,
+  PreparedGitHubPublicationWorkspaceOwner,
+  PublicationSessionIdentity,
+  PublicationSessionRead,
+  PublicationWorkspaceOptions,
+} from "./github-publication-availability.contract.js";
+import { PUBLICATION_SESSION_FIELDS } from "./github-publication-availability.contract.js";
 import {
   GitHubPublicationWorkspaceChangedError,
   GitHubPublicationSessionChangedError,
@@ -42,6 +50,7 @@ import { resolveSessionStoreIdentity } from "./session-store-key.js";
 import { findCanonicalStoreMatch } from "./session-utils-store-selection.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
+export type { PublicationSessionIdentity } from "./github-publication-availability.contract.js";
 
 // Discovery only: publication resolves Git afresh. Registry/lifecycle guards retire facts early.
 const worktreeTargets = new LruCache<{ expiresAt: number; assertCurrent: () => void }>(256);
@@ -80,13 +89,17 @@ export function currentGitHubPublicationConfig() {
 
 export async function prepareCurrentGitHubPublicationIdentity(
   agentId: string,
+  assertCurrent?: () => void,
 ): Promise<PreparedGitHubPublicationIdentity> {
+  assertCurrent?.();
   await requestCurrentGitHubOAuthRefresh(agentId);
+  assertCurrent?.();
   const snapshot = publicationConfigSnapshot();
   return await prepareGitHubPublicationIdentity({
     config: snapshot.config,
     sourceConfig: snapshot.sourceConfig,
     agentId,
+    assertCurrent,
   });
 }
 
@@ -115,18 +128,6 @@ export function matchesCurrentGitHubPublicationIdentity(params: {
     ...params,
   });
 }
-
-export type PublicationSessionIdentity = {
-  sessionId: string;
-  sessionKey: string;
-  agentId: string;
-  lifecycleRevision?: string | null;
-};
-type ExpectedWorktree = { worktreeId: string; repositoryFingerprint: string; branch: string };
-type PublicationSessionRead = Pick<
-  ReturnType<typeof loadGatewaySessionEntryReadOnly>,
-  "agentId" | "canonicalKey" | "storePath" | "entry"
->;
 
 /** Native incognito and deprecated SDK callers retain their synchronous read contract. */
 export function readGitHubPublicationSession(
@@ -171,25 +172,28 @@ export async function prepareGitHubPublicationSession(
     fields?: readonly (keyof NonNullable<PublicationSessionRead["entry"]>)[];
   } = {},
 ) {
-  const fields =
-    options.fields ??
-    ([
-      "sessionId",
-      "lifecycleRevision",
-      "archivedAt",
-      "repositoryWorkspaceId",
-      "worktree",
-      "owner",
-      "createdActor",
-      "visibility",
-      "incognito",
-    ] as const);
+  const fields = [
+    ...(options.fields ?? PUBLICATION_SESSION_FIELDS),
+    ...(options.target?.expectedWriterRunId !== undefined ? (["activeWriterRunId"] as const) : []),
+  ];
   let retained: ReturnType<typeof retainPreparedSessionEntryPredicate> | undefined;
   let active = true;
   const scope = { sessionKey, agentId: options.agentId, storePath: options.target?.storePath };
-  let native = Boolean(
-    getSessionActorStorageBinding(scope) || captureIncognitoSessionBinding(scope),
-  );
+  const memory = getSessionActorStorageBinding(scope);
+  const binding = memory ? undefined : captureIncognitoSessionBinding(scope);
+  const boundOwner = memory ?? binding?.actor;
+  const metadata = boundOwner ? captureSessionEntryMetadataRead(scope) : undefined;
+  // Grant callbacks can outlive the admission async context; retain its exact actor authority.
+  const readBoundSession =
+    boundOwner && metadata
+      ? (): PublicationSessionRead => ({
+          canonicalKey: sessionKey,
+          agentId: boundOwner.agentId,
+          storePath: boundOwner.path,
+          entry: metadata.readCurrent(),
+        })
+      : undefined;
+  let native = Boolean(readBoundSession);
   const retain = (
     databaseIdentity: string,
     key: string,
@@ -205,8 +209,8 @@ export async function prepareGitHubPublicationSession(
   };
   let loaded: PublicationSessionRead;
   try {
-    if (native) {
-      loaded = readGitHubPublicationSession(sessionKey, options);
+    if (readBoundSession) {
+      loaded = readBoundSession();
     } else if (options.target?.storePath && options.target.agentId) {
       const storePath = options.target.storePath;
       const agentId = options.target.agentId;
@@ -255,7 +259,11 @@ export async function prepareGitHubPublicationSession(
       if (!active || (retained && !retained.isCurrent())) {
         throw new GitHubPublicationSessionChangedError();
       }
-      return native ? readGitHubPublicationSession(sessionKey, options) : loaded;
+      return readBoundSession
+        ? readBoundSession()
+        : native
+          ? readGitHubPublicationSession(sessionKey, options)
+          : loaded;
     },
     release() {
       active = false;
@@ -397,11 +405,9 @@ export async function readGitHubPublicationWorktreeOwner(
 }
 
 function resolveGitHubPublicationWorkspaceOwner(
-  params: PublicationSessionIdentity,
+  loaded: PublicationSessionOwner,
   prepared: PreparedRepositoryWorkspace | undefined,
-  session: Awaited<ReturnType<typeof prepareGitHubPublicationSession>>,
 ) {
-  const loaded = requirePublicationSessionOwner(params, session.readCurrent());
   const workspaceId = loaded.entry.repositoryWorkspaceId;
   if (!workspaceId) {
     throw new GitHubPublicationSessionChangedError();
@@ -410,17 +416,36 @@ function resolveGitHubPublicationWorkspaceOwner(
   if (
     !workspace ||
     workspace.workspaceId !== workspaceId ||
-    workspace.agentId !== params.agentId ||
-    workspace.sessionKey !== params.sessionKey
+    workspace.agentId !== loaded.agentId ||
+    workspace.sessionKey !== loaded.canonicalKey
   ) {
     throw new Error("GitHub publication session repository owner changed.");
   }
   return { kind: "repository" as const, loaded, workspace };
 }
 
+type GitHubPublicationWorkspace =
+  | ReturnType<typeof resolveGitHubPublicationWorkspaceOwner>
+  | ({ kind: "worktree" } & Awaited<ReturnType<ReturnType<typeof preparePublicationWorktreeRead>>>);
+type GitHubCredentialOnlyWorkspace = {
+  kind: "none";
+  loaded: PublicationSessionOwner;
+};
+export function prepareGitHubPublicationWorkspaceOwner(
+  params: PublicationSessionIdentity,
+  options?: PublicationWorkspaceOptions,
+): Promise<PreparedGitHubPublicationWorkspaceOwner<GitHubPublicationWorkspace>>;
+export function prepareGitHubPublicationWorkspaceOwner(
+  params: PublicationSessionIdentity,
+  options: PublicationWorkspaceOptions & { allowMissingWorkspace: true },
+): Promise<
+  PreparedGitHubPublicationWorkspaceOwner<
+    GitHubPublicationWorkspace | GitHubCredentialOnlyWorkspace
+  >
+>;
 export async function prepareGitHubPublicationWorkspaceOwner(
   params: PublicationSessionIdentity,
-  options: { sessionTarget?: AgentRunSessionTarget; assertCurrent?: () => void } = {},
+  options: PublicationWorkspaceOptions & { allowMissingWorkspace?: true } = {},
 ) {
   const context = captureOpenClawStateWorkerContext();
   const assertCurrent = () => {
@@ -428,7 +453,7 @@ export async function prepareGitHubPublicationWorkspaceOwner(
     options.assertCurrent?.();
   };
   assertCurrent();
-  const target = options.sessionTarget;
+  const target = options.sessionTarget ? { ...options.sessionTarget } : undefined;
   if (target) {
     const logical =
       target.sessionKey &&
@@ -466,7 +491,7 @@ export async function prepareGitHubPublicationWorkspaceOwner(
     }
     const loaded = requirePublicationSessionOwner(params, snapshot);
     const workspaceId = loaded.entry.repositoryWorkspaceId;
-    if (!workspaceId && !loaded.entry.worktree?.id) {
+    if (!options.allowMissingWorkspace && !workspaceId && !loaded.entry.worktree?.id) {
       throw new GitHubPublicationSessionChangedError();
     }
     const identity = { ...params, lifecycleRevision: loaded.entry.lifecycleRevision ?? null };
@@ -476,23 +501,46 @@ export async function prepareGitHubPublicationWorkspaceOwner(
       : undefined;
     const validate = <T extends { loaded: PublicationSessionOwner }>(owner: T) => {
       assertCurrent();
-      if (owner.loaded.entry.repositoryWorkspaceId !== workspaceId) {
+      if (
+        owner.loaded.storePath !== loaded.storePath ||
+        owner.loaded.entry.repositoryWorkspaceId !== workspaceId ||
+        (target?.expectedWriterRunId !== undefined &&
+          owner.loaded.entry.activeWriterRunId !== target.expectedWriterRunId)
+      ) {
         throw new GitHubPublicationSessionChangedError();
       }
       return owner;
     };
-    const read = async () =>
-      validate(
-        workspaceId
-          ? resolveGitHubPublicationWorkspaceOwner(identity, prepared, session)
-          : { kind: "worktree" as const, ...(await readWorktree()) },
-      );
+    const currentSession = () =>
+      validate({ loaded: requirePublicationSessionOwner(identity, session.readCurrent()) }).loaded;
+    const currentRepository = () =>
+      validate(resolveGitHubPublicationWorkspaceOwner(currentSession(), prepared));
+    let worktreeWitness: Awaited<ReturnType<typeof readWorktree>> | undefined;
+    const current = () => {
+      const sessionOwner = currentSession();
+      if (workspaceId) {
+        return validate(resolveGitHubPublicationWorkspaceOwner(sessionOwner, prepared));
+      }
+      if (options.allowMissingWorkspace && !sessionOwner.entry.worktree) {
+        return validate({ kind: "none" as const, loaded: sessionOwner });
+      }
+      if (!worktreeWitness) {
+        throw new GitHubPublicationSessionChangedError();
+      }
+      const owner = worktreeWitness.assertCurrent();
+      return validate({ kind: "worktree" as const, ...worktreeWitness, ...owner });
+    };
+    const read = async () => {
+      if (!workspaceId && currentSession().entry.worktree) {
+        worktreeWitness = await readWorktree();
+      }
+      return current();
+    };
     return {
       initial: await read(),
       read,
-      // Only repository owners expose synchronous current facts; worktrees use the worker reader.
-      currentRepository: () =>
-        validate(resolveGitHubPublicationWorkspaceOwner(identity, prepared, session)),
+      current,
+      currentRepository,
       release: () => session.release(),
     };
   } catch (error) {
@@ -514,6 +562,9 @@ export function sameGitHubPublicationWorkspace(
 ): boolean {
   if (first.loaded.entry?.lifecycleRevision !== current.loaded.entry?.lifecycleRevision) {
     return false;
+  }
+  if (first.kind === "none" || current.kind === "none") {
+    return first.kind === current.kind;
   }
   return first.kind === "repository"
     ? current.kind === "repository" &&
@@ -638,7 +689,10 @@ export async function hasSupportedGitHubPublicationTarget(
   if (workspaceId) {
     const prepared = await getSessionRepositoryWorkspaceStore().prepare(workspaceId);
     assertCurrent();
-    const owner = resolveGitHubPublicationWorkspaceOwner(session, prepared, sessionRead);
+    const owner = resolveGitHubPublicationWorkspaceOwner(
+      requirePublicationSessionOwner(session, sessionRead.readCurrent()),
+      prepared,
+    );
     return isSupportedGitHubOrigin(owner.workspace.url);
   }
   if (!initial.entry.worktree?.id) {

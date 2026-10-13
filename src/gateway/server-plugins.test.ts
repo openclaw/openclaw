@@ -34,7 +34,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { createInternalAgentTurnFacade } from "./agent-turn/internal-facade.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
-import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
+import { registerNodeDuplexAuthoritySuite } from "./server-plugins.node-duplex-authority.suite.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-plugin-restart-owner-");
 
@@ -1311,6 +1311,20 @@ describe("loadGatewayPlugins", () => {
       });
     },
   );
+
+  registerNodeDuplexAuthoritySuite(() => {
+    const registry = createDuplexPluginRegistry();
+    loadOpenClawPlugins.mockReturnValue(registry);
+    loadStartupPluginFixture();
+    return {
+      registry,
+      gatewayRequestScopeModule,
+      setGatewayContext: (context) => serverPluginsModule.setFallbackGatewayContext(context),
+      setDispatch: (handler) => handleGatewayRequest.mockImplementationOnce(handler),
+      createRuntime: createRuntimeFromLastGatewayLoad,
+      getLastDispatchedParams,
+    };
+  });
 
   test("waits for framed readiness and carries binary messages through canonical invoke transport", async () => {
     const registry = createDuplexPluginRegistry();

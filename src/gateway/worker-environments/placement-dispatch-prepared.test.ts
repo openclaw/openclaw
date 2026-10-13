@@ -46,7 +46,10 @@ import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { requireWorkspaceResultGit } from "./workspace-result-git.js";
 
 // mock-isolation: Workspace startup supplies a synthetic identity without credential discovery.
-vi.mock("./worker-github-binding.js", () => ({ prepareGitHubPublicationFact: vi.fn() }));
+vi.mock("./worker-github-binding.js", () => ({
+  prepareGitHubPublicationFact: vi.fn(),
+  prepareWorkerGitHubBindingGrant: vi.fn(),
+}));
 
 vi.mock("../../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/config.js")>()),

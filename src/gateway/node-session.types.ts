@@ -30,6 +30,7 @@ export type NodeSession = {
   declaredCaps: string[];
   sessionCapsCeiling?: string[];
   caps: string[];
+  commandFeatures?: Record<string, string[]>;
   declaredCommands: string[];
   sessionCommandsCeiling?: string[];
   commands: string[];

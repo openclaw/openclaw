@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { resolveEmbeddedSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
 import { createEmbeddedRunLaneController } from "../../agents/embedded-agent-runner/run/lane-controller.js";
@@ -28,6 +28,7 @@ import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import { canRedispatchFailedWorkerPlacement } from "./session-placement-lifecycle.js";
 import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
 import { createWorkerPlacementRedispatch } from "./worker-placement-redispatch.js";
+import * as workerGitHubBinding from "./worker-github-binding.js";
 import {
   ENVIRONMENT_ID,
   OWNER_EPOCH,
@@ -307,6 +308,7 @@ describe("worker pre-launch claim recovery", () => {
     "workspace resolution",
     "workspace queue",
     "execution-start publication",
+    "GitHub binding",
     "workspace mutation",
     "dispatch",
     "uncertain dispatch",
@@ -529,6 +531,11 @@ describe("worker pre-launch claim recovery", () => {
         }
       },
     };
+    const lateGrantRevoked = createDeferred();
+    const revokeLateGrant = vi.fn(async () => lateGrantRevoked.resolve());
+    let github:
+      | MockInstance<typeof workerGitHubBinding.prepareWorkerGitHubBindingGrant>
+      | undefined;
     let blocked: Promise<unknown> | undefined;
     let successor: Promise<unknown> | undefined;
     let recovery: Promise<unknown> | undefined;
@@ -542,6 +549,18 @@ describe("worker pre-launch claim recovery", () => {
       expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
       expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       blockSecond = true;
+      if (stage === "GitHub binding") {
+        github = vi
+          .spyOn(workerGitHubBinding, "prepareWorkerGitHubBindingGrant")
+          .mockImplementationOnce(async () => {
+            entered.resolve();
+            await resume.promise;
+            return {
+              binding: { token: "synthetic-late-token", login: "fixture" },
+              revoke: revokeLateGrant,
+            };
+          });
+      }
       if (stage === "workspace queue") {
         queuedBlocker = coordinator.run(ENVIRONMENT_ID, () => resume.promise);
       }
@@ -652,6 +671,10 @@ describe("worker pre-launch claim recovery", () => {
       const replacement = placements.get(SESSION_ID)?.turnClaim;
       expect(replacement?.runId).toBe("successor-third");
       resume.resolve();
+      if (stage === "GitHub binding") {
+        await lateGrantRevoked.promise;
+        expect(revokeLateGrant).toHaveBeenCalledOnce();
+      }
       expect(await outcome).toBeInstanceOf(Error);
       if (!dispatched) {
         expect(await outcome).toMatchObject({ name: "AbortError" });
@@ -665,6 +688,7 @@ describe("worker pre-launch claim recovery", () => {
       resume.resolve();
       finishSuccessor.resolve();
       await Promise.allSettled([blocked, successor, queuedBlocker, recovery]);
+      github?.mockRestore();
       operation.complete();
       first.preparedRunAdmission.close();
       second.preparedRunAdmission.close();
