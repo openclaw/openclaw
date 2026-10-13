@@ -8,7 +8,8 @@ import {
 } from "../infra/sqlite-clean-close-seal.js";
 
 const inputs = vi.hoisted(() => ({ version: "2026.10.1", commit: "first", build: "first" }));
-vi.mock("../version.js", () => ({
+vi.mock("../version.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../version.js")>()),
   get VERSION() {
     return inputs.version;
   },
