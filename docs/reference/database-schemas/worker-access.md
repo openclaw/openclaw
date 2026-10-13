@@ -6363,6 +6363,12 @@ event still commits before the runtime advances; bulk transcript imports reuse
 their transaction-local append cursor. Root checks read metadata without saved
 prompt payloads. No cross-transaction root cache is introduced.
 
+Transcript rewrite preparation and publication copy mutable view containers while
+retaining already-owned string values, so old tool results and image payloads do
+not require another full byte copy on the main thread. Prepared views remain
+independently mutable. Opaque structured-cloneable SDK data retains native snapshot
+semantics. Worker write ordering, atomic publication, and stored bytes are unchanged.
+
 Append receipts read active identity, projection readiness, and the latest sequence
 in one transaction-local query. A clean latest message shares that result with
 the visible-tail consumer; native reentry or pending-input mutations require a
