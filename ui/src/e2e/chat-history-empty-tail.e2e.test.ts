@@ -39,7 +39,7 @@ suite.define(() => {
       await suite.withPage({ viewport: { width: 1280, height } }, async ({ page }) => {
         const gateway = await installMockGateway(page, {
           sessions: [sessionInfo],
-          deferredRequests: [{ method: "chat.history", params: { offset: 80 } }],
+          deferredRequests: [{ method: "chat.history", match: { offset: 80 } }],
           methodResponses: {
             "config.get": { config: { ui: { prefs: { chatShowToolCalls: false } } } },
             "chat.startup": {
@@ -90,9 +90,10 @@ suite.define(() => {
           .getByText("Can you check the report?", { exact: true })
           .waitFor();
         expect(await page.locator(".agent-chat__welcome").count()).toBe(0);
-        expect(
-          (await gateway.getRequests("chat.history")).map((request) => request.params.offset),
-        ).toEqual([80, 160]);
+        expect(await gateway.getRequests("chat.history")).toMatchObject([
+          { params: { offset: 80 } },
+          { params: { offset: 160 } },
+        ]);
         if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR) {
           const dir = createControlUiE2eArtifactDir(name);
           const frame = await takeControlUiScreenshotFrame(
