@@ -551,10 +551,14 @@ describe("package source preflight", () => {
       execFileSync(
         "git",
         [
-          "-c", "core.hooksPath=/dev/null",
-          "-c", "commit.gpgsign=false",
-          "-c", "user.name=Fixture",
-          "-c", "user.email=fixture@example.test",
+          "-c",
+          "core.hooksPath=/dev/null",
+          "-c",
+          "commit.gpgsign=false",
+          "-c",
+          "user.name=Fixture",
+          "-c",
+          "user.email=fixture@example.test",
           ...args,
         ],
         { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
@@ -564,11 +568,17 @@ describe("package source preflight", () => {
     git("commit", "-qm", "conflicting bundled source");
     const ref = git("rev-parse", "HEAD");
     const run = (...args: string[]) =>
-      spawnSync(process.execPath, [
-        path.resolve("scripts/package-source-preflight.mjs"),
-        "--allow-unreleased-changelog", ...args,
-      ], { cwd: root, encoding: "utf8" });
-    const conflict = "dependency 'shared' has conflicting specs: alpha use '1.0.0', beta uses '2.0.0'";
+      spawnSync(
+        process.execPath,
+        [
+          path.resolve("scripts/package-source-preflight.mjs"),
+          "--allow-unreleased-changelog",
+          ...args,
+        ],
+        { cwd: root, encoding: "utf8" },
+      );
+    const conflict =
+      "dependency 'shared' has conflicting specs: alpha use '1.0.0', beta uses '2.0.0'";
     const directoryFailure = run("--source-dir", root);
     expect(directoryFailure.status).toBe(1);
     expect(directoryFailure.stderr).toContain(conflict);
