@@ -311,6 +311,7 @@ describe("searchSessionTranscripts", () => {
       "deploy & staging",
       "deploy -> staging",
       "deploy \u2192 staging",
+      "deploy \u3001 staging",
     ]) {
       expect(
         search(query).hits.map((hit) => hit.sessionId),
@@ -318,7 +319,7 @@ describe("searchSessionTranscripts", () => {
       ).toEqual(["deploy"]);
     }
     expect(search("deploy staging \u{1F680}").hits.map((hit) => hit.sessionId)).toEqual(["deploy"]);
-    const prefixHits = search("deploy stag -", { match: "prefix" }).hits;
+    const prefixHits = search("deploy - stag", { match: "prefix" }).hits;
     expect(prefixHits.map((hit) => hit.sessionId)).toEqual(["deploy"]);
     expect(search("deploy missing -").hits).toEqual([]);
     expect(search("- &").hits).toEqual([]);
