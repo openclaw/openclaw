@@ -669,8 +669,9 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     const rowKey = this.messageRowKeysById.get(command.messageId);
     const rowIndex = rowKey ? this.rowIndexesByKey.get(rowKey) : undefined;
     if (rowIndex !== undefined) {
+      // Native scroll and row mounts continue the reveal. Requesting another
+      // render here can starve the offset notification that changes the range.
       virtualizer.scrollToIndex(rowIndex, { align: "center" });
-      this.host.requestUpdate();
     }
   }
 
