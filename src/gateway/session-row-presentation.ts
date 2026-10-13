@@ -256,7 +256,10 @@ export function prepareProjectedSessionPresentation(
       }
       excludedChildKeys = excluded;
     }
-    const sourceSwarm = record.materialized.row.swarm;
+    const sourceSwarm =
+      options.rowMode === "sidebar" || options.rowMode === "dashboard"
+        ? undefined
+        : record.materialized.row.swarm;
     let excludedSwarmKeys: Set<string> | undefined;
     for (const group of sourceSwarm?.groups ?? []) {
       for (const { sessionKey } of group.children ?? []) {
@@ -289,7 +292,7 @@ export function prepareProjectedSessionPresentation(
         liveModel?.provider,
         liveModel?.model,
         liveModel === null,
-        sourceSwarm,
+        record.materialized.row.swarm,
         childOwnerSessionKeys,
         temporal.subagentRun?.model,
         temporal.subagentOwner,
