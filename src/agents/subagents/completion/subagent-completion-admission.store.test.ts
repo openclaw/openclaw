@@ -139,8 +139,18 @@ afterEach(() => vi.restoreAllMocks());
 describe("native subagent completion worker admission", () => {
   it("commits queue and native owner atomically, then acknowledges replay without rewriting them", async () => {
     await withAdmissionState(async ({ input, database, admit }) => {
+      await mutateSubagentRuns([input.subagent.runId], (rows) => ({
+        value: undefined,
+        postimages: new Map([
+          [input.subagent.runId, { ...rows.get(input.subagent.runId)!, label: "before admission" }],
+        ]),
+      }));
       const result = await admit();
-      expect(result).toMatchObject({ claimed: true, status: "pending" });
+      expect(result).toMatchObject({
+        claimed: true,
+        status: "pending",
+        subagent: { label: "before admission" },
+      });
       expect(readSubagentRun(database, input.subagent.runId)?.delivery).toMatchObject({
         queueId: input.queueEntry.id,
         status: "in_progress",
@@ -343,6 +353,14 @@ describe("native subagent completion worker admission", () => {
             generation: 1,
           });
           expect(subagentRuns.get(input.expected.runId)?.delivery?.status).toBe("delivered");
+          if (change === "metadata successor") {
+            expect(readSubagentRun(database, input.expected.runId)?.task).toBe(
+              "metadata updated after completion admission",
+            );
+            expect(subagentRuns.get(input.expected.runId)?.task).toBe(
+              "metadata updated after completion admission",
+            );
+          }
         }
       });
     },

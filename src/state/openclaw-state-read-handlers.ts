@@ -3,10 +3,7 @@ import {
   prepareAcpSessionMetadataRead,
   readAcpSessionCommand,
 } from "../acp/runtime/session-meta-read.worker.js";
-import {
-  loadSubagentRunsForChildSessionFromSqlite,
-  loadSubagentSessionListRunsFromSqlite,
-} from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
+import { loadSubagentSessionListRunsFromSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import { readSubagentRunsInWorker } from "../agents/subagents/registry/subagent-registry.store.worker.js";
 import { readWorkspaceStateSnapshotForDirectoryInDatabase } from "../agents/workspace-state-store.kernel.js";
 import { isChannelIngressReadCommand } from "../channels/message/ingress-queue-read-contract.js";
@@ -223,14 +220,6 @@ export function readOpenClawStateDatabaseCommand(
     command.type === "devicePairing.bootstrapContext"
   ) {
     return executeDevicePairingRead(db, input.databasePath, command);
-  }
-  if (command.type === "subagents.forChildSession") {
-    return {
-      type: command.type,
-      runs: loadSubagentRunsForChildSessionFromSqlite(command.childSessionKey, {
-        db,
-      }),
-    };
   }
   if (command.type === "pluginBlob.lookup") {
     return {

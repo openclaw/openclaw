@@ -9,6 +9,13 @@ title: "Versioning contract"
 
 ## Versioning contract
 
+An admitted empty shared-state database is created directly at the current
+version in the migration owner's transaction. It does not replay historical
+row transforms or validate and repair the canonical schema it just installed.
+Database-open admission still applies. Existing and native-bootstrap databases
+retain the versioned migration and validation path; creation preserves the same
+catalog SQL and first-use table policy.
+
 Each database records its published schema in two places:
 
 - `PRAGMA user_version` is the SQLite schema version.

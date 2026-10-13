@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.sqlite-entry.js";
 import { memorySessionActorOwners } from "../../../config/sessions/session-actor-memory-owner.js";
@@ -192,6 +193,18 @@ it.each([
         requesterAgentId: parent.agentId,
         targetAgentId: childOwner.agentId,
         requesterInternalKey: parentKey,
+        parentTarget: {
+          agentId: parent.agentId,
+          storePath: parent.path,
+          canonicalKey: parentKey,
+          storeKeys: [parentKey],
+          store: {
+            [parentKey]: expectDefined(
+              parent.readSession(parentKey, authority)?.entry,
+              "parent session entry",
+            ),
+          },
+        },
         childSessionKey: childKey,
         incognito: true,
         expectedParentSessionId: name,
