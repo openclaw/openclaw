@@ -423,7 +423,8 @@ export async function* executeClaudeCli(
     context.abortSignal?.throwIfAborted();
     // Adopt the process's exact MCP capture before prompt dispatch or native tool callbacks.
     capability?.activate(session.handle);
-    if (!session.transport) {
+    let transport = session.transport;
+    if (!transport) {
       const { args, excludeDynamicSections } = prepareClaudeCliTransportArgs(context);
       session.transportStartup = createClaudeCliTransport({
         context,
@@ -469,14 +470,14 @@ export async function* executeClaudeCli(
           };
         },
         onError: (error) => session.handle.close("abort", error),
-      }).then((transport) => {
-        session.transport = transport;
+      }).then((created) => {
+        session.transport = created;
         if (session.closed) {
-          transport.close();
+          created.close();
         }
-        return transport;
+        return created;
       });
-      const transport = await session.transportStartup;
+      transport = await session.transportStartup;
       if (session.closed) {
         throw turn.error ?? new Error("Claude CLI closed during startup.");
       }
@@ -486,7 +487,7 @@ export async function* executeClaudeCli(
     if (session.closed || session.currentTurn !== turn) {
       throw turn.error ?? new Error("Claude CLI closed before its prompt was accepted.");
     }
-    await session.transport.send({
+    await transport.send({
       type: "user",
       message: { role: "user", content: context.prompt },
       parent_tool_use_id: null,
