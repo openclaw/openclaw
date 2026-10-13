@@ -302,6 +302,7 @@ export class RealtimeTalkSession {
       const catalog = await this.client.request<TalkCatalogResult>(
         "talk.catalog",
         {
+          sessionKey: this.sessionKey,
           ...(requestedProvider ? { provider: requestedProvider } : {}),
           ...(requestedModel ? { model: requestedModel } : {}),
         },

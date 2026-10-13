@@ -20,6 +20,7 @@ export class ComposerMicrophonePicker {
   private discoveryRequest = 0;
   private catalogClient: GatewayBrowserClient | null = null;
   private catalogConnected = false;
+  private catalogSessionKey: string | undefined;
   private catalogRequest = 0;
   realtimeStatus: ComposerTalkCapabilityStatus = "unknown";
   dictationStatus: ComposerTalkCapabilityStatus = "unknown";
@@ -28,17 +29,22 @@ export class ComposerMicrophonePicker {
 
   constructor(private readonly requestUpdate: () => void) {}
 
-  syncCatalog(client: GatewayBrowserClient | null, connected: boolean): void {
-    if (client === this.catalogClient && connected === this.catalogConnected) {
+  syncCatalog(client: GatewayBrowserClient | null, connected: boolean, sessionKey?: string): void {
+    if (
+      client === this.catalogClient &&
+      connected === this.catalogConnected &&
+      sessionKey === this.catalogSessionKey
+    ) {
       return;
     }
     window.removeEventListener("focus", this.refreshOnFocus);
     this.catalogClient = client;
     this.catalogConnected = connected;
+    this.catalogSessionKey = sessionKey;
     this.catalogRequest++;
+    this.realtimeStatus = "unknown";
+    this.dictationStatus = "unknown";
     if (!client || !connected) {
-      this.realtimeStatus = "unknown";
-      this.dictationStatus = "unknown";
       return;
     }
     window.addEventListener("focus", this.refreshOnFocus);
@@ -128,7 +134,10 @@ export class ComposerMicrophonePicker {
       this.requestUpdate();
     }
     void Promise.all([
-      client.request<TalkCatalogResult>("talk.catalog", {}),
+      client.request<TalkCatalogResult>(
+        "talk.catalog",
+        this.catalogSessionKey === undefined ? {} : { sessionKey: this.catalogSessionKey },
+      ),
       client.request<TalkConfigResult>("talk.config", {}),
     ])
       .then(async ([catalog, config]) => {

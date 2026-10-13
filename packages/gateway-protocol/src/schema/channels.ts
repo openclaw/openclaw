@@ -338,6 +338,7 @@ export const TalkSessionCloseParamsSchema = closedObject({
 export const TalkCatalogParamsSchema = closedObject({
   provider: Type.Optional(NonEmptyString),
   model: Type.Optional(NonEmptyString),
+  sessionKey: Type.Optional(NonEmptyString),
 });
 
 const TalkCatalogAudioFormatProperties = {

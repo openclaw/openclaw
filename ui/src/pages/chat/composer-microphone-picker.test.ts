@@ -20,6 +20,48 @@ afterEach(() => {
 });
 
 describe("composer voice readiness", () => {
+  it("reloads session readiness and rejects results from the previous session", async () => {
+    const previous = createDeferred<ReturnType<typeof catalog>>();
+    const current = createDeferred<ReturnType<typeof catalog>>();
+    const readCatalog = vi
+      .fn()
+      .mockResolvedValueOnce(catalog(true))
+      .mockReturnValueOnce(previous.promise)
+      .mockReturnValueOnce(current.promise);
+    const request = vi.fn((method: string) =>
+      method === "talk.config" ? Promise.resolve({}) : readCatalog(),
+    );
+    const client = { request } as unknown as GatewayBrowserClient;
+    let updated = createDeferred();
+    const requestUpdate = vi.fn(() => updated.resolve());
+    picker = new ComposerMicrophonePicker(requestUpdate);
+    picker.syncCatalog(client, true, "agent:first:main");
+    await updated.promise;
+    expect(picker.realtimeStatus).toBe("ready");
+    expect(picker.dictationStatus).toBe("ready");
+
+    window.dispatchEvent(new Event("focus"));
+    updated = createDeferred();
+    picker.syncCatalog(client, true, "agent:second:main");
+    expect(picker.realtimeStatus).toBe("checking");
+    expect(picker.dictationStatus).toBe("checking");
+    expect(request).toHaveBeenCalledWith("talk.catalog", { sessionKey: "agent:second:main" });
+    current.resolve(catalog(false));
+    await updated.promise;
+    expect(picker.realtimeStatus).toBe("unavailable");
+    expect(picker.dictationStatus).toBe("unavailable");
+
+    requestUpdate.mockClear();
+    previous.resolve(catalog(true));
+    await previous.promise;
+    await Promise.resolve();
+    expect(picker.realtimeStatus).toBe("unavailable");
+    expect(picker.dictationStatus).toBe("unavailable");
+    expect(requestUpdate).not.toHaveBeenCalled();
+    picker.syncCatalog(client, true, "agent:second:main");
+    expect(readCatalog).toHaveBeenCalledTimes(3);
+  });
+
   it("refreshes after returning from login on the same Gateway connection", async () => {
     let ready = false;
     const request = vi.fn(async (method: string) =>

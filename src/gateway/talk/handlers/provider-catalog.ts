@@ -28,8 +28,13 @@ export async function resolveCatalogProviderSelection(
   }
 }
 
-export async function buildTalkTranscriptionCatalog(config: OpenClawConfig) {
-  const transcriptionConfig = await buildTalkTranscriptionConfig(config);
+export async function buildTalkTranscriptionCatalog(config: OpenClawConfig, agentId: string) {
+  const transcriptionConfig = await buildTalkTranscriptionConfig(
+    config,
+    undefined,
+    undefined,
+    agentId,
+  );
   const transcriptionSelection = transcriptionConfig.file
     ? { ready: transcriptionConfig.file.ready, activeProvider: transcriptionConfig.file.provider }
     : await resolveCatalogProviderSelection(

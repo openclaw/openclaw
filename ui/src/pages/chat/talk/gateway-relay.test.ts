@@ -365,7 +365,11 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     );
     const startup = transport.start();
     expect(requestCallsFor(client, "talk.catalog")).toEqual([
-      ["talk.catalog", { provider: "openai", model: "gpt-live-1" }, expect.any(Object)],
+      [
+        "talk.catalog",
+        { sessionKey: "main", provider: "openai", model: "gpt-live-1" },
+        expect.any(Object),
+      ],
     ]);
     void transport.stop();
     resolveCatalog(defaultRelayResponse("talk.catalog", false));
