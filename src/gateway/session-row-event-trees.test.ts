@@ -409,7 +409,8 @@ it("publishes fresh ancestor rows through private intermediates with list visibi
       } finally {
         serialization.mockRestore();
       }
-      expect(normalizations).toBe(3);
+      // A new connection gets full rows without reencoding unchanged immutable presentations.
+      expect(normalizations).toBe(0);
       expectFull(newcomer, [parent, root]);
       expect(payloadFor(peers[0]!).ancestorSessions).toEqual([]);
       await assertListParity(newcomer);
