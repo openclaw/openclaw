@@ -38,6 +38,17 @@ background services, plus the SDK helpers those surfaces depend on. Part of the
 | `api.registerNodeInvokePolicy(policy)`            | Allowlist/approval policy for node-invoked commands                    |
 | `api.registerSecurityAuditCollector(collector)`   | Findings collector for `openclaw security audit`                       |
 
+Gateway method handlers can return a payload directly or through a promise:
+
+```ts
+api.registerGatewayMethod("my-plugin.status", async () => ({ status: "ready" }));
+```
+
+Any non-`undefined` result completes the request successfully unless the handler
+has already called `respond(...)`. Explicit responses take precedence, including
+errors. Returning `undefined` leaves completion to `respond(...)`; synchronous
+and asynchronous callback-style handlers remain supported.
+
 Gateway methods default to `profileAccess: "required"`, so authenticated-profile verification fails closed before plugin dispatch. Set `profileAccess: "independent"` only for an audited method that neither reads nor mutates durable user or session state. Operator scope remains a separate authorization requirement.
 
 Read-only methods may opt into WebSocket response sharing with registration options
