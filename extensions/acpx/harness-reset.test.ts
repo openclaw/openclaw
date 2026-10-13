@@ -1,20 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import {
-  createPluginStateKeyedStoreV2ForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it, vi } from "vitest";
 import plugin from "./index.js";
+import { createEmptyAcpxKeyedStore } from "./src/empty-keyed-store.test-support.js";
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
-  resetPluginStateStoreForTests();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
@@ -34,8 +30,8 @@ it("resets every registered ACP harness with a read-only package directory", asy
         config: { current: () => ({}) },
         state: {
           resolveStateDir,
-          openKeyedStoreV2: (options) =>
-            createPluginStateKeyedStoreV2ForTests("acpx", options, { assertCurrent() {} }),
+          // Host-owned identity/lease storage is outside this filesystem contract.
+          openKeyedStoreV2: createEmptyAcpxKeyedStore,
         },
       }),
       registerAgentHarness: (harness) => harnesses.push(harness),
