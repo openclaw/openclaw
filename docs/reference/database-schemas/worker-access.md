@@ -121,6 +121,16 @@ read-after-write certification. An owner without complete receipt coverage must
 use its canonical reader until that coverage exists. Other processes route
 writes through the Gateway or hold exclusive ownership while it is stopped.
 
+Idle maintenance uses the same ownership rule. Secret and device-setup expiry,
+GitHub OAuth inventory, ingress health, placement inventory, and cron history
+rebuild their facts on startup and invalidate them from their own writes. Empty
+inventories park until a receipt arrives; retained rows schedule their next
+deadline. Refreshes consume the dirty flag before awaiting a worker so a receipt
+received during the read remains pending. These facts schedule maintenance;
+credential, lease, and external-effect authority stays with the execution owner.
+Cron retains a memory-only clock check for future jobs so forward clock changes
+can trigger overdue work without reloading SQL every minute.
+
 Scope receipts to the data actually changed. Memory-index DML, for example,
 declares no session-row or transcript changes and preserves unrelated session
 actor replicas. Transcript mutations still update or invalidate their session
@@ -245,6 +255,15 @@ callback comparison. Skill snapshot persistence uses the same fixed-field path.
 Generic callbacks retain their prepare-and-compare contract, and source and
 conversation authority still apply at the mutation boundary. These operations
 change no schemas, stored formats, retention, or update behavior.
+
+Fresh isolated same-agent subagents commit first-admission metadata with their
+creation entry. The host-bound launch carries that postimage into first admission,
+avoiding a second load, generic reuse preparation, and metadata patch. The receipt
+is consumed once and grants no authority: the work lease still loads the current
+entry and rejects replacement or reset before execution. Current policy and
+metadata writes therefore survive admission. Forks, resumed children, incognito
+storage, collectors, thread binding, and cross-agent admission keep their existing
+paths.
 
 Observer digests and activity recaps also use closed entry operations. Their writer
 checks the current lifecycle, digest revision, recap eligibility, and transcript
@@ -832,6 +851,13 @@ blocks remain unproven because construction alone does not establish ownership
 of their effects. Shared async/sync factories and unsupported returned-object
 shapes also remain T1; this proof does not attempt whole-program points-to analysis.
 
+Mixed receivers can instead register individual deprecated members. Those members
+have their own compatibility boundary; constructing the receiver or calling its
+async methods does not make its deprecated members live. For explicitly typed
+service singletons, the check follows the public type member back to its reviewed
+implementation. Calling or escaping that member from ordinary bundled code still
+fails the check.
+
 The same check runs from the inventory generator and the worker ratchet, including
 staged-source checks. Adding a bundled caller fails even if another T1 call is
 removed in the same change. Shared kernels may have both worker and deprecated
@@ -851,9 +877,9 @@ initialization's `link` method remain compatibility paths; official harnesses us
 `linkAsync`. Current credential checks at external effects remain security
 boundaries even when their preparatory reads have moved to workers.
 
-Remove a T1-compat API and its remaining synchronous kernel in the next Plugin SDK
-major, together with obsolete SDK exports and registry entries. Publish release
-notes naming the removed API and its asynchronous replacement. Until that major,
+Remove a T1-compat API and its remaining synchronous kernel after a stable
+deprecation period, together with obsolete SDK exports and registry entries.
+Publish release notes naming the removed API and its asynchronous replacement. Until removal,
 keep the deprecated API's completion and transaction contract; migrate bundled
 callers to the owning worker operation instead of removing the compatibility
 implementation.

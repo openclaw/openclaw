@@ -139,7 +139,7 @@ export function registerAgentCreationCommitTests(fixture: {
   applyAgentConfig: Mock;
   rootWrite: Mock;
   writeConfigFile: Mock;
-  hasDeletedAgentDatabases: Mock<() => boolean>;
+  captureDeletedAgentDatabaseFences: Mock<() => [string, string][]>;
   reviveAgentDatabases: Mock<(agentIds: readonly string[]) => Promise<void>>;
   logGatewayWarn: Mock;
 }) {
@@ -169,7 +169,9 @@ export function registerAgentCreationCommitTests(fixture: {
   });
 
   it("reports committed creation when deleted database reader revival fails", async () => {
-    fixture.hasDeletedAgentDatabases.mockReturnValue(true);
+    fixture.captureDeletedAgentDatabaseFences.mockReturnValue([
+      ["/agents/test-agent/openclaw-agent.sqlite", "test-agent"],
+    ]);
     fixture.reviveAgentDatabases.mockRejectedValueOnce(new Error("worker acknowledgement failed"));
     const { respond, promise } = fixture.create({ name: "Test Agent" });
 
