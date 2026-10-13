@@ -97,6 +97,7 @@ describe("plugin registry SQLite session ownership", () => {
         );
         const pending = api.runtime.subagent.run({ sessionKey, message: "continue" });
         runtimeConfig = { agents: { entries: { replacement: {} } } };
+        setRuntimeConfigSnapshot(runtimeConfig);
         await expect(pending).rejects.toThrow('owned by plugin "harness-owner"');
         expect(subagent.run).toHaveBeenCalledOnce();
       } finally {

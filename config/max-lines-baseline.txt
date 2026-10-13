@@ -3,7 +3,6 @@
 # Existing suppressions carry a TODO at the file site.
 extensions/acpx/src/runtime.ts
 extensions/active-memory/index.test.ts
-extensions/amazon-bedrock/index.test.ts
 extensions/amazon-bedrock/stream.runtime.ts
 extensions/anthropic/session-catalog.test.ts
 extensions/browser/src/browser-tool.test.ts
@@ -105,7 +104,6 @@ extensions/memory-wiki/src/compile.ts
 extensions/memory-wiki/src/query.test.ts
 extensions/memory-wiki/src/query.ts
 extensions/microsoft-foundry/index.test.ts
-extensions/migrate-hermes/config.test.ts
 extensions/migrate-hermes/secrets.test.ts
 extensions/msteams/src/channel.ts
 extensions/mxc/test/mxc-backend.test.ts

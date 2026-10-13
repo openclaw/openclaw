@@ -293,12 +293,22 @@ async function prepareCliRunContextWithinReadFence(
       backendResolved.resolveExecutionArgs !== undefined) ||
       (backendResolved.toolAvailabilityEnforcement === "prepare-execution" &&
         backendResolved.prepareExecution !== undefined));
-  const callerToolAuthority = captureCliRunToolAuthority(params, {
-    agentId: workspaceResolution.agentId,
-    workspaceDir,
-    cwd,
-  });
-  const toolPolicy = resolveCliRuntimeToolPolicy({
+  using callerToolAuthorityResources = new DisposableStack();
+  const callerToolAuthority = callerToolAuthorityResources.use(
+    captureCliRunToolAuthority(params, {
+      agentId: workspaceResolution.agentId,
+      workspaceDir,
+      cwd,
+    }),
+  );
+  const finishPreparation = (prepared: PreparedCliRunContext): PreparedCliRunContext => {
+    const resources = callerToolAuthorityResources.move();
+    prepared.preparedBackend.cleanup = sequenceCliCleanups(prepared.preparedBackend.cleanup, () =>
+      resources.dispose(),
+    );
+    return prepared;
+  };
+  const toolPolicy = await resolveCliRuntimeToolPolicy({
     params,
     policySessionKey,
     policyAgentId,
@@ -1052,7 +1062,7 @@ async function prepareCliRunContextWithinReadFence(
       rawLoopbackServerConfig && backendResolved.bundleMcpMode === "claude-config-file"
         ? applyClaudeManagedMcpTimeout(rawLoopbackServerConfig)
         : rawLoopbackServerConfig;
-    const nativeMcpCapabilityProfile = mcp.resolveCliNativeMcpPolicy(params, {
+    const nativeMcpCapabilityProfile = await mcp.resolveCliNativeMcpPolicy(params, {
       config: runConfig,
       policySessionKey,
       policyAgentId,
@@ -1676,7 +1686,7 @@ async function prepareCliRunContextWithinReadFence(
     };
     if (skipsTurnPreparation) {
       const preparedParams = await admitFinalParams();
-      return { ...buildPreparedContext(preparedParams), hadSessionFile: false };
+      return finishPreparation({ ...buildPreparedContext(preparedParams), hadSessionFile: false });
     }
     // Context remains session-owned. Trusted helper runs may borrow a different
     // agentDir only for model/auth execution.
@@ -1766,7 +1776,7 @@ async function prepareCliRunContextWithinReadFence(
         }
       }
     }
-    return {
+    return finishPreparation({
       ...buildPreparedContext(preparedParams),
       ...(managedClaudeLiveSessionGeneration
         ? { requiredClaudeLiveSessionGeneration: managedClaudeLiveSessionGeneration }
@@ -1778,7 +1788,7 @@ async function prepareCliRunContextWithinReadFence(
       ...(promptContext ? { promptContext, promptForHooks } : {}),
       ...(nodeSkillWorkshop ? { nodeSkillWorkshop } : {}),
       ...(openClawHistoryPrompt ? { openClawHistoryPrompt } : {}),
-    };
+    });
   } catch (err) {
     try {
       await runCliCleanup(params, "cli-prepare-failure", async () => {

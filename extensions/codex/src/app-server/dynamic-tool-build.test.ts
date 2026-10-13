@@ -46,7 +46,7 @@ import {
   createCodexTestHostCapabilities,
   setCodexTestToolFactory,
 } from "./host-capability.test-support.js";
-import { prepareCodexNativeExecutionPolicyForRun } from "./native-execution-policy.js";
+import { prepareTestNativeExecutionPolicy } from "./native-execution-policy.test-support.js";
 import {
   CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
   flattenCodexDynamicToolFunctions,
@@ -250,16 +250,32 @@ describe("Codex app-server dynamic tool build", () => {
     },
   );
 
-  it("uses the prepared explicit-policy fact to disable the native surface", () => {
+  it("uses the prepared explicit-policy fact to disable the native surface", async () => {
     const params = createParams("/tmp/session.jsonl", "/tmp/workspace");
 
-    expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
+    expect(
+      shouldEnableCodexAppServerNativeToolSurface(params, undefined, {
+        nativeExecutionPolicy: await prepareTestNativeExecutionPolicy(params),
+      }),
+    ).toBe(true);
     params.config = { tools: { profile: "coding" } };
-    expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
+    expect(
+      shouldEnableCodexAppServerNativeToolSurface(params, undefined, {
+        nativeExecutionPolicy: await prepareTestNativeExecutionPolicy(params),
+      }),
+    ).toBe(true);
     params.conversationToolPolicy = { deny: ["exec"] };
-    expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
+    expect(
+      shouldEnableCodexAppServerNativeToolSurface(params, undefined, {
+        nativeExecutionPolicy: await prepareTestNativeExecutionPolicy(params),
+      }),
+    ).toBe(true);
     params.pluginHarnessToolPolicyRestricted = true;
-    expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
+    expect(
+      shouldEnableCodexAppServerNativeToolSurface(params, undefined, {
+        nativeExecutionPolicy: await prepareTestNativeExecutionPolicy(params),
+      }),
+    ).toBe(false);
   });
 
   it.each<{
@@ -670,7 +686,9 @@ describe("Codex app-server dynamic tool build", () => {
     );
 
     const tools = await buildDynamicToolsForTest(params, workspaceDir, {
-      nativeToolSurfaceEnabled: shouldEnableCodexAppServerNativeToolSurface(params),
+      nativeToolSurfaceEnabled: shouldEnableCodexAppServerNativeToolSurface(params, undefined, {
+        nativeExecutionPolicy: await prepareTestNativeExecutionPolicy(params),
+      }),
       sessionPermissionPolicy: {
         mode: testCase.mode,
         root: workspaceDir,
@@ -841,7 +859,9 @@ describe("Codex app-server dynamic tool build", () => {
       setCodexTestToolFactory(params, factory);
       const tools = await buildDynamicToolsForTest(params, workspaceDir, {
         sandbox: null,
-        nativeToolSurfaceEnabled: shouldEnableCodexAppServerNativeToolSurface(params),
+        nativeToolSurfaceEnabled: shouldEnableCodexAppServerNativeToolSurface(params, undefined, {
+          nativeExecutionPolicy: await prepareTestNativeExecutionPolicy(params),
+        }),
       });
 
       expect(factory).toHaveBeenCalledWith(
@@ -851,7 +871,11 @@ describe("Codex app-server dynamic tool build", () => {
           ...(toolsAllow ? { runtimeToolAllowlist: [...toolsAllow, "structured_output"] } : {}),
         }),
       );
-      expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
+      expect(
+        shouldEnableCodexAppServerNativeToolSurface(params, undefined, {
+          nativeExecutionPolicy: await prepareTestNativeExecutionPolicy(params),
+        }),
+      ).toBe(false);
       expect(tools.map((tool) => tool.name).toSorted()).toEqual(
         [...(toolsAllow ?? ["read"]), "structured_output"].toSorted(),
       );
@@ -1225,7 +1249,11 @@ describe("Codex app-server dynamic tool build", () => {
       ask: "off",
     };
 
-    const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(params);
+    const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(
+      params,
+      undefined,
+      { nativeExecutionPolicy: await prepareTestNativeExecutionPolicy(params) },
+    );
     const tools = await buildDynamicToolsForTest(params, workspaceDir, {
       nativeToolSurfaceEnabled,
     });
@@ -1296,7 +1324,14 @@ describe("Codex app-server dynamic tool build", () => {
     const runtimePolicyNativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(
       runtimePolicyParams,
       undefined,
-      { agentId: "policy", runtimeSessionKey: "agent:policy:session-1" },
+      {
+        agentId: "policy",
+        runtimeSessionKey: "agent:policy:session-1",
+        nativeExecutionPolicy: await prepareTestNativeExecutionPolicy(runtimePolicyParams, {
+          agentId: "policy",
+          runtimeSessionKey: "agent:policy:session-1",
+        }),
+      },
     );
     const runtimePolicyTools = await buildDynamicToolsForTest(runtimePolicyParams, workspaceDir, {
       sandboxSessionKey: "agent:policy:session-1",
@@ -1407,7 +1442,11 @@ describe("Codex app-server dynamic tool build", () => {
     const params = createParams(path.join(tempDir, "restricted-session.jsonl"), workspaceDir);
     setCodexTestToolFactory(params, () => [execTool, processTool, messageTool]);
     params.toolsAllow = ["exec", "process", "message"];
-    const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(params);
+    const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(
+      params,
+      undefined,
+      { nativeExecutionPolicy: await prepareTestNativeExecutionPolicy(params) },
+    );
 
     const tools = await buildDynamicToolsForTest(params, workspaceDir, {
       nativeToolSurfaceEnabled,
@@ -1741,9 +1780,9 @@ describe("Codex app-server dynamic tool build", () => {
       const workspaceDir = path.join(tempDir, "workspace");
       const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
       params.config = { agents: { defaults: { sandbox: { mode: "all" } } } };
-      const prepared = await prepareCodexNativeExecutionPolicyForRun(params, { sandbox });
+      const prepared = await prepareTestNativeExecutionPolicy(params, { sandbox });
       expect(prepared.policy.effectiveExecHost).toBe(expectedExecHost);
-      const nodePolicy = await prepareCodexNativeExecutionPolicyForRun(
+      const nodePolicy = await prepareTestNativeExecutionPolicy(
         { ...params, execOverrides: { host: "node", node: "synthetic-node" } },
         { sandbox },
       );
@@ -1763,15 +1802,19 @@ describe("Codex app-server dynamic tool build", () => {
     },
   );
 
-  it("disables Codex native tool surfaces when all tools are disabled", () => {
+  it("disables Codex native tool surfaces when all tools are disabled", async () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     params.disableTools = true;
 
-    expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
+    expect(
+      shouldEnableCodexAppServerNativeToolSurface(params, undefined, {
+        nativeExecutionPolicy: await prepareTestNativeExecutionPolicy(params),
+      }),
+    ).toBe(false);
   });
 
-  it("disables Codex native tool surfaces when the effective exec target is node", () => {
+  it("disables Codex native tool surfaces when the effective exec target is node", async () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const sessionParams = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     sessionParams.execOverrides = {
@@ -1781,15 +1824,27 @@ describe("Codex app-server dynamic tool build", () => {
       ask: "off",
     };
 
-    expect(shouldEnableCodexAppServerNativeToolSurface(sessionParams)).toBe(false);
+    expect(
+      shouldEnableCodexAppServerNativeToolSurface(sessionParams, undefined, {
+        nativeExecutionPolicy: await prepareTestNativeExecutionPolicy(sessionParams),
+      }),
+    ).toBe(false);
 
     sessionParams.toolsAllow = ["*"];
-    expect(shouldEnableCodexAppServerNativeToolSurface(sessionParams)).toBe(false);
+    expect(
+      shouldEnableCodexAppServerNativeToolSurface(sessionParams, undefined, {
+        nativeExecutionPolicy: await prepareTestNativeExecutionPolicy(sessionParams),
+      }),
+    ).toBe(false);
 
     const globalParams = createParams(path.join(tempDir, "global-session.jsonl"), workspaceDir);
     globalParams.config = { tools: { exec: { host: "node" } } } as never;
 
-    expect(shouldEnableCodexAppServerNativeToolSurface(globalParams)).toBe(false);
+    expect(
+      shouldEnableCodexAppServerNativeToolSurface(globalParams, undefined, {
+        nativeExecutionPolicy: await prepareTestNativeExecutionPolicy(globalParams),
+      }),
+    ).toBe(false);
 
     const autoOverrideParams = createParams(
       path.join(tempDir, "auto-override-session.jsonl"),
@@ -1798,7 +1853,11 @@ describe("Codex app-server dynamic tool build", () => {
     autoOverrideParams.config = { tools: { exec: { host: "node" } } } as never;
     autoOverrideParams.execOverrides = { host: "auto" };
 
-    expect(shouldEnableCodexAppServerNativeToolSurface(autoOverrideParams)).toBe(true);
+    expect(
+      shouldEnableCodexAppServerNativeToolSurface(autoOverrideParams, undefined, {
+        nativeExecutionPolicy: await prepareTestNativeExecutionPolicy(autoOverrideParams),
+      }),
+    ).toBe(true);
 
     const agentParams = createParams(path.join(tempDir, "agent-session.jsonl"), workspaceDir);
     agentParams.config = {
@@ -1810,6 +1869,9 @@ describe("Codex app-server dynamic tool build", () => {
     expect(
       shouldEnableCodexAppServerNativeToolSurface(agentParams, undefined, {
         agentId: "main",
+        nativeExecutionPolicy: await prepareTestNativeExecutionPolicy(agentParams, {
+          agentId: "main",
+        }),
       }),
     ).toBe(false);
 
@@ -1828,10 +1890,14 @@ describe("Codex app-server dynamic tool build", () => {
       },
     } as never;
 
-    expect(shouldEnableCodexAppServerNativeToolSurface(runtimePolicyParams)).toBe(false);
+    expect(
+      shouldEnableCodexAppServerNativeToolSurface(runtimePolicyParams, undefined, {
+        nativeExecutionPolicy: await prepareTestNativeExecutionPolicy(runtimePolicyParams),
+      }),
+    ).toBe(false);
   });
 
-  it("keeps sandbox exec-server native surfaces behind sandbox tool policy", () => {
+  it("keeps sandbox exec-server native surfaces behind sandbox tool policy", async () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     const sandbox = {
@@ -1847,6 +1913,9 @@ describe("Codex app-server dynamic tool build", () => {
     expect(
       shouldEnableCodexAppServerNativeToolSurface(params, sandbox as never, {
         sandboxExecServerEnabled: true,
+        nativeExecutionPolicy: await prepareTestNativeExecutionPolicy(params, {
+          sandbox: sandbox as never,
+        }),
       }),
     ).toBe(true);
 
@@ -1860,7 +1929,18 @@ describe("Codex app-server dynamic tool build", () => {
           placementExecutionMode: "remote-exec",
           placementNodeId: "device-1",
         } as never,
-        { sandboxExecServerEnabled: true },
+        {
+          sandboxExecServerEnabled: true,
+          nativeExecutionPolicy: await prepareTestNativeExecutionPolicy(params, {
+            sandbox: {
+              ...sandbox,
+              backendId: "node",
+              backend: undefined,
+              placementExecutionMode: "remote-exec",
+              placementNodeId: "device-1",
+            } as never,
+          }),
+        },
       ),
     ).toBe(true);
 
@@ -1871,7 +1951,15 @@ describe("Codex app-server dynamic tool build", () => {
           ...sandbox,
           tools: { allow: ["exec"], deny: [] },
         } as never,
-        { sandboxExecServerEnabled: true },
+        {
+          sandboxExecServerEnabled: true,
+          nativeExecutionPolicy: await prepareTestNativeExecutionPolicy(params, {
+            sandbox: {
+              ...sandbox,
+              tools: { allow: ["exec"], deny: [] },
+            } as never,
+          }),
+        },
       ),
     ).toBe(false);
 
@@ -1882,7 +1970,15 @@ describe("Codex app-server dynamic tool build", () => {
           ...sandbox,
           tools: { allow: [], deny: ["write"] },
         } as never,
-        { sandboxExecServerEnabled: true },
+        {
+          sandboxExecServerEnabled: true,
+          nativeExecutionPolicy: await prepareTestNativeExecutionPolicy(params, {
+            sandbox: {
+              ...sandbox,
+              tools: { allow: [], deny: ["write"] },
+            } as never,
+          }),
+        },
       ),
     ).toBe(false);
 
@@ -1890,6 +1986,9 @@ describe("Codex app-server dynamic tool build", () => {
     expect(
       shouldEnableCodexAppServerNativeToolSurface(params, sandbox as never, {
         sandboxExecServerEnabled: true,
+        nativeExecutionPolicy: await prepareTestNativeExecutionPolicy(params, {
+          sandbox: sandbox as never,
+        }),
       }),
     ).toBe(false);
   });

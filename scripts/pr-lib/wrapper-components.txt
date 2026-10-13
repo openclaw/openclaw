@@ -349,6 +349,7 @@ src/agents/worktrees/run-end-lifecycle.ts
 src/agents/sandbox/registry-lifecycle.ts
 src/agents/sandbox/registry-publication.ts
 src/config/zod-schema.database.ts
+src/infra/database-engine/admission-scope.ts
 src/infra/database-engine/observation.ts
 src/infra/database-engine/policy.ts
 src/infra/postgres-sync/connection.ts
@@ -894,6 +895,7 @@ src/infra/env-log.runtime.ts
 src/infra/env.ts
 src/infra/errno.ts
 src/infra/child-runtime-viability.ts
+src/infra/error-diagnostics.ts
 src/infra/error-graph-internal.ts
 src/infra/errors.ts
 src/infra/exec-allowlist-pattern.ts

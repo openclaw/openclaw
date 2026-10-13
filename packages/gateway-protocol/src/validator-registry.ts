@@ -383,6 +383,7 @@ export const validateConfigSchemaLookupResult = compile(S.ConfigSchemaLookupResu
 export const validateSystemAgentChatParams = compile(S.SystemAgentChatParamsSchema);
 export const validateSystemAgentChatHistoryParams = compile(S.SystemAgentChatHistoryParamsSchema);
 export const validateSystemChangesListParams = compile(S.SystemChangesListParamsSchema);
+export const validateSystemAgentSetupAutoParams = compile(S.SystemAgentSetupAutoParamsSchema);
 export const validateSystemAgentSetupDetectParams = compile(S.SystemAgentSetupDetectParamsSchema);
 export const validateSystemAgentSetupVerifyParams = compile(S.SystemAgentSetupVerifyParamsSchema);
 export const validateSystemAgentSetupActivateParams = compile(

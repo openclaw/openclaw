@@ -2894,7 +2894,6 @@ publish_release() (
 	if [[ -e "$published" ]]; then
 		published_info="$(proof validate-release "$published" "$target_sha" "$root_uid" sealed)"
 		proof release-capacity activate "$published" "$mirror" "$build_home" "$serving_root" "$runtime_home" >&2
-		bounded 120 "$node_bin" --no-warnings "$release_lib" seal-tree "$published"
 		prewarm_release "$published"
 		printf '%s\n' "$published_info"
 		return 0

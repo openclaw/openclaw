@@ -82,12 +82,12 @@ describe("Activity recap freshness after transcript writes", () => {
 
   it("prepares recap freshness off thread and observes an in-process transcript append", async () => {
     await messages(1);
-    await awaitPublication(() => service.ensure(target));
+    await awaitPublication(() => service.ensure(target, read()));
     const entry = read()!;
     cfg = { agents: { defaults: {} } };
     const observed = observeHostDataSql();
     try {
-      await service.ensure(target);
+      await service.ensure(target, entry);
       const before = await readSessionTranscriptWatermarkAsync(scope);
       expect(
         projectSessionActivitySummary({ ...target, cfg, entry, enabled: true, watermark: before })
@@ -123,7 +123,7 @@ describe("Activity recap freshness after transcript writes", () => {
 
   it("invalidates cached projection after an offline branch change without changing activity ordering", async () => {
     await messages(3);
-    await awaitPublication(() => service.ensure(target));
+    await awaitPublication(() => service.ensure(target, read()));
     expect(view()?.state).toBe("current");
     await service.dispose();
     const oldActivity = read()?.updatedAt;
@@ -140,7 +140,7 @@ describe("Activity recap freshness after transcript writes", () => {
     // Offline edits rebuild asynchronously; finish the fixture before restarting its observer.
     await waitForSessionTranscriptProjection(scope);
     service = createService();
-    await awaitPublication(() => service.ensure(target));
+    await awaitPublication(() => service.ensure(target, read()));
     expect(view()?.state).toBe("current");
     expect(complete).toHaveBeenCalledTimes(2);
     expect(JSON.parse(complete.mock.calls[1]![0].prompt)).toMatchObject({

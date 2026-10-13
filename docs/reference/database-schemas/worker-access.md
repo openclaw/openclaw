@@ -113,6 +113,13 @@ cache refreshes. Row receipts do not grant permission, and a missing receipt is
 not proof of absence. Outside processes use the Gateway or exclusive offline
 ownership; ordinary readers do not poll for foreign commits.
 
+Agent read-only opens reuse the physical owner's admitted schema and ownership
+proof. Tracked DDL or file replacement requires fresh admission; the durable
+quarantine guard still runs before opening. Lease admission marks the integrity
+receipt dirty once. A healthy close without a completed checkpoint leaves that
+receipt dirty, while failed disposal revokes it and the final checkpointed closer
+can certify it. These changes do not alter database formats or update behavior.
+
 Memory retrieval workers borrow the existing agent read-only owner across query
 awaits and release each borrow before replying. The owner retains the idle reader
 and its prepared statements, with committed-write invalidation and physical-file
@@ -176,10 +183,12 @@ appends, content rewrites, rewind, compaction, archive/restore, deletion, and un
 writes retain their session-scoped invalidation or committed actor update.
 
 Activity-summary batches also reuse the actor's complete retained linear context
-at its committed write token. The replica and worker share incremental batch
-selection, including byte limits and omitted-content handling. Incomplete or
-invalidated context uses the bounded worker reader; the replica adds no separate
-cache, stored format, retention rule, or permission grant.
+at its committed write token, including canonical model snapshots and runtime-context
+metadata. The replica and worker share transcript projection semantics and incremental
+batch selection, including byte limits and omitted-content handling. Incomplete or
+invalidated context, unsupported entries, and reset, rewind, or compaction boundaries
+use the bounded worker reader; the replica adds no separate cache, stored format,
+retention rule, or permission grant.
 
 Parent forks use the existing session-entry worker for both transcript copying
 and child-row commits. Internal fork transformations are data patches, not native
@@ -464,7 +473,8 @@ Schemas, retained bytes, durability, and update behavior are unchanged.
 Bundled plugins obtain prepared currentness checks and compose entry commit guards
 through the `session-binding-runtime` facade. `captureSessionEntryCurrentCheckAsync`
 retains the selected session generation and optional conversation alternatives;
-its awaited effect check reads both in one existing reader-worker snapshot. Typed
+its awaited effect check reads both in one existing reader-worker snapshot. The
+returned `release()` ends the owning operation’s captured authority after settlement. Typed
 mutations carry the prepared source so the writer checks all alternatives in one
 batched conversation read and publishes matching branches through its transaction
 grant. Entry-only binding mutations carry `entryCurrent` through existing writer
@@ -1142,10 +1152,17 @@ an overlapping read; it still validates its exact context at acceptance.
 
 Initial bounded hydration can also supply model context when it contains the whole
 active path. The manager retains detached, sanitized bytes and consumes them only
-under its existing source, writer FIFO, and native-mutation checks while the
-physical store's write revision remains unchanged. Truncated or changed views use
-the normal worker reader. Hydration and anchors share the projection's version
-and watermark in their existing snapshot.
+while its view and the physical store's receipt-owned write revision remain
+unchanged, under the current writer and selected reader. This synchronous handoff
+does not reacquire a history worker, recapture file identity, join the writer FIFO,
+or rebuild a second manager. A later pending write may complete after snapshot
+acceptance; writes and external effects keep their own authority checks. Truncated,
+changed, or admission-fenced views use the normal worker reader. Reset, compaction,
+fork, and retargeting invalidate through the same receipts or manager view. The
+writable manager, callbacks, resource extensions, and transport authority remain
+attempt-scoped; history replicas and provider connections retain their existing
+session owners. Hydration and anchors share the projection's version and watermark
+in their existing snapshot.
 
 Turn writers carry current entry facts into source and custody checks. Publication
 can reuse a writer-certified entry postimage while its transaction revision still
@@ -3987,9 +4004,8 @@ survives cleanup failure while the failed native owner retires. Use `run` when
 dependent commands share a binding or host publication must stay inside the
 same FIFO interval.
 
-Memory source-state reads, cache pruning, standing-intent operations, and session
-collaboration writes without a preparation callback use that single-command
-path. Memory bindings reuse the canonical connection's installed policy. Small
+Memory cache pruning, standing-intent operations, and session collaboration
+writes without a preparation callback use that single-command path. Memory bindings reuse the canonical connection's installed policy. Small
 source replacements and embedding-cache writes carry a bounded inline batch in
 one request through the same tombstone, capacity, and commit checks.
 Larger inputs retain bounded fragment messages and stage one publication in worker
@@ -4145,9 +4161,11 @@ binary values and is discarded after settlement or owner closure. Source-file in
 host. Cache pruning uses that same worker for its live count and oldest-row deletion,
 with a transaction recheck before each batch of at most 100 rows. The host releases
 admission and yields between batches; only definite pre-entry lock failures retry.
-Cache and source-hash reads use the retained publication worker, checking that
-its handle is open at admission. Source snapshots use that same publication owner;
-read-only diagnostics use the retrieval worker. Shadow session publication prepares
+Published source hashes, chunks, embedding-cache rows, session tombstones, and
+index/source snapshots use the existing retrieval worker's read-only connection.
+They retain their physical source and caller lifetime without reserving the agent
+writer FIFO. Private shadow databases keep their publication worker and private
+queue for read-your-writes. Both adapters use the same read kernels. Shadow session publication prepares
 its current tombstone predicate in the original published worker while retaining
 the workspace lock through commit. Ordinary publication checks that predicate only
 inside its committing transaction. The shadow's empty tombstone table never grants
@@ -5183,6 +5201,17 @@ private rows retain facts only for the request's synchronous publication frame.
 Schemas, stored values, permissions, retention, and update behavior are unchanged.
 
 ## Migrate a caller
+
+Session node-artifact copies merge participant aggregates in their existing write
+transaction. Each upsert consumes the current destination row without a separate
+read: aliases in one store add their contributions, while retried cross-store
+repairs retain the largest count. Unknown first-input times remain unknown and
+the latest known input time survives. Ordinary durable entry creation,
+replacement, and reclamation use the existing entry or reclamation worker;
+shared kernels retain native receivers for incognito, exclusive maintenance,
+and released synchronous entry APIs. Opaque deletion callbacks are adapted to
+worker commit finalizers and do not force durable artifact SQL onto the host.
+This changes no schema, stored format, retention, or update behavior.
 
 Manual `sessions.compact` requests with `maxLines` retain their selected physical
 store and prepared caller and sharing authority through cold restoration. The

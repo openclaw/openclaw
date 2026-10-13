@@ -563,7 +563,7 @@ export async function deliverHeartbeatDispatch(
   const { delivery, runSessionKey, storePath, outboundPolicySessionKey, internalProjection } =
     policy.prepared;
   const onDeliveredPayload = policy.projectTarget
-    ? prepareHeartbeatTargetAwareness({
+    ? await prepareHeartbeatTargetAwareness({
         agentId,
         storePath,
         runSessionKey,

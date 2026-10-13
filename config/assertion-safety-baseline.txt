@@ -2291,7 +2291,6 @@ src/plugin-sdk/allowlist-config-edit.ts	6
 src/plugin-sdk/api-baseline.ts	1
 src/plugin-sdk/approval-auth-helpers.ts	1
 src/plugin-sdk/approval-handler-runtime.ts	1
-src/plugin-sdk/approval-native-helpers.ts	1
 src/plugin-sdk/approval-reaction-binding.ts	2
 src/plugin-sdk/channel-config-helpers.ts	15
 src/plugin-sdk/channel-config-ui-hints.ts	1
@@ -2526,7 +2525,6 @@ src/skills/runtime/remote-probe-utils.ts	2
 src/skills/runtime/remote-skills.ts	1
 src/skills/workshop/tool-policy-diagnostic.ts	1
 src/snapshot/git-backup-codec.ts	7
-src/snapshot/git-backup.ts	2
 src/snapshot/local-repository.ts	4
 src/snapshot/manifest.ts	1
 src/state/local-onboarding-state.ts	1

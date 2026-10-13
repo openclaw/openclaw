@@ -11,6 +11,7 @@ import {
   clearEmbeddedSessionPromptStates,
   retainEmbeddedSessionPromptState,
 } from "../../agents/embedded-agent-runner/session-prompt-state.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import {
   enqueueSystemEvent,
@@ -19,9 +20,14 @@ import {
 } from "../../infra/system-events.js";
 import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-activity.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
 import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
-import { clearSessionResetRuntimeState } from "./session-reset-cleanup.js";
+import {
+  clearSessionResetRuntimeState,
+  prepareSessionResetCleanupGuard,
+} from "./session-reset-cleanup.js";
 
 afterEach(() => {
   clearEmbeddedSessionPromptStates(["old-session"]);
@@ -230,5 +236,38 @@ describe("clearSessionResetRuntimeState", () => {
 
     expect(operation.phase).toBe("queued");
     expect(replyRunRegistry.get("agent:main:slack:room:1")).toBe(operation);
+  });
+});
+
+it("keeps reset cleanup current through metadata writes and refuses a replacement session", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const agentId = "main";
+    const sessionKey = "agent:main:reset-cleanup";
+    const storePath = resolveOpenClawAgentSqlitePath({ agentId });
+    const scope = { agentId, sessionKey, storePath };
+    const entry = { sessionId: "before-reset", lifecycleRevision: "original", updatedAt: 1 };
+    await replaceSessionEntry(scope, entry);
+    const cleanup = await prepareSessionResetCleanupGuard({ ...scope, expectedSession: entry });
+    try {
+      await replaceSessionEntry(scope, { ...entry, updatedAt: 2, label: "Renamed" });
+      expect(() => cleanup.assertCurrent()).not.toThrow();
+      await replaceSessionEntry(scope, {
+        sessionId: "replacement",
+        lifecycleRevision: "replacement",
+        updatedAt: 3,
+      });
+      enqueueSystemEvent("replacement work", withSystemEventOwner({ sessionKey }, agentId));
+      expect(() =>
+        clearSessionResetRuntimeState([sessionKey, entry.sessionId], {
+          agentId,
+          sessionKey,
+          activeReplySessionId: entry.sessionId,
+          assertCurrent: cleanup.assertCurrent,
+        }),
+      ).toThrow("session changed before cleanup");
+      expect(peekSystemEvents(sessionKey)).toEqual(["replacement work"]);
+    } finally {
+      cleanup.release();
+    }
   });
 });

@@ -52,7 +52,13 @@ vi.mock("../config/config.js", factories.config);
 vi.mock("../logging/subsystem.js", factories.logging);
 
 vi.mock("../gateway/session-worker-placement-context.js", factories.placementContext);
+// mock-isolation: Picker tests provide placement capability outcomes without loading worker state.
 vi.mock("../gateway/worker-environments/placement-session-runtime.js", factories.placementRuntime);
+// mock-isolation: Worker preparation is covered by the placement runtime owner tests.
+vi.mock(
+  "../gateway/worker-environments/placement-session-runtime-preparation.js",
+  factories.placementRuntimePreparation,
+);
 
 import {
   applySessionModelSelectionInternal as applySessionModelSelection,

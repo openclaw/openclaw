@@ -44,6 +44,7 @@ import {
   trackAsyncWork,
 } from "../../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { getOpenClawStateWorkerOwner } from "../../../state/openclaw-state-worker-owner.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import {
   buildAnnounceIdFromChildRun,
@@ -1153,6 +1154,8 @@ describe("subagent registry lifecycle hardening", () => {
   ])(
     "preserves cleanup $phase when another run settles (related=$related)",
     async ({ phase, related }) => {
+      // Retire native idle maintenance before this policy fixture takes over the clock.
+      await getOpenClawStateWorkerOwner().close();
       vi.useFakeTimers();
       const entry = createRunEntry({
         endedAt: Date.now() - 1_000,
@@ -4996,6 +4999,7 @@ describe("requester settle wake trigger", () => {
       const sessionFacts = vi.spyOn(sharing, "prepareSessionMutationFacts").mockResolvedValue({
         storageTarget: target,
         bindCreation: vi.fn(),
+        prepareRead: () => undefined,
         readCurrent: () => ({
           target: { ...target, entry: { sessionId: requesterSessionId, updatedAt: 1 } },
           membership: new Set(),

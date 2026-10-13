@@ -29,7 +29,8 @@ describe("memory session delta publication", () => {
     await seedSessionTranscript({ sessionId, sessionKey, messages: [1, 2, 3, 4].map(turn) });
     await manager.sync({ reason: "initial", force: true });
     const database = Reflect.get(manager, "db") as DatabaseSync;
-    const before = readPublishedSessionIndex(database, sessionPath, "turnmarker1").chunks;
+    const initial = readPublishedSessionIndex(database, sessionPath, "turnmarker1");
+    const before = initial.chunks;
     expect(before.length).toBeGreaterThan(2);
 
     await seedSessionTranscript({ sessionId, sessionKey, messages: [turn(5)] });
@@ -45,6 +46,9 @@ describe("memory session delta publication", () => {
     // Only the trailing chunk may change; every earlier row stays untouched.
     expect(kept.length).toBeGreaterThanOrEqual(before.length - 1);
     expect(after.chunks).toEqual(expect.arrayContaining(kept));
+    expect(readPublishedSessionIndex(database, sessionPath, "turnmarker1").search).toEqual(
+      initial.search,
+    );
     expect(fixture.provider.embeddedBatchTexts.some((text) => text.includes("turnmarker1"))).toBe(
       false,
     );
@@ -52,5 +56,19 @@ describe("memory session delta publication", () => {
       true,
     );
     expect(manager.status().dirty).toBe(false);
+    const search = async () =>
+      (await manager.search("turnmarker1", { lexicalOnly: true, sources: ["sessions"] })).map(
+        ({ path, startLine, endLine, snippet, source }) => ({
+          path,
+          startLine,
+          endLine,
+          snippet,
+          source,
+        }),
+      );
+    const incrementalResults = await search();
+    expect(incrementalResults.length).toBeGreaterThan(0);
+    await manager.sync({ reason: "full-comparison", force: true });
+    expect(await search()).toEqual(incrementalResults);
   });
 });

@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -24,6 +24,9 @@ vi.mock("node:worker_threads", async () =>
 
 const observer = useReconcileWorkerObserver();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+beforeEach(() => setRuntimeConfigSnapshot({}));
+afterEach(() => clearRuntimeConfigSnapshot());
 
 async function seedPendingBacklogs(env: NodeJS.ProcessEnv, backlogs: Record<string, number>) {
   for (const [agentId, count] of Object.entries(backlogs)) {

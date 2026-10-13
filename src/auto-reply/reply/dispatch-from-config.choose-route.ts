@@ -56,7 +56,10 @@ import {
   type ReplyDispatchDeliveryOutcome,
 } from "./reply-dispatcher.js";
 import type { ReplyDispatchOperation } from "./reply-dispatcher.types.js";
-import { isDispatchFinalReplySessionWriterAuthorized } from "./session-writer-delivery-authority.js";
+import {
+  createSessionWriterDeliveryPreparation,
+  isDispatchFinalReplySessionWriterAuthorized,
+} from "./session-writer-delivery-authority.js";
 
 export async function chooseDispatchRoute(state: PrepareDispatchOperationReadyState) {
   const {
@@ -120,8 +123,12 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     allowsVerboseProgressDespiteSourceSuppression() &&
     params.replyOptions?.forceToolResultProgress === true;
   let finalReplyDeliveryStarted = false;
+  const prepareSessionWriterDelivery = createSessionWriterDeliveryPreparation({
+    storePath: sessionStoreEntry.storePath,
+    retain: (release) => registerReplyDispatcherSettledTask(dispatcher, release),
+  });
   const isSessionWriterDeliveryAuthorized = (payload: ReplyPayload) =>
-    isDispatchFinalReplySessionWriterAuthorized(payload, sessionStoreEntry.storePath, sessionKey);
+    isDispatchFinalReplySessionWriterAuthorized(payload, sessionKey);
   const shouldSuppressLateTextOnlyToolProgress = (payload: ReplyPayload) =>
     finalReplyDeliveryStarted && !requiresDurableToolResultDelivery(payload);
   // Durable inter-tool commentary lane: with verbose progress on, preamble
@@ -346,7 +353,6 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     queuedFinal: boolean;
     routedFinalCount: number;
     suppressionReason?: NormalizeReplySkipReason;
-    sessionWriterDeliveryRevoked?: true;
     dispatcherOutcome?: Promise<ReplyDispatchDeliveryOutcome>;
     routedOutcome?: ReplyDispatchDeliveryOutcome;
   }> => {
@@ -495,9 +501,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
         return { blockDeliveryOutcome, pendingBlock, queuedFinal: false, routedFinalCount: 0 };
       }
     }
-    if (!isSessionWriterDeliveryAuthorized(normalizedPayload)) {
-      return { queuedFinal: false, routedFinalCount: 0, sessionWriterDeliveryRevoked: true };
-    }
+    await prepareSessionWriterDelivery(normalizedPayload);
     const transcriptMirrorSessionKey =
       acpDispatchSessionKey ?? sessionStoreEntry.sessionKey ?? sessionKey;
     const transcriptMirrorSourceId =
@@ -556,9 +560,6 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
           ? normalizeOptionalString(normalizedPayload.text)
           : undefined;
       if (fallbackText && shouldRetryReplyDispatch(routedOutcome)) {
-        if (!isSessionWriterDeliveryAuthorized(normalizedPayload)) {
-          return { queuedFinal: false, routedFinalCount: 0, sessionWriterDeliveryRevoked: true };
-        }
         result =
           (await routeFinalPayload(
             copyReplyPayloadMetadata(normalizedPayload, { text: fallbackText }),
@@ -583,9 +584,6 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       };
     }
     throwIfFinalDeliveryAborted();
-    if (!isSessionWriterDeliveryAuthorized(normalizedPayload)) {
-      return { queuedFinal: false, routedFinalCount: 0, sessionWriterDeliveryRevoked: true };
-    }
     markInboundDedupeReplayUnsafe();
     const finalDeliveryCapture = transcriptMirror ? {} : undefined;
     const deliveredTranscriptMirror = transcriptMirror

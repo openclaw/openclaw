@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { resolveSandboxWorkspaceAuthority } from "../../agents/sandbox/workspace-authority.js";
+import { withPreparedSessionCapabilityRead } from "../../agents/subagents/spawn/subagent-session-store.js";
 import { runWithLocalStateOwner } from "../../cli/local-state-owner.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveSqliteSessionKey } from "../../config/sessions/session-accessor.sqlite-scope-helpers.js";
@@ -291,17 +292,19 @@ function createRuntimeSandbox(agent: PluginRuntime["agent"]): PluginRuntime["san
           sessionKey: params.sessionKey,
           preparedSessionEntry: sessionEntry ?? null,
         });
-        const authority = resolveSandboxWorkspaceAuthority({
-          ...params,
-          sessionEntry,
-          preparedRuntimeStatus,
-        });
+        const authority = await withPreparedSessionCapabilityRead(() =>
+          resolveSandboxWorkspaceAuthority({
+            ...params,
+            sessionEntry,
+            preparedRuntimeStatus,
+          }),
+        );
         if (!authority.sandboxed || authority.confinementError) {
           return authority;
         }
         const { resolveSandboxContext } = await import("../../agents/sandbox/context.js");
         assertCurrent();
-        await resolveSandboxContext({
+        const sandbox = await resolveSandboxContext({
           config: params.config,
           agentId: params.agentId,
           sessionKey: params.sessionKey,
@@ -310,8 +313,12 @@ function createRuntimeSandbox(agent: PluginRuntime["agent"]): PluginRuntime["san
           preparedRuntimeStatus,
           assertCurrent,
         });
-        assertCurrent();
-        return authority;
+        try {
+          assertCurrent();
+          return authority;
+        } finally {
+          sandbox?.[Symbol.dispose]?.();
+        }
       };
       return source && !("kind" in source)
         ? source.actor.sessions.withSharedState(prepare)

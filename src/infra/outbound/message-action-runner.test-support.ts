@@ -438,22 +438,12 @@ export function createPinboardMessageActionBootstrapRegistryMock() {
               deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
               resolveDeliveryTarget: resolveIMessageTarget,
             },
-            edit: {
-              aliases: ["chatGuid", "chatIdentifier", "chatId", "messageId"],
-              deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
-              resolveDeliveryTarget: resolveIMessageTarget,
-            },
             unsend: {
               aliases: ["chatGuid", "chatIdentifier", "chatId", "messageId"],
               deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
               resolveDeliveryTarget: resolveIMessageTarget,
             },
             "upload-file": { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
-            poll: {
-              aliases: ["chatGuid", "chatIdentifier", "chatId"],
-              deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
-              resolveDeliveryTarget: resolveIMessageTarget,
-            },
             "poll-vote": {
               aliases: ["chatGuid", "chatIdentifier", "chatId", "pollId", "messageId"],
               deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],

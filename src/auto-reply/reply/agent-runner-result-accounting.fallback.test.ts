@@ -182,7 +182,6 @@ it("does not persist or project a fallback for the selected model's wire identit
     buildGatewaySessionRow({
       cfg: context.cfg,
       agentId: "main",
-      skipTranscriptUsageFallback: true,
       lightweightListRow: true,
       storePath,
       store: { [context.sessionKey!]: stored },
@@ -252,7 +251,6 @@ it.each([false, true])(
       buildGatewaySessionRow({
         cfg: context.cfg,
         agentId: "main",
-        skipTranscriptUsageFallback: true,
         lightweightListRow: true,
         storePath,
         store: { [context.sessionKey!]: rowEntry },

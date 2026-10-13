@@ -55,6 +55,46 @@ afterEach(() => {
 });
 
 describe("publication receipt reads", () => {
+  it("reads personal options and receipts while shared identity discovery is pending", async ({
+    signal,
+  }) => {
+    await withReadFixture(
+      async (fixture) => {
+        const entered = createDeferredCore();
+        const release = createDeferredCore();
+        vi.mocked(
+          publicationAvailability.prepareCurrentGitHubPublicationOptionsIdentity,
+        ).mockImplementationOnce(async () => {
+          entered.resolve();
+          await release.promise;
+          return {
+            source: publisher.source,
+            account: { accountId: publisher.accountId, login: publisher.login, avatarUrl: null },
+          };
+        });
+        const respond = vi.fn();
+        const request = fixture.invoke("sessions.github.options", { sessionKey }, respond);
+        try {
+          await withinTest(entered.promise, signal);
+          expect(fixture.personalConnectionStatus).toHaveBeenCalledOnce();
+          expect(fixture.personalPending).toHaveBeenCalledOnce();
+          expect(fixture.latestShared).toHaveBeenCalledOnce();
+          expect(respond).not.toHaveBeenCalled();
+        } finally {
+          release.resolve();
+          await request;
+        }
+        expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
+          personal: expect.objectContaining({ state: "disconnected" }),
+          shared: publisher,
+          pendingPersonal: null,
+          latestShared: receipt,
+        });
+      },
+      { personal: true },
+    );
+  });
+
   it.each([
     { httpStatus: 401, reason: "unavailable" },
     { httpStatus: 429, reason: "rate_limited" },
@@ -379,11 +419,9 @@ describe("publication receipt reads", () => {
             expect(respond).toHaveBeenCalledOnce();
             if (phase === "refresh") {
               expect(mocks.runCommandBuffered).not.toHaveBeenCalled();
-              expect(fixture.personalConnectionStatus).not.toHaveBeenCalled();
             }
-            if (phase !== "receipt") {
-              expect(fixture.latestShared).not.toHaveBeenCalled();
-            }
+            expect(fixture.personalConnectionStatus).toHaveBeenCalledOnce();
+            expect(fixture.latestShared).toHaveBeenCalledOnce();
           } finally {
             pending.resolve();
             await vi.advanceTimersByTimeAsync(0);
@@ -480,12 +518,12 @@ describe("publication receipt reads", () => {
             () => {},
           );
         }
-        if (change === "github-unavailable") {
-          fixture.personalConnectionStatus.mockImplementationOnce(async (action) => ({
-            ...(await personalGitHubStatus(action)),
-            state: "unavailable",
-          }));
-        }
+        const statusReady = createDeferredCore();
+        fixture.personalConnectionStatus.mockImplementationOnce(async (action) => {
+          const status = await personalGitHubStatus(action);
+          statusReady.resolve();
+          return change === "github-unavailable" ? { ...status, state: "unavailable" } : status;
+        });
         const entered = createDeferredCore();
         const pending = createDeferredCore<SessionGitHubStatusResult | null>();
         const personalReceipt: SessionGitHubStatusResult = {
@@ -504,18 +542,13 @@ describe("publication receipt reads", () => {
         const respond = vi.fn();
         const request = fixture.invoke("sessions.github.options", { sessionKey }, respond);
         try {
-          await Promise.race([
-            entered.promise,
-            request.then(() => {
-              throw new Error("Options completed before the held receipt read started.");
-            }),
-          ]);
+          await awaitGateBeforeSettlement(
+            Promise.all([entered.promise, statusReady.promise]),
+            request,
+            "Options completed before status was prepared and the receipt read was held.",
+          );
           expect(respond).not.toHaveBeenCalled();
-          if (phase === "personal") {
-            expect(fixture.latestShared).not.toHaveBeenCalled();
-          } else {
-            expect(fixture.latestShared).toHaveBeenCalledOnce();
-          }
+          expect(fixture.latestShared).toHaveBeenCalledOnce();
 
           if (change === "scope") {
             fixture.client.connect.scopes = [];
@@ -590,11 +623,7 @@ describe("publication receipt reads", () => {
               undefined,
               expect.objectContaining({ code: "FORBIDDEN" }),
             );
-            if (phase === "personal") {
-              expect(fixture.latestShared).not.toHaveBeenCalled();
-            } else {
-              expect(fixture.latestShared).toHaveBeenCalledOnce();
-            }
+            expect(fixture.latestShared).toHaveBeenCalledOnce();
           }
         } finally {
           pending.resolve(null);

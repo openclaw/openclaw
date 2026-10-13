@@ -28,9 +28,12 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/subagents/spawn/subagent-spawn.incognito.test.ts",
   "src/agents/tools/sessions-send-tool.incognito.test.ts",
   "src/agents/tools/message-tool.current-prompt-reaction.test.ts",
+  "src/agents/tools/message-tool.hosted-transport.test.ts",
+  "src/agents/tools/sessions-tool.self-archive.test.ts",
   "src/agents/tools/terminal-tool.incognito.test.ts",
   "src/agents/interrupted-input-context.integration.test.ts",
   // Physical admission and descriptor custody belong to the application host, not an unhosted test Worker.
+  "src/infra/database-engine/physical-facts.test.ts",
   "src/infra/postgres-sync/locks.test.ts",
   "src/acp/runtime/session-meta-read.cache.test.ts",
   "src/state/user-profile-catalog-identity.read.test.ts",
@@ -69,6 +72,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/runtime-recovery.incognito.test.ts",
   "src/agents/cli-runner/history-boundary.incognito.test.ts",
   "src/agents/sandbox/runtime-status.incognito.test.ts",
+  "src/agents/harness/execution-environment.worker.test.ts",
   "src/agents/harness/host-capability.node-authority.test.ts",
   "src/state/openclaw-state-db-current-reader.test.ts",
   "src/state/openclaw-state-db-existing-write.test.ts",
@@ -203,10 +207,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/reply/agent-runner.media-ownership.test.ts",
   "src/auto-reply/reply/agent-runner-result-accounting.fallback.test.ts",
   "src/auto-reply/reply/dispatch-from-config.pending-final.test.ts",
-  "src/auto-reply/reply/dispatch-from-config.verbose-worker.test.ts",
   "src/auto-reply/reply/before-deliver.test.ts",
   "src/auto-reply/reply/route-reply.delivery-result.test.ts",
-  "src/auto-reply/reply/followup-turn-execution.worker.test.ts",
   "src/auto-reply/reply/queue.pending-inputs.test.ts",
   "src/agents/sandbox/runtime-status.session-override.test.ts",
   "src/auto-reply/reply/agent-runner-steer-adoption.worker.test.ts",
@@ -932,6 +934,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/reply/commands-plugins.install.test.ts",
   "src/auto-reply/reply/agent-runner-node-authority.test.ts",
   "src/auto-reply/reply/commands-plugins.install-clawhub-spec.test.ts",
+  "src/system-agent/setup-inference-codex.authority.test.ts",
+  "src/system-agent/setup-inference-credentials.authority.test.ts",
   "src/system-agent/setup-inference-credentials.lifecycle.test.ts",
   "src/system-agent/setup-inference.provider-install-owner.test.ts",
   "src/system-agent/setup-inference.groq-external.integration.test.ts",
@@ -1240,6 +1244,7 @@ const databaseWorkerCoreTestFileSet = new Set(databaseWorkerCoreTestFiles);
 
 // Preserve watch admission for consumers previously inferred into fast lanes.
 export const databaseWorkerCoreFormerFastKinds = new Map([
+  ["src/agents/harness/execution-environment.worker.test.ts", "unitFastIsolated"],
   ["src/acp/event-ledger.prepared.test.ts", "unitFastIsolated"],
   ["src/acp/event-ledger.test.ts", "unitFastIsolated"],
   ["src/acp/translator.error-kind.test.ts", "unitFastIsolated"],

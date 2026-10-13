@@ -484,6 +484,15 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.documentHost.load(url)
     }
 
+    func reloadDashboard() {
+        guard self.pendingGatewaySwitch == nil else { return }
+        if self.isShowingFailurePage {
+            DashboardManager.shared.recoverDashboard(self)
+        } else if self.isTrustedDashboardDocument {
+            self.webView.reload()
+        }
+    }
+
     private func requestBrowserProfileImportOfferIfNeeded() {
         guard !self.isHiddenForExperience,
               self.browserProfileImportOfferIsArmed,
@@ -703,6 +712,9 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
 
     private func showLoadFailure(_ error: Error) {
         let nsError = error as NSError
+        if ControlUIDocumentHost.shouldIgnoreDashboardPolicyInterruption(
+            nsError, isShowingFailurePage: self.isShowingFailurePage)
+        { return }
         // A cancelled provisional navigation never commits, so the prior
         // document survives and stays command-capable; clearing live state
         // here would queue native commands forever with no reload to flush.
@@ -719,6 +731,13 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             refreshGatewayHealth()
             return
         }
+        self.showDashboardFailure(
+            error,
+            message: error.localizedDescription,
+            detail: String(localized: "Choose Reload to try loading the dashboard again."))
+    }
+
+    private func showDashboardFailure(_ error: Error, message: String, detail: String) {
         self.finishDocumentLoad(.failure(error))
         prepareForFailure()
         let urlDescription = GatewayEndpointStore.diagnosticURLString(for: self.currentURL)
@@ -728,9 +747,9 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             error=\(error.localizedDescription, privacy: .public)
             """)
         let html = DashboardFailurePage.html(
-            title: "Dashboard unavailable",
-            message: error.localizedDescription,
-            detail: "The dashboard window is open, but the web UI could not load from this endpoint.",
+            title: String(localized: "Dashboard unavailable"),
+            message: message,
+            detail: detail,
             url: self.currentURL)
         self.webView.loadHTMLString(html, baseURL: nil)
     }
@@ -1478,6 +1497,23 @@ extension DashboardWindowController {
         decidePolicyFor navigationResponse: WKNavigationResponse,
         decisionHandler: @escaping @MainActor @Sendable (WKNavigationResponsePolicy) -> Void)
     {
+        if webView === self.webView,
+           ControlUIDocumentHost.shouldShowDashboardResponseFailure(
+               navigationResponse.response,
+               isMainFrame: navigationResponse.isForMainFrame,
+               dashboardURL: self.currentURL),
+           let response = navigationResponse.response as? HTTPURLResponse
+        {
+            decisionHandler(.cancel)
+            self.showDashboardFailure(
+                URLError(.badServerResponse),
+                message: String(
+                    format: String(localized: "The Gateway returned HTTP %ld (%@)."),
+                    response.statusCode,
+                    HTTPURLResponse.localizedString(forStatusCode: response.statusCode).capitalized),
+                detail: String(localized: "Choose Reload to try loading the dashboard again."))
+            return
+        }
         guard let tab = self.nativeBrowser.browserTab(for: webView) else {
             decisionHandler(.allow)
             return
