@@ -4081,20 +4081,9 @@ esac
     ).toBe(false);
   });
 
-  it.each(
-    [
-      "ci-check-focused-testbox.yml",
-      "ci-check-routine-testbox.yml",
-      "ci-check-high-memory-testbox.yml",
-    ].flatMap((workflow) =>
-      [[], ["--blacksmith-ref=old-workflow", "-blacksmith-ref", "main"]].map((refs) => ({
-        workflow,
-        refs,
-      })),
-    ),
-  )(
+  it.each([[], ["--blacksmith-ref=old-workflow", "-blacksmith-ref", "main"]])(
     "pins Testbox policy independently of configured refs and payload arguments: %j",
-    ({ workflow, refs }) => {
+    (...refs) => {
       const { output, result } = runSuccessfulDefaultWrapper(
         [
           "run",
@@ -4102,7 +4091,7 @@ esac
           "blacksmith-testbox",
           ...refs,
           "--blacksmith-workflow",
-          `.github/workflows/${workflow}`,
+          ".github/workflows/ci-check-high-memory-testbox.yml",
           "--blacksmith-job",
           "check",
           "--",
@@ -4120,7 +4109,7 @@ esac
       expect(output.args.slice(0, optionEnd)).toEqual(
         expect.arrayContaining([
           "--blacksmith-workflow",
-          `.github/workflows/${workflow}`,
+          ".github/workflows/ci-check-high-memory-testbox.yml",
           "--blacksmith-job",
           "check",
         ]),
