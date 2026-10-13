@@ -180,9 +180,10 @@ the agent's current embedding settings; status inspection remains read-only.
 
 Search-triggered maintenance applies pending memory-file changes incrementally
 while searches remain available. Session transcript indexing waits until the
-agent has had no transcript changes or running turns for 30 seconds. Continuous
-transcript activity defers indexing for at most about five minutes, plus embedding
-time; a running turn always takes priority. One pass covers the agent's pending
+agent has had no transcript changes or running turns for 30 seconds. While the
+agent is idle, continuous transcript changes defer indexing for at most about five
+minutes, plus embedding time. Running and back-to-back turns can defer it longer:
+each return to idle starts a fresh quiet period. One pass covers the agent's pending
 sessions, sharing transcript preparation, embedding-cache reads, and bounded
 publication transactions. If a turn starts during a pass, indexing finishes its
 current bounded group and resumes after the next quiet period.
