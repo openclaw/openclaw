@@ -13,8 +13,8 @@ The agent gets **one tool** for browser automation:
 
 How it maps:
 
-- `browser open` honors `timeoutMs` for opening navigation, capped at 120 seconds.
-  Playwright-backed profiles keep the 30-second default. If the load event times
+- On Playwright-backed profiles, `browser open` honors `timeoutMs` for opening
+  navigation, capped at 120 seconds, with a 30-second default. If the load event times
   out after a page commits, `open` returns the usable tab after navigation safety
   checks; it may still be loading. Use `snapshot` or `act` with `kind: "wait"` to
   inspect or wait for the content you need. Uncommitted or blocked pages still
