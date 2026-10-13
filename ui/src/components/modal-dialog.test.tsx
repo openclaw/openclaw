@@ -11,6 +11,7 @@ import {
   nextFrame,
 } from "../test-helpers/modal-dialog.ts";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
+import { flush } from "../test-helpers/solid-settle.ts";
 import "./modal-dialog.ts";
 
 let container: HTMLDivElement;
@@ -316,6 +317,8 @@ describe("openclaw-modal-dialog", () => {
         await commitRender(appHost);
 
         expect(appHost.parentElement).toBe(shell);
+        await vi.dynamicImportSettled();
+        flush();
         expect(appHost.querySelector(".app-toast__message")?.textContent).toBe("Saved");
         expect(modal.querySelector(".app-toast")).toBeNull();
       } finally {
