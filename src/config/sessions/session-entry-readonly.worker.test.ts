@@ -453,6 +453,9 @@ it.runIf(process.platform !== "win32").each([
       const replacement = retarget
         ? openOpenClawAgentDatabase({ agentId: "main", path: path("replacement.sqlite"), env })
         : undefined;
+      if (replacement) {
+        writeSessionEntry(replacement, sessionKey, { sessionId: "successor", updatedAt: 1 });
+      }
       const alias = path("custom.sqlite");
       symlinkSync(original.path, alias);
       let consumed = false;
@@ -479,18 +482,23 @@ it.runIf(process.platform !== "win32").each([
           if (replacement) {
             unlinkSync(alias);
             symlinkSync(replacement.path, alias);
+            owner.assertCurrent();
           }
           return read.value;
         },
       );
-      if (retarget) {
-        await expect(pending).rejects.toThrow(
-          "Session database target changed outside captured discovery custody",
-        );
-      } else {
-        await expect(pending).resolves.toMatchObject({ sessionId: "original" });
-      }
+      await expect(pending).resolves.toMatchObject({ sessionId: "original" });
       expect(consumed).toBe(true);
+      if (replacement) {
+        await expect(
+          readSessionEntryReadOnlyInWorker({
+            agentId: logicalAgentId,
+            sessionKey,
+            storePath: path("custom.json"),
+            env,
+          }),
+        ).resolves.toMatchObject({ sessionId: "successor" });
+      }
     });
   },
 );

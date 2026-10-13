@@ -101,6 +101,13 @@ identity, and open admission still rejects replacements that collide with a live
 owner. Creation and schema-maintenance requests keep their target checks at the
 actual effect.
 
+Session readers likewise resolve a selected store once and retain its canonical
+target for the read. A creator borrower stops checking its original alias after
+the worker publishes the admitted file identity. Retargeting an alias does not
+redirect or invalidate those retained operations; a fresh lookup resolves the
+new target. Worker opens still check physical identity, and source checks used
+for authorization or cross-store effects remain separate from ordinary reads.
+
 Retained task workers request admission facts through their existing relay when
 needed. Task messages must not copy the global admission snapshot. Committed
 session deletion retires its exact receipt scopes, including windows removed by
