@@ -21,7 +21,10 @@ import {
   normalizeTraceContext,
 } from "./service-trace-context.js";
 
-export function createDiagnosticsTraceRuntime(tracer: Tracer) {
+export function createDiagnosticsTraceRuntime(
+  tracer: Tracer,
+  options: { captureRootOperationSpans?: boolean } = {},
+) {
   const activeTrustedSpans = new Map<string, ReturnType<typeof tracer.startSpan>>();
   const activeTrustedSpanAliases = new Map<
     string,
@@ -350,6 +353,8 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
   };
   return {
     tracer,
+    // Gateway RPC and phase spans without a parent each start a one-span trace.
+    captureRootOperationSpans: options.captureRootOperationSpans !== false,
     activeTrustedSpans,
     activeTrustedSpanAliases,
     trustedSpanAliasKey,

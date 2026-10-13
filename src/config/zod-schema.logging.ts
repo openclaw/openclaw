@@ -37,6 +37,8 @@ export const DiagnosticsConfigSchema = z
         flushIntervalMs: z.number().int().nonnegative().optional(),
         /** Opt in to raw non-system message/tool content in OTEL span attributes. */
         captureContent: z.boolean().optional(),
+        /** Export gateway RPC and diagnostic phase spans that would start their own trace. */
+        captureRootOperationSpans: z.boolean().optional(),
       })
       .optional(),
     cacheTrace: z

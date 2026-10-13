@@ -759,3 +759,56 @@ test.each([false, true])(
     expect(sdk.exporter.getFinishedSpans()).toHaveLength(2);
   },
 );
+
+test("drops parentless Gateway RPC and phase spans when root operation spans are off", async () => {
+  await startOtelService({
+    traces: true,
+    configure: (ctx) => {
+      ctx.config.diagnostics!.otel!.captureRootOperationSpans = false;
+    },
+  });
+  await waitForDiagnosticEventsDrained();
+  const caller = sdk.provider.getTracer("rpc-caller").startSpan("caller");
+  const parent = createDiagnosticTraceContext({
+    traceId: caller.spanContext().traceId,
+    spanId: caller.spanContext().spanId,
+  });
+  const childTrace = createChildDiagnosticTraceContext(parent);
+  const phase = {
+    type: "diagnostic.phase.completed" as const,
+    startedAt: Date.now() - 5,
+    durationMs: 5,
+  };
+  try {
+    emit({
+      type: "gateway.rpc",
+      method: "health",
+      phase: "response",
+      outcome: "ok",
+      durationMs: 10,
+    });
+    emit({
+      type: "gateway.rpc",
+      method: "sessions.list",
+      phase: "response",
+      outcome: "ok",
+      durationMs: 12,
+      trace: childTrace,
+    });
+    emit({ ...phase, name: "phase.root" });
+    emit({ ...phase, name: "phase.nested", trace: childTrace });
+    emitDiagnosticEvent({ ...phase, name: "phase.untrusted.root" });
+    await waitForDiagnosticEventsDrained();
+
+    const spans = sdk.exporter.getFinishedSpans();
+    const rpc = spans.filter((span) => span.name === "openclaw.gateway.rpc.response");
+    expect(rpc.map((span) => span.attributes["openclaw.gateway.rpc.method"])).toEqual([
+      "sessions.list",
+    ]);
+    expect(rpc[0]?.parentSpanContext?.spanId).toBe(caller.spanContext().spanId);
+    const phases = spans.filter((span) => span.name === "openclaw.diagnostic.phase");
+    expect(phases.map((span) => span.attributes["openclaw.phase"])).toEqual(["phase.nested"]);
+  } finally {
+    caller.end();
+  }
+});

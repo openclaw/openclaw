@@ -1,4 +1,4 @@
-import { ROOT_CONTEXT, SpanStatusCode } from "@opentelemetry/api";
+import { context as otelContextApi, ROOT_CONTEXT, SpanStatusCode, trace } from "@opentelemetry/api";
 import {
   isInternalDiagnosticEventMetadata,
   normalizeDiagnosticValue,
@@ -318,18 +318,23 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
         spanAttrs[`openclaw.phase.detail.${key}`] =
           typeof value === "boolean" ? String(value) : value;
       }
+      const explicitParent = metadata.trusted
+        ? runtime.internalOrTrustedExplicitParentContext(evt, metadata)
+        : undefined;
+      if (
+        !runtime.captureRootOperationSpans &&
+        !explicitParent &&
+        (metadata.trusted || !trace.getSpan(otelContextApi.active()))
+      ) {
+        return;
+      }
       const span = runtime.spanWithDuration(
         "openclaw.diagnostic.phase",
         spanAttrs,
         evt.durationMs,
         {
           endTimeMs: evt.ts,
-          ...(metadata.trusted
-            ? {
-                parentContext:
-                  runtime.internalOrTrustedExplicitParentContext(evt, metadata) ?? ROOT_CONTEXT,
-              }
-            : {}),
+          ...(metadata.trusted ? { parentContext: explicitParent ?? ROOT_CONTEXT } : {}),
         },
       );
       span.end(evt.ts);

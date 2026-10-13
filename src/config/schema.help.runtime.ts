@@ -431,6 +431,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Interval in milliseconds for periodic telemetry flush from buffers to the collector. Increase to reduce export chatter, or lower for faster visibility during active incident response.",
   "diagnostics.otel.captureContent":
     "Opt-in OTEL span content capture. Defaults to off; true captures non-system message and tool content.",
+  "diagnostics.otel.captureRootOperationSpans":
+    "Export gateway RPC and diagnostic phase spans that have no parent span. Defaults to on; false keeps those spans only when they nest under a run or another span, so every Control UI or tool RPC does not become its own one-span trace. Their metrics are unaffected.",
   "diagnostics.cacheTrace.enabled":
     "Log cache trace snapshots for embedded agent runs (default: false).",
   "tools.exec.applyPatch.enabled":
