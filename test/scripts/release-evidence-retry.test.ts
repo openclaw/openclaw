@@ -30,7 +30,7 @@ function readPluginArtifactMetadata() {
   if (!script) {
     throw new Error("Plugin artifact readback must use the release evidence read boundary");
   }
-  const write = vi.fn();
+  let output = "";
   runInNewContext(script.replace(/^import .*;\n/mu, ""), {
     runReleaseCiGh,
     URLSearchParams,
@@ -40,10 +40,14 @@ function readPluginArtifactMetadata() {
         GITHUB_REPOSITORY: "openclaw/openclaw",
         RUN_ID: "42",
       },
-      stdout: { write },
+      stdout: {
+        write: (value: string) => {
+          output += value;
+        },
+      },
     },
   });
-  return JSON.parse(write.mock.calls[0][0]);
+  return JSON.parse(output);
 }
 
 afterEach(() => {
