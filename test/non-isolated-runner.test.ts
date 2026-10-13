@@ -524,7 +524,7 @@ async function verifyRunnerCleanup(signal: AbortSignal) {
       await fs.mkdir(path.dirname(path.join(root, name)), { recursive: true });
       await fs.writeFile(path.join(root, name), content, "utf8");
     }
-    // This real source uses only type imports; Node can retain its native generation.
+    // The fixture primes Node's native generation before Vite imports this source.
     await fs.writeFile(
       path.join(root, "vitest.config.ts"),
       `import { sharedVitestConfig } from ${JSON.stringify(path.join(repoRoot, "test", "vitest", "vitest.shared.config.ts"))};
@@ -540,6 +540,7 @@ export default defineConfig({
   resolve: sharedVitestConfig.resolve,
   test: {
     name: "non-isolated-runner",
+    execArgv: ["--experimental-transform-types"],
     isolate: false,
     fileParallelism: false,
     maxWorkers: 1,
