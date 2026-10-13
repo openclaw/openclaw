@@ -41,7 +41,7 @@ import {
 import { resolveSessionDiffSidebarContent } from "./components/chat-session-workspace.ts";
 import type { SidebarContent } from "./components/chat-sidebar-content-types.ts";
 import type { SidebarPanelDefinition } from "./components/chat-sidebar-region-types.ts";
-import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
+import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.tsx";
 import type { SidebarSlotId } from "./sidebar-layout-types.ts";
 import { sidebarMainPanel } from "./sidebar-layout.ts";
 
@@ -55,10 +55,8 @@ type SidebarPanelDefinitionParams = {
   subagentsInputRegion: "page" | "dock";
   subagentsPresented: PresentationValue;
   processesPresented?: PresentationValue;
-  onRefreshProcesses?: () => void;
   subagentsAvailable: boolean;
   subagentsShowRequest?: () => string | null | undefined;
-  onRefreshSubagents: () => void;
   onSubagentSessionSelect: (
     sessionKey: string,
     options?: PaneSessionChangeOptions,
@@ -107,11 +105,6 @@ type SidebarPanelDefinitionParams = {
   isPluginPanelPresented: (slot: SidebarSlotId) => PresentationValue;
 };
 
-type SidebarPanelTextKey =
-  | Exclude<SidebarSlotId, `plugin:${string}` | "detail" | "workspace" | "link-reader">
-  | "review"
-  | "files";
-
 function panelExternalLink(href: string | null | undefined, label: string) {
   return href
     ? html`<a
@@ -138,62 +131,51 @@ export function sidebarPanelDefinitions(
     dashboardAvailable: () => params.dashboard !== nothing,
   };
   const definePanel = (
-    slot: Exclude<SidebarSlotId, `plugin:${string}`>,
-    textKey: SidebarPanelTextKey,
+    slot: Exclude<SidebarSlotId, `plugin:${string}` | "link-reader">,
     icon: TemplateResult,
     content: TemplateResult | typeof nothing | null,
     headerAction?: TemplateResult,
-  ): SidebarPanelDefinition => ({
-    slot,
-    label: t(`chat.sidePanel.${textKey}`),
-    icon,
-    available: Boolean(
-      panelContext &&
-      (slot === "portal"
-        ? state &&
-          canCallGatewayMethod(
-            {
-              hello: state.hello,
-              client: state.client,
-              phase: state.connected ? "connected" : "stopped",
-            },
-            "portal.list",
-            "operator.read",
-          )
-        : slot === "subagents" || slot === "processes"
-          ? panelContext.subagentsAvailable
-          : SIDEBAR_PANEL_SHORTCUTS[slot]?.available(panelContext)),
-    ),
-    content,
-    loading: renderPanelLoadingSkeleton(
-      textKey === "conversation" || textKey === "companion"
-        ? "chat"
-        : textKey === "subagents" || textKey === "processes"
-          ? "file-list"
-          : textKey === "portal"
-            ? "browser"
-            : textKey === "dashboard"
-              ? "board"
-              : textKey,
-      t(textKey === "desktop" ? "desktop.connecting" : "common.loading"),
-    ),
-    empty: { description: t(`chat.sidePanel.${textKey}Empty`) },
-    headerAction,
-    shortcut: SIDEBAR_PANEL_SHORTCUTS[slot]?.combo,
-  });
-  const refreshAction = (panel: "subagents" | "processes", onRefresh?: () => void) =>
-    params
-      ? html`<button
-          type="button"
-          class="rail-header__action"
-          aria-label=${t(`chat.${panel}Panel.refresh`)}
-          title=${t(`chat.${panel}Panel.refresh`)}
-          ?disabled=${!params.connected}
-          @click=${onRefresh}
-        >
-          ${icons.refresh}
-        </button>`
-      : undefined;
+  ): SidebarPanelDefinition => {
+    const textKey = slot === "detail" ? "review" : slot === "workspace" ? "files" : slot;
+    return {
+      slot,
+      label: t(`chat.sidePanel.${textKey}`),
+      icon,
+      available: Boolean(
+        panelContext &&
+        (slot === "portal"
+          ? state &&
+            canCallGatewayMethod(
+              {
+                hello: state.hello,
+                client: state.client,
+                phase: state.connected ? "connected" : "stopped",
+              },
+              "portal.list",
+              "operator.read",
+            )
+          : slot === "subagents" || slot === "processes"
+            ? panelContext.subagentsAvailable
+            : SIDEBAR_PANEL_SHORTCUTS[slot]?.available(panelContext)),
+      ),
+      content,
+      loading: renderPanelLoadingSkeleton(
+        textKey === "conversation" || textKey === "companion"
+          ? "chat"
+          : textKey === "subagents" || textKey === "processes"
+            ? "file-list"
+            : textKey === "portal"
+              ? "browser"
+              : textKey === "dashboard"
+                ? "board"
+                : textKey,
+        t(textKey === "desktop" ? "desktop.connecting" : "common.loading"),
+      ),
+      empty: { description: t(`chat.sidePanel.${textKey}Empty`) },
+      headerAction,
+      shortcut: SIDEBAR_PANEL_SHORTCUTS[slot]?.combo,
+    };
+  };
   const terminal = state?.terminalAvailable
     ? html`<openclaw-terminal-panel
         embedded
@@ -309,9 +291,8 @@ export function sidebarPanelDefinitions(
     }
   }
   return [
-    definePanel("conversation", "conversation", icons.messageSquare, nothing),
+    definePanel("conversation", icons.messageSquare, nothing),
     definePanel(
-      "subagents",
       "subagents",
       icons.bot,
       state && params
@@ -326,10 +307,8 @@ export function sidebarPanelDefinitions(
             .onSessionSelect=${params.onSubagentSessionSelect}
           ></openclaw-chat-subagents-panel>`
         : null,
-      refreshAction("subagents", params?.onRefreshSubagents),
     ),
     definePanel(
-      "processes",
       "processes",
       icons.terminal,
       state && params
@@ -339,11 +318,9 @@ export function sidebarPanelDefinitions(
             .presented=${livePresentation(params.processesPresented ?? false)}
           ></openclaw-chat-processes-panel>`
         : null,
-      refreshAction("processes", params?.onRefreshProcesses),
     ),
     definePanel(
       "detail",
-      "review",
       icons.diff,
       detailContent?.kind === "loading"
         ? renderPanelLoadingSkeleton("review", t("common.loading"))
@@ -359,8 +336,8 @@ export function sidebarPanelDefinitions(
               )}`
             : null,
     ),
-    definePanel("terminal", "terminal", icons.terminal, terminal),
-    definePanel("browser", "browser", icons.globe, browser),
+    definePanel("terminal", icons.terminal, terminal),
+    definePanel("browser", icons.globe, browser),
     {
       slot: "link-reader",
       label: t("linkReader.title"),
@@ -383,10 +360,9 @@ export function sidebarPanelDefinitions(
       loading: renderPanelLoadingSkeleton("files", t("linkReader.loadingPreview")),
       empty: { description: t("linkReader.urlPlaceholder") },
     },
-    definePanel("portal", "portal", icons.globe, portal),
-    definePanel("workspace", "files", icons.fileText, workspaceContent),
+    definePanel("portal", icons.globe, portal),
+    definePanel("workspace", icons.fileText, workspaceContent),
     definePanel(
-      "companion",
       "companion",
       icons.messageSquarePlus,
       companion,
@@ -406,19 +382,17 @@ export function sidebarPanelDefinitions(
     ),
     definePanel(
       "desktop",
-      "desktop",
       icons.monitor,
       desktop,
       panelExternalLink(params?.desktopFocusHref, t("desktop.openWindow")),
     ),
     definePanel(
       "discussion",
-      "discussion",
       icons.messageSquare,
       discussion,
       panelExternalLink(params?.discussionOpenUrl, t("chat.sessionDiscussion.openExternal")),
     ),
-    definePanel("dashboard", "dashboard", icons.layoutDashboard, params?.dashboard ?? null),
+    definePanel("dashboard", icons.layoutDashboard, params?.dashboard ?? null),
     ...[...pluginPanels].map(([slot, entry]): SidebarPanelDefinition => ({
       slot,
       label: entry?.value.label ?? slot.slice("plugin:".length),

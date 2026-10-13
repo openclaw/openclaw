@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { AgentWaitResult } from "../agents/run-wait.types.js";
 import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
@@ -20,6 +21,7 @@ import {
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetAgentEventsForTest } from "../infra/agent-events.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
@@ -266,12 +268,16 @@ describe("gateway compaction hot reload", () => {
             { sessionKey, message, idempotencyKey: nextId("compaction-chat") },
           );
           expect(started.status).toBe("started");
-          const completed = await gatewayClient.request<{ status: string }>(
+          const completed = await gatewayClient.request<AgentWaitResult>(
             "agent.wait",
             { runId: started.runId, timeoutMs: 30_000 },
             { timeoutMs: 35_000 },
           );
-          expect(completed.status).toBe("ok");
+          const diagnostic = redactSensitiveText(JSON.stringify(completed), { mode: "tools" })
+            .replaceAll(token, "[test-token]")
+            .replaceAll(tempHome, "[test-home]")
+            .slice(0, 4_000);
+          expect(completed.status, diagnostic).toBe("ok");
         };
 
         await sendChatAndWait("Warm the existing prepared model runtime.");

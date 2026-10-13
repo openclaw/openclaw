@@ -175,11 +175,8 @@ async function loadCronJobsProjectionPage<Row>(
   if (append && !state.cronJobsHasMore) {
     return;
   }
-  if (append) {
-    state.cronJobsLoadingMore = true;
-  } else {
-    state.cronLoading = true;
-  }
+  const loadingKey = append ? "cronJobsLoadingMore" : "cronLoading";
+  state[loadingKey] = true;
   state.cronJobsError = null;
   try {
     const offset = append ? Math.max(0, state.cronJobsNextOffset ?? state.cronJobs.length) : 0;
@@ -230,11 +227,7 @@ async function loadCronJobsProjectionPage<Row>(
       state.cronJobsError = formatUiError(err);
     }
   } finally {
-    if (append) {
-      state.cronJobsLoadingMore = false;
-    } else {
-      state.cronLoading = false;
-    }
+    state[loadingKey] = false;
     await drainPendingCronJobsReload(state, projection);
   }
 }

@@ -1,5 +1,7 @@
 import { clampPositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveBrowserNavigationTimeoutMs } from "./act-policy.js";
+import { resolveBrowserOperationRequestTimeoutMs } from "./client-actions.js";
 import {
   browserClientTimeout,
   postBrowserJson,
@@ -54,12 +56,11 @@ async function sendProfilePost(
   baseUrl: BrowserClientTarget,
   path: string,
   opts: BrowserClientProfileOptions | undefined,
-  fallbackTimeoutMs: number,
 ): Promise<void> {
   await requestBrowserJson(baseUrl, path, {
     profile: opts?.profile,
     method: "POST",
-    timeoutMs: browserClientTimeout(baseUrl, opts?.timeoutMs, fallbackTimeoutMs),
+    timeoutMs: browserClientTimeout(baseUrl, opts?.timeoutMs, 15000),
     signal: opts?.signal,
   });
 }
@@ -180,14 +181,14 @@ export async function browserStart(
   baseUrl?: BrowserClientTarget,
   opts?: BrowserClientProfileOptions,
 ): Promise<void> {
-  await sendProfilePost(baseUrl, "/start", opts, 15000);
+  await sendProfilePost(baseUrl, "/start", opts);
 }
 
 export async function browserStop(
   baseUrl?: BrowserClientTarget,
   opts?: BrowserClientProfileOptions,
 ): Promise<void> {
-  await sendProfilePost(baseUrl, "/stop", opts, 15000);
+  await sendProfilePost(baseUrl, "/stop", opts);
 }
 
 export type BrowserCreateProfileResult = {
@@ -239,8 +240,12 @@ export async function browserOpenTab(
     timeoutMs?: number;
     signal?: AbortSignal;
     managedOnly?: boolean;
+    /** Backend attachment allowance, independent of the navigation budget. */
+    requestTimeoutMs?: number;
   },
 ): Promise<BrowserOpenResult> {
+  const timeoutMs =
+    opts?.timeoutMs === undefined ? undefined : resolveBrowserNavigationTimeoutMs(opts.timeoutMs);
   return await postBrowserJson(
     baseUrl,
     "/tabs/open",
@@ -248,8 +253,12 @@ export async function browserOpenTab(
       url,
       ...(opts?.label ? { label: opts.label } : {}),
       ...(opts?.managedOnly ? { managedOnly: true } : {}),
+      ...(timeoutMs === undefined ? {} : { timeoutMs }),
     },
-    browserClientTimeout(baseUrl, opts?.timeoutMs, 15000),
+    Math.max(
+      clampPositiveTimerTimeoutMs(opts?.requestTimeoutMs) ?? 0,
+      resolveBrowserOperationRequestTimeoutMs(timeoutMs ?? 30_000),
+    ),
     opts,
   );
 }

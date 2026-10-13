@@ -16,15 +16,17 @@ import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-conte
 import { fenceUserProfileMutationAuthority, onUserProfilesChanged } from "./user-profile-events.js";
 import {
   getUserProfileDisplay,
-  getUserProfileDisplays,
+  hasMultipleSessionSharingIdentities,
   prepareUserProfileCatalog,
   prepareUserProfileIdentity,
   readUserProfileAliases,
   readUserProfileIdentity,
+  readResidentUserProfileAliases,
   captureResidentUserProfileAccess,
   isUserProfileCatalogReady,
   resolveUserProfileReference,
 } from "./user-profile-list.js";
+import { getUserProfileDisplaysNative } from "./user-profile-list.native.js";
 import {
   linkEmail,
   setAvatar,
@@ -56,6 +58,29 @@ function fixture() {
 }
 
 describe("resident profile display and reference catalog", () => {
+  it("never opens native storage from an unprepared runtime read", async () => {
+    const options = fixture();
+    const profile = ensureProfileForEmail("cold@example.test", options);
+    const native = vi.spyOn(stateReads, "withExistingOpenClawStateDatabaseReadOnly");
+    const queries = vi.spyOn(openOpenClawStateDatabase(options).db, "prepare");
+    expect(readUserProfileIdentity(profile.id, options)).toBeUndefined();
+    expect(readUserProfileAliases(profile.id, options)).toEqual(new Set([profile.id]));
+    expect(hasMultipleSessionSharingIdentities(options)).toBe(false);
+    expect(() => getUserProfileDisplay(profile.id, options)).toThrow("user profile not found");
+    expect(native).not.toHaveBeenCalled();
+    expect(queries).not.toHaveBeenCalled();
+
+    const catalog = await prepareUserProfileCatalog(options);
+    releases.push(catalog.release);
+    expect(getUserProfileDisplay(profile.id, options).displayName).toBe("cold");
+    queries.mockClear();
+    setDisplayName(profile.id, "Current", options);
+    queries.mockClear();
+    expect(getUserProfileDisplay(profile.id, options).displayName).toBe("Current");
+    expect(queries).not.toHaveBeenCalled();
+    expect(native).not.toHaveBeenCalled();
+  });
+
   it("prepares first physical admission after a retained absent catalog without native hydration", async () => {
     const options = fixture();
     const absent = await prepareUserProfileCatalog(options);
@@ -64,7 +89,9 @@ describe("resident profile display and reference catalog", () => {
     expect(fs.existsSync(options.path)).toBe(false);
     const profile = ensureProfileForEmail("appeared@example.test", options);
     expect(isUserProfileCatalogReady(options)).toBe(false);
-    const native = vi.spyOn(openOpenClawStateDatabase(options).db, "prepare");
+    const database = openOpenClawStateDatabase(options);
+    await database.walMaintenance.stop();
+    const native = vi.spyOn(database.db, "prepare");
     const current = await prepareUserProfileCatalog(options);
     releases.push(current.release);
     expect(current.readCurrentIdentity(profile.id)?.profileId).toBe(profile.id);
@@ -298,7 +325,7 @@ describe("resident profile display and reference catalog", () => {
               { identity, authenticationAlias: { kind: "email", email: "first@example.test" } },
               options,
             );
-      const seen = vi.fn(() => readUserProfileAliases(second.id, options));
+      const seen = vi.fn(() => readResidentUserProfileAliases(second.id, options));
       releases.push(sessionChanges.subscribe(seen));
       expect(() =>
         runOpenClawStateWriteTransaction(() => {
@@ -322,7 +349,6 @@ describe("resident profile display and reference catalog", () => {
       if (!head.ok || !head.value) {
         throw new Error("missing merge head");
       }
-      const headProfileId = head.value;
       setDisplayName(first.id, "Current person", options);
       setUserProfileRole(first.id, "reader", options);
       expect(setAvatar(first.id, new Uint8Array([1, 2]), "image/png", options).ok).toBe(true);
@@ -342,16 +368,13 @@ describe("resident profile display and reference catalog", () => {
         expect(resolveUserProfileReference(id.replaceAll("-", ""), options)).toEqual(head);
         expect(readUserProfileAliases(id, options)).toContain(first.id);
       }
-      expect([
-        ...getUserProfileDisplays([first.id, second.id, head.value, "missing"], options).values(),
-      ]).toEqual(Array.from({ length: 3 }, () => getUserProfileDisplay(headProfileId, options)));
       expect(native).not.toHaveBeenCalled();
     },
   );
 
-  it("reads only display columns for one-hop aliases and native text keys without creating missing storage", () => {
+  it("keeps native display reads bounded for one-hop aliases and text keys without creating missing storage", () => {
     const options = fixture();
-    expect(getUserProfileDisplays(["missing"], options).size).toBe(0);
+    expect(getUserProfileDisplaysNative(["missing"], options).size).toBe(0);
     expect(fs.existsSync(options.path)).toBe(false);
     const target = ensureProfileForEmail("target@example.test", options);
     const alias = ensureProfileForEmail("alias@example.test", options);
@@ -369,14 +392,11 @@ describe("resident profile display and reference catalog", () => {
       "INSERT INTO user_profiles (id, display_name, created_at, updated_at) VALUES (?, ?, ?, ?)",
     ).run(boundId, "Native text", 1, 1);
     const ids = [alias.id, dangling.id, requestedId, "missing"];
-    const displays = getUserProfileDisplays(ids, options);
+    const displays = getUserProfileDisplaysNative(ids, options);
     expect(displays.size).toBe(3);
-    for (const id of ids.slice(0, -1)) {
-      expect(displays.get(id)).toEqual(getUserProfileDisplay(id, options));
-    }
-    expect(displays.get(alias.id)?.id).toBe(target.id);
-    expect(displays.get(dangling.id)?.id).toBe(dangling.id);
-    expect(displays.get(requestedId)?.id).toBe(boundId);
+    expect(displays.get(alias.id)).toMatchObject({ id: target.id, displayName: "target" });
+    expect(displays.get(dangling.id)).toMatchObject({ id: dangling.id, displayName: "dangling" });
+    expect(displays.get(requestedId)).toMatchObject({ id: boundId, displayName: "Native text" });
 
     const nonStrictOptions = fixture();
     const nonStrictDb = openOpenClawStateDatabase(nonStrictOptions).db;
@@ -397,12 +417,9 @@ describe("resident profile display and reference catalog", () => {
         "INSERT INTO user_profiles (id, display_name, merged_into, updated_at) VALUES (?, ?, ?, 1)",
       )
       .run("blob-alias", "Alias", blobId);
-    expect(getUserProfileDisplays(["blob-alias"], nonStrictOptions).get("blob-alias")).toEqual(
-      getUserProfileDisplay("blob-alias", nonStrictOptions),
-    );
-    expect(getUserProfileDisplay("blob-alias", nonStrictOptions).displayName).toBe(
-      "Native BLOB target",
-    );
+    expect(
+      getUserProfileDisplaysNative(["blob-alias"], nonStrictOptions).get("blob-alias"),
+    ).toMatchObject({ displayName: "Native BLOB target" });
   });
 
   it("keeps dormant ambiguity and exact-ID precedence inside the allowed visibility scope", async () => {
@@ -508,6 +525,9 @@ describe("resident profile display and reference catalog", () => {
         value: target.id,
       });
       expect(readUserProfileAliases(source.id, options)).toEqual(new Set([source.id, target.id]));
+      expect(readResidentUserProfileAliases(source.id, options)).toEqual(
+        new Set([source.id, target.id]),
+      );
     }
     expect(reads).not.toHaveBeenCalled();
     expect(native).not.toHaveBeenCalled();

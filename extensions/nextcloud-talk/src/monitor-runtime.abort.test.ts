@@ -278,6 +278,7 @@ describe("Nextcloud Talk monitor abort", () => {
         await route.handler(later, retry);
         expect(retry.statusCode).toBe(503);
 
+        expect(res.writableEnded).toBe(false);
         release.resolve();
         await dispatch;
         expect(res.statusCode).toBe(200);

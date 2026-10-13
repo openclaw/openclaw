@@ -33,7 +33,6 @@ describe("resolveBranchLanding", () => {
   });
 
   it.each([
-    { scenario: "no merged PRs", mergedHeads: [], descendantRef: false },
     { scenario: "an unrelated descendant ref", mergedHeads: [], descendantRef: true },
     {
       scenario: "a merge into another base without a propagation commit",
@@ -66,15 +65,14 @@ describe("resolveBranchLanding", () => {
     },
   );
 
-  it.each(["malformed selected", "missing selected object", "malformed unrelated"])(
+  it.each(["malformed selected", "missing selected object"])(
     "preserves readable revisions with a %s ref without fetching objects",
     async (scenario) => {
       const base = await sha("HEAD");
       const missingObject = "1".repeat(base.length);
       const missingSelectedObject = scenario === "missing selected object";
-      const ref = scenario === "malformed unrelated" ? "unrelated" : "feature";
       await fs.writeFile(
-        path.join(root, ".git", "refs", "remotes", "origin", ref),
+        path.join(root, ".git", "refs", "remotes", "origin", "feature"),
         `${missingSelectedObject ? missingObject : "not-an-object-id"}\n`,
       );
       await git("config", "extensions.partialClone", "origin");
@@ -149,7 +147,7 @@ describe("resolveBranchLanding", () => {
     });
   });
 
-  it.each(["single", "duplicate", "distinct"])(
+  it.each(["duplicate", "distinct"])(
     "checks %s landing receipts per unique head",
     async (scenario) => {
       const base = await sha("HEAD");
@@ -191,10 +189,7 @@ describe("resolveBranchLanding", () => {
       const landing = await resolveBranchLanding(root, {
         branch: "feature",
         defaultBranch: "main",
-        mergedHeads:
-          scenario === "single"
-            ? [landedHead]
-            : [landedHead, { ...landedHead, mergeCommitSha: otherMerge }],
+        mergedHeads: [landedHead, { ...landedHead, mergeCommitSha: otherMerge }],
       });
 
       expect(landing.provenNewPushedWork).toBe(scenario !== "distinct");

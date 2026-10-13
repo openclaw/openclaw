@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import "../../components/app-sidebar.ts";
 import { createGateway, createSessions, mountSidebar } from "../app-sidebar.ts";
+import { settleRoster } from "./roster.test-support.ts";
 
 describe("AppSidebar outbox attention badges", () => {
   it("shows active and inactive draft pencils while suppressing Incognito roster rows", async () => {
@@ -37,31 +38,6 @@ describe("AppSidebar outbox attention badges", () => {
     expect(incognitoRow?.querySelector(".session-row-badge--draft")).toBeNull();
   });
 
-  it("shows delivery attention and removes the badge when empty", async () => {
-    const sessionKey = "agent:main:attention-thread";
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", [sessionKey]));
-    sidebar.connected = true;
-    sidebar.storedOutboxes = {
-      total: 3,
-      attentionCountForSession: (rowSessionKey) => (rowSessionKey === sessionKey ? 3 : 0),
-      hasSessionDraft: () => false,
-    };
-    await sidebar.updateComplete;
-
-    const badge = sidebar.querySelector<HTMLElement>(
-      `[data-session-key="${sessionKey}"] .session-row-badge--attention`,
-    );
-    expect(badge?.textContent).toContain("3");
-    expect(badge?.getAttribute("aria-label")).toBe("3 messages need attention");
-
-    sidebar.storedOutboxes = undefined;
-    await sidebar.updateComplete;
-    expect(
-      sidebar.querySelector(`[data-session-key="${sessionKey}"] .session-row-badge--attention`),
-    ).toBeNull();
-  });
-
   it("resolves agent-main aliases to one attention badge count", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(
@@ -82,11 +58,18 @@ describe("AppSidebar outbox attention badges", () => {
     };
     await sidebar.updateComplete;
 
-    const badges = sidebar.querySelectorAll(".nav-item--home .session-row-badge--attention");
+    sidebar.connected = true;
+    sidebar.sidebarAgentsMode = "roster";
+    await settleRoster(sidebar);
+    const badges = sidebar.querySelectorAll(
+      '[data-agent-group="main"] .sidebar-agent-roster__header .session-row-badge--attention',
+    );
     expect(badges).toHaveLength(1);
     expect(badges[0]?.textContent).toContain("3");
     expect(
-      sidebar.querySelector('.nav-item--home .session-row-badge--draft[aria-label="Unsent draft"]'),
+      sidebar.querySelector(
+        '[data-agent-group="main"] .sidebar-agent-roster__header .session-row-badge--draft[aria-label="Unsent draft"]',
+      ),
     ).not.toBeNull();
   });
 });

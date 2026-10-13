@@ -38,7 +38,10 @@ vi.mock("./config-exec-approvals.js", () => ({
   resolveOpenClawExecPolicyForCodexAppServer: () => ({}),
 }));
 vi.mock("./config-requirements.js", () => ({ readCodexRequirementsToml: () => undefined }));
-vi.mock("openclaw/plugin-sdk/exec-approvals-runtime", () => ({ loadExecApprovals: () => ({}) }));
+// mock-isolation: Native-thread handoff uses a fixed policy; approval database I/O is outside this fixture.
+vi.mock("openclaw/plugin-sdk/exec-approvals-runtime", () => ({
+  loadExecApprovalsReadOnlyAsync: async () => ({}),
+}));
 vi.mock("./launch-args.js", () => ({ isCodexAppServerProxyLaunch: () => false }));
 vi.mock("./client-runtime.js", () => ({ ensureCodexAppServerClientRuntime: mocks.ensure }));
 vi.mock("./plugin-app-cache-key.js", () => ({
@@ -93,6 +96,12 @@ function fixture() {
       authProfileStore: { version: 1, profiles: {} },
       hostCapabilities: createCodexTestHostCapabilities({
         assertActive: mocks.assert,
+        preparedEnvironment: () => ({
+          credentialScrubEnv: {},
+          localIdentityEnv: {},
+          managedLocalIdentity: false,
+          localGitConfigParameters: "'maintenance.auto=false' 'gc.auto=0'",
+        }),
         retainSourceAuthority: () => ({
           assertCurrent: mocks.assert,
           release: vi.fn(),
@@ -102,13 +111,15 @@ function fixture() {
     },
     run: async (operation) => operation(),
   };
+  const read = () =>
+    mocks.start.mock.calls.length > 0
+      ? { threadId: "native-thread", clientId: "native-client" }
+      : undefined;
   return {
     preparation,
     bindingStore: {
-      read: () =>
-        mocks.start.mock.calls.length > 0
-          ? { threadId: "native-thread", clientId: "native-client" }
-          : undefined,
+      read,
+      readAsync: async () => read(),
       withLease: async (_identity: unknown, operation: () => Promise<unknown>) => operation(),
     } as unknown as CodexAppServerBindingStore,
     assertCurrent: mocks.assert,
@@ -149,6 +160,7 @@ describe("cold native MCP App session preparation", () => {
         }),
         userMcpServersEnabled: false,
         nativeModelAdmission: "required",
+        shellGitConfigParameters: "'maintenance.auto=false' 'gc.auto=0'",
         dynamicTools: [],
       }),
     );

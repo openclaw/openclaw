@@ -443,6 +443,7 @@ export function createSessionsListTool(opts?: {
           channel: derivedChannel,
           archived: entry.archived === true,
           pinned: entry.pinned === true,
+          sidebarRoot: entry.sidebarRoot === true,
           ...(rowLabel ? { label: rowLabel } : {}),
           ...(entry.createdActor
             ? { createdActor: projectInventoryActor(entry.createdActor) }

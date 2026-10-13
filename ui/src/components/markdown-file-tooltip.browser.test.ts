@@ -1,5 +1,6 @@
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
+import "../lib/toast-host.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 import { installTitleTooltips } from "./tooltip-title.ts";
 import "../styles/base.css";
@@ -37,7 +38,7 @@ describe("file path tooltip", () => {
     expect(card()?.textContent?.trim()).toBe(filePath);
     await copyButton().hover();
     await Promise.all([
-      expect.element(page.getByRole("status")).toHaveTextContent("Copied!"),
+      expect.poll(() => card()?.querySelector('[role="status"]')?.textContent).toBe("Copied!"),
       copyButton().click(),
     ]);
     expect(write).toHaveBeenCalledWith(filePath);

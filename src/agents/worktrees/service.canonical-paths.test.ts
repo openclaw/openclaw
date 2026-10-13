@@ -10,6 +10,10 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import {
+  resetConfigRuntimeState,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -59,11 +63,14 @@ describe("ManagedWorktreeService canonical paths", () => {
     stateDir = path.join(root, "state");
     await fs.mkdir(stateDir, { recursive: true });
     env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    setRuntimeConfigSnapshot({}, {});
     service = new ManagedWorktreeService({ env });
   });
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    resetConfigRuntimeState();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
@@ -283,6 +290,7 @@ describe("configured managed worktree root", () => {
   });
 
   afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
@@ -421,10 +429,12 @@ describe("ManagedWorktreeService allocation and orphan preservation", () => {
     repo = await fs.realpath(repo);
     stateDir = path.join(root, "state");
     env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    setRuntimeConfigSnapshot({}, {});
     service = new ManagedWorktreeService({ env });
   });
 
   afterEach(async () => {
+    resetConfigRuntimeState();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
@@ -477,6 +487,65 @@ describe("ManagedWorktreeService allocation and orphan preservation", () => {
       (await service.list()).filter((record) => record.ownerId === owner.ownerId),
     ).toHaveLength(1);
   });
+
+  it.each([
+    { ownerKind: "workboard", state: "clean", rejectsChangedBase: true },
+    { ownerKind: "workboard", state: "dirty", rejectsChangedBase: true },
+    { ownerKind: "session", state: "dirty", rejectsChangedBase: false },
+    { ownerKind: "manual", state: "dirty", rejectsChangedBase: false },
+    { ownerKind: undefined, state: "dirty", rejectsChangedBase: false },
+  ] as const)(
+    "preserves a $state checkout when ownerKind=$ownerKind requests another base",
+    async ({ ownerKind, state, rejectsChangedBase }) => {
+      const baseRef = await git(repo, "rev-parse", "HEAD");
+      const request = {
+        repoRoot: repo,
+        name: "owned-worktree",
+        baseRef,
+        ownerKind,
+        ownerId: "owner-1",
+      };
+      const created = await service.create(request);
+      const retained = { record: created, materialized: false };
+      if (!rejectsChangedBase) {
+        await expect(service.createWithOutcome({ ...request, baseRef: "main" })).resolves.toEqual(
+          retained,
+        );
+      }
+      await fs.writeFile(path.join(repo, "README.md"), "new base\n");
+      await git(repo, "commit", "-am", "advance source");
+      const requestedBase = await git(repo, "rev-parse", "HEAD");
+      if (state === "dirty") {
+        await fs.writeFile(path.join(created.path, "README.md"), "local changes\n");
+        await fs.writeFile(path.join(created.path, "draft.txt"), "unfinished work\n");
+      }
+
+      const reuse = service.createWithOutcome({ ...request, baseRef: requestedBase });
+      if (rejectsChangedBase) {
+        await expect(reuse).rejects.toThrow(
+          `already uses base ref ${baseRef}; requested ${requestedBase}`,
+        );
+      } else {
+        await expect(reuse).resolves.toEqual(retained);
+      }
+
+      expect(await git(created.path, "rev-parse", "HEAD")).toBe(baseRef);
+      expect(await git(created.path, "branch", "--show-current")).toBe(created.branch);
+      expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe(
+        state === "dirty" ? "local changes\n" : "base\n",
+      );
+      if (state === "dirty") {
+        expect(await fs.readFile(path.join(created.path, "draft.txt"), "utf8")).toBe(
+          "unfinished work\n",
+        );
+      }
+      expect(await service.listRegistryRecords()).toEqual([created]);
+      await expect(service.createWithOutcome(request)).resolves.toEqual(retained);
+      await expect(service.createWithOutcome({ ...request, baseRef: undefined })).resolves.toEqual(
+        retained,
+      );
+    },
+  );
 
   it("serializes overlapping numeric suffix families", async () => {
     await service.create({ repoRoot: repo, name: "task", baseRef: "HEAD" });
@@ -534,7 +603,11 @@ describe("ManagedWorktreeService allocation and orphan preservation", () => {
   it("preserves unreadable checkout metadata without blocking later cleanup", async () => {
     let now = Date.now();
     service = new ManagedWorktreeService({ env, now: () => now });
-    const expired = await service.create({ repoRoot: repo, name: "expired-snapshot" });
+    const expired = await service.create({
+      repoRoot: repo,
+      name: "expired-snapshot",
+      baseRef: "HEAD",
+    });
     await service.remove({ id: expired.id, reason: "retention" });
     now += SNAPSHOT_RETENTION_MS + 1;
 

@@ -63,8 +63,8 @@ type RetainedTelegramDraftPage = {
 
 type SingleUseReplyTargetState =
   | { kind: "available" }
-  | { kind: "pending"; generation: number }
-  | { kind: "retained"; generation: number; messageId: number };
+  | { kind: "pending" }
+  | { kind: "retained"; messageId: number };
 
 export function createTelegramDraftStream(params: {
   api: Bot["api"];
@@ -102,26 +102,17 @@ export function createTelegramDraftStream(params: {
   const chatId = params.chatId;
   const threadParams = buildTelegramThreadParams(params.thread);
   const replyToMessageId = normalizeTelegramReplyToMessageId(params.replyToMessageId);
-  const quoteParams = params.replyQuote
-    ? buildTelegramThreadReplyParams({
-        replyToMessageId,
-        replyQuoteMessageId: replyToMessageId,
-        replyQuoteText: params.replyQuote.text,
-        replyQuotePosition: params.replyQuote.position,
-        replyQuoteEntities: params.replyQuote.entities,
-      }).reply_parameters
-    : undefined;
-  const initialSendMessageParams =
-    replyToMessageId != null
-      ? {
-          ...threadParams,
-          reply_parameters: {
-            message_id: replyToMessageId,
-            allow_sending_without_reply: true,
-            ...quoteParams,
-          },
-        }
-      : (threadParams ?? {});
+  const initialSendMessageParams = {
+    ...threadParams,
+    ...buildTelegramThreadReplyParams({
+      replyToMessageId,
+      replyQuoteMessageId: replyToMessageId,
+      replyQuoteText: params.replyQuote?.text,
+      replyQuotePosition: params.replyQuote?.position,
+      replyQuoteEntities: params.replyQuote?.entities,
+      nativeReply: true,
+    }),
+  };
   const consumesReplyTarget =
     replyToMessageId != null &&
     params.replyToMode !== undefined &&
@@ -130,22 +121,20 @@ export function createTelegramDraftStream(params: {
   // Repositioning keeps pending/retained ownership until Telegram confirms the
   // superseded message was deleted; otherwise two visible messages can reply.
   let replyTargetState: SingleUseReplyTargetState = { kind: "available" };
-  const reserveReplyTargetForSend = (sendGeneration: number) => {
+  const reserveReplyTargetForSend = () => {
     if (!consumesReplyTarget) {
       return initialSendMessageParams;
     }
     if (replyTargetState.kind !== "available") {
       return threadParams ?? {};
     }
-    replyTargetState = { kind: "pending", generation: sendGeneration };
+    replyTargetState = { kind: "pending" };
     return initialSendMessageParams;
   };
-  const settlePendingReplyTarget = (sendGeneration: number, messageId?: number) => {
-    if (replyTargetState.kind === "pending" && replyTargetState.generation === sendGeneration) {
+  const settlePendingReplyTarget = (messageId?: number) => {
+    if (replyTargetState.kind === "pending") {
       replyTargetState =
-        messageId === undefined
-          ? { kind: "available" }
-          : { kind: "retained", generation: sendGeneration, messageId };
+        messageId === undefined ? { kind: "available" } : { kind: "retained", messageId };
     }
   };
   const streamState = { stopped: false, final: false };
@@ -166,13 +155,7 @@ export function createTelegramDraftStream(params: {
   // Counts requested updates: callers may reuse one assertion, so an earlier
   // attempt must not settle the authority a newer update still needs.
   let requestedUpdates = 0;
-  let generation = 0;
   let finalPagePlan: { pages: TelegramTextDeliveryPage[]; nextPageIndex: number } | undefined;
-  // Generations whose in-flight FIRST send was superseded by a reposition
-  // (rotateToNewMessageDeferringDelete). Their late-landing message is a stale
-  // ephemeral preview to delete, NOT a durable content chunk to retain — that
-  // distinguishes a reposition from forceNewMessage's continuation-chunk race.
-  const repositionedSendGenerations = new Set<number>();
   // Repositioned previews stay visible until a replacement message is accepted;
   // deleting them on a timer alone can leave the chat with no reply at all.
   let supersededPreviews: Array<{ messageId: number; visibleSinceMs?: number }> = [];
@@ -215,12 +198,8 @@ export function createTelegramDraftStream(params: {
     streamProviderMessage = undefined;
     scheduleProviderMessageObservation(message);
   };
-  const drainProviderMessageObservations = async () => {
-    await Promise.all(pendingProviderObservations);
-  };
   const sendMessageTransportPreview = async (
     page: TelegramTextDeliveryPage,
-    sendGeneration: number,
     disableLinkPreview: boolean,
   ): Promise<boolean> => {
     const linkPreviewParams = disableLinkPreview
@@ -246,13 +225,11 @@ export function createTelegramDraftStream(params: {
         warn: params.warn,
         request: (send) => previewRequest(assertPlatformSendAuthorized, send),
       });
-      if (sendGeneration === generation && streamMessageId === targetMessageId) {
-        streamMessageSnapshot = acceptedSnapshot;
-      }
+      streamMessageSnapshot = acceptedSnapshot;
       return true;
     }
     messageSendAttempted = true;
-    const sendMessageParams = reserveReplyTargetForSend(sendGeneration);
+    const sendMessageParams = reserveReplyTargetForSend();
     let sent: Awaited<ReturnType<typeof sendTelegramDraftMessage>>;
     try {
       sent = await previewRequest(assertPlatformSendAuthorized, () =>
@@ -264,8 +241,8 @@ export function createTelegramDraftStream(params: {
           linkPreviewParams,
           warn: params.warn,
           assertCurrentSend: () => {
-            if (sendGeneration !== generation || streamState.stopped) {
-              throw new TelegramRequestNotStartedError("Telegram preview generation retired");
+            if (streamState.stopped) {
+              throw new TelegramRequestNotStartedError("Telegram preview stopped");
             }
             assertPlatformSendAuthorized?.();
           },
@@ -273,11 +250,9 @@ export function createTelegramDraftStream(params: {
       );
     } catch (err) {
       const definitelyRejected = isSafeToRetrySendError(err) || isTelegramClientRejection(err);
-      if (sendGeneration === generation && definitelyRejected) {
-        messageSendAttempted = false;
-      }
       if (definitelyRejected) {
-        settlePendingReplyTarget(sendGeneration);
+        messageSendAttempted = false;
+        settlePendingReplyTarget();
       }
       throw err;
     }
@@ -287,14 +262,11 @@ export function createTelegramDraftStream(params: {
         ? Math.trunc(sentMessageId)
         : undefined;
     if (normalizedMessageId === undefined) {
-      if (sendGeneration === generation) {
-        streamState.stopped = true;
-        params.warn?.("telegram stream preview stopped (missing message id from sendMessage)");
-        return false;
-      }
-      return true;
+      streamState.stopped = true;
+      params.warn?.("telegram stream preview stopped (missing message id from sendMessage)");
+      return false;
     }
-    settlePendingReplyTarget(sendGeneration, normalizedMessageId);
+    settlePendingReplyTarget(normalizedMessageId);
     const adoptSentMessage = () => {
       streamMessageId = normalizedMessageId;
       streamMessageSnapshot = sent.snapshot;
@@ -309,29 +281,10 @@ export function createTelegramDraftStream(params: {
       terminalDeliveryError ??=
         error instanceof Error ? error : new Error(formatErrorMessage(error));
       streamState.stopped = true;
-      if (sendGeneration === generation) {
-        adoptSentMessage();
-      } else if (repositionedSendGenerations.delete(sendGeneration)) {
-        retireWhenReplaced(normalizedMessageId, Date.now());
-      }
+      adoptSentMessage();
       return false;
     }
-    if (sendGeneration !== generation) {
-      const visibleSinceMs = Date.now();
-      if (repositionedSendGenerations.delete(sendGeneration)) {
-        // Repositioned late sends are stale previews; delete instead of retaining
-        // them as durable continuation pages.
-        retireWhenReplaced(normalizedMessageId, visibleSinceMs);
-        return true;
-      }
-      params.onRetainedPage?.({
-        messageId: normalizedMessageId,
-        textSnapshot: sent.snapshot.text,
-        visibleSinceMs,
-      });
-      scheduleProviderMessageObservation(sent.message);
-      return true;
-    }
+    // Rotation during an in-flight request is best effort; accept the returned preview.
     adoptSentMessage();
     retireSupersededPreviews();
     return true;
@@ -350,17 +303,14 @@ export function createTelegramDraftStream(params: {
     if (renderedPreviewKey === lastSentPreviewKey) {
       return true;
     }
-    const sendGeneration = generation;
-
     if (
       typeof streamMessageId !== "number" &&
       minInitialChars != null &&
       !streamState.final &&
-      !complete
+      !complete &&
+      page.plainText.length < minInitialChars
     ) {
-      if (page.plainText.length < minInitialChars) {
-        return false;
-      }
+      return false;
     }
 
     const previousSentPreviewKey = lastSentPreviewKey;
@@ -372,21 +322,15 @@ export function createTelegramDraftStream(params: {
       }
     };
     try {
-      const sent = await sendMessageTransportPreview(page, sendGeneration, disableLinkPreview);
+      const sent = await sendMessageTransportPreview(page, disableLinkPreview);
       if (sent) {
         settleAuthorization();
-      }
-      if (sendGeneration !== generation) {
-        return true;
       }
       if (sent) {
         consecutivePreviewFailures = 0;
       }
       return sent;
     } catch (err) {
-      if (sendGeneration !== generation) {
-        return true;
-      }
       const isEdit = typeof streamMessageId === "number";
       if (isEdit && isTelegramMessageNotModifiedError(err)) {
         // Telegram already shows exactly this text; count the edit as delivered.
@@ -511,13 +455,7 @@ export function createTelegramDraftStream(params: {
     const disableLinkPreview = fullPreview.linkPreview === false || params.linkPreview === false;
     if (!streamState.final) {
       finalPagePlan = undefined;
-      const updateGeneration = generation;
       const sent = await sendOrEditPlannedPage(firstPage, fullPreview.complete, disableLinkPreview);
-      // A retired send/edit may finish after repositioning. Consume it without
-      // restoring old recovery text or asking the loop to retry that generation.
-      if (updateGeneration !== generation) {
-        return true;
-      }
       if (sent) {
         lastDeliveredText = pages.length === 1 ? trimmed : firstPage.plainText.trimEnd();
       }
@@ -576,7 +514,7 @@ export function createTelegramDraftStream(params: {
   };
 
   const requestDraftUpdate = (
-    text: string,
+    update: TelegramDraftUpdate,
     preview?: TelegramDraftPreview,
     onPlatformSendDispatch?: () => Promise<void>,
     assertPlatformSendAuthorized?: () => void,
@@ -584,38 +522,28 @@ export function createTelegramDraftStream(params: {
     if (streamState.stopped || streamState.final) {
       return;
     }
-    lastRequestedPreview = preview;
-    lastRequestedText = text;
-    pendingPlatformSendDispatch = onPlatformSendDispatch;
+    if (typeof update === "string") {
+      lastRequestedPreview = preview;
+      lastRequestedText = update;
+      pendingPlatformSendDispatch = onPlatformSendDispatch;
+    }
     pendingPlatformSendAuthorization = assertPlatformSendAuthorized;
     requestedUpdates += 1;
-    updateDraft(text);
-  };
-
-  const updatePreview = (
-    preview: TelegramDraftPreview,
-    assertPlatformSendAuthorized?: () => void,
-  ) => {
-    const text = preview.text.trimEnd();
-    if (!text) {
-      return;
-    }
-    requestDraftUpdate(text, { ...preview, text }, undefined, assertPlatformSendAuthorized);
+    updateDraft(update);
   };
 
   const stop = async () => {
-    const stopGeneration = generation;
     streamState.final = true;
     // Cancel only the throttle timer, preserving its pending text. Final sends
     // wait out any flood window in the account limiter.
     loop.resetThrottleWindow();
     await loop.waitForInFlight();
     throwTerminalDeliveryError();
-    if (generation !== stopGeneration || streamState.stopped) {
+    if (streamState.stopped) {
       return;
     }
     await flush();
-    if (generation !== stopGeneration || streamState.stopped) {
+    if (streamState.stopped) {
       return;
     }
     const finalText = lastRequestedText.trimEnd();
@@ -623,14 +551,8 @@ export function createTelegramDraftStream(params: {
       // Bounded resume attempts for transient edit failures; flood waits are
       // honored inside each attempt by the account limiter.
       for (let attempt = 0; attempt < 2; attempt += 1) {
-        if (generation !== stopGeneration || streamState.stopped) {
-          return;
-        }
         const sent = await sendOrEditStreamMessage(finalText);
         throwTerminalDeliveryError();
-        if (generation !== stopGeneration) {
-          return;
-        }
         if (sent) {
           loop.resetPending();
           break;
@@ -642,7 +564,7 @@ export function createTelegramDraftStream(params: {
     }
     streamState.final = true;
     observeCurrentProviderMessage();
-    await drainProviderMessageObservations();
+    await Promise.all(pendingProviderObservations);
     pendingPlatformSendDispatch = undefined;
     pendingPlatformSendAuthorization = undefined;
   };
@@ -679,9 +601,6 @@ export function createTelegramDraftStream(params: {
     }
     streamState.stopped = false;
     streamState.final = continueFinalPagination;
-    if (!continueFinalPagination) {
-      generation += 1;
-    }
     messageSendAttempted = false;
     streamMessageId = undefined;
     streamMessageSnapshot = undefined;
@@ -772,7 +691,7 @@ export function createTelegramDraftStream(params: {
     if (typeof messageId === "number" && Number.isFinite(messageId)) {
       scheduleDetachedDelete(messageId, visibleSince);
     }
-    await drainProviderMessageObservations();
+    await Promise.all(pendingProviderObservations);
   };
 
   const REPOSITION_DELETE_DELAY_MS = 1_500;
@@ -780,13 +699,6 @@ export function createTelegramDraftStream(params: {
   const rotateToNewMessageDeferringDelete = (): void => {
     const supersededMessageId = streamMessageId;
     const supersededVisibleSince = streamVisibleSinceMs;
-    // A FIRST send may still be in flight (no id yet): mark its generation so the
-    // late-landing message is deleted as a reposition, not retained as a durable
-    // chunk (forceNewMessage's contract). resetStreamToNewMessage bumps
-    // generation, so capture the current one before rewinding.
-    if (messageSendAttempted && streamMessageId === undefined) {
-      repositionedSendGenerations.add(generation);
-    }
     // Rewind WITHOUT deleting; the old id is captured above.
     resetStreamToNewMessage("replace");
     if (typeof supersededMessageId === "number" && Number.isFinite(supersededMessageId)) {
@@ -812,15 +724,14 @@ export function createTelegramDraftStream(params: {
       ),
     // An accepted lazy update replaces the pending one and carries no send
     // authority; stopped or final streams ignore it and keep the pending update's.
-    updateLazy: (resolveText: () => string | undefined) => {
-      if (streamState.stopped || streamState.final) {
+    updateLazy: (resolveText: () => string | undefined) => requestDraftUpdate({ resolveText }),
+    updatePreview: (preview: TelegramDraftPreview, assertPlatformSendAuthorized?: () => void) => {
+      const text = preview.text.trimEnd();
+      if (!text) {
         return;
       }
-      pendingPlatformSendAuthorization = undefined;
-      requestedUpdates += 1;
-      updateDraft({ resolveText });
+      requestDraftUpdate(text, { ...preview, text }, undefined, assertPlatformSendAuthorized);
     },
-    updatePreview,
     flush,
     waitForInFlight,
     messageId: () => streamMessageId,
@@ -841,7 +752,7 @@ export function createTelegramDraftStream(params: {
     discard: async () => {
       await stopForClear();
       observeCurrentProviderMessage();
-      await drainProviderMessageObservations();
+      await Promise.all(pendingProviderObservations);
     },
     remainingFinalContent,
     /** True while a pending or visible draft owns a first/batched reply target. */
@@ -853,4 +764,3 @@ export function createTelegramDraftStream(params: {
     sendMayHaveLanded: () => messageSendAttempted && typeof streamMessageId !== "number",
   };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

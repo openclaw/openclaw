@@ -10,6 +10,10 @@ import { parseSqliteSessionEntryRecord } from "../../config/sessions/session-ent
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { iterateSqliteQuerySync } from "../../infra/kysely-sync.js";
+import {
+  listAgentDatabaseAdmissionRefusals,
+  readAgentDatabaseAdmissionRefusal,
+} from "../../state/agent-database-admission.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db.js";
 import {
@@ -27,7 +31,7 @@ function migrationRequired(source: string): never {
   );
 }
 
-/** Initial boot covers all shared state; live readmission checks only its physical store. */
+/** Initial boot defers isolated stores; live readmission checks only its physical store. */
 export async function assertAcpSessionKeysMigratedForStartup(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
@@ -48,14 +52,27 @@ export async function assertAcpSessionKeysMigratedForStartup(
   const admittedPath = admittedDatabase
     ? resolveOpenClawAgentSqlitePath(admittedDatabase)
     : undefined;
+  // Unknown owners still require validation. Only the admission owner's explicit
+  // refusals defer a physical store, and its preparation borrow restores the check.
+  const refusedPaths = admittedDatabase
+    ? []
+    : listAgentDatabaseAdmissionRefusals({ env }).flatMap(
+        ({ agentId }) => readAgentDatabaseAdmissionRefusal(agentId, { env })?.paths ?? [],
+      );
   const matchesPath = createOpenClawAgentDatabasePathMatcher();
   const candidatePath = (agentId: string, storePath: string, sessionKey: string) =>
     resolveOpenClawAgentSqlitePath(
       toDatabaseOptions(resolveSqliteReadScope({ agentId, storePath, sessionKey, env })),
     );
-  const ownsPath = (agentId: string, storePath: string, sessionKey: string) =>
-    admittedPath === undefined ||
-    matchesPath(candidatePath(agentId, storePath, sessionKey), admittedPath);
+  const ownsPath = (agentId: string, storePath: string, sessionKey: string) => {
+    if (admittedPath === undefined && refusedPaths.length === 0) {
+      return true;
+    }
+    const pathname = candidatePath(agentId, storePath, sessionKey);
+    return admittedPath === undefined
+      ? !refusedPaths.some((refusedPath) => matchesPath(pathname, refusedPath))
+      : matchesPath(pathname, admittedPath);
+  };
   for (const row of result.rows) {
     const identities = legacyAcpSessionKeyCandidates(row.session_key, candidateAgentIds);
     const candidates: Array<{

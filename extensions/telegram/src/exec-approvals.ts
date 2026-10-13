@@ -1,11 +1,11 @@
 import { resolveApprovalApprovers } from "openclaw/plugin-sdk/approval-auth-runtime";
 import {
-  createChannelExecApprovalProfile,
+  createChannelExecApprovalProfileAsync,
   isChannelExecApprovalClientEnabledFromConfig,
   isChannelExecApprovalTargetRecipient,
   matchesApprovalRequestFilters,
 } from "openclaw/plugin-sdk/approval-client-runtime";
-import { doesApprovalRequestSelectChannelAccount } from "openclaw/plugin-sdk/approval-native-runtime";
+import { doesApprovalRequestSelectChannelAccountAsync } from "openclaw/plugin-sdk/approval-native-runtime";
 import type {
   ExecApprovalRequest,
   PluginApprovalRequest,
@@ -20,15 +20,7 @@ import { normalizeTelegramChatId, resolveTelegramTargetChatType } from "./target
 
 function normalizeTelegramDirectApproverId(value: string | number): string | undefined {
   const chatId = normalizeTelegramChatId(String(value));
-  if (!chatId || chatId.startsWith("-")) {
-    return undefined;
-  }
-  return chatId;
-}
-
-function resolveTelegramOwnerApprovers(cfg: OpenClawConfig): Array<string | number> {
-  const ownerAllowFrom = cfg.commands?.ownerAllowFrom;
-  return Array.isArray(ownerAllowFrom) ? ownerAllowFrom : [];
+  return chatId && !chatId.startsWith("-") ? chatId : undefined;
 }
 
 export function resolveTelegramExecApprovalConfig(params: {
@@ -51,7 +43,9 @@ export function getTelegramExecApprovalApprovers(params: {
 }): string[] {
   return resolveApprovalApprovers({
     explicit: resolveTelegramExecApprovalConfig(params)?.approvers,
-    allowFrom: resolveTelegramOwnerApprovers(params.cfg),
+    allowFrom: Array.isArray(params.cfg.commands?.ownerAllowFrom)
+      ? params.cfg.commands.ownerAllowFrom
+      : [],
     normalizeApprover: normalizeTelegramDirectApproverId,
   });
 }
@@ -95,13 +89,13 @@ function isTelegramExecApprovalAccountEligible(params: {
   );
 }
 
-function matchesTelegramRequestAccount(params: {
+async function matchesTelegramRequestAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   request: ExecApprovalRequest | PluginApprovalRequest | SystemAgentApprovalRequest;
-}): boolean {
+}): Promise<boolean> {
   const accountId = params.accountId ?? resolveDefaultTelegramAccountId(params.cfg);
-  return doesApprovalRequestSelectChannelAccount({
+  return doesApprovalRequestSelectChannelAccountAsync({
     ...params,
     channel: "telegram",
     defaultAccountId: resolveDefaultTelegramAccountId(params.cfg),
@@ -111,7 +105,7 @@ function matchesTelegramRequestAccount(params: {
   });
 }
 
-const telegramExecApprovalProfile = createChannelExecApprovalProfile({
+const telegramExecApprovalProfile = createChannelExecApprovalProfileAsync({
   resolveConfig: resolveTelegramExecApprovalConfig,
   resolveApprovers: getTelegramExecApprovalApprovers,
   isTargetRecipient: isTelegramExecApprovalTargetRecipient,

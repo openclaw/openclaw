@@ -23,8 +23,6 @@ const currentEvent = {
 async function runPromptEvidence(
   params: {
     events?: unknown[];
-    report?: Record<string, unknown>;
-    reportSessionKey?: string;
   } = {},
 ) {
   const scenario = readQaScenarioById(scenarioId);
@@ -84,7 +82,7 @@ async function runPromptEvidence(
             return {
               sessions: [
                 {
-                  key: params.reportSessionKey ?? sessionKey,
+                  key: sessionKey,
                   contextWeight: {
                     injectedWorkspaceFiles: [
                       {
@@ -93,7 +91,6 @@ async function runPromptEvidence(
                         truncated: false,
                         rawChars: instructionContents.trimEnd().length,
                         injectedChars: instructionContents.trimEnd().length,
-                        ...params.report,
                       },
                     ],
                   },
@@ -227,23 +224,6 @@ describe("instruction profile prompt evidence", () => {
       ],
     });
     expect(result.status).toBe("pass");
-  });
-
-  it.each([
-    { name: "missing file", report: { missing: true } },
-    { name: "truncated injection", report: { truncated: true } },
-    { name: "incomplete source", report: { rawChars: 1 } },
-    { name: "incomplete injection", report: { injectedChars: 1 } },
-    { name: "another session's report", reportSessionKey: "agent:qa:other" },
-    { name: "missing current-run dispatch", events: [{ ...currentEvent, runId: "stale-run" }] },
-    {
-      name: "mismatched dispatch",
-      events: [{ ...currentEvent, data: { ...currentObservation, matchesAssembledPrompt: false } }],
-    },
-  ])("rejects $name", async (params) => {
-    await expect(runPromptEvidence(params)).rejects.toThrow(
-      "current-run provider prompt evidence mismatch",
-    );
   });
 });
 

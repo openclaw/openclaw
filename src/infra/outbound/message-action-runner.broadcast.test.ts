@@ -8,6 +8,10 @@ import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { formatMessageCliText } from "../../commands/message-format.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import {
   mintMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
 } from "../../gateway/message-action-turn-capability.js";
@@ -106,15 +110,18 @@ function cancellationGate(sentBeforeError?: true) {
 }
 
 describe("broadcast send outcomes through native actions", () => {
+  const messageToolConfig: OpenClawConfig = {};
   let tempHome: TempHomeEnv;
   beforeAll(async () => {
     tempHome = await createTempHomeEnv("openclaw-broadcast-outcomes-");
+    setRuntimeConfigSnapshot(messageToolConfig);
   });
   afterEach(() => {
     resetPluginRuntimeStateForTest();
   });
   afterAll(async () => {
     await tempHome.restore();
+    clearRuntimeConfigSnapshot();
   });
 
   it.each([
@@ -380,7 +387,7 @@ describe("broadcast send outcomes through native actions", () => {
         ...identity,
         agentSessionKey: identity.sessionKey,
         messageActionTurnCapability: capability,
-        config: {},
+        config: messageToolConfig,
       });
       const pending = tool.execute("broadcast-cancel-call", {
         action: "broadcast",

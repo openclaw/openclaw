@@ -8,6 +8,7 @@ import type { Result } from "@openclaw/normalization-core/result";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { withSqliteWorkerCleanupFailure } from "../../infra/sqlite-worker-broker-reply.js";
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { resolveUserPath } from "../../utils.js";
 import {
@@ -35,8 +36,21 @@ function normalizeDisplayPath(pathname: string, env: NodeJS.ProcessEnv = process
   return pathname.startsWith("~") ? pathname : resolveUserPath(pathname, env);
 }
 
-/** Resolve the user-facing path for the database selected by the auth store loader. */
+/**
+ * @deprecated New SDK displays should use resolveProviderAuthProfileMetadataAsync from
+ * openclaw/plugin-sdk/provider-auth-runtime. This selected-path helper remains supported until
+ * removal in a later stable release after deprecation ships;
+ * resolveAuthStorePathForDisplayAsync is core-internal.
+ */
 export function resolveAuthStorePathForDisplay(agentDir?: string): string {
+  warnPluginSdkDeprecation({
+    family: "auth-profile-sync-operations",
+    method: "resolveAuthStorePathForDisplay",
+    replacement:
+      "provider metadata from resolveProviderAuthProfileMetadataAsync in openclaw/plugin-sdk/provider-auth-runtime",
+    compatibility:
+      "This selected-path helper remains supported until removal in a later stable release after deprecation ships; its async path replacement is core-internal.",
+  });
   const localPath = agentDir
     ? path.join(resolveUserPath(agentDir), "openclaw-agent.sqlite")
     : undefined;
@@ -47,14 +61,11 @@ export function resolveAuthStorePathForDisplay(agentDir?: string): string {
   return normalizeDisplayPath(selected ?? resolveSharedAuthStorePath());
 }
 
-/** Private model preparation: inspect the original source once before formatting its labels. */
-export async function withPreparedAuthStorePathForDisplay<T>(
-  agentDir: string | undefined,
-  env: NodeJS.ProcessEnv,
-  assertCurrent: () => void,
-  consume: (pathname: string) => T,
-): Promise<T> {
-  assertCurrent();
+/** Resolve the selected auth store's display path without host-thread SQLite. */
+export async function resolveAuthStorePathForDisplayAsync(
+  agentDir?: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<string> {
   const capturedEnv = cloneEnvWithPlatformSemantics(env);
   capturedEnv.OPENCLAW_STATE_DIR = resolveStateDir(capturedEnv);
   const localPath = agentDir
@@ -67,51 +78,20 @@ export async function withPreparedAuthStorePathForDisplay<T>(
         env: capturedEnv,
       })
     : undefined;
-  const shared: Result<ReturnType<typeof captureOpenClawStateWorkerContext>, unknown> = (() => {
-    try {
-      return { ok: true, value: captureOpenClawStateWorkerContext({ env: capturedEnv }) };
-    } catch (error) {
-      return { ok: false, error };
-    }
-  })();
-  let localUsed = false;
-  let sharedUsed = false;
-  const assertSources = () => {
-    assertCurrent();
-    if (localUsed) {
-      local?.assertCurrent();
-    }
-    if (sharedUsed) {
-      if (!shared.ok) {
-        throw shared.error;
-      }
-      shared.value.maintenanceScope?.assertAdmission();
-      shared.value.admission.assertCurrent();
-    }
-  };
-  let result: Result<T, unknown>;
+  let result: Result<string, unknown>;
   try {
     let selected: string | undefined;
     if (local) {
-      localUsed = true;
-      assertSources();
       const rows = await local.read();
-      assertSources();
       selected = selectLocalDisplayPath(localPath, rows.store.status);
     }
     if (selected === undefined) {
-      sharedUsed = true;
-      assertSources();
-      if (!shared.ok) {
-        throw shared.error;
-      }
-      await resolveSharedAuthStoreOwnershipAsync(shared.value);
-      assertSources();
+      await resolveSharedAuthStoreOwnershipAsync(
+        captureOpenClawStateWorkerContext({ env: capturedEnv }),
+      );
       selected = resolveSharedAuthStorePath(capturedEnv);
     }
-    assertSources();
-    result = { ok: true, value: consume(normalizeDisplayPath(selected, capturedEnv)) };
-    assertSources();
+    result = { ok: true, value: normalizeDisplayPath(selected, capturedEnv) };
   } catch (error) {
     result = { ok: false, error };
   }
@@ -128,11 +108,25 @@ export async function withPreparedAuthStorePathForDisplay<T>(
   if (!result.ok) {
     throw result.error;
   }
-  assertSources();
   return result.value;
 }
 
-/** Retained name for callers that present auth runtime state from the same selected store. */
+/** Private model preparation checks its caller authority once before consuming the label. */
+export async function withPreparedAuthStorePathForDisplay<T>(
+  agentDir: string | undefined,
+  env: NodeJS.ProcessEnv,
+  assertCurrent: () => void,
+  consume: (pathname: string) => T,
+): Promise<T> {
+  const pathname = await resolveAuthStorePathForDisplayAsync(agentDir, env);
+  assertCurrent();
+  return consume(pathname);
+}
+
+/** @deprecated Use resolveAuthStatePathForDisplayAsync in runtime callers. */
 export function resolveAuthStatePathForDisplay(agentDir?: string): string {
   return resolveAuthStorePathForDisplay(agentDir);
 }
+
+/** Retained terminology for the selected auth store's async display path. */
+export const resolveAuthStatePathForDisplayAsync = resolveAuthStorePathForDisplayAsync;

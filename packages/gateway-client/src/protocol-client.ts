@@ -509,6 +509,11 @@ export class GatewayProtocolClient<TPlan> {
       "phase" in event.payload
     ) {
       this.requests.setSuspensionPhase(event.payload.phase);
+    } else if (
+      event.event === "shutdown" &&
+      typeof asRecord(event.payload).restartExpectedMs === "number"
+    ) {
+      this.requests.setSuspensionPhase("draining");
     }
     this.invoke("event", () => this.opts.onEvent?.(event));
     for (const [listener, subscription] of listeners) {

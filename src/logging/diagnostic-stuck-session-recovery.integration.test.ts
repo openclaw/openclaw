@@ -159,7 +159,7 @@ describe("stuck session recovery integration", () => {
     }
   });
 
-  it("recovers repeated paid-call-shaped activity once without duplicate queued delivery", async () => {
+  it("gives a long request one bounded retry window before recovering queued delivery once", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(Date.parse("2026-08-04T03:00:00Z"));
     const sessionKey = "agent:main:repeated-requests";
@@ -218,8 +218,13 @@ describe("stuck session recovery integration", () => {
       model: "repeated-request-model",
       observationUnit: "request",
     });
-    for (let attempt = 2; attempt <= 3; attempt += 1) {
+    // A long first response can exhaust its output limit before the corrective retry starts.
+    for (let chunk = 0; chunk < 32; chunk += 1) {
+      markDiagnosticRunProgress({ sessionId, sessionKey, reason: "model_call:stream_progress" });
       await vi.advanceTimersByTimeAsync(30_000);
+    }
+    expect(events.filter((event) => event.type === "session.recovery.requested")).toHaveLength(0);
+    for (let attempt = 2; attempt <= 4; attempt += 1) {
       markDiagnosticModelStartedForTest({
         sessionId,
         sessionKey,
@@ -228,8 +233,10 @@ describe("stuck session recovery integration", () => {
         model: "repeated-request-model",
         observationUnit: "request",
       });
+      expect(events.filter((event) => event.type === "session.recovery.requested")).toHaveLength(0);
+      expect(deliveries).toBe(0);
+      await vi.advanceTimersByTimeAsync(30_000);
     }
-    await vi.advanceTimersByTimeAsync(30_000);
     await Promise.resolve();
 
     await expect(active).resolves.toBe("aborted");

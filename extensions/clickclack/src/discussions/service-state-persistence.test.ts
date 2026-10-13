@@ -6,8 +6,8 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
   OpenAsyncKeyedStoreOptions,
   OpenKeyedStoreOptions,
+  PluginStateActionAuthority,
   PluginStateCompareIntent,
-  PluginStateSyncKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
@@ -20,11 +20,19 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ClickClackClient } from "../http-client.js";
 import type { ClickClackChannel } from "../types.js";
-import type { ClickClackDiscussionBinding } from "./binding-store.js";
+import {
+  getClickClackDiscussionBindingStore,
+  type ClickClackDiscussionBinding,
+} from "./binding-store.js";
 import { getClickClackDiscussionInstallationId } from "./installation.js";
+import {
+  markClickClackDiscussionChannelIdentityRevoked,
+  markClickClackDiscussionChannelRevoked,
+} from "./revoked-channel-store.js";
 import { resolveClickClackDiscussionRoute } from "./routing.js";
 import { discussionChannel, createHarness, testExternalRef } from "./service-test-support.js";
 import { ClickClackDiscussionService } from "./service.js";
+import { enforceClickClackDiscussionToolTarget } from "./tool-policy.js";
 
 function legacyCreateResponse(
   input: Parameters<ClickClackClient["createChannel"]>[1],
@@ -43,20 +51,23 @@ describe("ClickClack discussion state persistence", () => {
     resetPluginStateStoreForTests();
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-clickclack-state-"));
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-    const stores = new Map<string, PluginStateSyncKeyedStore<unknown>>();
     const openSyncKeyedStore = (<T>(options: OpenKeyedStoreOptions) => {
       const created = createPluginStateSyncKeyedStoreForTests<T>("clickclack", {
         ...options,
         env,
       });
-      stores.set(options.namespace, created as PluginStateSyncKeyedStore<unknown>);
       return created;
     }) as PluginRuntime["state"]["openSyncKeyedStore"];
 
     try {
       const harness = createHarness({ label: "Persisted legacy title" }, { openSyncKeyedStore });
-      harness.runtime.state.openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) =>
-        createPluginStateKeyedStoreForTests<T>("clickclack", { ...options, env });
+      harness.runtime.state.openKeyedStoreV2 = <T>(
+        options: OpenAsyncKeyedStoreOptions,
+        authority?: PluginStateActionAuthority,
+      ) =>
+        createPluginStateKeyedStoreForTests<T>("clickclack", { ...options, env }).withCurrent!(
+          authority ?? { assertCurrent: () => {} },
+        );
       const service = new ClickClackDiscussionService(harness.runtime, {
         clientFactory: () => harness.client,
       });
@@ -71,20 +82,24 @@ describe("ClickClack discussion state persistence", () => {
       ]);
       expect(opened).toMatchObject({ state: "open" });
 
-      const binding = stores
-        .get("discussion-bindings")
-        ?.lookup(sessionKey) as ClickClackDiscussionBinding;
+      const binding = await harness.runtime.state
+        .openKeyedStoreV2<ClickClackDiscussionBinding>({
+          namespace: "discussion-bindings",
+          maxEntries: 10_000,
+          overflowPolicy: "reject-new",
+        })
+        .lookup(sessionKey);
       expect(binding).toMatchObject({ channelId: "chn_discussion" });
       expect(binding).not.toHaveProperty("displayTitle");
       const installation = await harness.runtime.state
-        .openKeyedStore<{ id: string }>({
+        .openKeyedStoreV2<{ id: string }>({
           namespace: "discussion-installation",
           maxEntries: 1,
           overflowPolicy: "reject-new",
         })
         .lookup("current");
       expect(installation?.id).toBe(installationId);
-      expect(binding.externalRef).toContain(installationId);
+      expect(binding?.externalRef).toContain(installationId);
     } finally {
       await closeOpenClawStateDatabaseAsync();
       resetPluginStateStoreForTests();
@@ -95,7 +110,7 @@ describe("ClickClack discussion state persistence", () => {
   it("does not create a remote channel when installation persistence fails", async () => {
     const harness = createHarness({ label: "Unpersisted installation" });
     const failure = new Error("installation store unavailable");
-    harness.runtime.state.openKeyedStore = () => {
+    harness.runtime.state.openKeyedStoreV2 = () => {
       throw failure;
     };
     const service = new ClickClackDiscussionService(harness.runtime, {
@@ -108,14 +123,14 @@ describe("ClickClack discussion state persistence", () => {
 
   it("requires a durable installation identity after successful registration", async () => {
     const harness = createHarness({ label: "Missing durable installation" });
-    harness.runtime.state.openKeyedStore = () => ({
-      register: async () => {},
+    const openStore = harness.runtime.state.openKeyedStoreV2;
+    harness.runtime.state.openKeyedStoreV2 = <T>(
+      options: OpenAsyncKeyedStoreOptions,
+      authority?: PluginStateActionAuthority,
+    ) => ({
+      ...openStore<T>(options, authority),
       registerIfAbsent: async () => true,
       lookup: async () => undefined,
-      consume: async () => undefined,
-      delete: async () => false,
-      entries: async () => [],
-      clear: async () => {},
     });
     const service = new ClickClackDiscussionService(harness.runtime, {
       clientFactory: () => harness.client,
@@ -156,7 +171,7 @@ function generationFixture(
   options: {
     env?: NodeJS.ProcessEnv;
     beforeCompare?: (key: string, intent: PluginStateCompareIntent<unknown>) => Promise<void>;
-    host?: "modern" | "no-observe" | "no-compare";
+    beforeWrite?: (namespace: string, key: string, action: "set" | "delete") => Promise<void>;
   } = {},
 ) {
   const env = options.env ?? {
@@ -173,47 +188,257 @@ function generationFixture(
       },
     },
   );
-  harness.runtime.state.openKeyedStore = <T>(storeOptions: OpenAsyncKeyedStoreOptions) => {
-    const store = createPluginStateKeyedStoreForTests<T>("clickclack", { ...storeOptions, env });
+  harness.runtime.state.openKeyedStoreV2 = <T>(
+    storeOptions: OpenAsyncKeyedStoreOptions,
+    authority?: PluginStateActionAuthority,
+  ) => {
+    const store = createPluginStateKeyedStoreForTests<T>("clickclack", { ...storeOptions, env })
+      .withCurrent!(authority ?? { assertCurrent: () => {} });
     return {
       ...store,
-      update: async () => {
-        throw new Error("Unexpected native callback update");
+      compareAndApply: async (...args: Parameters<typeof store.compareAndApply>) => {
+        await options.beforeCompare?.(args[0], args[2]);
+        if (args[2].action !== "keep") {
+          await options.beforeWrite?.(storeOptions.namespace, args[0], args[2].action);
+        }
+        return await store.compareAndApply(...args);
       },
-      deleteIf: async () => {
-        throw new Error("Unexpected native callback deletion");
+      register: async (...args: Parameters<typeof store.register>) => {
+        await options.beforeWrite?.(storeOptions.namespace, args[0], "set");
+        return await store.register(...args);
       },
-      observe: options.host === "no-observe" ? undefined : store.observe,
-      compareAndApply:
-        options.host === "no-compare"
-          ? undefined
-          : async (...args: Parameters<typeof store.compareAndApply>) => {
-              await options.beforeCompare?.(args[0], args[2]);
-              return await store.compareAndApply(...args);
-            },
+      delete: async (...args: Parameters<typeof store.delete>) => {
+        await options.beforeWrite?.(storeOptions.namespace, args[0], "delete");
+        return await store.delete(...args);
+      },
     };
   };
   return { ...harness, nativeNamespaces, env };
 }
 
-describe("ClickClack pending generation persistence", () => {
-  it.each(["no-observe", "no-compare"] as const)(
-    "retains the 2026.9.4 host path with %s",
-    async (host) => {
-      const f = generationFixture({ host });
-      try {
-        await expect(f.service.open("agent:main:legacy-host")).resolves.toMatchObject({
-          state: "open",
-        });
-        expect(f.nativeNamespaces).toContain("discussion-binding-generations");
-      } finally {
-        await f.service.cleanup();
-        await closeOpenClawStateDatabaseAsync();
-        resetPluginStateStoreForTests();
+it("rejects stale discussion indexes after native binding replacement and removal", async () => {
+  const f = generationFixture();
+  const initialSessionKey = "agent:main:reverse-index-source";
+  try {
+    await f.service.open(initialSessionKey);
+    const bindings = getClickClackDiscussionBindingStore(f.runtime);
+    const initialBinding = bindings.get(initialSessionKey);
+    if (!initialBinding) {
+      throw new Error("Expected the persisted discussion binding");
+    }
+    const native = f.runtime.state.openSyncKeyedStore<ClickClackDiscussionBinding>({
+      namespace: "discussion-bindings",
+      maxEntries: 10_000,
+      overflowPolicy: "reject-new",
+    });
+    for (const mutation of ["replace", "delete", "clear"] as const) {
+      native.clear();
+      const sessionKey = `agent:main:reverse-index-${mutation}`;
+      const previous = { ...initialBinding, channelId: `chn_previous_${mutation}` };
+      const successor = { ...initialBinding, channelId: `chn_successor_${mutation}` };
+      await bindings.setIfCurrent(sessionKey, undefined, previous);
+      const routeParams = {
+        runtime: f.runtime,
+        accountId: previous.accountId,
+        serverBaseUrl: previous.serverBaseUrl,
+        workspaceId: previous.workspaceId,
+        channelId: previous.channelId,
+      };
+      const previousRoute = await resolveClickClackDiscussionRoute(routeParams);
+      if (previousRoute.state !== "active") {
+        throw new Error("Expected the original discussion route to be active");
       }
-    },
-  );
+      const checkToolTarget = (sideSessionKey: string) =>
+        enforceClickClackDiscussionToolTarget({
+          runtime: f.runtime,
+          context: { toolName: "sessions_history", sessionKey: sideSessionKey },
+          event: { toolName: "sessions_history", params: { sessionKey } },
+        });
+      expect(checkToolTarget(previousRoute.route.sessionKey)).toBeUndefined();
 
+      if (mutation === "delete") {
+        expect(native.delete(sessionKey)).toBe(true);
+      } else if (mutation === "clear") {
+        native.clear();
+      }
+      if (mutation !== "replace") {
+        expect(native.lookup(sessionKey)).toBeUndefined();
+      }
+      native.register(sessionKey, successor);
+      // The owning wrapper sees the successor row, so it cannot unindex its predecessor.
+      await bindings.setIfCurrent(sessionKey, successor, successor);
+
+      expect(checkToolTarget(previousRoute.route.sessionKey)?.block).toBe(true);
+      await expect(resolveClickClackDiscussionRoute(routeParams)).resolves.toEqual({
+        state: "unbound",
+      });
+      const successorRoute = await resolveClickClackDiscussionRoute({
+        ...routeParams,
+        channelId: successor.channelId,
+      });
+      if (successorRoute.state !== "active") {
+        throw new Error("Stale-index cleanup removed the successor discussion route");
+      }
+      expect(successorRoute.route.sessionKey).not.toBe(previousRoute.route.sessionKey);
+      expect(checkToolTarget(successorRoute.route.sessionKey)).toBeUndefined();
+    }
+  } finally {
+    await f.service.cleanup();
+    await closeOpenClawStateDatabaseAsync();
+    resetPluginStateStoreForTests();
+  }
+});
+
+it.each(
+  (["revocation", "binding deletion", "binding publication"] as const).flatMap((phase) =>
+    (["same", "different"] as const).map((channel) => ({ phase, channel })),
+  ),
+)(
+  "preserves a native successor on the $channel channel when stale discussion $phase waits",
+  async ({ phase, channel }) => {
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    let armed = false;
+    let held = false;
+    const f = generationFixture({
+      beforeWrite: async (namespace, _key, action) => {
+        const targetNamespace =
+          phase === "revocation" ? "discussion-revoked-channels" : "discussion-bindings";
+        const targetAction = phase === "binding deletion" ? "delete" : "set";
+        if (armed && !held && namespace === targetNamespace && action === targetAction) {
+          held = true;
+          entered.resolve();
+          await release.promise;
+        }
+      },
+    });
+    const sessionKey = "agent:main:stale-binding-successor";
+    let opening: ReturnType<typeof f.service.open> | undefined;
+    try {
+      await f.service.open(sessionKey);
+      const native = createPluginStateSyncKeyedStoreForTests<ClickClackDiscussionBinding>(
+        "clickclack",
+        {
+          namespace: "discussion-bindings",
+          maxEntries: 10_000,
+          overflowPolicy: "reject-new",
+          env: f.env,
+        },
+      );
+      const previous = native.lookup(sessionKey);
+      if (!previous) {
+        throw new Error("Expected the original discussion binding");
+      }
+      // The selector changes while resolving to the same workspace, retiring the old binding.
+      f.config.channels!.clickclack!.discussions!.workspace = "wsp_team";
+      const successor: ClickClackDiscussionBinding = {
+        ...previous,
+        workspaceRef: "wsp_team",
+        ...(channel === "different"
+          ? {
+              channelId: "chn_successor",
+              channelRouteId: "successor-route",
+              externalRef: `${previous.externalRef}:successor`,
+            }
+          : {}),
+      };
+      f.createChannel.mockImplementationOnce(async (_workspaceId, input) =>
+        discussionChannel({ ...input, id: "chn_candidate", route_id: "candidate-route" }),
+      );
+      armed = true;
+      opening = f.service.open(sessionKey);
+      await entered.promise;
+      native.register(sessionKey, successor);
+      release.resolve();
+      const opened = await opening;
+
+      expect(native.lookup(sessionKey)).toEqual(successor);
+      expect(opened).toEqual({ state: "available" });
+      const routeParams = {
+        runtime: f.runtime,
+        accountId: successor.accountId,
+        serverBaseUrl: successor.serverBaseUrl,
+        workspaceId: successor.workspaceId,
+      };
+      if (channel === "different") {
+        await expect(
+          resolveClickClackDiscussionRoute({ ...routeParams, channelId: previous.channelId }),
+        ).resolves.toEqual({ state: "revoked" });
+      }
+      await expect(
+        resolveClickClackDiscussionRoute({ ...routeParams, channelId: successor.channelId }),
+      ).resolves.toMatchObject({ state: "active" });
+      if (phase === "binding publication") {
+        await expect(
+          resolveClickClackDiscussionRoute({ ...routeParams, channelId: "chn_candidate" }),
+        ).resolves.toEqual({ state: "revoked" });
+      }
+      const expectedCreates = phase === "binding publication" ? 2 : 1;
+      expect(f.createChannel).toHaveBeenCalledTimes(expectedCreates);
+      expect(f.updateChannel).not.toHaveBeenCalled();
+      await expect(f.service.open(sessionKey)).resolves.toMatchObject({
+        state: "open",
+        openUrl:
+          channel === "same"
+            ? "https://clickclack.example/app/team-route/discussion-route"
+            : "https://clickclack.example/app/team-route/successor-route",
+      });
+      expect(native.lookup(sessionKey)).toEqual(successor);
+      expect(f.createChannel).toHaveBeenCalledTimes(expectedCreates);
+    } finally {
+      release.resolve();
+      await Promise.allSettled(opening ? [opening] : []);
+      await f.service.cleanup();
+      await closeOpenClawStateDatabaseAsync();
+      resetPluginStateStoreForTests();
+    }
+  },
+);
+
+it("does not narrow an unconditional quarantine when revoking a bound discussion", async () => {
+  const f = generationFixture();
+  const sessionKey = "agent:main:unconditional-quarantine";
+  try {
+    await f.service.open(sessionKey);
+    const native = createPluginStateSyncKeyedStoreForTests<ClickClackDiscussionBinding>(
+      "clickclack",
+      {
+        namespace: "discussion-bindings",
+        maxEntries: 10_000,
+        overflowPolicy: "reject-new",
+        env: f.env,
+      },
+    );
+    const binding = native.lookup(sessionKey);
+    if (!binding) {
+      throw new Error("Expected the original discussion binding");
+    }
+    const routeParams = {
+      runtime: f.runtime,
+      accountId: binding.accountId,
+      serverBaseUrl: binding.serverBaseUrl,
+      workspaceId: binding.workspaceId,
+      channelId: binding.channelId,
+    };
+    await markClickClackDiscussionChannelIdentityRevoked(routeParams);
+    await markClickClackDiscussionChannelRevoked(f.runtime, sessionKey, binding);
+    f.config.channels!.clickclack!.discussions!.workspace = "wsp_team";
+    const successor = { ...binding, workspaceRef: "wsp_team" };
+    native.register(sessionKey, successor);
+
+    await expect(resolveClickClackDiscussionRoute(routeParams)).resolves.toEqual({
+      state: "revoked",
+    });
+    expect(native.lookup(sessionKey)).toEqual(successor);
+    expect(f.createChannel).toHaveBeenCalledOnce();
+  } finally {
+    await f.service.cleanup();
+    await closeOpenClawStateDatabaseAsync();
+    resetPluginStateStoreForTests();
+  }
+});
+
+describe("ClickClack pending generation persistence", () => {
   it("waits for pending persistence and drains queued opens before restarting", async () => {
     const entered = createDeferred<void>();
     const release = createDeferred<void>();

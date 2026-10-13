@@ -18,14 +18,10 @@ import {
   addChannelAllowFromStoreEntry,
   createPluginStateKeyedStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { listSkillCommandsForAgents } from "openclaw/plugin-sdk/skill-commands-runtime";
+import { prepareSkillCommandsForAgents } from "openclaw/plugin-sdk/skill-commands-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { writeSkill } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  enqueueTelegramMenuSync,
-  resolveTelegramMenuRemoteOwner,
-} from "./bot-native-command-menu-state.js";
 import {
   apiCalls,
   apiResponses,
@@ -33,6 +29,7 @@ import {
   createBot,
   from,
   harness,
+  settleMenuSyncs,
 } from "./bot.create-telegram-bot.native-pipeline.test-support.js";
 import { beginTelegramPollRegistration } from "./poll-answer-context.js";
 import { recordTelegramPollRegistryEntry } from "./poll-registry.js";
@@ -69,13 +66,7 @@ describe("registered native command routing through the message pipeline", () =>
       },
     };
     const bot = await createBot(true, true, cfg);
-    await new Promise<void>((resolve, reject) => {
-      enqueueTelegramMenuSync({
-        ownerKey: resolveTelegramMenuRemoteOwner({ botId: bot.botInfo.id }).queueKey,
-        sync: async () => resolve(),
-        onError: reject,
-      });
-    });
+    await settleMenuSyncs();
     const commands =
       apiCalls.mock.calls
         .filter(([method]) => method === "setMyCommands")
@@ -403,8 +394,8 @@ describe("registered native command routing through the message pipeline", () =>
           },
         },
       };
-      harness.listSkillCommandsForAgents.mockImplementation((params) => {
-        const commands = listSkillCommandsForAgents(params);
+      harness.prepareSkillCommandsForAgents.mockImplementation(async (params) => {
+        const commands = await prepareSkillCommandsForAgents(params);
         const beta = commands.find(({ skillName }) => skillName === "beta-skill");
         if (beta) {
           beta.descriptionLocalizations = { ko: "베타 스킬" };
@@ -414,13 +405,7 @@ describe("registered native command routing through the message pipeline", () =>
       const publishMenu = async (config: OpenClawConfig, accountId: string) => {
         apiCalls.mockClear();
         const bot = await createBot(true, true, config, false, accountId);
-        await new Promise<void>((resolve, reject) => {
-          enqueueTelegramMenuSync({
-            ownerKey: resolveTelegramMenuRemoteOwner({ botId: bot.botInfo.id }).queueKey,
-            sync: async () => resolve(),
-            onError: reject,
-          });
-        });
+        await settleMenuSyncs();
         const menus = apiCalls.mock.calls
           .filter(([method]) => method === "setMyCommands")
           .map(([, payload]) => payload as { commands: BotCommand[]; language_code?: string });

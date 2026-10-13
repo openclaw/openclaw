@@ -17,6 +17,7 @@ import {
   isSubagentSessionKey,
   parseAgentSessionKey,
 } from "../../../routing/session-key.js";
+import { readDelegatedToolPolicy, type DelegatedToolPolicy } from "../../delegated-tool-policy.js";
 import {
   normalizeInheritedToolAllowlist,
   normalizeInheritedToolDenylist,
@@ -46,6 +47,7 @@ type PersistedSubagentToolPolicyEnvelope = {
   inheritedToolAllow: string[];
   inheritedToolDeny: string[];
   inheritedToolPolicySource?: "sender";
+  delegatedToolPolicy?: DelegatedToolPolicy;
 };
 
 function normalizeSubagentRole(value: unknown): SubagentSessionRole | undefined {
@@ -272,12 +274,17 @@ export function resolvePersistedSubagentToolPolicyEnvelope(
     store?: SessionCapabilityStore;
     agentId?: string;
   },
+  visited = new Set<string>(),
 ): PersistedSubagentToolPolicyEnvelope | undefined {
   const stored = resolveStoredSubagentToolPolicy(sessionKey, opts);
   if (!stored) {
     return undefined;
   }
   const { sessionKey: normalizedSessionKey, store, entry } = stored;
+  if (visited.has(normalizedSessionKey) || visited.size >= 32) {
+    return undefined;
+  }
+  visited.add(normalizedSessionKey);
   const spawnedBy = normalizeOptionalString(entry?.spawnedBy);
   const hasSpawnDepth =
     typeof entry?.spawnDepth === "number" &&
@@ -295,12 +302,31 @@ export function resolvePersistedSubagentToolPolicyEnvelope(
     return undefined;
   }
   const completionOwnerSessionKey = normalizeOptionalString(entry.completionOwnerSessionKey);
+  let delegatedToolPolicy = readDelegatedToolPolicy(entry.delegatedToolPolicy);
+  if (delegatedToolPolicy) {
+    const targetAgentId = delegatedToolPolicy.targetAgentId;
+    const direct = spawnedBy === delegatedToolPolicy.requesterSessionKey;
+    const parent =
+      !direct && isSameAgentSessionStore(normalizedSessionKey, spawnedBy)
+        ? resolvePersistedSubagentToolPolicyEnvelope(spawnedBy, { ...opts, store }, visited)
+        : undefined;
+    if (
+      parseAgentSessionKey(normalizedSessionKey)?.agentId !== targetAgentId ||
+      (!direct &&
+        (parent?.delegatedToolPolicy?.requesterSessionKey !==
+          delegatedToolPolicy.requesterSessionKey ||
+          parent?.delegatedToolPolicy?.targetAgentId !== targetAgentId))
+    ) {
+      delegatedToolPolicy = undefined;
+    }
+  }
   return {
     sessionKey: normalizedSessionKey,
     spawnedBy,
     ...(completionOwnerSessionKey ? { completionOwnerSessionKey } : {}),
     inheritedToolAllow: normalizeInheritedToolAllowlist(entry.inheritedToolAllow),
     inheritedToolDeny: normalizeInheritedToolDenylist(entry.inheritedToolDeny),
+    delegatedToolPolicy,
     ...(entry.inheritedToolPolicySource === "sender"
       ? { inheritedToolPolicySource: "sender" as const }
       : {}),

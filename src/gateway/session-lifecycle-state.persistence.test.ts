@@ -1,6 +1,6 @@
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterAll, afterEach, expect, it, vi, type MockInstance } from "vitest";
+import { afterAll, afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { transitionMainSessionRecovery } from "../agents/main-session-recovery/main-session-recovery-state.js";
@@ -16,6 +16,7 @@ import {
   patchSessionEntryCore,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import {
   emitAgentEvent,
@@ -58,6 +59,11 @@ import {
 import { createSessionRowProjection } from "./session-row-projection.js";
 
 const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-restart-terminal-");
+
+beforeEach(() => {
+  const cfg = {};
+  setRuntimeConfigSnapshot(cfg, cfg);
+});
 
 const routing = vi.hoisted(() => ({ loadSessionEntry: vi.fn() }));
 vi.mock("./session-utils.js", async (importOriginal) => ({
@@ -307,6 +313,7 @@ it.each(["success", "failed-write"])(
       context,
       io: { emitAcceptance: vi.fn(), emitFinal: vi.fn() },
     };
+    let admissionEntry: SessionEntry | undefined = { sessionId, updatedAt: 1_000 };
     const admission = createAgentAdmissionController({
       ...admissionParams,
       dedupeLifecycle: createAgentDedupeLifecycle({
@@ -317,6 +324,10 @@ it.each(["success", "failed-write"])(
       getRequestedSessionKey: () => target.sessionKey,
       getResolvedSessionKey: () => target.sessionKey,
       getResolvedSessionId: () => sessionId,
+      getSessionEntry: () => admissionEntry,
+      setSessionEntry: (entry) => {
+        admissionEntry = entry;
+      },
       getResolvedSessionAgentId: () => "main",
       getAgentId: () => "main",
       getSessionPersisted: () => true,

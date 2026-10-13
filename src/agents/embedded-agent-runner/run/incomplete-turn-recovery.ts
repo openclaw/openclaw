@@ -5,6 +5,7 @@ import { isTerminalAssistantError } from "../../../llm/utils/retry.js";
 import { hasAcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import { isPreDispatchToolCallRejectionMessage } from "../../failover/message-patterns.js";
 import { resolveReplyCompletion, resolveReplyExpectation } from "../../reply-completion.js";
+import { readToolEffectReceipt } from "../../tool-effect-receipt.js";
 import { TOOL_FAILURE_INSTRUCTION } from "../../tool-outcome-instructions.js";
 import { resolveSourceReplyDelivery } from "../delivery-evidence.js";
 import { isZeroUsageEmptyStopAssistantTurn } from "../empty-assistant-turn.js";
@@ -112,6 +113,7 @@ function shouldSkipNonVisibleTurnRetry(params: {
   attempt: IncompleteTurnAttempt;
   /** Silent classification can tolerate completed effects, never unfinished work or replay. */
   tolerateSideEffects?: boolean;
+  consumedToolFailure?: boolean;
 }): boolean {
   return Boolean(
     params.aborted ||
@@ -120,7 +122,7 @@ function shouldSkipNonVisibleTurnRetry(params: {
     params.attempt.clientToolCalls ||
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||
-    params.attempt.lastToolError ||
+    (params.attempt.lastToolError && !params.consumedToolFailure) ||
     hasAcceptedSessionSpawn(params.attempt.acceptedSessionSpawns) ||
     params.attempt.itemLifecycle.activeCount > 0 ||
     params.attempt.itemLifecycle.completedCount < params.attempt.itemLifecycle.startedCount ||
@@ -199,34 +201,6 @@ function readSettledToolCalls(
         ]
       : [];
   });
-}
-
-// A tool-use stop with no structured call executed nothing. Its text is a failed
-// call rather than an answer, so continuing is as replay-safe as an empty turn.
-function isToolUseStopWithoutToolCall(
-  attempt: IncompleteTurnAttempt,
-  assistant: EmbeddedRunAttemptResult["currentAttemptAssistant"] | null,
-): boolean {
-  return (
-    assistant?.stopReason === "toolUse" &&
-    readSettledToolCalls(assistant).length === 0 &&
-    attempt.toolMetas.length === 0 &&
-    attempt.itemLifecycle.startedCount === 0
-  );
-}
-
-// A pre-dispatch rejection removed the malformed calls before any of them ran.
-// Earlier calls in the attempt may have completed, so the prompt cannot be
-// replayed, but continuing from the transcript repeats nothing.
-function isToolCallRejectedBeforeDispatch(
-  assistant: EmbeddedRunAttemptResult["currentAttemptAssistant"] | null,
-): boolean {
-  return (
-    assistant?.stopReason === "error" &&
-    (assistant.errorCode === MALFORMED_TOOL_CALL_ARGUMENTS_ERROR_CODE ||
-      isPreDispatchToolCallRejectionMessage(assistant.errorMessage)) &&
-    readSettledToolCalls(assistant).length === 0
-  );
 }
 
 /** Proves settlement and intentional termination for the exact current-turn tool-call batch. */
@@ -339,6 +313,7 @@ export function resolveSettledToolTerminalContinuationInstruction(
   const {
     assistant: toolBatchAssistant,
     allToolsProvenSettled,
+    parkedCodeModeRun,
     failedToolNames,
     hasUnsettledToolError,
     intentionalTermination,
@@ -375,19 +350,17 @@ export function resolveSettledToolTerminalContinuationInstruction(
       ? !allToolsProvenSettled
       : !emptyStopAfterSettledTools) ||
     intentionalTermination ||
+    parkedCodeModeRun ||
     hasUnsettledToolError ||
     hasAsyncActivity(attempt.toolMetas) ||
     hasAcceptedSessionSpawn(attempt.acceptedSessionSpawns) ||
     attempt.clientToolCalls ||
     attempt.yieldDetected ||
-    attempt.didSendDeterministicApprovalPrompt
+    attempt.didSendDeterministicApprovalPrompt ||
+    attempt.hasToolMediaBlockReply ||
+    resolveSourceReplyDelivery(attempt) !== "missing" ||
+    !shouldApplyNonVisibleTurnRetryGuard(params)
   ) {
-    return null;
-  }
-  if (attempt.hasToolMediaBlockReply || resolveSourceReplyDelivery(attempt) !== "missing") {
-    return null;
-  }
-  if (!shouldApplyNonVisibleTurnRetryGuard(params)) {
     return null;
   }
   return allToolsProvenSettled && failedToolNames.size > 0
@@ -404,21 +377,56 @@ export function resolveEmptyResponseRetryInstruction(
 ): string | null {
   const assistantState = classifyAssistantTurn(params);
   const assistant = assistantState.assistant ?? null;
-  // Error turns are never silent replies, so this checks model output directly:
-  // the only payload such a turn can produce is the host's own failure notice.
+  // A pre-dispatch rejection ran nothing. Error turns are never silent replies,
+  // so inspect model output directly rather than the host's failure notice.
   const rejectedBeforeDispatch =
     params.attempt.itemLifecycle.completedCount > 0 &&
     assistantState.visibleText.length === 0 &&
     !params.attempt.hasToolMediaBlockReply &&
     resolveSourceReplyDelivery(params.attempt) === "missing" &&
-    isToolCallRejectedBeforeDispatch(assistant);
-  // Settled earlier effects are tolerated only for a call that never ran;
-  // unfinished, async or failed work still blocks the continuation.
-  if (shouldSkipNonVisibleTurnRetry({ ...params, tolerateSideEffects: rejectedBeforeDispatch })) {
+    assistant?.stopReason === "error" &&
+    (assistant.errorCode === MALFORMED_TOOL_CALL_ARGUMENTS_ERROR_CODE ||
+      isPreDispatchToolCallRejectionMessage(assistant.errorMessage)) &&
+    readSettledToolCalls(assistant).length === 0;
+  let consumedToolFailure = false;
+  if (rejectedBeforeDispatch && params.attempt.lastToolError?.executionStarted === false) {
+    const messages = params.attempt.messagesSnapshot;
+    const failureIndex = messages.findLastIndex(
+      (message) => message.role === "toolResult" && message.isError,
+    );
+    const failure = messages[failureIndex];
+    const latestUserIndex = messages.findLastIndex((message) => message.role === "user");
+    // A later refusal cannot erase an earlier failure that may have caused effects.
+    consumedToolFailure =
+      failureIndex > latestUserIndex &&
+      failureIndex < messages.indexOf(assistant) &&
+      failure?.role === "toolResult" &&
+      failure.toolName === params.attempt.lastToolError.toolName &&
+      messages
+        .slice(latestUserIndex + 1, failureIndex + 1)
+        .every(
+          (message) =>
+            message.role !== "toolResult" ||
+            !message.isError ||
+            readToolEffectReceipt(message)?.state === "not_started",
+        );
+  }
+  if (
+    shouldSkipNonVisibleTurnRetry({
+      ...params,
+      tolerateSideEffects: rejectedBeforeDispatch,
+      consumedToolFailure,
+    })
+  ) {
     return null;
   }
 
-  const toolUseWithoutCall = isToolUseStopWithoutToolCall(params.attempt, assistant);
+  // A tool-use stop with no structured call executed nothing; its text is not an answer.
+  const toolUseWithoutCall =
+    assistant?.stopReason === "toolUse" &&
+    readSettledToolCalls(assistant).length === 0 &&
+    params.attempt.toolMetas.length === 0 &&
+    params.attempt.itemLifecycle.startedCount === 0;
   if (!assistantState.emptyResponse && !toolUseWithoutCall && !rejectedBeforeDispatch) {
     return null;
   }

@@ -1,5 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import type { NodeWorkerCleanupBinding } from "../../node-host/node-worker-launch-receipt.js";
+import type { BrokerError } from "../spawn-broker/protocol.js";
 
 export type ServiceChildStart = {
   type: "start" | "prepare";
@@ -11,6 +12,7 @@ export type ServiceChildStart = {
   env?: Record<string, string>;
   stdinMode: "inherit" | "pipe-open" | "pipe-closed";
   secretFd?: number;
+  terminateOnHostLoss?: true;
   controlFd?: number;
   /** Host-owned lineage writer; absent for older hosts retained by update --no-restart. */
   lineageFd?: number;
@@ -27,18 +29,20 @@ export type ServiceChildStart = {
   | { ownedWorker?: never; cleanupBinding?: never }
 );
 
-export type ServiceChildControlMessage = {
-  generation: string;
-  sequence: number;
-} & (
+export type ServiceChildControlPayload =
   | { type: "cancel"; signal: "SIGTERM" | "SIGKILL" }
+  | { type: "stdin-end" }
   | { type: "worker-start" }
   | { type: "launch" }
   | { type: "worker-close" }
   | { type: "startup-error-ack" }
   | { type: "lineage-closed" }
-  | { type: "closing-ack"; closingSequence: number }
-);
+  | { type: "closing-ack"; closingSequence: number };
+
+export type ServiceChildControlMessage = ServiceChildControlPayload & {
+  generation: string;
+  sequence: number;
+};
 
 export type ServiceChildAnchorPayload =
   | { type: "prepared" }
@@ -76,6 +80,7 @@ export type ServiceChildAnchorPayload =
   | {
       type: "startup-error";
       error: string;
+      errorDetails?: BrokerError;
     };
 
 export type ServiceChildAnchorMessage = ServiceChildAnchorPayload & {
@@ -83,17 +88,8 @@ export type ServiceChildAnchorMessage = ServiceChildAnchorPayload & {
   sequence: number;
 };
 
-export type ServiceChildRelayRetirement = {
-  type: "retirement";
-  generation: string;
-  sequence: number;
-  anchorExited: boolean;
-  signalError?: string;
-};
-
 export type ServiceChildRelayMessage =
   | ServiceChildStart
-  | ServiceChildRelayRetirement
   | { type: "relay-error"; generation: string; error: string };
 
 export function readServiceChildMessage(

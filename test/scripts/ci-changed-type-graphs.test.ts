@@ -74,12 +74,12 @@ describe("changed CI compiler graph selection", () => {
     },
   );
 
-  it("retains full planning for deleted paths alongside existing source", async () => {
+  it("retains full planning for deleted compiler inputs alongside existing source", async () => {
     const cwd = tempDirs.make("ci-type-deleted-");
     mkdirSync(join(cwd, "src"));
     writeFileSync(join(cwd, "src/value.ts"), "export type Value = number;\n");
     inspectGraphs.mockRejectedValue(new Error("Deleted inputs must not enumerate compilers"));
-    for (const deleted of ["src/deleted.ts", "docs/deleted.md", "ui/deleted.css"]) {
+    for (const deleted of ["src/deleted.ts", "src/deleted.js"]) {
       expect(await createChangedCiTypeCheckPlan(["src/value.ts", deleted], { cwd })).toEqual({
         mode: "full",
         graphs: TSGO_CI_GRAPHS,

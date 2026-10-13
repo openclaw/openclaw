@@ -10,7 +10,7 @@ import {
 import type { ChatComposerRecoveryOwner } from "./chat-send-contract.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import type { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
-import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.ts";
+import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.tsx";
 import {
   isIncognitoComposerScope,
   isChatComposerOwnerCurrent,
@@ -18,7 +18,7 @@ import {
 } from "./composer-persistence-state.ts";
 import {
   CHAT_COMPOSER_DRAFT_STORAGE_ERROR,
-  loadChatComposerDraftRevision,
+  loadChatComposerState,
   storedChatOutboxScopeKey,
 } from "./composer-persistence.ts";
 import type { ChatSplitLayout } from "./split-layout-types.ts";
@@ -249,7 +249,8 @@ export function restorePaneStagedAttachments(
   }
   const current =
     restored.draftRevision === undefined ||
-    restored.draftRevision >= loadChatComposerDraftRevision(state, state.sessionKey);
+    restored.draftRevision >=
+      loadChatComposerState(state, state.sessionKey).revisions.latestAttempt;
   if (current && restored.draftRevision !== undefined) {
     state.chatMessage = restored.message ?? "";
     state.chatMentions = restored.mentions;

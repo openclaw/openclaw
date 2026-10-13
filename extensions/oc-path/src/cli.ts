@@ -6,6 +6,7 @@
  * / `--human` override.
  */
 
+import { isUtf8 } from "node:buffer";
 import { constants as fsConstants, promises as fs } from "node:fs";
 import { resolve as resolvePath } from "node:path";
 import type { Command } from "commander";
@@ -88,6 +89,7 @@ async function loadOcPathFile(
   absPath: string,
   fileName: string,
   mode: OutputMode,
+  params: { requireUtf8?: boolean } = {},
 ): Promise<OcAst | null> {
   const kind = inferKind(fileName);
   // A blocking open can hang on a FIFO before stat can reject it. O_NONBLOCK
@@ -115,6 +117,19 @@ async function loadOcPathFile(
         mode,
         `input exceeds ${MAX_OC_PATH_INPUT_BYTES} bytes${stat.size > MAX_OC_PATH_INPUT_BYTES ? `; got ${stat.size}` : ""}`,
         kind === "jsonc" ? "OC_JSONC_INPUT_TOO_LARGE" : "OC_PATH_INPUT_TOO_LARGE",
+      );
+      process.exitCode = 2;
+      return null;
+    }
+    // Only the editing verb re-emits the whole file, so only it asks for strict
+    // admission: replacement decoding there would rewrite bytes the edit never
+    // touched. The read-only verbs keep their existing decode contract.
+    if (params.requireUtf8 === true && !isUtf8(bytes)) {
+      emitError(
+        mode,
+        `input is not valid UTF-8; the file was left unchanged: ${absPath}. ` +
+          `Convert or repair a backed-up copy as UTF-8, then retry.`,
+        "OC_PATH_INPUT_NOT_UTF8",
       );
       process.exitCode = 2;
       return null;
@@ -255,7 +270,7 @@ async function pathSetCommand(
     return;
   }
   const fsPath = resolveFsPath(ocPath, options);
-  const ast = await loadOcPathFile(fsPath, ocPath.file, mode);
+  const ast = await loadOcPathFile(fsPath, ocPath.file, mode, { requireUtf8: true });
   if (ast === null) {
     return;
   }

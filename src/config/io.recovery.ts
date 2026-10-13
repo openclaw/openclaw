@@ -94,6 +94,12 @@ export async function recoverConfigFromJsonRootSuffixWithContext(
     raw: snapshot.raw,
     observedAt: new Date().toISOString(),
   });
+  if (clobberedPath === null) {
+    context.deps.logger.warn(
+      `Config prefix recovery deferred: ${context.configPath}; original config snapshot could not be saved. Retry recovery.`,
+    );
+    return false;
+  }
   // Recovery must publish by rename; a copy fallback can truncate the live config.
   await replaceFileAtomic({
     filePath: context.configPath,
@@ -104,8 +110,7 @@ export async function recoverConfigFromJsonRootSuffixWithContext(
     fileSystem: context.deps.fs,
   });
   context.deps.logger.warn(
-    `Config auto-stripped non-JSON prefix: ${context.configPath}` +
-      (clobberedPath ? ` (original saved as ${clobberedPath})` : ""),
+    `Config auto-stripped non-JSON prefix: ${context.configPath} (original saved as ${clobberedPath})`,
   );
   return true;
 }

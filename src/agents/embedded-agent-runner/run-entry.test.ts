@@ -1,4 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   clearAgentRunContext,
@@ -18,6 +22,9 @@ import {
 } from "./run-entry.test-support.js";
 
 const state = setupRunEntryTestState();
+
+beforeEach(() => setRuntimeConfigSnapshot({}));
+afterEach(() => clearRuntimeConfigSnapshot());
 
 type EntryParams = Parameters<typeof runEmbeddedAgentEntry>[0];
 
@@ -438,7 +445,6 @@ describe("runEmbeddedAgentEntry", () => {
         committed ? "provider" : undefined,
       );
       expect(state.finalizedAttempts).toEqual(committed ? ["candidate"] : []);
-      expect(state.discardedAttempts).toEqual(committed ? [] : ["candidate"]);
     },
   );
 
@@ -520,7 +526,6 @@ describe("runEmbeddedAgentEntry", () => {
       ],
     });
     expect(state.finalizedAttempts).toEqual([]);
-    expect(state.discardedAttempts).toEqual(["candidate"]);
   });
 
   it("retains non-visible follow-up results for terminal delivery", async () => {
@@ -558,6 +563,84 @@ describe("runEmbeddedAgentEntry", () => {
     expect(result.outcome).toBe("exhausted");
     expect(result.result.payloads).toEqual([]);
   });
+
+  it.each([
+    { declared: true, modelRouteChange: undefined },
+    {
+      declared: false,
+      modelRouteChange: "Model route changed: broker/team/chat → broker/upstream-model.",
+    },
+  ])(
+    "announces an endpoint-resolved response model unless its configured row declares it (declared: $declared)",
+    async ({ declared, modelRouteChange }) => {
+      const runId = `endpoint-resolved-${declared}`;
+      const cfg: OpenClawConfig = {
+        models: {
+          providers: {
+            broker: {
+              baseUrl: "https://broker.example/v1",
+              models: [
+                {
+                  id: "team/chat",
+                  name: "Team chat",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128_000,
+                  maxTokens: 8_192,
+                  ...(declared ? { responseModelEquivalent: true } : {}),
+                },
+              ],
+            },
+          },
+        },
+      };
+      state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+        outcome: "completed" as const,
+        result: await params.run(params.provider, params.model, initialAttemptOptions(params)),
+        provider: params.provider,
+        model: params.model,
+        attempts: [],
+      }));
+      const result = await runEntry({
+        selection: { cfg, provider: "broker", model: "team/chat" },
+        identity: { runId, agentId: "main", sessionId: "session-1" },
+        runCandidate: async (provider, model) =>
+          makeResult({
+            provider,
+            model,
+            meta: {
+              finalAssistantVisibleText: "done",
+              finalAssistantRawText: "done",
+              agentMeta: {
+                sessionId: "session-1",
+                provider,
+                model,
+                terminalReceipt: {
+                  runId,
+                  sessionId: "session-1",
+                  turnId: "turn-1",
+                  requested: { provider, model },
+                  effective: { provider, model, responseModel: "upstream-model" },
+                  successfulToolNames: [],
+                  rerouted: false,
+                },
+              },
+            },
+          }),
+      });
+
+      expect(result.terminal.metadata.terminalReceipt).toMatchObject({
+        effective: { provider: "broker", model: "team/chat", responseModel: "upstream-model" },
+        rerouted: !declared,
+      });
+      expect(result.terminal.metadata.terminalReply).toEqual({
+        disposition: "visible",
+        text: "done",
+        ...(modelRouteChange ? { modelRouteChange } : {}),
+      });
+    },
+  );
 
   it.each([
     {

@@ -209,12 +209,13 @@ extension SettingsProTab {
         if showScanHero {
             scanAction = { self.openGatewayQRScanner() }
         }
+        let gateway = self.gatewayStatusPresentation
         return self.detailStatusCard(
             icon: "antenna.radiowaves.left.and.right",
             title: "Gateway",
-            detail: .verbatim(self.gatewayStatusDetail),
-            value: .verbatim(self.gatewayStatusValue),
-            color: self.gatewayStatusColor,
+            detail: .verbatim(gateway.detail),
+            value: .verbatim(gateway.value),
+            color: gateway.color,
             actionTitle: showScanHero ? "Scan QR to Pair" : nil,
             actionSystemImage: "qrcode.viewfinder",
             action: scanAction)

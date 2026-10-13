@@ -254,7 +254,9 @@ describe("update-cli", () => {
       mockFileBackedPathExists();
       mockRunningManagedGateway([process.execPath, entryPath, "gateway", "run"]);
       if (ancestor) {
-        mockGetSelfAndAncestorPidsSync.mockReturnValue(new Set([process.pid, gatewayFixturePid]));
+        mockGetSelfAndAncestorPidsSync.mockReturnValue(
+          new Set([process.pid, gatewayFixturePid, 1]),
+        );
       }
       managedUpdateHandoff.start.mockResolvedValue({
         status: "started",
@@ -360,6 +362,7 @@ describe("update-cli", () => {
       reason: "managed-service-preflight",
       recovery: { serviceRestartSafe: true },
       steps: [
+        expect.objectContaining({ name: "updater-runtime-retention", exitCode: 0 }),
         expect.objectContaining({
           stderrTail: expect.stringContaining("would kill this command"),
         }),

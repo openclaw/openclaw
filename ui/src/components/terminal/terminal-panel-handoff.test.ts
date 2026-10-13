@@ -4,14 +4,14 @@ import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
-import type { TerminalPanelSessionController } from "./terminal-panel-session-controller.ts";
 import {
   createTerminalController,
+  createTestTerminalPanel,
   defineTestTerminalPanelElement,
   terminalOpenResult,
+  terminalSessionsForTest,
   type CreateGhosttyTerminalMock,
 } from "./terminal-panel.test-support.ts";
-import type { OpenClawTerminalPanel } from "./terminal-panel.ts";
 
 const createTerminal: CreateGhosttyTerminalMock = vi.fn();
 const tag = defineTestTerminalPanelElement(createTerminal);
@@ -49,7 +49,7 @@ function gatewayFixture() {
 }
 
 async function mount(client: TerminalGatewayClient) {
-  const panel = document.createElement(tag) as OpenClawTerminalPanel;
+  const panel = createTestTerminalPanel(tag);
   panel.client = client;
   panel.available = true;
   document.body.append(panel);
@@ -57,8 +57,7 @@ async function mount(client: TerminalGatewayClient) {
     panel.toggle();
   }
   // SAFETY: expose the concrete panel's controller solely to inspect lifecycle state.
-  const sessions = (panel as unknown as { terminalSessions: TerminalPanelSessionController })
-    .terminalSessions;
+  const sessions = terminalSessionsForTest(panel);
   await vi.waitFor(() => expect(sessions.tabs).toHaveLength(1));
   await vi.waitFor(() => expect(sessions.booting).toBe(false));
   return { panel, sessions };
@@ -74,8 +73,9 @@ beforeEach(async () => {
   await i18n.setLocale("en");
   createTerminal.mockImplementation(async () => createTerminalController());
 });
-afterEach(() => {
+afterEach(async () => {
   document.body.replaceChildren();
+  await Promise.resolve();
   createTerminal.mockReset();
   vi.unstubAllGlobals();
   vi.useRealTimers();

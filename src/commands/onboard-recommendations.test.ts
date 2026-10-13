@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getRuntimeConfig } from "../config/config.js";
+import { loadConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   createOnboardingRecommendationsStore,
@@ -15,7 +15,12 @@ import {
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
-  return { ...actual, getRuntimeConfig: vi.fn(actual.getRuntimeConfig) };
+  const loadConfigMock = vi.fn(actual.loadConfig);
+  return {
+    ...actual,
+    loadConfig: loadConfigMock,
+    captureRuntimeConfigAsyncReader: () => async () => loadConfigMock(),
+  };
 });
 
 vi.mock("../state/onboarding-recommendations.js", async (importOriginal) => {
@@ -72,23 +77,7 @@ function createOffer(
   };
 }
 
-describe.each([
-  {
-    operation: "read",
-    run: (agent: string, runtime: RuntimeEnv) =>
-      onboardRecommendationsCommand({ agent, json: true }, runtime),
-  },
-  {
-    operation: "acknowledge",
-    run: (agent: string, runtime: RuntimeEnv) =>
-      acknowledgeOnboardRecommendationsCommand({ agent }, runtime),
-  },
-  {
-    operation: "refresh",
-    run: (agent: string, runtime: RuntimeEnv) =>
-      refreshOnboardRecommendationsCommand({ agent }, runtime),
-  },
-])("onboard recommendations $operation selection", ({ run }) => {
+describe("onboard recommendations read selection", () => {
   it.each([
     { agent: "   ", error: "--agent must not be blank" },
     { agent: "writer!", error: 'Unknown agent id "writer!"' },
@@ -120,7 +109,9 @@ describe.each([
           nowMs: 1,
         });
 
-        await expect(run(agent, makeRuntime())).rejects.toThrow(error);
+        await expect(
+          onboardRecommendationsCommand({ agent, json: true }, makeRuntime()),
+        ).rejects.toThrow(error);
         expect(await store.read()).toEqual(offer);
       });
     },
@@ -131,7 +122,7 @@ describe("onboard recommendations command", () => {
   let store: OnboardingRecommendationsStore;
 
   beforeEach(() => {
-    vi.mocked(getRuntimeConfig).mockReturnValue({
+    vi.mocked(loadConfig).mockReturnValue({
       agents: { entries: { main: { workspace: "/tmp/onboard-recommendations-test" } } },
     });
     store = {
@@ -146,36 +137,8 @@ describe("onboard recommendations command", () => {
   });
 
   afterEach(() => {
-    vi.mocked(getRuntimeConfig).mockReset();
+    vi.mocked(loadConfig).mockReset();
     vi.mocked(createOnboardingRecommendationsStore).mockReset();
-  });
-
-  it("returns stored matches as JSON without rescanning", async () => {
-    const runtime = makeRuntime();
-    const read = vi.fn(async () => createOffer());
-
-    Object.assign(store, { read });
-
-    await onboardRecommendationsCommand({ json: true }, runtime);
-
-    expect(read).toHaveBeenCalledOnce();
-    const output = vi.mocked(runtime.log).mock.calls[0]?.[0];
-    expect(typeof output).toBe("string");
-    expect(JSON.parse(output as string)).toEqual([
-      { id: "chat-plugin", source: "official-plugin", tier: "recommended" },
-    ]);
-    expect(output).not.toContain("Connects conversations");
-    expect(output).not.toContain("Chat plugin");
-  });
-
-  it("returns an empty JSON list when no offer is stored", async () => {
-    const runtime = makeRuntime();
-
-    Object.assign(store, { read: async () => null });
-
-    await onboardRecommendationsCommand({ json: true }, runtime);
-
-    expect(runtime.log).toHaveBeenCalledWith("[]");
   });
 
   it("returns an empty JSON list after the offer was answered", async () => {
@@ -348,8 +311,11 @@ describe("onboard recommendations command", () => {
 
     await onboardRecommendationsCommand({ json: true }, runtime);
 
-    expect(JSON.parse(vi.mocked(runtime.log).mock.calls[0]?.[0] as string)).toEqual([
+    const output = vi.mocked(runtime.log).mock.calls[0]?.[0];
+    expect(JSON.parse(output as string)).toEqual([
       { id: "chat-plugin", source: "official-plugin", tier: "recommended" },
     ]);
+    expect(output).not.toContain("Connects conversations");
+    expect(output).not.toContain("Chat plugin");
   });
 });

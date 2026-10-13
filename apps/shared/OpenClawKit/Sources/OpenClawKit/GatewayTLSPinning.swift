@@ -156,6 +156,17 @@ enum GatewayTLSServerTrustEvaluation {
 }
 
 public enum GatewayTLSServerTrust {
+    /// Fingerprinting identifies the leaf certificate; callers evaluate its trust separately.
+    public static func certificateFingerprint(_ trust: SecTrust) -> String? {
+        guard let chain = SecTrustCopyCertificateChain(trust) as? [SecCertificate],
+              let cert = chain.first
+        else {
+            return nil
+        }
+        return SHA256.hash(data: SecCertificateCopyData(cert) as Data)
+            .map { String(format: "%02x", $0) }.joined()
+    }
+
     public static func evaluate(
         trust: SecTrust,
         host: String,
@@ -190,7 +201,7 @@ public enum GatewayTLSServerTrust {
         let systemTrustOk =
             SecTrustSetPolicies(trust, hostnamePolicy) == errSecSuccess &&
             SecTrustEvaluateWithError(trust, nil)
-        let fingerprint = certificateFingerprint(trust)
+        let fingerprint = self.certificateFingerprint(trust)
         let expected = expectedFingerprint.map(normalizeFingerprint)
         let failure: (GatewayTLSValidationFailureKind, String?, String?) -> GatewayTLSServerTrustEvaluation
         failure = { kind, expectedFingerprint, enforcedFingerprint in
@@ -940,16 +951,6 @@ private final class GatewayHTTPResponseDelegate: NSObject, URLSessionDataDelegat
     func urlSession(_: URLSession, task _: URLSessionTask, didCompleteWithError error: Error?) {
         self.responses.continuation.finish(throwing: error ?? URLError(.badServerResponse))
     }
-}
-
-private func certificateFingerprint(_ trust: SecTrust) -> String? {
-    guard let chain = SecTrustCopyCertificateChain(trust) as? [SecCertificate],
-          let cert = chain.first
-    else {
-        return nil
-    }
-    return SHA256.hash(data: SecCertificateCopyData(cert) as Data)
-        .map { String(format: "%02x", $0) }.joined()
 }
 
 private func normalizeFingerprint(_ raw: String) -> String {

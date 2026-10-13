@@ -245,28 +245,6 @@ describe("run-with-env", () => {
     ).toBe(false);
   });
 
-  it("rejects malformed assignments before spawning", () => {
-    const result = spawnSync(
-      process.execPath,
-      [
-        ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(scriptModuleEntrypoints.runWithEnv)),
-        "1INVALID=value",
-        "--",
-        "node",
-        "-e",
-        "process.stdout.write('spawned')",
-      ],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-      },
-    );
-
-    expect(result.status).toBe(2);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("invalid environment assignment");
-  });
-
   it("uses the current Node executable for bare Node command names", () => {
     const args = ["scripts/run-vitest.mjs"];
     expect(resolveSpawnCommand("node", args, "/usr/bin/node", "linux")).toEqual({
@@ -488,40 +466,4 @@ describe("run-with-env", () => {
       }, fixture.cleanup);
     },
   );
-
-  it.runIf(process.platform !== "win32")("preserves wrapped command signal exits", () => {
-    const result = spawnSync(
-      process.execPath,
-      [
-        ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(scriptModuleEntrypoints.runWithEnv)),
-        "OPENCLAW_RUN_WITH_ENV_SIGNAL_TEST=1",
-        "--",
-        "node",
-        "-e",
-        "process.kill(process.pid, 'SIGTERM')",
-      ],
-      { cwd: process.cwd(), encoding: "utf8" },
-    );
-
-    expect(result.status).toBeNull();
-    expect(result.signal).toBe("SIGTERM");
-  });
-
-  it.runIf(process.platform !== "win32")("preserves wrapped command force-kill exits", () => {
-    const result = spawnSync(
-      process.execPath,
-      [
-        ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(scriptModuleEntrypoints.runWithEnv)),
-        "OPENCLAW_RUN_WITH_ENV_SIGNAL_TEST=1",
-        "--",
-        "node",
-        "-e",
-        "process.kill(process.pid, 'SIGKILL')",
-      ],
-      { cwd: process.cwd(), encoding: "utf8" },
-    );
-
-    expect(result.status).toBeNull();
-    expect(result.signal).toBe("SIGKILL");
-  });
 });

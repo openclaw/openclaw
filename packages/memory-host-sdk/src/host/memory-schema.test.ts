@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
+import { openNodeSqliteDatabase } from "../../../../src/infra/node-sqlite.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { encodeMemoryEmbedding } from "./embedding-vector.js";
 import { ensureMemoryRecallMetadataSchema } from "./memory-schema-recall.js";
@@ -17,7 +18,7 @@ describe("memory index schema", () => {
     (kind) => {
       const databasePath = path.join(tempDirs.make("memory-schema-index-"), "memory.sqlite");
       if (kind === "existing") {
-        using seed = new DatabaseSync(databasePath);
+        using seed = openNodeSqliteDatabase(databasePath);
         ensureMemoryIndexSchema({ db: seed, cacheEnabled: false, ftsEnabled: false });
         seed.exec(`
           CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_path ON memory_index_chunks(path);

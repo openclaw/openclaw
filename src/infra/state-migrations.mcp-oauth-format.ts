@@ -85,19 +85,16 @@ export function parseLegacyMcpOAuthStore(value: unknown): Record<string, unknown
   }
   assertAllowedJsonFields(value, STORE_KEYS, "legacy MCP OAuth store", { reportField: false });
   const result: Record<string, unknown> = {};
-  if (value.clientInformation !== undefined) {
-    const parsed = OAuthClientInformationSchema.safeParse(value.clientInformation);
-    if (!parsed.success) {
-      throw new Error("legacy MCP OAuth client information is invalid");
+  for (const [key, schema, message] of [
+    ["clientInformation", OAuthClientInformationSchema, "client information is invalid"],
+    ["tokens", OAuthTokensSchema, "tokens are invalid"],
+  ] as const) {
+    if (value[key] !== undefined) {
+      if (!schema.safeParse(value[key]).success) {
+        throw new Error(`legacy MCP OAuth ${message}`);
+      }
+      result[key] = value[key];
     }
-    result.clientInformation = value.clientInformation;
-  }
-  if (value.tokens !== undefined) {
-    const parsed = OAuthTokensSchema.safeParse(value.tokens);
-    if (!parsed.success) {
-      throw new Error("legacy MCP OAuth tokens are invalid");
-    }
-    result.tokens = value.tokens;
   }
   if (value.tokenExpiresAt !== undefined) {
     if (
@@ -121,14 +118,13 @@ export function parseLegacyMcpOAuthStore(value: unknown): Record<string, unknown
   if (value.discoveryState !== undefined) {
     result.discoveryState = parseDiscoveryState(value.discoveryState);
   }
-  if (value.lastAuthorizationUrl !== undefined) {
-    result.lastAuthorizationUrl = parseSafeUrl(
-      value.lastAuthorizationUrl,
-      "legacy MCP OAuth authorization URL",
-    );
-  }
-  if (value.redirectUrl !== undefined) {
-    result.redirectUrl = parseSafeUrl(value.redirectUrl, "legacy MCP OAuth redirect URL");
+  for (const [key, label] of [
+    ["lastAuthorizationUrl", "authorization URL"],
+    ["redirectUrl", "redirect URL"],
+  ] as const) {
+    if (value[key] !== undefined) {
+      result[key] = parseSafeUrl(value[key], `legacy MCP OAuth ${label}`);
+    }
   }
   // `state` was persisted but never read. Doctor deliberately leaves it retired.
   return result;

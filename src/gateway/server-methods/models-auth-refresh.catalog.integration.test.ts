@@ -32,6 +32,7 @@ describe("models.authRefresh learned catalog", () => {
     const requests: string[] = [];
     let holdDiscovery = false;
     const heldResponses: Array<() => void> = [];
+    let releasedHeldResponses = 0;
     const accounts = new Map([
       ["Bearer account-one-original", "account-one"],
       ["Bearer account-one-renewed", "account-one"],
@@ -49,7 +50,10 @@ describe("models.authRefresh learned catalog", () => {
       const reply = () =>
         response.end(JSON.stringify([{ id: `${account}-learned`, name: `${account} learned` }]));
       if (holdDiscovery) {
-        heldResponses.push(reply);
+        heldResponses.push(() => {
+          releasedHeldResponses++;
+          reply();
+        });
       } else if (requests.length === 1) {
         // Keep publication pending after the foreground refresh has returned.
         void initialRefreshReturned.promise.then(() => {
@@ -228,14 +232,24 @@ describe("models.authRefresh learned catalog", () => {
           client.request("models.list", { agentId: "main", provider, refresh: true }),
         ]);
         await heldRequest;
-        await state.writeAuthProfiles({ version: 1, profiles: {} });
-        const logoutStarted = Date.now();
-        await client.request("models.authRefresh", { agentId: "main", operation: "logout" });
-        const logoutMs = Date.now() - logoutStarted;
-        console.log("LOGOUT_DURING_DISCOVERY_MS", logoutMs);
-        expect(logoutMs).toBeLessThan(1_000);
-        for (const reply of heldResponses) {
-          reply();
+        try {
+          expect(heldResponses).toHaveLength(1);
+          expect(catalogWork.read().pendingTasks).toBeGreaterThan(0);
+          await state.writeAuthProfiles({ version: 1, profiles: {} });
+          const logoutStarted = Date.now();
+          await expect(
+            client.request("models.authRefresh", { agentId: "main", operation: "logout" }),
+          ).resolves.toEqual({ refreshed: true });
+          console.log("LOGOUT_DURING_DISCOVERY_MS", Date.now() - logoutStarted);
+          // Revocation must publish while the old discovery response is still withheld.
+          const revoked = await list();
+          expect(revoked.filter((model) => model.available)).toEqual([]);
+          expect(revoked.map((model) => model.id)).not.toContain("account-two-learned");
+          expect(releasedHeldResponses).toBe(0);
+        } finally {
+          for (const reply of heldResponses) {
+            reply();
+          }
         }
         await refreshSettled;
         expect((await list()).filter((model) => model.available)).toEqual([]);

@@ -12,22 +12,24 @@ vi.mock("node:child_process", async (importOriginal) => ({
 
 let child: ChildProcess;
 let kill: MockInstance<ChildProcess["kill"]>;
-let exit: MockInstance<typeof process.exit>;
-let detach: (() => void) | undefined;
+let processKill: MockInstance<typeof process.kill>;
+let completion: ReturnType<typeof runRespawnedChild> | undefined;
+let originalExitCode: typeof process.exitCode;
 beforeEach(() => {
   vi.useFakeTimers();
+  originalExitCode = process.exitCode;
+  process.exitCode = undefined;
   child = new ChildProcess();
   kill = vi.spyOn(child, "kill").mockReturnValue(true);
-  // `spawn` is hoisted once for the file, so its call log survives across cases
-  // and `toHaveBeenCalledExactlyOnceWith` would only ever hold for the first one.
-  spawn.mockClear();
+  spawn.mockReset();
   spawn.mockReturnValue(child);
-  exit = vi.spyOn(process, "exit").mockImplementation(vi.fn<typeof process.exit>());
-  vi.spyOn(process, "kill").mockReturnValue(true);
+  processKill = vi.spyOn(process, "kill").mockReturnValue(true);
 });
-afterEach(() => {
-  detach?.();
-  detach = undefined;
+afterEach(async () => {
+  child.emit("close", 0, null);
+  await completion;
+  completion = undefined;
+  process.exitCode = originalExitCode;
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
@@ -39,7 +41,7 @@ it.each([
   { platform: "win32", args: ["gateway", "run"], nativeBudgetMs: 3_000 },
 ] as const)(
   "bounds $platform $args shutdown without preempting the serving owner",
-  ({ platform, args, nativeBudgetMs }) => {
+  async ({ platform, args, nativeBudgetMs }) => {
     vi.spyOn(process, "platform", "get").mockReturnValue(platform);
     vi.spyOn(process, "argv", "get").mockReturnValue([
       "node",
@@ -48,11 +50,14 @@ it.each([
       ...args,
     ]);
     const previous = new Set(process.listeners("SIGTERM"));
-    runRespawnedChild("node", ["child.mjs"], {
+    completion = runRespawnedChild("node", ["child.mjs"], {
       OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.fixture",
       XPC_SERVICE_NAME: "ai.openclaw.fixture",
     });
-    detach = () => child.emit("exit", 0, null);
+    let completed = false;
+    void completion.then(() => {
+      completed = true;
+    });
     // No new environment contract is needed to give newly started launchers the
     // full service budget; legacy parent compatibility stays with the Gateway.
     expect(spawn).toHaveBeenCalledExactlyOnceWith(
@@ -69,7 +74,6 @@ it.each([
     expect(signal).toBeDefined();
     signal!("SIGTERM");
     expect(kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
-    // Reserve the final two seconds for escalation; all earlier time belongs to the child.
     vi.advanceTimersByTime(nativeBudgetMs - 2_001);
     expect(kill).toHaveBeenCalledTimes(1);
     signal!("SIGTERM");
@@ -77,24 +81,66 @@ it.each([
     vi.advanceTimersByTime(1);
     expect(kill).toHaveBeenCalledTimes(3);
     vi.advanceTimersByTime(1_000);
-    expect(kill).toHaveBeenLastCalledWith(platform === "win32" ? "SIGTERM" : "SIGKILL");
-    expect(exit).not.toHaveBeenCalled();
+    const childSignal = platform === "win32" ? "SIGTERM" : "SIGKILL";
+    expect(kill).toHaveBeenLastCalledWith(childSignal);
     vi.advanceTimersByTime(1_000);
-    expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+    await Promise.resolve();
+    expect(completed).toBe(false);
+    expect(process.exitCode).toBeUndefined();
+    child.emit("exit", null, childSignal);
+    expect(process.exitCode).toBeUndefined();
+    child.emit("close", null, childSignal);
+    await expect(completion).resolves.toBe(true);
+    expect(process.exitCode).toBe(platform === "win32" ? 1 : 137);
+    if (platform === "win32") {
+      expect(processKill).not.toHaveBeenCalled();
+    } else {
+      expect(processKill).toHaveBeenCalledExactlyOnceWith(process.pid, childSignal);
+    }
+    expect(process.listeners("SIGTERM")).toEqual([...previous]);
   },
 );
 
-it("removes the shutdown deadline when the child exits cooperatively", () => {
-  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-  vi.spyOn(process, "argv", "get").mockReturnValue(["node", "openclaw.mjs", "gateway"]);
-  const previous = new Set(process.listeners("SIGTERM"));
-  runRespawnedChild("node", ["child.mjs"], {});
-  detach = () => child.emit("exit", 0, null);
-  process.listeners("SIGTERM").find((listener) => !previous.has(listener))!("SIGTERM");
-  vi.advanceTimersByTime(3_000);
-  child.emit("exit", 0, null);
-  vi.advanceTimersByTime(330_000);
-  expect(kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
-  expect(exit).toHaveBeenCalledExactlyOnceWith(0);
-  expect(process.listeners("SIGTERM")).toEqual([...previous]);
+it.each([
+  { platform: "linux", childSignal: "SIGTERM", expected: 143 },
+  { platform: "linux", childSignal: "SIGINT", expected: 130 },
+  { platform: "linux", childSignal: "SIGHUP", expected: 129 },
+  { platform: "linux", childSignal: "SIGQUIT", expected: 131 },
+  { platform: "linux", childSignal: "SIGKILL", expected: 137 },
+  { platform: "win32", childSignal: "SIGTERM", expected: 143 },
+] as const)(
+  "records actual $platform $childSignal only after pipes close",
+  async ({ platform, childSignal, expected }) => {
+    vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+    vi.spyOn(process, "argv", "get").mockReturnValue(["node", "openclaw.mjs", "gateway"]);
+    const previous = process.listeners("SIGTERM");
+    completion = runRespawnedChild("node", ["child.mjs"], {});
+    const forward = process.listeners("SIGTERM").find((listener) => !previous.includes(listener))!;
+    forward("SIGTERM");
+    child.emit("exit", null, childSignal);
+    forward("SIGTERM");
+    vi.advanceTimersByTime(330_000);
+    expect(kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+    expect(process.exitCode).toBeUndefined();
+    expect(process.listeners("SIGTERM")).toContain(forward);
+    child.emit("close", null, childSignal);
+    await expect(completion).resolves.toBe(true);
+    expect(process.exitCode).toBe(expected);
+    if (platform === "win32") {
+      expect(processKill).not.toHaveBeenCalled();
+    } else {
+      expect(processKill).toHaveBeenCalledExactlyOnceWith(process.pid, childSignal);
+    }
+    expect(process.listeners("SIGTERM")).toEqual(previous);
+  },
+);
+
+it("records spawn failure only after its close notification", async () => {
+  vi.spyOn(process.stderr, "write").mockReturnValue(true);
+  completion = runRespawnedChild("missing-node", [], {});
+  child.emit("error", new Error("spawn ENOENT"));
+  expect(process.exitCode).toBeUndefined();
+  child.emit("close", -2, null);
+  await expect(completion).resolves.toBe(true);
+  expect(process.exitCode).toBe(1);
 });

@@ -5,13 +5,12 @@ import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { admitQueuedMessageForSession } from "./chat-outbox-admission.test-support.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
-import { admitQueuedMessageForSession } from "./chat-queue.ts";
 import { moveQueuedChatMessage } from "./chat-send-actions.ts";
 import {
   admitStoredChatComposerQueueItem,
   listStoredChatOutboxes,
-  updateStoredChatComposerQueueItem,
   updateStoredChatComposerQueueItems,
 } from "./composer-persistence.ts";
 
@@ -244,15 +243,15 @@ describe("queued message reorder", () => {
     const expectedQueued2 = storedById("queued-2");
     const expectedQueued3 = storedById("queued-3");
 
-    const concurrentWrite = updateStoredChatComposerQueueItem(
-      host as never,
-      SESSION_KEY,
-      expectedQueued2,
+    const concurrentWrite = updateStoredChatComposerQueueItems(host as never, SESSION_KEY, [
       {
-        ...expectedQueued2,
-        sendAttempts: (expectedQueued2.sendAttempts ?? 0) + 1,
+        expected: expectedQueued2,
+        next: {
+          ...expectedQueued2,
+          sendAttempts: (expectedQueued2.sendAttempts ?? 0) + 1,
+        },
       },
-    );
+    ]);
     expect(concurrentWrite).toBe(true);
 
     const applied = updateStoredChatComposerQueueItems(host as never, SESSION_KEY, [

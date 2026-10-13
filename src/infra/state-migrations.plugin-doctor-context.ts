@@ -19,7 +19,7 @@ import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/sess
 import {
   resolveExistingAgentSessionStoreTargetsReadOnlyResult,
   type SessionStoreTargetsReadCache,
-} from "../config/sessions/targets-read-availability.js";
+} from "../config/sessions/targets-read-availability.worker.js";
 import { dedupeSessionStoreTargetsBySqliteTarget } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runWriteTransaction } from "../plugin-state/plugin-state-store.database.js";

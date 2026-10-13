@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   createBrowserClient,
@@ -71,7 +72,7 @@ describe("Browser panel text and touch input", () => {
     panel.presented = true;
     panel.refreshOnPresentation = false;
     panel.client = client;
-    document.body.append(panel);
+    mountSolid(() => panel);
     await panel.updateComplete;
     const controller = (panel as unknown as { browserPanelController: BrowserPanelController })
       .browserPanelController;
@@ -122,10 +123,10 @@ describe("Browser panel text and touch input", () => {
   );
 
   it("offers an empty editable input surface while typing stays remote", async () => {
-    const { panel, request, input } = await mount();
+    const { request, input } = await mount();
     expect(input).not.toBeNull();
     input.focus();
-    expect(panel.shadowRoot?.activeElement).toBe(input);
+    expect(document.activeElement).toBe(input);
     const key = new KeyboardEvent("keydown", { key: "a", bubbles: true, cancelable: true });
     input.dispatchEvent(key);
     expect(key.defaultPrevented).toBe(true);

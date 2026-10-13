@@ -5,6 +5,10 @@ import {
   readExecRequestOwners,
   type ExecRequestIdentity,
 } from "../infra/exec-request-context.js";
+import {
+  consumeSelectedSystemEventEntries,
+  peekExecRequestSystemEventEntries,
+} from "../infra/system-events.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import {
   removeNotifyOnExit,
@@ -46,17 +50,57 @@ export function isConfirmedRequestedStop(session: ProcessSession): boolean {
   );
 }
 
+/** Agent retirement also owns independent services after their creating turns settle. */
+export async function drainAgentExecProcesses(
+  agentId: string,
+  assertCurrent: () => void,
+): Promise<void> {
+  const sessions = listExecSessionsForCancellation().filter(
+    (session) => session.agentId === agentId,
+  );
+  const accepted: ProcessSession[] = [];
+  const failures: unknown[] = [];
+  try {
+    for (const session of sessions) {
+      assertCurrent();
+      accepted.push(session);
+      session.requestCancelled = true;
+      if (!session.exited && !session.finalizing) {
+        session.cancellationRequested = true;
+        getProcessSupervisor().cancel(session.id, "manual-cancel");
+      }
+      removeNotifyOnExit(session);
+    }
+  } catch (error) {
+    failures.push(error);
+  }
+  // Losing cancellation authority cannot release an already accepted process's cleanup.
+  await Promise.all(accepted.map(waitForExecSession));
+  if (accepted.some((session) => session.finalizationFailed || session.cleanupUncertain)) {
+    failures.push(
+      new Error("Command cleanup could not be confirmed; inspect retained process output."),
+    );
+  }
+  if (failures.length > 0) {
+    throw new AggregateError(failures, `Agent ${agentId} command cleanup is still draining`);
+  }
+}
+
 /** Select before awaited cancellation work; a later human turn cannot enter this plan. */
 export function captureExecRequestCancellation(
   target: ExecRequestIdentity,
   accept: (identity: ExecRequestIdentity) => boolean = () => true,
 ) {
+  const queued = peekExecRequestSystemEventEntries(target);
   const initialSessions = listExecSessionsForCancellation();
-  const residualOwners = initialSessions
-    .flatMap((session) =>
+  const residualOwners = [
+    ...initialSessions.flatMap((session) =>
       !session.exited || session.finalizing ? (readExecRequestOwners(session) ?? []) : [],
-    )
-    .filter((owner) => execRequestMatches(owner, target) && accept(owner.identity));
+    ),
+    ...queued.flatMap(({ events }) =>
+      events.flatMap((event) => readExecRequestOwners(event) ?? []),
+    ),
+  ].filter((owner) => execRequestMatches(owner, target) && accept(owner.identity));
   const owners = new Set([...activeExecRequestOwners(target, accept), ...residualOwners]);
   const matching = (session: ProcessSession) =>
     readExecRequestOwners(session)?.some((owner) => owners.has(owner)) === true;
@@ -64,14 +108,32 @@ export function captureExecRequestCancellation(
   let cancelled = false;
   return {
     owners: [...owners],
-    cancel() {
+    // Ancestry selects descendants without rewriting completed model receipts.
+    requestRunIds: [...new Set([...owners].flatMap((owner) => Array.from(owner.turnRunIds)))],
+    cancel(select: (identity: ExecRequestIdentity) => boolean = () => true) {
       if (cancelled || owners.size === 0) {
         return false;
       }
       cancelled = true;
+      for (const owner of owners) {
+        if (!select(owner.identity)) {
+          owners.delete(owner);
+        }
+      }
+      if (owners.size === 0) {
+        return false;
+      }
       cancelExecRequestOwners([...owners]);
       for (const session of listExecSessionsForCancellation().filter(matching)) {
         removeNotifyOnExit(session);
+      }
+      for (const { sessionKey, events } of queued) {
+        consumeSelectedSystemEventEntries(
+          sessionKey,
+          events.filter((event) =>
+            readExecRequestOwners(event)?.some((owner) => owners.has(owner)),
+          ),
+        );
       }
       return true;
     },

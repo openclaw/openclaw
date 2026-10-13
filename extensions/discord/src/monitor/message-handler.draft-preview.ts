@@ -100,7 +100,6 @@ export function createDiscordDraftPreviewController(params: {
           fallbackLimit: DISCORD_TEXT_CHUNK_LIMIT,
         })
       : undefined;
-  const shouldSplitPreviewMessages = discordStreamMode === "block";
   const draftChunker = draftChunking ? new EmbeddedBlockChunker(draftChunking) : undefined;
   let lastPartialText = "";
   let draftText = "";
@@ -126,6 +125,7 @@ export function createDiscordDraftPreviewController(params: {
     seed: progressSeed,
     reasoningLinePrefix: "🧠 ",
     commentaryLinePrefix: "💬 ",
+    toolIcons: true,
     commentaryItalics: false,
     update: async (previewText, options) => {
       if (!draftStream) {
@@ -200,6 +200,13 @@ export function createDiscordDraftPreviewController(params: {
     onCleanupFailure: (err) => params.log(`discord: draft cleanup failed: ${String(err)}`),
   });
 
+  const resetProgressState = () => {
+    lastPartialText = "";
+    draftText = "";
+    hasStreamedAssistantText = false;
+    draftChunker?.reset();
+  };
+
   const beginNewProgressTurn = (options?: { force?: boolean }) => {
     const beganNewTurn = progressDraft.beginNewTurn(options);
     if (beganNewTurn) {
@@ -217,14 +224,11 @@ export function createDiscordDraftPreviewController(params: {
         draftStream?.forceNewMessage("discard");
       }
     } else {
-      if (shouldSplitPreviewMessages && hasStreamedAssistantText) {
+      if (discordStreamMode === "block" && hasStreamedAssistantText) {
         params.log("discord: calling forceNewMessage() for draft stream");
         draftStream?.forceNewMessage();
       }
-      lastPartialText = "";
-      draftText = "";
-      hasStreamedAssistantText = false;
-      draftChunker?.reset();
+      resetProgressState();
     }
     return beganNewTurn;
   };

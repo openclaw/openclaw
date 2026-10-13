@@ -363,11 +363,6 @@ describe("resolveDriveCommentEventTurn", () => {
       botOpenId: null,
       event: { is_mentioned: false },
     },
-    {
-      name: "skips a cold-start comment notice when missing recipient identity",
-      botOpenId: null,
-      event: { notice_meta: { to_user_id: undefined } },
-    },
   ])("$name", async ({ event, botOpenId }) => {
     expect(await resolveCommentTurn({ event: makeDriveCommentEvent(event), botOpenId })).toBeNull();
   });

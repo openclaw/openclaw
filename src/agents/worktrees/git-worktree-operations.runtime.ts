@@ -149,6 +149,7 @@ export async function executeGitWorktreeOperation(
         operation.input.repoRoot,
         operation.input.ref,
         operation.input.replacementRefBase,
+        operation.input.preparationKey,
       );
     case "worktree.checkout-transition-size":
       return await estimateCheckoutTransitionBytes(

@@ -69,6 +69,8 @@ export type EmbeddedAgentQueueHandle = {
   isAborted?: () => boolean;
   /** True only while this exact runtime owns a live wait, not unresolved host work or cleanup. */
   ownsLiveness?: () => boolean;
+  /** Interrupts a current model request; its attempt still owns settlement and replay policy. */
+  recoverStalledModelCall?: () => boolean;
   isAbortable?: () => boolean;
   isCompacting: () => boolean;
   supportsTranscriptCommitWait?: boolean;
@@ -81,6 +83,13 @@ export type EmbeddedAgentQueueHandle = {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   terminalReplyExpectation?: ReplyExpectation;
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
+};
+
+export type AbortAndDrainEmbeddedAgentRunResult = {
+  recoveringModelAttempt?: true;
+  aborted: boolean;
+  drained: boolean;
+  forceCleared: boolean;
 };
 
 export type EmbeddedAgentQueueMessageOutcome =
@@ -311,6 +320,16 @@ export function registerActiveEmbeddedRunHumanInputWait(
       registration.onHumanInputResolved?.();
     }
   };
+}
+
+/** Tool-side waits know only their run id; the live registration supplies its authority. */
+export function registerActiveEmbeddedRunHumanInputWaitForRun(
+  runId: string,
+  isPending: () => boolean,
+): ((resolved: boolean) => void) | undefined {
+  const handle = ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(runId);
+  const authority = handle && ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle)?.delegatedAuthority;
+  return authority ? registerActiveEmbeddedRunHumanInputWait(authority, isPending) : undefined;
 }
 
 /** Re-read at the recovery action, including after queued/lazy recovery dispatch. */

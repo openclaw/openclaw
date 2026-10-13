@@ -105,6 +105,8 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
     resetSharedRunIntegrationHarnessMocks();
     const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
     state = await createOpenClawTestState({ label: "run.codex-app-server-recovery" });
+    const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+    setRuntimeConfigSnapshot({});
     mockedClassifyFailoverReason.mockReturnValue(null);
   });
 
@@ -480,12 +482,15 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
         }),
       );
 
+      const config = createModelFallbackConfig("openai/gpt-5.5", ["anthropic/claude-opus-4-6"]);
+      const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+      setRuntimeConfigSnapshot(config);
       const result = await runEmbeddedAgent({
         ...createOverflowRunParams(state),
         provider: "codex",
         model: "gpt-5.5",
         runId: "run-codex-turn-completion-idle-timeout-fallback",
-        config: createModelFallbackConfig("openai/gpt-5.5", ["anthropic/claude-opus-4-6"]),
+        config,
       });
 
       expect(result.payloads?.[0]).toMatchObject({

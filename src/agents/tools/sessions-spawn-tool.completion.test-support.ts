@@ -31,6 +31,7 @@ export function registerSessionsSpawnCompletionTests({
       await withTestDir({ prefix: "openclaw-spawn-completion-" }, async (dir) => {
         const callGateway = vi.fn(async () => ({
           key: "agent:main:dashboard:child",
+          sessionId: "visible-child",
           runStarted: true,
           runId: "run-visible",
         }));

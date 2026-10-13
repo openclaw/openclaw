@@ -3,6 +3,7 @@ import type {
   SessionPlacementDiskSpace,
   SessionPlacementWorkerRuntimeInstall,
 } from "../../../../packages/gateway-protocol/src/schema/session-placement.ts";
+import { readRunFailureNotice } from "../../../../src/shared/run-failure-notice.js";
 import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
 import { renderCopyButton } from "../../components/copy-button.ts";
 import { formatWebUiIconErrorText } from "../../components/error-presentation.ts";
@@ -12,8 +13,8 @@ import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-sessio
 import { formatBytes } from "../../lib/agents/display.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
 import { clampText } from "../../lib/format.ts";
-import type { SubagentRowContext } from "./chat-spawned-subagent.ts";
-import "./components/chat-child-attention.ts";
+import type { SubagentRoster, SubagentRowContext } from "./chat-spawned-subagent.ts";
+import "./components/chat-child-attention.tsx";
 import { renderWorkspaceConflictNotice } from "./components/chat-workspace-conflict.ts";
 import type { ChatRunError } from "./run-lifecycle.ts";
 import type { ProviderPolicyNotice } from "./tool-stream-contract.ts";
@@ -34,7 +35,8 @@ type ChatViewNoticesProps = {
 };
 
 type ChatComposerNoticesProps = ChatPlacementStartupNoticeProps &
-  SubagentRowContext & {
+  SubagentRowContext &
+  Pick<SubagentRoster, "subagentSessionsRead"> & {
     sessionKey?: string;
     onSessionSelect?: (key: string) => void;
     connected?: boolean;
@@ -186,6 +188,12 @@ export function renderChatTopbarNotices(props: ChatViewNoticesProps) {
 }
 
 export function renderChatComposerNotices(props: ChatComposerNoticesProps) {
+  const hasTranscriptFailure = Boolean(
+    props.runError?.runId &&
+    props.messages.some(
+      (message) => readRunFailureNotice(message)?.runId === props.runError?.runId,
+    ),
+  );
   const contention = props.runError?.kind === "state_contention";
   const refresh = props.onRefresh
     ? html`<button
@@ -199,7 +207,8 @@ export function renderChatComposerNotices(props: ChatComposerNoticesProps) {
     : nothing;
   return html`
     ${
-      props.subagentParentKey
+      // Seeded rows can name children the gateway no longer links; wait for its child read.
+      props.subagentParentKey && props.subagentSessionsRead
         ? html`<openclaw-chat-child-attention
             .sessionKey=${props.subagentParentKey}
             .sessions=${props.subagentSessions ?? []}
@@ -210,7 +219,7 @@ export function renderChatComposerNotices(props: ChatComposerNoticesProps) {
     }
     ${props.providerReviewNotice ?? nothing}
     ${renderProviderPolicyNotice(props.providerPolicyNotice)}
-    ${props.runError ? renderErrorNotice(props.runError.summary, refresh, undefined, contention ? "warn" : "danger", props.runError.kind === "stop" ? undefined : t(contention ? "chat.errorBusySummary" : props.runError.kind === "auth_refresh" ? "chat.errorSignInSummary" : "chat.errorReplySummary")) : nothing}
+    ${props.runError && !hasTranscriptFailure ? renderErrorNotice(props.runError.summary, refresh, undefined, contention ? "warn" : "danger", props.runError.kind === "stop" ? undefined : t(contention ? "chat.errorBusySummary" : props.runError.kind === "auth_refresh" ? "chat.errorSignInSummary" : "chat.errorReplySummary")) : nothing}
     ${renderWorkspaceConflictNotice({
       conflict: props.workspaceConflict ?? undefined,
       onDismiss: props.onDismissWorkspaceConflict,

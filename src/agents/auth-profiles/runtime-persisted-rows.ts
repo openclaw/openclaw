@@ -1,47 +1,103 @@
-import fs from "node:fs";
+import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
+import {
+  matchesAgentDatabaseReadCandidatePath,
+  type AgentDatabaseReadCandidate,
+} from "../../infra/agent-database-readers.js";
+import { readSqliteDatabaseScopedWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
-import type { AuthProfileRowRead } from "./types.js";
-
-const IDENTITY_PROBE_INTERVAL_MS = 100;
+import { AUTH_STORE_VERSION } from "./constants.js";
+import {
+  buildPersistedAuthProfileSecretsStore,
+  mergePersistedAuthProfileState,
+} from "./persisted.js";
+import { buildPersistedAuthProfileState } from "./state.js";
+import { AuthProfileStoreUnreadableError } from "./store-unreadable-error.js";
+import type { AuthProfileRowRead, AuthProfileStore } from "./types.js";
 
 type RowsReader = {
+  identity?: string;
   read: () => Promise<AuthProfileRowRead>;
   assertCurrent: () => void;
 };
 
-export class AuthProfileRuntimeReadStaleError extends Error {
-  constructor(readonly waitForSettlement?: (signal?: AbortSignal) => Promise<void>) {
-    super("Auth profile store changed during its runtime read; retry resolution");
-    this.name = "AuthProfileRuntimeReadStaleError";
-  }
-}
-
-// Include WAL and rollback-journal writes from other processes, without opening
-// SQLite (which could release a host writer's POSIX locks).
-function readIdentity(databasePath: string): string {
-  return ["", "-wal", "-journal"]
-    .map((suffix) => {
-      const stat = fs.statSync(databasePath + suffix, { bigint: true, throwIfNoEntry: false });
-      return stat
-        ? `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`
-        : "missing";
-    })
-    .join("/");
-}
-
-/** A derived rows cache; the runtime snapshot owner supplies publication generations. */
-export function createRuntimeAuthProfileRowsCache(
-  revisionAtPath: (path: string) => {
-    rows: string;
-    selection: string;
-    ownerLineage?: readonly string[];
-  },
-) {
-  const entries = new Map<
-    string,
-    { identity: string; checkedAt: number; revision: string; rows: AuthProfileRowRead }
-  >();
+function persistedSource(store: AuthProfileStore | null): AuthProfileStore {
+  const current = store ?? { version: AUTH_STORE_VERSION, profiles: {} };
   return {
+    ...buildPersistedAuthProfileSecretsStore(current),
+    ...buildPersistedAuthProfileState(current),
+  };
+}
+
+function sourceFromRows(rows: AuthProfileRowRead, databasePath: string): AuthProfileStore {
+  const store = mergePersistedAuthProfileState(
+    rows.store.status === "readable" ? rows.store.raw : null,
+    () => (rows.state.status === "readable" ? rows.state.raw : null),
+  );
+  if (!store && rows.store.status !== "missing") {
+    throw new AuthProfileStoreUnreadableError(databasePath);
+  }
+  return persistedSource(store);
+}
+
+/** Persisted rows follow their source owner, independently of resolved snapshot publication. */
+export function createRuntimeAuthProfileRowsCache(
+  revisionAtPath: (path: string) => string,
+  waitForSourcePublication: (databasePath: string) => Promise<void>,
+) {
+  type Refresh = () => Promise<AuthProfileRowRead | undefined>;
+  type Entry = {
+    identity: string | undefined;
+    writeToken: string | undefined;
+    revision: string;
+    source: AuthProfileStore;
+    rows?: AuthProfileRowRead;
+    refresh?: Refresh;
+  };
+  const entries = new Map<string, Entry>();
+  const hasCurrentSource = (databasePath: string, entry: Entry) =>
+    revisionAtPath(databasePath) === entry.revision &&
+    readSqliteDatabaseScopedWriteTokenForPath(databasePath, "auth-profiles") === entry.writeToken;
+  const isCurrent = (databasePath: string, entry: Entry) =>
+    entries.get(databasePath) === entry && hasCurrentSource(databasePath, entry);
+  return {
+    hasSource(databasePath: string): boolean {
+      const entry = entries.get(databasePath);
+      return Boolean(
+        entry?.refresh &&
+        revisionAtPath(databasePath) === entry.revision &&
+        (entry.writeToken === undefined || hasCurrentSource(databasePath, entry)),
+      );
+    },
+    recordSource(
+      databasePath: string,
+      identity: string,
+      store: AuthProfileStore | null,
+      refresh: Refresh,
+    ) {
+      const writeToken = readSqliteDatabaseScopedWriteTokenForPath(databasePath, "auth-profiles");
+      const source = freezeJsonSnapshot(structuredClone(persistedSource(store)));
+      const previous = entries.get(databasePath);
+      entries.set(databasePath, {
+        identity,
+        writeToken,
+        revision: revisionAtPath(databasePath),
+        source,
+        refresh,
+        ...(previous?.identity === identity &&
+        previous.writeToken === writeToken &&
+        isDeepStrictEqual(previous.source, source)
+          ? { rows: previous.rows }
+          : {}),
+      });
+    },
+    invalidateRows(databasePath?: string) {
+      for (const [pathname, entry] of entries) {
+        if (databasePath === undefined || pathname === databasePath) {
+          entry.rows = undefined;
+        }
+      }
+    },
     clear(databasePath?: string) {
       if (databasePath === undefined) {
         entries.clear();
@@ -49,65 +105,152 @@ export function createRuntimeAuthProfileRowsCache(
         entries.delete(databasePath);
       }
     },
-    prepare(
-      databasePath: string,
-      reader: RowsReader,
-      captureSettlement?: (
-        databasePaths: readonly string[],
-        rows: AuthProfileRowRead | undefined,
-      ) => ((signal?: AbortSignal) => Promise<void>) | undefined,
-    ): RowsReader {
-      const revision = revisionAtPath(databasePath);
-      const ownerLineage = [databasePath, ...(revision.ownerLineage ?? [])];
-      let capturedRows: AuthProfileRowRead | undefined;
-      const assertCurrent = () => {
-        reader.assertCurrent();
-        // Bookkeeping evicts reusable rows without revoking an admitted snapshot read.
-        if (revisionAtPath(databasePath).selection !== revision.selection) {
-          throw new AuthProfileRuntimeReadStaleError(
-            captureSettlement?.(ownerLineage, capturedRows),
-          );
-        }
-      };
-      return {
-        assertCurrent,
-        async read() {
-          assertCurrent();
-          const entry = entries.get(databasePath);
-          const checkedAt = performance.now();
-          // Owner writes invalidate immediately; external writes are checked every 100 ms.
-          // Hits must not extend the interval, including while a cold read is pending.
-          if (
-            entry?.revision === revision.rows &&
-            checkedAt - entry.checkedAt < IDENTITY_PROBE_INTERVAL_MS
-          ) {
-            capturedRows = entry.rows;
-            return entry.rows;
-          }
-          const identity = readIdentity(databasePath);
-          if (entry?.identity === identity && entry.revision === revision.rows) {
-            entry.checkedAt = checkedAt;
-            capturedRows = entry.rows;
-            return entry.rows;
-          }
+    retire(candidates: readonly AgentDatabaseReadCandidate[], retainedPaths?: ReadonlySet<string>) {
+      for (const databasePath of entries.keys()) {
+        if (
+          !retainedPaths?.has(databasePath) &&
+          candidates.some((candidate) =>
+            matchesAgentDatabaseReadCandidatePath(candidate, databasePath),
+          )
+        ) {
           entries.delete(databasePath);
-          // Only completed, certified reads can serve another caller's later snapshot.
-          const rows = await reader.read();
-          capturedRows = rows;
-          assertCurrent();
+        }
+      }
+    },
+    publishSnapshots(databasePaths: ReadonlySet<string>) {
+      for (const databasePath of entries.keys()) {
+        if (!databasePaths.has(databasePath)) {
+          entries.delete(databasePath);
+        }
+      }
+    },
+    rebase(databasePath: string) {
+      const entry = entries.get(databasePath);
+      if (
+        entry &&
+        (entry.writeToken === undefined ||
+          readSqliteDatabaseScopedWriteTokenForPath(databasePath, "auth-profiles") ===
+            entry.writeToken)
+      ) {
+        entry.revision = revisionAtPath(databasePath);
+      }
+    },
+    async refreshChanged(directory: string): Promise<string[]> {
+      const key = path.resolve(directory);
+      const changed = new Map<string, Entry>();
+      // Async reads must not visit owners installed during this observation.
+      const observedEntries = Array.from(entries);
+      for (const [databasePath, entry] of observedEntries) {
+        if (path.dirname(path.resolve(databasePath)) !== key || !entry.refresh) {
+          continue;
+        }
+        for (;;) {
+          // Native source publication can precede the first scoped SQLite admission.
+          entry.writeToken ??= readSqliteDatabaseScopedWriteTokenForPath(
+            databasePath,
+            "auth-profiles",
+          );
+          if (!isCurrent(databasePath, entry)) {
+            break;
+          }
+          const writeToken = entry.writeToken;
+          let rows: AuthProfileRowRead | undefined;
+          let source: AuthProfileStore | undefined;
+          try {
+            rows = await entry.refresh();
+            if (!rows) {
+              break;
+            }
+            source = sourceFromRows(rows, databasePath);
+          } catch {
+            // A failed external reread cannot certify the cached credential facts.
+          }
+          // Disk commits can precede their source publication while the read awaits.
+          await waitForSourcePublication(databasePath);
           if (
-            rows.cacheable &&
+            entries.get(databasePath) === entry &&
+            revisionAtPath(databasePath) === entry.revision &&
+            writeToken === undefined
+          ) {
+            entry.writeToken = readSqliteDatabaseScopedWriteTokenForPath(
+              databasePath,
+              "auth-profiles",
+            );
+            if (entry.writeToken !== undefined) {
+              continue;
+            }
+          }
+          if (!isCurrent(databasePath, entry)) {
+            break;
+          }
+          if (
+            !rows ||
+            source === undefined ||
+            rows.store.status === "unreadable" ||
+            rows.state.status === "unreadable" ||
+            !isDeepStrictEqual(source, entry.source)
+          ) {
+            entries.delete(databasePath);
+            changed.set(databasePath, entry);
+          } else if (rows.cacheable && entry.writeToken !== undefined) {
+            freezeJsonSnapshot(rows);
+            entry.rows ??= rows;
+          } else {
+            entry.rows = undefined;
+          }
+          break;
+        }
+      }
+      return [...changed].flatMap(([databasePath, entry]) =>
+        !entries.has(databasePath) && hasCurrentSource(databasePath, entry) ? [databasePath] : [],
+      );
+    },
+    prepare(databasePath: string, reader: RowsReader, refresh?: Refresh, reuse = true): RowsReader {
+      const revision = revisionAtPath(databasePath);
+      return {
+        assertCurrent: reader.assertCurrent,
+        async read() {
+          reader.assertCurrent();
+          const entry = entries.get(databasePath);
+          // Session-only writes leave auth rows intact; auth and unscoped writes still fence reuse.
+          const writeToken = readSqliteDatabaseScopedWriteTokenForPath(
+            databasePath,
+            "auth-profiles",
+          );
+          if (
+            reuse &&
+            writeToken !== undefined &&
+            entry?.identity === reader.identity &&
+            entry?.revision === revision &&
+            entry.writeToken === writeToken &&
+            entry.rows
+          ) {
+            entry.refresh = refresh ?? entry.refresh;
+            return entry.rows;
+          }
+          if (entry) {
+            entry.rows = undefined;
+          }
+          // Source provenance can precede admission; reusable rows require a stable receipt.
+          const rows = await reader.read();
+          reader.assertCurrent();
+          if (
             rows.store.status !== "unreadable" &&
             rows.state.status !== "unreadable" &&
-            revisionAtPath(databasePath).rows === revision.rows &&
-            readIdentity(databasePath) === identity
+            revisionAtPath(databasePath) === revision &&
+            (writeToken === undefined ||
+              readSqliteDatabaseScopedWriteTokenForPath(databasePath, "auth-profiles") ===
+                writeToken)
           ) {
             freezeJsonSnapshot(rows);
-            entries.set(databasePath, { identity, checkedAt, revision: revision.rows, rows });
-            // Bound retained credential owners; eviction never changes read authority.
-            while (entries.size > 64) {
-              entries.delete(entries.keys().next().value!);
-            }
+            entries.set(databasePath, {
+              identity: reader.identity,
+              writeToken,
+              revision,
+              ...(rows.cacheable && writeToken !== undefined ? { rows } : {}),
+              source: sourceFromRows(rows, databasePath),
+              refresh,
+            });
           }
           return rows;
         },

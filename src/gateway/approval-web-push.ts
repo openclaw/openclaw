@@ -58,19 +58,14 @@ function approvalNotificationCopy(params: {
 }) {
   const label = params.preferences.label ? `${params.preferences.label} · ` : "";
   const agent = params.agentLabel ? ` for ${params.agentLabel}` : "";
-  if (params.terminal) {
-    return {
-      title: `${label}OpenClaw approval updated`,
-      body:
-        params.preferences.detailLevel === "private"
-          ? "This approval is no longer pending."
-          : `Approval${agent} is no longer pending.`,
-    };
-  }
+  const privateCopy = params.preferences.detailLevel === "private";
   return {
-    title: `${label}OpenClaw approval requested`,
-    body:
-      params.preferences.detailLevel === "private"
+    title: `${label}OpenClaw approval ${params.terminal ? "updated" : "requested"}`,
+    body: params.terminal
+      ? privateCopy
+        ? "This approval is no longer pending."
+        : `Approval${agent} is no longer pending.`
+      : privateCopy
         ? "Open OpenClaw to review this request."
         : `Open OpenClaw to review an approval${agent}.`,
   };

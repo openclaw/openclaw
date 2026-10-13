@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { toErrorObject, toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   registerRealtimeVoiceSelection,
@@ -7,11 +7,13 @@ import {
   type RealtimeVoiceSelectionHandle,
   type RealtimeVoiceSelectionRequest,
   type RealtimeVoiceTranscriptEntry,
+  type ResolvedRealtimeVoiceProvider,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { DiscordRealtimePlayer } from "./realtime-player.js";
 import type { DiscordRealtimeRecordingInput } from "./realtime-recording.js";
+import { prepareDiscordRealtimeProvider } from "./realtime-speaker-config.js";
 import {
   DiscordRealtimeSpeakerSession,
   type DiscordRealtimeSessionParams,
@@ -47,6 +49,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
   private idleTimer: ReturnType<typeof setInterval> | undefined;
   private voiceSelection: RealtimeVoiceSelectionHandle | undefined;
   private voiceOverride: string | undefined;
+  private preparedProvider: ResolvedRealtimeVoiceProvider | undefined;
   private changingVoice = false;
   private readonly callAbort = new AbortController();
   private readonly candidates = new Set<DiscordRealtimeSpeakerSession>();
@@ -59,7 +62,12 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     if (this.closed) {
       throw new Error("Discord realtime voice session is closed");
     }
-    const session = this.createSession();
+    const preparedProvider = await this.prepareProvider();
+    if (this.closed) {
+      return;
+    }
+    this.preparedProvider = preparedProvider;
+    const session = this.createSession(preparedProvider);
     this.warmSession = session;
     await session.connect();
     if (this.closed) {
@@ -148,7 +156,10 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       }
       const warm = this.warmSession;
       this.warmSession = undefined;
-      const session = warm ?? this.createSession();
+      if (!this.preparedProvider) {
+        throw new Error("Discord realtime voice session is not ready");
+      }
+      const session = warm ?? this.createSession(this.preparedProvider);
       speaker = {
         userId,
         senderIsOwner: context.senderIsOwner,
@@ -171,15 +182,26 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     return session?.canReceiveDuringPlayback() ?? false;
   }
 
+  private prepareProvider(voiceOverride = this.voiceOverride) {
+    return prepareDiscordRealtimeProvider({
+      accountId: this.params.accountId,
+      agentId: this.params.entry.route.agentId,
+      cfg: this.params.cfg,
+      realtimeConfig: this.params.discordConfig.voice?.realtime,
+      isAgentProxy: this.params.mode === "agent-proxy",
+      voiceOverride,
+    });
+  }
+
   private createSession(
-    voice = this.voiceOverride,
+    preparedProvider: ResolvedRealtimeVoiceProvider,
     previous?: DiscordRealtimeSpeakerSession,
   ): DiscordRealtimeSpeakerSession {
     const session = new DiscordRealtimeSpeakerSession({
       ...this.params,
       player: this.player,
       sessionId: `discord:${this.params.entry.voiceSessionKey}:realtime:${++this.nextSessionId}`,
-      voiceOverride: voice,
+      preparedProvider,
       standby: previous !== undefined,
       conversationHistory: previous?.snapshotConversation(),
       runAgentTurn: async (turn) => {
@@ -204,7 +226,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       return;
     }
     if (this.warmSession === session) {
-      this.params.onTerminalError(error instanceof Error ? error : new Error(String(error)));
+      this.params.onTerminalError(toStringifiedError(error));
       return;
     }
     for (const speaker of this.sessions) {
@@ -292,6 +314,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     };
     const prepare = async (
       targetVoice: string | undefined,
+      preparedProvider: ResolvedRealtimeVoiceProvider,
       preparationSignal: AbortSignal,
       assertCurrent: () => void,
     ) => {
@@ -310,7 +333,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
           assertCurrent();
         }
         checkpoints.set(original, original.conversationCheckpoint());
-        const candidate = this.createSession(targetVoice, original);
+        const candidate = this.createSession(preparedProvider, original);
         this.candidates.add(candidate);
         replacements.set(original, candidate);
         await this.connectCandidate(candidate, preparationSignal);
@@ -320,7 +343,10 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
         }
       }
     };
-    const adopt = (override: string | undefined) => {
+    const adopt = (
+      override: string | undefined,
+      preparedProvider: ResolvedRealtimeVoiceProvider,
+    ) => {
       for (const candidate of replacements.values()) {
         candidate.readVoiceSelection();
       }
@@ -329,6 +355,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
         this.candidates.delete(candidate);
       }
       this.voiceOverride = override;
+      this.preparedProvider = preparedProvider;
       if (originalWarm) {
         this.warmSession = replacements.get(originalWarm);
       }
@@ -349,7 +376,8 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     };
     try {
       await Promise.all(originals.map((session) => session.waitForInputIdle(signal)));
-      await prepare(voice, signal, request.assertCurrent);
+      const preparedProvider = await this.prepareProvider(voice);
+      await prepare(voice, preparedProvider, signal, request.assertCurrent);
       await Promise.all(originals.map((session) => session.waitForInputIdle(signal)));
       signal.throwIfAborted();
       request.assertCurrent();
@@ -369,11 +397,11 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       if (failedDrain?.status === "rejected") {
         throw toErrorObject(failedDrain.reason, "Discord voice transcript cleanup failed");
       }
-      await prepare(voice, signal, request.assertCurrent);
+      await prepare(voice, preparedProvider, signal, request.assertCurrent);
       signal.throwIfAborted();
       request.assertCurrent();
       assertOriginals();
-      adopt(voice);
+      adopt(voice, preparedProvider);
       logger.info(`discord voice: voice changed guild=${this.params.entry.guildId} voice=${voice}`);
     } catch (error) {
       if (retired && !this.callAbort.signal.aborted) {
@@ -381,9 +409,10 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
         try {
           // The former sockets are closed. Recovery recreates their previous voice and final
           // history under the room lifecycle, even if the requesting tool timed out or was cancelled.
-          await prepare(previousVoice, this.callAbort.signal, assertOriginals);
+          const recoveryProvider = await this.prepareProvider(previousVoice);
+          await prepare(previousVoice, recoveryProvider, this.callAbort.signal, assertOriginals);
           assertOriginals();
-          adopt(previousOverride);
+          adopt(previousOverride, recoveryProvider);
         } catch (recoveryError) {
           await discardCandidates();
           this.callAbort.signal.throwIfAborted();

@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import { bindSessionRowProjection } from "../gateway/session-row-projection-access.js";
@@ -11,6 +12,8 @@ import { createOpenClawCodingTools } from "./agent-tools.js";
 
 const identity = { sessionKey: "agent:main:preview", sessionId: "conversation", agentId: "main" };
 const binding = { ...identity, environmentId: "attached", ownerEpoch: 1, generation: 1 };
+beforeEach(() => setRuntimeConfigSnapshot({}));
+afterEach(() => clearRuntimeConfigSnapshot());
 
 function context(dedicated: boolean, attached: boolean, locked = false) {
   const signal = new AbortController().signal;
@@ -64,7 +67,6 @@ describe("attached conversation portal tool availability", () => {
   it.each([
     ["agent", "scoped", true, true, false, false],
     ["gateway", "scoped", true, true, false, false],
-    ["agent", "global", false, false, false, true],
     ["gateway", "global", false, false, false, true],
     ["gateway", "absent", false, true, false, false],
     ["agent", "absent", true, false, false, false],

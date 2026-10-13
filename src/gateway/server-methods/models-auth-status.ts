@@ -17,23 +17,28 @@ import {
   formatRemainingShort,
 } from "../../agents/auth-health.js";
 import {
-  ensureAuthProfileStoreWithoutExternalProfiles,
+  ensureAuthProfileStoreWithoutExternalProfilesAsync,
   externalCliDiscoveryForConfigStatus,
   listProfilesForProvider,
   resolveAuthProfileMetadata,
   resolveExplicitAuthOrderSelection,
 } from "../../agents/auth-profiles.js";
+import { refreshRuntimeAuthProfileStoreSources } from "../../agents/auth-profiles/runtime-snapshots.js";
 import type { RuntimeAuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { providerUsageLabel, resolveUsageProviderId } from "../../infra/provider-usage.shared.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { refreshActiveProviderAuthRuntimeSnapshot } from "../../secrets/runtime.js";
-import { abortChatRunsForProvider, type ChatAbortOps } from "../chat-abort.js";
+import { abortChatRunsForProvider } from "../chat-abort.js";
 import { refreshModelAuthStateAfterMutation } from "../model-auth-refresh.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
 import { loadDeferredCatalog, readPreparedCatalog } from "../server-model-catalog-auth.js";
 import { formatForLog } from "../ws-log.js";
+import {
+  captureLocalStateMutationGuard,
+  localStateOwnerChangedError,
+} from "./local-state-owner.js";
 import { resolveModelAuthAgentScope } from "./model-auth-agent-scope.js";
 import { modelsAuthRefreshHandlers } from "./models-auth-refresh.js";
 import { readModelAuthStatusFacts } from "./models-auth-status-facts.js";
@@ -90,17 +95,6 @@ function readLogoutProfileSelection(params: Record<string, unknown>): LogoutProf
     }
   }
   return { ok: true, profileIds: normalizeUniqueStringEntries(params.profileIds) };
-}
-
-function createAuthLogoutAbortOps(context: GatewayRequestContext): ChatAbortOps {
-  return {
-    chatAbortControllers: context.chatAbortControllers,
-    chatRunState: context.chatRunState,
-    removeChatRun: context.removeChatRun,
-    agentRunSeq: context.agentRunSeq,
-    broadcast: context.broadcast,
-    nodeSendToSession: context.nodeSendToSession,
-  };
 }
 
 // UI expiry fields are emitted only when both timestamp and remaining duration
@@ -181,16 +175,53 @@ async function refreshAfterCredentialMutation(
 
 export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
   ...modelsAuthRefreshHandlers,
-  "models.authSetApiKey": async ({ params, respond, context }) => {
+  "models.authSetApiKey": async (options) => {
+    const { params, respond, context, client } = options;
+    const expectedOwnerId = params.expectedOwnerId;
     if (
       !assertValidParams(params, validateModelsAuthSetApiKeyParams, "models.authSetApiKey", respond)
     ) {
       return;
     }
+    let assertCurrent: (() => void) | undefined;
+    if (expectedOwnerId !== undefined) {
+      if (typeof expectedOwnerId !== "string" || !expectedOwnerId.trim()) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "expectedOwnerId must be a non-empty string"),
+        );
+        return;
+      }
+      if (!hasGatewayAdminScope(client)) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.FORBIDDEN, "missing scope: operator.admin"),
+        );
+        return;
+      }
+      try {
+        assertCurrent = captureLocalStateMutationGuard(expectedOwnerId, options);
+      } catch (error) {
+        respond(false, undefined, localStateOwnerChangedError(error));
+        return;
+      }
+    }
     const provider = normalizeProviderId(params.provider);
     await respondUnavailableOnThrow(respond, async () => {
       const config = context.getRuntimeConfig();
-      const scope = resolveModelAuthAgentScope(config, params.agentId);
+      // CLI-only target semantics must not load the model-command runtime during Gateway startup.
+      const scope = assertCurrent
+        ? {
+            ok: true as const,
+            ...(await import("../../commands/models/shared.js")).resolveModelsTargetAgent(
+              config,
+              params.agentId,
+              { kind: "mutation" },
+            ),
+          }
+        : resolveModelAuthAgentScope(config, params.agentId);
       if (!scope.ok) {
         respond(false, undefined, scope.error);
         return;
@@ -201,6 +232,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         provider,
         apiKey: params.apiKey,
         agentDir: scope.agentDir,
+        assertCurrent,
       });
       const refreshWarning = await refreshAfterCredentialMutation(context, scope.agentId);
       const warning = [configWarning, refreshWarning].filter(Boolean).join(" ");
@@ -244,7 +276,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       }
       const { agentDir } = scope;
       const authProvider = resolveProviderIdForAuth(provider, { config: cfg });
-      const store = ensureAuthProfileStoreWithoutExternalProfiles(agentDir);
+      const store = await ensureAuthProfileStoreWithoutExternalProfilesAsync(agentDir);
       const availableProfiles = listProfilesForProvider(store, provider);
       const removedProfiles =
         selection.profileIds ??
@@ -279,12 +311,22 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       const { runIds: abortedRunIds } =
         selection.profileIds || apiKeyOnly
           ? { runIds: [] as string[] }
-          : abortChatRunsForProvider(createAuthLogoutAbortOps(context), {
-              cfg,
-              providerId: authProvider,
-              agentId: scope.agentId,
-              stopReason: "auth-revoked",
-            });
+          : abortChatRunsForProvider(
+              {
+                chatAbortControllers: context.chatAbortControllers,
+                chatRunState: context.chatRunState,
+                removeChatRun: context.removeChatRun,
+                agentRunSeq: context.agentRunSeq,
+                broadcast: context.broadcast,
+                nodeSendToSession: context.nodeSendToSession,
+              },
+              {
+                cfg,
+                providerId: authProvider,
+                agentId: scope.agentId,
+                stopReason: "auth-revoked",
+              },
+            );
       const refreshWarning = await refreshAfterCredentialMutation(context, scope.agentId);
       const warning = [configWarning, refreshWarning].filter(Boolean).join(" ");
       const result: ModelAuthLogoutResult = {
@@ -316,6 +358,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       }
       if (refreshRequested) {
         // Refresh into the transient prepared owner; mutations alone clear warmed auth state.
+        await refreshRuntimeAuthProfileStoreSources();
         await refreshActiveProviderAuthRuntimeSnapshot();
         cfg = context.getRuntimeConfig();
         scope = resolveScope(cfg);
@@ -357,14 +400,13 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         authHealth,
         usageProviderIds,
         externalProfileIds,
-        externalCliProfileIds,
         logoutProfileIds,
         configBoundProfileIds,
         configBoundAuthProviders,
         providerCapabilities,
       } = readModelAuthStatusFacts(preparedSnapshot, refreshRequested, now);
 
-      const providerUsageRuntime = getProviderUsageRuntimeSnapshot({
+      const providerUsageRuntime = await getProviderUsageRuntimeSnapshot({
         config: cfg,
         agentId,
         agentDir,
@@ -410,27 +452,11 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
           credentialType: usageProfile?.type,
         });
         const usage = usageKey ? usageByProvider.get(usageKey) : undefined;
-        const rawRollup = aggregateRefreshableAuthStatus(
+        const rollup = aggregateRefreshableAuthStatus(
           prov,
           Date.now(),
           expectsOAuth.has(prov.provider),
         );
-        const effectiveProfiles = prov.effectiveProfiles ?? prov.profiles;
-        const refreshableProfiles = effectiveProfiles.filter(
-          (profile) => profile.type === "oauth" || profile.type === "token",
-        );
-        // External CLI access tokens rotate without operator action. Keep their raw
-        // profile expiry diagnostic, but do not turn it into a provider login warning.
-        const externalCliOwnsOAuthRefresh =
-          refreshableProfiles.length > 0 &&
-          refreshableProfiles.every(
-            (profile) => profile.type === "oauth" && externalCliProfileIds.has(profile.profileId),
-          );
-        const rollup: ModelAuthStatusRollup =
-          externalCliOwnsOAuthRefresh &&
-          (rawRollup.status === "expired" || rawRollup.status === "expiring")
-            ? { status: "ok" }
-            : rawRollup;
         const apiKey = apiKeys.get(normalizeProviderId(prov.provider));
         const hasRefreshableProfile = prov.profiles.some(
           (profile) => profile.type === "oauth" || profile.type === "token",
@@ -464,9 +490,6 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
                 prof.expiresAt,
               ),
             };
-            if (externalCliProfileIds.has(prof.profileId)) {
-              profile.externallyManaged = true;
-            }
             if (includeProfileIdentity && metadata.displayName) {
               profile.displayName = metadata.displayName;
             }

@@ -17,3 +17,9 @@ export type SessionRowTranscriptFields = {
   lastMessagePreview?: string;
   terminalModel?: { modelProvider: string; model: string };
 };
+
+export type SessionRowBackfillWorkerInput = {
+  kind: "session-row-backfill";
+  database: { agentId: string; path: string };
+  params: SessionRowTranscriptReadParams;
+};

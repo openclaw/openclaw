@@ -5,12 +5,15 @@ import { kindFromMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { resolveAgentDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
+import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { DEFAULT_MAX_BYTES } from "./defaults.constants.js";
 import {
   normalizeImageDescriptionInput,
   optimizeImageDescriptionInput,
 } from "./image-input-normalize.js";
 import { describeImageWithModel } from "./image-runtime.js";
+import { assertMediaExecutionCurrent, type MediaExecutionContext } from "./provider-execution.js";
 import {
   buildMediaUnderstandingRegistry,
   getMediaUnderstandingProvider,
@@ -119,6 +122,7 @@ export async function runMediaUnderstandingFile(
 async function runFile(
   params: RunMediaUnderstandingFileParams,
   request: MediaRequestOverrides,
+  execution?: MediaExecutionContext,
 ): Promise<RunMediaUnderstandingFileResult> {
   const { cfg } = params;
   const requestTimeoutSeconds =
@@ -193,6 +197,7 @@ async function runFile(
       config,
       activeModel: params.activeModel,
       request,
+      execution,
     });
     if (result.outputs.length === 0 && result.decision.outcome === "failed") {
       throw new Error(
@@ -216,7 +221,6 @@ async function runFile(
   }
 }
 
-/** Describes one image file or URL through the configured image-understanding pipeline. */
 export async function describeImageFile(
   params: DescribeImageFileParams,
 ): Promise<RunMediaUnderstandingFileResult> {
@@ -263,7 +267,6 @@ export async function prepareImageDescriptionInput(params: PrepareImageDescripti
   };
 }
 
-/** Describes a prepared image with an explicit provider/model. */
 export async function describePreparedImageWithModel(params: DescribePreparedImageWithModelParams) {
   const timeoutMs = resolveMediaRuntimeTimeoutMs(params.timeoutMs);
   const providerRegistry = buildProviderRegistry(undefined, params.cfg);
@@ -308,7 +311,6 @@ export async function describeImageFileWithModel(params: DescribeImageFileWithMo
   });
 }
 
-/** Runs provider-backed structured extraction for multimodal text/image input. */
 export async function extractStructuredWithModel(params: ExtractStructuredWithModelParams) {
   const timeoutMs = resolveMediaRuntimeTimeoutMs(params.timeoutMs);
   if (!params.input.some((entry) => entry.type === "image")) {
@@ -338,7 +340,6 @@ export async function extractStructuredWithModel(params: ExtractStructuredWithMo
   });
 }
 
-/** Describes one video file or URL through the configured video-understanding pipeline. */
 export async function describeVideoFile(
   params: DescribeVideoFileParams,
 ): Promise<RunMediaUnderstandingFileResult> {
@@ -371,15 +372,23 @@ export async function resolveAudioInputBudget(params: {
   };
 }
 
-/** Transcribes one audio file or URL through the configured audio-understanding pipeline. */
 export async function transcribeAudioFile(
   params: TranscribeAudioFileParams,
+  execution?: MediaExecutionContext,
 ): Promise<RunMediaUnderstandingFileResult> {
-  return runFile(
-    { ...params, capability: "audio" },
-    {
-      prompt: params.prompt?.trim() || params.prompt || undefined,
-      language: params.language || undefined,
-    },
-  );
+  const run = () =>
+    runFile(
+      { ...params, capability: "audio" },
+      {
+        prompt: params.prompt?.trim() || params.prompt || undefined,
+        language: params.language || undefined,
+      },
+      execution,
+    );
+  return execution
+    ? withGuardedFetchRequestAuthority(
+        () => assertMediaExecutionCurrent(execution),
+        () => withCommandProcessScope(run, execution.signal),
+      )
+    : run();
 }

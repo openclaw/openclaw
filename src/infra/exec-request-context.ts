@@ -17,6 +17,7 @@ export type ExecRequestIdentity = {
 /** Process-local ownership of ordinary commands, independent of a disposable tool call. */
 export type ExecRequestOwner = {
   identity: Readonly<ExecRequestIdentity>;
+  readonly turnRunIds: Set<string>;
   readonly controller: AbortController;
   readonly signal: AbortSignal;
   readonly pendingProcesses: Set<Promise<void>>;
@@ -35,10 +36,14 @@ const state = resolveGlobalSingleton(Symbol.for("openclaw.execRequestContext"), 
 const EVENT_OWNERS = Symbol.for("openclaw.execRequestEventOwners");
 type OwnedEvent = { [EVENT_OWNERS]?: readonly ExecRequestOwner[] };
 
+/** Opaque request ancestry retained by work admitted through a host capability. */
+export type ExecRequestCustody = Readonly<OwnedEvent>;
+
 function createExecRequestOwner(identity: ExecRequestIdentity): ExecRequestOwner {
   const controller = new AbortController();
   return {
     identity: Object.freeze({ ...identity }),
+    turnRunIds: new Set(identity.runId ? [identity.runId] : []),
     controller,
     signal: controller.signal,
     pendingProcesses: new Set(),
@@ -57,7 +62,7 @@ export function cancelExecRequestOwners(owners: readonly ExecRequestOwner[]): vo
 
 export function execRequestMatches(owner: ExecRequestOwner, target: ExecRequestIdentity): boolean {
   return (
-    (target.runId === undefined || owner.identity.runId === target.runId) &&
+    (target.runId === undefined || owner.turnRunIds.has(target.runId)) &&
     (target.sessionKey === undefined || owner.identity.sessionKey === target.sessionKey) &&
     (target.sessionId === undefined || owner.identity.sessionId === target.sessionId) &&
     (target.agentId === undefined || owner.identity.agentId === target.agentId)
@@ -76,6 +81,34 @@ export function captureExecRequestOwners(
     : undefined;
 }
 
+export function captureExecRequestCustody(
+  identity: ExecRequestIdentity,
+): ExecRequestCustody | undefined {
+  const owners = captureExecRequestOwners(identity);
+  return owners?.length ? Object.freeze({ [EVENT_OWNERS]: Object.freeze([...owners]) }) : undefined;
+}
+
+/** Selection retains owner references, including their admitted continuation aliases. */
+export function captureExecRequestCustodySelection(
+  owners: readonly ExecRequestOwner[],
+  origin?: {
+    target: ExecRequestIdentity;
+    acceptsRequest: (identity: Readonly<ExecRequestIdentity>) => boolean;
+  },
+): (custody: ExecRequestCustody | undefined) => boolean {
+  const selected = new Set(owners);
+  return (custody) =>
+    custody?.[EVENT_OWNERS]?.some(
+      (owner) =>
+        selected.has(owner) ||
+        Boolean(
+          origin &&
+          execRequestMatches(owner, origin.target) &&
+          origin.acceptsRequest(owner.identity),
+        ),
+    ) === true;
+}
+
 export function activeExecRequestOwners(
   target: ExecRequestIdentity,
   accept: (identity: ExecRequestIdentity) => boolean,
@@ -87,11 +120,19 @@ export function activeExecRequestOwners(
           (target.runId === undefined || identity.runId === target.runId) &&
           (target.sessionKey === undefined || identity.sessionKey === target.sessionKey) &&
           (target.sessionId === undefined || identity.sessionId === target.sessionId) &&
-          (target.agentId === undefined || identity.agentId === target.agentId) &&
-          accept(identity);
-        return active
-          ? owners
-          : owners.filter((owner) => execRequestMatches(owner, target) && accept(owner.identity));
+          (target.agentId === undefined || identity.agentId === target.agentId);
+        const hasBoundActor = Boolean(
+          identity.ownerConnId?.trim() || identity.ownerDeviceId?.trim(),
+        );
+        return owners.filter((owner) => {
+          // An admitted current actor may stop its continuation. An unbound wake
+          // inherits the request's actor and protections at its current location.
+          const current = hasBoundActor ? identity : { ...owner.identity, ...identity };
+          return (
+            (active && accept(current)) ||
+            (execRequestMatches(owner, target) && accept(owner.identity))
+          );
+        });
       }),
     ),
   );
@@ -145,7 +186,7 @@ export function retainExecRequestProcess(
   void settlement.then(release, release);
 }
 
-/** Nested execution retains its request; a different human turn starts fresh. */
+/** A continuation inherits only its selected events; ordinary human turns start fresh. */
 export async function withExecRequestTurn<T>(
   params: {
     identity: ExecRequestIdentity;
@@ -165,6 +206,9 @@ export async function withExecRequestTurn<T>(
   const owners = inherited?.length ? inherited : [createExecRequestOwner(identity)];
   for (const owner of owners) {
     owner.signal.throwIfAborted();
+    if (params.identity.runId) {
+      owner.turnRunIds.add(params.identity.runId);
+    }
   }
   const turn = { identity, owners };
   const stop = () => {

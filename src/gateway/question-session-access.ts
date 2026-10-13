@@ -518,6 +518,7 @@ export function prepareQuestionAuthorization(
   const narrow = usesOwnRunQuestionAccess(options.client);
   return {
     target:
+      observation?.authorizeClient ||
       narrow ||
       (!isGatewayAdmin(options.client) &&
         hasOperatorBoundary(options.client, options.context.getRuntimeConfig()))
@@ -540,6 +541,14 @@ export function prepareQuestionAuthorization(
     authorize: (prepared?: PreparedQuestionSession) => {
       if (!observation?.isCurrent()) {
         return questionNotFound(id);
+      }
+      if (observation.authorizeClient) {
+        authority.assertCurrent();
+        return observation.authorizeClient(options.client, prepared?.target) &&
+          (prepared?.canAccess(options.client, false) ||
+            (!prepared?.target && isGatewayAdmin(options.client)))
+          ? null
+          : questionNotFound(id);
       }
       if (narrow) {
         authority.assertCurrent();
@@ -601,7 +610,7 @@ export async function prepareQuestionCommitAuthority(
     | ReturnType<
         NonNullable<
           ReturnType<typeof readGatewayRequestMutationAuthority>["questionCallerRead"]
-        >["retainNative"]
+        >["retainCurrent"]
       >
     | undefined;
   const assertCurrent = () => {
@@ -640,7 +649,7 @@ export async function prepareQuestionCommitAuthority(
     }
   };
   try {
-    callerCommit = readGatewayRequestMutationAuthority(options).questionCallerRead?.retainNative();
+    callerCommit = readGatewayRequestMutationAuthority(options).questionCallerRead?.retainCurrent();
     assertCurrent();
     return {
       assertCurrent,
@@ -680,7 +689,10 @@ export function questionBroadcastOptions(params: {
       if (!isCurrent()) {
         return false;
       }
-      if (usesOwnRunQuestionAccess(client)) {
+      if (observation?.authorizeClient && !observation.authorizeClient(client, prepared?.target)) {
+        return false;
+      }
+      if (usesOwnRunQuestionAccess(client) && !observation?.authorizeClient) {
         return canAccessSessionQuestion(observation, prepared, client);
       }
       if (prepared) {

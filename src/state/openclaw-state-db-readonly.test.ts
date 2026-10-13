@@ -13,7 +13,6 @@ import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { cleanupSnapshotOperations } from "../infra/sqlite-readonly-location-cleanup.js";
 import * as sqliteReadOnly from "../infra/sqlite-snapshot-source.js";
-import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
@@ -23,11 +22,9 @@ import {
 } from "./openclaw-quarantine-store.js";
 import { StateDatabaseReadAdmissionInvalidatedError } from "./openclaw-state-db-async-lifecycle.js";
 import {
-  closeOpenClawStateDatabaseByPathAsync,
   closeOpenClawStateDatabaseAsync,
   recordOpenClawStateDatabaseOpenFailure,
 } from "./openclaw-state-db-cache.js";
-import { iterateOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-read-connection.js";
 import {
   isOpenClawStateDatabaseDefinitelyAbsent,
   executeExistingOpenClawStateRead,
@@ -160,95 +157,6 @@ it("preserves read admission denial and recovers the cached reader", async () =>
   });
 });
 
-it.each(["throw", "failed close"] as const)(
-  "ends the native stream snapshot before close on %s",
-  async (ending) => {
-    await withTempDir("openclaw-state-stream-snapshot-", async (root) => {
-      const source = openOpenClawStateDatabase(createOptions(root));
-      let reader: DatabaseSync | undefined;
-      let finalized = false;
-      let transactionAtClose: boolean | undefined;
-      let refuseClose = ending === "failed close";
-      const failure = new Error("reader close failed");
-      // oxlint-disable-next-line typescript/unbound-method -- Called below with the intercepted native database receiver.
-      const close = DatabaseSync.prototype.close;
-      vi.spyOn(DatabaseSync.prototype, "close").mockImplementation(function (this: DatabaseSync) {
-        if (this === reader) {
-          transactionAtClose = this.isTransaction;
-          if (refuseClose) {
-            throw failure;
-          }
-        }
-        close.call(this);
-      });
-      const rows = iterateOpenClawStateDatabaseReadOnly(source, function* ({ db }) {
-        reader = db;
-        try {
-          yield db.prepare("SELECT 1 AS value").get()?.value;
-        } finally {
-          expect(db.isOpen).toBe(true);
-          expect(db.isTransaction).toBe(true);
-          finalized = true;
-        }
-      });
-      try {
-        expect((await rows.next()).value).toBe(1);
-        if (ending === "failed close") {
-          await expect(rows.return()).rejects.toBe(failure);
-          expect(reader?.isOpen).toBe(true);
-          await expect(closeOpenClawStateDatabaseByPathAsync(source.path)).rejects.toThrow(
-            "reader close failed",
-          );
-          expect(reader?.isOpen).toBe(true);
-          refuseClose = false;
-          await closeOpenClawStateDatabaseByPathAsync(source.path);
-        } else {
-          const consumerFailure = new Error("stream consumer failed");
-          await expect(rows.throw(consumerFailure)).rejects.toBe(consumerFailure);
-        }
-        expect(finalized).toBe(true);
-        expect(transactionAtClose).toBe(false);
-        expect(reader?.isOpen).toBe(false);
-      } finally {
-        refuseClose = false;
-        await rows.return();
-        closeOpenClawStateDatabaseForTest();
-      }
-    });
-  },
-);
-
-it("rejects non-filesystem stream sources without interpreting their logical path as a file", async () => {
-  await withTempDir("openclaw-state-memory-stream-", async (root) => {
-    const db = new DatabaseSync(":memory:");
-    const pathname = path.join(root, "logical-state.sqlite");
-    const rows = iterateOpenClawStateDatabaseReadOnly(
-      {
-        db,
-        path: pathname,
-        walMaintenance: {
-          stop: async () => {},
-          checkpoint: () => false,
-          close: () => false,
-          reclaimFreePages: createSqliteWalReclamationResult,
-        },
-      },
-      function* () {
-        yield "unreachable";
-      },
-    );
-    try {
-      await expect(rows.next()).rejects.toThrow(
-        "Streaming shared-state reads require a filesystem-backed database",
-      );
-      expect(fs.readdirSync(root)).toEqual([]);
-    } finally {
-      await rows.return();
-      db.close();
-    }
-  });
-});
-
 it("waits for a transient database lock before a fresh read-only schema inspection", ({ signal }) =>
   fixture.run(async () => {
     signal.throwIfAborted();
@@ -372,7 +280,7 @@ it("requires Doctor for the exact dangling Workshop index without changing its s
     const database = new DatabaseSync(opened.path);
     try {
       database.exec(
-        "CREATE INDEX idx_skill_workshop_collection_reviews_workspace_time ON skill_workshop_collection_reviews(review_id, create_time DESC);",
+        "CREATE TABLE IF NOT EXISTS skill_workshop_collection_reviews (review_id TEXT NOT NULL PRIMARY KEY, owner_agent_id TEXT NOT NULL, backup_id TEXT NOT NULL, create_time INTEGER NOT NULL, kept_names_json TEXT NOT NULL, written_names_json TEXT NOT NULL, dropped_json TEXT NOT NULL) STRICT; CREATE INDEX idx_skill_workshop_collection_reviews_workspace_time ON skill_workshop_collection_reviews(review_id, create_time DESC);",
       );
       database.enableDefensive?.(false);
       database.exec("PRAGMA writable_schema = ON;");
@@ -737,6 +645,19 @@ it("reads fresh authority without replacing an inherited discovery snapshot", as
       expect(read()).toBe("first");
       writer.exec("UPDATE held SET value='later'");
       expect(current()).toEqual(["later", "later"]);
+      expect(read()).toBe("first");
+      writer.exec("UPDATE held SET value='composite'");
+      const prepare = vi.spyOn(sqliteReadOnly, "prepareSqliteReadOnlyLocationSync");
+      try {
+        expect(
+          withSynchronousArtifactPreservingStateSnapshot(() => [read(), ...current()], {
+            current: options,
+          }),
+        ).toEqual(["composite", "composite", "composite"]);
+        expect(prepare).toHaveBeenCalledOnce();
+      } finally {
+        prepare.mockRestore();
+      }
       expect(read()).toBe("first");
       const foreign = createOptions(path.join(root, "foreign"));
       openOpenClawStateDatabase(foreign).db.exec(

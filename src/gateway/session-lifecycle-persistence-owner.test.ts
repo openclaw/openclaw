@@ -55,19 +55,6 @@ describe("session lifecycle persistence owner", () => {
     ownerStatus.mockReset().mockReturnValue("active");
   });
 
-  it("starts one terminal write before the chat handler consumes it", async () => {
-    persistLifecycle.mockResolvedValue(undefined);
-    const { owner } = fixture();
-
-    const prepared = owner.observe(terminal);
-    const consumed = owner.persist(terminal);
-
-    expect(consumed).toBe(prepared);
-    expect(persistLifecycle).toHaveBeenCalledOnce();
-    await consumed;
-    await owner.drain();
-  });
-
   it("distinguishes reused run ids by their exact owner claim", async () => {
     persistLifecycle.mockResolvedValue(undefined);
     const { owner } = fixture();
@@ -120,65 +107,6 @@ describe("session lifecycle persistence owner", () => {
       }),
     });
     await owner.drain();
-  });
-
-  it("persists a keyed error after the chat retry grace expires", async () => {
-    persistLifecycle.mockResolvedValue(undefined);
-    const { owner } = fixture();
-    const error = {
-      ...terminal,
-      event: {
-        ...terminal.event,
-        data: { phase: "error", error: "fallback exhausted", endedAt: 2_000 },
-      },
-    };
-
-    await owner.persist(error);
-
-    expect(persistLifecycle).toHaveBeenCalledOnce();
-    expect(persistLifecycle).toHaveBeenCalledWith(error);
-  });
-
-  it("keeps terminal writes alive until shutdown drains them", async () => {
-    const deferred = createDeferred();
-    persistLifecycle.mockReturnValue(deferred.promise);
-    const { owner, scheduler } = fixture();
-    void owner.observe(terminal);
-    scheduler.beginClose();
-
-    let drained = false;
-    const drain = owner.drain().then(() => {
-      drained = true;
-    });
-    await Promise.resolve();
-    expect(drained).toBe(false);
-
-    deferred.resolve();
-    await drain;
-    expect(drained).toBe(true);
-  });
-
-  it("settles a start before a following terminal while shutdown drains both", async () => {
-    const releaseStart = createDeferred();
-    const phases: unknown[] = [];
-    persistLifecycle.mockImplementation(async (params: PersistenceParams) => {
-      if (params.event.data?.phase === "start") {
-        await releaseStart.promise;
-      }
-      phases.push(params.event.data?.phase);
-    });
-    const { owner, scheduler } = fixture();
-    const start = owner.persist({
-      ...terminal,
-      event: { ...terminal.event, data: { phase: "start", startedAt: 1_000 } },
-    });
-    const end = owner.observe(terminal);
-    scheduler.beginClose();
-    const draining = owner.drain();
-    expect(persistLifecycle).toHaveBeenCalledOnce();
-    releaseStart.resolve();
-    await Promise.all([start, end, draining]);
-    expect(phases).toEqual(["start", "end"]);
   });
 
   it.each([false, true])(

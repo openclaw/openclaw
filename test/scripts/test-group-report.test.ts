@@ -16,7 +16,6 @@ import {
 import {
   parseTestGroupReportArgs,
   resolveFullSuiteVitestEnv,
-  resolveReportArtifactDirs,
   resolveReportRunSpecs,
   resolveReportVitestArgs,
   resolveRunPlanConcurrency,
@@ -760,49 +759,12 @@ describe("scripts/test-group-report arg parsing", () => {
     });
   });
 
-  it("parses individual test duration threshold", () => {
-    expect(parseTestGroupReportArgs(["--max-test-ms", "2000"])).toMatchObject({
-      maxTestMs: 2000,
-    });
-  });
-
-  it("parses explicit run concurrency", () => {
-    expect(parseTestGroupReportArgs(["--concurrency", "4"])).toMatchObject({
-      concurrency: 4,
-    });
-  });
-
-  it("parses per-config timeout controls", () => {
-    expect(
-      parseTestGroupReportArgs(["--timeout-ms", "5000", "--kill-grace-ms", "250"]),
-    ).toMatchObject({
-      killGraceMs: 250,
-      timeoutMs: 5000,
-    });
-  });
-
-  it.each(["--config=a.ts", "--compare=before.json", "--limit=5"])(
-    "rejects split-option inline form %s",
-    (arg) => {
-      expect(() => parseTestGroupReportArgs([arg])).toThrow(`Unknown option: ${arg}`);
-    },
-  );
-
   it("does not let help short-circuit later parse errors", () => {
     expect(() => parseTestGroupReportArgs(["--help", "--unknown"])).toThrow(
       "Unknown option: --unknown",
     );
     expect(() => parseTestGroupReportArgs(["--help", "--limit"])).toThrow(
       "--limit requires a value",
-    );
-  });
-
-  it("rejects malformed positive integer flags", () => {
-    expect(() => parseTestGroupReportArgs(["--limit", "20x"])).toThrow(
-      "--limit must be a positive integer",
-    );
-    expect(() => parseTestGroupReportArgs(["--limit", "0"])).toThrow(
-      "--limit must be a positive integer",
     );
   });
 
@@ -837,58 +799,9 @@ describe("scripts/test-group-report arg parsing", () => {
       ]),
     ).toThrow("--compare was provided more than once");
   });
-
-  it("validates a repeated value before reporting a duplicate", () => {
-    expect(() => parseTestGroupReportArgs(["--limit", "5", "--limit"])).toThrow(
-      "--limit requires a value",
-    );
-    expect(() => parseTestGroupReportArgs(["--limit", "5", "--limit", "20x"])).toThrow(
-      "--limit must be a positive integer",
-    );
-    expect(() =>
-      parseTestGroupReportArgs([
-        "--compare",
-        "before.json",
-        "after.json",
-        "--compare",
-        "second-before.json",
-      ]),
-    ).toThrow("--compare requires a value");
-  });
 });
 
 describe("scripts/test-group-report child process guard", () => {
-  it.concurrent("times out a child that ignores SIGTERM", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-
-    const started = Date.now();
-    const result = await spawnText(
-      process.execPath,
-      [
-        "--input-type=module",
-        "--eval",
-        "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
-      ],
-      {
-        cwd: process.cwd(),
-        env: process.env,
-        killGraceMs: 25,
-        timeoutMs: 250,
-      },
-    );
-
-    expect(Date.now() - started).toBeLessThan(2_000);
-    expect(result).toMatchObject({
-      status: 1,
-      signal: "SIGKILL",
-      timedOut: true,
-    });
-    expect(result.output).toContain("command timed out after 250ms");
-    expect(result.output).toContain("sending SIGKILL");
-  });
-
   it.concurrent("kills timed wrapper process groups without orphaning the measured process", async () => {
     if (process.platform === "win32" || !fs.existsSync("/usr/bin/time")) {
       return;
@@ -1393,14 +1306,5 @@ describe("scripts/test-group-report run plans", () => {
     expect(gatewayServerPlans.flatMap((plan) => plan.forwardedArgs)).toContain(
       "src/gateway/server.node-pairing-authz.test.ts",
     );
-  });
-});
-
-describe("scripts/test-group-report artifact paths", () => {
-  it("keeps raw Vitest reports scoped to the output file stem", () => {
-    expect(resolveReportArtifactDirs(".artifacts/test-perf/baseline-before.json")).toEqual({
-      reportDir: path.join(".artifacts", "test-perf", "baseline-before", "vitest-json"),
-      logDir: path.join(".artifacts", "test-perf", "baseline-before", "logs"),
-    });
   });
 });

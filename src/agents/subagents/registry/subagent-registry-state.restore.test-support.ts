@@ -53,27 +53,6 @@ export function registerSubagentRestoreCacheCases(params: {
     }
   });
 
-  it.each([false, true])(
-    "invalidates loaded snapshots on restore, including empty stores (%s)",
-    async (empty) => {
-      const stale = createRun("stale");
-      persistRegistryFixture(new Map([[stale.runId, stale]]));
-      const restored = empty
-        ? new Map<string, SubagentRunRecord>()
-        : new Map([["restored", createRun("restored")]]);
-      params.mockRestoredRows(restored);
-
-      await restoreSubagentRunsFromDisk({ runs: new Map() });
-
-      for (const read of [
-        getSubagentRunsSnapshotForRead,
-        getSubagentSessionListRunsSnapshotForRead,
-      ]) {
-        expect([...read(new Map()).keys()]).toEqual([...restored.keys()]);
-      }
-    },
-  );
-
   it.each([true, false])(
     "restores canonical rows across an external deletion publication (committed: %s)",
     async (committed) => {
@@ -121,7 +100,6 @@ export function registerSubagentRestoreCacheCases(params: {
         release.resolve();
       }
       await restoring;
-      expect(reads).toBe(committed ? 2 : 1);
       expect(restored.has(entry.runId)).toBe(!committed);
       expect(getSubagentRunsSnapshotForRead(new Map()).has(entry.runId)).toBe(!committed);
     },

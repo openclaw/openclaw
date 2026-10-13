@@ -59,13 +59,23 @@ and unreadable local images also fall back to the workspace avatar.
 
 Options: `--role <role>`, `--workspace <dir>`, `--model <id>`, `--agent-dir <dir>`, `--bind <channel[:accountId]>` (repeatable), `--non-interactive`, `--json`.
 
+Basic non-interactive creation uses the local Gateway while it is running. The
+command binds to that Gateway's state owner; an unsupported method, lost reply,
+or authentication failure never retries the write locally. Check `agents list`
+before retrying an uncertain result.
+
+Interactive setup, `--role`, `--agent-dir`, and `--bind` require the local Gateway
+to be stopped. These setup flows hold exclusive state ownership through workspace,
+credential, and config settlement. Stop the Gateway through its service owner,
+wait for it to exit, and rerun the same command.
+
 - The automation flags `--workspace`, `--model`, `--agent-dir`, `--bind`, and `--non-interactive` select the non-interactive path. Non-interactive mode requires an agent name and, unless `--role` is supplied, `--workspace`.
 - `--json` alone keeps the guided wizard interactive. Prompts and status are written to stderr, and stdout contains one JSON summary after setup completes.
 - Non-interactive `--json` reports normalized agent IDs in the summary without extra stdout status messages.
 - If a requested binding belongs to another agent, non-interactive creation keeps the new agent and any non-conflicting bindings but exits with status 1. The summary names the conflicts; resolve them with `agents bind` and `agents unbind` instead of recreating the agent.
 - `main` is an ordinary agent id. Recreating it after another agent owns the installation can require `openclaw doctor --fix` to repair legacy session or shared-auth ownership first.
 - Interactive mode offers optional auth copying. When the fleet has no default agent, choose a source agent or **Skip copying auth profiles** (the default). Selecting a source still requires confirmation before copying. Only portable static credentials (`api_key` and static `token` profiles) are copied unless a credential opts out with `copyToAgents: false`; OAuth refresh-token profiles are not copied unless a provider opts in with `copyToAgents: true`. Without a copy, OAuth stays available through the shared auth base. If the source agent has its own local OAuth profile, sign in separately for the new agent.
-- An agent id whose deletion has finished can be recreated with `agents add`. Creation claims the finished deletion record when it publishes the new agent, including when the wizard copies or configures auth. An id whose deletion cleanup is still pending is refused until that deletion is retried.
+- An agent id whose deletion has finished can be recreated with `agents add`. Creation claims the finished deletion record when it publishes the new agent, including when the wizard copies or configures auth. An id whose deletion cleanup is still pending is refused until cleanup finishes.
 
 #### Role templates
 
@@ -103,6 +113,9 @@ checkout. Follow the [Claw preview and consent flow](/cli/claws#inspect-and-prev
 to add it. Use `agents team create` to wire the agents into a team.
 
 ### `agents team create`
+
+Team creation requires the local Gateway to be stopped and holds exclusive state
+ownership until the created agents and config changes have settled.
 
 Options: `--preset <name>` (default and only bundled preset: `team`),
 `--coordinator <id>` (default: `coordinator`), `--prefix <p>`,
@@ -160,8 +173,13 @@ Options: `--force`, `--json`.
 
 - The only configured agent cannot be deleted.
 - Without `--force`, interactive confirmation is required (fails in a non-TTY session; re-run with `--force`).
-- Workspace, agent state, and session transcript directories move to Trash, not hard-deleted. If Trash is unavailable, agent config deletion still succeeds and reports paths requiring manual cleanup; `--json` exposes path outcomes in `removed` and `failed` arrays.
-- If session-store cleanup fails, the agent is removed from config but its files and pending cleanup are retained. Resolve the reported storage error, then retry the same deletion command; `--json` reports `purgeFailed: true` until the purge succeeds.
+- Workspace, agent state, and session transcript directories move to Trash, not hard-deleted. If Trash is unavailable, the agent is removed from config but cleanup remains pending. After config publication succeeds, Gateway deletion returns `UNAVAILABLE` with the path failures in its error message and the existing `removed` and `failed` details attached to the error response. Offline deletion reports those path outcomes through `--json`.
+- Gateway deletion durably closes new sessions, turns, and automations, then aborts and waits for active turns and background memory/session work to settle before retiring storage. In a shared session store, deletion cancels only the deleted agent's work; surviving agents remain admitted. Already accepted storage work settles before retirement. Late session writes are refused as soon as draining starts without interrupting cleanup. The Gateway resumes interrupted deletions after restart, including journals from older versions.
+- While deletion cleanup is pending, new session writes remain refused even if draining or restart recovery fails. Resolve the reported failure and retry deletion. Workspace, agent-directory, and session-store relocation is also refused until cleanup finishes; updates that leave the storage targets unchanged remain available.
+- Deletion closes every terminal for the agent, including detached terminals and terminals opened without a chat session, and waits for their processes to exit before retiring storage. Terminals for surviving agents remain usable.
+- Independent background commands are also cancelled and drained when their agent is deleted. Idle MCP runtimes retire before storage, while active MCP views keep deletion pending; close those views and retry. Tracked browser tabs use the same best-effort cleanup as session deletion.
+- During an upgrade, Doctor backs up and prepares a resumable pending deletion's old database schema under deletion ownership. Gateway recovery then completes normal session cleanup, including native bindings and related state, before applying the recorded file-removal choice.
+- If session-store cleanup fails, the agent is removed from config but its files and pending cleanup are retained. Resolve the reported storage error, then retry the same deletion command. After config publication succeeds, Gateway deletion returns `UNAVAILABLE`, names the failing cleanup step and database path in `failed`, and attaches `purgeFailed: true` to its error response; offline `--json` reports the same flag until the purge succeeds.
 - On installations that have not migrated shared auth yet, the legacy owner cannot be deleted. Run `openclaw doctor --fix`; after relocation into shared state SQLite, `main` follows the same deletion rules as any other agent.
 - An agent that owns a session database still used by another configured agent cannot be deleted, even when retaining files. Keep that owner configured; moving shared history to another owner requires a supported migration, which is not currently available.
 - When the Gateway is reachable, deletion routes through the Gateway so config and session-store cleanup share the same writer as runtime traffic. If the configured local Gateway cannot be reached before connecting, the CLI falls back to the offline local path and removes the agent's scheduled jobs transactionally. If local Gateway credentials are unavailable before the CLI can test reachability, deletion still falls back locally but warns that cron cleanup was skipped because a live scheduler may own the store.

@@ -1,4 +1,3 @@
-/** Process-local ACP runtime handle cache with lifecycle cleanup and reuse checks. */
 import {
   resolveRuntimeHandleIdentifiersFromIdentity,
   resolveSessionIdentityFromMeta,
@@ -44,7 +43,6 @@ export class ManagerRuntimeHandleCache {
     this.runtimeCache.delete(acpSessionActorKey(target));
   }
 
-  /** Returns cache counters used by ACP manager observability snapshots. */
   getObservabilitySnapshot() {
     return {
       activeSessions: this.runtimeCache.size,
@@ -53,7 +51,6 @@ export class ManagerRuntimeHandleCache {
     };
   }
 
-  /** Closes and removes one cached runtime handle when present. */
   async close(
     params: AcpSessionTarget & {
       assertActive?: () => void;
@@ -128,7 +125,6 @@ export class ManagerRuntimeHandleCache {
     return cached;
   }
 
-  /** Checks whether a cached runtime handle is still healthy enough to reuse. */
   async isReusable(params: {
     sessionKey: string;
     runtime: AcpRuntime;

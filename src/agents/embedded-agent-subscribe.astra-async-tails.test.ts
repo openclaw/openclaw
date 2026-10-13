@@ -526,7 +526,6 @@ describe("Astra async response tails", () => {
         findSessionTranscriptArchiveEventReadOnly: async () => undefined,
         getRuntimeConfig: unexpected,
         readSubagentSessionEntry: unexpected,
-        resolveAgentIdFromSessionKey: unexpected,
         resolveSessionStorePathCore: unexpected,
       });
       expect(announced.text).toBe("Use counter B.");

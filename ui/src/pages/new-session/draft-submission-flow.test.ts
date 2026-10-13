@@ -228,6 +228,7 @@ describe("DraftSubmissionFlow", () => {
         mentions: flow.mentions,
         attachments: flow.attachmentDraft.attachments,
       };
+      const navigationsBeforeCleanup = vi.mocked(context.navigateAndWait).mock.calls.length;
       if (next === "reconnect") {
         flow.invalidate("gateway-changed");
       }
@@ -239,6 +240,7 @@ describe("DraftSubmissionFlow", () => {
       expect(flow.mentions).toEqual([]);
       expect(flow.attachmentDraft.attachments).toEqual([]);
       expect(context.sessions.createResult).toHaveBeenCalledOnce();
+      expect(navigationsBeforeCleanup).toBe(0);
       expect(context.navigateAndWait).toHaveBeenCalledTimes(next === "navigation" ? 1 : 0);
       const retained = context.chatSubmissions.readInitial(
         sessionKey,

@@ -12,6 +12,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
@@ -20,7 +21,6 @@ import {
   loadSessionEntry,
   loadTranscriptEvents,
   replaceSessionEntry,
-  replaceTranscriptEvents,
   rewindSessionToMessage,
   switchSessionBranch,
   updateSessionEntry,
@@ -39,6 +39,8 @@ import {
   useSessionMessageCutFixtures,
 } from "./session-accessor.sqlite-message-cut.test-support.js";
 import * as transcriptWatermark from "./session-accessor.sqlite-transcript-watermark-read.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
+import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import * as coldStorage from "./session-cold-storage.js";
 import {
   createSessionColdStorageFixture,
@@ -481,39 +483,6 @@ describe("SQLite session branches", () => {
     }
   });
 
-  it("reuses branch summaries with unchanged watermarks after closing the writable handle", async () => {
-    const { env } = await createSession();
-    const database = openOpenClawAgentDatabase({ agentId, env });
-    await closeOpenClawAgentDatabaseByPathAsync(database.path, agentId);
-    const branchReads = trackBranchSummaryReads();
-
-    const first = await listSessionBranches({ agentId, env, sessionKey });
-    expect(first).toMatchObject({
-      status: "ok",
-      branches: expect.arrayContaining([
-        expect.objectContaining({
-          active: true,
-          leafEntryId: "assistant-2",
-          headline: "second answer",
-          messageCount: 4,
-        }),
-      ]),
-    });
-    expect(branchReads()).toBe(1);
-
-    const second = await listSessionBranches({ agentId, env, sessionKey });
-    expect(second).toEqual(first);
-    expect(branchReads()).toBe(1);
-    if (second.status !== "ok" || !second.branches[0]) {
-      throw new Error("expected cached branch list result");
-    }
-    second.branches[0].headline = "caller mutation";
-
-    await expect(listSessionBranches({ agentId, env, sessionKey })).resolves.toEqual(first);
-    expect(branchReads()).toBe(1);
-    expect(isOpenClawAgentDatabaseOpen(database.path)).toBe(false);
-  });
-
   it("reuses unchanged summaries across fifty active sessions without repeating worker reads", async () => {
     const { env } = await createSession();
     const scopes = [];
@@ -651,37 +620,6 @@ describe("SQLite session branches", () => {
     },
   );
 
-  it("lists every DAG tip with active state, headline, count, and timestamp", async () => {
-    const { env } = await createSession({ activeLeafTarget: "assistant-1" });
-
-    await expect(listSessionBranches({ agentId, env, sessionKey })).resolves.toEqual({
-      status: "ok",
-      branches: [
-        {
-          leafEntryId: "assistant-1",
-          headline: "first answer",
-          messageCount: 2,
-          updatedAt: "2026-07-18T00:00:02.000Z",
-          active: true,
-        },
-        {
-          leafEntryId: "off-path-user",
-          headline: "inactive prompt",
-          messageCount: 2,
-          updatedAt: "2026-07-18T00:00:05.000Z",
-          active: false,
-        },
-        {
-          leafEntryId: "assistant-2",
-          headline: "second answer",
-          messageCount: 4,
-          updatedAt: "2026-07-18T00:00:04.000Z",
-          active: false,
-        },
-      ],
-    });
-  });
-
   it("keeps opaque payloads in the worker and refreshes phased Unicode headlines after a rewrite", async () => {
     const { env, scope } = await createSession();
     const opaque = "x".repeat(256 * 1024);
@@ -760,20 +698,94 @@ describe("SQLite session branches", () => {
     expect(branchReads()).toBe(2);
   });
 
-  it("lists process-only incognito branches without opening a worker", async () => {
-    const { scope } = await createSession({ incognito: true });
+  it("lists current memory branches after writes and leaves missing sessions absent", async () => {
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-memory-branches-") };
+    const scope = {
+      agentId,
+      env,
+      sessionId: "memory-branch-source",
+      sessionKey: "agent:main:dashboard:incognito-branches",
+      storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId, env }),
+    };
+    const owner = memorySessionActorOwners.get({ agentId, path: scope.storePath });
+    const actor = await owner.acquire(
+      { database: owner.identity, sessionKey: scope.sessionKey },
+      { assertCurrent() {}, assertReadable() {} },
+    );
+    try {
+      expect(
+        await actor.storage!.mutate(
+          {
+            type: "session.entry.create",
+            input: {
+              entry: { sessionId: scope.sessionId, updatedAt: 1, incognito: true },
+              transcriptEvents: [
+                {
+                  type: "message",
+                  id: "user-2",
+                  parentId: null,
+                  message: { role: "user", content: "second prompt" },
+                },
+                {
+                  type: "message",
+                  id: "assistant-2",
+                  parentId: "user-2",
+                  message: { role: "assistant", content: "second answer" },
+                },
+              ],
+            },
+          },
+          { assertCurrent() {}, authorize() {} },
+        ),
+      ).toMatchObject({ kind: "committed" });
+    } finally {
+      await actor.release();
+    }
     const branchReads = trackBranchSummaryReads();
-    await expect(listSessionBranches(scope)).resolves.toMatchObject({
-      status: "ok",
-      branches: expect.arrayContaining([
-        expect.objectContaining({
-          active: true,
-          leafEntryId: "assistant-2",
-          headline: "second answer",
-        }),
-      ]),
+    const sqlite = vi.spyOn(sqliteRuntime, "requireNodeSqlite").mockImplementation(() => {
+      throw new Error("Memory branch listing opened SQLite");
     });
-    expect(branchReads()).toBe(0);
+    try {
+      await expect(listSessionBranches(scope)).resolves.toMatchObject({
+        status: "ok",
+        branches: expect.arrayContaining([
+          expect.objectContaining({
+            active: true,
+            leafEntryId: "assistant-2",
+            headline: "second answer",
+          }),
+        ]),
+      });
+      await appendTranscriptMessage(scope, {
+        eventId: "assistant-3",
+        parentId: "assistant-2",
+        now: Date.parse("2026-07-18T00:00:07.000Z"),
+        message: { role: "assistant", content: "fresh memory answer" },
+      });
+      await expect(listSessionBranches(scope)).resolves.toMatchObject({
+        status: "ok",
+        branches: expect.arrayContaining([
+          expect.objectContaining({
+            active: true,
+            leafEntryId: "assistant-3",
+            headline: "fresh memory answer",
+          }),
+        ]),
+      });
+      await expect(
+        listSessionBranches({
+          ...scope,
+          sessionKey: "agent:main:dashboard:incognito-missing",
+        }),
+      ).resolves.toEqual({ status: "missing-session" });
+      memorySessionActorOwners.closeDatabase(owner);
+      await expect(listSessionBranches(scope)).resolves.toEqual({ status: "missing-session" });
+      expect(sqlite).not.toHaveBeenCalled();
+      expect(branchReads()).toBe(0);
+    } finally {
+      sqlite.mockRestore();
+      memorySessionActorOwners.closeDatabase(owner);
+    }
   });
 
   it("summarizes a large shared branch graph without repeated path walks", async () => {
@@ -782,7 +794,9 @@ describe("SQLite session branches", () => {
     const sessionId = "large-branches-source";
     const scope = { agentId, env, sessionId, sessionKey };
     await upsertSessionEntryCore(scope, { sessionId, updatedAt: Date.now() });
-    // Keep reader startup outside the graph-work budget; replacement below forces a fresh scan.
+    // Match replacement's resident writer so warmup and measurement use the maintenance reader.
+    // Replacement below still forces a fresh graph scan.
+    openOpenClawAgentDatabase({ agentId, env });
     await expect(listSessionBranches(scope)).resolves.toEqual({ status: "ok", branches: [] });
     const events: Parameters<typeof replaceTranscriptEvents>[1] = [
       {

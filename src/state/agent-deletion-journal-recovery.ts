@@ -4,11 +4,13 @@ import { recordLegacyMigrationReceipt } from "../infra/state-migrations.receipts
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   AGENT_DELETION_RECOVERY_SOURCE_KEY as SOURCE_KEY,
+  assertAgentDeletionRecoveryHoldsMatch,
   decodeHolds,
   readAgentDeletionRecoveryHolds,
   readReport,
   type RecoveryDatabase,
   type RecoveryReport,
+  type AgentDeletionRecoveryHoldPredicate,
 } from "./agent-deletion-journal-recovery.kernel.js";
 import type { HeldAgentDatabase } from "./agent-deletion-journal.types.js";
 import { createOpenClawAgentDatabasePathMatcher } from "./openclaw-agent-db.paths.js";
@@ -100,11 +102,15 @@ export function resolveAgentDeletionRecoveryHolds(
   database: RecoveryDatabase,
   agentId: string,
   targetPaths: readonly string[],
+  predicate?: AgentDeletionRecoveryHoldPredicate,
 ): number {
   if (!database.db.isTransaction) {
     throw new Error("Agent deletion recovery resolution requires a shared-state transaction.");
   }
   const report = readReport(database);
+  if (predicate) {
+    assertAgentDeletionRecoveryHoldsMatch(decodeHolds(database, report?.held ?? []), predicate);
+  }
   if (!report) {
     return 0;
   }

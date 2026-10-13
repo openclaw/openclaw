@@ -1,6 +1,7 @@
 import path from "node:path";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { resolveStateDir } from "../config/paths.js";
+import { withSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
 import type { SessionExactEntriesWorkerResult } from "../config/sessions/session-entry-read.types.js";
 import { captureSessionStoreReadCandidate } from "../config/sessions/session-store-read-candidates.js";
 import { prepareSessionStoreTargetInventory } from "../config/sessions/session-store-target-inventory.js";
@@ -8,6 +9,8 @@ import { prepareSessionStoreTargetInventoryRead } from "../config/sessions/sessi
 import { withSessionHistoryWorkerDatabases } from "../config/sessions/session-transcript-worker-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
+import { isIncognitoSessionKey } from "../routing/session-key.js";
+import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
 import { SessionMetadataUnavailableError } from "../state/session-metadata-unavailable-error.js";
 import type { SessionTranscriptReadScope } from "./session-transcript-readers.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
@@ -20,11 +23,53 @@ export async function withManagedImageSessionRead<T>(
     agentId: string;
     stateDir: string;
     assertCurrent: () => void;
+    unavailable?: T;
   },
   consume: (scope: SessionTranscriptReadScope, assertCurrent: () => void) => Promise<T>,
 ): Promise<T | null> {
   const { cfg, sessionKey, agentId, stateDir } = params;
   params.assertCurrent();
+  const incognitoScope = {
+    agentId,
+    sessionKey: normalizeSessionKeyPreservingOpaquePeerIds(sessionKey),
+    storePath: cfg.session?.store,
+    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+  };
+  if (isIncognitoSessionKey(incognitoScope.sessionKey)) {
+    const assertCurrent = params.assertCurrent;
+    return (
+      (await withSessionActorStorage(
+        incognitoScope,
+        {
+          lifetime: { assertCurrent, assertReadable: assertCurrent },
+          authority: { assertCurrent, authorize: assertCurrent },
+        },
+        (binding) => {
+          const entry = binding.actor.snapshot(binding.authority)?.entry;
+          if (!entry) {
+            return null;
+          }
+          return consume(
+            {
+              ...incognitoScope,
+              storePath: binding.path,
+              sessionEntry: entry,
+              sessionId: entry.sessionId,
+            },
+            () => {
+              const current = binding.actor.snapshot(binding.authority)?.entry;
+              if (
+                current?.sessionId !== entry.sessionId ||
+                current?.lifecycleRevision !== entry.lifecycleRevision
+              ) {
+                throw new Error("Managed media session authority changed");
+              }
+            },
+          );
+        },
+      )) ?? null
+    );
+  }
   const { candidates, ...prepared } = prepareSessionStoreTargetInventory(cfg, [agentId], {
     ...process.env,
     OPENCLAW_STATE_DIR: stateDir,
@@ -41,10 +86,10 @@ export async function withManagedImageSessionRead<T>(
       }
     }
   };
-  return inventoryRead.withRead(async (inventory, assertDiscoveryCurrent) => {
+  const result = inventoryRead.withRead(async (inventory, assertDiscoveryCurrent) => {
     const source = inventory.agents[0];
     if (!source?.result.available) {
-      return null;
+      return params.unavailable ?? null;
     }
     return withSessionHistoryWorkerDatabases(
       source.reads.map(({ database }) => ({ ...database, env: prepared.env })),
@@ -79,11 +124,12 @@ export async function withManagedImageSessionRead<T>(
           } catch (error) {
             assertCurrent();
             if (
+              params.unavailable !== undefined ||
               extractErrorCode(error) === "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED" ||
               (error instanceof SessionMetadataUnavailableError &&
                 error.reason === "schema-missing")
             ) {
-              return null;
+              return params.unavailable ?? null;
             }
             throw error;
           }
@@ -92,20 +138,25 @@ export async function withManagedImageSessionRead<T>(
           }
           assertCurrent();
           if (exact.sharing?.placeholders.length) {
-            return null;
+            return params.unavailable ?? null;
           }
           let entry = exact.entries[0]?.entry;
           if (!entry) {
-            const read = await reader.readEntryResult({ scope });
+            const read = await reader.readEntryResult({ scope }).catch((error: unknown) => {
+              if (params.unavailable !== undefined) {
+                return undefined;
+              }
+              throw error;
+            });
             assertCurrent();
-            if (!read.ok) {
-              return null;
+            if (!read?.ok) {
+              return params.unavailable ?? null;
             }
             entry = read.value;
           }
           if (entry) {
             if (matched) {
-              return null;
+              return params.unavailable ?? null;
             }
             matched = { ...scope, sessionEntry: entry, sessionId: entry.sessionId };
           }
@@ -138,13 +189,21 @@ export async function withManagedImageSessionRead<T>(
               storePath: database.path,
               env: prepared.env,
             };
-            const read = await reader!.readEntryResult({ scope });
+            const read = await reader!.readEntryResult({ scope }).catch((error: unknown) => {
+              if (params.unavailable !== undefined) {
+                return undefined;
+              }
+              throw error;
+            });
             const assertFallbackCurrent = () => {
               assertCurrent();
               reader!.assertCurrent();
             };
             assertFallbackCurrent();
-            if (!read.ok || !read.value) {
+            if (!read?.ok) {
+              return params.unavailable ?? null;
+            }
+            if (!read.value) {
               return null;
             }
             return consume(
@@ -161,4 +220,14 @@ export async function withManagedImageSessionRead<T>(
       },
     );
   }, assertSelectionCurrent);
+  return result.catch((error: unknown) => {
+    if (
+      params.unavailable !== undefined &&
+      (error instanceof SessionMetadataUnavailableError ||
+        extractErrorCode(error) === "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED")
+    ) {
+      return params.unavailable;
+    }
+    throw error;
+  });
 }

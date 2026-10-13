@@ -199,7 +199,7 @@ export async function rollbackJsonFileWriteIfUnchanged(params: {
 
 export async function writeRootBoundJsonFile(params: {
   env: NodeJS.ProcessEnv;
-  deferredPluginMigrations: readonly DeferredPluginMigration[];
+  deferredPluginMigrations?: readonly DeferredPluginMigration[];
   configPath: string;
   includePath: string;
   allowedRoots: readonly string[];

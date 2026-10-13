@@ -20,7 +20,8 @@ import { PLUGIN_LIFECYCLE_LEASE_IDENTITY } from "./plugin-lifecycle-lease-identi
 const DEFAULT_PLUGIN_LIFECYCLE_LEASE_MS = 5 * 60_000;
 const DEFAULT_PLUGIN_LIFECYCLE_WAIT_MS = 10 * 60_000;
 
-export type PluginLifecycleLeaseContext = OpenClawStateLeaseContext & {
+export type PluginLifecycleLeaseContext = Omit<OpenClawStateLeaseContext, "assertOwned"> & {
+  assertOwned: () => void;
   databasePath: string;
   /** Original state owner; wrapper identity cannot authorize worker writes. */
   stateLease: OpenClawStateLeaseContext;
@@ -151,18 +152,9 @@ export async function withPluginArtifactCleanupLease<T>(
   const context = captureOpenClawStateWorkerContext({
     env: resolveLifecycleLeaseEnv(options.env),
   });
-  let refusal: { error: unknown } | undefined;
   const assertCurrent = () => {
-    if (refusal) {
-      throw refusal.error;
-    }
-    try {
-      options.signal?.throwIfAborted();
-      options.assertCurrent?.();
-    } catch (error) {
-      refusal = { error };
-      throw error;
-    }
+    options.signal?.throwIfAborted();
+    options.assertCurrent?.();
   };
   assertCurrent();
   return await withPluginLifecycleLeaseDemand(
@@ -185,18 +177,12 @@ export async function withPluginArtifactCleanupLease<T>(
           markAcquired();
           const assertOwned = async () => {
             assertCurrent();
-            try {
-              await lease.assertOwned();
-              assertCurrent();
-            } catch (error) {
-              refusal ??= { error };
-              throw refusal.error;
-            }
+            await lease.assertOwned();
+            assertCurrent();
           };
           await assertOwned();
-          const result = await run(assertOwned);
-          await assertOwned();
-          return result;
+          // Deletion owners check each effect; completed cleanup needs no new admission.
+          return await run(assertOwned);
         },
       ),
   );
@@ -223,35 +209,21 @@ export async function withPluginLifecycleLease<T>(
   const assertCurrent = options.assertCurrent;
   assertAuthority(() => assertCurrent?.());
   const runWithLease = async (lease: PluginLifecycleLeaseContext) => {
+    const guard = (check: () => void) =>
+      assertAuthority(() => {
+        assertCurrent?.();
+        check();
+      });
     const owned: PluginLifecycleLeaseContext =
       !assertCurrent && lease === active?.lease
         ? lease
         : {
             ...lease,
-            ...(lease.renew
-              ? {
-                  renew: () =>
-                    assertAuthority(() => {
-                      assertCurrent?.();
-                      lease.renew?.();
-                    }),
-                }
-              : {}),
-            assertCurrent: () =>
-              assertAuthority(() => {
-                assertCurrent?.();
-                lease.assertCurrent();
-              }),
-            assertOwned: () =>
-              assertAuthority(() => {
-                assertCurrent?.();
-                lease.assertOwned();
-              }),
+            ...(lease.renew ? { renew: () => guard(() => lease.renew?.()) } : {}),
+            assertCurrent: () => guard(() => lease.assertCurrent()),
+            assertOwned: () => guard(() => lease.assertOwned()),
             assertOwnedInTransaction: (database) =>
-              assertAuthority(() => {
-                assertCurrent?.();
-                lease.assertOwnedInTransaction(database);
-              }),
+              guard(() => lease.assertOwnedInTransaction(database)),
           };
     if (assertCurrent) {
       owned.assertOwned();

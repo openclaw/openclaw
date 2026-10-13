@@ -234,6 +234,11 @@ the Gateway already runs inside a managed Google Cloud environment.
 | Thinking/reasoning     | Yes (Gemini 2.5+ / Gemini 3+) |
 | Gemma 4 models         | Yes                           |
 
+Responses marked `MAX_TOKENS` or `CONTINUATION` reached a generation limit.
+OpenClaw preserves their partial content and reports a length-limited result.
+Function calls in that partial response remain incomplete instead of becoming
+an executable tool-use turn.
+
 ## Web search
 
 The bundled `gemini` web-search provider uses Gemini Google Search grounding.

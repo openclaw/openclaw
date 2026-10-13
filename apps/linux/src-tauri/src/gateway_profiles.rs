@@ -236,13 +236,7 @@ impl GatewayProfiles {
     }
 
     pub fn set_keep_computer_awake(&self, enabled: bool) -> Result<(), String> {
-        let mut cache = self.registry.lock().map_err(|_| CORRUPT)?;
-        let mut next = self.load(&mut cache)?.clone();
-        if next.keep_computer_awake == enabled {
-            return Ok(());
-        }
-        next.keep_computer_awake = enabled;
-        self.commit(&mut cache, next)
+        self.set_preference(|next| Ok((&mut next.keep_computer_awake, enabled)))
     }
 
     pub fn selected(&self) -> Result<Option<String>, String> {
@@ -256,25 +250,29 @@ impl GatewayProfiles {
     }
 
     pub fn set_desktop_sharing_enabled(&self, enabled: bool) -> Result<(), String> {
-        let mut cache = self.registry.lock().map_err(|_| CORRUPT)?;
-        let mut next = self.load(&mut cache)?.clone();
-        if next.desktop_sharing_enabled == Some(enabled) {
-            return Ok(());
-        }
-        next.desktop_sharing_enabled = Some(enabled);
-        self.commit(&mut cache, next)
+        self.set_preference(|next| Ok((&mut next.desktop_sharing_enabled, Some(enabled))))
     }
 
     pub fn remember(&self, id: Option<&str>) -> Result<(), String> {
+        self.set_preference(|next| {
+            if id.is_some_and(|id| !next.profiles.iter().any(|profile| profile.id == id)) {
+                return Err(NOT_FOUND.to_string());
+            }
+            Ok((&mut next.selected, id.map(str::to_string)))
+        })
+    }
+
+    fn set_preference<T: PartialEq>(
+        &self,
+        field: impl FnOnce(&mut Registry) -> Result<(&mut T, T), String>,
+    ) -> Result<(), String> {
         let mut cache = self.registry.lock().map_err(|_| CORRUPT)?;
         let mut next = self.load(&mut cache)?.clone();
-        if id.is_some_and(|id| !next.profiles.iter().any(|profile| profile.id == id)) {
-            return Err(NOT_FOUND.to_string());
-        }
-        if next.selected.as_deref() == id {
+        let (current, value) = field(&mut next)?;
+        if *current == value {
             return Ok(());
         }
-        next.selected = id.map(str::to_string);
+        *current = value;
         self.commit(&mut cache, next)
     }
 

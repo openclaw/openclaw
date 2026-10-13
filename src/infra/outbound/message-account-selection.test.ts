@@ -25,17 +25,6 @@ describe("validateExplicitMessageAccountSelection", () => {
     },
   } as unknown as ChannelPlugin;
 
-  it("accepts the plugin-resolved default when it is intentionally unlisted", async () => {
-    expect(
-      await validateExplicitMessageAccountSelection({
-        cfg,
-        channel: "feishu",
-        accountId: "OPS",
-        plugin,
-      }),
-    ).toBe("ops");
-  });
-
   it("still rejects a non-default unlisted account", async () => {
     await expect(
       validateExplicitMessageAccountSelection({

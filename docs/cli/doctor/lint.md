@@ -20,6 +20,11 @@ report, preserving the live database and its WAL files. Each new report reads a
 fresh snapshot. Checks that need writable inspection state or independent database
 verification retain their own copies; `--only` checks prepare state on demand.
 
+Read-only reports preserve existing SQLite database, WAL, and shared-memory files,
+including their modification times. An older shared-state schema produces a
+"migration pending" finding with `openclaw doctor --fix` guidance; inspection does
+not upgrade it. Ordinary Doctor and explicit repair retain their migration behavior.
+
 Doctor retires private database readers and writers before removing inspection
 snapshots. A cleanup failure preserves completed findings and check counts;
 updater runs report failed temporary-file removal as a warning. If database
@@ -121,20 +126,10 @@ Bare `openclaw doctor --json` exits `0` once it emits a findings payload, includ
 
 `core/doctor/session-snapshots` reports stale paths in retained legacy session
 metadata as informational findings. It preserves the original files even under
-`--fix`; active sessions use canonical SQLite state and the current runtime skill
+`--fix`; active sessions use current SQLite state and the current runtime skill
 catalog. Historical snapshot paths do not require cleanup or a session reset.
 
 `core/doctor/local-audio-acceleration` reports the auto-selected local STT command, separate capable/requested/observed backend evidence, and fallback order without loading a speech model. It emits an informational finding, so include `--severity-min info` to display it.
-
-`core/doctor/skill-workshop-relocation` distinguishes pending legacy collection
-backup roots from roots preserved for review. Eligible proposals or backup roots
-receive `openclaw doctor --fix` guidance, not a guarantee that every backup will
-be retired. Preserved roots require manual review of workspace ownership, backup
-manifests, and workspace migration blockers. If both kinds remain, Doctor reports
-both next steps. Do not delete preserved backups to clear the warning.
-The check uses the configured agent directories and actual filesystem paths even
-when lint reads a private state snapshot. Correctly placed Workshop targets do
-not need relocation merely because lint uses a temporary directory.
 
 ## Check selection
 

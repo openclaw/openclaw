@@ -21,6 +21,7 @@ type CheckRow = {
 type StripeRow = {
   stripe: number;
   lint_selection_json?: string;
+  shared_central_lint_selection_json?: string;
   type_graph_names_json?: string;
   root_type_stripe?: string;
 };
@@ -300,12 +301,54 @@ export async function createCiCheckPlan(input: CiCheckPlanInput) {
       centralLintSelection = JSON.stringify(withExtensions(central, selectedStripes));
     }
   }
+  // Full hybrid stripe 1 already has the same 16-class setup. Keep larger central
+  // owners separate, and retain a check row for the existing required gate.
+  const firstCoreLint = coreLint.find((row) => row.stripe === 1);
+  const centralLintIndex = checkRows.findIndex((row) => row.task === "lint");
+  if (
+    input.runnerProfile === "hybrid" &&
+    input.preserveFullChecks &&
+    coreLint.length === 2 &&
+    coreLint.some((row) => row.stripe === 2) &&
+    coreLint.every((row) => !row.lint_selection_json) &&
+    firstCoreLint &&
+    centralLintIndex >= 0 &&
+    centralLintSelection &&
+    checkRows.some((row) => row.task !== "lint")
+  ) {
+    const { createChangedCheckPlan } = await import("./check-changed.mts");
+    const commands = createChangedCheckPlan(detectChangedLanes(input.changedPaths), {
+      lintOnly: true,
+      lintSelection: JSON.parse(centralLintSelection),
+      lintThreads: 1,
+    }).commands;
+    const scriptsArgs = [
+      "--import",
+      "./scripts/tsx.mjs",
+      "scripts/run-oxlint-shards.mts",
+      "--only=scripts",
+      "--threads=1",
+    ];
+    if (
+      commands.length > 0 &&
+      commands.every(
+        ({ bin, args }) =>
+          (!bin && args[0] === "format:check") ||
+          (bin === "node" &&
+            args.length === scriptsArgs.length &&
+            args.every((arg, index) => arg === scriptsArgs[index])),
+      )
+    ) {
+      firstCoreLint.shared_central_lint_selection_json = centralLintSelection;
+      checkRows.splice(centralLintIndex, 1);
+    }
+  }
   const checkJobCount =
     checkRows.length +
     (hosted ? coreRows.length + coreLint.length : 0) +
     (input.runnerProfile === "hybrid" ? extensionLint.length : 0);
   if (checkJobCount > 400) {
-    throw new Error("Check planning exceeds the observer's 400-job inventory bound");
+    throw new Error("Check planning exceeds the 400-job inventory bound");
   }
   if (typePlan) {
     console.log(
@@ -313,7 +356,6 @@ export async function createCiCheckPlan(input: CiCheckPlanInput) {
     );
   }
   return {
-    check_job_count: checkJobCount,
     check_matrix: { include: checkRows },
     core_type_matrix: { include: coreRows },
     lint_core_matrix: { include: coreLint },

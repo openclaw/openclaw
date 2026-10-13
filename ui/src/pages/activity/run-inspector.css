@@ -2,7 +2,8 @@
   margin-bottom: var(--space-3);
 }
 
-.run-inspector button:focus-visible {
+.run-inspector button:focus-visible,
+.run-inspector__receipt-list a:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
@@ -188,11 +189,6 @@
 
 .run-inspector__receipt-list a:hover {
   border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
-}
-
-.run-inspector__receipt-list a:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 2px;
 }
 
 .run-inspector__receipt-list a[aria-current="true"] {

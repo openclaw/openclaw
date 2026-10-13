@@ -1,8 +1,5 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import type { ReactiveControllerHost } from "lit";
 import type {
-  SkillsProposalInspectResult,
-  SkillsProposalApplyResult,
   SkillLibraryEntry,
   SkillLibraryFile,
   SkillsLibraryListResult,
@@ -12,23 +9,20 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
+import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { assertUploadsEnabled, uploadsEnabled } from "../../lib/uploads.ts";
-import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
-import { libraryFileText, readLibraryFiles, uploadLibraryArchive } from "./library-files.ts";
+import { readLibraryFiles, uploadLibraryArchive } from "./library-files.ts";
 
 export type LibraryView = "workspace" | "mine" | "team" | "all";
 export type LibraryDraft = {
   importedFiles?: boolean;
-  target: "workspace" | "personal";
   connection: GatewayConnectionScope;
-  agentId: string | null;
   entry: SkillLibraryEntry | null;
   slug: string;
-  description: string;
   content: string;
   files: SkillLibraryFile[];
   baseFiles: readonly Readonly<SkillLibraryFile>[];
@@ -36,22 +30,16 @@ export type LibraryDraft = {
   selectedFile: string;
   rollbackRevision: string;
   dirty: boolean;
-  proposal: SkillsProposalInspectResult | null;
 };
 
 function libraryDraft(
   connection: GatewayConnectionScope,
-  target: LibraryDraft["target"],
-  agentId: string | null,
   read?: SkillsLibraryReadResult,
 ): LibraryDraft {
   return {
-    target,
     connection,
-    agentId,
     entry: read ? read.entry : null,
     slug: read ? read.entry.slug : "",
-    description: read ? read.entry.description : "",
     content: read ? read.content : "",
     files: read ? read.files : [],
     baseFiles: read ? read.files.map((file) => ({ ...file })) : [],
@@ -59,7 +47,6 @@ function libraryDraft(
     selectedFile: "SKILL.md",
     rollbackRevision: "",
     dirty: false,
-    proposal: null,
   };
 }
 
@@ -77,13 +64,14 @@ export class SkillLibraryController {
   importSelection: File[] = [];
   newFilePath = "";
   query = "";
-  private readSequence = 0;
 
   constructor(
-    private readonly host: ReactiveControllerHost,
-    private readonly gateway: GatewayPageController,
-    private readonly selectedAgent: () => string | null,
-    private readonly refreshWorkspace: () => Promise<void>,
+    private readonly host: { requestUpdate(): void },
+    private readonly gateway: {
+      readonly snapshot: ApplicationGatewaySnapshot | null;
+      capture(): GatewayConnectionScope | null;
+      isCurrent(scope: GatewayConnectionScope): boolean;
+    },
     private readonly config: () => ApplicationConfigCapability | undefined = () => undefined,
   ) {}
 
@@ -107,7 +95,6 @@ export class SkillLibraryController {
     }
   }
   reset() {
-    this.readSequence++;
     this.list = null;
     this.view = null;
     this.loading = false;
@@ -133,25 +120,8 @@ export class SkillLibraryController {
       requireAdvertisement: false,
     });
   }
-  get createTarget() {
-    if (this.showWorkspace && this.list?.canManageWorkspace) {
-      return "workspace";
-    }
-    return this.list?.profileId ? "personal" : "unavailable";
-  }
   get canCreate() {
-    if (this.loading) {
-      return false;
-    }
-    if (this.createTarget === "workspace") {
-      return canCallGatewayMethod(
-        this.gateway.snapshot,
-        "skills.proposals.create",
-        "operator.admin",
-        { requireAdvertisement: false },
-      );
-    }
-    return this.createTarget === "personal" && this.canWrite;
+    return !this.loading && Boolean(this.list?.profileId) && this.canWrite;
   }
   get canEdit() {
     return this.canWrite && (this.draft?.entry?.canEdit ?? true);
@@ -176,23 +146,19 @@ export class SkillLibraryController {
       this.list = result;
       this.view ??= result.defaultTarget === "personal" ? "mine" : "workspace";
     } catch (error) {
-      if (this.gateway.isCurrent(connection)) {
-        this.error = formatUiError(error);
-      }
+      this.error = formatUiError(error);
     } finally {
-      if (this.gateway.isCurrent(connection)) {
-        this.loading = false;
-        this.changed();
-      }
+      this.loading = false;
+      this.changed();
     }
   }
 
   create() {
     const connection = this.gateway.capture();
-    if (!connection || !this.canCreate || this.createTarget === "unavailable") {
+    if (!connection || !this.canCreate) {
       return;
     }
-    this.draft = libraryDraft(connection, this.createTarget, this.selectedAgent());
+    this.draft = libraryDraft(connection);
     this.clearFeedback();
     this.newFilePath = "";
     this.changed();
@@ -202,7 +168,6 @@ export class SkillLibraryController {
     if (this.busy || (this.draft?.dirty && !window.confirm(t("skillLibrary.discard")))) {
       return;
     }
-    this.readSequence++;
     this.draft = null;
     this.importOpen = false;
     this.newFilePath = "";
@@ -217,15 +182,14 @@ export class SkillLibraryController {
     if (!connection || this.busy) {
       return;
     }
-    const sequence = ++this.readSequence;
     await this.perform(async () => {
       const read = await connection.client.request<SkillsLibraryReadResult>("skills.library.read", {
         skillId,
       });
-      if (!this.gateway.isCurrent(connection) || sequence !== this.readSequence) {
+      if (!this.gateway.isCurrent(connection)) {
         return;
       }
-      this.draft = libraryDraft(connection, "personal", null, read);
+      this.draft = libraryDraft(connection, read);
     });
   }
 
@@ -288,39 +252,6 @@ export class SkillLibraryController {
         assertUploadsEnabled(this.config());
       }
       const client = draft.connection.client;
-      if (draft.target === "workspace") {
-        if (draft.files.length) {
-          assertUploadsEnabled(this.config());
-        }
-        if (!draft.agentId) {
-          throw new Error(t("skillLibrary.selectAgent"));
-        }
-        const supportFiles = draft.files.map((file) => {
-          const content = libraryFileText(file);
-          if (content === null || file.executable) {
-            throw new Error(t("skillLibrary.workspaceTextOnly"));
-          }
-          return { path: file.path, content };
-        });
-        const proposal = await client.request<SkillsProposalInspectResult>(
-          "skills.proposals.create",
-          {
-            agentId: draft.agentId,
-            name: draft.slug,
-            description: draft.description,
-            content: draft.content,
-            supportFiles,
-          },
-        );
-        if (!this.gateway.isCurrent(draft.connection)) {
-          return;
-        }
-        draft.proposal = proposal;
-        draft.importedFiles = false;
-        draft.dirty = false;
-        this.notice = t("skillLibrary.pending", { id: proposal.record.id, agent: draft.agentId });
-        return;
-      }
       const savedFiles = draft.files.map((file) => ({ ...file }));
       const baseFiles = new Map(draft.baseFiles.map((file) => [file.path, file]));
       const retainFiles: string[] = [];
@@ -363,37 +294,6 @@ export class SkillLibraryController {
     });
   }
 
-  async applyWorkspace() {
-    const draft = this.draft;
-    const proposal = draft?.proposal;
-    const agentId = draft?.agentId;
-    if (!draft || !proposal || !agentId) {
-      return;
-    }
-    await this.perform(async () => {
-      if (!this.gateway.isCurrent(draft.connection)) {
-        throw new Error(t("skillLibrary.connectionChanged"));
-      }
-      const result = await draft.connection.client.request<SkillsProposalApplyResult>(
-        "skills.proposals.apply",
-        {
-          agentId,
-          proposalId: proposal.record.id,
-          expectedRevisionHash: proposal.revisionHash,
-        },
-      );
-      if (!this.gateway.isCurrent(draft.connection)) {
-        return;
-      }
-      this.draft = null;
-      this.notice = t("skillLibrary.workspaceSaved", {
-        agent: agentId,
-        state: result.record.status,
-      });
-      await this.refreshWorkspace();
-    });
-  }
-
   async mutate(action: SkillsLibraryMutateParams["action"]) {
     const draft = this.draft;
     const entry = draft?.entry;
@@ -427,7 +327,7 @@ export class SkillLibraryController {
       }
       // Record the committed mutation even if the follow-up list or revision read fails.
       await this.receipt(receipt);
-      if (!this.gateway.isCurrent(draft.connection) || action === "remove") {
+      if (action === "remove") {
         return;
       }
       if (action === "rollback") {
@@ -435,9 +335,6 @@ export class SkillLibraryController {
           "skills.library.read",
           { skillId: receipt.entry.skillId, revision: receipt.entry.revision },
         );
-        if (!this.gateway.isCurrent(draft.connection)) {
-          return;
-        }
         draft.content = read.content;
         draft.files = read.files;
         draft.baseFiles = read.files.map((file) => ({ ...file }));
@@ -461,9 +358,6 @@ export class SkillLibraryController {
       assertUploadsEnabled(this.config());
       const [file] = files;
       if (file && files.length === 1 && file.name.toLowerCase().endsWith(".zip")) {
-        if (this.createTarget === "workspace") {
-          throw new Error(t("skillLibrary.workspaceTextOnly"));
-        }
         if (!this.list?.profileId) {
           throw new Error(t("skillLibrary.signIn"));
         }

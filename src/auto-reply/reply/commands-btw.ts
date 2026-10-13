@@ -39,10 +39,8 @@ export const handleBtwCommand: CommandHandler = defineAuthorizedTextCommand(
     const sessionAgentId = params.agentId;
     const agentDir = params.agentDir ?? resolveAgentDir(params.cfg, sessionAgentId);
 
-    const rejectQuestion = (text: string) => ({
-      shouldContinue: false,
-      reply: { text, btw: { question }, isError: true },
-    });
+    const rejectQuestion = (text: string) =>
+      commandReply({ text, btw: { question }, isError: true });
 
     if (toolPolicyRestrictsTools(params.ctx.ConversationToolPolicy)) {
       return rejectQuestion(
@@ -162,10 +160,7 @@ export const handleBtwCommand: CommandHandler = defineAuthorizedTextCommand(
       } finally {
         revokeMessageActionTurnCapability(messageActionTurnCapability);
       }
-      return {
-        shouldContinue: false,
-        reply: reply ? { ...reply, btw: { question } } : reply,
-      };
+      return commandReply(reply ? { ...reply, btw: { question } } : reply);
     } catch (error) {
       log.warn(`Side question failed: ${formatErrorMessage(error)}`);
       return rejectQuestion(

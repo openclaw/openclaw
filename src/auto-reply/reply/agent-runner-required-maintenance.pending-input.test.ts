@@ -44,6 +44,12 @@ type ModelRequest = {
   messages: Array<{ role: string; content: unknown; tool_call_id?: string }>;
   tools?: Array<{ function?: { name?: string } }>;
 };
+// Keep injected prompt/tool growth out of this pending-input test. Reported usage
+// still crosses preflight pressure once the approved input is added, while the
+// rendered request fits without a second, unrelated overflow-recovery compaction.
+const contextTokens = 65_536;
+const priorInputTokens = 45_000;
+
 const providerText = (content: unknown) =>
   extractTextFromChatContent(content, { joinWith: "\n", normalizeText: (text) => text }) ?? "";
 
@@ -186,10 +192,12 @@ describe("required maintenance with restart-safe admitted input", () => {
             defaults: {
               workspace: state.workspaceDir,
               model: { primary: "test-provider/test-model" },
+              // Retain the newest archive under the scaled provider-usage estimate.
+              compaction: { keepRecentTokens: 32_000 },
             },
           },
           session: { store: storePath },
-          tools: { profile: "coding" },
+          tools: { profile: "coding", allow: ["read", "write"] },
           models: {
             providers: {
               "test-provider": {
@@ -202,8 +210,8 @@ describe("required maintenance with restart-safe admitted input", () => {
                     name: "Synthetic model",
                     reasoning: false,
                     input: ["text"],
-                    contextWindow: 32_768,
-                    contextTokens: 32_768,
+                    contextWindow: contextTokens,
+                    contextTokens,
                     maxTokens: 8_192,
                     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                   },
@@ -232,7 +240,7 @@ describe("required maintenance with restart-safe admitted input", () => {
           let entry: SessionEntry = {
             sessionId,
             updatedAt: Date.now(),
-            totalTokens: 19_000,
+            totalTokens: priorInputTokens,
             totalTokensFresh: true,
             totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
           };
@@ -242,10 +250,10 @@ describe("required maintenance with restart-safe admitted input", () => {
           // a complete prefix for the earlier retention-only pass.
           const priorTurns =
             history === "one archive"
-              ? ([[2_000, 19_000]] as const)
+              ? ([[2_000, priorInputTokens]] as const)
               : ([
                   [600, 10_000],
-                  [1_400, 19_000],
+                  [1_400, priorInputTokens],
                 ] as const);
           for (const [rows, inputTokens] of priorTurns) {
             seed.appendMessage({
@@ -287,6 +295,7 @@ describe("required maintenance with restart-safe admitted input", () => {
             context: { chatAbortControllers: new Map(), chatQueuedTurns: new Map() },
             entry,
             initialSessionEntry: entry,
+            lifecycleTimestamps: undefined,
             now: Date.now(),
             placement: undefined,
             request,
@@ -424,11 +433,16 @@ describe("required maintenance with restart-safe admitted input", () => {
           expect(foregroundMessages.findIndex(isModelRuntimeContextCarrier)).toBeGreaterThan(
             userIndex,
           );
-          expect(foregroundContexts[0]!.at(-1)).toMatchObject({
-            role: "user",
-            content: approved,
-            idempotencyKey: `${runId}:user`,
-          });
+          expect(foregroundContexts[0]!.slice(-3)).toMatchObject([
+            {
+              role: "user",
+              content: "Earlier archive context.\n".repeat(
+                history === "one archive" ? 2_000 : 1_400,
+              ),
+            },
+            { role: "assistant", content: [{ type: "text", text: "ACK" }] },
+            { role: "user", content: approved, idempotencyKey: `${runId}:user` },
+          ]);
         } finally {
           await waitForSessionMaintenance(sessionKey);
           recorder?.finishPendingInput?.("interrupted");

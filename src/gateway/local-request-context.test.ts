@@ -310,9 +310,10 @@ describe("local gateway request context", () => {
     const loadOwner = vi
       .spyOn(preparedModelCatalog, "loadPublishedPreparedModelCatalogOwnerSnapshot")
       .mockImplementation(() => new Promise(() => {}));
+    const recheckNativeLogin = vi.fn();
     const readOwner = vi
       .spyOn(preparedModelCatalog, "getPublishedPreparedModelCatalogOwnerSnapshot")
-      .mockReturnValue(asPublishedOwner(candidate));
+      .mockReturnValue({ ...asPublishedOwner(candidate), recheckNativeLogin });
 
     const result = await withLocalGatewayRequestScope(
       { deps: {} as CliDeps, getRuntimeConfig: () => cfg },
@@ -321,7 +322,8 @@ describe("local gateway request context", () => {
 
     expect(result).toMatchObject({ ok: true, payload: { models: [] } });
     expect(loadOwner).not.toHaveBeenCalled();
-    expect(readOwner).toHaveBeenCalledOnce();
+    expect(readOwner).toHaveBeenCalledTimes(2);
+    expect(recheckNativeLogin).toHaveBeenCalledOnce();
     loadOwner.mockRestore();
     readOwner.mockRestore();
   });

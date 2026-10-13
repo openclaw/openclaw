@@ -117,6 +117,11 @@
         ]
       }
     },
+    "aliases": {
+      "x-ai": {
+        "provider": "xai"
+      }
+    },
     "discovery": {
       "xai": "refreshable"
     },

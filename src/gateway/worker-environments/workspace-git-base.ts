@@ -45,7 +45,7 @@ export async function prepareWorkerProjectSnapshot(params: {
   namespace: string;
   baseCommit?: string;
   signal?: AbortSignal;
-}): Promise<WorkerLocalProjectSnapshot | undefined> {
+}): Promise<WorkerLocalProjectSnapshot | null | undefined> {
   params.signal?.throwIfAborted();
   const root = await fsp.realpath(params.localPath);
   const options = {
@@ -97,6 +97,11 @@ export async function prepareWorkerProjectSnapshot(params: {
   const baseCommit = head.stdout.trim();
   if (!COMMIT_PATTERN.test(baseCommit)) {
     throw new Error("Worker workspace Git base is not a commit id");
+  }
+  if ((await requireGit(root, ["cat-file", "-s", `${baseCommit}^{tree}`], options)) === "0") {
+    // Only a committed empty tree admits runtime-only preparation. Undefined
+    // remains unavailable/unborn; session Git metadata still travels through sync.
+    return null;
   }
   const { canonicalRoot, commonDir } = await resolveGitRepositoryPaths(root, options);
   const origin = await runGit(root, ["remote", "get-url", "origin"], options);

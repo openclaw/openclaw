@@ -6,6 +6,7 @@ import type {
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { resolveOpenAIRuntimeProvider } from "../../agents/openai-routing.js";
+import type { ReplyDeliveryState } from "../../agents/reply-completion.js";
 import type { CompactionRequestBudget } from "../../agents/sessions/compaction/request-budget.js";
 import { resolveGroupSessionKey } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
@@ -14,7 +15,6 @@ import {
   isMarkdownCapableMessageChannel,
   resolveMessageChannel,
 } from "../../utils/message-channel.js";
-import type { PartialReplyPayload } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../types.js";
 import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import { resolveTerminalReplyDelivery } from "./agent-runner-core.js";
@@ -54,6 +54,26 @@ export async function runEmbeddedFallbackCandidate(
   compactionRequestBudget?: CompactionRequestBudget;
 }> {
   const turn = params.turn;
+  const resolveReplyDeliveryFacts: NonNullable<
+    RunEmbeddedAgentInternalParams["resolveReplyDeliveryFacts"]
+  > = async (minimumAssistantMessageIndex) => {
+    let source: ReplyDeliveryState = "pending";
+    const terminal = await resolveTerminalReplyDelivery({
+      blockReplyPipeline: turn.blockReplyPipeline,
+      directBlockDeliveries: params.directBlockDeliveries,
+      minimumAssistantMessageIndex,
+      resolveReplyDelivery: async (minimum) => {
+        const facts = await turn.opts?.resolveReplyDeliveryFacts?.(minimum);
+        if (facts) {
+          source = facts.source;
+          return facts.terminal;
+        }
+        source = (await turn.opts?.resolveReplyDelivery?.(minimum)) ?? "missing";
+        return source;
+      },
+    });
+    return { source, terminal };
+  };
   let maintenanceAuthProfile: CompletedAgentAuthSelection | undefined;
   let compactionRequestBudget: CompactionRequestBudget | undefined;
   const sourceReplyDeliveryRuntime = readSourceReplyDeliveryRuntime(params.candidateRun);
@@ -62,7 +82,7 @@ export async function runEmbeddedFallbackCandidate(
     ...params.candidateFastMode,
     thinkLevel: params.candidateThinkLevel,
   };
-  const { embeddedContext, senderContext, runBaseParams } = await buildEmbeddedRunExecutionParams({
+  const runBaseParams = await buildEmbeddedRunExecutionParams({
     run: candidateRun,
     replyRoute: turn.followupRun,
     sessionCtx: turn.sessionCtx,
@@ -121,7 +141,7 @@ export async function runEmbeddedFallbackCandidate(
     let eventHandler: ReturnType<typeof createAgentRunEventHandler> | undefined;
     const result = await params.timing.measure("embedded_run", () => {
       const embeddedRunParams: RunEmbeddedAgentInternalParams = {
-        ...embeddedContext,
+        ...runBaseParams,
         lifecycleGeneration: params.getLifecycleGeneration(),
         allowGatewaySubagentBinding: true,
         cronCreatorAuthorityCapability: turn.opts?.cronCreatorAuthorityCapability,
@@ -132,8 +152,6 @@ export async function runEmbeddedFallbackCandidate(
           normalizeOptionalString(turn.sessionCtx.GroupChannel) ??
           normalizeOptionalString(turn.sessionCtx.GroupSubject),
         groupSpace: normalizeOptionalString(turn.sessionCtx.GroupSpace),
-        ...senderContext,
-        ...runBaseParams,
         ...buildFallbackCandidateTurnParams(params),
         contextWindow: turn.getActiveSessionEntry()?.contextWindow,
         provider: embeddedRunProvider,
@@ -194,31 +212,7 @@ export async function runEmbeddedFallbackCandidate(
         blockReplyBreak: turn.resolvedBlockStreamingBreak,
         blockReplyChunking: turn.blockReplyChunking,
         // Subscriber callbacks are detached. Stage channel presentation before typing I/O.
-        onPartialReply: async (payload) => {
-          const classified = params.presentation.classifyStreamingPartial(payload);
-          if (classified.skip || !classified.text) {
-            return false;
-          }
-          const textForTyping = classified.text;
-          let didMaterialize = false;
-          let materializedText: string | undefined;
-          const partialPayload: PartialReplyPayload = {
-            get text() {
-              if (!didMaterialize) {
-                const sanitized = params.presentation.sanitizeStreamingText(textForTyping, false);
-                materializedText = sanitized.skip ? undefined : sanitized.text;
-                didMaterialize = true;
-              }
-              return materializedText;
-            },
-            mediaUrls: payload.mediaUrls,
-          };
-          const onPartialReply = turn.opts?.onPartialReply;
-          return await params.presentation.presentWithTyping(
-            turn.typingSignals.signalTextDelta(textForTyping),
-            () => (onPartialReply ? onPartialReply(partialPayload) : false),
-          );
-        },
+        onPartialReply: (payload) => params.presentation.presentPartialReply(payload, "embedded"),
         onAssistantMessageStart: async () => {
           await params.presentation.presentWithTyping(turn.typingSignals.signalMessageStart(), () =>
             turn.opts?.onAssistantMessageStart?.(),
@@ -271,13 +265,9 @@ export async function runEmbeddedFallbackCandidate(
         },
         // Flush-before-tool requires a handler even when regular block streaming is off.
         onBlockReply: params.presentation.blockReplyHandler,
-        resolveReplyDelivery: (minimumAssistantMessageIndex) =>
-          resolveTerminalReplyDelivery({
-            blockReplyPipeline: turn.blockReplyPipeline,
-            directBlockDeliveries: params.directBlockDeliveries,
-            minimumAssistantMessageIndex,
-            resolveReplyDelivery: turn.opts?.resolveReplyDelivery,
-          }),
+        resolveReplyDelivery: async (minimumAssistantMessageIndex) =>
+          (await resolveReplyDeliveryFacts(minimumAssistantMessageIndex)).terminal,
+        resolveReplyDeliveryFacts,
         onBlockReplyFlush:
           turn.blockStreamingEnabled && turn.blockReplyPipeline
             ? async () => {

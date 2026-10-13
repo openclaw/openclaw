@@ -41,6 +41,13 @@ export async function closeAcpRuntimeForSession(params: {
   assertCurrent?: () => void;
 }) {
   params.assertCurrent?.();
+  const readMeta = (sessionKey: string) =>
+    readAcpSessionMetaAsync({
+      sessionKey,
+      agentId: params.agentId,
+      cfg: params.cfg,
+      assertCurrent: params.assertCurrent,
+    });
   const sessionKeys = Array.from(
     new Set(
       [params.sessionKey, ...(params.fallbackSessionKeys ?? [])]
@@ -51,12 +58,7 @@ export async function closeAcpRuntimeForSession(params: {
   let acpMeta: SessionAcpMeta | undefined;
   let acpSessionKey = params.sessionKey;
   for (const sessionKey of sessionKeys) {
-    acpMeta = await readAcpSessionMetaAsync({
-      sessionKey,
-      agentId: params.agentId,
-      cfg: params.cfg,
-      assertCurrent: params.assertCurrent,
-    });
+    acpMeta = await readMeta(sessionKey);
     params.assertCurrent?.();
     if (acpMeta) {
       acpSessionKey = sessionKey;
@@ -130,13 +132,7 @@ export async function closeAcpRuntimeForSession(params: {
         meta: acpMeta,
       });
     } else {
-      const latestMeta =
-        (await readAcpSessionMetaAsync({
-          sessionKey: acpSessionKey,
-          agentId: params.agentId,
-          cfg: params.cfg,
-          assertCurrent: params.assertCurrent,
-        })) ?? acpMeta;
+      const latestMeta = (await readMeta(acpSessionKey)) ?? acpMeta;
       params.assertCurrent?.();
       if (
         !latestMeta.identity ||

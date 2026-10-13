@@ -12,7 +12,7 @@ import {
 import { addSession, deleteSession, markExited } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { createProcessTool } from "./bash-tools.process.js";
-import type { handleToolExecutionEnd } from "./embedded-agent-subscribe.handlers.tools.js";
+import type { handleToolExecutionEnd } from "./embedded-agent-subscribe.handlers.tools.completion.js";
 import type { ToolHandlerContext } from "./embedded-agent-subscribe.handlers.types.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 

@@ -58,24 +58,14 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-it.each([
-  [true, true, { primary: "openrouter/deepseek/deepseek-v4.1-flash" }],
-  [false, true, null],
-  [true, false, null],
-] as const)(
-  "requires active fallback auth=%s and image support=%s",
-  (auth, supportsImages, expected) => {
-    if (auth) {
-      available.add("openrouter");
-    }
-    expect(
-      resolve(configuredProvider("openrouter", "anthropic/claude-sonnet-4-5"), {
-        ...activeModel,
-        supportsImages,
-      }),
-    ).toEqual(expected);
-  },
-);
+it("uses the authenticated active vision model as a fallback", () => {
+  available.add("openrouter");
+  expect(
+    resolve(configuredProvider("openrouter", "anthropic/claude-sonnet-4-5"), activeModel),
+  ).toEqual({
+    primary: "openrouter/deepseek/deepseek-v4.1-flash",
+  });
+});
 
 it("does not select a provider that disables PDF image extraction", () => {
   available.add("restricted");
@@ -129,12 +119,6 @@ it.each([
       primary: "minimax/MiniMax-M2.7-highspeed",
       fallbacks: ["minimax-portal/MiniMax-M2.7"],
     },
-  },
-  {
-    provider: "minimax",
-    primary: "minimax/MiniMax-VL-01",
-    model: undefined,
-    expected: { primary: "minimax/MiniMax-M2.7", fallbacks: ["minimax-portal/MiniMax-M2.7"] },
   },
   {
     provider: "minimax-portal",

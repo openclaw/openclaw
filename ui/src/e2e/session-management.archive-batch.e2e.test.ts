@@ -10,6 +10,7 @@ import {
   installMockGateway,
   requireRecord,
   sessionsListResponse,
+  waitForConfirmModal,
 } from "./session-management.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
@@ -72,9 +73,10 @@ suite.define(() => {
         pinned: true,
         pinnedAt: baseTime - 1_000,
       });
+      // A legacy shared pin is not a personal navigation preference.
       expect(
         await rowFor(batchKeys[0])
-          .getByRole("button", { name: "Unpin session", exact: true })
+          .getByRole("button", { name: "Pin session", exact: true })
           .count(),
       ).toBe(1);
       const listCountBeforeBatch = (await gateway.getRequests("sessions.list", rosterMatch)).length;
@@ -94,6 +96,24 @@ suite.define(() => {
       ).toBe(true);
       await captureUiProof(suite, page, "sidebar-multi-select-archive-menu.png");
       await page.keyboard.press("A");
+      let confirm = await waitForConfirmModal(page);
+      await confirm.getByText("This selection contains active work.", { exact: false }).waitFor();
+      await captureUiProof(suite, page, "sidebar-multi-select-archive-confirm.png");
+      expect(await gateway.getRequests("sessions.patchMany")).toEqual([]);
+      if (scenario === "refreshed") {
+        await confirm.getByRole("button", { name: "Cancel", exact: true }).click();
+        for (const key of batchKeys) {
+          await rowFor(key).waitFor({ state: "visible" });
+        }
+        expect(await gateway.getRequests("sessions.patchMany")).toEqual([]);
+        await rowFor(batchKeys[0]).click({ button: "right" });
+        await page
+          .locator("openclaw-session-menu")
+          .getByRole("menuitem", { name: "Archive 3" })
+          .click();
+        confirm = await waitForConfirmModal(page);
+      }
+      await confirm.getByRole("button", { name: "Archive 3", exact: true }).click();
 
       const patchMany = await gateway.waitForRequest("sessions.patchMany");
       for (const key of batchKeys) {
@@ -189,20 +209,10 @@ suite.define(() => {
           targets: patchManyParams.targets,
           patch: { archived: false },
         });
-        await gateway.deferNext("sessions.patchMany");
         // Generated replies commit the canonical fixture without emitting session events.
+        // Sidebar Undo restores archive state, never re-pins shared session metadata.
         await gateway.resolveDeferred("sessions.patchMany");
-        const repin = await gateway.waitForRequest("sessions.patchMany", { after: 2 });
-        expect(requireRecord(repin.params)).toEqual({
-          targets: [
-            {
-              key: batchKeys[0],
-              agentId: "main",
-              expectedSessionId: `session:${batchKeys[0]}`,
-            },
-          ],
-          patch: { pinned: true },
-        });
+        expect(await gateway.getRequests("sessions.patchMany")).toHaveLength(2);
         if (scenario === "Undo with failed refresh") {
           expect(await readPinnedSessionState()).toEqual({
             archived: false,
@@ -210,7 +220,6 @@ suite.define(() => {
             pinnedAt: undefined,
           });
         }
-        await gateway.resolveDeferred("sessions.patchMany");
         await gateway.waitForRequest("sessions.list", {
           after: listCountBeforeUndo,
           match: rosterMatch,
@@ -235,14 +244,16 @@ suite.define(() => {
           }
           await expect.poll(readPinnedSessionState).toMatchObject({
             archived: false,
-            pinned: true,
-            ...(scenario === "Undo with failed refresh" ? { pinnedAt: undefined } : {}),
+            pinned: false,
+            pinnedAt: undefined,
           });
           expect(
             await rowFor(batchKeys[0])
-              .getByRole("button", { name: "Unpin session", exact: true })
+              .getByRole("button", { name: "Pin session", exact: true })
               .count(),
           ).toBe(1);
+          expect(await gateway.getRequests("sessions.patchMany")).toHaveLength(2);
+          expect(await gateway.getRequests("sessions.patch")).toEqual([]);
           expect(new URL(page.url()).pathname).toBe(controlUiSessionPath("agent:main:main"));
         } finally {
           await captureUiProof(suite, page, "batch-archive-undo-without-events.png");

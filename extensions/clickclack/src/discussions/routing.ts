@@ -3,12 +3,16 @@ import type { CoreConfig } from "../types.js";
 import { hasPendingDiscussionOpenForDestination } from "./binding-generation.js";
 import {
   attachBindingToCurrentActiveSession,
+  bindingMatchesActiveSessionIncarnation,
   getClickClackDiscussionBindingStore,
   type ClickClackDiscussionBinding,
 } from "./binding-store.js";
 import { resolveDiscussionBindingAccount } from "./eligibility.js";
 import { discussionSessionKey } from "./naming.js";
-import { isClickClackDiscussionChannelRevoked } from "./revoked-channel-store.js";
+import {
+  isClickClackDiscussionChannelRevoked,
+  isClickClackDiscussionChannelRevokedAsync,
+} from "./revoked-channel-store.js";
 
 type ClickClackDiscussionRoute = {
   agentId: string;
@@ -29,13 +33,14 @@ export async function resolveClickClackDiscussionRoute(params: {
   channelId: string;
 }): Promise<ClickClackDiscussionRouteResolution> {
   const store = getClickClackDiscussionBindingStore(params.runtime);
-  let matched = store.getByChannel(params.serverBaseUrl, params.channelId);
+  await store.prepare();
+  let matched = await store.getByChannel(params.serverBaseUrl, params.channelId);
   let pending = false;
   if (!matched) {
     pending = await hasPendingDiscussionOpenForDestination(params);
-    matched = store.getByChannel(params.serverBaseUrl, params.channelId);
+    matched = await store.getByChannel(params.serverBaseUrl, params.channelId);
   }
-  if (isClickClackDiscussionChannelRevoked(params)) {
+  if (await isClickClackDiscussionChannelRevokedAsync({ ...params, binding: matched?.binding })) {
     return { state: "revoked" };
   }
   if (!matched) {
@@ -56,7 +61,7 @@ export async function resolveClickClackDiscussionRoute(params: {
   }
   let binding: ClickClackDiscussionBinding | undefined;
   try {
-    binding = attachBindingToCurrentActiveSession({
+    binding = await attachBindingToCurrentActiveSession({
       runtime: params.runtime,
       store,
       sessionKey: matched.sessionKey,
@@ -71,6 +76,19 @@ export async function resolveClickClackDiscussionRoute(params: {
     return { state: "revoked" };
   }
   if (!binding) {
+    return { state: "revoked" };
+  }
+  const current = store.get(matched.sessionKey);
+  if (
+    !current ||
+    current.externalRef !== binding.externalRef ||
+    current.channelId !== binding.channelId ||
+    isClickClackDiscussionChannelRevoked({ ...params, binding: current }) ||
+    !bindingMatchesActiveSessionIncarnation(params.runtime, matched.sessionKey, binding) ||
+    // SAFETY: This fresh SDK config is schema-validated; account resolution only reads it.
+    resolveDiscussionBindingAccount(params.runtime.config.current() as CoreConfig, binding)
+      .state !== "active"
+  ) {
     return { state: "revoked" };
   }
   const sessionKey = discussionSessionKey({

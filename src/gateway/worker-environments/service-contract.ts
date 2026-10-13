@@ -22,7 +22,7 @@ import type { WorkerPlacementAuthorization } from "./placement-authorization.js"
 import type {
   WorkerPlacementMoveSource,
   WorkerPlacementMoveTarget,
-} from "./placement-move-intent.js";
+} from "./placement-move-intent.types.js";
 import type { WorkerEnvironmentPlacementFacts } from "./placement-read-projection.types.js";
 import type {
   WorkerSessionPlacementDispatchIdentity,
@@ -58,6 +58,7 @@ export function deriveEnvironmentIntent(idempotencyKey: string): {
 
 /** Non-secret worker projection available to Gateway request handlers. */
 export type WorkerEnvironmentServiceRecord = {
+  startStatus?: import("../../../packages/gateway-protocol/src/schema/environments.js").WorkerEnvironmentStartStatus;
   environmentId: string;
   providerId: string;
   profileId: string;

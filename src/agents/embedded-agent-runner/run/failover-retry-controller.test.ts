@@ -84,6 +84,20 @@ describe("createEmbeddedRunFailoverRetryController", () => {
     rateLimitContext.logFallbackDecision.mockClear();
   });
 
+  it("reports the one output-limit continuation independently of transient attempts", async () => {
+    const controller = createController(vi.fn(async () => false));
+    await controller.maybeRetryTransient({ reason: "server_error" });
+    const onRetry = vi.fn();
+    expect(await controller.maybeRetryTransient({ reason: "output_limit", onRetry })).toBe(true);
+    expect(mocks.warn).toHaveBeenLastCalledWith(
+      expect.stringContaining("output-limit continuation 1/1"),
+    );
+    expect(onRetry).toHaveBeenCalledWith(
+      expect.objectContaining({ attempt: 1, maxRetries: 1, reason: "output_limit" }),
+    );
+    expect(await controller.maybeRetryTransient({ reason: "output_limit" })).toBe(false);
+  });
+
   it("reports bounded retry-owner reasons without provider or credential metadata", async () => {
     const emit = vi.spyOn(diagnosticsTimeline, "emitDiagnosticsTimelineEvent");
     try {
@@ -449,7 +463,7 @@ describe("createEmbeddedRunFailoverRetryController", () => {
     const advanceAuthProfile = vi.fn(async () => true);
     const controller = createController(advanceAuthProfile);
 
-    await expect(controller.advanceRateLimitAuthProfile(rateLimitContext)).resolves.toBe(true);
+    await expect(controller.advanceAuthProfile("rate_limit", rateLimitContext)).resolves.toBe(true);
     await expect(controller.maybeRetryTransient({ reason: "rate_limit" })).resolves.toBe(true);
 
     expect(advanceAuthProfile).toHaveBeenCalledTimes(1);
@@ -517,19 +531,46 @@ describe("createEmbeddedRunFailoverRetryController", () => {
     }
   });
 
+  it("continues transient recovery when the retry status callback rejects", async () => {
+    const closeRetryWait = vi.fn();
+    const onRetryWait = vi.fn(() => closeRetryWait);
+    const controller = createController(
+      vi.fn(async () => false),
+      false,
+      undefined,
+      onRetryWait,
+    );
+    controller.observeAttempt({ providerRetryMaxRetries: 1 });
+    const onRetry = vi.fn(async () => {
+      throw new Error("event sink disconnected");
+    });
+
+    await expect(controller.maybeRetryTransient({ reason: "server_error", onRetry })).resolves.toBe(
+      true,
+    );
+
+    expect(onRetry).toHaveBeenCalledOnce();
+    expect(onRetryWait).toHaveBeenCalledOnce();
+    expect(mocks.sleepWithAbort).toHaveBeenCalledOnce();
+    expect(closeRetryWait).toHaveBeenCalledWith(true);
+    expect(controller.transientRetryCount).toBe(1);
+  });
+
   it("escalates after one successful rate-limit rotation without advancing again", async () => {
     const advanceAuthProfile = vi.fn(async () => true);
     const controller = createController(advanceAuthProfile, true);
 
-    await expect(controller.advanceRateLimitAuthProfile(rateLimitContext)).resolves.toBe(true);
-    await expect(controller.advanceRateLimitAuthProfile(rateLimitContext)).rejects.toMatchObject({
+    await expect(controller.advanceAuthProfile("rate_limit", rateLimitContext)).resolves.toBe(true);
+    await expect(
+      controller.advanceAuthProfile("rate_limit", rateLimitContext),
+    ).rejects.toMatchObject({
       name: "FailoverError",
       reason: "rate_limit",
       status: 429,
     } satisfies Partial<FailoverError>);
-    await expect(controller.advanceRateLimitAuthProfile(rateLimitContext)).rejects.toBeInstanceOf(
-      FailoverError,
-    );
+    await expect(
+      controller.advanceAuthProfile("rate_limit", rateLimitContext),
+    ).rejects.toBeInstanceOf(FailoverError);
 
     expect(advanceAuthProfile).toHaveBeenCalledTimes(1);
     expect(rateLimitContext.logFallbackDecision).toHaveBeenCalledTimes(2);

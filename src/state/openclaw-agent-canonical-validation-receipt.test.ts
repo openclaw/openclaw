@@ -1,7 +1,10 @@
 import { statSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
+import { runNodeScript } from "../../test/helpers/run-node-script.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { stateNativeProcessEntrypoints } from "./native-process-runtime.test-support.js";
 import {
   hasPersistedOpenClawAgentCanonicalValidation,
   recordOpenClawAgentCanonicalValidation,
@@ -35,7 +38,7 @@ it.each(["legacy-birthtime", "missing-column"] as const)(
           .prepare("UPDATE session_key_contract SET canonical_ready = ? WHERE id = 1")
           .run(JSON.stringify([1, "main", `${file.dev}:${file.ino}`, birthtime]));
         expect(hasPersistedOpenClawAgentCanonicalValidation(database)).toBe(
-          process.platform !== "linux" || birthtime === "0",
+          (process.platform !== "linux" && process.platform !== "android") || birthtime === "0",
         );
       } else {
         expect(hasPersistedOpenClawAgentCanonicalValidation(database)).toBe(false);
@@ -93,4 +96,15 @@ it("requires admitted physical identity and write admission for persisted canoni
       raw.close();
     }
   });
+});
+
+it("shares admitted canonical proof with readers and publishes repair changes only after commit", async () => {
+  const result = await runNodeScript(
+    (workerArgv) =>
+      workerArgv(resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.canonicalReceipt)),
+    process.env,
+    undefined,
+  );
+  expect(result.error, result.stderr).toBeUndefined();
+  expect(result.status, result.stderr).toBe(0);
 });

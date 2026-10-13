@@ -56,6 +56,9 @@ export class CodexEphemeralTurn {
             }
           } else if (notification.method === "rawResponse/completed") {
             this.usage.record(params);
+          } else if (notification.method === "thread/tokenUsage/updated") {
+            // thread/fork cannot opt into raw events, so forks report usage only here.
+            this.usage.recordThread(params);
           } else if (notification.method === "turn/completed") {
             const completed = readCodexTurnCompletedNotification(params);
             if (completed) {

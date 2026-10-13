@@ -23,10 +23,14 @@ function installWindowsPathFixture(params: {
   const dirname = path.dirname;
   const relative = path.relative;
   const isAbsolute = path.isAbsolute;
+  const join = path.join;
+  const parse = path.parse;
   const win32Resolve = path.win32.resolve;
   const win32Dirname = path.win32.dirname;
   const win32Relative = path.win32.relative;
   const win32IsAbsolute = path.win32.isAbsolute;
+  const win32Join = path.win32.join;
+  const win32Parse = path.win32.parse;
   vi.spyOn(process, "platform", "get").mockReturnValue("win32");
   vi.spyOn(path, "resolve").mockImplementation((...parts) =>
     parts.some(isWindowsPath) ? win32Resolve(...parts) : resolve(...parts),
@@ -39,6 +43,12 @@ function installWindowsPathFixture(params: {
   );
   vi.spyOn(path, "isAbsolute").mockImplementation((value) =>
     isWindowsPath(value) ? win32IsAbsolute(value) : isAbsolute(value),
+  );
+  vi.spyOn(path, "join").mockImplementation((...parts) =>
+    parts.some(isWindowsPath) ? win32Join(...parts) : join(...parts),
+  );
+  vi.spyOn(path, "parse").mockImplementation((value) =>
+    isWindowsPath(value) ? win32Parse(value) : parse(value),
   );
   const statSync = fs.statSync;
   const stat = vi.spyOn(fs, "statSync").mockImplementation(((value, options) => {
@@ -72,6 +82,10 @@ function installWindowsPathFixture(params: {
         const resolved = Buffer.from(params.canonicalRoot ?? params.root);
         return encoding === "buffer" ? resolved : resolved.toString(encoding ?? "utf8");
       }
+      if (params.source && String(value) === win32Dirname(params.source)) {
+        const resolved = Buffer.from(String(value));
+        return encoding === "buffer" ? resolved : resolved.toString(encoding ?? "utf8");
+      }
       return encoding === "buffer"
         ? realpathSync(value, "buffer")
         : realpathSync(value, { encoding });
@@ -81,6 +95,53 @@ function installWindowsPathFixture(params: {
 }
 
 describe("Windows plugin alias admission", () => {
+  it.each([
+    String.raw`C:\Program Files\nodejs\node_modules\@openclaw\deepseek-provider`,
+    String.raw`C:\Users\Tester\scoop\apps\nodejs\current\node_modules\@openclaw\deepseek-provider`,
+  ])("opens a plugin beneath an ancestor junction at %s", (aliasRoot) => {
+    const root = String.raw`D:\node-versions\24.19\node_modules\@openclaw\deepseek-provider`;
+    const source = `${aliasRoot}\\index.js`;
+    const canonicalSource = `${root}\\index.js`;
+    const file = fs.statSync(new URL(import.meta.url), { bigint: true });
+    const numericFile = fs.statSync(new URL(import.meta.url));
+    const stat = installWindowsPathFixture({ root, source });
+    const fixtureStat = stat.getMockImplementation()!;
+    stat.mockImplementation(((value, options) =>
+      String(value) === canonicalSource
+        ? options?.bigint
+          ? file
+          : numericFile
+        : fixtureStat(value, options)) as typeof fs.statSync);
+    vi.mocked(fs.realpathSync).mockImplementation(((value: fs.PathLike) =>
+      String(value).replace(aliasRoot, root)) as typeof fs.realpathSync);
+    const open = vi.spyOn(fs, "openSync").mockReturnValue(123);
+    const close = vi.spyOn(fs, "closeSync").mockImplementation(() => {});
+    vi.spyOn(fs, "fstatSync").mockImplementation(((fd, options) => {
+      expect(fd).toBe(123);
+      return options?.bigint ? file : numericFile;
+    }) as typeof fs.fstatSync);
+
+    const opened = openPluginRootFileSync({
+      rootPath: aliasRoot,
+      rootRealPath: root,
+      filePath: source,
+      rejectHardlinks: true,
+    });
+    try {
+      expect(opened, !opened.ok ? String(opened.error) : undefined).toMatchObject({
+        ok: true,
+        path: canonicalSource,
+        rootRealPath: root,
+      });
+      expect(open).toHaveBeenCalledWith(canonicalSource, expect.any(Number));
+    } finally {
+      if (opened.ok) {
+        fs.closeSync(opened.fd);
+      }
+    }
+    expect(close).toHaveBeenCalledWith(123);
+  });
+
   it.each([
     {
       root: String.raw`C:\plugins\trusted`,

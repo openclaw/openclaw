@@ -24,6 +24,9 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
+import { deriveMeetingTranscriptSessionColumns } from "../transcripts/store-columns.js";
+import { meetingTranscriptDb } from "../transcripts/store-sqlite.js";
+import { executeSqliteQuerySync } from "./kysely-sync.js";
 import { snapshotFiles } from "./state-migrations.caller-mode.test-helpers.js";
 import {
   autoMigrateLegacyState,
@@ -428,24 +431,24 @@ describe("legacy state migration caller storage", () => {
       stateDatabase.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;");
       stateDatabase.exec("PRAGMA wal_checkpoint(TRUNCATE)");
       const historicalSlug = `meeting-${"x".repeat(2200)}`;
-      stateDatabase
-        .prepare(
-          `INSERT INTO meeting_transcript_sessions
-             (session_id, started_at, selector, export_key, session_slug, provider_id,
-              source_json, created_at_ms, updated_at_ms)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          "wal-meeting",
-          "2026-09-03T00:00:00.000Z",
-          `2026-09-03/${historicalSlug}`,
-          `2026-09-03/${historicalSlug}`,
-          historicalSlug,
-          "manual-transcript",
-          JSON.stringify({ providerId: "manual-transcript", channelId: "room" }),
-          1,
-          1,
-        );
+      const sourceJson = JSON.stringify({ providerId: "manual-transcript", channelId: "room" });
+      executeSqliteQuerySync(
+        stateDatabase,
+        meetingTranscriptDb(stateDatabase)
+          .insertInto("meeting_transcript_sessions")
+          .values({
+            session_id: "wal-meeting",
+            started_at: "2026-09-03T00:00:00.000Z",
+            selector: `2026-09-03/${historicalSlug}`,
+            export_key: `2026-09-03/${historicalSlug}`,
+            session_slug: historicalSlug,
+            provider_id: "manual-transcript",
+            source_json: sourceJson,
+            ...deriveMeetingTranscriptSessionColumns(sourceJson, null),
+            created_at_ms: 1,
+            updated_at_ms: 1,
+          }),
+      );
       expect(fs.existsSync(`${agentDatabasePath}-wal`)).toBe(true);
       expect(fs.existsSync(`${stateDatabasePath}-wal`)).toBe(true);
 

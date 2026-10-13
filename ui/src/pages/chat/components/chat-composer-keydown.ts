@@ -2,14 +2,14 @@ import type { ChatFollowUpMode, ChatSendShortcut } from "../../../app/settings.t
 import { isComposingKeyboardEvent } from "../../../lib/ime.ts";
 import { steerableQueuedMessage } from "../chat-queue.ts";
 import { restoreHistoryCaret } from "./chat-composer-dom.ts";
-import type { GoalComposerController } from "./chat-composer-goal-mode.ts";
-import type { HumanMentionMenuHost } from "./chat-composer-mention-menu.ts";
-import { handleSkillMenuKeydown, type SkillMenuHost } from "./chat-composer-skill-menu.ts";
+import type { GoalComposerController } from "./chat-composer-goal-mode.tsx";
+import type { HumanMentionMenuHost } from "./chat-composer-mention-menu.tsx";
+import { handleSkillMenuKeydown, type SkillMenuHost } from "./chat-composer-skill-menu.tsx";
 import {
   handleInlineSlashArgKeydown,
   handleSlashMenuKeydown,
   type SlashMenuHost,
-} from "./chat-composer-slash-menu.ts";
+} from "./chat-composer-slash-menu.tsx";
 import { commitComposerDraft } from "./chat-composer-state.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 

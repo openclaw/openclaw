@@ -95,9 +95,7 @@ function sessionAttentionTooltipParts(attention: SidebarSessionAttention) {
   };
 }
 
-export function sessionAttentionTooltipLabel(
-  attention: SidebarSessionAttention,
-): string | undefined {
+function sessionAttentionTooltipLabel(attention: SidebarSessionAttention): string | undefined {
   const { status, preview, more } = sessionAttentionTooltipParts(attention);
   return [status, preview, more].filter(Boolean).join("\n") || undefined;
 }

@@ -105,7 +105,6 @@ async function withTitleRows(
               now: NOW,
               includeDerivedTitles: true,
               includeLastMessage,
-              skipTranscriptUsageFallback: true,
               lightweightListRow: true,
             }),
           );
@@ -168,7 +167,11 @@ test("does not hydrate named transcript payloads for scalar title-only rows", as
       const previews = await render(true);
       expect(queries.textBytes.events + queries.blobBytes.events).toBeGreaterThan(0);
       expect(parse.mock.calls.some(([json]) => json.includes(NAMED_PAYLOAD))).toBe(true);
-      expect(previews.every((row) => row.lastMessagePreview?.startsWith("Preview"))).toBe(true);
+      for (const [index, row] of previews.entries()) {
+        expect(
+          row.lastMessagePreview?.startsWith(`Preview ${index}. ${NAMED_PAYLOAD_MARKER}`),
+        ).toBe(true);
+      }
       expect(JSON.stringify(withoutPreviews(previews))).toBe(JSON.stringify(titles));
       parse.mockRestore();
     },

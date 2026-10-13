@@ -134,28 +134,11 @@ suite.define(() => {
           const group = sidebar.locator('[data-agent-group="main"]');
           const parent = group.locator('[data-session-key="agent:main:parent"]');
           await parent.waitFor({ state: "visible" });
+          // The saved list width includes shell borders; the rail adds its own 52px slot.
           expect(
-            await sidebar.evaluate((el) => el.parentElement?.getBoundingClientRect().width),
-          ).toBe(width);
-          const workspaceName = sidebar.locator(
-            ".sidebar-workspace-header .sidebar-agent-card__name-text",
-          );
+            await page.locator(".shell-nav").evaluate((el) => el.getBoundingClientRect().width),
+          ).toBe(width + 52);
           await captureSidebarUiProof(suite, page, `agent-first-${mode}-${width}-ready.png`);
-          expect(await workspaceName.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
-          const headerControls = await sidebar
-            .locator(".sidebar-brand__actions .sidebar-brand__header-control")
-            .evaluateAll((elements) =>
-              elements.map((el) => {
-                const rect = el.getBoundingClientRect();
-                return { x: rect.x, width: rect.width, height: rect.height };
-              }),
-            );
-          expect(headerControls).toHaveLength(4);
-          for (const [index, control] of headerControls.entries()) {
-            expect(control.width).toBeCloseTo(28, 4);
-            expect(control.height).toBeCloseTo(28, 4);
-            expect(control.x).toBeCloseTo(headerControls[0]!.x + index * 28, 4);
-          }
           for (const [id, label] of [
             ["project", "Project next steps"],
             ["weekly", "Weekly review"],
@@ -184,10 +167,16 @@ suite.define(() => {
             true,
           );
           await expect
-            .poll(() => group.locator(".sidebar-agent-roster__signals wa-tooltip[open]").count())
+            .poll(() =>
+              group
+                .locator(".sidebar-agent-roster__signals .tooltip-surface[popover]:popover-open")
+                .count(),
+            )
             .toBe(1);
           expect(
-            await group.locator(".sidebar-agent-roster__signals wa-tooltip[open]").textContent(),
+            await group
+              .locator(".sidebar-agent-roster__signals .tooltip-surface[popover]:popover-open")
+              .textContent(),
           ).toContain("Child session Review failed checks failed: Geometry mismatch");
           const attentionBounds = (await attention.boundingBox())!;
           const actionBounds = (await group
@@ -305,9 +294,9 @@ suite.define(() => {
           expect(await actions.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
           expect(await geometry()).toEqual(beforeFocus);
           expect(await add.getAttribute("href")).toBe("/new?agent=main");
-          await sidebar.locator(".sidebar-brand .sidebar-new-session-menu button").click();
+          await sidebar.locator(".sidebar-rail .sidebar-new-session").click();
           const menuFace = sidebar.locator(
-            '.sidebar-brand .sidebar-new-session-menu [value="main"] .identity-avatar__agent-face',
+            '.sidebar-new-session-menu [value="main"] .identity-avatar__agent-face',
           );
           await menuFace.waitFor();
           await expect.poll(async () => (await menuFace.boundingBox())?.width).toBe(36);

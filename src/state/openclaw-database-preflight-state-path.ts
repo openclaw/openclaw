@@ -21,10 +21,7 @@ import {
   OPENCLAW_STATE_SCHEMA_VERSION,
 } from "./openclaw-state-db-contract.js";
 import { assertNoLegacyStateRuntimeRepair } from "./openclaw-state-db-fast-path.js";
-import {
-  readStateSchemaContentVersion,
-  readStateSchemaMigrationVersion,
-} from "./openclaw-state-db-schema-version.js";
+import { readStateSchemaContentVersion } from "./openclaw-state-db-schema-version.js";
 import {
   inspectOpenClawStateOwnershipFromDatabase,
   type OpenClawExternalStateOwnership,
@@ -103,7 +100,7 @@ export async function preflightOpenClawStateDatabasePath(
     }
     assertSqliteIntegrity(database, resolvedPath);
     ownership = inspectOpenClawStateOwnershipFromDatabase(database, resolvedPath);
-    if (readStateSchemaMigrationVersion(database) < OPENCLAW_STATE_SCHEMA_VERSION) {
+    if (readStateSchemaContentVersion(database) < OPENCLAW_STATE_SCHEMA_VERSION) {
       return result("migration-required", { requiresWrite: true });
     }
     if (foundVersion < contentVersion) {

@@ -59,6 +59,8 @@ type QueuedRefreshTestParams = {
 /** Registers queued compaction provider authority coverage. */
 export function registerQueuedProviderRefreshTest(params: QueuedRefreshTestParams): void {
   it("preserves an explicit sandbox in queued provider refresh authority", async () => {
+    // The harness resets modules before loading compaction; bind in that same module lifetime.
+    const { bindMemoryProvider } = await import("../../plugins/memory-provider-adapter.js");
     const refresh = vi.fn().mockResolvedValue(undefined);
     const close = vi.fn().mockResolvedValue(undefined);
     const audience = {
@@ -70,7 +72,23 @@ export function registerQueuedProviderRefreshTest(params: QueuedRefreshTestParam
     getMemoryProviderRuntimeMock.mockReturnValue({ open: vi.fn() });
     getMemoryProviderMock.mockResolvedValue({
       providerId: "records",
-      provider: { refresh, close },
+      provider: bindMemoryProvider(
+        {
+          capabilities: {
+            sources: ["sessions"],
+            candidates: [],
+            pagination: false,
+            projectFilter: false,
+          },
+          search: async () => ({ hits: [] }),
+          get: async () => ({ status: "not_found" }),
+          health: async () => ({ status: "ready" }),
+          refresh,
+          close,
+        },
+        "records",
+        { authority: { kind: "host", operation: "test-refresh" }, assertCurrent: () => {} },
+      ),
     });
 
     try {

@@ -19,6 +19,10 @@ export function retirePreparedModelRuntimeGeneration(
   const retirement = owner.generationRetirement;
   owner.generationRetirement = undefined;
   retirement?.abort();
+  if (retirement?.signal.reason instanceof Error) {
+    // Retained signals must not keep the retiring caller's lazy stack frames alive.
+    void retirement.signal.reason.stack;
+  }
 }
 
 type ModelRuntimeClose = (error: Error) => Promise<void>;
@@ -89,12 +93,20 @@ export function closePreparedModelRuntimeSnapshots(): Promise<void> {
   return closed.promise;
 }
 
-export function createPreparedModelRuntimeReplacement(): PreparedModelRuntimeReplacement {
+export function createPreparedModelRuntimeReplacement(
+  agentIds?: ReadonlySet<string>,
+): PreparedModelRuntimeReplacement {
   const { promise, resolve, reject } = createDeferredCore();
   // Readers await the original promise. This handler only prevents an unobserved rejected gate
   // when a reload fails before any request reaches the stale generation.
   void promise.catch(() => undefined);
-  return { gateId: Symbol("prepared-model-runtime-replacement"), promise, resolve, reject };
+  return {
+    agentIds,
+    gateId: Symbol("prepared-model-runtime-replacement"),
+    promise,
+    resolve,
+    reject,
+  };
 }
 
 /** Execution waits for plugin replacement while the active publication remains readable. */

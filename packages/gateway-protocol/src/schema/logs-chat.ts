@@ -52,6 +52,7 @@ export const ChatHistoryParamsSchema = closedObject({
   messageId: Type.Optional(NonEmptyString),
   sessionId: Type.Optional(NonEmptyString),
   maxChars: Type.Optional(Type.Integer({ minimum: 1, maximum: 500_000 })),
+  toolResultMaxChars: Type.Optional(Type.Integer({ minimum: 1, maximum: 500_000 })),
 });
 
 /** Resolve a short chat link and fetch its first page under the same discovery policy. */
@@ -63,6 +64,7 @@ export const ChatStartupParamsSchema = Type.Union([
     agentId: NonEmptyString,
     limit: ChatHistoryParamsSchema.properties.limit,
     maxBytes: ChatHistoryParamsSchema.properties.maxBytes,
+    toolResultMaxChars: ChatHistoryParamsSchema.properties.toolResultMaxChars,
   }),
 ]);
 
@@ -427,7 +429,14 @@ export const ChatStatusEventSchema = closedObject({
     closedObject({
       attempt: Type.Integer({ minimum: 1, maximum: 10 }),
       maxAttempts: Type.Integer({ minimum: 1, maximum: 10 }),
-      reason: Type.Literal("rate_limit"),
+      reason: Type.Union([
+        Type.Literal("rate_limit"),
+        Type.Literal("overloaded"),
+        Type.Literal("server_error"),
+        Type.Literal("timeout"),
+        Type.Literal("output_limit"),
+      ]),
+      retryAt: Type.Optional(Type.Number({ minimum: 0 })),
     }),
   ),
 });
@@ -438,8 +447,6 @@ export const ChatDeltaEventSchema = closedObject({
   state: Type.Literal("delta"),
   message: Type.Optional(Type.Unknown()),
   deltaText: Type.String(),
-  itemId: Type.Optional(Type.String()),
-  itemStartOffset: Type.Optional(Type.Integer({ minimum: 0 })),
   replace: Type.Optional(Type.Boolean()),
   usage: Type.Optional(Type.Unknown()),
 });

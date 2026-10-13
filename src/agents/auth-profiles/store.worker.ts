@@ -11,12 +11,14 @@ import {
   withExistingOpenClawStateDatabaseReadOnly,
 } from "../../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
+import { personalCredentialPublication } from "../../state/user-model-account-authority.js";
 import {
   readUserModelAuthProfile,
   readUserModelAuthProfileInDatabase,
   updateUserModelAuthProfile,
 } from "../../state/user-model-accounts.js";
 import type { WorkerOperationHandlers } from "../../state/worker-operation-registry.js";
+import { bootstrapSharedAuthStoreInWorker } from "./shared-store-bootstrap.worker.js";
 import { readAuthProfileRows, SHARED_AUTH_STORE_STATE_KEY } from "./sqlite-json.js";
 import { isMissingDatabasePath } from "./sqlite-read-pool.js";
 import { updateAuthProfileStoreInDatabase } from "./store-update-kernel.js";
@@ -36,6 +38,7 @@ import { reduceAuthProfileFailure } from "./usage-reduction.js";
 import { resetAuthProfileFailureState } from "./usage-state.js";
 
 export const authProfileOperations = {
+  "authProfiles.bootstrap": bootstrapSharedAuthStoreInWorker,
   "authProfiles.personalAccept": (
     input: { profileId: string; credential: AuthProfileCredential },
     { stateOptions },
@@ -65,30 +68,33 @@ export const authProfileOperations = {
     const database = open();
     let committed: UserModelAuthProfile | undefined;
     const options = { ...stateOptions(), database };
-    updateUserModelAuthProfile(
-      input.profileId,
-      (profile) => {
-        if (!isDeepStrictEqual(profile, input.expected)) {
-          return false;
-        }
-        profile.credential = input.next.credential;
-        profile.usageStats = input.next.usageStats;
-        return true;
-      },
-      options,
-      (stage) => {
-        if (stage === "transaction") {
-          requestSqliteWorkerOperationAdmission({ stage, facts: undefined });
-        } else {
-          committed = readUserModelAuthProfileInDatabase(database.db, input.profileId);
-          if (!isDeepStrictEqual(committed, input.next)) {
-            throw new Error("Personal credential codec changed the prepared update");
+    personalCredentialPublication.capture(database.db, () =>
+      updateUserModelAuthProfile(
+        input.profileId,
+        (profile) => {
+          if (!isDeepStrictEqual(profile, input.expected)) {
+            return false;
           }
-          const digest = createHash("sha256").update(JSON.stringify(input.next)).digest("hex");
-          requestSqliteWorkerOperationAdmission({ stage, facts: digest });
-          deferSqliteWorkerCommitReceipt(database.db, digest);
-        }
-      },
+          profile.credential = input.next.credential;
+          profile.usageStats = input.next.usageStats;
+          return true;
+        },
+        options,
+        (stage) => {
+          if (stage === "transaction") {
+            requestSqliteWorkerOperationAdmission({ stage, facts: undefined });
+          } else {
+            committed = input.next;
+            const digest = createHash("sha256").update(JSON.stringify(input.next)).digest("hex");
+            requestSqliteWorkerOperationAdmission({ stage, facts: digest });
+            deferSqliteWorkerCommitReceipt(database.db, {
+              digest,
+              personalCredentials: personalCredentialPublication.capture(database.db, () => {})
+                .receipt,
+            });
+          }
+        },
+      ),
     );
     return committed;
   },
@@ -97,6 +103,7 @@ export const authProfileOperations = {
       ({ db }) => {
         updateAuthProfileStoreInDatabase(db, "shared-state", input);
         requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+        return true;
       },
       stateOptions(),
       { operationLabel: "auth-profiles.update" },

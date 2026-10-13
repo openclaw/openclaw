@@ -547,33 +547,26 @@ export const slackPlugin = createChatChannelPlugin<ResolvedSlackAccount, SlackPr
         });
         const account = resolveSlackAccount({ cfg, accountId });
         const { resolveTargetsWithOptionalToken } = await loadTargetResolverRuntimeSdk();
-        if (kind === "group") {
-          return resolveTargetsWithOptionalToken({
-            token:
-              normalizeOptionalString(account.userToken) ??
-              normalizeOptionalString(account.botToken),
-            inputs,
-            missingTokenNote: "missing Slack token",
-            resolveWithToken: async ({ token, inputs: inputsValue }) =>
-              (await loadSlackResolveChannelsModule()).resolveSlackChannelAllowlist({
-                token,
-                entries: inputsValue,
-              }),
-            mapResolved: (entry) =>
-              toResolvedTarget(entry, entry.archived ? "archived" : undefined),
-          });
-        }
         return resolveTargetsWithOptionalToken({
           token:
             normalizeOptionalString(account.userToken) ?? normalizeOptionalString(account.botToken),
           inputs,
           missingTokenNote: "missing Slack token",
-          resolveWithToken: async ({ token, inputs: inputsLocal }) =>
-            (await loadSlackResolveUsersModule()).resolveSlackUserAllowlist({
-              token,
-              entries: inputsLocal,
-            }),
-          mapResolved: (entry) => toResolvedTarget(entry, entry.note),
+          resolveWithToken: async ({ token, inputs: entries }) => {
+            if (kind === "group") {
+              const resolved = await (
+                await loadSlackResolveChannelsModule()
+              ).resolveSlackChannelAllowlist({ token, entries });
+              return resolved.map((entry) =>
+                toResolvedTarget(entry, entry.archived ? "archived" : undefined),
+              );
+            }
+            const resolved = await (
+              await loadSlackResolveUsersModule()
+            ).resolveSlackUserAllowlist({ token, entries });
+            return resolved.map((entry) => toResolvedTarget(entry, entry.note));
+          },
+          mapResolved: (entry) => entry,
         });
       },
     },

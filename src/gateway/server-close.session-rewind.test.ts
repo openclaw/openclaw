@@ -11,7 +11,7 @@ import {
   withinTest,
 } from "../../test/helpers/promise.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
-import { replaceTranscriptEventsSync } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEventsSync } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import { createSessionTranscriptHeader } from "../config/sessions/transcript-header.js";
 import * as lifecycleAdmission from "../sessions/session-lifecycle-admission.js";

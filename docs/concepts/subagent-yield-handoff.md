@@ -21,14 +21,14 @@ scheduled result, while the registry owns the nested orchestrator's continuation
 
 ## Ownership through the handoff
 
-| Phase                | Owner                                         | Required handoff                                                                                                                           |
-| -------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| Executing requester  | Admitted agent turn                           | Children identify the spawning turn with `requesterTurnRunId`. Progress callbacks use this turn's live authority.                          |
-| Explicit yield       | Registry requester-yield settlement           | Persist yield intent, freeze the child run IDs, advance the batch generation, and clear the old requester-turn binding.                    |
-| Waiting for children | Registry lifecycle and `requesterSettleWake`  | Retain captured completion results and schedule the owed batch. Individual announcements must not start a competing continuation.          |
-| Settlement dispatch  | Requester-settle wake delivery                | Validate the current batch and Gateway owner, dispatch an idempotent internal continuation for a nested requester, and record its outcome. |
-| Successor admission  | Gateway task tracking and paused-run adoption | Continue the paused task under the newly admitted run ID, preserving requester lineage and its outstanding settlement obligation.          |
-| Successor completion | Registry completion delivery                  | Deliver the orchestrator's result to its original requester. Cron's existing continuation and delivery policy own the scheduled output.    |
+| Phase                | Owner                                         | Required handoff                                                                                                                               |
+| -------------------- | --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Executing requester  | Admitted agent turn                           | Children identify the spawning turn with `requesterTurnRunId`. Progress callbacks use this turn's live authority.                              |
+| Explicit yield       | Registry requester-yield settlement           | Persist yield intent, freeze the child run IDs, advance the batch generation, and clear the old requester-turn binding.                        |
+| Waiting for children | Registry lifecycle and `requesterSettleWake`  | Retain captured completion results and schedule the owed batch. Individual announcements must not start a competing continuation.              |
+| Settlement dispatch  | Requester-settle wake delivery                | Validate the current batch and Gateway owner, dispatch an internal continuation safe to repeat for a nested requester, and record its outcome. |
+| Successor admission  | Gateway task tracking and paused-run adoption | Continue the paused task under the newly admitted run ID, preserving requester lineage and its outstanding settlement obligation.              |
+| Successor completion | Registry completion delivery                  | Deliver the orchestrator's result to its original requester. Cron's existing continuation and delivery policy own the scheduled output.        |
 
 The implementation owners are `subagent-registry-requester-yield.ts`,
 `subagent-announce.requester-settle-wake.ts`, and
@@ -36,6 +36,13 @@ The implementation owners are `subagent-registry-requester-yield.ts`,
 registry replacement operation; it does not create a second delegated task.
 Adoption clears a child-only pause notice instead of carrying it into completion.
 Actual requester completion batches keep their frozen membership and generation.
+
+Before admitting another turn in a yielded requester, the recovery owner transfers
+its ended execution's fence to the current durable child batch. The batch is
+revalidated before the write commits; absent or adopted batches, unrelated run
+fences, and outstanding recovery or delivery work remain fenced. The successor
+then receives its own execution fence, so completing it leaves later user input
+admissible without discarding pending child results.
 
 An explicit `waitFor: "message"` counts as continuation evidence after the
 registry accepts the wait. The attempt carries that fact into terminal reply
@@ -87,7 +94,7 @@ advance those observations only from their own acknowledged publications.
 The SQLite worker compares row-version digests before writing. A foreign change
 refreshes the affected rows through the read worker and reruns the plan, up to
 three attempts. Only acknowledged commits publish resident rows and notify readers.
-An unknown write outcome fences those rows until canonical restoration. Terminal
+An unknown write outcome fences those rows until restoration from the store. Terminal
 rows and their eligible session-state events commit together; equivalent duplicate
 terminal callbacks preserve in-flight cleanup authority. This changes no schema or
 update format.
@@ -114,7 +121,10 @@ owner, so callbacks from the closed Gateway cannot settle the recovered wake.
   direct user turn, cancellation, session reset or archive, and Gateway restart.
   After the successor binds its run scope, that scope owns the entitlement until
   it closes. Retiring the delivered child batch cannot revoke a still-running
-  requester.
+  requester. A new direct user turn retires the automation entitlement, not the
+  child batch’s separately retained completion source. Valid results can still
+  return under their original caller’s restrictions; they never borrow the new
+  turn’s identity or permissions.
 - **Completion-source custody.** Registration retains the live operator source
   separately from execution. Individual delivery and requester settlement use
   that captured permission ceiling, not the async caller that later schedules
@@ -141,7 +151,7 @@ owner, so callbacks from the closed Gateway cannot settle the recovered wake.
   A default-delivery follow-up admitted before the pause publishes receives
   the paused row's requester, completion custody, and settlement obligation
   when the pause publishes; requester-bound follow-ups keep their own delivery.
-- **Deterministic batches.** Frozen run IDs are sorted. Findings use creation
+- **Fixed batch ordering.** Frozen run IDs are sorted. Findings use creation
   time, completion time, and child session identity as tie-breakers. Superseded
   child rows are excluded. Batch identity includes requester identity, child
   IDs, and yield generation.

@@ -1,8 +1,5 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import { html } from "lit";
 import { GatewayRequestError } from "../../api/gateway.ts";
-import { icons } from "../../components/icons.ts";
-import { t } from "../../i18n/index.ts";
 
 export type CustodianEventNudge = {
   severity: 1 | 2 | 3;
@@ -62,83 +59,6 @@ export function questionUncertainty(previous: boolean, outcome: CustodianSendOut
     return false;
   }
   return outcome === "unknown" ? true : previous;
-}
-
-function eventNudgeText(nudge: CustodianEventNudge): string {
-  if (nudge.kind === "config-reload") {
-    return t("custodian.nudge.configReload");
-  }
-  const channel = nudge.channelLabel ?? t("custodian.nudge.channelFallback");
-  if (nudge.kind === "channel-auth") {
-    return t("custodian.nudge.channelAuth", { channel });
-  }
-  if (nudge.kind === "channel-disconnected") {
-    return t("custodian.nudge.channelDisconnected", { channel });
-  }
-  return t("custodian.nudge.channelDegraded", { channel });
-}
-
-export function renderCustodianEventNudge(params: {
-  nudge: CustodianEventNudge;
-  disabled: boolean;
-  onSend: () => void;
-  onDismiss: () => void;
-}) {
-  return html`<div class="custodian__nudge" role="status">
-    <button
-      class="custodian__nudge-action"
-      type="button"
-      ?disabled=${params.disabled}
-      @click=${params.onSend}
-    >
-      ${eventNudgeText(params.nudge)}
-    </button>
-    <button
-      class="custodian__nudge-dismiss"
-      type="button"
-      aria-label=${t("custodian.nudge.dismiss")}
-      @click=${params.onDismiss}
-    >
-      ${icons.x}
-    </button>
-  </div>`;
-}
-
-export function renderCustodianChannelOnboardingNudge(params: {
-  error: boolean;
-  retrying: boolean;
-  onAction: () => void;
-  onDismiss: () => void;
-}) {
-  return html`<div
-    class="custodian__nudge custodian__nudge--channel-onboarding"
-    role=${params.error ? "alert" : "status"}
-  >
-    <div class="custodian__nudge-copy">
-      <strong
-        >${t(params.error ? "custodian.nudge.channelStatusErrorTitle" : "custodian.nudge.channelSetupTitle")}</strong
-      >
-      <span
-        >${t(params.error ? "custodian.nudge.channelStatusErrorBody" : "custodian.nudge.channelSetupBody")}</span
-      >
-    </div>
-    <button
-      class="btn btn--sm primary custodian__nudge-cta"
-      type="button"
-      ?disabled=${params.error && params.retrying}
-      @click=${params.onAction}
-    >
-      ${t(params.error ? (params.retrying ? "common.loading" : "common.retry") : "custodian.nudge.channelSetupAction")}
-    </button>
-    <button
-      class="custodian__nudge-dismiss"
-      type="button"
-      aria-label=${t("custodian.nudge.channelSetupDismiss")}
-      @click=${params.onDismiss}
-    >
-      ${icons.x}
-    </button>
-  </div>`;
 }
 
 type UnknownRecord = Record<string, unknown>;

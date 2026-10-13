@@ -7,7 +7,9 @@ import { createDeferred as deferred } from "../../../../test/helpers/promise.js"
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { CATALOG_SESSION_CONTINUED_EVENT } from "../../lib/sessions/catalog-key.ts";
+import "../../lib/toast-host.ts";
 import { createGatewayHarness, createSessions, mountSidebar } from "../app-sidebar.ts";
+import { settleLitElement } from "../lit-settle.ts";
 import {
   answerConfirmDialog,
   installDialogPolyfill,
@@ -125,7 +127,7 @@ describe("AppSidebar catalog terminal ownership", () => {
         ["agent:main:main", "agent:main:adopted-codex"],
       );
       sidebar.sessionKey = "agent:main:adopted-codex";
-      await sidebar.updateComplete;
+      await settleLitElement(sidebar);
 
       const rows = [...sidebar.querySelectorAll('[data-session-key="agent:main:adopted-codex"]')];
       expect(rows).toHaveLength(1);
@@ -157,7 +159,7 @@ describe("AppSidebar catalog terminal ownership", () => {
           },
         }),
       );
-      await sidebar.updateComplete;
+      await settleLitElement(sidebar);
 
       const rows = [...sidebar.querySelectorAll('[data-session-key="agent:main:adopted-codex"]')];
       expect(rows).toHaveLength(1);
@@ -208,14 +210,11 @@ async function selectCatalogDelete(
     .querySelector(`[data-session-key*="${threadId}"]`)!
     .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
   await vi.advanceTimersByTimeAsync(0);
-  const item = sidebar.querySelector('wa-dropdown-item[value="delete"]');
-  expect(item).not.toBeNull();
-  item!.dispatchEvent(
-    new CustomEvent("wa-select", {
-      bubbles: true,
-      detail: { item: { value: "delete" } },
-    }),
+  const item = sidebar.querySelector<HTMLButtonElement>(
+    'openclaw-catalog-session-menu [data-value="delete"]',
   );
+  expect(item).not.toBeNull();
+  item!.click();
   return waitForConfirmDialogActions();
 }
 
@@ -274,14 +273,9 @@ describe("AppSidebar catalog deletion", () => {
     },
   );
 
-  it.each([
-    ["event", false],
-    ["page", false],
-    ["event", true],
-    ["page", true],
-  ] as const)(
-    "discards a pre-delete %s response (archive completed: %s) and requests fresh rows",
-    async (source, completed) => {
+  it.each(["event", "page"] as const)(
+    "keeps a pending delete hidden through an earlier %s response and requests fresh rows",
+    async (source) => {
       vi.useFakeTimers();
       const restoreDialog = installDialogPolyfill();
       try {
@@ -329,10 +323,6 @@ describe("AppSidebar catalog deletion", () => {
         ]);
         await sidebar.updateComplete;
         expect(sidebar.querySelector('[data-session-key*="thread-1"]')).toBeNull();
-        if (completed) {
-          archive.resolve({});
-          await vi.advanceTimersByTimeAsync(0);
-        }
         staleList.resolve(catalogList([{ threadId: "thread-1", name: "Stale deleted session" }]));
         await vi.advanceTimersByTimeAsync(0);
         await sidebar.updateComplete;

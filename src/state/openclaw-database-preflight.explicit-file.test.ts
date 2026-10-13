@@ -161,7 +161,7 @@ describe("explicit copied shared-state preflight", () => {
     deepStrictEqual(snapshotSourceFamily(databasePath), before);
   });
 
-  it.each(["gateway-startup", "explicit-file"] as const)(
+  it.each(["gateway-startup", "gateway-restart", "explicit-file"] as const)(
     "reports only the newer schema for an unreadable catalog through %s",
     async (operation) => {
       const initialPath = createExplicitStateDatabase();

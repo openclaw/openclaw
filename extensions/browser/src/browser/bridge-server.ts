@@ -210,9 +210,7 @@ export function stopBrowserBridgeServer(server: Server): Promise<void> {
   void stopBrowserBridgeServerOnce(server).then(resolve, reject);
   void stopping
     .finally(() => {
-      if (bridgeStopPromises.get(server) === stopping) {
-        bridgeStopPromises.delete(server);
-      }
+      bridgeStopPromises.delete(server);
     })
     .catch(() => {});
   return stopping;

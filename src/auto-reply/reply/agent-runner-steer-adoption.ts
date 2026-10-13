@@ -35,10 +35,6 @@ import {
 } from "./reply-run-registry.js";
 import { waitForReplyOperationBackend } from "./reply-run-registry.state.js";
 import { refreshReplyOperationTyping } from "./reply-run-typing.js";
-import {
-  resolveFollowupRunToolAuthorityFingerprint,
-  resolveFollowupRunToolAuthorityFingerprintAsync,
-} from "./reply-tool-authority.js";
 import { buildChannelSourceTurnId } from "./source-turn-id.js";
 import { prepareSteeringDelivery } from "./steering-delivery-preparation.js";
 import type { TypingSignaler } from "./typing-mode.js";
@@ -119,6 +115,8 @@ export async function runActiveReplySteer(
     params.opts?.abortSignal?.throwIfAborted();
     followupRun.operatorAuthority?.assertCurrent();
   };
+  let delivery: ReturnType<typeof prepareSteeringDelivery> | undefined;
+  let releaseToolAuthority: (() => void) | undefined;
   let steerSessionId = activeReplyOperation?.sessionId ?? followupRun.run.sessionId;
   const parked = parkSteerCandidate(queueKey, followupRun, resolvedQueue, runFollowup);
   if (!parked) {
@@ -126,19 +124,16 @@ export async function runActiveReplySteer(
     typing.cleanup();
     return "handled";
   }
-  const scheduleParkedFallback = () => {
-    const owner = replyRunRegistry.get(queueKey);
-    if (owner) {
-      scheduleFollowupDrainAfterReplyOperationClear({
-        operation: owner,
-        queueKey,
-        runFollowup,
-      });
-    } else {
-      scheduleFollowupDrain(queueKey, runFollowup);
-    }
-  };
-  scheduleParkedFallback();
+  const owner = replyRunRegistry.get(queueKey);
+  if (owner) {
+    scheduleFollowupDrainAfterReplyOperationClear({
+      operation: owner,
+      queueKey,
+      runFollowup,
+    });
+  } else {
+    scheduleFollowupDrain(queueKey, runFollowup);
+  }
   releaseAdmissionTicket();
   const fallback = async (
     reason: ActiveReplySteerFallbackReason,
@@ -196,7 +191,7 @@ export async function runActiveReplySteer(
     if (!injectionTarget) {
       return await fallback("injection_unavailable");
     }
-    const delivery = prepareSteeringDelivery({
+    delivery = prepareSteeringDelivery({
       agentId: followupRun.run.agentId,
       sessionKey,
       storePath: params.storePath,
@@ -205,11 +200,13 @@ export async function runActiveReplySteer(
       entry: params.sessionEntry,
       assertCurrent: assertReadCurrent,
     });
+    const steeringDelivery = delivery;
     const steeringAuthority = await resolveReplySteeringAuthority(
       followupRun,
       activeReplyOperation,
       assertReadCurrent,
     );
+    releaseToolAuthority = steeringAuthority.toolAuthority.release;
     assertReadCurrent();
     if (
       activeReplyOperation.key !== activeReplyKey ||
@@ -242,8 +239,7 @@ export async function runActiveReplySteer(
       }
     };
     const text = followupRun.prompt;
-    const assertLegacyPolicyCurrent = () =>
-      assertPolicy(resolveFollowupRunToolAuthorityFingerprint(followupRun, automaticFallbackRoute));
+    const assertLegacyPolicyCurrent = () => assertPolicy(steeringAuthority.toolAuthority.read());
     const sourceBound = Boolean(
       automaticFallbackRoute ||
       followupRun.operatorAuthority ||
@@ -260,14 +256,8 @@ export async function runActiveReplySteer(
           assertCurrent: assertSourceCurrent,
           compatAssertCurrent: assertLegacyPolicyCurrent,
           prepareCurrent: async () => {
-            assertPolicy(
-              await resolveFollowupRunToolAuthorityFingerprintAsync(
-                followupRun,
-                automaticFallbackRoute,
-                assertSourceCurrent,
-              ),
-            );
-            await delivery.prepareCurrent();
+            assertPolicy(steeringAuthority.toolAuthority.read());
+            await steeringDelivery.prepareCurrent();
             assertSourceCurrent();
           },
         }),
@@ -331,15 +321,11 @@ export async function runActiveReplySteer(
         isError: true,
       });
     }
-    const transcriptCommitUnconfirmed =
-      finalization.outcome.result?.transcriptCommit === "unconfirmed";
     if (finalization.aborted) {
       if (replyOperationRunState) {
         replyOperationRunState.messageInjectionAborted = true;
       }
-      const reason = transcriptCommitUnconfirmed
-        ? (finalization.outcome.result?.errorMessage ?? "transcript commitment unconfirmed")
-        : `adoption lost: ${formatErrorMessage(finalization.adoptionError)}`;
+      const reason = `adoption lost: ${formatErrorMessage(finalization.adoptionError)}`;
       logVerbose(
         `queue: active session ${steerSessionId} aborted exact steered target without replay (${reason})`,
       );
@@ -356,6 +342,8 @@ export async function runActiveReplySteer(
     await touchActiveSessionEntry();
     return "handled";
   } finally {
+    releaseToolAuthority?.();
+    delivery?.release();
     try {
       if (followupRun.steerPending) {
         if (isFollowupRunAborted(followupRun)) {

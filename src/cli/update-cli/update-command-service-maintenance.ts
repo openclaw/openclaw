@@ -17,6 +17,7 @@ import {
 import { resolveGatewayService } from "../../daemon/service.js";
 import { readSystemdServiceExecStart } from "../../daemon/systemd-service-files.js";
 import { captureSystemdServiceIdentity } from "../../daemon/systemd-service-identity.js";
+import { hasErrnoCode } from "../../infra/errno.js";
 import { inspectSelfAndAncestorPidsSync } from "../../infra/restart-stale-pids.js";
 import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
@@ -37,18 +38,21 @@ import {
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import type {
   ManagedGatewayUpdateVerdict,
+  ManagedGatewayServiceObservation,
   PreManagedServiceStop,
 } from "./update-command-service-context-types.js";
 import {
   assertGatewayServiceAdmissionUnchanged,
   GATEWAY_SERVICE_INSPECTION_WARNING,
   GatewayServiceUpdateOwnershipError,
+  isUpdateServiceManagerAvailable,
   observedSystemdManagerUid,
   readGatewayServiceStateForUpdate,
   resolveGatewayServiceManagementBlockMessageForUpdate,
 } from "./update-command-service-plan.js";
 import { isManagedGatewayServiceOffline } from "./update-command-service-publication.js";
 import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-revalidation.js";
+import { windowsUpdateManualGuidance } from "./update-command-windows-preflight.js";
 import {
   createWindowsTaskAutoStartRecovery,
   UpdateCommandAbort,
@@ -74,7 +78,7 @@ export type UpdateCommandRecoveryState = {
 
 export function createWindowsTaskAutoStartGuard(params: {
   root: string;
-  before: Pick<PreManagedServiceStop, "serviceEnv" | "serviceUpdateVerdict" | "serviceManagerUid">;
+  before: ManagedGatewayServiceObservation;
   timeoutMs?: number;
 }): () => Promise<void> {
   const before = params.before;
@@ -120,7 +124,16 @@ async function maybeSuspendWindowsTaskAutoStartForUpdate(params: {
   } catch (err) {
     await recovery.restore().catch(() => undefined);
     await recovery.complete(!(err instanceof ScheduledTaskAutoStartRecoveryError));
-    throw err;
+    throw hasErrnoCode(err, "EACCES")
+      ? new GatewayServiceUpdateOwnershipError(
+          createUpdatePreflightFailure(
+            "windows-task-elevation-required",
+            windowsUpdateManualGuidance(),
+            "managed-service",
+          ),
+          err,
+        )
+      : err;
   }
   await abortWindowsTaskUpdateIfInterrupted(recovery);
   if (!suspended) {
@@ -160,10 +173,7 @@ type ManagedServiceStopParams = {
   /** Package/helper root can differ from the inspected service during a rebind. */
   handoffRoot?: string;
   handoffFromGateway?: (state: GatewayServiceState) => Promise<boolean>;
-  expectedService?: Pick<
-    PreManagedServiceStop,
-    "serviceEnv" | "serviceUpdateVerdict" | "serviceManagerUid"
-  > &
+  expectedService?: ManagedGatewayServiceObservation &
     Partial<Pick<PreManagedServiceStop, "stopped">>;
   allowInstallRootChange?: boolean;
   onStopped?: (state: PreManagedServiceStop) => void;
@@ -362,16 +372,10 @@ async function stopManagedServiceBeforeMutableUpdate(
     assertCurrent();
     if (err instanceof GatewayServiceUpdateOwnershipError && service) {
       const inspectedService = service;
-      const available = await withCommandProcessScope(() =>
-        inspectedService.isLoaded({ env: serviceEnv, timeoutMs: params.timeoutMs }),
-      ).then(
-        () => true,
-        (error: unknown) => {
-          if (hasCommandProcessCleanupError(error)) {
-            throw error;
-          }
-          return false;
-        },
+      const available = await isUpdateServiceManagerAvailable(
+        withCommandProcessScope(() =>
+          inspectedService.isLoaded({ env: serviceEnv, timeoutMs: params.timeoutMs }),
+        ),
       );
       assertCurrent();
       if (available) {
@@ -632,6 +636,7 @@ async function stopManagedServiceBeforeMutableUpdate(
         env: currentState.env,
         stdout: params.jsonMode ? JSON_MODE_SERVICE_STDOUT : process.stdout,
         assertCurrent,
+        warn,
         ...(updateRun
           ? { updateHandoff: { root: params.handoffRoot ?? params.root, runId: updateRun.runId } }
           : {}),

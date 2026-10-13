@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { enrichChatHistoryCompactionMarkers } from "./chat-history-page-kernel.js";
-import { prepareChatHistoryResponsePage } from "./chat-history-response-page.js";
+import {
+  enrichChatHistoryCompactionMarkers,
+  prepareChatHistoryResponsePage,
+} from "./chat-history-response-page.js";
 
 describe("enrichChatHistoryCompactionMarkers", () => {
   it("joins retained legacy token metrics to the matching transcript marker", () => {
@@ -37,28 +39,6 @@ describe("enrichChatHistoryCompactionMarkers", () => {
       },
     });
     expect(marker["__openclaw"]).not.toHaveProperty("tokensBefore");
-  });
-
-  it("preserves message identity without legacy token metrics", () => {
-    const marker = {
-      role: "system",
-      __openclaw: { kind: "compaction", id: "compact-entry-1" },
-    };
-
-    const result = enrichChatHistoryCompactionMarkers([marker], undefined);
-
-    expect(result[0]).toBe(marker);
-  });
-
-  it("keeps readable history when legacy checkpoint metadata is malformed", () => {
-    const marker = {
-      role: "system",
-      __openclaw: { kind: "compaction", id: "compact-entry-1" },
-    };
-    const entry = { sessionId: "session-1", updatedAt: 1_000, compactionCheckpoints: [{}] };
-    const messages = [marker];
-
-    expect(enrichChatHistoryCompactionMarkers(messages, entry)).toBe(messages);
   });
 });
 

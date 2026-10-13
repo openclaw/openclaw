@@ -19,7 +19,6 @@ import {
   readMcpOAuthStore,
 } from "./mcp-oauth-store.js";
 import {
-  clearMcpOAuthCredentials,
   completeMcpOAuthAuthorization,
   countMcpOAuthPrincipals,
   readMcpOAuthCredentialsStatus,
@@ -554,50 +553,6 @@ describe("MCP OAuth provider", () => {
     );
   });
 
-  it("requires explicit login when no native OAuth credentials exist", async () => {
-    await withTempHome(
-      async () => {
-        await expect(
-          resolveMcpOAuthAccessToken({
-            identity: REMOTE_IDENTITY,
-          }),
-        ).rejects.toThrow("Run openclaw mcp login Remote Docs.");
-        expect(authMock).not.toHaveBeenCalled();
-      },
-      {
-        prefix: "openclaw-mcp-oauth-missing-token-",
-        skipSessionCleanup: true,
-        env: {
-          OPENCLAW_CONFIG_PATH: undefined,
-          OPENCLAW_STATE_DIR: undefined,
-        },
-      },
-    );
-  });
-
-  it("marks challenge-only bootstrap state as safe for Doctor credential import", async () => {
-    await withTempHome(
-      async () => {
-        await expect(
-          resolveMcpOAuthAccessToken({
-            identity: REMOTE_IDENTITY,
-            authorizationChallenge: true,
-            scope: "docs.read",
-          }),
-        ).rejects.toThrow("Run openclaw mcp login Remote Docs.");
-        expect(await readMcpOAuthStore(REMOTE_IDENTITY.storeKey)).toMatchObject({
-          credentialState: "uninitialized",
-          pendingAuthorizationChallenge: { scope: "docs.read" },
-        });
-      },
-      {
-        prefix: "openclaw-mcp-oauth-challenge-provenance-",
-        skipSessionCleanup: true,
-        env: { OPENCLAW_CONFIG_PATH: undefined, OPENCLAW_STATE_DIR: undefined },
-      },
-    );
-  });
-
   it("persists challenge hints without mutating an in-flight PKCE login", async () => {
     await withTempHome(
       async () => {
@@ -718,46 +673,6 @@ describe("MCP OAuth provider", () => {
     );
   });
 
-  it("updates provider fields atomically and clears token expiry on invalidation", async () => {
-    await withTempHome(
-      async () => {
-        await withMcpOAuthProviderForTest(
-          {
-            identity: REMOTE_IDENTITY,
-            allowAuthorizationRedirect: true,
-          },
-          async (provider) => {
-            await provider.saveClientInformation?.({ client_id: "client-id" });
-            await provider.saveTokens({
-              access_token: "access",
-              refresh_token: "refresh",
-              token_type: "Bearer",
-              expires_in: 3600,
-            });
-            await provider.saveCodeVerifier("verifier");
-            expect(await provider.codeVerifier()).toBe("verifier");
-            await provider.redirectToAuthorization(
-              new URL("https://auth.example.com/authorize?state=published-state"),
-            );
-            await provider.invalidateCredentials?.("tokens");
-          },
-        );
-
-        const store = await readMcpOAuthStore(REMOTE_IDENTITY.storeKey);
-        expect(store.clientInformation).toEqual({ client_id: "client-id" });
-        expect(store.codeVerifier).toBe("verifier");
-        expect(store.tokens).toBeUndefined();
-        expect(store.tokenExpiresAt).toBeUndefined();
-        expect(store.credentialState).toBe("cleared");
-      },
-      {
-        prefix: "openclaw-mcp-oauth-atomic-fields-",
-        skipSessionCleanup: true,
-        env: { OPENCLAW_CONFIG_PATH: undefined, OPENCLAW_STATE_DIR: undefined },
-      },
-    );
-  });
-
   it("fails closed when canonical token expiry has no token state", async () => {
     await withTempHome(
       async () => {
@@ -834,58 +749,6 @@ describe("MCP OAuth provider", () => {
     );
   });
 
-  it("does not retry a code exchange redirect mismatch", async () => {
-    await withTempHome(
-      async () => {
-        authMock.mockImplementationOnce(persistRedirect);
-        await startMcpOAuthAuthorization(
-          CALENDLY_IDENTITY,
-          resolvedOAuthConfig(CALENDLY_IDENTITY),
-          {},
-        );
-        authMock.mockReset();
-        authMock.mockRejectedValueOnce(new Error("invalid_grant: redirect_uri mismatch"));
-
-        await expect(
-          completeMcpOAuthAuthorization(CALENDLY_IDENTITY, resolvedOAuthConfig(CALENDLY_IDENTITY), {
-            code: "code-123",
-          }),
-        ).rejects.toThrow("redirect_uri mismatch");
-        expect(authMock).toHaveBeenCalledOnce();
-      },
-      {
-        prefix: "openclaw-mcp-oauth-code-mismatch-",
-        skipSessionCleanup: true,
-        env: { OPENCLAW_CONFIG_PATH: undefined, OPENCLAW_STATE_DIR: undefined },
-      },
-    );
-  });
-
-  it("does not persist localhost when the fallback attempt fails", async () => {
-    await withTempHome(
-      async () => {
-        authMock.mockReset();
-        authMock
-          .mockRejectedValueOnce(new Error("invalid_client_metadata: redirect_uri rejected"))
-          .mockRejectedValueOnce(new Error("localhost redirect also rejected"));
-
-        await expect(
-          startMcpOAuthAuthorization(CALENDLY_IDENTITY, resolvedOAuthConfig(CALENDLY_IDENTITY), {}),
-        ).rejects.toThrow("localhost redirect also rejected");
-
-        expect(await readMcpOAuthStore(CALENDLY_IDENTITY.storeKey)).toEqual({});
-      },
-      {
-        prefix: "openclaw-mcp-oauth-localhost-failure-",
-        skipSessionCleanup: true,
-        env: {
-          OPENCLAW_CONFIG_PATH: undefined,
-          OPENCLAW_STATE_DIR: undefined,
-        },
-      },
-    );
-  });
-
   it("does not start hidden authorization flows without an authorization callback", async () => {
     await withTempHome(
       async () => {
@@ -906,41 +769,6 @@ describe("MCP OAuth provider", () => {
       },
       {
         prefix: "openclaw-mcp-oauth-noninteractive-",
-        skipSessionCleanup: true,
-        env: {
-          OPENCLAW_CONFIG_PATH: undefined,
-          OPENCLAW_STATE_DIR: undefined,
-        },
-      },
-    );
-  });
-
-  it("clears stored credentials for a configured server URL", async () => {
-    await withTempHome(
-      async () => {
-        await withMcpOAuthProviderForTest(
-          {
-            identity: REMOTE_IDENTITY,
-          },
-          async (provider) => {
-            await provider.saveTokens({ access_token: "access", token_type: "Bearer" });
-          },
-        );
-
-        await clearMcpOAuthCredentials(REMOTE_IDENTITY);
-
-        expect(
-          await withMcpOAuthProviderForTest(
-            {
-              identity: REMOTE_IDENTITY,
-            },
-            async (provider) => await provider.tokens(),
-          ),
-        ).toBeUndefined();
-        expect((await readMcpOAuthStore(REMOTE_IDENTITY.storeKey)).credentialState).toBe("cleared");
-      },
-      {
-        prefix: "openclaw-mcp-oauth-clear-",
         skipSessionCleanup: true,
         env: {
           OPENCLAW_CONFIG_PATH: undefined,

@@ -13,7 +13,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
-import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.sqlite.js";
+import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.test-support.js";
 import type { TrajectoryEvent } from "../../trajectory/types.js";
 import { decodeSessionArchiveBytes, readSessionArchiveContentSync } from "./archive-compression.js";
 import { measureSessionPhysicalDiskUsage } from "./disk-budget.js";
@@ -26,17 +26,19 @@ import {
 } from "./session-accessor.js";
 import { writeTranscriptArchive } from "./session-accessor.sqlite-archive-artifact.js";
 import { materializeSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
+import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-delete-snapshot.js";
 import {
   deleteMaterializedSessionStatePlans,
-  planSessionStateDeleteIfUnreferenced,
+  readSessionGenerationIdsForKeys,
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import { touchTranscriptMutationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
-import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import {
   waitForSessionTranscriptIndexReconcilesInStateDir,
   waitForSessionTranscriptProjection,
 } from "./session-transcript-reconcile.js";
+import { prepareTranscriptPayload } from "./transcript-payload.js";
 
 type TestEvent = { id: string; [key: string]: unknown };
 const event = (id: string, content = "archive me"): TestEvent => ({ type: "session", id, content });
@@ -282,10 +284,15 @@ describe("SQLite transcript archive worker", () => {
     const target = await seed("restored-archive-session", [
       event("restored-archive-session", "first generation"),
     ]);
+    expect(readSessionGenerationIdsForKeys(database(), [])).toEqual([]);
+    expect(readSessionGenerationIdsForKeys(database(), [target.sessionKey])).toEqual([
+      target.sessionId,
+    ]);
     const first = (await deletion(target.sessionKey)).archivedTranscripts[0];
     if (!first) {
       throw new Error("expected first transcript archive");
     }
+    expect(readSessionGenerationIdsForKeys(database(), [target.sessionKey])).toEqual([]);
     fs.rmSync(first.archivedPath);
     database()
       .db.prepare(
@@ -294,6 +301,9 @@ describe("SQLite transcript archive worker", () => {
       .run(target.sessionId, first.generation);
     await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 2 });
     await replaceTranscriptEvents(target, [event(target.sessionId, "second generation")]);
+    expect(readSessionGenerationIdsForKeys(database(), [target.sessionKey])).toEqual([
+      target.sessionId,
+    ]);
     const second = await deletion(target.sessionKey);
     expect(second.archivedTranscripts).toHaveLength(1);
     expect(second.archivedTranscripts[0]?.archivedPath).not.toBe(first.archivedPath);
@@ -415,8 +425,26 @@ describe("SQLite transcript archive worker", () => {
     );
   });
 
+  it("deletes empty lifecycle state without producing an archive", async () => {
+    const target = scope("empty-transcript");
+    await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: Date.now() });
+    const result = await deletion(target.sessionKey);
+    expect(result).toMatchObject({ deleted: true, archivedTranscripts: [] });
+    expect(loadSessionEntry(target)).toBeUndefined();
+    const db = database();
+    expect(
+      executeSqliteQuerySync(
+        db.db,
+        getNodeSqliteKysely<DB>(db.db)
+          .selectFrom("session_windows")
+          .select("session_id")
+          .where("session_id", "=", target.sessionId),
+      ).rows,
+    ).toEqual([]);
+  });
+
   it.each(["empty", "nonempty"] as const)(
-    "rejects changes to a planned %s transcript before publishing an archive",
+    "preserves events appended after a planned %s transcript snapshot",
     async (initial) => {
       const target = scope("changed-before-worker-snapshot");
       const original = event(target.sessionId, "original transcript");
@@ -432,9 +460,16 @@ describe("SQLite transcript archive worker", () => {
       const appended = event("concurrent-event", "concurrent append");
       const events = initial === "empty" ? [appended] : [original, appended];
       await replaceTranscriptEvents(target, events);
-      await expect(materializeSessionStateDeletePlans([planned])).rejects.toThrow(
-        `SQLite session state changed before archive materialization for ${target.sessionId}`,
-      );
+      if (initial === "empty") {
+        const materialized = await materializeSessionStateDeletePlans([planned]);
+        expect(() => deletePlans(materialized, target.sessionKey)).toThrow(
+          `SQLite session state changed before deletion for ${target.sessionId}`,
+        );
+      } else {
+        await expect(materializeSessionStateDeletePlans([planned])).rejects.toThrow(
+          `SQLite session state changed before archive materialization for ${target.sessionId}`,
+        );
+      }
       await expect(loadTranscriptEvents(target)).resolves.toEqual(events);
       const directory = path.dirname(storePath);
       const names = fs.existsSync(directory) ? fs.readdirSync(directory) : [];
@@ -589,7 +624,10 @@ describe("SQLite transcript archive worker", () => {
                 .values({
                   session_id: sessionId,
                   seq: 1,
-                  event_json: JSON.stringify(event("concurrent-event", "concurrent append")),
+                  ...prepareTranscriptPayload(
+                    transaction.db,
+                    JSON.stringify(event("concurrent-event", "concurrent append")),
+                  ),
                   created_at: Date.now(),
                 }),
             );

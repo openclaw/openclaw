@@ -58,7 +58,7 @@ data class GatewayCredentials(
 
 internal val defaultSidebarVisiblePages = listOf("home", "threads", "skills", "work")
 internal val defaultSidebarPageOrder =
-  defaultSidebarVisiblePages + listOf("agents", "automations", "usage", "skill-workshop", "dreaming", "terminal", "desktop")
+  defaultSidebarVisiblePages + listOf("agents", "automations", "usage", "dreaming", "terminal", "desktop")
 
 internal fun sanitizeSidebarPageOrder(pageIds: List<String>): List<String> {
   val knownIds = defaultSidebarPageOrder.toSet()

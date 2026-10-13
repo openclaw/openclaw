@@ -11,11 +11,16 @@ import {
   patchSessionEntryCore,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
+import type { SessionAdmissionTransition } from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
 import {
-  readSessionEntryInWorker,
   readSessionEntryReadOnlyInWorker,
   readSessionEntrySummariesInWorker,
 } from "../../config/sessions/session-entry-read-runtime.js";
+import {
+  sessionEntryCommitGuardOptions,
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
@@ -159,6 +164,7 @@ export type AcceptedCompactionSuccessor = Awaited<
 > & {
   entry: InternalSessionEntry;
   previousSessionId?: string;
+  readonly admissionTransition?: SessionAdmissionTransition;
 };
 
 type CompactionWriterClaim = Readonly<{
@@ -188,7 +194,7 @@ export async function acceptCompactionSuccessor(params: {
   currentTarget: SessionTranscriptRuntimeTarget;
   currentSessionFile?: string;
   expectedEntry: CompactionWriterClaim;
-  assertActive: () => void;
+  assertActive: SessionSourceAssertion;
   config?: OpenClawConfig;
   onCommitted?: (accepted: AcceptedCompactionSuccessor) => void;
 }): Promise<AcceptedCompactionSuccessor> {
@@ -207,7 +213,7 @@ export async function acceptCompactionSuccessor(params: {
   });
   params.assertActive();
   const previousEntry = requireCompactionWriterEntry(
-    await readSessionEntryInWorker(
+    await readSessionEntryReadOnlyInWorker(
       { ...currentTarget, readConsistency: "latest" },
       params.assertActive,
     ),
@@ -220,10 +226,13 @@ export async function acceptCompactionSuccessor(params: {
   if (!params.result.ok || !params.result.compacted) {
     throw new Error("Cannot accept a successor without a successful completed compaction");
   }
-  const assertCommitAllowed = () => {
-    params.assertActive();
-    assertPlacement({ currentTarget, successorSessionId: successor.sessionId });
-  };
+  const assertCommitAllowed = composeSessionSourceAssertion(
+    [params.assertActive],
+    (assertSource) => {
+      assertSource();
+      assertPlacement({ currentTarget, successorSessionId: successor.sessionId });
+    },
+  );
   assertCommitAllowed();
   let committed: AcceptedCompactionSuccessor | undefined;
   try {
@@ -235,11 +244,25 @@ export async function acceptCompactionSuccessor(params: {
       },
       {
         skipMaintenance: true,
-        assertCommitAllowed,
+        ...sessionEntryCommitGuardOptions(assertCommitAllowed),
         onCommitted: (entry) => {
           // Capture the actual commit before identity observers can abort the caller.
           // This sink records facts only; no authority checks or lifecycle hooks.
-          committed = { ...successor, entry, previousSessionId: currentTarget.sessionId };
+          committed = {
+            ...successor,
+            entry,
+            previousSessionId: currentTarget.sessionId,
+            admissionTransition: Object.freeze({
+              previous: Object.freeze({
+                sessionId: expected.sessionId,
+                lifecycleRevision: expected.lifecycleRevision,
+              }),
+              current: Object.freeze({
+                sessionId: entry.sessionId,
+                lifecycleRevision: entry.lifecycleRevision,
+              }),
+            }),
+          };
           params.onCommitted?.(committed);
         },
       },

@@ -70,11 +70,8 @@ async function expectWorkerFailure(
   });
   expect(write).toHaveBeenCalledExactlyOnceWith(stdout);
   expect(process.exitCode).toBe(1);
-  const {
-    readSqliteReadOnlyWorkerValue,
-    SqliteReadOnlyInspectionContentionError,
-    SqliteSnapshotAllocationRefusedError,
-  } = await import("./sqlite-readonly-worker-protocol.js");
+  const { readSqliteReadOnlyWorkerValue, SqliteReadOnlyInspectionContentionError } =
+    await import("./sqlite-readonly-worker-protocol.js");
   let received: unknown;
   try {
     readSqliteReadOnlyWorkerValue({ kind: "launched", stdout, stderr: "", status: 0 }, mode);
@@ -84,10 +81,9 @@ async function expectWorkerFailure(
   expect(received).toBeInstanceOf(Error);
   expect(received instanceof SqliteReadOnlyInspectionContentionError).toBe(contention);
   const { isPrivateDirectoryCreationRefused } = await import("./private-directory-creation.js");
-  const allocationRefused =
-    received instanceof SqliteSnapshotAllocationRefusedError ||
-    isPrivateDirectoryCreationRefused(received);
-  expect(allocationRefused).toBe(options?.allocationRefused === true);
+  expect(isPrivateDirectoryCreationRefused(received)).toBe(
+    contention && options?.allocationRefused === true,
+  );
 }
 
 it.each<{
@@ -206,8 +202,7 @@ it.each([
 ] as const)(
   "does not accept an allocation refusal receipt with $kind (contention: $contention)",
   async ({ kind, contention }) => {
-    const { readSqliteReadOnlyWorkerValue, SqliteSnapshotAllocationRefusedError } =
-      await import("./sqlite-readonly-worker-protocol.js");
+    const { readSqliteReadOnlyWorkerValue } = await import("./sqlite-readonly-worker-protocol.js");
     const stdout = JSON.stringify({
       ok: false,
       message:
@@ -232,7 +227,6 @@ it.each([
       received = error;
     }
     expect(received).toBeInstanceOf(Error);
-    expect(received).not.toBeInstanceOf(SqliteSnapshotAllocationRefusedError);
     const { isPrivateDirectoryCreationRefused } = await import("./private-directory-creation.js");
     expect(isPrivateDirectoryCreationRefused(received)).toBe(false);
   },

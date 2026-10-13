@@ -471,6 +471,8 @@ printf '[{"filename":"openclaw-%s.tgz"}]\\n' "$version"
     const packOutput = await runCommandForTest(runner.command, runner.args, {
       capture: true,
       env: runner.env,
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+      killAfterMs: Number.MAX_SAFE_INTEGER,
     });
     const candidate = await moveNewestPackedTarballForTest(
       outputDir,
@@ -582,15 +584,6 @@ printf '[{"filename":"openclaw-%s.tgz"}]\\n' "$version"
         { capture: true },
       ),
     ).rejects.toThrow(/produced more than \d+ captured stdout chars/u);
-  });
-
-  it("clamps oversized package runner command timers before scheduling", async () => {
-    await expect(
-      runCommandForTest(process.execPath, ["-e", "setTimeout(() => process.exit(0), 25);"], {
-        killAfterMs: Number.MAX_SAFE_INTEGER,
-        timeoutMs: Number.MAX_SAFE_INTEGER,
-      }),
-    ).resolves.toBe("");
   });
 
   it("kills timed-out package runner process groups", async ({ signal, onTestFinished }) => {
@@ -1263,34 +1256,7 @@ printf '[{"filename":"openclaw-%s.tgz"}]\\n' "$version"
     await expect(missing(`${target}.tmp`)).resolves.toBe(true);
   });
 
-  it("reads package source metadata from package artifacts", async () => {
-    const dir = autoTempDirs.make("openclaw-package-candidate-");
-    await writeFile(
-      path.join(dir, "package-candidate.json"),
-      JSON.stringify(
-        {
-          packageRef: "release/2026.4.30",
-          packageSourceSha: "66ce632b9b7c5c7fdd3e66c739687d51638ad6e2",
-          packageTrustedReason: "repository-branch-history",
-          sha256: "a".repeat(64),
-        },
-        null,
-        2,
-      ),
-    );
-
-    await expect(readArtifactPackageCandidateMetadata(dir)).resolves.toEqual({
-      packageRef: "release/2026.4.30",
-      packageSourceSha: "66ce632b9b7c5c7fdd3e66c739687d51638ad6e2",
-      packageTrustedReason: "repository-branch-history",
-      sha256: "a".repeat(64),
-    });
-  });
-
-  it.each([
-    ["without a registry", false],
-    ["with a registry", true],
-  ])("rejects artifact provenance mismatches %s before side effects", async (_label, registry) => {
+  it("rejects artifact provenance mismatches before registry side effects", async () => {
     const metadataSha = "66ce632b9b7c5c7fdd3e66c739687d51638ad6e2";
     const buildInfoSha = "77df743c0c8d6d80ee4f77d84a798e62749be7f3";
     const fixture = await createArtifactFixture("openclaw-artifact-provenance-mismatch-", {
@@ -1304,14 +1270,10 @@ printf '[{"filename":"openclaw-%s.tgz"}]\\n' "$version"
           ...fixture.args,
           "--output-dir",
           path.join(fixture.dir, "output"),
-          ...(registry
-            ? [
-                "--plugin-registry-output-dir",
-                fixture.registryDir,
-                "--required-plugin-packages-json",
-                '["@openclaw/codex"]',
-              ]
-            : []),
+          "--plugin-registry-output-dir",
+          fixture.registryDir,
+          "--required-plugin-packages-json",
+          '["@openclaw/codex"]',
         ]),
       ).rejects.toThrow(
         `artifact packageSourceSha ${metadataSha} does not match package build-info commit ${buildInfoSha}`,

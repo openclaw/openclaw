@@ -61,7 +61,7 @@ describe("isHeartbeatEnabledForSessionAgent", () => {
           cfg,
           parentSessionKey: "global",
           requesterAgentId: "research",
-          targetAgentId: "ops",
+          ownerAgentId: "ops",
           ctx: {},
         })
       ).heartbeatEnabled,

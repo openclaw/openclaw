@@ -254,6 +254,12 @@ export function createProcessSupervisor(): ProcessSupervisor & {
     if (owner.terminationReason) {
       return settleConstructionResult(owner.terminationReason);
     }
+    if (input.prepareSpawn) {
+      await input.prepareSpawn();
+      if (owner.terminationReason) {
+        return settleConstructionResult(owner.terminationReason);
+      }
+    }
     input.assertCurrent?.();
     input.beforeSpawn?.();
 
@@ -408,6 +414,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
                 exactEnv: input.exactEnv,
                 windowsVerbatimArguments: input.windowsVerbatimArguments,
                 input: input.input,
+                prepareInput: input.prepareInput,
                 stdinMode: input.stdinMode,
                 secretInput: input.secretInput,
               });

@@ -24,14 +24,27 @@ function resolveLedgerSessionId(session: { sessionId: string; ledgerSessionId?: 
 
 export class AcpTranslatorSessionUpdates {
   private stopped = false;
+  private readonly pending = new Set<Promise<unknown>>();
   // Queue each ledger session at emission time so a detached disconnect notice
   // cannot overtake its older update or block unrelated session settlement.
   private ledgerMutationTails = new Map<string, Promise<void>>();
 
   constructor(private options: AcpTranslatorSessionUpdatesOptions) {}
 
-  stop(): void {
+  async stop(): Promise<void> {
     this.stopped = true;
+    // Revoking admission cannot retire the database or transport while an
+    // already-admitted ledger write, replay read, or delivery still uses it.
+    await Promise.allSettled([...this.pending, ...this.ledgerMutationTails.values()]);
+  }
+
+  private track<T>(operation: Promise<T>): Promise<T> {
+    this.pending.add(operation);
+    void operation.then(
+      () => this.pending.delete(operation),
+      () => this.pending.delete(operation),
+    );
+    return operation;
   }
 
   async startLedgerSession(
@@ -42,13 +55,15 @@ export class AcpTranslatorSessionUpdates {
       return;
     }
     try {
-      await this.options.eventLedger.startSession({
-        sessionId: resolveLedgerSessionId(session),
-        sessionKey: session.sessionKey,
-        cwd: session.cwd,
-        complete: options.complete,
-        ...(options.reset ? { reset: true } : {}),
-      });
+      await this.track(
+        this.options.eventLedger.startSession({
+          sessionId: resolveLedgerSessionId(session),
+          sessionKey: session.sessionKey,
+          cwd: session.cwd,
+          complete: options.complete,
+          ...(options.reset ? { reset: true } : {}),
+        }),
+      );
     } catch (err) {
       this.options.log(
         `event ledger session start failed for ${session.sessionId}: ${String(err)}`,
@@ -88,7 +103,7 @@ export class AcpTranslatorSessionUpdates {
       return { complete: false, events: [] };
     }
     try {
-      return await read();
+      return await this.track(read());
     } catch (err) {
       this.options.log(`event ledger ${failure}: ${String(err)}`);
       return { complete: false, events: [] };
@@ -122,10 +137,12 @@ export class AcpTranslatorSessionUpdates {
     if (this.stopped) {
       return;
     }
-    const delivery = this.options.connection.sessionUpdate({
-      sessionId: params.sessionId,
-      update: params.update,
-    });
+    const delivery = this.track(
+      this.options.connection.sessionUpdate({
+        sessionId: params.sessionId,
+        update: params.update,
+      }),
+    );
     const recording =
       params.record && params.sessionKey
         ? this.recordLedgerUpdate({

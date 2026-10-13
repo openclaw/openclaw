@@ -91,10 +91,8 @@ interface EventBridgeSnapshot {
   readonly usage: AssistantUsageSnapshot | undefined;
 }
 
-type MessageAccumulator = { text: string };
-
 export function attachEventBridge(session: SessionLike, options: EventBridgeOptions) {
-  const messagesById = new Map<string, MessageAccumulator>();
+  const messagesById = new Map<string, string>();
   const reasoningById = new Map<string, string>();
   const durableReasoningById = new Map<string, string>();
   let lastAssistantEvent: Extract<SessionEvent, { type: "assistant.message" }> | undefined;
@@ -125,7 +123,6 @@ export function attachEventBridge(session: SessionLike, options: EventBridgeOpti
   const sessionIdle = createDeferred();
   let firstDeltaError: unknown;
   let detached = false;
-  let unconsumedDurableReasoning = false;
   const unsubscribeFns: Array<() => void> = [];
   const listen = <K extends SessionEventType>(
     eventType: K,
@@ -133,9 +130,18 @@ export function attachEventBridge(session: SessionLike, options: EventBridgeOpti
   ) => {
     unsubscribeFns.push(session.on(eventType, handler));
   };
+  const listenRoot = <K extends SessionEventType>(
+    eventType: K,
+    handler: (event: Extract<SessionEvent, { type: K }>) => void,
+  ) =>
+    listen(eventType, (event) => {
+      if (isRootSessionEvent(event)) {
+        handler(event);
+      }
+    });
 
-  listen("user.message", (event) => {
-    if (!isRootSessionEvent(event) || event.ephemeral === true) {
+  listenRoot("user.message", (event) => {
+    if (event.ephemeral === true) {
       return;
     }
     flushPendingAssistantProjection();
@@ -172,24 +178,21 @@ export function attachEventBridge(session: SessionLike, options: EventBridgeOpti
 
   // These native history events have no lossless AgentMessage projection.
   for (const eventType of ["system.message", "skill.invoked", "system.notification"] as const) {
-    listen(eventType, (event) => {
-      if (isRootSessionEvent(event) && event.ephemeral !== true) {
+    listenRoot(eventType, (event) => {
+      if (event.ephemeral !== true) {
         options.transcriptProjection?.journal.markReplayIncomplete();
       }
     });
   }
 
-  listen("assistant.message_delta", (event) => {
-    if (!isRootSessionEvent(event)) {
-      return;
-    }
+  listenRoot("assistant.message_delta", (event) => {
     const messageId = readNonEmptyString(event.data.messageId) ?? "assistant-message";
     const delta = event.data.deltaContent;
     if (!delta) {
       return;
     }
-    const entry = ensureMessageAccumulator(messagesById, messageId);
-    entry.text += delta;
+    const text = (messagesById.get(messageId) ?? "") + delta;
+    messagesById.set(messageId, text);
     const onAssistantDelta = options.onAssistantDelta;
     if (!onAssistantDelta) {
       return;
@@ -197,7 +200,7 @@ export function attachEventBridge(session: SessionLike, options: EventBridgeOpti
     const payload: OnAssistantDeltaPayload = {
       delta,
       sessionId: options.getSdkSessionId(),
-      text: entry.text,
+      text,
       usage,
     };
     deltaQueue = deltaQueue
@@ -216,10 +219,7 @@ export function attachEventBridge(session: SessionLike, options: EventBridgeOpti
     void deltaChain.catch(() => undefined);
   });
 
-  listen("assistant.reasoning_delta", (event) => {
-    if (!isRootSessionEvent(event)) {
-      return;
-    }
+  listenRoot("assistant.reasoning_delta", (event) => {
     const reasoningId = readNonEmptyString(event.data.reasoningId) ?? "assistant-reasoning";
     const delta = event.data.deltaContent;
     if (!delta) {
@@ -228,27 +228,19 @@ export function attachEventBridge(session: SessionLike, options: EventBridgeOpti
     reasoningById.set(reasoningId, `${reasoningById.get(reasoningId) ?? ""}${delta}`);
   });
 
-  listen("assistant.reasoning", (event) => {
-    if (!isRootSessionEvent(event) || event.ephemeral === true) {
+  listenRoot("assistant.reasoning", (event) => {
+    if (event.ephemeral === true) {
       return;
     }
     reasoningById.set(event.data.reasoningId, event.data.content);
     durableReasoningById.set(event.data.reasoningId, event.data.content);
-    unconsumedDurableReasoning = true;
   });
 
-  listen("assistant.turn_start", (event) => {
-    if (isRootSessionEvent(event)) {
-      markUnconsumedReasoningIncomplete();
-    }
-  });
+  listenRoot("assistant.turn_start", markUnconsumedReasoningIncomplete);
 
   listen("assistant.message", handleAssistantMessage);
 
-  listen("assistant.usage", (event) => {
-    if (!isRootSessionEvent(event)) {
-      return;
-    }
+  listenRoot("assistant.usage", (event) => {
     usage = normalizeCopilotUsage(event.data);
     const apiCallId = readNonEmptyString(event.data.apiCallId);
     if (apiCallId && usage) {
@@ -259,8 +251,8 @@ export function attachEventBridge(session: SessionLike, options: EventBridgeOpti
     }
   });
 
-  listen("tool.user_requested", (event) => {
-    if (isRootSessionEvent(event) && event.ephemeral !== true) {
+  listenRoot("tool.user_requested", (event) => {
+    if (event.ephemeral !== true) {
       userRequestedToolCallIds.add(event.data.toolCallId);
       options.transcriptProjection?.journal.markReplayIncomplete();
     }
@@ -417,10 +409,7 @@ export function attachEventBridge(session: SessionLike, options: EventBridgeOpti
     });
   });
 
-  listen("session.compaction_start", (event) => {
-    if (!isRootSessionEvent(event)) {
-      return;
-    }
+  listenRoot("session.compaction_start", () => {
     observedCompaction = true;
     if (activeCompactionCount === 0) {
       compactionIdle = createDeferred();
@@ -457,10 +446,7 @@ export function attachEventBridge(session: SessionLike, options: EventBridgeOpti
     }
   });
 
-  listen("session.idle", (event) => {
-    if (!isRootSessionEvent(event)) {
-      return;
-    }
+  listenRoot("session.idle", () => {
     markUnconsumedReasoningIncomplete();
     flushPendingAssistantProjection();
     observedSessionIdle = true;
@@ -617,20 +603,22 @@ export function attachEventBridge(session: SessionLike, options: EventBridgeOpti
     for (const request of event.data.toolRequests ?? []) {
       projectedToolNamesByCallId.set(request.toolCallId, request.name);
     }
-    const entry = ensureMessageAccumulator(messagesById, event.data.messageId);
-    if (typeof event.data.content === "string" && event.data.content.length >= entry.text.length) {
-      entry.text = event.data.content;
-    }
+    const previousText = messagesById.get(event.data.messageId) ?? "";
+    messagesById.set(
+      event.data.messageId,
+      typeof event.data.content === "string" && event.data.content.length >= previousText.length
+        ? event.data.content
+        : previousText,
+    );
     lastAssistantReasoningText =
       event.data.reasoningText ?? ([...reasoningById.values()].join("") || undefined);
     const transcriptReasoningText =
       event.data.reasoningText ?? ([...durableReasoningById.values()].join("") || undefined);
     reasoningById.clear();
     durableReasoningById.clear();
-    unconsumedDurableReasoning = false;
     const chunk: AssistantProjectionChunk = {
       event,
-      assistantTexts: [messagesById.get(event.data.messageId)?.text ?? ""],
+      assistantTexts: [messagesById.get(event.data.messageId) ?? ""],
       ...(lastAssistantReasoningText ? { reasoningText: lastAssistantReasoningText } : {}),
       transcriptAssistantTexts: [event.data.content ?? ""],
       ...(transcriptReasoningText ? { transcriptReasoningText } : {}),
@@ -674,12 +662,11 @@ export function attachEventBridge(session: SessionLike, options: EventBridgeOpti
   }
 
   function markUnconsumedReasoningIncomplete(): void {
-    if (unconsumedDurableReasoning) {
+    if (durableReasoningById.size > 0) {
       options.transcriptProjection?.journal.markReplayIncomplete();
     }
     reasoningById.clear();
     durableReasoningById.clear();
-    unconsumedDurableReasoning = false;
   }
 
   function flushPendingAssistantProjectionForToolCall(toolCallId: string): void {
@@ -765,25 +752,11 @@ export function attachEventBridge(session: SessionLike, options: EventBridgeOpti
   }
 }
 
-function ensureMessageAccumulator(
-  messagesById: Map<string, MessageAccumulator>,
-  messageId: string,
-): MessageAccumulator {
-  let entry = messagesById.get(messageId);
-  if (!entry) {
-    entry = { text: "" };
-    messagesById.set(messageId, entry);
-  }
-  return entry;
-}
-
 function finalizeAssistantTexts(
-  messagesById: Map<string, MessageAccumulator>,
+  messagesById: Map<string, string>,
   event?: Extract<SessionEvent, { type: "assistant.message" }>,
 ): string[] {
-  const texts = [...messagesById.values()]
-    .map((message) => message.text)
-    .filter((text) => text.length > 0);
+  const texts = [...messagesById.values()].filter((text) => text.length > 0);
   if (texts.length > 0) {
     return texts;
   }

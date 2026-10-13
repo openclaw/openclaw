@@ -3,6 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { AgentSelectionRequiredError } from "../agents/agent-scope.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import {
   addSessionMember,
@@ -25,7 +26,7 @@ import { putSessionGroups, updateSessionGroupDefaults } from "./session-groups.j
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import {
-  authorizeSessionSharingTarget,
+  authorizeResolvedSessionMutationAsync,
   resolveSessionMutationAuthorization,
   resolveSessionSharingTarget,
 } from "./session-sharing.js";
@@ -42,7 +43,6 @@ afterEach(async () => {
 
 describe("session sharing group mutations", () => {
   it.each([
-    { retiredOwner: false, logicalAgent: "research", discoveryAgent: "main", archived: false },
     { retiredOwner: false, logicalAgent: "research", discoveryAgent: "main", archived: true },
     { retiredOwner: true, logicalAgent: "ops", discoveryAgent: "ops", archived: false },
     { retiredOwner: true, logicalAgent: "ops", discoveryAgent: "ops", archived: true },
@@ -58,6 +58,7 @@ describe("session sharing group mutations", () => {
             entries: retiredOwner ? { ops: {}, other: {} } : { main: {}, research: {} },
           },
         };
+        setRuntimeConfigSnapshot(cfg);
         openOpenClawAgentDatabase({ agentId: "main", path: storePath });
         const sessionKey = `agent:${logicalAgent}:group-member`;
         const scope = { agentId: logicalAgent, storePath, sessionKey };
@@ -74,8 +75,10 @@ describe("session sharing group mutations", () => {
         const ref = expectDefined(refs?.[0], "shared-store group member");
         const resolveTarget = () => resolveSessionSharingTarget({ cfg, ...ref });
         if (retiredOwner) {
-          const target = expectDefined(resolveTarget(), "shared-store sharing target");
-          expect(authorizeSessionSharingTarget({ cfg, client: viewer, target })).toBeNull();
+          expectDefined(resolveTarget(), "shared-store sharing target");
+          expect(
+            await authorizeResolvedSessionMutationAsync({ cfg, client: viewer, ...ref }),
+          ).toBeNull();
         } else {
           expect(resolveTarget).toThrow(AgentSelectionRequiredError);
         }
@@ -139,6 +142,7 @@ describe("session sharing group mutations", () => {
   it("reuses group membership metadata and immediately observes changed member permissions", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = {};
+      setRuntimeConfigSnapshot(cfg);
       await putSessionGroups({ cfg, names: ["Projects", "Personal"] });
       const scope = { agentId: "main", sessionKey: "agent:main:restricted-group-member" };
       await upsertSessionEntryCore(scope, {
@@ -193,6 +197,7 @@ describe("session sharing group mutations", () => {
     "refreshes groups after %s rejects changed member authority",
     async (action) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        setRuntimeConfigSnapshot({});
         await putSessionGroups({ cfg: {}, names: ["Old"] });
         const sessionKey = "agent:main:changed-group-authority";
         await upsertSessionEntryCore(
@@ -249,6 +254,8 @@ describe("session sharing group mutations", () => {
   );
   it("refuses restricted group drops at put admission while allowing retained groups", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = rolePolicyConfig();
+      setRuntimeConfigSnapshot(cfg);
       await putSessionGroups({ cfg: {}, names: ["Projects"] });
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: "agent:main:restricted-put-member" },
@@ -261,7 +268,6 @@ describe("session sharing group mutations", () => {
         },
       );
       const viewer = roleClient("none", "put-viewer");
-      const cfg = rolePolicyConfig();
       const context = { getRuntimeConfig: () => cfg } as GatewayRequestContext;
 
       await initializeSessionReadContext(context);
@@ -287,9 +293,10 @@ describe("session sharing group mutations", () => {
 
   it("rechecks late group members before committing a put drop", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = rolePolicyConfig();
+      setRuntimeConfigSnapshot(cfg);
       const groups = await putSessionGroups({ cfg: {}, names: ["Race"] });
       const viewer = roleClient("none", "put-viewer");
-      const cfg = rolePolicyConfig();
       const context = {
         getRuntimeConfig: () => cfg,
         getSessionEventSubscriberConnIds: () => new Set<string>(),
@@ -332,9 +339,10 @@ describe("session sharing group mutations", () => {
     "rechecks group members at %s admission for a defaults update",
     async (stage) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const cfg = rolePolicyConfig();
+        setRuntimeConfigSnapshot(cfg);
         await putSessionGroups({ cfg: {}, names: ["Race"] });
         await updateSessionGroupDefaults("Race", { cwd: "/repos/race", worktree: true });
-        const cfg = rolePolicyConfig();
         const writeRole = expectDefined(cfg.gateway?.roles?.definitions.write, "write role");
         const viewer = roleClient("write", "defaults-viewer");
         const addMember = () =>
@@ -418,6 +426,8 @@ describe("session sharing group mutations", () => {
 
   it("filters group defaults and blocks updates for sessions the caller cannot mutate", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = {};
+      setRuntimeConfigSnapshot(cfg);
       await putSessionGroups({ cfg: {}, names: ["Projects", "Personal"] });
       await updateSessionGroupDefaults("Projects", { cwd: "/repos/projects", worktree: true });
       await updateSessionGroupDefaults("Personal", { cwd: "/repos/personal", worktree: false });
@@ -432,7 +442,6 @@ describe("session sharing group mutations", () => {
         },
       );
       const viewer = client({ user: "viewer@example.com" });
-      const cfg = {};
       const context = {
         getRuntimeConfig: () => cfg,
         getSessionEventSubscriberConnIds: () => new Set<string>(),

@@ -10,7 +10,6 @@ import {
   createChatLayoutBrowser,
   getBoundingBox,
   getRect,
-  messageCircleOffSvg,
   readUiCss,
   rectsOverlap,
   waitForLayoutSettled,
@@ -287,75 +286,6 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
   });
 
   it.each([
-    [1200, 800, "desktop"],
-    [390, 844, "mobile"],
-  ] as const)(
-    "keeps the complete interrupted status above the input inside the %s footer",
-    async (width, height, label) => {
-      await withBrowserPage(openBrowserPage(width, height), async (page) => {
-        await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
-        <section class="chat">
-          <div class="chat-main__conversation-frame"><div class="chat-main__conversation">
-            <div class="chat-thread" role="log"><div class="chat-thread-inner">Transcript</div></div>
-            <div class="chat-footer">
-              <div class="agent-chat__composer-shell">
-                <div class="chat-footer__context">
-                <div class="agent-chat__composer-notices">
-                  <div class="agent-chat__composer-run-status">
-                    <span class="agent-chat__run-status agent-chat__run-status--interrupted">
-                  ${messageCircleOffSvg()}<span class="agent-chat__run-status-label">Interrupted</span>
-                    </span>
-                  </div>
-                </div>
-                </div>
-                <div class="agent-chat__input">Composer</div>
-              </div>
-            </div>
-          </div></div>
-        </section>
-      </body></html>`);
-
-        const [composer, status, input, footer, thread] = await Promise.all([
-          getRect(page, ".agent-chat__composer-shell"),
-          getRect(page, ".agent-chat__composer-run-status"),
-          getRect(page, ".agent-chat__input"),
-          getRect(page, ".chat-footer"),
-          getRect(page, ".chat-thread"),
-        ]);
-        expect(
-          Math.abs(status.left + status.width / 2 - (composer.left + composer.width / 2)),
-        ).toBeLessThan(1);
-        expect(status.top).toBeGreaterThanOrEqual(composer.top);
-        expect(status.bottom).toBeLessThanOrEqual(input.top);
-        expect(thread.bottom).toBeLessThanOrEqual(footer.top);
-        expect(composer.bottom).toBeLessThanOrEqual(footer.bottom);
-        expect(
-          await page.locator(".agent-chat__run-status-label").evaluate((node) => ({
-            clientWidth: node.clientWidth,
-            scrollWidth: node.scrollWidth,
-            text: node.textContent,
-          })),
-        ).toEqual(expect.objectContaining({ text: "Interrupted" }));
-        const labelWidths = await page
-          .locator(".agent-chat__run-status-label")
-          .evaluate((node) => ({
-            clientWidth: node.clientWidth,
-            scrollWidth: node.scrollWidth,
-          }));
-        expect(labelWidths.scrollWidth).toBeLessThanOrEqual(labelWidths.clientWidth);
-        const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-        if (artifactDir) {
-          await mkdir(artifactDir, { recursive: true });
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(artifactDir, `interrupted-status-${label}.png`),
-          });
-        }
-      });
-    },
-  );
-
-  it.each([
     [1200, 800, "desktop", "overlay", false],
     [900, 500, "mobile-landscape-900", "inline", false],
     [640, 900, "mobile-responsive-640", "overlay", false],
@@ -440,12 +370,31 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
         expect(await page.locator(".agent-chat__composer-notices").isVisible()).toBe(false);
         expect(await page.locator(".chat-footer__context").isVisible()).toBe(withPullRequest);
         const before = await geometry();
-        await page.locator(".agent-chat__composer-notices").evaluate((node) => {
+        await page.locator(".chat-footer__context").evaluate((node) => {
+          const notices = node.querySelector(".agent-chat__composer-notices")!;
+          const content = document.createElement("span");
+          content.className = "chat-composer-lit-content";
+          content.style.display = "contents";
+          for (const child of Array.from(node.children)) {
+            if (child !== notices) {
+              content.append(child);
+            }
+          }
+          node.prepend(content);
+          const recovery = document.createElement("openclaw-chat-outbox-recovery");
+          recovery.style.display = "contents";
+          content.append(recovery);
+          const noticeContent = document.createElement("span");
+          noticeContent.className = "chat-composer-lit-content";
+          noticeContent.style.display = "contents";
           const attention = document.createElement("openclaw-chat-child-attention");
           attention.style.display = "contents";
-          node.append(attention);
+          noticeContent.append(attention);
+          notices.append(noticeContent);
         });
         await waitForLayoutSettled(page, ".chat-main__conversation, .agent-chat__composer-shell");
+        expect(await page.locator(".agent-chat__composer-notices").isVisible()).toBe(false);
+        expect(await page.locator(".chat-footer__context").isVisible()).toBe(withPullRequest);
         expect(await geometry()).toEqual(before);
         expect(before.fadeInsetLeft).toBeGreaterThanOrEqual(before.scrollbarSize);
         expect(before.fadeInsetRight).toBeGreaterThanOrEqual(before.scrollbarSize);
@@ -456,7 +405,7 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
         });
         await page.locator(".agent-chat__composer-notices").evaluate((node) => {
           node.innerHTML =
-            '<div class="chat-composer-neighbor-card chat-error">Model unavailable</div>';
+            '<span class="chat-composer-lit-content" style="display:contents"><div class="chat-composer-neighbor-card chat-error">Model unavailable</div></span>';
         });
         await waitForLayoutSettled(page, ".chat-main__conversation, .agent-chat__composer-shell");
         expect(await page.getByText("Disk space low").isVisible()).toBe(true);

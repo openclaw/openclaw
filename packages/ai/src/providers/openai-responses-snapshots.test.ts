@@ -163,7 +163,7 @@ describe("Responses cumulative message snapshots", () => {
               {
                 type: "thinking",
                 thinking: "",
-                thinkingSignature: JSON.stringify({ type: "reasoning", id: "rs_1", summary: [] }),
+                thinkingSignature: JSON.stringify({ id: "rs_1", type: "reasoning", summary: [] }),
               },
             ]
           : []),

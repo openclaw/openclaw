@@ -21,10 +21,17 @@ describe("openai transport stream", () => {
     process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD = "full-redacted";
     try {
       const payload = testing.summarizeResponsesPayload({ input: `${"x".repeat(7_989)}🚀tail` });
-      const event = testing.stringifyRedactedEvent(`${"x".repeat(1_998)}🚀tail`);
+      const eventPrefix = '{"error_details":"';
+      const eventText = "x".repeat(1_999 - eventPrefix.length);
+      const failure = testing.normalizeResponsesFailedEvent(
+        { response: { error_details: `${eventText}🚀tail` } },
+        makeResponsesModel(),
+      );
+      assert(failure.observation);
+      const event = failure.observation.failureFieldsPreview;
 
       expect(payload).toContain(`payload={"input":"${"x".repeat(7_989)}…<truncated>`);
-      expect(event).toContain(`${"x".repeat(1_998)}…<truncated>`);
+      expect(event).toBe(`${eventPrefix}${eventText}…<truncated>`);
       expect(payload).not.toContain("\uD83D");
       expect(event).not.toContain("\uD83D");
     } finally {

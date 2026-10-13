@@ -64,6 +64,13 @@ type LogLike = {
   warn(message: string): void;
 };
 
+function resolveUnavailableAuthReason(
+  store: AuthProfileStore,
+  profileIds: string[],
+): FailoverReason {
+  return resolveProfilesUnavailableReason({ store, profileIds }) ?? "unknown";
+}
+
 /** Decides whether one automatic profile may bypass its current cooldown. */
 export function resolveEmbeddedAuthCooldownProbePolicy(params: {
   authStore: AuthProfileStore;
@@ -82,10 +89,7 @@ export function resolveEmbeddedAuthCooldownProbePolicy(params: {
       isProfileInCooldown(params.authStore, candidate, undefined, params.modelId),
     );
   const unavailableReason = allAutoProfilesInCooldown
-    ? (resolveProfilesUnavailableReason({
-        store: params.authStore,
-        profileIds: autoProfileCandidates,
-      }) ?? "unknown")
+    ? resolveUnavailableAuthReason(params.authStore, autoProfileCandidates)
     : null;
   const probeProfileIds = new Set<string>();
   if (
@@ -94,11 +98,7 @@ export function resolveEmbeddedAuthCooldownProbePolicy(params: {
     shouldUseTransientCooldownProbeSlot(unavailableReason)
   ) {
     for (const candidate of autoProfileCandidates) {
-      const candidateReason =
-        resolveProfilesUnavailableReason({
-          store: params.authStore,
-          profileIds: [candidate],
-        }) ?? "unknown";
+      const candidateReason = resolveUnavailableAuthReason(params.authStore, [candidate]);
       if (shouldUseTransientCooldownProbeSlot(candidateReason)) {
         probeProfileIds.add(candidate);
       }
@@ -369,12 +369,7 @@ export function createEmbeddedRunAuthController(params: {
       const profileIds = params.profileCandidates.filter(
         (id): id is string => typeof id === "string" && id.length > 0,
       );
-      return (
-        resolveProfilesUnavailableReason({
-          store: params.authStore,
-          profileIds,
-        }) ?? "unknown"
-      );
+      return resolveUnavailableAuthReason(params.authStore, profileIds);
     }
     return classifyFailoverReason(failoverParams.message, { provider: params.provider }) ?? "auth";
   };

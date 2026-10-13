@@ -222,6 +222,13 @@ export async function startTelegramWebhook(opts: {
   status.noteStart();
   const webhookRegistrationRetryPolicy =
     opts.webhookRegistrationRetryPolicy ?? TELEGRAM_WEBHOOK_REGISTRATION_RETRY_POLICY;
+  const retryDelay = (operation: "getMe" | "setWebhook", attempt: number) => {
+    const delayMs = computeBackoff(webhookRegistrationRetryPolicy, attempt);
+    runtime.log?.(
+      `telegram ${operation} retry ${attempt} scheduled in ${formatDurationPrecise(delayMs)}`,
+    );
+    return delayMs;
+  };
   let shutdownPromise: Promise<void> | undefined;
   let unregisterRoute: (() => void) | undefined;
   let unregisterTarget: (() => void) | undefined;
@@ -271,18 +278,17 @@ export async function startTelegramWebhook(opts: {
       // The webhook owns this transport because it resolved and injected it into
       // createTelegramBot; close once so abort/startup-failure paths cannot leak sockets.
       await runShutdownPhase("transport close", () => telegramTransport.close());
-      await runShutdownPhase("ingress drain", () =>
-        ingressStopTask
-          ? raceWithTimeout(
-              ingressStopTask,
-              TELEGRAM_WEBHOOK_INGRESS_STOP_GRACE_MS,
-              () => undefined,
-              {
-                ref: false,
-              },
-            )
-          : undefined,
-      );
+      await runShutdownPhase("ingress drain", () => {
+        if (ingressStopTask) {
+          return raceWithTimeout(
+            ingressStopTask,
+            TELEGRAM_WEBHOOK_INGRESS_STOP_GRACE_MS,
+            () => undefined,
+            { ref: false },
+          );
+        }
+        return undefined;
+      });
       await runShutdownPhase("ingress settlement", () => ingressMonitor?.waitForDeferredClaims());
       await runShutdownPhase("status update", () => status.noteStop());
     });
@@ -341,11 +347,7 @@ export async function startTelegramWebhook(opts: {
         }
         attempt += 1;
         status.noteRecovery();
-        const delayMs = computeBackoff(webhookRegistrationRetryPolicy, attempt);
-        runtime.log?.(
-          `telegram getMe retry ${attempt} scheduled in ${formatDurationPrecise(delayMs)}`,
-        );
-        await sleepWithAbort(delayMs, initializationAbortSignal);
+        await sleepWithAbort(retryDelay("getMe", attempt), initializationAbortSignal);
       }
     }
   });
@@ -490,16 +492,13 @@ export async function startTelegramWebhook(opts: {
     status.noteReady();
     runtime.log?.(`webhook advertised to telegram on ${publicUrl}`);
   };
-  const retryWebhookRegistration = async (firstAttempt: number): Promise<void> => {
-    let attempt = firstAttempt;
+  const retryWebhookRegistration = async (): Promise<void> => {
+    let attempt = 1;
     while (true) {
       if (shutdownPromise || opts.abortSignal?.aborted) {
         return;
       }
-      const delayMs = computeBackoff(webhookRegistrationRetryPolicy, attempt);
-      runtime.log?.(
-        `telegram setWebhook retry ${attempt} scheduled in ${formatDurationPrecise(delayMs)}`,
-      );
+      const delayMs = retryDelay("setWebhook", attempt);
       try {
         await sleepWithAbort(delayMs, opts.abortSignal);
       } catch {
@@ -549,7 +548,7 @@ export async function startTelegramWebhook(opts: {
         await shutdown();
         throw err;
       }
-      void retryWebhookRegistration(1);
+      void retryWebhookRegistration();
     }
   }
   // Drain only after registration succeeds or after the retrying startup path

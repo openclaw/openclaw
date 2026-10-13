@@ -171,7 +171,6 @@ export function normalizeCompatibilityConfig({
 
   const tuningKnobs = stripRetiredTelegramTuning(rawEntry, "channel");
   let updated = tuningKnobs.entry;
-  let changed = webhook.config !== cfg || tuningKnobs.changed;
   if (tuningKnobs.changed) {
     changes.push("Removed retired Telegram tuning knobs.");
   }
@@ -187,7 +186,6 @@ export function normalizeCompatibilityConfig({
     changes,
   });
   updated = retired.entry;
-  changed = changed || retired.changed;
 
   const accounts = normalizeChannelAccounts({
     entry: updated,
@@ -204,9 +202,8 @@ export function normalizeCompatibilityConfig({
       }),
   });
   updated = accounts.entry;
-  changed = changed || accounts.changed;
 
-  if (!changed && changes.length === 0) {
+  if (webhook.config === cfg && updated === rawEntry && changes.length === 0) {
     return { config: cfg, changes: [], historicalWebhookAccountIds };
   }
   return {

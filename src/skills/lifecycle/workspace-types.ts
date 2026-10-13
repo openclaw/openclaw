@@ -171,7 +171,6 @@ export type CommittedSkillChange = {
   workspaceDir: string;
   before?: PluginHookSkillArtifact;
   after?: PluginHookSkillArtifact;
-  proposal?: PluginHookSkillChangedEvent["proposal"];
   logger?: { warn?: (message: string) => void };
 };
 

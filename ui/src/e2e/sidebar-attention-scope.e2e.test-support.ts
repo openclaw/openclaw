@@ -8,6 +8,7 @@ import {
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
 import { compactCronJobFixture } from "../test-helpers/cron.ts";
+import { openSidebarPages } from "./sidebar-customization.test-support.ts";
 
 type SidebarAttentionScopeFlowOptions = {
   artifactDir: string;
@@ -216,12 +217,13 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     await captureProof(params, page, "09-desktop-inbox-writer-agent.png");
     await sidebar.locator(".sidebar-issues-button").click();
 
-    await sidebar.getByRole("link", { name: "Automations", exact: true }).click();
+    const pages = await openSidebarPages(page);
+    await pages.getByRole("link", { name: "Automations", exact: true }).click();
     await waitForControlUiRoute(page, { pathname: "/automations", routeId: "cron" });
     const pageScope = page.locator(".agent-scope-control openclaw-agent-select");
     await pageScope.locator(".agent-select__trigger").click();
     await pageScope
-      .locator("wa-dropdown-item[data-agent-option]")
+      .locator(".agent-select__option[data-agent-option]")
       .filter({ hasText: "All agents" })
       .click();
     await waitForCronScope(null);
@@ -258,7 +260,7 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
       const previousCount = await cronScopeRequestCount(agentId);
       await pageScope.locator(".agent-select__trigger").click();
       await pageScope
-        .locator("wa-dropdown-item[data-agent-option]")
+        .locator(".agent-select__option[data-agent-option]")
         .filter({ hasText: label })
         .click();
       await expect.poll(() => cronScopeRequestCount(agentId)).toBeGreaterThan(previousCount);

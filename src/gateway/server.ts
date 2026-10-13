@@ -92,8 +92,11 @@ async function startGatewayServerWithRuntime(
     const { withAgentDatabaseStartupAdmission } =
       await import("../state/agent-database-startup.js");
     try {
-      const server = await readOnlyWorkers.run(() =>
-        withAgentDatabaseStartupAdmission(
+      const { bindAuthProfileFileObservationReaders } =
+        await import("../agents/auth-profiles/file-state.js");
+      const server = await readOnlyWorkers.run(() => {
+        bindAuthProfileFileObservationReaders();
+        return withAgentDatabaseStartupAdmission(
           async (admission) => {
             stopDatabaseAdmission = () => admission.stop();
             const mod = await loadServerStart();
@@ -101,8 +104,8 @@ async function startGatewayServerWithRuntime(
             return mod.startGatewayServerCore(port, { ...opts, startupStartedAt });
           },
           { deferInspections: !opts.updateCanary },
-        ),
-      );
+        );
+      });
       return {
         ...server,
         close: (closeOptions: Parameters<typeof server.close>[0]) =>

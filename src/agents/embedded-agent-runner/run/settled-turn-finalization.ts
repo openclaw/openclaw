@@ -97,28 +97,49 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
   };
 }) {
   const initial = input.initial;
+  const { preparedAttempt, sessionTarget, sessionWriterFence } = input.finalization;
+  const committedSessionTarget =
+    preparedAttempt.sessionTarget || sessionTarget || sessionWriterFence
+      ? { ...preparedAttempt.sessionTarget, ...sessionTarget, ...sessionWriterFence }
+      : undefined;
+  const sessionWriterDeliveryAuthority = resolveSessionWriterDeliveryAuthority({
+    attempt: preparedAttempt,
+    sessionId: committedSessionTarget?.sessionId ?? initial.sessionIdUsed,
+    sessionTarget: committedSessionTarget,
+  });
   let attempt = initial.attempt;
   let lastRunPromptUsage = input.lastRunPromptUsage;
   const minimumAssistantMessageIndex = (attempt.answerSegments?.at(-1)?.messageEnd ?? -1) + 1;
-  const observeSourceDelivery = () =>
-    observeReplyDelivery(
-      input.terminalBase.runParams.resolveReplyDelivery,
+  const observeSourceDelivery = async () => {
+    let sourceReplyDeliveryState: TerminalPreparationInput["sourceReplyDeliveryState"];
+    const resolveFacts = input.terminalBase.runParams.resolveReplyDeliveryFacts;
+    const replyDeliveryState = await observeReplyDelivery(
+      resolveFacts
+        ? async (minimum) => {
+            const facts = await resolveFacts(minimum);
+            sourceReplyDeliveryState = facts.source;
+            return facts.terminal;
+          }
+        : input.terminalBase.runParams.resolveReplyDelivery,
       minimumAssistantMessageIndex,
       (error) =>
         log.warn(
           `reply delivery observation failed; retaining custody: ${formatErrorMessage(error)}`,
         ),
     );
-  const replyDeliveryState = await observeSourceDelivery();
+    return {
+      replyDeliveryState,
+      sourceReplyDeliveryState: sourceReplyDeliveryState ?? replyDeliveryState,
+    };
+  };
+  const delivery = await observeSourceDelivery();
+  const { replyDeliveryState } = delivery;
   let prepared = prepareEmbeddedRunTerminal({
     ...input.terminalBase,
-    replyDeliveryState,
+    ...initial,
+    ...delivery,
     attempt,
-    currentAttemptCompletedAssistant: initial.currentAttemptCompletedAssistant,
-    sessionIdUsed: initial.sessionIdUsed,
-    sessionFileUsed: initial.sessionFileUsed,
     lastRunPromptUsage,
-    terminalState: initial.terminalState,
   });
   const preserveInitial = (finalizationOutcome: "not-attempted" | "failed") => ({
     ...initial,
@@ -152,17 +173,6 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
   if (!assertFinalizationActive) {
     throw new Error("admitted run authority is no longer active");
   }
-  const { preparedAttempt, sessionTarget, sessionWriterFence } = input.finalization;
-  const committedSessionTarget =
-    preparedAttempt.sessionTarget || sessionTarget || sessionWriterFence
-      ? { ...preparedAttempt.sessionTarget, ...sessionTarget, ...sessionWriterFence }
-      : undefined;
-  const sessionWriterDeliveryAuthority = resolveSessionWriterDeliveryAuthority({
-    attempt: input.finalization.preparedAttempt,
-    sessionId: committedSessionTarget?.sessionId ?? initial.sessionIdUsed,
-    sessionTarget: committedSessionTarget,
-  });
-
   const runParams = input.terminalBase.runParams;
   const errorContext = input.terminalBase.activeErrorContext;
   const describeRun = () =>
@@ -322,7 +332,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
   const finalizedPrepared = prepareEmbeddedRunTerminal({
     ...input.terminalBase,
     ...completion,
-    replyDeliveryState: await observeSourceDelivery(),
+    ...(await observeSourceDelivery()),
     lastRunPromptUsage,
   });
   // Only a real finalizer answer may cross source-reply suppression. The

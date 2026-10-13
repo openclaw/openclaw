@@ -7,11 +7,7 @@ import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/s
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ChannelApprovalKind } from "../../infra/approval-types.js";
-import type {
-  ExecApprovalIdLookupResult,
-  ExecApprovalManager,
-  ExecApprovalRecord,
-} from "../exec-approval-manager.js";
+import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../method-scopes.js";
 import { operatorSessionCap } from "../operator-role-policy.js";
 import {
@@ -117,11 +113,8 @@ export function isApprovalRecordVisibleToClient<TPayload>(params: {
   if (requestedByConnId) {
     return requestedByConnId === normalizeNullableString(params.client?.connId);
   }
-  if (requestedByClientId || approvalReviewerDeviceIds.length > 0) {
-    return false;
-  }
   // Pre-binding pending approvals remain operable after upgrades and restarts.
-  return true;
+  return !requestedByClientId && approvalReviewerDeviceIds.length === 0;
 }
 
 export async function listVisiblePendingApprovalRequests<TPayload>(params: {
@@ -161,22 +154,6 @@ export async function listVisiblePendingApprovalRequests<TPayload>(params: {
     });
 }
 
-function resolveLookupError(params: {
-  resolvedId: ExecApprovalIdLookupResult;
-  exposeAmbiguousPrefixError?: boolean;
-}): PendingApprovalLookupError {
-  if (
-    params.resolvedId.kind === "none" ||
-    (params.resolvedId.kind === "ambiguous" && !params.exposeAmbiguousPrefixError)
-  ) {
-    return "missing";
-  }
-  return {
-    code: ErrorCodes.INVALID_REQUEST,
-    message: "ambiguous approval id prefix; use the full id",
-  };
-}
-
 async function resolveApprovalRecordForState<TPayload>(
   params: {
     manager: ExecApprovalManager<TPayload>;
@@ -186,11 +163,11 @@ async function resolveApprovalRecordForState<TPayload>(
     cfg?: OpenClawConfig;
     getCfg?: () => OpenClawConfig;
     exposeAmbiguousPrefixError?: boolean;
-    recordFilter?: (record: ExecApprovalRecord<TPayload>) => boolean;
+    recordFilter?: (record: ExecApprovalRecord<TPayload>) => boolean | Promise<boolean>;
   },
   expectedState: "pending" | "resolved",
 ): Promise<ApprovalRecordLookupResult<TPayload>> {
-  const visible = (record: ExecApprovalRecord<TPayload>) => {
+  const visible = async (record: ExecApprovalRecord<TPayload>) => {
     const cfg = params.getCfg?.() ?? params.cfg;
     return (
       !params.client?.invalidated &&
@@ -199,7 +176,7 @@ async function resolveApprovalRecordForState<TPayload>(
         client: params.client ?? null,
         ...(cfg ? { cfg } : {}),
       }) &&
-      (params.recordFilter?.(record) ?? true)
+      ((await params.recordFilter?.(record)) ?? true)
     );
   };
   const resolvedId = await params.manager.lookupApprovalId(params.inputId, {
@@ -209,12 +186,21 @@ async function resolveApprovalRecordForState<TPayload>(
   });
   params.authority?.assertCurrent();
   if (resolvedId.kind !== "exact" && resolvedId.kind !== "prefix") {
-    return { ok: false, response: resolveLookupError({ ...params, resolvedId }) };
+    return {
+      ok: false,
+      response:
+        resolvedId.kind === "none" || !params.exposeAmbiguousPrefixError
+          ? "missing"
+          : {
+              code: ErrorCodes.INVALID_REQUEST,
+              message: "ambiguous approval id prefix; use the full id",
+            },
+    };
   }
   const snapshot = await params.manager.getSnapshot(resolvedId.id, params.authority);
   params.authority?.assertCurrent();
   const isResolved = snapshot?.resolvedAtMs !== undefined;
-  if (!snapshot || isResolved !== (expectedState === "resolved") || !visible(snapshot)) {
+  if (!snapshot || isResolved !== (expectedState === "resolved") || !(await visible(snapshot))) {
     return { ok: false, response: "missing" };
   }
   params.authority?.bindSource(readApprovalRequestSource(snapshot));

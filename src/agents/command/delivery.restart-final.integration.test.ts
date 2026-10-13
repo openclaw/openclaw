@@ -13,6 +13,7 @@ import {
   SessionWorkStartInvalidatedError,
 } from "../../config/sessions/lifecycle.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { deriveDeliveryQueueRetentionColumns } from "../../infra/delivery-queue-retention-columns.js";
 import { loadDeliveryQueueEntries } from "../../infra/delivery-queue-sqlite.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "../../infra/outbound/delivery-queue-namespaces.js";
@@ -414,9 +415,27 @@ it.each(
         }
         if (boundary.endsWith("reference")) {
           const db = openOpenClawStateDatabase().db;
-          db.prepare(
-            "UPDATE delivery_queue_entries SET entry_json = json_remove(entry_json, '$.deliveryCompletion.commandOwnerReference') WHERE queue_name = ?",
-          ).run(COMMAND_OWNER_OUTBOUND_DELIVERY_QUEUE_NAME);
+          const rows = db
+            .prepare(
+              "SELECT id, json_remove(entry_json, '$.deliveryCompletion.commandOwnerReference') AS entry_json FROM delivery_queue_entries WHERE queue_name = ?",
+            )
+            .all(COMMAND_OWNER_OUTBOUND_DELIVERY_QUEUE_NAME) as Array<{
+            id: string;
+            entry_json: string;
+          }>;
+          const update = db.prepare(`UPDATE delivery_queue_entries SET entry_json = ?,
+            retention_id_prefix = @retention_id_prefix,
+            retention_max_age_ms = @retention_max_age_ms,
+            retention_max_entries = @retention_max_entries
+            WHERE queue_name = ? AND id = ?`);
+          for (const row of rows) {
+            update.run(
+              deriveDeliveryQueueRetentionColumns(row.id, row.entry_json),
+              row.entry_json,
+              COMMAND_OWNER_OUTBOUND_DELIVERY_QUEUE_NAME,
+              row.id,
+            );
+          }
         }
         // Capture older executors' inventory before recovery consumes this intent.
         const olderQueueRows = recoverable

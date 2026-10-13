@@ -37,7 +37,8 @@ import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { readProcessMemoryCapacity } from "./lib/process-memory.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { resolveTsgoTimeoutMs } from "./run-tsgo.mts";
-const repoRoot = resolveRepoRoot(import.meta.url);
+// Native compiler output uses long Windows paths even when Node entered through an 8.3 alias.
+const repoRoot = fs.realpathSync.native(resolveRepoRoot(import.meta.url));
 const DEFAULT_NODE_STEP_ABORT_KILL_GRACE_MS = 1_000;
 type NodeStepParams = {
   bin?: string;
@@ -346,12 +347,11 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
         // Output directories stay intact until a successful complete inventory exists.
         fs.rmSync(resolve(repoRoot, inputReceipt), { force: true });
         const outputs = new Set<string>();
-        return Object.assign(unit, { recordPath, inputReceipt, args, outputs, startedAt: 0 });
+        return Object.assign(unit, { recordPath, inputReceipt, args, outputs });
       })
       .filter((unit) => unit !== null);
     await runNodeSteps(
       pending.map((unit) => {
-        unit.startedAt = Date.now();
         return {
           label: `${unit.id} boundary dts`,
           args: unit.args,
@@ -388,8 +388,6 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
         unit.args,
         unit.inputReceipt,
         outputs,
-        before,
-        unit.startedAt,
         unit.outputRoot,
       );
       return Object.assign(unit, { record });

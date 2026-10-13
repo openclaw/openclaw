@@ -19,6 +19,7 @@ import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import { VERSION } from "../version.js";
 import { sha256Hex } from "./crypto-digest.js";
 import { prepareGithubIssue, type PreparedGithubIssue } from "./github-issue.js";
+import { PACKAGE_REFUSAL_CODES } from "./package-update-refusal.js";
 import { normalizeUpdateChannel } from "./update-channels.js";
 import { normalizeUpdateDoctorLintFindings } from "./update-doctor-lint.js";
 import {
@@ -111,10 +112,7 @@ function sanitizeReportField(
     typeof value === "bigint"
       ? String(value)
       : "unknown";
-  const redacted = redactSupportString(redactDiagnosticLines(text), {
-    env: context.env,
-    stateDir: context.stateDir,
-  });
+  const redacted = redactSupportString(redactDiagnosticLines(text), context);
   return truncateUtf8Prefix(redacted.trim(), maxBytes);
 }
 
@@ -206,10 +204,9 @@ function resolveUpdateMode(input: UpdateFailureReportInput): string {
 }
 
 function resolveRecoveryOutcome(
-  input: UpdateFailureReportInput,
+  { verification, steps }: ReturnType<typeof updateRunReportInputFromResult>,
   context: UpdateFailureReportContext,
 ): string {
-  const { verification, steps } = updateRunReportInputFromResult(input.result, input.recordedRun);
   const recovery = verification.recovery;
   const observation = steps.findLast((step) => step.step === "gateway recovery verification");
   return (
@@ -303,12 +300,15 @@ async function renderBoundedDiagnostics(
       .filter(Boolean)
       .join("\n");
     const facts = normalizeUpdateFailureFacts(step.failureFacts ?? [], context.env);
+    const refused = PACKAGE_REFUSAL_CODES.some((code) => facts.some((f) => f.code === code));
     const npm = facts.find(
       (fact) => (fact.check === "npm" || fact.check === "bun") && fact.npmErrorCode,
     );
-    const diagnostic = npm
-      ? [npm.npmErrorCode, npm.packageSpec].filter(Boolean).join(" ")
-      : redactPublicSupportDiagnosticLine(message, context);
+    const diagnostic = refused
+      ? "[redacted-diagnostic]"
+      : npm
+        ? [npm.npmErrorCode, npm.packageSpec].filter(Boolean).join(" ")
+        : redactPublicSupportDiagnosticLine(message, context);
     const exit = `exit ${step.exitCode ?? "unknown"}`;
     const publicDetail =
       diagnostic === "[redacted-diagnostic]"
@@ -333,7 +333,7 @@ async function renderBoundedDiagnostics(
               ...(fact.affectedKey
                 ? { affectedKey: redactPublicSupportConfigKey(fact.affectedKey) }
                 : {}),
-              ...(fact.message
+              ...(fact.message && !refused
                 ? {
                     message:
                       updatePreflightDetailMessage(fact.code) ??
@@ -380,17 +380,15 @@ export async function prepareUpdateFailureReport(
   const target = resolveUpdateTarget(input, context);
   const steps = resolveFailedSteps(input);
   const phase = sanitizeFactIdentifier(steps.at(-1)?.name ?? "not-recorded", context);
-  const recovery = resolveRecoveryOutcome(input, context);
+  const projection = updateRunReportInputFromResult(input.result, recordedRun);
+  const recovery = resolveRecoveryOutcome(projection, context);
   const rollback = input.result.rollbackOutcome ?? recordedRun?.verification?.rollbackOutcome;
   const action = recordedRun?.trigger ?? input.action;
   const installation = recordedRun?.target?.installationMethod;
-  const projection =
-    input.result.verification || recordedRun?.verification
-      ? updateRunReportInputFromResult(input.result, recordedRun)
-      : undefined;
-  const verification = projection?.verification;
-  const identity = projection
-    ? formatUpdateRunIdentity(projection.verification, projection.after)
+  const verification =
+    input.result.verification || recordedRun?.verification ? projection.verification : undefined;
+  const identity = verification
+    ? formatUpdateRunIdentity(verification, projection.after)
     : undefined;
   const currentHealth = verification
     ? await readUpdateRunReportHealth(verification, { env })

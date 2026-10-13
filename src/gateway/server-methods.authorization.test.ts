@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import * as acpMetadata from "../acp/runtime/session-meta-readonly.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
   patchSessionEntryCore,
@@ -82,9 +83,10 @@ describe("gateway method authorization", () => {
         },
       } as Parameters<typeof handleGatewayRequest>[0]["client"],
       isWebchatConnect: () => false,
-      context: { logGateway: { warn: vi.fn() } } as unknown as Parameters<
-        typeof handleGatewayRequest
-      >[0]["context"],
+      context: {
+        getRuntimeConfig: () => ({}),
+        logGateway: { warn: vi.fn() },
+      } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"],
     });
     return respond;
   }
@@ -146,6 +148,7 @@ describe("gateway method authorization", () => {
     { phase: "before response", change: "reassignment" },
   ] as const)("rejects a session $change $phase", async ({ phase, change }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const sessionKey = "agent:main:commit-bound-authorization";
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
@@ -302,6 +305,7 @@ describe("gateway method authorization", () => {
 
   it("authorizes lifecycle targets from each method's protocol shape", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const sessionKey = "agent:main:lifecycle-authorization-target";
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey },

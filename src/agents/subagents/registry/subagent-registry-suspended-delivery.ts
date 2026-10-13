@@ -86,7 +86,7 @@ export async function discardSuspendedPendingFinalDelivery(params: {
     skipRequesterSettleWake: true,
     stateContext,
     isCurrent,
-    discardDelivery: (draft) => params.discardTerminalDelivery(draft, now, "expired"),
+    finalizeDelivery: (draft) => params.discardTerminalDelivery(draft, now, "expired"),
   });
   assertCurrent();
   resumedRuns.delete(resumeKey);
@@ -97,6 +97,11 @@ export async function discardSuspendedPendingFinalDelivery(params: {
     runId: entry.runId,
     childSessionKey: entry.childSessionKey,
     requesterSessionKey: entry.requesterSessionKey,
+    suspendedAt: entry.delivery?.suspendedAt,
+    suspendedReason: entry.delivery?.suspendedReason,
+    lastError: entry.delivery?.lastError,
+    recovery:
+      "Inspect retained results with /subagents info <runId>; session history depends on cleanup and retention.",
   });
   if (shouldRemoveSubagentAttachments(entry) && isHookCurrent()) {
     await safeRemoveAttachmentsDir(entry, isHookCurrent);

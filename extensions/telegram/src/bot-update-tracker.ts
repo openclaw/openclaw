@@ -68,24 +68,21 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
   let highestCompletedUpdateId: number | null = persistenceFloorUpdateId;
   let persistInFlight = false;
   let persistTargetUpdateId: number | null = null;
+  const reportPersistError = (error: unknown) => {
+    options.onPersistError?.(error);
+  };
 
   // One prune rule: drop accepted ids at or below max(persisted offset,
   // highestAccepted - retention) unless still pending or failed. Persisted
   // floor is safe (getUpdates cannot redeliver below it); retention bounds
   // trackers that never advance a persisted floor.
   const pruneAcceptedUpdateIds = () => {
-    if (highestAcceptedUpdateId === null && highestPersistedAcceptedUpdateId === null) {
-      return;
-    }
     const windowFloor =
       (highestAcceptedUpdateId ?? Number.NEGATIVE_INFINITY) - ACCEPTED_UPDATE_ID_RETENTION;
     const persistedFloor = highestPersistedAcceptedUpdateId ?? Number.NEGATIVE_INFINITY;
     const pruneAtOrBelow = Math.max(persistedFloor, windowFloor);
     for (const id of acceptedUpdateIds) {
-      if (id > pruneAtOrBelow) {
-        continue;
-      }
-      if (pendingUpdateIds.has(id) || failedUpdateIds.has(id)) {
+      if (id > pruneAtOrBelow || pendingUpdateIds.has(id) || failedUpdateIds.has(id)) {
         continue;
       }
       acceptedUpdateIds.delete(id);
@@ -112,7 +109,7 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
             pruneAcceptedUpdateIds();
           }
         } catch (err) {
-          options.onPersistError?.(err);
+          reportPersistError(err);
         }
       }
     } finally {
@@ -132,9 +129,7 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
     }
     highestPersistenceRequestedUpdateId = updateId;
     persistTargetUpdateId = updateId;
-    void drainPersistQueue().catch((err: unknown) => {
-      options.onPersistError?.(err);
-    });
+    void drainPersistQueue().catch(reportPersistError);
   };
 
   const acceptUpdateId = (updateId: number) => {
@@ -170,9 +165,7 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
     if (!receiveContext?.shouldAckAfter(stage)) {
       return;
     }
-    void receiveContext.ack().catch((err: unknown) => {
-      options.onPersistError?.(err);
-    });
+    void receiveContext.ack().catch(reportPersistError);
   };
 
   const beginUpdate = (ctx: TelegramUpdateKeyContext): BeginUpdateResult => {
@@ -245,9 +238,7 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
         failedUpdateIds.add(update.updateId);
         void update.receiveContext
           ?.nack(new Error("Telegram update handler did not complete"))
-          .catch((err: unknown) => {
-            options.onPersistError?.(err);
-          });
+          .catch(reportPersistError);
       }
       pruneAcceptedUpdateIds();
     }

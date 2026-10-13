@@ -6,6 +6,7 @@ import { extractErrorHttpStatus } from "../../shared/assistant-error-format.js";
 import type { CompactionSafeguardCancellation } from "../agent-hooks/compaction-safeguard-runtime.js";
 import { hasModelFallbackStop } from "../failover-error.js";
 import { extractFailoverHttpStatus } from "../failover/retry-evidence.js";
+import type { EmbeddedAgentCompactResult } from "./types.js";
 
 const MAX_COMPACTION_REASON_DETAIL_CHARS = 100;
 const COMPACTION_PROVIDER_4XX = new Set([400, 401, 403, 429]);
@@ -27,6 +28,13 @@ const COMPACTION_TEXT_REASONS: ReadonlyArray<
 
 export const DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON =
   "deferred to background context-engine maintenance";
+
+export function buildCompactionFailureResult(
+  reason: string,
+  failure?: EmbeddedAgentCompactResult["failure"],
+): EmbeddedAgentCompactResult {
+  return { ok: false, compacted: false, reason, ...(failure ? { failure } : {}) };
+}
 
 function isGenericCompactionCancelledReason(reason: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(reason);

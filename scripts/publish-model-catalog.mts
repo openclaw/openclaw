@@ -208,6 +208,12 @@ export async function assembleModelCatalogBundle(options: {
     }
   }
 
+  // Runtime-discovered providers can intentionally have no static catalog rows.
+  for (const [providerId, provider] of Object.entries(providers)) {
+    if (isRecord(provider) && Array.isArray(provider.models) && provider.models.length === 0) {
+      delete providers[providerId];
+    }
+  }
   if (!Object.hasOwn(providers, "anthropic") || !Object.hasOwn(providers, "openai")) {
     throw new Error("catalog must include anthropic and openai providers");
   }
@@ -627,6 +633,141 @@ export async function hydrateModelCatalogFromModelsDev(options: {
     });
     provider.models.push(...additions);
     result[providerId] = { added: additions.length, filled, skipped };
+  }
+  return result;
+}
+
+/**
+ * Providers whose public, keyless /models lists the ids requests send. Novita's list mixes
+ * the case of some ids, so only a case-insensitive miss means it no longer serves the row.
+ */
+const PROVIDER_MODEL_INVENTORIES: Readonly<
+  Record<string, { url: string; caseInsensitive?: true }>
+> = {
+  chutes: { url: "https://llm.chutes.ai/v1/models" },
+  deepinfra: { url: "https://api.deepinfra.com/v1/openai/models" },
+  huggingface: { url: "https://router.huggingface.co/v1/models" },
+  kilocode: { url: "https://api.kilo.ai/api/gateway/models" },
+  novita: { url: "https://api.novita.ai/openai/v1/models", caseInsensitive: true },
+  nvidia: { url: "https://integrate.api.nvidia.com/v1/models" },
+  opencode: { url: "https://opencode.ai/zen/v1/models" },
+  "opencode-go": { url: "https://opencode.ai/zen/go/v1/models" },
+  venice: { url: "https://api.venice.ai/api/v1/models" },
+};
+
+/** Marks published rows a provider's live inventory no longer lists as deprecated. */
+export async function retireUnservedModels(options: {
+  bundle: PublishedModelCatalogBundle;
+  fetchImpl?: typeof fetch;
+  loadSource?: ModelCatalogSourceLoader;
+}): Promise<Record<string, string[]>> {
+  const loadSource = options.loadSource ?? createModelCatalogSourceLoader(options.fetchImpl);
+  const result: Record<string, string[]> = {};
+  for (const [providerId, { url, caseInsensitive }] of Object.entries(PROVIDER_MODEL_INVENTORIES)) {
+    const provider = options.bundle.providers[providerId];
+    if (!provider) {
+      continue;
+    }
+    let payload: unknown;
+    try {
+      payload = await loadSource(url, `${providerId} model inventory`);
+    } catch (error) {
+      process.stderr.write(
+        `[${SCRIPT_LABEL}] warning: ${error instanceof Error ? error.message : String(error)}; publishing ${providerId} without inventory retirement\n`,
+      );
+      continue;
+    }
+    const rows = isRecord(payload) && Array.isArray(payload.data) ? payload.data : [];
+    const ids = rows.flatMap((row) =>
+      isRecord(row) && typeof row.id === "string" && row.id ? [row.id] : [],
+    );
+    // An empty or partial inventory is an outage, not proof every model was retired.
+    if (ids.length === 0 || ids.length !== rows.length) {
+      process.stderr.write(
+        `[${SCRIPT_LABEL}] warning: ${providerId} model inventory is empty or malformed; publishing ${providerId} without inventory retirement\n`,
+      );
+      continue;
+    }
+    const fold = (id: string) => (caseInsensitive ? id.toLowerCase() : id);
+    const served = new Set(ids.map(fold));
+    const retired: string[] = [];
+    for (const model of provider.models) {
+      if (
+        model.status === "deprecated" ||
+        model.status === "disabled" ||
+        served.has(fold(model.id))
+      ) {
+        continue;
+      }
+      model.status = "deprecated";
+      model.statusReason = `${providerId} no longer lists this model in its public model inventory.`;
+      retired.push(model.id);
+    }
+    result[providerId] = retired;
+  }
+  return result;
+}
+
+/** Providers that publish their own featured list; its picks lead their recommendations. */
+const PROVIDER_FEATURED_MODELS: Readonly<Record<string, string>> = {
+  nvidia: "https://assets.ngc.nvidia.com/products/api-catalog/featured-models.json",
+};
+
+/**
+ * Matches each provider's featured list to its served rows, in feed order. An unavailable
+ * or malformed feed leaves that provider on the global list alone.
+ */
+export async function resolveProviderFeaturedModels(options: {
+  bundle: PublishedModelCatalogBundle;
+  fetchImpl?: typeof fetch;
+  loadSource?: ModelCatalogSourceLoader;
+}): Promise<Record<string, { ids: string[]; skipped: string[] }>> {
+  const loadSource = options.loadSource ?? createModelCatalogSourceLoader(options.fetchImpl);
+  const result: Record<string, { ids: string[]; skipped: string[] }> = {};
+  for (const [providerId, url] of Object.entries(PROVIDER_FEATURED_MODELS)) {
+    const provider = options.bundle.providers[providerId];
+    if (!provider) {
+      continue;
+    }
+    const fallback = `publishing ${providerId} with global recommendations only`;
+    let payload: unknown;
+    try {
+      payload = await loadSource(url, `${providerId} featured models`);
+    } catch (error) {
+      process.stderr.write(
+        `[${SCRIPT_LABEL}] warning: ${error instanceof Error ? error.message : String(error)}; ${fallback}\n`,
+      );
+      continue;
+    }
+    const rows = isRecord(payload) ? payload["featured-models"] : undefined;
+    const featured = Array.isArray(rows)
+      ? rows.flatMap((row) =>
+          isRecord(row) && typeof row.model === "string" && row.model ? [row.model] : [],
+        )
+      : [];
+    if (!Array.isArray(rows) || featured.length !== rows.length) {
+      process.stderr.write(
+        `[${SCRIPT_LABEL}] warning: ${providerId} featured models are malformed; ${fallback}\n`,
+      );
+      continue;
+    }
+    const servedIds = servedModelIdsByKey(provider.models);
+    const ids: string[] = [];
+    const skipped: string[] = [];
+    for (const featuredId of featured) {
+      const id = servedIds.get(canonicalModelKey(featuredId));
+      if (!id) {
+        skipped.push(featuredId);
+      } else if (!ids.includes(id)) {
+        ids.push(id);
+      }
+    }
+    if (featured.length > 0 && ids.length === 0) {
+      process.stderr.write(
+        `[${SCRIPT_LABEL}] warning: ${providerId} featured models match no served model; ${fallback}\n`,
+      );
+    }
+    result[providerId] = { ids, skipped };
   }
   return result;
 }
@@ -1054,14 +1195,12 @@ function readRecommendedModels(rootDir: string): string[] {
 }
 
 /**
- * Projects the global list onto one provider's served model rows, in list order. A
- * listed model is hidden when the provider also serves a newer listed member of its
- * family. Deprecated, disabled and replaced rows are not served.
+ * Maps canonical keys to a provider's served row ids. Deprecated, disabled and replaced
+ * rows are not served.
  */
-export function projectRecommendedModels(
-  recommendedModels: readonly string[],
+function servedModelIdsByKey(
   models: readonly Pick<ModelCatalogModel, "id" | "name" | "status" | "replacedBy">[],
-): string[] {
+): Map<string, string> {
   // The shortest id is the base alias, ahead of dated, tagged, or -fast variants.
   const idByKey = new Map<string, string>();
   for (const { id, name, status, replacedBy } of models) {
@@ -1074,6 +1213,19 @@ export function projectRecommendedModels(
       idByKey.set(key, id);
     }
   }
+  return idByKey;
+}
+
+/**
+ * Projects the global list onto one provider's served model rows, in list order. A
+ * listed model is hidden when the provider also serves a newer listed member of its
+ * family.
+ */
+export function projectRecommendedModels(
+  recommendedModels: readonly string[],
+  models: readonly Pick<ModelCatalogModel, "id" | "name" | "status" | "replacedBy">[],
+): string[] {
+  const idByKey = servedModelIdsByKey(models);
   const served = recommendedModels.flatMap((key) => {
     const id = idByKey.get(key);
     return id ? [{ key, id, family: canonicalModelFamily(key).name }] : [];
@@ -1089,16 +1241,27 @@ export function projectRecommendedModels(
     .map(({ id }) => id);
 }
 
+/**
+ * A provider's featured models lead its recommendations as listed, so the global family
+ * rule never hides a provider pick; the global projection follows without repeats.
+ */
 export async function assembleModelCatalogBundleV2(
   bundle: PublishedModelCatalogBundle,
   pricingSelections: WeakMap<ModelCatalogModel, PricingSelection>,
   standalonePricing?: StandalonePricing,
   recommendedModels: readonly string[] = [],
+  featuredModels: Readonly<Record<string, { ids: readonly string[] }>> = {},
 ): Promise<RemoteModelCatalogBundleV2> {
   const providers: RemoteModelCatalogBundleV2["providers"] = {};
   const models: RemoteModelCatalogBundleV2["models"] = [];
   for (const [providerId, provider] of Object.entries(bundle.providers)) {
-    const recommended = projectRecommendedModels(recommendedModels, provider.models);
+    const featured = featuredModels[providerId]?.ids ?? [];
+    const recommended = [
+      ...featured,
+      ...projectRecommendedModels(recommendedModels, provider.models).filter(
+        (id) => !featured.includes(id),
+      ),
+    ];
     providers[providerId] = {
       api: provider.api,
       defaultModel: provider.defaultModel,
@@ -1212,6 +1375,10 @@ export async function runPublishModelCatalog(
   }
   const loadSource = createModelCatalogSourceLoader(options.fetchImpl);
   const hydrationResult = await hydrateModelCatalogFromModelsDev({ bundle, manifests, loadSource });
+  const retirementResult = await retireUnservedModels({ bundle, loadSource });
+  const featuredResult = args.outV2
+    ? await resolveProviderFeaturedModels({ bundle, loadSource })
+    : {};
   const standalonePricing: StandalonePricing = { upstream: new Map(), provider: new Map() };
   const pricingResult = args.pricing
     ? await enrichModelCatalogPricing({
@@ -1232,6 +1399,7 @@ export async function runPublishModelCatalog(
         pricingSelections,
         standalonePricing,
         recommendedModels,
+        featuredResult,
       )
     : undefined;
   bundle = validateBundle(bundle);
@@ -1262,9 +1430,23 @@ export async function runPublishModelCatalog(
         `[${SCRIPT_LABEL}] models.dev provider=${providerId} added=${added} filled=${filled} skipped=${skipped}\n`,
     )
     .join("");
+  const retirementSummary = Object.entries(retirementResult)
+    .map(
+      ([providerId, ids]) =>
+        `[${SCRIPT_LABEL}] inventory provider=${providerId} retired=${ids.length}${ids.length > 0 ? ` ids=${ids.join(",")}` : ""}\n`,
+    )
+    .join("");
+  const featuredSummary = Object.entries(featuredResult)
+    .map(
+      ([providerId, { ids, skipped }]) =>
+        `[${SCRIPT_LABEL}] featured provider=${providerId} matched=${ids.length}${skipped.length > 0 ? ` skipped=${skipped.join(",")}` : ""}\n`,
+    )
+    .join("");
   const stats = `schemaVersion=1 providers=${summary.providers} models=${summary.models} costModels=${summary.costModels} pricingEnriched=${pricingResult.modelsEnriched} pricingEntries=${pricingResult.pricingEntries} bundleBytes=${bundleBytes} generatedAt=${bundle.generatedAt} minVersion=${bundle.minVersion} sourceCommit=${bundle.sourceCommit}`;
   if (args.dryRun) {
-    process.stdout.write(`[${SCRIPT_LABEL}] dry-run ${stats}\n${hydrationSummary}`);
+    process.stdout.write(
+      `[${SCRIPT_LABEL}] dry-run ${stats}\n${hydrationSummary}${retirementSummary}${featuredSummary}`,
+    );
     return { bundle, summary, pricingEnriched: pricingResult.modelsEnriched, wrote: false };
   }
   if (!args.out) {
@@ -1286,7 +1468,9 @@ export async function runPublishModelCatalog(
     fs.mkdirSync(path.dirname(outputFile), { recursive: true });
     fs.writeFileSync(outputFile, serialized);
   }
-  process.stdout.write(`[${SCRIPT_LABEL}] published ${stats} out=${args.out}\n${hydrationSummary}`);
+  process.stdout.write(
+    `[${SCRIPT_LABEL}] published ${stats} out=${args.out}\n${hydrationSummary}${retirementSummary}${featuredSummary}`,
+  );
   return { bundle, summary, pricingEnriched: pricingResult.modelsEnriched, wrote: true };
 }
 

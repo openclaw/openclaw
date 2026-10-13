@@ -637,24 +637,14 @@ function extractOpenClawToolTimeline(transcriptEvents) {
   return timeline;
 }
 
-function findSuccessfulToolResult(timeline, call, beforeIndex = Number.POSITIVE_INFINITY) {
+function findToolResult(timeline, call, beforeIndex = Number.POSITIVE_INFINITY, successful = true) {
   return timeline.find(
     (entry) =>
       entry.type === "result" &&
       entry.id === call.id &&
       entry.index > call.index &&
       entry.index < beforeIndex &&
-      entry.isError !== true,
-  );
-}
-
-function findToolResult(timeline, call, beforeIndex = Number.POSITIVE_INFINITY) {
-  return timeline.find(
-    (entry) =>
-      entry.type === "result" &&
-      entry.id === call.id &&
-      entry.index > call.index &&
-      entry.index < beforeIndex,
+      (!successful || entry.isError !== true),
   );
 }
 
@@ -692,11 +682,11 @@ function assertFollowthroughTranscript({ transcriptEvents, progressMarker, compl
     );
   }
   const [progressCall, completeCall] = markerCalls;
-  const progressResult = findSuccessfulToolResult(timeline, progressCall, completeCall.index);
+  const progressResult = findToolResult(timeline, progressCall, completeCall.index);
   if (!progressResult) {
     throw new Error("missing successful progress message result before completion");
   }
-  const completeResult = findSuccessfulToolResult(timeline, completeCall);
+  const completeResult = findToolResult(timeline, completeCall);
   if (!completeResult) {
     throw new Error("missing successful completion message result");
   }
@@ -728,13 +718,13 @@ function assertFollowthroughTranscript({ transcriptEvents, progressMarker, compl
       entry.index < completeCall.index,
   );
   const successfulWorkCalls = workCalls.filter((entry) =>
-    findSuccessfulToolResult(timeline, entry, completeCall.index),
+    findToolResult(timeline, entry, completeCall.index),
   );
   if (successfulWorkCalls.length === 0) {
     throw new Error("expected successful workspace work between progress and completion");
   }
   const unsettledWorkCalls = workCalls.filter(
-    (entry) => !findToolResult(timeline, entry, completeCall.index),
+    (entry) => !findToolResult(timeline, entry, completeCall.index, false),
   );
   if (unsettledWorkCalls.length > 0) {
     throw new Error(

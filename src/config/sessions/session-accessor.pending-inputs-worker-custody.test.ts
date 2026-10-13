@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { createGatewayRequestContext } from "../../gateway/server-request-context.js";
@@ -19,10 +19,13 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
+  appendTranscriptMessage,
   appendTranscriptMessageSync,
   loadTranscriptEvents,
   upsertSessionEntryCore,
@@ -43,6 +46,7 @@ import { addSessionMember, removeSessionMember } from "./session-sharing-store.j
 import { useTempSessionsFixture } from "./test-helpers.js";
 
 describe("accepted input worker custody", () => {
+  afterAll(clearRuntimeConfigSnapshot);
   const fixture = useTempSessionsFixture("openclaw-pending-worker-custody-");
   let receipt: SessionPendingInputReceipt | undefined;
 
@@ -54,6 +58,7 @@ describe("accepted input worker custody", () => {
   });
 
   it("appends, consumes, and finishes worker custody across a state-directory alias", async () => {
+    setRuntimeConfigSnapshot({});
     const fixtureRoot = path.resolve(fixture.sessionsDir(), "../../..");
     const aliasRoot = path.join(fixtureRoot, "state-alias");
     fs.symlinkSync(fixtureRoot, aliasRoot, process.platform === "win32" ? "junction" : "dir");
@@ -105,7 +110,7 @@ describe("accepted input worker custody", () => {
     expect(await listSessionPendingInputs(scope)).toMatchObject({ items: [], total: 0 });
   });
 
-  it("appends and finishes pending input through the native incognito owner", async () => {
+  it("appends and finishes pending input through the memory session actor", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
       const scope = {
         agentId: "incognito-agent",
@@ -123,6 +128,7 @@ describe("accepted input worker custody", () => {
         agents: { entries: { "incognito-agent": {} } },
       };
       const client = roleClient("view", "incognito-custody");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog({ env })).release };
       client.connect.scopes = ["operator.admin"];
       const context = createGatewayRequestContext(makeContextParams());
       context.getRuntimeConfig = () => cfg;
@@ -139,11 +145,11 @@ describe("accepted input worker custody", () => {
         role: "user",
         content: "Continue in memory",
         timestamp: 100,
-        idempotencyKey: "incognito-native:user",
+        idempotencyKey: "incognito-memory:user",
       };
       try {
         receipt = await stageSessionPendingInput(scope, {
-          runId: "incognito-native",
+          runId: "incognito-memory",
           message,
           assertCurrent: authorization.assertCurrent,
           assertAdmittedCurrent: authorization.assertCurrent,
@@ -158,9 +164,9 @@ describe("accepted input worker custody", () => {
         await expect(
           admitted.runAsync(() => {
             effects++;
-            return appendTranscriptMessageSync(scope, { message: admitted.message });
+            return appendTranscriptMessage(scope, { message: admitted.message });
           }),
-        ).resolves.toMatchObject({ ok: true, value: { appended: true } });
+        ).resolves.toMatchObject({ appended: true });
         client.connect.scopes = ["operator.read", "operator.write"];
         await expect(
           admitted.runAsync(() => {
@@ -190,6 +196,7 @@ describe("accepted input worker custody", () => {
 it("refreshes every collected source after a non-revoking profile change", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = rolePolicyConfig();
+    setRuntimeConfigSnapshot(cfg);
     const scope = {
       agentId: "main",
       sessionKey: "agent:main:collected-custody",
@@ -272,6 +279,7 @@ it.each(["turn", "locked"] as const)(
   async (writer) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = rolePolicyConfig();
+      setRuntimeConfigSnapshot(cfg);
       const client = roleClient("view", "custody-member");
       const profileId = client.authenticatedUserProfile!.profileId;
       const scope = {

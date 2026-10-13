@@ -48,24 +48,18 @@ function buildStatusDegradationRows(
   decorate = (value: string) => value,
 ) {
   const rows: Array<{ Item: string; Value: string }> = [];
-  if (summary.startupMigrationWarning) {
-    rows.push({ Item: "Startup migrations", Value: decorate(summary.startupMigrationWarning) });
-  }
-  if (summary.startupRecoveryWarning) {
-    rows.push({ Item: "Session recovery", Value: decorate(summary.startupRecoveryWarning) });
-  }
-  const childRuntimeWarning = summary.childRuntime
-    ? formatMissingChildRuntimeWarning(summary.childRuntime)
-    : undefined;
-  if (childRuntimeWarning) {
-    rows.push({ Item: "Gateway runtime", Value: decorate(childRuntimeWarning) });
-  }
-  if (summary.installationReplacementWarning) {
-    rows.push({
-      Item: "Installation replaced",
-      Value: decorate(summary.installationReplacementWarning),
-    });
-  }
+  const addWarning = (Item: string, value: string | undefined) => {
+    if (value) {
+      rows.push({ Item, Value: decorate(value) });
+    }
+  };
+  addWarning("Startup migrations", summary.startupMigrationWarning);
+  addWarning("Session recovery", summary.startupRecoveryWarning);
+  addWarning(
+    "Gateway runtime",
+    summary.childRuntime ? formatMissingChildRuntimeWarning(summary.childRuntime) : undefined,
+  );
+  addWarning("Installation replaced", summary.installationReplacementWarning);
   if (summary.secretEgressProxy) {
     const status = summary.secretEgressProxy;
     rows.push({
@@ -78,21 +72,17 @@ function buildStatusDegradationRows(
   }
   const secretOwners = summary.degradedSecretOwners ?? [];
   if (secretOwners.length > 0) {
-    rows.push({
-      Item: "Degraded secrets",
-      Value: decorate(
-        `${secretOwners.length} degraded · ${secretOwners.map((owner) => `${owner.ownerKind}:${owner.ownerId}`).join(", ")}`,
-      ),
-    });
+    addWarning(
+      "Degraded secrets",
+      `${secretOwners.length} degraded · ${secretOwners.map((owner) => `${owner.ownerKind}:${owner.ownerId}`).join(", ")}`,
+    );
   }
   const plugins = summary.degradedPlugins ?? [];
   if (plugins.length > 0) {
-    rows.push({
-      Item: "Degraded plugins",
-      Value: decorate(
-        `${plugins.length} configured-unavailable · ${plugins.map((plugin) => plugin.pluginId).join(", ")}`,
-      ),
-    });
+    addWarning(
+      "Degraded plugins",
+      `${plugins.length} configured-unavailable · ${plugins.map((plugin) => plugin.pluginId).join(", ")}`,
+    );
   }
   return rows;
 }

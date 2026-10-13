@@ -3,7 +3,7 @@ import { MCP_APP_OPEN_EVENT, type McpAppOpenDetail } from "../../components/mcp-
 import {
   MCP_APP_RESOURCE_MENTION_EVENT,
   type McpAppResourceMentionDetail,
-} from "../../components/mcp-app-resources.ts";
+} from "../../components/mcp-app-resources.tsx";
 import {
   WIDGET_PROMPT_EVENT,
   MCP_APP_CONTEXT_EVENT,
@@ -98,11 +98,7 @@ export class ChatPaneMcpAppController {
       listen(MCP_APP_OPEN_EVENT, (event) => this.receiveOpen(event)),
       listen(WIDGET_PROMPT_EVENT, (event) => this.receiveWidgetPrompt(event)),
     ];
-    return () => {
-      for (const cleanup of cleanups) {
-        cleanup();
-      }
-    };
+    return () => cleanups.forEach((cleanup) => cleanup());
   }
 
   syncLaunch(): void {

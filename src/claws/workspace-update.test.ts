@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { applyClawAddPlan } from "./add.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import { parseClawManifest } from "./schema.js";
@@ -12,8 +12,12 @@ import { buildClawUpdatePlan } from "./update-plan.js";
 import { applyClawWorkspaceUpdate } from "./workspace-update.js";
 import { readClawWorkspaceFiles } from "./workspace.js";
 
-afterEach(() => closeOpenClawStateDatabaseForTest());
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeStateDatabaseForTest();
+    cleanup();
+  }),
+);
 
 describe("applyClawWorkspaceUpdate", () => {
   it("applies add/change/remove actions and can roll them back with provenance", async () => {
@@ -77,7 +81,7 @@ describe("applyClawWorkspaceUpdate", () => {
       context: { workspace },
     });
     let config: OpenClawConfig = {};
-    await applyClawAddPlan(currentAddPlan, {
+    const added = await applyClawAddPlan(currentAddPlan, {
       env,
       nowMs: 10,
       consentPlanIntegrity: currentAddPlan.planIntegrity,
@@ -85,6 +89,7 @@ describe("applyClawWorkspaceUpdate", () => {
         config = transform(config);
       },
     });
+    expect(added).toMatchObject({ status: "complete" });
     const originalFiles = readClawWorkspaceFiles("worker", { env });
     const updatePlan = await buildClawUpdatePlan({
       agentId: "worker",

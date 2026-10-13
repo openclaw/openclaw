@@ -209,8 +209,7 @@ export class DiscordRealtimePlayback<TState> {
       );
       return false;
     }
-    const outputActive = this.hasInterruptibleOutputAudio();
-    if (!outputActive) {
+    if (!this.hasInterruptibleOutputAudio()) {
       logger.info(
         `discord voice: realtime barge-in ignored reason=${reason} outputActive=false guild=${this.params.entry.guildId} channel=${this.params.entry.channelId} playbackChunks=${this.params.harness.outputActivity.snapshot().chunks}`,
       );

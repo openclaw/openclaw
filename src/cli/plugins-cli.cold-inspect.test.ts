@@ -108,3 +108,66 @@ it.each([false, true])(
     expect(isColdPluginRuntimeLoaded(fixture)).toBe(enabled);
   },
 );
+
+it.each([false, true])(
+  "registered inspect preserves incompatible runtime diagnostics and healthy siblings (runtime=%s)",
+  async (runtime) => {
+    const healthy = createFixture(true);
+    fs.writeFileSync(
+      healthy.runtimeSource,
+      `module.exports = { id: "${pluginId}", register() {} };\n`,
+    );
+    const root = path.dirname(healthy.rootDir);
+    const incompatibleRoot = path.join(root, "codex");
+    fs.mkdirSync(incompatibleRoot);
+    const incompatible = createColdPluginFixture({
+      rootDir: incompatibleRoot,
+      pluginId: "codex",
+      packageName: "@openclaw/codex",
+      packageVersion: "2026.9.6",
+      manifest: { providers: [], channels: [], providerAuthChoices: [] },
+    });
+    fs.writeFileSync(
+      path.join(root, "openclaw.json"),
+      JSON.stringify({
+        plugins: {
+          load: { paths: [healthy.rootDir, incompatibleRoot] },
+          entries: { [pluginId]: { enabled: true }, codex: { enabled: true } },
+        },
+      }),
+    );
+    resetConfigRuntimeState();
+    const runtimeArgs = runtime ? ["--runtime"] : [];
+    const incompatibleReport = {
+      plugin: {
+        id: "codex",
+        status: "error",
+        activated: false,
+        imported: false,
+        error: expect.stringContaining("openclaw plugins update codex"),
+      },
+      diagnostics: [
+        expect.objectContaining({
+          level: "error",
+          pluginId: "codex",
+          message: expect.stringContaining("minimum compatible plugin version is 2026.9.7"),
+        }),
+      ],
+    };
+    expect(await runPluginsCommand(["inspect", "codex", ...runtimeArgs])).toMatchObject(
+      incompatibleReport,
+    );
+    expect(await runPluginsCommand(["inspect", pluginId, ...runtimeArgs])).toMatchObject({
+      plugin: { id: pluginId, status: "loaded", imported: runtime },
+    });
+    expect(await runPluginsCommand(["inspect", "--all", ...runtimeArgs])).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ...incompatibleReport,
+          plugin: expect.objectContaining(incompatibleReport.plugin),
+        }),
+      ]),
+    );
+    expect(isColdPluginRuntimeLoaded(incompatible)).toBe(false);
+  },
+);

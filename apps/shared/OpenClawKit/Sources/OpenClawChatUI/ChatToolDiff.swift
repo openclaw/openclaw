@@ -290,35 +290,30 @@ enum ChatToolDiff {
             }
             guard var section = current else { continue }
 
+            let line: ChatToolDiffLine
             if section.operation == .update, raw.hasPrefix("@@") {
-                if !section.lines.isEmpty, section.lines.last?.kind != .skip {
-                    self.pushPatchLine(
-                        ChatToolDiffLine(kind: .skip, text: ""),
-                        section: &section,
-                        storedRows: &storedRows,
-                        clipped: &clipped)
-                }
                 hunk = self.parsePatchHunk(raw)
-            } else if section.operation == .add, raw.hasPrefix("+") {
-                self.pushPatchLine(
-                    ChatToolDiffLine(kind: .add, lineNo: section.lines.count + 1, text: String(raw.dropFirst())),
-                    section: &section,
-                    storedRows: &storedRows,
-                    clipped: &clipped)
-            } else if section.operation == .delete, raw.hasPrefix("-") {
-                self.pushPatchLine(
-                    ChatToolDiffLine(kind: .del, lineNo: section.lines.count + 1, text: String(raw.dropFirst())),
-                    section: &section,
-                    storedRows: &storedRows,
-                    clipped: &clipped)
+                guard !section.lines.isEmpty, section.lines.last?.kind != .skip else { continue }
+                line = ChatToolDiffLine(kind: .skip, text: "")
+            } else if (section.operation == .add && raw.hasPrefix("+")) ||
+                (section.operation == .delete && raw.hasPrefix("-"))
+            {
+                line = ChatToolDiffLine(
+                    kind: section.operation == .add ? .add : .del,
+                    lineNo: section.lines.count + 1,
+                    text: String(raw.dropFirst()))
             } else if section.operation == .update,
                       raw.isEmpty || raw.hasPrefix("+") || raw.hasPrefix("-") || raw.hasPrefix(" ")
             {
-                self.pushPatchLine(
-                    hunk.consume(raw),
-                    section: &section,
-                    storedRows: &storedRows,
-                    clipped: &clipped)
+                line = hunk.consume(raw)
+            } else {
+                continue
+            }
+            if storedRows < self.maxRenderLines {
+                section.lines.append(line)
+                storedRows += 1
+            } else {
+                clipped = true
             }
             current = section
         }
@@ -340,20 +335,6 @@ enum ChatToolDiff {
             return (operation, path)
         }
         return nil
-    }
-
-    private static func pushPatchLine(
-        _ line: ChatToolDiffLine,
-        section: inout PatchSection,
-        storedRows: inout Int,
-        clipped: inout Bool)
-    {
-        if storedRows < self.maxRenderLines {
-            section.lines.append(line)
-            storedRows += 1
-        } else {
-            clipped = true
-        }
     }
 
     private static func parsePatchHunk(_ raw: String) -> PatchHunk {

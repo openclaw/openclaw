@@ -35,7 +35,7 @@ export function resolveEmbeddedRunTerminalTimeout(input: {
   const defaultTimeoutText = idleTimedOut
     ? "The model did not produce a response before the model idle timeout. " +
       "Please try again, or increase `models.providers.<id>.timeoutSeconds` for slow local or self-hosted providers. " +
-      "If `agents.defaults.timeoutSeconds` or a run-specific timeout is lower, raise that ceiling too; provider timeouts cannot extend the whole agent run."
+      "If `agents.defaults.timeoutSeconds` or a run-specific timeout is lower, raise that ceiling too; provider timeouts cannot extend a model attempt budget."
     : "Request timed out before a response was generated. " +
       "Please try again, or increase `agents.defaults.timeoutSeconds` in your config.";
   const timeoutText = input.attempt.promptTimeoutOutcome?.message?.trim() || defaultTimeoutText;

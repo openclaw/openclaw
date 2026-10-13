@@ -16,13 +16,6 @@ export const NATIVE_SUBAGENT_NOTIFICATION_METHODS = new Set([
   // boundary until its protocol provides the child's terminal status and text.
   "rawResponseItem/completed",
 ]);
-export const RECOVERY_REVISION_NOTIFICATION_METHODS = new Set([
-  "thread/started",
-  "thread/status/changed",
-  "turn/started",
-  "turn/completed",
-]);
-
 const CODEX_SUBAGENT_NOTIFICATION_START = "<subagent_notification>";
 const CODEX_SUBAGENT_NOTIFICATION_END = "</subagent_notification>";
 

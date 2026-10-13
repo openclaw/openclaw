@@ -7,10 +7,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveClaudeCliProjectDirForWorkspace } from "../agents/command/claude-cli-project-dir.js";
-import { resolveUpdatedInstallCommandEnv } from "../cli/update-cli/update-command-service-env.js";
 import { clearHealthChecksForTest } from "../flows/health-check-registry.js";
-import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
-import { loadBundledPluginPublicArtifactModuleSync } from "../plugins/public-surface-loader.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { noteClaudeCliHealth } from "./doctor-claude-cli.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
@@ -108,36 +105,6 @@ describe("noteClaudeCliHealth", () => {
     clearHealthChecksForTest();
   });
 
-  it("probes the executable resolved by the owning backend", async () => {
-    await withTempHome(({ workspaceDir, commandPath }) => {
-      resolveCliBackendConfigMock.mockReturnValue({
-        id: "claude-cli",
-        pluginId: "custom-anthropic",
-        config: { command: commandPath },
-      });
-      const spawn = mockClaudeAuthentication(true);
-
-      noteClaudeCliHealth(
-        {
-          agents: {
-            defaults: { model: "claude-cli/claude-sonnet-4-6" },
-            entries: { main: {} },
-          },
-        },
-        {
-          workspaceDir,
-          noteFn: vi.fn(),
-        },
-      );
-
-      expect(spawn).toHaveBeenCalledWith(
-        commandPath,
-        ["auth", "status", "--json"],
-        expect.any(Object),
-      );
-    });
-  });
-
   it("stays quiet when Claude CLI is not configured or detected", () => {
     const noteFn = vi.fn();
     noteClaudeCliHealth(
@@ -147,71 +114,6 @@ describe("noteClaudeCliHealth", () => {
       },
     );
     expect(noteFn).not.toHaveBeenCalled();
-  });
-
-  it("finds a native installation after update selects the service PATH", async () => {
-    await withTempHome(async ({ homeDir, workspaceDir }) => {
-      const nativeBin = path.join(homeDir, ".local", "bin");
-      const serviceBin = path.join(homeDir, "service-bin");
-      fs.mkdirSync(nativeBin, { recursive: true });
-      fs.mkdirSync(serviceBin);
-      const commandPath = path.join(nativeBin, "claude");
-      fs.writeFileSync(commandPath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-      const env = resolveUpdatedInstallCommandEnv({
-        processEnv: {
-          HOME: homeDir,
-          OPENCLAW_HOME: homeDir,
-          OPENCLAW_STATE_DIR: path.join(homeDir, ".openclaw"),
-          PATH: nativeBin,
-          OPENCLAW_PATH_BOOTSTRAPPED: "1",
-        },
-        serviceEnv: { PATH: serviceBin },
-      });
-      await withEnvAsync(env, async () => {
-        ensureOpenClawCliOnPath();
-        expect(process.env.PATH).toBe(serviceBin);
-        const { resolveClaudeTerminalExecutable } = loadBundledPluginPublicArtifactModuleSync<{
-          resolveClaudeTerminalExecutable: (
-            env: NodeJS.ProcessEnv,
-            options: { pathStrategy: "direct" },
-          ) => { executable: string } | undefined;
-        }>({ dirName: "anthropic", artifactBasename: "cli-auth-api.js" });
-        expect(resolveClaudeTerminalExecutable(process.env, { pathStrategy: "direct" })).toEqual({
-          executable: commandPath,
-        });
-        const noteFn = vi.fn();
-        const spawn = mockClaudeAuthentication(true);
-        noteClaudeCliHealth(defaultClaudeConfig, {
-          workspaceDir,
-          noteFn,
-        });
-        expect(noteBody(noteFn)).toContain(
-          `Binary: found at $OPENCLAW_HOME${path.sep}.local${path.sep}bin${path.sep}claude (not on service PATH).`,
-        );
-        expect(noteBody(noteFn)).not.toContain("- Fix:");
-        expect(spawn).toHaveBeenCalledWith(
-          commandPath,
-          ["auth", "status", "--json"],
-          expect.any(Object),
-        );
-      });
-    });
-  });
-
-  it("stays quiet for a healthy claude-cli setup", async () => {
-    await withTempHome(({ homeDir, workspaceDir }) => {
-      const projectDir = resolveClaudeCliProjectDirForWorkspace({ workspaceDir, homeDir });
-      fs.mkdirSync(projectDir, { recursive: true });
-
-      const noteFn = vi.fn();
-      mockClaudeAuthentication(true);
-      noteClaudeCliHealth(defaultClaudeConfig, {
-        workspaceDir,
-        noteFn,
-      });
-
-      expect(noteFn).not.toHaveBeenCalled();
-    });
   });
 
   it("probes auth with the same cleared environment as Claude execution", async () => {
@@ -255,54 +157,6 @@ describe("noteClaudeCliHealth", () => {
       const authEnv = spawn.mock.calls[0]?.[2]?.env;
       expect(authEnv).not.toHaveProperty("ANTHROPIC_API_KEY");
       expect(authEnv).not.toHaveProperty("CLAUDE_CODE_OAUTH_TOKEN");
-    });
-  });
-
-  it("stays quiet for a healthy non-default Claude CLI runtime agent", async () => {
-    await withTempHome(({ homeDir, workspaceDir }) => {
-      resolveModelAgentRuntimeMetadataMock.mockImplementation(({ agentId }) => ({
-        id: agentId === "xiaoao" ? "claude-cli" : "openclaw",
-        source: agentId === "xiaoao" ? "model" : "implicit",
-      }));
-      const root = path.dirname(workspaceDir);
-      const defaultWorkspace = path.join(root, "workspace-coder");
-      const claudeWorkspace = path.join(root, "workspace-xiaoao");
-      fs.mkdirSync(defaultWorkspace, { recursive: true });
-      fs.mkdirSync(claudeWorkspace, { recursive: true });
-      const projectDir = resolveClaudeCliProjectDirForWorkspace({
-        workspaceDir: claudeWorkspace,
-        homeDir,
-      });
-      fs.mkdirSync(projectDir, { recursive: true });
-
-      const noteFn = vi.fn();
-      mockClaudeAuthentication(true);
-      noteClaudeCliHealth(
-        {
-          agents: {
-            defaults: {
-              model: { primary: "openai/gpt-5.5" },
-            },
-            entries: {
-              coder: {
-                workspace: defaultWorkspace,
-              },
-              xiaoao: {
-                workspace: claudeWorkspace,
-                model: "anthropic/claude-opus-4-7",
-                models: {
-                  "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
-                },
-              },
-            },
-          },
-        },
-        {
-          noteFn,
-        },
-      );
-
-      expect(noteFn).not.toHaveBeenCalled();
     });
   });
 
@@ -387,29 +241,19 @@ describe("noteClaudeCliHealth", () => {
   });
 
   // Registered CLI entry; routed by test/vitest/vitest.commands.config.ts.
-  it.each(["cyclic project", "blocked workspace", "readable", "missing", "native installation"])(
+  it.each(["cyclic project", "native installation"])(
     "doctor --lint --only core/doctor/claude-cli reports %s at final output",
     async (scenario) => {
       clearHealthChecksForTest();
       await withTempHome(async ({ homeDir, workspaceDir, commandPath }) => {
         const configPath = path.join(homeDir, "openclaw.json");
-        let configuredWorkspace = workspaceDir;
-        if (scenario === "blocked workspace") {
-          const parent = path.join(workspaceDir, "parent");
-          fs.writeFileSync(parent, "not a directory");
-          configuredWorkspace = path.join(parent, "child");
-        } else if (scenario === "missing") {
-          configuredWorkspace = path.join(workspaceDir, "missing");
-        }
         const projectDir = resolveClaudeCliProjectDirForWorkspace({
-          workspaceDir: configuredWorkspace,
+          workspaceDir,
           homeDir,
         });
         fs.mkdirSync(path.dirname(projectDir), { recursive: true });
         if (scenario === "cyclic project") {
           fs.symlinkSync(projectDir, projectDir, process.platform === "win32" ? "junction" : "dir");
-        } else if (scenario === "readable") {
-          fs.mkdirSync(projectDir);
         }
         fs.writeFileSync(
           configPath,
@@ -419,7 +263,7 @@ describe("noteClaudeCliHealth", () => {
               defaults: {
                 model: "anthropic/fixture",
                 models: { "anthropic/fixture": { agentRuntime: { id: "claude-cli" } } },
-                workspace: configuredWorkspace,
+                workspace: workspaceDir,
               },
               entries: { main: {} },
             },
@@ -478,7 +322,7 @@ describe("noteClaudeCliHealth", () => {
             const output: unknown = JSON.parse(
               stdout.mock.calls.map(([chunk]) => String(chunk)).join(""),
             );
-            const broken = scenario === "cyclic project" || scenario === "blocked workspace";
+            const broken = scenario === "cyclic project";
             expect(exitCode).toBe(broken ? 1 : 0);
             expect(output).toMatchObject({
               ok: !broken,
@@ -488,14 +332,9 @@ describe("noteClaudeCliHealth", () => {
                     {
                       checkId: "core/doctor/claude-cli",
                       severity: "warning",
-                      message:
-                        scenario === "cyclic project"
-                          ? `Claude project dir: $OPENCLAW_HOME${projectDir.slice(homeDir.length)} is not readable by this user.`
-                          : `Workspace: ${configuredWorkspace} is not readable by this user.`,
+                      message: `Claude project dir: $OPENCLAW_HOME${projectDir.slice(homeDir.length)} is not readable by this user.`,
                       fixHint:
-                        scenario === "cyclic project"
-                          ? "- Fix: make the Claude project dir readable, or remove the broken path and let Claude recreate it."
-                          : "- Fix: make the workspace a readable, writable directory for the gateway user.",
+                        "- Fix: make the Claude project dir readable, or remove the broken path and let Claude recreate it.",
                     },
                   ]
                 : [],

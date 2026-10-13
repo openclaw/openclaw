@@ -62,11 +62,7 @@ export function logDecisionToolRequest(params: {
     restrictionRequested: params.decision.shouldPruneTools,
     restrictionApplied: params.decision.restrictionApplied === true,
     surfaceEffect:
-      !before || !final
-        ? "unknown"
-        : delta !== undefined && delta > 0
-          ? "reduced"
-          : "unchanged-or-expanded",
+      delta === undefined ? "unknown" : delta > 0 ? "reduced" : "unchanged-or-expanded",
     decisionLatencyMs: params.decision.latencyMs ?? null,
     contextExchanges: params.decision.context?.exchangeCount ?? 0,
     contextChars: params.decision.context?.contextChars ?? 0,

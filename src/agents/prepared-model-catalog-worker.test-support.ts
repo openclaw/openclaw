@@ -124,6 +124,8 @@ export function writeFixturePlugin(params: {
   asyncSyntheticAuth?: boolean;
   syntheticAuthAvailable?: boolean;
   catalogControl?: boolean;
+  /** Publishes the Codex client version handed to this worker request as a model id. */
+  reportCodexClientVersion?: boolean;
 }): string {
   const pluginDir = path.join(params.root, "plugin");
   fs.mkdirSync(pluginDir, { recursive: true });
@@ -229,6 +231,13 @@ module.exports = {
       catalog: {
         run(context) {
           ${catalogControlSource}
+          ${
+            params.reportCodexClientVersion
+              ? `// Same store the Codex client-version SDK facade reads inside a worker request.
+          const handedOff = globalThis[Symbol.for("openclaw.codexClientVersionHandoff")]?.getStore();
+          const codexClientVersion = handedOff ? (handedOff.version ?? "unreported") : "not-handed-off";`
+              : ""
+          }
           const refOnlyApi = context.resolveProviderApiKey(${JSON.stringify(REF_ONLY_API_PROVIDER_ID)}).apiKey;
           const refOnlyToken = context.resolveProviderApiKey(${JSON.stringify(REF_ONLY_TOKEN_PROVIDER_ID)}).apiKey;
           const durableAuth = context.resolveProviderApiKey(${JSON.stringify(DURABLE_AUTH_PROVIDER_ID)}).apiKey;
@@ -239,6 +248,7 @@ module.exports = {
             api: "openai-completions",
             models: [
               ${params.catalogControl ? "...legacyModels," : ""}
+              ${params.reportCodexClientVersion ? '{ id: "codex-client-" + codexClientVersion, name: "Codex client version proof" },' : ""}
               { id: "sqlite-model", name: "SQLite model" },
               {
                 id: ${JSON.stringify(`plugin-generation-${params.pluginVersion ?? "v1"}`)},
@@ -370,6 +380,7 @@ export async function createCatalogFixture(
     builtPluginVersion?: string;
     asyncSyntheticAuth?: boolean;
     catalogControl?: boolean;
+    reportCodexClientVersion?: boolean;
   },
 ) {
   const root = makeTempDir("openclaw-model-catalog-worker-");
@@ -426,6 +437,7 @@ export async function createCatalogFixture(
       },
     },
   } satisfies OpenClawConfig;
+  await seedFixturePluginModelCatalog(agentDir, env, PLUGIN_ID, PROVIDER_ID);
   replaceRuntimeAuthProfileStoreSnapshots([
     {
       agentDir,
@@ -458,7 +470,6 @@ export async function createCatalogFixture(
         syncExternalCli: false,
       })
     : undefined;
-  await seedFixturePluginModelCatalog(agentDir, env, PLUGIN_ID, PROVIDER_ID);
   return { agentDir, config, env, marker, externalAuthPath, hydratedAuthStore, root, workspaceDir };
 }
 
@@ -613,6 +624,7 @@ export async function expectNativeHarnessModelsPublishedFromWorker(params: {
     [REF_ONLY_API_ENV]: "ref-only-api-secret-not-real",
     [REF_ONLY_TOKEN_ENV]: "ref-only-token-secret-not-real",
   };
+  await seedFixturePluginModelCatalog(agentDir, env, PLUGIN_ID, PROVIDER_ID);
   replaceRuntimeAuthProfileStoreSnapshots([
     {
       agentDir,
@@ -630,7 +642,6 @@ export async function expectNativeHarnessModelsPublishedFromWorker(params: {
       },
     },
   ]);
-  await seedFixturePluginModelCatalog(agentDir, env, PLUGIN_ID, PROVIDER_ID);
   const input = {
     agentId: "main",
     agentDir,
