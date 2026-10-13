@@ -235,7 +235,7 @@ describe("plugin-sdk provider-auth-runtime", () => {
 
     await expect(callback).rejects.toBe(failure);
     expect(callbackListener.servers).toHaveLength(1);
-    expect(callbackListener.servers[0].listening).toBe(false);
+    expect(callbackListener.servers[0]?.listening).toBe(false);
   });
 
   it("binds the redirect host when the public hostname option is omitted", async () => {

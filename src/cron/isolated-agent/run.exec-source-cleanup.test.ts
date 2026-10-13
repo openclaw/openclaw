@@ -5,6 +5,7 @@ import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
   getChannelPluginMock,
   loadRunCronIsolatedAgentTurn,
+  resolveCronDeliveryPlanMock,
   resolveDeliveryTargetMock,
   runWithModelFallbackMock,
 } from "./run.test-harness.js";
@@ -41,6 +42,12 @@ describe("cron execution-source cleanup", () => {
         to: "test-target",
       });
       if (outcome === "preparation error") {
+        resolveCronDeliveryPlanMock.mockReturnValue({
+          requested: true,
+          mode: "announce",
+          channel: "messagechat",
+          to: "test-target",
+        });
         getChannelPluginMock.mockReturnValue({
           threading: {
             resolveCurrentChannelId: () => {

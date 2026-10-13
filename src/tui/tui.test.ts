@@ -848,7 +848,7 @@ describe("embedded TUI state ownership", () => {
               throw new Error("local TUI failed");
             }
             if (outcome === "early return") {
-              return;
+              return undefined;
             }
             return "complete";
           },
