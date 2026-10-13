@@ -141,7 +141,6 @@ extensions/qa-lab/web/src/app.ts
 extensions/signal/src/monitor/event-handler.inbound-context.test.ts
 extensions/signal/src/monitor/event-handler.ts
 extensions/slack/src/action-runtime.ts
-extensions/slack/src/channel.ts
 extensions/slack/src/message-action-dispatch.test.ts
 extensions/slack/src/monitor/events/interactions.block-actions.ts
 extensions/slack/src/monitor/events/interactions.test.ts

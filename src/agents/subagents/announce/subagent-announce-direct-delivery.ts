@@ -455,6 +455,11 @@ async function sendSubagentAnnounceDirectlyBound(
     }
     const classifyResponse = createDirectAnnounceResponseClassifier({
       params,
+      cfg,
+      requesterSessionKey: canonicalRequesterSessionKey,
+      requesterAgentId: params.requesterAgentId,
+      signal: params.signal,
+      timeoutMs: announceTimeoutMs,
       parentOnly,
       requesterSessionBound,
       deliveryTarget,
@@ -582,6 +587,9 @@ async function sendSubagentAnnounceDirectlyBound(
 
     const classified = directFailure ?? classifyResponse(directAnnounceResponse);
     const delivery = classified instanceof Promise ? await classified : classified;
+    if (!isCompletionDeliveryAllowed()) {
+      return sourceOwnerChangedResult();
+    }
     const originalOutcome = buildAgentRunTerminalOutcomeFromWaitResult(
       asOptionalRecord(directAnnounceResponse),
     );
@@ -660,9 +668,17 @@ async function sendSubagentAnnounceDirectlyBound(
     }
     // Settle responses cannot take the subagent text-send fallback. Reusing
     // their normal receipt classifier never dispatches or sends the input again.
-    return settledRecovery.kind === "delivery"
-      ? settledRecovery.delivery
-      : classifyResponse({ status: "ok", result: settledRecovery.result });
+    if (settledRecovery.kind === "delivery") {
+      return settledRecovery.delivery;
+    }
+    const recoveredDelivery = await classifyResponse({
+      status: "ok",
+      result: settledRecovery.result,
+    });
+    if (!isCompletionDeliveryAllowed()) {
+      return sourceOwnerChangedResult();
+    }
+    return recoveredDelivery;
   } catch (err) {
     const disposition = hasAnnounceSendEvidence(err)
       ? "ambiguous"

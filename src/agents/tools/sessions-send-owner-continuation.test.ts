@@ -140,6 +140,87 @@ afterEach(() => {
 });
 
 describe("child followup requester continuation", () => {
+  it("revalidates requester custody after asynchronous source-delivery classification", async () => {
+    let custodyCurrent = true;
+    const request = await inRun("original", () =>
+      prepareSessionsSendFollowup({
+        runId: "child-followup",
+        requesterTurnRunId: "original",
+        requesterAgentId: "main",
+        requesterSessionKey: SESSION,
+        targetAgentId: "main",
+        targetSessionKey: CHILD,
+      }),
+    );
+    expect(request).toBeDefined();
+    const completion = SessionFollowupCompletion.bind(request!);
+    completion.markAccepted(request!.runId);
+    const assertCustodyCurrent = request!.custody.assertCurrent.bind(request!.custody);
+    request!.custody.assertCurrent = () => {
+      if (!custodyCurrent) {
+        throw new Error("requester custody changed during delivery classification");
+      }
+      assertCustodyCurrent();
+    };
+    const released = createDeferredCore();
+    fixture.release.mockImplementation(() => released.resolve());
+    fixture.dispatch.mockImplementation(async (_method, params, options) => {
+      const runId = params.idempotencyKey as string;
+      options?.onAccepted?.({ status: "accepted", runId });
+      queueMicrotask(() => {
+        custodyCurrent = false;
+      });
+      return {
+        status: "ok",
+        runId,
+        inputProcessingCompleted: true,
+        result: {
+          didSendViaMessagingTool: true,
+          messagingToolSentTargets: [
+            {
+              tool: "message",
+              provider: "slack",
+              accountId: "default",
+              to: "user:U123",
+              sourceReplyFinal: true,
+            },
+          ],
+        },
+      };
+    });
+
+    try {
+      await startSessionsSendReplyFlow({
+        completion,
+        callGateway: callAgentToolGatewayRequest,
+        runId: request!.runId,
+        skip: false,
+        reply: { status: "ok", replyText: "ready" },
+        notifyRequesterOnWaitFailure: true,
+        targetSessionKey: CHILD,
+        targetAgentId: "main",
+        displayKey: CHILD,
+        requesterSessionKey: SESSION,
+        requesterAgentId: "main",
+        requesterSession: { sessionId: SESSION_ID, lifecycleRevision: "one" },
+        requesterOrigin: { channel: "slack", accountId: "default", to: "user:U123" },
+        replyTimeoutMs: 1_000,
+        replyMode: "one-way",
+      });
+      await released.promise;
+      expect(fixture.log).toHaveBeenCalledWith(
+        "sessions_send reply flow admission failed",
+        expect.objectContaining({
+          error: "requester custody changed during delivery classification",
+        }),
+      );
+    } finally {
+      custodyCurrent = true;
+      completion.close();
+      await released.promise;
+    }
+  });
+
   it("retains one timed-out inline result through busy parent admission and execution", async () => {
     vi.useFakeTimers();
     const request = await inRun("original", () =>
@@ -341,13 +422,16 @@ describe("child followup requester continuation", () => {
         ? { runId: admission!.runId, status: "in_flight" }
         : { runId: admission!.runId, status: "ok", inputProcessingCompleted: true };
     });
-    fixture.dispatch.mockImplementation(async (method, params, options) =>
-      callGateway({
+    fixture.dispatch.mockImplementation(async (method, params, options) => {
+      if (outcome === "receipt replay") {
+        options?.onAccepted?.({ runId: params.idempotencyKey });
+      }
+      return await callGateway({
         method,
         params,
         assertDispatchCurrent: options?.sessionMutationCommitGuard,
-      }),
-    );
+      });
+    });
     await startSessionsSendReplyFlow({
       completion,
       callGateway,

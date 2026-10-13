@@ -152,7 +152,11 @@ export function startSessionsSendReplyFlow(
               // input. Failed or timed-out processing must never execute again here.
               response = await dispatch();
             }
-            const delivery = resolvePrivateCompletionDeliveryResult(readReceipt());
+            const delivery = await resolvePrivateCompletionDeliveryResult(readReceipt());
+            request.custody.signal.throwIfAborted();
+            if (params.requesterOrigin?.channel && params.requesterOrigin.to) {
+              request.custody.assertCurrent();
+            }
             if (!delivery.delivered) {
               throw new Error(delivery.error ?? "Private requester input was not processed.");
             }
