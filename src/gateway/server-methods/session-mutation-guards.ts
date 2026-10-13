@@ -14,6 +14,8 @@ import {
   hasPreparedGatewayDeviceAuthority,
   readAcceptedGatewayDeviceSourceAuthority,
   readGatewayDeviceRevocationGuard,
+  readGatewayDeviceSourceAuthority,
+  retainGatewayDeviceRevocation,
 } from "../device-revocation.js";
 import type { ExpectedProfileBinding } from "../expected-profile.js";
 import { isInternalApprovalCommitGuard } from "../internal-approval-authority.js";
@@ -299,8 +301,17 @@ export function bindGatewayRequestHandlerMutationAuthority<T extends GatewayRequ
     const authorization = handler.sessionMutationAuthorization;
     if (authorization) {
       const admitted = authorization.admittedInputAuthority;
+      const assertAdmittedSourceCurrent = authorization.assertAdmittedSourceCurrent;
       handler.sessionMutationAuthorization = {
         ...authorization,
+        ...(assertAdmittedSourceCurrent
+          ? {
+              assertAdmittedSourceCurrent: () => {
+                assertTransferredHandlerCurrent();
+                assertAdmittedSourceCurrent();
+              },
+            }
+          : {}),
         ...(admitted
           ? {
               admittedInputAuthority: withSessionPendingInputAuthorityGuard(
@@ -362,6 +373,77 @@ export function captureGatewayRequestOperatorGuard(options: GatewayRequestOption
   return assertCurrent;
 }
 
+/** Accepted Gateway work survives transport loss while its original operator grant stays live. */
+export function retainGatewayRequestMutationAuthority(options: GatewayRequestOptions): {
+  assertCurrent: () => void;
+  release: () => void;
+} {
+  const assertOperatorCurrent = captureGatewayRequestOperatorGuard(options);
+  const authority = readGatewayRequestMutationAuthority(options);
+  authority.assertCurrent();
+  assertOperatorCurrent();
+  const sourceCurrent =
+    authority.family === "worker"
+      ? readGatewayDeviceSourceAuthority(options.hasCurrentClientAuthority)
+      : undefined;
+  const releaseDevice = retainGatewayDeviceRevocation(options.hasCurrentClientAuthority);
+  let released = false;
+  return {
+    assertCurrent: () => {
+      if (released || sourceCurrent?.() === false) {
+        throw new SessionMutationAuthorizationChangedError(
+          errorShape(ErrorCodes.FORBIDDEN, "Gateway requester authority changed"),
+        );
+      }
+      assertOperatorCurrent();
+      // Opaque SDK guards have no separable source grant; retain their full contract.
+      if (!sourceCurrent) {
+        authority.assertCurrent();
+      }
+    },
+    release: () => {
+      if (!released) {
+        released = true;
+        releaseDevice?.();
+      }
+    },
+  };
+}
+
+/** Forwarded chat input owns both its target and original request authority. */
+export function retainForwardedSessionMutationAuthorization(
+  authorization: SessionMutationAuthorization,
+  source: SessionMutationAuthorization | undefined,
+): SessionMutationAuthorization {
+  let releaseSource = source?.retain?.();
+  if (!releaseSource) {
+    return authorization;
+  }
+  return {
+    ...authorization,
+    release: () => {
+      try {
+        authorization.release?.();
+      } finally {
+        releaseSource?.();
+        releaseSource = undefined;
+      }
+    },
+    takeRelease: () => {
+      const releaseAuthorization = authorization.takeRelease?.() ?? authorization.release;
+      const releaseRetainedSource = releaseSource;
+      releaseSource = undefined;
+      return () => {
+        try {
+          releaseAuthorization?.();
+        } finally {
+          releaseRetainedSource?.();
+        }
+      };
+    },
+  };
+}
+
 /** Keep the host lifetime and operator target policy on the same commit boundary. */
 export function withSessionMutationCommitGuard(
   authorization: SessionMutationAuthorization | undefined,
@@ -376,7 +458,7 @@ export function withSessionMutationCommitGuard(
   // account selection change cannot revoke custody already transferred to it.
   const assertAdmittedInputCurrent = composeSessionSourceAssertion([
     assertAdmittedSourceCurrent ?? assertCommitAllowed,
-    authorization?.assertCurrent,
+    authorization?.assertAdmittedInputCurrent ?? authorization?.assertCurrent,
   ]);
   const admitted = authorization?.admittedInputAuthority;
   const withCommitGuards = <T>(consume: () => T): T => {
@@ -386,6 +468,10 @@ export function withSessionMutationCommitGuard(
   };
   return {
     ...authorization,
+    assertAdmittedSourceCurrent: composeSessionSourceAssertion([
+      assertAdmittedSourceCurrent ?? assertCommitAllowed,
+      authorization?.assertAdmittedSourceCurrent,
+    ]),
     ...(authorization?.prepareWorkerGrant
       ? {
           prepareWorkerGrant: async (target) => {

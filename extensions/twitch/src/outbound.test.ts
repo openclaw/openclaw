@@ -70,7 +70,6 @@ describe("outbound", () => {
   function setupAccountContext(params?: {
     account?: typeof mockAccount | null;
     configured?: boolean;
-    availableAccountIds?: string[];
   }) {
     const account = params?.account === undefined ? mockAccount : params.account;
     vi.mocked(resolveTwitchAccountContext).mockImplementation((_cfg, accountId) => ({
@@ -78,7 +77,7 @@ describe("outbound", () => {
       account,
       tokenResolution: { source: "config", token: account?.accessToken ?? "" },
       configured: account ? (params?.configured ?? true) : false,
-      availableAccountIds: params?.availableAccountIds ?? ["default"],
+      availableAccountIds: ["default"],
     }));
   }
 

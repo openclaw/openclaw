@@ -17,6 +17,7 @@ import type { CodexNativeSubagentSubmission } from "./native-subagent-submission
 export class CodexNativeSubagentAssignmentInventory {
   private readonly writes = new Map<ParentState, Promise<void>>();
   private readonly snapshots = new WeakMap<ChildState, string>();
+  private readonly cancelled = new WeakSet<ChildState>();
 
   constructor(
     private readonly dependencies: {
@@ -140,6 +141,26 @@ export class CodexNativeSubagentAssignmentInventory {
       await state.assignmentStore?.consume(assignment, () =>
         this.dependencies.assertCurrent(state),
       );
+    });
+  }
+
+  settleCancelled(state: ParentState, child: ChildState, assertCurrent: () => void): Promise<void> {
+    return this.enqueue(state, async () => {
+      const assertAdmission = () => {
+        this.dependencies.assertCurrent(state);
+        assertCurrent();
+      };
+      assertAdmission();
+      const assignment = this.fact(child);
+      if (!assignment || !state.assignmentStore || this.cancelled.has(child)) {
+        return;
+      }
+      if (!(await state.assignmentStore.consume(assignment, assertAdmission))) {
+        throw new Error("Cancelled native assignment was not acknowledged.");
+      }
+      // Remember a committed acknowledgement even if the following authority read fails.
+      this.cancelled.add(child);
+      assertAdmission();
     });
   }
 

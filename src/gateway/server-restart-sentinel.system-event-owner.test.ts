@@ -43,6 +43,11 @@ vi.mock("./session-utils.js", async (importOriginal) => ({
 }));
 // mock-isolation: Queued-owner cases use supplied session rows instead of real store discovery.
 vi.mock("./session-utils-store-worker.js", () => ({
+  loadGatewaySessionEntryReadOnlyInWorker: async (params: {
+    key: string;
+    agentId?: string;
+    env?: NodeJS.ProcessEnv;
+  }) => mocks.loadSessionEntry(params.key, { agentId: params.agentId, env: params.env }),
   resolveGatewaySessionStoreTargetInWorker: mocks.resolveSessionTarget,
 }));
 
@@ -114,6 +119,7 @@ it.each(cases)(
     await withOpenClawTestState(
       { label: "restart-event-owner", layout: "state-only" },
       async () => {
+        setRuntimeConfigSnapshot({});
         mockEventSession(loadedAgentId, "global");
         const queueContext = captureOpenClawStateWorkerContext();
         const id = await queueStorage.enqueueSessionDelivery(
@@ -204,6 +210,7 @@ it.each(["completed", "failed", "cancelled"] as const)(
     await withOpenClawTestState(
       { label: "restart-event-custody", layout: "state-only" },
       async () => {
+        setRuntimeConfigSnapshot({});
         mockEventSession();
         const queueContext = captureOpenClawStateWorkerContext();
         const id = await queueStorage.enqueueSessionDelivery(
@@ -272,6 +279,7 @@ it.each(["completed", "failed", "cancelled"] as const)(
 
 it("keeps an event retryable when normal admission refuses it before adoption", async () => {
   await withOpenClawTestState({ label: "restart-event-retry", layout: "state-only" }, async () => {
+    setRuntimeConfigSnapshot({});
     mockEventSession();
     const queueContext = captureOpenClawStateWorkerContext();
     const id = await queueStorage.enqueueSessionDelivery(
@@ -311,6 +319,7 @@ it("does not hand off an event after its queue admission retires during the sess
   await withOpenClawTestState(
     { label: "restart-event-read-retired", layout: "state-only" },
     async () => {
+      setRuntimeConfigSnapshot({});
       mockEventSession();
       const queueContext = captureOpenClawStateWorkerContext();
       const resolveTarget = mocks.resolveSessionTarget.getMockImplementation()!;
@@ -342,6 +351,7 @@ it("joins managed media promotion before publishing an internal restart delivery
   await withOpenClawTestState(
     { layout: "state-only", label: "restart-media-custody" },
     async (state) => {
+      setRuntimeConfigSnapshot({});
       const sessionKey = "agent:main:media-completion";
       const sessionId = "media-completion-session";
       const storePath = state.statePath("agents", "main", "sessions", "sessions.json");

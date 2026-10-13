@@ -3,7 +3,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/config.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { withIncognitoSessionBinding } from "../../../config/sessions/session-incognito-binding.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
@@ -44,11 +45,17 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await resetSubagentRegistryForTests();
+  setRuntimeConfigSnapshot({});
+});
+
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
 });
 
 describe("buildSubagentList", () => {
   it("enriches mixed children from their captured actors and recorded durable owners", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const authority = { assertCurrent() {} };
       const actors = await Promise.all(
         ["main", "research"].map((agentId) =>
@@ -186,6 +193,7 @@ describe("buildSubagentList", () => {
       const cfg: OpenClawConfig = {
         session: { store: state.statePath("agents/{agentId}/sessions/sessions.json") },
       };
+      setRuntimeConfigSnapshot(cfg);
       const now = Date.now();
       const runs = [
         { agentId: "main", name: "active", ended: false },
@@ -298,6 +306,8 @@ describe("buildSubagentList", () => {
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       try {
         const storePath = path.join(stateDir, "agents/main/sessions/sessions.json");
+        const cfg: OpenClawConfig = { session: { store: storePath } };
+        setRuntimeConfigSnapshot(cfg);
         const childSessionKey = "agent:main:subagent:target";
         for (let i = 0; i < 20; i++) {
           await replaceSessionEntry(
@@ -338,7 +348,7 @@ describe("buildSubagentList", () => {
         const parse = vi.spyOn(JSON, "parse");
         try {
           const list = await buildSubagentList({
-            cfg: { session: { store: storePath } },
+            cfg,
             runs: [run],
             recentMinutes: 30,
             taskMaxChars: 110,

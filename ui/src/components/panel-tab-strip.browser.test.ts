@@ -7,10 +7,7 @@ import {
   type PanelTabStripTab,
 } from "./panel-tab-strip.ts";
 
-type RenderedTab = HTMLElement & {
-  active: boolean;
-  panel: string;
-};
+type RenderedTab = HTMLButtonElement;
 
 type PanelBridge = HTMLElement & { updateComplete: Promise<boolean> };
 const mountedBridges = new Set<PanelBridge>();
@@ -56,21 +53,17 @@ function renderedTabs(container: ParentNode): RenderedTab[] {
 }
 
 function tabWithId(container: ParentNode, id: string): RenderedTab | undefined {
-  return renderedTabs(container).find((candidate) => candidate.panel === id);
+  return renderedTabs(container).find((candidate) => candidate.dataset.tabValue === id);
 }
 
 async function settleTabLayout(container: ParentNode) {
   await container.querySelector<PanelBridge>("openclaw-panel-tab-strip")?.updateComplete;
-  await container.querySelector<HTMLElement & { updateComplete: Promise<unknown> }>(".tabstrip")
-    ?.updateComplete;
   await new Promise(requestAnimationFrame);
 }
 
 async function expectOverflowTabVisible(container: ParentNode, selectedTab: HTMLElement) {
   await settleTabLayout(container);
-  const viewport = container
-    .querySelector(".tabstrip")
-    ?.shadowRoot?.querySelector<HTMLElement>(".nav");
+  const viewport = container.querySelector<HTMLElement>(".tabstrip");
   if (!viewport) {
     throw new Error("expected rendered tab strip viewport");
   }
@@ -91,9 +84,7 @@ async function expectControlledSelection(
     const tabs = renderedTabs(container);
     const selected = tabs.filter(
       (candidate) =>
-        candidate.active ||
-        candidate.hasAttribute("active") ||
-        candidate.getAttribute("aria-selected") === "true",
+        candidate.hasAttribute("active") || candidate.getAttribute("aria-selected") === "true",
     );
     active = tabWithId(container, activeId);
     expect(selected).toEqual([active]);

@@ -1,6 +1,6 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import {
-  createChannelApprovalNativeRuntimeAdapter,
+  createChannelApprovalNativeRuntimeAdapterAsync,
   resolvePreparedApprovalAccountId,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
@@ -32,7 +32,7 @@ type MSTeamsPendingEntry = {
   actionTokens: readonly MSTeamsApprovalActionToken[];
 };
 
-export const msTeamsApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapter<
+export const msTeamsApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapterAsync<
   MSTeamsPendingDelivery,
   { to: string },
   MSTeamsPendingEntry,

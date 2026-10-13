@@ -186,7 +186,7 @@ suite.define(() => {
         });
       }
       await page
-        .locator("openclaw-image-lightbox wa-dialog dialog")
+        .locator("openclaw-image-lightbox openclaw-modal-dialog > dialog")
         .evaluate(finishElementAnimations);
       const viewer = await page.locator("openclaw-image-lightbox .lightbox").boundingBox();
       expect(viewer).toMatchObject({ x: 0, y: 0, ...page.viewportSize() });

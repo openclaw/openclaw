@@ -8,6 +8,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
 import { tryProcessCwd } from "./safe-cwd.js";
+import { captureSqliteAuthSchema } from "./sqlite-readonly-auth-schema.js";
 import {
   createSqliteAuthTransferReceiver,
   createSqliteOperationTransferReceiver,
@@ -331,7 +332,12 @@ export function createSqliteReadOnlyWorkerSession(
                       artifactPreserving: options.artifactPreserving,
                       ...(options.mode === "operation"
                         ? { command: serialize(options.command).toString("base64") }
-                        : {}),
+                        : {
+                            schema:
+                              options.source === "canonical" && !options.artifactPreserving
+                                ? captureSqliteAuthSchema(pathname, options.expectedIdentity)
+                                : undefined,
+                          }),
                     },
                   }
                 : {}),

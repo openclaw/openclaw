@@ -221,8 +221,10 @@ vi.mock("../config/gateway-dispatch-config.js", () => ({
   readGatewayDispatchConfig: loadConfig,
   readGatewayDispatchConfigWithShellEnvFallback: loadConfigWithShellEnvFallback,
 }));
+// mock-isolation: Gateway dispatch fixtures control runtime config without loading operator state.
 vi.mock("../config/io.js", () => ({
   getRuntimeConfig: loadRuntimeConfig,
+  captureRuntimeConfigAsyncReader: () => async () => loadRuntimeConfig(),
   loadConfig: loadRuntimeConfig,
 }));
 vi.mock("../gateway/call.js", () => ({
@@ -1682,7 +1684,10 @@ describe("agentCliCommand", () => {
             },
           );
 
-          const command = agentCliCommand({ message: "hi", to: "+1555" }, runtime);
+          const command = agentCliCommand(
+            { message: "hi", sessionKey: "agent:main:retry-provenance" },
+            runtime,
+          );
           const rejection = expect(command).rejects.toBe(error);
           // Module loading is not driven by fake time; observe dispatch before advancing it.
           await gatewayStarted.promise;

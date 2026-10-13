@@ -106,13 +106,20 @@ The extension package boundary row has a 30-minute job budget for SDK preparatio
 all selected plugin compiles, input-receipt validation, the required negative
 canary, and cleanup. Hosted four-CPU runs spent about 19 minutes in the compile
 command alone; one completed compile and canary but exceeded the former
-20-minute whole-job deadline. Other additional-check rows retain 20 minutes.
+20-minute whole-job deadline.
 Optional hybrid hosted overflow retains this row on Blacksmith: compiled receipt
 archives include checkout-specific paths and links, and hosted cold runs exceeded
 22 minutes. Explicit hosted overrides, retry and trust fallbacks remain available.
 Other jobs keep their existing admission thresholds; the hosted row total counts
 only the rows actually offloaded. Compiler concurrency, coverage and cache guards
 are unchanged.
+
+The Plugin SDK API diff row also has a 30-minute job budget. Two hosted runs took
+722 and 725 seconds to render the base revision, then reached the former
+20-minute deadline while rendering the candidate. The budget allows both full
+revision renders plus setup and cleanup. Rendering stays serial below eight CPUs
+or 24 GiB of memory; larger hosts retain two render workers. Other
+additional-check rows retain 20 minutes.
 
 Core lint discovers separate source and UI TypeScript projects, retaining shared ambient declarations and imported dependencies. The source project also includes `src/**/*.test-support.cjs`; unrelated JavaScript files are not added as roots. See [local checks](/ci/local-proof#local-equivalents).
 
@@ -242,9 +249,10 @@ The generator records successful hosted job walls, including setup, in the exist
 spans and survive the daily refit. The hosted full planner splits measured rows
 above 12 minutes after file bundling, retaining exact coverage and worker settings.
 Complete split generations keep subsequent plans from recombining expensive work.
-The whole Gateway-methods owner retains its completed hosted cost when files are
-added or removed, until a complete observation covers the new inventory. Partial
-generations never supply that floor. Its full-validation rows use the existing
+Agents-support, CLI-process, Gateway chat, Gateway methods, and runtime-config
+owners retain their completed hosted cost when files are added or removed, until
+a complete observation covers the new inventory. Partial generations never supply
+that floor. Their full-validation rows use the existing
 `-hosted-N` split, while compact main and PR routing retain their existing policy.
 An indivisible over-budget test fails planning with its owner named; unmeasured
 rows still need native timing evidence before claiming the 20-minute objective.

@@ -1,11 +1,21 @@
+import { AsyncResource } from "node:async_hooks";
+import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
-import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  isSessionEntryDataSql,
+  observeHostDataSql,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { appendAbortedSessionTranscriptPartial } from "../../config/sessions/session-accessor.sqlite-transcript-reports.js";
 import { withIncognitoSessionActor } from "../../config/sessions/session-incognito-binding.js";
+import { recordSessionParticipantInWorker } from "../../config/sessions/session-sharing-store.async.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
+import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import * as agentDatabase from "../../state/openclaw-agent-db.js";
 import { openIncognitoTestActor } from "../../state/openclaw-agent-execution-incognito.test-support.js";
@@ -14,6 +24,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   resolveWorkerTurnTranscriptTarget,
   captureWorkerTurnTranscriptSource,
+  prepareWorkerTurnTranscriptSource,
   withWorkerTurnTranscriptDatabase,
 } from "./worker-turn-transcript-target.js";
 
@@ -157,12 +168,169 @@ it("preadmits cloud transcript guards and retains their handle through turn sett
         expect(result).toBe("settled");
         expect(releaseAuthority).toHaveBeenCalledOnce();
         expect(inspections).toEqual([]);
+        expect(observer.queries.filter(isSessionEntryDataSql)).toEqual([]);
       } finally {
         observer.restore();
         vi.useRealTimers();
       }
     } finally {
       await execution.release();
+    }
+  });
+});
+
+it("retains a logical-store worker transcript and refuses writer changes without host SQL", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const target = {
+      agentId: "main",
+      sessionKey: "agent:main:writer-receipt",
+      sessionId: "writer-receipt",
+      storePath: path.join(state.sessionsDir(), "sessions.json"),
+      expectedLifecycleRevision: "writer-lifecycle",
+      expectedWriterRunId: "first-writer",
+    };
+    await upsertSessionEntryCore(target, {
+      sessionId: target.sessionId,
+      lifecycleRevision: target.expectedLifecycleRevision,
+      activeWriterRunId: target.expectedWriterRunId,
+      updatedAt: 1,
+    });
+    const observer = observeHostDataSql();
+    const incomingRpc = new AsyncResource("worker-transcript-rpc");
+    const withPendingReplacement = async (
+      assertPending: () => void,
+      write: () => Promise<void>,
+    ) => {
+      let checked = false;
+      const admission = probe.admission(workerAdmission, (request, grant, admit) => {
+        if (
+          request.stage !== "commit" ||
+          !isRecord(request.facts) ||
+          !isRecord(request.facts.publication) ||
+          request.facts.publication.kind !== "session-entry-patch-committed"
+        ) {
+          admit(request, grant);
+          return;
+        }
+        admit(request, (beforeRelease) =>
+          grant(() => {
+            beforeRelease?.();
+            checked = true;
+            assertPending();
+          }),
+        );
+      });
+      try {
+        await write();
+      } finally {
+        admission.mockRestore();
+      }
+      expect(checked).toBe(true);
+    };
+    try {
+      {
+        await using rollbackSource = await prepareWorkerTurnTranscriptSource(target);
+        const rollback = new Error("Roll back worker replacement");
+        await withPendingReplacement(
+          () => {
+            expect(rollbackSource).toThrow("transcript identity is no longer current");
+            throw rollback;
+          },
+          async () => {
+            await expect(
+              patchSessionEntryCore(target, () => ({ activeWriterRunId: "rolled-back-writer" })),
+            ).rejects.toThrow(rollback);
+          },
+        );
+        expect(rollbackSource).not.toThrow();
+      }
+      await using source = await prepareWorkerTurnTranscriptSource(target);
+      source();
+      await withPendingReplacement(source, async () => {
+        await patchSessionEntryCore(target, () => ({ label: "same writer" }), {
+          workerGuard: { source },
+        });
+      });
+      source();
+      let checkedPendingParticipant = false;
+      const admission = probe.admission(workerAdmission, (request, grant, admit) => {
+        if (
+          request.stage !== "commit" ||
+          !isRecord(request.facts) ||
+          !isRecord(request.facts.publication) ||
+          request.facts.publication.type !== "participant"
+        ) {
+          admit(request, grant);
+          return;
+        }
+        admit(request, (beforeRelease) =>
+          grant(() => {
+            beforeRelease?.();
+            source();
+            checkedPendingParticipant = true;
+          }),
+        );
+      });
+      try {
+        expect(
+          await recordSessionParticipantInWorker(target, {
+            identity: { type: "agent", id: "other" },
+            promptedAt: 1,
+          }),
+        ).toBe("inserted");
+      } finally {
+        admission.mockRestore();
+      }
+      expect(checkedPendingParticipant).toBe(true);
+      source();
+      await expect(
+        appendAbortedSessionTranscriptPartial(target, {
+          runId: target.expectedWriterRunId,
+          expectedLifecycleRevision: target.expectedLifecycleRevision,
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "Interrupted worker response" }],
+            stopReason: "aborted",
+            timestamp: 2,
+          },
+        }),
+      ).resolves.toMatchObject({ ok: true, value: { skipped: false, append: { appended: true } } });
+      source();
+      await withWorkerTurnTranscriptDatabase(
+        { ...target, sessionTarget: target },
+        {
+          assertCurrent() {},
+          prepareAuthority: async () => ({ isCurrent: () => true, release() {} }),
+        },
+        async (pinned) => {
+          const assertReceipt = captureWorkerTurnTranscriptSource(pinned);
+          incomingRpc.runInAsyncScope(assertReceipt);
+          const effect = vi.fn(() => {
+            resolveWorkerTurnTranscriptTarget({ ...pinned, sessionTarget: pinned });
+          });
+          effect();
+          await withPendingReplacement(
+            () => {
+              expect(source).toThrow("transcript identity is no longer current");
+              expect(effect).toThrow("transcript identity is no longer current");
+            },
+            async () => {
+              await patchSessionEntryCore(target, () => ({ activeWriterRunId: "next-writer" }));
+            },
+          );
+          expect(effect).toThrow("transcript identity is no longer current");
+          expect(source).toThrow("transcript identity is no longer current");
+          expect(() => incomingRpc.runInAsyncScope(assertReceipt)).toThrow(
+            "transcript identity is no longer current",
+          );
+        },
+      );
+      await source.release();
+      expect(source).toThrow("Cloud worker transcript authority has been released");
+      expect(observer.queries.filter(isSessionEntryDataSql)).toEqual([]);
+    } finally {
+      incomingRpc.emitDestroy();
+      observer.restore();
     }
   });
 });

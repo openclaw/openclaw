@@ -34,6 +34,7 @@ import { readPreparedGatewayModelMetadata } from "./server-model-catalog-view.js
 import { readSessionRowModelFacts } from "./session-row-model-facts.js";
 import { SessionRowFactsPending } from "./session-row-prepared-read.js";
 import { isColdArchivedSessionRow } from "./session-row-projection-archive.js";
+import { createSessionRowCapabilityReader } from "./session-row-projection-identities.js";
 import * as records from "./session-row-projection-record.js";
 import { readSessionRowLookup, type prepareSessionRowScopes } from "./session-row-scope.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
@@ -339,7 +340,6 @@ export function readResidentSessionRow(
     // Incognito rows are transient exact reads and never enter the resident backfill queue.
     includeDerivedTitles: Boolean(source),
     includeLastMessage: Boolean(source),
-    skipTranscriptUsageFallback: true,
     includeSwarmChildren: true,
     childLinks: source || prepared ? undefined : params.links,
   });
@@ -534,6 +534,7 @@ export function createSessionRowLookup(owner: {
   runInOwner: <T>(consume: () => T) => T;
 }) {
   return {
+    readCapabilityEntry: createSessionRowCapabilityReader(owner),
     async readLookup(selection: Parameters<typeof readSessionRowLookup>[0], agentId?: string) {
       const selected = owner.state();
       const queries = await owner.runInOwner(() =>

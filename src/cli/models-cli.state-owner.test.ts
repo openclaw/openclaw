@@ -27,7 +27,11 @@ const mocks = vi.hoisted(() => ({
 }));
 
 // mock-isolation: A delegated command must not initialize mutation-capable config.
-vi.mock("../config/config.js", () => ({ getRuntimeConfig: mocks.getRuntimeConfig }));
+vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: mocks.getRuntimeConfig,
+  loadConfig: mocks.getRuntimeConfig,
+  captureRuntimeConfigAsyncReader: () => async () => mocks.getRuntimeConfig(),
+}));
 // mock-isolation: Supply inert key input without reading the test runner's terminal.
 vi.mock("../commands/models/auth-gateway.js", () => ({
   readGatewayApiKeyParams: mocks.readKey,

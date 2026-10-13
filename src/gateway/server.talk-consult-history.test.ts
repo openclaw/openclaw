@@ -39,8 +39,10 @@ import {
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
+import { runWithRetainedGatewayRootWork } from "../process/gateway-work-admission.js";
 import { getSessionWorkAdmissionRelease } from "../sessions/session-lifecycle-admission.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   resolveOpenClawAgentSqlitePath,
@@ -62,6 +64,7 @@ import {
   getSessionRowProjection,
 } from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
+import { captureSessionMutationRouting } from "./session-sharing-routing.js";
 import { createTalkClientAgentConsultRunner } from "./talk/client-agent-consult.js";
 import { resolveTalkAgentConsultAuthority } from "./talk/client-gateway-control.js";
 import { retainTalkClientRunAuthority } from "./talk/client-run-authority.js";
@@ -210,9 +213,10 @@ beforeEach(async () => {
       return;
     }
     publications.push(
-      publish(update).catch((error: unknown) => {
-        publicationErrors.push(error);
-      }),
+      // Match production subscription ownership: committed broadcasts outlive the producer.
+      runOutsideAsyncWorkScope(() => runWithRetainedGatewayRootWork(() => publish(update))).catch(
+        (error: unknown) => void publicationErrors.push(error),
+      ),
     );
   });
   voiceSessionId = await createOrResumeClientVoiceSession({
@@ -257,9 +261,7 @@ afterEach(async () => {
   }
 });
 
-function scope() {
-  return { agentId, sessionKey: canonicalKey, sessionId, storePath };
-}
+const scope = () => ({ agentId, sessionKey: canonicalKey, sessionId, storePath });
 async function rpc(method: string, params: Record<string, unknown>) {
   const respond = vi.fn<RespondFn>();
   await handleGatewayRequest({
@@ -718,7 +720,15 @@ describe("Direct Talk consult history after call closure", () => {
       const runner = createTalkClientAgentConsultRunner({
         config: getRuntimeConfig(),
         context,
-        sessionTarget: { agentId, sessionKey, canonicalKey, storePath },
+        sessionTarget: {
+          agentId,
+          sessionKey,
+          canonicalKey,
+          storePath,
+          assertCurrent: captureSessionMutationRouting(getRuntimeConfig(), undefined, [
+            { agentId, sessionKey },
+          ]),
+        },
         ownerConnId: connectionId,
         getVoiceSessionId: () => callId,
         initialItems: [],
@@ -911,7 +921,15 @@ it("dispatches permitted native actions once per logical request across text and
     const runner = createTalkClientAgentConsultRunner({
       config: getRuntimeConfig(),
       context,
-      sessionTarget: { agentId, sessionKey, canonicalKey, storePath },
+      sessionTarget: {
+        agentId,
+        sessionKey,
+        canonicalKey,
+        storePath,
+        assertCurrent: captureSessionMutationRouting(getRuntimeConfig(), undefined, [
+          { agentId, sessionKey },
+        ]),
+      },
       ownerConnId: connectionId,
       runAuthority: retained,
       authority: resolveTalkAgentConsultAuthority(client.connect.scopes, client),

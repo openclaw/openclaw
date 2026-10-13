@@ -19,7 +19,6 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import {
-  closeOrphanedOperatorApprovals,
   consumeOperatorApprovalAllowOnce,
   forceDenyOperatorApproval,
   getOperatorApprovalDetailed,
@@ -28,7 +27,7 @@ import {
   listTerminalOperatorApprovals,
   OPERATOR_APPROVAL_MAX_AUDIENCE_SESSION_KEYS,
   OperatorApprovalHistoryCursorError,
-  pruneTerminalOperatorApprovals,
+  recoverOperatorApprovalsOnStartup,
   resolveOperatorApproval,
 } from "./operator-approval-store.js";
 import { operatorApprovalOperations } from "./operator-approval-store.worker.js";
@@ -673,7 +672,7 @@ describe("operator approval store", () => {
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
 
-    const result = closeOrphanedOperatorApprovals({
+    const result = await recoverOperatorApprovalsOnStartup({
       runtimeEpoch: "runtime-b",
       nowMs: 2_000,
       databaseOptions,
@@ -681,6 +680,7 @@ describe("operator approval store", () => {
 
     expect(result).toMatchObject({
       affected: 1,
+      pruned: 0,
       records: [
         {
           id: "orphan",
@@ -692,6 +692,9 @@ describe("operator approval store", () => {
         },
       ],
     });
+    expect(
+      await getOperatorApproval({ id: "orphan", nowMs: 2_000, databaseOptions }),
+    ).toMatchObject({ status: "cancelled", terminalReason: "gateway-restart" });
     expect(
       await getOperatorApproval({ id: "current", nowMs: 2_000, databaseOptions }),
     ).toMatchObject({
@@ -808,7 +811,13 @@ describe("operator approval store", () => {
       databaseOptions,
     });
 
-    expect(pruneTerminalOperatorApprovals({ nowMs, databaseOptions })).toBe(1);
+    expect(
+      await recoverOperatorApprovalsOnStartup({
+        runtimeEpoch: "runtime-a",
+        nowMs,
+        databaseOptions,
+      }),
+    ).toMatchObject({ pruned: 1 });
     expect(rawApprovalRow(databaseOptions, "old-terminal")).toBeUndefined();
     expect(rawApprovalRow(databaseOptions, "recent-terminal")).toBeDefined();
     expect(rawApprovalRow(databaseOptions, "still-pending")).toBeDefined();

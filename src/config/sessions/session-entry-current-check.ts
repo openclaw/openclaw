@@ -21,7 +21,6 @@ import { captureIncognitoSessionSource } from "./session-incognito-binding.js";
 import type {
   PreparedSessionSourceAssertion,
   AsyncSessionSourceCheck,
-  SessionSourceCheck,
 } from "./session-source-authority.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target-paths.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
@@ -64,10 +63,7 @@ type SessionEntryCurrentCheckParams = {
   errorMessage?: string;
 };
 
-async function prepareSessionEntryCurrentCheck(
-  inputParams: SessionEntryCurrentCheckParams,
-  asynchronous: boolean,
-) {
+async function prepareSessionEntryCurrentCheck(inputParams: SessionEntryCurrentCheckParams) {
   const params = { ...inputParams };
   const incognito = captureIncognitoSessionSource(params);
   const storePath = incognito
@@ -162,7 +158,14 @@ async function prepareSessionEntryCurrentCheck(
         : undefined;
     const selectedStore = owner.selectedStore;
     const native = owner.kind === "native";
+    let active = true;
+    const release = () => {
+      active = false;
+    };
     const sourceIsCurrent = () => {
+      if (!active) {
+        return false;
+      }
       if (incognito) {
         incognito.admissionSignal?.throwIfAborted();
         if ("kind" in incognito) {
@@ -199,7 +202,7 @@ async function prepareSessionEntryCurrentCheck(
         return false;
       }
     };
-    const check: SessionSourceCheck = () => {
+    const check = () => {
       if (params.isActive?.() === false || !sourceIsCurrent()) {
         return false;
       }
@@ -445,45 +448,29 @@ async function prepareSessionEntryCurrentCheck(
         refuse();
       }
     };
-    check.sessionSource = source;
     owner.assertCurrent();
-    if ((params.fields || incognito) && !asynchronous) {
-      assertCurrent();
-    }
     return {
       entry: selected,
-      isCurrent: check,
-      assertCurrent: source,
       isCurrentAsync,
       assertCurrentAsync,
       source: preparedSource,
       entryCurrent,
+      release,
     };
   });
-}
-
-/** Compatibility owner for the deprecated synchronous SDK callbacks. */
-export async function captureSessionEntryCurrentCheckInternal(
-  params: SessionEntryCurrentCheckParams,
-) {
-  const prepared = await prepareSessionEntryCurrentCheck(params, false);
-  return {
-    entry: prepared.entry,
-    isCurrent: prepared.isCurrent,
-    assertCurrent: prepared.assertCurrent,
-  };
 }
 
 /** Current rows are read in the existing worker; mutations carry the prepared source. */
 export async function captureSessionEntryCurrentCheckAsyncInternal(
   params: SessionEntryCurrentCheckParams,
 ) {
-  const prepared = await prepareSessionEntryCurrentCheck(params, true);
+  const prepared = await prepareSessionEntryCurrentCheck(params);
   return {
     entry: prepared.entry,
     isCurrent: prepared.isCurrentAsync,
     assertCurrent: prepared.assertCurrentAsync,
     source: prepared.source,
     entryCurrent: prepared.entryCurrent,
+    release: prepared.release,
   };
 }

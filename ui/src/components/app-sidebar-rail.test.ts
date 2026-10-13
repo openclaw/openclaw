@@ -593,6 +593,34 @@ describe("personal navigation rail", () => {
     expect(sidebar.querySelector('.sidebar-rail a[aria-label="Detached result"]')).not.toBeNull();
   });
 
+  it("keeps cached pins while chat loads and skips queued reads after the sidebar is removed", async () => {
+    const { sidebar, sessions, result } = await fixture();
+    const key = "agent:other:unloaded";
+    const bootstrap = sidebar.sessionDataContext!.connectionBootstrap;
+    bootstrap.setForegroundRoute("agent:main:selected");
+    const read = vi.spyOn(sessions.sessions, "describe").mockResolvedValue({
+      session: { ...result.sessions[1]!, key, label: "Current title" },
+    });
+    sidebar.sidebarEntries = [`session:${key}`];
+    sidebar.pinnedSessions.seed([
+      { key, label: "Saved title", pinned: true, isChild: false, children: [] },
+    ]);
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector('.sidebar-rail a[aria-label="Saved title"]')).not.toBeNull();
+    expect(read).not.toHaveBeenCalled();
+
+    const parent = sidebar.parentElement!;
+    sidebar.remove();
+    bootstrap.setForegroundRoute(null);
+    await bootstrap.run({}, async () => {});
+    expect(read).not.toHaveBeenCalled();
+
+    parent.append(sidebar);
+    await settleLitElement(sidebar);
+    expect(read).toHaveBeenCalledExactlyOnceWith({ key });
+    expect(sidebar.querySelector('.sidebar-rail a[aria-label="Current title"]')).not.toBeNull();
+  });
+
   it("paints a burst of unloaded pins together without changing their saved order", async () => {
     const { sidebar, sessions, result } = await fixture();
     const frames = new Map<number, FrameRequestCallback>();

@@ -117,7 +117,6 @@ export function createInterruptedRecoveryCoordinator(params: {
         }
         return true;
       }
-      warnLegacySubagentAuthority(entry, params.warn);
       if (
         entry.execution.restartRecovery === undefined &&
         entry.terminalOwner !== "interrupted-recovery" &&
@@ -125,6 +124,7 @@ export function createInterruptedRecoveryCoordinator(params: {
       ) {
         return false;
       }
+      warnLegacySubagentAuthority(entry, params.warn);
       if (entry.execution.status === "terminal" && params.isTerminalTailActive(entry)) {
         // Replay drains orphaned winners; this process is still draining this one.
         return true;

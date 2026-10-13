@@ -39,15 +39,6 @@ export function resolvePackageActivationAnchor(installKey: string): string {
   return path.join(path.dirname(installKey), `${PACKAGE_ACTIVATION_PREFIX}${key}`);
 }
 
-export function isPackageActivationArtifactName(name: string): boolean {
-  return (
-    name.startsWith(PACKAGE_ACTIVATION_PREFIX) &&
-    /^[a-f0-9]{24}(?:\.control|\.superseded-[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})?$/u.test(
-      name.slice(PACKAGE_ACTIVATION_PREFIX.length),
-    )
-  );
-}
-
 export function resolvePackageActivationControl(anchor: string): string {
   return `${anchor}.control`;
 }
@@ -107,7 +98,7 @@ export function privatePackageActivationIdentity(
       .slice(0, 64);
     const mode = (stat.mode & 0o7777).toString(8).padStart(4, "0");
     throw new Error(
-      `Package recovery ${role} ${JSON.stringify(basename)} unsafe: mode=${mode} nlink=${stat.nlink} uid=${stat.uid}; expected owner-only mode${directory ? "" : " nlink=1"}.`,
+      `Package recovery ${role} ${JSON.stringify(basename)} unsafe: mode=${mode} nlink=${stat.nlink} uid=${stat.uid}; expected owner-only mode${directory ? "" : " nlink=1"}.${!directory && stat.nlink !== 1 ? " Run openclaw doctor --fix." : ""}`,
     );
   }
   return value;

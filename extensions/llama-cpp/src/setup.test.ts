@@ -814,7 +814,8 @@ describe("llama.cpp managed setup", () => {
   it("writes one durable managed-server provider after preparation", async () => {
     const ctx = authContext(true);
 
-    await expect(runLlamaCppSetup(ctx)).resolves.toMatchObject({
+    const result = await runLlamaCppSetup(ctx);
+    expect(result).toMatchObject({
       profiles: [],
       defaultModel: `${LLAMA_CPP_PROVIDER_ID}/qwen3.5-9b-q4_k_m`,
       configPatch: {
@@ -834,6 +835,9 @@ describe("llama.cpp managed setup", () => {
         },
       },
     });
+    expect(result.configPatch?.models?.providers?.[LLAMA_CPP_PROVIDER_ID]).not.toHaveProperty(
+      "apiKey",
+    );
     expect(
       mocks.ensureModel.mock.calls.filter(([options]) => options.download === true),
     ).toHaveLength(2);
@@ -921,9 +925,9 @@ describe("llama.cpp managed setup", () => {
 
     expect(managed).toMatchObject({
       baseUrl: "http://127.0.0.1:19432/v1",
-      apiKey: "llama-cpp-local",
       localService: { command: path.join(tempRoot, "llama-server") },
     });
+    expect(managed).not.toHaveProperty("apiKey");
     expect(managed).not.toHaveProperty("auth");
     expect(managed).not.toHaveProperty("headers");
     expect(managed).not.toHaveProperty("params");

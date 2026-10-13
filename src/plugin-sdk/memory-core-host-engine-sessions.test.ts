@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred, awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveDefaultSessionStorePath } from "../config/sessions/paths.js";
 import {
   appendTranscriptMessage,
@@ -32,6 +33,7 @@ describe("memory source sessions", () => {
     "resolves metadata and deletion selectors in the %s session store",
     async (layout) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        setRuntimeConfigSnapshot({});
         const storePath =
           layout === "default"
             ? resolveDefaultSessionStorePath("main")
@@ -170,6 +172,7 @@ describe("memory source sessions", () => {
 
   it("keeps another agent's live and archived sources out of a shared store selection", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const storePath = path.join(state.root, "shared.sqlite");
       const mainScope = { agentId: "main", storePath };
       for (const agentId of ["main", "other"]) {
@@ -221,6 +224,7 @@ describe("memory source sessions", () => {
 
   it("selects the exact recorded email source without conflating webhooks", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       for (const source of ["email", "webhook"] as const) {
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey: `agent:main:${source}` },
@@ -288,6 +292,7 @@ describe("memory source sessions", () => {
 
   it("does not create an absent configured session store while inspecting sources", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const storePath = path.join(state.root, "absent", "sessions.json");
       const scope = { agentId: "main", storePath, sessionId: "missing" };
       expect(await loadMemorySessionMetadataAsync(scope)).toBeUndefined();
@@ -306,6 +311,7 @@ describe("memory source sessions", () => {
   });
   it("refuses archive inventory after its retained database closes", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const scope = { agentId: "main", storePath: resolveDefaultSessionStorePath("main") };
       await upsertSessionEntryCore(
         { ...scope, sessionKey: "agent:main:inventory" },

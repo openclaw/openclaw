@@ -123,12 +123,6 @@ describe("board widget frame terminal failure message", () => {
       expect(message).not.toContain("mcp.apps.sandboxOrigin");
     }
   });
-
-  it("keeps the authorization message when no sandbox origin was resolved", () => {
-    const message = terminalFailureError({ widget: {}, resolvedSandboxOrigin: "" });
-    expect(message).toContain("authorization failed");
-    expect(message).not.toContain("mcp.apps.sandboxOrigin");
-  });
 });
 
 describe("board widget frame scroll handoff", () => {

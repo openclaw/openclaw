@@ -591,9 +591,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     onReasoningStream: params.onReasoningStream,
     streamReasoningInNonStreamModes: params.streamReasoningInNonStreamModes,
     onReasoningEnd: params.onReasoningEnd,
-    onToolResult: async (payload) => {
-      await params.onToolResult?.(payload);
-    },
+    onToolResult: params.onToolResult,
     onAgentToolResult: params.onAgentToolResult,
     onAgentEvent: async (event) => {
       await params.onAgentEvent?.(event);
@@ -688,6 +686,9 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
   const postCompactionAbortError = input.getPostCompactionAbortError();
   if (postCompactionAbortError) {
     throw postCompactionAbortError;
+  }
+  if (pluginWorkspace?.sandboxRuntime) {
+    rawAttempt.sandboxRuntime = pluginWorkspace.sandboxRuntime;
   }
   return {
     dispatchedAttempt: { rawAttempt, preparedAttempt: attemptParams },

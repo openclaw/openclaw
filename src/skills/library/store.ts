@@ -23,7 +23,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
+import { getOpenClawStateFeatureSchemaSql } from "../../state/openclaw-state-feature-schema.js";
 import { selectStoredGitHubIdentities } from "../../state/user-profile-github-identity.js";
 import { selectUserProfileDisplaysInDatabase } from "../../state/user-profile-identity.read.js";
 import {
@@ -67,17 +67,11 @@ export function ensureSkillLibrarySchema(
   if (ensured.has(db)) {
     return;
   }
-  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
-    "CREATE TABLE IF NOT EXISTS skill_library_entries (",
-  );
-  const end = OPENCLAW_STATE_SCHEMA_SQL.indexOf("-- End profile-owned skill library.", start);
-  if (start < 0 || end < start) {
-    throw new Error("Canonical skill library schema missing.");
-  }
+  const schema = getOpenClawStateFeatureSchemaSql("skill_library_entries");
   runOpenClawStateWriteTransaction(
     ({ db: transactionDb }) => {
       admit("transaction");
-      transactionDb.exec(OPENCLAW_STATE_SCHEMA_SQL.slice(start, end)); // sqlite-allow-raw -- canonical first-use additive DDL.
+      transactionDb.exec(schema); // sqlite-allow-raw -- canonical first-use additive DDL.
       admit("commit");
     },
     options,
@@ -343,14 +337,17 @@ export function selectSkillLibraryEntries(
   const ownerIds = [
     ...new Set(rows.flatMap((row) => (row.owner_profile_id ? [row.owner_profile_id] : []))),
   ];
-  const readOwners = (ids: string[]) =>
-    new Map(
-      tableExists(db, "user_profiles")
-        ? chunkItems(ids, 500).flatMap((batch) =>
-            Array.from(selectUserProfileDisplaysInDatabase(db, batch)),
-          )
-        : [],
-    );
+  function readOwners(ids: string[]) {
+    const owners: ReturnType<typeof selectUserProfileDisplaysInDatabase> = new Map();
+    if (tableExists(db, "user_profiles")) {
+      for (const batch of chunkItems(ids, 500)) {
+        for (const [id, owner] of selectUserProfileDisplaysInDatabase(db, batch)) {
+          owners.set(id, owner);
+        }
+      }
+    }
+    return owners;
+  }
   const owners = readOwners(ownerIds);
   // Canonical identity and display each retain their existing one-hop, missing-target fallback.
   const labels = readOwners([

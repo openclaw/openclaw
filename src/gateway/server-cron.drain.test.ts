@@ -85,6 +85,7 @@ async function startGatewayCron(
   const state = buildGatewayCronService({
     scheduler,
     cfg,
+    storePath: path.join(stateDir, "cron", "jobs.json"),
     deps: {} as CliDeps,
     broadcast,
     env: { ...process.env, OPENCLAW_SKIP_CRON: "0", OPENCLAW_STATE_DIR: stateDir },

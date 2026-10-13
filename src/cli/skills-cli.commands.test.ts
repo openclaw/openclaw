@@ -114,9 +114,14 @@ vi.mock("../utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../utils.js")>()),
   CONFIG_DIR: "/tmp/openclaw-config",
 }));
+// mock-isolation: Skill command fixtures own workspace selection and config without host state.
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: mocks.config,
   loadConfig: mocks.config,
+  captureRuntimeConfigAsyncReader:
+    (...args: Parameters<typeof mocks.config>) =>
+    async () =>
+      mocks.config(...args),
 }));
 vi.mock("../agents/agent-scope.js", () => ({
   resolveAgentIdByWorkspacePath: mocks.inferredAgent,

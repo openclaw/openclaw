@@ -21,6 +21,7 @@ export const RELEASE_ONLY_UI_TEST_FILES: ReadonlySet<string> = new Set(
     "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts",
     "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
     "ui/src/e2e/session-pr-reader-lifetime.real-gateway.e2e.test.ts",
+    "ui/src/e2e/team-scale-cold-load.e2e.test.ts",
     "ui/src/e2e/chat-collaborator-scroll.real-gateway.e2e.test.ts",
     "ui/src/e2e/mcp-app-conformance.e2e.test.ts",
     "ui/src/e2e/usage-sessions-owner-attribution.e2e.test.ts",
@@ -64,6 +65,7 @@ export function isCiProofTestFile(file: string): boolean {
 // Runtime integration and released-state matrices retain their canonical Vitest
 // owners, but automatic CI runs them only when the test itself changes.
 export const RELEASE_ONLY_RUNTIME_TEST_FILES = [
+  "extensions/codex/src/app-server/thread-lifecycle.warm-cleanup.native.test.ts",
   "src/agents/agent-bundle-mcp-retention.test.ts",
   "src/agents/harness/acp-native-execution.process.test.ts",
   "src/agents/mcp-stdio-client.cleanup.real.test.ts",
@@ -4095,6 +4097,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-collaborator-scroll.real-gateway.e2e.test.ts",
+  "ui/src/e2e/chat-composer-undo-redo.e2e.test.ts",
   "ui/src/e2e/chat-composer-websearch-kill-switch.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-flow.catalog-bootstrap.e2e.test.ts",
   "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
@@ -4131,7 +4134,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "ui/src/pages/agents/agents-page.test.ts",
   "ui/src/pages/agents/view.identity-avatar.test.ts",
   "ui/src/pages/chat/chat-composer-subagent.test.ts",
-  "ui/src/pages/chat/chat-composer-undo-redo.browser.test.ts",
   "ui/src/pages/chat/chat-content-column.browser.test.ts",
   "ui/src/pages/chat/chat-footer-layout.browser.test.ts",
   "ui/src/pages/chat/chat-gateway.test.ts",
@@ -4197,7 +4199,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "ui/src/pages/chat/components/chat-model-policy.test.ts",
   "ui/src/pages/chat/components/chat-pane-header.test.ts",
   "ui/src/pages/chat/components/chat-picker-overlay.test.ts",
-  "ui/src/pages/chat/components/chat-position-rail.test.ts",
+  "ui/src/pages/chat/components/chat-position-rail.test.tsx",
   "ui/src/pages/chat/components/chat-pull-requests.browser.test.ts",
   "ui/src/pages/chat/components/chat-session-workspace.test.ts",
   "ui/src/pages/chat/components/chat-sidebar-region.test.ts",

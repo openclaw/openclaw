@@ -19,7 +19,7 @@ import {
 import { initializeNativeSessionCatalogPreferences } from "../plugins/native-session-catalog-config.js";
 import { assertAgentDeletionTargetsUnchanged } from "./agent-workspace-roster-transition.js";
 import { prepareConfigFileWrite } from "./backup-rotation.js";
-import { collectChangedPaths } from "./config-change-paths.js";
+import { collectChangedPaths, collectConfigWriteChangedPaths } from "./config-change-paths.js";
 import { cloneEnvWithPlatformSemantics, createConfigRuntimeEnvBase } from "./config-env-vars.js";
 import {
   configSnapshotAuditRecordMatchesPath,
@@ -189,14 +189,10 @@ export async function writeConfigFileFromContext(
     : undefined;
 
   let persistCandidate: unknown = authoredConfig;
-  const changedPaths = new Set<string>();
-  collectChangedPaths(inputBasis.config, authoredConfig, "", changedPaths);
-  for (const changedPath of [...explicitSetPaths, ...(options.unsetPaths ?? [])]) {
-    const normalizedPath = changedPath.filter((segment) => segment.length > 0).join(".");
-    if (normalizedPath) {
-      changedPaths.add(normalizedPath);
-    }
-  }
+  const changedPaths = collectConfigWriteChangedPaths(inputBasis.config, authoredConfig, [
+    ...explicitSetPaths,
+    ...(options.unsetPaths ?? []),
+  ]);
   const hasAuthoredIncludes = containsConfigIncludeDirective(snapshot.parsed);
   // Doctor repairs need the same authored projection so roster moves preserve nested includes.
   // Missing snapshots also use this owner; exact bootstrap rosters carry explicitSetPaths.
@@ -290,6 +286,7 @@ export async function writeConfigFileFromContext(
       : initializeNativeSessionCatalogPreferences(validatedCandidate),
     options.lastTouchedVersionOverride,
     snapshot.exists ? previousSource : null,
+    deps.env,
   );
   // Resolve policy from included facts, but persist only its delta beside authored directives.
   persistCandidate = applyMergePatch(
@@ -321,6 +318,8 @@ export async function writeConfigFileFromContext(
       writeOptions: { unsetPaths: options.unsetPaths },
     }),
     options.lastTouchedVersionOverride,
+    undefined,
+    deps.env,
   );
   rejectConfigNonFiniteNumbers(stampedOutputConfig);
   const json = JSON.stringify(stampedOutputConfig, null, 2).trimEnd().concat("\n");
@@ -333,6 +332,7 @@ export async function writeConfigFileFromContext(
     raw: snapshot.raw,
     json5: deps.json5,
     lastTouchedVersionOverride: options.lastTouchedVersionOverride,
+    env: deps.env,
   });
   const nextBytes = Buffer.byteLength(json, "utf-8");
   const previousStat = snapshot.exists

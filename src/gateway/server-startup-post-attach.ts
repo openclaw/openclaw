@@ -5,7 +5,7 @@ import { loadGetReplyFromConfigRuntime } from "../auto-reply/reply/dispatch-from
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveInternalHookSelection } from "../hooks/configured.js";
+import { type InternalHookSelection, resolveInternalHookSelection } from "../hooks/configured.js";
 import {
   captureDeliveryQueueStateContext,
   type DeliveryQueueStateContext,
@@ -140,6 +140,7 @@ export async function startGatewaySidecars(params: {
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
   startupTrace?: GatewayStartupTrace;
   startupOutcomes?: GatewayStartupOutcomeRecorder;
+  internalHookSelection?: InternalHookSelection;
   waitForPostReadyWork?: () => Promise<void>;
 }) {
   const restartSentinelContext =
@@ -159,12 +160,15 @@ export async function startGatewaySidecars(params: {
     );
   };
 
-  const internalHooksConfigured = resolveInternalHookSelection(params.cfg).configured;
+  const internalHookSelection =
+    params.internalHookSelection ?? (await resolveInternalHookSelection(params.cfg));
+  const internalHooksConfigured = internalHookSelection.configured;
   await measureStartup(params.startupTrace, "sidecars.internal-hooks", async () => {
     try {
       const { prepareInternalHooks } = await import("../hooks/loader.js");
       const prepared = await prepareInternalHooks(params.cfg, params.defaultWorkspaceDir, {
         failureMode: "best-effort",
+        selection: internalHookSelection,
       });
       if (
         params.shouldCreatePostReadySidecars?.() === false ||
@@ -823,8 +827,12 @@ export async function startGatewayPostAttachRuntime(
             logGatewayReady(params, "candidate gateway ready; autonomous sidecars suppressed");
             return pluginRegistry;
           }
+          const internalHookSelection = await resolveInternalHookSelection(
+            params.gatewayPluginConfigAtStart,
+          );
           const startupOutcomes = createGatewayStartupOutcomeRecorder({
             cfg: params.gatewayPluginConfigAtStart,
+            internalHooksConfigured: internalHookSelection.configured,
             gatewayStartHooks: pluginRegistry.typedHooks.some(
               (hook) => hook.hookName === "gateway_start",
             ),
@@ -881,6 +889,7 @@ export async function startGatewayPostAttachRuntime(
                     : {}),
                   broadcastPluginEvent: params.broadcastPluginEvent,
                   startupOutcomes,
+                  internalHookSelection,
                   waitForPostReadyWork: params.waitForPostReadyWork,
                 }),
               );

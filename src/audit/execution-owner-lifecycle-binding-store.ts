@@ -4,9 +4,8 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import type { DB as OpenClawStateDatabase } from "../state/openclaw-state-db.generated.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
+import { getOpenClawStateFeatureSchemaSql } from "../state/openclaw-state-feature-schema.js";
 export const EXECUTION_OWNER_LIFECYCLE_BINDING_TABLE =
   "execution_owner_lifecycle_bindings" as const;
 type ExecutionOwnerLifecycleKind = "cron";
@@ -19,9 +18,7 @@ type ExecutionOwnerLifecycleDatabase = Pick<
 /** Only an enabled binding write allocates this existing optional table. */
 export function ensureExecutionOwnerLifecycleBindingSchema(db: DatabaseSync): void {
   // sqlite-allow-raw -- Canonical feature-local additive DDL only.
-  db.exec(
-    extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, EXECUTION_OWNER_LIFECYCLE_BINDING_TABLE),
-  );
+  db.exec(getOpenClawStateFeatureSchemaSql(EXECUTION_OWNER_LIFECYCLE_BINDING_TABLE));
 }
 
 /** The first admitted execution owns this diagnostic link for the receipt's lifetime. */

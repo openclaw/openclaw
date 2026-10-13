@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished } from "vitest";
 import {
   type createControlUiE2eSuite,
   holdModuleResponse,
@@ -144,12 +144,13 @@ export function defineNativeModuleBoundaryTests(
 
     it("keeps overlay motion anchored to its owning interaction", async () => {
       let popupModule!: Awaited<ReturnType<typeof holdModuleResponse>>;
+      onTestFinished(() => popupModule?.release());
       const page = await openPage({
         nativeNav: false,
         beforeNavigate: async (nextPage) => {
           popupModule = await holdModuleResponse(
             nextPage,
-            moduleRequest("node_modules/@awesome.me/webawesome/dist/components/tooltip/tooltip.js"),
+            moduleRequest("ui/src/components/solid/tooltip.tsx"),
           );
         },
       });
@@ -163,8 +164,7 @@ export function defineNativeModuleBoundaryTests(
         (element) => getComputedStyle(element).animationName,
       );
       const paletteDialogAnimationDuration = await paletteDialog.evaluate((element) => {
-        const webAwesomeDialog = element.shadowRoot?.querySelector("wa-dialog");
-        const dialog = webAwesomeDialog?.shadowRoot?.querySelector<HTMLElement>('[part~="dialog"]');
+        const dialog = element.querySelector<HTMLDialogElement>("dialog");
         return dialog ? getComputedStyle(dialog).animationDuration : "missing";
       });
       await page.keyboard.press("Escape");
@@ -175,26 +175,30 @@ export function defineNativeModuleBoundaryTests(
         name: "Control UI build details",
         exact: true,
       });
+      const hoverCard = sidebar.locator("openclaw-sidebar-build-chip openclaw-tooltip");
+      const surface = hoverCard.locator(".tooltip-surface[popover]");
+      await surface.waitFor({ state: "attached" });
+      // Pause native motion before releasing the first-use renderer.
+      await surface.evaluate((element) => {
+        (element as HTMLElement).style.animationPlayState = "paused";
+      });
       await page.clock.install();
+      expect(popupModule.requests()).toBe(0);
       await buildLink.hover();
       await page.clock.runFor(600);
-      // The hover delay starts the lazy popup load; it does not finish its upgrade
-      // or positioning. Keep that load pending until after the timer has elapsed.
       await popupModule.request;
+      expect(popupModule.requests()).toBe(1);
+      expect(await surface.isVisible()).toBe(false);
       popupModule.release();
-      await sidebar
-        .locator(
-          'openclaw-sidebar-build-chip openclaw-tooltip wa-tooltip[open] wa-popup[data-current-placement] [part~="popup"]',
-        )
-        .waitFor({ state: "visible" });
+      await surface.waitFor({ state: "visible" });
       const hoverCardMotion = await sidebar
         .locator("openclaw-sidebar-build-chip openclaw-tooltip")
         .evaluate((tooltip) => {
-          const webAwesomeTooltip = tooltip.shadowRoot?.querySelector("wa-tooltip");
-          const popup = webAwesomeTooltip?.shadowRoot?.querySelector("wa-popup");
-          const popupSurface = popup?.shadowRoot?.querySelector<HTMLElement>('[part~="popup"]');
-          if (!popup || !popupSurface) {
-            throw new Error("expected the open sidebar hovercard shadow parts");
+          const popupSurface = tooltip.shadowRoot?.querySelector<HTMLElement>(
+            ".tooltip-surface[popover]",
+          );
+          if (!popupSurface || !popupSurface.matches(":popover-open")) {
+            throw new Error("expected the open native sidebar hovercard");
           }
           const [originX, originY] = getComputedStyle(popupSurface)
             .transformOrigin.split(" ")
@@ -205,11 +209,16 @@ export function defineNativeModuleBoundaryTests(
             popupWidth: popupSurface.offsetWidth,
             originX,
             originY,
-            placement: popup.getAttribute("data-current-placement"),
+            placement: popupSurface.getAttribute("data-placement"),
+            playState: getComputedStyle(popupSurface).animationPlayState,
           };
         });
+      await surface.evaluate((element) => {
+        (element as HTMLElement).style.removeProperty("animation-play-state");
+      });
       await page.clock.resume();
       await page.keyboard.press("Escape");
+      expect(popupModule.requests()).toBe(1);
 
       await page.setViewportSize({ width: 900, height: 900 });
       const drawer = page.locator(".shell-nav.nav-drawer");
@@ -223,6 +232,7 @@ export function defineNativeModuleBoundaryTests(
       expect(paletteDialogAnimationDuration).toBe("0s");
       expect(drawerAnimationName).toBe("none");
       expect(hoverCardMotion.animationDuration).toBe("0.14s");
+      expect(hoverCardMotion.playState).toBe("paused");
       expect(hoverCardMotion.placement).toMatch(/^top(?:-|$)/u);
       expect(hoverCardMotion.originX).toBeGreaterThan(hoverCardMotion.popupWidth * 0.45);
       expect(hoverCardMotion.originX).toBeLessThan(hoverCardMotion.popupWidth * 0.55);
