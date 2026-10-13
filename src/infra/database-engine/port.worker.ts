@@ -4,7 +4,14 @@ import { isDeepStrictEqual } from "node:util";
 import type { Client } from "pg";
 import { encodeSqliteValue, escapedSqliteText } from "../../snapshot/sqlite-cell-codec.js";
 import { decodePostgresRows } from "../postgres-sync/protocol.js";
+import { assertSqliteIntegrity } from "../sqlite-integrity.js";
+import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../sqlite-schema-facts.js";
 import { quoteSqliteIdentifier as quote } from "../sqlite-schema-sql.js";
+import {
+  readAutoincrementHighWater,
+  restoreAutoincrementHighWater,
+  withSqliteForeignKeysDisabled,
+} from "../sqlite-strict.js";
 import { runSqliteImmediateTransactionSync } from "../sqlite-transaction.js";
 import {
   assertPostgresCatalog,
@@ -198,16 +205,12 @@ async function allocations(
         );
         let value = statement.get()?.value;
         if (identity.autoIncrement) {
-          const sequence = sqliteStatement(
-            endpoint.db,
-            "SELECT seq FROM sqlite_sequence WHERE name = ?",
-          );
-          const high = sequence.get(table.name)?.seq;
+          const high = readAutoincrementHighWater(endpoint.db, table.name);
           if (
-            typeof high === "bigint" &&
-            (value === null || (typeof value === "bigint" && high > value))
+            high !== null &&
+            (value === null || (typeof value === "bigint" && BigInt(high) > value))
           ) {
-            value = high;
+            value = BigInt(high);
           }
         }
         result[key] = { value: String(value ?? 1), called: value !== null && value !== undefined };
@@ -233,11 +236,7 @@ async function restoreAllocations(
           fact.called,
         ]);
       } else if (identity.autoIncrement && fact.called) {
-        sqliteStatement(endpoint.db, "DELETE FROM sqlite_sequence WHERE name = ?").run(table.name);
-        sqliteStatement(endpoint.db, "INSERT INTO sqlite_sequence(name, seq) VALUES (?, ?)").run(
-          table.name,
-          BigInt(fact.value),
-        );
+        restoreAutoincrementHighWater(endpoint.db, table.name, fact.value);
       }
     }
   }
@@ -252,14 +251,16 @@ async function insertBatch(
   assertCurrent();
   const columns = table.columns.map((c) => quote(c.name)).join(",");
   if (endpoint.engine === "sqlite") {
-    runSqliteImmediateTransactionSync(endpoint.db, () => {
-      const statement = sqliteStatement(
-        endpoint.db,
-        `INSERT INTO ${quote(table.name)} (${columns}) VALUES (${table.columns.map(() => "?").join(",")})`,
-      );
-      for (const row of rows) {
-        statement.run(...table.columns.map((c) => row[c.name]!));
-      }
+    withSqliteForeignKeysDisabled(endpoint.db, () => {
+      runSqliteImmediateTransactionSync(endpoint.db, () => {
+        const statement = sqliteStatement(
+          endpoint.db,
+          `INSERT INTO ${quote(table.name)} (${columns}) VALUES (${table.columns.map(() => "?").join(",")})`,
+        );
+        for (const row of rows) {
+          statement.run(...table.columns.map((c) => row[c.name]!));
+        }
+      });
     });
   } else {
     const values = rows.flatMap((row) => table.columns.map((c) => binding(row[c.name]!)));
@@ -377,7 +378,7 @@ async function referenceCatalog(
   }
 }
 
-/** Offline worker API: caller owns a migrated source, fresh destination, and exclusive custody. No publication. */
+/** Offline worker API: caller owns tracked readBigInts SQLite handles, migrated source, fresh destination, and exclusive custody. No publication. */
 export async function materializeDatabasePort(params: {
   source: Endpoint;
   destination: Endpoint;
@@ -419,11 +420,18 @@ export async function materializeDatabasePort(params: {
       throw new Error("Port source identity or schema version differs");
     }
   }
-  if (
-    destination.engine === "sqlite" &&
-    sqliteStatement(destination.db, "SELECT 1 FROM sqlite_schema LIMIT 1").get()
-  ) {
-    throw new Error("Port destination must be empty");
+  if (destination.engine === "sqlite") {
+    admitSqliteSchema(destination.db);
+    const facts = getAdmittedSqliteSchemaFacts(destination.db);
+    if (
+      !facts ||
+      facts.tables.size ||
+      facts.views.size ||
+      facts.indexes.size ||
+      facts.triggers.size
+    ) {
+      throw new Error("Port destination must have admitted empty schema facts");
+    }
   }
   assertCurrent();
   const definitions = await referenceCatalog(postgres, descriptor);
@@ -443,8 +451,7 @@ export async function materializeDatabasePort(params: {
       await destination.db.query(`SET search_path = ${quote(destination.namespace)}`);
       await destination.db.query(descriptor.preData);
     } else {
-      destination.db.exec("PRAGMA foreign_keys = OFF");
-      destination.db.exec(descriptor.sqlite);
+      withSqliteForeignKeysDisabled(destination.db, () => destination.db.exec(descriptor.sqlite));
     }
     const facts = await allocations(source, descriptor);
     const tables = await scan(source, descriptor, maxRowBytes, destination, assertCurrent);
@@ -463,13 +470,7 @@ export async function materializeDatabasePort(params: {
         params.storeId,
       ]);
     } else {
-      destination.db.exec("PRAGMA foreign_keys = ON");
-      if (
-        sqliteStatement(destination.db, "PRAGMA integrity_check").get()?.integrity_check !== "ok" ||
-        sqliteStatement(destination.db, "PRAGMA foreign_key_check").get()
-      ) {
-        throw new Error("Port SQLite integrity verification failed");
-      }
+      assertSqliteIntegrity(destination.db, "Port SQLite destination");
     }
     const verified = {
       tables: await scan(destination, descriptor, maxRowBytes),

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
 import { parentPort, workerData } from "node:worker_threads";
 import { Client } from "pg";
 import { deriveMeetingTranscriptSummaryColumns } from "../../transcripts/store-columns.js";
@@ -149,7 +149,7 @@ async function run() {
   const namespaces: string[] = [];
   const databases: DatabaseSync[] = [];
   const open = () => {
-    const db = new DatabaseSync(":memory:");
+    const db = openNodeSqliteDatabase(":memory:", { readBigInts: true });
     databases.push(db);
     return db;
   };
