@@ -10,6 +10,7 @@ import {
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import { toAgentStoreSessionKey } from "../../routing/session-key.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -253,6 +254,15 @@ export async function searchSessionTranscripts(
       },
       transcriptSearchLane,
     );
+  } catch (error) {
+    if (error instanceof WorkerTaskError && error.code === "timeout") {
+      throw new WorkerTaskError(
+        "Session transcript search timed out; narrow the session selection or use more specific query keywords, then retry. A timeout does not mean that no matching conversation exists.",
+        "timeout",
+        { cause: error },
+      );
+    }
+    throw error;
   } finally {
     await execution?.release();
   }

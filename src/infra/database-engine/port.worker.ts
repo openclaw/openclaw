@@ -13,6 +13,7 @@ import {
   withSqliteForeignKeysDisabled,
 } from "../sqlite-strict.js";
 import { runSqliteImmediateTransactionSync } from "../sqlite-transaction.js";
+import { writeSqliteUserVersion } from "../sqlite-user-version.js";
 import {
   assertPostgresCatalog,
   postgresCatalogQuery,
@@ -379,6 +380,45 @@ async function referenceCatalog(
   }
 }
 
+async function assertSourceIdentity(
+  source: Extract<Endpoint, { engine: "postgres" }>,
+  descriptor: PortDescriptor,
+  storeId: string,
+) {
+  const meta = (
+    await source.db.query(
+      `SELECT store, version, store_id FROM ${qualified(source, "openclaw_schema_meta")}`,
+    )
+  ).rows;
+  if (
+    meta.length !== 1 ||
+    meta[0].store !== descriptor.id ||
+    meta[0].store_id !== storeId ||
+    BigInt(meta[0].version) !== BigInt(descriptor.version)
+  ) {
+    throw new Error("Port source identity or schema version differs");
+  }
+}
+
+/** Offline recovery inspection, never a runtime foreign-writer probe. */
+export async function inspectDatabasePort(
+  source: Extract<Endpoint, { engine: "postgres" }>,
+  descriptor: PortDescriptor,
+  storeId: string,
+) {
+  await assertSourceIdentity(source, descriptor, storeId);
+  await source.db.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+  try {
+    return {
+      catalog: await catalogEvidence(source, descriptor),
+      tables: await scan(source, descriptor, 64 * 1024 * 1024),
+      allocations: await allocations(source, descriptor),
+    };
+  } finally {
+    await source.db.query("ROLLBACK");
+  }
+}
+
 /** Offline worker API: caller owns tracked readBigInts SQLite handles, migrated source, fresh destination, and exclusive custody. No publication. */
 export async function materializeDatabasePort(params: {
   source: Endpoint;
@@ -387,6 +427,7 @@ export async function materializeDatabasePort(params: {
   storeId: string;
   assertCurrent: () => void;
   maxRowBytes?: number;
+  sourceAllocations?: PortVerification["allocations"];
 }): Promise<PortVerification> {
   const { source, destination, descriptor, assertCurrent } = params;
   if (source.engine === destination.engine) {
@@ -407,19 +448,7 @@ export async function materializeDatabasePort(params: {
   }
   await postgres.db.query("SET row_security = off");
   if (source.engine === "postgres") {
-    const meta = (
-      await source.db.query(
-        `SELECT version, store_id FROM ${qualified(source, "openclaw_schema_meta")} WHERE store = $1`,
-        [descriptor.id],
-      )
-    ).rows;
-    if (
-      meta.length !== 1 ||
-      meta[0].store_id !== params.storeId ||
-      BigInt(meta[0].version) !== BigInt(descriptor.version)
-    ) {
-      throw new Error("Port source identity or schema version differs");
-    }
+    await assertSourceIdentity(source, descriptor, params.storeId);
   }
   if (destination.engine === "sqlite") {
     admitSqliteSchema(destination.db);
@@ -454,7 +483,7 @@ export async function materializeDatabasePort(params: {
     } else {
       withSqliteForeignKeysDisabled(destination.db, () => destination.db.exec(descriptor.sqlite));
     }
-    const facts = await allocations(source, descriptor);
+    const facts = params.sourceAllocations ?? (await allocations(source, descriptor));
     const tables = await scan(source, descriptor, maxRowBytes, destination, assertCurrent);
     assertCurrent();
     await restoreAllocations(destination, descriptor, facts);
@@ -471,6 +500,7 @@ export async function materializeDatabasePort(params: {
         params.storeId,
       ]);
     } else {
+      writeSqliteUserVersion(destination.db, descriptor.version);
       assertSqliteIntegrity(destination.db, "Port SQLite destination");
     }
     const verified = {

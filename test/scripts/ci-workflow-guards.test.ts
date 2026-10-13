@@ -6591,7 +6591,8 @@ fi
     writeFileSync(path.join(bin, "gh"), '#!/bin/sh\nprintf "%s\\n" "$TAG_SHA"\n', {
       mode: 0o755,
     });
-    writeFileSync(path.join(bin, "sha256sum"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    // Drain the checksum pipe so the publisher's printf cannot fail with SIGPIPE under pipefail.
+    writeFileSync(path.join(bin, "sha256sum"), "#!/bin/sh\ncat > /dev/null\n", { mode: 0o755 });
     const run = (alreadyPublished: string, status: object, desktop = "false") => {
       rmSync(calls, { force: true });
       const result = spawnSync(bash, ["--noprofile", "--norc", "-c", publisher.run ?? ""], {

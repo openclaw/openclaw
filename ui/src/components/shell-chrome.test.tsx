@@ -86,23 +86,15 @@ describe("Solid shell chrome", () => {
     expect(view.container.querySelector(".control-ui-environment-pill")).toBeNull();
   });
 
-  it("updates native navigation, authorization hints, and history-only chrome", () => {
-    const [collapsed, setCollapsed] = createSignal(false);
+  it("retains native history actions across the Settings takeover", () => {
     const [historyOnly, setHistoryOnly] = createSignal(false);
     const [canGoBack, setCanGoBack] = createSignal(false);
-    const [reason, setReason] = createSignal<string | undefined>("New sessions are unavailable");
-    const openSession = vi.fn();
     const back = vi.spyOn(globalThis.history, "back").mockImplementation(() => {});
     const view = mountSolid(() => (
       <MacosTitlebarControls
-        navCollapsed={collapsed()}
         historyOnly={historyOnly()}
         canGoBack={canGoBack()}
         canGoForward={false}
-        newSessionDisabledReason={reason()}
-        onToggleSidebar={() => setCollapsed((value) => !value)}
-        onOpenPalette={() => {}}
-        onOpenNewSession={openSession}
       />
     ));
     const backButton = view.container.querySelector<HTMLButtonElement>(
@@ -112,27 +104,11 @@ describe("Solid shell chrome", () => {
       view.container.querySelector<HTMLElement>("openclaw-macos-titlebar-controls")?.style.display,
     ).toBe("contents");
     expect(backButton.disabled).toBe(true);
-    expect(view.container.querySelector(".macos-titlebar-controls__new-session")).toBeNull();
-    view.container
-      .querySelector<HTMLButtonElement>(".macos-titlebar-controls__sidebar-toggle")!
-      .click();
+    expect(view.container.querySelectorAll("button")).toHaveLength(2);
     setCanGoBack(true);
     flush();
-    const newSession = view.container.querySelector<HTMLButtonElement>(
-      ".macos-titlebar-controls__new-session",
-    )!;
-    expect(newSession.disabled).toBe(true);
-    expect(newSession.closest("openclaw-tooltip")?.content).toBe("New sessions are unavailable");
-    expect(newSession.closest("openclaw-tooltip")?.querySelector("kbd")).toBeNull();
     backButton.click();
     expect(back).toHaveBeenCalledOnce();
-
-    setReason(undefined);
-    flush();
-    expect(newSession.disabled).toBe(false);
-    expect(newSession.closest("openclaw-tooltip")?.querySelector("kbd")).not.toBeNull();
-    newSession.click();
-    expect(openSession).toHaveBeenCalledOnce();
 
     setHistoryOnly(true);
     flush();
