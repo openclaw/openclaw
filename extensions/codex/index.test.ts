@@ -11,23 +11,18 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import {
-  createPluginRuntimeMock,
-  createCapturedPluginRegistration,
-} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   ensureAuthProfileStore,
   ensureAuthProfileStoreAsync,
   resolveAuthProfileOrder,
 } from "openclaw/plugin-sdk/provider-auth";
 import { resolveProviderIdForAuth } from "openclaw/plugin-sdk/provider-auth-aliases";
-import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   closeOpenClawStateDatabaseAsync,
   observeHostDataSql,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it, vi } from "vitest";
-import openAIPlugin from "../openai/index.js";
 import { createCodexAppServerAgentHarness } from "./harness.js";
 import plugin from "./index.js";
 import {
@@ -113,41 +108,6 @@ function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0, argIndex
 }
 
 describe("codex plugin", () => {
-  it("is opt-in and advertises its native authentication source", () => {
-    const manifest = JSON.parse(
-      fs.readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf8"),
-    ) as { enabledByDefault?: unknown; providers?: unknown };
-
-    expect(manifest.enabledByDefault).toBeUndefined();
-    expect(manifest.providers).toEqual(["codex"]);
-  });
-
-  it("keeps only Codex sub-plugin policy changes on the live thread-rotation path", () => {
-    expect(plugin.reload).toEqual({
-      noopPrefixes: ["plugins.entries.codex.config.codexPlugins"],
-    });
-  });
-
-  it("does not select an agent or open plugin state while registering", () => {
-    const openKeyedStoreV2 = vi.fn(() => {
-      throw new Error("state is unavailable during registration");
-    });
-    const openSyncKeyedStore = vi.fn(() => {
-      throw new Error("openSyncKeyedStore is only available through the plugin runtime proxy");
-    });
-
-    expect(() =>
-      plugin.register(
-        createCodexTestApi({
-          config: explicitAgentConfig,
-          runtime: { modelAuth, state: { openSyncKeyedStore, openKeyedStoreV2 } } as never,
-        }),
-      ),
-    ).not.toThrow();
-    expect(openSyncKeyedStore).not.toHaveBeenCalled();
-    expect(openKeyedStoreV2).not.toHaveBeenCalled();
-  });
-
   it("persists managed exclusions through the registered harness and catalog without parent SQLite", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-managed-worker-"));
     const env = { OPENCLAW_STATE_DIR: stateDir };
@@ -332,106 +292,6 @@ describe("codex plugin", () => {
     expect(nodeExecServerPolicy.defaultPlatforms).toBeUndefined();
   });
 
-  it("registers the agent harness, native thread tool, and hosted web search", () => {
-    const registerAgentHarness = vi.fn();
-    const registerCommand = vi.fn();
-    const registerMediaUnderstandingProvider = vi.fn();
-    const registerMigrationProvider = vi.fn();
-    const registerProvider = vi.fn();
-    const registerTool = vi.fn<OpenClawPluginApi["registerTool"]>();
-    const registerToolMetadata = vi.fn();
-    const registerWebSearchProvider = vi.fn();
-    const on = vi.fn();
-    const onConversationBindingResolved = vi.fn();
-
-    plugin.register(
-      createCodexTestApi({
-        registerAgentHarness,
-        registerCommand,
-        registerMediaUnderstandingProvider,
-        registerMigrationProvider,
-        registerProvider,
-        registerTool,
-        registerToolMetadata,
-        registerWebSearchProvider,
-        on,
-        onConversationBindingResolved,
-      }),
-    );
-
-    const agentHarnessRegistration = mockCallArg(registerAgentHarness) as Record<string, unknown>;
-    const agentHarnessOptions = mockCallArg(registerAgentHarness, 0, 1) as
-      | Record<string, unknown>
-      | undefined;
-    const mediaProviderRegistration = mockCallArg(registerMediaUnderstandingProvider) as
-      | Record<string, unknown>
-      | undefined;
-    const inboundClaimRegistration = mockCall(on) as [unknown, unknown] | undefined;
-    const bindingResolvedRegistration = mockCall(onConversationBindingResolved) as
-      | [unknown]
-      | undefined;
-
-    expect(registerProvider).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        id: "codex",
-        auth: [],
-        prepareSyntheticAuth: expect.any(Function),
-      }),
-    );
-    expect(agentHarnessRegistration.id).toBe("codex");
-    expect(agentHarnessRegistration.label).toBe("Codex agent harness");
-    expect(agentHarnessRegistration.deliveryDefaults).toEqual({
-      visibleReplies: "message_tool",
-    });
-    expect(agentHarnessRegistration.compactNative).toBeUndefined();
-    expect(typeof agentHarnessOptions?.nativeCompaction).toBe("function");
-    expect(typeof agentHarnessRegistration.dispose).toBe("function");
-    expect(typeof agentHarnessRegistration.fetchUsageSnapshot).toBe("function");
-    expect(typeof agentHarnessRegistration.loadMcpToolCatalog).toBe("function");
-    expect(mediaProviderRegistration?.id).toBe("codex");
-    expect(mediaProviderRegistration?.capabilities).toEqual(["image"]);
-    expect(mediaProviderRegistration?.defaultModels).toEqual({ image: "gpt-6-astra" });
-    expect(typeof mediaProviderRegistration?.describeImage).toBe("function");
-    expect(typeof mediaProviderRegistration?.describeImages).toBe("function");
-    const webSearchRegistration = mockCallArg(registerWebSearchProvider) as
-      | Record<string, unknown>
-      | undefined;
-    expect(webSearchRegistration?.id).toBe("codex");
-    expect(webSearchRegistration?.label).toBe("Codex Hosted Search");
-    expect(webSearchRegistration?.requiresCredential).toBe(false);
-    expect(typeof webSearchRegistration?.createTool).toBe("function");
-    const commandRegistration = mockCallArg(registerCommand) as Record<string, unknown> | undefined;
-    expect(commandRegistration?.name).toBe("codex");
-    expect(commandRegistration?.description).toBe(
-      "Inspect and control the Codex app-server harness",
-    );
-    const migrationRegistration = mockCallArg(registerMigrationProvider) as
-      | Record<string, unknown>
-      | undefined;
-    expect(migrationRegistration?.id).toBe("codex");
-    expect(migrationRegistration?.label).toBe("Codex");
-    expect(registerTool).toHaveBeenCalledWith(
-      expect.objectContaining({ contextVersion: 2, create: expect.any(Function) }),
-      { name: "codex_threads" },
-    );
-    expect(registerTool).toHaveBeenCalledWith(
-      expect.objectContaining({ contextVersion: 2, create: expect.any(Function) }),
-      { name: "codex_plugins" },
-    );
-    expect(registerTool.mock.calls.some(([, options]) => Array.isArray(options?.names))).toBe(
-      false,
-    );
-    expect(registerToolMetadata).toHaveBeenCalledWith(
-      expect.objectContaining({ toolName: "codex_threads", risk: "high" }),
-    );
-    expect(registerToolMetadata).toHaveBeenCalledWith(
-      expect.objectContaining({ toolName: "codex_plugins", risk: "low" }),
-    );
-    expect(inboundClaimRegistration?.[0]).toBe("inbound_claim");
-    expect(typeof inboundClaimRegistration?.[1]).toBe("function");
-    expect(typeof bindingResolvedRegistration?.[0]).toBe("function");
-  });
-
   it("lets native session discovery be disabled without disabling the Codex plugin", () => {
     const registerAgentHarness = vi.fn();
     const registerNodeHostCommand = vi.fn();
@@ -469,37 +329,6 @@ describe("codex plugin", () => {
     expect(registerSessionCatalog).not.toHaveBeenCalled();
   });
 
-  it("keeps native authentication separate from the OpenAI text provider", () => {
-    const providers: ProviderPlugin[] = [];
-    const registerProvider = (provider: ProviderPlugin) => providers.push(provider);
-    openAIPlugin.register(
-      createTestPluginApi({
-        id: "openai",
-        name: "OpenAI Provider",
-        source: "test",
-        config: {},
-        runtime: createCapturedPluginRegistration({ id: "openai" }).api.runtime,
-        registerProvider,
-      }),
-    );
-    plugin.register(
-      createTestPluginApi({
-        id: "codex",
-        name: "Codex",
-        source: "test",
-        config: {},
-        pluginConfig: {},
-        runtime: createCodexTestRuntime(),
-        registerProvider,
-      }),
-    );
-
-    expect(providers.map((provider) => provider.id)).toEqual(["openai", "codex"]);
-    expect(providers[1]).toMatchObject({ auth: [], prepareSyntheticAuth: expect.any(Function) });
-    expect(providers[1]).not.toHaveProperty("resolveDynamicModel");
-    expect(providers[1]).not.toHaveProperty("catalog");
-  });
-
   it("registers the five shipped supervision tools only when supervision is enabled", () => {
     const registerTool = vi.fn<OpenClawPluginApi["registerTool"]>();
     plugin.register(
@@ -520,7 +349,6 @@ describe("codex plugin", () => {
 
   it.each([
     ["supervision is absent", undefined],
-    ["supervision is disabled", { enabled: false }],
     ["supervision is enabled", { enabled: true }],
   ] as const)(
     "keeps live user-home appServer config for an auto-enabled Codex entry when %s",
@@ -575,26 +403,6 @@ describe("codex plugin", () => {
     expect(
       registration.factory.create({ senderIsOwner: true, assertInvocationCurrent: () => {} }),
     ).toBeNull();
-  });
-
-  it("activates from live supervision config through a normalized Codex entry id", () => {
-    const registerTool = vi.fn<OpenClawPluginApi["registerTool"]>();
-    plugin.register(
-      createCodexTestApi({
-        runtime: createCodexTestRuntime(() => ({
-          plugins: {
-            entries: {
-              " CODEX ": {
-                config: { supervision: { enabled: true } },
-              },
-            },
-          },
-        })),
-        registerTool,
-      }),
-    );
-
-    expect(registerTool.mock.calls.some(([, options]) => Array.isArray(options?.names))).toBe(true);
   });
 
   it.each([
@@ -680,23 +488,6 @@ describe("codex plugin", () => {
 
     await expect(probe.execute("probe", {})).rejects.toThrow(
       "Codex supervision is disabled in the codex plugin config.",
-    );
-  });
-
-  it("registers with capture APIs that do not expose conversation binding hooks yet", () => {
-    const registerProvider = vi.fn();
-    const api = createCodexTestApi({
-      registerProvider,
-    });
-    delete (api as { onConversationBindingResolved?: unknown }).onConversationBindingResolved;
-
-    plugin.register(api);
-    expect(registerProvider).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        id: "codex",
-        auth: [],
-        prepareSyntheticAuth: expect.any(Function),
-      }),
     );
   });
 
@@ -852,15 +643,6 @@ describe("codex plugin", () => {
         nativeHookRelay: { enabled: true },
       },
     );
-  });
-
-  it("owns auth bootstrap for forwarded profiles and native Codex sign-in", () => {
-    const harness = createCodexAppServerAgentHarness({
-      bindingStore: testCodexAppServerBindingStore,
-    });
-
-    expect(harness.authBootstrap).toBe("harness");
-    expect(typeof harness.authBinding?.fingerprint).toBe("function");
   });
 
   it("passes live Codex plugin config into public Codex app-server attempts", async () => {

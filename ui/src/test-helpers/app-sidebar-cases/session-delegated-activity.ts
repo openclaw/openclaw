@@ -10,6 +10,7 @@ import {
   type TestSessionMenu,
 } from "../app-sidebar.ts";
 import { createTestGatewayClient } from "../gateway-client.ts";
+import { settleLitElement } from "../lit-settle.ts";
 import { waitForFast } from "../wait-for.ts";
 import { mountRoster, roster, session } from "./roster.test-support.ts";
 
@@ -115,10 +116,17 @@ describe("AppSidebar delegated activity", () => {
         sessions: [parentRow, failedRun],
       },
     });
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(parent().querySelector(".session-glyph__ring")).toBeNull();
-    expect(parent().querySelector('[data-session-attention="error"]')).not.toBeNull();
-    expect(parent().textContent).toContain("Child session Review changes failed: Review failed");
+    const parentAttention = parent().querySelector('[data-session-attention="error"]')!;
+    expect(parentAttention).not.toBeNull();
+    await parentAttention.closest<HTMLElementTagNameMap["openclaw-tooltip"]>("openclaw-tooltip")!
+      .updateComplete;
+    const parentDescription = (parentAttention.getAttribute("aria-describedby") ?? "")
+      .split(/\s+/u)
+      .map((id) => parentAttention.ownerDocument.getElementById(id)?.textContent ?? "")
+      .join(" ");
+    expect(parentDescription).toContain("Child session Review changes failed: Review failed");
     expect(sidebar.querySelector(`[data-session-key="${childKey}"]`)).toBeNull();
     expect(
       sidebar.querySelector("[data-child-session-toggle], [data-show-more-children]"),
@@ -201,9 +209,14 @@ describe("AppSidebar delegated activity", () => {
     );
     expect(rosterParent().querySelector(".session-glyph__ring")).toBeNull();
     expect(rosterParent().querySelector('[aria-label="Unread"]')).not.toBeNull();
-    expect(rosterParent().textContent).toContain(
-      "Child session Review changes failed: Review failed",
-    );
+    const rosterAttention = rosterParent().querySelector('[data-session-attention="error"]')!;
+    await rosterAttention.closest<HTMLElementTagNameMap["openclaw-tooltip"]>("openclaw-tooltip")!
+      .updateComplete;
+    const rosterDescription = (rosterAttention.getAttribute("aria-describedby") ?? "")
+      .split(/\s+/u)
+      .map((id) => rosterAttention.ownerDocument.getElementById(id)?.textContent ?? "")
+      .join(" ");
+    expect(rosterDescription).toContain("Child session Review changes failed: Review failed");
     expect(mixed.sidebar.querySelector(`[data-session-key="${childKey}"]`)).toBeNull();
     expect(mixed.sidebar.querySelectorAll(".sidebar-recent-session--child")).toHaveLength(1);
   });
@@ -332,7 +345,7 @@ describe("AppSidebar delegated activity", () => {
           hasActiveSubagentRun: false,
         }).result,
       });
-      await sidebar.updateComplete;
+      await settleLitElement(sidebar);
       const finished = sidebar.querySelector(`[data-session-key="${parentKey}"]`)!;
       expect(finished.querySelector(".session-glyph__ring")).toBeNull();
       expect(finished.classList.contains("session-row-host--running")).toBe(false);

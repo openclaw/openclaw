@@ -8,7 +8,7 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { withEnvAsync } from "../../test-utils/env.js";
 import { registerSandboxBackend } from "./backend.js";
 import { resolveSandboxContext } from "./context.js";
-import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
+import { resolvePreparedSandboxRuntimeStatus } from "./runtime-status.js";
 
 const registry = vi.hoisted(() => ({
   readRegisteredSandboxRuntimeIds: vi.fn<() => Promise<string[]>>(),
@@ -67,7 +67,7 @@ it("rejects released hosted custody before ordinary sandbox backend provisioning
       config,
       sessionKey,
       workspaceDir: path.join(root, "workspace"),
-      preparedRuntimeStatus: resolveSandboxRuntimeStatus({
+      preparedRuntimeStatus: resolvePreparedSandboxRuntimeStatus({
         cfg: config,
         sessionKey,
         preparedSessionEntry: null,

@@ -209,7 +209,6 @@ const portableScripts = [
   "scripts/changelog-to-html.sh",
   "scripts/ci-hydrate-live-auth.sh",
   "scripts/ci-hydrate-testbox-env.sh",
-  "scripts/connect.sh",
   "scripts/dev/computer-use-macos-live-rig.sh",
   "scripts/docker/setup.sh",
   "scripts/docker/shared-image-artifact.sh",

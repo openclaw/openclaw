@@ -1,5 +1,6 @@
 import { copyFileSync, readFileSync, renameSync, unlinkSync } from "node:fs";
 import { expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { captureGatewayToolReceiptAssertion } from "../../../agents/tools/gateway-caller-context.js";
 import {
   loadSessionEntry,
@@ -199,6 +200,12 @@ export function registerClientCreateSourceAuthorityTests(harness: SourceAuthorit
           }
         }
       };
+      const changeRequested = createDeferred();
+      fixture.context.broadcastToConnIds.mockImplementation((event) => {
+        if (event === "talk.voice.change") {
+          changeRequested.resolve();
+        }
+      });
       const change = Promise.resolve(
         talkVoiceHandlers["talk.voice.set"]!({
           req: { type: "req", id: "sdk-change", method: "talk.voice.set", params: {} },
@@ -224,6 +231,11 @@ export function registerClientCreateSourceAuthorityTests(harness: SourceAuthorit
                   : assertSdkCurrent,
               }),
         } as never),
+      );
+      await awaitGateBeforeSettlement(
+        changeRequested.promise,
+        change,
+        "Voice change settled before requesting a replacement",
       );
       const changeId = fixture.context.broadcastToConnIds.mock.calls.find(
         ([event]) => event === "talk.voice.change",

@@ -183,7 +183,7 @@ it("reclassifies exact rewrites in both directions and deletes eligibility with 
   });
 });
 
-it("rejects a prepared projection after a same-sequence rewrite before its claim", async () => {
+it("keeps a prepared projection unpublished after a same-sequence rewrite", async () => {
   await withOpenClawTestState({ label: "transcript-eligibility-stale" }, async (state) => {
     const scope = {
       agentId: "main",
@@ -205,10 +205,22 @@ it("rejects a prepared projection after a same-sequence rewrite before its claim
           event: { ...entries[2], message: { ...entries[2].message, excludeFromContext: false } },
         },
       ]);
-      db.prepare(
-        "UPDATE session_transcript_active_events SET context_eligible = NULL WHERE session_id = ?",
-      ).run(sessionId);
-      expect(claimPreparedSessionTranscriptProjectionInTransaction(db, plan, -1)).toBe(false);
+      const claimId = -1;
+      expect(claimPreparedSessionTranscriptProjectionInTransaction(db, plan, claimId)).toBe(true);
+      deletePreparedSessionTranscriptProjectionChunkInTransaction(db, {
+        sessionId,
+        claimId,
+        maxRowsPerTable: 512,
+      });
+      appendPreparedSessionTranscriptProjectionChunkInTransaction(db, {
+        sessionId,
+        claimId,
+        activeRows: plan.activeRows,
+        ftsRows: plan.ftsRows,
+      });
+      expect(finalizePreparedSessionTranscriptProjectionInTransaction(db, plan, claimId)).toBe(
+        false,
+      );
     }, scope);
     expect(() => readActiveTranscriptStats(scope)).toThrow(
       SessionTranscriptProjectionUnavailableError,
@@ -218,7 +230,7 @@ it("rejects a prepared projection after a same-sequence rewrite before its claim
   });
 });
 
-it.each(["interrupted", "unclassified", "append", "rewrite", "delete"])(
+it.each(["interrupted", "rewrite", "delete"])(
   "fences partial eligibility publication after %s work",
   async (change) => {
     await withOpenClawTestState({ label: "transcript-eligibility-claim" }, async (state) => {
@@ -255,7 +267,7 @@ it.each(["interrupted", "unclassified", "append", "rewrite", "delete"])(
           }),
         ).toBe(true);
       }, scope);
-      // Removing the last NULL is not publication: counts and source identity still need a commit.
+      // Removing the last NULL is not publication: only finalization publishes the projection.
       expect(hasUnclassifiedSessionTranscriptEvents(db, sessionId)).toBe(false);
       expect(() => withCurrentProjectionSnapshot(scope, () => "visible")).toThrow(
         SessionTranscriptProjectionUnavailableError,
@@ -263,28 +275,7 @@ it.each(["interrupted", "unclassified", "append", "rewrite", "delete"])(
 
       if (change !== "interrupted") {
         runOpenClawAgentWriteTransaction((database) => {
-          if (change === "unclassified") {
-            expect(
-              appendPreparedSessionTranscriptProjectionChunkInTransaction(db, {
-                sessionId,
-                claimId,
-                activeRows: plan.activeRows.slice(1),
-                ftsRows: plan.ftsRows,
-              }),
-            ).toBe(true);
-            db.prepare(
-              "UPDATE session_transcript_active_events SET context_eligible = NULL WHERE session_id = ?",
-            ).run(sessionId);
-          } else if (change === "append") {
-            appendTranscriptEventsInTransaction(database, scope, [
-              {
-                type: "message",
-                id: "new",
-                parentId: "answer",
-                message: { role: "user", content: "next" },
-              },
-            ]);
-          } else if (change === "rewrite") {
+          if (change === "rewrite") {
             rewriteSqliteTranscriptEventRowsInTransaction(database, scope, [
               {
                 seq: 2,
@@ -306,7 +297,7 @@ it.each(["interrupted", "unclassified", "append", "rewrite", "delete"])(
       await waitForSessionTranscriptIndexReconcile(scope);
       expect(sessionTranscriptIndexNeedsReconcile(db, sessionId)).toBe(false);
       expect(readActiveTranscriptStats(scope).eventCount).toBe(
-        change === "delete" ? 0 : change === "append" || change === "rewrite" ? 4 : 3,
+        change === "delete" ? 0 : change === "rewrite" ? 4 : 3,
       );
       expect(projectionRows(db).every((row) => row.context_eligible !== null)).toBe(true);
     });

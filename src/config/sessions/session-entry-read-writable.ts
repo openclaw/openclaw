@@ -1,14 +1,12 @@
 import path from "node:path";
 import { readSqliteDatabaseWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
-import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import type { AgentDatabaseRegistryChange } from "../../state/openclaw-agent-db-contract.js";
 import {
   resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.paths.js";
-import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-admission-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { resolveSessionEntry } from "./session-accessor.sqlite-exact-read.js";
@@ -31,6 +29,7 @@ import {
 } from "./session-incognito-binding.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
 import { withSessionStoreTarget } from "./session-store-target-runtime.js";
+import { createSessionWorkerExecutionSource } from "./session-worker-execution-source.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 /** Preserve logical lookup and writable open semantics on the canonical file-backed actor. */
@@ -40,7 +39,7 @@ export async function readSessionEntryInWorker(
   onRegistryChange?: (change: AgentDatabaseRegistryChange) => void,
   onReadTarget?: (target: SessionEntryTargetPatchScope) => void,
   reader?: SessionEntryCohortReader,
-) {
+): Promise<SessionEntry | undefined> {
   if (reader) {
     return readAdmittedSessionEntry(reader, input, assertCallerCurrent, onReadTarget);
   }
@@ -130,24 +129,12 @@ export async function readSessionEntryInWorker(
         owner.assertCurrent();
       };
       const source = {
-        assertCurrent,
-        onRegistryChange(change) {
+        ...createSessionWorkerExecutionSource(assertCurrent, "Session read authority expired"),
+        onRegistryChange(change: AgentDatabaseRegistryChange) {
           owner.onRegistryChange(change);
           onRegistryChange?.(change);
         },
-        createAdmission(binding) {
-          return () => ({
-            nativeLocations: binding.nativeLocations,
-            admission: createSqliteWorkerOperationAdmission((request, grant) => {
-              binding.authorize(request);
-              assertCurrent();
-              if (!grant()) {
-                throw new Error("Session read authority expired");
-              }
-            }, binding.attachment),
-          });
-        },
-      } satisfies AgentDatabaseRequestExecutionSource;
+      };
       let entry: SessionEntry | undefined;
       let readTarget: SessionEntryTargetPatchScope | undefined;
       try {

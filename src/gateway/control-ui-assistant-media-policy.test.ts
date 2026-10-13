@@ -29,12 +29,17 @@ const state = vi.hoisted(() => ({
   loaded: vi.fn(),
   auth: vi.fn(),
   placements: vi.fn(),
+  placementsAsync: vi.fn(),
 }));
 vi.mock("./session-utils.js", () => ({ loadGatewaySessionEntryReadOnly: state.loaded }));
 vi.mock("./http-utils.js", () => ({ authorizeControlUiReadRequestOrReply: state.auth }));
-vi.mock("./session-worker-placement-context.js", () => ({
+vi.mock("./session-worker-placement-context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-worker-placement-context.js")>()),
   resolveSessionWorkerPlacementContext: () => ({
-    workerSessionPlacementService: { getMany: state.placements },
+    workerSessionPlacementService: {
+      getMany: state.placements,
+      getManyAsync: state.placementsAsync,
+    },
   }),
 }));
 const PNG = Buffer.from(
@@ -58,6 +63,9 @@ const sessionKey = "agent:main:dashboard:media";
 
 beforeEach(async () => {
   state.placements.mockReset().mockReturnValue(new Map());
+  state.placementsAsync
+    .mockReset()
+    .mockImplementation(async (sessionIds: readonly string[]) => state.placements(sessionIds));
   temp = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "assistant-image-policy-")));
   project = path.join(temp, "project");
   await fs.mkdir(project);
@@ -570,6 +578,9 @@ describe("assistant image session policy", () => {
         const placements = createWorkerSessionPlacementStore();
         state.placements.mockImplementation((sessionIds: readonly string[]) =>
           placements.getMany(sessionIds),
+        );
+        state.placementsAsync.mockImplementation((sessionIds: readonly string[]) =>
+          placements.getManyAsync(sessionIds),
         );
         entry.permissionMode = "full";
         const source = path.join(temp, "gateway-only.png");

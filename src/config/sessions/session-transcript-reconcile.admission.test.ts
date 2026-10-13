@@ -15,6 +15,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { persistSessionTranscriptTurn } from "./session-accessor.js";
 import {
   reconcileSessionTranscriptIndexes,
@@ -42,16 +43,19 @@ afterEach(async () => {
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
+  clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
   for (const root of roots.splice(0)) {
     fs.rmSync(root, { recursive: true, force: true });
   }
+  clearRuntimeConfigSnapshot();
 });
 
 async function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "reconcile-admission-"));
   roots.push(root);
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
+  setRuntimeConfigSnapshot({});
   const options = { agentId: "main", env: { ...process.env, OPENCLAW_STATE_DIR: root } };
   const scope = { ...options, sessionId: "cold", sessionKey: "agent:main:cold" };
   await persistSessionTranscriptTurn(scope, {

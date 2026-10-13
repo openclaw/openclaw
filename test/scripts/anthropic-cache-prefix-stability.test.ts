@@ -114,6 +114,29 @@ describe("provider cache prefix assertion", () => {
       /segment=cacheBreakpoint.policy/,
     );
   });
+  it("normalizes Anthropic text shorthand without hiding retained text changes", () => {
+    const payload = (content: string | Array<{ text: string; type: string }>) => ({
+      model: "synthetic-claude",
+      messages: [{ role: "user", content }],
+    });
+    // The release gate sorts provider JSON keys before taking this snapshot.
+    const before = snapshotProviderPrefix(
+      "anthropic-messages",
+      payload([{ text: "retained text", type: "text" }]),
+    );
+    const shorthand = snapshotProviderPrefix("anthropic-messages", payload("retained text"));
+    expect(() =>
+      assertStableProviderPrefix(before, shorthand, { label: "shorthand replay" }),
+    ).not.toThrow();
+    expect(() =>
+      assertStableProviderPrefix(shorthand, before, { label: "block replay" }),
+    ).not.toThrow();
+    const changed = snapshotProviderPrefix("anthropic-messages", payload("changed text"));
+    expect(() => assertStableProviderPrefix(before, changed, { label: "rewritten text" })).toThrow(
+      /segment=history\[0\].*path=\$.block.text/,
+    );
+  });
+
   it("preserves every retained item across an explicit history-window boundary", () => {
     const payload = fixture();
     payload.input.push({ role: "user", content: "retained turn" });

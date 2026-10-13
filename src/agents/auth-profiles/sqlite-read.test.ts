@@ -72,6 +72,31 @@ describe("prepared auth profile row reads", () => {
     await expect(reader.read()).rejects.toThrow("Auth profile database file identity changed");
   });
 
+  it("retains captured absence when the first session creates its database", async () => {
+    vi.mocked(identity.inspectDatabasePathIdentitySync).mockReturnValue({
+      key: "path:/fixture/auth.sqlite",
+      canonicalPath: "/fixture/auth.sqlite",
+    });
+    const reader = prepare();
+    vi.mocked(identity.inspectDatabasePathIdentitySync).mockReturnValue({
+      key: "file:created",
+      canonicalPath: "/fixture/auth.sqlite",
+    });
+    await expect(reader.read()).resolves.toEqual({
+      store: { status: "missing", reason: "database" },
+      state: { status: "missing", reason: "database" },
+      cacheable: false,
+    });
+    await reader.dispose();
+    expect(() => reader.assertCurrent()).not.toThrow();
+    expect(child.read).not.toHaveBeenCalled();
+    await expect(prepare().read()).resolves.toEqual(rows);
+    expect(child.read).toHaveBeenCalledWith(
+      "/fixture/auth.sqlite",
+      expect.objectContaining({ expectedIdentity: "file:created" }),
+    );
+  });
+
   it("captures environment and retains the agent owner through child settlement", async () => {
     const registration = vi.spyOn(resources, "registerOpenClawAgentDatabaseAsyncResource");
     const env = { OPENCLAW_STATE_DIR: "/fixture/original" };

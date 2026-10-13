@@ -79,6 +79,59 @@ function addOwnerColumns(db: DatabaseSync) {
   }
 }
 
+it("skips absent-field clearing only when the complete previous field set survives", () => {
+  const database = createDatabase();
+  const key = database.keys[0];
+  const previous = {
+    sessionId: "session-0",
+    updatedAt: 1,
+    skillsSnapshot: { prompt: "saved prompt", skills: [] },
+  };
+  // Match the initial complete snapshot, including its report.
+  const previousEntry = {
+    ...previous,
+    systemPromptReport: {
+      source: "run" as const,
+      generatedAt: 1,
+      systemPrompt: { chars: 0, projectContextChars: 0, nonProjectContextChars: 0 },
+      injectedWorkspaceFiles: [],
+      skills: { promptChars: 0, entries: [] },
+      tools: { listChars: 0, schemaChars: 0, entries: [] },
+    },
+  };
+  const writes = trackSqliteStatementExecutions(database.db, ["delete"], (sql) =>
+    /^delete from "session_entry_snapshots"/iu.test(sql) ? "delete" : null,
+  );
+  const replace = (entry: Record<string, unknown>, commit = true) => {
+    const split = splitSessionEntrySnapshots(entry, { previousEntry });
+    database.db.exec("BEGIN");
+    writeSessionEntrySnapshots(database, key, split.snapshots, split);
+    database.db.exec(commit ? "COMMIT" : "ROLLBACK");
+  };
+  const fields = () =>
+    database.db
+      .prepare("SELECT field FROM session_entry_snapshots WHERE session_key = ? ORDER BY field")
+      .all(key)
+      .map((row) => row.field);
+  try {
+    replace({ ...previousEntry, skillsSnapshot: { prompt: "new prompt", skills: [] } });
+    expect(writes.counts.delete).toBe(0);
+    expect(fields()).toEqual(["skillsSnapshot", "systemPromptReport"]);
+    replace(previous, false);
+    expect(fields()).toEqual(["skillsSnapshot", "systemPromptReport"]);
+    replace(previous);
+    expect(writes.counts.delete).toBe(2);
+    expect(fields()).toEqual(["skillsSnapshot"]);
+    // Explicit clearing still uses the same entry transaction.
+    database.db.exec("BEGIN");
+    writeSessionEntrySnapshots(database, key, []);
+    database.db.exec("COMMIT");
+    expect(fields()).toEqual([]);
+  } finally {
+    writes.restore();
+  }
+});
+
 it("batches snapshot replacement while preserving values, revisions, and rollback", () => {
   const database = createDatabase();
   const key = database.keys[0];

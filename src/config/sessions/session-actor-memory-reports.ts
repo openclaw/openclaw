@@ -23,7 +23,7 @@ import {
   hasSettledTranscriptAssistant,
   TranscriptReportNavigation,
 } from "./session-transcript-report-policy.js";
-import { isSteerConfirmationRewrite } from "./session-transcript-rewrite-effects.js";
+import { transcriptRewritePreservesAdmission } from "./session-transcript-rewrite-effects.js";
 import { sessionMatchesExpectedTranscriptTurn } from "./session-transcript-turn-state.js";
 import { SessionTranscriptWriterClaimReboundError } from "./session-transcript-writer-claim-error.js";
 import { canonicalizeTranscriptEventMedia } from "./transcript-event-media.js";
@@ -233,15 +233,15 @@ export function executeSessionActorMemoryReportCommand(
       if (input.rows.length) {
         let preserveGeneration = true;
         const replacements = new Map(
-          input.rows.map((row) => {
+          input.rows.map(({ entryId, expectedEventJson: beforeJson, event }) => {
             const existing = state.events.find(
-              (value) => isRecord(value.event) && value.event.id === row.entryId,
+              (value) => isRecord(value.event) && value.event.id === entryId,
             );
-            if (!existing || existing.eventJson !== row.expectedEventJson) {
+            if (!existing || existing.eventJson !== beforeJson) {
               throw new SqliteTranscriptMutationConflictError(entry.sessionId);
             }
-            const eventJson = JSON.stringify(canonicalizeTranscriptEventMedia(row.event));
-            preserveGeneration &&= isSteerConfirmationRewrite(row.expectedEventJson, eventJson);
+            const eventJson = JSON.stringify(canonicalizeTranscriptEventMedia(event));
+            preserveGeneration &&= transcriptRewritePreservesAdmission(beforeJson, eventJson);
             return [existing.rawSeq, { ...existing, eventJson, event: JSON.parse(eventJson) }];
           }),
         );

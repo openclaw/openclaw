@@ -95,65 +95,54 @@ export function registerQueuedRegistrationClaimCases() {
     },
   );
 
-  it.each(
-    (["complete", "incomplete", "rejected"] as const).flatMap((cleanupResult) => [
-      { cleanupResult, failure: new Error("transport failure"), errorText: "transport failure" },
-      { cleanupResult, failure: null, errorText: "error" },
-    ]),
-  )(
-    "retries only durable settlement after $cleanupResult cleanup of $errorText",
-    async ({ cleanupResult, failure, errorText }) => {
-      await withQueuedRegistrationFixture(async (f) => {
-        await f.register();
-        const launch = vi.fn(() => {
-          const attempt = createDeferred<never>();
-          attempt.reject(failure);
-          return attempt.promise;
-        });
-        const cleanup = vi.fn(async () => {
-          if (cleanupResult === "rejected") {
-            throw new Error("cleanup acknowledgement unknown");
-          }
-          return {
-            attachmentsRemoved: cleanupResult === "complete",
-            sessionDeleted: cleanupResult === "complete",
-          };
-        });
-        const rollback = vi.fn(async () => {});
-        const callbacks = createCollectorLaunchCallbacks({
-          childRunId: f.registration.runId,
-          childSessionKey: f.registration.childSessionKey,
-          requesterSessionKey: f.registration.requesterSessionKey,
-          registrationScope: f.scope,
-          preparation: { rollback, dispose: async () => {} },
-          provisionalSessionIdentity: {},
-          launchChildRun: launch,
-          recordParticipant: vi.fn(),
-          emitSpawnLifecycleHooks: async () => {},
-          cleanupFailedSpawn: cleanup,
-        });
-        const error = await callbacks.start().catch((launchError: unknown) => launchError);
-        const recovery = f.holdNextWrite();
-        const terminal = f.holdNextWrite("before");
-        const failed = f.track(callbacks.onStartFailure(error));
-        await recovery.entered;
-        recovery.release();
-        await terminal.entered;
-        terminal.reject(new Error("terminal refused"));
-        await expect(failed).rejects.toThrow("could not be persisted");
-        await callbacks.onStartFailure(error);
-        expect(launch).toHaveBeenCalledOnce();
-        expect(cleanup).toHaveBeenCalledOnce();
-        expect(rollback).toHaveBeenCalledOnce();
-        expect(f.current()).toMatchObject({
-          execution: {
-            status: "terminal",
-            outcome: { status: "error", error: errorText },
-          },
-        });
+  it("retries only durable settlement after complete cleanup of error", async () => {
+    await withQueuedRegistrationFixture(async (f) => {
+      await f.register();
+      const launch = vi.fn(() => {
+        const attempt = createDeferred<never>();
+        attempt.reject(null);
+        return attempt.promise;
       });
-    },
-  );
+      const cleanup = vi.fn(async () => {
+        return {
+          attachmentsRemoved: true,
+          sessionDeleted: true,
+        };
+      });
+      const rollback = vi.fn(async () => {});
+      const callbacks = createCollectorLaunchCallbacks({
+        childRunId: f.registration.runId,
+        childSessionKey: f.registration.childSessionKey,
+        requesterSessionKey: f.registration.requesterSessionKey,
+        registrationScope: f.scope,
+        preparation: { rollback, dispose: async () => {} },
+        provisionalSessionIdentity: {},
+        launchChildRun: launch,
+        recordParticipant: vi.fn(),
+        emitSpawnLifecycleHooks: async () => {},
+        cleanupFailedSpawn: cleanup,
+      });
+      const error = await callbacks.start().catch((launchError: unknown) => launchError);
+      const recovery = f.holdNextWrite();
+      const terminal = f.holdNextWrite("before");
+      const failed = f.track(callbacks.onStartFailure(error));
+      await recovery.entered;
+      recovery.release();
+      await terminal.entered;
+      terminal.reject(new Error("terminal refused"));
+      await expect(failed).rejects.toThrow("could not be persisted");
+      await callbacks.onStartFailure(error);
+      expect(launch).toHaveBeenCalledOnce();
+      expect(cleanup).toHaveBeenCalledOnce();
+      expect(rollback).toHaveBeenCalledOnce();
+      expect(f.current()).toMatchObject({
+        execution: {
+          status: "terminal",
+          outcome: { status: "error", error: "error" },
+        },
+      });
+    });
+  });
 
   it("guards a late claim during failure cleanup without replaying admitted rollback", async () => {
     await withQueuedRegistrationFixture(async (f) => {

@@ -34,7 +34,7 @@ final class ScreenRecordService {
         fps: Double?,
         includeAudio: Bool?) async throws -> (path: String, hasAudio: Bool)
     {
-        try ScreenCaptureSupport.requirePermission(failure: ScreenRecordError.writeFailed)
+        try await ScreenCaptureSupport.requirePermission()
         let durationMs = CaptureRateLimits.clampDurationMs(durationMs)
         let fps = CaptureRateLimits.clampFps(fps, maxFps: 60)
         let includeAudio = includeAudio ?? false
@@ -84,7 +84,7 @@ final class ScreenRecordService {
             try await stream.stopCapture()
         } catch {
             if started { try? await stream.stopCapture() }
-            throw error
+            throw PermissionManager.screenCaptureFailure(error)
         }
 
         try await recorder.finish()

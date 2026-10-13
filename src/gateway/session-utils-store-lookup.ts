@@ -4,8 +4,8 @@ import { listAgentIds } from "../agents/agent-scope.js";
 import { listSubagentSessionListRunsForControllers } from "../agents/subagents/registry/subagent-registry-read.js";
 import { resolveAgentMainSessionKey, type SessionEntry } from "../config/sessions.js";
 import { collectCanonicalSessionLookupKeys } from "../config/sessions/main-session-key.js";
-import { listSessionChildEntriesReadOnly } from "../config/sessions/session-accessor.js";
 import type { SessionEntryReadScope } from "../config/sessions/session-accessor.types.js";
+import { listIncognitoSessionChildEntriesReadOnly } from "../config/sessions/session-entry-children-incognito.js";
 import { SessionEntryChangedDuringReadError } from "../config/sessions/session-entry-read-errors.js";
 import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { SessionMember } from "../config/sessions/session-membership-facts.types.js";
@@ -264,12 +264,15 @@ export function resolveGatewaySessionStoreTargetWithStore(
 ): GatewaySessionStoreTargetWithStore {
   const normalized = { ...params, key: normalizeOptionalString(params.key) ?? "" };
   const deletedMain = prepareExplicitDeletedLegacyMainStoreTarget(normalized)?.resolve();
-  return includeDirectChildEntries(
-    deletedMain ?? prepareGatewaySessionStoreTarget(normalized).resolve(),
-    params.includeStoreChildEntries,
-    params.cfg,
-    params.env,
-  );
+  const target = deletedMain ?? prepareGatewaySessionStoreTarget(normalized).resolve();
+  return isIncognitoSessionKey(target.canonicalKey)
+    ? includeIncognitoDirectChildEntries(
+        target,
+        params.includeStoreChildEntries,
+        params.cfg,
+        params.env,
+      )
+    : target;
 }
 
 /** Retain discovery and exact worker rows through one synchronous authority consumer. */
@@ -597,7 +600,7 @@ function resolveGatewaySessionStoreTargetsReadOnly(params: {
   return selected.map((selection) => selection.resolve());
 }
 
-function includeDirectChildEntries(
+function includeIncognitoDirectChildEntries(
   target: GatewaySessionStoreTargetWithStore,
   include: boolean | undefined,
   cfg: OpenClawConfig,
@@ -610,7 +613,7 @@ function includeDirectChildEntries(
     const parentKeys = new Set([target.canonicalKey, ...target.storeKeys]);
     const childKeys = new Set<string>();
     for (const parentKey of parentKeys) {
-      for (const { sessionKey, entry } of listSessionChildEntriesReadOnly({
+      for (const { sessionKey, entry } of listIncognitoSessionChildEntriesReadOnly({
         agentId: target.agentId,
         env,
         clone: false,

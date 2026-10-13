@@ -16,7 +16,6 @@ import {
   formatErrorMessage,
   resolveAgentHarnessBeforePromptBuildResult,
   resolveAgentExecutorController,
-  sanitizeToolArgs,
   setActiveEmbeddedRun,
   type AgentHarnessAttemptParamsV2,
   type EmbeddedRunAttemptResult,
@@ -64,6 +63,7 @@ export async function runAgentsApiAttempt(
   onTerminalSessionFailure?: (binding: AgentsApiBinding) => Promise<void>,
 ): Promise<EmbeddedRunAttemptResult> {
   const startedAtMs = Date.now();
+  const startedAtMonotonicMs = performance.now();
   const cancellationState = {
     explicitCancellationObserved: false,
     terminalOutcomeFrozen: false,
@@ -107,6 +107,7 @@ export async function runAgentsApiAttempt(
   let settlementDeadlineAtMs: number | undefined;
   const deadlines = createAgentHarnessAttemptDeadlineController({
     startedAtMs,
+    startedAtMonotonicMs,
     timeoutMs: params.timeoutMs,
     settlementTimeoutMs: 30_000,
     signal: controller.signal,
@@ -456,7 +457,7 @@ export async function runAgentsApiAttempt(
             phase: "start",
             name: call.name,
             toolCallId: call.call_id,
-            args: asOptionalRecord(sanitizeToolArgs(call.arguments)),
+            args: asOptionalRecord(call.arguments),
           },
         });
         assertCurrent();

@@ -81,19 +81,22 @@ type ResolveApiKeyForProfileResult = {
   profileId: string;
   profileType: AuthProfileCredential["type"];
   credential?: AuthProfileCredential;
+  /** Personal authority survives preparation; null retains the shared/agent store contract. */
+  readCurrentCredential: (() => AuthProfileCredential | undefined) | null;
 };
 
 function buildApiKeyProfileResult(
-  params: ResolveApiKeyForProfileResult,
+  params: Omit<ResolveApiKeyForProfileResult, "readCurrentCredential"> &
+    Partial<Pick<ResolveApiKeyForProfileResult, "readCurrentCredential">>,
 ): ResolveApiKeyForProfileResult {
   const result = {
     apiKey: params.apiKey,
     provider: params.provider,
     email: params.email,
   };
-  for (const key of ["profileId", "profileType", "credential"] as const) {
+  for (const key of ["profileId", "profileType", "credential", "readCurrentCredential"] as const) {
     Object.defineProperty(result, key, {
-      value: params[key],
+      value: key === "readCurrentCredential" ? (params[key] ?? null) : params[key],
       enumerable: false,
     });
   }
@@ -222,6 +225,7 @@ async function resolveOAuthProfileAccess(
         profileId: params.profileId,
         profileType: credential.type,
         credential: resolved.credential,
+        readCurrentCredential: personalStore?.readCurrentCredential,
       })
     : null;
 }
@@ -411,6 +415,7 @@ async function resolveApiKeyForProfileOwned(
       email: cred.email,
       profileId,
       profileType: cred.type,
+      readCurrentCredential: personalStore?.readCurrentCredential,
     });
   }
 

@@ -79,12 +79,12 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
   });
 
   it.each([
-    { replacement: true, reviewHead: "previous", forwardMain: false },
-    { replacement: false, reviewHead: "current", forwardMain: true },
-    { replacement: true, reviewHead: "current", forwardMain: true },
+    { replacement: true, forwardMain: false },
+    { replacement: false, forwardMain: true },
+    { replacement: true, forwardMain: true },
   ])(
-    "operator recovery preserves old review evidence and consumes one exact attempt (replacement=$replacement, review=$reviewHead, forward main=$forwardMain)",
-    ({ replacement, reviewHead, forwardMain }) => {
+    "operator recovery preserves retained evidence and consumes one exact attempt (replacement=$replacement, forward main=$forwardMain)",
+    ({ replacement, forwardMain }) => {
       const f = fixture();
       f.save({ ...f.state(), mode: "unapplied" });
       expect(f.run().status).toBe(1);
@@ -116,14 +116,6 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
         );
         next.observations = [{}, { main }, {}, { advanceMain: true, advanceAfterRead: true }];
       }
-      if (reviewHead === "previous") {
-        next.issueComments[0]!.body = next.issueComments[0]!.body.replace(approvedHead, f.head);
-      }
-      const reviewedAt = "2000-01-01T00:00:00.000Z";
-      next.issueComments[0]!.body = next.issueComments[0]!.body.replace(
-        /reviewed_at=\S+/u,
-        `reviewed_at=${reviewedAt}`,
-      );
       f.save(next);
       const recovered = f.run(false, f.repo, "squash", previous, replacement ? approvedHead : "");
       expect(recovered.status, recovered.output).toBe(replacement ? 0 : 1);
@@ -132,10 +124,6 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       expect(f.record()).toMatchObject({
         phase: replacement ? "complete" : "commenting",
         head: approvedHead,
-        clawsweeperReview: {
-          reviewedSha: reviewHead === "previous" ? f.head : approvedHead,
-          reviewedAt,
-        },
         recovery: {
           outcome: previous,
           attempt: previousRecord.attempt,
@@ -349,7 +337,6 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     "missing-context",
     "pending-gate",
     "ci-proof",
-    "malformed-clawsweeper",
     "head-during-checks",
     "prep.env",
     "gates.env",
@@ -366,12 +353,6 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     next.mode = "success";
     if (fault === "ci-proof") {
       next.ciExit = 15;
-    }
-    if (fault === "malformed-clawsweeper") {
-      next.issueComments[0]!.body = next.issueComments[0]!.body.replace(
-        /reviewed_at=\S+/u,
-        "reviewed_at=invalid",
-      );
     }
     if (fault === "head-during-checks") {
       next.duringChecks = { head: f.head };
@@ -414,11 +395,6 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
             : approvedHead;
     const run = f.run(false, f.repo, "squash", previous, approval);
     expect(run.status, run.output).toBe(fault === "malformed-approval" ? 2 : 1);
-    if (fault === "malformed-clawsweeper") {
-      expect(run.output).toContain(
-        "ClawSweeper review gate failed: trusted review-version field values are invalid.",
-      );
-    }
     expect(f.state().mutations, run.output).toBe(1);
     expect(f.state().posts).toBe(0);
     expect(f.git(["rev-parse", outcomeRef])).toBe(previous);

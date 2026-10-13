@@ -201,6 +201,29 @@ describe("plugin state keyed store", () => {
     expect(store.lookup("z")).toBeUndefined();
   });
 
+  it("replaces an expired claim beyond the bounded cleanup batch", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(2_000);
+    const scope = { pluginId: "discord", namespace: "claim-expiry-batch" };
+    seedPluginStateEntriesForTests([
+      ...Array.from({ length: PLUGIN_STATE_EXPIRY_BATCH_ROWS }, (_, index) => ({
+        ...scope,
+        key: `expired-${index}`,
+        value: index,
+        expiresAt: 1_000,
+      })),
+      { ...scope, key: "target", value: -1, expiresAt: 1_500 },
+    ]);
+    const store = createPluginStateSyncKeyedStore<number>(scope.pluginId, {
+      namespace: scope.namespace,
+      maxEntries: 1,
+      overflowPolicy: "reject-new",
+    });
+
+    expect(store.registerIfAbsent("target", 42)).toBe(true);
+    expect(store.entries()).toEqual([{ key: "target", value: 42, createdAt: 2_000 }]);
+  });
+
   it("keeps a same-millisecond registerIfAbsent claim in the shared native kernel", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1000);

@@ -105,9 +105,9 @@ describe("nextcloud talk core", () => {
 
     expect(
       extractNextcloudTalkHeaders({
-        "x-nextcloud-talk-signature": "sig",
-        "x-nextcloud-talk-random": "rand",
-        "x-nextcloud-talk-backend": "backend",
+        "x-nextcloud-talk-signature": ["sig", "ignored"],
+        "x-nextcloud-talk-random": ["rand", "ignored"],
+        "x-nextcloud-talk-backend": ["backend", "ignored"],
       }),
     ).toEqual({
       signature: "sig",
@@ -152,20 +152,6 @@ describe("nextcloud talk core", () => {
         secret: "secret-123",
       }),
     ).toBe(false);
-  });
-
-  it("takes the first value from array-backed headers", () => {
-    expect(
-      extractNextcloudTalkHeaders({
-        "x-nextcloud-talk-signature": ["sig1", "sig2"],
-        "x-nextcloud-talk-random": ["rand1", "rand2"],
-        "x-nextcloud-talk-backend": ["backend1", "backend2"],
-      }),
-    ).toEqual({
-      signature: "sig1",
-      random: "rand1",
-      backend: "backend1",
-    });
   });
 
   it("still runs timingSafeEqual when the supplied signature length mismatches", async () => {

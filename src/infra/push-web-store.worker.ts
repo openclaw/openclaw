@@ -1,11 +1,8 @@
 import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
-import * as store from "./push-web-store.kernel.js";
+import * as store from "./push-web-store.database.worker.js";
 import { WebPushSubscriptionBindingError } from "./push-web-store.records.js";
 
-type Input<Handler extends (input: never) => unknown> = Omit<
-  Parameters<Handler>[0],
-  "database" | "assertCurrent"
->;
+type Input<Handler extends (input: never) => unknown> = Omit<Parameters<Handler>[0], "database">;
 
 export const webPushOperations = {
   "webPush.findBoundWebPushSubscriptionByEndpoint": (

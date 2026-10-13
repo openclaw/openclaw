@@ -1,7 +1,7 @@
 import { Show } from "solid-js";
 import { renderMcpServerForm, type McpServerForm } from "../../../components/mcp-server-form.ts";
 import { SettingsSegmented } from "../../../components/solid/settings-ui.tsx";
-import { t } from "../../../i18n/index.ts";
+import { t } from "../../../lib/reactive/i18n.ts";
 import { LitContent } from "./chat-composer-interop.tsx";
 
 export type ComposerAddServerDialogProps = {

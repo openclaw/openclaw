@@ -2,13 +2,13 @@ import { createMemo, onCleanup, Show } from "solid-js";
 import { providerDisplayLabel } from "../../../components/provider-icon.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../components/tooltip.ts";
-import { t } from "../../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
 import type { ChatModelCatalogState as ModelCatalogState } from "../../../lib/model-catalog-store.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { syncChatModelSearch } from "./chat-model-picker-search.ts";
 import type { ChatModelCatalogStateProps } from "./chat-model-types.ts";
 
-registerModelControlsEnglish();
+registerEnglishCatalog(registerModelControlsEnglish);
 
 export function ChatModelCatalogRefresh(props: { state: ModelCatalogState | undefined }) {
   const label = createMemo(() => {
@@ -50,9 +50,9 @@ export function ChatModelCatalogRefresh(props: { state: ModelCatalogState | unde
                 aria-label={text()}
               >
                 <span class="btn__spinner" aria-hidden="true" />
+                <span>{text()}</span>
               </button>
             </openclaw-tooltip>
-            <span class="sr-only">{text()}</span>
           </span>
         );
       }}

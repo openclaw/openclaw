@@ -339,7 +339,7 @@ process.exitCode = await runVitestBatch({config:${JSON.stringify(infraConfig)},a
           : {}),
       });
       expect(result.code, result.stdout + result.stderr).toBe(
-        mode === "cancel" ? 143 : mode === "failure" ? 1 : 0,
+        mode === "cancel" ? 143 : mode === "failure" ? 2 : 0,
       );
       const ready =
         mode === "ready" ||

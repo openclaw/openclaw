@@ -4,7 +4,7 @@ import {
   observeHostDataSql,
   trackSqliteStatementExecutions,
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { MAX_PAYLOAD_BYTES } from "../../gateway/server-constants.js";
+import { MAX_PAYLOAD_BYTES } from "../../gateway/payload-limits.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import type {
   SqliteWorkerOperations,

@@ -29,7 +29,6 @@ import { captureAgentRunTerminalPersistence } from "../infra/agent-run-terminal-
 import { onTrustedToolExecutionEvent } from "../infra/diagnostic-events.js";
 import { notifyGatewayWorkMetricsChanged } from "../infra/gateway-work-metrics-events.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
-import type { SubsystemLogger } from "../logging/subsystem.js";
 import {
   onGatewaySuspendAdmissionChange,
   runWithRetainedGatewayRootWork,
@@ -38,10 +37,7 @@ import {
   onSessionIdentityMutation,
   onSessionLifecycleEvent,
 } from "../sessions/session-lifecycle-events.js";
-import {
-  onInternalSessionTranscriptUpdate,
-  type InternalSessionTranscriptUpdate,
-} from "../sessions/transcript-events.js";
+import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -61,6 +57,7 @@ import {
 import { type ChatAbortControllerEntry, removeChatAbortControllerEntry } from "./chat-abort.js";
 import { bumpGatewayAccessRevision } from "./gateway-access-revision.js";
 import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
+import { dispatchEventHandler } from "./server-runtime-event-dispatch.js";
 import type { GatewayEventSubscriptionParams } from "./server-runtime-subscriptions.types.js";
 import { createSessionActivitySummaries } from "./session-activity-summaries.js";
 import { broadcastSessionActivitySummary } from "./session-activity-summary-events.js";
@@ -74,29 +71,6 @@ import {
   resolveSessionEventAgentScope,
 } from "./session-request-agent.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
-
-function dispatchEventHandler<TEvent>(params: {
-  loadHandler: () => Promise<(event: TEvent) => unknown>;
-  event: TEvent;
-  log: SubsystemLogger;
-  failureMessage: string;
-  context: Record<string, unknown>;
-  isDeliveryCurrent?: () => boolean;
-  onFailure?: (error: unknown) => void;
-}) {
-  return runWithRetainedGatewayRootWork(() =>
-    params
-      .loadHandler()
-      .then((handler) =>
-        params.isDeliveryCurrent?.() === false ? undefined : handler(params.event),
-      )
-      .then(() => undefined)
-      .catch((error: unknown) => {
-        params.log.warn(params.failureMessage, { ...params.context, error });
-        params.onFailure?.(error);
-      }),
-  );
-}
 
 /** Register gateway runtime event subscriptions and return unsubscribe handles. */
 export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionParams) {
@@ -151,6 +125,7 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
   });
   const sessionObserver = createSessionObserver({
     getConfig: getRuntimeConfig,
+    getSessionRowProjection: params.getSessionRowProjection,
     subscribers: params.sessionMessageSubscribers,
     sessionEventSubscribers: params.sessionEventSubscribers,
     broadcastToConnIds: params.broadcastToConnIds,
@@ -660,16 +635,16 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
     const agentHandler = agentEventHandlerLoader.peek();
     const publication = createDeferredCore();
     const dispatch = runOutsideAsyncWorkScope(() =>
-      dispatchEventHandler<InternalSessionTranscriptUpdate>({
-        loadHandler: agentHandler
-          ? () =>
-              agentHandler
-                .then(
-                  (handler) => handler.retireTranscript(evt, publication.promise),
-                  () => undefined,
-                )
-                .then(getTranscriptUpdateHandler)
-          : getTranscriptUpdateHandler,
+      dispatchEventHandler({
+        loadHandler: async () => {
+          if (agentHandler) {
+            await agentHandler.then(
+              (handler) => handler.retireTranscript(evt, publication.promise),
+              () => undefined,
+            );
+          }
+          return getTranscriptUpdateHandler();
+        },
         event: evt,
         log: params.log,
         failureMessage: "Transcript update dispatch failed",
@@ -707,13 +682,15 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
       );
       return;
     }
-    void dispatchEventHandler({
+    const dispatch = dispatchEventHandler({
       loadHandler: getLifecycleEventHandler,
       event: evt,
       log: params.log,
       failureMessage: "Lifecycle event dispatch failed",
       context: { sessionKey: evt.sessionKey },
     });
+    agentEventDispatches.add(dispatch);
+    void dispatch.then(() => agentEventDispatches.delete(dispatch));
   });
   const unsubscribeSuspension = onGatewaySuspendAdmissionChange((phase) => {
     params.broadcast("gateway.suspension", { phase });

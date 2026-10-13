@@ -40,6 +40,33 @@ afterEach(async () => {
 });
 
 describe("tui last session state", () => {
+  it("the worker confines a credential-shaped scope to the TUI namespace", async () => {
+    const stateDir = await makeTempStateDir();
+    const options = { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
+    const database = openOpenClawStateDatabase(options);
+    const context = captureOpenClawStateWorkerContext(options);
+    const open = () => database;
+    const unused = () => {
+      throw new Error("Unexpected writer route");
+    };
+    runWithSqliteWorkerStateContext(context, () =>
+      executeSharedStateCommand(
+        {
+          type: "tui.lastSession.write",
+          input: { scopeKey: "authProfiles.store", sessionKey: "agent:main:scoped" },
+        },
+        { databasePath: database.path },
+        open,
+        unused,
+        unused,
+        unused,
+      ),
+    );
+    expect(readConfigMachineStateWithMetadata("authProfiles.store", options)).toBeUndefined();
+    expect(
+      readConfigMachineStateWithMetadata("tui.lastSession.authProfiles.store", options)?.value,
+    ).toBe("agent:main:scoped");
+  });
   it("reads and clears remembered sessions without creating state on a fresh install", async () => {
     const stateDir = await makeTempStateDir();
 

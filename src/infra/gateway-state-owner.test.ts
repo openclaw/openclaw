@@ -457,6 +457,53 @@ describe("Gateway state ownership", () => {
     });
   });
 
+  it.skipIf(process.platform === "win32").each([undefined, 0])(
+    "acquires schema custody after shared lock directory removal with budget %s",
+    async (busyTimeoutMs) => {
+      await withTempDir("openclaw-schema-directory-handoff-", async (root) => {
+        const stateDir = path.join(fs.realpathSync(root), "absent");
+        const firstPath = path.join(stateDir, "state", "first.sqlite");
+        const secondPath = path.join(stateDir, "state", "second.sqlite");
+        const first = acquireStateDatabaseSchemaLease(firstPath);
+        const secondLock = resolveGatewayStateOwnerPath(secondPath);
+        const directory = path.dirname(secondLock);
+        const open = fs.openSync.bind(fs);
+        let released = false;
+        let second: ReturnType<typeof acquireStateDatabaseSchemaLease> | undefined;
+        const release = () => {
+          released = true;
+          first.release();
+          expect(fs.existsSync(directory)).toBe(false);
+        };
+        const handoff = vi.spyOn(fs, "openSync").mockImplementation((pathname, flags, mode) => {
+          if (
+            pathname === secondLock &&
+            typeof flags === "number" &&
+            (flags & fs.constants.O_EXCL) !== 0 &&
+            !released
+          ) {
+            release();
+          }
+          return open(pathname, flags, mode);
+        });
+        try {
+          second = acquireStateDatabaseSchemaLease(secondPath, { busyTimeoutMs });
+          expect(released).toBe(true);
+          second.assertCurrent();
+          second.run(() => assertStateDatabaseAccessAllowed(secondPath));
+          expect(tryAcquireGatewayStateOwner(secondPath)).toBeNull();
+          expect(fs.statSync(directory).mode & 0o777).toBe(0o700);
+        } finally {
+          handoff.mockRestore();
+          first.release();
+          second?.release();
+        }
+        expect(fs.existsSync(directory)).toBe(false);
+        expect(fs.existsSync(stateDir)).toBe(false);
+      });
+    },
+  );
+
   it("retries owned-directory cleanup after releasing the final physical lock", async () => {
     await withTempDir("openclaw-schema-directory-cleanup-", async (root) => {
       const stateDir = path.join(fs.realpathSync(root), "absent");

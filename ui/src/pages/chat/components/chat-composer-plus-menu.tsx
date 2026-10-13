@@ -1,15 +1,15 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, createSignal, For, Show } from "solid-js";
 import type { ToolsEffectiveEntry, ToolsEffectiveResult } from "../../../api/types.ts";
 import { pathForRoute } from "../../../app-route-paths.ts";
 import type { ApplicationNavigationOptions } from "../../../app/context.ts";
 import { icons } from "../../../components/icons.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { t } from "../../../i18n/index.ts";
-import "@awesome.me/webawesome/dist/components/switch/switch.js";
 import { registerMcpEnglish } from "../../../i18n/locales/en-mcp.ts";
+import "@awesome.me/webawesome/dist/components/switch/switch.js";
 import type { McpServerSummary } from "../../../lib/config/mcp-servers.ts";
 import { formatUiExternalText } from "../../../lib/format-error.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { SessionToolOverrides } from "../../../lib/sessions/patch.ts";
 import {
   countSessionToolOverrides,
@@ -40,7 +40,7 @@ import {
   menuDivider,
 } from "./chat-composer-menu-rows.tsx";
 
-registerMcpEnglish();
+registerEnglishCatalog(registerMcpEnglish);
 
 export type ChatComposerPlusMenuView =
   | "root"
@@ -473,7 +473,7 @@ function ToolAccessView(props: { menu: ChatComposerPlusMenuContentProps; serverN
 }
 
 function handleMenuSelection(
-  event: CustomEvent<{ item: { value?: string } }>,
+  event: CustomEvent<{ item: { value?: string; checked: boolean } }>,
   props: ChatComposerPlusMenuContentProps,
 ) {
   const value = event.detail.item.value ?? "";
@@ -527,20 +527,21 @@ function handleMenuSelection(
   }
   if (value === "toggle-web-search") {
     event.preventDefault();
+    // Web Awesome toggles before wa-select; policy can keep the effective value unchanged.
+    event.detail.item.checked = resolveWebSearchToolOverrideState(
+      props.webSearchBaseEnabled,
+      props.toolOverrides?.webSearch,
+    );
     if (
       props.mutationBlockedReason ||
       (!props.webSearchBaseEnabled && props.toolOverrides?.webSearch !== true)
     ) {
       return;
     }
-    const enabled = resolveWebSearchToolOverrideState(
-      props.webSearchBaseEnabled,
-      props.toolOverrides?.webSearch,
-    );
     props.onPatchToolOverrides(
       nextWebSearchToolOverrides(
         props.toolOverrides,
-        props.webSearchBaseEnabled && !enabled,
+        props.webSearchBaseEnabled && !event.detail.item.checked,
         props.webSearchBaseEnabled,
       ),
     );
@@ -615,6 +616,7 @@ function handleMenuSelection(
 }
 
 function PlusMenuSurface(props: { menu: ChatComposerPlusMenuContentProps }) {
+  const [opened, setOpened] = createSignal(props.menu.open);
   const hasOverrides = () => countSessionToolOverrides(props.menu.toolOverrides) > 0;
   const view = () => (props.menu.showCapabilities ? props.menu.view : "root");
   return (
@@ -624,10 +626,11 @@ function PlusMenuSurface(props: { menu: ChatComposerPlusMenuContentProps }) {
         placement="top-start"
         aria-label={t("chat.composer.addAttachment")}
         prop:open={props.menu.open}
-        onWa-select={(event: CustomEvent<{ item: { value?: string } }>) =>
+        onWa-select={(event: Parameters<typeof handleMenuSelection>[0]) =>
           handleMenuSelection(event, props.menu)
         }
         onWa-show={() => {
+          setOpened(true);
           if (!props.menu.open) {
             props.menu.onOpenChange(true);
           }
@@ -653,25 +656,27 @@ function PlusMenuSurface(props: { menu: ChatComposerPlusMenuContentProps }) {
         >
           <Icon name="plus" />
         </button>{" "}
-        <Show when={view()} keyed>
-          {(activeView) =>
-            activeView === "skills" ? (
-              <SkillView menu={props.menu} />
-            ) : activeView === "connectors" ? (
-              <ConnectorView menu={props.menu} />
-            ) : activeView.startsWith("tools:") ? (
-              <ToolAccessView menu={props.menu} serverName={activeView.slice("tools:".length)} />
-            ) : activeView.startsWith("library:") ? (
-              <>
-                {renderComposerLibraryMenuSolid(
-                  props.menu.library,
-                  activeView.slice("library:".length),
-                )}
-              </>
-            ) : (
-              <RootView menu={props.menu} />
-            )
-          }
+        <Show when={opened()}>
+          <Show when={view()} keyed>
+            {(activeView) =>
+              activeView === "skills" ? (
+                <SkillView menu={props.menu} />
+              ) : activeView === "connectors" ? (
+                <ConnectorView menu={props.menu} />
+              ) : activeView.startsWith("tools:") ? (
+                <ToolAccessView menu={props.menu} serverName={activeView.slice("tools:".length)} />
+              ) : activeView.startsWith("library:") ? (
+                <>
+                  {renderComposerLibraryMenuSolid(
+                    props.menu.library,
+                    activeView.slice("library:".length),
+                  )}
+                </>
+              ) : (
+                <RootView menu={props.menu} />
+              )
+            }
+          </Show>
         </Show>
       </wa-dropdown>
       <LitContent value={props.menu.addServerDialog} />{" "}

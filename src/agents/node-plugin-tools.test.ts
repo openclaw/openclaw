@@ -12,7 +12,11 @@ import {
 } from "../gateway/node-plugin-tool-snapshot.js";
 import { appendRuntimePluginToolGrant } from "../plugins/tool-grant-allowlist.js";
 import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tool-metadata.js";
-import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
+import {
+  applyCodeModeCatalog,
+  buildCodeModeCatalogPrompt,
+  createCodeModeTools,
+} from "./code-mode.js";
 import { testing } from "./code-mode.test-support.js";
 import { consumeMcpCodeModeGuestResult } from "./mcp-content.js";
 import { createNodePluginTools } from "./node-plugin-tools.js";
@@ -60,12 +64,12 @@ function createCodeModeHarness(tools: AnyAgentTool[]) {
     catalogRef,
   };
   const codeModeTools = createCodeModeTools(ctx);
-  const compacted = applyCodeModeCatalog({
+  applyCodeModeCatalog({
     tools: [...codeModeTools, ...tools],
     config,
     catalogRef,
   });
-  return { catalogRef, codeModeTools, compacted };
+  return { catalogRef, codeModeTools, ctx };
 }
 
 async function runCodeMode(codeModeTools: AnyAgentTool[], code: string) {
@@ -434,7 +438,7 @@ describe("createNodePluginTools", () => {
     });
 
     const nodeTools = createNodePluginTools({ agentSessionKey: "agent:main:node-mcp-code-mode" });
-    const { catalogRef, codeModeTools, compacted } = createCodeModeHarness(nodeTools);
+    const { catalogRef, codeModeTools, ctx } = createCodeModeHarness(nodeTools);
     const nodeEntry = catalogRef.current?.entries.find(
       (entry) => entry.name === "docs_search" && entry.source === "mcp",
     );
@@ -446,7 +450,9 @@ describe("createNodePluginTools", () => {
       toolName: "search",
       operation: "tool",
     });
-    expect(compacted.tools[0]?.description).toContain("docs (node: Studio Node)");
+    expect(buildCodeModeCatalogPrompt(ctx, catalogRef.current?.entries ?? [])).toContain(
+      "docs (node: Studio Node)",
+    );
     const details = await runCodeMode(
       codeModeTools,
       `
@@ -588,11 +594,11 @@ describe("createNodePluginTools", () => {
       },
     });
 
-    const { codeModeTools, compacted } = createCodeModeHarness([
+    const { catalogRef, codeModeTools, ctx } = createCodeModeHarness([
       gatewayMcpTool("tickets"),
       ...createNodePluginTools({}),
     ]);
-    expect(compacted.tools[0]?.description).toContain(
+    expect(buildCodeModeCatalogPrompt(ctx, catalogRef.current?.entries ?? [])).toContain(
       "visible servers: nodeATickets (node: Node A), nodeBDocs (node: Node B), nodeCDocs (node: Node C), tickets",
     );
 

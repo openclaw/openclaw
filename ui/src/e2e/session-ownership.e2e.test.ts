@@ -209,7 +209,7 @@ suite.define(() => {
     await expectBrowser(ownerRows.first()).toContainText("My sessions");
     await captureUiProof(
       suite,
-      currentPage.locator("openclaw-app-sidebar"),
+      currentPage.locator(".sidebar-shell"),
       "00-people-controls-from-session-owners.png",
       [ownerSelect],
     );
@@ -292,7 +292,7 @@ suite.define(() => {
     );
     await captureSessionOwnerPageProof(
       suite,
-      currentPage.locator("openclaw-app-sidebar"),
+      currentPage.locator(".sidebar-shell"),
       "05-owner-filter-restored-after-reload.png",
       [currentPage.locator("#sidebar-session-owner-title")],
     );
@@ -434,11 +434,11 @@ suite.define(() => {
     await expectBrowser(row.locator("openclaw-session-owner-chip")).toHaveCount(0);
     // Cross the event window and deliver the nested mock response timer.
     await currentPage.clock.runFor(2);
-    await expectBrowser(row.locator("openclaw-session-owner-chip")).toHaveCount(1);
     expect(await gateway.getRequests("sessions.list", rosterMatch)).toHaveLength(
       initialRequests + 1,
     );
     await currentPage.clock.resume();
+    await expectBrowser(row.locator("openclaw-session-owner-chip")).toHaveCount(1);
     await captureSessionOwnerProof(suite, currentPage, "multiple-humans.png");
   });
 

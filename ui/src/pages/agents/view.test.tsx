@@ -95,7 +95,7 @@ function directText(element: Element | null | undefined): string | undefined {
 
 function expectAgentTab(container: Element, text: string): HTMLElement & { disabled: boolean } {
   const button = Array.from(
-    container.querySelectorAll<HTMLElement & { disabled: boolean }>("wa-tab.hub-tab"),
+    container.querySelectorAll<HTMLElement & { disabled: boolean }>(".hub-tab"),
   ).find((candidate) => directText(candidate) === text);
   if (!(button instanceof HTMLElement)) {
     throw new Error(`Expected agent tab "${text}"`);

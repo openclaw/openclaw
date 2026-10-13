@@ -94,7 +94,7 @@ async function mountCopy(surface: "code" | "table" | "mermaid" | "message") {
     owner.append(diagram);
     await diagram.updateComplete;
     await waitForDiagram(diagram);
-    button = diagram.querySelector(".copy-button") ?? null;
+    button = diagram.querySelector(".copy-button");
   } else {
     render(renderCopyButton("Current message"), owner);
     button = owner.querySelector("button");

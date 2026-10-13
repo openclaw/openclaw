@@ -38,13 +38,6 @@ vi.mock("../../scripts/lib/ci-extension-lint-plan.mts", () => ({
   resolveCiExtensionLintSelection: vi.fn(),
 }));
 
-const checkJobs = [
-  "check-shard",
-  "check-lint-hosted-core-shard",
-  "check-lint-hosted-extension-shard",
-  "check-test-types-hosted-core-shard",
-];
-
 function createPlan(overrides: Partial<CiCheckPlanInput>) {
   return createCiCheckPlan({
     typeGraphBoundaryOwner: "check-plan",
@@ -58,16 +51,6 @@ function createPlan(overrides: Partial<CiCheckPlanInput>) {
     lintCoreMatrix: { include: [] },
     lintExtensionMatrix: { include: [] },
     ...overrides,
-  });
-}
-
-function admittedCheckRows(context: Parameters<typeof evaluateWorkflowExpression>[1]) {
-  const workflow = readCiWorkflow();
-  return checkJobs.flatMap((name) => {
-    const job = workflow.jobs[name];
-    return evaluateWorkflowExpression(job.if, context)
-      ? evaluateWorkflowExpression(job.strategy.matrix, context).include
-      : [];
   });
 }
 
@@ -90,7 +73,7 @@ function materializePlan(runnerProfile: string, rows: number, changedBaseRef?: s
     lintCoreMatrix: { include: rows ? [{ stripe: 1 }, { stripe: 2 }] : [] },
     lintExtensionMatrix: { include: rows ? [{ stripe: 1 }, { stripe: 2 }, { stripe: 3 }] : [] },
   };
-  const output = join(tempDirs.make("ci-check-count-"), "output");
+  const output = join(tempDirs.make("ci-check-plan-"), "output");
   const workflow = readCiWorkflow();
   const planner = workflow.jobs["check-plan"];
   const step = planner.steps.find((candidate: WorkflowStep) => candidate.id === "plan");
@@ -111,10 +94,10 @@ function materializePlan(runnerProfile: string, rows: number, changedBaseRef?: s
       ),
     },
   });
-  return { run, workflow, planner, outputs: existsSync(output) ? readWorkflowOutputs(output) : {} };
+  return { run, outputs: existsSync(output) ? readWorkflowOutputs(output) : {} };
 }
 
-describe("CI check-plan completion count", () => {
+describe("CI check-plan selection", () => {
   it.each(["hybrid", "github", "blacksmith"])(
     "selects complete extension roots without narrowing full check owners (%s)",
     async (runnerProfile) => {
@@ -148,7 +131,11 @@ describe("CI check-plan completion count", () => {
           lintCoreMatrix: { include: coreStripes.map((stripe) => ({ stripe })) },
           lintExtensionMatrix: { include: [1, 2, 3, 4, 5, 6].map((stripe) => ({ stripe })) },
         });
-        expect(plan.check_matrix).toEqual(checkMatrix);
+        expect(plan.check_matrix.include).toEqual(
+          runnerProfile === "hybrid"
+            ? checkMatrix.include.filter(({ task }) => task !== "lint")
+            : checkMatrix.include,
+        );
         expect(resolveCiExtensionLintSelection).toHaveBeenLastCalledWith(
           ["package.json"],
           process.cwd(),
@@ -171,7 +158,10 @@ describe("CI check-plan completion count", () => {
           runnerProfile === "blacksmith" ? ["core", "scripts"] : ["scripts"],
         );
         if (runnerProfile === "hybrid") {
-          expect(plan.lint_core_matrix.include).toEqual([{ stripe: 1 }, { stripe: 2 }]);
+          expect(plan.lint_core_matrix.include).toEqual([
+            { stripe: 1, shared_central_lint_selection_json: plan.central_lint_selection_json },
+            { stripe: 2 },
+          ]);
           expect(plan.run_lint_extensions).toBe(mode !== "none");
         } else if (runnerProfile === "github") {
           expect(payloads.flatMap((payload) => payload.fullCoreStripes ?? [])).toEqual([
@@ -203,6 +193,108 @@ describe("CI check-plan completion count", () => {
       }
     },
   );
+  it.each([
+    { paths: ["src/config/sessions/session-input-actor.ts"], share: true },
+    { paths: ["ui/src/styles/base.css"], share: false },
+    { paths: ["test/scripts/ci-check-plan.test.ts"], share: false },
+    { paths: ["scripts/ci-check-plan.mts"], share: true },
+  ])(
+    "retains separate central owners beyond formatting and scripts: $paths",
+    async ({ paths, share }) => {
+      vi.mocked(resolveCiExtensionLintSelection).mockResolvedValue({
+        mode: "selected",
+        extensionRoots: [],
+        reasons: {},
+        fullReasons: [],
+      });
+      const plan = await createPlan({
+        preserveFullChecks: true,
+        extensionLintMode: "affected",
+        changedPaths: paths,
+        checkMatrix: {
+          include: ["lint", "guards"].map((task) => ({
+            check_name: `check-${task}`,
+            task,
+            runner: "unused",
+          })),
+        },
+        lintCoreMatrix: { include: [{ stripe: 1 }, { stripe: 2 }] },
+      });
+      expect(plan.check_matrix.include.map(({ task }) => task)).toEqual(
+        share ? ["guards"] : ["lint", "guards"],
+      );
+      expect(plan.lint_core_matrix.include[0]?.shared_central_lint_selection_json).toBe(
+        share ? plan.central_lint_selection_json : undefined,
+      );
+    },
+  );
+
+  it("keeps the last check row required by the gate", async () => {
+    vi.mocked(resolveCiExtensionLintSelection).mockResolvedValue({
+      mode: "selected",
+      extensionRoots: [],
+      reasons: {},
+      fullReasons: [],
+    });
+    const plan = await createPlan({
+      preserveFullChecks: true,
+      extensionLintMode: "affected",
+      changedPaths: ["package.json"],
+      checkMatrix: { include: [{ check_name: "check-lint", task: "lint", runner: "unused" }] },
+      lintCoreMatrix: { include: [{ stripe: 1 }, { stripe: 2 }] },
+    });
+    expect(plan.check_matrix.include.map(({ task }) => task)).toEqual(["lint"]);
+    expect(plan.lint_core_matrix.include).toEqual([{ stripe: 1 }, { stripe: 2 }]);
+  });
+
+  it.each([0, 7])("executes shared central lint and propagates its result (%s)", (exitCode) => {
+    const cwd = tempDirs.make("ci-shared-lint-");
+    mkdirSync(join(cwd, "scripts"));
+    writeFileSync(join(cwd, "scripts/tsx.mjs"), "");
+    writeFileSync(
+      join(cwd, "scripts/changed-lanes.mts"),
+      "export const detectChangedLanes = paths => ({ paths });\n",
+    );
+    writeFileSync(
+      join(cwd, "scripts/check-changed.mts"),
+      `
+      import assert from 'node:assert/strict';
+      export async function runChangedCheck(result, options) {
+        assert.deepEqual(result.paths, ['src/example.ts']);
+        assert.deepEqual(options, { lintOnly: true, lintSelection: { central: true, fullGroups: ['scripts'] }, lintThreads: 1 });
+        return ${exitCode};
+      }
+    `,
+    );
+    const workflow = readCiWorkflow();
+    const step = workflow.jobs["check-lint-hosted-core-shard"].steps.find(
+      (candidate: WorkflowStep) => candidate.name === "Run shared central lint",
+    );
+    const context: Parameters<typeof evaluateWorkflowExpression>[1] = {
+      eventName: "pull_request",
+      repository: "openclaw/openclaw",
+      runAttempt: 1,
+      failed: true,
+      matrix: { shared_central_lint_selection_json: '{"central":true,"fullGroups":["scripts"]}' },
+      preflightOutputs: { narrow_check_paths_json: '["src/example.ts"]', runner_profile: "hybrid" },
+    };
+    expect(Boolean(evaluateWorkflowExpression(step.if, context))).toBe(true);
+    const run = runWorkflowShellScript(step.run, {
+      cwd,
+      env: {
+        ...process.env,
+        ...Object.fromEntries(
+          Object.entries(step.env).map(([name, value]) => [
+            name,
+            typeof value === "string" && value.includes("${{")
+              ? String(evaluateWorkflowExpression(value, context))
+              : String(value),
+          ]),
+        ),
+      },
+    });
+    expect(run.status, run.stderr).toBe(exitCode);
+  });
   it.each(["check-plan", "additional-checks"] as const)(
     "passes only an admitted parallel boundary owner without adding compiler rows (%s)",
     async (typeGraphBoundaryOwner) => {
@@ -230,7 +322,6 @@ describe("CI check-plan completion count", () => {
             typeGraphBoundaryOwner === "additional-checks" ? "additional-checks" : undefined,
         });
         expect(plan.core_type_matrix.include).toEqual([]);
-        expect(plan.check_job_count).toBe(2);
         expect(
           plan.check_matrix.include.map((row) => JSON.parse(row.type_graph_names_json!)),
         ).toEqual([["extensions"], ["extensions-test", "test-root"]]);
@@ -275,49 +366,8 @@ describe("CI check-plan completion count", () => {
         expect(JSON.parse(plan.check_matrix.include[0]!.type_graph_names_json!)).toEqual(
           moved ? ["scripts"] : hosted ? ["scripts", "test-root"] : ["test-root", "scripts"],
         );
-        expect(plan.check_job_count).toBe(1 + (hosted ? stripes.length : 0));
       } finally {
         typeSelection.graphs = null;
-      }
-    },
-  );
-
-  it.each(["blacksmith", "github", "hybrid"] as const)(
-    "publishes the admitted workflow expansion for %s, including an empty plan",
-    (runnerProfile) => {
-      for (const rows of [1, 0]) {
-        const { run, planner, outputs } = materializePlan(runnerProfile, rows);
-        expect(run.status, run.stderr).toBe(0);
-        const context: Parameters<typeof evaluateWorkflowExpression>[1] = {
-          eventName: "pull_request",
-          repository: "openclaw/openclaw",
-          runAttempt: 1,
-          runnerProfile,
-          preflightOutputs: { run_check_plan: "true", narrow_check_paths_json: "[]" },
-          additionalNeeds: { "check-plan": { outputs, result: "success" } },
-          steps: { plan: { outputs } },
-        };
-        const admittedRows = admittedCheckRows(context);
-        expect(outputs.check_job_count).toBe(String(admittedRows.length));
-        const marker: WorkflowStep = planner.steps.at(-1);
-        const admission = marker.if ?? "success()";
-        const condition = admission.startsWith("${{") ? admission : `\${{ ${admission} }}`;
-        for (const terminal of [{}, { failed: true }, { cancelled: true }]) {
-          expect(evaluateWorkflowExpression(condition, { ...context, ...terminal })).toBe(
-            !terminal.failed && !terminal.cancelled,
-          );
-        }
-        const continueOnError: unknown = marker["continue-on-error"];
-        expect(
-          typeof continueOnError === "string"
-            ? evaluateWorkflowExpression(continueOnError, context)
-            : (continueOnError ?? false),
-        ).toBe(false);
-        const name = marker.name?.replace(/\$\{\{[\s\S]*?\}\}/gu, (expression) =>
-          String(evaluateWorkflowExpression(expression, context)),
-        );
-        expect(name).toBe(`CI check job count v1: ${admittedRows.length}`);
-        expect(runWorkflowShellScript(marker.run!, { cwd: process.cwd() }).status).toBe(0);
       }
     },
   );
@@ -352,7 +402,6 @@ describe("CI check-plan completion count", () => {
       expect(selected.map(({ name, args }) => JSON.stringify({ name, args })).toSorted()).toEqual(
         shards.map(({ name, args }) => JSON.stringify({ name, args })).toSorted(),
       );
-      expect(plan.check_job_count).toBe(runnerProfile === "hybrid" ? 4 : 1);
       expect(plan.central_lint_selection_json).toBe("");
     },
   );

@@ -38,8 +38,10 @@ vi.mock("../agents/tools/gateway.js", () => ({
   callGatewayTool,
 }));
 
+// mock-isolation: MCP tool fixtures provide config without starting a real config owner.
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: getRuntimeConfigMock,
+  captureRuntimeConfigAsyncReader: () => async () => getRuntimeConfigMock(),
 }));
 
 vi.mock("../logging/console.js", async (importOriginal) => {

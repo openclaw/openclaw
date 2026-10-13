@@ -14,7 +14,7 @@ import {
   type CustodianSessionStore,
 } from "../pages/custodian/custodian-session-store.ts";
 import type { JSX as SolidJSX } from "../types/solid-elements.d.ts";
-import "../pages/custodian/custodian-surface.ts";
+import "../pages/custodian/custodian-surface.tsx";
 import "./home-session.runtime.ts";
 import "../styles/assistant-panel-content.css";
 

@@ -245,11 +245,12 @@ Retry a request with errors to recover failed terms.
 
 Bulk continuation re-reads the same bounded searches with at most four searches
 in flight, without retaining a second inventory. Cursors bind the normalized
-terms, kinds, registry, selected workspace, and result identities. If the matches
-change, the Gateway returns `INVALID_REQUEST` with a restart instruction rather
-than silently skipping results. Large keyword sets and subsequent pages perform
-more registry reads than ordinary searches; clients should allow a longer RPC
-request timeout and retain the original request for retries.
+terms, kinds, registry, and selected workspace. Pagination is best effort when
+remote listings change between requests: a continuation uses its offset in the
+current results, so a listing may repeat or be skipped. Restart discovery for a
+fresh traversal. Large keyword sets and subsequent pages perform more registry
+reads than ordinary searches; clients should allow a longer RPC request timeout
+and retain the original request for retries.
 
 ### Upstream contracts and gaps
 

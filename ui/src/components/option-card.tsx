@@ -132,7 +132,7 @@ function OptionCardContent(input: BridgeProps & { host: OptionCardElement }) {
   );
 }
 
-defineSolidBridge<BridgeProps>(
+export const OptionCard = defineSolidBridge<BridgeProps>(
   "openclaw-option-card",
   (props, host) => <OptionCardContent props={props.props} host={host} />,
   {

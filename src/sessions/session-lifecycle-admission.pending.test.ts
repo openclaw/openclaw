@@ -108,7 +108,23 @@ it.each(["released", "interrupted", "undeclared", "caller", "wrong receipt"] as 
       }
       expect(captured[0]!.interrupt(createAgentRunDirectAbortError())).toBe(false);
       expect(onInterrupt).toHaveBeenCalledTimes(state === "wrong receipt" ? 1 : 0);
-      expect(capture()).toEqual([]);
+      const remaining = capture();
+      if (state === "interrupted" || state === "wrong receipt") {
+        expect(remaining).toHaveLength(1);
+        expect(remaining[0]!.interrupt(createAgentRunDirectAbortError())).toBe(false);
+        let released = false;
+        const completion = remaining[0]!.released.then(() => {
+          released = true;
+        });
+        await Promise.resolve();
+        expect(released).toBe(false);
+        admission.release();
+        await completion;
+        expect(released).toBe(true);
+        expect(capture()).toEqual([]);
+      } else {
+        expect(remaining).toEqual([]);
+      }
     } finally {
       admission.release();
     }

@@ -169,7 +169,7 @@ function resolvePersistedCommitAcrossDag(params: {
   };
 
   // The pending ledger binds the request hash while each deterministic key
-  // binds tuple + index. Do not compare re-redacted content across restarts.
+  // binds tuple + index.
   visit(params.baseLeafId, 0, []);
   if (completedPaths.length > 1) {
     return { kind: "ambiguous" };

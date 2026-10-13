@@ -1,7 +1,7 @@
 import { CODEX_CATALOG_MAX_ROWS } from "./session-catalog-limits.js";
 import { boundedCatalogString, MAX_SESSION_ID_LENGTH } from "./session-catalog-parsing.js";
 import type { codexCatalogThreadStatus } from "./session-catalog-parsing.js";
-import { hasLiveCodexCatalogSource, type CodexCatalogSource } from "./session-catalog-source.js";
+import type { CodexCatalogSource } from "./session-catalog-source.js";
 
 export type CodexCatalogStatus = ReturnType<typeof codexCatalogThreadStatus>;
 /** Bounded display observations; later publications replace earlier ones. */
@@ -54,15 +54,13 @@ export class CodexCatalogField<T> {
   }
 }
 
-export type CodexCatalogSourcedValue<T> = { value: T; sources: Set<CodexCatalogSource> };
-
 /** Live field values retain source-lifetime invalidation. */
 export class CodexCatalogLiveField<T> {
-  protected readonly values = new CodexCatalogField<CodexCatalogSourcedValue<T>>();
+  protected readonly values = new CodexCatalogField<{ value: T; source: CodexCatalogSource }>();
 
   get(threadId: string): T | undefined {
     const current = this.values.get(threadId);
-    return current && hasLiveCodexCatalogSource(current.sources) ? current.value : undefined;
+    return current && !current.source.closed ? current.value : undefined;
   }
 
   delete(threadId: string): void {
@@ -74,9 +72,6 @@ export class CodexCatalogLiveField<T> {
       this.values.invalidate();
       return;
     }
-    this.values.deleteWhere((entry) => {
-      entry.sources.delete(source);
-      return !hasLiveCodexCatalogSource(entry.sources);
-    });
+    this.values.deleteWhere((entry) => entry.source === source);
   }
 }

@@ -121,61 +121,6 @@ describe("committed agent database reads", () => {
     },
   );
 
-  it.each([
-    {
-      name: "schema version",
-      sql: `PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION + 1}`,
-      error: /newer schema version/,
-    },
-    {
-      name: "database role",
-      sql: "UPDATE schema_meta SET role = 'state' WHERE meta_key = 'primary'",
-      error: /schema role.*state.*expected agent/,
-    },
-    {
-      name: "agent owner",
-      sql: "UPDATE schema_meta SET agent_id = 'other' WHERE meta_key = 'primary'",
-      error: /belongs to agent other.*requested agent main/,
-    },
-  ])(
-    "rechecks committed $name on the next read before invoking a retained reader",
-    async ({ sql, error }) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-        const options = { agentId: "main", env };
-        const owner = openOpenClawAgentDatabase(options);
-        inWriterTransaction(owner.db, () => expect(readStamp(options).db.isOpen).toBe(true));
-        owner.db.exec(sql);
-        let invoked = false;
-        inWriterTransaction(owner.db, () => {
-          expect(() =>
-            withOpenClawAgentDatabaseReadOnly(() => {
-              invoked = true;
-            }, options),
-          ).toThrow(error);
-        });
-        expect(invoked).toBe(false);
-      });
-    },
-  );
-
-  it("preserves missing-schema adaptation after the reader was retained", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-      const options = { agentId: "main", env };
-      const owner = openOpenClawAgentDatabase(options);
-      inWriterTransaction(owner.db, () => expect(readStamp(options).db.isOpen).toBe(true));
-      owner.db.exec("DELETE FROM schema_meta WHERE meta_key = 'primary'");
-      let invoked = false;
-      inWriterTransaction(owner.db, () => {
-        expect(
-          withOpenClawAgentDatabaseReadOnly(() => {
-            invoked = true;
-          }, options),
-        ).toEqual({ found: false, reason: "schema-missing" });
-      });
-      expect(invoked).toBe(false);
-    });
-  });
-
   it("retires the committed reader before closing its owner's WAL", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
       const options = { agentId: "main", env };

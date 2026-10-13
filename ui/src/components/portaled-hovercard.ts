@@ -1,5 +1,7 @@
+import { onSettled } from "solid-js";
 import { composedParent } from "../lib/navigation-click.ts";
 import { promoteToPopoverTopLayer } from "./menu-surface.ts";
+import { resolveTransientContainer } from "./transient-container.ts";
 
 const CARD_GAP = 10;
 const VIEWPORT_PADDING = 12;
@@ -36,14 +38,15 @@ export class PortaledHovercardController {
     }
   };
   private readonly handleCardFocusIn = (event: FocusEvent) => {
-    if (event.currentTarget === this.card) {
+    // A nested Solid root rewrites currentTarget while dispatching delegated focus events.
+    if (this.card && event.composedPath().includes(this.card)) {
       this.cardFocusInside = true;
       this.clearClose();
     }
   };
   private readonly handleCardFocusOut = (event: FocusEvent) => {
     const card = this.card;
-    if (!card || event.currentTarget !== this.card) {
+    if (!card || !event.composedPath().includes(card)) {
       return;
     }
     if (event.relatedTarget instanceof Node && card.contains(event.relatedTarget)) {
@@ -101,7 +104,14 @@ export class PortaledHovercardController {
   renderContents(card: HTMLDivElement, update: () => void): void {
     const focused = card.contains(document.activeElement) ? document.activeElement : null;
     update();
-    if (focused && !card.contains(document.activeElement)) {
+    if (!focused) {
+      return;
+    }
+    // Solid commits roster updates after the caller returns.
+    onSettled(() => {
+      if (this.card !== card || document.activeElement !== document.body) {
+        return;
+      }
       // Live session links can move between sections or disappear after a roster update.
       const replacement =
         focused instanceof HTMLAnchorElement
@@ -115,7 +125,7 @@ export class PortaledHovercardController {
         this.returnFocus(this.trigger);
         this.focusInside = document.activeElement === this.trigger;
       }
-    }
+    });
   }
 
   returnFocus(trigger: HTMLElement | null): void {
@@ -268,14 +278,14 @@ export class PortaledHovercardController {
     this.placement = placement;
     this.unmountContents = unmountContents ?? null;
     const trigger = this.trigger ?? anchor;
-    // A modal drawer makes body siblings inert. Keep its card inside the same
-    // dialog, then use the existing menu top layer to escape clipping and stacking.
-    let owner: Element = document.body;
+    const ancestors: Element[] = [];
     for (let ancestor: Element | null = anchor; ancestor; ancestor = composedParent(ancestor)) {
-      if (ancestor.localName === "openclaw-modal-dialog") {
-        owner = ancestor;
-        break;
-      }
+      ancestors.push(ancestor);
+    }
+    const owner = resolveTransientContainer(ancestors, anchor.ownerDocument);
+    if (!owner) {
+      this.reset();
+      return;
     }
     owner.append(card);
     promoteToPopoverTopLayer(card);

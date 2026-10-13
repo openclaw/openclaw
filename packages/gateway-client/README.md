@@ -162,7 +162,7 @@ transport timeouts return `false`. Both entries use the same implementation.
 
 ## Defaults and reconnect behavior
 
-The Node client starts with a 30 second request timeout, a 15 second
+The Node client starts with a 30 second request timeout, a 30 second
 connect-challenge timeout, and exponential reconnect backoff from 1 second to 30
 seconds with a multiplier of 2. Reconnects use randomized delays: the first waits
 1–1.2 seconds, and sustained failures spread retries across 25–30 seconds.
@@ -180,6 +180,13 @@ replaced it. A gap-revealing `chat` final, aborted, or error event is delivered
 first so its authoritative outcome can settle the run. Other gapped frames and
 subsequent frames from that socket are not delivered. Reconnect restores a fresh live-text baseline; applications should
 also refresh durable state and restore their session subscriptions.
+
+Session subscription requests time out without compensating RPCs. If the Gateway
+applied a subscribe or unsubscribe but its acknowledgment was lost, observation
+may remain stale until a fresh subscription or reconnect. In particular, a
+retained handle may miss updates after an unacknowledged unsubscribe. The caller
+still receives the timeout; ordinary acknowledged leases and release retries
+retain their ownership and ordering.
 
 The canonical defaults table and the server policy fields that can replace
 pre-handshake values are documented in the

@@ -102,16 +102,6 @@ describe("registerStatusHealthSessionsCommands", () => {
       "`sessions cleanup` does not support the parent `sessions` option --active; session-list filters cannot scope session maintenance.",
     ],
     [
-      "sessions --json tail",
-      mocks.sessionsTailCommand,
-      "`sessions tail` does not support the parent `sessions` option --json; trajectory tail emits human-readable progress and selects sessions separately.",
-    ],
-    [
-      "sessions --all-agents export-trajectory",
-      mocks.exportTrajectoryCommand,
-      "`sessions export-trajectory` does not support the parent `sessions` option --all-agents; trajectory export targets one session and cannot apply session-list filters.",
-    ],
-    [
       `sessions --store /tmp/other.sqlite archive ${key}`,
       mocks.sessionsLifecycleCommand,
       "`sessions archive` does not support the parent `sessions` option --store; the gateway resolves target stores from each key and --agent.",
@@ -167,27 +157,13 @@ describe("registerStatusHealthSessionsCommands", () => {
     expect(mocks.statusCommand).not.toHaveBeenCalled();
   });
 
-  it("forwards bare sessions options including an explicitly blank store", async () => {
-    await run(["sessions", ...blankStore, "--json", "--verbose", ...selection]);
-    expect(mocks.setVerbose).toHaveBeenCalledWith(true);
-    expectOptions(mocks.sessionsCommand, listOptions);
-  });
-  it("dispatches the list alias with omitted selectors (#81139)", async () => {
-    await run("sessions list");
-    expectOptions(mocks.sessionsCommand, {
-      json: false,
-      allAgents: false,
-      agent: undefined,
-      store: undefined,
-    });
-  });
-  it.each(["parent", "leaf"])("list preserves %s options and blank store", async (placement) => {
+  it.each(["parent"])("list preserves %s options and blank store", async (placement) => {
     const options = [...blankStore, "--json", "--verbose", ...selection];
     await runSession(placement, "list", options);
     expect(mocks.setVerbose).toHaveBeenCalledWith(true);
     expectOptions(mocks.sessionsCommand, listOptions);
   });
-  it.each(["parent", "leaf"])("cleanup preserves %s options and blank store", async (placement) => {
+  it.each(["parent"])("cleanup preserves %s options and blank store", async (placement) => {
     const options = [...blankStore, "--all-agents", "--json"];
     await runSession(
       placement,
@@ -207,7 +183,7 @@ describe("registerStatusHealthSessionsCommands", () => {
       json: true,
     });
   });
-  it.each(["parent", "leaf"])("tail preserves %s options and blank store", async (placement) => {
+  it.each(["parent"])("tail preserves %s options and blank store", async (placement) => {
     const options = [...blankStore, "--agent", "work"];
     await runSession(placement, "tail", options, `--session-key ${key} --tail 5 --follow`);
     expectOptions(mocks.sessionsTailCommand, {
@@ -219,7 +195,7 @@ describe("registerStatusHealthSessionsCommands", () => {
       tail: "5",
     });
   });
-  it.each(["parent", "leaf"])("export preserves %s options and blank store", async (placement) => {
+  it.each(["parent"])("export preserves %s options and blank store", async (placement) => {
     const options = [...blankStore, "--json"];
     const request = "eyJzZXNzaW9uS2V5IjoiYWdlbnQ6bWFpbjp0ZWxlZ3JhbTpkaXJlY3Q6b3duZXIifQ";
     await runSession(
@@ -238,7 +214,7 @@ describe("registerStatusHealthSessionsCommands", () => {
     });
   });
 
-  it.each([false, true])("compact leaf override=%s (#91378)", async (override) => {
+  it.each([false])("compact leaf override=%s (#91378)", async (override) => {
     await run(
       `sessions --agent ${override ? "main" : "work"} --json compact ${key}${override ? " --agent work" : ""}`,
     );

@@ -1083,7 +1083,7 @@ export async function runSecurityAuditCore(
   copyConfigResolutionFacts(context.sourceConfig, cfg);
   const auditNonDeep = await import("./audit.nondeep.runtime.js");
 
-  findings.push(...auditNonDeep.collectAttackSurfaceSummaryFindings(cfg));
+  findings.push(...(await auditNonDeep.collectAttackSurfaceSummaryFindings(cfg)));
   findings.push(...collectAgentRosterFindings(context.sourceConfig));
   findings.push(...auditNonDeep.collectSyncedFolderFindings({ stateDir, configPath }));
 

@@ -16,6 +16,7 @@ import {
   markReplyOperationExecutionStarted,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { SqliteBoardStore } from "../../boards/sqlite-board-store.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
   persistSessionTranscriptTurn,
@@ -72,6 +73,7 @@ it("selects current work before pagination and represents an isolated cron run o
     const config: OpenClawConfig = {
       agents: { entries: { main: {}, work: {} } },
     };
+    setRuntimeConfigSnapshot(config);
     const context = requestContext(config);
     const client = identifiedClient("viewer@example.test");
     const childKey = "agent:main:subagent:child";
@@ -193,6 +195,7 @@ it.each(["global", "unknown"] as const)(
         agents: { entries: { main: {}, ops: {} } },
         session: { scope: "global", store: state.statePath("{agentId}.sqlite") },
       };
+      setRuntimeConfigSnapshot(config);
       const sessionId = `restored-${sessionKey}`;
       const runId = `ops-${sessionKey}-run`;
       for (const agentId of ["main", "ops"]) {
@@ -259,6 +262,7 @@ it.for(["global", "unknown"] as const)(
         session: { scope: "global", store: state.statePath("{agentId}.sqlite") },
         agents: { entries: Object.fromEntries(agents.map((id) => [id, {}])) },
       };
+      setRuntimeConfigSnapshot(config);
       const context = requestContext(config);
       const client = identifiedClient("viewer@example.test");
       const storePathFor = (agentId: string) => state.statePath(`${agentId}.sqlite`);
@@ -476,6 +480,7 @@ it.each([{ activeMinutes: 1 }, { activeOnly: true }])(
   "reuses resident rows across concurrent filtered requests: %j",
   async (filter: SessionsListParams) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({ agents: { entries: { main: {}, work: {} } } });
       const { clock, config } = await seedSessionsWithActivityTimes();
       const context = requestContext(config);
       context.chatAbortControllers.set("active-run", {
@@ -507,6 +512,7 @@ it.each(["settled", "replaced"] as const)(
   "refills active work after the selected run is %s during projection",
   async (transition) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({ agents: { entries: { main: {}, work: {} } } });
       const config = await seedSessions();
       const context = requestContext(config);
       const client = identifiedClient("viewer@example.com");
@@ -559,6 +565,7 @@ it.each([false, true])(
   "refreshes the active model across aliased keys after list projection yields (known=%s)",
   async (known) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({ agents: { entries: { main: {}, work: {} } } });
       const config = await seedSessions();
       const context = requestContext(config);
       const sessionKey = "agent:main:active";
@@ -612,6 +619,7 @@ it.each(
   "reconciles a completed fallback during projection ($selection selection, $storedStatus status)",
   async ({ selection, storedStatus }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({ agents: { entries: { main: {}, work: {} } } });
       const config = await seedSessions();
       config.agents = {
         ...config.agents,
@@ -624,6 +632,7 @@ it.each(
           },
         },
       };
+      setRuntimeConfigSnapshot(config);
       const context = requestContext(config);
       const sessionKey = "agent:main:active";
       const sessionId = "main-active";

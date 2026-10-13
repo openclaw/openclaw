@@ -6,6 +6,10 @@ import type {
   TranscriptEvent,
 } from "../config/sessions/session-accessor.types.js";
 import type {
+  ReadRecentSessionConversationTextOptions,
+  SessionRecentConversationText,
+} from "../config/sessions/transcript-recent-text.js";
+import type {
   TranscriptAnchorPageOptions,
   TranscriptRecentReadLimits,
 } from "../sessions/transcript-anchor-page.js";
@@ -165,6 +169,7 @@ export type SessionTranscriptVisitor = {
 };
 
 export type SessionTranscriptProjectionSelection =
+  | { kind: "recent-text"; options: ReadRecentSessionConversationTextOptions }
   | { kind: "delta"; options: SessionTranscriptRawDeltaLimits }
   | { kind: "count" }
   | {
@@ -187,6 +192,7 @@ export type SessionTranscriptProjectionSelection =
   | { kind: "lookup"; messageId: string };
 
 export type SessionTranscriptProjectionSelectionResults = {
+  "recent-text": SessionRecentConversationText[];
   delta: SessionTranscriptDisplayDeltaResult;
   count: number;
   recent: ReadRecentSessionMessagesResult;

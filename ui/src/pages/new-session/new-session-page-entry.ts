@@ -1,10 +1,6 @@
 import { html } from "lit";
 import { restoredInstantThreadPage } from "./instant-thread-restore.ts";
-import { NewSessionPage } from "./new-session-page.ts";
-
-if (!customElements.get("openclaw-new-session-page")) {
-  customElements.define("openclaw-new-session-page", NewSessionPage);
-}
+import "./new-session-page.tsx";
 
 export const render = (data: unknown) =>
   restoredInstantThreadPage(data) ??

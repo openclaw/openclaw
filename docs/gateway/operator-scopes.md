@@ -367,6 +367,23 @@ naming the agent. `openclaw security audit` warns for each opted-in agent. See
 [GitHub identity](/gateway/config-tools/github-identity#sandbox-opt-in) for the
 credential boundary and backend requirements.
 
+A required sandbox contains the session's exec and file tools. It does not
+contain these paths, so configure them before admitting people you do not trust
+with the Gateway host:
+
+- Code Mode under the default `node` executor runs cells in the Gateway process.
+  Use the [QuickJS executor](/tools/code-mode/executors#choose-an-executor).
+- [CLI backends](/gateway/cli-backends) such as Claude CLI own their native
+  tools and sandboxing on the Gateway host. Exclude them with the role's
+  `modelPolicy`.
+- `worker-turn` cloud workers receive the agent's shared GitHub identity
+  regardless of `allowInSandbox`. Keep restricted people off worker profiles.
+- `sessions.others: "view"` exposes complete shared transcripts, including tool
+  output, from every agent. Keep sensitive work in draft sessions.
+- Gateway-brokered GitHub publication uses the shared account. See
+  [Workflow and CI changes](/gateway/config-tools/github-identity#workflow-and-ci-changes)
+  for what pull request workflows can run.
+
 The role's `scopes` list caps scopes granted through connection auth, identity
 grants, pairing, scope upgrades, and authenticated trusted-proxy HTTP requests.
 The ceiling uses the normal scope implications: `operator.admin` permits every
@@ -392,6 +409,16 @@ cookie. Plugin HTTP requests reapply the profile's current role ceiling and
 reject grants without a matching durable identity when roles are enabled.
 Include `operator.admin` explicitly only when that role should retain
 administrative connection authority.
+
+[Principal-bound remote ingress](/plugins/sdk-gateway-ingress) uses a separate
+plugin-approved ceiling intersected with the bound person's current role.
+**Read + write** uses `operator.read` and `operator.write`; **Full** uses
+`operator.admin`, whose implications are still limited by the role. Thus Full
+for a read-only role yields read access, while an empty role or grant remains
+empty. The same exact effective scopes apply to the remote UI and grant-bound
+Gateway RPC: neither identity grants nor an admin plugin caller adds authority.
+Role or profile changes fence existing delegated work. Ingress never issues a
+reusable device token, and device scope upgrades cannot widen its grant ceiling.
 
 An administrator-attested [channel identity link](/concepts/user-model#channel-identity-links)
 also lets a sender inherit channel-owner authority from their effective role's

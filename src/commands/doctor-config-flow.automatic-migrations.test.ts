@@ -6,7 +6,7 @@ import { readConfigFileSnapshot } from "../config/config.js";
 import { findLegacyConfigIssues } from "../config/legacy.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readPersistedInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
+import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "../plugins/installed-plugin-index-records.js";
 import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -279,7 +279,7 @@ it.each([
         expect(await fs.readFile(configPath, "utf8")).toBe(original);
         await expect(fs.access(`${configPath}.bak`)).rejects.toMatchObject({ code: "ENOENT" });
         if (fixture.legacy) {
-          expect(readPersistedInstalledPluginIndexInstallRecords()).toEqual({
+          expect(await readPersistedInstalledPluginIndexInstallRecordsAsync()).toEqual({
             existing: canonical,
           });
         }

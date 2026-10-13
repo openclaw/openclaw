@@ -8,7 +8,10 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { formatAgentDatabaseOwnershipRepairHint } from "../infra/state-migrations.agent-owner-guidance.js";
+import {
+  formatAgentDatabaseCorruptionRepairHint,
+  formatAgentDatabaseOwnershipRepairHint,
+} from "../infra/state-migrations.agent-owner-guidance.js";
 import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
@@ -85,7 +88,7 @@ export function createAgentDatabaseInspectionRefusal(params: {
       ? "Free space in the reported snapshot cache, then retry the update. This candidate snapshot failure does not require repairing the serving database."
       : params.pending
         ? 'Sessions remain unavailable until background inspection and preparation finish. If they cannot complete, stop the Gateway, run "openclaw doctor --fix", and restart.'
-        : 'Sessions remain unavailable. Stop the Gateway, run "openclaw doctor --fix" to inspect and repair this agent database, and restart.',
+        : `Sessions remain unavailable. ${formatAgentDatabaseCorruptionRepairHint(params.agentId, params.cause) ?? 'Stop the Gateway, run "openclaw doctor --fix" to inspect and repair this agent database, and restart.'}`,
   };
   refusalCauses.set(refusal, params.cause);
   return refusal;
@@ -325,37 +328,6 @@ export async function preparePendingAgentDatabase(
     scope.active = false;
   }
   sessionChanges.emit({ all: true, scope: { agentId: refusal.agentId, topology: true } });
-}
-
-/** Runtime preparation adds its config-generation guard to the same admission borrow. */
-export async function withAgentDatabasePreparationGuard<T>(
-  assertCurrent: () => void,
-  run: () => Promise<T>,
-): Promise<T> {
-  const parent = preparation.getStore();
-  if (!parent?.active) {
-    throw new Error("No pending agent database preparation owns this operation");
-  }
-  const original = parent.assertCurrent;
-  parent.assertCurrent = () => {
-    original();
-    assertCurrent();
-  };
-  const scope = {
-    ...parent,
-    assertCurrent: () => {
-      if (!parent.active) {
-        throw new Error("Agent database preparation has ended");
-      }
-      parent.assertCurrent();
-    },
-  };
-  try {
-    scope.assertCurrent();
-    return await preparation.run(scope, run);
-  } finally {
-    scope.active = false;
-  }
 }
 
 export function failPendingAgentDatabase(

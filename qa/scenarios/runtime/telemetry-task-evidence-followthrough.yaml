@@ -202,9 +202,9 @@ flow:
             message:
               expr: "`task tool results did not prove serial read/read/write completion before the terminal claim: ${taskOrderingEvidence}`"
         - assert:
-            expr: "JSON.stringify(outbound.toolCalls ?? []).includes('[redacted]') && !JSON.stringify(outbound.toolCalls ?? []).includes('PERSONAL_TASK_LEDGER.md') && !JSON.stringify(outbound.toolCalls ?? []).includes('FOLLOWTHROUGH_NOTE.md') && !JSON.stringify(outbound.toolCalls ?? []).includes(config.artifactFile)"
+            expr: "expectedTaskPaths.every((expectedPath) => outbound.toolCalls?.some((toolCall) => (toolCall.name === 'read' || toolCall.name === 'write') && typeof (toolCall.arguments?.path ?? toolCall.arguments?.file_path) === 'string' && path.resolve(env.gateway.workspaceDir, toolCall.arguments.path ?? toolCall.arguments.file_path) === expectedPath))"
             message:
-              expr: "`task tool telemetry leaked raw arguments: ${JSON.stringify(outbound.toolCalls ?? null)}`"
+              expr: "`task tool start trace did not preserve the observed input paths`"
         - assert:
             expr: "artifactStat.mtimeMs <= outbound.timestamp"
             message:

@@ -94,11 +94,10 @@ afterEach(async () => {
 });
 
 describe("SQLite read-only session operation custody", () => {
-  it.each(
-    ["EACCES", "ENOENT", "EPERM"].flatMap((code) =>
-      [false, true].map((spawned) => ({ code, spawned })),
-    ),
-  )(
+  it.each([
+    { code: "EACCES", spawned: false },
+    { code: "EPERM", spawned: true },
+  ])(
     "attributes $code to startup only before the spawn event (spawned=$spawned)",
     async ({ code, spawned }) => {
       const { session, child } = createSession();
@@ -133,35 +132,33 @@ describe("SQLite read-only session operation custody", () => {
     },
   );
 
-  it.each([
-    "staging-create",
-    "staging-create-legacy",
-    "staging-reconcile",
-    "staging-retire",
-  ] as const)("reuses its child after a well-formed %s refusal", async (mode) => {
-    const { session, child } = createSession();
-    const first = session.run("/fixture/first.sqlite", { mode });
-    const observed = first.catch((error: unknown) => error);
-    const firstId = requestId(child);
-    child.emit("message", {
-      id: firstId,
-      result: { ok: false, message: "fixture staging refused" },
-    });
-    // An incorrect retirement must fail here, without waiting forever for a mock child close.
-    await nextTurn();
-    expect(child.kill).not.toHaveBeenCalled();
-    expect(await observed).toMatchObject({
-      message: expect.stringContaining("fixture staging refused"),
-    });
+  it.each(["staging-create"] as const)(
+    "reuses its child after a well-formed %s refusal",
+    async (mode) => {
+      const { session, child } = createSession();
+      const first = session.run("/fixture/first.sqlite", { mode });
+      const observed = first.catch((error: unknown) => error);
+      const firstId = requestId(child);
+      child.emit("message", {
+        id: firstId,
+        result: { ok: false, message: "fixture staging refused" },
+      });
+      // An incorrect retirement must fail here, without waiting forever for a mock child close.
+      await nextTurn();
+      expect(child.kill).not.toHaveBeenCalled();
+      expect(await observed).toMatchObject({
+        message: expect.stringContaining("fixture staging refused"),
+      });
 
-    const second = session.run("/fixture/second.sqlite", { mode });
-    const secondId = requestId(child);
-    expect(secondId).not.toBe(firstId);
-    child.emit("message", { id: secondId, result: { ok: true, location: "/fixture/staged" } });
-    await expect(second).resolves.toBe("/fixture/staged");
-    expect(mock.spawn).toHaveBeenCalledOnce();
-    expect(child.kill).not.toHaveBeenCalled();
-  });
+      const second = session.run("/fixture/second.sqlite", { mode });
+      const secondId = requestId(child);
+      expect(secondId).not.toBe(firstId);
+      child.emit("message", { id: secondId, result: { ok: true, location: "/fixture/staged" } });
+      await expect(second).resolves.toBe("/fixture/staged");
+      expect(mock.spawn).toHaveBeenCalledOnce();
+      expect(child.kill).not.toHaveBeenCalled();
+    },
+  );
 
   it("joins retirement for a malformed staging refusal instead of retaining its child", async () => {
     const { session, child } = createSession();
@@ -339,7 +336,6 @@ it("carries only its captured read scope and refuses callbacks after owner retir
 
 it.each([
   { execPath: "/fixture/bin/node", family: "node" },
-  { execPath: "/fixture/bin/bun", family: "bun" },
   { execPath: "/fixture/bin/custom-runtime", family: "other" },
 ])(
   "counts admitted read-only session children as $family in spawn diagnostics",

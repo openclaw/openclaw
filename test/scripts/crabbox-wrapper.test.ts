@@ -4151,6 +4151,24 @@ esac
     );
   });
 
+  it("redacts only the Testbox caller command after materializing its source", () => {
+    for (const provider of ["blacksmith-testbox", "aws"]) {
+      const { remoteCommand } = runSuccessfulDefaultWrapper(
+        ["run", "--provider", provider, "--", "corepack", "pnpm", "check:changed"],
+        sparseChangedGateOptions,
+      );
+      const stage = "exec node scripts/crabbox-remote-redact.mjs -- bash -c ";
+      if (provider === "blacksmith-testbox") {
+        expect(remoteCommand).toMatch(/^export CI=true; openclaw_source_root=/u);
+        expect(remoteCommand).toContain(`cd "$openclaw_source_root" || exit $?; ${stage}`);
+        expect(remoteCommand).toMatch(/-- bash -c '.*corepack pnpm check:changed'$/u);
+      } else {
+        expect(remoteCommand).toContain('"baseSha":"abc123"');
+        expect(remoteCommand).not.toContain(stage);
+      }
+    }
+  });
+
   it.each(["origin/main~1", "abc123"])("rejects a non-recreatable changed-gate base %s", (base) => {
     const result = runDefaultWrapper(
       ["run", "--provider", "aws", "--", "corepack", "pnpm", "check:changed", "--base", base],
@@ -4675,6 +4693,11 @@ process.on("exit", () => {
       copyFileSync(
         path.join(origin, "scripts/check-changed.mjs"),
         path.join(origin, "scripts/source-fixture.mjs"),
+      );
+      // Real transports carry this repo's Testbox redaction stage; the synthetic source passes through.
+      writeFileSync(
+        path.join(origin, "scripts/crabbox-remote-redact.mjs"),
+        'import { spawnSync } from "node:child_process"; const [, command, ...args] = process.argv.slice(2); process.exit(spawnSync(command, args, { stdio: "inherit" }).status ?? 1);\n',
       );
       if (scenario === "captured-base") {
         writeFileSync(

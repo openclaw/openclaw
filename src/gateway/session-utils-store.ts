@@ -133,7 +133,6 @@ function loadSessionEntryWithMode(
   sessionKey: string,
   opts:
     | (Pick<SessionEntryReadScope, "agentId" | "clone" | "projection" | "env"> & {
-        includeStoreChildEntries?: boolean;
         targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
       })
     | undefined,
@@ -151,7 +150,6 @@ function loadSessionEntryWithMode(
     targetDiscoveryCache: opts?.targetDiscoveryCache,
     ...(opts?.clone === false ? { clone: false } : {}),
     ...(opts?.agentId ? { agentId: opts.agentId } : {}),
-    ...(opts?.includeStoreChildEntries ? { includeStoreChildEntries: true } : {}),
   });
   const storePath = target.storePath;
   const store = target.store;
@@ -191,7 +189,6 @@ export function loadGatewaySessionEntry(
 export function loadGatewaySessionEntryReadOnly(
   sessionKey: string,
   opts?: {
-    includeStoreChildEntries?: boolean;
     targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
   } & Pick<SessionEntryReadScope, "agentId" | "clone" | "projection" | "env">,
   cfg?: OpenClawConfig,
@@ -252,11 +249,17 @@ export async function withQualifiedGatewaySessionEntry<T>(params: {
   logicalStorePath: string;
   env?: NodeJS.ProcessEnv;
   includeMembership: boolean;
+  transcript?: import("../config/sessions/session-entry-read.types.js").SessionExactEntriesWorkerRequest["transcript"];
+  includeLifecycle?: boolean;
   consume: Parameters<typeof withGatewaySessionEntry<T>>[2];
   assertConfigCurrent: () => void;
 }): Promise<T> {
   return withQualifiedGatewaySessionStoreTarget({
     ...params,
+    readOptions: {
+      transcript: params.transcript,
+      lifecycleSessionKey: params.includeLifecycle ? params.target.storeKey : undefined,
+    },
     consume: (target, membership, assertSourceCurrent) => {
       const canonicalMatch = findCanonicalStoreMatch(target.store, target.storeKeys);
       // Qualification retains the selected store key even before its row exists.

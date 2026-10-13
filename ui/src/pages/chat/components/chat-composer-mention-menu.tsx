@@ -6,9 +6,9 @@ import {
   resolveGatewayErrorDetailCode,
   type GatewayBrowserClient,
 } from "../../../api/gateway.ts";
-import { t } from "../../../i18n/index.ts";
 import type { HumanMention } from "../../../lib/chat/chat-types.ts";
 import { MAX_HUMAN_MENTIONS, updateHumanMentions } from "../../../lib/chat/human-mentions.ts";
+import { t } from "../../../lib/reactive/i18n.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { solidTemplate } from "./chat-composer-controls.ts";
 import { paneDomId } from "./chat-composer-dom.ts";

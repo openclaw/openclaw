@@ -2,13 +2,9 @@ import path from "node:path";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { readSqliteDatabaseWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
 import { readSqliteNativeMutationRevision } from "../../infra/sqlite-schema-facts.js";
-import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
-import type {
-  AgentDatabaseGenerationClaim,
-  AgentDatabaseRequestExecutionSource,
-} from "../../state/openclaw-agent-execution-admission-contract.js";
+import type { AgentDatabaseGenerationClaim } from "../../state/openclaw-agent-execution-admission-contract.js";
 import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
 import { runOpenClawAgentWriteAdmissions } from "../../state/openclaw-agent-write-admission.js";
 import type { SessionAccessScope, SessionEntryTargetPatchScope } from "./session-accessor.types.js";
@@ -16,6 +12,7 @@ import type { CanonicalSessionReaderContinuation } from "./session-canonical-key
 import { assertSessionEntryCohortScope } from "./session-entry-cohort-scope.js";
 import { SessionEntryChangedDuringReadError } from "./session-entry-read-errors.js";
 import {
+  readSessionEntriesWithRetainedFacts,
   readRetainedSessionEntryFacts,
   retainSessionEntryReadFacts,
 } from "./session-entry-read-facts.js";
@@ -28,7 +25,10 @@ import type {
 import type { SessionEntryCohortRequest } from "./session-entry-read.types.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target-paths.js";
 import { captureSessionStoreReadCandidate } from "./session-store-read-candidates.js";
+import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
+import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import type { SessionHistoryWorkerDatabase } from "./session-transcript-worker.types.js";
+import { createSessionWorkerExecutionSource } from "./session-worker-execution-source.js";
 
 type ReadSessionStore = <T>(
   input: SessionEntryWorkerRead,
@@ -41,7 +41,7 @@ type ReadSessionStore = <T>(
 ) => Promise<T>;
 
 /** Data-only return; decisions/effects consume withRead's synchronous callback directly. */
-export function readAdmittedSessionEntry(
+export async function readAdmittedSessionEntry(
   reader: SessionEntryCohortReader,
   input: SessionAccessScope,
   assertCurrent: () => void,
@@ -49,17 +49,17 @@ export function readAdmittedSessionEntry(
 ) {
   assertCurrent();
   const key = assertSessionEntryCohortScope(reader, input);
-  return reader.withRead({ sessionKeys: [key] }, assertCurrent, (read, assertPrepared) => {
-    assertPrepared();
-    onReadTarget?.({
-      agentId: reader.logicalAgentId,
-      env: reader.database.env,
-      storePath: read.source.path,
-      readSource: { ...read.source },
-      target: { canonicalKey: key, storeKeys: [key] },
-    });
-    return read.entries.find((row) => row.sessionKey === key)?.entry;
+  const read = await reader.readEntry(assertCurrent);
+  assertCurrent();
+  reader.assertCurrent();
+  onReadTarget?.({
+    agentId: reader.logicalAgentId,
+    env: reader.database.env,
+    storePath: read.source.path,
+    readSource: { ...read.source },
+    target: { canonicalKey: key, storeKeys: [key] },
   });
+  return read.entry;
 }
 
 /** Admission already owns this execution; the reader neither opens nor promotes storage. */
@@ -89,6 +89,37 @@ export function createAdmittedSessionEntryCohortReader(params: {
       ...new Set([...params.storePaths, database.path].map((p) => path.resolve(p))),
     ]),
     assertCurrent: assertOwnerCurrent,
+    async readEntry(assertCallerCurrent) {
+      const assertCurrent = () => {
+        assertOwnerCurrent();
+        assertCallerCurrent();
+      };
+      assertCurrent();
+      const request = { sessionKeys: [params.sessionKey] };
+      const read = await readSessionEntriesWithRetainedFacts(database, request, () =>
+        withSessionHistoryWorkerDatabase(
+          database,
+          (reader) => reader.readExactEntries({ ...request, env: database.env }),
+          targetDiscoveryLane,
+        ),
+      );
+      assertCurrent();
+      const entry = read.entries.find((row) => row.sessionKey === params.sessionKey)?.entry;
+      const admitted = expected.sessions.find(
+        (session) => session.sessionKey === params.sessionKey,
+      );
+      if (
+        !entry ||
+        !admitted ||
+        !read.source ||
+        read.source.databaseIdentity !== params.generation.identity ||
+        entry.sessionId !== admitted.sessionId ||
+        entry.lifecycleRevision !== admitted.lifecycleRevision
+      ) {
+        throw new SessionEntryChangedDuringReadError();
+      }
+      return { entry, source: read.source };
+    },
     async withRead(request, assertCallerCurrent, consume) {
       assertOwnerCurrent();
       assertCallerCurrent();
@@ -109,21 +140,10 @@ export function createAdmittedSessionEntryCohortReader(params: {
         assertCallerCurrent();
         assertNativeCurrent();
       };
-      const source: AgentDatabaseRequestExecutionSource = {
+      const source = createSessionWorkerExecutionSource(
         assertCurrent,
-        createAdmission(binding) {
-          return () => ({
-            nativeLocations: binding.nativeLocations,
-            admission: createSqliteWorkerOperationAdmission((admissionRequest, grant) => {
-              binding.authorize(admissionRequest);
-              assertCurrent();
-              if (!grant()) {
-                throw new Error("Session cohort authority expired");
-              }
-            }, binding.attachment),
-          });
-        },
-      };
+        "Session cohort authority expired",
+      );
       const result = await params.execution.runExisting(
         source,
         async (worker) => {

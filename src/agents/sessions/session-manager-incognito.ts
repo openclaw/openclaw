@@ -12,11 +12,7 @@ import type {
   SessionTranscriptContextSnapshot,
 } from "../../config/sessions/session-history-read.types.js";
 import type { IncognitoContextReadResult } from "../../config/sessions/session-incognito-history-contract.js";
-import { readSessionTranscriptAnchorsAsync } from "../../config/sessions/session-transcript-anchor-read.js";
-import {
-  readSessionTranscriptModelContextAsync,
-  type PreparedSessionTranscriptModelContext,
-} from "../../config/sessions/session-transcript-context-read.js";
+import { readSessionTranscriptModelContextAsync } from "../../config/sessions/session-transcript-context-read.js";
 import {
   prepareIncognitoSessionTranscriptHydration,
   prepareSessionTranscriptHydration,
@@ -227,7 +223,6 @@ export async function readSessionManagerModelContextAsync<T>(
     signal?: AbortSignal;
     through?: TranscriptEntryAnchor;
     limits?: SessionModelContextLimits;
-    prepared?: PreparedSessionTranscriptModelContext;
   },
   consume: (context: ReturnType<typeof readSessionTranscriptModelContext>) => T,
   manager?: object,
@@ -283,7 +278,6 @@ export async function readSessionManagerModelContextAsync<T>(
       limits,
       undefined,
       true,
-      options.prepared,
     ),
   );
   options.signal?.throwIfAborted();
@@ -384,7 +378,8 @@ export async function readSessionManagerContextAsync<T>(
     return withSessionTranscriptReadSource(
       captured,
       consume,
-      async ({ scope, expectedIdentity, owner, assertCurrent: assertReadOwner }) => {
+      async (source) => {
+        const { scope, expectedIdentity, owner, assertCurrent: assertReadOwner } = source;
         const readTarget = {
           ...scope,
           sessionId: captured.sessionId,
@@ -395,6 +390,11 @@ export async function readSessionManagerContextAsync<T>(
           assertReadOwner();
         };
         assertDurable();
+        if (admission && !expectedIdentity) {
+          throw new SessionTranscriptReadFenceError(
+            "Session transcript changed during context read",
+          );
+        }
         const snapshot = await readSessionTranscriptContextMessagesInWorker(
           readTarget,
           admission,
@@ -404,30 +404,7 @@ export async function readSessionManagerContextAsync<T>(
         assertDurable();
         const result = await consumeSnapshot(snapshot, () => owner.assertCurrent());
         assertDurable();
-        if (readSessionManagerActorTranscript(captured, snapshot.version)) {
-          return result;
-        }
-        let accepted: { value: T } | undefined;
-        await readSessionTranscriptAnchorsAsync(
-          readTarget,
-          { entryIds: [], contextValidation: { version: snapshot.version, admission } },
-          signal,
-          (facts) => {
-            assertDurable();
-            if (!facts.contextValidated && (snapshot.version || admission)) {
-              throw new SessionTranscriptReadFenceError(
-                "Session transcript changed during context read",
-              );
-            }
-            accepted = { value: result };
-          },
-        );
-        if (!accepted) {
-          throw new SessionTranscriptReadFenceError(
-            "Session transcript changed during context read",
-          );
-        }
-        return accepted.value;
+        return result;
       },
       signal,
     );
