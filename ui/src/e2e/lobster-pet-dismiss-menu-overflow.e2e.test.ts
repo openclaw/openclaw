@@ -239,7 +239,11 @@ suite.define(() => {
           }),
           edge,
         );
-        await sprite.dispatchEvent("contextmenu", point);
+        await sprite.evaluate((element, position) => {
+          element.dispatchEvent(
+            new MouseEvent("contextmenu", { ...position, bubbles: true, cancelable: true }),
+          );
+        }, point);
         await page.locator(".lobster-pet-dismiss-menu__panel").waitFor();
 
         const measurement = await measureDismissMenu(page);

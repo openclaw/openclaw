@@ -13,8 +13,8 @@ export function LobsterPetDismissMenu(params: {
   const id = createUniqueId();
   let menu!: MenuHandle;
   let returnTarget: HTMLElement | undefined;
-  let removeCloseListener: (() => void) | undefined;
-  onCleanup(() => removeCloseListener?.());
+  let removeListeners: (() => void) | undefined;
+  onCleanup(() => removeListeners?.());
   const restoreCapturedFocus = () => {
     const trigger = menu.overlay.trigger;
     if (!trigger || !returnTarget?.isConnected) {
@@ -51,15 +51,13 @@ export function LobsterPetDismissMenu(params: {
           const surface = handle.overlay.surface;
           const close = () => params.onClose();
           surface.addEventListener("overlay-after-hide", close);
-          removeCloseListener = () => surface.removeEventListener("overlay-after-hide", close);
+          trigger.addEventListener("focus", restoreCapturedFocus);
+          removeListeners = () => {
+            surface.removeEventListener("overlay-after-hide", close);
+            trigger.removeEventListener("focus", restoreCapturedFocus);
+          };
           if (!handle.open()) {
             params.onClose();
-          }
-        }}
-        onOpenChange={(open) => {
-          if (!open) {
-            // The owner publishes close before returning focus to its trigger.
-            queueMicrotask(restoreCapturedFocus);
           }
         }}
         placement="top-start"
@@ -76,7 +74,6 @@ export function LobsterPetDismissMenu(params: {
           event.preventDefault();
           // Restore focus through the owner before dismissal removes this menu.
           if (menu.close()) {
-            restoreCapturedFocus();
             params.onDismiss(item.id === "dismiss-permanently");
           }
         }}
