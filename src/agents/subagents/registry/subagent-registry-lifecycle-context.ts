@@ -120,6 +120,11 @@ export type PendingRequesterSettleWakeCommit = {
   reportedFailureLogs?: number;
   /** Identical failure reports withheld after the reporting budget ran out. */
   suppressedFailureLogs?: number;
+  /** Owner-changed rejection the settle attempts keep repeating, and how many in a row. */
+  ownerChangedSignature?: string;
+  ownerChangedFailures?: number;
+  /** The repeated owner-changed rejection was reported once; retries keep their cadence. */
+  ownerChangedReported?: boolean;
 };
 
 export interface SubagentLifecycleWakeContext extends SubagentLifecycleCommonContext {
