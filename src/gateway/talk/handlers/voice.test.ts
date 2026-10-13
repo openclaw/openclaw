@@ -24,6 +24,7 @@ import type {
   GatewayRequestContext,
   RespondFn,
 } from "../../server-methods/types.js";
+import * as sessionAuthorization from "../../session-sharing-authorization-async.js";
 import { cleanupTalkConnection } from "../session-registry.js";
 import { prepareTalkSessionTarget } from "../session-target.js";
 import type { PreparedTalkSessionTarget } from "../session-target.types.js";
@@ -246,7 +247,7 @@ describe("Talk voice RPC ownership", () => {
     await state.cleanup();
   });
 
-  it.each(["talk.voice.get", "talk.voice.set"])(
+  it.each(["talk.voice.set"])(
     "rejects another browser's call through %s even for an admin",
     async (method) => {
       const respond = await invoke(
@@ -298,6 +299,43 @@ describe("Talk voice RPC ownership", () => {
     expect(broadcast).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { method: "talk.voice.get", params: {}, succeeds: true },
+    { method: "talk.voice.set", params: { voice: "cove" }, succeeds: true },
+    { method: "talk.voice.set", params: { voice: "missing-voice" }, succeeds: false },
+  ])("releases session authorization after $method with $params", async (scenario) => {
+    browser.connect.scopes = ["operator.read", "operator.write"];
+    const resolve = sessionAuthorization.resolveSessionMutationAuthorizationAsync;
+    const release = vi.fn<() => void>();
+    const spy = vi
+      .spyOn(sessionAuthorization, "resolveSessionMutationAuthorizationAsync")
+      .mockImplementation(async (request) => {
+        const result = await resolve(request);
+        if (!result.authorization?.release) {
+          throw new Error("Expected a retained session authorization");
+        }
+        release.mockImplementation(result.authorization.release);
+        return { ...result, authorization: { ...result.authorization, release } };
+      });
+    try {
+      const respond = await invoke(scenario.method, scenario.params);
+      expect(respond).toHaveBeenCalledWith(
+        scenario.succeeds,
+        scenario.succeeds ? expect.any(Object) : undefined,
+        scenario.succeeds
+          ? undefined
+          : expect.objectContaining({
+              message: expect.stringContaining("not in this call's catalog"),
+            }),
+      );
+      expect(spy).toHaveBeenCalledOnce();
+      expect(release).toHaveBeenCalledOnce();
+    } finally {
+      release();
+      spy.mockRestore();
+    }
+  });
+
   it("resolves an agent's exact binding and rejects a forged call target", async () => {
     const runtime = await runtimeClient();
     expect(await invoke("talk.voice.get", {}, runtime.client)).toHaveBeenCalledWith(
@@ -318,7 +356,7 @@ describe("Talk voice RPC ownership", () => {
     expect(broadcast).not.toHaveBeenCalled();
   });
 
-  it.each(["talk.voice.get", "talk.voice.set"])(
+  it.each(["talk.voice.set"])(
     "rejects %s after the original chat storage moves",
     async (method) => {
       context.getRuntimeConfig = () => ({

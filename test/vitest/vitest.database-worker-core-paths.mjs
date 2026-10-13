@@ -33,6 +33,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/tools/terminal-tool.incognito.test.ts",
   "src/agents/interrupted-input-context.integration.test.ts",
   // Physical admission and descriptor custody belong to the application host, not an unhosted test Worker.
+  "src/infra/database-engine/physical-facts.test.ts",
   "src/infra/postgres-sync/locks.test.ts",
   "src/acp/runtime/session-meta-read.cache.test.ts",
   "src/state/user-profile-catalog-identity.read.test.ts",
@@ -933,6 +934,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/reply/commands-plugins.install.test.ts",
   "src/auto-reply/reply/agent-runner-node-authority.test.ts",
   "src/auto-reply/reply/commands-plugins.install-clawhub-spec.test.ts",
+  "src/system-agent/setup-inference-codex.authority.test.ts",
+  "src/system-agent/setup-inference-credentials.authority.test.ts",
   "src/system-agent/setup-inference-credentials.lifecycle.test.ts",
   "src/system-agent/setup-inference.provider-install-owner.test.ts",
   "src/system-agent/setup-inference.groq-external.integration.test.ts",

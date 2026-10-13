@@ -1,3 +1,4 @@
+import { formatCliJsonFailure } from "../cli/failure-output.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { copyToClipboard } from "../infra/clipboard.js";
 import { isRemoteEnvironment } from "../infra/remote-env.js";
@@ -53,7 +54,7 @@ async function ensureDashboardTargetReady(params: {
 }
 
 function dashboardJsonFailure(runtime: RuntimeEnv, reason: string): void {
-  writeRuntimeJson(runtime, { ok: false, reason }, 0);
+  writeRuntimeJson(runtime, { ...formatCliJsonFailure(reason), reason }, 0);
   runtime.exit(1);
 }
 

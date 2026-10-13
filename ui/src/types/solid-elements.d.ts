@@ -22,6 +22,12 @@ type LegacyAttributes<T extends HTMLElement> = JSX.HTMLAttributes<T> & JSX.Prope
 type Tooltip = HTMLElementTagNameMap["openclaw-tooltip"];
 
 type ElementProperties<T> = { [Key in keyof T as `prop:${string & Key}`]?: T[Key] };
+type PluginViewProperties = {
+  [Surface in keyof ControlUiSurfaceProps]: {
+    "prop:surface": Surface;
+    "prop:props": ControlUiSurfaceProps[Surface];
+  };
+}[keyof ControlUiSurfaceProps];
 
 declare module "@solidjs/web" {
   namespace JSX {
@@ -46,12 +52,11 @@ declare module "@solidjs/web" {
         "prop:run": UpdateRunRecord | null;
         "prop:connected": boolean;
       };
-      "openclaw-plugin-view": HTMLAttributes<HTMLElement> & {
-        "prop:surface": "tool-result";
-        "prop:props": ControlUiSurfaceProps["tool-result"];
-        "prop:defaultView": unknown;
-        "prop:presented": boolean;
-      };
+      "openclaw-plugin-view": HTMLAttributes<HTMLElement> &
+        PluginViewProperties & {
+          "prop:defaultView": unknown;
+          "prop:presented": boolean;
+        };
       "openclaw-message-reaction-picker": HTMLAttributes<HTMLElement> & {
         compact?: boolean;
         placement?: "bottom-start" | "bottom-end";
@@ -80,13 +85,13 @@ declare module "@solidjs/web" {
         "prop:active": boolean;
       };
       "resizable-divider": Omit<HTMLAttributes<HTMLElement>, "onResize"> & {
-        "prop:orientation": "horizontal" | "vertical";
+        "prop:orientation"?: "horizontal" | "vertical";
         "prop:label": string;
         "prop:splitRatio": number;
         "prop:minRatio": number;
         "prop:maxRatio": number;
-        "prop:measureRatio": () => number;
-        "prop:measureSize": () => number;
+        "prop:measureRatio"?: () => number;
+        "prop:measureSize"?: () => number;
         onResize: (event: CustomEvent<{ splitRatio: number }>) => void;
         "onResize-end"?: () => void;
       };
@@ -143,7 +148,12 @@ declare module "@solidjs/web" {
         ElementProperties<
           Pick<
             HTMLElementTagNameMap["openclaw-link-reader-hovercard-provider"],
-            "client" | "readers" | "agentId" | "previewSeeds"
+            | "client"
+            | "readers"
+            | "agentId"
+            | "previewSeeds"
+            | "pagePreviewContext"
+            | "claimedReaders"
           >
         >;
       "openclaw-session-owner-chip": HTMLAttributes<

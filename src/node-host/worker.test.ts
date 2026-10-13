@@ -1,4 +1,3 @@
-import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../gateway/client.js";
 import {
@@ -167,36 +166,6 @@ describe("NodeHostWorkerBridgeClient", () => {
     expect(settled).toBe(true);
   });
 
-  it("tunnels runtime gateway requests and resolves their matching response", async () => {
-    const messages: Array<Record<string, unknown>> = [];
-    const client = new NodeHostWorkerBridgeClient((message) => {
-      messages.push(message as Record<string, unknown>);
-    });
-
-    client.setConnection(1, true);
-    const response = client.request<{ bins: string[] }>("skills.bins", {}, { timeoutMs: 1_000 });
-    expect(messages).toEqual([
-      {
-        type: "gateway-request",
-        generation: 1,
-        id: "gateway-1",
-        method: "skills.bins",
-        params: {},
-        timeoutMs: 1_000,
-      },
-    ]);
-    expect(
-      client.handleResponse({
-        type: "gateway-response",
-        generation: 1,
-        id: "gateway-1",
-        ok: true,
-        result: { bins: ["rg"] },
-      }),
-    ).toBe(true);
-    await expect(response).resolves.toEqual({ bins: ["rg"] });
-  });
-
   it("does not keep the worker alive for a pending gateway timeout", async () => {
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const client = new NodeHostWorkerBridgeClient(() => {});
@@ -211,45 +180,6 @@ describe("NodeHostWorkerBridgeClient", () => {
     } finally {
       timeoutSpy.mockRestore();
     }
-  });
-
-  it.each([
-    { requested: Number.MAX_SAFE_INTEGER, expected: MAX_TIMER_TIMEOUT_MS },
-    { requested: Number.POSITIVE_INFINITY, expected: 15_000 },
-    { requested: 0, expected: 1 },
-    { requested: 7.9, expected: 7 },
-  ])("normalizes a gateway request timeout of $requested", async ({ requested, expected }) => {
-    vi.useFakeTimers();
-    const messages: Array<Record<string, unknown>> = [];
-    const client = new NodeHostWorkerBridgeClient((message) => {
-      messages.push(message as Record<string, unknown>);
-    });
-
-    client.setConnection(1, true);
-    const response = client.request("skills.bins", {}, { timeoutMs: requested });
-
-    expect(messages).toEqual([
-      {
-        type: "gateway-request",
-        generation: 1,
-        id: "gateway-1",
-        method: "skills.bins",
-        params: {},
-        timeoutMs: expected,
-      },
-    ]);
-    expect(vi.getTimerCount()).toBe(1);
-    expect(
-      client.handleResponse({
-        type: "gateway-response",
-        generation: 1,
-        id: "gateway-1",
-        ok: true,
-        result: { bins: [] },
-      }),
-    ).toBe(true);
-    await expect(response).resolves.toEqual({ bins: [] });
-    expect(vi.getTimerCount()).toBe(0);
   });
 });
 

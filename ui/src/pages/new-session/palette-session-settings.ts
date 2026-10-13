@@ -4,6 +4,7 @@ import { ref } from "lit/directives/ref.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { strokeIcon } from "../../components/icons-tools.ts";
 import { icons } from "../../components/icons.ts";
+import "../../components/tooltip.ts";
 import { renderKeyboardShortcut, renderShortcutText } from "../../components/kbd.ts";
 import { syncPopoverLabel } from "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
@@ -247,26 +248,38 @@ export class PaletteSessionSettings {
     const groups = machines
       .map((machine) => ({
         machine,
-        choices: machine.hosted
-          ? [{ id: "", label: t("newSession.hostedWorkspace") }].filter(
-              (choice) =>
-                !query || (machine.label + " " + choice.label).toLocaleLowerCase().includes(query),
-            )
-          : [
-              {
-                id: "",
-                label: machine.remote
-                  ? t("newSession.newWorkspace")
-                  : pathDisplayName(place.workspacePath()) || t("newSession.folderPlaceholder"),
-              },
-              ...draft.browser.projects.map((project) => ({
-                id: project.id,
-                label: project.displayName,
-              })),
-            ].filter(
-              (choice) =>
-                !query || (machine.label + " " + choice.label).toLocaleLowerCase().includes(query),
-            ),
+        choices:
+          machine.disabledReason || machine.hosted
+            ? [
+                {
+                  id: "",
+                  label: t(
+                    machine.disabledReason
+                      ? "newSession.environmentUnavailable"
+                      : "newSession.hostedWorkspace",
+                  ),
+                },
+              ].filter(
+                (choice) =>
+                  !query ||
+                  (machine.label + " " + choice.label).toLocaleLowerCase().includes(query),
+              )
+            : [
+                {
+                  id: "",
+                  label: machine.remote
+                    ? t("newSession.newWorkspace")
+                    : pathDisplayName(place.workspacePath()) || t("newSession.folderPlaceholder"),
+                },
+                ...draft.browser.projects.map((project) => ({
+                  id: project.id,
+                  label: project.displayName,
+                })),
+              ].filter(
+                (choice) =>
+                  !query ||
+                  (machine.label + " " + choice.label).toLocaleLowerCase().includes(query),
+              ),
       }))
       .filter((group) => group.choices.length);
     return html`
@@ -338,25 +351,34 @@ export class PaletteSessionSettings {
                                   (machine.remote
                                     ? place.freshWorkspace
                                     : place.folder === place.workspacePath())));
-                          return html`<button
+                          const row = html`<button
                             type="button"
                             class="palette-session-settings__row"
                             data-machine=${machine.id}
                             data-project=${choice.id}
                             aria-pressed=${String(selected)}
-                            title=${machine.disabledReason ?? nothing}
-                            ?disabled=${locked || Boolean(machine.disabledReason)}
+                            aria-description=${machine.disabledReason ?? nothing}
+                            aria-disabled=${machine.disabledReason ? "true" : nothing}
+                            ?disabled=${locked}
                             @click=${() => choose(machine, choice.id)}
                           >
-                            <span class="palette-session-settings__icon"
-                              >${choice.id ? icons.gitBranch : icons.folder}</span
+                            <span class="palette-session-settings__icon" aria-hidden="true"
+                              >${machine.disabledReason ? icons.alertTriangle : choice.id ? icons.gitBranch : icons.folder}</span
                             ><span class="palette-session-settings__label">${choice.label}</span
                             ><span class="palette-session-settings__check"
                               >${selected ? icons.check : nothing}</span
                             >
                           </button>`;
+                          return machine.disabledReason
+                            ? html`<openclaw-tooltip
+                                class="palette-session-settings__reason"
+                                placement="right-start"
+                                open-on-click
+                                .content=${machine.disabledReason}
+                                >${row}</openclaw-tooltip
+                              >`
+                            : row;
                         })}
-                        ${machine.disabledReason ? html`<div class="palette-session-settings__unavailable">${machine.disabledReason}</div>` : nothing}
                       </section>`,
                     )}
                     ${!groups.length ? html`<div class="palette-session-settings__unavailable">${t("newSession.environmentSearchEmpty")}</div>` : nothing}
