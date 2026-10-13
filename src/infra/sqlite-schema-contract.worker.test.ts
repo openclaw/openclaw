@@ -7,7 +7,6 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
-import { prepareOpenClawDatabaseSchemaContracts } from "../state/openclaw-database-schema-contracts.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { getOpenClawStateRuntimeSchema } from "../state/openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
@@ -167,8 +166,10 @@ it("inherits complete expected schemas through a cold carrier while rechecking a
     try {
       expect(getCanonicalSqliteTableNames(schemaSql)).toContain("schema_contract_inheritance");
       expect(getCanonicalSqliteTableNames(schemaSql)).toContain("session_nodes");
-      prepareOpenClawDatabaseSchemaContracts();
-      prepareOpenClawDatabaseSchemaContracts();
+      for (const schema of [OPENCLAW_AGENT_SCHEMA_SQL, OPENCLAW_STATE_SCHEMA_SQL]) {
+        getCanonicalSqliteTableNames(schema);
+        getCanonicalSqliteTableNames(schema);
+      }
       expect(construction.mock.calls.filter(([sql]) => sql === schemaSql)).toHaveLength(1);
       for (const schema of [OPENCLAW_AGENT_SCHEMA_SQL, OPENCLAW_STATE_SCHEMA_SQL]) {
         expect(construction.mock.calls.filter(([sql]) => sql === schema)).toHaveLength(1);
