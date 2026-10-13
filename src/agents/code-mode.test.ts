@@ -313,10 +313,14 @@ describe("Code Mode search", () => {
   });
 });
 
-it("searches and reads eligible skills through the worker bridge and normal tool dispatch", async () => {
+it("reads a known skill with resource context before discovery through the worker bridge", async () => {
   const demo = createFixtureSkillEntry("demo");
   const hidden = createFixtureSkillEntry("hidden");
-  const body = "---\nname: demo\n---\n\n# Complete demo instructions\n";
+  const body = "---\nname: demo\n---\n\nRead references/workflow.md before continuing.\n";
+  const location = "node://remote/skills/demo/SKILL.md";
+  const locationNote = "Run referenced files with exec host=node node=remote.";
+  demo.skill.filePath = location;
+  demo.skill.locationNote = locationNote;
   const reader = vi.fn(async () => body);
   const codeModeSkills = resolveCodeModeSkills({
     skillsPrompt: await resolveSkillsPrompt({ entries: [demo], workspaceDir: "/workspace" }),
@@ -332,9 +336,9 @@ it("searches and reads eligible skills through the worker bridge and normal tool
     execTool: h.tools[0]!,
     waitTool: h.tools[1]!,
     code: `
+    const body = await skills.read("demo");
     const listed = await skills.list();
     const found = await skills.search("demo");
-    const body = await skills.read("demo");
     let unknown;
     try { await skills.read("missing"); } catch (error) { unknown = error.message; }
     return { listed, found, body, unknown };
@@ -344,22 +348,25 @@ it("searches and reads eligible skills through the worker bridge and normal tool
     status: "completed",
     value: {
       listed: [
-        { name: "demo", description: demo.skill.description, location: "/skills/demo/SKILL.md" },
+        { name: "demo", description: `${demo.skill.description}\n${locationNote}`, location },
       ],
       found: {
         skills: [
-          { name: "demo", description: demo.skill.description, location: "/skills/demo/SKILL.md" },
+          { name: "demo", description: `${demo.skill.description}\n${locationNote}`, location },
         ],
         hasMore: false,
         coverage: { bodyIndexed: 0, metadataOnly: 1, truncatedBodies: 0 },
       },
-      body,
+      body:
+        `Skill location: ${location}\n` +
+        "Resolve relative resource paths from the directory containing this SKILL.md.\n" +
+        `${locationNote}\n\n${body}`,
       unknown:
         'Skill "missing" is not available to this agent. Search the available skills instead.',
     },
   });
   expect(reader).toHaveBeenCalledExactlyOnceWith({
-    location: "/skills/demo/SKILL.md",
+    location,
     signal: expect.any(AbortSignal),
   });
 });
@@ -405,7 +412,13 @@ it("records Code Mode skills.read of a workshop skill as run usage and skill.use
       waitTool: h.tools[1]!,
       code: 'return await skills.read("learned");',
     });
-    expect(result).toMatchObject({ status: "completed", value: "# Learned instructions\n" });
+    expect(result).toMatchObject({
+      status: "completed",
+      value:
+        "Skill location: /skills/learned/SKILL.md\n" +
+        "Resolve relative resource paths from the directory containing this SKILL.md.\n\n" +
+        "# Learned instructions\n",
+    });
     expect(consumeRunSkillUsage("run-code-mode")).toEqual([
       {
         name: "learned",
@@ -570,7 +583,9 @@ it.for(["transported", "skills_read", "skills_search", "shadowed", "revoked"] as
                   ? expect.stringContaining("Unknown tool id: skills_read.")
                   : denied === "shadowed"
                     ? expect.stringContaining("Shadowed reader")
-                    : "Private instructions",
+                    : `Skill location: ${filePath}\n` +
+                      "Resolve relative resource paths from the directory containing this SKILL.md.\n\n" +
+                      "Private instructions",
           },
         });
         expect(reads).toBe(denied === undefined || denied === "revoked" ? 1 : 0);
@@ -601,6 +616,9 @@ it.each([undefined, "read", "skills_read"])(
     const guide = createFixtureSkillEntry("guide");
     const hidden = createFixtureSkillEntry("hidden");
     const body = `${"x".repeat(256 * 1024)}complete tail`;
+    const context =
+      "Skill location: /skills/guide/SKILL.md\n" +
+      "Resolve relative resource paths from the directory containing this SKILL.md.\n\n";
     guide.skill.readContent = body;
     hidden.skill.readContent = body;
     const skills = prepareInstalledSkillCatalog({
@@ -641,7 +659,7 @@ it.each([undefined, "read", "skills_read"])(
       value: {
         body: denied
           ? "skills_read is not available in this run."
-          : { length: body.length, tail: "complete tail" },
+          : { length: context.length + body.length, tail: "complete tail" },
         hidden: denied
           ? "skills_read is not available in this run."
           : 'Skill "hidden" exceeds the 262144-byte instruction limit.',
