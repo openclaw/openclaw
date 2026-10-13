@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
+import { assertStateDatabaseAccessAllowed } from "../infra/gateway-state-owner.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync-cache-state.js";
 import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import {
@@ -179,6 +180,7 @@ function createExistingOpenClawStateWriter(
         throw new Error("Existing-state writer cannot change its database path.");
       }
       assertSameFile();
+      assertStateDatabaseAccessAllowed(pathname);
       const existingSchema = isExistingOpenClawStateSchema(pathname);
       if (admitted && existingSchema !== admitted.existingSchema) {
         throw new Error("Existing-state writer schema admission changed.");

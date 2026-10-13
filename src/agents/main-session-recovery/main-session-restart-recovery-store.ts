@@ -517,8 +517,19 @@ export async function recoverStore(params: {
       if (stopped()) {
         return result;
       }
+      // Native operator clients use internal ingress; their admitted source, not
+      // transcript attribution, determines which turn recovery may restore.
+      const operatorSource = entry.restartRecoveryOperatorSource;
+      const hasRetainedOperatorSource =
+        expectedRecoverySourceRunId !== undefined &&
+        operatorSource?.sourceRunId === expectedRecoverySourceRunId &&
+        operatorSource.agentId === target.agentId &&
+        operatorSource.sessionKey === sessionKey &&
+        operatorSource.sessionId === entry.sessionId &&
+        operatorSource.lifecycleRevision === entry.lifecycleRevision;
       if (
         !recoverableHarnessCompletion &&
+        !hasRetainedOperatorSource &&
         (source === "inter_session" ||
           ((source === undefined ||
             source === "internal_system" ||

@@ -323,6 +323,87 @@ export function registerHarnessCompletionRecoveryCases(
     expect(callGateway).toHaveBeenCalledOnce();
   });
 
+  it.each(["native input", "steering", "wrong run", "wrong session", "wrong lifecycle"] as const)(
+    "restores only the exact admitted native operator source (%s)",
+    async (source) => {
+      const { expectRecovery, loadSessionEntry, gatewayParams } = getFixture();
+      const sourceRunId = "native-operator-run";
+      const valid = source === "native input" || source === "steering";
+      const operatorSource: NonNullable<SessionEntry["restartRecoveryOperatorSource"]> = {
+        version: 1,
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        sessionId: source === "wrong session" ? "other-session" : "main-session",
+        lifecycleRevision: source === "wrong lifecycle" ? "other-lifecycle" : "native-lifecycle",
+        sourceRunId: source === "wrong run" ? "other-run" : sourceRunId,
+        snapshot: {
+          profileId: "native-operator",
+          scopes: ["operator.admin"],
+          assignedRole: "owner",
+          githubLogin: null,
+          grant: null,
+          aliasBindingIds: [],
+          authPolicy: {
+            generation: "",
+            grantGeneration: "fixture-grant",
+            role: "operator",
+            authMethod: "token",
+          },
+          controlUiAdmin: false,
+          localOperator: true,
+          sourceIngress: "internal",
+        },
+      };
+      const { storePath, sessionKey } = await writeMainSession(
+        {
+          lifecycleRevision: "native-lifecycle",
+          restartRecoveryDeliveryRunId: sourceRunId,
+          restartRecoveryDeliverySourceRunId: sourceRunId,
+          restartRecoverySourceIngress: "internal",
+          restartRecoveryOperatorSource: operatorSource,
+          restartRecoveryRuns: [{ runId: sourceRunId, lifecycleGeneration: "before-restart" }],
+        },
+        [
+          { role: "user", content: "Finish the requested repair" },
+          ...(source === "steering"
+            ? [
+                {
+                  role: "user",
+                  content: "Check the latest result",
+                  provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+                },
+              ]
+            : []),
+          {
+            role: "assistant",
+            stopReason: "toolUse",
+            content: [{ type: "toolCall", id: "inspect-native", name: "read" }],
+          },
+        ],
+      );
+      await expectRecovery({
+        started: valid ? 1 : 0,
+        settled: 0,
+        failed: 0,
+        skipped: valid ? 0 : 1,
+      });
+      if (valid) {
+        expect(gatewayParams()).toMatchObject({
+          sessionKey,
+          expectedExistingSessionId: "main-session",
+        });
+        expect(
+          loadSessionEntry({ sessionKey, storePath })?.mainRestartRecovery?.tombstone,
+        ).toBeUndefined();
+      } else {
+        expect(callGateway).not.toHaveBeenCalled();
+        expect(
+          loadSessionEntry({ sessionKey, storePath })?.mainRestartRecovery?.tombstone,
+        ).toBeDefined();
+      }
+    },
+  );
+
   it.each(["delegated", "unverified internal", "internal system"] as const)(
     "refuses %s recovery without surviving sender authority",
     async (source) => {

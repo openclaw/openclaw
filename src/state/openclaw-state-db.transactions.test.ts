@@ -12,6 +12,7 @@ import {
   openOpenClawStateDatabase,
   registerOpenClawStateDatabaseLifecycleListener,
   runOpenClawStateWriteTransaction,
+  runWithOpenClawStateBusyTimeout,
 } from "./openclaw-state-db.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -215,3 +216,36 @@ it("lets SQLite exclude a competing cached writer and resumes after its commit",
     other.close();
   }
 });
+
+it.each(["transaction", "busy timeout"] as const)(
+  "refuses cached %s admission before native SQL while another owner holds state",
+  (operation) => {
+    const options = {
+      path: path.join(tempDirs.make("state-cached-owner-admission-"), "state.sqlite"),
+    };
+    const database = openOpenClawStateDatabase(options);
+    const marker = publishForeignSchemaOwner(database.path);
+    const files = [database.path, `${database.path}-wal`, `${database.path}-shm`];
+    const before = files.map((pathname) => ({ pathname, bytes: fs.readFileSync(pathname) }));
+    const exec = vi.spyOn(database.db, "exec");
+    const prepare = vi.spyOn(database.db, "prepare");
+    const callback = vi.fn();
+    try {
+      expect(() =>
+        operation === "transaction"
+          ? runOpenClawStateWriteTransaction(callback, options, { busyTimeoutMs: 0 })
+          : runWithOpenClawStateBusyTimeout(callback, options, 0),
+      ).toThrow(/offline maintenance/iu);
+      expect(callback).not.toHaveBeenCalled();
+      expect(exec).not.toHaveBeenCalled();
+      expect(prepare).not.toHaveBeenCalled();
+      for (const { pathname, bytes } of before) {
+        expect(fs.readFileSync(pathname).equals(bytes)).toBe(true);
+      }
+    } finally {
+      exec.mockRestore();
+      prepare.mockRestore();
+      fs.rmSync(marker, { force: true });
+    }
+  },
+);

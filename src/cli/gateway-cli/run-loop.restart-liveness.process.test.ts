@@ -22,6 +22,7 @@ const fileLogTransportUrl = resolveRuntimeWorkerUrl(
 const childScript = `
   import fs from "node:fs";
   import http from "node:http";
+  import { MessageChannel } from "node:worker_threads";
   import { runGatewayLoop } from ${JSON.stringify(runLoopUrl)};
   import { setGatewayRestartPolicy } from ${JSON.stringify(restartUrl)};
   import { fileLogTransport } from ${JSON.stringify(fileLogTransportUrl)};
@@ -59,6 +60,11 @@ const childScript = `
               return new Promise(() => {});
             }
             if (closeFailure) {
+              if (closeFailure === "retained") {
+                const resource = new MessageChannel();
+                resource.port1.ref();
+                process.stdout.write("resource:retained\\n");
+              }
               const error = new TypeError("fixture close owner failed");
               error.stack = "TypeError: fixture close owner failed\\n    at closeOwner (fixture.js:12:3)";
               return new Promise((resolve, reject) => server.close(closeError => closeError ? reject(closeError) : resolve()))
@@ -103,9 +109,9 @@ function startFixture(initialFailure = false, closeFailure = "", executable = pr
   const directory = tempDirs.make("openclaw-restart-liveness-");
   const home = path.join(directory, "home");
   fs.mkdirSync(home);
-  const pendingClose = closeFailure === "pending";
+  const nativeDeadline = closeFailure === "pending" || closeFailure === "retained";
   const bin = path.join(directory, "bin");
-  if (pendingClose) {
+  if (nativeDeadline) {
     fs.mkdirSync(bin);
     // This fixture owns a short native deadline, independent of the service policy.
     fs.writeFileSync(
@@ -138,13 +144,15 @@ function startFixture(initialFailure = false, closeFailure = "", executable = pr
     ],
     {
       env: {
-        PATH: pendingClose ? `${bin}${path.delimiter}${process.env.PATH ?? ""}` : process.env.PATH,
+        PATH: nativeDeadline
+          ? `${bin}${path.delimiter}${process.env.PATH ?? ""}`
+          : process.env.PATH,
         HOME: home,
         TMPDIR: directory,
         OPENCLAW_STATE_DIR: stateDir,
         OPENCLAW_CONFIG_PATH: path.join(directory, "openclaw.json"),
         OPENCLAW_NO_RESPAWN: "1",
-        ...(pendingClose ? { OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway.test" } : {}),
+        ...(nativeDeadline ? { OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway.test" } : {}),
         NODE_DISABLE_COMPILE_CACHE: "1",
         TSX_DISABLE_CACHE: "1",
         ESBUILD_WORKER_THREADS: "0",
@@ -155,7 +163,7 @@ function startFixture(initialFailure = false, closeFailure = "", executable = pr
   const closed = once(child, "close");
   children.set(child, closed);
   void closed.catch(() => {});
-  if (pendingClose) {
+  if (nativeDeadline) {
     // Native queries may run through the spawn broker, so report the fixture's PID.
     fs.writeFileSync(path.join(bin, "launchctl.pid"), String(child.pid));
   }
@@ -285,6 +293,25 @@ describe("runGatewayLoop failed-restart process lifetime", () => {
       expect(fixture.output()).not.toContain("start:2");
     },
     60_000,
+  );
+
+  it.skipIf(process.platform !== "darwin")(
+    "keeps the native deadline after a failed close retains referenced resources",
+    async () => {
+      const fixture = startFixture(false, "retained");
+      await fixture.waitForOutput("ready:1");
+      expect(fixture.child.kill("SIGUSR2")).toBe(true);
+      await fixture.waitForOutput("http-closed:1");
+      expect(
+        await withTestTimeout(fixture.closed, 15_000, "failed close retired its native deadline"),
+        fixture.output(),
+      ).toEqual([null, "SIGKILL"]);
+      expect(fixture.output()).toContain("resource:retained");
+      expect(fixture.output()).toContain("loop-returned:1");
+      expect(fixture.output()).not.toContain("natural-exit");
+      expect(fixture.output()).not.toContain("start:2");
+    },
+    30_000,
   );
 
   posixIt(

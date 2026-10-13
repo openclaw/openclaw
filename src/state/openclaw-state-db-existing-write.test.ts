@@ -4,6 +4,7 @@ import { DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveGatewayStateOwnerPath } from "../infra/gateway-state-owner.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import * as maintenance from "../infra/state-database-maintenance.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "./openclaw-state-db-cache.js";
@@ -71,6 +72,46 @@ function readSchemaMarkers(database: DatabaseSync) {
 }
 
 describe("retained existing-state writer", () => {
+  it("refuses retained writer admission before timeout SQL or BEGIN while another owner holds state", () => {
+    const options = fixture();
+    const writer = openExistingOpenClawStateWriter(options, contract);
+    const database = writer.run(({ db }) => db, options);
+    const marker = resolveGatewayStateOwnerPath(options.path);
+    fs.mkdirSync(path.dirname(marker), { recursive: true });
+    fs.writeFileSync(
+      marker,
+      JSON.stringify({
+        pid: process.ppid,
+        ownerId: "foreign-retained-writer-fixture",
+        configPath: path.join(path.dirname(options.path), "openclaw.json"),
+        createdAt: new Date().toISOString(),
+        role: "sqlite-maintenance",
+        stateOwnerKind: "schema",
+      }),
+    );
+    const files = [options.path, `${options.path}-wal`, `${options.path}-shm`];
+    const before = files.map((pathname) => ({ pathname, bytes: fs.readFileSync(pathname) }));
+    const exec = vi.spyOn(database, "exec");
+    const prepare = vi.spyOn(database, "prepare");
+    const callback = vi.fn();
+    try {
+      expect(() => writer.run(callback, { ...options, busyTimeoutMs: 0 })).toThrow(
+        /offline maintenance/iu,
+      );
+      expect(callback).not.toHaveBeenCalled();
+      expect(exec).not.toHaveBeenCalled();
+      expect(prepare).not.toHaveBeenCalled();
+      for (const { pathname, bytes } of before) {
+        expect(fs.readFileSync(pathname).equals(bytes)).toBe(true);
+      }
+    } finally {
+      exec.mockRestore();
+      prepare.mockRestore();
+      fs.rmSync(marker, { force: true });
+      writer.close();
+    }
+  });
+
   it("refuses invalid and restricted repair admission before acquiring schema maintenance", () => {
     const options = fixture();
     const repairContract = { ...contract, recoverTaskDeliveryOrphans: true as const };
