@@ -37,10 +37,10 @@ import {
 import { generateUUID } from "../lib/uuid.ts";
 import {
   BROWSER_WEBSOCKET_SECURITY_ERROR_CODE,
-  createBrowserGatewaySocket,
   formatBrowserWebSocketConstructorError,
   probeGatewayReachability,
 } from "./gateway-browser-socket.ts";
+import * as gatewaySocket from "./gateway-browser-socket.ts";
 import { GatewayChatEvents } from "./gateway-chat-events.ts";
 import {
   enrichProtocolMismatchDetails,
@@ -53,10 +53,11 @@ import {
   type ConnectPlan,
   type GatewayBrowserConnectOptions,
 } from "./gateway-connect-plan.ts";
+import { GatewayPayloadLimitError, normalizeGatewayPayloadError } from "./gateway-payload-error.ts";
 export type { EventFrame as GatewayEventFrame } from "@openclaw/gateway-client/browser";
-export { GatewayPayloadLimitError } from "./gateway-browser-socket.ts";
 
 export { resolveGatewayErrorDetailCode, CONTROL_UI_OPERATOR_ROLE };
+export { GatewayPayloadLimitError };
 
 export class GatewayRequestError extends GatewayProtocolRequestError {
   constructor(error: ErrorShape) {
@@ -137,7 +138,6 @@ async function deriveLegacyV4RecoveryScope(material: string | undefined): Promis
 export class GatewayBrowserClient {
   private readonly client: GatewayProtocolClient<ConnectPlan>;
   private readonly chatEvents = new GatewayChatEvents((reason) => this.forceReconnect(reason));
-  private maxPayloadBytes: number | undefined;
   private scopeUpgradeRuntime: Promise<GatewayScopeUpgrade> | null = null;
   private connectionHello: GatewayHelloOk | null = null;
   inboundActivitySeq = 0;
@@ -175,10 +175,21 @@ export class GatewayBrowserClient {
         this.reachabilityProbe?.abort();
         this.reachabilityProbe = null;
         this.chatEvents.clear();
-        this.maxPayloadBytes = undefined;
-        return createBrowserGatewaySocket(this.opts.url, handlers, () => this.maxPayloadBytes);
+        return gatewaySocket.createBrowserGatewaySocket(this.opts.url, handlers);
       },
       createRequestId: generateUUID,
+      validateRequestFrame: (frame, method, isPreAuth) => {
+        try {
+          gatewaySocket.validateGatewayRequestFrame(
+            frame,
+            method,
+            this.client.maxPayloadBytes,
+            isPreAuth,
+          );
+        } catch (error) {
+          throw normalizeGatewayPayloadError(error);
+        }
+      },
       createRequestError: (error) =>
         new GatewayRequestError({
           code: error.code ?? "UNAVAILABLE",
@@ -398,7 +409,6 @@ export class GatewayBrowserClient {
     // Replace retained identity before consumers can act on a different account.
     this.opts.offlineRecoveryScope = hello.auth?.recoveryScope;
     this.offlineStorageRetired = false;
-    this.maxPayloadBytes = hello.policy?.maxPayload;
     this.initializeInboundActivity(hello);
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;

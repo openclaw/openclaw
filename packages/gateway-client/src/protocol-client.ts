@@ -6,6 +6,7 @@ import {
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveSleepDelayMs, RetrySupervisor, sleepWithAbort } from "@openclaw/retry";
 import { GatewayEventListeners } from "./event-listeners.js";
+import { resolveGatewayMaxPayloadBytes, validateGatewayRequestFrame } from "./payload-limits.js";
 import { GatewayPendingRequests, type GatewayProtocolRequestTiming } from "./pending-request.js";
 import type {
   CloseSnapshot,
@@ -60,6 +61,7 @@ export class GatewayProtocolClient<TPlan> {
   private reconnectSignal: AbortSignal | null = null;
   private socketOpened = false;
   private helloReceived = false;
+  maxPayloadBytes: number | undefined;
   private connectFailure: GatewayProtocolCloseContext["connectFailure"];
   private connectTiming: ConnectTimingState | null = null;
   private stoppedSocket?: { socket: GatewayProtocolSocket; context: CloseSnapshot };
@@ -139,7 +141,21 @@ export class GatewayProtocolClient<TPlan> {
     if (typeof method !== "string" || method.length === 0) {
       return Promise.reject(new Error("invalid request frame: method must be a non-empty string"));
     }
-    return this.requests.request<T>(socket, method, params, options);
+    return this.requests.request<T>(
+      {
+        send: (frame) => {
+          if (this.opts.validateRequestFrame) {
+            this.opts.validateRequestFrame(frame, method, !this.helloReceived);
+          } else {
+            validateGatewayRequestFrame(frame, method, this.maxPayloadBytes, !this.helloReceived);
+          }
+          socket.send(frame);
+        },
+      },
+      method,
+      params,
+      options,
+    );
   }
 
   addEventListener(listener: (event: EventFrame) => void): () => void {
@@ -358,6 +374,7 @@ export class GatewayProtocolClient<TPlan> {
           return;
         }
         this.helloReceived = true;
+        this.maxPayloadBytes = resolveGatewayMaxPayloadBytes(hello.policy);
         this.requests.setSuspensionPhase(hello.snapshot?.suspension?.phase);
         this.clearHandshakeTimer();
         this.connectFailure = undefined;
