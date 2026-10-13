@@ -1,15 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApiKeyCredential } from "./auth-profiles/credential-fixtures.test-support.js";
-import type { AuthProfileCredential } from "./auth-profiles/types.js";
+import type { AuthProfileCredential, ProfileUsageStats } from "./auth-profiles/types.js";
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   order: [] as string[],
   profiles: {} as Record<string, AuthProfileCredential>,
+  usageStats: {} as Record<string, ProfileUsageStats>,
 }));
 
 vi.mock("./auth-profiles/store-runtime.js", () => ({
-  loadAuthProfileStoreForRuntime: () => ({ version: 1, profiles: mocks.profiles }),
+  loadAuthProfileStoreForRuntime: () => ({
+    version: 1,
+    profiles: mocks.profiles,
+    usageStats: mocks.usageStats,
+  }),
 }));
 
 vi.mock("./auth-profiles/order.js", () => ({
@@ -43,6 +48,9 @@ describe("resolveCliExecutionAuthProfileId", () => {
     mocks.order.length = 0;
     for (const profileId of Object.keys(mocks.profiles)) {
       delete mocks.profiles[profileId];
+    }
+    for (const profileId of Object.keys(mocks.usageStats)) {
+      delete mocks.usageStats[profileId];
     }
   });
 
@@ -314,6 +322,72 @@ describe("resolveCliExecutionAuthProfileId", () => {
       expires: Date.now() + 60_000,
     };
     expect(resolve()).toBe("google-gemini-cli:work");
+  });
+
+  describe("session binding affinity", () => {
+    const boundProfileId = "claude-cli:bound";
+    const healthyProfileId = "claude-cli:healthy";
+
+    const seedProfiles = () => {
+      mocks.profiles[boundProfileId] = createApiKeyCredential("claude-cli", "test-bound-key");
+      mocks.profiles[healthyProfileId] = createApiKeyCredential("claude-cli", "test-healthy-key");
+      mocks.order.push(healthyProfileId);
+    };
+
+    const resolveWithBinding = () =>
+      resolveCliExecutionAuthProfileId({
+        cliExecutionProvider: "claude-cli",
+        authProfileProvider: "anthropic",
+        config: {},
+        agentDir: "/tmp/unused-agent",
+        selected: { authProfileId: healthyProfileId, authProfileIdSource: "auto" },
+        sessionBinding: { sessionId: "session-1", authProfileId: boundProfileId },
+      });
+
+    it("keeps an automatic run on a healthy bound profile", () => {
+      seedProfiles();
+
+      expect(resolveWithBinding()).toBe(boundProfileId);
+    });
+
+    it("fails over from a bound profile disabled for billing", () => {
+      seedProfiles();
+      mocks.usageStats[boundProfileId] = {
+        disabledUntil: Date.now() + 60 * 60_000,
+        disabledReason: "billing",
+      };
+
+      expect(resolveWithBinding()).toBe(healthyProfileId);
+    });
+
+    it("fails over from a bound profile in cooldown", () => {
+      seedProfiles();
+      mocks.usageStats[boundProfileId] = {
+        cooldownUntil: Date.now() + 60_000,
+        cooldownReason: "rate_limit",
+      };
+
+      expect(resolveWithBinding()).toBe(healthyProfileId);
+    });
+
+    it("keeps a user pin on a disabled profile instead of switching accounts", () => {
+      seedProfiles();
+      mocks.usageStats[boundProfileId] = {
+        disabledUntil: Date.now() + 60 * 60_000,
+        disabledReason: "billing",
+      };
+
+      expect(
+        resolveCliExecutionAuthProfileId({
+          cliExecutionProvider: "claude-cli",
+          authProfileProvider: "anthropic",
+          config: {},
+          agentDir: "/tmp/unused-agent",
+          selected: { authProfileId: boundProfileId, authProfileIdSource: "user" },
+          sessionBinding: { sessionId: "session-1", authProfileId: boundProfileId },
+        }),
+      ).toBe(boundProfileId);
+    });
   });
 
   it("uses the stored owner for a Gemini-native model profile", () => {
