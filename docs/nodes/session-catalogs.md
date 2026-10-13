@@ -9,8 +9,11 @@ title: "Node session catalogs"
 sidebarTitle: "Session catalogs"
 ---
 
-Catalog listing waits up to one second per provider, concurrently. Providers that
-finish within that budget return normally. A slow provider returns
+Cold catalog listing waits up to one second per provider, concurrently. Providers that
+finish within that budget return normally. When a page is already available for
+the same caller and query, listing returns it promptly while discovery refreshes
+in the background; an already-settled refresh returns its fresh page instead.
+A slow provider returns
 `catalog.error.code: "catalog_pending"`; when available, its latest available page
 for the same caller and query is included with hosts marked `pending: true` and
 a stale-results message. A failed catalog enumeration can likewise return that page with
