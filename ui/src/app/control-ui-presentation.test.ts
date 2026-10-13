@@ -58,7 +58,7 @@ describe("Control UI accent presentation", () => {
       for (const [attribute, value] of [
         ["data-theme", "rose"],
         ["data-theme-mode", "light"],
-      ]) {
+      ] as const) {
         reads.mockClear();
         root.setAttribute(attribute, value);
         syncControlUiSystemChrome();
