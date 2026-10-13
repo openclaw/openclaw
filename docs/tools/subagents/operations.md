@@ -98,6 +98,12 @@ transfers do not retry indefinitely. Registry hydration and startup transfer eac
 run once per attempt. A failed hydration logs its error and can be retried by the
 next registry access; an incomplete startup transfer remains recorded for the
 next activation or restart. Recovery does not keep a separate retry timer.
+Requester recovery selects each retained turn's children without repeatedly
+scanning unrelated run history. Completed children remain in saved batches when
+their delivery receipts are needed to prevent replaying an already delivered result.
+Durably completed cleanup does not replay interrupted child-session effects on restart.
+The saved interruption still rejects late child results, and pending requester wakes
+continue through their existing settlement owner.
 
 Recovery handles both sessions marked `abortedLastRun: true` and hard kills that
 prevented the shutdown marker from being written. For a hard kill, the child
@@ -118,6 +124,9 @@ Startup session maintenance reports retained run/task owners in one informationa
 summary. Those rows remain with registry recovery; the session-only orphan repair
 does not compete for their ownership. Ownership changes during a repair and failed
 ownership checks still produce warnings.
+
+Main-session restart recovery excludes sub-agent sessions before resolving their
+stores; retained child recovery stays with the sub-agent registry owner.
 
 The parent can inspect a retained child transcript and use `sessions_send` to
 continue that session, or spawn a replacement after confirming the old execution
@@ -264,3 +273,9 @@ timeout. Those events do not automatically cancel them.
 - Sub-agent context only injects `AGENTS.md` (no `SOUL.md`, `IDENTITY.md`, `USER.md`, `MEMORY.md`, or `BOOTSTRAP.md`). Its `## Tools` section carries environment-specific notes. Codex-native subagents follow the same boundary through native `AGENTS.md` discovery, while parent-only persona, identity, and user files are injected as turn-scoped collaboration instructions so children do not clone them.
 - Recursive spawning is enabled through depth `5` by default. Set `maxSpawnDepth` from `1` through `5` to lower the boundary.
 - `maxChildrenPerAgent` caps active children per session (default `5`, range `1-20`).
+
+Subagent lifecycle warnings retain the error name, message, code, and full stack
+in file logs; console output includes the first six stack lines. Direct announce
+and requester-settle retry warnings
+also include the requester and delivery idempotency key so retries can be traced
+without logging message content.

@@ -64,6 +64,8 @@ arguments remain unquoted. Non-Vitest failures show their failed step names and
 test command with the local runner's default worker behavior. `--json` emits
 `{ run, failures: [{ job, class, files: [{ file, tests }], failedSteps, url, reason }], command }`.
 
+`--run` sets `OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE=1` so ordinary test failures do not hide later selected files; use the same opt-in with manual `pnpm test` commands, while infrastructure failures still stop scheduling.
+
 After PR CI fails, run `pnpm test:ci-failed <pr>`, fix new failures and investigate
 unknown ones, then run `pnpm test:ci-failed <pr> --run` until those pass locally
 and push once. PR CI supplies broad proof for the repaired head. Never run the

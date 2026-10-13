@@ -216,7 +216,7 @@ describe("codex websocket idle watchdog through the embedded runner chain", () =
     ControlledWebSocket.onSend = (socket) => {
       queueMicrotask(() => socket.deliver(completedFrame("resp_fork")));
     };
-    const identity = { agentId: "main", sessionId: "native-fork-revocation" };
+    const identity = { agentId: "main", sessionId: "native-fork-revocation", runId: "parent" };
     const parent = wrapStreamFnWithSessionFork(
       (requestModel, requestContext, options) =>
         llmRuntime.streamSimple(requestModel, requestContext, options),
@@ -278,7 +278,7 @@ describe("codex websocket idle watchdog through the embedded runner chain", () =
         }
       });
     };
-    const identity = { agentId: "main", sessionId: "native-fork-independent" };
+    const identity = { agentId: "main", sessionId: "native-fork-independent", runId: "parent" };
     const parent = wrapStreamFnWithSessionFork(
       (requestModel, requestContext, options) =>
         llmRuntime.streamSimple(requestModel, requestContext, options),
@@ -368,7 +368,7 @@ describe("codex websocket idle watchdog through the embedded runner chain", () =
         }
       });
     };
-    const identity = { agentId: "main", sessionId: "native-fork-fallback" };
+    const identity = { agentId: "main", sessionId: "native-fork-fallback", runId: "parent" };
     const parent = wrapStreamFnWithSessionFork(
       (requestModel, requestContext, options) =>
         runtime.streamSimple(requestModel, requestContext, options),

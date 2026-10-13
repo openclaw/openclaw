@@ -53,7 +53,7 @@ import {
   subscribeBootRecordPersistence,
   subscribeWarmBootConnection,
 } from "./bootstrap-warm-boot.ts";
-import { startBrowserAuthRecovery } from "./browser-auth-recovery.ts";
+import { startBrowserAuthRecovery } from "./browser-auth-recovery.tsx";
 import { createBrowserHistory, resolveControlUiPaths } from "./browser.ts";
 import { createChatAttachmentHandoff } from "./chat-attachment-handoff.ts";
 import { createChatSubmissions } from "./chat-submissions.ts";

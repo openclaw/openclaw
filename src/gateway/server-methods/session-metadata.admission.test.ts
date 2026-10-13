@@ -12,6 +12,7 @@ import { addSessionSuggestionInWorker as addSessionSuggestion } from "../../conf
 import {
   addSessionMember,
   listSessionMembers,
+  readSessionMembersInWorker,
 } from "../../config/sessions/session-sharing-store.js";
 import { listSessionSuggestions } from "../../config/sessions/session-suggestion-store.read.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -119,7 +120,16 @@ describe("session metadata writer admission", () => {
           sessionKey: scope.sessionKey,
           agentId: scope.agentId,
         })!;
-        expect(resolveSessionSharingRole({ cfg: {}, client: viewer, target })).toBe("viewer");
+        expect(
+          resolveSessionSharingRole({
+            cfg: {},
+            client: viewer,
+            target,
+            isMember: (await readSessionMembersInWorker(scope)).members.some(
+              (member) => member.identityId === other.id,
+            ),
+          }),
+        ).toBe("viewer");
         const context = sessionSharingTestContext(vi.fn());
         await initializeSessionReadContext(context);
         const request = invoke(
@@ -138,9 +148,16 @@ describe("session metadata writer admission", () => {
           agentId: scope.agentId,
         })!;
         expect(current.entry.createdActor?.id).toBe(owner.id);
-        expect(resolveSessionSharingRole({ cfg: {}, client: viewer, target: current })).toBe(
-          "viewer",
-        );
+        expect(
+          resolveSessionSharingRole({
+            cfg: {},
+            client: viewer,
+            target: current,
+            isMember: (await readSessionMembersInWorker(scope)).members.some(
+              (member) => member.identityId === other.id,
+            ),
+          }),
+        ).toBe("viewer");
       });
     },
   );

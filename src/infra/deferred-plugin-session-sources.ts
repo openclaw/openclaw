@@ -2,7 +2,10 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { formatCliCommand } from "../cli/command-format.js";
-import { isPrimarySessionTranscriptFileName } from "../config/sessions/artifacts.js";
+import {
+  isPrimarySessionTranscriptFileName,
+  isTrajectorySessionArtifactName,
+} from "../config/sessions/artifacts.js";
 import {
   isLegacySessionRecordOwnedByTarget,
   readLegacySessionStoreEntries,
@@ -328,9 +331,8 @@ export function readDeferredPluginSessionImport(
     return undefined;
   }
   let recorded = { ...binding.recorded, databaseIdentity: binding.currentDatabaseIdentity };
-  // Canonical mutations have their own provenance checks; changed plugin inputs cannot undo
-  // core import completion or authorize replay of file-era metadata.
-  if (params.purpose === "canonical") {
+  // Readiness and canonical mutations use the database binding; Doctor verifies source bytes.
+  if (params.purpose) {
     return recorded;
   }
   if (params.allowMissingIndex && !statMigrationPath(params.target.storePath)) {
@@ -353,16 +355,7 @@ export function readDeferredPluginSessionImport(
       ),
     };
   }
-  try {
-    assertVerifiedSessionSources(params, recorded, params.verification, params.onSourceConflict);
-  } catch (error) {
-    if (params.purpose !== "readiness") {
-      throw error;
-    }
-    recordStartupMigrationWarnings([
-      `Retained plugin session source awaits Doctor repair; canonical SQLite sessions remain available: ${String(error)}`,
-    ]);
-  }
+  assertVerifiedSessionSources(params, recorded, params.verification, params.onSourceConflict);
   return recorded;
 }
 
@@ -476,7 +469,12 @@ export async function rebuildDeferredPluginSessionSourceIndex(
     }
   };
   const sources: DeferredPluginSessionImport["sources"] = [];
-  for (const source of recorded.sources.filter((item) => !missingIndex || item !== index)) {
+  for (const source of recorded.sources.filter(
+    (item) =>
+      (!missingIndex || item !== index) &&
+      (!isTrajectorySessionArtifactName(path.basename(item.path)) ||
+        existingSessionSourcePaths(item.path, target, params.env, archives).length > 0),
+  )) {
     sources.push(
       await (async () => {
         let failure: unknown;

@@ -20,6 +20,20 @@ is instructed to inspect interrupted actions before deciding whether to repeat
 them. A retry status shows the wait and attempt count. Cancellation remains
 available. No additional configuration is required.
 
+An output-token limit is separate from a transient provider outage. The embedded
+runtime permits at most one continuation for a truncated Responses tool call or
+an empty length stop that still needs an answer. It records an output-limit
+notice and continues the saved transcript, preserving completed actions. A
+second output limit surfaces the unfinished result. Raw model runs and
+`promptMode: "none"` cannot carry that history, so they surface the output limit
+without replaying the original request. Visible partial answers remain visible.
+
+For Responses, `max_output_tokens` includes reasoning and visible output. The
+request uses the configured `maxTokens` override or the model's output cap;
+service tier does not independently change that cap. A long generation with
+ongoing progress can exceed the stream's idle timeout. The separate run deadline
+still applies; see [Agent loop timeouts](/concepts/agent-loop#timeouts).
+
 ChatGPT Responses WebSocket connection expiry and a normal close before the
 terminal event follow this recovery policy even after streaming starts. The failed socket is retired; recovery continues the
 saved transcript instead of replaying the request inside the transport.

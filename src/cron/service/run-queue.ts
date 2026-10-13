@@ -13,7 +13,12 @@ import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { captureCronMutationCommit } from "../mutation-completion.js";
 import { noteCronJobsStoreCommit } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
-import type { CronQueuedRun, CronSkippedRequest } from "../store/run-queue.types.js";
+import type {
+  CronQueuedRun,
+  CronRunQueueOperations,
+  CronRunRequestContext,
+  CronSkippedRequest,
+} from "../store/run-queue.types.js";
 import { ownsStreamSource } from "../stream-schedule.js";
 import type { CronJob } from "../types.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
@@ -281,6 +286,22 @@ async function cancelCronRunRequests(
   }
 }
 
+export function getCronRunQueueRequests(state: CronServiceState): CronRunRequestContext[] {
+  return [...launchState(state).contexts.values()]
+    .filter((pending) => !pending.started)
+    .map(({ receipt, options }) => ({
+      receiptId: receipt.receiptId,
+      mode: options.onExit
+        ? "on-exit"
+        : options.source === "manual" || options.source === "event"
+          ? options.mode === "force"
+            ? "force"
+            : "if-enabled"
+          : "scheduled",
+      onExitSchedule: options.onExit?.schedule,
+    }));
+}
+
 /** Consume committed activations. No host semaphore or reservation influences selection. */
 export async function drainCronRunQueue(state: CronServiceState): Promise<void> {
   if (
@@ -305,93 +326,92 @@ export async function drainCronRunQueue(state: CronServiceState): Promise<void> 
           defaultAgentId: resolveCurrentDefaultAgentId(state),
           maxConcurrentRuns: DEFAULT_CRON_MAX_CONCURRENT_RUNS,
           schedulingPaused: state.schedulingPaused,
-          requests: [...launchState(state).contexts.values()].map(({ receipt, options }) => ({
-            receiptId: receipt.receiptId,
-            mode: options.onExit
-              ? ("on-exit" as const)
-              : options.source === "manual" || options.source === "event"
-                ? options.mode === "force"
-                  ? ("force" as const)
-                  : ("if-enabled" as const)
-                : ("scheduled" as const),
-            onExitSchedule: options.onExit?.schedule,
-          })),
+          requests: getCronRunQueueRequests(state),
         },
       }),
     );
-    if (result.launches.length || result.skipped.length) {
-      noteCronJobsStoreCommit(cronStoreKey(state.deps.storePath));
-    }
-    for (const skipped of result.skipped) {
-      await publishSkipped(state, skipped);
-    }
-    for (const entry of result.launches) {
-      applyCronRuntimeRowsToState(state, [entry.job]);
-      let pending = launchState(state).contexts.get(entry.runReceipt.receiptId);
-      if (!pending) {
-        pending = {
-          receipt: entry.runReceipt,
-          context,
-          options: {},
-          generation: state.lifecycleGeneration,
-          batch: { notified: false },
-          completion: createDeferredCore<CronRunResult>(),
-          activation: createDeferredCore(),
-        };
-        // Recovered requests have no caller waiting on their completion.
-        void pending.completion.promise.catch(() => {});
-        launchState(state).contexts.set(entry.runReceipt.receiptId, pending);
-        registerCronRunQueue(state, () => drainCronRunQueue(state));
-      }
-      pending.receipt = entry.runReceipt;
-      const launch = pending;
-      // The launch owns its lifetime beyond the request acknowledgement and store lock.
-      const running = runWithGatewayDetachedWorkContinuation(
-        () =>
-          Promise.resolve().then(() =>
-            runOutsideOperatorToolGatewayAuthority(() => {
-              const run = () => launchCronRun(state, entry, launch);
-              return state.deps.runSchedulerOwned ? state.deps.runSchedulerOwned(run) : run();
-            }),
-          ),
-        "cron:run",
-      )
-        .catch(async (error: unknown) => {
-          state.deps.log.error(
-            { jobId: entry.job.id, err: String(error) },
-            "cron: queued launch failed",
-          );
-          launch.completion.reject(error);
-          try {
-            if (!launch.started) {
-              await cancelCronRunRequests(
-                state,
-                [entry.runReceipt.receiptId],
-                normalizeCronRunErrorText(error),
-              );
-            }
-          } catch (cleanupError) {
-            state.deps.log.warn(
-              { err: String(cleanupError) },
-              "cron: failed launch left for recovery",
-            );
-          } finally {
-            launch.activation.resolve();
-            launch.completion.reject(error);
-            launch.removeCancellation?.();
-            launchState(state).contexts.delete(entry.runReceipt.receiptId);
-          }
-        })
-        .finally(() => {
-          launchState(state).running.delete(running);
-          pumpCronRunQueues(state);
-        });
-      launchState(state).running.add(running);
-    }
+    await launchCronRunQueueResult(state, result, context);
   }).finally(() => {
     launchState(state).drain = undefined;
   });
   await launchState(state).drain;
+}
+
+/** Publish and execute activations already committed by the queue owner. */
+export async function launchCronRunQueueResult(
+  state: CronServiceState,
+  result: CronRunQueueOperations["cron.drainQueue"]["output"],
+  context = captureOpenClawStateWorkerContext(),
+): Promise<void> {
+  if (result.launches.length || result.skipped.length) {
+    noteCronJobsStoreCommit(cronStoreKey(state.deps.storePath));
+  }
+  for (const skipped of result.skipped) {
+    await publishSkipped(state, skipped);
+  }
+  for (const entry of result.launches) {
+    applyCronRuntimeRowsToState(state, [entry.job]);
+    let pending = launchState(state).contexts.get(entry.runReceipt.receiptId);
+    if (!pending) {
+      pending = {
+        receipt: entry.runReceipt,
+        context,
+        options: {},
+        generation: state.lifecycleGeneration,
+        batch: { notified: false },
+        completion: createDeferredCore<CronRunResult>(),
+        activation: createDeferredCore(),
+      };
+      // Recovered requests have no caller waiting on their completion.
+      void pending.completion.promise.catch(() => {});
+      launchState(state).contexts.set(entry.runReceipt.receiptId, pending);
+      registerCronRunQueue(state, () => drainCronRunQueue(state));
+    }
+    pending.receipt = entry.runReceipt;
+    const launch = pending;
+    // The launch owns its lifetime beyond the request acknowledgement and store lock.
+    const running = runWithGatewayDetachedWorkContinuation(
+      () =>
+        Promise.resolve().then(() =>
+          runOutsideOperatorToolGatewayAuthority(() => {
+            const run = () => launchCronRun(state, entry, launch);
+            return state.deps.runSchedulerOwned ? state.deps.runSchedulerOwned(run) : run();
+          }),
+        ),
+      "cron:run",
+    )
+      .catch(async (error: unknown) => {
+        state.deps.log.error(
+          { jobId: entry.job.id, err: String(error) },
+          "cron: queued launch failed",
+        );
+        launch.completion.reject(error);
+        try {
+          if (!launch.started) {
+            await cancelCronRunRequests(
+              state,
+              [entry.runReceipt.receiptId],
+              normalizeCronRunErrorText(error),
+            );
+          }
+        } catch (cleanupError) {
+          state.deps.log.warn(
+            { err: String(cleanupError) },
+            "cron: failed launch left for recovery",
+          );
+        } finally {
+          launch.activation.resolve();
+          launch.completion.reject(error);
+          launch.removeCancellation?.();
+          launchState(state).contexts.delete(entry.runReceipt.receiptId);
+        }
+      })
+      .finally(() => {
+        launchState(state).running.delete(running);
+        pumpCronRunQueues(state);
+      });
+    launchState(state).running.add(running);
+  }
 }
 
 async function launchCronRun(

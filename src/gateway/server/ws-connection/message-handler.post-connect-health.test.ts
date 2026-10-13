@@ -7,6 +7,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resetDiagnosticEventsForTest } from "../../../infra/diagnostic-events.js";
 import { tryBeginGatewaySuspendAdmission } from "../../../process/gateway-work-admission.js";
+import { prepareUserProfileCatalog } from "../../../state/user-profile-list.js";
 import {
   linkEmail,
   setAvatar,
@@ -85,6 +86,7 @@ const {
   prepareGatewayNodeConnectMock,
   prewarmGatewaySessionHistoryMock,
   resolveConnectAuthStateMock,
+  resolveHostAccountNameMock,
   upsertPresenceMock,
 } = vi.hoisted(() => ({
   buildGatewaySnapshotMock: vi.fn(() => ({
@@ -116,6 +118,7 @@ const {
   prepareGatewayNodeConnectMock: vi.fn(),
   prewarmGatewaySessionHistoryMock: vi.fn(async () => {}),
   resolveConnectAuthStateMock: vi.fn(),
+  resolveHostAccountNameMock: vi.fn(async () => "Gateway Person"),
   upsertPresenceMock: vi.fn(),
 }));
 
@@ -139,8 +142,9 @@ vi.mock("../../../state/user-profile-writes.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../../infra/host-account-name.js", () => ({
-  resolveHostAccountName: vi.fn(async () => "Gateway Person"),
+vi.mock("../../../infra/host-account-name.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../infra/host-account-name.js")>()),
+  resolveHostAccountName: resolveHostAccountNameMock,
 }));
 
 vi.mock("../../github-user-identity.js", () => ({
@@ -253,42 +257,49 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
   it("keeps one editable owner profile across shared-secret and device-token reconnects", async () => {
     await withGatewayTestState({ label: "gateway-owner-reconnect" }, async () => {
       let profileId: string | undefined;
-      for (const authMethod of ["token", "password", "device-token", "none"] as const) {
-        resolveConnectAuthStateMock.mockResolvedValueOnce({
-          authResult: { ok: true, method: authMethod },
-          authOk: true,
-          authMethod,
-          sharedAuthOk: true,
-        });
-        const harness = attachGatewayHarness({
-          connId: `owner-${authMethod}`,
-          connectNonce: `nonce-${authMethod}`,
-        });
-        harness.sendConnect(`connect-${authMethod}`, {
-          ...TEST_CONNECT_PARAMS,
-          scopes: ["operator.read"],
-          caps: [],
-        });
-        await harness.whenAttached;
-        const resolvedProfileId = expectAuthenticatedOwnerReconnect(harness.client, {
-          authMethod,
-          previousProfileId: profileId,
-          registeredProfileId: harness.registeredProfileId,
-        });
-        if (!profileId) {
-          setDisplayName(resolvedProfileId, "Saved Owner");
-        }
-        profileId = resolvedProfileId;
-        expect(upsertPresenceMock).toHaveBeenCalledWith(
-          `owner-${authMethod}`,
-          expect.objectContaining({
-            user: expect.objectContaining({
-              id: profileId,
-              identity: { type: "profile", id: profileId },
+      let releaseCatalog = () => {};
+      try {
+        for (const authMethod of ["token", "password", "device-token", "none"] as const) {
+          resolveConnectAuthStateMock.mockResolvedValueOnce({
+            authResult: { ok: true, method: authMethod },
+            authOk: true,
+            authMethod,
+            sharedAuthOk: true,
+          });
+          const harness = attachGatewayHarness({
+            connId: `owner-${authMethod}`,
+            connectNonce: `nonce-${authMethod}`,
+          });
+          harness.sendConnect(`connect-${authMethod}`, {
+            ...TEST_CONNECT_PARAMS,
+            scopes: ["operator.read"],
+            caps: [],
+          });
+          await harness.whenAttached;
+          const resolvedProfileId = expectAuthenticatedOwnerReconnect(harness.client, {
+            authMethod,
+            previousProfileId: profileId,
+            registeredProfileId: harness.registeredProfileId,
+          });
+          expect(resolveHostAccountNameMock).toHaveBeenCalledTimes(1);
+          if (!profileId) {
+            releaseCatalog = (await prepareUserProfileCatalog()).release;
+            setDisplayName(resolvedProfileId, "Saved Owner");
+          }
+          profileId = resolvedProfileId;
+          expect(upsertPresenceMock).toHaveBeenCalledWith(
+            `owner-${authMethod}`,
+            expect.objectContaining({
+              user: expect.objectContaining({
+                id: profileId,
+                identity: { type: "profile", id: profileId },
+              }),
             }),
-          }),
-          { pending: true },
-        );
+            { pending: true },
+          );
+        }
+      } finally {
+        releaseCatalog();
       }
     });
   });

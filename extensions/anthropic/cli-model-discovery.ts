@@ -69,7 +69,7 @@ export async function discoverClaudeCliModels(params: {
   let transport: ClaudeCliTransport | undefined;
   let abortListener: Disposable | undefined;
   try {
-    transport = createClaudeCliTransport({
+    transport = await createClaudeCliTransport({
       context,
       args: invocation.argv,
       currentContext: () => (signal.aborted ? undefined : context),

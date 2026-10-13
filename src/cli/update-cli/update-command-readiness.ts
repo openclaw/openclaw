@@ -16,6 +16,7 @@ import { defaultRuntime } from "../../runtime.js";
 import {
   createGatewayRestartDeadline,
   GatewayRestartDeadlineError,
+  type GatewayRestartDeadline,
 } from "../daemon-cli/restart-health-deadline.js";
 import {
   GATEWAY_RESTART_PROBE_TIMEOUT_MS,
@@ -61,7 +62,9 @@ export async function verifyPreviousGatewayForUpdate(params: {
     previousGateway: true,
   });
   const startedAtMs = Date.now();
-  const deadline = createGatewayRestartDeadline({ timeoutMs, signal: params.signal });
+  const sharedDeadline = params.opts.run?.deadline;
+  const deadline =
+    sharedDeadline ?? createGatewayRestartDeadline({ timeoutMs, signal: params.signal });
   let lastProgress = { stage: "", at: -Infinity };
   let lastReason = "resolving the previous Gateway port and installed version";
   const progress = (stage: string, reason: string, warning = false) => {
@@ -112,7 +115,7 @@ export async function verifyPreviousGatewayForUpdate(params: {
         expectedBuildId: expectedBuildId ?? undefined,
         timeoutMs,
         probeTimeoutMs: 5_000,
-        deadlineMs: deadline.deadlineMs,
+        deadline,
         requireRunningService: true,
         settle: { probes: 1 },
         signal: deadline.signal,
@@ -142,7 +145,9 @@ export async function verifyPreviousGatewayForUpdate(params: {
     progress("budget exhausted", lastReason, true);
     return false;
   } finally {
-    deadline.dispose();
+    if (!sharedDeadline) {
+      deadline.dispose();
+    }
   }
 }
 
@@ -161,6 +166,7 @@ export function captureUpdateGatewayReadinessOwner(params: {
   };
   const assertCurrent = () => {
     params.signal?.throwIfAborted();
+    originalRun?.deadline?.signal.throwIfAborted();
     if (
       params.opts.run !== originalRun ||
       originalRun?.executorFence !== originalExecutor ||
@@ -187,6 +193,7 @@ export type UpdateGatewayReadinessParams = {
   timeoutMs?: number;
   probeTimeoutMs?: number;
   deadlineMs?: number;
+  deadline?: GatewayRestartDeadline;
   onProgress?: (stage: string, reason: string) => void;
   observedStartupMs?: number;
   expectedVersion?: string;
@@ -244,13 +251,15 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
     ? (Math.max(1, settle.probes) - 1) * DEFAULT_RESTART_HEALTH_DELAY_MS
     : 0;
   const startedAtMs = performance.now();
-  const deadline = createGatewayRestartDeadline({
-    timeoutMs: Math.max(
-      0,
-      Math.min(timeoutMs + settleDurationMs, (params.deadlineMs ?? Infinity) - startedAtMs),
-    ),
-    signal: params.signal,
-  });
+  const deadline =
+    params.deadline ??
+    createGatewayRestartDeadline({
+      timeoutMs: Math.max(
+        0,
+        Math.min(timeoutMs + settleDurationMs, (params.deadlineMs ?? Infinity) - startedAtMs),
+      ),
+      signal: params.signal,
+    });
   const remainingMs = deadline.remainingMs;
   const probeTimeoutMs = () =>
     waitForStartup && params.probeTimeoutMs === undefined
@@ -461,6 +470,8 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
       launchAgentRecovery,
     };
   } finally {
-    deadline.dispose();
+    if (!params.deadline) {
+      deadline.dispose();
+    }
   }
 }

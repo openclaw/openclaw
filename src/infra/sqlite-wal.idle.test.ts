@@ -2,6 +2,8 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createGatewaySchedulerClock } from "../test-utils/gateway-scheduler-clock.js";
+import { GatewayScheduler } from "./gateway-scheduler.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import { configureSqliteWalMaintenance } from "./sqlite-wal.js";
 
@@ -11,6 +13,52 @@ describe("idle WAL checkpoint ticks", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
+  });
+
+  it("disarms clean ticks and keeps the first sibling write deadline through later writes", async () => {
+    const clock = createGatewaySchedulerClock(1_000);
+    const scheduler = new GatewayScheduler({ clock: clock.clock });
+    const originalScope = GatewayScheduler.prototype.scope.bind(scheduler);
+    vi.spyOn(GatewayScheduler.prototype, "scope").mockImplementation(() => originalScope());
+    const databasePath = path.join(tempDirs.make("openclaw-wal-wake-"), "state.sqlite");
+    const writer = openNodeSqliteDatabase(databasePath);
+    const maintenance = configureSqliteWalMaintenance(writer, { databasePath });
+    writer.exec("CREATE TABLE events(value TEXT)");
+    const sibling = openNodeSqliteDatabase(databasePath);
+    try {
+      await clock.advanceBy(10_000);
+      expect(maintenance.health?.state).toBe("complete");
+      const periodicAtMs = 1_000 + 30 * 60_000;
+      expect(clock.armedAtMs).toBe(periodicAtMs);
+      await clock.advanceBy(10_000);
+      expect(clock.armedAtMs).toBe(periodicAtMs);
+
+      sibling.exec("BEGIN; INSERT INTO events VALUES ('first')");
+      expect(clock.armedAtMs).toBe(periodicAtMs);
+      sibling.exec("COMMIT");
+      expect(clock.armedAtMs).toBe(31_000);
+      await clock.advanceBy(5_000);
+      sibling.exec("INSERT INTO events VALUES ('second')");
+      expect(clock.armedAtMs).toBe(31_000);
+      await clock.advanceBy(5_000);
+      expect(maintenance.health?.state).toBe("complete");
+      expect(clock.armedAtMs).toBe(periodicAtMs);
+
+      await maintenance.stop();
+      expect(clock.armedAtMs).toBeNull();
+      sibling.exec("INSERT INTO events VALUES ('after-stop')");
+      expect(clock.armedAtMs).toBeNull();
+      expect(writer.prepare("SELECT value FROM events ORDER BY rowid").all()).toEqual([
+        { value: "first" },
+        { value: "second" },
+        { value: "after-stop" },
+      ]);
+    } finally {
+      await maintenance.stop();
+      maintenance.close();
+      sibling.close();
+      writer.close();
+    }
   });
 
   it("skips completed idle ticks and resumes after writes on either connection", async () => {

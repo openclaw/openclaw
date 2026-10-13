@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
+import path from "node:path";
 import { serialize } from "node:v8";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { BrokerChild } from "../process/spawn-broker/child.js";
@@ -6,6 +7,7 @@ import type { SpawnBrokerHost } from "../process/spawn-broker/host.js";
 import { recordChildProcessSpawn } from "../process/spawn-diagnostics.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { registerOpenClawAgentDatabaseReadCandidateResource } from "../state/openclaw-agent-db-resources.js";
 import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
 import { tryProcessCwd } from "./safe-cwd.js";
 import { captureSqliteAuthSchema } from "./sqlite-readonly-auth-schema.js";
@@ -114,8 +116,9 @@ export function createSqliteReadOnlyWorkerSession(
       }
     | undefined;
   const { promise: closeSignal, resolve: resolveClosed } = createDeferredCore();
+  const authReaderResources = new Map<string, () => void>();
   // Broker loss retains group cleanup later in the same turn as proxy close.
-  const closed = closeSignal.then(() => {
+  const closed = closeSignal.then(async () => {
     if (
       transport.kind === "broker" &&
       child instanceof BrokerChild &&
@@ -123,9 +126,12 @@ export function createSqliteReadOnlyWorkerSession(
       child.exitCode === null &&
       child.signalCode === null
     ) {
-      return transport.owner.waitForCleanup();
+      await transport.owner.waitForCleanup();
     }
-    return undefined;
+    for (const unregister of authReaderResources.values()) {
+      unregister();
+    }
+    authReaderResources.clear();
   });
   const retire = (error?: unknown) => {
     retired = true;
@@ -288,6 +294,23 @@ export function createSqliteReadOnlyWorkerSession(
       if (retired) {
         return Promise.reject(new Error("SQLite read-only worker is closed"));
       }
+      if (
+        options.mode === "auth-profile-rows" &&
+        options.source === "canonical" &&
+        !options.artifactPreserving
+      ) {
+        const databasePath = path.resolve(pathname);
+        if (!authReaderResources.has(databasePath)) {
+          authReaderResources.set(
+            databasePath,
+            registerOpenClawAgentDatabaseReadCandidateResource({
+              path: databasePath,
+              revoke: () => retire(new Error("Auth profile reader owner was revoked")),
+              close: () => session.close(),
+            }),
+          );
+        }
+      }
       return (pendingOperation = new Promise<SqliteReadOnlyWorkerValue>((resolve, reject) => {
         const { timeoutMs, size } = host.readBudget(pathname);
         stderr = "";
@@ -333,6 +356,8 @@ export function createSqliteReadOnlyWorkerSession(
                       ...(options.mode === "operation"
                         ? { command: serialize(options.command).toString("base64") }
                         : {
+                            retainReader:
+                              options.source === "canonical" && !options.artifactPreserving,
                             schema:
                               options.source === "canonical" && !options.artifactPreserving
                                 ? captureSqliteAuthSchema(pathname, options.expectedIdentity)

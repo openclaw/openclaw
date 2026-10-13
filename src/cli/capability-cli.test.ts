@@ -6,6 +6,7 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { inspectLocalAudioSelection } from "../media-understanding/local-audio.js";
+import { registerEmbeddingCapabilityCliTests } from "./capability-cli.embedding.test-support.js";
 import { registerCapabilityCli } from "./capability-cli.js";
 import {
   runCap,
@@ -1935,72 +1936,13 @@ describe("capability cli", () => {
     }
   });
 
-  it("creates embeddings with explicit provider selection", async () => {
-    await runCapability(
-      "embedding",
-      "create",
-      "--text",
-      "hello",
-      "--text",
-      "world",
-      "--model",
-      "openai/text-embedding-3-large",
-      "--json",
-    );
-    expect(firstEmbeddingProviderCall()).toMatchObject({
-      provider: "openai",
-      model: "text-embedding-3-large",
-      fallback: "none",
-    });
-    expect(firstJsonOutput()).toMatchObject({
-      capability: "embedding.create",
-      provider: "openai",
-      model: "text-embedding-3-small",
-      outputs: [
-        { text: "hello", embedding: [0.1, 0.2] },
-        { text: "world", embedding: [0.1, 0.2] },
-      ],
-    });
-    expect(mocks.embedBatch).toHaveBeenCalledWith(["hello", "world"], { inputType: "document" });
-    expect(closeEmbeddingProviderMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("shows ordered embedding dimensions and bounded vector previews in text output", async () => {
-    mocks.embedBatch.mockResolvedValueOnce([
-      [0.1, -0.2],
-      Array.from({ length: 1536 }, (_, index) => index + 1),
-      [],
-    ]);
-
-    await runCapability("embedding", "create", "--text", "hello", "--text", "world", "--text", "");
-
-    expect(mocks.runtime.log).toHaveBeenCalledWith(
-      [
-        "embedding.create via local",
-        "provider: openai",
-        "model: text-embedding-3-small",
-        "outputs: 3",
-        "hello",
-        "dimensions: 2",
-        "embedding: [0.1, -0.2]",
-        "world",
-        "dimensions: 1536",
-        "embedding: [1, 2, 3, 4, 5, 6, 7, 8, ...]",
-        "",
-        "dimensions: 0",
-        "embedding: []",
-      ].join("\n"),
-    );
-  });
-
-  it("retries embedding cleanup without masking the primary failure", async () => {
-    closeEmbeddingProviderMock.mockRejectedValueOnce(new Error("close failed"));
-    mocks.embedBatch.mockRejectedValueOnce(new Error("embedding failed"));
-    await expect(runCapability("embedding", "create", "--text", "hello", "--json")).rejects.toThrow(
-      "exit 1",
-    );
-    expect(closeEmbeddingProviderMock).toHaveBeenCalledTimes(2);
-    expectRuntimeErrorContains("embedding failed");
+  registerEmbeddingCapabilityCliTests({
+    embedBatch: mocks.embedBatch,
+    closeProvider: closeEmbeddingProviderMock,
+    providerCall: firstEmbeddingProviderCall,
+    jsonOutput: firstJsonOutput,
+    log: mocks.runtime.log,
+    expectError: expectRuntimeErrorContains,
   });
 
   it.each(["populated", "lock-failed"])(

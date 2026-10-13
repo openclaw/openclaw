@@ -20,7 +20,9 @@ export { hasSqliteWorkerOutcomeUnknown } from "../infra/sqlite-worker-contract.j
 export {
   getSqliteDatabaseAdmission,
   publishSqliteDatabaseAdmission,
+  readSqliteDatabasePendingScopedWriteToken,
   readSqliteDatabasePendingWriteToken,
+  readSqliteDatabaseScopedWriteToken,
   readSqliteDatabaseWriteTokenForPath,
   withSqliteDatabaseWriteScope,
   type SqliteDatabaseAdmissionKey,

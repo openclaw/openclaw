@@ -7,7 +7,7 @@ import { registerSessionResourceCleanup } from "@openclaw/ai/internal/runtime";
 import { isCredentialFieldName } from "@openclaw/ai/internal/shared";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { withGuardedFetchRequestAuthority } from "../../infra/net/fetch-request-authority.js";
-import type { Model } from "../../llm/types.js";
+import type { Message, Model } from "../../llm/types.js";
 import { collectTextContentBlocks } from "../content-blocks.js";
 import type { StreamFn } from "../runtime/index.js";
 import { normalizeUsage, type NormalizedUsage } from "../usage.js";
@@ -18,7 +18,7 @@ import {
 } from "./usage-accumulator.js";
 
 type StreamOptions = NonNullable<Parameters<StreamFn>[2]>;
-export type EmbeddedSessionForkIdentity = { sessionId: string; agentId: string };
+export type EmbeddedSessionForkIdentity = { sessionId: string; agentId: string; runId: string };
 type SessionForkAuthority = { active: boolean; capture: object };
 type Snapshot = EmbeddedSessionForkIdentity & {
   model: Model;
@@ -79,6 +79,34 @@ function safeHeaders(headers: Record<string, string> | undefined) {
     headers &&
     Object.fromEntries(Object.entries(headers).filter(([key]) => !isCredentialFieldName(key)))
   );
+}
+
+/** Record the model-visible publication, including split async calls and their outcomes. */
+export function recordEmbeddedSessionForkMessage(
+  sessionId: string,
+  runId: string,
+  message: Message,
+): void {
+  const snapshot = snapshots.get(sessionId);
+  if (
+    !snapshot ||
+    snapshot.runId !== runId ||
+    !snapshot.authority.active ||
+    snapshot.expires <= Date.now()
+  ) {
+    return;
+  }
+  try {
+    const completed = structuredClone(message);
+    const bytes = Buffer.byteLength(JSON.stringify(completed));
+    snapshot.context.messages.push(completed);
+    snapshot.bytes += bytes;
+    retainedBytes += bytes;
+    prune();
+  } catch {
+    // Optional replay retention must never fail a successfully completed parent message.
+    clearEmbeddedSessionForkSnapshot(sessionId);
+  }
 }
 
 /** Installed below host context transforms and above the actual provider transport. */
@@ -158,10 +186,10 @@ export function wrapStreamFnWithSessionFork(
               authority,
               bytes,
               expires: Date.now() + TTL_MS,
-              expiryTimer: setTimeout(
-                () => clearEmbeddedSessionForkSnapshot(identity.sessionId),
-                TTL_MS,
-              ).unref(),
+              // Expiry owns only the session ID, never the completed turn or its async context.
+              expiryTimer: getAiTransportHost().runInDetachedAsyncContext(() =>
+                setTimeout(clearEmbeddedSessionForkSnapshot, TTL_MS, identity.sessionId).unref(),
+              ),
             });
             retainedBytes += bytes;
           } else {

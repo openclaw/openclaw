@@ -33,7 +33,7 @@ import type { FixtureOperations } from "./sqlite-worker-store.test-support.js";
 
 vi.mock("./diagnostic-flags.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./diagnostic-flags.js")>()),
-  isDiagnosticFlagEnabled: (flag: string) => flag === "sqlite.worker-timing",
+  isDiagnosticFlagEnabled: () => false,
 }));
 
 vi.mock("node:os", async (importOriginal) => ({
@@ -121,6 +121,7 @@ it("waits for schema publication after opening, then dispatches queued writes on
         timing?.dispatched,
         timing?.posted,
         timing?.received,
+        timing?.inputReady,
         timing?.executeStarted,
         timing?.executeFinished,
         timing?.serialized,

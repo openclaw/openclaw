@@ -238,7 +238,7 @@ export function readShellView(host: ShellViewHost) {
     storedOutboxes: host.storedOutboxes,
     terminalAvailable,
     catalogOpenTarget: normalizeCatalogOpenTarget(uiSettings.catalogOpenTarget),
-    canPairDevice: gatewayConnected && (operatorAccess.canAdmin || operatorAccess.canPair),
+    canPairDevice: gatewayConnected && operatorAccess.canAdmin,
     sidebarEntries: navigationSnapshot.sidebarEntries,
     navigationVisible: !navigationSurfaceHidden,
     navigationCollapsed: navCollapsed,

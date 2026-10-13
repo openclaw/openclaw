@@ -361,14 +361,14 @@ describe("main-session startup recovery", () => {
       updatedBeforeMs: cutoff,
     });
 
-    expect(marked).toEqual({ marked: 1, skipped: 3 });
+    expect(marked).toEqual({ marked: 1, skipped: 1 });
     let store = readStore(path.join(sessionsDir, "sessions.json"));
     expect(store["agent:main:main"]?.abortedLastRun).toBe(true);
     expect(store["agent:main:active-key"]?.abortedLastRun).toBeUndefined();
     expect(store["agent:main:active-id"]?.abortedLastRun).toBeUndefined();
     expect(store["agent:main:fresh"]?.abortedLastRun).toBeUndefined();
-    expect(store["agent:main:subagent:child"]?.abortedLastRun).toBeUndefined();
-    expect(store["agent:main:cron:nightly"]?.abortedLastRun).toBeUndefined();
+    expect(store["agent:main:subagent:child"]).toEqual(before["agent:main:subagent:child"]);
+    expect(store["agent:main:cron:nightly"]).toEqual(before["agent:main:cron:nightly"]);
     expect(store["agent:main:completed"]?.abortedLastRun).toBe(false);
     expect(store["agent:main:already-marked"]?.abortedLastRun).toBe(true);
     expect(store["agent:main:completed"]?.restartRecoveryRuns).toBeUndefined();
@@ -381,7 +381,13 @@ describe("main-session startup recovery", () => {
     store = readStore(path.join(sessionsDir, "sessions.json"));
     expect(store["agent:main:main"]?.abortedLastRun).toBe(false);
     expect(store["agent:main:already-marked"]?.abortedLastRun).toBe(false);
-    for (const key of [archivedKey, "agent:main:active-key", "agent:main:active-id"]) {
+    for (const key of [
+      archivedKey,
+      "agent:main:active-key",
+      "agent:main:active-id",
+      "agent:main:subagent:child",
+      "agent:main:cron:nightly",
+    ]) {
       expect(store[key]).toEqual(before[key]);
     }
     expect(await loadTranscriptEvents(archivedScope)).toEqual(archivedHistory);

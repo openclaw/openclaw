@@ -216,6 +216,17 @@ export function WhereChip(props: { params: WhereChipOptions }) {
           ),
         )
       : [];
+    const suggestion = props.params.suggestedProfile;
+    const showSuggestion =
+      props.params.isAdmin &&
+      props.params.state.cloudProfiles.length === 0 &&
+      suggestion !== undefined &&
+      matches(
+        t("newSession.cloud"),
+        suggestion.providerId,
+        suggestion.providerDisplayId,
+        resolveCloudProfileIconData(suggestion).label,
+      );
     const showMissingCloud =
       props.params.isAdmin &&
       Boolean(props.params.cloudProfileId) &&
@@ -248,6 +259,7 @@ export function WhereChip(props: { params: WhereChipOptions }) {
       hosted,
       showHostedSetup,
       cloudProfiles,
+      showSuggestion,
       showMissingCloud,
       showAuto,
       autoHelp,
@@ -470,16 +482,34 @@ export function WhereChip(props: { params: WhereChipOptions }) {
                   <span class="session-menu__text">{t("newSession.hostedSetup")}</span>
                 </a>
               ) : undefined}
-              {view().cloudProfiles.length || view().showMissingCloud || view().showCloudSkeletons
+              {view().cloudProfiles.length ||
+              view().showSuggestion ||
+              view().showMissingCloud ||
+              view().showCloudSkeletons
                 ? renderEnvironmentHeading(
                     t("newSession.cloud"),
                     "manage-cloud-workers",
                     view().busy,
-                    props.params.isAdmin && !view().showCloudSkeletons
+                    props.params.isAdmin && !view().showCloudSkeletons && !view().showSuggestion
                       ? props.params.onManageCloudWorkers
                       : undefined,
                   )
                 : undefined}
+              {view().showSuggestion ? (
+                <SessionMenuItem
+                  item={{
+                    value: "suggested-cloud",
+                    label: t("newSession.cloud"),
+                    icon: <CloudProfileIcon profile={props.params.suggestedProfile} />,
+                    compact: true,
+                    checked: false,
+                    disabled: Boolean(props.params.cloudDisabledReason),
+                    title: props.params.cloudDisabledReason,
+                    onSelect: () => props.params.onAdoptSuggestedProfile?.(),
+                  }}
+                  submitting={view().busy}
+                />
+              ) : undefined}
               <CloudProfileMenuItems
                 params={{
                   profiles: view().cloudProfiles,
@@ -519,6 +549,7 @@ export function WhereChip(props: { params: WhereChipOptions }) {
               view().hosted.length === 0 &&
               !view().showHostedSetup &&
               !view().showMissingCloud &&
+              !view().showSuggestion &&
               !view().showDeviceSkeletons &&
               !view().showCloudSkeletons ? (
                 <div class="new-session-page__environment-empty" role="status">

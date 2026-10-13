@@ -7,11 +7,6 @@ import { readGatewayOperatorAccess } from "./operator-access.ts";
 type OverlayOperatorAccess = ReturnType<typeof readGatewayOperatorAccess>;
 type DevicePairSetupState = ReturnType<typeof createDevicePairSetupState>;
 
-function canAccessDevicePairing(snapshot: ApplicationGateway["snapshot"]): boolean {
-  const access = readGatewayOperatorAccess(snapshot);
-  return access.canAdmin || access.canPair;
-}
-
 export function readOverlayOperatorAccessTransition(
   previous: OverlayOperatorAccess,
   snapshot: ApplicationGateway["snapshot"],
@@ -24,8 +19,6 @@ export function readOverlayOperatorAccessTransition(
     grantRevoked: previous.canGrantApprovals && !access.canGrantApprovals,
     adminRevoked: previous.canAdmin && !access.canAdmin,
     pairingChanged: previous.canPair !== access.canPair,
-    pairingSetupRevoked:
-      (previous.canAdmin || previous.canPair) && !(access.canAdmin || access.canPair),
   };
 }
 
@@ -52,7 +45,7 @@ export function createOverlayPairingPendingCount(params: {
         params.gateway.snapshot.phase !== "connected" ||
         params.isDisposed() ||
         !params.state.devicePairSetupOpen ||
-        !canAccessDevicePairing(params.gateway.snapshot)
+        !readGatewayOperatorAccess(params.gateway.snapshot).canAdmin
       ) {
         return;
       }
@@ -69,7 +62,7 @@ export function createOverlayPairingPendingCount(params: {
         params.gateway.snapshot.client !== client ||
         params.gateway.snapshot.phase !== "connected" ||
         !params.state.devicePairSetupOpen ||
-        !canAccessDevicePairing(params.gateway.snapshot)
+        !readGatewayOperatorAccess(params.gateway.snapshot).canAdmin
       ) {
         return;
       }

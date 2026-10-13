@@ -221,9 +221,9 @@ export function registerLegacyDriverTests(modes: readonly LegacyDriverMode[]) {
             expect(receipt).toMatchObject({
               status: "ok",
               configHash: "unchanged",
-              warnings: [expect.stringContaining("live agent databases are unchanged")],
+              warnings: [expect.stringContaining("live databases are unchanged")],
             });
-            expect(output).toContain("live agent databases are unchanged");
+            expect(output).toContain("live databases are unchanged");
             expect(output).not.toContain("Doctor complete.");
           }
           // The published driver has now discarded package rollback and recorded its

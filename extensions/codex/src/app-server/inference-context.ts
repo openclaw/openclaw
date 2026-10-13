@@ -230,10 +230,26 @@ export function createCodexInferenceContext(assertClientCurrent: () => void) {
       }
       if (kind === "turn") {
         const prefix = registration.forkPrefix;
-        const question = Array.isArray(body.input)
-          ? body.input.findLast((item) => isJsonObject(item) && item.role === "user")
-          : undefined;
-        if (prefix && Array.isArray(prefix.input) && question) {
+        const inputTools = Array.isArray(prefix?.input)
+          ? prefix.input.find((item) => isJsonObject(item) && item.type === "additional_tools")
+          : prefix?.inputTools;
+        const input =
+          prefix && Array.isArray(body.input)
+            ? body.input.map((item) =>
+                isJsonObject(inputTools) && isJsonObject(item) && item.type === "additional_tools"
+                  ? inputTools
+                  : item,
+              )
+            : undefined;
+        // Only a complete matching prefix proves where current native history begins.
+        // A changed/compacted history uses native reconstruction rather than losing its tail.
+        if (
+          prefix &&
+          Array.isArray(prefix.input) &&
+          input &&
+          prefix.input.length <= input.length &&
+          prefix.input.every((item, index) => JSON.stringify(item) === JSON.stringify(input[index]))
+        ) {
           // Native thread/fork reconstructs persisted history and settings. Replay the
           // last actual wire prefix instead, without normalizing any prompt or schema.
           preparedBody = { ...body };
@@ -247,22 +263,19 @@ export function createCodexInferenceContext(assertClientCurrent: () => void) {
               preparedBody[key] = value;
             }
           }
-          preparedBody.input = [...prefix.input, question];
+          preparedBody.input = [...prefix.input, ...input.slice(prefix.input.length)];
         } else if (prefix) {
-          // Native history remains authoritative after a WS delta; restore only
-          // declarations changed by disabling hosted search in the native fork.
-          const inputTools = prefix.inputTools;
+          // Native history owns the tail; the retained request still owns prepared
+          // instructions and declarations, independently of input-prefix equality.
           preparedBody = {
             ...preparedBody,
             ...(prefix.tools !== undefined ? { tools: prefix.tools } : {}),
-            ...(isJsonObject(inputTools) && Array.isArray(body.input)
-              ? {
-                  input: body.input.map((item) =>
-                    isJsonObject(item) && item.type === "additional_tools" ? inputTools : item,
-                  ),
-                }
-              : {}),
+            ...(input ? { input } : {}),
           };
+          delete preparedBody.instructions;
+          if (prefix.instructions !== undefined) {
+            preparedBody.instructions = prefix.instructions;
+          }
         }
         if (registration.denyToolCalls) {
           preparedBody = { ...preparedBody, tool_choice: "none" };

@@ -2,6 +2,13 @@ import type { DiagnosticEventMetadata, DiagnosticEventPayload } from "../api.js"
 import { seconds } from "./prometheus-format.js";
 import type { PrometheusMetricStore } from "./prometheus-metric-store.js";
 
+// Preserve existing le series while narrowing RPC quantile interpolation through 30 seconds.
+const RPC_DURATION_BUCKETS_SECONDS = [
+  0.005, 0.01, 0.0125, 0.015, 0.02, 0.025, 0.03, 0.04, 0.05, 0.06, 0.08, 0.1, 0.125, 0.15, 0.2,
+  0.25, 0.3, 0.4, 0.5, 0.6, 0.8, 1, 1.25, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10, 12.5, 15, 20, 25, 30, 60,
+  120, 300, 600,
+];
+
 const RESPONSE_BYTE_BUCKETS = Array.from({ length: 17 }, (_, index) => 1024 * 2 ** index);
 const HEAP_DELTA_BYTE_BUCKETS = [
   ...RESPONSE_BYTE_BUCKETS.toReversed().map((bytes) => -bytes),
@@ -167,6 +174,7 @@ export function recordOperationTimingEvent(
           "Elapsed time until the first Gateway RPC response is sent.",
           labels,
           seconds(evt.durationMs),
+          RPC_DURATION_BUCKETS_SECONDS,
         );
       } else if (evt.phase === "handler") {
         if (evt.heapDeltaBytes !== undefined) {
@@ -188,12 +196,14 @@ export function recordOperationTimingEvent(
           "Gateway RPC handler duration until return or throw.",
           labels,
           seconds(evt.durationMs),
+          RPC_DURATION_BUCKETS_SECONDS,
         );
         store.histogram(
           "openclaw_gateway_rpc_admission_seconds",
           "Elapsed time from Gateway RPC receipt until handler invocation.",
           labels,
           seconds(evt.admissionMs),
+          RPC_DURATION_BUCKETS_SECONDS,
         );
       } else if (evt.phase === "dispatch") {
         store.histogram(
@@ -201,6 +211,7 @@ export function recordOperationTimingEvent(
           "Gateway operator request start queue wait.",
           labels,
           seconds(evt.queueWaitMs),
+          RPC_DURATION_BUCKETS_SECONDS,
         );
       }
     }

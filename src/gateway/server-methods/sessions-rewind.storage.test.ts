@@ -49,10 +49,8 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import {
-  resolveSessionMutationAuthorization,
-  SessionMutationAuthorizationChangedError,
-} from "../session-sharing.js";
+import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
+import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import * as repositoryCheckpoints from "../worker-environments/session-repository-checkpoints.js";
 import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
 import { sessionRewindHandlers } from "./sessions-rewind.js";
@@ -647,18 +645,18 @@ it.each(["SQLite writer fault injection", "public lifecycle predecessor"] as con
         connect: { role: "operator", scopes: ["operator.write"] },
       } as GatewayClient;
       const requestContext = context();
+      const admission = await resolveSessionMutationAuthorizationAsync({
+        client,
+        method: "sessions.fork",
+        requestParams: mutationParams("sessions.fork", scope.sessionKey),
+        context: requestContext,
+      });
+      expect(admission.error).toBeNull();
+      const authorization = expectDefined(
+        admission.authorization,
+        "source participation authority",
+      );
       const invoke = () => {
-        const admission = resolveSessionMutationAuthorization({
-          client,
-          method: "sessions.fork",
-          requestParams: mutationParams("sessions.fork", scope.sessionKey),
-          context: requestContext,
-        });
-        expect(admission.error).toBeNull();
-        const authorization = expectDefined(
-          admission.authorization,
-          "source participation authority",
-        );
         expect(() => authorization.assertCurrent()).not.toThrow();
         return invokeMessageCut("sessions.fork", scope, {
           client,
@@ -666,31 +664,44 @@ it.each(["SQLite writer fault injection", "public lifecycle predecessor"] as con
           sessionMutationAuthorization: authorization,
         });
       };
-      const before = await readMutationStorage(scope);
-      const mutation =
-        revocation === "public lifecycle predecessor"
-          ? await revokeWithPublicLifecyclePredecessor(scope, requestContext, invoke)
-          : await revokeDuringWriterWait(scope, invoke, () => {
-              expect(
-                removeSessionMember(scope, "member", undefined, scope.sessionId),
-              ).not.toBeNull();
-              expect(loadSessionEntry(scope)).toEqual(before.source);
-            });
+      try {
+        const before = await readMutationStorage(scope);
+        const mutation =
+          revocation === "public lifecycle predecessor"
+            ? await revokeWithPublicLifecyclePredecessor(scope, requestContext, invoke)
+            : await revokeDuringWriterWait(scope, invoke, () => {
+                expect(
+                  removeSessionMember(scope, "member", undefined, scope.sessionId),
+                ).not.toBeNull();
+                expect(loadSessionEntry(scope)).toEqual(before.source);
+              });
 
-      expect(
-        resolveSessionMutationAuthorization({
-          client,
-          method: "sessions.fork",
-          requestParams: mutationParams("sessions.fork", scope.sessionKey),
-          context: requestContext,
-        }).error,
-      ).toMatchObject({ details: { code: "SESSION_PARTICIPATION_REQUIRED" } });
-      expect.soft(await readMutationStorage(scope)).toEqual(before);
-      expect(await mutation.error).toBeInstanceOf(SessionMutationAuthorizationChangedError);
-      expect(await mutation.error).toMatchObject({
-        error: { details: { code: "SESSION_PARTICIPATION_REQUIRED" } },
-      });
-      expect(mutation.respond).not.toHaveBeenCalledWith(true, expect.anything(), undefined);
+        expect(
+          (
+            await resolveSessionMutationAuthorizationAsync({
+              client,
+              method: "sessions.fork",
+              requestParams: mutationParams("sessions.fork", scope.sessionKey),
+              context: requestContext,
+            })
+          ).error,
+        ).toMatchObject({ details: { code: "SESSION_PARTICIPATION_REQUIRED" } });
+        expect.soft(await readMutationStorage(scope)).toEqual(before);
+        expect(await mutation.error).toBeInstanceOf(SessionMutationAuthorizationChangedError);
+        expect(await mutation.error).toMatchObject({
+          error: {
+            details: {
+              code:
+                revocation === "public lifecycle predecessor"
+                  ? "SESSION_MUTATION_AUTHORIZATION_CHANGED"
+                  : "SESSION_PARTICIPATION_REQUIRED",
+            },
+          },
+        });
+        expect(mutation.respond).not.toHaveBeenCalledWith(true, expect.anything(), undefined);
+      } finally {
+        authorization.release?.();
+      }
     });
   },
 );
@@ -741,7 +752,7 @@ it("sessions.fork retains member authority while restoring cold source history",
     } as GatewayClient;
     const requestContext = context();
     await initializeSessionReadContext(requestContext);
-    const admission = resolveSessionMutationAuthorization({
+    const admission = await resolveSessionMutationAuthorizationAsync({
       client,
       method: "sessions.fork",
       requestParams: mutationParams("sessions.fork", scope.sessionKey),
@@ -749,14 +760,18 @@ it("sessions.fork retains member authority while restoring cold source history",
     });
     expect(admission.error).toBeNull();
 
-    const mutation = invokeMessageCut("sessions.fork", scope, {
-      client,
-      context: requestContext,
-      sessionMutationAuthorization: expectDefined(admission.authorization, "source authority"),
-    });
+    try {
+      const mutation = invokeMessageCut("sessions.fork", scope, {
+        client,
+        context: requestContext,
+        sessionMutationAuthorization: expectDefined(admission.authorization, "source authority"),
+      });
 
-    expect(await mutation.error).toBeUndefined();
-    expect(mutation.respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
-    expect(readSessionColdTranscript(database, scope.sessionId)).toBeUndefined();
+      expect(await mutation.error).toBeUndefined();
+      expect(mutation.respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+      expect(readSessionColdTranscript(database, scope.sessionId)).toBeUndefined();
+    } finally {
+      admission.authorization?.release?.();
+    }
   });
 });

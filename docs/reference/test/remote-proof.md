@@ -29,12 +29,18 @@ workflow and job selection support explicit focused, routine, and high-memory
 profiles. The default stays 16-class until real smaller-machine qualification
 passes; neither `--class` nor `--type` sizes delegated Testbox leases.
 
-| Workload                                     | Workflow                           | Runner tier | Runtime ceiling |
-| -------------------------------------------- | ---------------------------------- | ----------- | --------------- |
-| Focused tests and narrow checks              | `ci-check-focused-testbox.yml`     | 4 vCPU      | 60 minutes      |
-| Bounded routine proof                        | `ci-check-routine-testbox.yml`     | 8 vCPU      | 120 minutes     |
-| Broad compiler/lint graphs (current default) | `ci-check-testbox.yml`             | 16 vCPU     | 240 minutes     |
-| Measured memory-heavy proof                  | `ci-check-high-memory-testbox.yml` | 32 vCPU     | 240 minutes     |
+| Workload                                     | Workflow                           | Runner tier | Default job deadline | Maximum explicit deadline |
+| -------------------------------------------- | ---------------------------------- | ----------- | -------------------- | ------------------------- |
+| Focused tests and narrow checks              | `ci-check-focused-testbox.yml`     | 4-class     | 60 minutes           | 60 minutes                |
+| Bounded routine proof                        | `ci-check-routine-testbox.yml`     | 8-class     | 60 minutes           | 120 minutes               |
+| Broad compiler/lint graphs (current default) | `ci-check-testbox.yml`             | 16-class    | 60 minutes           | 240 minutes               |
+| Measured memory-heavy proof                  | `ci-check-high-memory-testbox.yml` | 32-class    | 240 minutes          | 240 minutes               |
+
+Deadlines include hydration. The larger maximum requires an explicit workflow
+`timeout_minutes` input; Crabbox does not forward that input, and `--ttl` does
+not extend a Testbox job. Runner classes are requested labels; verify actual
+CPU and RAM before selecting a workload. See the
+[observed runner capacity](/ci/runners#blacksmith-runner-capacity).
 
 Select with `--blacksmith-workflow .github/workflows/<workflow> --blacksmith-job check`
 on a fresh lease. Small profiles are opt-in qualification candidates, not proof
@@ -106,6 +112,12 @@ Raw-byte differences can conservatively select additional changed paths. Git pat
 names must be UTF-8; symlink targets remain raw bytes. Symlinked repository Crabbox
 configuration or ignore files, and privacy-excluded runtime configuration, are
 rejected before upload rather than changing their trust or privacy treatment.
+
+The synthetic transport commit can change between wrapper calls even when the
+source tree is unchanged. Build and consume artifacts whose freshness is bound
+to Git `HEAD` in one payload, as CI does within one checkout. Separate calls can
+trigger an unintended rebuild. Do not rewrite freshness stamps to bypass this
+check.
 
 See [local commands](/reference/test/local) for focused development proof.
 

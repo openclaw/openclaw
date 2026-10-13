@@ -1,12 +1,10 @@
-import type { JSX as SolidJSX } from "@solidjs/web";
+import { Dynamic, type JSX as SolidJSX } from "@solidjs/web";
 import { createEffect, createMemo, Show } from "solid-js";
 import type { RouteId } from "../app-routes.ts";
 import { renderLazyElementModal } from "../components/lazy-view-error.ts";
 import type { DebugOverlayFrameHost } from "../pages/debug/debug-overlay-frame.ts";
-import {
-  renderCommandPaletteLoading,
-  type CommandPaletteLoadingState,
-} from "./app-shell-command-palette-loading.ts";
+import { CommandPaletteLoading } from "./app-shell-command-palette-loading-view.tsx";
+import type { CommandPaletteLoadingState } from "./app-shell-command-palette-loading.ts";
 import type { ShellNewSessionHost } from "./app-shell-new-session.ts";
 import type { ApplicationNavigationOptions } from "./context.ts";
 import {
@@ -65,6 +63,7 @@ export function ShellLazyOverlays(props: {
       debugDefined: isOptionalElementDefined(DEBUG_OVERLAY_ELEMENT),
       debugRenderer: props.host.debugOverlayFrame.renderer,
       debugFrameFailed: props.host.debugOverlayFrame.failed,
+      debugMode: props.host.pendingDebugOverlayMode,
       shortcutsDefined: isOptionalElementDefined(KEYBOARD_SHORTCUTS_ELEMENT),
       sendShortcut: normalizeChatSendShortcut(props.host.context?.theme.settings.chatSendShortcut),
     };
@@ -84,25 +83,69 @@ export function ShellLazyOverlays(props: {
       }
     },
   );
+  const paletteLoading = createMemo(() => {
+    const current = state();
+    return (
+      current.paletteLoading &&
+      (!current.lazy ||
+        (current.lazy.status === "loading" &&
+          current.lazy.element === props.host.commandPaletteElement))
+    );
+  });
+  const pendingDebug = createMemo(() => {
+    const current = state();
+    return current.lazy?.element === DEBUG_OVERLAY_ELEMENT ? current.lazy : undefined;
+  });
   const onClose = () => props.host.closePendingPalette();
   return (
     <>
-      <LitRouteHost
-        renderValue={() => {
-          const current = state();
-          return current.paletteLoading &&
-            (!current.lazy ||
-              (current.lazy.status === "loading" &&
-                current.lazy.element === props.host.commandPaletteElement))
-            ? renderCommandPaletteLoading(props.host.commandPaletteLoading, onClose)
-            : current.lazy?.element === DEBUG_OVERLAY_ELEMENT
-              ? (current.debugRenderer?.(props.host, current.lazy) ??
-                (current.debugFrameFailed
-                  ? renderLazyElementModal(props.host.lazyCustomElements)
-                  : undefined))
-              : renderLazyElementModal(props.host.lazyCustomElements);
-        }}
-      />
+      <Show
+        when={paletteLoading()}
+        fallback={
+          <Show
+            when={pendingDebug()}
+            fallback={
+              <LitRouteHost
+                renderValue={() => {
+                  state();
+                  return renderLazyElementModal(props.host.lazyCustomElements);
+                }}
+              />
+            }
+          >
+            {(pending) => (
+              <Show
+                when={state().debugRenderer}
+                fallback={
+                  <Show when={state().debugFrameFailed}>
+                    <LitRouteHost
+                      renderValue={() => {
+                        state();
+                        return renderLazyElementModal(props.host.lazyCustomElements);
+                      }}
+                    />
+                  </Show>
+                }
+              >
+                {(renderer) => (
+                  <Dynamic
+                    component={renderer()}
+                    host={props.host}
+                    state={pending()}
+                    mode={state().debugMode}
+                  />
+                )}
+              </Show>
+            )}
+          </Show>
+        }
+      >
+        <CommandPaletteLoading
+          state={props.host.commandPaletteLoading}
+          revision={state().revision}
+          onClose={onClose}
+        />
+      </Show>
       <Show when={state().paletteDefined}>
         <openclaw-command-palette
           prop:desktopAvailable={props.desktopPanelAvailable}
