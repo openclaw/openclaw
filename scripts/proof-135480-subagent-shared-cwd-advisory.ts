@@ -43,6 +43,17 @@
  *      25 shared directories across 50 children to prove only eight directory
  *      summaries are model-visible, and that permuting that equal-timestamp
  *      cohort leaves the ids, samples, and reported directories identical.
+ *   9. The reader/advisory metadata key contract. `readSubagentListSessionEntries`
+ *      keys its selection by run id, not by child session key, because raw child
+ *      session keys repeat across agents
+ *      (https://github.com/openclaw/openclaw/pull/166550). Asserts the real
+ *      reader's key set directly and then feeds that exact selection to
+ *      `buildSubagentList`, so a producer/consumer key disagreement cannot pass.
+ *      The cross-agent raw-key case itself needs an admitted database for a
+ *      non-default agent, which this offline harness does not stand up; it is
+ *      covered by `subagent-list.test.ts` ("groups by each run's own metadata
+ *      when two agents share one raw session key") through the supported test
+ *      state.
  *
  * Run: pnpm tsx scripts/proof-135480-subagent-shared-cwd-advisory.ts
  */
@@ -110,9 +121,7 @@ async function main(): Promise<void> {
   const { buildSubagentList, captureSubagentListReadContext, readSubagentListSessionEntries } =
     (await import("../src/agents/subagents/registry/subagent-list.js")) as SubagentListModule;
   const { buildSubagentRunReadIndexFromRuns } =
-    (await import(
-      "../src/agents/subagents/registry/subagent-registry-queries.js"
-    )) as SubagentRegistryQueriesModule;
+    (await import("../src/agents/subagents/registry/subagent-registry-queries.js")) as SubagentRegistryQueriesModule;
   const { handleSubagentsListAction } =
     (await import("../src/auto-reply/reply/commands-subagents/action-list.js")) as SubagentsCommandModule;
 
@@ -534,6 +543,50 @@ async function main(): Promise<void> {
     check("permuting equal-timestamp runs leaves the whole report identical", () => {
       assert.equal(reversedSummary, inOrderSummary);
       assert.equal(interleavedSummary, inOrderSummary);
+    });
+  }
+
+  console.log("── scenario 9: the reader/advisory metadata key contract ──");
+  {
+    // The defect this round fixed was invisible to every scenario above that
+    // asserted only an end result: the advisory read the reader's selection by
+    // child session key while the reader stores it by run id, so every ordinary
+    // child resolved to `undefined` and the advisory went silent. Assert the
+    // contract itself against the real reader, not just its downstream effect.
+    const store = path.join(root, "sessions-key-contract.json");
+    const dir = path.join(root, "key-contract-shared");
+    await fs.mkdir(dir, { recursive: true });
+    const runs = [makeRun("key-contract-a", now), makeRun("key-contract-b", now)];
+    for (const run of runs) {
+      await createChildSession({
+        storePath: store,
+        sessionKey: run.childSessionKey,
+        requestedCwd: dir,
+      });
+    }
+    const cfg = { session: { store } } as OpenClawConfig;
+    const context = buildReadContext(runs, 30);
+    const selection = await readSubagentListSessionEntries(cfg, context);
+    console.log(
+      `   reader selection keys: ${[...selection.keys()].join(", ")} (run ids: ${runs
+        .map((run) => run.runId)
+        .join(", ")}; session keys: ${runs.map((run) => run.childSessionKey).join(", ")})`,
+    );
+    check("the reader keys its selection by run id, never by child session key", () => {
+      assert.equal(selection.size, runs.length);
+      assert.deepEqual([...selection.keys()].toSorted(), runs.map((run) => run.runId).toSorted());
+      for (const run of runs) {
+        assert.equal(selection.has(run.childSessionKey), false);
+        assert.equal(selection.get(run.runId)?.spawnedCwd, path.resolve(dir));
+      }
+    });
+    // Same selection object the production callers pass, consumed by the owner
+    // under test — so a producer/consumer key disagreement cannot pass here.
+    const list = buildSubagentList({ context, sessionEntries: selection });
+    check("the advisory consumes that selection under the same key", () => {
+      assert.equal(list.sharedCwdGroupTotal, 1);
+      assert.equal(list.sharedCwdGroups[0]?.runCount, runs.length);
+      assert.ok(list.active.every((item) => item.sharedCwdGroupId === 1));
     });
   }
 

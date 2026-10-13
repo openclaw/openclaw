@@ -269,6 +269,16 @@ function capSharedCwdPath(value: string) {
  * `readSubagentListSessionEntries` passes `sessionKeys`, so nothing outside the
  * visible children is ever materialized.
  *
+ * **That selection is keyed by `run.runId`, not by child session key**, and this
+ * lookup must use the same key as `buildListEntry`'s model/usage read. Raw child
+ * session keys repeat across agents, so the reader resolves each run's owner
+ * store separately and stores the result per run — the separation introduced by
+ * https://github.com/openclaw/openclaw/pull/166550 so two agents sharing one raw
+ * key cannot overwrite each other's metadata. Keying grouping on
+ * `run.childSessionKey` instead silently returns `undefined` for every ordinary
+ * child (whose run id and session key always differ), which disables the whole
+ * advisory rather than degrading it.
+ *
  * The only filesystem work is one canonicalization per distinct explicit
  * directory (see `canonicalCwdIdentity`). Runs without an explicit `spawnedCwd`
  * inherited the parent workspace — the default for `collect` swarms — and are
@@ -285,7 +295,7 @@ function buildSharedCwdIndex(params: {
     if (!isRetainedUnendedSubagentRun(run, params.now)) {
       continue;
     }
-    const spawnedCwd = params.sessionEntries.get(run.childSessionKey)?.spawnedCwd?.trim();
+    const spawnedCwd = params.sessionEntries.get(run.runId)?.spawnedCwd?.trim();
     if (!spawnedCwd) {
       continue;
     }

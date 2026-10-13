@@ -1,4 +1,6 @@
+import fs from "node:fs/promises";
 import os from "node:os";
+import path from "node:path";
 import { expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { spawnAcpDirect } from "./acp-spawn.js";
@@ -81,5 +83,75 @@ export function registerAcpSpawnPolicyTests(fixture: {
     });
     expect(fixture.callGatewayMock).not.toHaveBeenCalled();
     expect(fixture.initializeSessionMock).not.toHaveBeenCalled();
+  });
+
+  // Explicit-working-directory persistence. These live here rather than inline
+  // in `acp-spawn.test.ts` because that file is already far over the
+  // `max-lines` cap and `check:line-cap-ratchet` rejects any growth in it; this
+  // module already owns what root an ACP spawn receives and what the session
+  // writer records for it, and already holds both mocks.
+  const spawnedCwdFromCreate = () =>
+    (
+      (fixture.upsertSessionEntryMock as { mock: { calls: unknown[][] } }).mock.calls[0]?.[1] as {
+        spawnedCwd?: string;
+      }
+    )?.spawnedCwd;
+
+  it("persists an explicit ACP cwd so working-directory readers see it like a native child", async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acp-spawn-cwd-"));
+    const explicitCwd = path.join(workspaceRoot, "shared-checkout");
+    await fs.mkdir(explicitCwd, { recursive: true });
+    try {
+      fixture.state.cfg.acp = { ...fixture.state.cfg.acp, allowedAgents: ["codex", "claude-code"] };
+      fixture.state.cfg.agents = {
+        entries: {
+          main: { workspace: path.join(workspaceRoot, "main") },
+          "claude-code": { workspace: path.join(workspaceRoot, "claude-code") },
+        },
+      };
+      const result = await fixture.spawn(
+        {
+          task: "Inspect the queue owner state",
+          agentId: "claude-code",
+          mode: "run",
+          cwd: explicitCwd,
+        },
+        { agentSessionKey: "agent:main:main" },
+      );
+
+      expect(result.status).toBe("accepted");
+      expect(spawnedCwdFromCreate()).toBe(explicitCwd);
+      expect(fixture.initializeSessionMock).toHaveBeenCalledWith(
+        expect.objectContaining({ agent: "claude-code", cwd: explicitCwd }),
+      );
+    } finally {
+      await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("records no spawnedCwd when an ACP child inherits the target agent workspace", async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acp-spawn-cwd-"));
+    const targetWorkspace = path.join(workspaceRoot, "claude-code");
+    await fs.mkdir(targetWorkspace, { recursive: true });
+    try {
+      fixture.state.cfg.acp = { ...fixture.state.cfg.acp, allowedAgents: ["codex", "claude-code"] };
+      fixture.state.cfg.agents = {
+        entries: {
+          main: { workspace: path.join(workspaceRoot, "main") },
+          "claude-code": { workspace: targetWorkspace },
+        },
+      };
+      const result = await fixture.spawn(
+        { task: "Inspect the queue owner state", agentId: "claude-code", mode: "run" },
+        { agentSessionKey: "agent:main:main" },
+      );
+
+      expect(result.status).toBe("accepted");
+      // Inheritance is not an explicit cwd: the advisory must stay silent for
+      // children that merely share the workspace they were given.
+      expect(spawnedCwdFromCreate()).toBeUndefined();
+    } finally {
+      await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
   });
 }

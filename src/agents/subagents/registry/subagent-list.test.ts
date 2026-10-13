@@ -621,8 +621,8 @@ describe("buildSubagentList", () => {
       const sharedDir = path.join(testWorkspaceDir, "shared-tree");
       const runA = makeRun("shared-cwd-a", now);
       const runB = makeRun("shared-cwd-b", now);
-      addSubagentRunForTests(runA);
-      addSubagentRunForTests(runB);
+      await addSubagentRunForTests(runA);
+      await addSubagentRunForTests(runB);
       const storePath = path.join(testWorkspaceDir, "sessions-shared-cwd-pair.json");
       await seedSessionEntry(storePath, runA.childSessionKey, sharedDir);
       await seedSessionEntry(storePath, runB.childSessionKey, sharedDir);
@@ -652,7 +652,7 @@ describe("buildSubagentList", () => {
       const sharedDir = path.join(testWorkspaceDir, "shared-tree-trio");
       const runs = ["trio-a", "trio-b", "trio-c"].map((suffix) => makeRun(suffix, now));
       for (const run of runs) {
-        addSubagentRunForTests(run);
+        await addSubagentRunForTests(run);
       }
       const storePath = path.join(testWorkspaceDir, "sessions-shared-cwd-trio.json");
       for (const run of runs) {
@@ -683,8 +683,8 @@ describe("buildSubagentList", () => {
       const now = Date.now();
       const runA = makeRun("inherited-a", now);
       const runB = makeRun("inherited-b", now);
-      addSubagentRunForTests(runA);
-      addSubagentRunForTests(runB);
+      await addSubagentRunForTests(runA);
+      await addSubagentRunForTests(runB);
       const storePath = path.join(testWorkspaceDir, "sessions-shared-cwd-inherited.json");
       await seedSessionEntry(storePath, runA.childSessionKey);
       await seedSessionEntry(storePath, runB.childSessionKey);
@@ -703,8 +703,8 @@ describe("buildSubagentList", () => {
       const now = Date.now();
       const runA = makeRun("distinct-a", now);
       const runB = makeRun("distinct-b", now);
-      addSubagentRunForTests(runA);
-      addSubagentRunForTests(runB);
+      await addSubagentRunForTests(runA);
+      await addSubagentRunForTests(runB);
       const storePath = path.join(testWorkspaceDir, "sessions-shared-cwd-distinct.json");
       await seedSessionEntry(
         storePath,
@@ -737,8 +737,8 @@ describe("buildSubagentList", () => {
       await fs.symlink(realDir, linkDir, "dir");
       const runA = makeRun("alias-real", now);
       const runB = makeRun("alias-link", now);
-      addSubagentRunForTests(runA);
-      addSubagentRunForTests(runB);
+      await addSubagentRunForTests(runA);
+      await addSubagentRunForTests(runB);
       const storePath = path.join(testWorkspaceDir, "sessions-shared-cwd-alias.json");
       await seedSessionEntry(storePath, runA.childSessionKey, realDir);
       await seedSessionEntry(storePath, runB.childSessionKey, linkDir);
@@ -770,8 +770,8 @@ describe("buildSubagentList", () => {
       const missingDir = path.join(testWorkspaceDir, "missing-tree");
       const runA = makeRun("missing-a", now);
       const runB = makeRun("missing-b", now);
-      addSubagentRunForTests(runA);
-      addSubagentRunForTests(runB);
+      await addSubagentRunForTests(runA);
+      await addSubagentRunForTests(runB);
       const storePath = path.join(testWorkspaceDir, "sessions-shared-cwd-missing.json");
       await seedSessionEntry(storePath, runA.childSessionKey, missingDir);
       await seedSessionEntry(storePath, runB.childSessionKey, missingDir);
@@ -796,8 +796,8 @@ describe("buildSubagentList", () => {
       const sharedDir = path.join(testWorkspaceDir, "shared-tree-ended");
       const runA = makeRun("ended-share-a", now, { ended: true });
       const runB = makeRun("ended-share-b", now, { ended: true });
-      addSubagentRunForTests(runA);
-      addSubagentRunForTests(runB);
+      await addSubagentRunForTests(runA);
+      await addSubagentRunForTests(runB);
       const storePath = path.join(testWorkspaceDir, "sessions-shared-cwd-ended.json");
       await seedSessionEntry(storePath, runA.childSessionKey, sharedDir);
       await seedSessionEntry(storePath, runB.childSessionKey, sharedDir);
@@ -827,7 +827,7 @@ describe("buildSubagentList", () => {
         makeRun(`max-children-${String(i).padStart(2, "0")}`, now),
       );
       for (const run of runs) {
-        addSubagentRunForTests(run);
+        await addSubagentRunForTests(run);
       }
       const storePath = path.join(testWorkspaceDir, "sessions-shared-cwd-max-children.json");
       for (const run of runs) {
@@ -878,7 +878,7 @@ describe("buildSubagentList", () => {
       const sharedRuns = ["long-a", "long-b"].map((suffix) => makeRun(suffix, now));
       const otherRuns = ["long-c", "long-d"].map((suffix) => makeRun(suffix, now));
       for (const run of [...sharedRuns, ...otherRuns]) {
-        addSubagentRunForTests(run);
+        await addSubagentRunForTests(run);
       }
       const storePath = path.join(testWorkspaceDir, "sessions-shared-cwd-long-path.json");
       for (const run of sharedRuns) {
@@ -923,7 +923,7 @@ describe("buildSubagentList", () => {
       }));
       const runs = groups.flatMap((group) => group.runs);
       for (const run of runs) {
-        addSubagentRunForTests(run);
+        await addSubagentRunForTests(run);
       }
       const storePath = path.join(testWorkspaceDir, "sessions-shared-cwd-many-groups.json");
       for (const group of groups) {
@@ -972,7 +972,7 @@ describe("buildSubagentList", () => {
           // Every run carries the identical createdAt/startedAt from `makeRun`.
           const run = makeRun(`perm-${spec.tag}-${runIndex}`, now);
           runs.push(run);
-          addSubagentRunForTests(run);
+          await addSubagentRunForTests(run);
           await seedSessionEntry(storePath, run.childSessionKey, dirForTag(spec.tag));
         }
       }
@@ -1029,8 +1029,8 @@ describe("buildSubagentList", () => {
       const sharedDir = path.join(testWorkspaceDir, "shared-tree-mixed");
       const liveRun = makeRun("mixed-live", now);
       const endedRun = makeRun("mixed-ended", now, { ended: true });
-      addSubagentRunForTests(liveRun);
-      addSubagentRunForTests(endedRun);
+      await addSubagentRunForTests(liveRun);
+      await addSubagentRunForTests(endedRun);
       const storePath = path.join(testWorkspaceDir, "sessions-shared-cwd-mixed.json");
       await seedSessionEntry(storePath, liveRun.childSessionKey, sharedDir);
       await seedSessionEntry(storePath, endedRun.childSessionKey, sharedDir);
@@ -1043,6 +1043,65 @@ describe("buildSubagentList", () => {
       expect(list.active[0]?.sharedCwdGroupId).toBeUndefined();
       expect(list.active[0]?.line).not.toContain("shared cwd");
       expect(list.recent[0]?.sharedCwdGroupId).toBeUndefined();
+    });
+
+    // Raw child session keys repeat across agents, so the list reader resolves
+    // each run's owner store separately and keys the selection by run id — the
+    // separation https://github.com/openclaw/openclaw/pull/166550 introduced so
+    // one agent's metadata cannot overwrite another's. Grouping must consume
+    // that selection by the same key: reading it by child session key returns
+    // undefined for every ordinary child and silently disables the advisory.
+    it("groups by each run's own metadata when two agents share one raw session key", async () => {
+      await withOpenClawTestState({ label: "subagent-list-shared-cwd-raw-key" }, async (state) => {
+        const cfg: OpenClawConfig = {
+          session: { store: state.statePath("agents/{agentId}/sessions/sessions.json") },
+        };
+        const now = Date.now();
+        const sharedDir = path.join(testWorkspaceDir, "shared-tree-raw-key");
+        const ownDir = path.join(testWorkspaceDir, "raw-key-research-only");
+        await fs.mkdir(sharedDir, { recursive: true });
+        await fs.mkdir(ownDir, { recursive: true });
+        const makeRawRun = (agentId: string, index: number): SubagentRunRecord =>
+          Object.assign(makeRun(`raw-${agentId}`, now), {
+            runId: `run-raw-${agentId}`,
+            childSessionKey: "global",
+            childAgentId: agentId,
+            createdAt: now - 120_000 - index,
+          });
+        const runs = [makeRawRun("main", 0), makeRawRun("research", 1)];
+        const seedOwnerEntry = async (run: SubagentRunRecord, spawnedCwd: string) => {
+          await replaceSessionEntry(
+            { sessionKey: run.childSessionKey, agentId: run.childAgentId },
+            { sessionId: run.runId, updatedAt: Date.now(), spawnedCwd },
+          );
+        };
+        const list = () =>
+          buildSubagentList({ cfg, runs, recentMinutes: 30, readSnapshot: new Map() });
+
+        // Distinct directories under one raw key: each run keeps its own
+        // metadata, so there is no collision to report.
+        await seedOwnerEntry(runs[0]!, sharedDir);
+        await seedOwnerEntry(runs[1]!, ownDir);
+        const distinct = await list();
+        expect(distinct.active.map((item) => item.sessionKey)).toEqual(["global", "global"]);
+        expect(distinct.sharedCwdGroupTotal).toBe(0);
+        expect(distinct.active.every((item) => item.sharedCwdGroupId === undefined)).toBe(true);
+
+        // Same directory under one raw key: both runs are found and grouped,
+        // which a child-session-key lookup can never report.
+        await seedOwnerEntry(runs[1]!, sharedDir);
+        const collided = await list();
+        expect(collided.sharedCwdGroupTotal).toBe(1);
+        expect(collided.sharedCwdGroups).toEqual([
+          {
+            id: 1,
+            path: path.resolve(sharedDir),
+            runCount: 2,
+            runIds: runs.map((run) => run.runId).toSorted(),
+          },
+        ]);
+        expect(collided.active.every((item) => item.sharedCwdGroupId === 1)).toBe(true);
+      });
     });
   });
 });
