@@ -279,8 +279,7 @@ export function installColdLoadProbes(input: {
         for (const method of ["requestUpdate", "prepareRender", "commitRender"] as const) {
           const original = owner[method];
           sidebarLifecycleOriginals.set(method, original);
-          owner[method] = function () {
-            const started = performance.now();
+          owner[method] = function (this: SolidSidebarProbeOwner) {
             const connected = this.isConnected;
             if (method === "requestUpdate" && connected) {
               const stack = new Error().stack?.split("\n").slice(2, 14).join(" <- ") ?? "";
@@ -289,6 +288,7 @@ export function installColdLoadProbes(input: {
                 sidebarOwnerStacks.set(key, (sidebarOwnerStacks.get(key) ?? 0) + 1);
               }
             }
+            const started = performance.now();
             try {
               return original.call(this);
             } finally {
