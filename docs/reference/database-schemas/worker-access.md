@@ -1295,6 +1295,13 @@ boundary. Compositions retain actor lifetime across asynchronous work, while
 individual commands acquire their own FIFO turn. No transaction awaits a hook,
 network operation, or another actor command.
 
+Durable commands fork the resident state's small mutable object shells and share
+unchanged rows and payloads. A map or navigation array is shallow-copied on its
+first write; stored rows and payloads are replaced rather than edited. Rollback
+discards that working state, while a confirmed commit installs it. Entry-patch
+and transcript-rewrite publications use the same isolation. Returned snapshots
+and receipts still detach their mutable facts at the projection boundary.
+
 The MAIN replica retains complete committed hot state. A synchronous snapshot
 reads installed facts; an ordered read joins the existing physical writer FIFO
 and requests actor state only on a miss. Commit receipts identify the command,
