@@ -211,11 +211,13 @@ export function sanitizeTriageUpdateFailure(
       // Released 9.4 preserves this field. Reserve the complete link and receipt
       // together so a second excerpt cannot cut into the inventory locator.
       const detail = text(errorDetail, Number.MAX_SAFE_INTEGER);
-      const suffix = `${detail ? `. ${detail}` : ""} Doctor lint receipt: ${lintReceipt(lint)}`;
-      const errorBudget = 768 - Buffer.byteLength(JSON.stringify(suffix));
-      if (errorBudget <= 5) {
-        throw new Error("Update failure diagnostics exceed the 768-byte error limit.");
+      const receipt = ` Doctor lint receipt: ${lintReceipt(lint)}`;
+      let suffix = `${detail ? `. ${detail}` : ""}${receipt}`;
+      // A valid filesystem path can exceed the diagnostic field's entire budget.
+      if (768 - Buffer.byteLength(JSON.stringify(suffix)) <= 5) {
+        suffix = `. Complete Doctor lint inventory unavailable: diagnostic link exceeds error limit.${receipt}`;
       }
+      const errorBudget = 768 - Buffer.byteLength(JSON.stringify(suffix));
       error = `${text(failure.error ?? result.reason ?? "Update failed", errorBudget, "ends")}${suffix}`;
     }
   }
