@@ -21,6 +21,7 @@ enum CapabilityAuthorizationStatus: Equatable, Sendable {
 
 enum PermissionManager {
     @MainActor static let screenRecordingPermissions = PermissionsService()
+    @MainActor static var screenRecordingState = ScreenRecordingPermissionState()
     @MainActor private(set) static var accessibilityRequestAttempted = false
     @MainActor private(set) static var eventPostingRequestAttempted = false
     private static let logger = Logger(subsystem: "ai.openclaw", category: "permissions")
@@ -146,9 +147,15 @@ enum PermissionManager {
     private static func ensureScreenRecording(
         interactive: Bool, isCurrent: @MainActor () -> Bool) async -> Bool
     {
+        let granted = await self.screenRecordingPermissions.checkScreenRecordingPermissionLive()
         guard !Task.isCancelled, isCurrent() else { return false }
-        if interactive, !self.screenRecordingPermissions.checkScreenRecordingPermission() {
-            self.screenRecordingPermissions.requestScreenRecordingPermission()
+        if interactive, !granted {
+            if self.screenRecordingState.requestAttempted {
+                SystemSettingsURLSupport.openPrivacySettings(for: .screenRecording)
+            } else {
+                self.screenRecordingState.requestAttempted = true
+                self.screenRecordingPermissions.requestScreenRecordingPermission()
+            }
         }
         return await self.screenRecordingPermissions.checkScreenRecordingPermissionLive(forceProbe: interactive)
     }

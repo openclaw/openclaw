@@ -95,7 +95,6 @@ function ChatPermissionCard(props: {
         ...props.request,
         ...action(),
       });
-      native?.refresh();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {

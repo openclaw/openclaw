@@ -42,6 +42,11 @@ permissions below the explanation, then updates its action after the capability
 is enabled. Each click dispatches only the current step's capabilities; later
 permission grants and relaunches require their own card actions.
 
+The card refreshes permission status after every native grant attempt, including
+cancelled or failed requests. Denying a Screen Recording prompt changes the next
+action to **Open System Settings**; macOS does not show the prompt again. Returning
+to the app refreshes the card after you change access in System Settings.
+
 Accessibility is explicitly requested before a possibly stale grant is reported.
 If an Event Posting request remains denied, enable access in System Settings,
 then use **Relaunch OpenClaw**: macOS can cache that denial until the app restarts.

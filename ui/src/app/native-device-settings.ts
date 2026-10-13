@@ -387,7 +387,13 @@ export function createNativeDeviceSettingsCapability(): NativeDeviceSettingsCapa
       throw new Error("This permission belongs to another device");
     }
     // Native revalidates the node identity immediately before requesting access.
-    await post({ type: "resolve-permission", request });
+    try {
+      await post({ type: "resolve-permission", request });
+    } finally {
+      if (isCurrent()) {
+        refresh();
+      }
+    }
   };
   return {
     get snapshot() {
