@@ -139,11 +139,14 @@ function resolveIsolatedStreamParams(
     return streamParams;
   }
   const modelMaxTokens = model?.maxTokens ?? Number.POSITIVE_INFINITY;
-  if (answerTokenBudget !== undefined && model?.reasoning) {
-    if (thinkLevel !== "off") {
+  if (answerTokenBudget !== undefined) {
+    const mandatoryAdaptiveThinking = model !== undefined && requiresClaudeAdaptiveThinking(model);
+    if (thinkLevel === "off") {
+      if (mandatoryAdaptiveThinking) {
+        maxTokens = adjustMaxTokensForThinking(answerTokenBudget, modelMaxTokens, "low").maxTokens;
+      }
+    } else if (model?.reasoning || mandatoryAdaptiveThinking) {
       maxTokens = adjustMaxTokensForThinking(answerTokenBudget, modelMaxTokens, "medium").maxTokens;
-    } else if (requiresClaudeAdaptiveThinking(model)) {
-      maxTokens = adjustMaxTokensForThinking(answerTokenBudget, modelMaxTokens, "low").maxTokens;
     }
   }
   return {

@@ -91,15 +91,31 @@ describe("isolated completion token budgets", () => {
     );
   });
 
-  it("reserves low thinking budget when thinkLevel is off on mandatory adaptive Claude models", async () => {
-    const model = {
-      provider: "anthropic",
-      id: "claude-opus-5-5",
-      api: "anthropic-messages",
-      baseUrl: nativeAuthPlan.modelRoute.baseUrl,
-      reasoning: true,
-      maxTokens: 64_000,
-    };
+  it.each([
+    {
+      label: "canonical mandatory-adaptive Claude 5.5 model",
+      model: {
+        provider: "anthropic",
+        id: "claude-opus-5-5",
+        api: "anthropic-messages",
+        baseUrl: nativeAuthPlan.modelRoute.baseUrl,
+        reasoning: true,
+        maxTokens: 64_000,
+      },
+    },
+    {
+      label: "mandatory-adaptive deployment alias with catalog reasoning false",
+      model: {
+        provider: "anthropic",
+        id: "company-opus",
+        api: "anthropic-messages",
+        baseUrl: nativeAuthPlan.modelRoute.baseUrl,
+        reasoning: false,
+        maxTokens: 64_000,
+        params: { canonicalModelId: "claude-opus-5-5" },
+      },
+    },
+  ])("reserves low thinking budget when thinkLevel is off on $label", async ({ model }) => {
     mocks.resolveModelAsync.mockResolvedValue({ model });
     mocks.prepareSimpleCompletionModel.mockResolvedValue({
       model,
@@ -111,13 +127,13 @@ describe("isolated completion token budgets", () => {
     registerIsolatedHarness({ runIsolatedCompletionV2: dispatch });
     await runIsolatedCompletion({
       ...isolatedRequest(),
-      answerTokenBudget: 1024,
+      answerTokenBudget: 300,
       thinkLevel: "off",
     });
     expect(dispatch).toHaveBeenCalledWith(
       expect.objectContaining({
         thinkLevel: "off",
-        streamParams: { maxTokens: 3072 },
+        streamParams: { maxTokens: 2348 },
       }),
     );
   });

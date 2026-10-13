@@ -87,9 +87,6 @@ describe("session observer completion", () => {
     expect(prefix).toContain("password=");
     expect(prefix).toMatch(/x{20}$/u);
     expect(completeModel).toHaveBeenCalledTimes(2);
-    expect(completeModel).toHaveBeenCalledWith(
-      expect.objectContaining({ answerTokenBudget: 1024, streamParams: { temperature: 0.2 } }),
-    );
   });
 
   it("publishes a digest from a utility model that answers after 15s", async () => {

@@ -136,7 +136,7 @@ describe("utility completion with an unavailable implicit harness", () => {
       expect(transport).toHaveBeenCalledWith(
         expect.objectContaining({
           context: expect.objectContaining({ tools: [] }),
-          options: expect.objectContaining({ maxTokens: 1024, temperature: 0.2, reasoning: "off" }),
+          options: expect.objectContaining({ maxTokens: 300, temperature: 0.2, reasoning: "off" }),
         }),
       );
       expect(runtimeMocks.runEmbeddedAttempt).not.toHaveBeenCalled();
@@ -237,4 +237,75 @@ describe("utility completion with an unavailable implicit harness", () => {
       expect(runtimeMocks.runEmbeddedAttempt).not.toHaveBeenCalled();
     },
   );
+
+  it("reserves mandatory adaptive thinking once through Anthropic transport shaping for observer digests", async () => {
+    const { resolveAnthropicTransportOptions } =
+      await import("../../packages/ai/src/transports/anthropic-transport-options.js");
+    const mandatoryModel = {
+      provider: "anthropic",
+      id: "claude-opus-5-5",
+      name: "Claude Opus 5.5",
+      api: "anthropic-messages" as const,
+      baseUrl: "https://api.anthropic.com",
+      reasoning: true,
+      input: ["text" as const],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200_000,
+      maxTokens: 64_000,
+    };
+    vi.spyOn(simpleCompletionRuntime, "prepareSimpleCompletionModel").mockResolvedValue({
+      model: mandatoryModel,
+      auth: { apiKey: "synthetic-utility-key", mode: "api-key", source: "test" },
+    });
+    let shapedOptions: ReturnType<typeof resolveAnthropicTransportOptions> | undefined;
+    const transport = vi
+      .spyOn(simpleCompletionExecution, "completeWithPreparedSimpleCompletionModel")
+      .mockImplementation(async (params) => {
+        shapedOptions = resolveAnthropicTransportOptions(
+          params.model as typeof mandatoryModel,
+          params.options,
+          params.auth.apiKey ?? "synthetic-utility-key",
+        );
+        return makeAssistantMessageFixture({
+          stopReason: "stop",
+          content: [
+            { type: "text", text: '{"headline":"Adaptive budget reserved","health":"on-track"}' },
+          ],
+        });
+      });
+    vi.useFakeTimers();
+    const observer = createHarness({
+      config,
+      utilityModelRef: "anthropic/claude-opus-5-5",
+      prepareModel: vi.fn(defaultPrepareModel),
+      completeModel: vi.fn(defaultCompleteModel),
+      readSession: vi.fn(() => ({
+        sessionId: "session-id",
+        updatedAt: 0,
+        agentHarnessId: "openclaw",
+      })),
+    });
+    try {
+      startAndAddToolNotes(observer.observer);
+      await vi.advanceTimersByTimeAsync(12_000);
+      await vi.dynamicImportSettled();
+      await flushObserver();
+
+      expect(transport).toHaveBeenCalledOnce();
+      expect(shapedOptions).toMatchObject({
+        maxTokens: 2348,
+        thinkingEnabled: true,
+        effort: "low",
+        reasoning: "low",
+      });
+      expect(observer.broadcastToConnIds).toHaveBeenCalledWith(
+        "session.observer",
+        expect.objectContaining({ headline: "Adaptive budget reserved", health: "on-track" }),
+        expect.any(Set),
+        expect.anything(),
+      );
+    } finally {
+      observer.observer.dispose();
+    }
+  });
 });

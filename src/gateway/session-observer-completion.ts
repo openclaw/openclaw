@@ -71,7 +71,7 @@ export function createSessionObserverCompletion(params: {
             prompt: buildSessionObserverPrompt(state, notes),
             timeoutMs: SESSION_OBSERVER_MODEL_TIMEOUT_MS,
             abortSignal: controller.signal,
-            answerTokenBudget: 1024,
+            answerTokenBudget: 300,
             streamParams: { temperature: 0.2 },
           });
           const parsed = normalizeSessionObserverModelOutput(result.text);
