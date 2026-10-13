@@ -235,15 +235,34 @@ it.each(["same", "independent"] as const)(
   "commits an awaited rewrite and refuses a stale rewrite after a %s manager writes",
   async (writerKind) => {
     const { scope, manager } = await openSession();
-    const sourceId = await appendUser(manager, "original");
+    const sourceId = await manager.appendMessageAsync({
+      role: "user",
+      content: [{ type: "text", text: "original" }],
+      timestamp: 1,
+    });
+    if (!sourceId) {
+      throw new Error("Missing source message ID");
+    }
     await manager.reloadPersistedTranscriptAsync();
     const source = manager.getEntry(sourceId);
-    expect(Object.isFrozen(source)).toBe(true);
+    if (source?.type !== "message") {
+      throw new Error("Missing hydrated source message");
+    }
+    expect(Object.isFrozen(source)).toBe(false);
+    expect(Object.isFrozen(source.message.content)).toBe(true);
     vi.spyOn(manager, "prepareTranscriptRewrite").mockImplementation(() => {
       throw new Error("sync compatibility adapter used");
     });
     const rewrite = await manager.prepareTranscriptRewriteAsync();
-    expect(rewrite.sessionManager.getEntry(sourceId)).toBe(source);
+    const snapshot = rewrite.sessionManager.getEntry(sourceId);
+    if (snapshot?.type !== "message") {
+      throw new Error("Missing rewrite source message");
+    }
+    expect(snapshot).not.toBe(source);
+    expect(snapshot.message).not.toBe(source.message);
+    expect(snapshot.message.content).toBe(source.message.content);
+    source.message.content = "local replacement";
+    expect(snapshot.message.content).toEqual([{ type: "text", text: "original" }]);
     await rewrite.sessionManager.resetLeafAsync();
     const replacementId = await appendUser(rewrite.sessionManager, "replacement");
     await rewrite.commit(new Map([[sourceId, replacementId]]));

@@ -17,7 +17,6 @@ import {
 } from "../../config/sessions/transcript-target-binding.js";
 import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
-import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import {
   isIndexedSessionEntry,
   migrateToCurrentVersion,
@@ -33,6 +32,7 @@ import {
 } from "./session-manager-incognito-scope.js";
 import { prepareSessionManagerHydration } from "./session-manager-incognito.js";
 import { consumeSessionManagerReload, readSessionManagerReload } from "./session-manager-reload.js";
+import { freezeTranscriptPayloads } from "./session-manager-snapshot.js";
 import type {
   FileEntry,
   NewSessionOptions,
@@ -289,8 +289,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
       partitioned.fileEntriesByOriginalIndex,
     );
     if (target) {
-      // Seal hydrated SQLite payloads once, after migration, like newly appended entries.
-      this.fileEntries.forEach((entry) => freezeJsonSnapshot(entry));
+      this.fileEntries.forEach(freezeTranscriptPayloads);
     }
     this.buildIndex();
     if (bounded) {

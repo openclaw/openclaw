@@ -1,7 +1,19 @@
 import { isProxy } from "node:util/types";
-import { isDeeplyFrozenPlainData } from "../../shared/immutable-data.js";
+import { freezeJsonSnapshot, isDeeplyFrozenPlainData } from "../../shared/immutable-data.js";
+import type { FileEntry } from "./session-manager-types.js";
 
 const nativeCloneRequired = new Error("Opaque session snapshot requires native cloning");
+
+/** Loaded entry/message envelopes stay caller-mutable; their nested payloads may be shared. */
+export function freezeTranscriptPayloads(entry: FileEntry): void {
+  for (const [key, value] of Object.entries(entry)) {
+    if (entry.type === "message" && key === "message") {
+      Object.values(entry.message).forEach((payload) => freezeJsonSnapshot(payload));
+    } else {
+      freezeJsonSnapshot(value);
+    }
+  }
+}
 
 /** Detach mutable containers while sharing sealed transcript payloads. */
 export function cloneTranscriptView<T>(snapshot: T): T {
