@@ -190,23 +190,31 @@ export function readExactSessionEntryCandidatesInDatabase(
   });
 }
 
-/** Bracket one accessor-owned row write so its publication cannot hide earlier raw DML. */
-export function trackSessionEntryCacheWrite(
-  database: OpenClawAgentDatabase,
-  write: () => void,
-): SqliteSessionEntryCacheWriteGeneration | undefined {
+/** Capture the preimage before a prepared write; settle its generation after commit. */
+export function prepareSessionEntryCacheWrite(database: OpenClawAgentDatabase) {
   const before =
     !readSessionActorTransactionState(database) &&
     sessionEntryCaches.has(database.db) &&
     getAdmittedSqliteSchemaFacts(database.db)
       ? readSessionNodesGeneration(database.db)
       : undefined;
+  return (): SqliteSessionEntryCacheWriteGeneration | undefined => {
+    if (before === undefined || !getAdmittedSqliteSchemaFacts(database.db)) {
+      sessionEntryCaches.delete(database.db);
+      return undefined;
+    }
+    return { before, after: readSessionNodesGeneration(database.db) };
+  };
+}
+
+/** Bracket one accessor-owned row write so its publication cannot hide earlier raw DML. */
+export function trackSessionEntryCacheWrite(
+  database: OpenClawAgentDatabase,
+  write: () => void,
+): SqliteSessionEntryCacheWriteGeneration | undefined {
+  const complete = prepareSessionEntryCacheWrite(database);
   write();
-  if (before === undefined || !getAdmittedSqliteSchemaFacts(database.db)) {
-    sessionEntryCaches.delete(database.db);
-    return undefined;
-  }
-  return { before, after: readSessionNodesGeneration(database.db) };
+  return complete();
 }
 
 export function readSessionEntryCache(

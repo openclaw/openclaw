@@ -682,6 +682,16 @@ it.each([false, true])(
 it("retains rollback state and fences unknown commits until an explicit read", async () => {
   await withActor(async ({ actor, commands, fault }) => {
     const initial = await actor.read(authority);
+    if (actor.target.database.kind !== "file") {
+      throw new Error("Fixture requires durable storage");
+    }
+    const retained = retainPreparedSessionEntryPredicate({
+      databaseIdentity: `file:${actor.target.database.physicalIdentity}`,
+      sessionKey: actor.target.sessionKey,
+      entry: initial.entry,
+      matches: (before, after) => before?.sessionId === after?.sessionId,
+    });
+    using _ = { [Symbol.dispose]: retained.release };
     const rejected = await actor.patch(
       {
         commandId: "refused",
@@ -701,6 +711,7 @@ it("retains rollback state and fences unknown commits until an explicit read", a
     expect(rejected.kind).toBe("rolled-back");
     const rolledBack = actor.snapshot(authority) ?? (await actor.read(authority));
     expect(rolledBack.entry?.updatedAt).toBe(initial.entry?.updatedAt);
+    expect(retained.isCurrent()).toBe(true);
     fault.reply = "unknown";
     const unknown = await actor.patch(
       {
@@ -712,6 +723,7 @@ it("retains rollback state and fences unknown commits until an explicit read", a
       authority,
     );
     expect(unknown.kind).toBe("unknown");
+    expect(retained.isCurrent()).toBe(false);
     expect(actor.snapshot(authority)).toBeUndefined();
     const before = commands.length;
     expect(

@@ -3324,6 +3324,38 @@ openclaw-chat-ci-details {
   line-height: 1;
 }
 
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .chat-pane__layout-trigger {
+    min-height: 44px;
+  }
+
+  /* Keep the complete action list scrollable without covering the conversation. */
+  .chat-panel-layout-menu::part(menu) {
+    /* Web Awesome consumes this variable in its important max-height rule. */
+    --auto-size-available-height: min(360px, 50dvh);
+
+    width: min(264px, calc(100dvw - 24px));
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .chat-panel-layout-menu .session-menu__item {
+    min-height: 44px;
+  }
+
+  .chat-panel-layout-menu .session-menu__text {
+    display: block;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  /* The desktop shortcut rail consumes label space but offers no touch action. */
+  .chat-panel-layout-menu .side-panel-type-option__shortcut,
+  .chat-panel-layout-menu .session-menu__item::part(details) {
+    display: none;
+  }
+}
+
 .chat-pane__layout-trigger svg,
 .chat-pane__sharing-trigger svg,
 .chat-pane__subagents-running svg {

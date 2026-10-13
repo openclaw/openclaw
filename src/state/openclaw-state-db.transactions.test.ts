@@ -8,6 +8,10 @@ import {
   resolveGatewayStateOwnerPath,
 } from "../infra/gateway-state-owner.js";
 import {
+  deferSqlitePostCommitPublication,
+  stageSqliteCommittedPublication,
+} from "../infra/sqlite-post-commit.js";
+import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   registerOpenClawStateDatabaseLifecycleListener,
@@ -214,4 +218,118 @@ it("lets SQLite exclude a competing cached writer and resumes after its commit",
     }
     other.close();
   }
+});
+
+it("refuses a single-statement write before its effect when shared-state admission is lost", () => {
+  const options = { path: path.join(tempDirs.make("state-single-refused-"), "state.sqlite") };
+  const database = openOpenClawStateDatabase(options);
+  const marker = publishForeignSchemaOwner(database.path);
+  const write = vi.fn(({ db }: { db: DatabaseSync }) =>
+    db
+      .prepare(
+        "INSERT INTO diagnostic_events(scope,event_key,payload_json,created_at) VALUES(?,?,?,?)",
+      )
+      .run("single-statement", "refused", "{}", 1),
+  );
+  try {
+    expect(() =>
+      runOpenClawStateWriteTransaction(write, { ...options, database }, { singleStatement: true }),
+    ).toThrow(expect.objectContaining({ name: "StateDatabaseAccessError" }));
+    expect(write).not.toHaveBeenCalled();
+    expect(database.db.isTransaction).toBe(false);
+    expect(
+      database.db
+        .prepare("SELECT event_key FROM diagnostic_events WHERE scope='single-statement'")
+        .all(),
+    ).toEqual([]);
+  } finally {
+    fs.rmSync(marker, { force: true });
+  }
+});
+
+it("publishes a committed single statement without an envelope or replaying a failed observer", () => {
+  const options = { path: path.join(tempDirs.make("state-single-publication-"), "state.sqlite") };
+  const database = openOpenClawStateDatabase(options);
+  using reader = new DatabaseSync(database.path, { readOnly: true });
+  const events: string[] = [];
+  const exec = vi.spyOn(database.db, "exec");
+  const write = vi.fn(({ db }: { db: DatabaseSync }) => {
+    expect(db.isTransaction).toBe(false);
+    expect(
+      stageSqliteCommittedPublication(db, {
+        installFacts: () => {
+          expect(db.isTransaction).toBe(false);
+          events.push("facts");
+        },
+        invalidate: () => events.push("invalidated"),
+        notify: () => {
+          expect(
+            reader
+              .prepare("SELECT event_key FROM diagnostic_events WHERE scope='single-statement'")
+              .all(),
+          ).toEqual([{ event_key: "committed" }]);
+          events.push("notified");
+        },
+      }),
+    ).toBe(true);
+    deferSqlitePostCommitPublication(db, () => {
+      events.push("failed observer");
+      throw new Error("synthetic observer failure");
+    });
+    deferSqlitePostCommitPublication(db, () => events.push("last observer"));
+    return db
+      .prepare(
+        "INSERT INTO diagnostic_events(scope,event_key,payload_json,created_at) VALUES(?,?,?,?)",
+      )
+      .run("single-statement", "committed", "{}", 1);
+  });
+  try {
+    const result = runOpenClawStateWriteTransaction(write, options, { singleStatement: true });
+    expect(result.changes).toBe(1);
+    expect(write).toHaveBeenCalledOnce();
+    expect(events).toEqual(["facts", "notified", "failed observer", "last observer"]);
+    expect(
+      exec.mock.calls.filter(([sql]) =>
+        /\b(?:BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE)\b/i.test(sql),
+      ),
+    ).toEqual([]);
+  } finally {
+    exec.mockRestore();
+  }
+});
+
+it("keeps a nested single statement and its publication subject to the outer rollback", () => {
+  const options = { path: path.join(tempDirs.make("state-single-nested-"), "state.sqlite") };
+  const database = openOpenClawStateDatabase(options);
+  const published = vi.fn();
+  expect(() =>
+    runOpenClawStateWriteTransaction(({ db }) => {
+      runOpenClawStateWriteTransaction(
+        ({ db: nested }) => {
+          expect(nested.isTransaction).toBe(true);
+          deferSqlitePostCommitPublication(nested, published);
+          return nested
+            .prepare(
+              "INSERT INTO diagnostic_events(scope,event_key,payload_json,created_at) VALUES(?,?,?,?)",
+            )
+            .run("single-statement", "rolled-back", "{}", 1);
+        },
+        { ...options, database },
+        { singleStatement: true },
+      );
+      expect(db.isTransaction).toBe(true);
+      expect(published).not.toHaveBeenCalled();
+      expect(
+        db.prepare("SELECT event_key FROM diagnostic_events WHERE scope='single-statement'").all(),
+      ).toEqual([{ event_key: "rolled-back" }]);
+      throw new Error("synthetic outer rollback");
+    }, options),
+  ).toThrow("synthetic outer rollback");
+  expect(database.db.isTransaction).toBe(false);
+  expect(published).not.toHaveBeenCalled();
+  expect(
+    database.db
+      .prepare("SELECT event_key FROM diagnostic_events WHERE scope='single-statement'")
+      .all(),
+  ).toEqual([]);
 });

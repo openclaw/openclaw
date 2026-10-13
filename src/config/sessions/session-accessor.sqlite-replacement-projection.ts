@@ -21,7 +21,6 @@ import type {
 import type { SessionCreationSnapshot } from "./session-accessor.sqlite-creation-read.js";
 import {
   captureNativeSessionWorkerDeletion,
-  hasPreparedNativeSessionDeletion,
   runSqliteSessionDeletionTransaction as runOpenClawAgentWriteTransaction,
 } from "./session-accessor.sqlite-deletion.js";
 import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
@@ -463,13 +462,10 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
         deletedEntries: deletedOwners,
         commit: async (assertSourceCurrent) => {
           const nativeDeletion = captureNativeSessionWorkerDeletion(deletedOwners);
-          // Only opaque companions require the parent's synchronous transaction view.
-          const workerCommit =
-            useWorker && (!hasPreparedNativeSessionDeletion() || Boolean(nativeDeletion));
           const preparedPreservation =
             params.skipMaintenance === false
               ? await prepareSessionMaintenancePreservation(params.storePath, {
-                  native: !workerCommit,
+                  native: !useWorker,
                 })
               : undefined;
           try {
@@ -505,7 +501,7 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
               preparedTranscript: params.preparedTranscript,
               maintenance,
             };
-            if (!workerCommit) {
+            if (!useWorker) {
               return await withSqliteSessionDatabase(
                 databaseOptions,
                 (owned) =>
