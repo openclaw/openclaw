@@ -5,6 +5,7 @@ import { beforeEach, expect, it } from "vitest";
 import type { SecretStoreEntry } from "../../../../packages/gateway-protocol/src/index.js";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiViewportScreenshot } from "../../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../../test-helpers/control-ui-e2e.ts";
 
@@ -114,22 +115,12 @@ async function tableBodyContrast(page: Page): Promise<number> {
 }
 
 async function activeGatewayIdentity(page: Page) {
-  return await page.evaluate(() => {
-    const app = document.querySelector("openclaw-app") as HTMLElement & {
-      runtime?: {
-        context: {
-          gateway: {
-            connection: { gatewayUrl: string };
-            snapshot: { client: { instanceId: string } | null; phase: string };
-          };
-        };
-      };
-    };
-    const gateway = app.runtime?.context.gateway;
+  return await evaluateControlUiContext(page, (context) => {
+    const gateway = context.gateway;
     return {
-      clientInstanceId: gateway?.snapshot.client?.instanceId,
-      gatewayUrl: gateway?.connection.gatewayUrl,
-      phase: gateway?.snapshot.phase,
+      clientInstanceId: gateway.snapshot.client?.instanceId,
+      gatewayUrl: gateway.connection.gatewayUrl,
+      phase: gateway.snapshot.phase,
     };
   });
 }
@@ -502,21 +493,10 @@ suite.define(() => {
 
       const socketCount = await gateway.getSocketCount();
       const listCount = (await gateway.getRequests("secrets.store.list")).length;
-      const originalGateway = await page.evaluate(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime?: {
-            context: {
-              gateway: {
-                connection: { gatewayUrl: string };
-                connect: (options: { token: string }) => void;
-                snapshot: { client: { instanceId: string } | null };
-              };
-            };
-          };
-        };
-        const activeGateway = app.runtime?.context.gateway;
-        const client = activeGateway?.snapshot.client;
-        if (!activeGateway || !client) {
+      const originalGateway = await evaluateControlUiContext(page, (context) => {
+        const activeGateway = context.gateway;
+        const client = activeGateway.snapshot.client;
+        if (!client) {
           throw new Error("Expected a connected Gateway client before confirmation");
         }
         const identity = {

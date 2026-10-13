@@ -10,15 +10,17 @@ import {
 import {
   hydrateOpenClawStateWorkerError,
   retainOpenClawStateWorkerErrorPayload,
+  type OpenClawStateWorkerErrorPayload,
 } from "./openclaw-state-worker-error.js";
 
 type OpenClawStateOwnershipWorkerReply =
   | { ok: true; ownershipJson: string }
-  | { ok: false; workerError: unknown };
+  | { ok: false; workerError: OpenClawStateWorkerErrorPayload | undefined };
 
 function readOwnershipWorkerReply(stdout: string, stderr: string): string {
-  let reply: unknown;
+  let reply: OpenClawStateOwnershipWorkerReply;
   try {
+    // This bundled child emits the private reply contract; check its envelope below.
     reply = JSON.parse(stdout);
   } catch {
     throw createSqliteReadOnlyWorkerError("returned invalid ownership JSON", stderr);

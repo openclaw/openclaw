@@ -7,7 +7,7 @@ import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
 } from "../media-understanding/types.js";
-import type { MediaFact } from "../media/media-facts.js";
+import type { LegacyMediaContextKey, MediaFact } from "../media/media-facts.js";
 import type { PluginHookChannelContext } from "../plugins/hook-channel-context.types.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { CommandTurnContext } from "./command-turn-context.js";
@@ -394,7 +394,7 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   TransportThreadId?: string | number;
   /** Platform-native channel/conversation id (e.g. Slack DM channel "D…" id). */
   NativeChannelId?: string;
-  /** Channel-owned local conversation image reference; never rendered into prompt text. */
+  /** Channel-owned local image reference; empty clears a prior avatar. Never rendered into prompts. */
   ConversationAvatar?: string;
   /** Channel-owned metadata exposed to plugin hook context, not prompt text. */
   ChannelContext?: PluginHookChannelContext;
@@ -463,20 +463,8 @@ export type FinalizedMsgContext = Omit<MsgContext, "CommandAuthorized"> & {
   CommandTurn?: CommandTurnContext;
 };
 
-type RuntimeMediaContextKey =
-  | "MediaPath"
-  | "MediaUrl"
-  | "MediaType"
-  | "MediaDir"
-  | "MediaPaths"
-  | "MediaUrls"
-  | "MediaTypes"
-  | "MediaWorkspaceDir"
-  | "MediaTranscribedIndexes"
-  | "MediaStaged";
-
 /** Internal inbound context; legacy media fields exist only on the shipped SDK adapter. */
-export type RuntimeMsgContext = Omit<MsgContext, RuntimeMediaContextKey>;
+export type RuntimeMsgContext = Omit<MsgContext, LegacyMediaContextKey>;
 
 export type FinalizedRuntimeMsgContext = Omit<
   RuntimeMsgContext,

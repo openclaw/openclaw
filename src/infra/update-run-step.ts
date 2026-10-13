@@ -48,6 +48,14 @@ export function isUpdateGatewayReadinessPending(result: UpdateRunResult): boolea
   return step?.termination === "timeout" && step.advisory?.kind === "recoverable-maintenance";
 }
 
+export function isUpdatePostInstallVerificationDeferred(step: ResultStep): boolean {
+  return (
+    step.name === "post-install-verify" &&
+    step.exitCode === null &&
+    step.advisory?.kind === "recoverable-maintenance"
+  );
+}
+
 /** Preserve producer-classified diagnostics without turning successful inventory into warnings. */
 export function updateRunStepsFromResultStep(step: ResultStep): UpdateRunStep[] {
   const text = (value: string) => truncateUtf16Safe(value, UPDATE_RUN_TEXT_LIMIT);

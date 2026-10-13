@@ -12,10 +12,7 @@ import {
   positionTranscriptDisplayEvents,
   readTranscriptDisplaySource,
 } from "./session-accessor.sqlite-display-position.js";
-import {
-  isVisibleHistoryNonMessageEvent,
-  parseStoredTranscriptEvent,
-} from "./session-accessor.sqlite-history-interval.js";
+import { parseStoredTranscriptEvent } from "./session-accessor.sqlite-history-interval.js";
 import {
   readActiveTranscriptCoordinate,
   resolveVisibleHistoryEventCount,
@@ -27,6 +24,7 @@ import {
   type SessionTranscriptMessageEvent,
 } from "./session-accessor.sqlite-projection-read.js";
 import { resolveTranscriptBoundaryWindow } from "./session-accessor.sqlite-reset-window.js";
+import { isVisibleHistoryNonMessageEvent } from "./session-history-visibility.js";
 import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { readTranscriptPayload } from "./transcript-payload.js";

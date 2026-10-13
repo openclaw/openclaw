@@ -15,15 +15,14 @@ import {
 import type { prepareUtilityCompletionForAgent } from "../agents/utility-completion.js";
 import type { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import {
-  loadSessionEntryReadOnly,
   patchSessionEntryCore,
   patchSessionEntryTarget,
 } from "../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { redactToolPayloadText } from "../logging/redact.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
@@ -31,6 +30,7 @@ import type {
   SessionEventSubscriberRegistry,
   SessionMessageSubscriberRegistry,
 } from "./server-chat-state.js";
+import type { SessionRowProjection } from "./session-row-projection.js";
 import { resolveSessionSubscriptionKey } from "./session-subscription-keys.js";
 
 const HEADLINE_MAX_CHARS = 120;
@@ -39,8 +39,6 @@ const MAX_REVISION_FLOORS = 256;
 const MAX_SUPERSEDED_RUNS = 256;
 const MAX_DORMANT_RUNS = 256;
 const MAX_DISABLED_RUNS = 512;
-
-export const SESSION_OBSERVER_MODEL_MAX_TOKENS = 300;
 
 export type SessionObserverRead = {
   assertCurrent: () => void;
@@ -253,6 +251,7 @@ export type SessionObserverDeps = {
   prepareModel?: PrepareModel;
   completeModel?: CompleteModel;
   readSession?: (sessionKey: string, agentId: string) => SessionEntry | undefined;
+  getSessionRowProjection?: () => SessionRowProjection | undefined;
   persistDigest?: (params: {
     reader?: SessionObserverRead;
     sessionKey: string;
@@ -301,7 +300,7 @@ const ModelDigestSchema = z.strictObject({
 });
 
 export function sanitizeSessionObserverModelText(value: string, maxChars: number): string {
-  const normalized = redactToolPayloadText(value).replace(/\s+/gu, " ").trim();
+  const normalized = value.replace(/\s+/gu, " ").trim();
   return truncateUtf16Safe(normalized, maxChars);
 }
 
@@ -309,10 +308,14 @@ export function defaultReadSession(
   sessionKey: string,
   agentId: string,
   storePath?: string,
-): SessionEntry | undefined {
+): Promise<SessionEntry | undefined> {
   // Read-only: observation must never materialize agent state (dirs, agent DB
   // registration) for agents that are not configured.
-  return loadSessionEntryReadOnly({ sessionKey, agentId, ...(storePath ? { storePath } : {}) });
+  return readSessionEntryReadOnlyInWorker({
+    sessionKey,
+    agentId,
+    ...(storePath ? { storePath } : {}),
+  });
 }
 
 export async function defaultPersistDigest(params: {

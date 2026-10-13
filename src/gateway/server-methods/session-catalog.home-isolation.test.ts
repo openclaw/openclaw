@@ -10,9 +10,8 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
 
-// HOME policy uses the real home path, but this fixture must not open its profile database.
+// mock-isolation: HOME policy uses the real home path but must not open its profile database.
 vi.mock("../../state/user-profiles.js", () => ({
-  getUserProfileRole: vi.fn(() => null),
   hasMultipleSessionSharingIdentities: vi.fn(() => false),
 }));
 

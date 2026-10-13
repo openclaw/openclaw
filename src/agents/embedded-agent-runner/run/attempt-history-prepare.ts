@@ -4,6 +4,10 @@ import { filterHeartbeatTranscriptArtifacts } from "../../../auto-reply/heartbea
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import { readSessionEntrySummariesInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
+import {
+  sessionEntryCommitGuardOptions,
+  type SessionSourceAssertion,
+} from "../../../config/sessions/session-source-authority.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import { resolveHeartbeatSummaryForAgent } from "../../../infra/heartbeat-summary.js";
 import { prepareHarnessContextEnginePrompt } from "../../harness/context-engine-lifecycle.js";
@@ -11,12 +15,13 @@ import { sanitizeToolUseResultPairingForModel } from "../../session-transcript-r
 import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "../replay-history.js";
+import { bindToolResultPromptProjectionKeys } from "../tool-result-projection-key.js";
 import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
 import { loadAttemptSessionEntryAfterQuotaMaintenance } from "./attempt-transcript-helpers.js";
 
 export async function prepareEmbeddedAttemptHistory(
   input: EmbeddedAttemptExecutionPhaseInput,
-  assertActive: () => void,
+  assertActive: SessionSourceAssertion,
 ) {
   const { attempt, activeContextEngine, isRawModelRun } = input;
   const {
@@ -60,7 +65,10 @@ export async function prepareEmbeddedAttemptHistory(
     });
     const prior = await sanitizeSessionHistory({
       ...replayContext(),
-      messages: activeSession.messages,
+      messages: bindToolResultPromptProjectionKeys(
+        activeSession.messages,
+        input.prepared.sessionRuntime.toolResultPromptProjectionState,
+      ),
       allowedToolNames: replayAllowedToolNames,
       sessionManager,
     });
@@ -111,7 +119,11 @@ export async function prepareEmbeddedAttemptHistory(
               quotaSuspension: { ...entry.quotaSuspension, state: "active" },
             };
           },
-          { skipMaintenance: true, takeCacheOwnership: true, assertCommitAllowed: assertActive },
+          {
+            skipMaintenance: true,
+            takeCacheOwnership: true,
+            ...sessionEntryCommitGuardOptions(assertActive),
+          },
         );
         assertActive();
       }

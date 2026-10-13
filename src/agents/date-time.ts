@@ -68,38 +68,18 @@ export function formatDateStamp(nowMs: number, timeZone: string): string {
   return date.toISOString().slice(0, 10);
 }
 
-export function buildTemporalContextSection(params: {
-  userDate?: string;
-  userTimezone?: string;
-  sessionStatusAvailable: boolean;
-}): string[] {
-  const userDate = params.userDate?.trim();
-  const userTimezone = params.userTimezone?.trim();
-  if (!userDate || !userTimezone) {
-    return [];
-  }
-  return [
-    "## Temporal Context",
-    `Current date: ${userDate}`,
-    `Time zone: ${userTimezone}`,
-    ...(params.sessionStatusAvailable ? ["For the exact current time, use `session_status`."] : []),
-    "",
-  ];
-}
-
-/** Build current prompt text using the configured timezone or the canonical host fallback. */
+/** Build current turn context using the configured timezone or the canonical host fallback. */
 export function buildTemporalContextText(params: {
   configuredTimezone?: string;
   sessionStatusAvailable: boolean;
 }): string {
   const userTimezone = resolveUserTimezone(params.configuredTimezone);
-  return buildTemporalContextSection({
-    userDate: formatDateStamp(Date.now(), userTimezone),
-    userTimezone,
-    sessionStatusAvailable: params.sessionStatusAvailable,
-  })
-    .join("\n")
-    .trimEnd();
+  return [
+    "## Temporal Context",
+    `Current date: ${formatDateStamp(Date.now(), userTimezone)}`,
+    `Time zone: ${userTimezone}`,
+    ...(params.sessionStatusAvailable ? ["For the exact current time, use `session_status`."] : []),
+  ].join("\n");
 }
 
 /** Normalize Date, second, millisecond, or parseable string timestamps. */
@@ -166,40 +146,28 @@ export function withNormalizedTimestamp<T extends Record<string, unknown>>(
 }
 
 function detectSystemTimeFormat(): boolean {
-  if (process.platform === "darwin") {
-    try {
+  try {
+    if (process.platform === "darwin") {
       const result = execFileSync("defaults", ["read", "-g", "AppleICUForce24HourTime"], {
         encoding: "utf8",
         timeout: 500,
         stdio: ["pipe", "pipe", "pipe"],
       }).trim();
-      if (result === "1") {
-        return true;
+      if (result === "1" || result === "0") {
+        return result === "1";
       }
-      if (result === "0") {
-        return false;
-      }
-    } catch {
-      // macOS omits the key for locale-default behavior.
-    }
-  }
-
-  if (process.platform === "win32") {
-    try {
+    } else if (process.platform === "win32") {
       const result = execFileSync(
         "powershell",
         ["-Command", "(Get-Culture).DateTimeFormat.ShortTimePattern"],
         { encoding: "utf8", timeout: 1000 },
       ).trim();
-      if (result.startsWith("H")) {
-        return true;
+      if (result.startsWith("H") || result.startsWith("h")) {
+        return result.startsWith("H");
       }
-      if (result.startsWith("h")) {
-        return false;
-      }
-    } catch {
-      // Windows detection is best-effort; Intl below is the portable fallback.
     }
+  } catch {
+    // Missing OS preferences and failed probes use the portable Intl fallback.
   }
 
   try {

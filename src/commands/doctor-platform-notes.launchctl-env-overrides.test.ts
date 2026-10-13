@@ -22,8 +22,7 @@ vi.mock("../daemon/launchd.js", () => ({ findStaleOpenClawUpdateLaunchdJobs: moc
 
 import {
   collectGatewayPlatformWarnings,
-  noteMacLaunchctlGatewayEnvOverrides,
-  noteMacStaleOpenClawUpdateLaunchdJobs,
+  noteMacGatewayPlatformWarnings,
   noteStartupOptimizationHints,
 } from "./doctor-platform-notes.js";
 
@@ -48,7 +47,7 @@ afterEach(() => {
   }
 });
 
-describe("noteMacLaunchctlGatewayEnvOverrides", () => {
+describe("macOS Gateway environment warnings", () => {
   it("prints clear unsetenv instructions for token override", async () => {
     mocks.runExec.mockImplementation(async (_command, [, name]) => ({
       stdout: name === "OPENCLAW_GATEWAY_TOKEN" ? " \tlaunchctl-token\n" : " \n",
@@ -62,7 +61,7 @@ describe("noteMacLaunchctlGatewayEnvOverrides", () => {
       },
     };
 
-    await noteMacLaunchctlGatewayEnvOverrides(cfg);
+    await noteMacGatewayPlatformWarnings(cfg);
 
     expect(mocks.note).toHaveBeenCalledTimes(1);
     expect(mocks.runExec).toHaveBeenCalledTimes(2);
@@ -96,7 +95,7 @@ describe("noteMacLaunchctlGatewayEnvOverrides", () => {
       },
     };
 
-    await noteMacLaunchctlGatewayEnvOverrides(cfg);
+    await noteMacGatewayPlatformWarnings(cfg);
 
     expect(mocks.note).toHaveBeenCalledTimes(1);
     const [message] = expectDefined<unknown[]>(mocks.note.mock.calls[0], "note call 0");
@@ -116,7 +115,7 @@ describe("noteMacLaunchctlGatewayEnvOverrides", () => {
       },
     };
 
-    await noteMacLaunchctlGatewayEnvOverrides(cfg);
+    await noteMacGatewayPlatformWarnings(cfg);
 
     expect(mocks.runExec).not.toHaveBeenCalled();
     expect(mocks.note).not.toHaveBeenCalled();
@@ -132,7 +131,7 @@ describe("noteMacLaunchctlGatewayEnvOverrides", () => {
       },
     };
 
-    await noteMacLaunchctlGatewayEnvOverrides(cfg);
+    await noteMacGatewayPlatformWarnings(cfg);
 
     expect(mocks.runExec).toHaveBeenNthCalledWith(
       1,
@@ -150,7 +149,7 @@ describe("noteMacLaunchctlGatewayEnvOverrides", () => {
   });
 });
 
-describe("noteMacStaleOpenClawUpdateLaunchdJobs", () => {
+describe("macOS stale updater warnings", () => {
   it("uses service env for gateway platform stale updater warnings", async () => {
     const serviceEnv = {
       OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",
@@ -187,7 +186,7 @@ describe("noteMacStaleOpenClawUpdateLaunchdJobs", () => {
       },
     ]);
 
-    await noteMacStaleOpenClawUpdateLaunchdJobs();
+    await noteMacGatewayPlatformWarnings({});
 
     expect(mocks.findJobs).toHaveBeenCalledTimes(1);
     const [message, title] = expectDefined<unknown[]>(mocks.note.mock.calls[0], "note call 0");

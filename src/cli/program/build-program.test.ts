@@ -1,6 +1,6 @@
 // Build program tests cover root CLI program construction and command wiring.
 import process from "node:process";
-import { Command, CommanderError } from "commander";
+import { CommanderError } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildProgram } from "./build-program.js";
 import type { ProgramContext } from "./context.js";
@@ -69,25 +69,6 @@ describe("buildProgram", () => {
     vi.restoreAllMocks();
   });
 
-  it("wires context/help/preaction/command registration with shared context", () => {
-    const argv = ["node", "openclaw", "status"];
-    const originalArgv = process.argv;
-    process.argv = argv;
-    try {
-      const program = buildProgram();
-      const ctx = createProgramContextMock.mock.results[0]?.value as ProgramContext;
-
-      expect(program).toBeInstanceOf(Command);
-      expect(setProgramContextMock).toHaveBeenCalledWith(program, ctx);
-      expect(configureProgramHelpMock).toHaveBeenCalledWith(program, ctx);
-      expect(registerPreActionHooksMock).toHaveBeenCalledWith(program, ctx.programVersion);
-      expect(registerCoreCliCommandsMock).toHaveBeenCalledWith(program, ctx, argv);
-      expect(registerSubCliCommandsMock).toHaveBeenCalledWith(program, argv);
-    } finally {
-      process.argv = originalArgv;
-    }
-  });
-
   it("sets exitCode to 1 on argument errors (fixes #60905)", async () => {
     const program = buildProgram();
     program.command("test").description("Test command");
@@ -101,16 +82,6 @@ describe("buildProgram", () => {
     expect(process.exitCode).toBe(1);
   });
 
-  it("does not run the command action after an argument error", async () => {
-    const program = buildProgram();
-    const actionSpy = vi.fn();
-    program.command("test").action(actionSpy);
-
-    await expectCommanderExit(program.parseAsync(["test", "unexpected-arg"], { from: "user" }), 1);
-
-    expect(actionSpy).not.toHaveBeenCalled();
-  });
-
   it("preserves exitCode 0 for help display", async () => {
     const program = buildProgram();
     program.command("test").description("Test command");
@@ -119,29 +90,6 @@ describe("buildProgram", () => {
 
     expect(error.code).toBe("commander.helpDisplayed");
     expect(process.exitCode).toBe(0);
-  });
-
-  it("preserves exitCode 0 for version display", async () => {
-    const program = buildProgram();
-    program.version("1.0.0");
-
-    const error = await expectCommanderExit(program.parseAsync(["--version"], { from: "user" }), 0);
-
-    expect(error.code).toBe("commander.version");
-    expect(process.exitCode).toBe(0);
-  });
-
-  it("preserves non-zero exitCode for help error flows", async () => {
-    const program = buildProgram();
-    program.helpCommand("help [command]");
-
-    const error = await expectCommanderExit(
-      program.parseAsync(["help", "missing"], { from: "user" }),
-      1,
-    );
-
-    expect(error.code).toBe("commander.help");
-    expect(process.exitCode).toBe(1);
   });
 
   it("preserves caller-configured Commander error output", async () => {

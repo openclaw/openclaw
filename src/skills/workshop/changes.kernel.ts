@@ -1,11 +1,11 @@
 import type { DatabaseSync } from "node:sqlite";
 import { sql } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
-import { extractSqliteTableSchema } from "../../infra/sqlite-schema-sql.js";
+import { createSqliteSchemaEnsurer } from "../../infra/sqlite-schema-ensure.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
+import { getOpenClawStateFeatureSchemaSql } from "../../state/openclaw-state-feature-schema.js";
 import { isWorkshopChangeAction, type WorkshopChangeAction } from "./skill-versions.js";
 
 const WORKSHOP_ACTORS = ["agent", "review", "curator", "user"] as const;
@@ -34,6 +34,17 @@ type ChangesDatabase = Pick<DB, "skill_workshop_changes">;
 
 const MAX_CHANGES_PER_AGENT = 500;
 
+const ensureWorkshopChangesSchema = createSqliteSchemaEnsurer(
+  () =>
+    getOpenClawStateFeatureSchemaSql("skill_workshop_changes", {
+      endMarker: "ON skill_workshop_changes(agent_id, created_at_ms);",
+    }),
+  {
+    tables: ["skill_workshop_changes"],
+    indexes: ["idx_skill_workshop_changes_agent_time"],
+  },
+);
+
 export type WorkshopChangesQuery = {
   agentId: string;
   limit: number;
@@ -47,13 +58,7 @@ export function recordWorkshopChangeInDatabase(
   change: WorkshopChange,
 ): void {
   const { db } = database;
-  // sqlite-allow-raw -- Canonical feature-owned additive DDL; rows use Kysely.
-  // Canonical table + index are adjacent in the schema; the index line ends the slice.
-  db.exec(
-    extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "skill_workshop_changes", {
-      endMarker: "ON skill_workshop_changes(agent_id, created_at_ms);",
-    }),
-  );
+  ensureWorkshopChangesSchema(db);
   const kysely = getNodeSqliteKysely<ChangesDatabase>(db);
   executeSqliteQuerySync(
     db,
@@ -128,16 +133,10 @@ export function listWorkshopChangesInDatabase(
       actor: row.actor,
       summary: row.summary,
       createdAtMs: row.created_at_ms,
+      ...(row.version_id ? { versionId: row.version_id } : {}),
+      ...(row.session_key ? { sessionKey: row.session_key } : {}),
+      ...(row.run_id ? { runId: row.run_id } : {}),
     };
-    if (row.version_id) {
-      change.versionId = row.version_id;
-    }
-    if (row.session_key) {
-      change.sessionKey = row.session_key;
-    }
-    if (row.run_id) {
-      change.runId = row.run_id;
-    }
     return [change];
   });
 }

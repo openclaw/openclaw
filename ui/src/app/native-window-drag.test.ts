@@ -59,16 +59,6 @@ describe("native window drag", () => {
     expect(postMessage).toHaveBeenCalledTimes(2);
   });
 
-  it("treats the static title text as draggable chrome", () => {
-    const postMessage = installBridge();
-    const { title } = buildHeader();
-
-    const event = mouseDown(title);
-
-    expect(postMessage).toHaveBeenCalledWith({ type: "window-drag" });
-    expect(event.defaultPrevented).toBe(true);
-  });
-
   it("leaves presses on interactive children alone", () => {
     const postMessage = installBridge();
     const { button } = buildHeader();

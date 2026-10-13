@@ -1,5 +1,5 @@
-import { spawn, spawnSync } from "node:child_process";
-import { EventEmitter, once } from "node:events";
+import { spawnSync } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { lstat, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { Writable } from "node:stream";
@@ -25,13 +25,10 @@ import {
   createQaGatewayChildLogAccess,
   createQaGatewayChildLogCollector,
   formatQaGatewayProcessBoundaryStartupFailure,
-  monitorQaGatewayChildFailure,
   stopQaGatewayChildProcessTree,
-  throwQaGatewayChildFailure,
 } from "./gateway-child-process.js";
 import {
-  isRetryableRpcStartupError,
-  resolveQaGatewayStartupRetry,
+  needsQaGatewayMigrationRestart,
   waitForGatewayReady,
   waitForQaGatewayRestartBoundary,
 } from "./gateway-child-readiness.js";
@@ -172,32 +169,6 @@ describe("runQaGatewayCliCommand", () => {
     } finally {
       await expect(lifetime.stop()).resolves.toEqual({ process: "confirmed-stopped", errors: [] });
     }
-  });
-});
-
-describe("monitorQaGatewayChildFailure", () => {
-  it("records the first pipe failure and stops the detached Gateway child", async () => {
-    const child = spawn(process.execPath, ["--eval", "setInterval(() => {}, 1000)"], {
-      detached: process.platform !== "win32",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const close = once(child, "close");
-    const output = createQaGatewayChildLogCollector();
-    const getFailure = monitorQaGatewayChildFailure(child, output);
-    const error = new Error("synthetic gateway stdout read failure");
-
-    child.stdout?.destroy(error);
-    child.stderr?.destroy(new Error("later stderr read failure"));
-
-    await vi.waitFor(() => expect(getFailure()).toEqual({ source: "stdout", error }));
-    await close;
-    expect(output.text()).toContain(
-      "gateway child stdout stream failed: synthetic gateway stdout read failure",
-    );
-    expect(output.text()).not.toContain("later stderr read failure");
-    expect(() => throwQaGatewayChildFailure(getFailure, () => output.text())).toThrow(
-      "gateway child stdout stream failed: synthetic gateway stdout read failure",
-    );
   });
 });
 
@@ -983,58 +954,47 @@ describe("buildQaRuntimeEnv", () => {
     expect(new Set(records.map((record) => record.authDbPath)).size).toBe(1);
   });
 
-  it.each([
-    { retry: "bind", configBuilds: 2 },
-    { retry: "migration", configBuilds: 1 },
-  ])(
-    "preserves packaged config repair across $retry startup retries",
-    async ({ retry, configBuilds }) => {
-      const mutateConfig = vi.fn((cfg: OpenClawConfig) => cfg);
-      const { start, recordPath } = await createPackagedFixture(
-        {
-          QA_STARTUP_RETRY: retry,
-          QA_CONFIG_RUNTIME_VERSION: "2026.7.33",
-        },
-        mutateConfig,
-      );
-      await expect(start()).rejects.toThrow("fixture gateway exit");
-      const records = await readJsonLines(recordPath);
-      const gateways = records.filter((record) => record.kind === "gateway");
-      expect(gateways).toHaveLength(2);
-      expect(gateways.map((record) => record.sourcePluginConfigured)).toEqual([false, false]);
-      const repairs = records.filter((record) => record.kind === "plugins");
-      expect(repairs).toHaveLength(configBuilds);
-      for (const repair of repairs) {
-        expect(repair.args).toContain("--accept-capabilities");
-      }
-      expect(repairs.map((record) => record.configPort)).toEqual(
-        retry === "bind" ? gateways.map((record) => record.configPort) : [gateways[0]?.configPort],
-      );
-      expect(mutateConfig).toHaveBeenCalledTimes(configBuilds);
-      expect(records.filter((record) => record.kind === "auth")).toHaveLength(2);
-      expect(records.map((record) => record.kind)).toEqual([
-        "auth",
-        "auth",
-        "help",
-        "plugins",
-        "gateway",
-        ...(retry === "bind" ? ["help", "plugins"] : []),
-        "gateway",
-      ]);
-      expect(new Set(records.map((record) => record.stateDir)).size).toBe(1);
-      for (const gateway of gateways) {
-        expect(gateway.args).toContainEqual(String(gateway.configPort));
-        expect(gateway).toMatchObject({
-          dbExists: true,
-          authProfileIds: ["qa-mock-openai", "qa-mock-anthropic"],
-          configVersion: "2026.7.33",
-        });
-      }
-      if (retry === "migration") {
-        expect(gateways[1]?.configPort).toBe(gateways[0]?.configPort);
-      }
-    },
-  );
+  it("preserves packaged config repair across migration convergence", async () => {
+    const mutateConfig = vi.fn((cfg: OpenClawConfig) => cfg);
+    const { start, recordPath } = await createPackagedFixture(
+      {
+        QA_STARTUP_RETRY: "migration",
+        QA_CONFIG_RUNTIME_VERSION: "2026.7.33",
+      },
+      mutateConfig,
+    );
+    await expect(start()).rejects.toThrow("fixture gateway exit");
+    const records = await readJsonLines(recordPath);
+    const gateways = records.filter((record) => record.kind === "gateway");
+    expect(gateways).toHaveLength(2);
+    expect(gateways.map((record) => record.sourcePluginConfigured)).toEqual([false, false]);
+    const repairs = records.filter((record) => record.kind === "plugins");
+    expect(repairs).toHaveLength(1);
+    for (const repair of repairs) {
+      expect(repair.args).toContain("--accept-capabilities");
+    }
+    expect(repairs.map((record) => record.configPort)).toEqual([gateways[0]?.configPort]);
+    expect(mutateConfig).toHaveBeenCalledTimes(1);
+    expect(records.filter((record) => record.kind === "auth")).toHaveLength(2);
+    expect(records.map((record) => record.kind)).toEqual([
+      "auth",
+      "auth",
+      "help",
+      "plugins",
+      "gateway",
+      "gateway",
+    ]);
+    expect(new Set(records.map((record) => record.stateDir)).size).toBe(1);
+    for (const gateway of gateways) {
+      expect(gateway.args).toContainEqual(String(gateway.configPort));
+      expect(gateway).toMatchObject({
+        dbExists: true,
+        authProfileIds: ["qa-mock-openai", "qa-mock-anthropic"],
+        configVersion: "2026.7.33",
+      });
+    }
+    expect(gateways[1]?.configPort).toBe(gateways[0]?.configPort);
+  });
 
   it("preserves authored newer-version metadata so the packaged candidate refuses it", async () => {
     const { start, recordPath } = await createPackagedFixture(
@@ -1294,80 +1254,17 @@ describe("buildQaRuntimeEnv", () => {
     }
   });
 
-  it.each([
-    ["another gateway instance is already listening on ws://127.0.0.1:43124", "bind-collision"],
-    [
-      "failed to bind gateway socket on ws://127.0.0.1:43124: Error: listen EADDRINUSE",
-      "bind-collision",
-    ],
-  ] as const)("classifies %s", (details, expectedKind) => {
-    expect(
-      resolveQaGatewayStartupRetry({
-        attempt: 1,
-        details,
-        migrationConvergenceRestartUsed: false,
-      })?.kind,
-    ).toBe(expectedKind);
-  });
-
   it("does not retry an incomplete migration-convergence diagnostic", () => {
     const details = "OpenClaw plugin migration inputs changed during startup convergence";
-    expect(
-      resolveQaGatewayStartupRetry({
-        attempt: 1,
-        details,
-        migrationConvergenceRestartUsed: false,
-      }),
-    ).toBeNull();
+    expect(needsQaGatewayMigrationRestart(details)).toBe(false);
   });
 
-  it("restarts migration convergence once with the same launch state", () => {
-    const first = resolveQaGatewayStartupRetry({
-      attempt: 1,
-      details:
+  it("recognizes a complete migration convergence diagnostic", () => {
+    expect(
+      needsQaGatewayMigrationRestart(
         "OpenClaw plugin migration inputs changed during startup convergence; refusing readiness.",
-      migrationConvergenceRestartUsed: false,
-    });
-
-    expect(first).toEqual({
-      kind: "migration-convergence-restart",
-      reuseLaunchState: true,
-      migrationConvergenceRestartUsed: true,
-    });
-    expect(
-      resolveQaGatewayStartupRetry({
-        attempt: 2,
-        details:
-          "OpenClaw plugin migration inputs changed during startup convergence; refusing readiness.",
-        migrationConvergenceRestartUsed: first?.migrationConvergenceRestartUsed ?? false,
-      }),
-    ).toBeNull();
-  });
-
-  it("fails immediately for generic exits and after the startup attempt budget", () => {
-    expect(
-      resolveQaGatewayStartupRetry({
-        attempt: 1,
-        details: "gateway exited with code 1",
-        migrationConvergenceRestartUsed: false,
-      }),
-    ).toBeNull();
-    expect(
-      resolveQaGatewayStartupRetry({
-        attempt: 5,
-        details: "listen EADDRINUSE",
-        migrationConvergenceRestartUsed: false,
-      }),
-    ).toBeNull();
-  });
-
-  it("treats startup token mismatches as retryable rpc startup errors", () => {
-    expect(
-      isRetryableRpcStartupError(
-        "unauthorized: gateway token mismatch (set gateway.remote.token to match gateway.auth.token)",
       ),
     ).toBe(true);
-    expect(isRetryableRpcStartupError("permission denied")).toBe(false);
   });
 
   it("preserves only sanitized gateway debug artifacts", async () => {

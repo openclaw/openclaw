@@ -396,7 +396,9 @@ it
       } else {
         expect(Object.values(results)).toHaveLength(3);
         for (const result of Object.values(results)) {
-          expect(result).toBe("The update process no longer has permission to continue.");
+          expect(result).toBe(
+            "UPDATE_NATIVE_AUTHORITY: The update process no longer has permission to continue.",
+          );
         }
         expect(fs.readFileSync(config, "utf8")).toBe(JSON.stringify(before));
         expect(fs.existsSync(effect)).toBe(false);

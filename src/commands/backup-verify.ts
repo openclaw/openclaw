@@ -36,11 +36,6 @@ import {
 const MAX_SQLITE_SNAPSHOT_EXTRACT_BYTES = 64 * 1024 * 1024 * 1024;
 const SQLITE_SNAPSHOT_FREE_SPACE_RESERVE_BYTES = 256 * 1024 * 1024;
 
-type BackupVerifyOptions = {
-  archive: string;
-  json?: boolean;
-};
-
 type BackupVerifyResult = Awaited<ReturnType<typeof verifyBackupArchive>>;
 
 type ArchiveEntry = {
@@ -127,8 +122,8 @@ function formatResult(result: BackupVerifyResult): string {
     `Archive entries scanned: ${result.entryCount}`,
     `Symbolic links checked: ${result.symlinkCount}`,
     result.sqliteInventoryVerified
-      ? "Canonical SQLite inventory verified."
-      : "Canonical SQLite completeness unknown: this legacy archive has no database inventory.",
+      ? "SQLite database inventory verified."
+      : "SQLite database coverage unknown: this legacy archive has no database inventory.",
   ].join("\n");
 }
 
@@ -155,18 +150,29 @@ function isRegularArchiveFile(entryType: string | undefined): boolean {
   return entryType === "File" || entryType === "OldFile" || entryType === "ContiguousFile";
 }
 
-function resolveRegularFileExtractionBytes(entries: NormalizedArchiveEntry[]): number {
+function resolveExtractionBytes(
+  entries: NormalizedArchiveEntry[],
+  sqliteSnapshots = false,
+): number {
+  const label = sqliteSnapshots ? "SQLite snapshot" : "Archive";
   let totalBytes = 0;
   for (const entry of entries) {
-    if (!isRegularArchiveFile(entry.type)) {
+    if (!sqliteSnapshots && !isRegularArchiveFile(entry.type)) {
       continue;
     }
     if (!Number.isSafeInteger(entry.size) || (entry.size ?? -1) < 0) {
-      throw new Error(`Archive regular file has an invalid size: ${entry.normalized}`);
+      throw new Error(
+        sqliteSnapshots
+          ? `SQLite snapshot has an invalid archive size: ${entry.normalized}`
+          : `Archive regular file has an invalid size: ${entry.normalized}`,
+      );
+    }
+    if (sqliteSnapshots && entry.size === 0) {
+      throw new Error(`SQLite snapshot is empty: ${entry.normalized}`);
     }
     totalBytes += entry.size ?? 0;
     if (!Number.isSafeInteger(totalBytes)) {
-      throw new Error("Archive extraction size exceeds the supported integer range.");
+      throw new Error(`${label} extraction size exceeds the supported integer range.`);
     }
   }
   return totalBytes;
@@ -221,7 +227,9 @@ function listSqliteSnapshotEntries(
       continue;
     }
     if (entry.normalized !== owner.archivePath) {
-      throw new Error(`Backup contains a case-mangled canonical SQLite path: ${entry.normalized}`);
+      throw new Error(
+        `Backup contains a SQLite path with incorrect letter casing: ${entry.normalized}`,
+      );
     }
     if (!isRegularArchiveFile(entry.type)) {
       throw new Error(`SQLite snapshot must be a regular archive file: ${entry.normalized}`);
@@ -249,29 +257,12 @@ function readArchivedAgentDatabaseOwners(
   }));
 }
 
-function resolveSqliteExtractionBytes(entries: SqliteSnapshotEntry[]): number {
-  let totalBytes = 0;
-  for (const entry of entries) {
-    if (!Number.isSafeInteger(entry.size) || (entry.size ?? -1) < 0) {
-      throw new Error(`SQLite snapshot has an invalid archive size: ${entry.normalized}`);
-    }
-    if (entry.size === 0) {
-      throw new Error(`SQLite snapshot is empty: ${entry.normalized}`);
-    }
-    totalBytes += entry.size ?? 0;
-    if (!Number.isSafeInteger(totalBytes)) {
-      throw new Error("SQLite snapshot extraction size exceeds the supported integer range.");
-    }
-  }
-  return totalBytes;
-}
-
 function assertSqliteExtractionBudget(params: {
   entries: SqliteSnapshotEntry[];
   tempRoot: string;
   extractedBytes?: number;
 }): void {
-  const totalBytes = resolveSqliteExtractionBytes(params.entries);
+  const totalBytes = resolveExtractionBytes(params.entries, true);
   if (totalBytes > MAX_SQLITE_SNAPSHOT_EXTRACT_BYTES) {
     throw new Error(
       `SQLite snapshots require ${formatDiskSpaceBytes(totalBytes)} of extraction space; the verification limit is ${formatDiskSpaceBytes(MAX_SQLITE_SNAPSHOT_EXTRACT_BYTES)}.`,
@@ -396,7 +387,7 @@ async function verifySqliteSnapshots(params: {
     const batches = [initialEntries];
     const extractedEntries: SqliteSnapshotEntry[] = [];
     for (const sqliteEntries of batches) {
-      const extractedBytes = resolveSqliteExtractionBytes(extractedEntries);
+      const extractedBytes = resolveExtractionBytes(extractedEntries, true);
       extractedEntries.push(...sqliteEntries);
       if (extractedBytes > 0) {
         assertSqliteExtractionBudget({ entries: extractedEntries, tempRoot, extractedBytes });
@@ -658,7 +649,7 @@ async function verifyResolvedBackupArchive(
   }
   const verifiedSnapshots = await verifySqliteSnapshots({ archivePath, entries, manifest });
   verifyBackupSqliteCoverage(manifest, requiredSnapshots, verifiedSnapshots);
-  const regularFileExtractionBytes = resolveRegularFileExtractionBytes(entries);
+  const regularFileExtractionBytes = resolveExtractionBytes(entries);
 
   const result = {
     ok: true as const,
@@ -706,7 +697,7 @@ export async function verifyBackupArchive(
 /** Verify a backup archive, including snapshot shape and canonical SQLite integrity checks. */
 export async function backupVerifyCommand(
   runtime: RuntimeEnv,
-  opts: BackupVerifyOptions,
+  opts: { archive: string; json?: boolean },
 ): Promise<BackupVerifyResult> {
   const result = await verifyBackupArchive(opts.archive);
 

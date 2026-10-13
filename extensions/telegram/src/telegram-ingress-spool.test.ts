@@ -20,14 +20,17 @@ import { openTelegramIngressQueue, resolveTelegramUpdateId } from "./telegram-in
 
 async function withTempState<T>(fn: (stateDir: string) => Promise<T>): Promise<T> {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tg-spool-"));
-  const openKeyedStore = <StoreValue>(
+  const openKeyedStoreV2 = <StoreValue>(
     options: Parameters<typeof createPluginStateKeyedStoreForTests<StoreValue>>[1],
-  ) => createPluginStateKeyedStoreForTests<StoreValue>("telegram", options);
+  ) =>
+    createPluginStateKeyedStoreForTests<StoreValue>("telegram", options).withCurrent({
+      assertCurrent: () => {},
+    });
   setTelegramRuntime({
     channel: { inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress } },
     state: {
       resolveStateDir: () => stateDir,
-      openKeyedStore,
+      openKeyedStoreV2,
       openSyncKeyedStore: <StoreValue>(
         options: Parameters<typeof createPluginStateSyncKeyedStoreForTests<StoreValue>>[1],
       ) => createPluginStateSyncKeyedStoreForTests<StoreValue>("telegram", options),

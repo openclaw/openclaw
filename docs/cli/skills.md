@@ -144,7 +144,7 @@ settings use the separate `skills.install` request path instead.
 When `security.installPolicy` returns `warn` in an interactive terminal,
 OpenClaw prints the reason and findings, then asks `type: '<skill>' to install
 anyway` (or `update anyway`). If the fully rendered review exceeds 4,000
-characters, OpenClaw fails closed before prompting; reduce or coalesce the
+characters, OpenClaw stops before prompting; reduce or coalesce the
 policy output first. A matching answer evaluates the staged skill
 again before continuing. Declined and non-interactive direct CLI commands stop
 before commit; after review, `--acknowledge-install-policy-warning` is the

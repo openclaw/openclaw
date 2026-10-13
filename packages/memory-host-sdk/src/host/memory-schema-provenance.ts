@@ -30,6 +30,18 @@ export function ensureMemoryChunkProvenance(db: DatabaseSync): void {
     // legacy/imported rows without changing the canonical chunk table.
     db.exec("DROP TRIGGER IF EXISTS memory_index_chunk_provenance_after_insert");
     db.exec(MEMORY_INDEX_CHUNK_PROVENANCE_SCHEMA_SQL);
+    backfillMemoryChunkProvenance(db);
+  };
+  if (db.isTransaction) {
+    ensure();
+    return;
+  }
+  runSqliteImmediateTransactionSync(db, ensure);
+}
+
+/** Imported rows still need provenance after their physical schema has been admitted. */
+export function backfillMemoryChunkProvenance(db: DatabaseSync): void {
+  const backfill = () => {
     // Materialize indexed missing IDs before touching wide chunk payloads.
     // CROSS JOIN keeps that empty-set check ahead of the chunk-table lookup.
     db.exec(`
@@ -58,8 +70,8 @@ export function ensureMemoryChunkProvenance(db: DatabaseSync): void {
     `);
   };
   if (db.isTransaction) {
-    ensure();
+    backfill();
     return;
   }
-  runSqliteImmediateTransactionSync(db, ensure);
+  runSqliteImmediateTransactionSync(db, backfill);
 }

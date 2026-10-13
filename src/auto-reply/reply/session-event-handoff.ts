@@ -26,7 +26,7 @@ import {
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { channelRouteTargetsMatchExact } from "../../plugin-sdk/channel-route.js";
 import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { ReplyPayload } from "../../shared/reply-payload.types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
@@ -39,12 +39,12 @@ import type {
   SessionEventSource,
   SessionEventTarget,
 } from "./session-event-contract.js";
+import { narrowSessionEventSettings } from "./session-event-policy.js";
 import {
   assertSessionEventTargetCurrent,
   assertSessionEventSettingsCurrent,
   captureSessionEventTargetForHost,
   getSessionEventRuntimeConfig,
-  narrowSessionEventSettings,
   prepareSessionEventTargetForHost,
   readSessionEventTargetEnvironment,
   resolveSessionEventKey,
@@ -53,7 +53,6 @@ export {
   assertSessionEventTargetCurrent,
   captureSessionEventTargetForHost,
   combineSessionEventTargetsForHost,
-  prepareSessionEventTargetForHost,
 } from "./session-event-target.js";
 export type {
   SessionEventReceipt,
@@ -102,10 +101,6 @@ export function enqueueSessionEventForHost(
   const agentId = normalizeAgentId(options.agentId);
   resolveConfiguredAgentId(cfg, agentId);
   const sessionKey = resolveSessionEventKey(agentId, options.sessionKey);
-  const keyOwner = parseAgentSessionKey(sessionKey)?.agentId;
-  if (!sessionKey || (keyOwner !== undefined && keyOwner !== agentId)) {
-    throw new Error("Session event requires an exact session owned by its agent");
-  }
   if (!text.trim()) {
     throw new Error("Session event text must not be empty");
   }
@@ -114,13 +109,7 @@ export function enqueueSessionEventForHost(
     : undefined;
   const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId, env });
   let target = options.expectedTarget;
-  let generationLease:
-    | Awaited<
-        ReturnType<
-          typeof import("../../config/sessions/session-delivery-generation.js").prepareSessionGenerationFacts
-        >
-      >
-    | undefined;
+  let generationLease: Awaited<ReturnType<typeof prepareSessionEventTargetForHost>> | undefined;
   let preparedBinding: { sessionId: string; lifecycleRevision?: string } | undefined;
   const generation = options.expectedTarget?.generation ?? getAgentEventLifecycleGeneration();
   if (
@@ -211,13 +200,12 @@ export function enqueueSessionEventForHost(
   let deliverySuppressionReason: NormalizeReplySkipReason | undefined;
   let summary: string | undefined;
   let failure: string | undefined;
-  let finished = false;
-  let settling = false;
+  let settlement: "settling" | "finished" | undefined;
   let settings = options.expectedTarget?.settings;
   let settingsAdmitted = false;
   const toolsAllow = options.expectedTarget?.toolsAllow;
   const assertOwnerCurrent = () => {
-    if (finished) {
+    if (settlement === "finished") {
       throw new Error("Session event occurrence is settled");
     }
     signal.throwIfAborted();
@@ -238,13 +226,11 @@ export function enqueueSessionEventForHost(
     if (isAgentDeletionBlocked(agentId)) {
       throw new Error("Session event agent is being deleted");
     }
-    if (operation) {
-      if (operation.abortSignal.aborted) {
-        throw new Error("Session event admission no longer owns its destination");
-      }
-      if (replyRunRegistry.get(sessionKey) !== operation) {
-        throw new Error("Session event admission no longer owns its destination");
-      }
+    if (
+      operation &&
+      (operation.abortSignal.aborted || replyRunRegistry.get(sessionKey) !== operation)
+    ) {
+      throw new Error("Session event admission no longer owns its destination");
     }
   };
   const assertCurrent = () => {
@@ -255,7 +241,7 @@ export function enqueueSessionEventForHost(
     }
   };
   const accept = () => {
-    if (accepted || finished) {
+    if (accepted || settlement === "finished") {
       return;
     }
     assertCurrent();
@@ -290,12 +276,12 @@ export function enqueueSessionEventForHost(
     assertCurrent();
   };
   const finish = () => {
-    if (settling) {
+    if (settlement) {
       return;
     }
-    settling = true;
+    settlement = "settling";
     const complete = () => {
-      finished = true;
+      settlement = "finished";
       acceptanceAssertion = undefined;
       const status = signal.aborted ? "cancelled" : failure ? "failed" : "completed";
       if (status === "failed") {
@@ -369,6 +355,12 @@ export function enqueueSessionEventForHost(
     }
     deliveryAttempted = true;
     const deliveryConfig = getSessionEventRuntimeConfig();
+    const assertDeliveryCurrent = () => {
+      assertCurrent();
+      if (getSessionEventRuntimeConfig() !== deliveryConfig) {
+        throw new Error("Session event delivery policy changed before send");
+      }
+    };
     const result = await routeReply({
       cfg: deliveryConfig,
       agentId,
@@ -381,18 +373,8 @@ export function enqueueSessionEventForHost(
       replyKind: kind,
       abortSignal: signal,
       mirror: false,
-      beforeDeliver: async () => {
-        assertCurrent();
-        if (getSessionEventRuntimeConfig() !== deliveryConfig) {
-          throw new Error("Session event delivery policy changed before send");
-        }
-      },
-      assertCurrent: () => {
-        assertCurrent();
-        if (getSessionEventRuntimeConfig() !== deliveryConfig) {
-          throw new Error("Session event delivery policy changed before send");
-        }
-      },
+      beforeDeliver: async () => assertDeliveryCurrent(),
+      assertCurrent: assertDeliveryCurrent,
     });
     delivered ||= result.delivered;
     deliveryAmbiguous ||= result.ambiguous === true;
@@ -616,7 +598,7 @@ export function enqueueSessionEventForHost(
     id: occurrence.id,
     cancel: () => {
       if (options.preserveOccurrenceOnRejection && !adopted && !started) {
-        if (finished || signal.aborted) {
+        if (settlement === "finished" || signal.aborted) {
           return false;
         }
         // Native preparation and a queued reply retain custody until finish releases the claim.

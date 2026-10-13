@@ -134,7 +134,7 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
       parseCatalogSessionKey(scope.state.sessionKey)
     ) {
       this.setTaskSuggestions([]);
-      this.requestUpdate();
+      this.chatState.requestBackgroundUpdate();
       return;
     }
     const sessionKey = scope.state.sessionKey;
@@ -161,7 +161,7 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
       this.setTaskSuggestions(
         result.suggestions.filter((suggestion) => this.suggestionMatchesCurrentSession(suggestion)),
       );
-      this.requestUpdate();
+      this.chatState.requestBackgroundUpdate();
     } catch {
       // Suggestions are an optional ephemeral affordance; chat remains usable
       // when a reconnect loses the process-local registry.
@@ -188,7 +188,7 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
         this.taskSuggestionBusyIds.delete(event.taskId);
       }
     }
-    this.requestUpdate();
+    this.chatState.requestBackgroundUpdate();
     // The replacement snapshot includes the event plus unrelated suggestions;
     // its request version prevents any older snapshot from overwriting either.
     void this.refreshTaskSuggestions({ automatic: true });
@@ -302,16 +302,14 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
         suggestion: TaskSuggestion,
         mode: TaskSuggestionStartMode,
         cwd?: string,
-      ) => {
-        return ownsDisplayedOperation(suggestion)
+      ) =>
+        ownsDisplayedOperation(suggestion)
           ? this.resolveTaskSuggestion(suggestion, "accept", mode, cwd)
-          : undefined;
-      },
-      onDismissTaskSuggestion: (suggestion: TaskSuggestion) => {
-        return ownsDisplayedOperation(suggestion)
+          : undefined,
+      onDismissTaskSuggestion: (suggestion: TaskSuggestion) =>
+        ownsDisplayedOperation(suggestion)
           ? this.resolveTaskSuggestion(suggestion, "dismiss")
-          : undefined;
-      },
+          : undefined,
     };
   }
 

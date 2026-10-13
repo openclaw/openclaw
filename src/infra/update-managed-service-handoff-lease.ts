@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync as HandoffDatabase } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
@@ -71,7 +72,13 @@ export type {
 } from "./update-managed-service-handoff-lease-types.js";
 
 export function resolveManagedUpdateLeaseDatabasePath(): string {
-  return path.join(resolvePreferredOpenClawTmpDir(), "managed-update-handoffs.sqlite");
+  const uid = process.getuid?.();
+  // Other users may own /tmp/openclaw after a reboot; lease placement must not follow it.
+  const preferredDir = path.join(os.tmpdir(), uid === undefined ? "openclaw" : `openclaw-${uid}`);
+  return path.join(
+    resolvePreferredOpenClawTmpDir({ preferredDir }),
+    "managed-update-handoffs.sqlite",
+  );
 }
 
 /** One lease implementation, preloaded normally and sealed before package replacement. */
@@ -173,7 +180,7 @@ function createLeaseStore(
     if (custody && (custody !== "reserved" || !root.includes("/.openclaw-update-child-"))) {
       throw new Error("Managed command custody requires a child reservation");
     }
-    const run = (db: HandoffDatabase): LeaseAcquisition => {
+    return withDatabase(true, (db): LeaseAcquisition => {
       // Probe liveness before taking the write lock; commit only if both observations still match.
       const observed = row(db, root);
       const destination = admissionLease(root, observed, handle, processState);
@@ -272,8 +279,7 @@ function createLeaseStore(
           lease: handle(root, { owner, payload_json: payload, updated_at: updatedAt }),
         };
       });
-    };
-    return withDatabase(true, run);
+    });
   }
   const acquire = createManagedHandoffOriginalAcquisition({
     options,
@@ -693,9 +699,10 @@ function createLeaseStore(
     validFailure: (value: unknown) => triageFailureSchema.safeParse(value).success,
   };
   const prepareRepair = prepareManagedHandoffRepair.bind(null, store, {
-    rows: { handle, updateRow },
+    rows: { handle, updateRow, row, descendants },
     withDatabase,
     processState,
+    reclaimable,
     cas,
   });
   return Object.assign(store, { prepareRepair });

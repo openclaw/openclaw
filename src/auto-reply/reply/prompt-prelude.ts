@@ -146,7 +146,12 @@ export function buildReplyPromptEnvelopeBase(
     : undefined;
   const currentInboundContextText = isRoomEvent
     ? buildRoomEventContext(inboundUserContext, deliveryDirective)
-    : [inboundUserContext, deliveryDirective].filter(Boolean).join("\n\n");
+    : (params.inboundUserContextPromptJoiner === " "
+        ? [deliveryDirective, inboundUserContext]
+        : [inboundUserContext, deliveryDirective]
+      )
+        .filter(Boolean)
+        .join("\n\n");
   const resetModelBody = params.isBareSessionReset
     ? [
         params.inboundUserContext,
@@ -172,7 +177,7 @@ export function buildReplyPromptEnvelopeBase(
       }).text
     : params.isBareSessionReset
       ? softResetTail || `[OpenClaw session ${params.startupAction}]`
-      : (roomEventBody ?? (params.hasUserBody ? params.baseBody : MEDIA_ONLY_USER_TEXT));
+      : effectiveBaseBody;
   const fragments: RuntimeContextFragment[] = [
     ...(isRoomEvent ? [{ kind: "runtime-instruction" as const, text: ROOM_EVENT_PROMPT }] : []),
     ...(inboundUserContext

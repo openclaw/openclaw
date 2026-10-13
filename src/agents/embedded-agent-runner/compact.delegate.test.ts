@@ -48,6 +48,7 @@ let compactQueued: Awaited<
 let sessions: typeof import("../sessions/index.js");
 let accessor: typeof import("../../config/sessions/session-accessor.js");
 let databases: typeof import("../../state/openclaw-agent-db.js");
+let runtimeConfig: typeof import("../../config/runtime-snapshot.js");
 let streamResolution: typeof import("./stream-resolution.js");
 let replay: typeof import("../openai-transport-stream.test-support.js").testing;
 let accounting: typeof import("./run/compaction-accounting-bridge.js");
@@ -55,6 +56,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     await databases.closeOpenClawAgentDatabasesAsync();
     databases.closeOpenClawAgentDatabasesForTest();
+    runtimeConfig.clearRuntimeConfigSnapshot();
     cleanup();
   }),
 );
@@ -80,6 +82,7 @@ beforeAll(async () => {
     sessions,
     accessor,
     databases,
+    runtimeConfig,
     streamResolution,
     { testing: replay },
     accounting,
@@ -88,6 +91,7 @@ beforeAll(async () => {
     import("../sessions/index.js"),
     import("../../config/sessions/session-accessor.js"),
     import("../../state/openclaw-agent-db.js"),
+    import("../../config/runtime-snapshot.js"),
     import("./stream-resolution.js"),
     import("../openai-transport-stream.test-support.js"),
     import("./run/compaction-accounting-bridge.js"),
@@ -639,7 +643,25 @@ describe("manual Codex transcript byte compaction", () => {
       info: { ownsCompaction: false },
       compact: hostCompact,
     });
-    const config = fixture.runtimeContext.config;
+    const baseConfig = fixture.runtimeContext.config;
+    const config = {
+      ...baseConfig,
+      agents: {
+        ...baseConfig.agents,
+        defaults: {
+          ...baseConfig.agents.defaults,
+          compaction: { ...baseConfig.agents.defaults.compaction, maxActiveTranscriptBytes },
+          ...(selection === "configured"
+            ? {
+                models: {
+                  [`${model.provider}/${model.id}`]: { agentRuntime: { id: "codex" } },
+                },
+              }
+            : {}),
+        },
+      },
+    };
+    runtimeConfig.setRuntimeConfigSnapshot(config);
     return {
       ...fixture,
       hostCompact,
@@ -655,23 +677,7 @@ describe("manual Codex transcript byte compaction", () => {
         ...(selection === "pinned" ? { agentHarnessId: "codex" } : {}),
         trigger: "manual" as const,
         enqueue: async <T>(run: () => T | Promise<T>) => await run(),
-        config: {
-          ...config,
-          agents: {
-            ...config.agents,
-            defaults: {
-              ...config.agents.defaults,
-              compaction: { ...config.agents.defaults.compaction, maxActiveTranscriptBytes },
-              ...(selection === "configured"
-                ? {
-                    models: {
-                      [`${model.provider}/${model.id}`]: { agentRuntime: { id: "codex" } },
-                    },
-                  }
-                : {}),
-            },
-          },
-        },
+        config,
       },
     };
   }
@@ -813,9 +819,59 @@ describe("manual Codex transcript byte compaction", () => {
     expect(accessor.loadSessionEntryReadOnly(target)?.compactionCount).toBe(2);
   });
 
-  it("keeps below-threshold manual requests native-only", async () => {
+  it("clears the byte latch after a manual host summary shrinks history below budget", async () => {
+    const maxBytes = 2048;
+    const { params, target, hostCompact, publicCompact } = await createCodexFixture(maxBytes);
+    const manager = await sessions.SessionManager.openAsync(target, workspaceDir);
+    await manager.appendMessageAsync({
+      role: "user",
+      content: "old history ".repeat(512),
+      timestamp: 2,
+    });
+    await manager.appendMessageAsync(createAssistant(model, [{ type: "text", text: "Recorded." }]));
+    await manager.appendMessageAsync({
+      role: "user",
+      content: "Keep this short tail.",
+      timestamp: 3,
+    });
+    await manager.appendMessageAsync(createAssistant(model, [{ type: "text", text: "Kept." }]));
+    const { readSessionTranscriptAccountingAsync } =
+      await import("../../gateway/session-transcript-readers.js");
+    const readBytes = async () =>
+      (
+        await readSessionTranscriptAccountingAsync(target, {
+          includeByteSize: true,
+          includeUsage: false,
+        })
+      ).byteSize;
+    expect(await readBytes()).toBeGreaterThan(maxBytes);
+
+    await expect(compactQueued(params)).resolves.toMatchObject({ ok: true, compacted: true });
+
+    expect(await readBytes()).toBeLessThan(maxBytes);
+    expect(accessor.loadSessionEntryReadOnly(target)).toMatchObject({ compactionCount: 1 });
+    expect(
+      accessor.loadSessionEntryReadOnly(target)?.transcriptByteCompactionLatch,
+    ).toBeUndefined();
+    await expect(compactQueued(params)).resolves.toMatchObject({ ok: true, compacted: true });
+    expect(hostCompact).toHaveBeenCalledOnce();
+    expect(publicCompact).toHaveBeenCalledTimes(2);
+    expect(
+      accessor.loadSessionEntryReadOnly(target)?.transcriptByteCompactionLatch,
+    ).toBeUndefined();
+  });
+
+  it("clears stale byte suppression while keeping below-threshold manual requests native-only", async () => {
     const { params, target, hostCompact, publicCompact, privateNativeCompaction } =
       await createCodexFixture("20mb");
+    await accessor.upsertSessionEntryCore(target, {
+      ...accessor.loadSessionEntryReadOnly(target)!,
+      transcriptByteCompactionLatch: {
+        sessionId: target.sessionId,
+        maxBytes: 20 * 1024 * 1024,
+        activeBytes: 21 * 1024 * 1024,
+      },
+    });
 
     await expect(compactQueued(params)).resolves.toMatchObject({
       ok: true,

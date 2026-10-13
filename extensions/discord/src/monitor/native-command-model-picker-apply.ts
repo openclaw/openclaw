@@ -29,8 +29,9 @@ export async function applyDiscordModelPickerSelection(
     selectedRuntime?: string;
     preferenceScope: DiscordModelPickerPreferenceScope;
     settleMs: number;
-    resolveCurrentModel: (route: ResolvedAgentRoute) => string;
-    resolveCurrentRuntime: (route: ResolvedAgentRoute) => string;
+    resolveCurrentSelection: (
+      route: ResolvedAgentRoute,
+    ) => Promise<{ modelRef: string; runtime: string }>;
   },
 ): Promise<DiscordModelPickerApplyResult> {
   const failureNotice = `❌ Failed to apply ${params.resolvedModelRef}. Try /model ${params.resolvedModelRef} directly.`;
@@ -66,8 +67,8 @@ export async function applyDiscordModelPickerSelection(
       });
     }
 
-    const effectiveModelRef = params.resolveCurrentModel(effectiveRoute);
-    const effectiveRuntime = params.resolveCurrentRuntime(effectiveRoute);
+    const { modelRef: effectiveModelRef, runtime: effectiveRuntime } =
+      await params.resolveCurrentSelection(effectiveRoute);
     const currentSelection = `Current selection: ${effectiveModelRef} with runtime ${effectiveRuntime}.`;
     if (hiddenFinalReply?.isError) {
       return {

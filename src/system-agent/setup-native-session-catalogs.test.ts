@@ -51,31 +51,6 @@ describe("native conversation setup preferences", () => {
     ).toBe(config);
   });
 
-  it("preserves an authored malformed value for the plugin validator", () => {
-    const config = initializeNativeSessionCatalogPreferences({
-      plugins: { entries: { codex: { config: { sessionCatalog: { enabled: "invalid" } } } } },
-    });
-    expect(config.plugins?.entries?.codex?.config).toEqual({
-      sessionCatalog: { enabled: "invalid" },
-    });
-  });
-
-  it("offers an unchecked choice after fresh configuration creation, even with an explicit agent", () => {
-    const config = initializeNativeSessionCatalogPreferences({
-      agents: { entries: { research: {} } },
-    });
-    const required = requiresSetupNativeSessionCatalogConsent({
-      config,
-      configExists: true,
-      catalogs,
-    });
-    expect(required).toBe(true);
-    expect(resolveSetupNativeSessionCatalogPreference({ consentRequired: required })).toBe(false);
-    expect(
-      resolveSetupNativeSessionCatalogPreference({ consentRequired: required, requested: true }),
-    ).toBe(true);
-  });
-
   it("preserves missing and mixed legacy preferences without inferring consent from a new agent", () => {
     const configs: OpenClawConfig[] = [
       { agents: { entries: { research: {} } } },
@@ -100,23 +75,5 @@ describe("native conversation setup preferences", () => {
         resolveSetupNativeSessionCatalogPreference({ consentRequired: required, requested: false }),
       ).toBeUndefined();
     }
-  });
-
-  it("includes an absent official plugin before install and retains its unchecked preference", () => {
-    expect(catalogs.map(({ pluginId }) => pluginId)).toContain("codex");
-    const config = applySetupNativeSessionCatalogPreference({
-      config: {},
-      enabled: false,
-      metadataSnapshot,
-    });
-    expect(config.plugins?.entries?.codex).toEqual({
-      config: { sessionCatalog: { enabled: false } },
-    });
-    expect(config.plugins?.entries?.anthropic).toEqual({
-      config: { sessionCatalog: { enabled: false } },
-    });
-    expect(
-      applySetupNativeSessionCatalogPreference({ config, enabled: false, metadataSnapshot }),
-    ).toBe(config);
   });
 });

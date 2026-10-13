@@ -17,14 +17,10 @@ import {
 import { runAuthProbes, withAuthProbeStateOwnership } from "./list.probe.js";
 
 const runner = vi.hoisted(() =>
-  vi.fn<
-    (params: {
-      agentDir: string;
-      abortSignal?: AbortSignal;
-    }) => Promise<{ payloads: Array<{ text: string }> }>
-  >(),
+  vi.fn<(params: { agentDir: string; abortSignal?: AbortSignal }) => Promise<{ text: string }>>(),
 );
-vi.mock("../../agents/embedded-agent.js", () => ({ runEmbeddedAgent: runner }));
+// mock-isolation: Controlled completion tails exercise cleanup without starting inference.
+vi.mock("../../agents/isolated-completion.js", () => ({ runIsolatedCompletion: runner }));
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -130,7 +126,7 @@ it("holds state ownership for an in-flight sibling after progress rejects the pr
     firstStarted.resolve();
     await finishFirst.promise;
     firstFinished.resolve();
-    return { payloads: [{ text: "OK" }] };
+    return { text: "OK" };
   });
   const parent = new AsyncWorkScope();
   const original = new Error("synthetic progress failure");
@@ -185,7 +181,7 @@ it("retains the staged directory and releases state ownership when database disp
   let stagedDir: string | undefined;
   runner.mockImplementation(async (params) => {
     stagedDir = params.agentDir;
-    return { payloads: [{ text: "OK" }] };
+    return { text: "OK" };
   });
   const dispose = agentDatabaseDisposal.disposeOpenClawAgentDatabaseByPath;
   const close = vi

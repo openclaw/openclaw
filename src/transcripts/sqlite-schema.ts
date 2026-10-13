@@ -1,5 +1,5 @@
 // Additive meeting-transcript schema used by the feature's one-time lazy ensure.
-import { createOpenClawStateSchemaEnsurer } from "../state/openclaw-state-feature-schema.js";
+import { createOpenClawStateSchemaEnsurer } from "../state/openclaw-state-feature-schema-ensure.js";
 
 export const ensureMeetingTranscriptsSchema = createOpenClawStateSchemaEnsurer({
   table: "meeting_transcript_sessions",

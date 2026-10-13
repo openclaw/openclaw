@@ -14,6 +14,7 @@ type ControlUiGitHubPreviewCoAuthor = {
 };
 
 export type ControlUiGitHubPreview = GitHubItemTarget & {
+  stale?: boolean;
   additions?: number;
   avatarDataUrl?: string;
   /** Bounded to the faces the card renders; `coAuthorCount` carries the true total. */
@@ -49,6 +50,7 @@ export function isControlUiGitHubPreview(value: unknown): value is ControlUiGitH
       (key) =>
         value[key] === undefined || (typeof value[key] === "number" && Number.isFinite(value[key])),
     ) &&
+    (value.stale === undefined || typeof value.stale === "boolean") &&
     (value.draft === undefined || typeof value.draft === "boolean") &&
     (value.coAuthors === undefined ||
       (Array.isArray(value.coAuthors) &&

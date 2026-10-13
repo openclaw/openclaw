@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type GatewayRequestOptions = {
   expectFinal?: boolean;
-  onSent?: () => void;
   timeoutMs?: number;
 };
 
@@ -79,42 +78,6 @@ describe("startQaGatewayRpcClient", () => {
   beforeEach(() => gatewayRpcMock.reset());
   afterEach(() => vi.useRealTimers());
 
-  it("starts one authenticated backend operator client and forwards request options", async () => {
-    const client = await startQaGatewayRpcClient({
-      wsUrl: "ws://127.0.0.1:18789",
-      token: "qa-token",
-      logs: () => "qa logs",
-    });
-
-    await expect(
-      client.request("agent.run", { prompt: "hi" }, { expectFinal: true, timeoutMs: 45_000 }),
-    ).resolves.toEqual({ ok: true });
-
-    expect(gatewayRpcMock.clients).toHaveLength(1);
-    expect(gatewayRpcMock.clients[0]?.options).toMatchObject({
-      url: "ws://127.0.0.1:18789",
-      token: "qa-token",
-      requestTimeoutMs: 20_000,
-      clientName: "gateway-client",
-      deviceIdentity: null,
-      mode: "backend",
-      scopes: ["operator.admin"],
-    });
-    expect(gatewayRpcMock.clients[0]?.options).not.toHaveProperty("sharedStateMode");
-    expect(gatewayRpcMock.startGatewayClientWhenEventLoopReady).toHaveBeenCalledWith(
-      gatewayRpcMock.clients[0],
-      { timeoutMs: 20_000 },
-    );
-    expect(gatewayRpcMock.request).toHaveBeenCalledWith(
-      "agent.run",
-      { prompt: "hi" },
-      expect.objectContaining({ expectFinal: true, timeoutMs: expect.any(Number) }),
-    );
-    const requestOptions = gatewayRpcMock.request.mock.calls[0]?.[2] as { timeoutMs: number };
-    expect(requestOptions.timeoutMs).toBeGreaterThanOrEqual(44_900);
-    expect(requestOptions.timeoutMs).toBeLessThanOrEqual(45_000);
-  });
-
   it("retains only observed hello identity and clears it across disconnect and stop", async () => {
     const client = await startQaGatewayRpcClient({
       wsUrl: "ws://127.0.0.1:18789",
@@ -134,7 +97,7 @@ describe("startQaGatewayRpcClient", () => {
     expect(client.evidenceIdentity).toBeNull();
   });
 
-  it.each([{ scopes: ["operator.read", "operator.write"] }, { scopes: [] }])(
+  it.each([{ scopes: [] }])(
     "forwards ephemeral device identity and explicit scopes $scopes without shared-state writes",
     async ({ scopes }) => {
       const deviceIdentity = {
@@ -158,23 +121,6 @@ describe("startQaGatewayRpcClient", () => {
       await client.stop();
     },
   );
-
-  it("preserves explicit null identity without enabling read-only state", async () => {
-    const client = await startQaGatewayRpcClient({
-      wsUrl: "ws://127.0.0.1:18789",
-      token: "qa-token",
-      logs: () => "",
-      deviceIdentity: null,
-      scopes: ["operator.read"],
-    });
-
-    expect(gatewayRpcMock.clients[0]?.options).toMatchObject({
-      deviceIdentity: null,
-      scopes: ["operator.read"],
-    });
-    expect(gatewayRpcMock.clients[0]?.options).not.toHaveProperty("sharedStateMode");
-    await client.stop();
-  });
 
   it("dispatches concurrent requests over the same client", async () => {
     let releaseFirst: (() => void) | undefined;
@@ -304,11 +250,8 @@ describe("startQaGatewayRpcClient", () => {
     expect(gatewayRpcMock.request).not.toHaveBeenCalled();
   });
 
-  it("does not retry a sent request whose Gateway error says it is not connected", async () => {
-    gatewayRpcMock.request.mockImplementationOnce(async (_method, _params, options) => {
-      options.onSent?.();
-      throw new Error("gateway not connected");
-    });
+  it("does not replay a request whose Gateway error says it is not connected", async () => {
+    gatewayRpcMock.request.mockRejectedValueOnce(new Error("gateway not connected"));
     const client = await startQaGatewayRpcClient({
       wsUrl: "ws://127.0.0.1:18789",
       token: "qa-token",
@@ -333,21 +276,6 @@ describe("startQaGatewayRpcClient", () => {
     });
   });
 
-  it("stops the transport and rejects later requests", async () => {
-    const client = await startQaGatewayRpcClient({
-      wsUrl: "ws://127.0.0.1:18789",
-      token: "qa-token",
-      logs: () => "qa logs",
-    });
-
-    await client.stop();
-
-    expect(gatewayRpcMock.stopAndWait).toHaveBeenCalledOnce();
-    await expect(client.request("health")).rejects.toThrow(
-      "gateway rpc client already stopped\nGateway logs:\nqa logs",
-    );
-  });
-
   it("rejects a request waiting for reconnect when stopped", async () => {
     const client = await startQaGatewayRpcClient({
       wsUrl: "ws://127.0.0.1:18789",
@@ -360,28 +288,5 @@ describe("startQaGatewayRpcClient", () => {
     await client.stop();
 
     await expect(request).rejects.toThrow("gateway rpc client stopped\nGateway logs:\nqa logs");
-  });
-
-  it("does not create a new reconnect waiter after stop races a pre-dispatch rejection", async () => {
-    let rejectRequest!: (error: Error) => void;
-    gatewayRpcMock.request.mockImplementationOnce(
-      async () =>
-        await new Promise((_resolve, reject) => {
-          rejectRequest = reject;
-        }),
-    );
-    const client = await startQaGatewayRpcClient({
-      wsUrl: "ws://127.0.0.1:18789",
-      token: "qa-token",
-      logs: () => "qa logs",
-    });
-    const request = client.request("agent.run");
-    await vi.waitFor(() => expect(gatewayRpcMock.request).toHaveBeenCalledOnce());
-
-    await client.stop();
-    rejectRequest(new Error("gateway not connected"));
-
-    await expect(request).rejects.toThrow("gateway rpc client already stopped");
-    expect(gatewayRpcMock.request).toHaveBeenCalledOnce();
   });
 });

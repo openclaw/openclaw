@@ -7,7 +7,7 @@ import {
   enqueueSystemEvent,
   handleCompactCommand,
   incrementCompactionCount,
-  resolveCurrentSessionEntry,
+  prepareCurrentSessionEntry,
   isEmbeddedAgentRunAbortableForCompaction,
   resetCompactCommandMocks,
   waitForEmbeddedAgentRunEnd,
@@ -36,7 +36,11 @@ describe("handleCompactCommand lifecycle authority", () => {
       compactionCount: 3,
       transcriptByteCompactionLatch: { sessionId: "session-1", activeBytes: 200, maxBytes: 100 },
     };
-    vi.mocked(resolveCurrentSessionEntry).mockReturnValue(entry);
+    vi.mocked(prepareCurrentSessionEntry).mockResolvedValue({
+      entry,
+      assertCurrent() {},
+      release() {},
+    });
     vi.mocked(compactEmbeddedAgentSession).mockImplementationOnce(async (_input, host) => {
       await host?.onHostCompactionCommitted?.({
         entry,
@@ -93,7 +97,7 @@ describe("handleCompactCommand lifecycle authority", () => {
       vi.mocked(isEmbeddedAgentRunAbortableForCompaction).mockReturnValueOnce(true);
       vi.mocked(waitForEmbeddedAgentRunEnd).mockImplementationOnce(async () => {
         if (authority === "session") {
-          vi.mocked(resolveCurrentSessionEntry).mockReturnValueOnce(undefined);
+          vi.mocked(prepareCurrentSessionEntry).mockResolvedValueOnce(undefined);
         } else if (authority === "owner") {
           ownerCurrent = false;
         } else {
@@ -130,7 +134,7 @@ describe("handleCompactCommand lifecycle authority", () => {
   );
 
   it("does not abort a run after the bound session changes", async () => {
-    vi.mocked(resolveCurrentSessionEntry).mockReturnValueOnce(undefined);
+    vi.mocked(prepareCurrentSessionEntry).mockResolvedValueOnce(undefined);
     vi.mocked(isEmbeddedAgentRunAbortableForCompaction).mockReturnValueOnce(true);
 
     const result = await handleCompactCommand(buildLifecycleParams(), true);
@@ -139,7 +143,6 @@ describe("handleCompactCommand lifecycle authority", () => {
       compacted: false,
       reason: "command session changed",
     });
-    expect(vi.mocked(isEmbeddedAgentRunAbortableForCompaction)).not.toHaveBeenCalled();
     expect(vi.mocked(abortEmbeddedAgentRun)).not.toHaveBeenCalled();
     expect(vi.mocked(compactEmbeddedAgentSession)).not.toHaveBeenCalled();
   });
@@ -205,7 +208,7 @@ describe("handleCompactCommand lifecycle authority", () => {
     expect(vi.mocked(compactEmbeddedAgentSession)).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "preserves the drained writer fence and completed count, with caller abort=%s",
     async (abortAfterCompletion) => {
       const controller = new AbortController();
@@ -216,8 +219,10 @@ describe("handleCompactCommand lifecycle authority", () => {
         activeWriterRunId: "earlier-writer",
       };
       let currentEntry = original;
-      vi.mocked(resolveCurrentSessionEntry).mockImplementation(({ expected }) =>
-        expected.sessionId === currentEntry.sessionId ? currentEntry : undefined,
+      vi.mocked(prepareCurrentSessionEntry).mockImplementation(async ({ expected }) =>
+        expected.sessionId === currentEntry.sessionId
+          ? { entry: currentEntry, assertCurrent() {}, release() {} }
+          : undefined,
       );
       vi.mocked(isEmbeddedAgentRunAbortableForCompaction).mockReturnValueOnce(true);
       vi.mocked(waitForEmbeddedAgentRunEnd).mockImplementationOnce(async () => {
@@ -253,26 +258,33 @@ describe("handleCompactCommand lifecycle authority", () => {
       expect(incrementCompactionCount).toHaveBeenCalledOnce();
       expect(enqueueSystemEvent).toHaveBeenCalledTimes(abortAfterCompletion ? 0 : 1);
       expect(currentEntry.activeWriterRunId).toBe("drained-writer");
+      expect(abortEmbeddedAgentRun).not.toHaveBeenCalled();
+      expect(waitForEmbeddedAgentRunEnd).toHaveBeenCalledWith("session-1", 60_000);
     },
   );
 
-  it.each([false, true])(
+  it.each([true])(
     "uses the host-accepted successor before accounting, with owner replacement=%s",
     async (replaceBeforeAccounting) => {
       const initial = { sessionId: "native-session", updatedAt: 1, lifecycleRevision: "lifecycle" };
       let ownerCurrent = true;
       let currentSessionId = initial.sessionId;
-      vi.mocked(resolveCurrentSessionEntry).mockImplementation(({ expected }) =>
-        expected.sessionId === currentSessionId ? { updatedAt: 1, ...expected } : undefined,
+      vi.mocked(prepareCurrentSessionEntry).mockImplementation(async ({ expected }) =>
+        expected.sessionId === currentSessionId
+          ? { entry: { updatedAt: 1, ...expected }, assertCurrent() {}, release() {} }
+          : undefined,
       );
-      vi.mocked(incrementCompactionCount).mockImplementationOnce(async ({ expectedSession }) => {
-        expect(expectedSession?.sessionId).toBe("successor-session");
-        if (replaceBeforeAccounting) {
-          currentSessionId = "replacement-session";
-          return undefined;
-        }
-        return 1;
-      });
+      vi.mocked(incrementCompactionCount).mockImplementationOnce(
+        async ({ expectedSession, transcriptByteCompactionLatch }) => {
+          expect(expectedSession?.sessionId).toBe("successor-session");
+          expect(transcriptByteCompactionLatch).toBeNull();
+          if (replaceBeforeAccounting) {
+            currentSessionId = "replacement-session";
+            return undefined;
+          }
+          return 1;
+        },
+      );
       vi.mocked(compactEmbeddedAgentSession).mockImplementationOnce(async (params, host) => {
         host?.assertActive?.();
         const storePath = params.sessionTarget?.storePath;
@@ -320,7 +332,7 @@ describe("handleCompactCommand lifecycle authority", () => {
 
       expect(result?.sessionCompaction).toMatchObject(
         replaceBeforeAccounting
-          ? { compacted: false, reason: "command session changed" }
+          ? { compacted: false, reason: "session accounting failed" }
           : { compacted: true, tokensAfter: 321 },
       );
     },

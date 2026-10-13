@@ -391,10 +391,14 @@ export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDelivery
         (isCaptionedFinalTextPayload(outgoingPayload) ||
           (hasFinalTtsMedia && Boolean(ttsPayload.text?.trim())));
 
-      const recordPendingDelivery = (tracksVisibleText: boolean) => {
+      const recordVisibleBlock = (tracksVisibleText: boolean, confirmed: boolean) => {
+        state.deliveredVisibleText ||= tracksVisibleText && confirmed;
         if (deliveredBlock && tracksVisibleText) {
           deliveredBlock.needsFinalDelivery = false;
         }
+      };
+      const recordPendingDelivery = (tracksVisibleText: boolean) => {
+        recordVisibleBlock(tracksVisibleText, false);
         // Coverage belongs to this payload. Hidden text and independent final audio
         // remain deliverable, and commentary never stands in for an answer.
         const pendingAnswer =
@@ -423,11 +427,7 @@ export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDelivery
         if (deliveredBlock) {
           deliveredBlock.delivered = sendKind === "final" ? "final" : "block";
         }
-        if (
-          (rawFinalText || hasFinalTtsMedia) &&
-          transcriptSource &&
-          transcriptSource.kind !== "final"
-        ) {
+        if ((rawFinalText || hasFinalTtsMedia) && transcriptSource?.kind === "blocks") {
           for (const block of finalBlocks) {
             block.delivered = "final";
           }
@@ -437,12 +437,7 @@ export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDelivery
             : transcriptFinalText;
         }
         recordFinalReply();
-        if (tracksVisibleText) {
-          state.deliveredVisibleText = true;
-          if (deliveredBlock) {
-            deliveredBlock.needsFinalDelivery = false;
-          }
-        }
+        recordVisibleBlock(tracksVisibleText, true);
       };
 
       if (params.shouldRouteToOriginating && params.originatingChannel && params.originatingTo) {

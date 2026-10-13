@@ -245,6 +245,7 @@ describe("chat run registration lifecycle", () => {
       expect(agentRunSeq.get(runId)).toBe(1);
       if (settled) {
         broadcastChatError({
+          terminalEntry: undefined,
           context: harness,
           runId,
           sessionKey: "session-reply-dispatch",

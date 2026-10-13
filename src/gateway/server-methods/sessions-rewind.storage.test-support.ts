@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { createSessionEntryWithTranscript } from "../../config/sessions/session-accessor.entry-mutation.js";
 import {
   listSessionEntriesCore,
@@ -11,10 +12,11 @@ import {
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import {
-  appendTranscriptEvent,
   appendTranscriptMessage,
   loadTranscriptEvents,
 } from "../../config/sessions/session-accessor.transcript.js";
+import { appendPreparedTranscriptEvent } from "../../config/sessions/session-transcript-event.js";
+import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -43,6 +45,7 @@ export async function seedMessageCutSource(
   incognito = false,
   identity?: { sessionKey: string; sessionId: string },
 ) {
+  setRuntimeConfigSnapshot(cfg);
   const sessionKey = `agent:main:dashboard:${incognito ? "incognito-" : ""}source`;
   const scope = { agentId: "main", sessionKey, sessionId: "message-fork-source", ...identity };
   const created = await createSessionEntryWithTranscript(scope, () => ({
@@ -69,12 +72,17 @@ export async function seedMessageCutSource(
       message: { role: message.role, content: message.content },
     });
   }
-  await appendTranscriptEvent(scope, {
-    type: "leaf",
-    id: "active-leaf",
-    parentId: "alternate-user",
-    targetId: "user-2",
-  });
+  await appendPreparedTranscriptEvent(
+    scope,
+    {
+      type: "leaf",
+      id: "active-leaf",
+      parentId: "alternate-user",
+      targetId: "user-2",
+    },
+    () => {},
+  );
+  await waitForSessionTranscriptIndexReconcile(toDatabaseOptions(resolveSqliteScope(scope)));
   return scope;
 }
 
@@ -131,7 +139,10 @@ export function invokeMessageCut(
 }
 
 export async function readMutationStorage(scope: SourceScope) {
-  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope)));
+  const options = toDatabaseOptions(resolveSqliteScope(scope));
+  // Settle fixture-owned projection work before the native handle claims a shared-state lease.
+  await waitForSessionTranscriptIndexReconcile(options);
+  const database = openOpenClawAgentDatabase(options);
   const db = getSessionKysely(database.db);
   return {
     source: loadSessionEntry(scope),

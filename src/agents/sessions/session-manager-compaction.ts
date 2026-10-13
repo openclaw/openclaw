@@ -4,12 +4,12 @@ import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import { getSessionCompactionPersistenceAsync } from "./session-compaction-persistence.js";
+import { withSessionManagerAppend } from "./session-manager-append-admission.js";
 import { SessionManagerEntries } from "./session-manager-entries.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
 import { prepareSessionManagerSync } from "./session-manager-incognito-scope.js";
 import { canonicalizeSessionEntry } from "./session-manager-persistence-entry.js";
 import type { CompactionEntry } from "./session-manager-types.js";
-import { withSessionManagerWrite } from "./session-manager-write-admission.js";
 
 export class SessionManagerCompaction extends SessionManagerEntries {
   private createCompactionEntry(
@@ -56,69 +56,81 @@ export class SessionManagerCompaction extends SessionManagerEntries {
     tokensAfter?: number,
     publication?: { assertActive?: () => void; onCommitted?: () => void },
   ): Promise<string> {
-    return await withSessionManagerWrite(this, async (admission) => {
-      this.assertTranscriptWriteActive();
-      publication?.assertActive?.();
-      if (!admission && getSessionCompactionPersistenceAsync(this)) {
-        throw new Error("Compaction boundary validation failed");
-      }
-      const entry = this.createCompactionEntry(
-        summary,
-        firstKeptEntryId,
-        tokensBefore,
-        details,
-        fromHook,
-        metadata,
-        tokensAfter,
-      );
-      if (
-        !admission ||
-        (isIncognitoSessionKey(this.persistenceTarget?.sessionKey) &&
-          "db" in admission.database &&
-          !getSessionCompactionPersistenceAsync(this))
-      ) {
-        const appended = this.appendEntry(entry, {
-          invalidateSerializedPrefixCache: fromHook === true || details !== undefined,
-        });
+    return await withSessionManagerAppend(
+      this,
+      async (admission) => {
+        this.assertTranscriptWriteActive();
+        publication?.assertActive?.();
+        if (!admission && getSessionCompactionPersistenceAsync(this)) {
+          throw new Error("Compaction boundary validation failed");
+        }
+        const entry = this.createCompactionEntry(
+          summary,
+          firstKeptEntryId,
+          tokensBefore,
+          details,
+          fromHook,
+          metadata,
+          tokensAfter,
+        );
+        if (
+          !admission ||
+          (isIncognitoSessionKey(this.persistenceTarget?.sessionKey) &&
+            !("actor" in admission) &&
+            "db" in admission.database &&
+            !getSessionCompactionPersistenceAsync(this))
+        ) {
+          const appended = this.appendEntry(entry, {
+            invalidateSerializedPrefixCache: fromHook === true || details !== undefined,
+          });
+          try {
+            publication?.onCommitted?.();
+          } catch (cause) {
+            return this.failCommittedCompaction(cause);
+          }
+          return appended.entry.id;
+        }
+        const canonical = canonicalizeSessionEntry(entry);
+        const target = this.getSessionTarget();
+        const sessionId = this.getSessionId();
+        const assertNavigation = this.captureTranscriptNavigationAssertion();
+        const admittedUserId = target
+          ? resolveSessionTranscriptReadFence(target)?.entryId
+          : undefined;
+        const committed = await this.persistWorkerRecord(
+          canonical,
+          !this.pendingDeliberateAppend && this.appendMode !== "side" ? "active-branch" : undefined,
+          admission,
+          undefined,
+          undefined,
+          undefined,
+          true,
+          assertNavigation,
+          publication,
+        );
         try {
-          publication?.onCommitted?.();
+          this.assertTranscriptWriteActive();
+          if (
+            this.getSessionId() !== sessionId ||
+            !sameSessionTranscriptTargetBinding(target, this.getSessionTarget())
+          ) {
+            throw new SessionTranscriptWriterClaimReboundError();
+          }
+          if (committed.publicationFailure) {
+            throw committed.publicationFailure;
+          }
+          // A newer committed view owns navigation; this receipt will not replace it.
+          if (!this.hasNewerPublishedTranscriptView(committed.committedVersion)) {
+            assertNavigation();
+          }
+          return (await this.adoptWorkerCommittedEntry(canonical, committed, admittedUserId)).entry
+            .id;
         } catch (cause) {
           return this.failCommittedCompaction(cause);
         }
-        return appended.entry.id;
-      }
-      const canonical = canonicalizeSessionEntry(entry);
-      const target = this.getSessionTarget();
-      const sessionId = this.getSessionId();
-      const admittedUserId = target
-        ? resolveSessionTranscriptReadFence(target)?.entryId
-        : undefined;
-      const committed = await this.persistWorkerRecord(
-        canonical,
-        !this.pendingDeliberateAppend && this.appendMode !== "side" ? "active-branch" : undefined,
-        admission,
-        undefined,
-        undefined,
-        undefined,
-        true,
-        undefined,
-        publication,
-      );
-      try {
-        if (
-          this.getSessionId() !== sessionId ||
-          !sameSessionTranscriptTargetBinding(target, this.getSessionTarget())
-        ) {
-          throw new SessionTranscriptWriterClaimReboundError();
-        }
-        if (committed.publicationFailure) {
-          throw committed.publicationFailure;
-        }
-        return this.adoptWorkerCommittedEntry(canonical, committed, admittedUserId).entry.id;
-      } catch (cause) {
-        return this.failCommittedCompaction(cause);
-      }
-    });
+      },
+      Boolean(getSessionCompactionPersistenceAsync(this)),
+    );
   }
 
   private failCommittedCompaction(cause: unknown): never {

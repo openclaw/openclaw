@@ -81,6 +81,7 @@ describe("diagnostic stability recorder", () => {
       count: 2,
       intervalMs: 60_000,
     });
+    emitInternalDiagnosticEvent({ type: "gateway.http.cancelled", source: "client" });
     emitDiagnosticEvent({
       type: "worker.request",
       kind: "sessionTranscript",
@@ -88,9 +89,7 @@ describe("diagnostic stability recorder", () => {
       phase: "queued",
       queueDepth: 1,
     });
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await waitForDiagnosticEventsDrained();
 
     const snapshot = getDiagnosticStabilitySnapshot({ limit: 10 });
 

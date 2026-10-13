@@ -18,9 +18,11 @@ import {
 import { applyEmbeddedAttemptToolsAllow } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { loadNodeExecAvailability } from "../agents/node-exec-availability.js";
 import { pickSandboxToolPolicy } from "../agents/sandbox-tool-policy.js";
+import { prepareSessionCapabilityRead } from "../agents/subagents/spawn/subagent-session-store.js";
 import { normalizeToolPolicyName, toolPolicyRestrictsTools } from "../agents/tool-policy.js";
 import { getInProcessGatewayToolContext } from "../agents/tools/in-process-gateway.js";
 import { hasSessionControlAuthority } from "../agents/tools/sessions-operator-authority.js";
+import type { SessionEventSourcePolicy } from "../auto-reply/reply/session-event-contract.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DirectoryCache } from "../infra/outbound/directory-cache.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
@@ -61,6 +63,7 @@ type CachedScopedTools = {
 
 type McpLoopbackScopeParams = {
   admittedRunContext?: AdmittedRunContext;
+  sessionEventSourcePolicy?: SessionEventSourcePolicy;
   context: Omit<McpLoopbackRequestContext, "senderIsOwner"> & { senderIsOwner?: boolean };
   cfg: OpenClawConfig;
   authProfileStore?: AuthProfileStore;
@@ -86,13 +89,13 @@ type McpLoopbackScopeParams = {
 
 type LoopbackToolsAllowMode = "exact" | "policy";
 
-function captureMcpLoopbackScope(params: McpLoopbackScopeParams) {
+async function captureMcpLoopbackScope(params: McpLoopbackScopeParams) {
   const canPreparePortal =
     params.context.senderIsOwner === false &&
     Boolean(params.context.sessionKey.trim() && params.context.sessionId);
   const gateway = canPreparePortal ? getInProcessGatewayToolContext() : undefined;
   const projection = gateway ? getSessionRowProjection(gateway) : undefined;
-  const assertCurrent = () => {
+  const prepared = await prepareSessionCapabilityRead(() => {
     params.signal?.throwIfAborted();
     assertCompletionGrantLineage(params);
     hasSessionControlAuthority(readAdmittedRunOperatorAuthority(params.admittedRunContext));
@@ -106,12 +109,16 @@ function captureMcpLoopbackScope(params: McpLoopbackScopeParams) {
     ) {
       throw new Error("MCP tool preparation belongs to a retired Gateway");
     }
+  });
+  return {
+    ...params,
+    projection,
+    assertCurrent: prepared.read,
+    [Symbol.dispose]: prepared.release,
   };
-  assertCurrent();
-  return { ...params, projection, assertCurrent };
 }
 
-type CapturedMcpLoopbackScope = ReturnType<typeof captureMcpLoopbackScope>;
+type CapturedMcpLoopbackScope = Awaited<ReturnType<typeof captureMcpLoopbackScope>>;
 
 function captureMcpCatalogSessionFacts(params: CapturedMcpLoopbackScope) {
   if (!params.projection) {
@@ -339,6 +346,7 @@ async function constructMcpLoopbackTools(
     conversationReadOrigin: "delegated",
     surface: "loopback",
     admittedRunContext: params.admittedRunContext,
+    sessionEventSourcePolicy: params.sessionEventSourcePolicy,
     isGrantCurrent: params.isGrantCurrent,
     excludeToolNames,
     mediatedToolNames: mediatedNativeTools,
@@ -367,8 +375,9 @@ async function resolveMcpLoopbackCatalog(
   params: McpLoopbackScopeParams,
   mode: LoopbackToolsAllowMode,
 ): Promise<CachedScopedTools> {
+  using scope = await captureMcpLoopbackScope(params);
   const resolved = await resolvePairedComputerNodeScope(
-    await resolveNodeExecScope(captureMcpLoopbackScope(params), mode),
+    await resolveNodeExecScope(scope, mode),
     mode,
   );
   for (;;) {
@@ -474,7 +483,8 @@ export class McpLoopbackToolCache {
 
   async resolve(input: McpLoopbackScopeParams): Promise<CachedScopedTools> {
     const epoch = this.#epoch;
-    const nodeExecParams = await resolveNodeExecScope(captureMcpLoopbackScope(input), "exact");
+    using scope = await captureMcpLoopbackScope(input);
+    const nodeExecParams = await resolveNodeExecScope(scope, "exact");
     for (;;) {
       nodeExecParams.assertCurrent();
       // A policy-excluded computer scope has no inventory component. It can use

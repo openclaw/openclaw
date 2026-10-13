@@ -51,7 +51,7 @@ export async function prepareManualTranscriptByteCompaction(
       sessionStore,
       amount: 0,
       expectedSession: entry,
-      transcriptByteCompactionLatch: refreshedLatch,
+      transcriptByteCompactionLatch: refreshedLatch ?? null,
       authorize: () => {
         params.abortSignal?.throwIfAborted();
         host.assertActive?.();
@@ -130,7 +130,9 @@ export function createCompactionAccounting(params: {
         maxBytes !== undefined &&
         postCompactionBytes >= maxBytes
           ? { sessionId: acceptedEntry.sessionId, activeBytes: postCompactionBytes, maxBytes }
-          : undefined,
+          : !byteBudget && compactionKind === "native-harness"
+            ? undefined
+            : null,
     });
     if (count === undefined) {
       throw new Error("Session changed before compaction maintenance could be recorded");

@@ -1,6 +1,13 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { TranscriptSessionSummary, TranscriptsGetResult } from "@openclaw/gateway-protocol";
+import type {
+  TranscriptSessionSummary,
+  TranscriptsGetResult,
+  TranscriptsStatusResult,
+} from "@openclaw/gateway-protocol";
 import { expect, it } from "vitest";
+import type { MockGatewayWindow } from "../test-helpers/control-ui-e2e-contract.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -43,6 +50,113 @@ const detail: TranscriptsGetResult = {
 };
 
 suite.define(() => {
+  it("returns from capture settings to the same meeting and preserves native new-tab links", async () => {
+    await suite.withPage(
+      { viewport: { width: 1440, height: 900 }, locale: "en-US" },
+      async ({ context, page }) => {
+        await installMockGateway(page, {
+          methodResponses: {
+            "transcripts.list": { sessions: [meeting], nextCursor: null },
+            "transcripts.get": detail,
+            "transcripts.status": {
+              enabled: true,
+              providers: [],
+              configuredSources: [],
+              active: [],
+              latestTranscript: meeting,
+              omitted: { providers: 0, configuredSources: 0, active: 0 },
+            } satisfies TranscriptsStatusResult,
+          },
+        });
+        const meetingUrl = `${suite.server.baseUrl}meetings?query=design&selector=${encodeURIComponent(meeting.selector)}`;
+        const capturePath =
+          "settings/communications?section=transcripts#settings-communications-meeting-capture";
+        const captureUrl = `${suite.server.baseUrl}${capturePath}`;
+        await page.goto(meetingUrl);
+        const view = page.locator("openclaw-meetings-page");
+        await view.getByRole("heading", { name: "Design review", exact: true }).waitFor();
+        const capture = view.getByRole("link", { name: "Meeting capture", exact: true });
+        expect(await capture.getAttribute("href")).toBe(`/${capturePath}`);
+        await capture.click();
+        await page.getByRole("heading", { name: "Communications", exact: true }).waitFor();
+        expect(page.url()).toBe(captureUrl);
+        await page.getByRole("button", { name: "Back to app", exact: true }).click();
+        await page.waitForURL(meetingUrl);
+        expect(page.url()).toBe(meetingUrl);
+        try {
+          await view.getByRole("heading", { name: "Design review", exact: true }).waitFor();
+        } catch (error) {
+          // This navigation failure otherwise retains only generic route readiness in CI.
+          const diagnostic = await page
+            .evaluate(
+              ({ selector, search }) => {
+                const hosts = [...document.querySelectorAll("openclaw-meetings-page")];
+                const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
+                const reads = gateway?.findRequests("transcripts.get") ?? [];
+                return {
+                  hostCount: hosts.length,
+                  hosts: hosts.slice(0, 2).map((host) => ({
+                    routeSearch:
+                      Reflect.get(host, "routeSearch") === search
+                        ? search
+                        : Reflect.get(host, "routeSearch") === ""
+                          ? ""
+                          : "other",
+                    headings: [...host.querySelectorAll("h1, h2, h3")]
+                      .slice(0, 8)
+                      .map((heading) => {
+                        const text = heading.textContent?.trim();
+                        return text === "Design review" || text === "Meetings" ? text : "other";
+                      }),
+                    readerPresent: host.querySelector(".transcripts-reader") !== null,
+                    alertCount: host.querySelectorAll('[role="alert"]').length,
+                  })),
+                  mainClass: document.querySelector("main.content")?.className ?? null,
+                  listRequests: gateway?.findRequests("transcripts.list").length ?? 0,
+                  getRequests: reads.length,
+                  requestedSelectors: reads.slice(-6).map((request) => {
+                    const requested =
+                      request.params && typeof request.params === "object"
+                        ? Reflect.get(request.params, "selector")
+                        : undefined;
+                    return requested === selector ? selector : requested == null ? null : "other";
+                  }),
+                };
+              },
+              { selector: meeting.selector, search: new URL(meetingUrl).search },
+            )
+            .catch(() => ({ unavailable: true }));
+          console.error("[meetings] capture return diagnostics", diagnostic);
+          throw error;
+        }
+        expect(
+          await view.getByRole("searchbox", { name: "Search meetings", exact: true }).inputValue(),
+        ).toBe("design");
+        const frame = await takeControlUiScreenshotFrame(
+          page,
+          view,
+          [view.getByRole("heading", { name: "Design review", exact: true })],
+          { animations: "disabled" },
+        );
+        await writeFile(path.join(suite.artifactDir, "meetings-capture-return.png"), frame.png);
+        for (const activation of ["modified", "middle"] as const) {
+          const [popup] = await Promise.all([
+            context.waitForEvent("page"),
+            capture.click(
+              activation === "modified" ? { modifiers: ["ControlOrMeta"] } : { button: "middle" },
+            ),
+          ]);
+          try {
+            await popup.waitForURL(captureUrl);
+            expect(page.url()).toBe(meetingUrl);
+          } finally {
+            await popup.close();
+          }
+        }
+      },
+    );
+  });
+
   it("opens Summary by default and follows speech, interim notes, and final notes across tabs", async () => {
     await suite.withPage(
       { viewport: { width: 1440, height: 1000 }, timezoneId: "UTC", colorScheme: "light" },
@@ -70,6 +184,7 @@ suite.define(() => {
           nextCursor: null,
         };
         const gateway = await installMockGateway(page, {
+          heldMethods: ["transcripts.summarize"],
           methodResponses: {
             "transcripts.list": { sessions: [activeMeeting, meeting], nextCursor: null },
             "transcripts.get": initial,
@@ -185,6 +300,9 @@ suite.define(() => {
           sessions: [interim.session, meeting],
           nextCursor: null,
         });
+        await gateway.waitForRequest("transcripts.summarize");
+        await gateway.setMethodResponse("transcripts.summarize", interim);
+        await gateway.resolveDeferred("transcripts.summarize", interim);
         await reader.getByText(interim.summary!.overview, { exact: true }).waitFor();
         await expect.poll(() => row.textContent()).toContain(interim.summary!.overview);
         expect(await reader.getByText(/Summary so far/).isVisible()).toBe(true);

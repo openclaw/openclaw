@@ -548,9 +548,9 @@ export function createNativeConversationBridge(
   });
   document.addEventListener(CHAT_RUN_ACTIVITY_CHANGED_EVENT, refreshConversation);
   document.addEventListener(CHAT_PANE_LIFECYCLE_CHANGED_EVENT, refreshConversation);
-  const stopGateway = context.gateway.subscribe(refreshConversation);
-  const stopRouter = context.router.subscribe(refreshConversation);
-  const stopSessions = context.sessions.subscribe(refreshConversation);
+  const stopStores = (["gateway", "router", "sessions"] as const).map((key) =>
+    context[key].subscribe(refreshConversation),
+  );
   refreshConversation();
   return {
     supportsSessionActions: features.includes("session-actions-v1"),
@@ -565,9 +565,7 @@ export function createNativeConversationBridge(
       pending.forEach((expire) => expire());
       document.removeEventListener(CHAT_RUN_ACTIVITY_CHANGED_EVENT, refreshConversation);
       document.removeEventListener(CHAT_PANE_LIFECYCLE_CHANGED_EVENT, refreshConversation);
-      stopGateway();
-      stopRouter();
-      stopSessions();
+      stopStores.forEach((stop) => stop());
       listeners.clear();
       window.removeEventListener(COMMAND_EVENT, onCommand);
       document.removeEventListener("click", onClick);

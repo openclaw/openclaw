@@ -474,7 +474,9 @@ export async function getMatrixVerificationStatus(
       await client.refreshOwnDeviceKeys();
       return await readMatrixVerificationStatus(client, opts);
     },
-    "discard",
+    // Even a diagnostic read may initialize Rust crypto and mutate its store.
+    // A normal close must publish that state and clear durable refusal.
+    "persist",
   );
 }
 

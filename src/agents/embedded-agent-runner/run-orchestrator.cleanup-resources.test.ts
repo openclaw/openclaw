@@ -3,6 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { CliPluginInvocationResources } from "../../cli/plugin-invocation-resources.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetPluginLoaderTestStateForTest } from "../../plugins/loader.test-fixtures.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
@@ -147,6 +148,7 @@ it.each([
           entries: { [fixture.pluginId]: { enabled: true } },
         },
       };
+      setRuntimeConfigSnapshot(cfg);
       loop.mockImplementation(async (_refresh, input) => {
         const prepared = input.preparedModelRuntime;
         if (!prepared) {

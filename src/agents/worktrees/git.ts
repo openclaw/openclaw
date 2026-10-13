@@ -208,6 +208,7 @@ async function withGitRefAdmission<
     args[0] === "fetch" ||
     args[0] === "update-ref" ||
     args[0] === "merge" ||
+    (args[0] === "worktree" && args[1] === "add" && !args.includes("--detach")) ||
     (args[0] === "symbolic-ref" && args.length === 3 && !args[1]?.startsWith("-")) ||
     (args[0] === "branch" &&
       args.some((arg) => arg === "-d" || arg === "-D" || arg === "--delete"));

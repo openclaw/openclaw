@@ -14,6 +14,30 @@ import type { MemoryAudience } from "../../plugins/memory-provider-types.js";
 import type { MemoryFlushPlan } from "../../plugins/registry-contribution-types.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
 
+export function createSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
+  return {
+    sessionId: "session",
+    updatedAt: Date.now(),
+    ...overrides,
+  };
+}
+
+export function createFreshSessionEntry(overrides: Partial<SessionEntry>): SessionEntry {
+  return createSessionEntry({ totalTokensFresh: true, totalTokensVersion: 1, ...overrides });
+}
+
+export function createFlushSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
+  return createFreshSessionEntry({ totalTokens: 80_000, compactionCount: 1, ...overrides });
+}
+
+export function modelRoutingProvenance(
+  requestedProvider: string,
+  requestedModel: string,
+  stage: ModelFallbackAttemptProvenance["stage"] = "initial",
+): ModelFallbackAttemptProvenance {
+  return { requestedProvider, requestedModel, stage };
+}
+
 export async function seedMemoryAccountingTranscript(
   scope: SessionTranscriptRuntimeTarget,
   workspaceDir: string,
@@ -112,9 +136,7 @@ export function createMemoryRunEntryMockImplementation(deps: {
   ensureSelectedAgentHarnessPlugin: typeof ensureSelectedAgentHarnessPlugin;
 }) {
   return async (params: Parameters<typeof runEmbeddedAgentEntry<EmbeddedAgentRunResult>>[0]) => {
-    const assistantErrorTranscript = createAssistantErrorTranscript({
-      runId: params.identity.runId,
-    });
+    const assistantErrorTranscript = createAssistantErrorTranscript();
     const fallbackResult = (await deps.runWithModelFallback({
       ...params.selection,
       ...params.identity,

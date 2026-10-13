@@ -1,5 +1,7 @@
 import { hasPendingFollowupQueueWork } from "../../auto-reply/reply/queue/state.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
+import { getSessionActorStorageBinding } from "../../config/sessions/session-actor-storage-binding.js";
+import { captureIncognitoSessionBinding } from "../../config/sessions/session-incognito-binding.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isSessionWorkAdmissionActive } from "../../sessions/session-lifecycle-admission.js";
@@ -23,7 +25,10 @@ export function createWorkerPlacementIdleSweep(options: {
     identity: WorkerSessionPlacementIdentity,
   ) => Promise<() => boolean>;
   loadSessionRuntime?: () => Promise<
-    Pick<typeof import("../session-utils.js"), "resolveGatewaySessionStoreTargetWithStore">
+    Pick<
+      typeof import("../session-utils-store-worker.js"),
+      "resolveGatewaySessionStoreTargetInWorker"
+    >
   >;
   now?: () => number;
 }) {
@@ -33,12 +38,33 @@ export function createWorkerPlacementIdleSweep(options: {
     options.getSessionWorkAdmissionCheck ??
     (loadSessionRuntime &&
       (async ({ sessionId, sessionKey, agentId }: WorkerSessionPlacementIdentity) => {
+        const memory = getSessionActorStorageBinding({ sessionKey, agentId });
+        if (memory) {
+          const identities = [sessionKey, sessionId];
+          return () => {
+            memory.actor.assertCurrent();
+            return (
+              isSessionWorkAdmissionActive(memory.path, identities) ||
+              hasPendingFollowupQueueWork(identities)
+            );
+          };
+        }
+        const binding = captureIncognitoSessionBinding({ sessionKey, agentId });
+        if (binding) {
+          const identities = [sessionKey, sessionId];
+          return () => {
+            binding.actor.assertReadable();
+            return (
+              isSessionWorkAdmissionActive(binding.actor.path, identities) ||
+              hasPendingFollowupQueueWork(identities)
+            );
+          };
+        }
         const sessionRuntime = await loadSessionRuntime();
-        const target = sessionRuntime.resolveGatewaySessionStoreTargetWithStore({
+        const target = await sessionRuntime.resolveGatewaySessionStoreTargetInWorker({
           cfg: options.getConfig(),
           key: sessionKey,
           agentId,
-          clone: false,
         });
         const identities = [sessionKey, target.canonicalKey, ...target.storeKeys, sessionId];
         return () =>

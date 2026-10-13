@@ -5,11 +5,11 @@ import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.j
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { captureRuntimeConfigAsyncReader } from "../io.js";
 import {
   loadTranscriptEventsSync,
   persistSessionTranscriptTurn,
   readTranscriptStatsSync,
-  replaceTranscriptEvents,
 } from "./session-accessor.js";
 import { readSessionTranscriptBoundedActiveContextCore } from "./session-accessor.sqlite-active-context.js";
 import {
@@ -25,6 +25,7 @@ import {
 } from "./session-accessor.sqlite-history-events.js";
 import { readActiveTranscriptStats } from "./session-accessor.sqlite-history.test-support.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import type { SessionTranscriptRuntimeScope } from "./session-accessor.types.js";
 import {
   shouldRebuildSessionTranscriptIndexSynchronously,
@@ -80,6 +81,7 @@ async function withByteSizeScope(
   run: (scope: SessionTranscriptRuntimeScope & { agentId: string }) => Promise<void>,
 ) {
   await withOpenClawTestState({ label: "transcript-byte-size" }, async (state) => {
+    await captureRuntimeConfigAsyncReader()();
     await run({
       agentId: "main",
       env: state.env,

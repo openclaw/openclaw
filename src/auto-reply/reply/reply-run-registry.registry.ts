@@ -87,13 +87,15 @@ export function resolveReplyOperationsForSession(params: ReplyOperationSessionTa
 
 export async function waitForReplyOperationOwnerSettlement(
   operation: ReplyOperation,
-  timeoutMs: number,
+  timeoutMs: number | null,
 ): Promise<boolean> {
   const settlement = operation.ownerSettlement;
   if (!settlement) {
     return true;
   }
-  return settlesWithin(settlement, resolveTimerTimeoutMs(timeoutMs, 100, 100));
+  return timeoutMs === null
+    ? settlement.then(() => true)
+    : settlesWithin(settlement, resolveTimerTimeoutMs(timeoutMs, 100, 100));
 }
 
 export function expireStaleReplyRunBySessionId(
@@ -133,18 +135,15 @@ function allowsDirectMessageInjectionOwner(sessionKey: string): boolean {
   );
 }
 
+function getReplyRun(sessionKey: string): ReplyOperation | undefined {
+  const normalizedSessionKey = normalizeOptionalString(sessionKey);
+  return normalizedSessionKey ? replyRunState.activeRunsByKey.get(normalizedSessionKey) : undefined;
+}
+
 export const replyRunRegistry: ReplyRunRegistry = {
   begin: createReplyOperation,
-  get(sessionKey) {
-    const normalizedSessionKey = normalizeOptionalString(sessionKey);
-    return normalizedSessionKey
-      ? replyRunState.activeRunsByKey.get(normalizedSessionKey)
-      : undefined;
-  },
-  isActive(sessionKey) {
-    const normalizedSessionKey = normalizeOptionalString(sessionKey);
-    return Boolean(normalizedSessionKey && replyRunState.activeRunsByKey.has(normalizedSessionKey));
-  },
+  get: getReplyRun,
+  isActive: (sessionKey) => getReplyRun(sessionKey) !== undefined,
   bindSourceTurnId(operation, sourceTurnId) {
     // Durable admission can finish after reset has replaced this operation.
     if (
@@ -218,7 +217,7 @@ export const replyRunRegistry: ReplyRunRegistry = {
     return new Promise((resolve) => {
       const waiters =
         replyRunState.waitersByKey.get(normalizedSessionKey) ?? new Set<ReplyRunWaiter>();
-      let abortHandler: (() => void) | undefined;
+      const abortHandler = () => waiter(false);
       let timer: NodeJS.Timeout | undefined;
       const waiter: ReplyRunWaiter = (ended) => {
         if (!waiters.delete(waiter)) {
@@ -228,18 +227,13 @@ export const replyRunRegistry: ReplyRunRegistry = {
           replyRunState.waitersByKey.delete(normalizedSessionKey);
         }
         clearTimeout(timer);
-        if (abortHandler) {
-          opts?.signal?.removeEventListener("abort", abortHandler);
-        }
+        opts?.signal?.removeEventListener("abort", abortHandler);
         resolve(ended);
       };
       if (typeof timeoutMs === "number" && Number.isFinite(timeoutMs)) {
         timer = setTimeout(() => waiter(false), resolveTimerTimeoutMs(timeoutMs, 100, 100));
       }
-      if (opts?.signal) {
-        abortHandler = () => waiter(false);
-        opts.signal.addEventListener("abort", abortHandler, { once: true });
-      }
+      opts?.signal?.addEventListener("abort", abortHandler, { once: true });
       waiters.add(waiter);
       replyRunState.waitersByKey.set(normalizedSessionKey, waiters);
       if (!replyRunState.activeRunsByKey.has(normalizedSessionKey)) {
@@ -247,12 +241,7 @@ export const replyRunRegistry: ReplyRunRegistry = {
       }
     });
   },
-  resolveSessionId(sessionKey) {
-    const normalizedSessionKey = normalizeOptionalString(sessionKey);
-    return normalizedSessionKey
-      ? replyRunState.activeRunsByKey.get(normalizedSessionKey)?.sessionId
-      : undefined;
-  },
+  resolveSessionId: (sessionKey) => getReplyRun(sessionKey)?.sessionId,
 };
 
 /** Abort and await only the captured operation; a same-key successor is never rediscovered. */
@@ -506,30 +495,10 @@ function evictPriorLifecycleReplyRuns(): void {
       continue;
     }
     const evict = evictReplyOperationByOperation.get(operation);
-    if (evict) {
-      if (attempt(evict)) {
-        continue;
-      }
-    } else {
-      // Pre-generation hot-loaded operations have no retained callback, but their
-      // public method still closes over the module instance that owns the backend.
-      attempt(() => {
-        if (!operation.abortForRestart()) {
-          throw new Error(`Stale reply operation was not abortable: ${operation.key}`);
-        }
-      });
-      // Admission stays occupied until the old closure clears it. If abort
-      // synchronously clears and replaces the slot, its captured stateCleared
-      // makes this completion idempotent instead of erasing the replacement.
-      attempt(() => operation.complete());
+    if (evict && attempt(evict)) {
+      continue;
     }
-    attempt(() => {
-      clearReplyRunState({
-        sessionKey: operation.key,
-        sessionId: operation.sessionId,
-        operation,
-      });
-    });
+    attempt(() => clearReplyRunState(operation));
   }
   if (errors.length > 0) {
     throw new AggregateError(errors, "Failed to abort stale reply runs");
@@ -551,7 +520,6 @@ const replyRunRegistryTestApi = {
     replyRunState.activeKeysBySessionId.clear();
     replyRunState.waitKeysBySessionId.clear();
     replyRunState.sourceTurnByKey.clear();
-    replyRunState.completionObservationsByKey?.clear();
     replyRunSettle.resetReplyRunSettleTimersForTesting();
     for (const waiters of replyRunState.waitersByKey.values()) {
       for (const waiter of waiters) {

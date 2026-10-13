@@ -2,10 +2,11 @@
   "id": "llama-cpp",
   "categories": ["models"],
   "name": "llama.cpp Provider",
-  "description": "Managed and external llama.cpp servers for GGUF chat and embeddings.",
+  "description": "Managed and external llama.cpp servers for GGUF chat, embeddings and local images.",
   "activation": {
     "onStartup": false
   },
+  "providerCatalogEntry": "./provider-discovery.ts",
   "enabledByDefault": true,
   "autoEnableWhenConfiguredProviders": ["llama-cpp"],
   "providers": ["llama-cpp"],
@@ -72,7 +73,9 @@
     }
   ],
   "contracts": {
-    "embeddingProviders": ["local"]
+    "embeddingProviders": ["local"],
+    "mediaUnderstandingProviders": ["llama-cpp"],
+    "tools": ["local_image"]
   },
   "configSchema": {
     "type": "object",

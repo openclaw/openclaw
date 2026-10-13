@@ -1,10 +1,11 @@
 /**
  * Hook endpoint trust tests for agent dispatch and gateway network config.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  captureGatewayRootWorkReleaseObserver,
   getActiveGatewayRootWorkCount,
   isGatewaySubordinateWorkAdmissionClosed,
   resetGatewayWorkAdmission,
@@ -12,6 +13,7 @@ import {
 } from "../../process/gateway-work-admission.js";
 import { getSpawnBroker, runWithSpawnBroker } from "../../process/spawn-broker/context.js";
 import { useSpawnBrokerTestFixture } from "../../process/spawn-broker/host.test-support.js";
+import { AsyncWorkScope, getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 
 const enqueueSystemEventMock = vi.fn();
@@ -93,7 +95,8 @@ vi.mock("./hooks-request-handler.js", () => ({
   }),
 }));
 
-const { createGatewayHooksRequestHandler } = await import("./hooks.js");
+const { createGatewayHookDispatcher, createGatewayHooksRequestHandler } =
+  await import("./hooks.js");
 const createBroker = useSpawnBrokerTestFixture(afterEach);
 
 function waitForFast<T>(
@@ -135,6 +138,7 @@ function buildAgentPayload(name: string, agentId?: string) {
     idempotencyKey: undefined,
     wakeMode: "now" as const,
     sessionKey: "session-1",
+    sessionMode: "isolated" as const,
     sourcePath: "/hooks/agent",
     deliver: false,
     channel: "last" as const,
@@ -374,40 +378,50 @@ describe("dispatchAgentHook trust handling", () => {
     expect(runCronIsolatedAgentTurnMock).not.toHaveBeenCalled();
   });
 
-  it("retains detached agent work after the hook request releases admission", async () => {
-    let continueRun = () => {};
+  it("retains detached agent work after the hook request closes", async () => {
+    const requestWork = new AsyncWorkScope();
+    const runGate = createDeferred();
+    const runReleased = createDeferred();
     let subordinateAdmissionClosed: boolean | undefined;
-    const runGate = new Promise<void>((resolve) => {
-      continueRun = resolve;
-    });
     runCronIsolatedAgentTurnMock.mockImplementationOnce(
       async (params: { onExecutionStarted?: () => void }) => {
+        const observeRelease = captureGatewayRootWorkReleaseObserver();
+        assert(observeRelease, "hook execution must own root admission");
+        observeRelease(() => runReleased.resolve());
         params.onExecutionStarted?.();
-        await runGate;
+        await runGate.promise;
+        const signal = getAsyncWorkSignal();
+        assert(signal, "hook execution must own its cancellation scope");
+        signal.throwIfAborted();
         subordinateAdmissionClosed = isGatewaySubordinateWorkAdmissionClosed();
         return { status: "ok", summary: "done", delivered: false };
       },
     );
+    const dispatcher = createGatewayHookDispatcher(buildMinimalParams());
     const requestAdmission = tryBeginGatewayRootWorkAdmission();
-    expect(requestAdmission).not.toBeNull();
+    assert(requestAdmission, "hook request must acquire admission");
 
-    await requestAdmission?.run(async () => {
-      const admission = await dispatchAgentHook(buildAgentPayload("Async hook"));
-      expect(admission).toMatchObject({ ok: true });
+    try {
+      const admission = await requestWork.track(() =>
+        requestAdmission.run(() => dispatcher.dispatchAgentHook(buildAgentPayload("Async hook"))),
+      );
+      assert(admission.ok, "hook must acknowledge execution before it finishes");
       expect(getActiveGatewayRootWorkCount()).toBe(2);
-    });
-    requestAdmission?.release();
+      requestAdmission.release();
+      await requestWork.drain();
 
-    expect(getActiveGatewayRootWorkCount()).toBe(1);
-    continueRun();
-    await waitForFast(() =>
-      expect(logHooksInfoMock).toHaveBeenCalledWith(
-        expect.stringMatching(/^hook agent run completed /),
-        expect.any(Object),
-      ),
-    );
-    expect(subordinateAdmissionClosed).toBe(false);
-    expect(getActiveGatewayRootWorkCount()).toBe(0);
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+      runGate.resolve();
+      const completion = await admission.completion;
+      await runReleased.promise;
+      expect(completion).toMatchObject({ status: "ok" });
+      expect(subordinateAdmissionClosed).toBe(false);
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    } finally {
+      runGate.resolve();
+      requestAdmission.release();
+      await requestWork.drain();
+    }
   });
 
   it("serializes canonical aliases for the same session in dispatch order", async () => {

@@ -22,11 +22,40 @@ For unmatched HTTP paths, the app-shell fallback respects the request's `Accept`
 
 It speaks **directly to the Gateway WebSocket** on the same port.
 
+## Browser requirements
+
+Use Safari 26.2 or later on macOS 26.2, iOS 26.2, or iPadOS 26.2 or later,
+or Chrome or Firefox released within the last six months (Chrome 147+ and
+Firefox 150+ as of October 2026). Embedded web views need the same browser capabilities.
+
+Browsers missing required overlay features show an update screen before the
+dashboard starts. In the native apps, **Open in browser** opens the current
+page in your default browser. Update the browser or operating system if that
+browser also shows the update screen.
+
+In **Settings → Appearance → Browser tab icon**, choose **Agent avatar** to use
+the selected agent’s image. The **Shape** row offers **Square**, **Rounded corners**,
+and **Circle**. Square preserves the full image; rounded and circular icons use a
+centered crop. The choice is saved with your tab-icon preference, and activity
+badges remain visible on every shape.
+
 After a Gateway restart, an agent may need a few minutes to prepare its database. The chat view shows "Starting up" and the sidebar stays quiet while preparation is pending. Both reload automatically when the agent is ready; an actual preparation failure still shows its diagnostic and repair instructions.
+
+Reloading a previously visited chat restores the last settled sidebar while the Gateway reconnects. Pinned sessions, plugin rows, roster order, filters, and your display identity keep their places until live data is ready. The footer still reports the current connection status. This browser cache is scoped to the Gateway and profile, expires after 30 days, and excludes incognito sessions. The same snapshot provides the saved session rows and routing defaults for the first chat header. Cached rows never authorize session changes.
+
+Saved pin labels remain visible while their details refresh, even when those sessions are outside the first list page. Unavailable pins disappear silently without removing their saved shortcuts. Sidebar session updates arriving within one display frame paint together.
+
+Inline widgets and MCP Apps reserve their last rendered height when a cached conversation reloads, so loading their content does not move the surrounding messages. New widgets use their declared size until the content reports its height. Changed content or a different window width can still resize a widget.
+
+Transcript history loads in parallel with the browser cache. An unchanged history response keeps the cached message rows and widget sizes in place. The transcript restores its saved reading position, or opens at the end, before showing its initial measured rows.
+
+During connection recovery, Send shows its busy state and explains why sending is unavailable without inserting a temporary notice above the composer.
 
 Automatic read acknowledgements and identity refreshes pause while the Gateway reports a restart or suspension. Pending read acknowledgements are shared across repeated session updates. If an acknowledgement is rejected, later updates respect the server's retry delay and use randomized backoff instead of immediately sending another patch.
 
-Reconnect bootstrap reads also pause together: agent identity, session subscriptions, session groups, pending questions, and the session list. A restart rejection holds these reads on that connection, with one delayed probe at a time in case the restart is canceled. Readiness or a new connection resumes loading automatically; writes are never replayed by this mechanism.
+Reconnect bootstrap reads also pause together: agent identity, session subscriptions, session groups, pending questions, and the session list. An announced restart or suspension holds these reads until readiness or a new connection resumes loading. If a restart rejection arrives without an announcement, one delayed probe at a time checks for recovery after at least a minute, in case the restart is canceled. Writes are never replayed by this mechanism.
+
+Agent identities are shared across views on the same connection and refresh after configuration or agent changes, including `IDENTITY.md` saves through the Gateway, rather than expiring while a tab is idle. Reload the tab to pick up direct filesystem edits to workspace `IDENTITY.md` or avatar image files.
 
 If the Gateway's request queue is full, automatic sidebar session discovery keeps the current rows and retries up to three times, respecting the server's retry delay. A persistent failure shows "The server is busy. Please try again in a moment." Other actions can show this message immediately; wait briefly, then retry the action.
 
@@ -40,11 +69,15 @@ Sidebar pull-request indicators reuse the last known snapshot. Opening a session
 
 Background pull-request comparisons use local Git objects and never fetch missing history or blobs. If a partial clone lacks objects needed for the comparison, statistics can remain unavailable until those objects are fetched. A timed-out comparison skips its dependent checks, keeps the branch visible without statistics or a Create PR link, and logs a warning to fetch repository history and retry.
 
-The sidebar’s **Online** list shows compact person rows with avatar presence indicators: solid green means active, amber means idle, and a hollow green ring means connected with activity unavailable. Names stay on one line and fade at the edge when space is tight. The indicators, hovercard, and accessible description preserve the activity distinctions. A compact group at the end of each row shows a theme-accent spinner and running count, then a small message-circle icon and muted open count. Each icon-number pair uses tabular digits and keeps its natural width, with a wider gap between running and open groups. The group rests at the right edge; names and counts share a text baseline, without fixed digit columns. Counts have no pill background at rest, with explanatory tooltips; hovering or keyboard-focusing the row reveals a subtle grouping pill without shifting the content. Reduced motion keeps the spinner still. Known zero counts are omitted. Open counts each person’s owned, unarchived conversations that you can access across configured agents, excluding hidden subagents, automation, system, and global/unknown sessions. Running counts those conversations actively executing an agent turn, not queued work or activity in descendant sessions. Counts cover the matching sessions before pagination and do not change with your session-list filters. By default, all connected people remain visible, ordered Active, Idle, then Online with activity unavailable. Hover the **Online** block or focus it with the keyboard to reveal **Filter & sort**; the action stays available on touch devices. Its compact menu uses the existing dropdown controls: choose **All** or **Running**, and sort by **Active people first**, **Running sessions**, **Total sessions**, or **Name**. Mouse hover opens the choice submenus; selecting an option dismisses the menu. Count sorts put larger values first and unavailable counts last; **Total sessions** uses the open count above, not lifetime history. **Reset to defaults** appears only after a setting changes, below a single separator, and restores the default view. These controls only filter or order people; they do not change session-list queries or hide either counter. Unavailable counts show no placeholder; the row tooltip and accessible description identify them as unavailable rather than zero. A failed refresh keeps the last counts with a retry notice.
+The sidebar’s **Online** list shows compact person rows with avatar presence indicators: solid green means active, amber means idle, and a hollow green ring means connected with activity unavailable. Names stay on one line and fade at the edge when space is tight. The indicators, hovercard, and accessible description preserve the activity distinctions. A compact group at the end of each row shows a theme-accent spinner and running count, then a small message-circle icon and muted open count. Each icon-number pair uses tabular digits and keeps its natural width, with a wider gap between running and open groups. The group rests at the right edge; names and counts share a text baseline, without fixed digit columns. Counts have no pill background at rest, with explanatory tooltips; hovering or keyboard-focusing the row reveals a subtle grouping pill without shifting the content. Reduced motion keeps the spinner still. Known zero counts are omitted. Open counts each person’s owned, unarchived conversations that you can access across configured agents, excluding hidden subagents, automation, system, and global/unknown sessions. Running counts each conversation once while its own agent turn executes or its delegated subagents remain active, including when the parent is waiting for their results. Queued direct turns without active delegated work do not count. Counts cover the matching sessions before pagination and do not change with your session-list filters. By default, all connected people remain visible, ordered Active, Idle, then Online with activity unavailable. Hover the **Online** block or focus it with the keyboard to reveal **Filter & sort**; the action stays available on touch devices. Its compact menu uses the existing dropdown controls: choose **All** or **Running**, and sort by **Active people first**, **Running sessions**, **Total sessions**, or **Name**. Mouse hover opens the choice submenus; selecting an option dismisses the menu. Count sorts put larger values first and unavailable counts last; **Total sessions** uses the open count above, not lifetime history. **Reset to defaults** appears only after a setting changes, below a single separator, and restores the default view. These controls only filter or order people; they do not change session-list queries or hide either counter. Unavailable counts show no placeholder; the row tooltip and accessible description identify them as unavailable rather than zero. A failed refresh keeps the last counts with a retry notice.
 
 Person hovercards keep their **Recent sessions** selection and order stable while open, so background activity does not move links under the pointer or keyboard focus. Reopening the card selects the latest sessions. Timestamps stay live, and sessions that leave the visible, eligible roster disappear without replacing them with other sessions. **Viewing now** continues to follow presence.
 
 Sidebar live narration pauses while the browser tab is hidden and resumes from current activity when you return. The selected chat and pending outbox keep their separately owned subscriptions.
+
+**My sessions** lists your sessions across configured agents, independently of the chat or workspace you are viewing. Other agent-scoped sidebar lists refresh immediately when you switch agents, even while the selected chat is still loading. Automatic startup and reconnect refreshes continue to wait for that chat to become ready.
+
+In **My sessions**, choosing an agent from the switcher resumes that agent's newest loaded active conversation from your list, or opens its Home when none is loaded. Agent unread indicators and Home activity use the same current list; Home controls keep their separate main-session behavior.
 
 The sidebar’s **Unsent draft** pencil covers saved text, attachments, replies, and goals, including drafts saved in another tab or before a reload, without reopening the conversation. A newer edit or clear always replaces an older saved draft. Incognito conversations never show a saved-draft pencil. Outbox attention badges also count queued messages with attachments that need review once the connection finishes restoring.
 
@@ -60,6 +93,8 @@ Failed narration releases use the same backoff, including while the tab is hidde
 
 Closed Terminal, Browser, and Desktop panels initialize when you open them rather than during initial navigation. Home/Ask OpenClaw and System busyness keep lightweight frames ready and defer their conversation or diagnostic contents until opened. Home preserves its saved dock position and size throughout loading. Panels saved as open still restore after a reload. Settings does not automatically reopen Ask OpenClaw; its control and diagnostic actions can still open it explicitly.
 
+Minimizing and reopening the Dashboard side panel preserves loaded MCP Apps and their unsaved in-app input while the app lease remains valid.
+
 Hidden retained chats defer command and model metadata refreshes until you return to them. Returning to a recently opened chat reuses its completed metadata on the same connection until a Gateway change invalidates it. Concurrent readers share the same request. Session events with an unchanged model-selection revision retain the model catalog, and session-only changes retain agent commands. Native sessions without a model-selection revision wait for a 2.5-second quiet period after ordinary patches before refreshing the catalog and session facts. Explicit model, account, and runtime selections refresh promptly. Configuration and command changes refresh commands; catalog and session lifecycle changes refresh affected model choices. Repeated changes during a request share one trailing refresh instead of issuing overlapping requests.
 
 New Session keeps previously fetched model choices selectable while their catalog
@@ -69,7 +104,9 @@ catalog cache and appear independently of slower search categories.
 
 Provider authentication status is shared across views and refreshes after account changes and near credential warning or expiry deadlines. Credentials without an expiry do not need periodic refreshes. Hidden tabs defer deadline refreshes until visible again.
 
-The sidebar loads automation status once per connection and refreshes after automation or configuration changes. Failed reads retry once per minute while the tab is visible and stop retrying after success. Overdue warnings advance on a local deadline without polling the Gateway. Hidden tabs catch up when visible; returning to an unchanged tab does not poll automations. Command palette searches reuse their automation inventory on the same connection until one of those changes or a reconnect.
+The sidebar loads automation status once per connection and refreshes after automation or configuration changes. Failed reads retry once per minute while the tab is visible and stop retrying after success. Sidebar health and Automations page refreshes pause during announced restarts or suspension and catch up when the Gateway is available again. Overdue warnings advance on a local deadline without polling the Gateway. Hidden tabs catch up when visible; returning to an unchanged tab does not poll automations. Command palette searches reuse their automation inventory on the same connection until one of those changes or a reconnect.
+
+In a session’s menu, open **View → Speech bubbles** to switch that conversation—including the main session—to two-sided bubbles. Your messages stay on the right and agent replies stream into bubbles on the left. The choice is saved per session in this browser; other sessions keep their own mode. Turn it off to restore the flat reply layout. In bubble mode, activity appears as a compact **…** preview. Click it to see the full tool or status details. Agent reactions appear beneath the prompt they acknowledge, independently of the selected layout.
 
 Automation inputs appear as compact, collapsed activity rows instead of message bubbles. Expand a row to read the full prompt and access its message actions. Each automation input stays separate, even when several jobs run in the same conversation. The expanded **From** link opens that automation's History tab and highlights the originating run; open the run's transcript from History when needed.
 
@@ -92,10 +129,12 @@ non-success outcomes remain visible even when collapsed, such as
 Still-streaming assistant text stays at the bottom of its run, below saved output, and
 takes its transcript position once saved.
 
-Steering keeps the current response intact. A steer appears below all server
-output from the run it targets, including live text, restored text, commentary,
-and saved assistant messages. These display rules do not rewrite the stored
-transcript or split an assistant message around a steer.
+Accepted steering messages keep their saved transcript positions. Earlier saved
+output stays above the message; later answers and live output appear below it,
+including when the same run continues after steering. Reloading or reconnecting
+does not move the message to the end of that run. Unsaved assistant text remains
+one live tail until saved rows replace it; the UI does not split or rewrite
+stored assistant messages.
 
 Consecutive tool activity shares one expandable log, including when background
 work resumes in a new run. Visible messages, media, and conversation markers
@@ -113,16 +152,36 @@ When an incoming message causes an unstarted tool call to be skipped, its card
 and work summary show **Skipped**, including after reloading the conversation.
 Approval blocks and tool failures keep their separate outcomes.
 
-Open the parent conversation's side panel and select **Subagents** from its **+**
-menu to inspect ordinary child runs. The panel groups running and finished work,
-keeping children waiting on their own descendants under **Running**. It shows
-elapsed time and available tool activity, and opens each child's existing
-view-only transcript beside the parent. It does not add rows to the left sidebar;
-Swarm members remain in their parallel-tasks view. A directly opened child page
-offers **Open parent session**. The `/subagents list`, `/subagents info <id|#>`,
-and `/subagents log <id|#>` commands remain available.
+The chat header keeps **Share**, **Layout**, and the session menu together.
+**Layout** contains focus, split, swap, panel selection, and dock-position actions,
+with their keyboard shortcuts. Open **Subagents** there or from the side-panel
+**+** menu to inspect child runs, including swarm workers. An empty conversation
+starts with the panel closed. The first running batch adds it automatically,
+preserving another panel you selected; closing it keeps it closed for that batch.
+Finished results stay open until you close them. While the parent waits on
+subagents, the conversation keeps each child’s claw, name, and current activity
+together in one clickable row. A single muted timer at the far right shows total
+time since your message, including subagent waits, when that request is known.
+There is no second status line above the composer. When the conversation uses
+a fallback wait indicator instead of named child activity, its clock measures
+the current idle interval from the parent’s latest recorded run end, independently
+of loaded handoff history. Active children alone do not invent a wait for a
+parent that has never run.
+The panel loads all child pages automatically and groups running and finished
+work, keeping children waiting on their own
+descendants under **Running**. It shows elapsed time and available tool activity,
+and opens each child's existing view-only transcript beside the parent. Running
+rows show public tool progress when available, otherwise the current tool step's
+purpose (such as an exec call's title) or the run's latest status summary, along
+with the call count. When only part of a long history is loaded, the count is a
+lower bound such as **40+ calls**. Avatar-free child transcripts do not reserve
+empty avatar columns, and narrow panes use compact horizontal insets while wide
+transcripts retain the reading-width limit. It does not add rows to the left
+sidebar. The parallel-tasks view also shows aggregate swarm progress. A directly
+opened child page offers **Open parent session**. The `/subagents list`,
+`/subagents info <id|#>`, and `/subagents log <id|#>` commands remain available.
 
-Open **Processes** from the chat header's **Panels** menu or the side-panel **+**
+Open **Processes** from the chat header's **Layout** menu or the side-panel **+**
 menu to inspect the conversation's background exec commands. It is separate from
 **Subagents**. Running and retained finished processes show status and elapsed
 time. **Finished** starts collapsed; click its heading to expand or collapse the
@@ -136,6 +195,10 @@ Escape cancels the edit. While an input method is composing text, Enter and
 Escape stay with composition. Finish composing before saving or canceling.
 Once the Gateway confirms a rename, the saved name stays visible while the session
 list refreshes, even if an older snapshot arrives late.
+
+Open group rename and **New session defaults** dialogs close when the Gateway
+reconnects or you switch connections. Reopen the group’s menu to make changes
+using the current connection.
 
 Dragging a session between sidebar groups updates its placement immediately. A successful
 save keeps that placement even if the subsequent list refresh fails; the UI reports
@@ -295,6 +358,9 @@ Agent names and avatars follow agent and identity updates. While a configured av
 the avatar keeps its tinted background with no face or text. The image appears when ready;
 an emoji or generated face appears only when no image is configured or the image fails to load.
 Repeated views reuse prepared avatar thumbnails; updating the avatar refreshes its thumbnail.
+Profiles without an advertised avatar use initials without probing an image route. Authenticated
+misses for current profile revisions, agent avatars, and resolved workspace icons can remain in
+the browser cache for up to one minute. New profile and agent image revisions use a new URL.
 This behavior is shared by the roster, agent switcher, identity chips, settings, and chat.
 
 Activity and previews on the page and sidebar roster refresh on session events

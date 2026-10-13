@@ -4,6 +4,10 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import {
   loadSessionEntry,
   replaceSessionEntry,
   patchSessionEntryCore,
@@ -24,6 +28,8 @@ import { cancelGatewayWorkerSessionWork } from "./server-worker-placement-cancel
 import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
 import { admitWorkerStopChat } from "./server-worker-placement.test-harness.js";
 import * as lifecycleState from "./session-lifecycle-state.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
+import { resolveCanonicalSessionEntryFromStoreKeys } from "./session-utils-store.js";
 import { closeSessionSqliteDatabasesForTest } from "./session-utils.test-support.js";
 const routing = vi.hoisted(() => ({
   load: vi.fn<
@@ -46,6 +52,8 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
             .spyOn(lifecycleState, "prepareGatewaySessionLifecycleEvent")
             .mockReturnValue(() => terminalWrite.promise);
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "worker-stop-terminal-"));
+    const cfg = {};
+    setRuntimeConfigSnapshot(cfg);
     const target = {
       storePath: path.join(root, "sessions.json"),
       sessionKey: "agent:main:terminal-stop",
@@ -82,7 +90,7 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
       chatAbortControllers: new Map(),
       chatQueuedTurns: new Map(),
       agentRunSeq: new Map(),
-      getRuntimeConfig: () => ({}),
+      getRuntimeConfig: () => cfg,
       removeChatRun: vi.fn(),
       broadcast: vi.fn(),
       nodeSendToSession: vi.fn(),
@@ -176,38 +184,39 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
         },
         { once: true },
       );
-      heldWriter = patchSessionEntryCore(target, async () => {
-        writerEntered.resolve();
-        await releaseWriter.promise;
-        return null;
-      });
-      await writerEntered.promise;
-      const sessionTarget = {
-        storePath: target.storePath,
-        canonicalKey: target.sessionKey,
-        storeKeys: [target.sessionKey],
-        agentId: "main",
-        store: { [target.sessionKey]: entry },
-      };
       const barriers = createGatewayWorkerPlacementReclaimBarriers({
         placements: {
           get: () => placement as never,
           getAsync: async () => placement as never,
           waitForTurnClaimRelease: async () => {},
         },
-        loadSessionRuntime: async () =>
-          ({
-            managedWorktrees: {
-              findLiveByOwner: async () => ({
-                id: "terminal-worktree",
-                ownerId: target.sessionKey,
-                path: root,
-              }),
-            },
-            resolveGatewaySessionStoreTargetWithStore: () => sessionTarget,
-            resolveCanonicalSessionEntryFromStoreKeys: () => entry,
-          }) as never,
-        cancelSessionWork: (request) => cancelGatewayWorkerSessionWork(context, request),
+        loadSessionRuntime: async () => ({
+          managedWorktrees: {
+            findLiveByOwner: async () => ({
+              id: "terminal-worktree",
+              ownerId: target.sessionKey,
+              path: root,
+            }),
+          },
+          resolveGatewaySessionStoreTargetInWorker: (params) =>
+            resolveGatewaySessionStoreTargetInWorker({
+              ...params,
+              cfg: {
+                ...params.cfg,
+                session: { ...params.cfg.session, store: target.storePath },
+              },
+            }),
+          resolveCanonicalSessionEntryFromStoreKeys,
+        }),
+        cancelSessionWork: async (request) => {
+          heldWriter = patchSessionEntryCore(target, async () => {
+            writerEntered.resolve();
+            await releaseWriter.promise;
+            return null;
+          });
+          await writerEntered.promise;
+          await cancelGatewayWorkerSessionWork(context, request);
+        },
         revokeSessionAuthority: vi.fn(),
       });
       reclaim = barriers.runReclaimBarrier({
@@ -295,6 +304,7 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
       subscriptions?.transcriptUnsub();
       subscriptions?.lifecycleUnsub();
       await closeSessionSqliteDatabasesForTest();
+      clearRuntimeConfigSnapshot();
       persistenceSpy?.mockRestore();
       routing.load.mockReset();
       await fs.rm(root, { recursive: true, force: true });

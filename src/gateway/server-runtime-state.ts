@@ -19,6 +19,7 @@ import type { ResolvedGatewayAuth } from "./auth.js";
 import type { NodeDesktopStreamBroker } from "./desktop/node-stream-broker.js";
 import type { DesktopSessionRegistry } from "./desktop/session-registry.js";
 import type { HooksConfigResolved } from "./hooks.js";
+import type { GatewayHttpRequestLifetime } from "./http-request-authority.js";
 import {
   createGatewayUnattributableProxyReporter,
   type GatewayIngressTransport,
@@ -97,6 +98,7 @@ export async function createGatewayHttpTransport(params: {
   getPluginRouteRegistry?: () => PluginRegistry;
   isStartupPluginRuntimeReady?: () => boolean;
   getGatewayRequestContext?: () => GatewayRequestContext | undefined;
+  httpRequestLifetime?: GatewayHttpRequestLifetime;
   deps: CliDeps;
   log: { info: (msg: string) => void; warn: (msg: string) => void };
   logHooks: ReturnType<typeof createSubsystemLogger>;
@@ -104,6 +106,7 @@ export async function createGatewayHttpTransport(params: {
   getReadiness?: ReadinessChecker;
   getStartup?: StartupChecker;
   isStartupPending?: () => boolean;
+  waitForRequestRuntime?: () => Promise<void>;
   isTerminalEnabled: () => boolean;
   handleWatchNodeRequest?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
   handleNodeWorkerBundleTransferRequest?: ArtifactTransferHttpCallback;
@@ -354,7 +357,9 @@ export async function createGatewayHttpTransport(params: {
       getStartup: params.getStartup,
       getRuntimeConfig: loadRuntimeConfig,
       getGatewayRequestContext: params.getGatewayRequestContext,
+      waitForRequestRuntime: params.waitForRequestRuntime,
       isStartupPluginRuntimeReady: params.isStartupPluginRuntimeReady,
+      httpRequestLifetime: params.httpRequestLifetime,
       isTerminalEnabled: params.isTerminalEnabled,
       tlsOptions,
       ingressTransport,
@@ -378,6 +383,7 @@ export async function createGatewayHttpTransport(params: {
       desktopSessionRegistry: params.desktopSessionRegistry,
       nodeDesktopStreamBroker: params.nodeDesktopStreamBroker,
       getGatewayRequestContext: params.getGatewayRequestContext,
+      waitForRequestRuntime: params.waitForRequestRuntime,
       isStartupPending: params.isStartupPending,
       ingressTransport,
       reportUnattributableProxy,

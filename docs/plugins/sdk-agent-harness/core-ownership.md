@@ -373,9 +373,11 @@ For auxiliary session control calls, `resolveSessionModelRef` from
 `openclaw/plugin-sdk/model-session-runtime` resolves the current model selection.
 `prepareAgentRuntimeAuth` from `openclaw/plugin-sdk/agent-harness-runtime` selects
 its auth route and ordered credential attempts from the caller's loaded auth
-snapshot. Preserve the selected attempt's profile, API, and fallback restrictions
-when materializing credentials; this keeps control calls on the same billing
-route as agent turns.
+snapshot. When the model has no concrete transport of its own, such as a natively
+listed model, pass the routes from the admission-captured published catalog (the
+catalog the model picker read) as `observedRoutes`. Preserve the
+selected attempt's profile, API, and fallback restrictions when materializing
+credentials; this keeps control calls on the same billing route as agent turns.
 
 For tools that support both standalone and Gateway execution,
 `hasGatewayToolRoutingContext()` from

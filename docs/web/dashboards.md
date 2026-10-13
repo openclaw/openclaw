@@ -214,6 +214,10 @@ never needs the agent.
   the dashboard main and focuses it; `"split"` reveals it using the current
   arrangement, bringing chat alongside when Dashboard is main.
 
+If a widget change fails, its error stays visible when the dashboard refreshes
+without any saved changes. You can retry from the widget menu. A new action or
+updated dashboard state clears the previous error.
+
 ## Show a website fullscreen
 
 Ask your agent:

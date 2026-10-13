@@ -116,49 +116,32 @@ export function resolveSessionModelIdentityRef(
 ): { provider?: string; model: string } {
   const runtimeModel = entry?.model?.trim();
   const runtimeProvider = entry?.modelProvider?.trim();
-  if (runtimeModel) {
-    if (runtimeProvider) {
-      return { provider: runtimeProvider, model: runtimeModel };
-    }
-    const inferredProvider = inferUniqueProviderFromConfiguredModels({
-      cfg,
-      model: runtimeModel,
-      agentId,
-      manifestPlugins: options?.manifestPlugins,
-    });
-    if (inferredProvider) {
-      return { provider: inferredProvider, model: runtimeModel };
-    }
-    if (runtimeModel.includes("/")) {
-      const parsedRuntime = parseModelRef(runtimeModel, DEFAULT_PROVIDER, {
+  if (runtimeModel && runtimeProvider) {
+    return { provider: runtimeProvider, model: runtimeModel };
+  }
+  const model = runtimeModel || fallbackModelRef?.trim();
+  if (model) {
+    const inferConfigured = () => {
+      const provider = inferUniqueProviderFromConfiguredModels({
+        cfg,
+        model,
+        agentId,
+        manifestPlugins: options?.manifestPlugins,
+      });
+      return provider ? { provider, model } : undefined;
+    };
+    const parseSelected = () => {
+      const parsed = parseModelRef(model, DEFAULT_PROVIDER, {
         allowPluginNormalization: options?.allowPluginNormalization,
         manifestPlugins: options?.manifestPlugins,
       });
-      if (parsedRuntime) {
-        return { provider: parsedRuntime.provider, model: parsedRuntime.model };
-      }
-    }
-    return { model: runtimeModel };
-  }
-  const fallbackRef = fallbackModelRef?.trim();
-  if (fallbackRef) {
-    const parsedFallback = parseModelRef(fallbackRef, DEFAULT_PROVIDER, {
-      allowPluginNormalization: options?.allowPluginNormalization,
-      manifestPlugins: options?.manifestPlugins,
-    });
-    if (parsedFallback) {
-      return { provider: parsedFallback.provider, model: parsedFallback.model };
-    }
-    const inferredProvider = inferUniqueProviderFromConfiguredModels({
-      cfg,
-      model: fallbackRef,
-      agentId,
-      manifestPlugins: options?.manifestPlugins,
-    });
-    if (inferredProvider) {
-      return { provider: inferredProvider, model: fallbackRef };
-    }
-    return { model: fallbackRef };
+      return parsed ? { provider: parsed.provider, model: parsed.model } : undefined;
+    };
+    return (
+      (runtimeModel
+        ? (inferConfigured() ?? (model.includes("/") ? parseSelected() : undefined))
+        : (parseSelected() ?? inferConfigured())) ?? { model }
+    );
   }
   const resolved = resolveSessionModelRefCore(cfg, entry, agentId, options);
   return { provider: resolved.provider, model: resolved.model };

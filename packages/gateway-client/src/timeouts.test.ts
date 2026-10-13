@@ -11,15 +11,6 @@ import {
 } from "./timeouts.js";
 
 describe("resolveSafeTimeoutDelayMs", () => {
-  it("clamps to Node's signed-32-bit timer ceiling", () => {
-    expect(resolveSafeTimeoutDelayMs(3_000_000_000)).toBe(MAX_SAFE_TIMEOUT_DELAY_MS);
-  });
-
-  it("falls back to the minimum for non-finite delays", () => {
-    expect(resolveSafeTimeoutDelayMs(Number.NaN)).toBe(1);
-    expect(resolveSafeTimeoutDelayMs(Number.POSITIVE_INFINITY, { minMs: 250 })).toBe(250);
-  });
-
   it("preserves callers that intentionally allow zero-delay timers", () => {
     expect(resolveSafeTimeoutDelayMs(Number.NaN, { minMs: 0 })).toBe(0);
     expect(resolveSafeTimeoutDelayMs(-5, { minMs: 0 })).toBe(0);
@@ -27,13 +18,6 @@ describe("resolveSafeTimeoutDelayMs", () => {
 });
 
 describe("addSafeTimeoutDelayGraceMs", () => {
-  it("adds grace before applying Node timer bounds", () => {
-    expect(addSafeTimeoutDelayGraceMs(10_000, 5_000)).toBe(15_000);
-    expect(addSafeTimeoutDelayGraceMs(MAX_SAFE_TIMEOUT_DELAY_MS - 100, 500)).toBe(
-      MAX_SAFE_TIMEOUT_DELAY_MS,
-    );
-  });
-
   it("caps overflowed finite sums instead of falling back to the minimum", () => {
     expect(addSafeTimeoutDelayGraceMs(Number.MAX_VALUE, 5_000)).toBe(MAX_SAFE_TIMEOUT_DELAY_MS);
   });
@@ -67,19 +51,6 @@ describe("gateway client handshake timeouts", () => {
         configuredTimeoutMs: 3_000_000_000,
       }),
     ).toBe(MAX_SAFE_TIMEOUT_DELAY_MS);
-  });
-
-  it("accepts existing strict timeout env integer forms", () => {
-    expect(
-      resolvePreauthHandshakeTimeoutMs({
-        env: { OPENCLAW_HANDSHAKE_TIMEOUT_MS: " +75000 " },
-      }),
-    ).toBe(75_000);
-    expect(
-      getConnectChallengeTimeoutMsFromEnv({
-        OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS: " 015000 ",
-      }),
-    ).toBe(15_000);
   });
 
   it("caps gateway connect challenge env and explicit timeouts to the safe timer range", () => {

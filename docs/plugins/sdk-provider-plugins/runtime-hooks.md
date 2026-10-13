@@ -296,6 +296,12 @@ entrypoint. Adapters that already bound and redact their diagnostics can constru
 its message so status and retry metadata survive; search tools use those fields
 for safe authentication and quota guidance without exposing response bodies.
 
+The same entrypoint exposes `runHttpTlsPreflight(url, options)` for a
+non-redirecting reachability probe. It distinguishes certificate failures from
+other network failures, accepts cancellation and a current-authority callback,
+and requests best-effort cancellation of unread response bodies. Any HTTP status
+means the endpoint is reachable; this is not a credential or account check.
+
 Bundled and trusted official provider policies can use
 `resolveEffortThinkingProfile(compat?.supportedReasoningEfforts)` from the
 private `openclaw/plugin-sdk/provider-thinking-runtime` helper. It accepts
@@ -305,6 +311,13 @@ of each remaining level. The default preference is `medium`, `high`, `low`,
 then `off`. Missing, null, or empty metadata returns `undefined`; a nonempty
 list without supported values returns an off-only profile. Keep model-specific
 overrides and API fallbacks in the provider policy.
+
+Provider stream adapters can call `resolveOpenAIRequestReasoning(model, level)`
+from `openclaw/plugin-sdk/llm` to resolve declared efforts, native-label maps,
+logical Off, and scalar-effort disablement through the shared transport owner.
+Translate its `effort` and `thinkingEnabled` results into the provider's wire
+dialect instead of defining another effort ladder. Read the level from each
+stream call's options before falling back to the wrapper context.
 
 Bundled and trusted official plugins can also export
 `resolveToolSearchMode(ctx)` from their lightweight `provider-policy-api`

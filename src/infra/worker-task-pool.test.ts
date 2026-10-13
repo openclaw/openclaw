@@ -272,13 +272,15 @@ it("keeps host cancellation callbacks in the admitted caller context", async () 
 });
 
 it.each([
-  { replies: [], deadline: 1_000 },
-  { replies: [1_000], deadline: 1_000 },
-  { replies: [50, 1_000], deadline: 950 },
+  { replies: [], deadline: 1_000, opaqueRequest: false },
+  { replies: [1_000], deadline: 1_000, opaqueRequest: false },
+  { replies: [50, 1_000], deadline: 950, opaqueRequest: false },
+  { replies: [], deadline: 1_000, opaqueRequest: true },
 ])(
-  "keeps the caller deadline through host waits with $replies replies",
-  async ({ replies, deadline }) => {
+  "keeps the caller deadline through host waits with $replies replies (opaque=$opaqueRequest)",
+  async ({ replies, deadline, opaqueRequest }) => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
     const pool = createPool({ idleTimeoutMs: 0 });
     const entered = Array.from({ length: replies.length + 1 }, () => createDeferredCore());
     const responses = Array.from({ length: replies.length + 1 }, () =>
@@ -286,7 +288,7 @@ it.each([
     );
     const signals: AbortSignal[] = [];
     const result = pool.run(
-      { label: "deadline", exchanges: replies.length + 1 },
+      { label: "deadline", exchanges: replies.length + 1, opaqueRequest },
       {
         timeoutMs: 1_000,
         onRequest: (_value, { signal }) => {
@@ -311,11 +313,17 @@ it.each([
       expect(signals.at(-1)?.aborted).toBe(false);
       await vi.advanceTimersByTimeAsync(1);
       expect(signals.at(-1)?.aborted).toBe(true);
+      expect(signals.at(-1)?.reason).toMatchObject({ code: "timeout" });
+      expect(warning).toHaveBeenCalledExactlyOnceWith(
+        `worker task timed out waiting for host callback ${opaqueRequest ? path.basename(workerUrl.pathname) : "fixture-exchange"}`,
+        { code: "WORKER_HOST_CALLBACK_TIMEOUT" },
+      );
       expect(await outcome).toEqual([
         { status: "rejected", reason: expect.objectContaining({ code: "timeout" }) },
       ]);
       await expect(pool.run({ label: "next" }, {})).resolves.toMatchObject({ label: "next" });
     } finally {
+      warning.mockRestore();
       await pool.close();
       for (const response of responses) {
         response.resolve({ input: null, timeoutMs: 1_000 });

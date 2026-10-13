@@ -44,8 +44,8 @@ import {
   assertSessionEventTargetCurrent,
   captureSessionEventTargetForHost,
   enqueueSessionEventForHost,
-  prepareSessionEventTargetForHost,
 } from "./session-event-handoff.js";
+import { prepareSessionEventTargetForHost } from "./session-event-target.js";
 // These cases stop before turn admission. Unexpected dispatch is a failure,
 // never a synthetic adoption/settlement supplied by the fixture.
 const dispatch = vi.hoisted(() =>
@@ -130,6 +130,52 @@ afterAll(() => {
 });
 
 describe("session event target custody", () => {
+  it("preserves cold event capture across an empty usage refresh", async () => {
+    const { refreshCostUsageCacheForAgent } =
+      await import("../../infra/session-cost-usage-aggregation.js");
+    await withTargetFixture(
+      async ({ env }) => {
+        const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env });
+        await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
+        const originalRead = sessionEntryRead.withSessionEntryReadOnlyInWorker;
+        const reader = vi
+          .spyOn(sessionEntryRead, "withSessionEntryReadOnlyInWorker")
+          .mockImplementation((input, assertCurrent, consume, prepare) =>
+            originalRead(
+              input,
+              assertCurrent,
+              async (read, owner) => {
+                expect(owner.source).toBeUndefined();
+                await expect(refreshCostUsageCacheForAgent({ agentId: "main", env })).resolves.toBe(
+                  "refreshed",
+                );
+                return consume(read, owner);
+              },
+              prepare,
+            ),
+          );
+        try {
+          const target = await captureSessionEventTargetForHost("main", sessionKey, { env });
+          expect(target.sessionId).toBe("");
+          reader.mockRestore();
+          await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
+          const prepared = await prepareSessionEventTargetForHost(target, {
+            createIfMissing: true,
+          });
+          try {
+            prepared.assertCurrent();
+            expect((await fs.stat(databasePath)).isFile()).toBe(true);
+          } finally {
+            prepared.release();
+          }
+        } finally {
+          reader.mockRestore();
+        }
+      },
+      { empty: true, native: true },
+    );
+  });
+
   it("retains fresh event custody from a captured Windows short-path spelling", async () => {
     await withTargetFixture(
       async (state) => {
@@ -213,6 +259,69 @@ describe("session event target custody", () => {
       { empty: true, native: true },
     );
   });
+
+  it.each(["before", "after"] as const)(
+    "binds cold event capture to storage created %s the worker read",
+    async (creation) => {
+      await withTargetFixture(
+        async ({ env }) => {
+          const create = () => {
+            const database = openOpenClawAgentDatabase({ agentId: "main", env });
+            writeSessionEntry(database, sessionKey, {
+              sessionId: "created-during-capture",
+              lifecycleRevision: "created-during-capture",
+              updatedAt: 1,
+            });
+          };
+          const originalRead = sessionEntryRead.withSessionEntryReadOnlyInWorker;
+          const reader = vi
+            .spyOn(sessionEntryRead, "withSessionEntryReadOnlyInWorker")
+            .mockImplementation((input, assertCurrent, consume, prepare) =>
+              originalRead(
+                input,
+                assertCurrent,
+                async (read, owner) => {
+                  if (creation === "after") {
+                    create();
+                  }
+                  return consume(read, owner);
+                },
+                (database, identity) => {
+                  prepare?.(database, identity);
+                  expect(identity.key).toMatch(/^path:/);
+                  if (creation === "before") {
+                    create();
+                  }
+                },
+              ),
+            );
+          try {
+            const capture = captureSessionEventTargetForHost("main", sessionKey, { env });
+            if (creation === "after") {
+              await expect(capture).rejects.toThrow("storage changed after capture");
+              return;
+            }
+            const target = await capture;
+            expect(target).toMatchObject({
+              sessionId: "created-during-capture",
+              lifecycleRevision: "created-during-capture",
+            });
+            reader.mockRestore();
+            const prepared = await prepareSessionEventTargetForHost(target);
+            try {
+              prepared.assertCurrent();
+            } finally {
+              prepared.release();
+            }
+            expect(dispatch).not.toHaveBeenCalled();
+          } finally {
+            reader.mockRestore();
+          }
+        },
+        { empty: true, native: true },
+      );
+    },
+  );
 
   it.for([false, true])(
     "joins cold native preparation before settling cancellation (retained occurrence: %s)",

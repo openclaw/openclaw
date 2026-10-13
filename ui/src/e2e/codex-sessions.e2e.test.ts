@@ -3,6 +3,7 @@ import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
 import type { SessionsCatalogHostEvent } from "../../../packages/gateway-protocol/src/index.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   assertSessionSectionCountAlignment,
   controlUiBundledGatewayUrl,
@@ -441,15 +442,12 @@ suite.define(() => {
       await section.waitFor({ state: "visible" });
       await expect
         .poll(() =>
-          page.evaluate(() => {
-            const app = document.querySelector("openclaw-app") as HTMLElement & {
-              runtime?: import("../app/bootstrap.ts").ApplicationRuntime;
-            };
-            const theme = app.runtime?.context.theme;
+          evaluateControlUiContext(page, (context) => {
+            const theme = context.theme;
             const palette = document.getElementById("openclaw-theme-palette-knot");
             const root = document.documentElement.dataset;
             return {
-              preferences: [theme?.settings.theme, theme?.mode, theme?.resolvedMode],
+              preferences: [theme.settings.theme, theme.mode, theme.resolvedMode],
               paletteReady: palette instanceof HTMLLinkElement && Boolean(palette.sheet),
               root: [root.theme, root.themeMode],
             };

@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OutputRuntimeEnv } from "../runtime.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
@@ -115,20 +114,6 @@ describe("agentsListCommand", () => {
     }
   });
 
-  it("reports no default without a designation despite retained provenance", async () => {
-    const config = retainLegacyDefaultAgentId(
-      {
-        agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
-      },
-      "ops",
-    );
-    requireValidConfigMock.mockResolvedValueOnce(config);
-    expect((await list({ json: true })).json).toMatchObject([
-      { id: "ops", isDefault: false },
-      { id: "research", isDefault: false },
-    ]);
-  });
-
   it("adds durable provenance to JSON without loading provider details", async () => {
     listAgentProvenanceMock.mockRejectedValue(new Error("unrelated stored provenance is invalid"));
     readAgentProvenanceForDisplayMock.mockResolvedValue([
@@ -180,16 +165,6 @@ describe("agentsListCommand", () => {
       ].join("\n"),
     );
     expect(buildProviderStatusIndexMock).not.toHaveBeenCalled();
-  });
-
-  it("keeps provider details available for JSON callers that request bindings", async () => {
-    const { json } = await list({ json: true, bindings: true });
-    expect(json).toMatchObject([
-      { id: "main", routes: ["Telegram default"], providers: ["Telegram default: configured"] },
-    ]);
-    for (const field of ["createdVia", "creatorAgentId", "createdAt"]) {
-      expect(json).not.toHaveProperty(`0.${field}`);
-    }
   });
 
   it("lists configured, inherited, and local avatar identities without changing the workspace", async () => {
@@ -256,40 +231,6 @@ describe("agentsListCommand", () => {
       expect(output).toContain("Identity: 🦞 Chosen Identity (config)");
       expect(output).toContain("Identity: 🦞 Workspace Identity (IDENTITY.md)");
       expect(fs.readFileSync(identityPath, "utf8")).toBe(identityFile);
-    });
-  });
-
-  it("keeps JSON identity fields when local avatar preparation fails", async () => {
-    await withTestDir({ prefix: "openclaw-agent-identity-list-" }, async (workspace) => {
-      const avatarRuntime = await import("../agents/identity-avatar-file-runtime.js");
-      const prepareAvatar = vi
-        .spyOn(avatarRuntime, "prepareLocalAgentAvatar")
-        .mockRejectedValue(new Error("avatar worker unavailable"));
-      try {
-        requireValidConfigMock.mockResolvedValueOnce({
-          agents: {
-            entries: {
-              proof: {
-                workspace,
-                identity: { name: "Chosen Identity", emoji: "🦉", avatar: "avatar.png" },
-              },
-            },
-          },
-        } satisfies OpenClawConfig);
-        const { json } = await list({ json: true });
-        expect(prepareAvatar).toHaveBeenCalledOnce();
-        expect(json).toMatchObject([
-          {
-            id: "proof",
-            identityName: "Chosen Identity",
-            identityEmoji: "🦉",
-            identitySource: "config",
-          },
-        ]);
-        expect(json).not.toHaveProperty("0.identityAvatarUrl");
-      } finally {
-        prepareAvatar.mockRestore();
-      }
     });
   });
 

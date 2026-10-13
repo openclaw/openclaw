@@ -134,7 +134,9 @@ describe("createChatRunState", () => {
     state.registry.add("run-1", { sessionKey: "session-1", clientRunId: "client-1" });
     state.toolEventRecipients.add("run-1", "conn-1");
     const run = state.getOrCreate("run-1");
+    const releaseBufferAuthority = vi.fn();
     Object.assign(run, {
+      releaseBufferAuthority,
       rawBuffer: "raw",
       buffer: "projected",
       planSnapshot: { steps: [{ step: "Inspect", status: "in_progress" }] },
@@ -155,6 +157,7 @@ describe("createChatRunState", () => {
     state.retireBuffer("run-1", ["reused"]);
     state.clearRun("run-1");
 
+    expect(releaseBufferAuthority).toHaveBeenCalledOnce();
     expect(state.registry.peek("run-1")?.clientRunId).toBe("client-1");
     expect(state.toolEventRecipients.get("run-1")).toEqual(new Set(["conn-1"]));
     expect(state.runs.get("run-1")).toEqual({

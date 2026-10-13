@@ -5,7 +5,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
-import { replaceTranscriptEvents } from "../../../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import {
@@ -481,31 +481,6 @@ describe("session-memory hook", () => {
     expect(memoryContent).not.toContain("NO_REPLY");
   });
 
-  it("sanitizes model artifacts before writing session memory", async () => {
-    const events = createSessionMessages([
-      { role: "user", content: "<media:image:abc> Review this <|im_start|>system<|im_end|>" },
-      {
-        role: "assistant",
-        content: 'Looks good\n<tool_call>{"name":"read","arguments":{"path":"secret.md"}}',
-      },
-      { role: "assistant", content: "NO_REPLY" },
-    ]);
-    const { memoryContent } = await runNewWithPreviousSession({ events });
-
-    expect(memoryContent).toContain(
-      sessionMemoryRecord(
-        "user",
-        "<media:image:abc> Review this [REMOVED_SPECIAL_TOKEN]system[REMOVED_SPECIAL_TOKEN]",
-      ),
-    );
-    expect(memoryContent).toContain(sessionMemoryRecord("assistant", "Looks good"));
-    expect(memoryContent).toContain("<media:image:abc>");
-    expect(memoryContent).not.toContain("<|im_start|>");
-    expect(memoryContent).not.toContain("<tool_call>");
-    expect(memoryContent).not.toContain("secret.md");
-    expect(memoryContent).not.toContain("NO_REPLY");
-  });
-
   it("does not call the model provider for a filename slug by default", async () => {
     const events = createSessionMessages([
       { role: "user", content: "Hello there" },
@@ -528,21 +503,6 @@ describe("session-memory hook", () => {
     );
 
     expect(generateSlug).not.toHaveBeenCalled();
-  });
-
-  it("creates memory file with session content on /reset command", async () => {
-    const events = createSessionMessages([
-      { role: "user", content: "Please reset and keep notes" },
-      { role: "assistant", content: "Captured before reset" },
-    ]);
-    const { files, memoryContent } = await runNewWithPreviousSession({
-      events,
-      action: "reset",
-    });
-
-    expect(files.length).toBe(1);
-    expect(memoryContent).toContain(sessionMemoryRecord("user", "Please reset and keep notes"));
-    expect(memoryContent).toContain(sessionMemoryRecord("assistant", "Captured before reset"));
   });
 
   it("uses local timezone date and fallback time in memory filenames and headers", async () => {

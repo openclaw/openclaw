@@ -6,11 +6,12 @@ import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { PluginStateStoreError } from "../../plugin-state/plugin-state-store.types.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { loadTranscriptEventsSync } from "./session-accessor.sqlite-read.js";
-import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import {
   withNativeBindingFixture,
   type NativeBindingClientTestApi,
@@ -110,30 +111,26 @@ function observeNativeGrants(
     facts: Record<string, unknown>,
   ) => void,
 ) {
-  const create = admission.createSqliteWorkerOperationAdmission;
-  vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-    (callback, attachment) =>
-      create((request, grant) => {
-        const facts = isRecord(request.facts) ? request.facts.publication : undefined;
-        if (isRecord(facts) && facts.kind === "native-binding-ready") {
-          // Production joins renewal and quiesces the lease before invoking this grant.
-          callback(request, () => {
-            observe(request, facts);
-            const accepted = grant();
-            if (accepted) {
-              delivery.accepted++;
-              delivery.acceptedDispatch ??= delivery.dispatched;
-            }
-            return accepted;
-          });
-          return;
+  probe.admission(admission, (request, grant, callback) => {
+    const facts = isRecord(request.facts) ? request.facts.publication : undefined;
+    if (isRecord(facts) && facts.kind === "native-binding-ready") {
+      // Production joins renewal and quiesces the lease before invoking this grant.
+      callback(request, () => {
+        observe(request, facts);
+        const accepted = grant();
+        if (accepted) {
+          delivery.accepted++;
+          delivery.acceptedDispatch ??= delivery.dispatched;
         }
-        if (isRecord(facts)) {
-          observe(request, facts);
-        }
-        callback(request, grant);
-      }, attachment),
-  );
+        return accepted;
+      });
+      return;
+    }
+    if (isRecord(facts)) {
+      observe(request, facts);
+    }
+    callback(request, grant);
+  });
 }
 
 function expectOneAcceptedExecution() {

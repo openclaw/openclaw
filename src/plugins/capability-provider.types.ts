@@ -449,7 +449,9 @@ export type SpeechProviderPlugin = {
     | SpeechProviderPreparedSynthesis
     | undefined
     | Promise<SpeechProviderPreparedSynthesis | undefined>;
+  /** @deprecated Use isConfiguredAsync. Removed at the next Plugin SDK major. */
   isConfigured: (ctx: SpeechProviderConfiguredContext) => boolean;
+  isConfiguredAsync?: (ctx: SpeechProviderConfiguredContext) => Promise<boolean>;
   synthesize: (req: SpeechSynthesisRequest) => Promise<SpeechSynthesisResult>;
   streamSynthesize?: (req: SpeechSynthesisStreamRequest) => Promise<SpeechSynthesisStreamResult>;
   synthesizeTelephony?: (
@@ -468,7 +470,9 @@ export type RealtimeTranscriptionProviderPlugin = {
   resolveConfig?: (
     ctx: RealtimeTranscriptionProviderResolveConfigContext,
   ) => RealtimeTranscriptionProviderConfig;
+  /** @deprecated Use isConfiguredAsync. Removed at the next Plugin SDK major. */
   isConfigured: (ctx: RealtimeTranscriptionProviderConfiguredContext) => boolean;
+  isConfiguredAsync?: (ctx: RealtimeTranscriptionProviderConfiguredContext) => Promise<boolean>;
   createSession: (req: RealtimeTranscriptionSessionCreateRequest) => RealtimeTranscriptionSession;
 };
 
@@ -484,8 +488,14 @@ export type RealtimeVoiceProviderPlugin = {
   voices?: readonly string[];
   autoSelectOrder?: number;
   capabilities?: RealtimeVoiceProviderCapabilities;
+  /** @deprecated Use resolveConfigAsync when config resolution needs credentials. */
   resolveConfig?: (ctx: RealtimeVoiceProviderResolveConfigContext) => RealtimeVoiceProviderConfig;
+  resolveConfigAsync?: (
+    ctx: RealtimeVoiceProviderResolveConfigContext,
+  ) => Promise<RealtimeVoiceProviderConfig>;
+  /** @deprecated Use isConfiguredAsync. Removed at the next Plugin SDK major. */
   isConfigured: (ctx: RealtimeVoiceProviderConfiguredContext) => boolean;
+  isConfiguredAsync?: (ctx: RealtimeVoiceProviderConfiguredContext) => Promise<boolean>;
   createBridge: (req: RealtimeVoiceBridgeCreateRequest) => RealtimeVoiceBridge;
   createBrowserSession?: (
     req: RealtimeVoiceBrowserSessionCreateRequest,

@@ -14,7 +14,7 @@ export function registerHostedUpdateStopTests({
   hostedStopPrepare,
   hostedStopExecute,
   hostedStopDispose,
-  consumeGatewayRestartIntentPayloadSync,
+  consumeGatewayRestartIntentPayload,
   createSignaledLoopHarness,
   managedUpdateSuccessorOwner,
   respawnGatewayProcessForUpdate,
@@ -91,9 +91,9 @@ export function registerHostedUpdateStopTests({
           );
           expect(hostedStopExecute).toHaveBeenCalledOnce();
           expect(runtime.exit).not.toHaveBeenCalled();
-          const intentReads = consumeGatewayRestartIntentPayloadSync.mock.calls.length;
+          const intentReads = consumeGatewayRestartIntentPayload.mock.calls.length;
           captureSignal("SIGTERM")();
-          expect(consumeGatewayRestartIntentPayloadSync).toHaveBeenCalledTimes(intentReads);
+          expect(consumeGatewayRestartIntentPayload).toHaveBeenCalledTimes(intentReads);
           disposed.resolve();
           await expect(withTimeout(exited, 4_000)).resolves.toBe(0);
           expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(0);

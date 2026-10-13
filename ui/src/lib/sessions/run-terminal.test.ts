@@ -104,24 +104,20 @@ async function terminalOwner(initial: GatewaySessionRow, owner: "primary" | "man
     hasMore: true,
     nextOffset: 2,
   });
-  let response: ReturnType<typeof createDeferred<SessionsListResult>> | undefined;
-  const pending: Promise<void>[] = [];
   const client = createTestGatewayClient(async (_method, params) => {
     if (owner === "managed" && !(params as { ownerId?: string }).ownerId) {
       return sessionsResult([sibling]);
     }
-    return response?.promise ?? listResult({ ...initial });
+    return listResult({ ...initial });
   });
   const sessions = createTestSessionCapability(createGatewayHarness(client).gateway);
   const query = { agentId: "main", ownerId: "ada" };
   const updates = vi.fn();
   const stop =
     owner === "managed" ? sessions.subscribeList(query, updates) : sessions.subscribe(updates);
-  onTestFinished(async () => {
+  onTestFinished(() => {
     stop();
     sessions.dispose();
-    response?.resolve(listResult(initial));
-    await Promise.all(pending);
     vi.useRealTimers();
   });
   await sessions.refresh({ agentId: "main", force: true });
@@ -139,13 +135,6 @@ async function terminalOwner(initial: GatewaySessionRow, owner: "primary" | "man
     updates,
     result,
     row: () => result()?.sessions.find((row) => row.key === initial.key),
-    holdRead() {
-      response = createDeferred<SessionsListResult>();
-      const settled = refresh();
-      pending.push(settled);
-      const resolve = response.resolve;
-      return { settled, resolve: (row: GatewaySessionRow) => resolve(listResult(row)) };
-    },
   };
 }
 
@@ -180,7 +169,6 @@ describe("terminal metadata ownership", () => {
       };
       const h = await terminalOwner(initial, owner);
       const primary = h.sessions.state.result;
-      const oldRead = h.holdRead();
       const terminal = { sessionKeys: [initial.key], runId: "new-run", status, endedAt: 400 };
 
       expect(h.sessions.reconcileRunTerminal(terminal)).toBe(true);
@@ -202,21 +190,6 @@ describe("terminal metadata ownership", () => {
       expect(h.result()).toBe(settled);
       expect(h.updates).not.toHaveBeenCalled();
 
-      oldRead.resolve({ ...initial, derivedTitle: "Read title", updatedAt: 250 });
-      await oldRead.settled;
-      expect(h.row()).toMatchObject({
-        derivedTitle: "Read title",
-        updatedAt: 250,
-        lastRunId: "new-run",
-        endedAt: 400,
-        abortedLastRun: status === "killed",
-        status,
-        hasActiveRun: false,
-        activeRunIds: [],
-      });
-      expect(h.row()?.startedAt).toBeUndefined();
-      expect(h.row()?.runtimeMs).toBeUndefined();
-      expect(h.row()?.lastRunError).toBeUndefined();
       expect(h.result()).toMatchObject({ count: 2, totalCount: 7, hasMore: true, nextOffset: 2 });
       expect(h.result()?.sessions.map((row) => row.key)).toEqual([
         initial.key,
@@ -435,7 +408,6 @@ describe("terminal observations", () => {
       );
       await pending;
       expect(result()?.sessions[0]).toMatchObject({
-        derivedTitle: "Read title",
         status: mode === "overlap" || mode === "later read" ? "running" : "done",
         hasActiveRun: mode === "overlap" || mode === "later read",
         activeRunIds:

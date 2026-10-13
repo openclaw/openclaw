@@ -188,7 +188,7 @@ export function captureGatewayDeviceRevocation(
 /** Carry the original capture through a composed commit guard without changing its contract. */
 export function bindGatewayDeviceRevocation<T extends () => unknown>(
   guard: T,
-  isCurrent: CurrentCaller | undefined,
+  isCurrent: (() => unknown) | undefined,
 ): T {
   const capture = isCurrent ? captures.get(isCurrent) : undefined;
   if (capture) {

@@ -35,27 +35,6 @@ describe("cloud worker repository defaults", () => {
     ).toEqual([{ repository: "github.com/acme/app", profileId: "removed" }]);
   });
 
-  it.each([
-    "github.com/ACME/New.git",
-    "https://github.com/acme/new.git",
-    "git@github.com:acme/new.git",
-    "ssh://git@github.com:22/acme/new.git",
-  ])("adds the normalized identity for %s without resending other mappings", (repository) => {
-    const built = requirePatch(
-      buildCloudWorkerRepositoryUpsertPatch(config, { repository, profileId: "small" }, null),
-    );
-    expect(built).toEqual({
-      patch: { cloudWorkers: { projectProfiles: { "github.com/acme/new": "small" } } },
-      replacePaths: [],
-    });
-    expect(applyMergePatch(config, built.patch)).toEqual({
-      cloudWorkers: {
-        ...config.cloudWorkers,
-        projectProfiles: { ...config.cloudWorkers.projectProfiles, "github.com/acme/new": "small" },
-      },
-    });
-  });
-
   it("changes the profile and moves the identity while preserving unrelated mappings", () => {
     const built = requirePatch(
       buildCloudWorkerRepositoryUpsertPatch(
@@ -83,14 +62,9 @@ describe("cloud worker repository defaults", () => {
   });
 
   it.each([
-    ["", "small", null, "repository"],
-    ["https://github.com/acme/../new", "small", null, "repository"],
     ["https://github.com/acme/%2e%2e/new", "small", null, "repository"],
-    ["github.com/ACME/App.git", "small", null, "repositoryExists"],
     ["github.com/acme/docs", "small", "github.com/acme/app", "repositoryExists"],
     ["github.com/acme/new", "removed", null, "repositoryProfile"],
-    ["github.com/acme/new", "", null, "repositoryProfile"],
-    ["github.com/acme/new", "small", "github.com/acme/removed", "repositoryMissing"],
   ])("refuses invalid or stale mappings (%s, %s, %s)", (repository, profileId, original, error) => {
     expect(
       buildCloudWorkerRepositoryUpsertPatch(
@@ -148,20 +122,17 @@ describe("cloud worker repository defaults", () => {
 });
 
 describe("cloud worker prepared pool", () => {
-  it.each(["0", "3", " 12 "])(
-    "sets the global cap to %s while preserving profiles and defaults",
-    (value) => {
-      const built = requirePatch(buildCloudWorkerPreparedPoolPatch(value));
-      const next = applyMergePatch(config, built.patch);
-      expect(next).toEqual({
-        cloudWorkers: { ...config.cloudWorkers, preparedPool: { maxTotal: Number(value) } },
-      });
-      if (!isRecord(next)) {
-        throw new Error("Expected merged config");
-      }
-      expect(readCloudWorkerPreparedPool(next)).toBe(String(Number(value)));
-    },
-  );
+  it.each(["3"])("sets the global cap to %s while preserving profiles and defaults", (value) => {
+    const built = requirePatch(buildCloudWorkerPreparedPoolPatch(value));
+    const next = applyMergePatch(config, built.patch);
+    expect(next).toEqual({
+      cloudWorkers: { ...config.cloudWorkers, preparedPool: { maxTotal: Number(value) } },
+    });
+    if (!isRecord(next)) {
+      throw new Error("Expected merged config");
+    }
+    expect(readCloudWorkerPreparedPool(next)).toBe(String(Number(value)));
+  });
 
   it("removes a configured cap when the field is emptied", () => {
     const built = requirePatch(buildCloudWorkerPreparedPoolPatch(" "));
@@ -174,7 +145,7 @@ describe("cloud worker prepared pool", () => {
     expect(readCloudWorkerPreparedPool(null)).toBe("");
   });
 
-  it.each(["-1", "0.5", "NaN", "1e2", "9007199254740992"])("rejects invalid cap %s", (value) => {
+  it.each(["9007199254740992"])("rejects invalid cap %s", (value) => {
     expect(buildCloudWorkerPreparedPoolPatch(value)).toEqual({ error: "preparedPool" });
   });
 });

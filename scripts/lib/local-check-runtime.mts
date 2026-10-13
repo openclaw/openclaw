@@ -14,6 +14,7 @@ const DEFAULT_LOCAL_TSGO_BUILD_INFO_FILE = ".artifacts/tsgo-cache/root.tsbuildin
 const DEFAULT_FAST_LOCAL_CHECK_MIN_MEMORY_BYTES = 48 * GIB;
 const DEFAULT_FAST_LOCAL_CHECK_MIN_CPUS = 12;
 const CI_PARALLEL_MIN_CPUS = 8;
+const DECLARATION_PATH_CACHE_LIMIT = 16_384;
 export const CI_PARALLEL_MIN_MEMORY_BYTES = 24 * GIB;
 
 const EXCLUSIVE_CI_TEST_CONFIGS = new Set([
@@ -109,12 +110,37 @@ export function createDeclarationInputBoundary(cwd: string) {
   }
   prefixes.push(fs.realpathSync(declared));
   const root = fs.realpathSync.native(declared);
+  const resolvedPaths = new Map<string, string>();
+  const containedPaths = new Map<string, boolean>();
+  // Cache lexical membership; assert still resolves the current filesystem path each time.
+  const contains = (absolute: string) => {
+    const cached = containedPaths.get(absolute);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const contained = withinRoot(root, absolute);
+    if (containedPaths.size < DECLARATION_PATH_CACHE_LIMIT) {
+      containedPaths.set(absolute, contained);
+    }
+    return contained;
+  };
   // Runtimes differ on whether realpath preserves a case-only symlink target.
   // Translate only declared checkout spellings; never canonicalize outside candidates into scope.
   const resolve = (file: string) => {
+    // Drive-relative paths can depend on the current directory on Windows.
+    const cacheable = path.isAbsolute(file);
+    const cached = cacheable ? resolvedPaths.get(file) : undefined;
+    if (cached !== undefined) {
+      return cached;
+    }
     const absolute = path.resolve(declared, file);
     const prefix = prefixes.find((candidate) => withinRoot(candidate, absolute));
-    return prefix ? path.resolve(root, path.relative(prefix, absolute)) : absolute;
+    const resolved = prefix ? path.resolve(root, path.relative(prefix, absolute)) : absolute;
+    // Watch builds can retain this boundary; cache lexical results, never filesystem checks.
+    if (cacheable && resolvedPaths.size < DECLARATION_PATH_CACHE_LIMIT) {
+      resolvedPaths.set(file, resolved);
+    }
+    return resolved;
   };
   return {
     root,
@@ -127,7 +153,7 @@ export function createDeclarationInputBoundary(cwd: string) {
         existing = path.dirname(existing);
       }
       const real = fs.realpathSync.native(existing);
-      if (!withinRoot(root, absolute) || !withinRoot(root, real)) {
+      if (!contains(absolute) || !contains(real)) {
         const diagnosis = `Keep declaration dependencies and compiler files physically inside ${root}; shared installs and external symlinks are unsupported. Inspect the reported path and dependency links; this error alone does not establish a missing or undeclared dependency.`;
         throw new Error(`Declaration input escapes checkout: ${absolute} -> ${real}. ${diagnosis}`);
       }

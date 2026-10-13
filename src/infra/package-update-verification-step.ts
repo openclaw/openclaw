@@ -1,7 +1,9 @@
 import { isDeepStrictEqual } from "node:util";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
+import { isOpenClawStateWriteContentionError } from "../state/openclaw-state-ownership.js";
 import { formatErrorMessage } from "./errors.js";
 import { trimLogTail } from "./restart-sentinel.js";
+import { isSqliteSchemaVersionError } from "./sqlite-user-version.js";
 import {
   PACKAGE_POST_INSTALL_DOCTOR_ADVISORY,
   normalizeUpdatePostInstallDoctorWarnings,
@@ -136,6 +138,49 @@ function failedVerification(root: string, code: string, message: string): Update
     stderrTail: message,
     failureFacts: [createUpdateFailureFact({ check: "package-runtime", code, message })],
   };
+}
+
+export async function deferPackageStateVerification(
+  params: {
+    root: string;
+    restart?: boolean;
+    migrationRecorded?: boolean;
+    results?: UpdateStepResult[];
+    progress:
+      | { onStepComplete?: (step: UpdateStepResult & { index: number; total: number }) => unknown }
+      | undefined;
+    assertCurrent: () => void;
+  },
+  error: unknown,
+): Promise<UpdateStepResult> {
+  // Snapshot discovery wraps admission errors; typed outer refusals retain their meaning.
+  const cause =
+    error instanceof Error && error.constructor === Error ? (error.cause ?? error) : error;
+  const candidateOwnsVerification =
+    params.migrationRecorded === true && isSqliteSchemaVersionError(cause);
+  if (
+    !candidateOwnsVerification &&
+    (params.restart !== false || !isOpenClawStateWriteContentionError(cause))
+  ) {
+    throw error;
+  }
+  const step: UpdateStepResult = {
+    name: "post-install-verify",
+    command: "verify installed package",
+    cwd: params.root,
+    durationMs: 0,
+    exitCode: null,
+    advisory: {
+      kind: "recoverable-maintenance",
+      message: candidateOwnsVerification
+        ? "Post-install state verification belongs to the candidate after its recorded candidate migration; this updater cannot reopen the newer schema. Keep the installed candidate and recovery backups, and run openclaw update status to check current Gateway health."
+        : "Post-install state verification deferred: another process holds the state database and --no-restart leaves activation to the operator. Restart the Gateway through its service owner, then run openclaw update status and openclaw doctor. Keep recovery backups until verification completes.",
+    },
+  };
+  params.results?.push(step);
+  await params.progress?.onStepComplete?.({ ...step, index: 0, total: 0 });
+  params.assertCurrent();
+  return step;
 }
 
 export function failedPackageVerificationStep(

@@ -50,6 +50,7 @@ import {
   testing,
 } from "./image-tool.test-support.js";
 import { resolveMediaToolInboundRoots } from "./media-tool-shared.js";
+import { createPdfTool } from "./pdf-tool.js";
 
 const publicSurfaceLoaderMocks = vi.hoisted(() => ({
   loadBundledPluginPublicArtifactModuleFromCandidatesSync: vi.fn(() => null),
@@ -130,22 +131,15 @@ vi.mock("../../media/channel-inbound-roots.js", () => ({
   },
 }));
 
-function readMockAuthProfileStore(agentDir?: string): {
-  version: number;
-  profiles: Record<string, { provider?: string; type?: string }>;
-} {
-  const fallback = {
-    version: 1,
-    profiles: {} as Record<string, { provider?: string; type?: string }>,
-  };
+function readMockAuthProfileStore(agentDir?: string): AuthProfileStore {
+  const fallback: AuthProfileStore = { version: 1, profiles: {} };
   if (!agentDir) {
     return fallback;
   }
   try {
-    return JSON.parse(fsSync.readFileSync(path.join(agentDir, "auth-profiles.json"), "utf8")) as {
-      version: number;
-      profiles: Record<string, { provider?: string; type?: string }>;
-    };
+    return JSON.parse(
+      fsSync.readFileSync(path.join(agentDir, "auth-profiles.json"), "utf8"),
+    ) as AuthProfileStore;
   } catch {
     return fallback;
   }
@@ -157,11 +151,15 @@ function readMockRuntimeAuthProfileStore(agentDir?: string) {
     store.profiles["openai:default"] = {
       provider: "openai",
       type: "oauth",
+      access: "test-access",
+      refresh: "test-refresh",
+      expires: 4_102_444_800_000,
     };
   }
   return store;
 }
 
+// mock-isolation: image selection uses fixture JSON profiles and simulated CLI credentials, never host auth state.
 vi.mock("../auth-profiles.js", () => ({
   externalCliDiscoveryForProviderAuth: (params: { provider: string }) => params,
   ensureAuthProfileStore: readMockRuntimeAuthProfileStore,
@@ -169,6 +167,8 @@ vi.mock("../auth-profiles.js", () => ({
   loadAuthProfileStoreForRuntimeAsync: async (agentDir?: string) =>
     readMockRuntimeAuthProfileStore(agentDir),
   ensureAuthProfileStoreWithoutExternalProfiles: readMockAuthProfileStore,
+  ensureAuthProfileStoreWithoutExternalProfilesAsync: async (agentDir?: string) =>
+    readMockAuthProfileStore(agentDir),
   hasAnyAuthProfileStoreSource: (agentDir?: string) =>
     Boolean(agentDir && fsSync.existsSync(path.join(agentDir, "auth-profiles.json"))),
   listProfilesForProvider: (
@@ -880,6 +880,7 @@ describe("image tool implicit imageModel config", () => {
       const actual = resolveImageModelConfigForTool({
         cfg: openAiPrimaryCfg,
         agentDir,
+        authStore: readMockRuntimeAuthProfileStore(agentDir),
         preparedModelRuntime: {
           mediaCapabilityProviders: {
             mediaUnderstandingProviders: hasAlias
@@ -909,7 +910,11 @@ describe("image tool implicit imageModel config", () => {
           await writeProfiles(agentDir, profiles);
         }
 
-        const actual = resolveImageModelConfigForTool({ cfg, agentDir });
+        const actual = resolveImageModelConfigForTool({
+          cfg,
+          agentDir,
+          authStore: readMockRuntimeAuthProfileStore(agentDir),
+        });
         if (expected === null) {
           expect(actual).toBeNull();
         } else {
@@ -943,7 +948,13 @@ describe("image tool implicit imageModel config", () => {
             },
           },
         };
-        expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual(
+        expect(
+          resolveImageModelConfigForTool({
+            cfg,
+            agentDir,
+            authStore: readMockRuntimeAuthProfileStore(agentDir),
+          }),
+        ).toEqual(
           directAuth
             ? { primary: "openai/gpt-5.5", fallbacks: [openAiDefaultImageModel.primary] }
             : codexImageModel,
@@ -962,7 +973,7 @@ describe("image tool implicit imageModel config", () => {
           resolveImageModelConfigForTool({
             cfg: openAiPrimaryCfg,
             agentDir,
-            ...(scoped ? { authStore: makeAuthStore({}) } : {}),
+            authStore: scoped ? makeAuthStore({}) : readMockRuntimeAuthProfileStore(agentDir),
           }),
         ).toEqual(codexImageModel);
       });
@@ -1269,11 +1280,19 @@ describe("image tool implicit imageModel config", () => {
             },
           },
         };
-        expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
-          primary: `${provider}/${model}`,
-        });
+        expect(
+          resolveImageModelConfigForTool({
+            cfg,
+            agentDir,
+            authStore: createAuthProfileStoreFixture({
+              [`${provider}:default`]: { type: "api_key", provider, key: "sk-test" },
+            }),
+          }),
+        ).toEqual({ primary: `${provider}/${model}` });
         if (checkTool) {
+          // Direct factories retain their shipped directory-backed auth contract.
           expect(typeof createImageTool({ config: cfg, agentDir })?.execute).toBe("function");
+          expect(typeof createPdfTool({ config: cfg, agentDir })?.execute).toBe("function");
         }
       });
     },
@@ -1301,7 +1320,13 @@ describe("image tool implicit imageModel config", () => {
           },
         },
       };
-      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toBeNull();
+      expect(
+        resolveImageModelConfigForTool({
+          cfg,
+          agentDir,
+          authStore: readMockRuntimeAuthProfileStore(agentDir),
+        }),
+      ).toBeNull();
     });
   });
 
@@ -1365,9 +1390,21 @@ describe("image tool implicit imageModel config", () => {
           : {}),
       };
       if (expected instanceof RegExp) {
-        expect(() => resolveImageModelConfigForTool({ cfg, agentDir })).toThrow(expected);
+        expect(() =>
+          resolveImageModelConfigForTool({
+            cfg,
+            agentDir,
+            authStore: readMockRuntimeAuthProfileStore(agentDir),
+          }),
+        ).toThrow(expected);
       } else {
-        expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual(expected);
+        expect(
+          resolveImageModelConfigForTool({
+            cfg,
+            agentDir,
+            authStore: readMockRuntimeAuthProfileStore(agentDir),
+          }),
+        ).toEqual(expected);
       }
     });
   });

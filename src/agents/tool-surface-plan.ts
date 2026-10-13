@@ -6,6 +6,7 @@ import {
   isCodeModeEngagedForModel,
   resolveCodeModeConfig,
 } from "./code-mode.js";
+import type { EmbeddedRunTrigger } from "./run-trigger.js";
 import { normalizeToolPolicyName, readToolAllowlistIntersection } from "./tool-policy-shared.js";
 import { resolveAgentToolSearchRuntimeConfig } from "./tool-search-runtime-config.js";
 import type { ToolSearchConfig } from "./tool-search-types.js";
@@ -30,6 +31,7 @@ export type AgentToolSurfacePlanParams = {
   isRawModelRun: boolean;
   toolsAllow?: readonly string[];
   forceCodeModeControls?: boolean;
+  trigger?: EmbeddedRunTrigger;
 };
 
 export function resolveAgentToolSurfacePlan(params: AgentToolSurfacePlanParams) {
@@ -58,14 +60,20 @@ export function resolveAgentToolSurfacePlan(params: AgentToolSurfacePlanParams) 
     completionPrivateMessageOnly,
     model: params.model,
   });
-  // Apply invocation restrictions after selecting the current runtime snapshot;
-  // config rebinding must not put an auxiliary direct-tool run back behind discovery.
-  const toolSearchRuntimeConfig = params.disableToolSearch
-    ? { ...selectedToolConfig, tools: { ...selectedToolConfig?.tools, toolSearch: false as const } }
-    : selectedToolConfig;
+  // Apply restrictions after snapshot selection so config rebinding cannot
+  // restore discovery for direct-tool or persistence-only turns.
+  const isMemoryFlushRun = params.trigger === "memory";
+  const toolSearchRuntimeConfig =
+    params.disableToolSearch || isMemoryFlushRun
+      ? {
+          ...selectedToolConfig,
+          tools: { ...selectedToolConfig?.tools, toolSearch: false as const },
+        }
+      : selectedToolConfig;
   const toolSearchConfig = resolveToolSearchConfig(toolSearchRuntimeConfig);
   const toolsAvailable =
     params.toolsEnabled &&
+    !isMemoryFlushRun &&
     getActiveAgentRingZeroTools().length === 0 &&
     params.disableTools !== true &&
     !params.isRawModelRun &&
@@ -108,33 +116,24 @@ type ApplyAgentToolSurfaceCatalogParams = Omit<CodeModeCatalogParams, "directToo
   toolSearchRuntimeConfig: OpenClawConfig | undefined;
   codeModeControlsEnabled: boolean;
   toolSearchConfig: ToolSearchConfig;
-  forceDirectMessageTool: boolean;
 };
 
 export function applyAgentToolSurfaceCatalog({
   codeModeControlsEnabled,
   toolSearchConfig,
   toolSearchRuntimeConfig,
-  forceDirectMessageTool,
   ...catalogParams
 }: ApplyAgentToolSurfaceCatalogParams) {
-  // When the message tool is the only reply path it must stay directly visible
-  // in every search mode; a hidden delivery tool can leave the run mute.
-  const directToolNames = forceDirectMessageTool ? ["message"] : [];
-  if (codeModeControlsEnabled) {
-    return applyCodeModeCatalog({
-      ...catalogParams,
-      config: catalogParams.config,
-      directToolNames,
-    });
-  }
-  const applyCatalog =
-    toolSearchConfig.mode === "directory"
+  // Reply delivery changes per turn; keep an authorized message tool visible
+  // throughout the conversation instead of changing the provider's tool prefix.
+  const applyCatalog = codeModeControlsEnabled
+    ? applyCodeModeCatalog
+    : toolSearchConfig.mode === "directory"
       ? applyToolSchemaDirectoryCatalog
       : applyToolSearchCatalog;
   return applyCatalog({
     ...catalogParams,
-    config: toolSearchRuntimeConfig,
-    directToolNames,
+    config: codeModeControlsEnabled ? catalogParams.config : toolSearchRuntimeConfig,
+    directToolNames: ["message"],
   });
 }

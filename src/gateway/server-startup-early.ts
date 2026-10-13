@@ -43,23 +43,17 @@ export async function startGatewayEarlyRuntime(params: {
   pluginRegistry?: PluginRegistry;
   pluginRuntimeClaim: GatewayPluginRuntimeClaim;
   broadcast: GatewayMaintenanceParams["broadcast"];
-  nodeSendToAllSubscribed: Parameters<StartGatewayMaintenanceTimers>[0]["nodeSendToAllSubscribed"];
-  getPresenceVersion: GatewayMaintenanceParams["getPresenceVersion"];
-  getHealthVersion: GatewayMaintenanceParams["getHealthVersion"];
-  refreshGatewayHealthSnapshot: GatewayMaintenanceParams["refreshGatewayHealthSnapshot"];
-  restartRunningChannels: GatewayMaintenanceParams["restartRunningChannels"];
-  refreshPresence: GatewayMaintenanceParams["refreshPresence"];
-  resetEventLoopHealth: GatewayMaintenanceParams["resetEventLoopHealth"];
-  logHealth: GatewayMaintenanceParams["logHealth"];
-  clients: GatewayMaintenanceParams["clients"];
-  dedupe: GatewayMaintenanceParams["dedupe"];
-  chatAbortControllers: GatewayMaintenanceParams["chatAbortControllers"];
-  chatQueuedTurns: GatewayMaintenanceParams["chatQueuedTurns"];
-  restartRecoveryCandidates: GatewayMaintenanceParams["restartRecoveryCandidates"];
-  chatRunState: GatewayMaintenanceParams["chatRunState"];
-  removeChatRun: GatewayMaintenanceParams["removeChatRun"];
-  agentRunSeq: GatewayMaintenanceParams["agentRunSeq"];
-  nodeSendToSession: GatewayMaintenanceParams["nodeSendToSession"];
+  maintenance: Omit<
+    GatewayMaintenanceParams,
+    | "scheduler"
+    | "broadcast"
+    | "getRuntimeConfig"
+    | "activeWorkInspectors"
+    | "isNixMode"
+    | "runWorktreeGc"
+    | "runDeliveryQueueMediaGc"
+    | "runManagedOutgoingMediaGc"
+  >;
   getRuntimeConfig: () => OpenClawConfig;
   startupTrace?: GatewayStartupTrace;
 }) {
@@ -113,8 +107,18 @@ export async function startGatewayEarlyRuntime(params: {
     : await measureStartup(params.startupTrace, "runtime.early.skills-listener", async () => {
         const skillsRuntimePromise = import("../skills/runtime/refresh.js");
         const remoteSkillsRuntimePromise = loadRemoteSkillsRuntimeModule();
-        const { closeSkillsWatchers, registerSkillsChangeListener } = await skillsRuntimePromise;
+        const {
+          closeSkillsWatchers,
+          detachSkillsWatchers,
+          refreshSkillsDiscovery,
+          registerSkillsChangeListener,
+        } = await skillsRuntimePromise;
         const { refreshRemoteBinsForConnectedNodes } = await remoteSkillsRuntimePromise;
+        try {
+          await refreshSkillsDiscovery({ config: params.getRuntimeConfig() });
+        } catch (error) {
+          params.log.warn(`failed to refresh skills during startup: ${String(error)}`);
+        }
         const unregister = registerSkillsChangeListener((event) => {
           if (params.isClosing()) {
             return;
@@ -129,6 +133,7 @@ export async function startGatewayEarlyRuntime(params: {
             params.broadcast("skills.changed", { reason: event.reason });
             return;
           }
+          params.broadcast("skills.changed", { reason: event.reason });
           // Coalesce local skill changes before refreshing connected remote
           // nodes so bulk plugin/skill updates do not stampede node refreshes.
           params.scheduler.schedule({
@@ -145,15 +150,12 @@ export async function startGatewayEarlyRuntime(params: {
                   `failed to refresh remote bins after skills change: ${String(error)}`,
                 );
               }
-              if (!params.isClosing()) {
-                params.broadcast("skills.changed", { reason: event.reason });
-              }
             },
           });
         });
-        return async () => {
+        return async ({ exitAfterClose = false }: { exitAfterClose?: boolean } = {}) => {
           unregister();
-          await closeSkillsWatchers();
+          await (exitAfterClose ? detachSkillsWatchers() : closeSkillsWatchers());
         };
       });
 
@@ -175,26 +177,10 @@ export async function startGatewayEarlyRuntime(params: {
         resolveGatewayContext,
         () =>
           startGatewayMaintenanceTimers({
+            ...params.maintenance,
             scheduler: params.scheduler,
             broadcast: params.broadcast,
-            nodeSendToAllSubscribed: params.nodeSendToAllSubscribed,
-            getPresenceVersion: params.getPresenceVersion,
-            getHealthVersion: params.getHealthVersion,
-            refreshGatewayHealthSnapshot: params.refreshGatewayHealthSnapshot,
-            restartRunningChannels: params.restartRunningChannels,
             activeWorkInspectors,
-            refreshPresence: params.refreshPresence,
-            resetEventLoopHealth: params.resetEventLoopHealth,
-            logHealth: params.logHealth,
-            clients: params.clients,
-            dedupe: params.dedupe,
-            chatAbortControllers: params.chatAbortControllers,
-            chatQueuedTurns: params.chatQueuedTurns,
-            restartRecoveryCandidates: params.restartRecoveryCandidates,
-            chatRunState: params.chatRunState,
-            removeChatRun: params.removeChatRun,
-            agentRunSeq: params.agentRunSeq,
-            nodeSendToSession: params.nodeSendToSession,
             isNixMode,
             getRuntimeConfig: params.getRuntimeConfig,
           }),

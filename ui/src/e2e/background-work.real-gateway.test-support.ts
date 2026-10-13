@@ -303,6 +303,7 @@ export function observeBackgroundWorkRpc(page: Page, signal: AbortSignal) {
   const methods = new Set([
     "chat.send",
     "chat.history",
+    "chat.startup",
     "sessions.list",
     "chat.abort",
     "sessions.abort",

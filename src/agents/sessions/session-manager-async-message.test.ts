@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import {
   appendTranscriptMessageSync,
@@ -11,16 +12,18 @@ import {
   stageSessionPendingInput,
   withSessionPendingInputPersistence,
 } from "../../config/sessions/session-accessor.pending-inputs.js";
+import { persistCompactionBoundaryWithSessionEntryAsync } from "../../config/sessions/session-accessor.sqlite-compaction-runtime.js";
 import { readTranscriptEventRows } from "../../config/sessions/session-accessor.sqlite-read.js";
 import { SqliteTranscriptMutationConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
-import { prepareModelVisibleToolTextBlock } from "../../logging/redact.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { isRecordedModelFallbackStop } from "../model-fallback-stop.js";
+import { withSessionCompactionPersistenceAsync } from "./session-compaction-persistence.js";
 import { sessionManagerReadMessageAnchor } from "./session-manager-message-anchor.js";
 import * as metadataRuntime from "./session-manager-metadata-runtime.js";
 import { SessionManager } from "./session-manager.js";
@@ -350,7 +353,7 @@ it("persists the native first content getter result before provenance reads", as
   });
 });
 
-it("expands message toJSON with its envelope key before applying transcript redaction", async () => {
+it("expands message toJSON with its envelope key without changing tool text", async () => {
   const { target, manager } = await fixture(state, "message-json-redaction");
   await manager.appendMessageAsync(user("json-redaction"));
   const message = {
@@ -379,7 +382,7 @@ it("expands message toJSON with its envelope key before applying transcript reda
     role: "toolResult",
     toolCallId: "json-result",
     toolName: "lookup",
-    content: [{ type: "text", text: "opaque(abcdef…qrst)" }],
+    content: [{ type: "text", text: "opaque(abcdefghijklmnopqrst)" }],
     details: { serializationKey: "message" },
     isError: false,
     timestamp: 2,
@@ -388,17 +391,16 @@ it("expands message toJSON with its envelope key before applying transcript reda
   expect((await loadTranscriptEvents(target)).at(-1)).toMatchObject({ message: expected });
 });
 
-it("persists prepared tool text once when JSON normalization copies a frozen content block", async () => {
+it("preserves tool text when JSON normalization copies a frozen content block", async () => {
   const { target, manager } = await fixture(state, "frozen-prepared-tool-text");
   await manager.appendMessageAsync(user("frozen-prepared-text"));
   const config = { logging: { redactPatterns: [String.raw`/opaque\(([^)]+)\)/g`] } };
-  const block = Object.freeze(
-    prepareModelVisibleToolTextBlock(
-      { type: "text", text: "opaque(abcdefghijklmnopqrst)", optional: undefined },
-      config.logging,
-    ),
-  );
-  expect(block.text).toBe("opaque(abcdef…qrst)");
+  const block = Object.freeze({
+    type: "text" as const,
+    text: "opaque(abcdefghijklmnopqrst)",
+    optional: undefined,
+  });
+  expect(block.text).toBe("opaque(abcdefghijklmnopqrst)");
   const committed = await manager.appendMessageWithTranscriptAnchorAsync(
     {
       role: "toolResult",
@@ -410,7 +412,7 @@ it("persists prepared tool text once when JSON normalization copies a frozen con
     },
     { config },
   );
-  const expected = [{ type: "text", text: "opaque(abcdef…qrst)" }];
+  const expected = [{ type: "text", text: "opaque(abcdefghijklmnopqrst)" }];
   expect(committed.message).toHaveProperty("content", expected);
   expect((await loadTranscriptEvents(target)).at(-1)).toMatchObject({
     message: { content: expected },
@@ -580,80 +582,167 @@ it("revalidates overtaken keyed replays while retaining fresh committed pending 
   }
 });
 
-it("fences local navigation changes at worker commit and receipt publication", async () => {
-  const { target, manager } = await fixture(state, "navigation-during-append");
-  const seed = expectDefined(
-    await manager.appendMessageAsync(user("navigation-seed")),
-    "Expected seed",
-  );
-  const tail = expectDefined(
-    await manager.appendMessageAsync(user("navigation-tail")),
-    "Expected tail",
-  );
-  const before = await loadTranscriptEvents(target);
-  for (const change of ["branch", "branch-back"] as const) {
-    manager.branch(tail);
-    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-    const admission = vi
-      .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((admit, attachment) =>
-        createAdmission((request, grant) => {
-          if (request.stage === "commit") {
-            manager.branch(seed);
-            if (change === "branch-back") {
-              manager.branch(tail);
-            }
-          }
-          admit(request, grant);
-        }, attachment),
-      );
-    try {
-      await expect(manager.appendMessageAsync(user(`refused-${change}`))).rejects.toThrow(
-        "Session transcript navigation changed before publication",
-      );
-      expect(manager.getLeafId()).toBe(change === "branch" ? seed : tail);
-      expect(await loadTranscriptEvents(target)).toEqual(before);
-    } finally {
-      admission.mockRestore();
-    }
-  }
-
-  const withWorker = metadataRuntime.withSessionMetadataWorker;
-  const delayed: typeof withWorker = async (
-    options,
-    database,
-    assertCurrent,
-    operation,
-    controls,
-  ) => {
-    const receipt = await withWorker(options, database, assertCurrent, operation, controls);
-    manager.resetLeaf();
-    return receipt;
-  };
-  const publication = vi
-    .spyOn(metadataRuntime, "withSessionMetadataWorker")
-    .mockImplementation(delayed);
-  let failure: unknown;
-  try {
-    failure = await manager.appendMessageAsync(user("committed-before-reset")).then(
-      () => undefined,
-      (error: unknown) => error,
+it.each(["message", "compaction", "compaction-owner"] as const)(
+  "fences local navigation changes at worker commit and receipt publication (%s)",
+  async (kind) => {
+    const { target, manager } = await fixture(state, `navigation-during-${kind}`);
+    const seed = expectDefined(
+      await manager.appendMessageAsync(user("navigation-seed")),
+      "Expected seed",
     );
-    expect(failure).toMatchObject({
-      name: "SessionMessageCommittedError",
-      cause: { message: "Session transcript navigation changed before publication" },
+    const tail = expectDefined(
+      await manager.appendMessageAsync(user("navigation-tail")),
+      "Expected tail",
+    );
+    const onCommitted = vi.fn();
+    const append = (key: string) => {
+      if (kind === "message") {
+        return manager.appendMessageAsync(user(key));
+      }
+      return withSessionCompactionPersistenceAsync(
+        manager,
+        kind === "compaction-owner"
+          ? (prepared) =>
+              persistCompactionBoundaryWithSessionEntryAsync(target, {
+                prepared,
+                transcriptByteCompactionLatch: {
+                  activeBytes: 2048,
+                  sessionId: target.sessionId,
+                  maxBytes: 1024,
+                },
+              })
+          : undefined,
+        () =>
+          manager.appendCompactionAsync(
+            key,
+            seed,
+            120,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            {
+              onCommitted,
+            },
+          ),
+      );
+    };
+    const before = await loadTranscriptEvents(target);
+    for (const change of ["branch", "branch-back"] as const) {
+      manager.branch(tail);
+      const admission = probe.admission(workerAdmission, (request, grant, admit) => {
+        if (request.stage === "commit") {
+          manager.branch(seed);
+          if (change === "branch-back") {
+            manager.branch(tail);
+          }
+        }
+        admit(request, grant);
+      });
+      try {
+        await expect(append(`refused-${change}`)).rejects.toThrow(
+          "Session transcript navigation changed before publication",
+        );
+        expect(manager.getLeafId()).toBe(change === "branch" ? seed : tail);
+        expect(await loadTranscriptEvents(target)).toEqual(before);
+        expect(onCommitted).not.toHaveBeenCalled();
+      } finally {
+        admission.mockRestore();
+      }
+    }
+
+    const withWorker = metadataRuntime.withSessionMetadataWorker;
+    const delayed: typeof withWorker = async (
+      options,
+      database,
+      assertCurrent,
+      operation,
+      controls,
+    ) => {
+      const receipt = await withWorker(options, database, assertCurrent, operation, controls);
+      manager.resetLeaf();
+      return receipt;
+    };
+    const publication = vi
+      .spyOn(metadataRuntime, "withSessionMetadataWorker")
+      .mockImplementation(delayed);
+    let failure: unknown;
+    try {
+      failure = await append("committed-before-reset").then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      expect(failure).toMatchObject({
+        name:
+          kind === "message"
+            ? "SessionMessageCommittedError"
+            : kind === "compaction-owner"
+              ? "SessionEntryCommittedError"
+              : "SessionCompactionCommittedError",
+        cause: { message: "Session transcript navigation changed before publication" },
+      });
+      expect(isRecordedModelFallbackStop(failure)).toBe(true);
+      expect(() => manager.getEntries()).toThrow(/committed/);
+      expect(onCommitted).toHaveBeenCalledTimes(kind === "message" ? 0 : 1);
+    } finally {
+      publication.mockRestore();
+    }
+    const persisted = await loadTranscriptEvents(target);
+    expect(persisted.slice(0, before.length)).toEqual(before);
+    expect(persisted.slice(before.length)).toMatchObject([
+      kind === "message"
+        ? { type: "message", parentId: tail, message: user("committed-before-reset") }
+        : { type: "compaction", parentId: tail, summary: "committed-before-reset" },
+    ]);
+  },
+);
+
+it.each(["worker", "compaction-owner"] as const)(
+  "keeps a newer published view when an awaited compaction receipt is overtaken (%s)",
+  async (owner) => {
+    const { target, manager } = await fixture(state, `overtaken-compaction-${owner}`);
+    const seed = expectDefined(await manager.appendMessageAsync(user("seed")), "Expected seed");
+    const tail = expectDefined(await manager.appendMessageAsync(user("tail")), "Expected tail");
+    let newerId: string | undefined;
+    const onCommitted = vi.fn(() => {
+      // A synchronous SDK caller may publish a new branch before receipt adoption.
+      manager.branch(seed);
+      newerId = manager.appendMessage(user("after-compaction"));
     });
-    expect(isRecordedModelFallbackStop(failure)).toBe(true);
-    expect(() => manager.getEntries()).toThrow("Session entry committed");
-  } finally {
-    publication.mockRestore();
-  }
-  const persisted = await loadTranscriptEvents(target);
-  expect(persisted.slice(0, before.length)).toEqual(before);
-  expect(persisted.slice(before.length)).toMatchObject([
-    { type: "message", parentId: tail, message: user("committed-before-reset") },
-  ]);
-});
+    const compactionId = await withSessionCompactionPersistenceAsync(
+      manager,
+      owner === "compaction-owner"
+        ? (prepared) =>
+            persistCompactionBoundaryWithSessionEntryAsync(target, {
+              prepared,
+              transcriptByteCompactionLatch: {
+                activeBytes: 2048,
+                sessionId: target.sessionId,
+                maxBytes: 1024,
+              },
+            })
+        : undefined,
+      () =>
+        manager.appendCompactionAsync(
+          "Committed summary",
+          seed,
+          120,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          { onCommitted },
+        ),
+    );
+    expect(onCommitted).toHaveBeenCalledOnce();
+    expect(manager.getLeafEntry()).toMatchObject({ id: newerId, parentId: seed });
+    const persisted = await loadTranscriptEvents(target);
+    expect(persisted).toEqual(manager.getPersistedEntries());
+    expect(
+      persisted.filter((entry) => isRecord(entry) && entry.type === "compaction"),
+    ).toMatchObject([{ id: compactionId, parentId: tail, summary: "Committed summary" }]);
+  },
+);
 
 it.each([false, true])(
   "preserves pending custody and closed committed replay (collected: %s)",
@@ -738,17 +827,12 @@ it("rolls back worker promotion when pending authority retires at commit", async
     "Expected pending input custody",
   );
   const before = await loadTranscriptEvents(target);
-  const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-  const admission = vi
-    .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-    .mockImplementation((admit, attachment) =>
-      createAdmission((request, grant) => {
-        if (request.stage === "commit") {
-          current = false;
-        }
-        admit(request, grant);
-      }, attachment),
-    );
+  const admission = probe.admission(workerAdmission, (request, grant, admit) => {
+    if (request.stage === "commit") {
+      current = false;
+    }
+    admit(request, grant);
+  });
   try {
     await expect(receipt.run(() => manager.appendMessageAsync(receipt.message))).rejects.toThrow(
       "Pending owner retired at commit",

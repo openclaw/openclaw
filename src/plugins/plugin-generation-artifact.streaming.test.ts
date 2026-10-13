@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import * as fsSafeAdvanced from "@openclaw/fs-safe/advanced";
@@ -33,6 +32,7 @@ function fixture(bytes: Buffer, basename = "fixture.bin") {
   const filename = path.join(source, basename);
   fs.writeFileSync(filename, bytes, { mode: 0o755 });
   return {
+    bytes,
     filename,
     capture(entry?: string) {
       const artifact = withPluginSourceCaptureDirectory(captures, () =>
@@ -44,181 +44,53 @@ function fixture(bytes: Buffer, basename = "fixture.bin") {
   };
 }
 
-it.each([
-  ["./optional.cjs", "optional.cjs"],
-  ["./optional", "optional.js"],
-  ["./nested/optional.cjs", "nested/optional.cjs"],
-])("recaptures standalone source when missing %s appears", async (reference, filename) => {
-  const source = fixture(
-    Buffer.from(`try { module.exports = require(${JSON.stringify(reference)}); }
-    catch { module.exports = "missing"; }`),
-    "entry.cjs",
-  );
-  const load = createRequire(import.meta.url);
-  await withPluginGenerationSourceCustody(async () => {
-    const first = source.capture(source.filename);
-    expect(load(first.resolve(source.filename))).toBe("missing");
-    const dependency = path.join(path.dirname(source.filename), filename);
-    fs.mkdirSync(path.dirname(dependency), { recursive: true });
-    fs.writeFileSync(dependency, 'module.exports = "available";');
-    const second = source.capture(source.filename);
-    expect(load(second.resolve(source.filename))).toBe("available");
-    expect(load(first.resolve(source.filename))).toBe("missing");
+function interceptCopies(
+  intercept: (
+    options: Parameters<typeof fsSafeAdvanced.copyRootFileSync>[0],
+    copyFile: typeof fsSafeAdvanced.copyRootFileSync,
+  ) => ReturnType<typeof fsSafeAdvanced.copyRootFileSync>,
+) {
+  const createBatch = fsSafeAdvanced.createRootFileCopyBatchSync;
+  const copies = vi.fn(intercept);
+  vi.spyOn(fsSafeAdvanced, "createRootFileCopyBatchSync").mockImplementation(() => {
+    const batch = createBatch();
+    const copyFile = batch.copyFile.bind(batch);
+    return { ...batch, copyFile: (options) => copies(options, copyFile) };
   });
-});
+  return copies;
+}
 
-it("recaptures standalone source when a file supersedes a directory import", async () => {
-  const source = fixture(Buffer.from('module.exports = require("./helper");'), "entry.cjs");
-  const directory = path.join(path.dirname(source.filename), "helper");
-  fs.mkdirSync(directory);
-  fs.writeFileSync(path.join(directory, "index.js"), 'module.exports = "directory";');
-  const load = createRequire(import.meta.url);
-  await withPluginGenerationSourceCustody(async () => {
-    const first = source.capture(source.filename);
-    expect(load(first.resolve(source.filename))).toBe("directory");
-    fs.writeFileSync(
-      path.join(path.dirname(source.filename), "helper.js"),
-      'module.exports = "file";',
-    );
-    const second = source.capture(source.filename);
-    expect(load(second.resolve(source.filename))).toBe("file");
-    expect(load(first.resolve(source.filename))).toBe("directory");
-  });
-});
-
-it.each(["root", "nested"])(
-  "recaptures standalone source when %s package metadata appears",
-  async (scope) => {
-    const source = fixture(Buffer.from('module.exports = "steady";'), "entry.cjs");
-    let entry = source.filename;
-    if (scope === "nested") {
-      const nested = path.join(path.dirname(entry), "nested");
-      fs.mkdirSync(nested);
-      entry = path.join(nested, "entry.cjs");
-      fs.renameSync(source.filename, entry);
-    }
-    const load = createRequire(import.meta.url);
-    await withPluginGenerationSourceCustody(async () => {
-      const first = source.capture(entry);
-      const manifest = path.join(path.dirname(entry), "package.json");
-      fs.writeFileSync(manifest, '{"type":"commonjs"}');
-      const second = source.capture(entry);
-      expect(load(second.resolve(entry))).toBe("steady");
-      expect(fs.readFileSync(second.resolve(manifest), "utf8")).toBe('{"type":"commonjs"}');
-      expect(first.hasSource(manifest)).toBe(false);
-    });
-  },
-);
-
-it.each(["file", "directory", "symlink"])(
-  "refreshes metadata-only legacy entry selection after a %s change",
-  async (change) => {
-    const source = fixture(Buffer.from('module.exports = "steady";'), "entry.cjs");
-    const root = path.dirname(source.filename);
-    const dependency = path.join(root, "node_modules", "legacy");
-    fs.mkdirSync(dependency, { recursive: true });
-    fs.writeFileSync(path.join(root, "package.json"), '{"imports":{"#unused":"legacy"}}');
-    const main = change === "directory" ? "lib" : "main.cjs";
-    fs.writeFileSync(
-      path.join(dependency, "package.json"),
-      JSON.stringify({ name: "legacy", main }),
-    );
-    fs.writeFileSync(path.join(dependency, "index.js"), 'module.exports = "fallback";');
-    const preferred = path.join(dependency, "preferred.cjs");
-    if (change === "directory") {
-      fs.mkdirSync(path.join(dependency, "lib"));
-    } else if (change === "symlink") {
-      const outside = path.join(temp.make("legacy-entry-outside-"), "preferred.cjs");
-      fs.writeFileSync(outside, 'module.exports = "preferred";');
-      fs.linkSync(outside, preferred);
-      fs.symlinkSync(outside, path.join(dependency, main));
-    }
-    await withPluginGenerationSourceCustody(async () => {
-      const first = source.capture(source.filename);
-      const firstLoad = createRequire(first.resolve(source.filename));
-      expect(firstLoad("legacy")).toBe("fallback");
-      if (change === "symlink") {
-        fs.unlinkSync(path.join(dependency, main));
-        fs.symlinkSync(preferred, path.join(dependency, main));
-      } else {
-        fs.writeFileSync(
-          path.join(dependency, change === "directory" ? "lib/index.js" : main),
-          'module.exports = "preferred";',
-        );
+it.skipIf(process.platform === "win32")(
+  "amortizes directory metadata reads when capturing sibling files",
+  () => {
+    const bytes = Buffer.alloc(64 * 1024 + 1, "S");
+    const source = fixture(bytes, "fixture.dat");
+    const lstatSync = fs.lstatSync;
+    let directoryReads = 0;
+    vi.spyOn(fs, "lstatSync").mockImplementation((filename, options) => {
+      const stat = lstatSync(filename, options);
+      if (stat?.isDirectory()) {
+        directoryReads += 1;
       }
-      const second = source.capture(source.filename);
-      expect(createRequire(second.resolve(source.filename))("legacy")).toBe("preferred");
-      expect(firstLoad("legacy")).toBe("fallback");
+      return stat;
     });
-  },
-);
-
-it.each(["file", "directory"])(
-  "recaptures a deferred %s link when an external alias moves inside the package",
-  async (kind) => {
-    const source = fixture(Buffer.from('module.exports = "steady";'), "entry.cjs");
-    const root = path.dirname(source.filename);
-    const outside = temp.make("plugin-deferred-alias-");
-    const external = path.join(outside, "external");
-    if (kind === "directory") {
-      fs.mkdirSync(external);
-    } else {
-      fs.writeFileSync(external, "outside");
-    }
-    const alias = path.join(outside, "alias");
-    const link = path.join(root, "link");
-    fs.symlinkSync(external, alias, kind === "directory" ? "junction" : "file");
-    fs.symlinkSync(alias, link, kind === "directory" ? "junction" : "file");
-    const internal = kind === "directory" ? path.join(root, "helper") : source.filename;
-    if (kind === "directory") {
-      fs.mkdirSync(internal);
-      fs.writeFileSync(path.join(internal, "entry.cjs"), 'module.exports = "steady";');
-    }
-    await withPluginGenerationSourceCustody(async () => {
-      const first = source.capture();
-      expect(first.hasSource(link)).toBe(false);
-      fs.unlinkSync(alias);
-      fs.symlinkSync(internal, alias, kind === "directory" ? "junction" : "file");
-      const second = source.capture();
-      const selected = kind === "directory" ? path.join(link, "entry.cjs") : link;
-      expect(createRequire(import.meta.url)(second.resolve(selected))).toBe("steady");
-      expect(first.hasSource(link)).toBe(false);
-    });
-  },
-);
-
-it.each(["missing asset", "empty directory"])(
-  "recaptures standalone source when a %s gains content",
-  async (kind) => {
-    const relative = kind === "empty directory" ? "./assets/" : "./optional.dat";
-    const read =
-      kind === "empty directory"
-        ? 'fs.readdirSync(asset).join(",")'
-        : 'fs.readFileSync(asset, "utf8")';
-    const source = fixture(
-      Buffer.from(`import fs from "node:fs";
-    const asset = new URL(${JSON.stringify(relative)}, import.meta.url);
-    export default fs.existsSync(asset) ? ${read} : "missing";`),
-      "entry.mjs",
+    source.capture();
+    const singleFileReads = directoryReads;
+    const siblings = Array.from({ length: 15 }, (_, index) =>
+      path.join(path.dirname(source.filename), `sibling-${index}.dat`),
     );
-    const asset = path.join(path.dirname(source.filename), relative);
-    if (kind === "empty directory") {
-      fs.mkdirSync(asset);
+    for (const sibling of siblings) {
+      fs.writeFileSync(sibling, bytes);
     }
-    const load = createRequire(import.meta.url);
-    await withPluginGenerationSourceCustody(async () => {
-      const first = source.capture(source.filename);
-      const previous = load(first.resolve(source.filename)).default;
-      fs.writeFileSync(
-        kind === "empty directory" ? path.join(asset, "added.dat") : asset,
-        "available",
-      );
-      const second = source.capture(source.filename);
-      expect(load(second.resolve(source.filename)).default).toBe(
-        kind === "empty directory" ? "added.dat" : "available",
-      );
-      expect(load(first.resolve(source.filename)).default).toBe(previous);
-    });
+    directoryReads = 0;
+    const captured = source.capture();
+    const siblingFileReads = directoryReads;
+    for (const sibling of [source.filename, ...siblings]) {
+      expect(fs.readFileSync(captured.resolve(sibling))).toEqual(bytes);
+    }
+    expect(singleFileReads).toBeGreaterThan(0);
+    // Keep per-file identity checks, but amortize directory admission across siblings.
+    expect(siblingFileReads).toBeLessThanOrEqual(singleFileReads * (siblings.length + 1) * 0.85);
   },
 );
 
@@ -311,14 +183,13 @@ it("captures and verifies a native artifact without whole-file Buffer reads", ()
     return result;
   });
   const artifact = source.capture();
-  artifact.assertSourceCurrent();
   reads.mockRestore();
   chunks.mockRestore();
 
   expect(wholeFileReads).toBe(0);
   expect(largestBuffer).toBeLessThanOrEqual(1024 * 1024);
-  // One capture digest and two fresh checks; portable descriptor copies add one transfer.
-  const passes = process.platform === "linux" || process.platform === "darwin" ? 3 : 4;
+  // Receipt replay reads the copied payload; portable copies add one transfer.
+  const passes = process.platform === "linux" || process.platform === "darwin" ? 1 : 2;
   expect(streamedBytes).toBeLessThanOrEqual(bytes.length * passes);
   // SHA-256 of the existing package/directory/file receipt framing and this fixed payload.
   expect(artifact.sourceDigest).toBe(
@@ -335,44 +206,6 @@ it("captures and verifies a native artifact without whole-file Buffer reads", ()
   expect(fs.readFileSync(artifact.resolve(source.filename)).equals(bytes)).toBe(true);
 });
 
-it.each(["unchanged metadata", "growing source"])("rejects edits with %s", (kind) => {
-  const source = fixture(Buffer.from("before"), "fixture.js");
-  const before = fs.statSync(source.filename, { bigint: true });
-  const artifact = source.capture();
-  let reads = 0;
-  if (kind === "unchanged metadata") {
-    const statSync = fs.statSync;
-    vi.spyOn(fs, "statSync").mockImplementation((filename, options) => {
-      const stat = statSync(filename, options);
-      if (filename === source.filename && stat && "mtimeNs" in stat) {
-        stat.mtimeNs = before.mtimeNs;
-        stat.ctimeNs = before.ctimeNs;
-      }
-      return stat;
-    });
-    expect(artifact.assertSourceCurrent).not.toThrow();
-    fs.writeFileSync(source.filename, "edited");
-  } else {
-    const readSync = fs.readSync;
-    vi.spyOn(fs, "readSync").mockImplementation((...args) => {
-      const length = Reflect.apply(readSync, fs, args);
-      const stat = fs.fstatSync(args[0], { bigint: true });
-      if (stat.dev === before.dev && stat.ino === before.ino) {
-        if (++reads > 8) {
-          throw new Error("Verification did not bound a growing source");
-        }
-        fs.appendFileSync(source.filename, "growth");
-      }
-      return length;
-    });
-  }
-  expect(artifact.assertSourceCurrent).toThrow(
-    "Plugin source changed while preparing its reload; retry after the edit finishes.",
-  );
-  expect(reads).toBeLessThanOrEqual(2);
-  expect(fs.readFileSync(artifact.resolve(source.filename), "utf8")).toBe("before");
-});
-
 it.each(["cold", "warm", "lazy"] as const)(
   "rejects a copied destination replaced before receipt admission (%s)",
   (phase) => {
@@ -384,22 +217,31 @@ it.each(["cold", "warm", "lazy"] as const)(
       source.capture();
     }
     const lazy = phase === "lazy" ? source.capture(entry) : undefined;
-    const copyRootFileSync = fsSafeAdvanced.copyRootFileSync;
+    const createFileSync = fsSafeAdvanced.createFileSync;
     let replaced = false;
-    vi.spyOn(fsSafeAdvanced, "copyRootFileSync").mockImplementation((options) => {
-      const copied = copyRootFileSync(options);
-      if (options.source.absolutePath !== source.filename) {
-        return copied;
-      }
+    const replaceAfterClose = (copied: fsSafeAdvanced.OwnedFileDescriptorSync, target: string) => {
       const close = () => {
         copied.close();
         if (!replaced) {
           replaced = true;
-          fs.renameSync(copied.path, `${copied.path}.original`);
-          fs.writeFileSync(copied.path, "replaced");
+          fs.renameSync(target, `${target}.original`);
+          fs.writeFileSync(target, "replaced");
         }
       };
       return { ...copied, close, [Symbol.dispose]: close };
+    };
+    interceptCopies((options, copyRootFileSync) => {
+      const copied = copyRootFileSync(options);
+      if (options.source.absolutePath !== source.filename) {
+        return copied;
+      }
+      return { ...copied, ...replaceAfterClose(copied, copied.path) };
+    });
+    vi.spyOn(fsSafeAdvanced, "createFileSync").mockImplementation((target, options) => {
+      const copied = createFileSync(target, options);
+      return path.basename(target) === path.basename(source.filename)
+        ? replaceAfterClose(copied, target)
+        : copied;
     });
 
     const capture = () => (lazy ? lazy.captureResolvedModule(source.filename) : source.capture());
@@ -422,12 +264,11 @@ it.each(["cold", "warm", "lazy"] as const)(
 );
 
 it("refuses a source swapped after OpenClaw pins it without leaving a capture", () => {
-  const source = fixture(Buffer.from("pinned source"), "fixture.js");
+  const source = fixture(Buffer.alloc(64 * 1024 + 1, "P"), "fixture.js");
   const admitted = fs.statSync(source.filename, { bigint: true });
-  const copyRootFileSync = fsSafeAdvanced.copyRootFileSync;
   let target: string | undefined;
   let refused: unknown;
-  vi.spyOn(fsSafeAdvanced, "copyRootFileSync").mockImplementation((options) => {
+  interceptCopies((options, copyRootFileSync) => {
     if (options.source.absolutePath !== source.filename) {
       return copyRootFileSync(options);
     }
@@ -447,15 +288,14 @@ it("refuses a source swapped after OpenClaw pins it without leaving a capture", 
   expect(refused).toMatchObject({ code: "path-mismatch" });
   expect(target).toBeDefined();
   expect(fs.existsSync(target!)).toBe(false);
-  expect(fs.readFileSync(`${source.filename}.retained`, "utf8")).toBe("pinned source");
+  expect(fs.readFileSync(`${source.filename}.retained`)).toEqual(source.bytes);
   expect(fs.readFileSync(source.filename, "utf8")).toBe("replacement");
 });
 
 it("maps growth beyond the pinned size to the reload retry error with its cause", () => {
-  const source = fixture(Buffer.from("bounded"), "fixture.js");
-  const copyRootFileSync = fsSafeAdvanced.copyRootFileSync;
+  const source = fixture(Buffer.alloc(64 * 1024 + 1, "B"), "fixture.js");
   let target: string | undefined;
-  vi.spyOn(fsSafeAdvanced, "copyRootFileSync").mockImplementation((options) => {
+  interceptCopies((options, copyRootFileSync) => {
     if (options.source.absolutePath === source.filename) {
       target = options.destination.absolutePath;
       fs.appendFileSync(source.filename, " growth");
@@ -478,12 +318,11 @@ it("maps growth beyond the pinned size to the reload retry error with its cause"
 });
 
 it.each(["EIO", "EBADF"])("propagates fatal %s copy failures without retry", (code) => {
-  const source = fixture(Buffer.from("captured"), "fixture.js");
-  const copyRootFileSync = fsSafeAdvanced.copyRootFileSync;
+  const source = fixture(Buffer.alloc(64 * 1024 + 1, "C"), "fixture.js");
   const failure = new FsSafeError("helper-failed", "guarded synchronous file copy failed", {
     cause: Object.assign(new Error("injected copy failure"), { code }),
   });
-  const copies = vi.spyOn(fsSafeAdvanced, "copyRootFileSync").mockImplementation((options) => {
+  const copies = interceptCopies((options, copyRootFileSync) => {
     if (options.source.absolutePath === source.filename) {
       throw failure;
     }
@@ -499,8 +338,7 @@ it.each(["EIO", "EBADF"])("propagates fatal %s copy failures without retry", (co
 it.each([false, true])(
   "preserves disk-full diagnostics when capture cleanup fails: %s",
   (cleanupFails) => {
-    const source = fixture(Buffer.from("captured"), "fixture.js");
-    const copyRootFileSync = fsSafeAdvanced.copyRootFileSync;
+    const source = fixture(Buffer.alloc(64 * 1024 + 1, "C"), "fixture.js");
     const cause = Object.assign(new Error("capture filesystem is full"), { code: "ENOSPC" });
     const primary = new FsSafeError("helper-failed", "guarded synchronous file copy failed", {
       cause,
@@ -513,7 +351,7 @@ it.each([false, true])(
           ),
         })
       : primary;
-    const copies = vi.spyOn(fsSafeAdvanced, "copyRootFileSync").mockImplementation((options) => {
+    const copies = interceptCopies((options, copyRootFileSync) => {
       if (options.source.absolutePath === source.filename) {
         throw failure;
       }

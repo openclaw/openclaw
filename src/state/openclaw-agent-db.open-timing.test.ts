@@ -102,13 +102,13 @@ function createTimedOpen(indexRepairMs = 0) {
 }
 
 describe("agent database open timings", () => {
-  it("includes synchronous WAL recovery in the deferred integrity gate", () => {
+  it("includes WAL admission metadata reads in the deferred integrity gate", () => {
     const { options, pathname, advance } = createTimedOpen();
     const database = openOpenClawAgentDatabase(options);
     const prepare = database.db.prepare.bind(database.db);
     vi.spyOn(database.db, "prepare").mockImplementation((sql) => {
       const statement = prepare(sql);
-      if (sql === "PRAGMA wal_checkpoint(PASSIVE)") {
+      if (sql === "PRAGMA journal_mode") {
         const get = statement.get.bind(statement);
         vi.spyOn(statement, "get").mockImplementation((...parameters) => {
           const result = get(...parameters);

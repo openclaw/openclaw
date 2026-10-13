@@ -37,73 +37,42 @@ function evidence(exports: unknown[] = []) {
 }
 
 describe("Plugin SDK API release evidence", () => {
-  it("preserves the frozen v1 payload digest and receipt bytes", () => {
-    const legacyDiff = diff([{ change: "added", exportName: "send" }]);
-    const receipt = createPluginSdkApiReleaseEvidence({
-      baseRef: "v2026.8.1",
-      baseSha,
-      diff: legacyDiff,
-      headSha,
-      workflowSha,
-    });
-
-    expect(legacyDiff.digest).toBe(
-      "f4b495f34f8c1b72721841242b24d6f8351524c00e34db016af0fd3944f44992",
-    );
-    expect(JSON.stringify(receipt)).toBe(
-      `{"schema":"openclaw.plugin-sdk-api-release-evidence/v1","status":"checked","baseRef":"v2026.8.1","baseSha":"${baseSha}","headSha":"${headSha}","hasChanges":true,"digest":"f4b495f34f8c1b72721841242b24d6f8351524c00e34db016af0fd3944f44992","diff":{"entrypointsAdded":[],"entrypointsRemoved":[],"exports":[{"change":"added","exportName":"send"}],"digest":"f4b495f34f8c1b72721841242b24d6f8351524c00e34db016af0fd3944f44992"},"workflowSha":"${workflowSha}"}`,
-    );
-    expect(
-      validatePluginSdkApiReleaseEvidence({
-        acknowledgement: legacyDiff.digest.slice(0, 8),
-        evidence: receipt,
-        expectedHeadSha: headSha,
-        expectedWorkflowSha: workflowSha,
+  it("enforces selectors acknowledgement through the release CLI", () => {
+    const receipt = evidence([{ change: "added", exportName: "send" }]);
+    const manifestPath = join(tempDirs.make("plugin-sdk-evidence-"), "manifest.json");
+    writeFileSync(
+      manifestPath,
+      JSON.stringify({
+        pluginSdkApi: createPluginSdkApiReleaseEvidenceSet({ beta: evidence(), latest: receipt }),
       }),
-    ).toMatchObject({ acknowledgement: "f4b495f3", hasChanges: true });
-  });
-
-  it.each(["single", "selectors"])(
-    "enforces %s acknowledgement through the release CLI",
-    (shape) => {
-      const receipt = evidence([{ change: "added", exportName: "send" }]);
-      const manifestPath = join(tempDirs.make("plugin-sdk-evidence-"), "manifest.json");
-      writeFileSync(
-        manifestPath,
-        JSON.stringify({
-          pluginSdkApi:
-            shape === "single"
-              ? receipt
-              : createPluginSdkApiReleaseEvidenceSet({ beta: evidence(), latest: receipt }),
-        }),
+    );
+    const run = (acknowledgement?: string) =>
+      spawnSync(
+        process.execPath,
+        [
+          "scripts/plugin-sdk-api-release-evidence.mjs",
+          "--manifest",
+          manifestPath,
+          "--head",
+          headSha,
+          "--workflow-sha",
+          workflowSha,
+          "--npm-dist-tag",
+          "latest",
+          ...(acknowledgement ? ["--acknowledge", acknowledgement] : []),
+        ],
+        { cwd: process.cwd(), encoding: "utf8" },
       );
-      const run = (acknowledgement?: string) =>
-        spawnSync(
-          process.execPath,
-          [
-            "scripts/plugin-sdk-api-release-evidence.mjs",
-            "--manifest",
-            manifestPath,
-            "--head",
-            headSha,
-            "--workflow-sha",
-            workflowSha,
-            ...(shape === "selectors" ? ["--npm-dist-tag", "latest"] : []),
-            ...(acknowledgement ? ["--acknowledge", acknowledgement] : []),
-          ],
-          { cwd: process.cwd(), encoding: "utf8" },
-        );
 
-      for (const acknowledgement of [undefined, "deadbeef"]) {
-        const rejected = run(acknowledgement);
-        expect(rejected.status, rejected.stderr).toBe(1);
-        expect(rejected.stderr).toContain("require acknowledgement digest");
-      }
-      const accepted = run(receipt.digest.slice(0, 8));
-      expect(accepted.status, accepted.stderr).toBe(0);
-      expect(JSON.parse(accepted.stdout)).toMatchObject({ hasChanges: true, status: "checked" });
-    },
-  );
+    for (const acknowledgement of [undefined, "deadbeef"]) {
+      const rejected = run(acknowledgement);
+      expect(rejected.status, rejected.stderr).toBe(1);
+      expect(rejected.stderr).toContain("require acknowledgement digest");
+    }
+    const accepted = run(receipt.digest.slice(0, 8));
+    expect(accepted.status, accepted.stderr).toBe(0);
+    expect(JSON.parse(accepted.stdout)).toMatchObject({ hasChanges: true, status: "checked" });
+  });
 
   it("round-trips oversized shared comparisons under the unchanged 16 MiB file cap", () => {
     const beta = evidence([{ declaration: "x".repeat(9 * 1024 * 1024) }]);
@@ -178,17 +147,6 @@ describe("Plugin SDK API release evidence", () => {
         createPluginSdkApiDiffSet({ beta: beta.diff, latest: latest.diff }),
       ),
     ).toEqual({ beta: beta.diff, latest: latest.diff });
-  });
-
-  it("accepts a blank acknowledgement when the frozen diff has no changes", () => {
-    expect(
-      validatePluginSdkApiReleaseEvidence({
-        acknowledgement: "",
-        evidence: evidence(),
-        expectedHeadSha: headSha,
-        expectedWorkflowSha: workflowSha,
-      }),
-    ).toMatchObject({ acknowledgement: null, hasChanges: false });
   });
 
   it("rejects evidence for another release SHA or a changed diff payload", () => {

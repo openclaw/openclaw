@@ -24,9 +24,10 @@ const LEGACY_CATCHUP_CURSOR_NAMESPACE = "imessage.catchup-cursors";
 const LEGACY_CATCHUP_CURSOR_MAX_ENTRIES = 256;
 
 type RecoveryCursor = { lastRowid: number };
+let cursorWrites: Promise<unknown> = Promise.resolve();
 
 function openRecoveryCursorStore() {
-  return getIMessageRuntime().state.openKeyedStore<RecoveryCursor>(RECOVERY_CURSOR_STORE_OPTIONS);
+  return getIMessageRuntime().state.openKeyedStoreV2<RecoveryCursor>(RECOVERY_CURSOR_STORE_OPTIONS);
 }
 
 // Canonicalize a local chat.db path (expand a leading ~, then resolve) so the
@@ -103,46 +104,24 @@ function decideRecoveryCursorUpdate(
   return { lastRowid: update.rowid };
 }
 
-async function applyRecoveryCursorUpdate(
+function applyRecoveryCursorUpdate(
   key: string,
   update: RecoveryCursorUpdate,
 ): Promise<RecoveryCursor | undefined> {
-  const state = getIMessageRuntime().state;
-  const store = state.openKeyedStore<RecoveryCursor>(RECOVERY_CURSOR_STORE_OPTIONS);
-  if (!store.observe || !store.compareAndApply) {
-    // Published 2026.9.4 hosts have atomic update but no comparison methods.
-    // Remove this branch when the declared host floor requires comparisons.
-    const legacy = state.openSyncKeyedStore<RecoveryCursor>(RECOVERY_CURSOR_STORE_OPTIONS);
-    if (!legacy.update) {
-      throw new Error("iMessage recovery cursor persistence requires atomic update support.");
-    }
-    let result: RecoveryCursor | undefined;
-    legacy.update(key, (current) => {
-      const next = decideRecoveryCursorUpdate(current, update);
-      result = next ?? current;
-      return next;
-    });
-    return result;
-  }
-
-  const observe = store.observe.bind(store);
-  const compareAndApply = store.compareAndApply.bind(store);
-  let observation = await observe(key);
-  for (;;) {
-    const next = decideRecoveryCursorUpdate(observation.value, update);
+  // This module owns cursor writes. Serialize ordinary concurrent completions;
+  // direct writes by another owner during this operation are best effort.
+  const write = cursorWrites.then(async () => {
+    const store = openRecoveryCursorStore();
+    const current = await store.lookup(key);
+    const next = decideRecoveryCursorUpdate(current, update);
     if (!next) {
-      return observation.value;
+      return current;
     }
-    const result = await compareAndApply(key, observation.comparison, {
-      operation: "update",
-      action: "set",
-      value: next,
-    });
-    if (result.status !== "conflict") {
-      return next;
-    }
-    observation = result.current;
-  }
+    await store.register(key, next);
+    return next;
+  });
+  cursorWrites = write.catch(() => {});
+  return write;
 }
 
 async function readRecoveryCursor(accountId: string, dbIdentity: string): Promise<number | null> {
@@ -177,7 +156,7 @@ async function migrateLegacyCatchupCursor(
   dbIdentity: string,
 ): Promise<number | null> {
   try {
-    const legacy = getIMessageRuntime().state.openKeyedStore<{ lastSeenRowid?: unknown }>({
+    const legacy = getIMessageRuntime().state.openKeyedStoreV2<{ lastSeenRowid?: unknown }>({
       namespace: LEGACY_CATCHUP_CURSOR_NAMESPACE,
       maxEntries: LEGACY_CATCHUP_CURSOR_MAX_ENTRIES,
     });

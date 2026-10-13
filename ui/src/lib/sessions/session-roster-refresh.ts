@@ -512,7 +512,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
         scope,
         lists,
         affectsPrimary: matches({ agentId: lastListOptions.agentId }),
-        ...observations.captureEventDelivery(scope, revision),
+        ...observations.captureEventDelivery(scope),
       };
     },
     primaryList: () => primaryList,

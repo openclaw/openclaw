@@ -2755,7 +2755,7 @@ describe("updateNpmInstalledPlugins", () => {
             pluginId: "qqbot",
             status: "skipped",
             message:
-              'Removed duplicate "qqbot" install record; "openclaw-qqbot" is the canonical plugin id.',
+              'Removed duplicate "qqbot" install record; "openclaw-qqbot" is the current plugin ID.',
           }),
         ]),
       );
@@ -2776,7 +2776,7 @@ describe("updateNpmInstalledPlugins", () => {
             expect.objectContaining({
               pluginId: "qqbot",
               message:
-                'Kept duplicate "qqbot" install record because "openclaw-qqbot" did not complete a runnable canonical update.',
+                'Kept duplicate "qqbot" install record because "openclaw-qqbot" did not produce a runnable installation of the current plugin.',
             }),
           ]),
         );
@@ -2790,7 +2790,7 @@ describe("updateNpmInstalledPlugins", () => {
                 pluginId: "qqbot",
                 status: "skipped",
                 message:
-                  'Would remove duplicate "qqbot" install record; "openclaw-qqbot" is the canonical plugin id.',
+                  'Would remove duplicate "qqbot" install record; "openclaw-qqbot" is the current plugin ID.',
               }),
             ]),
           );

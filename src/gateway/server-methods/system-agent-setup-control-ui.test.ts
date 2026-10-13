@@ -4,10 +4,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../../ui/src/i18n/index.ts";
 import { createFirstRunContext } from "../../../ui/src/pages/model-setup/model-setup-first-run.test-support.ts";
-import { ModelSetupPage } from "../../../ui/src/pages/model-setup/model-setup-page.ts";
+import "../../../ui/src/pages/model-setup/model-setup-page.tsx";
 import { createApplicationContextProvider } from "../../../ui/src/test-helpers/application-context.ts";
+import { waitForSolid } from "../../../ui/src/test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../../ui/src/test-helpers/storage.ts";
-import { waitForFast } from "../../../ui/src/test-helpers/wait-for.ts";
 import { applyWizardMetadata } from "../../commands/onboard-helpers.js";
 import { createConfigFileSnapshot } from "../../config/io.snapshot-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -161,11 +161,13 @@ describe("selected-agent Gateway detection and Model Setup consent", () => {
         throw new Error(`Unexpected setup RPC: ${method}`);
       });
       const provider = createApplicationContextProvider(context);
-      const page = new ModelSetupPage();
+      const page = document.createElement("openclaw-model-setup-page");
       page.routeData = { firstRun: true };
       provider.append(page);
       document.body.append(provider);
-      await waitForFast(() =>
+      await waitForSolid(() => expect(request).toHaveBeenCalled());
+      await request.mock.results[0]!.value;
+      await waitForSolid(() =>
         expect(page.querySelector('[data-auth-choice="custom-api-key"] button')).not.toBeNull(),
       );
       expect(request.mock.calls).toEqual([
@@ -195,7 +197,7 @@ describe("selected-agent Gateway detection and Model Setup consent", () => {
         expect(page.querySelector('[data-auth-choice="mixed-search-api-key"]')).toBeNull();
       }
       page.querySelector<HTMLButtonElement>('[data-auth-choice="custom-api-key"] button')!.click();
-      await waitForFast(() =>
+      await waitForSolid(() =>
         expect(request.mock.calls.some(([method]) => method === "openclaw.setup.auth.start")).toBe(
           true,
         ),

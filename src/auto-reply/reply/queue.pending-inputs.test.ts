@@ -1,6 +1,11 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useSqliteWorkerFault } from "../../../test/helpers/sqlite-worker-fault.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
   listSessionPendingInputs,
@@ -8,6 +13,8 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { useTempSessionsFixture } from "../../config/sessions/test-helpers.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { captureGatewayRootWorkReleaseObserver } from "../../process/gateway-work-admission.js";
 import {
   createUserTurnTranscriptRecorder,
   type PersistedUserTurnMessage,
@@ -42,6 +49,7 @@ const fault = useSqliteWorkerFault([
 
 describe("followup queue durable input consumption", () => {
   const fixture = useTempSessionsFixture("openclaw-queue-pending-");
+  let config: OpenClawConfig;
   let caseSequence = 0;
   let sessionKey = "";
   const sessionId = "queue-pending-session";
@@ -49,6 +57,8 @@ describe("followup queue durable input consumption", () => {
   const scope = () => ({ agentId: "main", sessionId, sessionKey, storePath: fixture.storePath() });
 
   beforeEach(async () => {
+    config = { session: { store: fixture.storePath() } };
+    setRuntimeConfigSnapshot(config);
     sessionKey = `agent:main:queue-pending-${++caseSequence}`;
     vi.mocked(executeAgentTurn).mockReset();
     await upsertSessionEntryCore(scope(), { sessionId, updatedAt: 1 });
@@ -60,6 +70,7 @@ describe("followup queue durable input consumption", () => {
       recorder.finishPendingInput?.("interrupted");
     }
     closeOpenClawAgentDatabasesForTest();
+    clearRuntimeConfigSnapshot();
   });
 
   const createStagedRun = async (runId: string) => {
@@ -69,7 +80,7 @@ describe("followup queue durable input consumption", () => {
     }));
     const recorder = createUserTurnTranscriptRecorder({
       input: { text: `${runId} private source`, idempotencyKey: `${runId}:user` },
-      target: { ...scope(), sessionEntry: undefined },
+      target: { ...scope(), sessionEntry: undefined, config },
       beforeMessageWrite,
       updateMode: "none",
     });
@@ -87,7 +98,7 @@ describe("followup queue durable input consumption", () => {
         agentId: "main",
         sessionKey,
         sessionId,
-        config: { session: { store: fixture.storePath() } },
+        config,
       },
     };
     return { run, beforeMessageWrite };
@@ -158,7 +169,7 @@ describe("followup queue durable input consumption", () => {
       messageId: "unstaged",
       userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
         input: { text: "unstaged transcript body" },
-        target: { ...scope(), sessionEntry: undefined },
+        target: { ...scope(), sessionEntry: undefined, config: staged.run.run.config },
       }),
       turnAdoptionLifecycle: { admission: "cancel-only", onAdopted: async () => {} },
     };
@@ -178,9 +189,9 @@ describe("followup queue durable input consumption", () => {
     expect(calls[1]?.transcriptPrompt).toContain("unstaged transcript body");
   });
 
-  it.each([false, true])(
+  it.for([false, true])(
     "binds collected custody before runtime append (cancel during preparation: %s)",
-    async (abortDuringPreparation) => {
+    async (abortDuringPreparation, { signal }) => {
       const first = await createStagedRun("first");
       const second = await createStagedRun("second");
       first.run.prompt = "first private source";
@@ -191,6 +202,7 @@ describe("followup queue durable input consumption", () => {
       const calls: FollowupRun[] = [];
       const failures: unknown[] = [];
       const pendingTotals: number[] = [];
+      const drainReleased = createDeferred<"settled" | "reset">();
       vi.mocked(executeAgentTurn).mockImplementation(async (params) => {
         const message = await params.followupRun.userTurnTranscriptRecorder?.resolveMessage();
         if (!message) {
@@ -201,6 +213,9 @@ describe("followup queue durable input consumption", () => {
         return { runId: "collected-run", outcome: { kind: "rejected", payload: { text: "done" } } };
       });
       scheduleFollowupDrain(sessionKey, async (run) => {
+        const observeRelease = captureGatewayRootWorkReleaseObserver();
+        assert(observeRelease, "followup execution must own root admission");
+        observeRelease(drainReleased.resolve);
         calls.push(run);
         const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
         const typing = createTypingController({});
@@ -243,7 +258,8 @@ describe("followup queue durable input consumption", () => {
           typing.cleanup();
         }
       });
-      await vi.waitFor(() => expect(getExistingFollowupQueue(sessionKey)).toBeUndefined());
+      expect(await withinTest(drainReleased.promise, signal)).toBe("settled");
+      expect(getExistingFollowupQueue(sessionKey)).toBeUndefined();
 
       expect(failures).toHaveLength(abortDuringPreparation ? 1 : 0);
       expect(pendingTotals).toEqual(abortDuringPreparation ? [2] : [2, 0]);

@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { BoardOp } from "../../lib/board/types.ts";
 import { applyBoardFixtureOps } from "../../test-helpers/board-fixture.ts";
 import "./board-view.ts";
-import { callbacks, mount, settleCells, snapshot } from "./board-view.test-support.ts";
+import { boardWidget, callbacks, mount, settleCells, snapshot } from "./board-view.test-support.ts";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -104,6 +105,25 @@ describe("openclaw-board-view retention", () => {
     );
     expect(replacement).toBeDefined();
     expect(replacement).not.toBe(cell);
+  });
+
+  it("keeps a removed MCP cell connected with its last binding until teardown settles", async () => {
+    const widget = boardWidget({ contentKind: "mcp-app" });
+    const view = await mount({ snapshot: snapshot({ widgets: [widget] }) });
+    const cell = view.querySelector("openclaw-board-widget-cell")!;
+    const teardown = createDeferred();
+    vi.spyOn(cell, "teardown").mockReturnValue(teardown.promise);
+
+    view.snapshot = snapshot({ revision: 2, widgets: [] });
+    await settleCells(view);
+    expect(cell.isConnected).toBe(true);
+    expect(cell.widget).toBe(widget);
+    expect(cell.active).toBe(false);
+    expect(cell.hidden).toBe(true);
+
+    teardown.resolve();
+    await settleCells(view);
+    expect(cell.isConnected).toBe(false);
   });
 
   it("moves widgets to another tab from the kebab menu", async () => {

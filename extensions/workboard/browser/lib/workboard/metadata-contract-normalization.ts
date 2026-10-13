@@ -1,10 +1,5 @@
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type {
-  WorkboardAutomation,
-  WorkboardDiagnosticAction,
-  WorkboardWorkspace,
-  WorkboardWorkspaceAccess,
-} from "./types.ts";
+import type { WorkboardAutomation, WorkboardWorkspace, WorkboardWorkspaceAccess } from "./types.ts";
 
 function normalizeStringArray(value: unknown): string[] {
   return Array.isArray(value)
@@ -75,21 +70,4 @@ export function normalizeAutomation(value: unknown): WorkboardAutomation | undef
     ...(typeof value.lastDispatchAt === "number" ? { lastDispatchAt: value.lastDispatchAt } : {}),
   };
   return Object.keys(automation).length ? automation : undefined;
-}
-
-export function normalizeDiagnosticAction(value: unknown): WorkboardDiagnosticAction | null {
-  if (
-    !isRecord(value) ||
-    (value.kind !== "claim" &&
-      value.kind !== "unblock" &&
-      value.kind !== "promote" &&
-      value.kind !== "reclaim" &&
-      value.kind !== "reassign" &&
-      value.kind !== "add_proof" &&
-      value.kind !== "open_session") ||
-    typeof value.label !== "string"
-  ) {
-    return null;
-  }
-  return { kind: value.kind, label: value.label };
 }

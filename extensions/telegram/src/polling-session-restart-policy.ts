@@ -16,14 +16,12 @@ const TELEGRAM_POLL_STOP_TIMEOUT_BURST_LIMIT = 2;
 type TelegramRestartBackoffState = {
   restartAttempts: number;
   stopTimeoutBurst: number;
-  stopTimeoutCooldownAttempts: number;
 };
 
 export function createTelegramRestartBackoffState(): TelegramRestartBackoffState {
   return {
     restartAttempts: 0,
     stopTimeoutBurst: 0,
-    stopTimeoutCooldownAttempts: 0,
   };
 }
 
@@ -41,17 +39,15 @@ export function resolveTelegramRestartDelayMs(
   if (opts.stopTimedOut) {
     state.stopTimeoutBurst += 1;
     if (state.stopTimeoutBurst >= TELEGRAM_POLL_STOP_TIMEOUT_BURST_LIMIT) {
-      state.stopTimeoutCooldownAttempts += 1;
       const cooldownMs = computeBackoff(
         TELEGRAM_POLL_STOP_TIMEOUT_COOLDOWN_POLICY,
-        state.stopTimeoutCooldownAttempts,
+        state.stopTimeoutBurst - TELEGRAM_POLL_STOP_TIMEOUT_BURST_LIMIT + 1,
       );
       delayMs = Math.max(delayMs, cooldownMs);
       stopTimeoutSuffix = ` Stop timeout burst=${state.stopTimeoutBurst}; applying cooldown.`;
     }
   } else {
     state.stopTimeoutBurst = 0;
-    state.stopTimeoutCooldownAttempts = 0;
   }
   return { delayMs, stopTimeoutSuffix };
 }

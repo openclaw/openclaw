@@ -34,7 +34,7 @@ export const page = definePage({
     return routeOptions(location);
   },
   component: () =>
-    import("./sessions-page.ts").then(() => ({
+    import("./sessions-page.tsx").then(() => ({
       header: true,
       render: (data: SessionsRouteData | undefined) =>
         html`<openclaw-sessions-page .routeData=${data}></openclaw-sessions-page>`,

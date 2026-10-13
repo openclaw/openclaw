@@ -32,7 +32,7 @@ export class CodexCatalogStatusIndex extends CodexCatalogLiveField<CodexCatalogS
     }
   }
 
-  observe(row: CodexCatalogIndexRow, revision: number): void {
+  observe(row: CodexCatalogIndexRow): void {
     const session = row.page.sessions[0];
     const source = getCodexCatalogSource(row);
     if (session && source) {
@@ -45,7 +45,7 @@ export class CodexCatalogStatusIndex extends CodexCatalogLiveField<CodexCatalogS
         source,
       );
       if (next) {
-        this.values.observe(row.threadId, next, revision);
+        this.values.update(row.threadId, next);
       }
     }
   }
@@ -66,7 +66,6 @@ export class CodexCatalogStatusIndex extends CodexCatalogLiveField<CodexCatalogS
       current.value.status !== "notLoaded" &&
       sources.size
     ) {
-      // An unobserved source's withdrawal still fences its older pending reads.
       sources.delete(source);
       if (sources.size) {
         return { value: current.value, sources };

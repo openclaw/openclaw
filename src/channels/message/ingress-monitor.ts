@@ -328,19 +328,13 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
             return result;
           }
           // Preserve terminal/handoff outcomes under abort: releasing them could replay delivery.
-          if (result?.kind === "completed") {
-            // The deferred owner must settle its claim even after a conflicting terminal return.
-            if (deferredHandoff) {
-              return { kind: "deferred" };
-            }
+          if (result?.kind === "completed" && !deferredHandoff) {
             return result;
           }
-          if (result?.kind === "deferred") {
-            if (!deferredHandoff) {
-              wrappedLifecycle.onDeferred();
-            }
-            return { kind: "deferred" };
+          if (result?.kind === "deferred" && !deferredHandoff) {
+            wrappedLifecycle.onDeferred();
           }
+          // The deferred owner must settle its claim even after a conflicting terminal return.
           if (deferredHandoff) {
             return { kind: "deferred" };
           }

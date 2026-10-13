@@ -25,11 +25,14 @@ import {
 } from "../../agents/admitted-run-context.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { acceptCompactionSuccessor } from "../../agents/embedded-agent-runner/compaction-successor.js";
-import type { ModelFallbackAttemptProvenance } from "../../agents/model-fallback.types.js";
 import { withSessionCompactionPersistenceAsync } from "../../agents/sessions/session-compaction-persistence.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
 import { ZERO_USAGE_FIXTURE } from "../../agents/test-helpers/usage-fixtures.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import {
   appendTranscriptEvent,
@@ -40,7 +43,8 @@ import {
   waitForSessionTranscriptProjection,
 } from "../../config/sessions/session-accessor.js";
 import { readActiveTranscriptStats } from "../../config/sessions/session-accessor.sqlite-history.test-support.js";
-import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { projectCompactionAccountingPatch } from "../../config/sessions/session-entry-projection.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import * as transcriptAccounting from "../../config/sessions/session-transcript-accounting.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
@@ -59,10 +63,14 @@ import {
   runSessionCompactionIfNeeded as runSessionCompactionIfNeededRaw,
 } from "./agent-runner-memory.js";
 import {
+  createSessionEntry,
+  createFreshSessionEntry,
+  createFlushSessionEntry,
   createMemoryFlushPlan,
   createModifiedMemoryFlushPlan,
   createMemoryRunEntryMockImplementation,
   seedMemoryAccountingTranscript,
+  modelRoutingProvenance,
   type CompactEmbeddedAgentSessionParams,
   type EmbeddedAgentParams,
   type ModelFallbackParams,
@@ -133,10 +141,9 @@ type MemoryFlushTestParams = Parameters<typeof runMemoryFlushIfNeededRaw>[0] & {
 
 async function runMemoryFlushIfNeeded(params: MemoryFlushTestParams) {
   const { modelContextTokens, ...runParams } = params;
-  return await runMemoryFlushIfNeededRaw({
-    ...runParams,
-    cfg: withTestModelContextTokens({ ...runParams, contextTokens: modelContextTokens }),
-  });
+  const cfg = withTestModelContextTokens({ ...runParams, contextTokens: modelContextTokens });
+  setRuntimeConfigSnapshot(cfg);
+  return await runMemoryFlushIfNeededRaw({ ...runParams, cfg });
 }
 
 type PreflightCompactionTestParams = Parameters<typeof runSessionCompactionIfNeededRaw>[0] & {
@@ -145,26 +152,9 @@ type PreflightCompactionTestParams = Parameters<typeof runSessionCompactionIfNee
 
 async function runSessionCompactionIfNeeded(params: PreflightCompactionTestParams) {
   const { modelContextTokens, ...runParams } = params;
-  return await runSessionCompactionIfNeededRaw({
-    ...runParams,
-    cfg: withTestModelContextTokens({ ...runParams, contextTokens: modelContextTokens }),
-  });
-}
-
-function createSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
-  return {
-    sessionId: "session",
-    updatedAt: Date.now(),
-    ...overrides,
-  };
-}
-
-function createFreshSessionEntry(overrides: Partial<SessionEntry>): SessionEntry {
-  return createSessionEntry({ totalTokensFresh: true, totalTokensVersion: 1, ...overrides });
-}
-
-function createFlushSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
-  return createFreshSessionEntry({ totalTokens: 80_000, compactionCount: 1, ...overrides });
+  const cfg = withTestModelContextTokens({ ...runParams, contextTokens: modelContextTokens });
+  setRuntimeConfigSnapshot(cfg);
+  return await runSessionCompactionIfNeededRaw({ ...runParams, cfg });
 }
 
 function registerMemoryFlushPlanResolverForTest(resolver: MemoryFlushPlanResolver): void {
@@ -228,14 +218,6 @@ function usageEvent(
 
 function compactionConfig(compaction: AgentDefaultsConfig["compaction"]) {
   return { agents: { defaults: { compaction } } };
-}
-
-function modelRoutingProvenance(
-  requestedProvider: string,
-  requestedModel: string,
-  stage: ModelFallbackAttemptProvenance["stage"] = "initial",
-): ModelFallbackAttemptProvenance {
-  return { requestedProvider, requestedModel, stage };
 }
 
 function requireModelFallbackCall(index = 0) {
@@ -424,8 +406,7 @@ describe("runMemoryFlushIfNeeded", () => {
       const previous = params.sessionStore[sessionKey] as SessionEntry;
       const nextEntry: SessionEntry = {
         ...previous,
-        compactionCount: (previous.compactionCount ?? 0) + Math.max(0, params.amount ?? 1),
-        transcriptByteCompactionLatch: params.transcriptByteCompactionLatch,
+        ...projectCompactionAccountingPatch(previous, params),
       };
       params.sessionStore[sessionKey] = nextEntry;
       if (typeof params.storePath === "string") {
@@ -436,6 +417,7 @@ describe("runMemoryFlushIfNeeded", () => {
   });
 
   afterEach(async () => {
+    clearRuntimeConfigSnapshot();
     cliBackendsTesting.resetDepsForTest();
     setActivePluginRegistry(createEmptyPluginRegistry());
     clearMemoryPluginState();
@@ -455,7 +437,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const operatorAuthority = createAdmittedRunOperatorAuthority({
       profileId: "guest",
       scopes: ["operator.write"],
-      assertCurrent: vi.fn(),
+      assertCurrent: vi.fn<() => void>(),
       retain: () => releaseOperatorAuthority,
     });
     runEmbeddedAgentMock
@@ -1543,8 +1525,9 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactCall.currentTokenCount).toBeGreaterThanOrEqual(100_000);
   });
 
-  it("preserves token-pressure compaction while byte retries are latched", async () => {
+  it("preserves host byte suppression when native token-pressure compaction succeeds", async () => {
     const fixture = await createOversizedByteCompactionFixture();
+    incrementCompactionCountMock.mockImplementation(incrementCompactionCount);
 
     await fixture.run(fixture.sessionEntry);
     const tokenHeavyEntry: SessionEntry = {
@@ -1553,10 +1536,22 @@ describe("runMemoryFlushIfNeeded", () => {
       totalTokensFresh: true,
       totalTokensVersion: 1,
     };
+    const latch = tokenHeavyEntry.transcriptByteCompactionLatch;
+    expect(latch).toMatchObject({ sessionId: "session", maxBytes: 10 });
+    compactEmbeddedAgentSessionMock.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      compactionKind: "native-harness",
+      result: { tokensAfter: 42 },
+    });
     await fixture.run(tokenHeavyEntry);
 
     expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(2);
     expect(requireCompactEmbeddedAgentSessionCall(1).preflightCompactionTrigger).toBe("tokens");
+    expect(loadMainSessionEntry(fixture.storePath)).toMatchObject({
+      compactionCount: 2,
+      transcriptByteCompactionLatch: latch,
+    });
   });
 
   it("latches upgraded Codex byte preflight when the successful mock omits the host callback", async () => {

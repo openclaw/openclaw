@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatQueueItem } from "../../../lib/chat/chat-types.ts";
+import { flush } from "../../../test-helpers/solid-settle.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { rememberLiveTerminalRun } from "../terminal-message-identity.ts";
 import { toggleTranscriptSearch } from "./chat-thread-interactions.ts";
@@ -39,7 +40,9 @@ function setupEntryTranscript(messages: unknown[] = []) {
   let container = document.body.appendChild(document.createElement("div"));
   const update = () => {
     render(renderChatThread(props, transcript), container);
+    flush();
     transcript.hostUpdated();
+    flush();
   };
   update();
   transcript.hostConnected();

@@ -4,7 +4,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   externalCliDiscoveryForProviderAuth,
-  loadAuthProfileStoreForRuntime,
+  loadAuthProfileStoreForRuntimeAsync,
   markAuthProfileFailure,
   markAuthProfileSuccess,
   type AuthProfileStore,
@@ -136,7 +136,7 @@ export async function settleCliPreparationError(
     if (!(error instanceof CliAuthProfilePreparationError)) {
       return;
     }
-    const store = loadAuthProfileStoreForRuntime(error.agentDir, {
+    const store = await loadAuthProfileStoreForRuntimeAsync(error.agentDir, {
       externalCli: externalCliDiscoveryForProviderAuth({
         cfg: params.config,
         provider: error.provider,

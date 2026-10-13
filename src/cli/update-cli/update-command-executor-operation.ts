@@ -7,7 +7,6 @@ const asUpdateError = (cause: unknown, message = "Update execution failed") =>
 type ExecutorOperation<T> = {
   operation: () => Promise<T>;
   children: ReturnType<typeof createChildOwner>;
-  assertCurrent: () => void;
 };
 
 /** Join admitted descendants before the command scope settles, retaining each owner's errors. */
@@ -25,9 +24,6 @@ export function withUpdateCommandExecutorOperation<T>(
     params.children.close();
     try {
       await params.children.settle();
-      if (owner === "delegated" || "result" in outcome) {
-        params.assertCurrent();
-      }
     } catch (cause) {
       outcome = {
         error:

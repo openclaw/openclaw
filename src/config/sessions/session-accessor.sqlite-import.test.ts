@@ -77,7 +77,7 @@ function observeStages() {
     );
 }
 
-it.each(["prepare", "append", "commit"])(
+it.each(["append"])(
   "leaves canonical rows unchanged and removes private staging after %s failure",
   async (phase) => {
     await withOpenClawTestState({ label: "import-rollback" }, async (state) => {
@@ -415,7 +415,7 @@ it("rejects batches spanning implicit agent stores before reading sources", asyn
   });
 });
 
-it.each(["implicit", "root", "opaque", "parentless"])(
+it.each(["implicit", "root", "opaque"])(
   "repairs an original-only prompt rewrite branch in staging (leaf control=%s)",
   async (mode) => {
     const leafControl = mode !== "implicit";

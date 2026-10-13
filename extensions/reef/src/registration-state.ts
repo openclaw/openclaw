@@ -34,8 +34,8 @@ const registrationStoreOptions = {
 
 function openRegistrationStore(
   runtime: PluginRuntime,
-): PluginStateKeyedStore<ReefRegistrationRecord> {
-  return runtime.state.openKeyedStore<ReefRegistrationRecord>(registrationStoreOptions);
+): PluginStateKeyedStore<ReefRegistrationRecord, 2> {
+  return runtime.state.openKeyedStoreV2<ReefRegistrationRecord>(registrationStoreOptions);
 }
 
 export function parseReefIdentityBinding(value: unknown): ReefIdentityBinding | undefined {
@@ -122,54 +122,30 @@ export async function assertReefIdentityBinding(
   }
 }
 
-function openIdentityReservationStore(runtime: PluginRuntime) {
-  const { observe, compareAndApply } = openRegistrationStore(runtime);
-  if (observe && compareAndApply) {
-    return { kind: "worker" as const, observe, compareAndApply };
-  }
-  // Shipped hosts without comparisons retain their atomic native callbacks.
-  // Remove only when an approved minimum host version guarantees comparisons.
-  return {
-    kind: "legacy" as const,
-    store: runtime.state.openSyncKeyedStore<ReefRegistrationRecord>(registrationStoreOptions),
-  };
-}
-
 type IdentityUpdate<T> = { value: ReefRegistrationRecord; result: T };
 
 async function updateIdentityBinding<T>(
   runtime: PluginRuntime,
   decide: (current: ReefRegistrationRecord | undefined) => IdentityUpdate<T>,
 ): Promise<T> {
-  const access = openIdentityReservationStore(runtime);
-  if (access.kind === "legacy") {
-    const update = access.store.update;
-    if (!update) {
-      throw new Error("Reef identity reservation requires atomic plugin-state updates");
-    }
-    const outcome: { decision?: IdentityUpdate<T>; failure?: { error: unknown } } = {};
-    update(REEF_REGISTRATION_IDENTITY_KEY, (current) => {
-      try {
-        outcome.decision = decide(current);
-        return outcome.decision.value;
-      } catch (error) {
-        // The native SDK wraps callback exceptions. Publish domain errors only
-        // after the atomic update settles, as the original Reef owner did.
-        outcome.failure = { error };
-        return current;
-      }
-    });
-    if (outcome.failure) {
-      throw outcome.failure.error;
-    }
-    if (!outcome.decision) {
-      throw new Error("Reef identity reservation update did not run");
-    }
-    return outcome.decision.result;
-  }
+  const access = openRegistrationStore(runtime);
   let observation = await access.observe(REEF_REGISTRATION_IDENTITY_KEY);
   for (;;) {
-    const decision = decide(observation.value);
+    let decision: IdentityUpdate<T>;
+    try {
+      decision = decide(observation.value);
+    } catch (error) {
+      const checked = await access.compareAndApply(
+        REEF_REGISTRATION_IDENTITY_KEY,
+        observation.comparison,
+        { operation: "delete", action: "keep" },
+      );
+      if (checked.status !== "conflict") {
+        throw error;
+      }
+      observation = checked.current;
+      continue;
+    }
     const result = await access.compareAndApply(
       REEF_REGISTRATION_IDENTITY_KEY,
       observation.comparison,
@@ -252,15 +228,7 @@ export async function releaseReefIdentityReservation(
   }
   const ownsReservation = (current: ReefRegistrationRecord | undefined) =>
     parseReefIdentityPendingRecord(current)?.owner === reservation.owner;
-  const access = openIdentityReservationStore(runtime);
-  if (access.kind === "legacy") {
-    const deleteIf = access.store.deleteIf;
-    if (!deleteIf) {
-      throw new Error("Reef identity reservation requires atomic plugin-state updates");
-    }
-    deleteIf(REEF_REGISTRATION_IDENTITY_KEY, ownsReservation);
-    return;
-  }
+  const access = openRegistrationStore(runtime);
   let observation = await access.observe(REEF_REGISTRATION_IDENTITY_KEY);
   while (ownsReservation(observation.value)) {
     const result = await access.compareAndApply(

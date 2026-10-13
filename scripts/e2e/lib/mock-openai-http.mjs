@@ -2,6 +2,7 @@ import fs from "node:fs";
 // Raw launchers meet the repo's Node 24.16.0 minimum, where native TS stripping is enabled.
 import { truncateUtf16Safe } from "../../../packages/normalization-core/src/utf16-slice.ts";
 import { readPositiveIntEnv } from "./env-limits.mjs";
+import { readBoundedRequestBody } from "./request-body.mjs";
 
 const DEFAULT_REQUEST_MAX_BYTES = 4 * 1024 * 1024;
 const DEFAULT_REQUEST_LOG_BODY_MAX_BYTES = 256 * 1024;
@@ -38,39 +39,7 @@ export function isRequestBodyTooLargeError(error) {
  * @param {{ requestLogBodyMaxBytes?: number; requestMaxBytes: number }} [limits]
  */
 export function readBody(req, limits = readMockOpenAiHttpLimits()) {
-  const { requestMaxBytes } = limits;
-  return new Promise((resolve, reject) => {
-    let body = "";
-    let bytes = 0;
-    let settled = false;
-    req.setEncoding("utf8");
-    req.on("data", (chunk) => {
-      if (settled) {
-        return;
-      }
-      bytes += Buffer.byteLength(chunk, "utf8");
-      if (bytes > requestMaxBytes) {
-        settled = true;
-        body = "";
-        req.resume();
-        reject(requestBodyTooLargeError(requestMaxBytes));
-        return;
-      }
-      body += chunk;
-    });
-    req.on("end", () => {
-      if (!settled) {
-        settled = true;
-        resolve(body);
-      }
-    });
-    req.on("error", (error) => {
-      if (!settled) {
-        settled = true;
-        reject(error instanceof Error ? error : new Error(String(error)));
-      }
-    });
-  });
+  return readBoundedRequestBody(req, limits.requestMaxBytes, requestBodyTooLargeError);
 }
 
 /**

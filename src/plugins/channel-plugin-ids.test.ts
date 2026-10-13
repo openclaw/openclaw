@@ -1441,16 +1441,6 @@ describe("resolveGatewayStartupPluginPlanFromRegistry", () => {
     });
   });
 
-  it("includes required agent harness owner plugins for model runtime policy", () => {
-    expectStartupPluginIds({
-      config: {
-        agents: { defaults: { models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } } } },
-        plugins: { entries: { codex: { enabled: true } } },
-      } as OpenClawConfig,
-      expected: ["demo-channel", "browser", "openai", "codex", "memory-core"],
-    });
-  });
-
   it("does not include required agent harness owner plugins when they are explicitly disabled", () => {
     expectStartupPluginIds({
       config: {

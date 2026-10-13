@@ -18,7 +18,8 @@ import {
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { setSafeTimeout } from "../../utils/timer-delay.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
-import { loadSessionEntry, prepareDeletedAgentSessionCheck } from "../session-utils.js";
+import type { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
+import { prepareDeletedAgentSessionCheck } from "../session-utils.js";
 
 export const CRON_CONTINUATION_RELEASE_RECOVERY_DELAYS_MS = [250, 1_000, 4_000, 15_000] as const;
 
@@ -93,19 +94,14 @@ export function respondDeletedAgentSession(params: {
     : respond(deletedAgentId);
 }
 
-export function respondUnavailableAgentSessionForKey(params: {
-  sessionKey: string;
+export function respondUnavailableAgentSession(params: {
+  loaded: Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>>;
   requestedSessionId?: string;
   isRawModelRun: boolean;
-  agentId?: string;
   respond: GatewayRequestHandlerOptions["respond"];
   assertCurrent?: () => void;
 }): boolean | Promise<boolean> {
-  const { cfg, entry, canonicalKey, legacyKey } = loadSessionEntry(params.sessionKey, {
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    clone: false,
-    projection: "list",
-  });
+  const { cfg, entry, canonicalKey, legacyKey } = params.loaded;
   const deleted = respondDeletedAgentSession({
     cfg,
     canonicalKey,

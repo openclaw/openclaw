@@ -33,6 +33,21 @@ export function hasSlackAccountCredentials(params: {
   return params.appTokenConfigured;
 }
 
+export function hasSlackAccountCredentialsFromConfig(
+  config: SlackAccountConfig | undefined,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  const userIdentity = config?.postAs === "user";
+  return hasSlackAccountCredentials({
+    config: config ?? {},
+    identityTokenConfigured:
+      hasConfiguredAccountValue(userIdentity ? config?.userToken : config?.botToken) ||
+      hasConfiguredAccountValue(userIdentity ? env.SLACK_USER_TOKEN : env.SLACK_BOT_TOKEN),
+    appTokenConfigured:
+      hasConfiguredAccountValue(config?.appToken) || hasConfiguredAccountValue(env.SLACK_APP_TOKEN),
+  });
+}
+
 function createSlackAccountConfiguredChecker(allowSecretRefs: boolean) {
   return (account: SlackCredentialAccount): boolean => {
     const hasToken = (key: "botToken" | "appToken" | "userToken") =>

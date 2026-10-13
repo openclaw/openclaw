@@ -11,11 +11,7 @@ export function inferSshTargetFromRemoteUrl(rawUrl?: string | null): string | nu
     return null;
   }
   const host = URL.parse(trimmed)?.hostname;
-  if (!host) {
-    return null;
-  }
-  const user = normalizeOptionalString(process.env.USER) ?? "";
-  return user ? `${user}@${host}` : host;
+  return host ? buildSshTarget({ user: process.env.USER, host }) : null;
 }
 
 function buildSshTarget(input: { user?: string; host?: string; port?: number }): string | null {

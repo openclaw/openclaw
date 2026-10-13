@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, vi } from "vitest";
+import { sqliteOnly as test } from "./test/sqlite-only.js";
 import { createWorkboardSqliteTestHarness } from "./test/sqlite-store.js";
 import { createWorkboardTools } from "./tools.js";
 
@@ -40,7 +41,8 @@ function uploadInput(id: string) {
 }
 
 describe("Workboard tool input commit policy", () => {
-  it("rechecks input policy after waiting in the real mutation queue", async () => {
+  // Inspects uncommitted and orphaned blobs through a native SQLite file handle.
+  test("rechecks input policy after waiting in the real mutation queue", async () => {
     const policy = createInputPolicy();
     const blocked = createDeferred<void>();
     const release = createDeferred<void>();
@@ -104,7 +106,8 @@ describe("Workboard tool input commit policy", () => {
     }
   });
 
-  it.each(["blob-committed", "metadata-write"] as const)(
+  // Inspects committed and orphaned blobs through a native SQLite file handle.
+  test.each(["blob-committed", "metadata-write"] as const)(
     "rechecks input policy at %s and removes the already committed blob",
     async (phase) => {
       const policy = createInputPolicy();
@@ -149,7 +152,8 @@ describe("Workboard tool input commit policy", () => {
     },
   );
 
-  it.each(["enabled-client", "internal-without-context"] as const)(
+  // Verifies the physical blob count through a native SQLite file handle.
+  test.each(["enabled-client", "internal-without-context"] as const)(
     "keeps %s uploads working without borrowing lifecycle authority",
     async (origin) => {
       const policy = createInputPolicy();

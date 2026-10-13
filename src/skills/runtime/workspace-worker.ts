@@ -143,16 +143,10 @@ export async function serveWorkspaceSkills(options: {
     return;
   }
   if (operation === "watch") {
-    const {
-      ensureSkillsWatcher,
-      reconcileSkillsWatcherCoverage,
-      closeSkillsWatchers,
-      registerSkillsChangeListener,
-    } = await import("./refresh.js");
+    const { ensureSkillsWatcher, closeSkillsWatchers, registerSkillsChangeListener } =
+      await import("./refresh.js");
     const lines = skillWorkerLines(input);
     let stopped = false;
-    let queued = false;
-    let unavailable = false;
     let unsubscribe: (() => void) | undefined;
     let retiring: Promise<void> | undefined;
     let outputClosing: Promise<void> | undefined;
@@ -184,37 +178,18 @@ export async function serveWorkspaceSkills(options: {
         if (stopped || event.workspaceDir !== workspace) {
           return;
         }
-        if (event.reason === "watch-unavailable") {
-          unavailable = true;
-        }
-        const recovered = event.reason === "watch-available";
-        if (recovered) {
-          if (event.sourceScope?.executionWorkspaceDir !== params.executionWorkspaceDir) {
-            return;
-          }
-          // Fresh scans can reveal a symlink or nested root while normal watch
-          // discovery is suppressed. Verify those new targets before clearing
-          // the host's fallback, and let their ready event retry this check.
-          if (!reconcileSkillsWatcherCoverage(params)) {
-            return;
-          }
-          unavailable = false;
-        }
         notifier?.send(
-          recovered ? "available" : event.reason === "watch-unavailable" ? "unavailable" : "change",
+          event.reason === "watch-available"
+            ? "available"
+            : event.reason === "watch-unavailable"
+              ? "unavailable"
+              : "change",
         );
-        // Native events also invalidate discovery targets (for example a new symlink).
-        if (event.reason === "watch" && !queued && !unavailable) {
-          queued = true;
-          queueMicrotask(() => {
-            queued = false;
-            if (!stopped && !unavailable) {
-              ensureSkillsWatcher(params);
-            }
-          });
-        }
       });
-      ensureSkillsWatcher(params);
+      await ensureSkillsWatcher(params);
+      if (!stopped) {
+        notifier.send("available");
+      }
       try {
         await lines.read();
         throw new Error("Unexpected message on the skill watch subscription");
@@ -267,74 +242,64 @@ export async function serveWorkspaceSkills(options: {
     const hostRequest = { ...decoded, workspaceDir: workspace };
     try {
       let result: unknown;
-      switch (operation) {
-        case "clawhubPlanRemoval":
-          result = await uninstall.planClawHubSkillUninstall(
-            // SAFETY: The paired adapter sends native removal arguments.
-            hostRequest as Parameters<typeof uninstall.planClawHubSkillUninstall>[0],
-          );
-          break;
-        case "clawhubVerifyTarget":
-          result = await status.resolveClawHubSkillVerificationTarget(
-            // SAFETY: The paired adapter sends native verification arguments.
-            hostRequest as Parameters<typeof status.resolveClawHubSkillVerificationTarget>[0],
-          );
-          break;
-        case "clawhubPreflight":
-          result = await status.preflightSkillOwnerState(
-            // SAFETY: The paired adapter sends native preflight arguments.
-            hostRequest as Parameters<typeof status.preflightSkillOwnerState>[0],
-          );
-          break;
-        case "clawhubReadLock":
-          result = await store.readClawHubSkillsLockfile(workspace);
-          break;
-        case "clawhubUpdateSlug":
-          result = await status.resolveRequestedUpdateSlug(
-            // SAFETY: The paired adapter sends the native selector and lock snapshot.
-            hostRequest as Parameters<typeof status.resolveRequestedUpdateSlug>[0],
-          );
-          break;
-        case "clawhubUpdateTarget":
-          result = await status.resolveTrackedUpdateTarget(
-            // SAFETY: The paired adapter sends native target lookup arguments.
-            hostRequest as Parameters<typeof status.resolveTrackedUpdateTarget>[0],
-          );
-          break;
-        case "clawhubUpdateGuard":
-          result = await uninstall.guardTrackedSkillLocalState(
-            // SAFETY: The paired adapter sends native guard arguments; the owner checks state.
-            hostRequest as Parameters<typeof uninstall.guardTrackedSkillLocalState>[0],
-          );
-          break;
-        case "clawhubCheckInstall":
-          await store.assertClawHubSkillInstallState(
-            // SAFETY: The paired adapter sends native install-check arguments.
-            hostRequest as Parameters<typeof store.assertClawHubSkillInstallState>[0],
-          );
-          break;
-        case "clawhubReadFiles": {
-          // SAFETY: The adapter sends the installed path; its workspace boundary is checked next.
-          const request = decoded as Parameters<typeof store.readInstalledClawHubSkillFiles>[0];
-          assertSkillDir(request.skillDir, workspace);
-          result = await store.readInstalledClawHubSkillFiles(request);
-          break;
+      if (operation === "clawhubReadFiles") {
+        // SAFETY: The adapter sends the installed path; its workspace boundary is checked next.
+        const request = decoded as Parameters<typeof store.readInstalledClawHubSkillFiles>[0];
+        assertSkillDir(request.skillDir, workspace);
+        result = await store.readInstalledClawHubSkillFiles(request);
+      } else if (operation === "clawhubRecordInstall") {
+        // SAFETY: The adapter sends native provenance; path and slug consistency are checked below.
+        const request = hostRequest as Parameters<typeof store.recordClawHubSkillInstall>[0];
+        const { resolveWorkspaceSkillInstallDir } = await import("../lifecycle/install-paths.js");
+        assertSkillDir(request.skillDir, workspace);
+        if (request.skillDir !== resolveWorkspaceSkillInstallDir(workspace, request.origin.slug)) {
+          throw new Error("ClawHub metadata does not match the installed skill");
         }
-        case "clawhubRecordInstall": {
-          // SAFETY: The adapter sends native provenance; path and slug consistency are checked below.
-          const request = hostRequest as Parameters<typeof store.recordClawHubSkillInstall>[0];
-          const { resolveWorkspaceSkillInstallDir } = await import("../lifecycle/install-paths.js");
-          assertSkillDir(request.skillDir, workspace);
-          if (
-            request.skillDir !== resolveWorkspaceSkillInstallDir(workspace, request.origin.slug)
-          ) {
-            throw new Error("ClawHub metadata does not match the installed skill");
-          }
-          await store.recordClawHubSkillInstall(request);
-          break;
-        }
-        default:
+        await store.recordClawHubSkillInstall(request);
+      } else {
+        const operations: Record<string, () => Promise<unknown>> = {
+          clawhubPlanRemoval: () =>
+            uninstall.planClawHubSkillUninstall(
+              // SAFETY: The paired adapter sends native removal arguments.
+              hostRequest as Parameters<typeof uninstall.planClawHubSkillUninstall>[0],
+            ),
+          clawhubVerifyTarget: () =>
+            status.resolveClawHubSkillVerificationTarget(
+              // SAFETY: The paired adapter sends native verification arguments.
+              hostRequest as Parameters<typeof status.resolveClawHubSkillVerificationTarget>[0],
+            ),
+          clawhubPreflight: () =>
+            status.preflightSkillOwnerState(
+              // SAFETY: The paired adapter sends native preflight arguments.
+              hostRequest as Parameters<typeof status.preflightSkillOwnerState>[0],
+            ),
+          clawhubReadLock: () => store.readClawHubSkillsLockfile(workspace),
+          clawhubUpdateSlug: () =>
+            status.resolveRequestedUpdateSlug(
+              // SAFETY: The paired adapter sends the native selector and lock snapshot.
+              hostRequest as Parameters<typeof status.resolveRequestedUpdateSlug>[0],
+            ),
+          clawhubUpdateTarget: () =>
+            status.resolveTrackedUpdateTarget(
+              // SAFETY: The paired adapter sends native target lookup arguments.
+              hostRequest as Parameters<typeof status.resolveTrackedUpdateTarget>[0],
+            ),
+          clawhubUpdateGuard: () =>
+            uninstall.guardTrackedSkillLocalState(
+              // SAFETY: The paired adapter sends native guard arguments; the owner checks state.
+              hostRequest as Parameters<typeof uninstall.guardTrackedSkillLocalState>[0],
+            ),
+          clawhubCheckInstall: () =>
+            store.assertClawHubSkillInstallState(
+              // SAFETY: The paired adapter sends native install-check arguments.
+              hostRequest as Parameters<typeof store.assertClawHubSkillInstallState>[0],
+            ),
+        };
+        const invoke = Object.hasOwn(operations, operation) ? operations[operation] : undefined;
+        if (!invoke) {
           throw new Error(`Unknown skill worker operation: ${operation}`);
+        }
+        result = await invoke();
       }
       await write({ result: result ?? null });
     } catch (error) {

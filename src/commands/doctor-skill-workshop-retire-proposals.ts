@@ -140,17 +140,7 @@ function parseUnfinishedApply(
   return { proposalId, skillFile, previousContent, supportFiles };
 }
 
-function readDatabaseProposals(
-  config: OpenClawConfig,
-  env: NodeJS.ProcessEnv,
-): {
-  proposals: RetiredProposal[];
-  unfinishedApplies: UnfinishedApply[];
-  /** Every proposal id with a row, whatever its status; their bundles need no sidecar. */
-  recordedIds: Set<string>;
-  failures: string[];
-  hasTables: boolean;
-} {
+function readDatabaseProposals(config: OpenClawConfig, env: NodeJS.ProcessEnv) {
   const { db } = openOpenClawStateDatabase({ env });
   const hasTables = [
     "skill_workshop_proposals",
@@ -158,14 +148,14 @@ function readDatabaseProposals(
     "skill_workshop_proposal_rollbacks",
     "skill_workshop_collection_reviews",
   ].some((table) => tableExists(db, table));
+  const proposals: RetiredProposal[] = [];
+  const unfinishedApplies: UnfinishedApply[] = [];
+  // Every proposal id with a row, whatever its status; their bundles need no sidecar.
+  const recordedIds = new Set<string>();
+  const failures: string[] = [];
+  const result = { proposals, unfinishedApplies, recordedIds, failures, hasTables };
   if (!tableExists(db, "skill_workshop_proposals")) {
-    return {
-      proposals: [],
-      unfinishedApplies: [],
-      recordedIds: new Set(),
-      failures: [],
-      hasTables,
-    };
+    return result;
   }
   const rows = db // sqlite-allow-raw -- Retired table has no generated Kysely type; Doctor reads it once before dropping it.
     .prepare(
@@ -173,9 +163,6 @@ function readDatabaseProposals(
         ORDER BY proposal_id`,
     )
     .all();
-  const proposals: RetiredProposal[] = [];
-  const recordedIds = new Set<string>();
-  const failures: string[] = [];
   for (const row of rows) {
     const id = String(row.proposal_id);
     recordedIds.add(id);
@@ -214,7 +201,6 @@ function readDatabaseProposals(
         )
         .all()
     : [];
-  const unfinishedApplies: UnfinishedApply[] = [];
   for (const row of rollbackRows) {
     const id = String(row.proposal_id);
     try {
@@ -232,7 +218,7 @@ function readDatabaseProposals(
       );
     }
   }
-  return { proposals, unfinishedApplies, recordedIds, failures, hasTables };
+  return result;
 }
 
 /**
@@ -286,26 +272,20 @@ function inferOwnerAgentId(
 }
 
 /** Pre-SQLite bundles keep their record in `proposal.json`; SQLite-backed bundles have none. */
-async function readLegacyJsonProposals(params: {
+async function appendLegacyJsonProposals(params: {
   stateDir: string;
-  recordedIds: ReadonlySet<string>;
+  inventory: ReturnType<typeof readDatabaseProposals>;
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
-}): Promise<{
-  proposals: RetiredProposal[];
-  unfinishedApplies: UnfinishedApply[];
-  failures: string[];
-}> {
-  const proposals: RetiredProposal[] = [];
-  const unfinishedApplies: UnfinishedApply[] = [];
-  const failures: string[] = [];
+}) {
+  const { proposals, unfinishedApplies, failures, recordedIds } = params.inventory;
   const stateRoot = await root(params.stateDir);
   const readOptions = { hardlinks: "reject", symlinks: "reject" } as const;
   for (const entry of await stateRoot.list(LEGACY_PROPOSALS_DIR, { withFileTypes: true })) {
     if (
       !entry.isDirectory ||
       !PROPOSAL_ID_PATTERN.test(entry.name) ||
-      params.recordedIds.has(entry.name)
+      recordedIds.has(entry.name)
     ) {
       continue;
     }
@@ -357,7 +337,6 @@ async function readLegacyJsonProposals(params: {
       );
     }
   }
-  return { proposals, unfinishedApplies, failures };
 }
 
 /**
@@ -464,19 +443,14 @@ async function retireProposals(params: {
   const { config, env, assertCurrent } = params;
   const stateDir = resolveStateDir(env);
   const legacyDirExists = await pathExists(path.join(stateDir, LEGACY_PROPOSALS_DIR));
-  const database = readDatabaseProposals(config, env);
-  if (!database.hasTables && !legacyDirExists) {
+  const inventory = readDatabaseProposals(config, env);
+  if (!inventory.hasTables && !legacyDirExists) {
     return { changes: [], warnings: [] };
   }
-  const legacy = legacyDirExists
-    ? await readLegacyJsonProposals({
-        stateDir,
-        recordedIds: database.recordedIds,
-        config,
-        env,
-      })
-    : { proposals: [], unfinishedApplies: [], failures: [] };
-  const warnings = [...database.failures, ...legacy.failures];
+  if (legacyDirExists) {
+    await appendLegacyJsonProposals({ stateDir, inventory, config, env });
+  }
+  const warnings = inventory.failures;
   // Any unread or unexported proposal keeps the tables and files for the next Doctor run.
   let blocked = warnings.length > 0;
   const changes: string[] = [];
@@ -486,7 +460,7 @@ async function retireProposals(params: {
     ...(warnings.length > 0 ? { warningDisposition: "recoverable" as const } : {}),
   });
   // Dropping the rollbacks forgets what an interrupted apply half-wrote, so undo that first.
-  for (const apply of [...database.unfinishedApplies, ...legacy.unfinishedApplies]) {
+  for (const apply of inventory.unfinishedApplies) {
     assertCurrent();
     const skillDir = path.dirname(apply.skillFile);
     // An update rehearsal must not write outside its copied state; the real Doctor run restores.
@@ -510,7 +484,7 @@ async function retireProposals(params: {
   }
   const exportedIds = new Set<string>();
   const exportedByRoot = new Map<string, number>();
-  for (const proposal of [...database.proposals, ...legacy.proposals]) {
+  for (const proposal of inventory.proposals) {
     assertCurrent();
     const proposalDir = path.join(stateDir, LEGACY_PROPOSALS_DIR, proposal.id);
     if (!(await pathExists(proposalDir))) {

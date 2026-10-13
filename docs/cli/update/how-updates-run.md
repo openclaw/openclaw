@@ -15,7 +15,7 @@ Channel switching, update validation, the restart handoff, and the Git checkout 
 Switching channels explicitly (`--channel ...`) also keeps the install method
 aligned:
 
-- `dev` -> ensures a git checkout (default `~/openclaw`, or
+- `dev` -> creates or reuses a git checkout (default `~/openclaw`, or
   `$OPENCLAW_HOME/openclaw` when `OPENCLAW_HOME` is set; override with
   `OPENCLAW_GIT_DIR`), updates it, and installs the global CLI from that
   checkout.
@@ -32,6 +32,13 @@ replacement. Choose an empty `OPENCLAW_GIT_DIR` and retry.
 
 ### Validation and activation
 
+Readiness checks share an overall deadline across native service inspection,
+listener checks, authenticated RPC, and HTTP readiness. A network probe's
+per-request limit does not shorten native inspection. Slow inspection still
+consumes the shared deadline, so it cannot extend the update's overall budget.
+These checks belong to the installed updater; a candidate cannot change an
+older updater's already-running readiness wait.
+
 On Windows, candidate commands verify their recorded handoff lease and their own
 PID/start identity even when the launcher process tree changes. A different
 immediate parent no longer causes a valid candidate to fail with `Candidate
@@ -39,9 +46,14 @@ executor binding does not match its parent`. The update owner must remain live,
 and changed or revoked leases still refuse mutation. This check runs in the
 candidate, so it also accepts valid handoffs from older installed updaters.
 
+If a service refresh refuses before writing its definition, the candidate keeps
+the original refusal in its output. The updater can then revalidate and restart
+the preserved service definition. Actual loss of native service authority still
+leaves recovery pending until ownership and restoration can be verified.
+
 Channel health collection timeouts are warnings during post-update verification.
 The Gateway must still answer, report the expected version and build, pass HTTP
-readiness, and remain in the same running generation. An explicit negative channel
+readiness, and pass the normal health-settle checks. An explicit negative channel
 probe still fails verification. Timeout warnings remain in the update report even
 if a later probe completes; run `openclaw health` to check the affected channels.
 The seven-second collection budget is unchanged. Updated Gateways also avoid
@@ -88,6 +100,10 @@ custom policy values with an advisory while refreshing recognized old defaults.
 For example, `TimeoutStartSec=45` stays unchanged while the old installer value
 `TimeoutStopSec=30` becomes `330`. Existing identity and command checks still apply.
 Maintenance stops also read the resident Gateway's recorded shutdown budget.
+If rollback finds the service already stopped, the Gateway cannot be reached,
+and its local port is free, it proceeds directly through the guarded native stop
+to restoration instead of waiting for the drain deadline. Running Gateways and
+unverified service or port states keep the normal drain checks.
 Published 2026.9.5 residents keep their startup budget even after `daemon-reload`;
 their first stop therefore uses the short/unknown-budget path. The Gateway's
 lifecycle owner fences admission and reports drain progress until idle or the
@@ -151,7 +167,14 @@ validation, installation, and Doctor finalization continue in the invoking
 installation. Doctor leaves unverified service records unchanged and reports an
 advisory; state coordinators and database leases still protect active writers.
 
-The baseline package fingerprint is best effort. If its bounded scan times out
+For recovery of a managed service using a separate, unchanged installation,
+OpenClaw rechecks its service definition, runtime pin, package directory and
+version, launchers, Node executable, build identity, and schema support. It does
+not fingerprint that installation's entire package tree; edits elsewhere in that
+tree during an update are best effort. Keep tools that modify either installation
+stopped until the update finishes.
+
+The baseline fingerprint of a package retained for rollback is best effort. If its bounded scan times out
 or reaches its byte or entry limit, the update records a warning and continues
 with the retained package directory.
 Rollback then verifies the restored directory identity, package version, and
@@ -205,6 +228,12 @@ recovery files would change their metadata and could invalidate an older sealed
 helper's fingerprint. Explicit runtime links into those recovery artifacts are
 rejected; the evidence remains untouched for its recovery owner.
 
+Unchanged retained runtime files use hard links when the filesystem supports
+them. Retention verifies each source before linking and checks the resulting
+inode and metadata, without rehashing bytes for the change time caused by its
+own link. Files requiring independent plugin-safety checks or relocation still
+use verified copies.
+
 Candidate verification uses the same best-effort contract when its scan reaches
 the resource limits: activation and publication continue with directory identity,
 package version, and launcher verification, recording that full package contents
@@ -216,8 +245,11 @@ identity, metadata, directory listings, links, and a final metadata sweep. A
 file's content digest from the earlier baseline or staged-package scan is reused
 only when its complete metadata, including inode, link count, size, modification
 time, and change time, is unchanged and its change time predates that earlier
-read by at least five seconds. Recovery helpers and later commands re-read file
-contents. Like the metadata sweep, these checks observe the package rather than
+read by at least five seconds. Files that were too recent during preparation
+become eligible after a later successful verification observes them settled;
+subsequent publication checks reuse that observation while still comparing
+against the original package fingerprint. Recovery helpers and later commands
+re-read file contents. Like the metadata sweep, these checks observe the package rather than
 lock it: writes through an already-modified shared memory mapping may not update
 file times. Keep other package managers and tools that modify the installation
 stopped during an update.
@@ -363,6 +395,27 @@ These progress improvements require the repaired updater on the next update hop.
 An already-running 2026.9.5 updater retains its original silent verification window;
 independent `openclaw gateway status --deep --require-rpc` and `/readyz` checks can show
 whether the old Gateway is still serving, but do not establish the updater's wait reason.
+
+The update result, `openclaw update` output, and the run history record timed steps
+for the private state copy (`candidate-state-snapshot`), the rehearsal Doctor
+(`candidate-doctor`), the test Gateway startup (`candidate-gateway-startup`), and
+temporary-copy removal (`candidate-state-cleanup`), including Git updates. Activation
+also records `post-stop-checks` (the schema, artifact, and configuration checks after the
+Gateway stops) and `git-runtime-activation`. Each Doctor the updater launches adds one
+`Doctor sections: …` diagnostic with its database preflight, configuration, and
+contribution times, plus the slowest contributions. Run history keeps these rows when
+older diagnostics are trimmed. The updater that is already installed records these
+steps, so they first appear on the update after the one that installs this version.
+
+The report also preserves `updater-runtime-retention`, which measures retaining
+the running updater's package, built runtime, and dependency tree before mutation.
+This is separate from the private-state snapshot and can run while the previous
+Gateway is still serving. Native service work records `managed-service-executor-check`
+separately from the successful `managed-service-install` or `managed-service-restart`
+child. `update-driver-handoff` measures the interval from the previous driver's last
+completed receipt until the fresh driver resumes finalization. The handoff timer
+can appear on the installing update; retention and service timers require the
+updater executing those operations to include this instrumentation.
 
 Update build and validation processes resolve source-linked plugin SDKs from
 the staged installation root, even when the serving source launcher passed its own checkout
@@ -617,13 +670,14 @@ the run stays pending and its continuation is preserved until startup verificati
 settles. A version that has not yet been observed is unknown; a version mismatch
 requires an observed serving version that disagrees with the installed target.
 
-When the readiness allowance expires for the same running PID or boot generation
-while the restart owner reports waiting for a listener, startup migration, or
+When the readiness allowance expires for a running Gateway while the restart
+owner reports waiting for a listener, startup migration, or
 healthy settling, the updater records the elapsed wait and startup phase as a warning. It leaves the process starting, keeps readiness
 unconfirmed, and retains recovery backups. The run ends `skipped` with reason
 `gateway-readiness-unverified`, recording an intentional unverified outcome rather
-than success or an indefinite pending run. Observed PID or boot-generation changes
-remain failures and enter recovery. Check `openclaw gateway status --deep`
+than success or an indefinite pending run. A PID or boot-generation change alone
+does not fail this wait; current health, version, build, and listener checks still
+apply. Check `openclaw gateway status --deep`
 before retiring those backups. A timeout alone does not authorize a recovery
 restart or rollback; a refused rollback also leaves the candidate untouched.
 A running status alone, a failed check on an established listener, or an HTTP
@@ -702,6 +756,23 @@ avoiding another full database read. Recovery still verifies the stored bytes
 against that receipt before replacing any live database, so later snapshot changes
 are rejected. This saving requires the installed updater to contain the fix;
 older updaters retain their original backup path.
+
+The native supervisor's `update migrate --backup-root` capture runs with the
+Gateway stopped. Checkpointed database files use filesystem clones when available
+(including APFS and reflink-capable Linux filesystems), with an independent byte
+copy on other filesystems. The capture checks the SQLite header/schema, records
+one SHA-256 digest for the existing restore contract, and verifies that source
+files and journal state stayed unchanged. Clone creation avoids copying payload
+pages, but the required digest still reads each snapshot once. Retained WAL or
+rollback journals use the existing coherent, fully verified snapshot path.
+
+Every discovered agent database remains covered even during a shared-state-only
+schema upgrade: Doctor can write agent bookkeeping without advancing its schema.
+Update-time Doctor defers media content maintenance on databases whose schema is
+already current; explicit `openclaw doctor --fix` still performs that maintenance.
+Databases needing schema repair or carrying recorded corruption retain the repair
+path. This avoids repeated backup integrity audits and unnecessary writable opens
+while the service is stopped; startup validation retains its own policy.
 
 Settled, verified successful activation removes the current update's database
 snapshots, together with the old package backup. Rollback, failed or unverified
@@ -835,7 +906,9 @@ for update status and Gateway health, then exits; this acknowledges the handoff,
 not a completed update. The acknowledging CLI exits with code `75` (`EX_TEMPFAIL`)
 so scripts cannot mistake accepted background work for a completed update. The
 detached helper remains the settlement authority; use the printed status and
-health commands to retrieve its terminal result. The helper launches staging and validation outside the
+health commands to retrieve its terminal result. A handoff accepted during candidate
+admission keeps this pending result after local staging cleanup; it does not create
+an update failure report. The helper launches staging and validation outside the
 Gateway's service boundary while the old Gateway keeps serving. It parks the Gateway
 only when the orchestrator reaches `activating`, then completes the existing
 commit-or-cancel handoff. Keep stdout connected to the agent: stopping the service
@@ -1009,14 +1082,14 @@ when it detects that its installation was replaced; restart it through its
 service or foreground process owner afterward.
 
 When updater-owned Doctor reaches maintenance before that foreground Gateway
-finishes shutting down, it waits for the same process to release state, up to
+finishes shutting down, it waits for exclusive state ownership, up to
 the installation-check interval plus the existing restart-drain and service-stop
 allowances. Doctor retains the updater's live authority and still acquires its
 normal maintenance locks before repairing state.
-If shutdown has already removed the process identity, Doctor allows only the
-existing ten-second cleanup reserve and refuses any newly appearing owner.
-A different Gateway owner, lost update authority, or unresolved contention stops
-maintenance with recovery guidance. Ordinary Doctor commands and older update
+The same bounded wait applies if the owner exits or changes while Doctor waits;
+only acquiring the physical maintenance lock permits repair. Lost update
+authority or unresolved contention stops maintenance with recovery guidance.
+Ordinary Doctor commands and older update
 drivers without delegated Doctor authority retain their immediate refusal.
 
 An active Gateway suspension keeps installation changes under its host operation’s
@@ -1143,7 +1216,9 @@ the sentinel.
 
   </Step>
   <Step title="Sync plugins">
-    Against the installed target, syncs plugins to the active channel before restarting the managed service. Dev uses bundled plugins; stable and beta use npm or ClawHub while preserving recorded source choices. A changed plugin snapshot or deferred model retirement recorded by this update runs fresh Doctor repairs. Unchanged plugins with no pending repair do not run another full Doctor pass. The updater then revalidates the service owner, starts the Gateway, and verifies the final snapshot.
+    Against the installed target, syncs plugins to the active channel before restarting the managed service. Dev uses bundled plugins; stable and beta use npm or ClawHub while preserving recorded source choices. A changed plugin snapshot, pending plugin data/settings upgrade, or deferred model retirement recorded by this update runs fresh Doctor repairs. Unchanged plugins with no pending repair do not run another full Doctor pass. The updater then revalidates the service owner, starts the Gateway, and verifies the final snapshot.
+
+    If plugin data/settings upgrades remain pending after Doctor, the update records a warning naming each plugin and its recovery command, such as `openclaw doctor --fix`. Doctor-only and after-session repairs keep their existing offline ownership requirements; pending work does not by itself fail the core update. Skipped plugin updates also print the plugin name and skip reason alongside the summary counts.
 
     The updater performing plugin convergence owns this deferred-repair decision. Package updates that delegate this work to the new version can use its repair immediately. If an older updater leaves model retirement deferred, run the newly installed `openclaw doctor --fix` once to finish it. Later updates use their own run history to complete the follow-up; they do not use another update's pending marker.
 

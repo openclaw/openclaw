@@ -7,11 +7,13 @@ import {
   writeSessionProgressCard,
 } from "../../session-cards/progress-card-store.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { migrateLegacyMainSessionKeys } from "./legacy-main-session-migration.js";
 import {
   assignHumanOwner,
@@ -26,10 +28,15 @@ import {
 import { loadSessionEntry, replaceSessionEntry } from "./session-accessor.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { appendTranscriptEventInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import * as retirement from "./session-retirement-read.js";
+import type { SessionRetirementReadOperation } from "./session-retirement-read.types.js";
 import { runSessionStartupMigration } from "./startup-migration.js";
 
 const { tempDirs, createFixture } = setupLegacyMainSessionMigrationTests();
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  clearRuntimeConfigSnapshot();
+});
 
 type LegacyMainSessionMigrationOutcomeKind = Awaited<
   ReturnType<typeof migrateLegacyMainSessionKeys>
@@ -397,6 +404,7 @@ it.each(["doctor-fix", "detect"] as const)(
       seedSessions(state.stateDir, "ops", ["agent:ops:one", "agent:ops:two", "agent:ops:three"]);
       seedSessions(state.stateDir, "main", ["agent:main:two"]);
       const reads = recordTranscriptReads();
+      const retirementReads = recordRetirementReads();
 
       const result = await migrateLegacyMainSessionKeys({
         cfg: { agents: { entries: { ops: {} } } },
@@ -408,6 +416,19 @@ it.each(["doctor-fix", "detect"] as const)(
         expect.objectContaining({ kind: "divergent-canonical", canonicalKey: "agent:ops:two" }),
       ]);
       const transcriptReads = reads();
+      if (mode === "detect") {
+        expect(transcriptReads).toEqual([]);
+        expect(
+          retirementReads
+            .flatMap((read) => (read.operation === "comparison-claims" ? read.keys : []))
+            .toSorted((left, right) => left.key.localeCompare(right.key)),
+        ).toEqual([
+          { key: "agent:main:two", canonicalKey: "agent:ops:two" },
+          { key: "agent:ops:two", canonicalKey: "agent:ops:two" },
+        ]);
+        return;
+      }
+      // Doctor and worker comparison share the same streaming generation reader.
       expect(transcriptReads.length).toBeGreaterThan(0);
       expect(new Set(transcriptReads.flatMap((read) => read.parameters))).toEqual(
         new Set(["agent:main:two", "agent:ops:two"]),
@@ -416,6 +437,21 @@ it.each(["doctor-fix", "detect"] as const)(
     });
   },
 );
+
+function recordRetirementReads(): SessionRetirementReadOperation[] {
+  const requests: SessionRetirementReadOperation[] = [];
+  const capture = retirement.captureSessionRetirementReader;
+  vi.spyOn(retirement, "captureSessionRetirementReader").mockImplementation((...args) => {
+    const reader = capture(...args);
+    const read = reader.read;
+    vi.spyOn(reader, "read").mockImplementation((request) => {
+      requests.push(request);
+      return read(request);
+    });
+    return reader;
+  });
+  return requests;
+}
 
 function seedSessions(stateDir: string, agentId: string, keys: string[]): void {
   const pathname = databasePath(stateDir, agentId);
@@ -480,6 +516,7 @@ it("reports legacy session repairs without rewriting stored claims at startup", 
   await withEnvAsync({ OPENCLAW_AGENT_DIR: undefined, OPENCLAW_STATE_DIR: stateDir }, async () => {
     const env = { ...process.env };
     const cfg = { agents: { entries: { ops: { workspace } } } };
+    setRuntimeConfigSnapshot(cfg);
     const legacy = { agentId: "main", env, sessionKey: "agent:main:retained" };
     const canonical = { agentId: "ops", env, sessionKey: "agent:ops:retained" };
     const worktree = { agentId: "ops", env, sessionKey: "agent:ops:workspace" };
@@ -527,6 +564,7 @@ it("keys the startup shortcut to source layout and makes Doctor rescan", async (
 
   const restoredPath = path.join(root, "restored-main.sqlite");
   seedClaim({ ...claim("main", "agent:main:restored", restoredPath), events: [] });
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   fs.renameSync(mainPath, `${mainPath}.before-restore`);
   fs.renameSync(restoredPath, mainPath);

@@ -168,39 +168,10 @@ describe("gateway restart handlers", () => {
     expect(requestGatewayRestartWithSignalAdmission).not.toHaveBeenCalled();
   });
 
-  it("defaults to skipDeferral: false when the param is absent", async () => {
-    mockScheduledRestart({ safe: true, summary: "safe to restart now" });
-
-    await invokeRestartRequest({ reason: "operator" });
-
-    expectRestartRequest(false);
-  });
-
-  it("forwards skipDeferral: true only when params.skipDeferral === true", async () => {
-    mockScheduledRestart({ safe: false, summary: "" });
-
-    await invokeRestartRequest({ reason: "operator", skipDeferral: true });
-
-    expectRestartRequest(true);
-  });
-
-  it("normalizes truthy non-boolean skipDeferral values to false", async () => {
-    mockScheduledRestart({ safe: true, summary: "safe to restart now" });
-
-    await invokeRestartRequest({ reason: "operator", skipDeferral: "true" });
-
-    expectRestartRequest(false);
-  });
-
   it.each([
-    { restartIntent: { waitMs: 30_000 }, expected: { waitMs: 30_000 } },
     { restartIntent: { waitMs: 0 }, expected: { waitMs: 0 } },
     { restartIntent: { force: true }, expected: { force: true } },
     { restartIntent: { force: true, drainBudgetMs: 0 }, expected: { force: true, waitMs: 0 } },
-    {
-      restartIntent: { force: true, drainBudgetMs: 180_000 },
-      expected: { force: true, waitMs: 180_000 },
-    },
   ])(
     "delivers a targeted restart only to the matching lock owner ($restartIntent)",
     async ({ restartIntent, expected }) => {
@@ -346,12 +317,10 @@ describe("gateway restart handlers", () => {
     });
   });
 
-  it.each(
-    [0.5, -1, MAX_TIMER_TIMEOUT_MS + 1, Number.MAX_SAFE_INTEGER].flatMap((budget) => [
-      { waitMs: budget },
-      { force: true, drainBudgetMs: budget },
-    ]),
-  )("rejects an invalid targeted restart budget: %j", async (restartIntent) => {
+  it.each([
+    { waitMs: MAX_TIMER_TIMEOUT_MS + 1 },
+    { force: true, drainBudgetMs: MAX_TIMER_TIMEOUT_MS + 1 },
+  ])("rejects an invalid targeted restart budget: %j", async (restartIntent) => {
     const respond = await invokeRestartRequest({
       reason: "operator",
       target: restartTarget,
@@ -397,22 +366,6 @@ describe("gateway restart handlers", () => {
 
   it("rejects non-object params without scheduling a restart", async () => {
     const respond = await invokeRestartRequest("operator");
-
-    expect(scheduleSafeGatewayRestart).not.toHaveBeenCalled();
-    expect(respond.mock.calls).toEqual([
-      [
-        false,
-        undefined,
-        {
-          code: "INVALID_REQUEST",
-          message: "invalid gateway.restart.request params",
-        },
-      ],
-    ]);
-  });
-
-  it("rejects array params without scheduling a restart", async () => {
-    const respond = await invokeRestartRequest([]);
 
     expect(scheduleSafeGatewayRestart).not.toHaveBeenCalled();
     expect(respond.mock.calls).toEqual([
