@@ -14,10 +14,14 @@ import {
   collectPackageDistImportErrors,
   collectPackageDistImports,
 } from "../../scripts/lib/package-dist-imports.mjs";
+import { publicPluginSdkEntrypoints } from "../../scripts/lib/plugin-sdk-entries.mts";
 import {
+  TSDOWN_PACKAGE_CONFIG_GROUP,
+  TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
   TSDOWN_UNIFIED_CONFIG_GROUP,
   TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
 } from "../../scripts/lib/tsdown-config-groups.mts";
+import { WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID } from "../../scripts/lib/worker-deploy-build-plugin.mts";
 import { importFreshModule } from "../../src/plugin-sdk/test-helpers/import-fresh.js";
 import { WORKER_BUNDLE_CHUNK_PATH_PATTERN } from "../../src/shared/worker-bundle-hash.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
@@ -32,6 +36,7 @@ const testNodeExecPath = resolveTestNodeExecPath();
 afterEach(() => vi.unstubAllEnvs());
 
 type TsdownConfig = (typeof configs)[number];
+type OutExtensions = NonNullable<TsdownConfig["outExtensions"]>;
 
 function hasWorkerEntry(config: TsdownConfig, name: string, source: string): boolean {
   const entry = config.entry;
@@ -76,6 +81,8 @@ const workerBuildTargets = [
     "src/process/supervisor/service-child-group-anchor.ts",
   ],
 ] as const;
+const isWorkerBuildConfig = (config: TsdownConfig) =>
+  workerBuildTargets.some(([, entry, source]) => hasWorkerEntry(config, entry, source));
 
 function findWorkerBuildConfig(target: string) {
   const selected = workerBuildTargets.find(([name]) => name === target);
@@ -125,7 +132,11 @@ if (loaded.length) assert(loaded[0].startsWith(path.dirname(rootDir) + path.sep)
 `;
 
 describe("tsdown config", () => {
-  it.each(["extensions/openai/setup-api"])(
+  it.each([
+    "extensions/openai/setup-api",
+    "extensions/openai/capability-catalog",
+    "extensions/anthropic/provider-discovery",
+  ])(
     "keeps %s inventory chunks local and shares the host SDK across lazy imports",
     async (entryName) => {
       const selected = configs.find((config) =>
@@ -219,7 +230,7 @@ describe("tsdown config", () => {
     },
   );
 
-  it.each([true])(
+  it.each([false, true])(
     "runs the Docker-selected memory store with only production dependencies (verbose=%s)",
     async (verbose) => {
       vi.stubEnv("OPENCLAW_BUILD_VERBOSE", verbose ? "1" : "0");
@@ -605,6 +616,7 @@ describe("tsdown config", () => {
   });
 
   it.each([
+    { target: "runtime", entry: "parser" },
     { target: "nested", entry: "extensions/fixture/.setup/parser" },
     { target: "worker", entry: "worker/parser" },
   ])("loads the Bash grammar from the relocated $target package", async ({ target, entry }) => {
@@ -977,10 +989,11 @@ console.log("relocated session card renders with bundled fonts");
     },
   );
 
-  it.each([
-    { target: "declarations", verbose: false },
-    { target: "declarations", verbose: true },
-  ])(
+  it.each(
+    ["runtime", "declarations", ...workerBuildTargets.map(([target]) => target)].flatMap((target) =>
+      [false, true].map((verbose) => ({ target, verbose })),
+    ),
+  )(
     "preserves dependency package boundaries for $target (verbose=$verbose)",
     async ({ target, verbose }) => {
       vi.stubEnv("OPENCLAW_BUILD_VERBOSE", verbose ? "1" : "0");
@@ -1111,6 +1124,101 @@ console.log("relocated session card renders with bundled fonts");
     },
   );
 
+  it.each(["tsdown.config.ts", "tsdown.ai.config.ts"])(
+    "keeps %s free of runtime imports from tsdown",
+    (configPath) => {
+      const source = fs.readFileSync(configPath, "utf8");
+      expect(source).not.toMatch(/^import(?!\s+type\b).*from ["']tsdown["'];?$/mu);
+    },
+  );
+
+  it("gives every standalone declaration caller one canonical package config", () => {
+    for (const packageName of [
+      "gateway-client",
+      "gateway-protocol",
+      "sdk",
+      "retry",
+      "normalization-core",
+      "net-policy",
+      "media-understanding-common",
+      "media-generation-core",
+      "media-core",
+      "acp-core",
+    ]) {
+      const manifest = JSON.parse(
+        fs.readFileSync(`packages/${packageName}/package.json`, "utf8"),
+      ) as { scripts: { build: string }; exports: Record<string, { import: string }> };
+      expect(manifest.scripts.build).toContain(`build-workspace-package.mts ${packageName}`);
+      const selected = configs.filter((config) => config.outDir === `packages/${packageName}/dist`);
+      expect(selected, packageName).toHaveLength(1);
+      const sources = Object.values(selected[0]!.entry ?? {});
+      for (const entry of Object.values(manifest.exports)) {
+        expect(sources).toContain(
+          entry.import.replace("./dist/", `packages/${packageName}/src/`).replace(/\.mjs$/u, ".ts"),
+        );
+      }
+      if (packageName === "acp-core") {
+        expect(sources).toContain("packages/acp-core/src/error-format.ts");
+      }
+    }
+  });
+
+  it("isolates runtime output from one shared declaration program", () => {
+    const packageConfigs = configs.filter((entry) => entry.name === TSDOWN_PACKAGE_CONFIG_GROUP);
+    const unifiedRuntimeConfig = configs.find(
+      (entry) => entry.name === TSDOWN_UNIFIED_CONFIG_GROUP,
+    );
+    const standaloneRuntimeConfig = configs.find(
+      (entry) =>
+        entry.name === TSDOWN_UNIFIED_CONFIG_GROUP &&
+        entry.dts === false &&
+        hasWorkerEntry(
+          entry,
+          "infra/sqlite-readonly-location.worker",
+          path.resolve("src/infra/sqlite-readonly-location.worker.ts"),
+        ),
+    );
+    const unifiedDeclarationConfigs = TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.map((name) =>
+      configs.find((entry) => entry.name === name),
+    );
+
+    expect(packageConfigs).not.toHaveLength(0);
+    expect(packageConfigs.map((entry) => entry.dts)).toEqual(packageConfigs.map(() => true));
+    expect(unifiedRuntimeConfig?.dts).toBe(false);
+    expect(standaloneRuntimeConfig?.dts).toBe(false);
+    expect(unifiedDeclarationConfigs).toHaveLength(1);
+    expect(unifiedDeclarationConfigs.every(Boolean)).toBe(true);
+    const runtimeEntries = configs
+      .filter(
+        (entry) =>
+          entry.name === TSDOWN_UNIFIED_CONFIG_GROUP &&
+          entry !== standaloneRuntimeConfig &&
+          !isWorkerBuildConfig(entry) &&
+          !entry.outDir,
+      )
+      .flatMap((entry) => Object.entries(entry.entry ?? {}));
+    const runtimeEntryNames = runtimeEntries.map(([name]) => name);
+    const runtimeOnlyEntryNames = ["native-hook-relay/entry", "node-host-launcher-bootstrap"];
+    expect(runtimeEntryNames).toEqual(expect.arrayContaining(runtimeOnlyEntryNames));
+    const declarationEntries = runtimeEntries.filter(
+      ([name]) => !runtimeOnlyEntryNames.includes(name),
+    );
+    const declarationEntryNames = declarationEntries.map(([name]) => name);
+    const standaloneEntries = Object.entries(standaloneRuntimeConfig?.entry ?? {});
+    const standaloneNames = new Set(standaloneEntries.map(([name]) => name));
+    const declarationInputs = Object.fromEntries([...declarationEntries, ...standaloneEntries]);
+    for (const declarationConfig of unifiedDeclarationConfigs) {
+      expect(declarationConfig?.dts).toMatchObject({ emitDtsOnly: true });
+      // Runtime and inventory graphs retain every alias in the declaration input map.
+      expect(declarationConfig?.entry).toEqual(declarationInputs);
+      expect(
+        Object.keys(declarationConfig?.entry ?? {})
+          .filter((name) => !standaloneNames.has(name))
+          .toSorted(),
+      ).toEqual(declarationEntryNames.toSorted());
+    }
+  });
+
   it("keeps excluded plugins out of the unified graph without dropping host helpers", () => {
     const runtime = configs.find((entry) => entry.name === TSDOWN_UNIFIED_CONFIG_GROUP);
     const entries = runtime?.entry as Record<string, string>;
@@ -1133,5 +1241,153 @@ console.log("relocated session card renders with bundled fonts");
         "extensions/vault/vault-secret-ref-resolver.js",
       ]),
     );
+  });
+
+  it("emits every public declaration without private runtime roots", () => {
+    const declarationSources = TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.flatMap((name) => {
+      const declarationConfig = configs.find((entry) => entry.name === name);
+      const dts = declarationConfig?.dts;
+      if (!dts || typeof dts !== "object" || !Array.isArray(dts.entry)) {
+        return [];
+      }
+      return dts.entry;
+    });
+
+    expect(declarationSources).toEqual(
+      expect.arrayContaining([
+        "src/index.ts",
+        ...publicPluginSdkEntrypoints.map((entry) => `src/plugin-sdk/${entry}.ts`),
+        "extensions/anthropic/api.ts",
+        "extensions/anthropic/contract-api.ts",
+        "extensions/memory-core/api.ts",
+        "extensions/memory-core/runtime-api.ts",
+      ]),
+    );
+    expect(
+      declarationSources.filter(
+        (source) => source.startsWith("src/") && !source.startsWith("src/plugin-sdk/"),
+      ),
+    ).toEqual(["src/index.ts"]);
+    expect(
+      declarationSources.filter((source) => source.startsWith("extensions/anthropic/")).toSorted(),
+    ).toEqual(["extensions/anthropic/api.ts", "extensions/anthropic/contract-api.ts"]);
+    expect(declarationSources.every((source) => /\.[cm]?tsx?$/u.test(source))).toBe(true);
+    expect(new Set(declarationSources).size).toBe(declarationSources.length);
+  });
+
+  it("keeps public SDK types canonical without emitting private runtime declarations", () => {
+    const declarationSources = TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS.flatMap((name) => {
+      const dts = configs.find((entry) => entry.name === name)?.dts;
+      return dts && typeof dts === "object" && Array.isArray(dts.entry) ? dts.entry : [];
+    });
+    const publicSources = publicPluginSdkEntrypoints.map((entry) => `src/plugin-sdk/${entry}.ts`);
+    expect(declarationSources.toSorted()).toEqual(publicSources.toSorted());
+    const runtime = configs.find((entry) => entry.name === TSDOWN_UNIFIED_CONFIG_GROUP);
+    expect(runtime?.entry).toHaveProperty(
+      "plugin-sdk/tts-runtime",
+      "src/plugin-sdk/tts-runtime.ts",
+    );
+  });
+
+  it("builds self-contained worker deploy executables with every dependency bundled", () => {
+    const workerConfigs = Object.fromEntries(
+      workerBuildTargets.map(([target, entry, source]) => {
+        const config = findWorkerBuildConfig(target);
+        expect(config?.entry).toEqual({
+          [entry]: source,
+          ...(target === "worker"
+            ? { "worker/worker-chunk-highlight": "node_modules/highlight.js/lib/index.js" }
+            : {}),
+        });
+        return [target, config] as const;
+      }),
+    );
+    const {
+      worker: workerConfig,
+      receiver: receiverConfig,
+      "github-launcher": launcherConfig,
+      "service-relay": relayConfig,
+      "service-group-anchor": anchorConfig,
+    } = workerConfigs;
+    const packageVersion = (
+      JSON.parse(fs.readFileSync("package.json", "utf8")) as {
+        version: string;
+      }
+    ).version;
+    expect(workerConfig?.define).toEqual({
+      WORKER_DEPLOY_BUILD: "true",
+      SEALED_RUNTIME_BUILD: "true",
+      WORKER_DEPLOY_VERSION: JSON.stringify(packageVersion),
+    });
+    expect(workerConfig?.alias).toMatchObject({
+      bufferutil: WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
+      "chromium-bidi/lib/cjs/bidiMapper/BidiMapper": WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
+      "chromium-bidi/lib/cjs/cdp/CdpConnection": WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
+      "electron/index.js": WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
+      fsevents: WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
+      kerberos: WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
+      "utf-8-validate": WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
+    });
+    expect(workerConfig?.outDir).toBe("dist");
+    expect(workerConfig?.shims).toBe(true);
+    expect(workerConfig?.plugins).toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: "openclaw:worker-deploy" })]),
+    );
+    expect(workerConfig?.outputOptions).toMatchObject({
+      codeSplitting: true,
+      chunkFileNames: "worker/worker-chunk-[hash].mjs",
+      assetFileNames: "worker/[name][extname]",
+    });
+    for (const config of [receiverConfig, launcherConfig]) {
+      expect(config?.define).toBeUndefined();
+    }
+    for (const config of [relayConfig, anchorConfig]) {
+      expect(config?.define).toEqual({
+        WORKER_DEPLOY_BUILD: "true",
+        SEALED_RUNTIME_BUILD: "true",
+      });
+    }
+    for (const config of [receiverConfig, launcherConfig, relayConfig, anchorConfig]) {
+      expect(config?.alias).toBeUndefined();
+      expect(config?.plugins).toBeUndefined();
+      expect(config?.outputOptions).toEqual({ codeSplitting: false });
+    }
+
+    const context = {
+      format: "es",
+      options: {},
+      pkgType: "module",
+    } as Parameters<OutExtensions>[0];
+    for (const config of Object.values(workerConfigs)) {
+      expect(config?.dts).toBe(false);
+      expect(config?.outDir).toBe("dist");
+      expect(config?.shims).toBe(true);
+      expect(config?.deps?.onlyBundle).toBe(false);
+      expect(config?.deps?.alwaysBundle).toBeTypeOf("function");
+      const alwaysBundle = config?.deps?.alwaysBundle;
+      if (typeof alwaysBundle !== "function") {
+        throw new Error("worker deploy config must define dependency bundling");
+      }
+      expect(alwaysBundle("json5", undefined)).toBe(true);
+      expect(config?.platform).toBe("node");
+      expect(config?.outExtensions?.(context)).toEqual({ js: ".mjs", dts: ".d.ts" });
+    }
+  });
+
+  it("keeps node package artifacts on the declared js and dts extensions", () => {
+    const nodePackageConfigs = configs.filter(
+      (entry) => entry.fixedExtension === false && !isWorkerBuildConfig(entry),
+    );
+    expect(nodePackageConfigs).not.toHaveLength(0);
+
+    const context = {
+      format: "es",
+      options: {},
+      pkgType: "module",
+    } as Parameters<OutExtensions>[0];
+
+    for (const entry of nodePackageConfigs) {
+      expect(entry.outExtensions?.(context)).toEqual({ js: ".js", dts: ".d.ts" });
+    }
   });
 });

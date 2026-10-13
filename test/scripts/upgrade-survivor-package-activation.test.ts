@@ -11,16 +11,17 @@ import { readUpgradeSurvivorPaths } from "./upgrade-survivor-paths.test-support.
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 
-it.each(["package-stranded-first-hop"])(
-  "keeps %s live package journals on runtime storage, not the artifact mount",
-  (scenario) => {
-    const paths = readUpgradeSurvivorPaths("/tmp/package-recovery-paths", {
-      OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario,
-    });
-    expect(paths.npmPrefix).toBe(path.join(paths.runtimeRoot, "npm-prefix"));
-    expect(paths.summaryJson).toBe(path.join(paths.artifactRoot, "summary.json"));
-  },
-);
+it.each([
+  "package-publication-recovery",
+  "package-verification-recovery",
+  "package-stranded-first-hop",
+])("keeps %s live package journals on runtime storage, not the artifact mount", (scenario) => {
+  const paths = readUpgradeSurvivorPaths("/tmp/package-recovery-paths", {
+    OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario,
+  });
+  expect(paths.npmPrefix).toBe(path.join(paths.runtimeRoot, "npm-prefix"));
+  expect(paths.summaryJson).toBe(path.join(paths.artifactRoot, "summary.json"));
+});
 
 describe("release package interruption fixture", () => {
   it("re-arms publication and Doctor faults when the same artifact directory is reused", () => {

@@ -18,6 +18,32 @@ import {
 const it = createDeclarationTest();
 
 describe("write-unified-entry-dts", () => {
+  it("owns the executable generator closure without unrelated CI planning code", () => {
+    const root = process.cwd();
+    const closure = resolveTsdownDeclarationGeneratorInputs(
+      root,
+      "scripts/write-unified-entry-dts.ts",
+    ).map((file) => path.relative(root, file).split(path.sep).join("/"));
+
+    expect(closure).toEqual(
+      expect.arrayContaining([
+        "scripts/lib/tsdown-declaration-generator-inputs.mts",
+        "scripts/lib/tsdown-declaration-boundary.mts",
+        "scripts/lib/plugin-sdk-entrypoints.json",
+        "scripts/windows-cmd-helpers.mjs",
+        "packages/normalization-core/src/mountinfo-path.ts",
+        "extensions/memory-core/src/memory/manager-search-knn-entrypoint.ts",
+        "src/state/openclaw-state-schema.sql",
+        "src/state/openclaw-agent-schema.sql",
+        "src/shared/freebsd-process-identity.ts",
+        "src/infra/update-managed-service-handoff-native-loader.ts",
+        "src/infra/package-update-activation-native-loader.ts",
+      ]),
+    );
+    expect(closure).not.toContain("scripts/lib/ci-node-test-plan.mts");
+    expect(closure).not.toContain("src/infra/node_modules/@openclaw/proc-safe/dist/identity.js");
+  });
+
   it("still traverses a compiler source when the generator also imports it", () => {
     const readFileSync = fs.readFileSync.bind(fs);
     const read = vi.spyOn(fs, "readFileSync").mockImplementation((file, options) => {
@@ -84,6 +110,28 @@ describe("write-unified-entry-dts", () => {
       ).toThrow("Unresolved dynamic module edges");
     } finally {
       read.mockRestore();
+    }
+  });
+
+  it("leaves physical and external installed dependencies to lockfile topology", () => {
+    const root = process.cwd();
+    const list = () =>
+      resolveTsdownDeclarationGeneratorInputs(root, "scripts/write-unified-entry-dts.ts").map(
+        (file) => path.relative(root, file).split(path.sep).join("/"),
+      );
+    expect(list().some((file) => file.endsWith("/typescript/lib/typescript.d.ts"))).toBe(false);
+
+    const realpathSync = fs.realpathSync.bind(fs);
+    const realpath = vi.spyOn(fs, "realpathSync").mockImplementation((file, options) => {
+      const name = String(file).replaceAll("\\", "/");
+      return name.endsWith("/node_modules/typescript/lib/typescript.d.ts")
+        ? path.join(root, "node_modules/typescript/lib/typescript.d.ts")
+        : realpathSync(file, options as never);
+    });
+    try {
+      expect(list().some((file) => file.endsWith("/typescript/lib/typescript.d.ts"))).toBe(false);
+    } finally {
+      realpath.mockRestore();
     }
   });
 
