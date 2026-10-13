@@ -1713,6 +1713,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     params.fastMode = testCase.fastMode;
     params.agentDir = path.join(tempDir, "agent");
     let starts = 0;
+    let catalogLookups = 0;
     const fixture = await createLeasedCodexLifecycleHarness({
       agentDir: params.agentDir,
       respond: async (method) => {
@@ -1732,6 +1733,9 @@ describe("Codex app-server thread lifecycle bindings", () => {
           return { requirements: null };
         }
         if (method === "model/list") {
+          if (++catalogLookups > 2) {
+            throw new Error("Synthetic catalog unavailable during replacement");
+          }
           return {
             data: [
               {
@@ -1803,6 +1807,18 @@ describe("Codex app-server thread lifecycle bindings", () => {
       threadId: testCase.retained ? first.threadId : "incognito-2",
       lifecycle: { action: testCase.retained ? "resumed" : "started" },
     });
+    if (!testCase.retained) {
+      expect(second.preparedServiceTier).toBe("ultrafast");
+      expect(catalogLookups).toBe(2);
+      expect(
+        fixture.request.mock.calls.filter(([method]) => method === "thread/start")[1]?.[1],
+      ).toMatchObject({
+        config: {
+          model_auto_compact_token_limit: 260_000,
+          model_auto_compact_token_limit_scope: "total",
+        },
+      });
+    }
     expect(
       fixture.request.mock.calls
         .filter(([method]) => method === "thread/start" || method === "thread/resume")

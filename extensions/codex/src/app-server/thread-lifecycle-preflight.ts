@@ -40,7 +40,12 @@ import {
 import { mergeCodexThreadConfigs } from "./plugin-thread-config.js";
 import { isCodexAppServerProfilerEnabled } from "./profiler-flag.js";
 import { mergeCodexNativeProjectDocThreadConfig } from "./project-doc-thread-config.js";
-import { flattenCodexDynamicToolFunctions, isJsonObject, type JsonObject } from "./protocol.js";
+import {
+  flattenCodexDynamicToolFunctions,
+  isJsonObject,
+  type CodexServiceTier,
+  type JsonObject,
+} from "./protocol.js";
 import { readScheduledCodexAppManagedRequirementsFingerprint } from "./scheduled-app-authority.js";
 import { resolveCodexUltrafastServiceTier } from "./service-tier.js";
 import {
@@ -117,6 +122,7 @@ export async function prepareCodexThreadRequestContext(
     clientId: string;
     config: CodexStartOrResumeThreadParams["config"];
     preflight: Awaited<ReturnType<typeof prepareCodexThreadLifecyclePreflight>>;
+    serviceTierAdmission?: { tier: CodexServiceTier | null | undefined };
     assertCurrent: () => void;
     throwIfAborted: () => void;
   },
@@ -151,28 +157,30 @@ export async function prepareCodexThreadRequestContext(
           options.assertCurrent,
         )
       : undefined;
-  const serviceTier = await resolveCodexUltrafastServiceTier({
-    enabled: fastMode === "ultrafast" && params.appServer.enableUltrafast !== false,
-    serviceTier:
-      params.appServer.serviceTier === "ultrafast" ? "priority" : params.appServer.serviceTier,
-    model:
-      admittedNativeThread?.model ?? preservedNativeBinding?.model ?? startModelSelection.model,
-    modelProvider:
-      admittedNativeThread?.modelProvider ??
-      preservedNativeBinding?.modelProvider ??
-      startModelProvider ??
-      options.selectionBinding?.modelProvider ??
-      (typeof nativeProvider === "string"
-        ? nativeProvider
-        : params.params.provider === "codex"
-          ? "openai"
-          : params.params.provider),
-    client: params.client,
-    timeoutMs: Math.min(params.appServer.requestTimeoutMs, 2500),
-    signal: params.signal ?? new AbortController().signal,
-    assertCurrent: options.assertCurrent,
-    config: params.params.config,
-  });
+  const serviceTier = options.serviceTierAdmission
+    ? options.serviceTierAdmission.tier
+    : await resolveCodexUltrafastServiceTier({
+        enabled: fastMode === "ultrafast" && params.appServer.enableUltrafast !== false,
+        serviceTier:
+          params.appServer.serviceTier === "ultrafast" ? "priority" : params.appServer.serviceTier,
+        model:
+          admittedNativeThread?.model ?? preservedNativeBinding?.model ?? startModelSelection.model,
+        modelProvider:
+          admittedNativeThread?.modelProvider ??
+          preservedNativeBinding?.modelProvider ??
+          startModelProvider ??
+          options.selectionBinding?.modelProvider ??
+          (typeof nativeProvider === "string"
+            ? nativeProvider
+            : params.params.provider === "codex"
+              ? "openai"
+              : params.params.provider),
+        client: params.client,
+        timeoutMs: Math.min(params.appServer.requestTimeoutMs, 2500),
+        signal: params.signal ?? new AbortController().signal,
+        assertCurrent: options.assertCurrent,
+        config: params.params.config,
+      });
   params.appServer = { ...params.appServer, serviceTier };
   const source = params.params.hostCapabilities.retainSourceAuthority?.();
   const modelPolicyEnforced =
@@ -229,6 +237,7 @@ export async function prepareCodexThreadRequestContext(
   return {
     ...options.preflight,
     admittedNativeThread,
+    serviceTierAdmission: options.serviceTierAdmission ?? { tier: serviceTier },
     bindingIdentity: options.bindingIdentity,
     startModelSelection,
     startModelProvider,
