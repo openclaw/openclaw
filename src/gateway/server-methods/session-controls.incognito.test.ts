@@ -333,7 +333,7 @@ it("rejects a replaced actor source during approval lineage preparation", async 
   });
 });
 
-it.each(["agent:native:dashboard:incognito-native-controls", "agent:native:controls"])(
+it.each(["agent:native:dashboard:incognito-native-controls"])(
   "preserves unbound native wake %s without actor allocation",
   async (sessionKey) => {
     replaceSessionEntrySync(

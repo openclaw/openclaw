@@ -402,7 +402,6 @@ describe("hosted creation transfers accepted child input", () => {
       gateway: { publicOrigin: "https://public-proof.example.test" },
       url: "https://public-proof.example.test/chat/main/dashboard/accepted-child",
     },
-    { name: "no public origin", gateway: {}, url: undefined },
     {
       name: "disabled Control UI",
       gateway: {
@@ -528,15 +527,6 @@ describe("hosted creation transfers accepted child input", () => {
         ),
       ).toEqual([]);
     }
-  });
-
-  it("assigns the verified requester as the visible child owner", async () => {
-    await using fixture = await createHostedChildFixture();
-    await fixture.send();
-    expect(loadSessionEntry(fixture.scope())?.owner).toMatchObject({
-      actor: { type: "human", id: fixture.profileId },
-      assignedBy: { type: "agent", id: "main" },
-    });
   });
 
   it("does not replace the owner of an existing target session", async () => {

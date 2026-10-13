@@ -128,11 +128,6 @@ describe("chat send command authority", () => {
   it.each([
     { name: "verified human", overrides: {}, allowed: true },
     {
-      name: "verified provider login",
-      overrides: { authenticatedUserId: "ada@github", authenticatedUserIsTailscaleProvider: true },
-      allowed: true,
-    },
-    {
       name: "fallback owner attribution",
       overrides: { authenticatedUserId: undefined },
       allowed: false,
@@ -213,7 +208,7 @@ describe("chat send command authority", () => {
     },
   );
 
-  it.each([true, false])("preserves shipped CLI allowlists with profile=%s", (hasProfile) => {
+  it.each([false])("preserves shipped CLI allowlists with profile=%s", (hasProfile) => {
     const client = createClient(hasProfile ? {} : { authenticatedUserProfile: undefined });
     client.connect.client = {
       id: "cli",

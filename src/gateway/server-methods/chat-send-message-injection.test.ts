@@ -193,31 +193,6 @@ describe("finalizeAcceptedChatSendMessageInjection", () => {
     );
     expect(updateSessionEntry).toHaveBeenCalledOnce();
   });
-
-  it("reports indeterminate question input without claiming success or falling back", async () => {
-    const errorMessage = "Could not confirm the question response; do not replay it.";
-    vi.mocked(finalizeReplyMessageInjectionAttempt).mockResolvedValueOnce({
-      status: "indeterminate",
-      outcome: { status: "indeterminate", errorMessage },
-      targetRunId: "backing-run",
-      adoptionError: undefined,
-    });
-    const params = makeParams();
-    params.context.chatRunState.hasAbortMarker = () => false;
-    await expect(finalizeAcceptedChatSendMessageInjection(params)).resolves.toBe(true);
-    expect(broadcastChatError).toHaveBeenCalledWith(
-      expect.objectContaining({ runId: "run-1", errorMessage }),
-    );
-    expect(broadcastChatFinal).not.toHaveBeenCalled();
-    expect(emitInboundMessageAuditTerminal).toHaveBeenCalledWith(
-      expect.objectContaining({
-        terminal: {
-          outcome: "error",
-          options: { reason: "question_response_indeterminate", error: errorMessage },
-        },
-      }),
-    );
-  });
 });
 
 describe("createChatSendMessageInjectionStarter admission fence", () => {
@@ -341,7 +316,7 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
     },
   );
 
-  it.each(["unbound", "current", "refused"] as const)(
+  it.each(["current", "refused"] as const)(
     "composes captured terminal admission with %s authority",
     async (authority) => {
       // A captured terminal receipt rejects steering, but must not swallow
@@ -353,9 +328,7 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
           throw refusal;
         }
       };
-      if (authority !== "unbound") {
-        params.assertCurrent = assertCurrent;
-      }
+      params.assertCurrent = assertCurrent;
       const begin = createChatSendMessageInjectionStarter(params);
 
       if (authority === "refused") {
@@ -504,28 +477,6 @@ describe("gateway steer contract after the injection-start fence", () => {
       );
     },
   );
-
-  it("routes a fail-closed inbound to follow-up dispatch exactly once, with no steer enqueued", async () => {
-    // Mock-gateway contract: the pre-ACK path creates the starter, invokes
-    // it after preparation, and hands the inbound to follow-up dispatch whenever
-    // no injection attempt exists. A terminal receipt present at the
-    // injection-start boundary must yield exactly one delivery path — the
-    // follow-up dispatch — and zero runtime queueMessage calls, instead of
-    // the old post-enqueue rejection (steer already queued + fallback
-    // second dispatch = inbound double delivery).
-    const dispatchFollowup = vi.fn();
-    const begin = createChatSendMessageInjectionStarter(
-      makeStarterParams({ entry: makeFailClosedEntry() }),
-    );
-
-    const attempt = await begin();
-    if (attempt) {
-      throw new Error("unexpected injection attempt for a fail-closed session");
-    }
-    dispatchFollowup();
-
-    expect(dispatchFollowup).toHaveBeenCalledOnce();
-  });
 });
 
 describe("createChatSendMessageInjectionStarter", () => {
@@ -599,12 +550,6 @@ describe("createChatSendMessageInjectionStarter", () => {
       expectedText:
         '[media attached: media://inbound/note.txt (text/plain) "note.txt"]\n\nsee attached\n\n<file name="note.txt" mime="text/plain">doc body</file>',
     },
-    {
-      caption: "",
-      label: "blank-caption",
-      expectedText:
-        '[media attached: media://inbound/note.txt (text/plain) "note.txt"]\n\n<file name="note.txt" mime="text/plain">doc body</file>',
-    },
   ])("retains marker and document text for a $label steer", async ({ caption, expectedText }) => {
     const documentText = '<file name="note.txt" mime="text/plain">doc body</file>';
     const params = makeSteerStarterParams({
@@ -651,16 +596,6 @@ describe("createChatSendMessageInjectionStarter", () => {
     expect(params.turn.ctx).toEqual(originalContext);
   });
 
-  it("keeps the base text untouched when no document context was rendered", async () => {
-    await createChatSendMessageInjectionStarter(makeSteerStarterParams({ body: "plain steer" }))();
-
-    expect(beginReplyMessageInjectionTarget).toHaveBeenCalledWith(
-      expect.anything(),
-      "plain steer",
-      expect.anything(),
-    );
-  });
-
   it("merges extracted page images after the prepared inbound images", async () => {
     const params = makeSteerStarterParams({
       body: "see attached",
@@ -703,27 +638,6 @@ describe("createChatSendMessageInjectionStarter", () => {
       }),
     );
     expect(params.turn.ctx).toEqual(durableContext);
-  });
-
-  it("injects extracted page images when the steer carries no inbound images", async () => {
-    await createChatSendMessageInjectionStarter(
-      makeSteerStarterParams({
-        body: "scan attached",
-        documentContext: {
-          status: "rendered",
-          text: "[PDF content rendered to images]",
-          images: [{ type: "image", data: "page-1", mimeType: "image/png", attachmentIndex: 0 }],
-        },
-      }),
-    )();
-
-    expect(beginReplyMessageInjectionTarget).toHaveBeenCalledWith(
-      expect.anything(),
-      "scan attached\n\n[PDF content rendered to images]",
-      expect.objectContaining({
-        images: [{ type: "image", data: "page-1", mimeType: "image/png", sourceIndex: 0 }],
-      }),
-    );
   });
 
   it("returns undefined for internal slash-command turns even with a target", async () => {

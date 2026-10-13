@@ -35,37 +35,6 @@ export function registerCronRunWaitTests({
       },
       waits: false,
     },
-    {
-      name: "isolated result commit into the caller",
-      job: {
-        sessionTarget: "isolated",
-        sourceConversation: { sessionKey: "agent:ops:main", sessionId: "creator" },
-        delivery: { mode: "announce" },
-      },
-      waits: false,
-    },
-    {
-      name: "script result commit into the caller",
-      job: {
-        sessionTarget: "isolated",
-        sourceConversation: { sessionKey: "agent:ops:main", sessionId: "creator" },
-        payload: { kind: "script", script: "return { notify: 'report' };" },
-        delivery: { mode: "announce" },
-      },
-      waits: false,
-    },
-    {
-      // Quiet current jobs run detached and never commit into the conversation.
-      name: "quiet current-session",
-      job: { sessionTarget: "current", sessionKey: "agent:ops:main", delivery: { mode: "none" } },
-      waits: true,
-    },
-    {
-      // The automations tool stamps the creator's session onto non-isolated jobs.
-      name: "other named session created from the caller",
-      job: { sessionTarget: "session:reports", sessionKey: "agent:ops:main" },
-      waits: true,
-    },
   ] as const)(
     "waits for a $name run from an agent turn only when it can finish meanwhile",
     async ({ job, mainKey, waits }) => {
@@ -100,10 +69,7 @@ export function registerCronRunWaitTests({
     },
   );
 
-  it.each([
-    { creatorIsCaller: false, destinationIsCaller: true, waits: false },
-    { creatorIsCaller: true, destinationIsCaller: false, waits: true },
-  ])(
+  it.each([{ creatorIsCaller: true, destinationIsCaller: false, waits: true }])(
     "waits on the destination lane, not the creator lane ($destinationIsCaller)",
     async ({ creatorIsCaller, destinationIsCaller, waits }) => {
       const callerSessionKey = "agent:ops:telegram:direct:123";

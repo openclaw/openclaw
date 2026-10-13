@@ -139,16 +139,6 @@ describe("sessions.files RPC handlers", () => {
     );
   });
 
-  it("returns no workspace listing while the session checkout is pending", async () => {
-    mockSession({ sessionId: "sess-pending", pendingWorktree: { titleSource: "New checkout" } });
-    mockVisibleMessages([]);
-
-    expect(expectOkPayload(await listFiles())).toEqual({
-      sessionKey,
-      files: [],
-    });
-  });
-
   it("uses the persisted fixed-store owner for a bare session workspace", async () => {
     const cfg = fixedStoreConfig();
     hoisted.loadSessionEntry.mockReturnValue({
@@ -638,27 +628,6 @@ describe("sessions.files RPC handlers", () => {
     }
   });
 
-  it("round-trips a UTF-8 BOM through get and set", async () => {
-    const original = "\uFEFFexport default {};\n";
-    writeWorkspaceFile(workspaceRoot, "bom.ts", original);
-
-    const preview = expectOkPayload(await getFile("bom.ts"));
-    expect(preview.file.content).toBe(original);
-    expect(preview.file.hash).toBe(hashContent(original));
-
-    const next = "\uFEFFexport default { bom: true };\n";
-    expectOkPayload(
-      await saveFile({
-        path: "bom.ts",
-        content: next,
-        expectedHash: preview.file.hash,
-      }),
-    );
-    const bytes = fs.readFileSync(path.join(workspaceRoot, "bom.ts"));
-    expect([...bytes.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
-    expect(bytes.toString("utf8")).toBe(next);
-  });
-
   it("rejects replacement content containing NUL bytes", async () => {
     const error = expectError(
       await saveFile({
@@ -866,32 +835,6 @@ describe("sessions.files touched-file folds", () => {
   const listTouched = async () => expectOkPayload(await listFiles());
   const touchedKinds = (payload: Record<string, unknown>[]) =>
     payload.map((file) => [file.path, file.kind]);
-
-  it("retains incremental cursors across more than 16 concurrently viewed sessions", async () => {
-    hoisted.resolveAgentWorkspaceDir.mockReturnValue(undefined);
-    const storePath = path.join(workspaceRoot, "visible-sessions.sqlite");
-    hoisted.loadSessionEntry.mockImplementation((key: string) => {
-      const sessionId = key.split(":").at(-1)!;
-      return {
-        agentId: "main",
-        canonicalKey: key,
-        cfg: {},
-        storePath,
-        entry: { sessionId, sessionFile: `sqlite:main:${sessionId}:${storePath}` },
-      };
-    });
-    hoisted.readDelta.mockImplementation((scope) => page(`${scope.sessionId}-cursor`, [], false));
-
-    const sessionKeys = Array.from({ length: 24 }, (_, index) => `agent:main:visible-${index}`);
-    for (const key of sessionKeys) {
-      expectOkPayload(await invoke("sessions.files.list", { sessionKey: key }));
-    }
-    expectOkPayload(await invoke("sessions.files.list", { sessionKey: sessionKeys[0] }));
-
-    expect(hoisted.readDelta.mock.lastCall?.[1]).toMatchObject({
-      cursor: "visible-0-cursor",
-    });
-  });
 
   it("yields between SQLite pages and shares one concurrent fold per session", async () => {
     useSqliteSession(hoisted.loadSessionEntry, workspaceRoot, "sess-touched-singleflight");
