@@ -236,6 +236,13 @@ warning when it has no explicit writer or migration refusal. The updater still
 validates the final config and readiness, then starts the Gateway. A child whose
 termination cannot be confirmed remains blocking because it may still write state.
 
+If optional memory dreaming cron ownership inspection is unavailable, Doctor
+retains existing rows and the pending plugin repair, records a warning, and
+continues core recovery. A cron inspection whose read completed keeps its result
+when disposable snapshot cleanup fails; the snapshot stays registered for a later
+cleanup retry. Run `openclaw doctor --fix` to retry that inspection. Cron rewrite
+and required state migration failures retain their existing safety checks.
+
 Doctor's disposable database migration and repair connections use a 64 MiB SQLite
 page-cache allowance to reduce repeated reads while rebuilding large stores.
 The allowance ends when each connection closes; serving connections keep their
