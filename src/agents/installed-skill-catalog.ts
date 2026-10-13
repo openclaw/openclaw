@@ -1,3 +1,5 @@
+import path from "node:path";
+import type { Root } from "@openclaw/fs-safe/root";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { openLocalFileSafely, readLocalFileSafely } from "../infra/fs-safe.js";
 import { readCodeModeSkill, type CodeModeSkill } from "./code-mode-skills.js";
@@ -9,6 +11,8 @@ export type InstalledSkill = CodeModeSkill & {
   /** Prompt-listed instructions retain the shipped Code Mode whole-read contract. */
   promptListed?: boolean;
   assertCurrent?: () => void;
+  /** Captured during preparation; unavailable placements retain whole instructions only. */
+  companionRoot?: Promise<{ root: Root } | { error: unknown }>;
   /** The owner must bound I/O before allocating the returned content. */
   readSearchContent?: (maxBytes: number, signal?: AbortSignal) => Promise<string>;
 };
@@ -249,6 +253,7 @@ export async function readInstalledSkill(
   skills: readonly InstalledSkill[],
   name: string,
   signal?: AbortSignal,
+  relativePath?: string,
 ): Promise<string> {
   signal?.throwIfAborted();
   const skill = skills.find((entry) => entry.name === name);
@@ -258,6 +263,43 @@ export async function readInstalledSkill(
     );
   }
   skill.assertCurrent?.();
+  if (relativePath !== undefined) {
+    if (
+      typeof relativePath !== "string" ||
+      !relativePath.trim() ||
+      /[\\\0]/u.test(relativePath) ||
+      path.posix.isAbsolute(relativePath) ||
+      path.win32.isAbsolute(relativePath) ||
+      /^[a-z]:/iu.test(relativePath) ||
+      relativePath === "~" ||
+      relativePath.startsWith("~/") ||
+      relativePath.split("/").some((part) => !part || part === "." || part === "..")
+    ) {
+      throw new ToolInputError(
+        "relativePath must be a non-empty skill-relative path without traversal.",
+      );
+    }
+    if (!skill.companionRoot) {
+      throw new ToolInputError(
+        "This skill is instruction-only; omit relativePath to read SKILL.md.",
+      );
+    }
+    const captured = await skill.companionRoot;
+    signal?.throwIfAborted();
+    skill.assertCurrent?.();
+    if ("error" in captured) {
+      throw captured.error;
+    }
+    const content = await captured.root.readText(relativePath, {
+      symlinks: "reject",
+      hardlinks: "reject",
+      maxBytes: MAX_SKILL_INSTRUCTION_BYTES,
+    });
+    // Filesystem I/O does not carry run authority; revalidate before publishing bytes.
+    signal?.throwIfAborted();
+    skill.assertCurrent?.();
+    return content;
+  }
   const content =
     !skill.promptListed && typeof skill.source.readContent !== "string" && !skill.reader
       ? (

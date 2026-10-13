@@ -158,7 +158,7 @@ export function buildCodeModeCatalogPrompt(
       ? " Installed skills: use `await skills.search(query, limit)` to find relevant skills. `await skills.list()` lists up to 20 entries; pass an offset for later pages."
       : "") +
     (hasSkillTool("skills_read")
-      ? " Use `await skills.read(name)` for complete installed skill instructions. A known exact name can be read directly."
+      ? " Use `await skills.read(name)` for complete installed skill instructions. A known exact name can be read directly. Use `skills.read(name, relativePath)` for bounded companions of non-sandbox local Gateway skills; other placements are instruction-only."
       : "");
   // The catalog already reserves built-in namespace globals without constructing their runtimes.
   const bindings = createCodeModeCatalogBindings(
