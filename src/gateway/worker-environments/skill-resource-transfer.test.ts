@@ -1005,6 +1005,70 @@ describe("remote-exec skill resources", () => {
         activation: "read",
         skillFingerprint: expectedGatewayRevision,
       });
+      // An unstamped workspace entry may omit the fingerprint only with its
+      // delivery and accounting preserved — never borrowing the same-path
+      // gateway sibling's stamp. Strip the workspace identity from both
+      // consumer projections and re-run the real serving route: the read still
+      // serves the workspace's own transferred bytes, its skill.used event
+      // still fires (accounting), and the omission disguises no lost delivery.
+      for (const projection of [transferred.resolvedSkills!, transferred.discoverySkills!]) {
+        const unstamped = projection.find((skill) => skill.name === workspaceSkill.name);
+        unstamped!.bundleFingerprint = undefined;
+      }
+      const unstampedCatalog = prepareInstalledSkillCatalog({
+        snapshot: transferred,
+        workspaceDir: carrier.workspace,
+      });
+      const unstampedMarkers = createSkillInstructionDeliveryMarkers();
+      const unstampedTool = createInstalledSkillTools(unstampedCatalog, {
+        skillInstructionDeliveryMarkers: unstampedMarkers,
+      }).find((tool) => tool.name === "skills_read")!;
+      const unstampedEmitted: DiagnosticEventPayload[] = [];
+      const stopUnstamped = onInternalDiagnosticEvent((evt) => unstampedEmitted.push(evt));
+      try {
+        for (const identity of identities) {
+          const toolCallId = `collision-unstamped-${identity.name}`;
+          const served = await unstampedTool.execute(
+            toolCallId,
+            { name: identity.name },
+            undefined,
+            undefined,
+          );
+          expect((served.details as { content: string }).content).toBe(identity.instructions);
+          const match = findSkillUsageMatch({
+            toolName: "skills_read",
+            toolParams: { name: identity.name },
+            ctx: {
+              skillsSnapshot: transferred,
+              skillInstructionDeliveryMarkers: unstampedMarkers,
+            },
+            toolCallId,
+          });
+          expect(match).toBeDefined();
+          recordSkillUsed({
+            match: match!,
+            toolName: "skills_read",
+            toolCallId,
+          });
+        }
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      } finally {
+        stopUnstamped();
+      }
+      const unstampedUsed = unstampedEmitted.filter((evt) => evt.type === "skill.used");
+      expect(unstampedUsed).toHaveLength(2);
+      expect(unstampedUsed[0]).toMatchObject({
+        type: "skill.used",
+        skillName: workspaceSkill.name,
+        activation: "read",
+      });
+      expect(unstampedUsed[0]).not.toHaveProperty("skillFingerprint");
+      expect(unstampedUsed[1]).toMatchObject({
+        type: "skill.used",
+        skillName: gatewaySkill.name,
+        activation: "read",
+        skillFingerprint: expectedGatewayRevision,
+      });
     } finally {
       await resources?.cleanup();
       release();
