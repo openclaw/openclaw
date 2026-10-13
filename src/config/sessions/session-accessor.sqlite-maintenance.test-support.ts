@@ -7,6 +7,7 @@ import type {
 } from "../../infra/sqlite-worker-contract.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as workerStore from "../../infra/sqlite-worker-store.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -147,16 +148,11 @@ export function observeSessionMaintenancePlanningWorker(hooks: {
               if (!planning) {
                 return createAdmission(retained);
               }
-              const authorize = admission.createSqliteWorkerOperationAdmission;
               const observer = hooks.beforeAdmission
-                ? vi
-                    .spyOn(admission, "createSqliteWorkerOperationAdmission")
-                    .mockImplementation((callback, attachment) =>
-                      authorize((request, grant) => {
-                        hooks.beforeAdmission?.(request);
-                        return callback(request, grant);
-                      }, attachment),
-                    )
+                ? probe.admission(admission, (request, grant, callback) => {
+                    hooks.beforeAdmission?.(request);
+                    return callback(request, grant);
+                  })
                 : undefined;
               try {
                 const owned = createAdmission(retained);

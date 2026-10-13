@@ -4,6 +4,7 @@ import { buildSessionContext as buildCoreSessionContext } from "../../../package
 import { selectSessionTranscriptLeafControlledPath } from "../../config/sessions/transcript-tree.js";
 import { MIN_READABLE_SESSION_VERSION } from "../../config/sessions/version.js";
 import { logWarn } from "../../logger.js";
+import { projectModelContextMessages } from "../../shared/model-context-message.js";
 import type { SessionTreeEntry as CoreSessionTreeEntry } from "../runtime/index.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
 import type {
@@ -11,6 +12,7 @@ import type {
   FileEntry,
   SessionContext,
   SessionEntry,
+  SessionHeader,
 } from "./session-manager-types.js";
 
 export {
@@ -127,6 +129,20 @@ export function getLatestCompactionEntry(entries: SessionEntry[]): CompactionEnt
     (entry) => entry.type === "reset" || entry.type === "compaction",
   );
   return boundary?.type === "compaction" ? boundary : null;
+}
+
+export function cloneSessionModelContextEntries(
+  header: SessionHeader | null,
+  branch: readonly SessionEntry[],
+): FileEntry[] {
+  // Public manager entries are mutable; preserve durable bytes before publication.
+  const events = structuredClone([...(header ? [header] : []), ...branch]);
+  for (const entry of events) {
+    if (entry.type === "message") {
+      entry.message = projectModelContextMessages([entry.message])[0]!;
+    }
+  }
+  return events;
 }
 
 export function buildSessionContext(

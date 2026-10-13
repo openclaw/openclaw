@@ -114,44 +114,36 @@ export async function prepareStagedPackageInstall(
 > {
   const startedAt = Date.now();
   try {
+    let native: StagedPackageInstall["native"];
+    let prefix: string;
+    let layout: StagedPackageInstall["layout"];
     if (nativeOptions) {
-      const native = await prepareNativePackageStage({
+      const prepared = await prepareNativePackageStage({
         installTarget,
         packageName,
         ...nativeOptions,
       });
-      if (!native) {
+      if (!prepared) {
         throw new Error("Cannot resolve the native package manager's staging owner.");
       }
-      // Isolated pnpm resolves its newly created owner after installation.
-      const packageRoot = path.join(native.globalRoot, packageName);
-      return {
-        stagedInstall: {
-          prefix: native.projectRoot,
-          layout: {
-            prefix: native.projectRoot,
-            globalRoot: native.globalRoot,
-            binDir: native.binDir,
-          },
-          packageRoot,
-          installTarget: { ...installTarget, globalRoot: native.globalRoot, packageRoot },
-          native,
-        },
-        failedStep: null,
-      };
+      native = prepared;
+      prefix = native.projectRoot;
+      layout = { prefix, globalRoot: native.globalRoot, binDir: native.binDir };
+    } else {
+      const targetLayout = resolveNpmGlobalPrefixLayoutFromGlobalRoot(installTarget.globalRoot, {
+        allowDirectNodeModulesRoot: installTarget.directNodeModulesRoot === true,
+      });
+      if (!targetLayout) {
+        throw new Error(
+          `The ${installTarget.manager} global install layout cannot prepare the update. Reinstall with ${installTarget.manager} into its default global layout, then retry the update.`,
+        );
+      }
+      await fs.mkdir(targetLayout.globalRoot, { recursive: true });
+      // Active stages must stay outside cleanupGlobalRenameDirs' disposable ".openclaw-" namespace.
+      prefix = await fs.mkdtemp(path.join(targetLayout.globalRoot, ".openclaw.update-stage-"));
+      layout = resolveNpmGlobalPrefixLayoutFromPrefix(prefix);
     }
-    const targetLayout = resolveNpmGlobalPrefixLayoutFromGlobalRoot(installTarget.globalRoot, {
-      allowDirectNodeModulesRoot: installTarget.directNodeModulesRoot === true,
-    });
-    if (!targetLayout) {
-      throw new Error(
-        `The ${installTarget.manager} global install layout cannot prepare the update. Reinstall with ${installTarget.manager} into its default global layout, then retry the update.`,
-      );
-    }
-    await fs.mkdir(targetLayout.globalRoot, { recursive: true });
-    // Active stages must stay outside cleanupGlobalRenameDirs' disposable ".openclaw-" namespace.
-    const prefix = await fs.mkdtemp(path.join(targetLayout.globalRoot, ".openclaw.update-stage-"));
-    const layout = resolveNpmGlobalPrefixLayoutFromPrefix(prefix);
+    // Isolated pnpm resolves its newly created owner after installation.
     const packageRoot = path.join(layout.globalRoot, packageName);
     return {
       stagedInstall: {
@@ -159,11 +151,11 @@ export async function prepareStagedPackageInstall(
         layout,
         packageRoot,
         installTarget: {
-          manager: "npm",
-          command: installTarget.command,
+          ...(native ? installTarget : { manager: "npm" as const, command: installTarget.command }),
           globalRoot: layout.globalRoot,
           packageRoot,
         },
+        ...(native ? { native } : {}),
       },
       failedStep: null,
     };

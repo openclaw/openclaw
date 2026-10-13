@@ -28,6 +28,7 @@ import type {
 } from "../plugins/provider-auth-choices.js";
 import type { resolvePluginProvidersCore } from "../plugins/providers.runtime.js";
 import type { SetupRecommendedInstall } from "../plugins/recommended-tool-installs.js";
+import type { ProviderAuthResult } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -77,8 +78,8 @@ export type SetupInferenceCandidate = {
   label: string;
   detail: string;
   modelRef: string;
-  /** @deprecated Gateway wire compatibility for older macOS clients. Always false. */
-  recommended: false;
+  /** Highest-ranked usable primary-model candidate from passive discovery. */
+  recommended: boolean;
   credentials?: boolean;
   icon?: string;
   website?: string;
@@ -184,6 +185,8 @@ export type BoundVerifySetupInferenceResult =
 
 export type ActivateSetupInferenceParams = {
   kind: SetupInferenceKind | "api-key" | "provider-auth";
+  /** Gateway first-run policy; never inherited by the manual picker. */
+  automaticSetup?: true;
   /** Acknowledge utility-only activation; older clients must not promote it as primary-ready. */
   modelTarget?: "utility";
   /** Configured agent that owns the route being tested and persisted. */
@@ -406,31 +409,20 @@ export function validateSetupInferenceOwnerEvidence(params: {
   configuredHarnessId?: string;
   auth: AgentExecutionAuthBinding;
 }): Extract<ActivateSetupInferenceResult, { ok: false }> | undefined {
+  let reason: string | undefined;
   if (
     !params.auth.authFingerprint &&
     (!params.auth.runtimeOwnerFingerprint ||
       !params.auth.runtimeOwnerKind ||
       !params.auth.runtimeOwnerId?.trim())
   ) {
-    return {
-      ok: false,
-      status: "unknown",
-      error:
-        "Inference succeeded, but its runtime did not report an owner that OpenClaw can safely reuse. No default model was changed.",
-    };
-  }
-  if (
+    reason = "its runtime did not report an owner that OpenClaw can safely reuse";
+  } else if (
     params.runner === "cli" &&
     (!params.auth.runtimeArtifactFingerprint || !params.auth.runtimeArtifactId?.trim())
   ) {
-    return {
-      ok: false,
-      status: "unknown",
-      error:
-        "Inference succeeded, but its CLI executable/package artifact could not be safely reused. No default model was changed.",
-    };
-  }
-  if (params.runner === "embedded") {
+    reason = "its CLI executable/package artifact could not be safely reused";
+  } else if (params.runner === "embedded") {
     const successfulHarnessId = params.auth.agentHarnessId?.trim();
     const configuredHarnessId = params.configuredHarnessId?.trim();
     if (
@@ -439,29 +431,24 @@ export function validateSetupInferenceOwnerEvidence(params: {
         configuredHarnessId !== "auto" &&
         successfulHarnessId !== configuredHarnessId)
     ) {
-      return {
-        ok: false,
-        status: "unknown",
-        error:
-          "Inference succeeded, but its exact agent harness could not be safely reused. No default model was changed.",
-      };
-    }
-    if (
+      reason = "its exact agent harness could not be safely reused";
+    } else if (
       successfulHarnessId !== "openclaw" &&
       (params.auth.runtimeOwnerKind !== "plugin-harness" ||
         params.auth.runtimeOwnerId?.trim() !== successfulHarnessId ||
         !params.auth.runtimeArtifactFingerprint ||
         !params.auth.runtimeArtifactId?.trim())
     ) {
-      return {
-        ok: false,
-        status: "unknown",
-        error:
-          "Inference succeeded, but its agent harness artifact could not be safely reused. No default model was changed.",
-      };
+      reason = "its agent harness artifact could not be safely reused";
     }
   }
-  return undefined;
+  return reason
+    ? {
+        ok: false,
+        status: "unknown",
+        error: `Inference succeeded, but ${reason}. No default model was changed.`,
+      }
+    : undefined;
 }
 
 /** CLI backends need a hard tool-free mode; the probe must not let a CLI act on the host. */
@@ -529,6 +516,20 @@ export type StagedCandidate = {
   pendingPluginInstalls?: Record<string, PluginInstallRecord>;
 };
 export type StageFailure = { error: string };
+export type SaveSetupCredentialParams = {
+  profile: ProviderAuthResult["profiles"][number];
+  config: OpenClawConfig;
+  baseConfig: OpenClawConfig;
+  agentDir: string;
+  modelRef: string;
+  authChoice?: string;
+  pluginId?: string;
+  agentRuntimeId?: string;
+  beforePersistentEffect?: () => void | Promise<void>;
+  beforeWrite?: () => void;
+  /** Retains the wizard auth owner's selected state directory and cancellation boundary. */
+  persistAuthProfiles?: (profiles: ProviderAuthResult["profiles"]) => Promise<void>;
+};
 export function validateSetupModelTarget(
   expected: "utility" | undefined,
   requested: "utility" | undefined,
@@ -550,7 +551,7 @@ export type StageContext = {
   routeAgentId: string;
   agentDir: string;
   workspace: string;
-  credentialsSaved: boolean;
+  effects: { credentialsSaved: boolean };
   beforePersistentEffect: (effect?: "credential") => Promise<void>;
 };
 

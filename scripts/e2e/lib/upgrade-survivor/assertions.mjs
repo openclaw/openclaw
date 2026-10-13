@@ -3,7 +3,6 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import {
   readSqliteTranscriptPayload,
   sqliteTranscriptPayloadColumns,
@@ -135,13 +134,16 @@ function isPathInsideManagedNpmProjectPackageRoot(params) {
 function seedLegacySessionMetadata(stateDir) {
   const legacySessionsDir = path.join(stateDir, "agents", "main", "sessions");
   const baseUpdatedAt = Date.now() - 24 * 60 * 60 * 1000;
-  writeJson(path.join(legacySessionsDir, "sessions.json"), {
+  const entry = (sessionId, offset) => ({
+    sessionId,
+    sessionFile: path.join(legacySessionsDir, `${sessionId}.jsonl`),
+    modelProvider: "openai",
+    model: "gpt-5.5",
+    updatedAt: baseUpdatedAt + offset,
+  });
+  const sessions = {
     "agent:main:main": {
-      sessionId: LEGACY_SESSION_MAIN_ID,
-      sessionFile: path.join(legacySessionsDir, `${LEGACY_SESSION_MAIN_ID}.jsonl`),
-      modelProvider: "openai",
-      model: "gpt-5.5",
-      updatedAt: baseUpdatedAt,
+      ...entry(LEGACY_SESSION_MAIN_ID, 0),
       skillsSnapshot: {
         prompt: "legacy prompt survives as metadata",
         resolvedSkills: [
@@ -152,33 +154,17 @@ function seedLegacySessionMetadata(stateDir) {
         ],
       },
     },
-    "agent:main:+15551234567": {
-      sessionId: LEGACY_SESSION_DIRECT_ID,
-      sessionFile: path.join(legacySessionsDir, `${LEGACY_SESSION_DIRECT_ID}.jsonl`),
-      modelProvider: "openai",
-      model: "gpt-5.5",
-      updatedAt: baseUpdatedAt + 100,
-    },
+    "agent:main:+15551234567": entry(LEGACY_SESSION_DIRECT_ID, 100),
     "agent:main:slack:channel:cupgrade": {
-      sessionId: LEGACY_SESSION_GROUP_ID,
-      sessionFile: path.join(legacySessionsDir, `${LEGACY_SESSION_GROUP_ID}.jsonl`),
-      modelProvider: "openai",
-      model: "gpt-5.5",
-      updatedAt: baseUpdatedAt + 200,
+      ...entry(LEGACY_SESSION_GROUP_ID, 200),
       lastChannel: "slack",
       lastTo: "CUPGRADE",
       ...(getScenario() === "acpx-openclaw-tools-bridge" ? { acp: LEGACY_ACP_META } : {}),
     },
-  });
-  for (const sessionId of [
-    LEGACY_SESSION_MAIN_ID,
-    LEGACY_SESSION_DIRECT_ID,
-    LEGACY_SESSION_GROUP_ID,
-  ]) {
-    write(
-      path.join(legacySessionsDir, `${sessionId}.jsonl`),
-      `${JSON.stringify({ type: "session", id: sessionId })}\n`,
-    );
+  };
+  writeJson(path.join(legacySessionsDir, "sessions.json"), sessions);
+  for (const { sessionId, sessionFile } of Object.values(sessions)) {
+    write(sessionFile, `${JSON.stringify({ type: "session", id: sessionId })}\n`);
   }
 }
 
@@ -700,12 +686,9 @@ function assertLegacyOperatorPendingDelivery([updateJson, updateErr]) {
       "published update stopped on legacy pending-delivery state",
     );
   }
-  const db = new DatabaseSync(path.join(stateDir, "agents/ops/agent/openclaw-agent.sqlite"), {
-    readOnly: true,
-  });
   let liveRow;
   let recoveredInputs = [];
-  try {
+  readDatabase(path.join(stateDir, "agents/ops/agent/openclaw-agent.sqlite"), (db) => {
     liveRow = readLegacyOperatorPendingDelivery(db);
     if (
       liveRow &&
@@ -718,9 +701,7 @@ function assertLegacyOperatorPendingDelivery([updateJson, updateErr]) {
         .all("legacy-pending-delivery")
         .map((event) => JSON.parse(readSqliteTranscriptPayload(event)).message);
     }
-  } finally {
-    db.close();
-  }
+  });
   let row = liveRow;
   if (process.env.OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE === "auto-auth") {
     const witness = readJson(
@@ -1232,9 +1213,7 @@ function assertSessionMetadataMigrated(stateDir, stage) {
 function readMigratedSessionStore(stateDir, targetStorePath) {
   const dbPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
   if (fs.existsSync(dbPath)) {
-    let db;
-    try {
-      db = new DatabaseSync(dbPath, { readOnly: true });
+    const snapshot = readDatabase(dbPath, (db) => {
       const tables = new Set(
         db
           .prepare(
@@ -1248,32 +1227,21 @@ function readMigratedSessionStore(stateDir, targetStorePath) {
       );
       // SQLite is authoritative once it owns a supported session table. A stale
       // sessions.json must not hide missing, malformed, or unreadable database state.
-      const source = tables.has("session_nodes")
-        ? "session_nodes"
-        : tables.has("session_entries")
-          ? "session_entries"
-          : tables.has("cache_entries")
-            ? "cache_entries"
-            : null;
+      const source = ["session_nodes", "session_entries", "cache_entries"].find((table) =>
+        tables.has(table),
+      );
       if (source) {
-        const rows =
+        const query =
           source === "session_nodes"
-            ? db
-                .prepare(
-                  `SELECT session_key AS key, current_session_id AS session_id, entry_json AS value_json
-                   FROM session_nodes`,
-                )
-                .all()
+            ? `SELECT session_key AS key, current_session_id AS session_id, entry_json AS value_json
+               FROM session_nodes`
             : source === "session_entries"
-              ? db
-                  .prepare(
-                    `SELECT session_key AS key, session_id, entry_json AS value_json
-                     FROM session_entries`,
-                  )
-                  .all()
-              : db
-                  .prepare("SELECT key, value_json FROM cache_entries WHERE scope = ?")
-                  .all("session_entries");
+              ? `SELECT session_key AS key, session_id, entry_json AS value_json
+                 FROM session_entries`
+              : "SELECT key, value_json FROM cache_entries WHERE scope = ?";
+        const rows = db
+          .prepare(query)
+          .all(...(source === "cache_entries" ? ["session_entries"] : []));
         const store = {};
         for (const row of rows) {
           if (typeof row?.key !== "string" || typeof row?.value_json !== "string") {
@@ -1304,8 +1272,10 @@ function readMigratedSessionStore(stateDir, targetStorePath) {
         }
         return { source, store };
       }
-    } finally {
-      db?.close();
+      return undefined;
+    });
+    if (snapshot) {
+      return snapshot;
     }
   }
 

@@ -79,10 +79,6 @@ async function ensureGuildComponentMemberAllowed(params: {
     return true;
   }
 
-  const replyUnauthorized = async () => {
-    await replyUnavailableComponentInteraction(interaction, unauthorizedReply);
-  };
-
   if (
     channelConfig?.enabled === false ||
     !resolveDiscordChannelPolicyCommandAuthorizer({
@@ -92,7 +88,7 @@ async function ensureGuildComponentMemberAllowed(params: {
     }).allowed ||
     channelConfig?.allowed === false
   ) {
-    await replyUnauthorized();
+    await replyUnavailableComponentInteraction(interaction, unauthorizedReply);
     return false;
   }
 
@@ -112,7 +108,7 @@ async function ensureGuildComponentMemberAllowed(params: {
   }
 
   logVerbose(`agent ${componentLabel}: blocked user ${user.id} (not in users/roles allowlist)`);
-  await replyUnauthorized();
+  await replyUnavailableComponentInteraction(interaction, unauthorizedReply);
   return false;
 }
 

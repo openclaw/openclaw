@@ -27,7 +27,6 @@ import {
 import {
   getPreparedTelegramPollAnswer,
   isEligibleTelegramPollAnswerUpdate,
-  prepareTelegramPollAnswerContext,
   prepareTelegramPollAnswerContextAsync,
   recordPreparedTelegramPollAnswer,
   settleTelegramPollAnswerContext,
@@ -73,15 +72,20 @@ function telegramSpooledLaneKey(update: unknown, botInfo?: TelegramBotInfo): str
   });
 }
 
+function requireTelegramSpooledUpdateId(update: unknown): number {
+  const updateId = resolveTelegramUpdateId(update);
+  if (updateId === null) {
+    throw new TelegramIngressPayloadError("Telegram spooled update is missing numeric update_id.");
+  }
+  return updateId;
+}
+
 function inspectTelegramSpooledUpdate(
   update: unknown,
   botInfo?: TelegramBotInfo,
   claimedLaneKey?: string,
 ) {
-  const updateId = resolveTelegramUpdateId(update);
-  if (updateId === null) {
-    throw new TelegramIngressPayloadError("Telegram spooled update is missing numeric update_id.");
-  }
+  const updateId = requireTelegramSpooledUpdateId(update);
   const derivedLaneKey = telegramSpooledLaneKey(update, botInfo);
   const preservePreIdentityControlLane =
     botInfo !== undefined &&
@@ -98,10 +102,6 @@ function inspectTelegramSpooledUpdate(
 
 function isNonemptyTelegramCallbackValue(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
-}
-
-function isBoundedTelegramCallbackData(value: unknown): value is string {
-  return isNonemptyTelegramCallbackValue(value) && fitsTelegramCallbackData(value);
 }
 
 function isPositiveSafeInteger(value: unknown): value is number {
@@ -165,7 +165,8 @@ function canReconcileTelegramLegacyLane(params: {
       candidate.channel_post !== undefined ||
       candidate.edited_channel_post !== undefined ||
       !isNonemptyTelegramCallbackValue(callback.id) ||
-      !isBoundedTelegramCallbackData(callback.data) ||
+      !isNonemptyTelegramCallbackValue(callback.data) ||
+      !fitsTelegramCallbackData(callback.data) ||
       !isNonemptyTelegramCallbackValue(callback.chat_instance) ||
       callback.inline_message_id !== undefined ||
       !isPositiveSafeInteger(senderId) ||
@@ -322,12 +323,7 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
     TelegramSpooledUpdatePayload
   >({
     queue: params.queue,
-    inspect: (update, context) => {
-      if (context.phase === "admission" && isEligibleTelegramPollAnswerUpdate(update)) {
-        prepareTelegramPollAnswerContext({ update, accountId: params.accountId });
-      }
-      return inspect(update, context);
-    },
+    inspect,
     inspectAsync: async (update, context) => {
       if (context.phase === "admission" && isEligibleTelegramPollAnswerUpdate(update)) {
         await prepareTelegramPollAnswerContextAsync({ update, accountId: params.accountId });
@@ -337,12 +333,7 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
     payload: {
       version: TELEGRAM_SPOOLED_UPDATE_PAYLOAD_VERSION,
       serialize: (update, { receivedAt }) => {
-        const updateId = resolveTelegramUpdateId(update);
-        if (updateId === null) {
-          throw new TelegramIngressPayloadError(
-            "Telegram spooled update is missing numeric update_id.",
-          );
-        }
+        const updateId = requireTelegramSpooledUpdateId(update);
         const preparedPollAnswer =
           typeof update === "object" && update !== null
             ? getPreparedTelegramPollAnswer(update)

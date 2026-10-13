@@ -125,6 +125,7 @@ type StartPluginServicesParams = {
   getCronService?: () => PluginServiceCronHost | null | undefined;
   oneShotStopTimeouts?: { eventDrainMs: number; serviceStopMs: number };
   previous?: PluginServicesHandle | null;
+  deferStartForPluginIds?: ReadonlySet<string>;
 } & (
   | { throwOnStartError: true; onHandle: (handle: PluginServicesHandle) => void }
   | { throwOnStartError?: false; onHandle?: (handle: PluginServicesHandle) => void }
@@ -192,6 +193,7 @@ async function startPreparedPluginServices({
   broadcastPluginEvent,
   getCronService,
   oneShotStopTimeouts,
+  deferStartForPluginIds,
   throwOnStartError,
   owner,
   publication,
@@ -696,6 +698,9 @@ async function startPreparedPluginServices({
     for (const entry of registry.services) {
       if (owner.closed) {
         break;
+      }
+      if (deferStartForPluginIds?.has(entry.pluginId)) {
+        continue;
       }
       if (!canStart(entry)) {
         if (throwOnStartError && owner.stopped.has(entry)) {

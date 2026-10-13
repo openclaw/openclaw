@@ -43,7 +43,6 @@ import {
   resolveCompletedResponsesToolCall,
   resolveResponsesToolCallId,
   type ResponsesEventSink,
-  type ResponsesThinkingBlock,
   type TextBlockReference,
 } from "./openai-responses-stream-terminal-internal.js";
 import type {
@@ -88,70 +87,59 @@ export async function processResponsesStream<TApi extends Api>(
   let lastTextBlock: TextBlockReference | null = null;
   const blocks = output.content;
   const compactionTracker = createCompactionTracker(output, model, options);
+  const createTextBlock = (item: ResponsesStreamOutputMessage, text: string): TextContent => ({
+    type: "text",
+    text,
+    ...(item.phase ? { textSignature: encodeTextSignatureV1(item.id, item.phase) } : {}),
+  });
   const createOutputSlot = (
     event: object,
     item: ResponseOutputItem | ResponsesStreamOutputMessage,
   ): ResponsesOutputSlot | undefined => {
+    let slot: ThinkingOutputSlot | TextOutputSlot;
     if (item.type === "reasoning") {
-      const block: ResponsesThinkingBlock = { type: "thinking", thinking: "" };
-      const slot = {
+      slot = {
         type: "thinking",
         item,
-        block,
+        block: { type: "thinking", thinking: "" },
         contentIndex: blocks.length,
         outputIndex: readResponsesOutputIndex(event),
-      } satisfies ResponsesOutputSlot;
-      blocks.push(block);
-      outputs.set(item, slot.contentIndex, slot.outputIndex);
-      outputSlots.register(event, slot);
-      stream.push({ type: "thinking_start", contentIndex: slot.contentIndex, partial: output });
-      return slot;
-    }
-    if (item.type === "message") {
-      const messageItem = item as ResponsesStreamOutputMessage;
+      };
+    } else if (item.type === "message") {
       const collapseCandidate = lastTextBlock;
-      const block: TextContent | null = collapseCandidate
-        ? null
-        : {
-            type: "text",
-            text: "",
-            ...(messageItem.phase
-              ? { textSignature: encodeTextSignatureV1(messageItem.id, messageItem.phase) }
-              : {}),
-          };
-      const slot = {
+      const block = collapseCandidate ? null : createTextBlock(item, "");
+      slot = {
         type: "text",
-        item: messageItem,
+        item,
         block,
         contentIndex: block ? blocks.length : undefined,
         outputIndex: readResponsesOutputIndex(event),
         pendingText: collapseCandidate ? "" : null,
         collapseCandidate,
-      } satisfies ResponsesOutputSlot;
-      if (block) {
-        blocks.push(block);
-        outputs.set(messageItem, slot.contentIndex ?? blocks.length - 1, slot.outputIndex);
-      }
-      outputSlots.register(event, slot);
-      if (slot.contentIndex !== undefined) {
-        stream.push({ type: "text_start", contentIndex: slot.contentIndex, partial: output });
-      }
-      return slot;
+      };
+    } else {
+      return undefined;
     }
-    return undefined;
+    if (slot.block) {
+      blocks.push(slot.block);
+      outputs.set(slot.item, slot.contentIndex ?? blocks.length - 1, slot.outputIndex);
+    }
+    outputSlots.register(event, slot);
+    if (slot.contentIndex !== undefined) {
+      stream.push({
+        type: slot.type === "thinking" ? "thinking_start" : "text_start",
+        contentIndex: slot.contentIndex,
+        partial: output,
+      });
+    }
+    return slot;
   };
   const materializeDeferredTextSlot = (slot: TextOutputSlot): void => {
     if (slot.block || slot.pendingText === null) {
       return;
     }
     const text = slot.pendingText;
-    slot.block = {
-      type: "text",
-      text,
-      ...(slot.item.phase
-        ? { textSignature: encodeTextSignatureV1(slot.item.id, slot.item.phase) }
-        : {}),
-    };
+    slot.block = createTextBlock(slot.item, text);
     blocks.push(slot.block);
     slot.contentIndex = blocks.length - 1;
     outputs.set(slot.item, slot.contentIndex, slot.outputIndex);
@@ -390,26 +378,23 @@ export async function processResponsesStream<TApi extends Api>(
         slot.item.summary.push(event.part);
       } else if (
         event.type === "response.reasoning_summary_text.delta" ||
-        event.type === "response.reasoning_summary_part.done"
+        event.type === "response.reasoning_summary_part.done" ||
+        event.type === "response.reasoning_text.delta"
       ) {
         const slot = outputSlots.resolve(event, "thinking");
         if (!slot) {
           continue;
         }
-        slot.item.summary = slot.item.summary || [];
-        const lastPart = slot.item.summary[slot.item.summary.length - 1];
-        if (!lastPart) {
-          continue;
+        const delta = event.type === "response.reasoning_summary_part.done" ? "\n\n" : event.delta;
+        if (event.type !== "response.reasoning_text.delta") {
+          slot.item.summary = slot.item.summary || [];
+          const lastPart = slot.item.summary[slot.item.summary.length - 1];
+          if (!lastPart) {
+            continue;
+          }
+          lastPart.text += delta;
         }
-        const delta = event.type === "response.reasoning_summary_text.delta" ? event.delta : "\n\n";
-        lastPart.text += delta;
         appendThinkingDelta(slot, delta);
-      } else if (event.type === "response.reasoning_text.delta") {
-        const slot = outputSlots.resolve(event, "thinking");
-        if (!slot) {
-          continue;
-        }
-        appendThinkingDelta(slot, event.delta);
       } else if (event.type === "response.content_part.added") {
         const slot = outputSlots.resolve(event, "text");
         if (!slot) {
@@ -454,9 +439,19 @@ export async function processResponsesStream<TApi extends Api>(
           lastPart.text += event.delta;
         }
         projectTextDelta(slot, event.delta);
-      } else if (event.type === "response.function_call_arguments.delta") {
+      } else if (
+        event.type === "response.function_call_arguments.delta" ||
+        event.type === "response.function_call_arguments.done"
+      ) {
         const toolCall = streamingToolCalls.resolve(event);
-        if (toolCall) {
+        if (!toolCall) {
+          if (streamingToolCalls.hasActive()) {
+            streamingToolCalls.markArgumentsUnreliable();
+          }
+          continue;
+        }
+        let delta: string | undefined;
+        if (event.type === "response.function_call_arguments.delta") {
           toolCall.block.partialJson += event.delta;
           toolCall.argumentsStreamed = true;
           // Preview refresh is geometric; the done event and terminal finalize
@@ -464,18 +459,8 @@ export async function processResponsesStream<TApi extends Api>(
           if (toolCall.previewSchedule(toolCall.block.partialJson.length)) {
             toolCall.block.arguments = parseStreamingJson(toolCall.block.partialJson);
           }
-          stream.push({
-            type: "toolcall_delta",
-            contentIndex: toolCall.contentIndex,
-            delta: event.delta,
-            partial: output,
-          });
-        } else if (streamingToolCalls.hasActive()) {
-          streamingToolCalls.markArgumentsUnreliable();
-        }
-      } else if (event.type === "response.function_call_arguments.done") {
-        const toolCall = streamingToolCalls.resolve(event);
-        if (toolCall) {
+          delta = event.delta;
+        } else {
           const previousPartialJson = toolCall.block.partialJson;
           const doneArguments = typeof event.arguments === "string" ? event.arguments : undefined;
 
@@ -490,18 +475,16 @@ export async function processResponsesStream<TApi extends Api>(
           }
 
           if (doneArguments?.startsWith(previousPartialJson)) {
-            const delta = doneArguments.slice(previousPartialJson.length);
-            if (delta.length > 0) {
-              stream.push({
-                type: "toolcall_delta",
-                contentIndex: toolCall.contentIndex,
-                delta,
-                partial: output,
-              });
-            }
+            delta = doneArguments.slice(previousPartialJson.length) || undefined;
           }
-        } else if (streamingToolCalls.hasActive()) {
-          streamingToolCalls.markArgumentsUnreliable();
+        }
+        if (delta !== undefined) {
+          stream.push({
+            type: "toolcall_delta",
+            contentIndex: toolCall.contentIndex,
+            delta,
+            partial: output,
+          });
         }
       } else if (event.type === "response.output_item.done") {
         const item = event.item;
@@ -588,11 +571,7 @@ export async function processResponsesStream<TApi extends Api>(
             if (!outputSlot.block) {
               // Deferred distinct message: open its block now, balanced with the
               // text_end below.
-              outputSlot.block = {
-                type: "text",
-                text: "",
-                ...(phase ? { textSignature: encodeTextSignatureV1(item.id, phase) } : {}),
-              };
+              outputSlot.block = createTextBlock(item, "");
               blocks.push(outputSlot.block);
               outputSlot.contentIndex = blocks.length - 1;
               stream.push({
@@ -727,7 +706,9 @@ export async function processResponsesStream<TApi extends Api>(
     return terminalResponse ?? undefined;
   } finally {
     for (const block of output.content) {
-      delete (block as { partialJson?: string }).partialJson;
+      if (block.type === "toolCall") {
+        delete block.partialJson;
+      }
     }
   }
 }

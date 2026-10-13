@@ -52,6 +52,13 @@ function plainPage(text: string): TelegramTextDeliveryPage {
   };
 }
 
+function htmlPage(
+  htmlText: string,
+  plainText = telegramHtmlToPlainTextFallback(htmlText),
+): TelegramTextDeliveryPage {
+  return { htmlText, plainText, sourceText: htmlText, sourceTextMode: "html" };
+}
+
 export function planTelegramTextDeliveryPages(
   params: TelegramTextPlanParams,
 ): TelegramTextDeliveryPage[] {
@@ -111,13 +118,11 @@ export function planTelegramTextDeliveryPages(
     try {
       const normalizedHtml = params.text.replace(/<br\s*\/?>/giu, "\n");
       const chunks = splitTelegramHtmlChunks(normalizedHtml, maxChars);
-      return chunks.map((htmlText) => ({
-        htmlText,
-        plainText: chunks.length === 1 ? plainText : telegramHtmlToPlainTextFallback(htmlText),
-        sourceText: htmlText,
-        sourceTextMode: "html",
-        fullSourceText: normalizedHtml,
-      }));
+      return chunks.map((htmlText) =>
+        Object.assign(htmlPage(htmlText, chunks.length === 1 ? plainText : undefined), {
+          fullSourceText: normalizedHtml,
+        }),
+      );
     } catch (error) {
       params.warn?.(`telegram HTML chunk planning failed; sending plain text: ${String(error)}`);
       return splitTelegramPlainTextChunks(plainText, maxChars).map(plainPage);
@@ -131,23 +136,12 @@ export function planTelegramTextDeliveryPages(
   for (const markdown of markdownParts) {
     const chunks = markdownToTelegramChunks(markdown, maxChars, { tableMode: params.tableMode });
     if (!chunks.length && markdown) {
-      const htmlText = markdownToTelegramHtml(markdown, { tableMode: params.tableMode });
-      pages.push({
-        htmlText,
-        plainText: markdown,
-        sourceText: htmlText,
-        sourceTextMode: "html",
-      });
+      pages.push(
+        htmlPage(markdownToTelegramHtml(markdown, { tableMode: params.tableMode }), markdown),
+      );
       continue;
     }
-    pages.push(
-      ...chunks.map((chunk) => ({
-        htmlText: chunk.html,
-        plainText: telegramHtmlToPlainTextFallback(chunk.html),
-        sourceText: chunk.html,
-        sourceTextMode: "html" as const,
-      })),
-    );
+    pages.push(...chunks.map((chunk) => htmlPage(chunk.html)));
   }
   return pages;
 }
@@ -165,6 +159,8 @@ type TelegramTextPageSender<TPlain, THtml, TRich> = {
     sendHtml: (html: string) => Promise<THtml>;
     sendRich: (richMessage: TelegramInputRichMessage) => Promise<TRich>;
   };
+  /** Drafts keep HTML transport for source-mode pages even when the rendered text is empty. */
+  html?: boolean;
   fallbackLimit?: number;
 };
 
@@ -174,7 +170,8 @@ export async function* sendTelegramTextPageParts<TPlain, THtml, TRich>(
   params: TelegramTextPageSender<TPlain, THtml, TRich>,
 ): AsyncGenerator<{ result: TPlain | THtml | TRich; page: TelegramTextDeliveryPage }> {
   const { page } = params;
-  if (!page.richMessage && !page.htmlText) {
+  const html = params.html ?? Boolean(page.htmlText);
+  if (!page.richMessage && !html) {
     yield { result: await params.sender.sendPlain(page.plainText), page };
     return;
   }
@@ -196,7 +193,7 @@ export async function* sendTelegramTextPageParts<TPlain, THtml, TRich>(
     sendFormatted: async () => ({
       result: page.richMessage
         ? await params.sender.sendRich(page.richMessage)
-        : await params.sender.sendHtml(page.htmlText!),
+        : await params.sender.sendHtml(page.htmlText ?? page.sourceText),
     }),
     sendPlain: async (plan, label) => ({
       chunks: page.richMessage ? plan.chunks : [plan.plainText],

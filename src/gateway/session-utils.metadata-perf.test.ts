@@ -93,7 +93,6 @@ function createRowThinkingFixture() {
       modelCatalog: models,
       rowContext,
       activeModel: null,
-      skipTranscriptUsageFallback: true,
     }).inputs.thinkingProjection;
   return {
     cfg,
@@ -165,7 +164,7 @@ test("rebuilds resident thinking facts on config and catalog publication", async
     const read = () => projection.snapshot({ agentId: "main", key }).row;
     try {
       await projection.ensureMaterialized();
-      expect(read()).toMatchObject({ thinkingLevel: "high", thinkingDefault: "off" });
+      expect(read()).toMatchObject({ thinkingLevel: "medium", thinkingDefault: "off" });
       const initialCalls = fixture.policyCalls();
       cfg = {
         ...cfg,
@@ -174,7 +173,7 @@ test("rebuilds resident thinking facts on config and catalog publication", async
       expect(read()?.thinkingDefault).toBe("off");
       sessionChanges.emit({ all: true, scope: "config" });
       await projection.ensureMaterialized();
-      expect(read()).toMatchObject({ thinkingLevel: "high", thinkingDefault: "high" });
+      expect(read()).toMatchObject({ thinkingLevel: "medium", thinkingDefault: "high" });
       expect(fixture.policyCalls()).toBeGreaterThan(initialCalls);
       const configuredCalls = fixture.policyCalls();
       const next: ModelCatalogSnapshot = {
@@ -194,11 +193,11 @@ test("rebuilds resident thinking facts on config and catalog publication", async
           createPreparedGatewayModelCatalog({ ...next, pluginRegistry: fixture.pluginRegistry }),
         ],
       ]);
-      expect(read()?.thinkingLevel).toBe("high");
+      expect(read()?.thinkingLevel).toBe("medium");
       notifyPreparedModelRuntimePublication({ phase: "catalog-published" });
       await projection.ensureMaterialized();
       expect(read()).toMatchObject({
-        thinkingLevel: "off",
+        thinkingLevel: "medium",
         thinkingDefault: "off",
         thinkingOptions: ["off", "ultra"],
       });

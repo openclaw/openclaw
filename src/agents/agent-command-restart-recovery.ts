@@ -7,11 +7,6 @@ import type {
   HarnessCompletionRecovery,
   RestartRecoveryTerminalDeliveryEvidenceResult,
 } from "../config/sessions/restart-recovery-types.js";
-import {
-  bindPreparedSessionSourceAssertion,
-  prepareSessionSourceScope,
-  releaseSessionSourceAuthorities,
-} from "../config/sessions/session-source-authority.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import { isAgentMediatedCompletionSourceTool } from "../sessions/input-provenance.js";
 import type { DeliveryContext } from "../utils/delivery-context.shared.js";
@@ -471,13 +466,13 @@ export function prepareCommandHarnessCompletionRecovery(params: {
 }
 
 /** Called after the caller has recorded the committed entry for failure cleanup. */
-export async function bindCommandHarnessCompletionAssertion(params: {
+export function bindCommandHarnessCompletionAssertion(params: {
   claim?: HarnessCompletionRecovery;
   persisted?: SessionEntry;
   sessionKey: string;
   storePath?: string;
   opts: AgentCommandOpts;
-}): Promise<{ opts: AgentCommandOpts; source?: { release(): Promise<void> } }> {
+}): { opts: AgentCommandOpts } {
   const { claim, persisted, sessionKey, storePath, opts } = params;
   if (
     claim &&
@@ -501,26 +496,5 @@ export async function bindCommandHarnessCompletionAssertion(params: {
       { recoveryReference: opts.assertSourceCurrent?.recoveryReference },
     ),
   };
-  // A resumed run needs its exact source prepared before the first assertion.
-  const prepared = await prepareSessionSourceScope(guarded.assertSourceCurrent);
-  if (!prepared) {
-    guarded.assertSourceCurrent();
-    return { opts: guarded };
-  }
-  const source = bindPreparedSessionSourceAssertion(guarded.assertSourceCurrent, prepared);
-  try {
-    source();
-    return {
-      opts: {
-        ...guarded,
-        assertSourceCurrent: Object.assign(source, {
-          recoveryReference: guarded.assertSourceCurrent.recoveryReference,
-        }),
-      },
-      source,
-    };
-  } catch (error) {
-    await releaseSessionSourceAuthorities([source], [error]);
-    throw error;
-  }
+  return { opts: guarded };
 }

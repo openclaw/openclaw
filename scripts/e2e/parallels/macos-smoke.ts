@@ -48,9 +48,11 @@ import {
   printSmokeTargetSummary,
   posixAgentTurnScript,
   posixStopGatewayScript,
+  posixRefOnboardArgs,
   SmokeRunController,
   smokeDefaultOptions,
   smokeDefaultStatus,
+  verifyPosixGateway,
   type SmokeCliOptions,
 } from "./smoke-common.ts";
 
@@ -317,16 +319,7 @@ class MacosSmoke extends SmokeRunController<MacosOptions> {
   }
 
   protected async runFreshLane(): Promise<void> {
-    await this.phases.phase("fresh.restore-snapshot", 780, () => this.restoreSnapshot());
-    await this.phases.phase("fresh.reset-state", 180, () => this.resetState());
-    await this.phases.phase("fresh.install-main", 420, () =>
-      this.installMain("openclaw-main-fresh.tgz"),
-    );
-    this.status.freshVersion = await this.extractLastVersion("fresh.install-main");
-    await this.phases.phase("fresh.verify-main-version", 60, () => this.verifyTargetVersion());
-    await this.phases.phase("fresh.verify-bundle-permissions", 180, () =>
-      this.verifyBundlePermissions(),
-    );
+    await this.runInstallLane("fresh");
     await this.phases.phase("fresh.install-companions", 600, () =>
       installSmokeRuntimeCompanions({
         provider: this.options.provider,
@@ -341,31 +334,39 @@ class MacosSmoke extends SmokeRunController<MacosOptions> {
   }
 
   protected async runUpgradeLane(): Promise<void> {
-    await this.phases.phase("upgrade.restore-snapshot", 780, () => this.restoreSnapshot());
-    await this.phases.phase("upgrade.reset-state", 180, () => this.resetState());
-    await this.phases.phase("upgrade.install-latest", 420, () => this.installLatestRelease());
-    this.status.latestInstalledVersion = await this.extractLastVersion("upgrade.install-latest");
-    await this.phases.phase("upgrade.verify-latest-version", 60, () =>
-      this.verifyVersionContains(this.installVersion),
-    );
-    if (this.options.skipLatestRefCheck) {
-      this.status.upgradePrecheck = "skipped";
-    } else if (
-      await this.phases.phaseReturns("upgrade.latest-ref-precheck", 180, () =>
-        this.captureLatestRefFailure(),
-      )
-    ) {
-      this.status.upgradePrecheck = "latest-ref-pass";
-    } else {
-      this.status.upgradePrecheck = "latest-ref-fail";
-    }
-    if (this.options.targetPackageSpec) {
-      await this.phases.phase("upgrade.install-main", 420, () =>
-        this.installMain("openclaw-main-upgrade.tgz"),
+    await this.runInstallLane("upgrade");
+    await this.phases.phase("upgrade.onboard-ref", 420, () => this.runRefOnboard());
+    await this.runGatewaySmoke("upgrade");
+  }
+
+  private async runInstallLane(lane: "fresh" | "upgrade"): Promise<void> {
+    await this.phases.phase(`${lane}.restore-snapshot`, 780, () => this.restoreSnapshot());
+    await this.phases.phase(`${lane}.reset-state`, 180, () => this.resetState());
+    if (lane === "upgrade") {
+      await this.phases.phase("upgrade.install-latest", 420, () => this.installLatestRelease());
+      this.status.latestInstalledVersion = await this.extractLastVersion("upgrade.install-latest");
+      await this.phases.phase("upgrade.verify-latest-version", 60, () =>
+        this.verifyVersionContains(this.installVersion),
       );
-      this.status.upgradeVersion = await this.extractLastVersion("upgrade.install-main");
-      await this.phases.phase("upgrade.verify-main-version", 60, () => this.verifyTargetVersion());
-      await this.phases.phase("upgrade.verify-bundle-permissions", 180, () =>
+      if (this.options.skipLatestRefCheck) {
+        this.status.upgradePrecheck = "skipped";
+      } else if (
+        await this.phases.phaseReturns("upgrade.latest-ref-precheck", 180, () =>
+          this.captureLatestRefFailure(),
+        )
+      ) {
+        this.status.upgradePrecheck = "latest-ref-pass";
+      } else {
+        this.status.upgradePrecheck = "latest-ref-fail";
+      }
+    }
+    if (lane === "fresh" || this.options.targetPackageSpec) {
+      await this.phases.phase(`${lane}.install-main`, 420, () =>
+        this.installMain(`openclaw-main-${lane}.tgz`),
+      );
+      this.status[`${lane}Version`] = await this.extractLastVersion(`${lane}.install-main`);
+      await this.phases.phase(`${lane}.verify-main-version`, 60, () => this.verifyTargetVersion());
+      await this.phases.phase(`${lane}.verify-bundle-permissions`, 180, () =>
         this.verifyBundlePermissions(),
       );
     } else {
@@ -377,8 +378,6 @@ class MacosSmoke extends SmokeRunController<MacosOptions> {
         this.verifyDevChannelUpdate(),
       );
     }
-    await this.phases.phase("upgrade.onboard-ref", 420, () => this.runRefOnboard());
-    await this.runGatewaySmoke("upgrade");
   }
 
   private async runGatewaySmoke(lane: "fresh" | "upgrade"): Promise<void> {
@@ -632,28 +631,7 @@ fi`);
 
   private runRefOnboard(): void {
     const daemonFlag = this.guestTransport === "sudo" ? "--skip-health" : "--install-daemon";
-    this.guest.exec([
-      "/usr/bin/env",
-      `${this.auth.apiKeyEnv}=${this.auth.apiKeyValue}`,
-      guestOpenClaw,
-      "onboard",
-      "--non-interactive",
-      "--mode",
-      "local",
-      "--auth-choice",
-      this.auth.authChoice,
-      ...(this.auth.tokenProvider ? ["--token-provider", this.auth.tokenProvider] : []),
-      "--secret-input-mode",
-      "ref",
-      "--gateway-port",
-      "18789",
-      "--gateway-bind",
-      "loopback",
-      daemonFlag,
-      "--skip-skills",
-      "--accept-risk",
-      "--json",
-    ]);
+    this.guest.exec(posixRefOnboardArgs(this.auth, daemonFlag));
   }
 
   private captureLatestRefFailure(): void {
@@ -739,24 +717,7 @@ sleep 1`,
   }
 
   private verifyGateway(): void {
-    for (let attempt = 1; attempt <= 8; attempt++) {
-      const result = this.guestOpenClaw([
-        "gateway",
-        "status",
-        "--deep",
-        "--require-rpc",
-        "--timeout",
-        "15000",
-      ]);
-      if (result) {
-        return;
-      }
-      if (attempt < 8) {
-        warn(`gateway-status retry ${attempt}`);
-        run("sleep", ["5"]);
-      }
-    }
-    throw new Error("gateway status did not become RPC-ready");
+    verifyPosixGateway(this.guest);
   }
 
   private showGatewayStatusCompat(): void {

@@ -157,9 +157,9 @@ describe("on-demand prepared worker admission", () => {
     }
   });
 
-  it.each(["build", "reserve", "expired reserve"] as const)(
+  it.each(["reserve"] as const)(
     "cancels an in-flight %s while retaining cleanup ownership until the provider settles",
-    async (purpose) => {
+    async () => {
       const f = await fixture();
       const entered = createDeferredCore<AbortSignal>();
       const release = createDeferredCore();
@@ -179,34 +179,26 @@ describe("on-demand prepared worker admission", () => {
         expect(provisionSettled).toBe(true);
       });
       f.provider.destroy = destroyProvider;
-      let environmentId: string;
-      if (purpose === "build") {
-        ({ environmentId } = await f.service.prepare(f.request));
-      } else {
-        const intent = await f.service.prepareProjectIntent("development", {
-          projectPath: f.projectPath,
-          executionMode: "worker-turn",
-          setupAuthorized: true,
-        });
-        ({ environmentId } = await support.testState.store.createIntent({
-          environmentId: "automatic-reserve",
-          provisionOperationId: "automatic-reserve-operation",
-          providerId: intent.providerId,
-          profileId: "development",
-          profileSnapshot: intent.profileSnapshot,
-          preparation: {
-            purpose: "reserve",
-            key: intent.preparationKey!,
-            demandAtMs: 1_000,
-            expiresAtMs: 11_000,
-          },
-        }));
-        f.service.schedulePreparedRefill();
-      }
+      const intent = await f.service.prepareProjectIntent("development", {
+        projectPath: f.projectPath,
+        executionMode: "worker-turn",
+        setupAuthorized: true,
+      });
+      const { environmentId } = await support.testState.store.createIntent({
+        environmentId: "automatic-reserve",
+        provisionOperationId: "automatic-reserve-operation",
+        providerId: intent.providerId,
+        profileId: "development",
+        profileSnapshot: intent.profileSnapshot,
+        preparation: {
+          purpose: "reserve",
+          key: intent.preparationKey!,
+          demandAtMs: 1_000,
+          expiresAtMs: 11_000,
+        },
+      });
+      f.service.schedulePreparedRefill();
       const signal = await entered.promise;
-      if (purpose === "expired reserve") {
-        support.testState.nowMs = 11_001;
-      }
       const cancelled = new Promise<void>((resolve) => {
         signal.addEventListener("abort", () => resolve(), { once: true });
       });

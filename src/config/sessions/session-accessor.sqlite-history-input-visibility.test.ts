@@ -3,16 +3,15 @@ import { expect, it } from "vitest";
 import { createSessionHistorySubagentProjection } from "../../gateway/session-history-subagent-projection.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import {
-  replaceSessionEntry,
-  replaceTranscriptEvents,
-  waitForSessionTranscriptProjection,
-} from "./session-accessor.js";
+import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
+import { replaceSessionEntry, waitForSessionTranscriptProjection } from "./session-accessor.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 
 it.each([false, true])(
   "bounds legacy coordination lookups and reuses scanned inputs (compacted=%s)",
   async (compacted) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
       const scope = {
         agentId: "main",

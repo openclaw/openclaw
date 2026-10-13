@@ -22,6 +22,7 @@ import {
   deleteSkillUploadState,
   hasLiveSkillUploadInstallLease,
   requireUploadMetadata,
+  requireUploadMetadataInDatabase,
   selectSkillUploadMetadata,
   SKILL_UPLOAD_LEASE_SCOPE,
   type SkillUploadDatabase,
@@ -134,13 +135,7 @@ export function appendSkillUploadChunkInDatabase(
   return runOpenClawStateWriteTransaction(({ db }) => {
     admit?.("transaction");
     const kysely = getNodeSqliteKysely<SkillUploadDatabase>(db);
-    const row = executeSqliteQueryTakeFirstSync(
-      db,
-      selectSkillUploadMetadata(kysely).where("upload_id", "=", uploadId),
-    );
-    if (!row) {
-      throw new SkillUploadRequestError(`upload not found: ${uploadId}`);
-    }
+    const row = requireUploadMetadataInDatabase(db, kysely, uploadId);
     if (!isFutureDateTimestampMs(row.expires_at)) {
       throw new SkillUploadRequestError("upload has expired");
     }

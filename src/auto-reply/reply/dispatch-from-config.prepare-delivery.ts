@@ -2,6 +2,7 @@ import { isParentOwnedBackgroundAcpSession } from "@openclaw/acp-core/session-in
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { readAcpSessionEntryAsync } from "../../acp/runtime/session-meta.js";
 import { logVerbose } from "../../globals.js";
+import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import {
   copyReplyPayloadMetadata,
@@ -10,13 +11,14 @@ import {
 } from "../reply-payload.js";
 import type { PluginBindingTranscriptOwner } from "./dispatch-from-config.events.js";
 import type { GatherDispatchRequestReadyState } from "./dispatch-from-config.gather.js";
-import { hasAskUserPayload } from "./dispatch-from-config.payloads.js";
+import { maybeApplyTtsToReplyPayload, hasAskUserPayload } from "./dispatch-from-config.payloads.js";
 import {
   loadReplyMediaPathsRuntime,
   loadRouteReplyRuntime,
 } from "./dispatch-from-config.runtime-loaders.js";
 import { resolveReplyPolicyConversationType } from "./get-reply-conversation-type.js";
 import type { ReplyDispatchKind, ReplyDispatchOperation } from "./reply-dispatcher.types.js";
+import { beginReplyOperationFinalizationWork } from "./reply-run-finalization-lease.js";
 import {
   createReplyDeliveryContext,
   resolveReplyDeliveryAccountId,
@@ -93,6 +95,39 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     routeReplyChannel === normalizedCurrentSurface,
   );
   const deliveryChannel = shouldRouteToOriginating ? routeReplyChannel : currentSurface;
+  const { preparedTtsPreferences, getDispatchReplyOperation } = state;
+  const maybeApplyTtsWithFinalizationLease = async (
+    payload: ReplyPayload,
+    kind: ReplyDispatchKind,
+  ) => {
+    const ttsContext = {
+      cfg,
+      channel: deliveryChannel,
+      ttsAuto: state.sessionTtsAuto,
+      agentId: state.sessionAgentId,
+      accountId: replyRoute.accountId,
+    };
+    const replyOperation = getDispatchReplyOperation();
+    // Provider fallbacks can outlive the default lease, but remain bounded by
+    // the same hard no-progress ceiling used for stale run takeover.
+    const finishFinalizationWork = replyOperation
+      ? beginReplyOperationFinalizationWork(replyOperation, RUN_STALE_TAKEOVER_MS)
+      : undefined;
+    try {
+      return await maybeApplyTtsToReplyPayload({
+        ...ttsContext,
+        payload,
+        kind,
+        preparedTtsPreferences,
+        inboundAudio:
+          state.inboundAudio ||
+          state.getDispatchReplyOperation()?.acceptedSteeredInboundAudio === true,
+      });
+    } finally {
+      finishFinalizationWork?.();
+      replyOperation?.recordActivity();
+    }
+  };
   const replyContextAccountId = routeReplyChannel
     ? resolveReplyDeliveryAccountId(cfg, routeReplyChannel, replyRoute.accountId)
     : undefined;
@@ -280,7 +315,7 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     markInboundDedupeReplayUnsafe();
     return turnLedger.sendQueued(mode === "additive" ? "tool" : "final", bindingPayload).queued;
   };
-  const nextState = Object.assign(state, {
+  return Object.assign(state, {
     suppressAcpChildUserDelivery,
     normalizedCurrentSurface,
     isInternalWebchatTurn,
@@ -290,6 +325,7 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     shouldSuppressTyping,
     routeReplyTo,
     deliveryChannel,
+    maybeApplyTtsWithFinalizationLease,
     replyContextAccountId,
     normalizeReplyMediaPayload,
     routeReplyToOriginating,
@@ -298,9 +334,6 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     sendReplyOperationAsync,
     deliverBindingPayload,
   });
-  return { status: "ready" as const, state: nextState };
 }
 
-export type PrepareDispatchDeliveryReadyState = Awaited<
-  ReturnType<typeof prepareDispatchDelivery>
->["state"];
+export type PrepareDispatchDeliveryReadyState = Awaited<ReturnType<typeof prepareDispatchDelivery>>;

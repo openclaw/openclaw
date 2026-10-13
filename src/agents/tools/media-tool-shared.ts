@@ -35,6 +35,7 @@ import {
 } from "../sandbox-media-paths.js";
 import type { ToolFsPolicy } from "../tool-fs-policy.js";
 import { normalizeWorkspaceDir } from "../workspace-dir.js";
+import type { AgentWorkspaceReadiness } from "../workspace-readiness.js";
 import {
   ToolInputError,
   readNumberParam,
@@ -100,17 +101,21 @@ type CapabilityProvider = {
   defaultModel?: string;
   models?: readonly string[];
   isConfigured?: (ctx: { cfg?: OpenClawConfig; agentDir?: string }) => boolean;
+  isConfiguredAsync?: (ctx: { cfg?: OpenClawConfig; agentDir?: string }) => Promise<boolean>;
 };
 
-type CapabilityProviderSource = CapabilityProvider[] | (() => CapabilityProvider[]);
+type CapabilityProviderSource =
+  | readonly CapabilityProvider[]
+  | (() => readonly CapabilityProvider[]);
 
 type GenerationCapabilityProviderKey =
   | "imageGenerationProviders"
   | "videoGenerationProviders"
   | "musicGenerationProviders";
 
+/** @deprecated Only synchronous tool-constructor compatibility uses this path. */
 export function isCapabilityProviderConfigured<T extends CapabilityProvider>(params: {
-  providers: T[];
+  providers: readonly T[];
   provider?: T;
   providerId?: string;
   cfg?: OpenClawConfig;
@@ -146,6 +151,21 @@ export function isCapabilityProviderConfigured<T extends CapabilityProvider>(par
   });
 }
 
+export async function isCapabilityProviderConfiguredAsync<T extends CapabilityProvider>(
+  params: Parameters<typeof isCapabilityProviderConfigured<T>>[0],
+): Promise<boolean> {
+  const provider =
+    params.provider ??
+    findCapabilityProviderById({
+      providers: params.providers,
+      providerId: params.providerId,
+      normalizeProviderId,
+    });
+  return provider?.isConfiguredAsync
+    ? await provider.isConfiguredAsync({ cfg: params.cfg, agentDir: params.agentDir })
+    : isCapabilityProviderConfigured({ ...params, provider });
+}
+
 export function createCapabilityProviderRuntimeDeps<T extends CapabilityProvider>(
   providers: readonly T[] | undefined,
 ) {
@@ -160,7 +180,7 @@ export function createCapabilityProviderRuntimeDeps<T extends CapabilityProvider
 }
 
 export function resolveSelectedCapabilityProvider<T extends CapabilityProvider>(params: {
-  providers: T[];
+  providers: readonly T[];
   modelConfig: ToolModelConfig;
   modelOverride?: string;
 }): T | undefined {
@@ -182,14 +202,14 @@ export function resolveSelectedCapabilityProvider<T extends CapabilityProvider>(
   return undefined;
 }
 
-function resolveCapabilityModelCandidatesForTool(params: {
+async function resolveCapabilityModelCandidatesForTool(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
   authProfileStoreSource?: boolean;
-  providers: CapabilityProvider[];
-}): string[] {
+  providers: readonly CapabilityProvider[];
+}): Promise<string[]> {
   const providerDefaults = new Map<string, { ref: string; aliases: string[] }>();
   for (const provider of params.providers) {
     const providerId = provider.id.trim();
@@ -198,10 +218,10 @@ function resolveCapabilityModelCandidatesForTool(params: {
       !providerId ||
       !modelId ||
       providerDefaults.has(providerId) ||
-      !isCapabilityProviderConfigured({
+      !(await isCapabilityProviderConfiguredAsync({
         ...params,
         provider,
-      })
+      }))
     ) {
       continue;
     }
@@ -229,7 +249,7 @@ function resolveCapabilityModelCandidatesForTool(params: {
  * Builds the model config for a generation tool from explicit config first, then configured
  * provider defaults ordered around the agent's primary provider.
  */
-export function resolveCapabilityModelConfigForTool(params: {
+export async function resolveCapabilityModelConfigForTool(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
   agentDir?: string;
@@ -238,7 +258,7 @@ export function resolveCapabilityModelConfigForTool(params: {
   modelConfig?: AgentModelConfig;
   modelOverride?: string;
   providers: CapabilityProviderSource;
-}): ToolModelConfig | null {
+}): Promise<ToolModelConfig | null> {
   const configured = coerceToolModelConfig(params.modelConfig);
   const modelOverride = normalizeOptionalString(params.modelOverride);
   const explicit = modelOverride ? { ...configured, primary: modelOverride } : configured;
@@ -249,12 +269,13 @@ export function resolveCapabilityModelConfigForTool(params: {
   return buildToolModelConfigFromCandidates({
     ...params,
     explicit,
-    candidates: resolveCapabilityModelCandidatesForTool({ ...params, providers }),
-    isProviderConfigured: (providerId) =>
-      isCapabilityProviderConfigured({ ...params, providers, providerId }),
+    candidates: await resolveCapabilityModelCandidatesForTool({ ...params, providers }),
+    // Candidate selection already checked each provider against its current auth owner.
+    isProviderConfigured: () => true,
   });
 }
 
+/** @deprecated Only synchronous tool-constructor compatibility uses this path. */
 export function hasGenerationToolAvailability(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
@@ -262,7 +283,7 @@ export function hasGenerationToolAvailability(params: {
   authStore?: AuthProfileStore;
   authProfileStoreSource?: boolean;
   modelConfig?: AgentModelConfig;
-  providers?: CapabilityProvider[] | (() => CapabilityProvider[]);
+  providers?: CapabilityProviderSource;
   providerKey: GenerationCapabilityProviderKey;
 }): boolean {
   if (params.cfg?.plugins?.enabled === false) {
@@ -311,6 +332,27 @@ export function hasGenerationToolAvailability(params: {
       capability: capabilityAuthOperation(params.providerKey),
     }),
   );
+}
+
+export async function hasGenerationToolAvailabilityAsync(
+  params: Parameters<typeof hasGenerationToolAvailability>[0],
+): Promise<boolean> {
+  if (params.cfg?.plugins?.enabled === false) {
+    return false;
+  }
+  if (hasToolModelConfig(coerceToolModelConfig(params.modelConfig))) {
+    return true;
+  }
+  const providers = typeof params.providers === "function" ? params.providers() : params.providers;
+  if (providers) {
+    for (const provider of providers) {
+      if (await isCapabilityProviderConfiguredAsync({ ...params, providers, provider })) {
+        return true;
+      }
+    }
+    return false;
+  }
+  return hasGenerationToolAvailability({ ...params, providers: undefined });
 }
 
 export function resolveGenerateAction(
@@ -468,6 +510,7 @@ export async function loadMediaToolReferences<T>(params: {
   maxBytes: number;
   ssrfPolicy?: SsrFPolicy;
   signal?: AbortSignal;
+  workspaceReadiness?: AgentWorkspaceReadiness;
   mapMedia: (media: LoadedToolReferenceMedia) => T;
   mapRemote?: (url: string) => T;
 }): Promise<LoadedMediaToolReference<T>[]> {
@@ -487,6 +530,16 @@ export async function loadMediaToolReferences<T>(params: {
     if (params.sandbox && reference.isHttpUrl) {
       const label = params.toolName === "image_generate" ? "" : `${params.expectedKind} `;
       throw new ToolInputError(`Sandboxed ${params.toolName} does not allow remote ${label}URLs.`);
+    }
+    const workspaceReadiness =
+      !reference.isHttpUrl && !reference.isDataUrl && !reference.isMediaStoreUrl
+        ? params.workspaceReadiness
+        : undefined;
+    if (workspaceReadiness) {
+      workspaceReadiness.assertCurrent();
+      await workspaceReadiness.waitUntilReady();
+      params.signal?.throwIfAborted();
+      workspaceReadiness.assertCurrent();
     }
     const resolvedInput = !params.sandbox && input.startsWith("~") ? resolveUserPath(input) : input;
     if (reference.isHttpUrl && params.mapRemote) {
@@ -515,6 +568,7 @@ export async function loadMediaToolReferences<T>(params: {
     } else {
       const { loadWebMedia } = await import("../../media/web-media.js");
       params.signal?.throwIfAborted();
+      workspaceReadiness?.assertCurrent();
       const timeout =
         params.toolName === "music_generate" && !params.sandbox
           ? buildTimeoutAbortSignal({

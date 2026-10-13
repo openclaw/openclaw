@@ -17,6 +17,11 @@ While an update is active, the table shows its phase instead of advertising anot
 update, and the final line points to `openclaw update status`. JSON still includes
 registry/Git `availability` separately from `activeRun`.
 
+When a package publication journal no longer matches its installation, status
+names the changed parent, control directory, or journal bindings with their
+recorded and current `dev:ino` values. It identifies device-number-only changes
+and directs you to `openclaw update repair` for verified recovery.
+
 Git availability checks, including the Gateway's background check after startup,
 refresh only the selected upstream. They do not import other remote branches or
 tags, prune existing refs, or change shallow-history boundaries. A fresh detached
@@ -53,9 +58,13 @@ Older installed status commands cannot acquire this observation from candidate c
 
 For adopted immutable installations, the installation projection includes
 `activationEnabled` only when explicitly enabled. `activation` reports a
-retained operation's `operationId`, `phase`, `previousSha`, and `candidateSha`;
-`lastActivation` records the verified result and selected generation after
-retirement. Read these under `update.immutable` in CLI JSON or
+retained operation's `operationId`, `phase`, `previousSha`, and `candidateSha`,
+plus optional safe `failure` and the exact retained `recoveryCommand`.
+`lastActivation` records historical verification (`outcome`, `selectedSha`, and
+`verifiedAtMs`), including optional Gateway `version`, `buildId`, `pid`, and
+`bootId`. Text status labels success **accepted** and rollback **restored**;
+a restored predecessor is not candidate success. Older receipts may omit Gateway
+fields. Pending recovery remains separate even when a historical receipt exists. Read these under `update.immutable` in CLI JSON or
 `schedule.install.immutable` in Gateway `update.status`. A prepared generation
 or `starting` phase is not activation success. Use
 [`openclaw update recover --root <installation-root>`](/cli/update#immutable-release-installations)

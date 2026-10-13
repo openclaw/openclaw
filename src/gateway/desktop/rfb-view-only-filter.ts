@@ -9,6 +9,24 @@ const FIXED_PHASE_LENGTHS: Record<Exclude<RfbClientPhase, "messages">, number> =
   clientInit: 1,
 };
 
+const MESSAGE_LENGTHS = new Map<number, number | ((pending: Buffer) => number)>([
+  [0, 20],
+  [2, (pending) => (pending.length < 4 ? 4 : 4 + pending.readUInt16BE(2) * 4)],
+  [3, 10],
+  [4, 8],
+  // noVNC's extended pointer marker appends one byte for buttons 8-15.
+  [5, (pending) => (pending.length < 2 ? 2 : (pending.readUInt8(1) & 0x80) !== 0 ? 7 : 6)],
+  // Extended clipboard payloads use a negative signed length.
+  [6, (pending) => (pending.length < 8 ? 8 : 8 + Math.abs(pending.readInt32BE(4)))],
+  [150, 10],
+  // ClientFence's payload length follows its 8-byte fixed header.
+  [248, (pending) => (pending.length < 9 ? 9 : 9 + pending.readUInt8(8))],
+  // noVNC sends one fixed 16-byte screen record in SetDesktopSize.
+  [251, 24],
+  // QEMU extended key: type, subtype, down flag, keysym, keycode.
+  [255, 12],
+]);
+
 type RfbClientMessageFilterResult =
   | { forward: Buffer; error?: never }
   | { forward?: never; error: string };
@@ -34,36 +52,10 @@ export function createRfbClientMessageFilter(
     if (pending.length === 0) {
       return 1;
     }
-    switch (pending[0]) {
-      case 0:
-        return 20;
-      case 2:
-        return pending.length < 4 ? 4 : 4 + pending.readUInt16BE(2) * 4;
-      case 3:
-        return 10;
-      case 4:
-        return 8;
-      case 5:
-        // noVNC's extended pointer event sets the marker bit in the button mask
-        // and appends one byte for buttons 8-15.
-        return pending.length < 2 ? 2 : (pending.readUInt8(1) & 0x80) !== 0 ? 7 : 6;
-      case 6:
-        // noVNC marks extended clipboard payloads with a negative signed length.
-        return pending.length < 8 ? 8 : 8 + Math.abs(pending.readInt32BE(4));
-      case 150:
-        return 10;
-      case 248:
-        // ClientFence's payload length byte follows its 8-byte fixed header.
-        return pending.length < 9 ? 9 : 9 + pending.readUInt8(8);
-      case 251:
-        // SetDesktopSize has one fixed 16-byte screen record in noVNC.
-        return 24;
-      case 255:
-        // QEMU extended key event: type, subtype, down flag, keysym, keycode.
-        return 12;
-      default:
-        return `unsupported RFB client message type ${pending[0]}`;
-    }
+    const length = MESSAGE_LENGTHS.get(pending[0] ?? -1);
+    return typeof length === "function"
+      ? length(pending)
+      : (length ?? `unsupported RFB client message type ${pending[0]}`);
   };
 
   const routePending = (forwarded: Buffer[]): string | undefined => {
@@ -103,7 +95,7 @@ export function createRfbClientMessageFilter(
       }
       const forwarded: Buffer[] = [];
       let offset = 0;
-      while (offset < chunk.length) {
+      while (offset < chunk.length || pending.length > 0) {
         const target = pendingTargetLength();
         if (typeof target === "string") {
           return fail(target);
@@ -111,17 +103,13 @@ export function createRfbClientMessageFilter(
         if (target > MAX_PENDING_BYTES) {
           return fail("RFB client message exceeds the 64 KiB buffer limit");
         }
-        const take = Math.min(target - pending.length, chunk.length - offset);
-        pending = Buffer.concat([pending, chunk.subarray(offset, offset + take)]);
-        offset += take;
-        const completedTarget = pendingTargetLength();
-        if (typeof completedTarget === "string") {
-          return fail(completedTarget);
-        }
-        if (completedTarget > MAX_PENDING_BYTES) {
-          return fail("RFB client message exceeds the 64 KiB buffer limit");
-        }
-        if (pending.length < completedTarget) {
+        if (pending.length < target) {
+          if (offset === chunk.length) {
+            break;
+          }
+          const take = Math.min(target - pending.length, chunk.length - offset);
+          pending = Buffer.concat([pending, chunk.subarray(offset, offset + take)]);
+          offset += take;
           continue;
         }
         const error = routePending(forwarded);

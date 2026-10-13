@@ -68,6 +68,8 @@ export type ChatAbortControllerEntry = {
   isAbortable?: (entry: ChatAbortControllerEntry) => boolean;
   /** Runs once when this registration is actually removed. */
   onRemoved?: () => void;
+  /** Definitive execution outcome or chat terminal, recorded before publication. */
+  terminalOutcomeObserved?: true;
   /**
    * Which RPC owns this registration. Absent (undefined) is treated as
    * `"chat-send"` so pre-existing callers that constructed entries without

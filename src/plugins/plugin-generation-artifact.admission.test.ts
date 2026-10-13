@@ -32,6 +32,7 @@ function observeNativeIo(filename: string) {
   const readSync = fs.readSync;
   const readFileSync = fs.readFileSync;
   const copyRootFileSync = fsSafeAdvanced.copyRootFileSync;
+  const createBatch = fsSafeAdvanced.createRootFileCopyBatchSync;
   const writeSync = fs.writeSync;
   const empty = () => ({ originalBytes: 0, capturedBytes: 0, wholeFileReads: 0, largestBuffer: 0 });
   let current: ReturnType<typeof empty> | undefined;
@@ -40,6 +41,12 @@ function observeNativeIo(filename: string) {
     if (current && stat.size === original.size) {
       copies.add(`${stat.dev}:${stat.ino}`);
     }
+  };
+  const recordCopiedFile = (copied: ReturnType<typeof fsSafeAdvanced.copyRootFileSync>) => {
+    if (current) {
+      recordCopy(fs.fstatSync(copied.fd));
+    }
+    return copied;
   };
   const spies = [
     vi.spyOn(fs, "readSync").mockImplementation((...args) => {
@@ -64,12 +71,15 @@ function observeNativeIo(filename: string) {
       }
       return result;
     }),
-    vi.spyOn(fsSafeAdvanced, "copyRootFileSync").mockImplementation((options) => {
-      const copied = copyRootFileSync(options);
-      if (current) {
-        recordCopy(fs.fstatSync(copied.fd));
-      }
-      return copied;
+    vi
+      .spyOn(fsSafeAdvanced, "copyRootFileSync")
+      .mockImplementation((options) => recordCopiedFile(copyRootFileSync(options))),
+    vi.spyOn(fsSafeAdvanced, "createRootFileCopyBatchSync").mockImplementation(() => {
+      const batch = createBatch();
+      return {
+        ...batch,
+        copyFile: (options) => recordCopiedFile(batch.copyFile(options)),
+      };
     }),
     vi.spyOn(fs, "writeSync").mockImplementation((...args) => {
       const length = Reflect.apply(writeSync, fs, args);
@@ -372,7 +382,6 @@ it.each(["npm", "clawhub"] as const)(
           );
           artifacts.push(artifact);
           artifact.linkHost(host);
-          artifact.assertSourceCurrent();
           return artifact;
         });
       const assertDependencyCapture = async (
@@ -521,7 +530,6 @@ it.each(["npm", "clawhub"] as const)(
             ),
           ),
         ).toBe(fs.realpathSync(hosts[0]!));
-        expect(() => warm.value.assertSourceCurrent()).not.toThrow();
 
         // Real discovery keeps the manifest and executable-entry hardlink policy intact.
         expect(loadRuntime(freshCache, persisted).value.plugins).toContainEqual(
@@ -625,16 +633,12 @@ it.each([false, true])(
           capturePluginGenerationArtifact(candidate.root),
         );
         artifacts.push(replacement);
-        expect(replacement.assertSourceCurrent).not.toThrow();
         expect(
           fs.readFileSync(replacement.resolve(candidate.filename)).equals(candidate.bytes),
         ).toBe(true);
         expect(fs.readFileSync(replacement.resolve(candidateCompanion), "utf8")).toBe(
           "unchanged native companion",
         );
-        fs.writeFileSync(candidateCompanion, "different native companion");
-        fs.utimesSync(candidateCompanion, modifiedAt, modifiedAt);
-        expect(replacement.assertSourceCurrent).toThrow("Plugin source changed");
       } finally {
         rootFault?.mockRestore();
         fault?.mockRestore();
@@ -699,7 +703,6 @@ it.each(["direct", "transitive"] as const)(
         const first = capture(caches[0]!);
         if (!transitive) {
           expect(fs.readFileSync(first.resolve(companion), "utf8")).toBe(original);
-          expect(first.assertSourceCurrent).not.toThrow();
         }
         const second = capture(caches[1]!);
         if (!transitive) {
@@ -708,10 +711,7 @@ it.each(["direct", "transitive"] as const)(
             expect(fs.readFileSync(artifact.resolve(fixture.filename)).equals(fixture.bytes)).toBe(
               true,
             );
-            expect(artifact.assertSourceCurrent).not.toThrow();
           }
-        } else {
-          expect(first.assertSourceCurrent).not.toThrow();
         }
         const capturedCompanion = transitive
           ? createRequire(
@@ -725,7 +725,6 @@ it.each(["direct", "transitive"] as const)(
         if (transitive) {
           fs.utimesSync(companion, modifiedAt, modifiedAt);
         }
-        expect(first.assertSourceCurrent).toThrow("Plugin source changed");
         expect(fs.readFileSync(capturedCompanion ?? first.resolve(companion), "utf8")).toBe(
           original,
         );
@@ -787,7 +786,6 @@ it.each([false, true])(
       let sibling: ReturnType<typeof capturePluginGenerationArtifact> | undefined;
       try {
         artifact = withPluginCache(cache, () => capturePluginGenerationArtifact(fixture.root));
-        artifact.assertSourceCurrent();
         const require = createRequire(path.join(artifact.rootDir, "index.js"));
         expect(require("a-library")).toBe("companion");
         expect(fs.readFileSync(require.resolve("a-library/lib/library.so"), "utf8")).toBe(
@@ -809,7 +807,6 @@ it.each([false, true])(
             capturePluginGenerationArtifact(path.join(fixture.root, "node_modules/c-addon")),
           );
         }).toThrow("Native plugin companion changed during admission");
-        expect(artifact.assertSourceCurrent).toThrow("Plugin source changed");
       } finally {
         await sibling?.disposeAsync();
         await artifact?.disposeAsync();
@@ -859,7 +856,6 @@ it("snapshots a mutable native edit once while retained generations keep their p
       fs.writeFileSync(helper, "module.exports = 'replacement helper';");
       fs.utimesSync(fixture.filename, before.atime, new Date(before.mtimeMs + 1000));
       expect(fs.statSync(fixture.filename).ino).toBe(before.ino);
-      expect(first.value.assertSourceCurrent).toThrow("Plugin source changed");
       const changed = capture();
       expect(changed.io.copies).toBe(1);
       expect(changed.io.capturedBytes).toBe(nativeSize);

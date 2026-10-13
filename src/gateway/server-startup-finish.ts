@@ -59,7 +59,6 @@ export async function finishGatewayStartup(params: {
   const {
     kernelRuntime: runtime,
     port,
-    bootId,
     opts,
     log,
     logHealth,
@@ -176,7 +175,7 @@ export async function finishGatewayStartup(params: {
       wss,
       clients,
       connectionWork: runtime.connectionWork,
-      bootId,
+      bootId: params.bootId,
       preauthConnectionBudget,
       port,
       gatewayHost: bindHost ?? undefined,
@@ -204,8 +203,15 @@ export async function finishGatewayStartup(params: {
     }),
   );
   await startupTrace.measure("http.listen", () => startListening());
-  kernel.setDispatchReady(true);
   startupTrace.mark("http.bound");
+  // Bind first so liveness works while session readers await the complete projection.
+  await runtime.ensureRequestRuntimeReady();
+  kernel.setDispatchReady(true);
+  if (!minimalTestGateway && !opts.updateCanary) {
+    const { startOpenClawDatabaseIntegrityVerifier } =
+      await import("../state/openclaw-database-verify.js");
+    registerGatewayLifetimeSidecars(startOpenClawDatabaseIntegrityVerifier({ env: process.env }));
+  }
   activateAgentDatabases();
   // Health can answer as soon as the listener binds. Discovery, remote-skill
   // setup, and maintenance do not determine liveness, so keep them off that
@@ -362,12 +368,11 @@ export async function finishGatewayStartup(params: {
                   if (lifecycle.closePreludeStarted) {
                     return null;
                   }
+                  databasePreparationReady.resolve(); // Plugins are attached; worker recovery awaits admission.
                   return await workerPlacementRuntime.startRuntime({
                     isClosePreludeStarted: () => lifecycle.closePreludeStarted,
                     // Close must see the drain handle before reconciliation can yield.
-                    registerSidecar: (sidecar) => {
-                      registerConnectionDependentSidecars(sidecar);
-                    },
+                    registerSidecar: registerConnectionDependentSidecars,
                     unregisterSidecar: unregisterConnectionDependentSidecar,
                   });
                 },
@@ -408,11 +413,6 @@ export async function finishGatewayStartup(params: {
   if (opts.updateCanary) {
     // Copied queues and jobs must not resume; the canary owns only startup probes.
     return { startupSettled: postAttachHandles.startupSettled };
-  }
-  if (!minimalTestGateway) {
-    const { startOpenClawDatabaseIntegrityVerifier } =
-      await import("../state/openclaw-database-verify.js");
-    registerGatewayLifetimeSidecars(startOpenClawDatabaseIntegrityVerifier({ env: process.env }));
   }
   postAttachRuntimeReturned = true;
   activateScheduledServicesWhenReady();

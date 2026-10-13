@@ -52,11 +52,7 @@ private struct DecodedExecApprovalDecision: Decodable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
-        guard let raw = try? container.decode(String.self) else {
-            self.decision = nil
-            return
-        }
-        self.decision = ExecApprovalDecision(rawValue: raw)
+        self.decision = (try? container.decode(String.self)).flatMap(ExecApprovalDecision.init(rawValue:))
     }
 }
 
@@ -174,12 +170,8 @@ func readLineFromSocket(_ fd: Int32, maxBytes: Int) throws -> String? {
             break
         }
     }
-    guard let newlineIndex = buffer.firstIndex(of: 0x0A) else {
-        guard !buffer.isEmpty else { return nil }
-        return String(data: buffer, encoding: .utf8)
-    }
-    let lineData = buffer.subdata(in: 0..<newlineIndex)
-    return String(data: lineData, encoding: .utf8)
+    guard !buffer.isEmpty else { return nil }
+    return String(data: buffer.prefix { $0 != 0x0A }, encoding: .utf8)
 }
 
 func timingSafeHexStringEquals(_ lhs: String, _ rhs: String) -> Bool {

@@ -60,11 +60,10 @@ export async function auditTelegramGroupMembershipImpl(
         });
         const json: unknown = JSON.parse(body.toString("utf8"));
         if (!res.ok || !isRecord(json) || !json.ok) {
-          const desc =
+          entry.error =
             isRecord(json) && !json.ok && typeof json.description === "string"
               ? json.description
               : `getChatMember failed (${res.status})`;
-          entry.error = desc;
           continue;
         }
         const status =

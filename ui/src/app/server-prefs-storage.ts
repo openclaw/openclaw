@@ -1,6 +1,11 @@
 import { safeParseJson } from "@openclaw/normalization-core";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import { SYNCED_PREFS, type ServerUiPrefs, type SyncedPrefKey } from "./server-prefs-state.ts";
+import {
+  SYNCED_PREFS,
+  clearSidebarEntriesMetadata,
+  type ServerUiPrefs,
+  type SyncedPrefKey,
+} from "./server-prefs-state.ts";
 
 // localStorage persistence primitives for the synced-prefs engine. Stateless:
 // every helper is (root, scope)-parameterized; scope adoption, pending shadows,
@@ -17,7 +22,28 @@ export const PENDING_KEY = "openclaw.control.serverPrefs.pending.v1";
 // snapshot establishes a LAST_SEEN baseline, then normal server-delta reconciliation resumes.
 const RETAINED_LOCAL_KEY = "openclaw.control.serverPrefs.retained-local.v1";
 
-function readStorageState(
+// The sync engine keeps its in-memory vocabulary; persisted rail intent has a fresh identity.
+const navigationStorageKeys = {
+  sidebarEntries: "railShortcuts",
+  sidebarEntriesBase: "railShortcutsBase",
+  sidebarEntriesOrder: "railShortcutsOrder",
+} as const;
+
+export function serializeStoredPrefs(prefs: ServerUiPrefs): string {
+  const stored: Record<string, unknown> = { ...prefs };
+  for (const [key, storageKey] of Object.entries(navigationStorageKeys)) {
+    delete stored[key];
+    if (Object.hasOwn(prefs, key)) {
+      stored[storageKey] = prefs[key];
+    }
+  }
+  if (prefs.navigationConfirmation) {
+    stored.navigationConfirmation = { railShortcuts: prefs.navigationConfirmation.sidebarEntries };
+  }
+  return JSON.stringify(stored);
+}
+
+export function readStorageState(
   root: string,
   scope: string,
 ): { available: boolean; value: string | null } {
@@ -57,6 +83,29 @@ export function writeStorage(root: string, scope: string, value: string | null):
 
 export function parseStoredPrefs(raw: string | null): ServerUiPrefs | null {
   const prefs = asRecord(safeParseJson(raw ?? "null"));
+  if (prefs) {
+    for (const [key, storageKey] of Object.entries(navigationStorageKeys)) {
+      delete prefs[key];
+      if (Object.hasOwn(prefs, storageKey)) {
+        prefs[key] = prefs[storageKey];
+        delete prefs[storageKey];
+      }
+    }
+    const confirmation = asRecord(prefs.navigationConfirmation);
+    if (confirmation) {
+      if (Object.hasOwn(confirmation, "railShortcuts")) {
+        prefs.navigationConfirmation = { sidebarEntries: confirmation.railShortcuts };
+      } else {
+        delete prefs.navigationConfirmation;
+      }
+    }
+  }
+  if (prefs && !Array.isArray(prefs.sidebarEntries)) {
+    clearSidebarEntriesMetadata(prefs);
+  }
+  if (prefs && prefs.sidebarEntriesOrder !== true) {
+    delete prefs.sidebarEntriesOrder;
+  }
   // SAFETY: consumers re-validate per key against SYNCED_PREFS extractors.
   return prefs && Object.keys(prefs).length ? (prefs as ServerUiPrefs) : null;
 }
@@ -86,6 +135,8 @@ export function writeRetainedLocalKeys(scope: string, keys: ReadonlySet<SyncedPr
   writeStorage(
     RETAINED_LOCAL_KEY,
     scope,
-    keys.size ? JSON.stringify(Object.fromEntries([...keys].map((key) => [key, true]))) : null,
+    keys.size
+      ? serializeStoredPrefs(Object.fromEntries([...keys].map((key) => [key, true])))
+      : null,
   );
 }

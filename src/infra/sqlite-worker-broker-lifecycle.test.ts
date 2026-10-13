@@ -2,10 +2,11 @@ import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { captureSqliteWorkerOpen } from "./sqlite-worker-broker-admission.js";
 import { createSqliteWorkerLifecycle } from "./sqlite-worker-broker-lifecycle.js";
-import type { Actor } from "./sqlite-worker-broker.types.js";
+import type { Actor, Slot } from "./sqlite-worker-broker.types.js";
 import {
   requestSqliteWorkerOperationAdmission,
   withSqliteWorkerOperationAdmission,
@@ -23,6 +24,77 @@ beforeEach(() => {
 });
 
 describe("SQLite worker slots", () => {
+  function runtimeFixture(autoExit = true) {
+    const workers: (EventEmitter & {
+      unref: ReturnType<typeof vi.fn>;
+      terminate: ReturnType<typeof vi.fn>;
+    })[] = [];
+    createCpuTrackedWorker.mockImplementation(() => {
+      const worker = Object.assign(new EventEmitter(), {
+        unref: vi.fn(),
+        terminate: vi.fn(() => {
+          if (autoExit) {
+            queueMicrotask(() => worker.emit("exit", 0));
+          }
+          return Promise.resolve(0);
+        }),
+      });
+      workers.push(worker);
+      return worker;
+    });
+    const slots = new Set<Slot>();
+    const lifecycle = createSqliteWorkerLifecycle({
+      explicitSqliteCloseReleasesNativeResources: true,
+      actors: new Map(),
+      slots,
+      stores: new Map(),
+      enqueueClose: vi.fn(),
+      fail: (slot, reason) => {
+        slot.failed = reason instanceof Error ? reason : new Error(String(reason));
+      },
+    });
+    const options = captureSqliteWorkerOpen({
+      moduleUrl: new URL("file:///openclaw/dist/backend.js"),
+      databasePath: "/state/openclaw.sqlite",
+      input: undefined,
+    });
+    const replyOwner = () => ({ fail: vi.fn(), finish: vi.fn(), dispatch: vi.fn() });
+    return { lifecycle, slots, workers, options, replyOwner };
+  }
+
+  it("cancels a slot waiter while the retiring worker keeps ownership until exit", async ({
+    signal,
+  }) => {
+    const { lifecycle, slots, workers, options, replyOwner } = runtimeFixture(false);
+    const slot = lifecycle.createSlot(options, false, replyOwner);
+    let retired = false;
+    const retirement = lifecycle.retire(slot).then(() => {
+      retired = true;
+    });
+    const cancel = new AbortController();
+    const waiting = lifecycle.acquireSlot(
+      { ...options, signal: cancel.signal },
+      { maxWorkers: 1, maxStores: 1 },
+      replyOwner,
+    );
+    const reason = new Error("opening deadline expired while previous worker retires");
+    const rejected = expect(waiting).rejects.toBe(reason);
+    cancel.abort(reason);
+    try {
+      await withinTest(rejected, signal);
+      expect(retired).toBe(false);
+      expect(workers).toHaveLength(1);
+      expect(workers[0]?.terminate).toHaveBeenCalledTimes(1);
+    } finally {
+      workers[0]?.emit("exit", 0);
+      await retirement;
+      await Promise.allSettled([waiting]);
+    }
+    expect(retired).toBe(true);
+    expect(workers).toHaveLength(1);
+    expect(slots.size).toBe(0);
+  });
+
   it.each([
     { owned: false, revoked: false },
     { owned: false, revoked: true },
@@ -133,10 +205,6 @@ describe("SQLite worker slots", () => {
       lifecycle.createSlot(
         {
           carrierUrl: new URL("file:///openclaw/src/infra/sqlite-store.worker.ts"),
-          moduleUrl: new URL("file:///openclaw/src/infra/device-auth-store.sqlite.ts"),
-          databasePath: "/state/openclaw.sqlite",
-          input: Buffer.alloc(0),
-          existingOnly: false,
         },
         false,
         () => ({ fail: vi.fn(), finish: vi.fn(), dispatch: vi.fn() }),
@@ -184,10 +252,6 @@ describe("SQLite worker slots", () => {
       const slot = lifecycle.createSlot(
         {
           carrierUrl: new URL("file:///openclaw/dist/sqlite-store.worker.js"),
-          moduleUrl: new URL("file:///openclaw/dist/device-auth-store.sqlite.js"),
-          databasePath: "/state/openclaw.sqlite",
-          input: Buffer.alloc(0),
-          existingOnly: false,
         },
         false,
         () => ({ fail: vi.fn(), finish: vi.fn(), dispatch: vi.fn() }),

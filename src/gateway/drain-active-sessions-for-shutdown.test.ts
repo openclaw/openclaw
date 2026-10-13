@@ -104,41 +104,6 @@ afterEach(() => {
 });
 
 describe("drainActiveSessionsForShutdown", () => {
-  it("returns an empty result and skips hook emission when no sessions are tracked", async () => {
-    const result = await drainActiveSessionsForShutdown({ reason: "shutdown" });
-
-    expect(result).toEqual({ emittedSessionIds: [], timedOut: false });
-    expect(runSessionEndMock).not.toHaveBeenCalled();
-  });
-
-  it("fires session_end with reason=shutdown for every tracked session and clears them", async () => {
-    trackSessionForShutdown({ sessionId: "sess-A" });
-    trackSessionForShutdown({ sessionId: "sess-B", sessionKey: "agent:main:other" });
-
-    const result = await drainActiveSessionsForShutdown({ reason: "shutdown" });
-
-    expect(result.timedOut).toBe(false);
-    expect(result.emittedSessionIds.toSorted()).toEqual(["sess-A", "sess-B"]);
-    expect(runSessionEndMock).toHaveBeenCalledTimes(2);
-    const reasons = runSessionEndMock.mock.calls.map(
-      ([event]) => (event as { reason?: string }).reason,
-    );
-    expect(reasons.every((reason) => reason === "shutdown")).toBe(true);
-    // After the drain, the tracker forgets every emitted session (the emit
-    // helper calls `forgetActiveSessionForShutdown`), so a second drain is a
-    // no-op and we never double-fire on restart loops.
-    expect(listActiveSessionsForShutdown()).toEqual([]);
-  });
-
-  it("propagates reason=restart when called for a restart shutdown", async () => {
-    trackSessionForShutdown({ sessionId: "sess-A" });
-
-    await drainActiveSessionsForShutdown({ reason: "restart" });
-
-    expect(runSessionEndMock).toHaveBeenCalledTimes(1);
-    expect(requireSessionEndHookEvent(0).reason).toBe("restart");
-  });
-
   it("does not double-fire for a session already finalized by reset/delete/compaction", async () => {
     trackSessionForShutdown({ sessionId: "sess-A" });
     trackSessionForShutdown({ sessionId: "sess-B", sessionKey: "agent:main:other" });

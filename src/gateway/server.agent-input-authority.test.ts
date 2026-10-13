@@ -360,7 +360,7 @@ describe("spawn input ownership transfer", () => {
         const result = await pending;
         expect(result.details).toMatchObject({
           status: "error",
-          error: expect.stringMatching(/archived|revoked/),
+          error: "Session communication state changed before admission.",
         });
         expect(result.details).not.toHaveProperty("sentBeforeError");
         expect(stage).not.toHaveBeenCalled();

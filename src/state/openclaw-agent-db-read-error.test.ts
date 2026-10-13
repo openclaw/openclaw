@@ -28,11 +28,11 @@ it("preserves programming failures when required tables remain available", async
   });
 });
 
-it.each([false, true])("records missing required tables (fresh-only: %s)", async (freshOnly) => {
+it.each([false, true])("records absent admission tables (fresh-only: %s)", async (freshOnly) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const options = { agentId: "main", env: state.env };
     const owner = openOpenClawAgentDatabase(options);
-    owner.db.exec("DROP TABLE session_nodes;");
+    owner.db.exec("DROP TABLE session_canonical_validation_pending;");
     let readDb: DatabaseSync = owner.db;
     const nativeOpen = sqlite.openNodeSqliteDatabase;
     const open = vi.spyOn(sqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
@@ -52,7 +52,7 @@ it.each([false, true])("records missing required tables (fresh-only: %s)", async
     const unavailable = expect.objectContaining({
       name: "SessionMetadataUnavailableError",
       reason: "table-missing",
-      missingTables: ["session_nodes"],
+      missingTables: ["session_canonical_validation_pending"],
       cause: expect.objectContaining({
         message: expect.stringMatching(
           /canonical validation schema is missing or drifted.*openclaw doctor --fix/u,

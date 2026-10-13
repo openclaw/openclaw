@@ -2,7 +2,11 @@ import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import { listFinishedSessions, listRunningSessions } from "./bash-process-registry.js";
 import { resolveProcessToolScopeKey } from "./bash-process-scope.js";
 import { bindRequesterYieldCronAuthority } from "./cron-creator-authority-context.js";
-import type { SessionsYieldClaimResult, SessionsYieldIntent } from "./tools/sessions-yield-tool.js";
+import type {
+  SessionsYieldClaimResult,
+  SessionsYieldIntent,
+  SessionsYieldRuntimeClaim,
+} from "./tools/sessions-yield-tool.js";
 
 const ISOLATED_AUTOMATION_YIELD_UNSUPPORTED_ERROR =
   "Isolated automation turns cannot use sessions_yield because no requester continuation is available. Finish this turn so the scheduler can handle child output under the job's delivery policy.";
@@ -30,7 +34,7 @@ export function createRequesterYieldCallback(params: {
   requesterTurnRunId?: string;
   processScopeKey?: string;
   swarmCollector?: boolean;
-  claimYieldCompletion?: () => boolean | Promise<boolean>;
+  claimYieldCompletion?: () => SessionsYieldRuntimeClaim | Promise<SessionsYieldRuntimeClaim>;
 }): YieldCompletionClaim | undefined {
   // Requester settlement never resumes cron. Reject before checking claims or writing yield intent.
   if (isCronSessionKey(params.requesterSessionKey)) {
@@ -56,7 +60,8 @@ export function createRequesterYieldCallback(params: {
   return async (intent) => {
     // Runtime claims are observational. Check them before durable registry state
     // so a runtime failure cannot record a yield that never reaches onYield.
-    const runtimeClaimed = (await params.claimYieldCompletion?.()) ?? false;
+    const runtimeClaim = (await params.claimYieldCompletion?.()) ?? false;
+    const runtimeClaimed = runtimeClaim === true;
     let registryClaimed = false;
     if (hasRegistryClaim) {
       const { markRequesterTurnYielded } =
@@ -104,19 +109,21 @@ export function createRequesterYieldCallback(params: {
     }
     // This turn owns no claim, but an earlier turn of the same session may still
     // await its children: their completion resumes the session on its own, so
-    // report them instead of telling the model the work is finished.
+    // report them instead of telling the model the work is finished. The runtime
+    // reports its own native children; the registry reports OpenClaw children.
+    const pendingChildren =
+      typeof runtimeClaim === "object" ? [...runtimeClaim.pendingChildren] : [];
     if (requesterSessionKey) {
       const { listUnsettledRequesterChildren } =
         await import("./subagents/registry/subagent-registry.js");
-      const pendingChildren = await listUnsettledRequesterChildren({
-        requesterSessionKey,
-        requesterAgentId: params.requesterAgentId,
-        excludeRequesterTurnRunId: params.requesterTurnRunId,
-      });
-      if (pendingChildren.length > 0) {
-        return { pendingChildren };
-      }
+      pendingChildren.push(
+        ...(await listUnsettledRequesterChildren({
+          requesterSessionKey,
+          requesterAgentId: params.requesterAgentId,
+          excludeRequesterTurnRunId: params.requesterTurnRunId,
+        })),
+      );
     }
-    return false;
+    return pendingChildren.length > 0 ? { pendingChildren } : false;
   };
 }

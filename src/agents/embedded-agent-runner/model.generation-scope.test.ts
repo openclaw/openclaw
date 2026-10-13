@@ -4,6 +4,7 @@ import path from "node:path";
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { captureRuntimeConfigAsyncReader } from "../../config/io.js";
 import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import "../../claws/tool-policy-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -320,6 +321,7 @@ describe("model runtime generation scope", () => {
   it("preserves metadata compatibility for mutable-scope discovery", async () => {
     const config = { plugins: { enabled: false } } satisfies OpenClawConfig;
     await state.writeConfig(config);
+    await captureRuntimeConfigAsyncReader()();
     const generation = generationFixture({
       label: "compatibility",
     });

@@ -8,6 +8,55 @@ import WebKit
 @Suite(.serialized, .testWaitLimit)
 @MainActor
 struct DashboardExperienceTests {
+    @Test func `cancelling a dashboard handoff retires its pending navigation and window`() async throws {
+        let gate = DashboardWindowOwnershipPresentationGate()
+        let server = try await DashboardHTTPFixture.start(beforeResponse: {
+            _ = await gate.waitForRelease()
+        })
+        defer { server.stop() }
+        let endpoint = GatewayConnection.EndpointSnapshot(
+            config: (url: server.websocketURL(), token: "fixture", password: nil), routeAuthority: nil)
+        let manager = DashboardManager._testMake(primaryEndpointProvider: { _ in endpoint })
+        defer { manager.close() }
+        let opening = Task {
+            await manager.show(
+                atPath: DashboardRouteMap.custodianPagePath,
+                search: DashboardRouteMap.custodianOnboardingSearch,
+                target: .primary,
+                waitForLoad: true,
+                reportErrors: false)
+        }
+        do {
+            await gate.waitUntilRequested()
+            let controller = try #require(manager._testController())
+            #expect(controller._testPendingNativeNavigation?.search == DashboardRouteMap.custodianOnboardingSearch)
+            let loadingChanges = AsyncTestSignal()
+            let loadingObservation = controller.webView.observe(\.isLoading) { _, _ in
+                loadingChanges.notify()
+            }
+            defer { loadingObservation.invalidate() }
+
+            opening.cancel()
+            let result = await opening.value
+            // WebKit may publish the stopped load after native cancellation returns.
+            try await loadingChanges.wait("cancelled dashboard navigation") {
+                !controller.webView.isLoading
+            }
+            await gate.release()
+
+            #expect(throws: CancellationError.self) { try result.get() }
+            #expect(manager.openWindowCount(for: .primary) == 0)
+            #expect(controller._testPendingNativeNavigation == nil)
+            #expect(!controller.webView.isLoading)
+            #expect(!controller.isShowingFailurePage)
+        } catch {
+            opening.cancel()
+            await gate.release()
+            _ = await opening.value
+            throw error
+        }
+    }
+
     @Test func `switching experiences retains documents and restores the selected Gateway`() async throws {
         let server = try await DashboardHTTPFixture.start()
         defer { server.stop() }

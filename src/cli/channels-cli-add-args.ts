@@ -64,6 +64,10 @@ export async function resolveChannelsAddChannelFromArgv(
       index += 1;
       continue;
     }
+    if (CHANNEL_ADD_SHARED_VALUE_OPTIONS.has(arg)) {
+      index += 1;
+      continue;
+    }
     if (arg.startsWith("--channel=")) {
       const value = arg.slice("--channel=".length).trim();
       explicitChannel = value || explicitChannel;

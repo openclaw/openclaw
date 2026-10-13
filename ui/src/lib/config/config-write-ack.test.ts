@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ConfigPatchAck } from "./config-gateway-operations.ts";
+import type { ConfigPatchAck } from "./config-draft-model.ts";
 import {
   CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS,
   createConfigCapabilityHarness,

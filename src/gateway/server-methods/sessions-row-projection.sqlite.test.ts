@@ -4,6 +4,7 @@ import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execu
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import * as historyWorker from "../../config/sessions/session-transcript-worker-runtime.js";
 import * as sqlite from "../../infra/kysely-sync.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { observeMainThreadReads } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
@@ -168,7 +169,7 @@ describe("resident session rows", () => {
     });
   });
 
-  it("refreshes only the dirty identity through bounded keyed readers, then reuses it without SQL", async () => {
+  it("refreshes only the invalidated identity through bounded keyed readers, then reuses it without SQL", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = await seedSessions();
       const context = requestContext(cfg);
@@ -184,6 +185,13 @@ describe("resident session rows", () => {
         { agentId: "main", sessionKey: key },
         { ...current.entry, label: "Committed label" },
       );
+      // Complete commit receipts reuse their facts; missing facts require the keyed fallback.
+      sessionChanges.invalidate({
+        agentId: "main",
+        sessionKey: key,
+        scope: "session-entry",
+        factsInvalidated: true,
+      });
       expect(projection.dirtyRowCount).toBeGreaterThan(0);
       const workerKeys = vi.fn<(keys: readonly string[]) => void>();
       const readDatabases = historyWorker.withSessionHistoryWorkerDatabases;
@@ -203,6 +211,12 @@ describe("resident session rows", () => {
       );
       const hostSql = observeHostDataSql();
       try {
+        sessionChanges.emit({
+          agentId: "main",
+          sessionKey: key,
+          storePath: current.storeTarget.storePath,
+          factsInvalidated: true,
+        });
         const listed = await listSessions({ context, client, request });
         expect(listed.sessions.find((row) => row.key === key)?.label).toBe("Committed label");
         expect(projection.materializedCount - before).toBe(1);

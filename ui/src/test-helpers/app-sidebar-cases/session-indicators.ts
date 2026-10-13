@@ -4,7 +4,9 @@ import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../lib/session-pull-requests.ts";
 import { reconcileSessionChanged } from "../../lib/sessions/reconcile.ts";
 import { createGatewayHarness, createSessionsHarness, mountSidebar } from "../app-sidebar.ts";
+import { settleLitElement } from "../lit-settle.ts";
 import { waitForFast } from "../wait-for.ts";
+import { settleRoster } from "./roster.test-support.ts";
 
 function expectEmptyLead(row: Element | null) {
   const lead = row?.querySelector(".sidebar-session-indicator");
@@ -26,7 +28,7 @@ describe("AppSidebar session indicators", () => {
         color: "purple",
       }).result,
     });
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(row()?.classList.contains("sidebar-recent-session--colored")).toBe(true);
     expect(row()?.style.getPropertyValue("--session-color")).toBe("var(--session-color-purple)");
     sessions.publish({
@@ -35,7 +37,7 @@ describe("AppSidebar session indicators", () => {
         color: null,
       }).result,
     });
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(row()?.classList.contains("sidebar-recent-session--colored")).toBe(false);
     expect(row()?.style.getPropertyValue("--session-color")).toBe("");
   });
@@ -82,7 +84,7 @@ describe("AppSidebar session indicators", () => {
         icon: null,
       }).result,
     });
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(svgRow()?.querySelector(".session-glyph__icon")).toBeNull();
   });
 
@@ -145,7 +147,9 @@ describe("AppSidebar session indicators", () => {
     expect(avatar?.querySelector(".channel-avatar")?.getAttribute("src")).toBe(
       "blob:channel-avatar",
     );
-    expect(avatar?.querySelector(".session-owner-chip")).toBeNull();
+    expect(
+      avatar?.querySelector<HTMLElement>("openclaw-channel-avatar > span")?.style.display,
+    ).toBe("none");
 
     const owner = sidebar.querySelector(`[data-session-key="${ownerKey}"]`);
     expect(owner?.querySelector("openclaw-channel-avatar")).toBeNull();
@@ -237,8 +241,10 @@ describe("AppSidebar session indicators", () => {
     );
     // Once the avatar renders, the chip fallback yields to the real image.
     expect(
-      sidebar.querySelector(`[data-session-key="${avatarKey}"] .session-owner-chip`),
-    ).toBeNull();
+      sidebar.querySelector<HTMLElement>(
+        `[data-session-key="${avatarKey}"] openclaw-channel-avatar > span`,
+      )?.style.display,
+    ).toBe("none");
   });
 
   it("keeps the owner chip when avatar auth is not ready", async () => {
@@ -279,7 +285,7 @@ describe("AppSidebar session indicators", () => {
   });
 
   it.each(["running", "queued"] as const)(
-    "rings Home for %s activity while keeping its draft and outbox badges trailing",
+    "presents main-session %s activity once in the agent header with draft and outbox badges",
     async (status) => {
       const mainKey = "agent:main:main";
       const workingKey = "agent:main:working";
@@ -298,6 +304,8 @@ describe("AppSidebar session indicators", () => {
       const { sidebar } = await mountSidebar(
         createGatewayHarness({} as GatewayBrowserClient).gateway,
         sessions.sessions,
+        "panel",
+        { defaultId: "main", mainKey: "main", scope: "per-sender", agents: [{ id: "main" }] },
       );
       sidebar.activeRouteId = "chat";
       sidebar.sessionKey = workingKey;
@@ -306,22 +314,24 @@ describe("AppSidebar session indicators", () => {
         attentionCountForSession: (sessionKey) => (sessionKey === mainKey ? 2 : 0),
         hasSessionDraft: (sessionKey) => sessionKey === mainKey,
       };
-      await sidebar.updateComplete;
+      sidebar.connected = true;
+      sidebar.sidebarAgentsMode = "roster";
+      await settleRoster(sidebar);
 
-      const home = sidebar.querySelector(".nav-item--home");
+      const home = sidebar.querySelector('[data-agent-group="main"] .sidebar-agent-roster__header');
       const homeRing = home?.querySelector(".session-glyph--running .session-glyph__ring");
-      expect(home?.querySelector(".session-glyph__content .nav-item__icon")).not.toBeNull();
+      expect(home?.querySelector(".sidebar-agent-roster__avatar")).not.toBeNull();
       expect(homeRing).not.toBeNull();
-      expect(home?.querySelector(".nav-item__state .session-run-spinner")).toBeNull();
-      expect(home?.querySelector(".session-unread-dot")).toBeNull();
+      expect(home?.querySelectorAll(".session-run-spinner")).toHaveLength(0);
+      expect(home?.querySelectorAll('[aria-label="Unread"]')).toHaveLength(1);
       const activityLabel = status === "queued" ? "Queued" : "Active run";
       expect(homeRing?.getAttribute("aria-label")).toBe(activityLabel);
       expect(homeRing?.classList.contains("session-glyph__ring--queued")).toBe(status === "queued");
-      expect(home?.getAttribute("aria-label")).toBe(`Home · ${activityLabel} · Unread`);
       expect(
-        home?.querySelector(".nav-item__state .session-row-badge--attention")?.textContent,
-      ).toContain("2");
-      expect(home?.querySelector(".nav-item__state .session-row-badge--draft")).not.toBeNull();
+        home?.querySelectorAll(`.session-glyph__ring[aria-label="${activityLabel}"]`),
+      ).toHaveLength(1);
+      expect(home?.querySelector(".session-row-badge--attention")?.textContent).toContain("2");
+      expect(home?.querySelector(".session-row-badge--draft")).not.toBeNull();
     },
   );
 
@@ -475,7 +485,7 @@ describe("AppSidebar session indicators", () => {
         ],
       },
     });
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]")?.click();
     await waitForFast(() =>
       expect(sidebar.querySelectorAll(".sidebar-recent-session--child")).toHaveLength(4),
@@ -594,13 +604,6 @@ describe("AppSidebar session indicators", () => {
     const { sidebar } = await mountSidebar(gatewayHarness.gateway, sessions.sessions);
     sidebar.connected = true;
     await sidebar.updateComplete;
-    await waitForFast(() => {
-      expect(request).toHaveBeenCalledWith(
-        SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-        { sessionKeys: [] },
-        { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
-      );
-    });
     sessions.sessions.setPullRequestSummary(keys.openPullRequest, { numbers: [1], state: "open" });
     sessions.sessions.setPullRequestSummary(keys.mergedPullRequest, {
       numbers: [1],

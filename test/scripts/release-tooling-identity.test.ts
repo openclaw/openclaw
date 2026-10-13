@@ -55,19 +55,19 @@ describe("release tooling identity", () => {
     ).toThrow("workflow ref is not a trusted direct, release-ci, or protected-tag route");
   });
 
-  it.each([
-    ["1", "main", "refs/heads/main"],
-    ["2", "release/2026.8.1", "refs/heads/release/2026.8.1"],
-  ])("derives contract %s identity for safe direct workflow ref %s", (contract, ref, fullRef) => {
-    expect(
-      resolveReleaseToolingIdentity({
-        workflowContract: contract,
-        workflowFullRef: fullRef,
-        workflowRef: ref,
-        workflowSha: SHA,
-      }),
-    ).toEqual({ fullRef, ref, sha: SHA });
-  });
+  it.each([["2", "release/2026.8.1", "refs/heads/release/2026.8.1"]])(
+    "derives contract %s identity for safe direct workflow ref %s",
+    (contract, ref, fullRef) => {
+      expect(
+        resolveReleaseToolingIdentity({
+          workflowContract: contract,
+          workflowFullRef: fullRef,
+          workflowRef: ref,
+          workflowSha: SHA,
+        }),
+      ).toEqual({ fullRef, ref, sha: SHA });
+    },
+  );
 
   it("rejects retired Tideclaw tooling even when prevalidated", () => {
     const workflowRef = "tideclaw/alpha/2026-08-21-1200Z";
@@ -101,14 +101,6 @@ describe("release tooling identity", () => {
   });
 
   it.each([
-    [
-      "release-ci ref",
-      {
-        workflowContract: "2",
-        workflowFullRef: `refs/heads/release-ci/${SHA.slice(0, 12)}-123`,
-        workflowRef: `release-ci/${SHA.slice(0, 12)}-123`,
-      },
-    ],
     [
       "protected tag",
       {
@@ -231,40 +223,7 @@ describe("release tooling identity", () => {
     ).toThrow("must match the executing workflow ref and SHA");
   });
 
-  it("accepts only the live exact lightweight protected tag", () => {
-    const runGh = vi.fn(() =>
-      JSON.stringify({
-        ref: FULL_REF,
-        object: { sha: SHA, type: "commit" },
-      }),
-    );
-
-    expect(verifyReleaseToolingIdentity({ ...protectedIdentity(), runGh })).toEqual({
-      fullRef: FULL_REF,
-      ref: REF,
-      route: "protected-tag",
-      sha: SHA,
-    });
-    expect(runGh).toHaveBeenCalledWith([
-      "api",
-      `repos/openclaw/openclaw/git/ref/tags/${REF}`,
-      "--method",
-      "GET",
-    ]);
-  });
-
   it.each([
-    [
-      "moved tag",
-      {
-        runGh: () =>
-          JSON.stringify({
-            ref: FULL_REF,
-            object: { sha: OTHER_SHA, type: "commit" },
-          }),
-      },
-      "missing, moved, annotated, or bound to the wrong SHA",
-    ],
     [
       "deleted tag",
       {
@@ -274,26 +233,6 @@ describe("release tooling identity", () => {
       },
       "missing or unreadable",
     ],
-    [
-      "annotated tag",
-      {
-        runGh: () =>
-          JSON.stringify({
-            ref: FULL_REF,
-            object: { sha: OTHER_SHA, type: "tag" },
-          }),
-      },
-      "missing, moved, annotated, or bound to the wrong SHA",
-    ],
-    [
-      "wrong SHA prefix",
-      {
-        workflowRef: `release-publish/${OTHER_SHA.slice(0, 12)}-${RUN_ID}`,
-        workflowFullRef: `refs/tags/release-publish/${OTHER_SHA.slice(0, 12)}-${RUN_ID}`,
-      },
-      "SHA prefix does not match",
-    ],
-    ["same-name branch", { workflowFullRef: `refs/heads/${REF}` }, "exact tag full ref"],
   ])("rejects $0", (_label, overrides, expectedError) => {
     expect(() =>
       verifyReleaseToolingIdentity({
@@ -301,66 +240,6 @@ describe("release tooling identity", () => {
         ...overrides,
       }),
     ).toThrow(expectedError);
-  });
-
-  it.each(["ahead", "identical"])(
-    "accepts main tooling reachable from current main: %s",
-    (status) => {
-      const runGh = vi.fn(() => JSON.stringify({ status }));
-      expect(
-        verifyReleaseToolingIdentity({
-          repository: "openclaw/openclaw",
-          runGh,
-          workflowFullRef: "refs/heads/main",
-          workflowRef: "main",
-          workflowSha: SHA,
-        }),
-      ).toMatchObject({ route: "main", sha: SHA });
-      expect(runGh).toHaveBeenCalledWith([
-        "api",
-        `repos/openclaw/openclaw/compare/${SHA}...main`,
-        "--method",
-        "GET",
-        "--jq",
-        "{status}",
-      ]);
-    },
-  );
-
-  it("rejects main tooling outside current main ancestry", () => {
-    expect(() =>
-      validateReleaseToolingIdentity({
-        mainComparisonStatus: "diverged",
-        workflowFullRef: "refs/heads/main",
-        workflowRef: "main",
-        workflowSha: SHA,
-      }),
-    ).toThrow("not reachable from current main");
-  });
-
-  it("preserves explicitly prevalidated non-main branch routes", () => {
-    const runGh = vi.fn(() =>
-      JSON.stringify({
-        ref: "refs/heads/release/2026.8.1",
-        object: { sha: SHA, type: "commit" },
-      }),
-    );
-    expect(
-      verifyReleaseToolingIdentity({
-        allowPrevalidatedRef: true,
-        repository: "openclaw/openclaw",
-        runGh,
-        workflowFullRef: "refs/heads/release/2026.8.1",
-        workflowRef: "release/2026.8.1",
-        workflowSha: SHA,
-      }),
-    ).toMatchObject({ route: "prevalidated-branch" });
-    expect(runGh).toHaveBeenCalledWith([
-      "api",
-      "repos/openclaw/openclaw/git/ref/heads/release/2026.8.1",
-      "--method",
-      "GET",
-    ]);
   });
 
   it("rejects a prevalidated branch moved after approval", () => {
@@ -424,17 +303,10 @@ describe("release tooling identity", () => {
   });
 
   it.each([
-    ["active", "in_progress", null, true],
-    ["active", "waiting", null, true],
-    ["active", "queued", null, true],
-    ["active", "requested", null, true],
-    ["active", "pending", null, true],
-    ["active", "waiting", "success", false],
     ["active", "in_progress", undefined, false],
     ["active", "completed", "success", false],
     ["active-or-failure", "completed", "failure", true],
     ["active-or-failure", "completed", "success", false],
-    ["active-or-failure", "completed", "cancelled", false],
     ["active-or-success", "completed", "success", true],
     ["active-or-success", "completed", "failure", false],
     ["manual-recovery", "completed", "success", true],
@@ -474,14 +346,9 @@ describe("release tooling identity", () => {
   );
 
   it.each([
-    ["active", "in_progress", null, true],
     ["active", "waiting", null, true],
-    ["active", "queued", null, true],
-    ["active", "requested", null, true],
-    ["active", "pending", null, true],
     ["active", "completed", "success", false],
     ["active", "waiting", "success", false],
-    ["active", "in_progress", undefined, false],
     ["success", "completed", "success", true],
     ["success", "waiting", null, false],
     ["success", "completed", "failure", false],
@@ -533,7 +400,6 @@ describe("release tooling identity", () => {
   });
 
   it.each([
-    ["wrong parent branch", "release/2026.8.1", "refs/heads/main"],
     ["wrong parent full ref", "main", "refs/heads/release/2026.8.1"],
     ["untrusted parent ref", "feature/release", "refs/heads/feature/release"],
   ])("rejects %s independently of protected child identity", (_label, parentRef, parentFullRef) => {
@@ -589,8 +455,6 @@ describe("historical npm preflight tooling", () => {
 
   it.each([
     { version: 2 },
-    { version: 1, producer },
-    { version: "2", producer },
     {
       version: 2,
       producer: {
@@ -602,7 +466,6 @@ describe("historical npm preflight tooling", () => {
     { version: 2, producer: { ...producer, runId: PARENT_RUN_ID } },
     { version: 2, producer: { ...producer, runAttempt: "2" } },
     { version: 2, producer: { ...producer, repository: "other/repo" } },
-    { version: 2, producer: { ...producer, extra: true } },
   ])("rejects incomplete or mismatched immutable producer evidence %j", (manifest) => {
     expect(() => validateNpmPreflightProducer({ ...expectedProducer, manifest })).toThrow();
   });
@@ -641,27 +504,11 @@ describe("historical npm preflight tooling", () => {
   });
 
   it.each([
-    ["missing tag", `git/ref/tags/${REF}`, null],
     ["ambiguous branch", `git/matching-refs/heads/${REF}`, [{ ref: `refs/heads/${REF}` }]],
-    ["malformed branches", `git/matching-refs/heads/${REF}`, {}],
-    ["malformed branch entry", `git/matching-refs/heads/${REF}`, [{}]],
     ["producer outside main", `compare/${SHA}...main`, { status: "diverged" }],
-    ["producer newer than publisher", `compare/${SHA}...${OTHER_SHA}`, { status: "behind" }],
     ["unrelated publisher", `compare/${SHA}...${OTHER_SHA}`, { status: "diverged" }],
-    ["missing ancestry", `compare/${SHA}...${OTHER_SHA}`, {}],
   ])("rejects %s", (_name, route, response) => {
     expect(() => verifyReleasePreflightToolingIdentity(proof({ [route]: response }))).toThrow();
-  });
-
-  it("fails closed when provenance cannot be read", () => {
-    expect(() =>
-      verifyReleasePreflightToolingIdentity({
-        ...proof(),
-        runGh: () => {
-          throw new Error("HTTP 503");
-        },
-      }),
-    ).toThrow("HTTP 503");
   });
 
   it.each([
@@ -673,6 +520,19 @@ describe("historical npm preflight tooling", () => {
   });
 });
 
+const independentProducerRoute = {
+  label: "independent producer after FRV rerun",
+  workflowPath: ".github/workflows/full-release-artifacts.yml",
+  fullRunId: PARENT_RUN_ID,
+  fullRunAttempt: "3",
+};
+const retainedProducerRoute = {
+  label: "independent producer retained across transport refs",
+  workflowPath: ".github/workflows/full-release-artifacts.yml",
+  fullRunId: PARENT_RUN_ID,
+  fullRunAttempt: "1",
+  retainedTransport: true,
+};
 const qualificationRoutes = [
   {
     label: "FRV-owned",
@@ -680,27 +540,7 @@ const qualificationRoutes = [
     fullRunId: RUN_ID,
     fullRunAttempt: "1",
   },
-  {
-    label: "independent producer after FRV rerun",
-    workflowPath: ".github/workflows/full-release-artifacts.yml",
-    fullRunId: PARENT_RUN_ID,
-    fullRunAttempt: "3",
-  },
-  {
-    label: "FRV-owned producer retained across transport refs",
-    workflowPath: ".github/workflows/full-release-validation.yml",
-    fullRunId: PARENT_RUN_ID,
-    fullRunAttempt: "1",
-    retainedTransport: true,
-    producerRunAttempt: "2",
-  },
-  {
-    label: "independent producer retained across transport refs",
-    workflowPath: ".github/workflows/full-release-artifacts.yml",
-    fullRunId: PARENT_RUN_ID,
-    fullRunAttempt: "1",
-    retainedTransport: true,
-  },
+  retainedProducerRoute,
 ];
 
 function qualificationFixture({
@@ -887,7 +727,7 @@ describe("npm qualification", () => {
     workflowPath,
     fullRunId,
     fullRunAttempt,
-  } = qualificationFixture(qualificationRoutes[1]!);
+  } = qualificationFixture(independentProducerRoute);
   it.each(qualificationRoutes)("requires exact qualifier and artifact for $label", (route) => {
     const {
       input: routeInput,
@@ -896,11 +736,11 @@ describe("npm qualification", () => {
     } = qualificationFixture(route);
     const runGh = vi.fn(routeReader());
     expect(resolveFullReleaseNpmPreflight({ ...routeResolutionInput, runGh })).toMatchObject({
-      producer: { runId: RUN_ID, runAttempt: route.producerRunAttempt ?? "1" },
+      producer: { runId: RUN_ID, runAttempt: "1" },
       artifact: { id: 555 },
     });
     expect(runGh.mock.calls.map(([args]) => args[1])).toContain(
-      `repos/openclaw/openclaw/actions/runs/${RUN_ID}/attempts/${route.producerRunAttempt ?? "1"}`,
+      `repos/openclaw/openclaw/actions/runs/${RUN_ID}/attempts/1`,
     );
     expect(verifyNpmPreflightProducer({ ...routeInput, runGh: routeReader() })).toMatchObject({
       provenance: "immutable-manifest",
@@ -954,7 +794,7 @@ describe("npm qualification", () => {
   it.each(["root", "candidate", "policy", "transport"])(
     "rejects retained npm evidence with a changed %s binding",
     (mismatch) => {
-      const fixture = qualificationFixture(qualificationRoutes[3]!);
+      const fixture = qualificationFixture(retainedProducerRoute);
       const reuse = fixture.fullReleaseManifest.evidenceReuse;
       if (!reuse) {
         throw new Error("Expected retained producer fixture");

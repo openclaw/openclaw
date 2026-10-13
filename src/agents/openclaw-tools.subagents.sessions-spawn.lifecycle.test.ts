@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { setSessionMcpRuntimeScheduler } from "./agent-bundle-mcp-manager-api.js";
@@ -61,11 +62,13 @@ describe("sessions_spawn lifecycle", () => {
     resetSessionsSpawnAnnounceFlowOverride();
     resetSessionsSpawnHookRunnerOverride();
     resetSessionsSpawnConfigOverride();
-    setSessionsSpawnConfigOverride({
+    const config = {
       session: { mainKey: "main", scope: "per-sender" },
       messages: { queue: {} },
       agents: { defaults: { subagents: { runTimeoutSeconds: 1 } } },
-    });
+    } satisfies Parameters<typeof setSessionsSpawnConfigOverride>[0];
+    setSessionsSpawnConfigOverride(config);
+    setRuntimeConfigSnapshot(config);
     await resetSubagentRegistryForTests({ persist: false });
     hookRunnerMocks.runSubagentSpawned.mockClear();
     hookRunnerMocks.runSubagentProgress.mockClear();
@@ -84,6 +87,7 @@ describe("sessions_spawn lifecycle", () => {
     await resetSubagentRegistryForTests({ persist: false });
     await bundleMcpRuntimeTesting.resetSessionMcpRuntimeManager();
     await scheduler.stop();
+    clearRuntimeConfigSnapshot();
   });
   afterAll(() => {
     if (fastModeEnv.previous === undefined) {
@@ -105,20 +109,22 @@ describe("sessions_spawn lifecycle", () => {
       includeChatHistory: true,
       agentWaitResult: { status: "ok", startedAt: 3000, endedAt: 4000 },
     });
+    let childSessionId: string | undefined;
     try {
       await spawn(mainContext, { cleanup: "keep" });
       const child = ctx.getChild();
       assert(child.sessionKey);
       await started.promise;
+      childSessionId = getLatestLiveSubagentRunByChildSessionKey(child.sessionKey)
+        ?.childSessionIdentity?.sessionId;
+      assert(childSessionId);
       await getOrCreateSessionMcpRuntime({
-        sessionId: "session:subagent:mcp-retire",
+        sessionId: childSessionId,
         sessionKey: child.sessionKey,
         workspaceDir: "/tmp/openclaw-subagent-mcp-retire",
         cfg: unopenedMcpConfig,
       });
-      expect(bundleMcpRuntimeTesting.getCachedSessionIds()).toContain(
-        "session:subagent:mcp-retire",
-      );
+      expect(bundleMcpRuntimeTesting.getCachedSessionIds()).toContain(childSessionId);
     } finally {
       gate.resolve("delivered");
       const key = ctx.getChild().sessionKey;
@@ -130,9 +136,10 @@ describe("sessions_spawn lifecycle", () => {
         await settleRootWork();
       }
     }
+    assert(childSessionId);
     await waitForSessionsSpawnEvent(
       "bundle MCP runtime retirement",
-      () => !bundleMcpRuntimeTesting.getCachedSessionIds().includes("session:subagent:mcp-retire"),
+      () => !bundleMcpRuntimeTesting.getCachedSessionIds().includes(childSessionId),
     );
   });
 

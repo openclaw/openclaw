@@ -89,7 +89,6 @@ it("serves authorized incognito descriptions, events, and reconciled history", a
           .prepare("SELECT needs_rebuild FROM session_transcript_index_state WHERE session_id = ?")
           .get(created.sessionId);
       let committedProjection: unknown;
-      let scheduled = false;
       // Incognito state belongs to this process. Seed the branch through its
       // canonical writer, then exercise the authenticated public history route.
       await persistSessionTranscriptTurn(
@@ -111,12 +110,11 @@ it("serves authorized incognito descriptions, events, and reconciled history", a
           ],
           onMessageCommitted: () => {
             committedProjection = projection();
-            scheduled = isSessionTranscriptIndexReconcileRunning(options);
           },
         },
       );
       expect(committedProjection).toEqual({ needs_rebuild: 1 });
-      expect(scheduled).toBe(true);
+      expect(isSessionTranscriptIndexReconcileRunning(options)).toBe(true);
       await waitForSessionTranscriptIndexReconcile(options);
       expect(projection()).toEqual({ needs_rebuild: 0 });
       const history = await gateway.client.request<{

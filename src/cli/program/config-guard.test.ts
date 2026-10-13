@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { note } from "../../../packages/terminal-core/src/note.js";
+import { setDeferredPluginMigrationConfigFacts } from "../../config/deferred-plugin-migration-config.js";
 import type { ConfigSnapshotReadMeasure } from "../../config/io.js";
 import type { ConfigValidationIssue } from "../../config/types.js";
 import { getGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-state.js";
@@ -18,6 +19,11 @@ import { ExitError } from "../../runtime.js";
 import { withExistingOpenClawStateSchema } from "../../state/openclaw-state-db-schema-policy.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { formatCliCommand } from "../command-format.js";
+import {
+  clearGatewayRunConfigEnvironment,
+  prepareGatewayRunBootstrap,
+  takeAcceptedGatewayRunMigrations,
+} from "../gateway-cli/pre-bootstrap.js";
 import { ensureConfigReady, testApi } from "./config-guard.js";
 
 const pluginPackagingRecoveryHint = [
@@ -267,6 +273,41 @@ describe("ensureConfigReady", () => {
     expect(getProcessPluginCache() === preflightCache).toBe(true);
     // Cache reuse must not freeze the Gateway inventory before its final config read.
     expect(getGatewayPluginMetadataSnapshot()).toBeUndefined();
+  });
+
+  const pendingMigration = { command: "openclaw doctor --fix", pluginId: "demo", reason: "kept" };
+  it.each([
+    { name: "pending", exists: true, valid: true, pending: [pendingMigration] },
+    { name: "empty", exists: true, valid: true, pending: [] },
+    { name: "missing-config", exists: false, valid: true, pending: undefined },
+    { name: "invalid", exists: true, valid: false, pending: undefined },
+  ])("hands the final gateway read $name accepted migration facts once", async (fixture) => {
+    try {
+      const runtime = makeRuntime() as never;
+      expect(await prepareGatewayRunBootstrap({ opts: {}, runtime })).toBe(true);
+      const sourceConfig = { gateway: { mode: "local" as const } };
+      // Preflight snapshots carry their migration generation only when it is nonempty.
+      setDeferredPluginMigrationConfigFacts(sourceConfig, fixture.pending ?? [pendingMigration]);
+      const snapshot = { ...makeSnapshot(), exists: fixture.exists, valid: fixture.valid };
+      runStartupConfigPreflightMock.mockResolvedValue({
+        snapshot: {
+          ...snapshot,
+          sourceConfig,
+          ...(fixture.valid ? {} : { issues: [{ path: "gateway", message: "invalid" }] }),
+        },
+        baseConfig: sourceConfig,
+        pluginMetadataSnapshot: preflightMetadata,
+      });
+
+      await runEnsureConfigReady(["gateway", "run"]);
+
+      expect(takeAcceptedGatewayRunMigrations()).toEqual(
+        fixture.pending ? { deferredPluginMigrations: fixture.pending } : {},
+      );
+      expect(takeAcceptedGatewayRunMigrations()).toEqual({});
+    } finally {
+      clearGatewayRunConfigEnvironment();
+    }
   });
 
   it("honors a readiness refusal after preflight resources unwind", async () => {

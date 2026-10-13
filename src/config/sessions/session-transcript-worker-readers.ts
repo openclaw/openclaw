@@ -1,7 +1,6 @@
-import { isDeepStrictEqual } from "node:util";
+import { types } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err, ok } from "@openclaw/normalization-core/result";
-import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import type { WorkerTaskResponse } from "../../infra/worker-task-pool.types.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import { decodeSessionTranscriptWorkerReadError } from "./session-history-worker-errors.js";
@@ -89,6 +88,7 @@ export function createSessionHistoryWorkerReaders(
       );
   }
   return {
+    readTrajectoryEvents: reader("trajectory-events", "trajectory events", (value) => value.events),
     readTrajectoryRetention: (input, options) => {
       const captured = {
         ...input,
@@ -110,6 +110,11 @@ export function createSessionHistoryWorkerReaders(
     },
     readCleanup: reader("session-cleanup", "a cleanup snapshot", (value) => value),
     readRawDelta: reader("transcript-raw-delta", "raw transcript delta", (value) => value.result),
+    readLatestAssistant: reader(
+      "transcript-latest-assistant",
+      "latest assistant text",
+      (value) => value.result,
+    ),
     readVisibleDelta: reader(
       "transcript-visible-delta",
       "visible transcript delta",
@@ -140,6 +145,11 @@ export function createSessionHistoryWorkerReaders(
     ),
     readConversations: reader("conversation-rows", "conversations", (value) => value.rows),
     prewarm: reader("prewarm", "prewarm acknowledgement", () => undefined),
+    readRetirement: reader(
+      "session-retirement-read",
+      "session retirement facts",
+      (value) => value.result,
+    ),
     readPendingArchives: reader(
       "session-pending-archives",
       "pending archives",
@@ -149,6 +159,24 @@ export function createSessionHistoryWorkerReaders(
       "lifecycle-artifact-plan",
       "lifecycle artifact plan",
       (value) => value,
+    ),
+    readTranscriptStatsBatch: reader(
+      "transcript-stats-batch",
+      "transcript statistics",
+      (value) => value.stats,
+    ),
+    readTranscriptInstances: reader(
+      "session-transcript-instances",
+      "transcript instances",
+      (value) => value.instances,
+      (input) => ({
+        kind: "session-transcript-instances",
+        ...input,
+        scope: {
+          ...input.scope,
+          env: captureSessionTranscriptStorageEnvironment(input.scope.env ?? process.env),
+        },
+      }),
     ),
     readMemorySessionTargets: reader(
       "memory-session-targets",
@@ -254,6 +282,7 @@ export function createSessionHistoryWorkerReaders(
       "a transcript watermark",
       (value) => value.watermark,
     ),
+    readStats: reader("transcript-stats", "transcript statistics", (value) => value.stats),
     readActivitySummarySource: reader(
       "session-activity-summary-source",
       "an Activity recap source",
@@ -270,8 +299,11 @@ export function createSessionHistoryWorkerReaders(
         if (
           typeof value === "boolean" ||
           Array.isArray(value) ||
-          (value.kind !== "active-accounting" &&
+          (value.kind !== "history-event-page" &&
+            value.kind !== "active-accounting" &&
             value.kind !== "bounded-tail" &&
+            value.kind !== "recent-usage" &&
+            value.kind !== "recent-text" &&
             value.kind !== "reactions" &&
             value.kind !== "conversation-binding" &&
             value.kind !== "transcript-binding" &&
@@ -321,7 +353,7 @@ export function createSessionHistoryWorkerReaders(
         for (const frame of value.frames) {
           if (
             !isRecord(frame) ||
-            !(frame.data instanceof Uint8Array) ||
+            !types.isUint8Array(frame.data) ||
             typeof frame.endOfEvent !== "boolean"
           ) {
             throw new Error("Session history worker returned an invalid transcript frame");
@@ -390,15 +422,10 @@ export function createSessionHistoryWorkerReaders(
       (value) => value.message,
     ),
     readVoiceSessions: reader("voice-sessions", "voice sessions", (value) => value),
-    readUsageCache: reader(
-      "usage-refresh-lock",
-      "usage cache",
-      (value) => value,
-      (input) => ({ kind: "usage-cache", ...input }),
-    ),
     readMembershipFacts: reader("session-membership-facts", "membership facts", (value) => value),
     readMembers: reader("session-members", "members", (value) => value),
     readSuggestions: reader("session-suggestions", "suggestions", (value) => value.suggestions),
+    readReactions: reader("session-reactions", "reactions", (value) => value.reactions),
     readExactEntries: async (input, signal) => {
       const captured = { ...input, env: captureSessionTranscriptStorageEnvironment(input.env) };
       return runRequest(
@@ -465,38 +492,34 @@ export function createSessionHistoryWorkerReaders(
       "a Goal operation receipt",
       (value) => value.result,
     ),
-    readEntryResult: reader("session-entry-read", "an entry", (value) =>
-      value.readError
+    readEntryResult: reader("session-entry-read", "an entry", (value) => ({
+      ...(value.readError
         ? err(decodeSessionTranscriptWorkerReadError(value.readError))
-        : ok(value.entry),
-    ),
+        : ok(value.entry)),
+      source: value.source,
+      facts: value.facts,
+    })),
     readEntryCurrent: reader(
       "session-entry-current",
       "entry currency facts",
       (value) => value.entry,
     ),
     readDiagnosticText: reader("session-diagnostic-text", "diagnostic text", (value) => value.text),
-    readEntries: async (scope, continuation, expectedIdentity) => {
+    // The native reader validates the selected file. Replacement after that read is best effort.
+    readEntries: async (scope, continuation, expectedIdentity, ifRevision) => {
       const captured = expectedIdentity && { ...expectedIdentity };
-      const assertIdentity = () => {
-        if (
-          captured &&
-          !isDeepStrictEqual(readDatabasePathIdentitySync(captured.canonicalPath), captured)
-        ) {
-          throw new Error("Session listing changed its captured physical owner");
-        }
-      };
-      assertIdentity();
       return runRequest(
-        () => {
-          assertIdentity();
-          return { kind: "session-entry-list", scope, continuation, expectedIdentity: captured };
-        },
-        JSON.stringify({ scope, continuation, expectedIdentity: captured }).length * 2,
+        () => ({
+          kind: "session-entry-list",
+          scope,
+          continuation,
+          expectedIdentity: captured,
+          ifRevision,
+        }),
+        JSON.stringify({ scope, continuation, expectedIdentity: captured, ifRevision }).length * 2,
         (value) => {
           assertResultKind(value, "session-entry-list", "entries");
-          assertIdentity();
-          return value.entries;
+          return value;
         },
       );
     },

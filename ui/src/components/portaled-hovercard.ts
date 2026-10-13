@@ -1,5 +1,6 @@
 import { composedParent } from "../lib/navigation-click.ts";
 import { promoteToPopoverTopLayer } from "./menu-surface.ts";
+import { resolveTransientContainer } from "./transient-container.ts";
 
 const CARD_GAP = 10;
 const VIEWPORT_PADDING = 12;
@@ -58,6 +59,11 @@ export class PortaledHovercardController {
     private readonly closeDelayMs = 120,
     private readonly dismiss: () => void = close,
   ) {}
+
+  readonly handleCardPointerLeave = () => {
+    this.pointerOverCard = false;
+    this.scheduleClose();
+  };
 
   readonly handleTriggerKeyDown = (event: KeyboardEvent) => {
     if (event.key === "Escape") {
@@ -256,20 +262,21 @@ export class PortaledHovercardController {
     this.clearCard();
     this.anchor = anchor;
     this.card = card;
+    card.addEventListener("keydown", this.handleCardKeyDown);
     card.addEventListener("pointerenter", this.handleCardPointerEnter);
     card.addEventListener("focusin", this.handleCardFocusIn);
     card.addEventListener("focusout", this.handleCardFocusOut);
     this.placement = placement;
     this.unmountContents = unmountContents ?? null;
     const trigger = this.trigger ?? anchor;
-    // A modal drawer makes body siblings inert. Keep its card inside the same
-    // dialog, then use the existing menu top layer to escape clipping and stacking.
-    let owner: Element = document.body;
+    const ancestors: Element[] = [];
     for (let ancestor: Element | null = anchor; ancestor; ancestor = composedParent(ancestor)) {
-      if (ancestor.localName === "openclaw-modal-dialog") {
-        owner = ancestor;
-        break;
-      }
+      ancestors.push(ancestor);
+    }
+    const owner = resolveTransientContainer(ancestors, anchor.ownerDocument);
+    if (!owner) {
+      this.reset();
+      return;
     }
     owner.append(card);
     promoteToPopoverTopLayer(card);

@@ -61,6 +61,8 @@ Owner page: [Gateway authentication](/gateway/authentication) — auth modes, to
   excludes pairing-mutation scopes and `operator.admin`.
 - `hello-ok.auth.deviceTokens` contains only additional bootstrap-handoff tokens.
   Do not use it as metadata for the primary `deviceToken` reconnect record.
+- A node-only bootstrap retry reuses an already-approved node pairing without
+  requesting an operator handoff or changing the node's pairing generation.
 - While a non-baseline setup-code bootstrap waits for approval,
   `PAIRING_REQUIRED` details include `recommendedNextStep: "wait_then_retry"`,
   `retryable: true`, and `pauseReconnect: false`. Keep reconnecting with the

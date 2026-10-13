@@ -182,7 +182,7 @@ class OpenClawBrowserDashboardWidget extends OpenClawLightDomElement {
                 })}
               ></openclaw-browser-panel>`
             : this.error
-              ? renderBoardWidgetError(this.error, () => void this.request("open"))
+              ? renderBoardWidgetError(this.error, { onRetry: () => void this.request("open") })
               : html` <p class="board-browser__notice" role="status">
                   ${t(dashboard?.stopping ? "browser.dashboardStopping" : dashboard?.paused ? "browser.dashboardStopped" : "browser.loading")}
                 </p>`

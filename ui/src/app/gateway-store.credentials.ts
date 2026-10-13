@@ -86,12 +86,9 @@ export function createGatewayCredentials(ownsWarmBoot: boolean) {
       if (!gatewayScope) {
         return;
       }
+      const clear = clearCaches ? clearWarmBootState : clearBootRecords;
       for (const owner of owners) {
-        if (clearCaches) {
-          void clearWarmBootState(gatewayScope, owner);
-        } else {
-          clearBootRecords(gatewayScope, owner);
-        }
+        void clear(gatewayScope, owner);
       }
     },
   };

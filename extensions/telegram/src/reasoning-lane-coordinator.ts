@@ -65,10 +65,9 @@ function isPartialReasoningTagPrefix(text: string): boolean {
   );
 }
 
-type TelegramReasoningSplit = {
-  reasoningText?: string;
-  answerText?: string;
-};
+type TelegramReasoningSplit =
+  | { reasoningText?: string; answerText?: never }
+  | { reasoningText?: never; answerText: string };
 
 export function splitTelegramReasoningText(
   text?: string,

@@ -5,10 +5,15 @@ import {
   isRestartRecoveryTombstone,
   isSessionWorkStartInvalidatedError,
 } from "../../config/sessions/lifecycle.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
+import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import {
-  loadSessionEntryReadOnly,
-  patchSessionEntryCore,
-} from "../../config/sessions/session-accessor.js";
+  composeSessionSourceAssertion,
+  sessionEntryCommitGuardOptions,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import { isRecoverableTerminalSessionStatus } from "../../config/sessions/terminal-status.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -25,6 +30,7 @@ import {
   type SessionWorkAdmissionLease,
 } from "../../sessions/session-lifecycle-admission.js";
 import { classifySessionStateActor } from "../../sessions/session-state-events.js";
+import { observeAgentRunStart } from "../agent-run-start.js";
 import { isNativeCommandTurn } from "../command-turn-context.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import {
@@ -79,6 +85,9 @@ async function restoreArchivedDispatchSession(params: {
   ) {
     return entry;
   }
+  const scope = { sessionKey, storePath };
+  const actor = captureIncognitoSessionSource(scope);
+  const metadata = actor ? captureSessionEntryMetadataRead(scope) : undefined;
   let placementContext = params.placementContext;
   if (!placementContext) {
     try {
@@ -98,6 +107,7 @@ async function restoreArchivedDispatchSession(params: {
     if (
       currentEntry.sessionId !== snapshotSessionId ||
       currentEntry.archivedAt !== snapshotArchivedAt ||
+      (actor && currentEntry.lifecycleRevision !== entry.lifecycleRevision) ||
       isRestartRecoveryTombstone(currentEntry)
     ) {
       return false;
@@ -123,8 +133,18 @@ async function restoreArchivedDispatchSession(params: {
     scope: storePath,
     identities: [sessionKey, snapshotSessionId],
     run: async () => {
-      const scope = { sessionKey, storePath };
-      const currentEntry = loadSessionEntryReadOnly(scope);
+      const currentEntry = actor
+        ? "kind" in actor
+          ? undefined
+          : (
+              await actor.actor.sessions.read(
+                { assertCurrent: () => metadata!.assertCurrent() },
+                { sessionKey },
+                actor.admissionSignal,
+              )
+            ).entry
+        : await readSessionEntryReadOnlyInWorker(scope);
+      metadata?.assertCurrent();
       if (
         !currentEntry ||
         !canRestore(currentEntry, {
@@ -136,7 +156,16 @@ async function restoreArchivedDispatchSession(params: {
       ) {
         return currentEntry;
       }
-      let assertCommitAllowed: (() => void) | undefined;
+      let assertCommitAllowed: SessionSourceAssertion | undefined = metadata
+        ? () => {
+            const current = metadata.readCurrent();
+            if (!current || !canRestore(current)) {
+              throw new DispatchSessionRefreshRequiredError(
+                new Error("Session changed while restoring archived work. Retry the request."),
+              );
+            }
+          }
+        : undefined;
       if (currentEntry.worktree) {
         const { restoreSessionWorktree } =
           await import("../../sessions/session-worktree-lifecycle.js");
@@ -144,10 +173,13 @@ async function restoreArchivedDispatchSession(params: {
         assertCommitAllowed = await restoreSessionWorktree({
           entry: currentEntry,
           scope,
-          commitGuard: await prepareSessionWorkerPlacementMutationCheckAsync({
-            context: placementContext,
-            sessionId: currentEntry.sessionId,
-          }),
+          commitGuard: composeSessionSourceAssertion([
+            assertCommitAllowed,
+            await prepareSessionWorkerPlacementMutationCheckAsync({
+              context: placementContext,
+              sessionId: currentEntry.sessionId,
+            }),
+          ]),
         });
       }
       const updatedEntry = await patchSessionEntryCore(
@@ -157,7 +189,7 @@ async function restoreArchivedDispatchSession(params: {
             ? { archivedAt: undefined, archivedBy: undefined, archiveReason: undefined }
             : null,
         // The writer may have waited; revalidate the prepared binding at the actual commit edge.
-        { assertCommitAllowed },
+        sessionEntryCommitGuardOptions(assertCommitAllowed),
       );
       return updatedEntry ?? undefined;
     },
@@ -243,13 +275,10 @@ export function createDispatchReplyOperationCoordinator(params: {
         dispatchLifecycleAbortController = undefined;
       }
     };
-    if (!afterWorkBarrier && pendingWork.length === 0) {
-      clearAbortControllers();
-      admission.release();
-      return;
-    }
     try {
-      await Promise.allSettled(pendingWork);
+      if (afterWorkBarrier || pendingWork.length > 0) {
+        await Promise.allSettled(pendingWork);
+      }
       if (afterWorkBarrier) {
         await waitForReplyBarrierSettlement(
           afterWorkBarrier(),
@@ -309,7 +338,7 @@ export function createDispatchReplyOperationCoordinator(params: {
         resetTriggered: dispatchResetTriggered,
         allowRestartTombstoneParentFork,
         allowRestartTombstoneReset,
-      } = resolveDispatchResetAdmission({
+      } = await resolveDispatchResetAdmission({
         agentId: params.agentId,
         cfg: params.cfg,
         ctx: params.ctx,
@@ -389,13 +418,10 @@ export function createDispatchReplyOperationCoordinator(params: {
       });
     const lifecycleOnlyAbortController =
       allowActiveResolution || allowSlackRoutedThreadBypass ? new AbortController() : undefined;
-    const onLifecycleInterrupt = () => {
-      preDispatchLifecycleInterrupted = true;
-      lifecycleOnlyAbortController?.abort();
-    };
     const admitCurrentReplyTurn = async () => {
       try {
         return await admitReplyTurn({
+          onDatabaseRegistration: params.replyOptions?.onDatabaseRegistration,
           assertRequestCurrent: () => {
             params.replyOptions?.operatorAuthority?.assertCurrent();
             params.replyOptions?.internalEventExecution?.assertCurrent?.();
@@ -425,7 +451,10 @@ export function createDispatchReplyOperationCoordinator(params: {
           upstreamAbortSignal: params.replyOptions?.abortSignal,
           waitForActive: !allowActiveResolution && !allowSlackRoutedThreadBypass,
           retainLifecycleAdmissionOnActive: allowActiveResolution || allowSlackRoutedThreadBypass,
-          onLifecycleInterrupt,
+          onLifecycleInterrupt: () => {
+            preDispatchLifecycleInterrupted = true;
+            lifecycleOnlyAbortController?.abort();
+          },
         });
       } catch (error) {
         if (
@@ -527,32 +556,30 @@ export function createDispatchReplyOperationCoordinator(params: {
     return { status: "ready" };
   };
 
-  let cachedPreDispatchAbortSignal:
-    | {
-        operationSignal: AbortSignal | undefined;
-        lifecycleSignal: AbortSignal | undefined;
-        upstreamSignal: AbortSignal | undefined;
-        signal: AbortSignal | undefined;
-      }
-    | undefined;
+  let cachedOperationSignal: AbortSignal | undefined;
+  let cachedLifecycleSignal: AbortSignal | undefined;
+  let cachedUpstreamSignal: AbortSignal | undefined;
+  let cachedPreDispatchAbortSignal: AbortSignal | undefined;
   const getPreDispatchAbortSignal = () => {
     const operationSignal = (dispatchAbortOperation ?? preDispatchAbortOperation)?.abortSignal;
     const lifecycleSignal = preDispatchLifecycleAbortController?.signal;
     const upstreamSignal = params.replyOptions?.abortSignal;
     if (
-      cachedPreDispatchAbortSignal &&
-      cachedPreDispatchAbortSignal.operationSignal === operationSignal &&
-      cachedPreDispatchAbortSignal.lifecycleSignal === lifecycleSignal &&
-      cachedPreDispatchAbortSignal.upstreamSignal === upstreamSignal
+      cachedOperationSignal === operationSignal &&
+      cachedLifecycleSignal === lifecycleSignal &&
+      cachedUpstreamSignal === upstreamSignal
     ) {
-      return cachedPreDispatchAbortSignal.signal;
+      return cachedPreDispatchAbortSignal;
     }
     const abortSignals = [operationSignal, lifecycleSignal, upstreamSignal].filter(
       (signal): signal is AbortSignal => Boolean(signal),
     );
-    const signal = abortSignals.length > 1 ? AbortSignal.any(abortSignals) : abortSignals[0];
-    cachedPreDispatchAbortSignal = { operationSignal, lifecycleSignal, upstreamSignal, signal };
-    return signal;
+    cachedPreDispatchAbortSignal =
+      abortSignals.length > 1 ? AbortSignal.any(abortSignals) : abortSignals[0];
+    cachedOperationSignal = operationSignal;
+    cachedLifecycleSignal = lifecycleSignal;
+    cachedUpstreamSignal = upstreamSignal;
+    return cachedPreDispatchAbortSignal;
   };
 
   const getDispatchAbortSignal = () => {
@@ -596,13 +623,12 @@ export function createDispatchReplyOperationCoordinator(params: {
             queuedFollowupAbortSignal: getQueuedFollowupAbortSignal(),
           }
         : {}),
-      onAgentRunStart: (...args) => {
+      ...observeAgentRunStart(params.replyOptions, (start) => {
         agentRunTerminalOutcome = "completed";
         // Execution may generate its ID in copied options; finalization needs the observed run.
-        agentRunId = args[0];
-        params.messageAuditTerminal?.observeRunId(args[0]);
-        return params.replyOptions?.onAgentRunStart?.(...args);
-      },
+        agentRunId = start.runId;
+        params.messageAuditTerminal?.observeRunId(start.runId);
+      }),
       onAgentRunTerminalOutcome: (outcome) => {
         if (outcome === "failed" || agentRunTerminalOutcome === undefined) {
           agentRunTerminalOutcome = outcome;
@@ -641,10 +667,8 @@ export function createDispatchReplyOperationCoordinator(params: {
     const complete = () => {
       if (params.replyOptions?.internalEventExecution) {
         // Source-owned effects retain the admitted operation until delivery settles.
-        void waitForDispatchDelivery().then(
-          () => operation.complete(),
-          () => operation.complete(),
-        );
+        const settle = () => operation.complete();
+        void waitForDispatchDelivery().then(settle, settle);
       } else {
         operation.completeWithAfterClearBarrier(waitForDispatchDelivery(), timeoutPolicy);
       }

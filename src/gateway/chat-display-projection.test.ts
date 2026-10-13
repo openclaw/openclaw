@@ -421,44 +421,72 @@ it.each([
   ]);
 });
 
-it("caps nested output once, preserves literal text, and removes private media", () => {
-  const text = " \n[[reply_to_current]] <tag>\r\n" + "x".repeat(20_000) + "  \n";
-  const metadata = {
-    id: "nested-output",
-    toolOutput: { source: "execution", modelInput: "unverified" },
-  };
-  const result = { type: "toolResult", toolCallId: "nested-call", toolName: "exec", isError: true };
-  const message = {
-    role: "assistant",
-    __openclaw: metadata,
-    content: [
-      {
-        ...result,
-        text,
-        content: [
-          { type: "text", text },
-          { type: "image", data: "aW1hZ2U=", path: "/private/image.png" },
-        ],
-      },
-    ],
-  };
-  const original = structuredClone(message);
-  expect(sanitizeChatHistoryMessages([message], 32)).toEqual([
-    {
+it.each([{ maxChars: 32 }, { maxChars: 8_000, toolResultMaxChars: 32 }])(
+  "caps nested output once, preserves literal text, and removes private media (%j)",
+  (options) => {
+    const text = " \n[[reply_to_current]] <tag>\r\n" + "x".repeat(20_000) + "  \n";
+    const metadata = {
+      id: "nested-output",
+      toolOutput: { source: "execution", modelInput: "unverified" },
+    };
+    const result = {
+      type: "toolResult",
+      toolCallId: "nested-call",
+      toolName: "exec",
+      isError: true,
+    };
+    const message = {
       role: "assistant",
-      __openclaw: { ...metadata, truncated: true, reason: "display-cap" },
+      __openclaw: metadata,
       content: [
         {
           ...result,
+          text,
           content: [
-            { type: "text", text: text.slice(0, 32) },
-            { type: "image", omitted: true, bytes: 5 },
+            { type: "text", text },
+            { type: "image", data: "aW1hZ2U=", path: "/private/image.png" },
           ],
         },
       ],
-    },
-  ]);
-  expect(message).toEqual(original);
+    };
+    const original = structuredClone(message);
+    expect(sanitizeChatHistoryMessages([message], options.maxChars, options)).toEqual([
+      {
+        role: "assistant",
+        __openclaw: { ...metadata, truncated: true, reason: "display-cap" },
+        content: [
+          {
+            ...result,
+            content: [
+              { type: "text", text: text.slice(0, 32) },
+              { type: "image", omitted: true, bytes: 5 },
+            ],
+          },
+        ],
+      },
+    ]);
+    expect(message).toEqual(original);
+  },
+);
+
+it("retains complete structured tool previews and tool arguments under a smaller text cap", () => {
+  const text = JSON.stringify({
+    kind: "canvas",
+    view: { id: "preview", title: "x".repeat(3_000) },
+  });
+  const call = { type: "toolCall", id: "structured", name: "exec", arguments: { input: text } };
+  const result = {
+    type: "toolResult",
+    toolCallId: "structured",
+    content: [{ type: "text", text }],
+  };
+  const messages = [
+    { role: "toolResult", content: result.content },
+    { role: "assistant", content: [call, result] },
+  ];
+  expect(sanitizeChatHistoryMessages(messages, 8_000, { toolResultMaxChars: 2_000 })).toEqual(
+    messages,
+  );
 });
 
 const user = { role: "user", content: "hello", __openclaw: { seq: 1 } };
@@ -577,6 +605,23 @@ it.each([
   expect(message).toEqual(original);
 });
 
+it("preserves a model-fallback event marker through history projection", () => {
+  const notice = {
+    role: "assistant",
+    provider: "openclaw",
+    model: "delivery-mirror",
+    content: [{ type: "text", text: "Model switched from primary/model-a to secondary/model-b." }],
+    openclawDeliveryMirror: {
+      kind: "model-fallback",
+      runId: "run-a",
+      fromModel: "primary/model-a",
+      toModel: "secondary/model-b",
+      reason: "empty_response",
+    },
+  };
+  expect(projectChatDisplayMessages([notice])).toEqual([notice]);
+});
+
 it("retires repeated non-visible failed attempts after their run answers", () => {
   const failures = Array.from({ length: 4 }, (_, attempt) => ({
     ...failed,
@@ -590,12 +635,80 @@ it("retires repeated non-visible failed attempts after their run answers", () =>
   expect(raw).toEqual(original);
 });
 
+it.each([false, true])(
+  "retires a recovered overflow copy without hiding partial output (projected=%s)",
+  (projected) => {
+    const copy =
+      "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.";
+    const overflow = {
+      ...failed,
+      content: [text(copy)],
+      errorCode: "context_length_exceeded",
+      errorMessage: "Your input exceeds the context window of this model.",
+    };
+    const message = projected ? projectChatDisplayMessage(overflow) : overflow;
+    if (!message) {
+      throw new Error("Expected an overflow display projection");
+    }
+    const original = structuredClone(message);
+    expect(projectChatDisplayMessages([user, message, answer])).toEqual([user, answer]);
+    expect(projectedIds([user, message])).toContainEqual(failed["__openclaw"]);
+    expect(
+      projectedIds([
+        user,
+        message,
+        { ...answer, __openclaw: { ...answer["__openclaw"], runId: "other" } },
+      ]),
+    ).toContainEqual(failed["__openclaw"]);
+    expect(
+      projectedIds([user, message, { ...user, content: "Next question" }, answer]),
+    ).toContainEqual(failed["__openclaw"]);
+    const partial = { ...message, content: [text(copy + "\n\nThe first step completed.")] };
+    expect(projectedIds([user, partial, answer])).toContainEqual(failed["__openclaw"]);
+    expect(message).toEqual(original);
+  },
+);
+
 it.each([
   { ...answer, provider: "openclaw", model: "gateway-injected" },
   { ...answer, stopReason: "toolUse" },
 ])("keeps the failure without a successful runtime answer: %j", (later) => {
   expect(projectedIds([user, failed, later])).toContainEqual(failed["__openclaw"]);
 });
+
+it.each([false, true])(
+  "keeps same-run recovery across hidden internal continuations (overflow=%s)",
+  (overflow) => {
+    const failure = overflow
+      ? {
+          ...failed,
+          content: [
+            text(
+              "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.",
+            ),
+          ],
+        }
+      : failed;
+    const continuation = {
+      role: "user",
+      content: "Continue from the current transcript.",
+      provenance: { kind: "internal_system" },
+      display: false,
+    };
+    const raw = [user, failure, continuation, answer];
+    const original = structuredClone(raw);
+    expect(projectChatDisplayMessages(raw)).toEqual([user, answer]);
+    expect(
+      projectedIds([
+        user,
+        failure,
+        continuation,
+        { ...answer, __openclaw: { ...answer["__openclaw"], runId: "other" } },
+      ]),
+    ).toContainEqual(failed["__openclaw"]);
+    expect(raw).toEqual(original);
+  },
+);
 
 it("keeps unattributed failures and failures separated by a new user turn", () => {
   const unattributed = { ...failed, __openclaw: { id: "failed", seq: 2 } };

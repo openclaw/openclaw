@@ -1,5 +1,6 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createRetainedOperation, type RetainedOperation } from "./retained-operation.js";
 import type {
   Slot,
@@ -7,6 +8,22 @@ import type {
   RetainedWorkerTask,
   WorkerTaskResponse,
 } from "./worker-task-pool.types.js";
+
+export function createWorkerHostExchange<Input, Output>(
+  task: Task<Input, Output>,
+  request: unknown,
+): NonNullable<Task<Input, Output>["exchange"]> {
+  const name = isRecord(request) ? (request.kind ?? request.type) : request;
+  return (task.exchange = {
+    id: ++task.exchangeSequence,
+    // Retain only a bounded operation label, never callback payloads or paths.
+    name:
+      typeof name === "string" && /^[a-zA-Z][a-zA-Z0-9._:-]{0,95}$/.test(name) ? name : "unknown",
+    pressure: new AbortController(),
+    sent: false,
+    onConsumed: undefined,
+  });
+}
 
 export function dispatchOwnedWorkerRequest<Input, Output>(
   task: Task<Input, Output>,

@@ -1,7 +1,22 @@
+import crypto from "node:crypto";
 import path from "node:path";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { withFileLock } from "openclaw/plugin-sdk/file-lock";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { getMSTeamsRuntime } from "./runtime.js";
+
+export function resolveMSTeamsAccountStateNamespace(
+  namespace: string,
+  accountId?: string | null,
+): string {
+  const normalizedAccountId = normalizeAccountId(accountId);
+  // Default namespaces are also used by Doctor's legacy-state migration.
+  if (normalizedAccountId === DEFAULT_ACCOUNT_ID) {
+    return namespace;
+  }
+  const digest = crypto.createHash("sha256").update(normalizedAccountId).digest("hex");
+  return `${namespace}-${digest}`;
+}
 
 export function toPluginJsonValue<T>(value: T): T {
   const serialized = JSON.stringify(value);

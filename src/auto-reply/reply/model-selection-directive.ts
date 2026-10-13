@@ -251,10 +251,12 @@ export function resolveModelDirectiveSelection(params: {
   }
 
   const resolvedKey = modelKey(resolved.ref.provider, resolved.ref.model);
+  const isExactSelection =
+    rawTrimmed.includes("/") || resolved.alias || allowedModelKeys.has(resolvedKey);
   if (
     params.operatorModelPolicy &&
     !params.operatorModelPolicy.allows(resolved.ref) &&
-    (rawTrimmed.includes("/") || resolved.alias || allowedModelKeys.has(resolvedKey))
+    isExactSelection
   ) {
     return {
       error:
@@ -265,10 +267,7 @@ export function resolveModelDirectiveSelection(params: {
   const permitted = allows(resolved.ref);
   // Preserve catalog hints for bare fragments, while explicit routes and aliases
   // depend only on policy, never on finite picker membership.
-  if (
-    permitted &&
-    (rawTrimmed.includes("/") || resolved.alias || allowedModelKeys.has(resolvedKey))
-  ) {
+  if (permitted && isExactSelection) {
     return { selection: explicitSelection };
   }
 

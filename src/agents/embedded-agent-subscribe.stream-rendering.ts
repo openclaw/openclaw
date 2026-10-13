@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { readAssistantThinkingAppend } from "@openclaw/ai/internal/shared";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { InlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
@@ -13,7 +14,10 @@ import {
 } from "../auto-reply/reply-payload.js";
 import type { ReplyDirectiveParseResult } from "../auto-reply/reply/reply-directives.js";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
-import { emitAgentEvent } from "../infra/agent-events.js";
+import {
+  emitAgentEventWithAssistantSourceIfCurrent,
+  readAgentAssistantSource,
+} from "../infra/agent-events.js";
 import { findFinalTagMatches } from "../shared/text/final-tags.js";
 import { hasOrphanReasoningCloseBoundary } from "../shared/text/reasoning-tags.js";
 import {
@@ -36,7 +40,11 @@ import type {
   StreamBlockState,
 } from "./embedded-agent-subscribe.handlers.types.js";
 import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
-import { createThinkingTagStreamState, THINKING_TAG_SCAN_RE } from "./embedded-agent-utils.js";
+import {
+  createAssistantStreamBlockState,
+  createThinkingTagStreamState,
+  THINKING_TAG_SCAN_RE,
+} from "./embedded-agent-utils.js";
 
 const STREAM_STRIPPED_BLOCK_TAG_NAMES = [
   "final",
@@ -642,6 +650,9 @@ export function createStreamRendering({
     if (!trimmed || trimmed === state.lastStreamedReasoning) {
       return;
     }
+    // Transcript persistence completes this same occurrence receipt after message_end.
+    const source = readAgentAssistantSource(state.lastAssistant);
+    const itemId = source ? (source.itemId ??= randomUUID()) : undefined;
     flushAssistantStream();
     // Partial callbacks can advance reasoning while the assistant scope flushes.
     const prior = state.lastStreamedReasoning ?? "";
@@ -654,14 +665,14 @@ export function createStreamRendering({
     state.lastStreamedReasoning = trimmed;
 
     // Archive thinking regardless of /reasoning; that setting gates the rendering hook.
-    emitAgentEvent({
-      runId: params.runId,
-      stream: "thinking",
-      data: {
-        text: trimmed,
-        delta,
+    emitAgentEventWithAssistantSourceIfCurrent(
+      {
+        runId: params.runId,
+        stream: "thinking",
+        data: { text: trimmed, delta, ...(itemId ? { itemId } : {}) },
       },
-    });
+      source,
+    );
 
     // A message-tool-only reply suppresses later reasoning from channel rendering,
     // including reasoning attached to tool calls. The archive above still receives it.
@@ -693,18 +704,13 @@ export function createStreamRendering({
     state.hasFlushedPartialText = false;
     blockChunker.reset();
     resetPartialReplyDirectives();
-    state.partialBlockState = {
-      thinking: false,
-      final: false,
-      inlineCode: createInlineCodeState(),
-    };
+    state.partialBlockState = createAssistantStreamBlockState();
     state.assistantStream = undefined;
     state.currentSourceMessagingToolHeldPartial = undefined;
     state.lastBlockReplyText = undefined;
     state.lastStreamedReasoning = undefined;
     reasoningProjection = createTextProjection([trimTextFilter("both")]);
     reasoningRaw = undefined;
-    state.lastReasoningSent = undefined;
     state.reasoningStreamOpen = false;
     state.suppressBlockChunks = false;
     state.assistantMessageIndex += 1;

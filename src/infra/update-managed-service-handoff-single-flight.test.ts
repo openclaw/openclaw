@@ -6,9 +6,12 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
-import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import {
+  createManagedHandoffTempDirTracker,
+  readManagedHandoffArtifacts,
+} from "./update-managed-service-handoff-artifacts.test-support.js";
 import {
   signalMockManagedUpdateHandoffReady,
   registerPreparedCoordinatorAdmissionTest,
@@ -26,7 +29,7 @@ const findSystemdGatewayInstallationMock = vi.hoisted(() =>
   })),
 );
 // The coordinator must outlive mocked lease cleanup in afterEach.
-const tempRoots = createTempDirTracker();
+const tempRoots = createManagedHandoffTempDirTracker();
 const mockedHandoffLeaseCleanups = new Set<() => void>();
 const MOCK_INSTALL_ROOT = path.join(os.tmpdir(), `openclaw-handoff-single-flight-${process.pid}`);
 
@@ -108,7 +111,7 @@ beforeEach(async () => {
   findSystemdGatewayInstallationMock.mockResolvedValue({ kind: "none" });
   spawnMock.mockReset();
   spawnMock.mockImplementation((_command: string, args: string[]) => {
-    const child = createReadyChild(pid++, args.at(-1) ?? "");
+    const child = createReadyChild(pid++, readManagedHandoffArtifacts(args).paramsPath);
     liveChildren.add(child.pid);
     child.once("exit", () => liveChildren.delete(child.pid));
     return child;
@@ -119,13 +122,10 @@ afterEach(async () => {
   for (const cleanup of mockedHandoffLeaseCleanups) {
     cleanup();
   }
-  const handoffDirs = spawnMock.mock.calls.flatMap((call) => {
-    const args = call[1] as string[] | undefined;
-    const scriptPath = args?.[0];
-    return scriptPath ? [path.dirname(scriptPath)] : [];
-  });
-  await Promise.all(handoffDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
-  tempRoots.cleanup();
+  for (const [, args] of spawnMock.mock.calls) {
+    tempRoots.add(readManagedHandoffArtifacts(args).dir);
+  }
+  await tempRoots.cleanup();
   vi.restoreAllMocks();
   vi.resetModules();
 });
@@ -194,7 +194,7 @@ describe("managed service update handoff single-flight", () => {
     ["identifies a dead helper", "dead-helper"],
   ] as const)("rejects READY when the durable helper lease %s", async (_label, failure) => {
     spawnMock.mockImplementationOnce((_command: string, args: string[]) =>
-      createReadyChild(process.pid, args.at(-1) ?? "", failure),
+      createReadyChild(process.pid, readManagedHandoffArtifacts(args).paramsPath, failure),
     );
     const { claimManagedServiceUpdateHandoff, startManagedServiceUpdateHandoff } =
       await import("./update-managed-service-handoff.js");
@@ -334,7 +334,7 @@ describe("managed service update handoff single-flight", () => {
   it("transfers through Bun-style child pipes without stream-level unref", async () => {
     const commands: string[] = [];
     spawnMock.mockImplementationOnce((_command: string, args: string[]) => {
-      const child = createReadyChild(process.pid, args.at(-1) ?? "");
+      const child = createReadyChild(process.pid, readManagedHandoffArtifacts(args).paramsPath);
       child.stdin.on("data", (chunk) => {
         const command = chunk.toString();
         commands.push(command);
@@ -502,7 +502,7 @@ describe("managed service update handoff single-flight", () => {
       const helper = spawnMock.mock.results[0]?.value as import("node:child_process").ChildProcess;
       const [, args] = spawnMock.mock.calls[0] as [string, string[]];
       leaseDatabasePath = (
-        JSON.parse(await fs.readFile(args[1] ?? "", "utf8")) as {
+        JSON.parse(await fs.readFile(readManagedHandoffArtifacts(args).paramsPath, "utf8")) as {
           updateLeaseDatabasePath: string;
         }
       ).updateLeaseDatabasePath;
@@ -739,7 +739,9 @@ describe("managed service update handoff single-flight", () => {
       throw new Error("expected the detached helper control pipe");
     }
     const [, args] = spawnMock.mock.calls[0] as [string, string[]];
-    const { updateLeaseDatabasePath } = JSON.parse(await fs.readFile(args[1] ?? "", "utf8")) as {
+    const { updateLeaseDatabasePath } = JSON.parse(
+      await fs.readFile(readManagedHandoffArtifacts(args).paramsPath, "utf8"),
+    ) as {
       updateLeaseDatabasePath: string;
     };
     let controlDestroyed = false;
@@ -892,7 +894,9 @@ describe("managed service update handoff single-flight", () => {
     ).resolves.toBe(false);
     const child = spawnMock.mock.results[0]?.value as import("node:child_process").ChildProcess;
     const [, args] = spawnMock.mock.calls[0] as [string, string[]];
-    const helper = JSON.parse(await fs.readFile(args[1] ?? "", "utf8")) as {
+    const helper = JSON.parse(
+      await fs.readFile(readManagedHandoffArtifacts(args).paramsPath, "utf8"),
+    ) as {
       updateLeaseDatabasePath: string;
       stateDatabasePath: string;
     };

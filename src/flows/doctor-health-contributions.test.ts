@@ -100,10 +100,8 @@ const mocks = vi.hoisted(() => ({
   maybeRepairGatewayServiceConfig: vi.fn().mockResolvedValue(undefined),
   maybeScanExtraGatewayServices: vi.fn().mockResolvedValue(undefined),
   maybeResolveDuelingSystemdGatewayScopes: vi.fn().mockResolvedValue(undefined),
-  noteMacLaunchAgentOverrides: vi.fn(),
+  noteMacGatewayPlatformWarnings: vi.fn(),
   noteMacDisabledGatewayLaunchAgent: vi.fn(),
-  noteMacLaunchctlGatewayEnvOverrides: vi.fn(),
-  noteMacStaleOpenClawUpdateLaunchdJobs: vi.fn(),
   gatewaySecretInputPathCanWin: vi.fn(),
   readGatewaySecretInputValue: vi.fn((..._args: unknown[]) => undefined as string | undefined),
   checkGatewayHealth: vi.fn(async () => ({
@@ -398,11 +396,10 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway,
 }));
 
-vi.mock("../commands/doctor-platform-notes.js", () => ({
-  noteMacLaunchAgentOverrides: mocks.noteMacLaunchAgentOverrides,
+vi.mock("../commands/doctor-platform-notes.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/doctor-platform-notes.js")>()),
+  noteMacGatewayPlatformWarnings: mocks.noteMacGatewayPlatformWarnings,
   noteMacDisabledGatewayLaunchAgent: mocks.noteMacDisabledGatewayLaunchAgent,
-  noteMacLaunchctlGatewayEnvOverrides: mocks.noteMacLaunchctlGatewayEnvOverrides,
-  noteMacStaleOpenClawUpdateLaunchdJobs: mocks.noteMacStaleOpenClawUpdateLaunchdJobs,
 }));
 
 vi.mock("../commands/doctor-foreign-launchd-jobs.js", () => ({
@@ -751,9 +748,7 @@ describe("doctor health contributions", () => {
     mocks.noteLegacyWhatsAppCrontabHealthCheck.mockResolvedValue(undefined);
     mocks.collectStalePluginRuntimeSymlinkHealthFindings.mockResolvedValue([]);
     mocks.replaceConfigFile.mockResolvedValue(undefined);
-    mocks.noteMacLaunchAgentOverrides.mockResolvedValue(undefined);
-    mocks.noteMacLaunchctlGatewayEnvOverrides.mockResolvedValue(undefined);
-    mocks.noteMacStaleOpenClawUpdateLaunchdJobs.mockResolvedValue(undefined);
+    mocks.noteMacGatewayPlatformWarnings.mockResolvedValue(undefined);
     setRegisteredHealthChecks([
       { id: "core/example/internal", kind: "core" },
       { id: "plugin/example/unrelated", kind: "plugin" },

@@ -16,11 +16,9 @@ import {
 } from "../../agent-run-terminal-outcome.js";
 import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
 import { SessionTranscriptMessageCommittedError } from "../../sessions/session-manager-message-error.js";
-import {
-  appendSessionTranscriptNote,
-  withSessionManagerWrite,
-} from "../../sessions/session-manager-write-admission.js";
+import { appendSessionTranscriptNote } from "../../sessions/session-manager-write-admission.js";
 import { log } from "../logger.js";
 import { clearActiveEmbeddedRun } from "../runs.js";
 import { joinWithRunLivenessDeadline, RUN_LIVENESS_JOIN_TIMEOUT_MS } from "./abortable.js";
@@ -199,7 +197,7 @@ export async function runEmbeddedAttemptSettledPhase(
     let rewoundBeforeAgentFinalizeRevision = false;
     if (beforeAgentFinalizeRevisionReason && beforeAgentFinalizeRevisionEntryId) {
       await input.sessionLock.withOwnedTranscriptWrite(() =>
-        withSessionManagerWrite(sessionManager, async () => {
+        withSessionManagerAppend(sessionManager, async () => {
           const rejectedEntry = sessionManager.getEntry(beforeAgentFinalizeRevisionEntryId);
           if (rejectedEntry?.type !== "message" || rejectedEntry.message.role !== "assistant") {
             throw new Error(
@@ -354,12 +352,12 @@ export async function runEmbeddedAttemptSettledPhase(
               }
             };
             if (isIncognitoSessionKey(target.sessionKey)) {
-              await withSessionManagerWrite(sessionManager, appendAndPublish);
+              await withSessionManagerAppend(sessionManager, appendAndPublish);
             } else {
               await appendAndPublish();
             }
           } else {
-            await withSessionManagerWrite(sessionManager, async () => {
+            await withSessionManagerAppend(sessionManager, async () => {
               assertBinding();
               await sessionManager.appendMessageAsync(note);
               assertBinding();

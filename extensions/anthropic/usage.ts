@@ -249,11 +249,7 @@ export async function resolveAnthropicUsageAuth(
     return oauthToken;
   }
 
-  const apiKey = ctx.resolveApiKeyFromConfigAndStore();
-  const adminKey = normalizeAdminKey(apiKey);
-  if (adminKey) {
-    return { token: encodeAdminToken(adminKey) };
-  }
+  const apiKey = storedCandidates[0];
   if (apiKey) {
     const { validateAnthropicSetupToken } = await import("openclaw/plugin-sdk/provider-auth");
     if (validateAnthropicSetupToken(apiKey) === undefined) {

@@ -76,6 +76,11 @@ export interface ReleaseChildSpec {
 }
 export type ReleaseGhTransportErrorClass = "ambiguous" | "hard" | "transient";
 export function classifyReleaseGhTransportError(error: unknown): ReleaseGhTransportErrorClass;
+export function releaseGhRateLimitRetryAt(
+  error: unknown,
+  now?: number,
+  failures?: number,
+): number | undefined;
 export function isReleaseGhArtifactMissingError(error: unknown): boolean;
 export function releaseChildSpec(key: string): ReleaseChildSpec;
 export function releaseChildSpecs(): ReleaseChildSpec[];
@@ -84,7 +89,7 @@ export function planReleaseChildRerun(input: {
   jobs: ReleaseRecord[];
 }):
   | { failed: string[]; mode: "failed-jobs" }
-  | { failed: string[]; mode: "producer"; producer: string };
+  | { failed: string[]; mode: "producer" | "receipt"; producer: string };
 export function validateReleaseChildRunProvenance(
   run: ReleaseRecord,
   expected?: ReleaseRecord,

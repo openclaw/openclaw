@@ -154,7 +154,7 @@ export async function restartWhatsAppQaDriverSession(params: {
 }
 
 export async function startWhatsAppQaDriverSessionWithRetry(params: { authDir: string }) {
-  for (let attempt = 1; attempt <= WHATSAPP_QA_TRANSIENT_DRIVER_ATTEMPTS; attempt += 1) {
+  for (let attempt = 1; ; attempt += 1) {
     try {
       return await startWhatsAppQaDriverSession({
         authDir: params.authDir,
@@ -170,5 +170,4 @@ export async function startWhatsAppQaDriverSessionWithRetry(params: { authDir: s
       await sleep(WHATSAPP_QA_DRIVER_RECONNECT_DELAY_MS);
     }
   }
-  throw new Error("unreachable WhatsApp QA driver retry loop exit");
 }

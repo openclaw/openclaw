@@ -4,6 +4,7 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-
 import { isLockOwnerDefinitelyStale } from "../../infra/stale-lock-file.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import { WorktreeRemovalContentionError } from "./errors.js";
+import { worktreeRegistryPublication } from "./registry-publication.js";
 
 type WorktreeLeaseDatabase = Pick<DB, "worktrees" | "state_leases">;
 export const WORKTREE_REMOVING_LEASE_KEY = "__removing__";
@@ -46,10 +47,15 @@ export function collectLiveRunLeases(
   ).rows;
   const { staleKeys, ...live } = inspectRunLeases(rows);
   if (reapStale && staleKeys.length > 0) {
-    executeSqliteQuerySync(
+    const removed = executeSqliteQuerySync(
       db,
-      k.deleteFrom("state_leases").where("scope", "=", scope).where("lease_key", "in", staleKeys),
-    );
+      k
+        .deleteFrom("state_leases")
+        .where("scope", "=", scope)
+        .where("lease_key", "in", staleKeys)
+        .returning(["scope", "lease_key"]),
+    ).rows;
+    worktreeRegistryPublication.deleted(db, removed);
   }
   return live;
 }

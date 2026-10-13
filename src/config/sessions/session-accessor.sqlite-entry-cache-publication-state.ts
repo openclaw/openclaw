@@ -23,7 +23,6 @@ import {
   type SessionEntryReplacementPublication,
   type SessionSharingEntry,
 } from "./session-accessor.sqlite-entry-cache.types.js";
-import { isSessionEntryReplacementFactKnown } from "./session-accessor.sqlite-entry-receipt.js";
 import { stageIncognitoSharingPublication } from "./session-accessor.sqlite-incognito-sharing.js";
 import {
   projectSessionEntryPredicateChange,
@@ -36,7 +35,7 @@ import {
   type PreparedSessionSharingRead,
   type SessionSharingRetentionRequest,
 } from "./session-accessor.sqlite-sharing-acquisition.js";
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export const preparedSharingReads = resolveGlobalSingleton(
   Symbol.for("openclaw.preparedSessionSharingReads"),
@@ -85,7 +84,6 @@ export function stageSessionSharingPublication(
 export function recordCommittedSessionEntryPublication(
   database: SessionEntryCacheDatabase | string,
   sessionKey: string,
-  entry: Pick<SessionEntry, "sessionId" | "lifecycleRevision"> | undefined,
   before?: PendingSessionEntryPublication,
 ): void {
   const identity =
@@ -98,17 +96,12 @@ export function recordCommittedSessionEntryPublication(
     if (pending === before) {
       break;
     }
-    pending.superseded.set(
-      sessionKey,
-      entry
-        ? { sessionId: entry.sessionId, lifecycleRevision: entry.lifecycleRevision }
-        : undefined,
-    );
+    pending.superseded.add(sessionKey);
   }
 }
 
 export function recordCommittedSessionMetadataPublication(
-  database: SessionEntryCacheDatabase,
+  database: SessionEntryCacheDatabase | string,
   sessionKey: string,
   change?: SessionRowFacts,
   entry?: SessionEntry,
@@ -121,28 +114,7 @@ export function recordCommittedSessionMetadataPublication(
         : undefined);
     publishRetainedSessionEntryPredicate(read, postimage, postimage !== undefined);
   }
-  const identity = findOpenClawAgentDatabaseIdentity(database)?.identity;
-  if (typeof identity === "string") {
-    for (const pending of pendingSessionEntryPublications.get(`file:${identity}\0${sessionKey}`) ??
-      []) {
-      pending.metadataSuperseded.add(sessionKey);
-    }
-  }
-}
-
-export function recordCommittedSessionOwnerPublication(
-  database: SessionEntryCacheDatabase,
-  sessionKey: string,
-  change: Extract<SessionRowFacts, { kind: "owner" }>,
-): void {
-  const identity = findOpenClawAgentDatabaseIdentity(database)?.identity;
-  if (typeof identity === "string") {
-    for (const pending of pendingSessionEntryPublications.get(`file:${identity}\0${sessionKey}`) ??
-      []) {
-      // A field update supersedes its value, not the pending entry's generation fence.
-      pending.ownerChanges.set(sessionKey, structuredClone(change));
-    }
-  }
+  recordCommittedSessionEntryPublication(database, sessionKey);
 }
 
 /** Commit receipts remain current only until their stored fields are superseded. */
@@ -151,51 +123,39 @@ export function readCurrentSessionEntryProjection(
   replacement: SessionEntryReplacementPublication | undefined,
   sessionKey: string,
 ) {
-  return !owner.superseded.has(sessionKey) &&
-    !owner.metadataSuperseded.has(sessionKey) &&
-    !owner.projectionSuperseded.has(sessionKey) &&
-    (!replacement?.receipt || replacement.receipt.facts.get(sessionKey)?.kind === "postimage")
-    ? replacement?.projection?.get(sessionKey)
-    : undefined;
+  return !owner.superseded.has(sessionKey) ? replacement?.projection?.get(sessionKey) : undefined;
 }
 
-export function isSessionEntryReplacementIdentityCurrent(
-  owner: PendingSessionEntryPublication,
-  replacement: SessionEntryReplacementPublication | undefined,
-  sessionKey: string,
-): boolean {
-  if (!owner.superseded.has(sessionKey)) {
-    return true;
-  }
-  const native = owner.superseded.get(sessionKey);
-  const committed = replacement?.current.get(sessionKey);
-  // A later metadata write supersedes sharing facts, but retains this lifecycle transition.
-  return (
-    native !== undefined &&
-    committed !== undefined &&
-    native.sessionId === committed.sessionId &&
-    native.lifecycleRevision === committed.lifecycleRevision
-  );
-}
-
-export function prepareSessionEntryReplacementChanges(
+function prepareSessionEntryReplacementChanges(
   owner: PendingSessionEntryPublication,
   replacement: SessionEntryReplacementPublication,
   databaseIdentity: string,
-  transcriptUnchanged: boolean,
 ): PreparedSessionEntryChanges | undefined {
   if (replacement.source?.identity !== databaseIdentity) {
     return undefined;
   }
-  const current = (key: string) =>
-    !owner.superseded.has(key) && isSessionEntryReplacementFactKnown(replacement, key);
+  const current = (key: string) => !owner.superseded.has(key);
   return {
     source: replacement.source,
     entries: new Map(
       [...replacement.current]
-        .filter(([key]) => current(key) && !owner.metadataSuperseded.has(key))
+        .filter(([key]) => current(key) && !replacement.unavailableParticipantKeys?.includes(key))
         .map(([key, entry]) => [key, freezeJsonSnapshot(entry)]),
     ),
+    fullEntries:
+      replacement.fullEntries &&
+      new Map(
+        [...replacement.fullEntries]
+          .filter(([key]) => current(key) && !replacement.unavailableParticipantKeys?.includes(key))
+          .map(([key, entry]) => [key, freezeJsonSnapshot(entry)]),
+      ),
+    actorPostimages:
+      replacement.actorPostimages &&
+      new Map(
+        [...replacement.actorPostimages]
+          .filter(([key]) => current(key))
+          .map(([key, state]) => [key, freezeJsonSnapshot(state)]),
+      ),
     sharing: new Map(
       [...replacement.current]
         .filter(([key]) => current(key))
@@ -206,41 +166,56 @@ export function prepareSessionEntryReplacementChanges(
       new Map(
         [...replacement.projection]
           .filter(
-            ([key, facts]) =>
-              readCurrentSessionEntryProjection(owner, replacement, key) !== undefined &&
-              (facts.activitySummaryWatermark === undefined || transcriptUnchanged),
+            ([key]) => readCurrentSessionEntryProjection(owner, replacement, key) !== undefined,
           )
           .map(([key, facts]) => [key, freezeJsonSnapshot(facts)]),
       ),
   };
 }
 
-export function applyPendingSessionEntryOwnerChanges(
-  replacement: SessionEntryReplacementPublication | undefined,
-  ownerChanges: PendingSessionEntryPublication["ownerChanges"],
-): SessionEntryReplacementPublication | undefined {
-  if (!replacement || ownerChanges.size === 0) {
-    return replacement;
-  }
-  // The receipt stays immutable evidence of its own COMMIT. Only the existing
-  // owner's installation view incorporates subsequent native field assignments.
-  const current = new Map(replacement.current);
-  for (const [sessionKey, change] of ownerChanges) {
-    const entry = current.get(sessionKey);
-    if (
-      !entry ||
-      entry.sessionId !== change.sessionId ||
-      (entry.lifecycleRevision ?? null) !== change.lifecycleRevision
-    ) {
-      continue;
+/** Capture acknowledged facts while their existing publication owner keeps delivery current. */
+export function prepareSessionEntryPublicationFacts(params: {
+  replacement: SessionEntryReplacementPublication | undefined;
+  owner: PendingSessionEntryPublication;
+  databaseIdentity: string;
+  unknown: boolean;
+}) {
+  const { replacement, owner, databaseIdentity, unknown } = params;
+  const current = (key: string) => !owner.superseded.has(key);
+  const prepared =
+    !unknown && replacement
+      ? prepareSessionEntryReplacementChanges(owner, replacement, databaseIdentity)
+      : undefined;
+  const currentMetadata = (key: string) => current(key) && replacement !== undefined;
+  const readCurrent = (key: string) => {
+    if (!currentMetadata(key)) {
+      return undefined;
     }
-    const { owner: _previousOwner, ...metadata } = entry;
-    current.set(
-      sessionKey,
-      freezeJsonSnapshot({ ...metadata, ...(change.owner ? { owner: change.owner } : {}) }),
-    );
-  }
-  return { ...replacement, current };
+    const entry = prepared?.entries.get(key);
+    if (!entry) {
+      const metadata = replacement?.unavailableParticipantKeys?.includes(key)
+        ? replacement.current.get(key)
+        : undefined;
+      // Missing participant display cannot erase acknowledged identity or certify an empty row.
+      return metadata
+        ? {
+            entry: undefined,
+            projection: undefined,
+            sharing: projectSessionSharingEntry(metadata),
+          }
+        : undefined;
+    }
+    const projection = readCurrentSessionEntryProjection(owner, replacement, key)
+      ? prepared?.projection?.get(key)
+      : undefined;
+    return {
+      entry,
+      fullEntry: prepared?.fullEntries?.get(key),
+      actorPostimage: prepared?.actorPostimages?.get(key),
+      projection,
+    };
+  };
+  return { prepared, currentMetadata, readCurrent };
 }
 
 export function publishRetainedSessionEntryChange(
@@ -251,7 +226,7 @@ export function publishRetainedSessionEntryChange(
   known: boolean,
   metadataEntry?: SessionEntry,
 ): void {
-  recordCommittedSessionEntryPublication(database, sessionKey, entry);
+  recordCommittedSessionEntryPublication(database, sessionKey);
   for (const read of retainedSharingReads(database, sessionKey) ?? []) {
     publishRetainedSessionEntryPredicate(read, metadataEntry, known);
     recordAcquiringSessionEntry(read.acquisition, entry, previousIdentity);
@@ -306,8 +281,40 @@ export function retainPreparedSessionSharingFacts(params: SessionSharingRetentio
         !publication.superseded.has(params.sessionKey) &&
         !publication.generationUnchanged.has(params.sessionKey),
     );
+  const predicatePending = () =>
+    (read.predicate?.pending.size ?? 0) > 0 ||
+    [...(pendingSessionEntryPublications.get(key) ?? [])].some((publication) => {
+      if (publication.settled || publication.superseded.has(params.sessionKey)) {
+        return false;
+      }
+      const entryPostimage = publication.entryPostimages?.get(params.sessionKey);
+      if (read.predicate && entryPostimage) {
+        // These fields are unchanged whether the pending transaction commits or rolls back.
+        try {
+          return !read.predicate.matches(entryPostimage);
+        } catch {
+          return true;
+        }
+      }
+      if (!read.predicate || !publication.participantProjections?.has(params.sessionKey)) {
+        return true;
+      }
+      const projection = publication.participantProjections.get(params.sessionKey);
+      if (!projection) {
+        return false;
+      }
+      const postimage = projectSessionEntryPredicateChange(read.predicate, {
+        kind: "participants",
+        projection,
+      });
+      try {
+        return !postimage || !read.predicate.matches(postimage);
+      } catch {
+        return true;
+      }
+    });
   return {
-    hasPendingPublication: () => pending(false, read.predicate?.pending),
+    hasPendingPublication: predicatePending,
     prepareRead: (): Promise<void> | undefined => {
       // Publication begins only after writer admission; queued writers cannot block their owner.
       const completions = [...(pendingSessionEntryPublications.get(key) ?? [])].flatMap(
@@ -325,6 +332,10 @@ export function retainPreparedSessionSharingFacts(params: SessionSharingRetentio
       }
       read.facts = reconcileSessionSharingAcquisition(acquisition, snapshot);
       read.acquisition = undefined;
+      return read.facts;
+    },
+    adoptCreatedEntry: (entry: SessionSharingEntry) => {
+      read.facts = { entry, membership: new Set() };
     },
     readGeneration: () => (active && !generationPending() ? read.generation?.current : undefined),
     readGenerationSettings: () => (active && !pending(true) ? read.generation?.current : undefined),
@@ -365,9 +376,11 @@ export function retainPreparedSessionEntryPredicate(params: {
   });
   let active = true;
   const canRefresh = () => active && predicate.state !== "changed";
+  const isCurrent = () =>
+    canRefresh() && predicate.state === "current" && !retained.hasPendingPublication();
   return {
-    isCurrent: () =>
-      canRefresh() && predicate.state === "current" && !retained.hasPendingPublication(),
+    isCurrent,
+    readCurrent: () => (isCurrent() ? { entry: structuredClone(predicate.entry) } : undefined),
     canRefresh,
     captureRevision: () => predicate.revision,
     acknowledge: (entry: SessionEntry | undefined, revision: number) => {
@@ -433,7 +446,7 @@ export function retainedSharingReads(
 type PreparedSharingChangeRegistry = {
   changes: WeakMap<object, SessionEntryPublicationRecord>;
   operations: WeakMap<SessionEntryCreationOperation, CreationRecord>;
-  current: AsyncLocalStorage<CreationRecord>;
+  current: AsyncLocalStorage<CreationRecord | undefined>;
 };
 
 export const preparedSharingChanges: PreparedSharingChangeRegistry = resolveGlobalSingleton(
@@ -441,7 +454,7 @@ export const preparedSharingChanges: PreparedSharingChangeRegistry = resolveGlob
   () => ({
     changes: new WeakMap<object, SessionEntryPublicationRecord>(),
     operations: new WeakMap<SessionEntryCreationOperation, CreationRecord>(),
-    current: new AsyncLocalStorage<CreationRecord>(),
+    current: new AsyncLocalStorage<CreationRecord | undefined>(),
   }),
 );
 
@@ -518,12 +531,20 @@ export function readPreparedSessionEntryChange(change: object, sessionKey: strin
     return undefined;
   }
   const { prepared } = record;
-  const entry = prepared.entries.get(sessionKey);
+  const current = record.readCurrent?.(sessionKey);
+  const entry = record.readCurrent ? current?.entry : prepared.entries.get(sessionKey);
+  // A withheld postimage must still identify the store that committed the change.
   return {
     source: prepared.source,
     entry,
-    sharing:
-      prepared.sharing?.get(sessionKey) ?? (entry ? projectSessionSharingEntry(entry) : undefined),
-    projection: prepared.projection?.get(sessionKey),
+    fullEntry: record.readCurrent ? current?.fullEntry : prepared.fullEntries?.get(sessionKey),
+    actorPostimage: record.readCurrent
+      ? current?.actorPostimage
+      : prepared.actorPostimages?.get(sessionKey),
+    sharing: record.readCurrent
+      ? (current?.sharing ?? (current?.entry && projectSessionSharingEntry(current.entry)))
+      : (prepared.sharing?.get(sessionKey) ??
+        (entry ? projectSessionSharingEntry(entry) : undefined)),
+    projection: record.readCurrent ? current?.projection : prepared.projection?.get(sessionKey),
   };
 }

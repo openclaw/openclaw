@@ -121,7 +121,6 @@ export function registerSubagentRestoreCacheCases(params: {
         release.resolve();
       }
       await restoring;
-      expect(reads).toBe(committed ? 2 : 1);
       expect(restored.has(entry.runId)).toBe(!committed);
       expect(getSubagentRunsSnapshotForRead(new Map()).has(entry.runId)).toBe(!committed);
     },

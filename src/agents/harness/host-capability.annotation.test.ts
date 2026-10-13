@@ -7,6 +7,7 @@ import { convertMessages } from "../../../packages/ai/src/openai-completions-mes
 import { resolveOpenAICompletionsCompat } from "../../../packages/ai/src/transports/openai-completions-compat.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
   listSessionPendingInputReceipts,
@@ -14,7 +15,6 @@ import {
   loadSessionEntry,
   loadTranscriptEvents,
   readActiveTranscriptEntryAnchor,
-  replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
@@ -22,8 +22,8 @@ import {
   resolveSqliteTranscriptScope,
   runExclusiveSqliteSessionWrite,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
-import { readClosedTranscriptTurnInDatabase } from "../../config/sessions/session-accessor.transcript-range.js";
-import { markSessionTranscriptIndexDirtyInTransaction } from "../../config/sessions/session-transcript-index.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { readClosedTranscriptTurnInDatabase } from "../../config/sessions/session-accessor.transcript-range.worker.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createWorkerSessionPlacementStore } from "../../gateway/worker-environments/placement-store.js";
@@ -83,6 +83,7 @@ async function withAdmission(
   } = {},
 ) {
   await withOpenClawTestState({ label: "admission-annotation" }, async (state) => {
+    setRuntimeConfigSnapshot(options.config ?? {}, options.config);
     const fixture = await prepareAdmission(
       path.join(state.sessionsDir(), "sessions.json"),
       options,
@@ -251,7 +252,7 @@ describe("host-owned current admission annotation", () => {
           });
           const persisted = expectDefined(await recorder.persistApproved(), "promoted input");
           const original = structuredClone(persisted.admission);
-          const consumptions = listSessionPendingInputReceipts(f.target, {
+          const consumptions = await listSessionPendingInputReceipts(f.target, {
             runIds: accepted.items.map((input) => input.runId),
           });
           expect(consumptions).toEqual(
@@ -289,7 +290,7 @@ describe("host-owned current admission annotation", () => {
             accepted.items.map((input) => input.message),
           );
           expect(
-            listSessionPendingInputReceipts(f.target, {
+            await listSessionPendingInputReceipts(f.target, {
               runIds: accepted.items.map((input) => input.runId),
             }),
           ).toEqual(consumptions);
@@ -547,7 +548,6 @@ describe("host-owned current admission annotation", () => {
     "admission-close",
     "abort",
     "writer",
-    "lifecycle",
     "session",
     "replacement",
     "blocked",
@@ -571,9 +571,6 @@ describe("host-owned current admission annotation", () => {
         }
         if (reason === "writer") {
           f.patchSession({ activeWriterRunId: "successor" });
-        }
-        if (reason === "lifecycle") {
-          f.patchSession({ lifecycleRevision: "successor" });
         }
         if (reason === "session") {
           f.patchSession({ sessionId: "successor" });
@@ -669,18 +666,6 @@ describe("host-owned current admission annotation", () => {
     });
   });
 
-  it("refuses a stale active projection even when the old anchor still matches", async () => {
-    await withAdmission(async (f) => {
-      const before = await loadTranscriptEvents(f.target);
-      runOpenClawAgentWriteTransaction(
-        (database) => markSessionTranscriptIndexDirtyInTransaction(database.db, f.target.sessionId),
-        { agentId: "main" },
-      );
-      await expect(f.annotate()).rejects.toThrow();
-      expect(await loadTranscriptEvents(f.target)).toEqual(before);
-    });
-  });
-
   it("does not annotate after an external edit", async () => {
     await withAdmission(async (f) => {
       const events = await loadTranscriptEvents(f.target);
@@ -719,14 +704,16 @@ describe("host-owned current admission annotation", () => {
     );
   });
 
-  it("never restores upstream text removed by storage redaction", async () => {
+  it("preserves admitted upstream text independently of diagnostic redaction patterns", async () => {
     await withAdmission(
       async (f) => {
         const before = await loadTranscriptEvents(f.target);
-        await expect(f.annotate(nativeAnnotation("prompt", "private-value"))).rejects.toThrow(
-          "redacted",
-        );
-        expect(await loadTranscriptEvents(f.target)).toEqual(before);
+        await f.annotate(nativeAnnotation("prompt", "private-value"));
+        expect(f.recorder.getPersistedMessage?.()).toMatchObject({
+          content: "prompt",
+          __openclaw: { upstreamUserText: "private-value" },
+        });
+        expect(await loadTranscriptEvents(f.target)).toHaveLength(before.length);
       },
       { config: { logging: { redactPatterns: ["private-value"] } } },
     );

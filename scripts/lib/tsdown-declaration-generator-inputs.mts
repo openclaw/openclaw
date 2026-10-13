@@ -156,6 +156,7 @@ export function resolveTsdownDeclarationGeneratorInputs(rootDir: string, generat
             [
               "../../src/shared/freebsd-process-identity.ts",
               "../../src/infra/update-managed-service-handoff-native-loader.ts",
+              "../../src/infra/package-update-activation-native-loader.ts",
             ].includes(reference.specifier);
           visit(target, targetIsCompilerSource);
         }

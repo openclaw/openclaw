@@ -1,8 +1,9 @@
 import type { ProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { ToolResultContentSource } from "../../../packages/agent-core/src/types.js";
-import type { SessionEventTarget } from "../../auto-reply/reply/session-event-contract.js";
+import type { SessionEventSourcePolicy } from "../../auto-reply/reply/session-event-contract.js";
 import type { CliSessionBinding, SessionEntry } from "../../config/sessions.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
+import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
@@ -163,7 +164,7 @@ export type RunCliAgentParams = {
     openClaw: string[];
   };
   /** Caller-owned authority for credential use; cancellation alone is not authorization. */
-  assertCurrent?: () => void;
+  assertCurrent?: SessionSourceAssertion;
   /** Internal completion caller's representation of operator authorization failures. */
   mapOperatorAuthorizationError?: (error: unknown) => Error;
   onExecutionStarted?: () => unknown;
@@ -235,7 +236,7 @@ export function captureCliRunStartTime() {
 export type PreparedCliRunContext = {
   params: RunCliAgentParams & { admittedRunContext: AdmittedRunContext };
   /** Original host policy, retained before native tool translation consumes runtime caps. */
-  sessionEventSourcePolicy?: Readonly<Pick<SessionEventTarget, "toolsAllow" | "settings">>;
+  sessionEventSourcePolicy?: SessionEventSourcePolicy;
   /** Core-only original caller policy, bound to each native request's exact lifetime. */
   bindQuestionAnswerAuthority?: (assertActive: () => void) => PreparedQuestionAnswerAuthority;
   effectiveAuthProfileId?: string;

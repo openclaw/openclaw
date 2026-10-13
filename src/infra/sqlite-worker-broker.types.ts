@@ -23,7 +23,11 @@ export type RequestBody = SqliteWorkerRequest extends infer Request
     ? Omit<Request, "id">
     : never
   : never;
-type DispatchState = { dispatched: boolean; openNotEntered?: boolean };
+type DispatchState = {
+  dispatched: boolean;
+  openNotEntered?: boolean;
+  openRefused?: boolean;
+};
 export type Job = {
   observation: WorkerRequestObservation;
   signal?: AbortSignal;
@@ -147,6 +151,7 @@ export type PreparedSqliteWorkerOpen = {
   onNativeStopped?: (
     stopped: Promise<void>,
     readCloseReceipt: () => SqliteWorkerCloseReceipt | undefined,
+    readOpenRefused: () => boolean,
   ) => void;
   stateDatabasePath?: string;
   createAdmission?: SqliteWorkerAdmissionFactory;

@@ -64,6 +64,7 @@ export async function resolveRuntimeAccessGroupMembershipFacts(params: {
     if (!group || group.type === "message.senders") {
       continue;
     }
+    const membership = { groupName: name, source: "dynamic" as const };
     try {
       const matched = await params.input.resolveAccessGroupMembership({
         name,
@@ -76,21 +77,15 @@ export async function resolveRuntimeAccessGroupMembershipFacts(params: {
         matched
           ? {
               kind: "matched",
-              groupName: name,
-              source: "dynamic",
+              ...membership,
               matchedEntryIds: [`access-group:${name}`],
             }
-          : {
-              kind: "not-matched",
-              groupName: name,
-              source: "dynamic",
-            },
+          : { kind: "not-matched", ...membership },
       );
     } catch {
       facts.push({
         kind: "failed",
-        groupName: name,
-        source: "dynamic",
+        ...membership,
         reasonCode: "access_group_failed",
         diagnosticId: `access-group:${name}`,
       });

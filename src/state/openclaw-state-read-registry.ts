@@ -13,12 +13,8 @@ import {
   readWorkerEnvironmentPrunePage,
 } from "../gateway/worker-environments/store-row-codec.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
-import { readAgentDeletionJournalAuthorityInDatabase } from "./agent-deletion-journal-authority.worker.js";
 import { readAgentDeletionJournalStatusInDatabase } from "./agent-deletion-journal.read.js";
-import type {
-  OpenClawStateReadCommand,
-  OpenClawStateReadResult,
-} from "./openclaw-state-read.types.js";
+import type { OpenClawStateReadCommand } from "./openclaw-state-read.types.js";
 
 export function readStateRegistryCommand(
   db: DatabaseSync,
@@ -30,7 +26,6 @@ export function readStateRegistryCommand(
         | "workerEnvironments.snapshot"
         | "workerEnvironments.pruneCandidates"
         | "agentDeletionJournal.status"
-        | "agentDeletionJournal.authority"
         | "worktrees.cleanupState"
         | "worktrees.list"
         | "sandboxRegistry.list"
@@ -39,7 +34,7 @@ export function readStateRegistryCommand(
         | "sandboxRegistry.browsers";
     }
   >,
-): OpenClawStateReadResult {
+) {
   if (command.type === "preparedPoolPresence.read") {
     return { type: command.type, demand: readPreparedPoolPresenceDemandInDatabase(db) };
   }
@@ -61,12 +56,6 @@ export function readStateRegistryCommand(
     return {
       type: command.type,
       status: readAgentDeletionJournalStatusInDatabase(db, command.agentId),
-    };
-  }
-  if (command.type === "agentDeletionJournal.authority") {
-    return {
-      type: command.type,
-      authority: readAgentDeletionJournalAuthorityInDatabase(db, command.agentId),
     };
   }
   if (command.type === "sandboxRegistry.list") {

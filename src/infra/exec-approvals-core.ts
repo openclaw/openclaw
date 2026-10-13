@@ -17,17 +17,16 @@ export type ExecApprovalUnavailableDecision = "allow-always";
 
 const EXEC_TARGET_VALUES: readonly ExecTarget[] = ["auto", "sandbox", "gateway", "node"];
 
-export function normalizeExecTarget(value?: string | null): ExecTarget | null {
+function normalizeExecPolicyValue<T extends string>(
+  value: unknown,
+  values: readonly T[],
+): T | null {
   const normalized = normalizeOptionalLowercaseString(value);
-  if (
-    normalized === "auto" ||
-    normalized === "sandbox" ||
-    normalized === "gateway" ||
-    normalized === "node"
-  ) {
-    return normalized;
-  }
-  return null;
+  return values.find((candidate) => candidate === normalized) ?? null;
+}
+
+export function normalizeExecTarget(value?: string | null): ExecTarget | null {
+  return normalizeExecPolicyValue(value, EXEC_TARGET_VALUES);
 }
 
 export function requireValidExecTarget(value?: unknown): ExecTarget | null {
@@ -55,33 +54,15 @@ export function requireValidExecTarget(value?: unknown): ExecTarget | null {
 }
 
 export function normalizeExecSecurity(value?: unknown): ExecSecurity | null {
-  const normalized = normalizeOptionalLowercaseString(value);
-  if (normalized === "deny" || normalized === "allowlist" || normalized === "full") {
-    return normalized;
-  }
-  return null;
+  return normalizeExecPolicyValue(value, ["deny", "allowlist", "full"]);
 }
 
 export function normalizeExecAsk(value?: unknown): ExecAsk | null {
-  const normalized = normalizeOptionalLowercaseString(value);
-  if (normalized === "off" || normalized === "on-miss" || normalized === "always") {
-    return normalized;
-  }
-  return null;
+  return normalizeExecPolicyValue(value, ["off", "on-miss", "always"]);
 }
 
 export function normalizeExecMode(value?: string | null): ExecMode | null {
-  const normalized = normalizeOptionalLowercaseString(value);
-  if (
-    normalized === "deny" ||
-    normalized === "allowlist" ||
-    normalized === "ask" ||
-    normalized === "auto" ||
-    normalized === "full"
-  ) {
-    return normalized;
-  }
-  return null;
+  return normalizeExecPolicyValue(value, ["deny", "allowlist", "ask", "auto", "full"]);
 }
 
 export function resolveExecModeFromPolicy(params: {

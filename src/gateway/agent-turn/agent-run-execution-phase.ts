@@ -164,7 +164,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
             agentId: params.activeSessionAgentId,
             reason: "agent.input.settled",
           },
-          { accessChanged: false },
+          { accessChanged: false, rowScope: "runtime" },
         );
       }
     };
@@ -312,6 +312,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
             task: message,
             gatewayContextResolver: params.context.resolveGatewayContext,
             assertCurrent: assertDispatchCurrent,
+            acpSession: params,
           });
         }
         if (

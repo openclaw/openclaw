@@ -148,18 +148,10 @@ export function resolveEmbedSandbox(
   mode: EmbedSandboxMode | null | undefined,
   ceiling?: "strict" | "scripts",
 ): string {
-  if (ceiling === "strict" || (ceiling === "scripts" && mode === "strict")) {
+  if (ceiling === "strict" || mode === "strict") {
     return "";
   }
-  if (ceiling === "scripts") {
-    return "allow-scripts";
-  }
-  switch (mode) {
-    case "strict":
-      return "";
-    case "trusted":
-      return "allow-scripts allow-same-origin";
-    default:
-      return "allow-scripts";
-  }
+  return mode === "trusted" && ceiling !== "scripts"
+    ? "allow-scripts allow-same-origin"
+    : "allow-scripts";
 }

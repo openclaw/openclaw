@@ -1,3 +1,6 @@
+import { normalizeRelayQuery } from "./relay-url.js";
+import { createSerialQueue } from "./serial-queue.js";
+
 /** Tab group shown to the user; an ACL in selected mode and an ownership marker in all mode. */
 export const OPENCLAW_TAB_GROUP_TITLE = "OpenClaw";
 export const ACCESS_MODE_ALL = "all";
@@ -100,18 +103,6 @@ function isUnsupportedProxyPrefix(raw) {
   } catch {
     return false;
   }
-}
-
-function normalizeRelayQuery(relay) {
-  const query = [...relay.searchParams];
-  if (
-    query.some(([key, value]) => key !== "profile" || !/^[a-z0-9-]+$/.test(value)) ||
-    query.filter(([key]) => key === "profile").length > 1
-  ) {
-    return false;
-  }
-  relay.searchParams.sort();
-  return true;
 }
 
 function validatePairingFields(relayUrl, token, gatewayUrl) {
@@ -218,14 +209,9 @@ function parseStoredPairing(stored) {
 
 /** Own serialized validation and mutation at the extension pairing storage boundary. */
 export function createPairingConfigStore(storage) {
-  let chain = Promise.resolve();
+  const run = createSerialQueue();
   let invalidObserved = false;
   let invalidationRevision = 0;
-  const run = (task) => {
-    const pending = chain.then(task, task);
-    chain = pending.catch(() => undefined);
-    return pending;
-  };
   return {
     get invalidationRevision() {
       return invalidationRevision;

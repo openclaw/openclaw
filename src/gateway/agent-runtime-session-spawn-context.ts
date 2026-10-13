@@ -1,5 +1,6 @@
 import type { ProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { SessionPermissionMode } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 
 /** Automatic intent bound to the complete request before creation resolves aliases. */
 export type AgentRuntimeSpawnModelAutoSelection = {
@@ -20,6 +21,7 @@ export type AgentRuntimeSessionSpawnContext = {
     version: 1;
     allow: string[];
     deny: string[];
+    delegatedToolPolicy?: SessionEntry["delegatedToolPolicy"];
   };
   spawnModelAutoSelection?: AgentRuntimeSpawnModelAutoSelection;
 };

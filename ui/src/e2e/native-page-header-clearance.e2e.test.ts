@@ -183,7 +183,7 @@ suite.define(() => {
     await page.evaluate(() => {
       document.documentElement.dir = "rtl";
     });
-    await page.locator(".sidebar-brand__collapse").click();
+    await page.locator('[data-navigation-view][aria-pressed="true"]').click();
     await expect
       .poll(() => page.locator(".shell").getAttribute("class"))
       .toContain("shell--nav-collapsed");
@@ -222,7 +222,7 @@ suite.define(() => {
         }
       });
     });
-    await page.locator(".sidebar-brand__collapse").click();
+    await page.locator('[data-navigation-view][aria-pressed="true"]').click();
     await expect
       .poll(() => page.locator(".shell").getAttribute("class"))
       .toContain("shell--nav-collapsed");

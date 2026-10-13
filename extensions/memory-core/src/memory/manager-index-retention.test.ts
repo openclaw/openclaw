@@ -4,7 +4,10 @@ import type { DatabaseSync } from "node:sqlite";
 import { encodeMemoryEmbedding } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
-import { createManagerIndexFixture } from "./manager-index.test-support.js";
+import {
+  createManagerIndexFixture,
+  memoryIndexFixtureWriter,
+} from "./manager-index.test-support.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 
@@ -25,6 +28,7 @@ describe("source-wide embedding publication ownership", () => {
     const manager = await fixture.getFreshManager(
       fixture.createConfig({
         provider: "batch-wide-test",
+        model: "embeddinggemma",
         batchEnabled: true,
         cacheEnabled: true,
         vectorEnabled: false,
@@ -32,6 +36,9 @@ describe("source-wide embedding publication ownership", () => {
       "cli",
     );
     await manager.sync({ reason: "cli", force: true });
+    expect(fixture.provider.providerRuntimeBatchCalls.flat()).toContain(
+      "title: none | text: Shared alpha beta source.",
+    );
     fixture.provider.providerRuntimeBatchCalls = [];
     const sharedVectors: number[][] = [];
     // oxlint-disable-next-line typescript/unbound-method -- Invoked with the actual database owner.
@@ -97,7 +104,7 @@ describe("source-wide embedding publication ownership", () => {
     await fs.writeFile(first, "Updated alpha alpha source.");
     await fs.writeFile(second, "Updated beta beta source.");
     Reflect.set(manager, "dirty", true);
-    db.exec(`
+    memoryIndexFixtureWriter(manager).exec(`
       CREATE TRIGGER fail_retention_source BEFORE INSERT ON memory_index_chunks
       WHEN NEW.path = 'memory/second.md'
       BEGIN SELECT RAISE(ABORT, 'injected retained-source publication failure'); END;
@@ -116,7 +123,7 @@ describe("source-wide embedding publication ownership", () => {
       expect(readSource("memory/second.md")).toEqual(secondBefore);
       expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
     } finally {
-      db.exec("DROP TRIGGER fail_retention_source");
+      memoryIndexFixtureWriter(manager).exec("DROP TRIGGER fail_retention_source");
     }
     await manager.sync({ reason: "watch" });
     expect(readSource("memory/second.md").chunks).toEqual([

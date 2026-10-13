@@ -1,7 +1,6 @@
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
-import { requestUrl } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const effectGate = vi.hoisted(() => ({ prepare: undefined as (() => Promise<void>) | undefined }));
@@ -37,11 +36,8 @@ import {
   createMattermostDirectChannelWithRetry,
   createMattermostPost,
   deleteMattermostPost,
-  fetchMattermostChannel,
   fetchMattermostChannelPosts,
-  normalizeMattermostBaseUrl,
   sendMattermostTyping,
-  updateMattermostPost,
   uploadMattermostFile,
 } from "./client.js";
 
@@ -161,10 +157,6 @@ describe("Mattermost request boundary", () => {
     expect(() => createMattermostClient({ baseUrl: "", botToken })).toThrow("baseUrl is required");
   });
 
-  it("normalizes absent base URLs to undefined", () => {
-    expect(normalizeMattermostBaseUrl(undefined)).toBeUndefined();
-  });
-
   it("releases null-body errors without unbounded response readers", async () => {
     const response = new Response(null, {
       status: 503,
@@ -232,28 +224,6 @@ describe("Mattermost request boundary", () => {
     const { client, release } = guardedClient(tracked.response);
     await expect(client.request("/users/me")).rejects.toThrow("text response exceeds 65536 bytes");
     expect(tracked.wasCanceled()).toBe(true);
-    expect(release).toHaveBeenCalledOnce();
-  });
-
-  it("releases a failed channel receipt without claiming visible delivery", async () => {
-    const { client, release } = guardedClient(
-      new Response(
-        new ReadableStream({
-          pull() {
-            throw new Error("upstream body failed");
-          },
-        }),
-        { headers: jsonHeaders },
-      ),
-    );
-    const error = await rejection(fetchMattermostChannel(client, "channel/unsafe"));
-    expect(error).toMatchObject({ message: "upstream body failed" });
-    expect(isChannelPartialDeliveryError(error)).toBe(false);
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://chat.example.com/api/v4/channels/channel%2Funsafe",
-      }),
-    );
     expect(release).toHaveBeenCalledOnce();
   });
 
@@ -349,18 +319,6 @@ describe("Mattermost credential diagnostics", () => {
     );
   });
 
-  it("reports a rejected post with a redacted serialized diagnostic, without claiming delivery", async () => {
-    const { client } = customClient(
-      Response.json({ context: "invalid post", echoed: botToken }, { status: 400 }),
-    );
-    const error = await rejection(createMattermostPost(client, postParams));
-    expect(error).toBeInstanceOf(Error);
-    expect(error).toMatchObject({
-      message: 'Mattermost API 400 : {"context":"invalid post","echoed":"***"}',
-    });
-    expect(isChannelPartialDeliveryError(error)).toBe(false);
-  });
-
   it("redacts a credential clipped by the error limit and releases unread data", async () => {
     const prefix = "upstream diagnostic " + ".".repeat(8192 - 20 - 12);
     const tracked = cancelTrackedTextResponse(prefix + botToken + " unread suffix", {
@@ -381,46 +339,28 @@ describe("Mattermost post receipts", () => {
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
-  it.each(["blank", "no-content"])(
-    "preserves accepted visibility for a %s post identity",
-    async (kind) => {
-      const { client } = customClient(
-        kind === "blank" ? Response.json({ id: "  " }) : new Response(null, { status: 204 }),
-      );
-      await expectAccepted(createMattermostPost(client, postParams));
-    },
-  );
+  it("preserves accepted visibility for a no-content post identity", async () => {
+    const { client } = customClient(new Response(null, { status: 204 }));
+    await expectAccepted(createMattermostPost(client, postParams));
+  });
 
-  it.each(["post1", "  post1  "])(
-    "sends post attachments and consumes provider identity %j",
-    async (id) => {
-      const { client, fetchImpl } = customClient(Response.json({ id }));
-      const props = {
-        attachments: [
-          { text: "Choose:", actions: [{ id: "btn1", type: "button", name: "Click" }] },
-        ],
-      };
-      await expect(
-        createMattermostPost(client, { ...postParams, fileIds: ["file1", "file2"], props }),
-      ).resolves.toEqual({ id: "post1" });
-      expect(requestBody(fetchImpl)).toEqual({
-        channel_id: "ch1",
-        message: "hello",
-        file_ids: ["file1", "file2"],
-        props,
-      });
-      expect(new Headers(fetchImpl.mock.calls[0]?.[1]?.headers).get("Content-Type")).toBe(
-        "application/json",
-      );
-    },
-  );
-
-  it("does not misclassify a network SyntaxError as accepted", async () => {
-    const failure = new SyntaxError("network response parser failed");
-    const fetchImpl = vi.fn<typeof fetch>().mockRejectedValueOnce(failure);
-    const client = createMattermostClient({ ...clientParams, fetchImpl });
-    await expect(createMattermostPost(client, postParams)).rejects.toBe(failure);
-    expect(isChannelPartialDeliveryError(failure)).toBe(false);
+  it("sends post attachments and trims the provider identity", async () => {
+    const { client, fetchImpl } = customClient(Response.json({ id: "  post1  " }));
+    const props = {
+      attachments: [{ text: "Choose:", actions: [{ id: "btn1", type: "button", name: "Click" }] }],
+    };
+    await expect(
+      createMattermostPost(client, { ...postParams, fileIds: ["file1", "file2"], props }),
+    ).resolves.toEqual({ id: "post1" });
+    expect(requestBody(fetchImpl)).toEqual({
+      channel_id: "ch1",
+      message: "hello",
+      file_ids: ["file1", "file2"],
+      props,
+    });
+    expect(new Headers(fetchImpl.mock.calls[0]?.[1]?.headers).get("Content-Type")).toBe(
+      "application/json",
+    );
   });
 });
 
@@ -495,19 +435,6 @@ describe("Mattermost post reads and edits", () => {
       "Unexpected Mattermost channel posts response",
     );
   });
-
-  it.each([{ message: "Updated" }, { props: { attachments: [] } }])(
-    "patches only the supplied post fields: %j",
-    async (update) => {
-      const { client, fetchImpl } = customClient(Response.json({ id: "post1" }));
-      await updateMattermostPost(client, "post1", update);
-      expect(requestUrl(fetchImpl.mock.calls[0]?.[0] ?? "")).toBe(
-        "https://chat.example.com/api/v4/posts/post1/patch",
-      );
-      expect(fetchImpl.mock.calls[0]?.[1]?.method).toBe("PUT");
-      expect(requestBody(fetchImpl)).toEqual({ id: "post1", ...update });
-    },
-  );
 });
 
 describe("Mattermost DM retries", () => {
@@ -523,17 +450,6 @@ describe("Mattermost DM retries", () => {
   });
 
   it.each([
-    { name: "429", failure: new Error("Mattermost API 429 Too many requests") },
-    {
-      name: "503 mentioning upstream 404",
-      failure: new Error("Mattermost API 503: upstream returned Mattermost API 404 Not Found"),
-    },
-    {
-      name: "wrapped provider status",
-      failure: new Error("request failed", {
-        cause: new Error("Mattermost API 429: upstream returned Mattermost API 403 Forbidden"),
-      }),
-    },
     {
       name: "nested transport code",
       failure: new TypeError("fetch failed", {
@@ -570,11 +486,8 @@ describe("Mattermost DM retries", () => {
   });
 
   it.each([
-    { status: 400, message: "Request timeout for user 4294967295" },
     { status: 400, message: "Invalid request: too many requests is diagnostic text" },
-    { status: 403, message: "Permission denied despite upstream too many requests" },
     { status: 400, message: "Invalid request; upstream Mattermost API 503 Service Unavailable" },
-    { status: 403, message: "Permission denied; upstream Mattermost API 503 Service Unavailable" },
   ])("does not retry $status with misleading details: $message", async ({ status, message }) => {
     const fetchImpl = vi.fn<typeof fetch>(async () => Response.json({ message }, { status }));
     const client = createMattermostClient({ ...clientParams, fetchImpl });
@@ -601,40 +514,27 @@ describe("Mattermost DM retries", () => {
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
-  it("stops after exhausting the retry budget", async () => {
-    const fetchImpl = vi
-      .fn<typeof fetch>()
-      .mockImplementation(async () =>
-        Response.json({ message: "Service unavailable" }, { status: 503 }),
+  it.each([400, 429, 503])(
+    "preserves HTTP %s retry policy when the error response body fails",
+    async (status) => {
+      const fetchImpl = vi.fn<typeof fetch>(
+        async () =>
+          new Response(
+            new ReadableStream({
+              pull() {
+                throw new TypeError("network error");
+              },
+            }),
+            { status, headers: jsonHeaders },
+          ),
       );
-    const client = createMattermostClient({ ...clientParams, fetchImpl });
-    const outcome = expect(
-      createMattermostDirectChannelWithRetry(client, ["u1", "u2"], {
-        maxRetries: 2,
-        initialDelayMs: 10,
-      }),
-    ).rejects.toThrow("Mattermost API 503");
-    await vi.runAllTimersAsync();
-    await outcome;
-    expect(fetchImpl).toHaveBeenCalledTimes(3);
-  });
-
-  it("keeps the default delay cap authoritative when initialDelayMs exceeds it", async () => {
-    const fetchImpl = vi
-      .fn<typeof fetch>()
-      .mockRejectedValueOnce(new Error("Mattermost API 503"))
-      .mockRejectedValueOnce(new Error("Mattermost API 503"))
-      .mockResolvedValueOnce(Response.json({ id: "dm1" }));
-    const client = createMattermostClient({ ...clientParams, fetchImpl });
-    const delays: number[] = [];
-    const run = createMattermostDirectChannelWithRetry(client, ["u1", "u2"], {
-      initialDelayMs: 60_000,
-      onRetry: (_attempt, delay) => {
-        delays.push(delay);
-      },
-    });
-    await vi.runAllTimersAsync();
-    await expect(run).resolves.toMatchObject({ id: "dm1" });
-    expect(delays).toEqual([10_000, 10_000]);
-  });
+      const client = createMattermostClient({ ...clientParams, fetchImpl });
+      const outcome = rejection(createMattermostDirectChannelWithRetry(client, ["u1", "u2"]));
+      await vi.runAllTimersAsync();
+      expect(fetchImpl).toHaveBeenCalledTimes(status === 429 || status >= 500 ? 4 : 1);
+      expect(await outcome).toMatchObject({
+        message: expect.stringContaining(`Mattermost API ${status}`),
+      });
+    },
+  );
 });

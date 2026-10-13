@@ -61,7 +61,15 @@ describe("scripts/bundle-a2ui.mjs", () => {
     expect(listTrackedInputFiles(runGit, repoRoot)).toBeNull();
     expect(runGit).toHaveBeenCalledWith(
       "git",
-      ["ls-files", "--", "package.json", "pnpm-lock.yaml", "extensions/canvas/src/host/a2ui-app"],
+      [
+        "ls-files",
+        "--",
+        "package.json",
+        "pnpm-lock.yaml",
+        "extensions/canvas/package.json",
+        "extensions/canvas/scripts/bundle-a2ui.mjs",
+        "extensions/canvas/src/host/a2ui-app",
+      ],
       {
         cwd: repoRoot,
         encoding: "utf8",

@@ -9,6 +9,7 @@ import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
 } from "../../agents/subagents/spawn/subagent-capabilities.js";
+import { withPreparedSessionCapabilityRead } from "../../agents/subagents/spawn/subagent-session-store.js";
 import { isToolAllowedByPolicies } from "../../agents/tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../agents/tool-policy.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
@@ -28,7 +29,7 @@ import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveSourceReplyDeliveryMode } from "./source-reply-delivery-mode.js";
 
 /** Synthetic and chat turns must share messageToolPolicyHash to reuse CLI sessions (#121485). */
-export function resolveSessionStableReplyMode(params: {
+export async function resolveSessionStableReplyMode(params: {
   cfg: OpenClawConfig;
   ctx: FinalizedMsgContext;
   sessionEntry?: SessionEntry;
@@ -36,7 +37,7 @@ export function resolveSessionStableReplyMode(params: {
   sessionKey?: string;
   sessionStore?: Record<string, SessionEntry>;
   turnModelOverride?: string;
-}): SourceReplyDeliveryMode {
+}): Promise<SourceReplyDeliveryMode> {
   const { cfg, ctx, sessionEntry } = params;
   const chatType =
     normalizeChatType(ctx.ChatType) ?? normalizeChatType(sessionEntry?.chatType) ?? undefined;
@@ -52,7 +53,7 @@ export function resolveSessionStableReplyMode(params: {
     Surface: normalizeOptionalString(ctx.Surface) ?? sessionDeliveryChannel(sessionEntry),
     ExplicitDeliverRoute: ctx.ExplicitDeliverRoute,
   };
-  const { harnessDefaultVisibleReplies } = resolveVisibleRepliesPolicy({
+  const { harnessDefaultVisibleReplies } = await resolveVisibleRepliesPolicy({
     cfg,
     chatType,
     ctx,
@@ -72,7 +73,11 @@ export function resolveSessionStableReplyMode(params: {
   }
   // Match dispatch's availability downgrade without letting sender-specific
   // permissions change the policy shared by all turns in this session.
-  return resolveStableMessageToolAvailability(params) ? candidateMode : "automatic";
+  return (await withPreparedSessionCapabilityRead(() =>
+    resolveStableMessageToolAvailability(params),
+  ))
+    ? candidateMode
+    : "automatic";
 }
 
 /** Shared by dispatch and synthetic turns; sender denials apply only to the individual turn. */

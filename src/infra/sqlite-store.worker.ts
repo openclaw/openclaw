@@ -10,13 +10,23 @@ import {
   type OpenClawStateWorkerErrorPayload,
 } from "../state/openclaw-state-worker-error.js";
 import { captureSqliteNativeRuntimeAdmission } from "./node-sqlite.js";
+import {
+  captureSqliteDatabaseAdmissions,
+  createSqliteDatabaseAdmissionCursor,
+  installSqliteDatabaseAdmissions,
+  withSqliteDatabaseAdmissionExchange,
+} from "./sqlite-database-admission.js";
 import { withSqliteReaderOwner } from "./sqlite-reader-lifecycle.js";
+import { SQLITE_WORKER_SOURCE_FENCE } from "./sqlite-source-fence-contract.js";
+import { runSqliteSourceFence } from "./sqlite-source-fence.js";
 import {
   SQLITE_WORKER_MAX_RESULT_BYTES,
   SQLITE_WORKER_PREPARE_COMMAND,
   SQLITE_WORKER_PREPARE_ADMITTED,
   SQLITE_WORKER_OPERATION_CLEANUP,
   SQLITE_WORKER_CLOSE_RECEIPT,
+  SqliteWorkerError,
+  SqliteWorkerOpenRefusedError,
   type SqliteWorkerCloseReceipt,
   type SqliteWorkerPreparedBackend,
   type SqliteWorkerCommand,
@@ -24,14 +34,17 @@ import {
   type SqliteWorkerReply,
   type SqliteWorkerRequest,
 } from "./sqlite-worker-contract.js";
+import { exchangeSqliteDatabaseAdmissions } from "./sqlite-worker-database-admission-relay.js";
 import { assertExistingDatabaseIdentity } from "./sqlite-worker-identity.js";
 import {
-  SqliteWorkerOpenRefusedError,
   withSqliteWorkerOperationAdmission,
+  withSqliteWorkerOperationAdmissionAsync,
   requestSqliteWorkerOperationAdmission,
+} from "./sqlite-worker-operation-admission.js";
+import {
   settleSqliteWorkerOperationContext,
   type SqliteWorkerOperationContext,
-} from "./sqlite-worker-operation-admission.js";
+} from "./sqlite-worker-operation-settlement.js";
 import {
   runWithSqliteWorkerStateContext,
   type SqliteWorkerStateContext,
@@ -65,6 +78,19 @@ let sourceLoaderRegistered = false;
 let nativeCleanupFailure: OpenClawStateWorkerErrorPayload | undefined;
 let operationAdmission: { actor: number; context: SqliteWorkerOperationContext } | undefined;
 let nativeRuntimeAdmissionSent = false;
+const databaseAdmissionCursor = createSqliteDatabaseAdmissionCursor();
+
+async function loadBackendModule(moduleUrl: string, sourceLoaderUrl?: string): Promise<unknown> {
+  if (!sourceLoaderRegistered && sourceLoaderUrl) {
+    const loader: unknown = await import(sourceLoaderUrl);
+    if (!isRecord(loader) || typeof loader.register !== "function") {
+      throw new Error("SQLite source worker loader is unavailable");
+    }
+    loader.register();
+    sourceLoaderRegistered = true;
+  }
+  return import(moduleUrl);
+}
 
 function runWithActorFacts<T>(actor: number, operation: () => T): T {
   const context = stateContexts.get(actor);
@@ -79,7 +105,55 @@ function runInActorContext<T>(actor: number, operation: () => T): T {
   );
 }
 
+async function runInActorContextAsync<T>(
+  actor: number,
+  operation: () => T | Promise<T>,
+): Promise<T> {
+  return runWithActorFacts(actor, () =>
+    operationAdmission?.actor === actor
+      ? withSqliteWorkerOperationAdmissionAsync(operationAdmission.context, operation)
+      : operation(),
+  );
+}
+
+async function closeInActorContext(
+  actor: number,
+  close: () => void | Promise<void>,
+): Promise<void> {
+  const admission = operationAdmission?.actor === actor ? operationAdmission.context : undefined;
+  let active = true;
+  try {
+    await runInActorContext(actor, () =>
+      admission
+        ? withSqliteDatabaseAdmissionExchange((facts, location, create) => {
+            if (!active) {
+              throw new SqliteWorkerError("SQLite close facts outlived native cleanup", "closed");
+            }
+            return exchangeSqliteDatabaseAdmissions(admission.port, facts, location, create);
+          }, close)
+        : close(),
+    );
+  } finally {
+    active = false;
+  }
+}
+
+function assertSynchronousResult(value: unknown, phase: string, beforeReject?: () => void): void {
+  if (isPromise(value) || (isRecord(value) && typeof value.then === "function")) {
+    beforeReject?.();
+    if (isPromise(value)) {
+      // Retirement owns the failure; consume rejection while native exit is joined.
+      void value.catch(() => {});
+    }
+    throw new Error(`SQLite worker ${phase} must remain synchronous`);
+  }
+}
+
 async function receive(request: SqliteWorkerRequest): Promise<void> {
+  const timing = request.timing;
+  if (timing) {
+    timing.received = performance.now();
+  }
   let reply: SqliteWorkerReply;
   let executed = pendingResult !== undefined;
   let retire = false;
@@ -88,6 +162,9 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
   let openNotEntered = false;
   let commandAdmissionRefused = false;
   try {
+    if (request.databaseAdmissions) {
+      installSqliteDatabaseAdmissions(request.databaseAdmissions);
+    }
     let value: unknown;
     let closeReceipt: SqliteWorkerCloseReceipt | undefined;
     if (request.type !== "result-next" && request.type !== "execute-frame") {
@@ -118,15 +195,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
             const settlement: unknown = runInActorContext(request.actor, () => ({
               settlement: backend.assertSettled?.(),
             })).settlement;
-            if (
-              isPromise(settlement) ||
-              (isRecord(settlement) && typeof settlement.then === "function")
-            ) {
-              if (isPromise(settlement)) {
-                void settlement.catch(() => {});
-              }
-              throw new Error("SQLite worker settlement checks must remain synchronous");
-            }
+            assertSynchronousResult(settlement, "settlement checks");
             return backend.assertSettled !== undefined;
           };
           const settleCommand = (failure?: { error: unknown }) => {
@@ -153,15 +222,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
                 const cleanup: unknown = runInActorContext(request.actor, () => ({
                   cleanup: backend[SQLITE_WORKER_OPERATION_CLEANUP]?.(typedCommand),
                 })).cleanup;
-                if (
-                  isPromise(cleanup) ||
-                  (isRecord(cleanup) && typeof cleanup.then === "function")
-                ) {
-                  if (isPromise(cleanup)) {
-                    void cleanup.catch(() => {});
-                  }
-                  throw new Error("SQLite worker operation cleanup must remain synchronous");
-                }
+                assertSynchronousResult(cleanup, "operation cleanup");
                 assertSettled();
               }
             } catch (error) {
@@ -205,10 +266,29 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
                 await admitted;
               }
             }
-            value = runInActorContext(request.actor, () => ({
-              // SAFETY: The typed host command is serialized once; framing validates complete reconstruction.
-              result: backend.execute(typedCommand),
-            })).result;
+            const execute = () => {
+              if (timing) {
+                timing.executeStarted = performance.now();
+              }
+              const result = runInActorContext(request.actor, () => ({
+                // SAFETY: The typed host command is serialized once; framing validates complete reconstruction.
+                result: backend.execute(typedCommand),
+              })).result;
+              if (timing) {
+                timing.executeFinished = performance.now();
+              }
+              return result;
+            };
+            const fence = runInActorContext(request.actor, () =>
+              backend[SQLITE_WORKER_SOURCE_FENCE]?.(typedCommand),
+            );
+            value = fence
+              ? await runSqliteSourceFence(
+                  fence,
+                  (operation) => runInActorContext(request.actor, operation),
+                  execute,
+                )
+              : execute();
           } catch (error) {
             // Cleanup can replace the refusal; only settled command failures retain its provenance.
             const admissionRefused =
@@ -221,17 +301,12 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
           }
           executed = true;
           completeResult = true;
-          if (isPromise(value) || (isRecord(value) && typeof value.then === "function")) {
+          assertSynchronousResult(value, "operations", () => {
             retire = true;
             if (operationAdmission) {
               settleSqliteWorkerOperationContext(operationAdmission.context, "unknown");
             }
-            if (isPromise(value)) {
-              // Retirement owns the failure; consume rejection while native exit is joined.
-              void value.catch(() => {});
-            }
-            throw new Error("SQLite worker operations must remain synchronous");
-          }
+          });
           settleCommand();
         },
       );
@@ -304,15 +379,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
       if (request.existingIdentity) {
         assertExistingDatabaseIdentity(request.databasePath, request.existingIdentity);
       }
-      if (!sourceLoaderRegistered && request.sourceLoaderUrl) {
-        const loader: unknown = await import(request.sourceLoaderUrl);
-        if (!isRecord(loader) || typeof loader.register !== "function") {
-          throw new Error("SQLite source worker loader is unavailable");
-        }
-        loader.register();
-        sourceLoaderRegistered = true;
-      }
-      const module: unknown = await import(request.moduleUrl);
+      const module = await loadBackendModule(request.moduleUrl, request.sourceLoaderUrl);
       const factoryName = request.existingIdentity
         ? "openExistingSqliteWorkerBackend"
         : "createSqliteWorkerBackend";
@@ -324,7 +391,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
       if (request.existingIdentity) {
         assertExistingDatabaseIdentity(request.databasePath, request.existingIdentity);
       }
-      const backend: unknown = await runInActorContext(request.actor, () => {
+      const backend: unknown = await runInActorContextAsync(request.actor, () => {
         const input = deserialize(request.input);
         if (request.openAdmission) {
           try {
@@ -359,6 +426,10 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
           backend[SQLITE_WORKER_OPERATION_CLEANUP] !== undefined &&
           (typeof backend[SQLITE_WORKER_OPERATION_CLEANUP] !== "function" ||
             typeof backend.assertSettled !== "function")) ||
+        (SQLITE_WORKER_SOURCE_FENCE in backend &&
+          backend[SQLITE_WORKER_SOURCE_FENCE] !== undefined &&
+          (typeof backend[SQLITE_WORKER_SOURCE_FENCE] !== "function" ||
+            typeof backend.assertSettled !== "function")) ||
         (SQLITE_WORKER_CLOSE_RECEIPT in backend &&
           backend[SQLITE_WORKER_CLOSE_RECEIPT] !== undefined &&
           typeof backend[SQLITE_WORKER_CLOSE_RECEIPT] !== "function") ||
@@ -375,7 +446,8 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
         throw new Error("SQLite worker actor is closed");
       }
       try {
-        await runInActorContext(request.actor, () => backend.close());
+        // Facts settle through async close; transaction grants still expire at the synchronous boundary.
+        await closeInActorContext(request.actor, () => backend.close());
         closeReceipt = runInActorContext(request.actor, () =>
           backend[SQLITE_WORKER_CLOSE_RECEIPT]?.(),
         );
@@ -389,6 +461,9 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
       await executeCommand(deserialize(request.input));
     }
     const serialized = serialize(value);
+    if (timing) {
+      timing.serialized = performance.now();
+    }
     if (serialized.byteLength > SQLITE_WORKER_MAX_RESULT_BYTES) {
       if (!completeResult) {
         throw new Error("SQLite worker frame exceeds the transport byte limit");
@@ -409,13 +484,13 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
       };
     }
   } catch (error) {
-    if (openNotEntered && request.type === "open") {
+    const refusedOpen = request.type === "open" && error instanceof SqliteWorkerOpenRefusedError;
+    if (openNotEntered || refusedOpen) {
       stateContexts.delete(request.actor);
     }
     transfers.cancel();
     pendingResult = undefined;
     pendingInput = undefined;
-    const refusedOpen = request.type === "open" && error instanceof SqliteWorkerOpenRefusedError;
     const originalError = refusedOpen ? error.originalError : error;
     const admissionRefused =
       commandAdmissionRefused ||
@@ -460,9 +535,16 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
     });
   }
   const complete = !reply.ok || (!pendingInput && !pendingResult);
+  if (complete) {
+    reply.databaseAdmissions = captureSqliteDatabaseAdmissions(databaseAdmissionCursor);
+  }
   if (complete && nativeCleanupFailure) {
     reply.cleanupFailure = nativeCleanupFailure;
     nativeCleanupFailure = undefined;
+  }
+  if (timing) {
+    timing.replied = performance.now();
+    reply.timing = timing;
   }
   if (reply.ok) {
     if (complete && !reply.cleanupFailure && !nativeRuntimeAdmissionSent) {

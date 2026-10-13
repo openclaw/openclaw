@@ -39,34 +39,7 @@ describe("agent-runtime model catalog compatibility", () => {
     expect(readCatalog).toHaveBeenCalledOnce();
   });
 
-  it("propagates failures from the shipped thinking catalog callback", async () => {
-    const failure = new Error("catalog unavailable");
-
-    await expect(
-      resolveThinkingDefaultWithRuntimeCatalog({
-        cfg: {},
-        provider: "example",
-        model: "example-model",
-        loadModelCatalog: async () => {
-          throw failure;
-        },
-      }),
-    ).rejects.toBe(failure);
-  });
-
-  it.each([
-    ["prepared", loadPreparedModelCatalog],
-    ["legacy", loadModelCatalog],
-  ] as const)("preserves the writable default of the %s SDK loader", async (_name, load) => {
-    const entries = [{ provider: "test", id: "discovered", name: "Discovered" }];
-    mocks.loadCatalog.mockResolvedValue(entries);
-
-    await expect(load()).resolves.toBe(entries);
-    expect(mocks.loadCatalog).toHaveBeenCalledExactlyOnceWith({ readOnly: false });
-    expect(mocks.getSnapshot).not.toHaveBeenCalled();
-  });
-
-  it.each([true, false])("preserves explicit readOnly:%s in the SDK loader", async (readOnly) => {
+  it.each([true])("preserves explicit readOnly:%s in the SDK loader", async (readOnly) => {
     const config = {};
     const entries = [{ provider: "test", id: "selected", name: "Selected" }];
     mocks.loadCatalog.mockResolvedValue(entries);

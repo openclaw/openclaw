@@ -1,5 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import {
+  releaseSessionSourceAuthorities,
+  type PreparedSessionSourceAuthority,
+} from "../config/sessions/session-source-authority.js";
+import { runBestEffortCleanup } from "../infra/non-fatal-cleanup.js";
+import {
   captureSqliteWorkerStateContext,
   runWithSqliteWorkerStateContext,
 } from "../infra/sqlite-worker-state-context.js";
@@ -183,11 +188,6 @@ export async function withClientVoiceSessionSettlement<T>(
   }
 }
 
-export function assertClientVoiceSessionAdmission(source?: OpenClawStateWorkerContext): void {
-  const accepted = captureClientVoiceSessionSettlement(source);
-  accepted.release();
-}
-
 function matchesSettlementContext(
   left: OpenClawStateWorkerContext,
   right: OpenClawStateWorkerContext,
@@ -213,4 +213,35 @@ export function assertClientVoiceSessionSettlementCurrent(
 
 export function prepareClientVoiceSessionClose() {
   return lifetime(captureOpenClawStateWorkerContext()).retainGateway();
+}
+
+/** Await all cleanup without making an acknowledged operation appear replayable. */
+export async function withClientVoiceSessionResources<T>(
+  resources:
+    | readonly Pick<PreparedSessionSourceAuthority, "release">[]
+    | (() => readonly Pick<PreparedSessionSourceAuthority, "release">[]),
+  operation: () => Promise<T>,
+): Promise<T> {
+  const errors: unknown[] = [];
+  const release = () =>
+    releaseSessionSourceAuthorities(
+      typeof resources === "function" ? resources() : resources,
+      errors,
+    );
+  try {
+    return await operation();
+  } catch (error) {
+    errors.push(error);
+    throw error;
+  } finally {
+    if (errors.length > 0) {
+      await release();
+    } else {
+      await runBestEffortCleanup({
+        cleanup: release,
+        onError: (error) =>
+          console.warn("[talk] voice session operation completed before cleanup failed", error),
+      });
+    }
+  }
 }

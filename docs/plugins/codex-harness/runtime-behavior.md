@@ -52,7 +52,7 @@ replaced by a selected managed provider. OpenClaw keeps Codex's standalone
 its user-defined `web` namespace. `tools.web.search.enabled: false`
 disables both paths, as do tool-disabled LLM-only runs. Codex treats
 `"cached"` as a preference and resolves it to live external access for
-unrestricted app-server turns. Automatic managed fallback fails closed when
+unrestricted app-server turns. Automatic managed fallback is blocked when
 native `allowedDomains` are set so the allowlist cannot be bypassed.
 Persistent effective search-policy changes rotate the bound Codex thread
 before the next turn; transient per-turn restrictions use a temporary
@@ -81,7 +81,7 @@ debugging the full tool payload.
 Long tool results have a collapsed preview in the Control UI. **Show full output**
 opens the saved result as plain text; copy and download use that text, not the
 preview. Reloading the conversation reads the same saved result. Inspection is
-subject to the Gateway's message-size limits and configured transcript redaction.
+subject to the Gateway's message-size limits. Tool-result text is not secret-masked.
 Tool-output inspection requests the supported maximum of 2,000,000 characters per
 text field; a result that remains capped is explicitly marked unavailable.
 A preview limit does not mean Codex truncated the model's input.
@@ -164,6 +164,16 @@ attempt: progress does not reset it, and `0` means unlimited execution.
 OpenClaw still bounds its own requests, dynamic tools, cancellation, and local
 settlement. See [Timeouts](/plugins/codex-harness-reference#timeouts) for those
 budgets, Stop and replay behavior, and Doctor migration of retired idle settings.
+
+If the app-server connection is lost before the turn completes, the conversation
+retains a visible failure outcome even when Codex already sent commentary or
+partial output. Reloading the Control UI or opening the conversation on another
+client preserves that outcome. The live error and saved notice both explain
+that the task may still be running and tell you to check the conversation before
+trying again. The original error remains in diagnostic details.
+Check any command's effects before retrying: a
+lost connection does not prove that its work stopped. A later turn can reconnect
+to the app-server normally.
 
 Failed app-server startup waits for child shutdown before returning its error.
 If startup times out or is canceled during process registration, cleanup joins

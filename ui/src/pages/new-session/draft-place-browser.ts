@@ -477,10 +477,13 @@ export class DraftPlaceBrowser {
 
   onPopoverAfterHide(kind: DraftPickerKind) {
     this.hidingPopovers.delete(kind);
-    this.restorePopoverTrigger(
-      `${this.callbacks.pickerIdPrefix ?? "new-session"}-${kind}-trigger`,
-      `.new-session-page__${kind}-popover`,
-    );
+    const id = `${this.callbacks.pickerIdPrefix ?? "new-session"}-${kind}-trigger`;
+    const active = this.callbacks.activeElement();
+    const popover = this.callbacks.querySelector(`.new-session-page__${kind}-popover`);
+    const body = this.callbacks.body();
+    if (!active || active === body || popover?.contains(active)) {
+      (this.callbacks.querySelector(`#${id}`) as HTMLButtonElement | null)?.focus();
+    }
     this.callbacks.requestUpdate();
   }
 
@@ -548,15 +551,5 @@ export class DraftPlaceBrowser {
         target.focus({ preventScroll: true });
       }
     });
-  }
-
-  private restorePopoverTrigger(id: string, popoverSelector: string) {
-    const active = this.callbacks.activeElement();
-    const popover = this.callbacks.querySelector(popoverSelector);
-    const body = this.callbacks.body();
-    if (active && active !== body && !popover?.contains(active)) {
-      return;
-    }
-    (this.callbacks.querySelector(`#${id}`) as HTMLButtonElement | null)?.focus();
   }
 }

@@ -151,7 +151,7 @@ and returns:
   "status": "draining",
   "suspensionId": "2c3f...",
   "expiresAtMs": 1770000000000,
-  "retryAfterMs": 20000,
+  "retryAfterMs": 5000,
   "activeCount": 2,
   "blockers": [
     { "kind": "root-request", "count": 1, "message": "1 active request" },
@@ -169,7 +169,9 @@ block readiness. Neither policy terminates or detaches terminals during
 preparation, polling, renewal, resume, or lease expiry.
 
 Poll `gateway.suspend.status` with the returned `suspensionId`, honoring
-`retryAfterMs`. While blockers remain, status returns `status: "draining"`
+`retryAfterMs`. A held drain recommends five-second polling so completed work
+does not leave new work waiting through the longer busy-preparation retry.
+While blockers remain, status returns `status: "draining"`
 together with `expiresAtMs`, `retryAfterMs`, `activeCount`, and `blockers`.
 Each status call refreshes the active-work snapshot. If protected lifecycle or
 final-chat writes are pending, the RPC waits up to 15 seconds for them to settle,

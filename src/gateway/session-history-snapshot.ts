@@ -5,8 +5,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.types.js";
 import type {
   ChatHistoryPageParams,
-  PaginatedSessionHistory,
-  SessionHistoryMessage,
   SessionHistoryReadParams,
   SessionHistorySnapshot,
   SessionHistorySubagentFacts,
@@ -34,7 +32,7 @@ import {
   prepareSessionHistorySubagentFacts,
 } from "./session-history-delta-visibility.js";
 import {
-  buildPaginatedSessionHistory,
+  paginateSessionMessages,
   readChatHistoryMessageSeq as resolveMessageSeq,
   readIncrementalChatHistoryTail,
   resolveCursorSeq,
@@ -129,56 +127,6 @@ export async function readSessionHistorySnapshotKernel(
     assistantErrorPending: projected.assistantErrorPending,
     transcriptPath,
   };
-}
-
-function paginateSessionMessages(
-  messages: SessionHistoryMessage[],
-  limit: number | undefined,
-  cursor: string | undefined,
-): PaginatedSessionHistory {
-  // Cursors point at transcript sequence watermarks. The returned page is the
-  // window before that cursor, matching "older messages" pagination.
-  const cursorSeq = resolveCursorSeq(cursor);
-  let endExclusive = messages.length;
-  if (typeof cursorSeq === "number") {
-    endExclusive = messages.findIndex((message, index) => {
-      const seq = resolveMessageSeq(message);
-      if (typeof seq === "number") {
-        return seq >= cursorSeq;
-      }
-      return index + 1 >= cursorSeq;
-    });
-    if (endExclusive < 0) {
-      endExclusive = messages.length;
-    }
-  }
-  let start = typeof limit === "number" && limit > 0 ? Math.max(0, endExclusive - limit) : 0;
-  // Projection can interleave several rows from the same transcript records.
-  // Close the page over their seq groups because the public cursor cannot split one.
-  if (start > 0) {
-    const pageSeqs = new Set<number>();
-    let indexedStart = endExclusive;
-    for (let index = start - 1; index >= 0; index--) {
-      // Index only admitted intervals; unrelated older gaps need no retained sequence set.
-      while (indexedStart > start) {
-        const pageSeq = resolveMessageSeq(messages[--indexedStart]);
-        if (pageSeq !== undefined) {
-          pageSeqs.add(pageSeq);
-        }
-      }
-      const seq = resolveMessageSeq(messages[index]);
-      if (seq !== undefined && pageSeqs.has(seq)) {
-        start = index;
-      }
-    }
-  }
-  const paginatedMessages = messages.slice(start, endExclusive);
-  const firstSeq = resolveMessageSeq(paginatedMessages[0]);
-  return buildPaginatedSessionHistory({
-    messages: paginatedMessages,
-    hasMore: start > 0,
-    ...(start > 0 && typeof firstSeq === "number" ? { nextCursor: String(firstSeq) } : {}),
-  });
 }
 
 /** Retain the actor across lazy adapter loading without expanding shared execution imports. */
@@ -280,21 +228,28 @@ export function createIncognitoSessionHistoryReader(params: {
     scope: SessionTranscriptReadScope,
     command: { type: Key; input: IncognitoHistoryOperations[Key]["input"] },
     selectMessages?: (value: IncognitoHistoryOperations[Key]["output"]) => unknown[],
+    requestSignal?: AbortSignal,
   ): Promise<IncognitoHistoryOperations[Key]["output"]> => {
+    const readSignal =
+      signal && requestSignal
+        ? AbortSignal.any([signal, requestSignal])
+        : (requestSignal ?? signal);
+    readSignal?.throwIfAborted();
     assertScope(scope);
     const current = consumption.getStore();
-    const value = await actor.sessions.history(prepared.authority, command, signal, () => {
+    const value = await actor.sessions.history(prepared.authority, command, readSignal, () => {
       if (current) {
         current.snapshot ??= actor.sessions.captureSnapshot(target.sessionKey);
         current.snapshot.assertCurrent();
       }
     });
     if (selectMessages) {
-      await prepareVisibility(selectMessages(value));
+      await prepareVisibility(selectMessages(value), readSignal);
     }
+    readSignal?.throwIfAborted();
     return disclose(value);
   };
-  const prepareVisibility = async (messages: unknown[]) => {
+  const prepareVisibility = async (messages: unknown[], requestSignal?: AbortSignal) => {
     if (params.subagentCoordination || messages.length === 0) {
       return subagentCoordination;
     }
@@ -334,17 +289,22 @@ export function createIncognitoSessionHistoryReader(params: {
         import("../config/io.runtime.js"),
         import("./session-utils-store-sources.js"),
       ]);
+    requestSignal?.throwIfAborted();
     assertCurrent();
     state.maintenanceScope?.assertAdmission();
     state.admission.assertCurrent();
     const cfg = getRuntimeConfig();
-    const sources = await prepareGatewaySessionStoreReadSourcesAsync({
-      cfg,
-      env: visibilityEnv,
-      currentSource: { agentId, path: actor.path },
-      registryPath: state.admission.databasePath,
-    });
+    const sources = await prepareGatewaySessionStoreReadSourcesAsync(
+      {
+        cfg,
+        env: visibilityEnv,
+        currentSource: { agentId, path: actor.path },
+        registryPath: state.admission.databasePath,
+      },
+      requestSignal,
+    );
     const checks = (current.visibilityChecks ??= []);
+    // Visibility authority outlives the worker callback that prepared it.
     const checkSources = () => {
       state.maintenanceScope?.assertAdmission();
       state.admission.assertCurrent();
@@ -353,6 +313,7 @@ export function createIncognitoSessionHistoryReader(params: {
     checks.push(checkSources);
     const incognitoSources = new Map<string, boolean>();
     for (;;) {
+      requestSignal?.throwIfAborted();
       checkSources();
       const result = await read(
         { ...target, agentId, storePath },
@@ -366,6 +327,8 @@ export function createIncognitoSessionHistoryReader(params: {
             stateDatabase: { path: state.admission.databasePath, environment: state.environment },
           },
         },
+        undefined,
+        requestSignal,
       );
       if (result.missingSources.length === 0) {
         const facts = (current.facts ??= { sessions: [], runMessages: [] });
@@ -389,6 +352,7 @@ export function createIncognitoSessionHistoryReader(params: {
         import("../agents/subagents/spawn/subagent-depth-policy.js"),
       ]);
       for (const sessionKey of result.missingSources) {
+        requestSignal?.throwIfAborted();
         const sourceAgentId = resolveAgentIdFromSessionKey(sessionKey);
         const source = captureOpenClawAgentDatabaseExecution
           .listIncognito(visibilityEnv)
@@ -416,7 +380,7 @@ export function createIncognitoSessionHistoryReader(params: {
             env: visibilityEnv,
             authority: { assertCurrent: check },
             existingOnly: true,
-            signal,
+            signal: requestSignal ?? signal,
           });
           if (!sourceActor) {
             throw new Error("Incognito source actor ended while preparing history");
@@ -424,6 +388,7 @@ export function createIncognitoSessionHistoryReader(params: {
           const releaseSource = sourceActor.release.bind(sourceActor);
           (current.releaseVisibility ??= []).push(releaseSource);
           const joined = await sourceActor.acp.prepareEntryRead({
+            signal: requestSignal,
             authority: { assertCurrent: check },
             cfg,
             env: visibilityEnv,
@@ -431,6 +396,7 @@ export function createIncognitoSessionHistoryReader(params: {
             sessionKey,
           });
           current.releaseVisibility.push(async () => joined.release());
+          requestSignal?.throwIfAborted();
           (current.sharedVisibility ??= []).push({
             agentId: sourceAgentId,
             sessionKey,
@@ -458,19 +424,21 @@ export function createIncognitoSessionHistoryReader(params: {
         { type: "session.history.recent", input: { ...target, options } },
         (value) => value.messages,
       ),
-    readSessionMessagesPageWithStatsAsync: (scope, options) =>
+    readSessionMessagesPageWithStatsAsync: (scope, options, requestSignal) =>
       read(
         scope,
         { type: "session.history.page", input: { ...target, options } },
         (value) => value.messages,
+        requestSignal,
       ),
-    readSessionMessagesAroundIdWithStatsAsync: (scope, options) =>
+    readSessionMessagesAroundIdWithStatsAsync: (scope, options, requestSignal) =>
       read(
         scope,
         { type: "session.history.around-id", input: { ...target, options } },
         (value) => value.messages,
+        requestSignal,
       ),
-    readSessionMessageByIdAsync: async (scope, messageId, options) => {
+    readSessionMessageByIdAsync: async (scope, messageId, options, requestSignal) => {
       return consume(scope, async () => {
         const { filterSessionMessageHistoryVisibility } =
           await import("./session-transcript-read-kernel.js");
@@ -483,11 +451,20 @@ export function createIncognitoSessionHistoryReader(params: {
                 input: { ...target, messageId, options },
               },
               (value) => (value.message === undefined ? [] : [value.message]),
+              requestSignal,
             ),
             scope,
             messageId,
             options?.historyVisibility,
-            readers,
+            {
+              ...readers,
+              readSessionMessagesAroundIdWithStatsAsync: (aroundScope, aroundOptions) =>
+                readers.readSessionMessagesAroundIdWithStatsAsync(
+                  aroundScope,
+                  aroundOptions,
+                  requestSignal,
+                ),
+            },
           ),
         );
       });

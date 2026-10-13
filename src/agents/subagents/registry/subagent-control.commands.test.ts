@@ -3,10 +3,10 @@
 import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { stopSubagentsForRequester } from "../../../auto-reply/reply/abort-operation.js";
-import { getRuntimeConfig } from "../../../config/config.js";
+import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../../config/config.js";
 import { abortControlledSubagents } from "../../../gateway/server-methods/chat-abort-descendants.js";
 import { withExecRequestTurn } from "../../../infra/exec-request-context.js";
 import { getProcessSupervisor } from "../../../process/supervisor/index.js";
@@ -36,8 +36,13 @@ import { resolveSubagentSessionStatus } from "./subagent-session-metrics.js";
 
 const fixture = useSubagentControlFixture();
 
+beforeEach(async () => {
+  await captureRuntimeConfigAsyncReader()();
+});
+
 it.each([
   "owned",
+  "legacy-owned",
   "other-controller",
   "new-generation",
   "admin-root",
@@ -60,6 +65,7 @@ it.each([
       agentId: "main",
       sessionKey: childSessionKey,
       defaultSessionId: sessionId,
+      lifecycleRevision: `${sessionId}-revision`,
     });
     const commands: ProcessSession[] = [];
     let authorized = true;
@@ -68,6 +74,7 @@ it.each([
     const alternate = selection.startsWith("alternate-");
     const shouldCancel =
       selection === "owned" ||
+      selection === "legacy-owned" ||
       selection === "postaccept-revoked" ||
       selection === "gateway" ||
       selection === "gateway-error" ||
@@ -149,7 +156,7 @@ it.each([
         generation,
         childSessionKey,
         childAgentId: "main",
-        childSessionIdentity: { sessionId },
+        childSessionIdentity: { sessionId, lifecycleRevision: `${sessionId}-revision` },
         requesterSessionKey,
         controllerSessionKey: requesterSessionKey,
         requesterAgentId: "main",
@@ -165,6 +172,9 @@ it.each([
         delivery: { status: "not_required" },
       });
     const original = completed("completed-command-run", 1);
+    if (selection === "legacy-owned") {
+      delete original.childSessionIdentity!.lifecycleRevision;
+    }
     const publish = async (entry: typeof original) =>
       mutateSubagentRuns([entry.runId], () => ({
         value: undefined,
@@ -188,13 +198,17 @@ it.each([
           agentId: "main",
           sessionKey: nestedKey,
           defaultSessionId: nestedId,
+          lifecycleRevision: `${nestedId}-revision`,
         });
         const nested = createSubagentRunRecord({
           runId: "nested-completed-command",
           generation: 1,
           childSessionKey: nestedKey,
           childAgentId: "main",
-          childSessionIdentity: { sessionId: nestedId },
+          childSessionIdentity: {
+            sessionId: nestedId,
+            lifecycleRevision: `${nestedId}-revision`,
+          },
           requesterSessionKey: childSessionKey,
           controllerSessionKey: childSessionKey,
           requesterAgentId: "main",
@@ -409,10 +423,13 @@ it.each([
       agentId: "main",
       sessionKey: childSessionKey,
       defaultSessionId: sessionId,
+      lifecycleRevision: `${sessionId}-revision`,
     });
     await registerSubagentRun({
       runId,
       childSessionKey,
+      childAgentId: "main",
+      sessionEntry: { sessionId, lifecycleRevision: `${sessionId}-revision` },
       requesterSessionKey,
       requesterAgentId: "main",
       requesterDisplayKey: requesterSessionKey,

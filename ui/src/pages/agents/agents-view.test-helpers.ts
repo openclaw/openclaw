@@ -1,9 +1,9 @@
 import { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
-import type { renderAgentFiles } from "./panels-files.ts";
-import type { renderAgents } from "./view.ts";
+import type { AgentFiles } from "./panels-files.tsx";
+import type { Agents } from "./view.tsx";
 
-type AgentsViewProps = Parameters<typeof renderAgents>[0];
-type AgentFilesProps = Parameters<typeof renderAgentFiles>[0];
+type AgentsViewProps = Parameters<typeof Agents>[0];
+type AgentFilesProps = Parameters<typeof AgentFiles>[0];
 
 export function primaryModelPicker(container: ParentNode) {
   return container.querySelector(
@@ -86,10 +86,6 @@ export function createAgentViewTestProps(
     agentIdentityById: {},
     overview: {
       identityDraft: { name: null, emoji: null, avatar: null },
-      identityAvatarLoader: {
-        resolve: (url) => url,
-        imageErrorHandler: () => () => undefined,
-      },
       identitySaving: false,
       identityError: null,
       modelCatalog: [],

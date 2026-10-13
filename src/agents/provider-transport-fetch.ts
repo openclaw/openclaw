@@ -5,12 +5,6 @@ import {
 } from "@openclaw/ai/diagnostics";
 import { parseRetryAfterHeadersSeconds as parseRetryAfterSeconds } from "@openclaw/ai/internal/retry-after";
 import {
-  isCloudMetadataIpAddress,
-  isLinkLocalIpAddress,
-  isRfc8215LocalUseNat64Ipv6Address,
-  parseCanonicalIpAddress,
-} from "@openclaw/net-policy/ip";
-import {
   asFiniteNumberInRange,
   clampPositiveTimerTimeoutMs,
   parseStrictFiniteNumber,
@@ -21,13 +15,6 @@ import {
 } from "../infra/net/fetch-guard.js";
 import { wrapGuardedBodyStream } from "../infra/net/guarded-body-stream.js";
 import { shouldUseEnvHttpProxyForUrl } from "../infra/net/proxy-env.js";
-import {
-  mergeSsrFPolicies,
-  ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist,
-  ssrfPolicyFromHttpBaseUrlAllowedOrigin,
-  SsrFBlockedError,
-  type SsrFPolicy,
-} from "../infra/net/ssrf.js";
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveDebugProxySettings } from "../proxy-capture/env.js";
@@ -39,6 +26,10 @@ import {
 } from "./provider-http-errors.js";
 import type { ProviderLocalServiceLease } from "./provider-local-service-target.js";
 import { ensureModelProviderLocalService } from "./provider-local-service.js";
+import {
+  resolveProviderTransportSsrFPolicy,
+  withModelProviderNetworkRemediation,
+} from "./provider-network-policy.js";
 import {
   buildProviderRequestDispatcherPolicy,
   getModelProviderRequestRouteFacts,
@@ -62,7 +53,6 @@ const SLOW_MODEL_FETCH_MS = 1_000;
 const OPENAI_SDK_STREAM_CONTENT_SNIFF_BYTES = 2 * 1024;
 const log = createSubsystemLogger("provider-transport-fetch");
 
-const BLOCKED_EXACT_ORIGIN_TRUST_HOSTNAME_LABELS = new Set(["instance-data"]);
 const PLAIN_DECIMAL_NUMBER_RE = /^\d+(?:\.\d+)?$/;
 
 function shouldSanitizeOpenAISdkSseResponse(model: Model): boolean {
@@ -284,119 +274,6 @@ export function resolveModelRequestTimeoutMs(
     timeoutMs === undefined
       ? (model as { requestTimeoutMs?: unknown }).requestTimeoutMs
       : timeoutMs,
-  );
-}
-
-function resolveHttpOrigin(value: unknown): string | undefined {
-  if (typeof value !== "string" || !value.trim()) {
-    return undefined;
-  }
-  const parsed = URL.parse(value);
-  if (!parsed || (parsed.protocol !== "http:" && parsed.protocol !== "https:")) {
-    return undefined;
-  }
-  parsed.hostname = parsed.hostname.replace(/\.+$/, "");
-  return parsed.origin.toLowerCase();
-}
-
-function normalizeProviderOriginHostname(value: unknown): string | undefined {
-  if (typeof value !== "string" || !value.trim()) {
-    return undefined;
-  }
-  const parsed = URL.parse(value);
-  if (!parsed || (parsed.protocol !== "http:" && parsed.protocol !== "https:")) {
-    return undefined;
-  }
-  return parsed.hostname.trim().toLowerCase().replace(/\.+$/, "") || undefined;
-}
-
-function canImplicitlyTrustConfiguredBaseUrlOrigin(value: unknown): value is string {
-  const hostname = normalizeProviderOriginHostname(value);
-  if (!hostname) {
-    return false;
-  }
-  const labels = hostname.split(".").filter(Boolean);
-  return (
-    !labels.some(
-      (label) =>
-        label.includes("metadata") || BLOCKED_EXACT_ORIGIN_TRUST_HOSTNAME_LABELS.has(label),
-    ) &&
-    !isLinkLocalIpAddress(hostname) &&
-    !isCloudMetadataIpAddress(hostname) &&
-    !isRfc8215LocalUseNat64Ipv6Address(hostname)
-  );
-}
-
-function canApplyFakeIpHostnamePolicy(value: unknown): value is string {
-  const hostname = normalizeProviderOriginHostname(value);
-  if (!hostname) {
-    return false;
-  }
-  const labels = hostname.split(".").filter(Boolean);
-  return (
-    !labels.some(
-      (label) =>
-        label.includes("metadata") || BLOCKED_EXACT_ORIGIN_TRUST_HOSTNAME_LABELS.has(label),
-    ) && !parseCanonicalIpAddress(hostname)
-  );
-}
-
-export function resolveProviderTransportSsrFPolicy(params: {
-  baseUrl?: string;
-  url: string;
-  allowPrivateNetwork?: boolean;
-  trustConfiguredBaseUrlOrigin?: boolean;
-}): SsrFPolicy | undefined {
-  const baseUrl = params.baseUrl;
-  const baseOrigin = resolveHttpOrigin(baseUrl);
-  const requestOrigin = resolveHttpOrigin(params.url);
-  const requestMatchesBaseOrigin =
-    typeof baseUrl === "string" && Boolean(baseOrigin) && requestOrigin === baseOrigin;
-  const baseUrlOriginPolicy =
-    requestMatchesBaseOrigin &&
-    params.trustConfiguredBaseUrlOrigin &&
-    canImplicitlyTrustConfiguredBaseUrlOrigin(baseUrl)
-      ? ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl)
-      : undefined;
-  // Fake-IP trust is hostname-scoped and orthogonal to exact-origin private-IP trust.
-  // It is for DNS hostnames only and does not allow literal private IPs by itself.
-  const fakeIpPolicy =
-    requestMatchesBaseOrigin && canApplyFakeIpHostnamePolicy(baseUrl)
-      ? ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist(baseUrl)
-      : undefined;
-  return mergeSsrFPolicies(
-    baseUrlOriginPolicy,
-    fakeIpPolicy,
-    params.allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined,
-  );
-}
-
-function withModelProviderNetworkRemediation(
-  error: unknown,
-  params: {
-    baseUrl?: string;
-    providerId: string;
-    url: string;
-  },
-): unknown {
-  const baseOrigin = resolveHttpOrigin(params.baseUrl);
-  const requestOrigin = resolveHttpOrigin(params.url);
-  const hostname = normalizeProviderOriginHostname(params.baseUrl);
-  if (
-    !(error instanceof SsrFBlockedError) ||
-    !baseOrigin ||
-    requestOrigin !== baseOrigin ||
-    !hostname ||
-    !isRfc8215LocalUseNat64Ipv6Address(hostname)
-  ) {
-    return error;
-  }
-  return new SsrFBlockedError(
-    `Configured model provider ${params.providerId} uses local-use NAT64 origin ` +
-      `${baseOrigin}, which OpenClaw blocks by default. Move the provider to a ` +
-      `loopback, LAN, or tailnet address, or set ` +
-      `models.providers.${params.providerId}.request.allowPrivateNetwork=true only for an ` +
-      `operator-controlled endpoint. Original block: ${error.message}`,
   );
 }
 

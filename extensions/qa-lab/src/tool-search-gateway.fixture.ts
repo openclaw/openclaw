@@ -443,6 +443,7 @@ export async function runToolSearchGatewayLane(params: {
     plannedWireToolName?: string;
   }>;
   const lastRequest = laneRequests.at(-1) ?? {};
+  const declaredTools = Array.isArray(lastRequest.body?.tools) ? lastRequest.body.tools : [];
   // The last provider request contains the terminal target result, while earlier
   // requests contain discovery results needed to prove the complete structured flow.
   const providerToolOutputs = laneRequests
@@ -489,14 +490,10 @@ export async function runToolSearchGatewayLane(params: {
     providerToolOutputSnippet: truncateUtf16Safe(providerToolOutputs, 4_000),
     providerToolSearchResult,
     providerToolCallResult,
-    providerDeclaredToolCount: Array.isArray(lastRequest.body?.tools)
-      ? lastRequest.body.tools.length
-      : 0,
-    providerDeclaredToolNames: Array.isArray(lastRequest.body?.tools)
-      ? lastRequest.body.tools.flatMap((tool) =>
-          isRecord(tool) && typeof tool.name === "string" ? [tool.name] : [],
-        )
-      : [],
+    providerDeclaredToolCount: declaredTools.length,
+    providerDeclaredToolNames: declaredTools.flatMap((tool) =>
+      isRecord(tool) && typeof tool.name === "string" ? [tool.name] : [],
+    ),
     providerDirectoryContainsTarget:
       providerPromptText.includes("### Deferred Tool Schemas") &&
       providerPromptText.includes(`- ${targetTool}`),
@@ -519,12 +516,7 @@ export function assertToolSearchLaneResults(params: {
   const laneDebug = () =>
     JSON.stringify(
       Object.fromEntries(
-        (
-          [
-            ["normal", normal],
-            ["tools", tools],
-          ] as const
-        ).map(([name, result]) => [
+        Object.entries({ normal, tools }).map(([name, result]) => [
           name,
           {
             plannedTools: result.providerPlannedTools,
@@ -540,20 +532,18 @@ export function assertToolSearchLaneResults(params: {
       null,
       2,
     );
-  assert(
-    normal.providerPlannedTools.includes(targetTool) &&
-      normal.gatewayOutputText.includes("FAKE_PLUGIN_OK") &&
-      normal.gatewayOutputText.includes(targetTool) &&
-      (normal.sessionLogToolMentions[targetTool] ?? 0) > 0,
-    `normal lane did not call ${targetTool}: ${laneDebug()}`,
-  );
-  assert(
-    tools.providerPlannedTools.includes("tool_call") &&
-      tools.gatewayOutputText.includes("FAKE_PLUGIN_OK") &&
-      tools.gatewayOutputText.includes(targetTool) &&
-      (tools.sessionLogToolMentions[targetTool] ?? 0) > 0,
-    `structured lane did not call ${targetTool}: ${laneDebug()}`,
-  );
+  for (const [result, label, plannedTool] of [
+    [normal, "normal", targetTool],
+    [tools, "structured", "tool_call"],
+  ] as const) {
+    assert(
+      result.providerPlannedTools.includes(plannedTool) &&
+        result.gatewayOutputText.includes("FAKE_PLUGIN_OK") &&
+        result.gatewayOutputText.includes(targetTool) &&
+        (result.sessionLogToolMentions[targetTool] ?? 0) > 0,
+      `${label} lane did not call ${targetTool}: ${laneDebug()}`,
+    );
+  }
   assert(
     tools.providerDirectoryContainsTarget,
     `structured lane did not advertise ${targetTool} in the capability directory: ${laneDebug()}`,

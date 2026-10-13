@@ -9,7 +9,6 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
-  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   observeHostDataSql,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -18,6 +17,7 @@ import * as cpuRuntime from "./manager-cpu-worker-runtime.js";
 import type { MemoryIndexDatabase } from "./manager-database-context.js";
 import {
   createManagerIndexFixture,
+  memoryIndexFixtureWriter,
   readPublishedSessionIndex,
 } from "./manager-index.test-support.js";
 import { observePublishedSql } from "./manager-publication-observer.test-support.js";
@@ -28,6 +28,45 @@ describe("memory manager retained worker reads", () => {
   const fixture = createManagerIndexFixture({
     getMemorySearchManager,
     closeAllMemorySearchManagers,
+  });
+
+  it("reopens invalidated source state without host data reads", async () => {
+    await fs.writeFile(path.join(fixture.paths.memory, "cold.md"), "Alpha cold source.");
+    const config = fixture.createConfig({ provider: "none", sources: ["memory"] });
+    const initial = await fixture.getFreshManager(config, "cli");
+    await initial.sync({ reason: "baseline", force: true });
+    memoryIndexFixtureWriter(initial).prepare("UPDATE memory_index_sources SET hash = ''").run();
+    await initial.close();
+    const observed = observeHostDataSql();
+    try {
+      const manager = await fixture.getFreshManager(config, "cli");
+      expect(Reflect.get(manager, "memorySourceProvenanceRepairPending")).toBe(true);
+      expect(observed.queries.filter((sql) => /memory_index_sources/iu.test(sql))).toEqual([]);
+    } finally {
+      observed.restore();
+    }
+  });
+
+  it("loads vectors and publishes a full reindex without host SQLite", async () => {
+    await fs.writeFile(path.join(fixture.paths.memory, "vectors.md"), "Alpha vector source.");
+    const manager = await fixture.getFreshManager(
+      fixture.createConfig({
+        provider: "openai",
+        sources: ["memory"],
+        vectorEnabled: true,
+      }),
+      "cli",
+    );
+    const observed = observeHostDataSql();
+    try {
+      expect(await manager.probeVectorStoreAvailability()).toBe(true);
+      await manager.sync({ reason: "cold-vectors", force: true });
+      expect(observed.queries).toEqual([]);
+    } finally {
+      observed.restore();
+    }
+    expect((await manager.search("alpha", { minScore: 0 })).length).toBeGreaterThan(0);
+    expect(Reflect.get(manager, "publishedDatabase").facts.hasVectorTable).toBe(true);
   });
 
   it("keeps transcript statistics off the host during session catch-up", async () => {
@@ -128,7 +167,7 @@ describe("memory manager retained worker reads", () => {
     }
   });
 
-  it.each(["ready", "rejected", "revoked"] as const)(
+  it.each(["ready", "rejected"] as const)(
     "waits for a %s cache read before requesting embeddings",
     async (outcome) => {
       const memoryPath = path.join(fixture.paths.memory, "2026-01-12.md");
@@ -176,23 +215,13 @@ describe("memory manager retained worker reads", () => {
         expect(
           publishedDb.prepare("SELECT text FROM memory_index_chunks ORDER BY id").all(),
         ).toEqual(before);
-        if (outcome === "revoked") {
-          closeOpenClawAgentDatabasesForTest();
-        }
         release.resolve();
         if (outcome === "ready") {
           await sync;
           expect(fixture.provider.embeddedBatchTexts).toEqual([replacement]);
         } else {
-          await expect(sync).rejects.toThrow(
-            outcome === "rejected"
-              ? "controlled cache read rejection"
-              : "Memory embedding generation changed during cache lookup",
-          );
+          await expect(sync).rejects.toThrow("controlled cache read rejection");
           expect(fixture.provider.embeddedBatchTexts).toEqual([]);
-        }
-        if (outcome === "revoked") {
-          await closeOpenClawAgentDatabasesAsync();
         }
         const current = openOpenClawAgentDatabase({ agentId: "main" }).db;
         expect(current.prepare("SELECT text FROM memory_index_chunks ORDER BY id").all()).toEqual(

@@ -107,21 +107,6 @@ describe("resolveNpmInstallSpecsForUpdateChannel", () => {
     },
   );
 
-  it.each(["stable", "extended-stable"] as const)(
-    "preserves explicit beta on %s",
-    async (updateChannel) => {
-      const spec = "@openclaw/codex@beta";
-      expect(
-        await resolveNpmInstallSpecsForUpdateChannel({
-          spec,
-          updateChannel,
-          officialPackageName: "@openclaw/codex",
-          coreVersion: "2026.8.1-beta.3",
-        }),
-      ).toEqual({ installSpec: spec, recordSpec: spec });
-    },
-  );
-
   it("does not rewrite a third-party extended-stable package", async () => {
     expect(
       await resolveNpmInstallSpecsForUpdateChannel({

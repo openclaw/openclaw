@@ -76,8 +76,9 @@ Start agent work in the background: hook-dispatched turns for external content a
     support fresh, tool-free isolated inference; unsupported runtimes fail
     before inference.
 
-    Completions use the [shared background queue](/concepts/queue#background-work),
-    with up to three runs per plugin within the three-run total budget.
+    Completions use the [subagent queue](/concepts/queue#background-work) at
+    background priority, sharing `agents.defaults.subagents.maxConcurrent`
+    across plugins and workspaces. Set this existing limit to `1` to serialize them.
     Cancellation removes queued work immediately. Running work keeps its slot
     until underlying runtime cleanup finishes, then rejects; late output is not
     returned after cancellation, timeout, or runtime retirement. Calls require

@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
+import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import {
   registerSqliteCacheExitClose,
   runInSqliteMaintenanceContext,
@@ -15,7 +16,6 @@ import {
   findOpenClawAgentDatabaseIdentity,
 } from "./openclaw-agent-db-identity.js";
 import {
-  hasOpenClawAgentReadOnlySchema,
   openOpenClawAgentDatabaseReadOnly,
   readOpenClawAgentDatabase,
   readOpenClawAgentDatabaseSnapshot,
@@ -25,6 +25,11 @@ import {
   type OpenClawAgentReadOnlyDatabaseHandle,
 } from "./openclaw-agent-db-readonly-open.js";
 import { registerOpenClawAgentDatabaseSyncResource } from "./openclaw-agent-db-resources.js";
+import { assertAgentDatabaseTerminalOpenAllowed } from "./openclaw-agent-db-terminal.js";
+import {
+  adoptOpenClawAgentDatabaseValidation,
+  type OpenClawAgentDatabaseReadValidation,
+} from "./openclaw-agent-db-validation-cache.js";
 import { observeOpenClawDatabaseMaintenanceResource } from "./openclaw-state-db-async-lifecycle.js";
 
 export type OpenClawAgentDatabaseReadOnlyBehavior = {
@@ -34,6 +39,11 @@ export type OpenClawAgentDatabaseReadOnlyBehavior = {
 };
 
 type ReadTarget = OpenClawAgentDatabaseOptions & { agentId: string; path: string };
+type ReadScopeTarget = {
+  agentId: string;
+  path: string;
+  validation?: OpenClawAgentDatabaseReadValidation;
+};
 const readOnlyScope = new AsyncLocalStorage<OpenClawAgentDatabaseReadOnlyScope>();
 const log = createSubsystemLogger("state/agent-db");
 type ReadOnlyScopes = {
@@ -49,11 +59,10 @@ const retainedScopes = resolveGlobalSingleton<ReadOnlyScopes>(
 /** One retained connection, revoked by its caller, database lifecycle, or idle expiry. */
 export class OpenClawAgentDatabaseReadOnlyScope {
   private database?: OpenClawAgentReadOnlyDatabaseHandle;
-  private target?: { agentId: string; path: string };
+  private target?: ReadScopeTarget;
   private idleTimer?: ReturnType<typeof setTimeout>;
   private unregisterResource?: () => void;
   private borrowers = 0;
-  private closing = false;
 
   constructor(private readonly cached = false) {}
 
@@ -80,10 +89,8 @@ export class OpenClawAgentDatabaseReadOnlyScope {
   }
 
   close(): void {
-    this.closing = true;
     clearTimeout(this.idleTimer);
     this.idleTimer = undefined;
-    // Failed native cleanup retains custody and blocks reuse until the owner retries.
     this.database?.close();
     this.database = undefined;
     this.borrowers = 0;
@@ -99,7 +106,6 @@ export class OpenClawAgentDatabaseReadOnlyScope {
       retainedScopes.unregisterExit?.();
       retainedScopes.unregisterExit = undefined;
     }
-    this.closing = false;
   }
 
   private discardConnection(): void {
@@ -137,7 +143,7 @@ export class OpenClawAgentDatabaseReadOnlyScope {
     this.idleTimer.unref();
   }
 
-  run<T>(target: { agentId: string; path: string }, operation: () => T): T {
+  run<T>(target: ReadScopeTarget, operation: () => T): T {
     if (this.target?.agentId !== target.agentId || this.target.path !== target.path) {
       this.close();
     }
@@ -149,11 +155,7 @@ export class OpenClawAgentDatabaseReadOnlyScope {
     return this.target?.agentId === agentId && this.target.path === pathname;
   }
 
-  private acquire(
-    options: OpenClawAgentDatabaseOptions,
-    onAdmitted?: (database: OpenClawAgentReadOnlyDatabaseHandle) => void,
-    snapshot = false,
-  ) {
+  private acquire(options: OpenClawAgentDatabaseOptions) {
     const finish = (database: OpenClawAgentReadOnlyDatabaseHandle) => {
       const requestedAgentId = normalizeAgentId(options.agentId);
       if (database.agentId !== requestedAgentId) {
@@ -163,29 +165,26 @@ export class OpenClawAgentDatabaseReadOnlyScope {
       }
       observeOpenClawDatabaseMaintenanceResource(this.unregisterResource);
       this.touch();
-      onAdmitted?.(database);
       return { found: true, database } as const;
     };
     if (this.database && !isOpenClawAgentDatabasePathCurrent(this.database)) {
       this.discardConnection();
     }
+    if (this.database) {
+      assertAgentDatabaseTerminalOpenAllowed(this.database.path);
+    }
     if (!this.database) {
-      let opened: ReturnType<typeof openOpenClawAgentDatabaseReadOnly>;
-      try {
-        opened = openOpenClawAgentDatabaseReadOnly(options);
-      } catch (error) {
-        this.discardConnection();
-        throw error;
-      }
+      const opened = openOpenClawAgentDatabaseReadOnly(options);
       if (!opened.found) {
         this.discardConnection();
         return opened;
       }
       this.database = opened.database;
-      this.target = { agentId: this.database.agentId, path: this.database.path };
+      this.target = { ...this.target, agentId: this.database.agentId, path: this.database.path };
       try {
         this.unregisterResource = registerOpenClawAgentDatabaseSyncResource({
-          ...this.target,
+          agentId: this.target.agentId,
+          path: this.target.path,
           revoke: () => this.close(),
           close: () => this.close(),
         });
@@ -202,24 +201,16 @@ export class OpenClawAgentDatabaseReadOnlyScope {
         this.discardConnection();
         throw error;
       }
-      return finish(opened.database);
     }
     const database = this.database;
-    if (snapshot) {
-      return finish(database);
-    }
-    let result: ReturnType<typeof openOpenClawAgentDatabaseReadOnly> = {
-      found: false,
-      reason: "schema-missing",
-    };
     if (
-      !hasOpenClawAgentReadOnlySchema(database, () => {
-        result = finish(database);
-      })
+      this.target?.validation &&
+      !adoptOpenClawAgentDatabaseValidation(database, this.target.validation)
     ) {
-      this.discardConnection();
+      throw new Error("Session reader validation does not match its current physical owner");
     }
-    return result;
+    // The open owner validates the schema once; runtime reads retain that admission.
+    return finish(database);
   }
 
   private releaseBorrow(database: OpenClawAgentReadOnlyDatabaseHandle): void {
@@ -239,14 +230,7 @@ export class OpenClawAgentDatabaseReadOnlyScope {
     }
   }
 
-  private assertUsable(): void {
-    if (this.closing) {
-      throw new Error("Agent read-only database native cleanup is pending");
-    }
-  }
-
   retain(options: OpenClawAgentDatabaseOptions) {
-    this.assertUsable();
     const opened =
       this.database?.db.isOpen && this.database.db.isTransaction
         ? openOpenClawAgentDatabaseReadOnly(options)
@@ -277,37 +261,29 @@ export class OpenClawAgentDatabaseReadOnlyScope {
     options: OpenClawAgentDatabaseOptions,
     behavior: OpenClawAgentDatabaseReadOnlyBehavior = {},
   ): OpenClawAgentDatabaseReadOnlyResult<T> {
-    this.assertUsable();
     if (this.database?.db.isOpen && this.database.db.isTransaction) {
       return withFreshOpenClawAgentDatabaseReadOnly(operation, options, behavior);
     }
-    let result: OpenClawAgentDatabaseReadOnlyResult<T> = {
-      found: false,
-      reason: "schema-missing",
-    };
-    const opened = this.acquire(
-      options,
-      (database) => {
-        this.borrowers++;
-        try {
-          result = behavior.snapshot
-            ? readOpenClawAgentDatabaseSnapshot(database, operation)
-            : readOpenClawAgentDatabase(database, operation);
-          if (!result.found) {
-            this.discardConnection();
-          }
-        } catch (error) {
-          if (this.cached && this.borrowers === 1) {
-            this.discardConnection();
-          }
-          throw error;
-        } finally {
-          this.releaseBorrow(database);
-        }
-      },
-      behavior.snapshot,
-    );
-    return opened.found ? result : opened;
+    const opened = this.acquire(options);
+    if (!opened.found) {
+      return opened;
+    }
+    const { database } = opened;
+    this.borrowers++;
+    try {
+      return behavior.snapshot
+        ? readOpenClawAgentDatabaseSnapshot(database, operation)
+        : runSqliteReadOperationSync(database.db, () =>
+            readOpenClawAgentDatabase(database, operation),
+          );
+    } catch (error) {
+      if (this.cached && this.borrowers === 1) {
+        this.discardConnection();
+      }
+      throw error;
+    } finally {
+      this.releaseBorrow(database);
+    }
   }
 }
 

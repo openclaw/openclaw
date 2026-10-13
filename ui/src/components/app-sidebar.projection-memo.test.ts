@@ -21,6 +21,7 @@ import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import * as sidebarAgentSessionRows from "./app-sidebar-agent-session-rows.ts";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import { SidebarSessionProjection } from "./app-sidebar-session-projection.ts";
+import type { SelectPicker } from "./select-picker.ts";
 import "./app-sidebar.ts";
 
 type Sidebar = AppSidebarSessionNavigationElement & {
@@ -81,7 +82,12 @@ async function mount(rows: GatewaySessionRow[]) {
   const row = (sessionKey: string) => sidebar.querySelector(`[data-session-key="${sessionKey}"]`);
   const publish = (next: GatewaySessionRow[]) =>
     sessions.publishList({
-      result: { ...sessions.sessions.state.result!, sessions: next, count: next.length },
+      result: {
+        ...sessions.sessions.state.result!,
+        sessions: next,
+        count: next.length,
+        owners: structuredClone(sessions.sessions.state.result!.owners),
+      },
     });
   return {
     ...mounted,
@@ -102,6 +108,9 @@ async function mount(rows: GatewaySessionRow[]) {
 async function expectRowRefresh(sidebar: Sidebar, change: () => void) {
   projectRows.mockClear();
   change();
+  if (vi.isFakeTimers()) {
+    vi.advanceTimersToNextFrame();
+  }
   await settleLitElement(sidebar);
   expect(projectRows).toHaveBeenCalled();
 }
@@ -119,6 +128,10 @@ describe("sidebar projection memo", () => {
       ...Array.from({ length: 20 }, (_, index) => session(`thread-${index}`)),
     ];
     const { sidebar, sessions, row, publish } = await mount(rows);
+    const ownerPicker = sidebar
+      .querySelector("#sidebar-session-owner-title")!
+      .closest<SelectPicker>("openclaw-select-picker")!;
+    const renderOwnerPicker = vi.spyOn(ownerPicker, "render");
     const sections = vi.spyOn(SidebarSessionProjection.prototype, "project");
     expect(projectHome).toHaveBeenCalled();
     projectHome.mockClear();
@@ -145,6 +158,7 @@ describe("sidebar projection memo", () => {
     expect(projectRows).not.toHaveBeenCalled();
     expect(sections).not.toHaveBeenCalled();
     expect(projectHome).not.toHaveBeenCalled();
+    expect(renderOwnerPicker).not.toHaveBeenCalled();
 
     await expectRowRefresh(sidebar, () =>
       publish([
@@ -154,6 +168,7 @@ describe("sidebar projection memo", () => {
       ]),
     );
     expect(row(key("first"))?.textContent).toContain("Renamed first");
+    expect(renderOwnerPicker).not.toHaveBeenCalled();
     expect(projectHome).toHaveBeenCalled();
     expect(projectHome.mock.results.at(-1)?.value.lastMessagePreview).toBe("Home after");
     await expectRowRefresh(sidebar, () => {
@@ -192,6 +207,7 @@ describe("sidebar projection memo", () => {
     await settleLitElement(sidebar);
     expect(row(key("second"))).not.toBeNull();
     expect(row(key("first"))).toBeNull();
+    expect(ownerPicker.querySelector("button")?.getAttribute("aria-label")).toContain("Bob");
     const options = sidebar.sessionOwnerOptions;
     projectRows.mockClear();
     sidebar.devGitBranch = "another-branch";

@@ -95,6 +95,9 @@ vi.mock("../state/openclaw-agent-execution.js", () => ({
     async prepare() {
       throw new Error("Unexpected database preparation");
     },
+    async adoptNativeDatabase() {
+      throw new Error("Unexpected native database adoption");
+    },
     async runExisting() {
       throw new Error("Revoked retention must not write");
     },

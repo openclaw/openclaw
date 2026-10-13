@@ -68,7 +68,6 @@ export type RunAgentAttemptParams = Pick<
     pluginsEnabled?: boolean;
     metadataSnapshot?: PluginMetadataSnapshot;
     pluginGeneration: PreparedModelRuntimePluginGeneration | undefined;
-    modelFallbacksOverride?: string[];
     sessionHasHistory?: boolean;
     fallbackRuntimeState?: { originRuntime?: "cli" | "embedded" };
     suppressPromptPersistenceOnRetry?: boolean;
@@ -77,8 +76,7 @@ export type RunAgentAttemptParams = Pick<
     onLifecycleGenerationChanged?: (lifecycleGeneration: string) => void;
     onCompactionAccounting?: RunEmbeddedAgentInternalParams["onCompactionAccounting"];
     onCompactionRequestBudget?: RunEmbeddedAgentInternalParams["onCompactionRequestBudget"];
-    onSuccessfulAuthProfile?: (selection: {
-      authProfileId?: string;
-      authProfileIdSource?: "auto" | "user";
-    }) => void;
+    onSuccessfulAuthProfile?: (
+      selection: Pick<RunEmbeddedAgentInternalParams, "authProfileId" | "authProfileIdSource">,
+    ) => void;
   };

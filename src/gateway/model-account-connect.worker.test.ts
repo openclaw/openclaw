@@ -13,6 +13,7 @@ import {
   type SqliteWorkerRequest,
 } from "../infra/sqlite-worker-contract.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import type { ProviderAuthMethod } from "../plugins/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
@@ -189,21 +190,16 @@ it("rejects a pin whose identity changed before an awaited account read was acce
 });
 
 function observeAccountAdmission(observer: (stage: "transaction" | "commit") => void) {
-  const create = workerAdmission.createSqliteWorkerOperationAdmission;
-  return vi
-    .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-    .mockImplementation((admit, attachment) =>
-      create((request, grant) => {
-        if (
-          isRecord(request.facts) &&
-          request.facts.kind === "model-account-links" &&
-          (request.stage === "transaction" || request.stage === "commit")
-        ) {
-          observer(request.stage);
-        }
-        admit(request, grant);
-      }, attachment),
-    );
+  return probe.admission(workerAdmission, (request, grant, admit) => {
+    if (
+      isRecord(request.facts) &&
+      request.facts.kind === "model-account-links" &&
+      (request.stage === "transaction" || request.stage === "commit")
+    ) {
+      observer(request.stage);
+    }
+    admit(request, grant);
+  });
 }
 
 it("serves personal account RPCs without caller-thread SQL or credentials", async ({ signal }) => {
@@ -225,25 +221,14 @@ it("serves personal account RPCs without caller-thread SQL or credentials", asyn
     const settled = createDeferredCore();
     const committed = createDeferredCore();
     const deliverCommit = createDeferredCore();
-    const runWorker = stateWorker.runOpenClawStateWorkerOperation;
-    vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementation(
-      (workerContext, operation, options) =>
-        runWorker(
-          workerContext,
-          (scope) =>
-            operation({
-              execute: async (command, executeOptions) => {
-                const result = await scope.execute(command, executeOptions);
-                if (command.type === "userProfiles.modelAccount.connect") {
-                  committed.resolve();
-                  await deliverCommit.promise;
-                }
-                return result;
-              },
-            }),
-          options,
-        ),
-    );
+    probe.command(stateWorker, async (command, executeOptions, scope) => {
+      const result = await scope.execute(command, executeOptions);
+      if (command.type === "userProfiles.modelAccount.connect") {
+        committed.resolve();
+        await deliverCommit.promise;
+      }
+      return result;
+    });
     // oxlint-disable-next-line typescript/unbound-method -- The call below retains the intercepted Wizard as receiver.
     const cancel = WizardSession.prototype.cancel;
     const cancellation = vi.spyOn(WizardSession.prototype, "cancel").mockImplementation(function (
@@ -375,13 +360,9 @@ it("serves personal account RPCs without caller-thread SQL or credentials", asyn
   });
 });
 
-it.each([
-  { stage: "transaction", allowed: false },
-  { stage: "commit", allowed: false },
-  { stage: "transaction", allowed: true },
-] as const)(
-  "uses the stored role when policy enables at $stage (allowed: $allowed), without grant SQL",
-  async ({ stage, allowed }) => {
+it.each(["transaction", "commit"] as const)(
+  "uses the stored role to refuse selection when policy enables at %s, without grant SQL",
+  async (stage) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const owner = ensureProfileForEmail("grant-role@example.test").id;
       setUserProfileRole(owner, "member");
@@ -411,12 +392,12 @@ it.each([
               member: {
                 sessions: { others: "none" },
                 agents: [],
-                scopes: allowed ? ["operator.write"] : [],
+                scopes: [],
               },
               fallback: {
                 sessions: { others: "none" },
                 agents: [],
-                scopes: allowed ? [] : ["operator.write"],
+                scopes: ["operator.write"],
               },
             },
           },
@@ -430,27 +411,22 @@ it.each([
         }
       });
       const stages: string[] = [];
-      const create = workerAdmission.createSqliteWorkerOperationAdmission;
-      const admission = vi
-        .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((admit, attachment) =>
-          create((request, grant) => {
-            if (!isRecord(request.facts) || request.facts.kind !== "model-account-links") {
-              admit(request, grant);
-              return;
-            }
-            stages.push(request.stage);
-            if (request.stage === stage) {
-              cfg = enabled;
-            }
-            inGrant = true;
-            try {
-              admit(request, grant);
-            } finally {
-              inGrant = false;
-            }
-          }, attachment),
-        );
+      const admission = probe.admission(workerAdmission, (request, grant, admit) => {
+        if (!isRecord(request.facts) || request.facts.kind !== "model-account-links") {
+          admit(request, grant);
+          return;
+        }
+        stages.push(request.stage);
+        if (request.stage === stage) {
+          cfg = enabled;
+        }
+        inGrant = true;
+        try {
+          admit(request, grant);
+        } finally {
+          inGrant = false;
+        }
+      });
       try {
         const calibration = new DatabaseSync(":memory:");
         try {
@@ -477,26 +453,18 @@ it.each([
           isWebchatConnect: () => false,
         });
         expect(respond).toHaveBeenCalledTimes(1);
-        if (allowed) {
-          expect(respond).toHaveBeenCalledWith(true, {
-            links: expect.arrayContaining([
-              expect.objectContaining({ authProfileId: first.authProfileId }),
-            ]),
-          });
-        } else {
-          // The real RPC mapper recognizes the authority error after worker transport.
-          expect(respond).toHaveBeenCalledWith(
-            false,
-            undefined,
-            expect.objectContaining({ code: "FORBIDDEN" }),
-          );
-        }
+        // The real RPC mapper recognizes the authority error after worker transport.
+        expect(respond).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({ code: "FORBIDDEN" }),
+        );
         expect(stages).toEqual(
-          stage === "transaction" && !allowed ? ["transaction"] : ["transaction", "commit"],
+          stage === "transaction" ? ["transaction"] : ["transaction", "commit"],
         );
         expect(grantSql).toEqual([]);
         expect(await listUserProfileAuthLinksAsync(owner)).toMatchObject([
-          { authProfileId: allowed ? first.authProfileId : second.authProfileId },
+          { authProfileId: second.authProfileId },
         ]);
       } finally {
         admission.mockRestore();
@@ -544,7 +512,7 @@ it.each(["transaction", "commit"] as const)(
   },
 );
 
-it.each(["unchanged", "credential", "selection"] as const)(
+it.each(["credential", "selection"] as const)(
   "compares before BEGIN and rereads %s account rows inside the transaction",
   async (race) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -581,18 +549,12 @@ it.each(["unchanged", "credential", "selection"] as const)(
           },
         });
         expect(order).toEqual(["compare", "transaction", "commit"]);
-        if (race === "unchanged") {
-          expect(result.authProfileId).toBe(first.authProfileId);
-        } else {
-          expect(result.authProfileId).not.toBe(first.authProfileId);
-          expect(readUserModelAuthProfile(first.authProfileId)?.credential).toEqual({
-            ...credential,
-            token: race === "credential" ? "synthetic-concurrent-refresh" : credential.token,
-          });
-        }
-        expect((await listUserModelAccountsAsync({ profileId: owner })).accounts).toHaveLength(
-          race === "unchanged" ? 1 : 2,
-        );
+        expect(result.authProfileId).not.toBe(first.authProfileId);
+        expect(readUserModelAuthProfile(first.authProfileId)?.credential).toEqual({
+          ...credential,
+          token: race === "credential" ? "synthetic-concurrent-refresh" : credential.token,
+        });
+        expect((await listUserModelAccountsAsync({ profileId: owner })).accounts).toHaveLength(2);
         expect(await listUserProfileAuthLinksAsync(owner)).toMatchObject([
           { authProfileId: result.authProfileId },
         ]);

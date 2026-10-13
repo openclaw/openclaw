@@ -20,6 +20,7 @@ import {
   BROWSER_TAB_REFERENCE_HELP,
   callBrowserRequest,
   parseBrowserPositiveIntegerOption,
+  printBrowserList,
   printBrowserJsonResult as printJsonResult,
   resolveBrowserProfileQuery as resolveProfileQuery,
   runBrowserCliCommand as runBrowserCommand,
@@ -100,22 +101,14 @@ function parseTabIndex(value: string): number {
 }
 
 function logBrowserTabs(tabs: BrowserTab[]) {
-  if (tabs.length === 0) {
-    defaultRuntime.log("No tabs (browser closed or no targets).");
-    return;
-  }
-  defaultRuntime.log(
-    tabs
-      .map((t, i) => {
-        const labelHandle = t.label ? `label:${t.label}` : undefined;
-        const suggested = t.suggestedTargetId ? `use: ${t.suggestedTargetId}` : undefined;
-        const handles = [suggested, t.tabId ? `tab: ${t.tabId}` : undefined, labelHandle]
-          .filter(Boolean)
-          .join(" ");
-        return `${i + 1}. ${t.title || "(untitled)"}${handles ? ` [${handles}]` : ""}\n   ${t.url}\n   id: ${t.targetId}`;
-      })
-      .join("\n"),
-  );
+  printBrowserList(tabs, "No tabs (browser closed or no targets).", (t, i) => {
+    const labelHandle = t.label ? `label:${t.label}` : undefined;
+    const suggested = t.suggestedTargetId ? `use: ${t.suggestedTargetId}` : undefined;
+    const handles = [suggested, t.tabId ? `tab: ${t.tabId}` : undefined, labelHandle]
+      .filter(Boolean)
+      .join(" ");
+    return `${i + 1}. ${t.title || "(untitled)"}${handles ? ` [${handles}]` : ""}\n   ${t.url}\n   id: ${t.targetId}`;
+  });
 }
 
 function formatDoctorLine(check: BrowserDoctorCheck): string {
@@ -300,6 +293,16 @@ export function registerBrowserManageCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
 ) {
+  const runManagementRequest = <T = unknown>(
+    command: Command,
+    params: Omit<Parameters<typeof runBrowserCliRequest<T>>[0], "parent" | "timeoutMs">,
+  ) =>
+    runBrowserCliRequest<T>({
+      parent: parentOpts(command),
+      ...params,
+      timeoutMs: resolveBrowserManagementTimeout(command),
+    });
+
   browser
     .command("status")
     .description("Show browser status")
@@ -369,29 +372,24 @@ export function registerBrowserManageCommands(
       });
     });
 
-  browser
-    .command("start")
-    .description("Start the browser (no-op if already running)")
-    .option("--headless", "Launch a local managed browser headless for this start")
-    .action(async (opts: { headless?: boolean }, cmd) => {
+  for (const [action, description] of [
+    ["start", "Start the browser (no-op if already running)"],
+    ["stop", "Stop the browser (best-effort)"],
+  ] as const) {
+    const command = browser.command(action).description(description);
+    if (action === "start") {
+      command.option("--headless", "Launch a local managed browser headless for this start");
+    }
+    command.action(async (opts: { headless?: boolean }, cmd) => {
       const parent = parentOpts(cmd);
       await runBrowserCommand(async () => {
         await runBrowserToggle(cmd, parent, {
-          path: "/start",
-          query: opts.headless ? { headless: true } : undefined,
+          path: `/${action}`,
+          query: action === "start" && opts.headless ? { headless: true } : undefined,
         });
       });
     });
-
-  browser
-    .command("stop")
-    .description("Stop the browser (best-effort)")
-    .action(async (_opts, cmd) => {
-      const parent = parentOpts(cmd);
-      await runBrowserCommand(async () => {
-        await runBrowserToggle(cmd, parent, { path: "/stop" });
-      });
-    });
+  }
 
   browser
     .command("reset-profile")
@@ -415,11 +413,9 @@ export function registerBrowserManageCommands(
     .command("tabs")
     .description("List open tabs")
     .action(async (_opts, cmd) => {
-      await runBrowserCliRequest<{ tabs: BrowserTab[] }>({
-        parent: parentOpts(cmd),
+      await runManagementRequest<{ tabs: BrowserTab[] }>(cmd, {
         method: "GET",
         path: "/tabs",
-        timeoutMs: resolveBrowserManagementTimeout(cmd),
         json: (result) => ({ tabs: result.tabs ?? [] }),
         print: (result) => logBrowserTabs(result.tabs ?? []),
       });
@@ -429,11 +425,9 @@ export function registerBrowserManageCommands(
     .command("tab")
     .description("Tab shortcuts (index-based)")
     .action(async (_opts, cmd) => {
-      await runBrowserCliRequest<{ tabs: BrowserTab[] }>({
-        parent: parentOpts(cmd),
+      await runManagementRequest<{ tabs: BrowserTab[] }>(cmd, {
         path: "/tabs/action",
         body: { action: "list" },
-        timeoutMs: resolveBrowserManagementTimeout(cmd),
         json: (result) => ({ tabs: result.tabs ?? [] }),
         print: (result) => logBrowserTabs(result.tabs ?? []),
       });
@@ -444,11 +438,9 @@ export function registerBrowserManageCommands(
     .description("Open a new tab (about:blank)")
     .option("--label <label>", "Assign a friendly tab label")
     .action(async (opts: { label?: string }, cmd) => {
-      await runBrowserCliRequest<{ tab?: BrowserTab }>({
-        parent: parentOpts(cmd),
+      await runManagementRequest<{ tab?: BrowserTab }>(cmd, {
         path: "/tabs/action",
         body: { action: "new", label: opts.label },
-        timeoutMs: resolveBrowserManagementTimeout(cmd),
         successMessage: ({ tab: opened }) =>
           opened?.tabId
             ? `opened new tab ${opened.tabId}${opened.label ? ` (${opened.label})` : ""}`
@@ -462,11 +454,9 @@ export function registerBrowserManageCommands(
     .argument("<targetId>", BROWSER_TAB_REFERENCE_HELP)
     .argument("<label>", "Friendly label")
     .action(async (targetId: string, label: string, _opts, cmd) => {
-      await runBrowserCliRequest<{ tab?: BrowserTab }>({
-        parent: parentOpts(cmd),
+      await runManagementRequest<{ tab?: BrowserTab }>(cmd, {
         path: "/tabs/action",
         body: { action: "label", targetId, label },
-        timeoutMs: resolveBrowserManagementTimeout(cmd),
         successMessage: ({ tab: tabValue }) =>
           `labeled tab ${tabValue?.tabId ?? targetId} as ${tabValue?.label ?? label}`,
       });
@@ -503,11 +493,9 @@ export function registerBrowserManageCommands(
     .argument("<url>", "URL to open")
     .option("--label <label>", "Assign a friendly tab label")
     .action(async (url: string, opts: { label?: string }, cmd) => {
-      await runBrowserCliRequest<BrowserTab>({
-        parent: parentOpts(cmd),
+      await runManagementRequest<BrowserTab>(cmd, {
         path: "/tabs/open",
         body: { url, ...(opts.label ? { label: opts.label } : {}) },
-        timeoutMs: resolveBrowserManagementTimeout(cmd),
         successMessage: (tabLocal) =>
           `opened: ${tabLocal.url}\n${tabLocal.tabId ? `tab: ${tabLocal.tabId}\n` : ""}${tabLocal.label ? `label: ${tabLocal.label}\n` : ""}id: ${tabLocal.targetId}`,
       });
@@ -518,11 +506,9 @@ export function registerBrowserManageCommands(
     .description("Focus a tab by tab reference")
     .argument("<targetId>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (targetId: string, _opts, cmd) => {
-      await runBrowserCliRequest({
-        parent: parentOpts(cmd),
+      await runManagementRequest(cmd, {
         path: "/tabs/focus",
         body: { targetId },
-        timeoutMs: resolveBrowserManagementTimeout(cmd),
         json: () => ({ ok: true }),
         successMessage: `focused tab ${targetId}`,
       });
@@ -534,12 +520,10 @@ export function registerBrowserManageCommands(
     .argument("[targetId]", `${BROWSER_TAB_REFERENCE_HELP} (optional)`)
     .action(async (targetId: string | undefined, _opts, cmd) => {
       const target = targetId?.trim();
-      await runBrowserCliRequest({
-        parent: parentOpts(cmd),
+      await runManagementRequest(cmd, {
         method: target ? "DELETE" : "POST",
         path: target ? `/tabs/${encodeURIComponent(target)}` : "/act",
         body: target ? undefined : { kind: "close" },
-        timeoutMs: resolveBrowserManagementTimeout(cmd),
         json: () => ({ ok: true }),
         successMessage: "closed tab",
       });
@@ -549,33 +533,21 @@ export function registerBrowserManageCommands(
     .command("profiles")
     .description("List all browser profiles")
     .action(async (_opts, cmd) => {
-      await runBrowserCliRequest<{ profiles: ProfileStatus[] }>({
-        parent: parentOpts(cmd),
+      await runManagementRequest<{ profiles: ProfileStatus[] }>(cmd, {
         profile: null,
         method: "GET",
         path: "/profiles",
-        timeoutMs: resolveBrowserManagementTimeout(cmd),
         json: (result) => ({ profiles: result.profiles ?? [] }),
-        print: (result) => {
-          const profiles = result.profiles ?? [];
-          if (profiles.length === 0) {
-            defaultRuntime.log("No profiles configured.");
-            return;
-          }
-          defaultRuntime.log(
-            profiles
-              .map((p) => {
-                const status = p.running ? "running" : "stopped";
-                const tabs = p.running ? ` (${p.tabCount} tabs)` : "";
-                const def = p.isDefault ? " [default]" : "";
-                const loc = formatBrowserConnectionSummary(p);
-                const remote = p.isRemote ? " [remote]" : "";
-                const driver = p.driver !== "openclaw" ? ` [${p.driver}]` : "";
-                return `${p.name}: ${status}${tabs}${def}${remote}${driver}\n  ${loc}, color: ${p.color}`;
-              })
-              .join("\n"),
-          );
-        },
+        print: (result) =>
+          printBrowserList(result.profiles ?? [], "No profiles configured.", (p) => {
+            const status = p.running ? "running" : "stopped";
+            const tabs = p.running ? ` (${p.tabCount} tabs)` : "";
+            const def = p.isDefault ? " [default]" : "";
+            const loc = formatBrowserConnectionSummary(p);
+            const remote = p.isRemote ? " [remote]" : "";
+            const driver = p.driver !== "openclaw" ? ` [${p.driver}]` : "";
+            return `${p.name}: ${status}${tabs}${def}${remote}${driver}\n  ${loc}, color: ${p.color}`;
+          }),
       });
     });
 
@@ -584,31 +556,22 @@ export function registerBrowserManageCommands(
     .description("List Chrome-family profiles available for cookie import")
     .option("--browser <browser>", "System browser (chrome|brave|edge|chromium); omit to list all")
     .action(async (opts: { browser?: string }, cmd) => {
-      await runBrowserCliRequest<{ systemProfiles: SystemProfileInfo[] }>({
-        parent: parentOpts(cmd),
+      await runManagementRequest<{ systemProfiles: SystemProfileInfo[] }>(cmd, {
         profile: null,
         method: "GET",
         path: "/system-profiles",
         query: opts.browser ? { browser: opts.browser } : undefined,
-        timeoutMs: resolveBrowserManagementTimeout(cmd),
         json: (result) => ({ systemProfiles: result.systemProfiles ?? [] }),
-        print: (result) => {
-          const systemProfiles = result.systemProfiles ?? [];
-          if (systemProfiles.length === 0) {
-            defaultRuntime.log("No system browser profiles found.");
-            return;
-          }
-          defaultRuntime.log("browser\tid\tname\thasCookies");
-          defaultRuntime.log(
-            systemProfiles
-              .map((profile) =>
-                [profile.browser, profile.id, profile.name, profile.hasCookies ? "yes" : "no"]
-                  .map(sanitizeTableCell)
-                  .join("\t"),
-              )
-              .join("\n"),
-          );
-        },
+        print: (result) =>
+          printBrowserList(
+            result.systemProfiles ?? [],
+            "No system browser profiles found.",
+            (profile) =>
+              [profile.browser, profile.id, profile.name, profile.hasCookies ? "yes" : "no"]
+                .map(sanitizeTableCell)
+                .join("\t"),
+            "browser\tid\tname\thasCookies",
+          ),
       });
     });
 
