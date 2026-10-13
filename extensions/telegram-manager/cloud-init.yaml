@@ -1,0 +1,40 @@
+#cloud-config
+# OpenClaw managed-instance template (OP-167, Phase 3).
+# Owner: extensions/telegram-manager/src/openclaw-installer.ts (buildOpenClawUserData).
+# That builder renders this shape with live secrets; this file is the reviewed
+# static template for operators who provision by hand or via Terraform.
+# Placeholders: ${OPENCLAW_GATEWAY_TOKEN} ${TELEGRAM_BOT_TOKEN} ${OPENCLAW_IMAGE}
+#   ${TELEGRAM_ALLOW_FROM} (comma-separated numeric sender ids, may be empty)
+# Follows docs/install/hetzner.md: Docker path, host firewall, SSH tunnel
+# access (no public inbound rule for TCP 18789).
+package_update: true
+packages:
+  - git
+  - curl
+  - ca-certificates
+  - ufw
+runcmd:
+  - ufw allow OpenSSH && ufw --force enable
+  - curl -fsSL https://get.docker.com | sh
+  - [
+      sh,
+      -c,
+      'grep -q AllowTcpForwarding /etc/ssh/sshd_config || echo "AllowTcpForwarding local" >> /etc/ssh/sshd_config',
+    ]
+  - [sh, -c, "sshd -t && systemctl restart ssh || systemctl restart sshd || true"]
+  - git clone --depth 1 https://github.com/openclaw/openclaw.git /root/openclaw || (cd /root/openclaw && git pull --ff-only)
+  - |
+    cat > /root/openclaw/.env <<'EOF'
+    OPENCLAW_GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN}
+    TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+    OPENCLAW_IMAGE=${OPENCLAW_IMAGE}
+    OPENCLAW_GATEWAY_BIND=127.0.0.1
+    EOF
+  - |
+    sh -c 'cd /root/openclaw && \
+      export OPENCLAW_CONFIG_DIR=/root/.openclaw OPENCLAW_WORKSPACE_DIR=/root/.openclaw/workspace \
+      OPENCLAW_AUTH_PROFILE_SECRET_DIR=/root/.openclaw-auth-profile-secrets OPENCLAW_IMAGE=${OPENCLAW_IMAGE} && \
+      ./scripts/docker/setup.sh'
+  # Operator note: write ${TELEGRAM_ALLOW_FROM} to /root/.openclaw/.telegram-allowfrom
+  # when non-empty so only the owner's numeric sender id is authorized.
+  - echo openclaw-provisioned > /root/.openclaw-provisioned

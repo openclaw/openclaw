@@ -1,7 +1,6 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { Type } from "typebox";
 import { createHetznerClient } from "./src/hetzner-client.js";
-import { createManagerBot } from "./src/manager-bot.js";
 import { startProvisioning, retryFailed } from "./src/provisioning-orchestrator.js";
 import type { OrchestratorDeps } from "./src/provisioning-orchestrator.js";
 import { ProvisioningStore } from "./src/provisioning-store.js";
@@ -145,7 +144,9 @@ export default definePluginEntry({
 
     // Manager Bot lifecycle is intentionally explicit (not onStartup): the
     // operator starts it with a manager token once BotFather grants
-    // bot_can_manage_bots. Expose starter via service handle.
-    void createManagerBot;
+    // bot_can_manage_bots. createManagerBot is exported through api.ts for
+    // that operator-owned startup path.
   },
 });
+
+export { createManagerBot } from "./src/manager-bot.js";
