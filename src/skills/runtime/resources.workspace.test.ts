@@ -23,9 +23,6 @@ import {
   readSkillResourceFiles,
   resolveExplicitSkillResource,
   stampLocalSkillBundleIdentities,
-  SKILL_BUNDLE_IDENTITY_ACQUISITION_TIMEOUT_MS,
-  SKILL_DELIVERED_FINGERPRINT_ACQUISITION_TIMEOUT_MS,
-  SKILL_BUNDLE_IDENTITY_WALK_CONCURRENCY,
 } from "./resources.js";
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
@@ -391,22 +388,6 @@ it("stamps each host's bundle identity when Gateway and workspace skills share o
     expect(workspaceEntry.bundleFingerprint).toBe(workspaceIdentity);
     expect(workspaceEntry.bundleFingerprint).not.toBe(gatewayEntry.bundleFingerprint);
     expect(f.skillResources.readSkillFiles).toHaveBeenCalledTimes(1);
-    // Delivery-time acquisition verifies at acquire: each entry's acquirer
-    // attributes its own host's identity only when the acquired tree contains
-    // the delivered instruction text itself, and omits on any other bytes.
-    const guideInstructions = await fs.readFile(
-      path.join(f.gateway, "skills", "guide", "SKILL.md"),
-      "utf8",
-    );
-    expect(await stamped.deliveredIdentityAcquirers.get(gatewayEntry)?.(guideInstructions)).toBe(
-      gatewayIdentity,
-    );
-    expect(await stamped.deliveredIdentityAcquirers.get(workspaceEntry)?.(guideInstructions)).toBe(
-      workspaceIdentity,
-    );
-    expect(
-      await stamped.deliveredIdentityAcquirers.get(gatewayEntry)?.("changed instructions"),
-    ).toBeUndefined();
   } finally {
     f.release();
   }
@@ -491,18 +472,15 @@ it("omits remote-hosted identities without failing when the owning reader is una
       workspaceDir: gateway,
     });
     const entry = stamped.snapshot?.resolvedSkills?.[0];
+    // The owning reader is unavailable, so the identity omits instead of
+    // guessing which host owns the bytes.
     expect(entry?.bundleFingerprint).toBeUndefined();
-    // The owning reader is unavailable, so no delivered text can be proven to
-    // come from the acquired tree: the acquirer omits instead of guessing.
-    const guideText = await fs.readFile(path.join(gateway, "skills", "guide", "SKILL.md"), "utf8");
-    expect(await stamped.deliveredIdentityAcquirers.get(entry!)?.(guideText)).toBeUndefined();
-    expect(await stamped.deliveredIdentityAcquirers.get(entry!)?.(undefined)).toBeUndefined();
   } finally {
     release();
   }
 });
 
-it("keeps a workspace entry acquirable when a library selection shares its name", async () => {
+it("stamps a workspace entry through its owning reader when a library selection shares its name", async () => {
   const f = await fixture();
   try {
     const workspaceSkill = f.snapshot.resolvedSkills?.[0];
@@ -533,10 +511,10 @@ it("keeps a workspace entry acquirable when a library selection shares its name"
     if (!entry) {
       throw new Error("missing stamped workspace entry");
     }
-    // A same-name library selection is no pin: the workspace entry keeps its
-    // delivery-time acquisition and stamps through its owning workspace
-    // reader, so the served tree's identity can never go stale behind the
-    // pin's name.
+    // A same-name library selection is no pin: the workspace entry stamps
+    // the identity of its own loaded bundle through its owning workspace
+    // reader, so the selection's name never substitutes another bundle's
+    // identity for the workspace tree.
     const hostBaseDir = path.join(f.host, "skills", "guide");
     const hostIdentity = prepareSkillBundle(
       (await readSkillResourceFiles(
@@ -544,22 +522,14 @@ it("keeps a workspace entry acquirable when a library selection shares its name"
         { allowMissingRoot: false },
       ))!,
     ).revision;
-    expect(stamped.deliveredIdentityAcquirers.get(entry)).toBeDefined();
     expect(entry.bundleFingerprint).toBe(hostIdentity);
     expect(f.skillResources.readSkillFiles).toHaveBeenCalled();
-    // The armed acquirer attributes the workspace tree's own bytes and omits
-    // any other delivered text.
-    const guideText = await fs.readFile(path.join(hostBaseDir, "SKILL.md"), "utf8");
-    expect(await stamped.deliveredIdentityAcquirers.get(entry)?.(guideText)).toBe(hostIdentity);
-    expect(
-      await stamped.deliveredIdentityAcquirers.get(entry)?.("changed instructions"),
-    ).toBeUndefined();
   } finally {
     f.release();
   }
 });
 
-it("omits an identity whose resource-reader walk cannot be established promptly", async () => {
+it("omits an identity without failing the preparation when its reader walk fails", async () => {
   const f = await fixture();
   try {
     const workspaceSkill = f.snapshot.resolvedSkills?.[0];
@@ -567,162 +537,29 @@ it("omits an identity whose resource-reader walk cannot be established promptly"
       throw new Error("missing workspace skill fixture");
     }
     recordSkillFileHost(workspaceSkill, "workspace");
-    // The owning reader's tree walk never settles: preparation and delivery
-    // acquisitions observe the resource-reader deadline and omit instead of
-    // holding up the turn.
-    f.skillResources.readSkillFiles.mockImplementationOnce(() => new Promise<never>(() => {}));
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    try {
-      const pending = stampLocalSkillBundleIdentities({
-        snapshot: f.snapshot,
-        libraryEntries: [],
-        workspaceDir: f.gateway,
-      });
-      await vi.advanceTimersByTimeAsync(SKILL_BUNDLE_IDENTITY_ACQUISITION_TIMEOUT_MS + 1);
-      const stamped = await pending;
-      const entry = stamped.snapshot?.resolvedSkills?.find(
-        (skill) => skill.name === workspaceSkill.name,
-      );
-      if (!entry) {
-        throw new Error("missing stamped workspace entry");
-      }
-      // The stale identity is omitted, never guessed: the entry ships
-      // unstamped and still arms delivery-time acquisition for its live tree.
-      expect(entry.bundleFingerprint).toBeUndefined();
-      expect(stamped.deliveredIdentityAcquirers.get(entry)).toBeDefined();
-      // The armed acquirer observes the opportunistic delivery-time bound:
-      // a second hung walk omits the delivered identity instead of stalling
-      // the settlement by the full preparation budget.
-      f.skillResources.readSkillFiles.mockImplementationOnce(() => new Promise<never>(() => {}));
-      const guideText = await fs.readFile(path.join(f.host, "skills", "guide", "SKILL.md"), "utf8");
-      const acquired = stamped.deliveredIdentityAcquirers.get(entry)!(guideText);
-      await vi.advanceTimersByTimeAsync(SKILL_DELIVERED_FINGERPRINT_ACQUISITION_TIMEOUT_MS + 1);
-      expect(await acquired).toBeUndefined();
-    } finally {
-      vi.useRealTimers();
+    // The owning reader's tree walk fails: the identity is telemetry-only, so
+    // the preparation omits it instead of failing the run.
+    f.skillResources.readSkillFiles.mockImplementationOnce(() =>
+      Promise.reject(new Error("reader transport failed")),
+    );
+    const stamped = await stampLocalSkillBundleIdentities({
+      snapshot: f.snapshot,
+      libraryEntries: [],
+      workspaceDir: f.gateway,
+    });
+    const entry = stamped.snapshot?.resolvedSkills?.find(
+      (skill) => skill.name === workspaceSkill.name,
+    );
+    if (!entry) {
+      throw new Error("missing stamped workspace entry");
     }
+    expect(entry.bundleFingerprint).toBeUndefined();
   } finally {
     f.release();
   }
 });
 
-it("keeps a stalled reader's discovery stall on traced turn startup under one second", async () => {
-  const f = await fixture();
-  try {
-    const workspaceSkill = f.snapshot.resolvedSkills?.[0];
-    if (!workspaceSkill) {
-      throw new Error("missing workspace skill fixture");
-    }
-    recordSkillFileHost(workspaceSkill, "workspace");
-    f.skillResources.readSkillFiles.mockImplementationOnce(() => new Promise<never>(() => {}));
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    try {
-      const pending = stampLocalSkillBundleIdentities({
-        snapshot: f.snapshot,
-        libraryEntries: [],
-        workspaceDir: f.gateway,
-      });
-      // Optional telemetry must not gate the first model call for seconds: a
-      // preparation budget above this one-second ceiling leaves the await
-      // below stuck while the owning reader never settles. The pinned
-      // millisecond ceiling is the regression contract; the symbolic
-      // deadline test above stays value-independent.
-      await vi.advanceTimersByTimeAsync(1_001);
-      const stamped = await pending;
-      const entry = stamped.snapshot?.resolvedSkills?.find(
-        (skill) => skill.name === workspaceSkill.name,
-      );
-      if (!entry) {
-        throw new Error("missing stamped workspace entry");
-      }
-      expect(entry.bundleFingerprint).toBeUndefined();
-      expect(stamped.deliveredIdentityAcquirers.get(entry)).toBeDefined();
-    } finally {
-      vi.useRealTimers();
-    }
-  } finally {
-    f.release();
-  }
-});
-
-it("does not start new telemetry walks behind an earlier preparation's abandoned reads", async () => {
-  const f = await fixture();
-  try {
-    const workspaceSkill = f.snapshot.resolvedSkills?.[0];
-    if (!workspaceSkill) {
-      throw new Error("missing workspace skill fixture");
-    }
-    recordSkillFileHost(workspaceSkill, "workspace");
-    // Seven more workspace-hosted bundles beside the fixture's guide, so one
-    // preparation can saturate the per-reader walk bound.
-    const extraSkills: Skill[] = [];
-    for (const name of ["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta"]) {
-      const hostDir = path.join(f.host, "skills", name);
-      await fs.mkdir(hostDir, { recursive: true });
-      await fs.writeFile(
-        path.join(hostDir, "SKILL.md"),
-        `---\nname: ${name}\ndescription: ${name}\n---\nUse ${name}.\n`,
-      );
-      const gatewayDir = path.join(f.gateway, "skills", name);
-      extraSkills.push(
-        recordSkillFileHost(
-          createCanonicalFixtureSkill({
-            name,
-            description: name,
-            filePath: path.join(gatewayDir, "SKILL.md"),
-            baseDir: gatewayDir,
-            source: "openclaw-workspace",
-          }),
-          "workspace",
-        ),
-      );
-    }
-    const snapshot = {
-      ...f.snapshot,
-      skills: [...f.snapshot.skills, ...extraSkills.map((skill) => ({ name: skill.name }))],
-      resolvedSkills: [...(f.snapshot.resolvedSkills ?? []), ...extraSkills],
-    };
-    // Every walk on the owning reader stalls: the preparation deadline
-    // abandons each observation, but the underlying reads stay in flight.
-    f.skillResources.readSkillFiles.mockImplementation(() => new Promise<never>(() => {}));
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    try {
-      const first = stampLocalSkillBundleIdentities({
-        snapshot,
-        libraryEntries: [],
-        workspaceDir: f.gateway,
-      });
-      await vi.advanceTimersByTimeAsync(SKILL_BUNDLE_IDENTITY_ACQUISITION_TIMEOUT_MS + 1);
-      await first;
-      // Eight distinct stalled walks saturate the reader-scoped bound.
-      expect(f.skillResources.readSkillFiles).toHaveBeenCalledTimes(
-        SKILL_BUNDLE_IDENTITY_WALK_CONCURRENCY,
-      );
-      // A later preparation on the same stalled reader must not stack more
-      // underlying reads behind the abandoned ones: the reader-scoped walk
-      // bound carries across preparations and these observations omit.
-      f.skillResources.readSkillFiles.mockClear();
-      const second = stampLocalSkillBundleIdentities({
-        snapshot,
-        libraryEntries: [],
-        workspaceDir: f.gateway,
-      });
-      await vi.advanceTimersByTimeAsync(SKILL_BUNDLE_IDENTITY_ACQUISITION_TIMEOUT_MS + 1);
-      const stampedSecond = await second;
-      expect(f.skillResources.readSkillFiles).not.toHaveBeenCalled();
-      const entry = stampedSecond.snapshot?.resolvedSkills?.find(
-        (skill) => skill.name === workspaceSkill.name,
-      );
-      expect(entry?.bundleFingerprint).toBeUndefined();
-    } finally {
-      vi.useRealTimers();
-    }
-  } finally {
-    f.release();
-  }
-});
-
-it("walks discovered bundles concurrently under one shared preparation budget", async () => {
+it("walks discovered bundles concurrently and coalesces same-directory siblings", async () => {
   const f = await fixture();
   try {
     // Two more workspace-hosted bundles beside the fixture's guide.
@@ -748,6 +585,20 @@ it("walks discovered bundles concurrently under one shared preparation budget", 
         ),
       );
     }
+    // A same-directory sibling of the guide entry: two entries sharing one
+    // loaded bundle directory must coalesce into a single walk.
+    extraSkills.push(
+      recordSkillFileHost(
+        createCanonicalFixtureSkill({
+          name: "guide-alias",
+          description: "Guide alias",
+          filePath: path.join(f.gateway, "skills", "guide", "SKILL.md"),
+          baseDir: path.join(f.gateway, "skills", "guide"),
+          source: "openclaw-workspace",
+        }),
+        "workspace",
+      ),
+    );
     const snapshot = {
       ...f.snapshot,
       skills: [...f.snapshot.skills, ...extraSkills.map((skill) => ({ name: skill.name }))],
@@ -770,8 +621,9 @@ it("walks discovered bundles concurrently under one shared preparation budget", 
       libraryEntries: [],
       workspaceDir: f.gateway,
     });
-    // All discovery walks start together: a slow owning reader delays the
-    // preparation once, never once per discovered bundle.
+    // All distinct discovery walks start together — never serialized behind
+    // an earlier bundle — and the same-directory sibling joins the guide
+    // bundle's single walk instead of starting its own.
     for (let i = 0; i < 100 && gates.length < 3; i += 1) {
       await new Promise<void>((resolve) => setImmediate(resolve));
     }
@@ -786,290 +638,10 @@ it("walks discovered bundles concurrently under one shared preparation budget", 
       );
       expect(entry?.bundleFingerprint).toBeTypeOf("string");
     }
-  } finally {
-    f.release();
-  }
-});
-
-it("coalesces concurrent same-cohort acquisitions into a single walk", async () => {
-  const f = await fixture();
-  try {
-    const workspaceSkill = f.snapshot.resolvedSkills?.[0];
-    if (!workspaceSkill) {
-      throw new Error("missing workspace skill fixture");
-    }
-    recordSkillFileHost(workspaceSkill, "workspace");
-    const stamped = await stampLocalSkillBundleIdentities({
-      snapshot: f.snapshot,
-      libraryEntries: [],
-      workspaceDir: f.gateway,
-    });
-    const entry = stamped.snapshot?.resolvedSkills?.find(
-      (candidate) => candidate.name === workspaceSkill.name,
-    );
-    if (!entry) {
-      throw new Error("missing stamped workspace entry");
-    }
-    const acquirer = stamped.deliveredIdentityAcquirers.get(entry);
-    expect(acquirer).toBeDefined();
-    const orig = f.skillResources.readSkillFiles.getMockImplementation()!;
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    f.skillResources.readSkillFiles.mockClear();
-    f.skillResources.readSkillFiles.mockImplementationOnce(
-      async (...args: Parameters<typeof orig>) => {
-        await gate;
-        return orig(...args);
-      },
-    );
-    const guideText = await fs.readFile(path.join(f.host, "skills", "guide", "SKILL.md"), "utf8");
-    const first = acquirer!(guideText, 2);
-    const second = acquirer!(guideText, 2);
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    // One in-flight walk serves both same-cohort deliveries.
-    expect(f.skillResources.readSkillFiles).toHaveBeenCalledTimes(1);
-    release();
-    const [a, b] = await Promise.all([first, second]);
-    expect(a).toBeTypeOf("string");
-    expect(a).toBe(b);
-    expect(a).toBe(entry.bundleFingerprint);
-  } finally {
-    f.release();
-  }
-});
-
-it("counts underlying delivery-time walks against the per-preparation bound", async () => {
-  const f = await fixture();
-  try {
-    const workspaceSkill = f.snapshot.resolvedSkills?.[0];
-    if (!workspaceSkill) {
-      throw new Error("missing workspace skill fixture");
-    }
-    recordSkillFileHost(workspaceSkill, "workspace");
-    // Nine more workspace-hosted bundles with armed delivery acquisitions.
-    const extraSkills: Skill[] = [];
-    for (let i = 0; i < 9; i += 1) {
-      const name = `bulk${i}`;
-      const hostDir = path.join(f.host, "skills", name);
-      await fs.mkdir(hostDir, { recursive: true });
-      await fs.writeFile(
-        path.join(hostDir, "SKILL.md"),
-        `---\nname: ${name}\ndescription: ${name}\n---\nUse ${name}.\n`,
-      );
-      const gatewayDir = path.join(f.gateway, "skills", name);
-      extraSkills.push(
-        recordSkillFileHost(
-          createCanonicalFixtureSkill({
-            name,
-            description: name,
-            filePath: path.join(gatewayDir, "SKILL.md"),
-            baseDir: gatewayDir,
-            source: "openclaw-workspace",
-          }),
-          "workspace",
-        ),
-      );
-    }
-    const snapshot = {
-      ...f.snapshot,
-      skills: [...f.snapshot.skills, ...extraSkills.map((skill) => ({ name: skill.name }))],
-      resolvedSkills: [...(f.snapshot.resolvedSkills ?? []), ...extraSkills],
-    };
-    const stamped = await stampLocalSkillBundleIdentities({
-      snapshot,
-      libraryEntries: [],
-      workspaceDir: f.gateway,
-    });
-    const entries = (stamped.snapshot?.resolvedSkills ?? []).filter((skill) =>
-      skill.name.startsWith("bulk"),
-    );
-    expect(entries).toHaveLength(9);
-    const acquirers = entries.map((entry) => stamped.deliveredIdentityAcquirers.get(entry));
-    expect(acquirers.every((acquirer) => acquirer !== undefined)).toBe(true);
-    const orig = f.skillResources.readSkillFiles.getMockImplementation()!;
-    // Release gates whose settlement the test can await: `release` only lets a
-    // walk's underlying read proceed; `settled` resolves when that read has
-    // actually settled — the only event that frees a walk-bound slot.
-    const gates: Array<{ release: () => void; settled: Promise<unknown> }> = [];
-    f.skillResources.readSkillFiles.mockImplementation(
-      (skill: Skill, options: { allowMissingRoot: boolean }) => {
-        let release!: () => void;
-        const gate = new Promise<void>((resolve) => {
-          release = resolve;
-        });
-        const settled = gate.then(() => orig(skill, options));
-        // A walk whose race already hit its deadline has no awaiter: keep a
-        // rejecting underlying read from surfacing as an unhandled rejection
-        // when cleanup releases it.
-        void settled.catch(() => undefined);
-        gates.push({ release, settled });
-        return settled;
-      },
-    );
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    try {
-      // The bound's worth of concurrent delivery acquisitions starts one
-      // underlying walk each; the delivery race omits them all at the short
-      // deadline while the underlying reads stay outstanding and counted.
-      const pending = acquirers
-        .slice(0, SKILL_BUNDLE_IDENTITY_WALK_CONCURRENCY)
-        .map((acquirer, index) => acquirer!(`Use bulk${index}.`, undefined));
-      await vi.advanceTimersByTimeAsync(SKILL_DELIVERED_FINGERPRINT_ACQUISITION_TIMEOUT_MS + 1);
-      for (const acquired of pending) {
-        expect(await acquired).toBeUndefined();
-      }
-      expect(gates).toHaveLength(SKILL_BUNDLE_IDENTITY_WALK_CONCURRENCY);
-      // A delivery acquisition beyond the bound omits without starting
-      // another underlying walk: no telemetry read piles onto the full bound.
-      const refused = acquirers[SKILL_BUNDLE_IDENTITY_WALK_CONCURRENCY]!("Use bulk8.", undefined);
-      expect(await refused).toBeUndefined();
-      expect(gates).toHaveLength(SKILL_BUNDLE_IDENTITY_WALK_CONCURRENCY);
-      // The walk bound releases only when an underlying read settles: a
-      // race deadline never frees a slot. Restore real timers, settle one
-      // walk's underlying fs read, and the refused acquisition retries into a
-      // fresh walk — a fake-timer-frozen walk would never release its slot.
-      vi.useRealTimers();
-      // The walk bound releases only when an underlying read settles: release
-      // the first walk and await the controlled reader's own settlement signal
-      // — the promise its release resolves — so the underlying filesystem read
-      // provably finished. That settlement alone is still not the bound's
-      // release: the guarded workspace reader resolves one promise hop later,
-      // and `releaseUnderlying` queues only when that hop runs. The hop's
-      // continuation precedes this await's (it attached to the controlled
-      // read first), so by the time this continuation suspends on a macrotask
-      // the release callback is already queued — and a macrotask boundary
-      // drains it before the retry asks the bound for a slot, without counting
-      // event-loop turns or hoping a busy runner schedules the release first.
-      gates[0]!.release();
-      await gates[0]!.settled;
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
-      const retry = acquirers[SKILL_BUNDLE_IDENTITY_WALK_CONCURRENCY]!("Use bulk8.", undefined);
-      expect(gates).toHaveLength(SKILL_BUNDLE_IDENTITY_WALK_CONCURRENCY + 1);
-      // The retry's underlying walk settles like any other: release and join
-      // it, and the opportunistic acquisition verifies its delivered text
-      // against the walked bundle — a mismatch omits — without holding the
-      // served read.
-      const retryGate = gates[SKILL_BUNDLE_IDENTITY_WALK_CONCURRENCY]!;
-      retryGate.release();
-      await retryGate.settled;
-      expect(await retry).toBeUndefined();
-    } finally {
-      vi.useRealTimers();
-      // Join every released-but-unsettled read so none dangles past the test:
-      // releasing without awaiting would leave the still-gated walks'
-      // underlying reads unresolved past teardown.
-      const released = gates.splice(0, gates.length);
-      for (const gate of released) {
-        gate.release();
-      }
-      await Promise.allSettled(released.map((gate) => gate.settled));
-    }
-  } finally {
-    f.release();
-  }
-});
-
-it("bounds outstanding discovery walks per preparation", async () => {
-  const f = await fixture();
-  try {
-    // Route the fixture's own guide bundle through the gated owning reader
-    // as well, so every discovered walk in this test is observable.
-    for (const skill of f.snapshot.resolvedSkills ?? []) {
-      recordSkillFileHost(skill, "workspace");
-    }
-    // Nine more workspace-hosted bundles beside the fixture's guide.
-    const extraSkills: Skill[] = [];
-    for (let i = 0; i < 9; i += 1) {
-      const name = `bulk${i}`;
-      const hostDir = path.join(f.host, "skills", name);
-      await fs.mkdir(hostDir, { recursive: true });
-      await fs.writeFile(
-        path.join(hostDir, "SKILL.md"),
-        `---\nname: ${name}\ndescription: ${name}\n---\nUse ${name}.\n`,
-      );
-      const gatewayDir = path.join(f.gateway, "skills", name);
-      extraSkills.push(
-        recordSkillFileHost(
-          createCanonicalFixtureSkill({
-            name,
-            description: name,
-            filePath: path.join(gatewayDir, "SKILL.md"),
-            baseDir: gatewayDir,
-            source: "openclaw-workspace",
-          }),
-          "workspace",
-        ),
-      );
-    }
-    const snapshot = {
-      ...f.snapshot,
-      skills: [...f.snapshot.skills, ...extraSkills.map((skill) => ({ name: skill.name }))],
-      resolvedSkills: [...(f.snapshot.resolvedSkills ?? []), ...extraSkills],
-    };
-    const orig = f.skillResources.readSkillFiles.getMockImplementation()!;
-    // Release gates whose settlement the test can await (same shape as the
-    // delivery-walks test): a walk-bound slot frees only when the underlying
-    // read settles, so batch boundaries wait on that signal, never on turns.
-    const gates: Array<{ release: () => void; settled: Promise<unknown> }> = [];
-    f.skillResources.readSkillFiles.mockImplementation(
-      (skill: Skill, options: { allowMissingRoot: boolean }) => {
-        let release!: () => void;
-        const gate = new Promise<void>((resolve) => {
-          release = resolve;
-        });
-        const settled = gate.then(() => orig(skill, options));
-        void settled.catch(() => undefined);
-        gates.push({ release, settled });
-        return settled;
-      },
-    );
-    const pending = stampLocalSkillBundleIdentities({
-      snapshot,
-      libraryEntries: [],
-      workspaceDir: f.gateway,
-    });
-    const total = snapshot.resolvedSkills!.length;
-    // Exactly one bound of walks is in flight; the next batch starts only
-    // when this one settles.
-    for (let i = 0; i < 100 && gates.length < SKILL_BUNDLE_IDENTITY_WALK_CONCURRENCY; i += 1) {
-      await new Promise<void>((resolve) => setImmediate(resolve));
-    }
-    expect(gates.length).toBe(SKILL_BUNDLE_IDENTITY_WALK_CONCURRENCY);
-    for (let i = 0; i < 10; i += 1) {
-      await new Promise<void>((resolve) => setImmediate(resolve));
-    }
-    expect(gates.length).toBe(SKILL_BUNDLE_IDENTITY_WALK_CONCURRENCY);
-    // Release the first batch and await its underlying reads' actual
-    // settlement before asserting the next batch: event-loop turns cannot
-    // establish that a released walk's filesystem read finished, so a busy
-    // runner must not decide whether the bound admits the next batch.
-    const firstBatch = gates.splice(0, gates.length);
-    for (const gate of firstBatch) {
-      gate.release();
-    }
-    await Promise.allSettled(firstBatch.map((gate) => gate.settled));
-    // The next batch registers exactly the walks beyond the bound, and only
-    // now that the first bound has settled.
-    const remaining = total - SKILL_BUNDLE_IDENTITY_WALK_CONCURRENCY;
-    for (let i = 0; i < 100 && gates.length < remaining; i += 1) {
-      await new Promise<void>((resolve) => setImmediate(resolve));
-    }
-    expect(gates.length).toBe(remaining);
-    const secondBatch = gates.splice(0, gates.length);
-    for (const gate of secondBatch) {
-      gate.release();
-    }
-    // Join every released-but-unsettled read so none dangles past the test.
-    await Promise.allSettled(secondBatch.map((gate) => gate.settled));
-    const stamped = await pending;
-    for (const skill of snapshot.resolvedSkills ?? []) {
-      const entry = stamped.snapshot?.resolvedSkills?.find(
-        (candidate) => candidate.name === skill.name,
-      );
-      expect(entry?.bundleFingerprint).toBeTypeOf("string");
-    }
+    // The sibling's stamp is the same loaded bundle's identity.
+    const guide = stamped.snapshot?.resolvedSkills?.find((skill) => skill.name === "guide");
+    const alias = stamped.snapshot?.resolvedSkills?.find((skill) => skill.name === "guide-alias");
+    expect(alias?.bundleFingerprint).toBe(guide?.bundleFingerprint);
   } finally {
     f.release();
   }

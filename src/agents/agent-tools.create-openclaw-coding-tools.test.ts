@@ -703,18 +703,12 @@ describe("createOpenClawCodingTools", () => {
       bundleFingerprint: "fp-host-retained-stamp",
     };
     const markers = createSkillInstructionDeliveryMarkers();
-    const acquirer = vi.fn(async () => "fp-acquired-host-tree");
-    const acquirers = new WeakMap<
-      object,
-      (deliveredText: string | undefined, cohort?: number) => Promise<string | undefined>
-    >([[skill, acquirer]]);
 
     const tools = createOpenClawCodingToolsInternal(
       {
         workspaceDir,
         sandbox,
         skillInstructionDeliveryMarkers: markers,
-        skillDeliveredIdentityAcquirers: acquirers,
       },
       [skill],
     );
@@ -735,9 +729,6 @@ describe("createOpenClawCodingTools", () => {
     await expect(
       readTool.execute("read-sandboxed-host-path", { path: hostSkillFile }),
     ).rejects.toThrow();
-    // The host-tree acquisition walk never arms inside a sandbox: the entry's
-    // serving reader is the bridge, not the host tree.
-    expect(acquirer).not.toHaveBeenCalled();
     // No delivery identity settles for bridge-served instructions, so the
     // activation cannot borrow the host bundle's stamp.
     expect(markers.takeInvocationFingerprint("read-sandboxed-skill")).toBeUndefined();
@@ -1289,7 +1280,6 @@ describe("createOpenClawCodingTools read behavior", () => {
     expect(instructionDeliveryMarkers.takeInvocationFingerprint("succeeding-skill-read")).toBe(
       "fp-generation-b",
     );
-    expect(instructionDeliveryMarkers.settledFingerprint(locator)).toBe("fp-generation-b");
   });
 
   it("retries skill reads after failures, whole-read refusals, and optional misses", async () => {
@@ -1404,7 +1394,6 @@ describe("createOpenClawCodingTools read behavior", () => {
     // materializations is pinned by the cross-materialization test above.
     instructionDeliveryCache.clear();
     instructionDeliveryMarkers.clear();
-    expect(instructionDeliveryMarkers.settledFingerprint(locator)).toBeUndefined();
     expect(instructionDeliveryMarkers.takeInvocationFingerprint("in-flight-read")).toBeUndefined();
     // Post-clear, an oversized re-read has no qualifying delivery to inherit: omit.
     expect(

@@ -14,7 +14,6 @@ import {
 import { prepareSkillBundle, readSkillBundleTree } from "../../skills/library/bundle.js";
 import type { Skill } from "../../skills/loading/skill-contract.js";
 import {
-  SKILL_DELIVERED_FINGERPRINT_ACQUISITION_TIMEOUT_MS,
   readSkillResourceFiles,
   stampLocalSkillBundleIdentities,
 } from "../../skills/runtime/resources.js";
@@ -35,11 +34,10 @@ import type { AnyAgentTool } from "../tools/common.js";
 import type { EmbeddedRunAttemptParams } from "./run/types.js";
 import { prepareEmbeddedSkills } from "./skill-runtime.js";
 
-// Narrow spy factory for hashing-count assertions: preparation-boundary
-// discovery stamps and delivery-time acquisition both walk the bundle tree
-// through `readSkillBundleTree`, while the ordinary-local discovery path never
-// touches it, so every other export stays real while the count observes only
-// the tracing-gated hashing walks.
+// Narrow spy factory for hashing-count assertions: the preparation-boundary
+// discovery stamps walk the bundle tree through `readSkillBundleTree`, while
+// the ordinary-local discovery path never touches it, so every other export
+// stays real while the count observes only the tracing-gated hashing walks.
 vi.mock("../../skills/library/bundle.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../skills/library/bundle.js")>();
   return { ...actual, readSkillBundleTree: vi.fn(actual.readSkillBundleTree) };
@@ -126,7 +124,6 @@ describe("prepareEmbeddedSkills bundle fingerprints", () => {
         filePath: resolveSkillReadPath(skill),
         readContent: skill.readContent,
         bundleFingerprint: skill.bundleFingerprint,
-        acquireDeliveredFingerprint: prepared.skillDeliveredIdentityAcquirers?.get(skill),
       })),
       {
         cwd: workspace,
@@ -181,7 +178,7 @@ describe("prepareEmbeddedSkills bundle fingerprints", () => {
     return used ? (used as { skillFingerprint?: string }).skillFingerprint : undefined;
   }
 
-  it("emits ordinary local read activations with the delivered bundle identity while tracing is active", async () => {
+  it("emits ordinary local read activations with the loaded bundle identity while tracing is active", async () => {
     // Diagnostics dispatch stays enabled throughout every test here: the gate
     // is the active tracing consumer, never the dispatcher flag.
     setDiagnosticsEnabledForProcess(true);
@@ -194,9 +191,9 @@ describe("prepareEmbeddedSkills bundle fingerprints", () => {
       const entry = prepared.skillsSnapshotForRun!.resolvedSkills!.find(
         (skill) => skill.name === "pond",
       )!;
-      // Preparation stamps discovery identities once per loaded bundle, cached
-      // per preparation: no bundle directory is walked twice, and the pond
-      // bundle walked exactly once.
+      // Preparation stamps the loaded bundle's identity once per loaded
+      // bundle, cached per preparation: no bundle directory is walked twice,
+      // and the pond bundle walked exactly once.
       const walkedBundles = readSkillBundleTreeSpy.mock.calls.map((call) =>
         path.resolve(String(call[0])),
       );
@@ -215,10 +212,10 @@ describe("prepareEmbeddedSkills bundle fingerprints", () => {
       ).toBe(expected);
       readSkillBundleTreeSpy.mockClear();
 
-      // Real local delivery route: settlement acquires the identity of the
-      // bytes this delivery serves (one acquisition walk), the marker rides the
-      // invocation, and the emission match reads that marker rather than the
-      // current snapshot.
+      // Real local delivery route: settlement resolves the entry's retained
+      // loaded-bundle fingerprint by lookup — no tree walk at delivery — the
+      // marker rides the invocation, and the emission consumes that marker
+      // rather than the current snapshot.
       const instructionDeliveryCache = createSkillInstructionDeliveryCache();
       const instructionDeliveryMarkers = createSkillInstructionDeliveryMarkers();
       const { locator, read } = wrapLocalReadTool(
@@ -235,9 +232,9 @@ describe("prepareEmbeddedSkills bundle fingerprints", () => {
         toolCallId: "local-read",
       });
       expect(delivered).toBe(expected);
-      expect(pondWalks(baseDir)).toBe(1);
-      // Already-served re-reads inherit the settled delivery identity and never
-      // rehash.
+      expect(pondWalks(baseDir)).toBe(0);
+      // Already-served re-reads inherit the prior qualifying delivery's
+      // identity by the same lookup and never rehash.
       const reserved = await readDeliveredIdentity({
         read,
         prepared,
@@ -246,13 +243,13 @@ describe("prepareEmbeddedSkills bundle fingerprints", () => {
         toolCallId: "local-read-2",
       });
       expect(reserved).toBe(expected);
-      expect(pondWalks(baseDir)).toBe(1);
+      expect(pondWalks(baseDir)).toBe(0);
     } finally {
       prepared.restoreSkillEnv();
     }
   });
 
-  it("hashes and acquires nothing while tracing is inactive with diagnostics still enabled", async () => {
+  it("hashes and stamps nothing while tracing is inactive with diagnostics still enabled", async () => {
     // The exact state the round-3 dispatcher-off control could not see:
     // diagnostics dispatch is on, but no trace consumer is registered — the
     // metrics-only install shape. Zero hashing may happen here.
@@ -269,7 +266,6 @@ describe("prepareEmbeddedSkills bundle fingerprints", () => {
           (skill) => skill.bundleFingerprint === undefined,
         ),
       ).toBe(true);
-      expect(prepared.skillDeliveredIdentityAcquirers).toBeUndefined();
       // Ordinary local skills still load and serve; only the identity is
       // absent, and a successful delivery settles with accounting intact.
       const instructionDeliveryCache = createSkillInstructionDeliveryCache();
@@ -295,7 +291,7 @@ describe("prepareEmbeddedSkills bundle fingerprints", () => {
     }
   });
 
-  it("binds the delivered identity to the bytes the read actually serves, not the preparation-time tree", async () => {
+  it("retains the loaded bundle identity across an in-preparation edit until the next preparation restamps", async () => {
     setDiagnosticsEnabledForProcess(true);
     registerActiveTracingBridge();
     const workspace = await fs.realpath(temps.make("openclaw-local-fingerprint-live-"));
@@ -305,14 +301,8 @@ describe("prepareEmbeddedSkills bundle fingerprints", () => {
       const entry = prepared.skillsSnapshotForRun!.resolvedSkills!.find(
         (skill) => skill.name === "pond",
       )!;
-      const discovered = entry.bundleFingerprint;
-      expect(discovered).toBeTypeOf("string");
-      // The bundle changes on disk between preparation and the first read: the
-      // served bytes must never inherit the preparation-time fingerprint.
-      await fs.writeFile(path.join(baseDir, "scripts", "check.sh"), "#!/bin/sh\nprintf pond-two\n");
-      const expectedServed = prepareSkillBundle(
-        (await readSkillResourceFiles(entry, { allowMissingRoot: false }))!,
-      ).revision;
+      const loaded = entry.bundleFingerprint;
+      expect(loaded).toBeTypeOf("string");
       readSkillBundleTreeSpy.mockClear();
       const instructionDeliveryCache = createSkillInstructionDeliveryCache();
       const instructionDeliveryMarkers = createSkillInstructionDeliveryMarkers();
@@ -322,22 +312,26 @@ describe("prepareEmbeddedSkills bundle fingerprints", () => {
         instructionDeliveryCache,
         instructionDeliveryMarkers,
       );
-      // First delivery: settlement acquires the identity of the bytes it
-      // actually serves — the edited tree, never the preparation-time stamp.
-      const servedIdentity = await readDeliveredIdentity({
+      // The bundle changes on disk between preparation and the first read:
+      // the fingerprint identifies the loaded bundle — a disclosed staleness
+      // window, not a defect — so this delivery still carries the loaded
+      // generation's identity, and no delivery-time walk runs to chase the
+      // edit.
+      await fs.writeFile(path.join(baseDir, "scripts", "check.sh"), "#!/bin/sh\nprintf pond-two\n");
+      const delivered = await readDeliveredIdentity({
         read,
         prepared,
         markers: instructionDeliveryMarkers,
         locator,
         toolCallId: "live-read",
       });
-      expect(servedIdentity).toBe(expectedServed);
-      expect(servedIdentity).not.toBe(discovered);
-      // Discovery entries keep the discovered bundle's identity; only the
-      // delivered emission followed the bytes the reader actually served.
-      expect(entry.bundleFingerprint).toBe(discovered);
-      // Already-served re-reads inherit this delivery's identity without a
-      // second walk.
+      expect(delivered).toBe(loaded);
+      expect(pondWalks(baseDir)).toBe(0);
+      // A fresh delivery generation (the compaction owner cleared the epoch)
+      // re-establishes the marker by the same lookup; the identity is
+      // constant within the preparation.
+      instructionDeliveryCache.clear();
+      instructionDeliveryMarkers.clear();
       expect(
         await readDeliveredIdentity({
           read,
@@ -346,44 +340,26 @@ describe("prepareEmbeddedSkills bundle fingerprints", () => {
           locator,
           toolCallId: "live-read-2",
         }),
-      ).toBe(servedIdentity);
-      expect(pondWalks(baseDir)).toBe(1);
-      // A fresh delivery generation (the compaction owner cleared the epoch)
-      // re-acquires the identity of the bytes it serves.
-      instructionDeliveryCache.clear();
-      instructionDeliveryMarkers.clear();
-      expect(
-        await readDeliveredIdentity({
-          read,
-          prepared,
-          markers: instructionDeliveryMarkers,
-          locator,
-          toolCallId: "live-read-3",
-        }),
-      ).toBe(servedIdentity);
-      expect(pondWalks(baseDir)).toBe(2);
-      // And an edit before a fresh delivery is never mislabeled with the old
-      // generation's identity.
-      await fs.writeFile(
-        path.join(baseDir, "scripts", "check.sh"),
-        "#!/bin/sh\nprintf pond-three\n",
-      );
-      const expectedAfterEdit = prepareSkillBundle(
-        (await readSkillResourceFiles(entry, { allowMissingRoot: false }))!,
-      ).revision;
-      readSkillBundleTreeSpy.mockClear();
-      instructionDeliveryCache.clear();
-      instructionDeliveryMarkers.clear();
-      const afterEdit = await readDeliveredIdentity({
-        read,
-        prepared,
-        markers: instructionDeliveryMarkers,
-        locator,
-        toolCallId: "live-read-4",
-      });
-      expect(afterEdit).toBe(expectedAfterEdit);
-      expect(afterEdit).not.toBe(servedIdentity);
-      expect(pondWalks(baseDir)).toBe(1);
+      ).toBe(loaded);
+      expect(pondWalks(baseDir)).toBe(0);
+      // The watcher's reload closes the window: the next preparation walks
+      // the edited tree and restamps a new identity.
+      const second = await prepareLocalRun(workspace);
+      try {
+        const entrySecond = second.skillsSnapshotForRun!.resolvedSkills!.find(
+          (skill) => skill.name === "pond",
+        )!;
+        const expectedAfterEdit = prepareSkillBundle(
+          (await readSkillResourceFiles(entrySecond, { allowMissingRoot: false }))!,
+        ).revision;
+        expect(entrySecond.bundleFingerprint).toBe(expectedAfterEdit);
+        expect(entrySecond.bundleFingerprint).not.toBe(loaded);
+        // The first preparation's retained entries keep the identity they
+        // loaded with.
+        expect(entry.bundleFingerprint).toBe(loaded);
+      } finally {
+        second.restoreSkillEnv();
+      }
     } finally {
       prepared.restoreSkillEnv();
     }
@@ -462,7 +438,7 @@ describe("prepareEmbeddedSkills bundle fingerprints", () => {
     expect(stamped.libraryEntries).toEqual([]);
   });
 
-  it("never borrows a preparation stamp for a workspace skill sharing a library selection's name", async () => {
+  it("stamps each entry's own bundle identity when a workspace skill shares a library selection's name", async () => {
     setDiagnosticsEnabledForProcess(true);
     registerActiveTracingBridge();
     const workspace = await fs.realpath(temps.make("openclaw-local-fingerprint-pin-"));
@@ -470,10 +446,9 @@ describe("prepareEmbeddedSkills bundle fingerprints", () => {
     const prepared = await prepareLocalRun(workspace);
     try {
       // The library selection shares the live tree's name: a pin is
-      // identified by its exclusive library source, never by the name, so
-      // the live tree's preparation stamp is not attributable at delivery
-      // while the pinned entry's stamp stays attributable from the
-      // immutable revision-keyed store.
+      // identified by its exclusive library source, never by the name, so the
+      // workspace entry keeps its own loaded-tree identity while the pinned
+      // entry keeps its immutable revision-keyed store's stamp.
       const live = prepared.skillsSnapshotForRun!.resolvedSkills!.find(
         (skill) => skill.name === "pond",
       )!;
@@ -493,28 +468,22 @@ describe("prepareEmbeddedSkills bundle fingerprints", () => {
         },
         workspaceDir: workspace,
         sandbox: null,
-        deliveredIdentityAcquirers: prepared.skillDeliveredIdentityAcquirers,
       });
-      const liveEntry = catalog.find(
-        (entry) => entry.name === "pond" && entry.acquireDeliveredFingerprint !== undefined,
-      );
-      const pinEntry = catalog.find(
-        (entry) => entry.name === "pond" && entry.acquireDeliveredFingerprint === undefined,
-      );
-      // Old name-matched classification borrowed the live tree's discovered
-      // stamp as attributable; the live entry must acquire at delivery instead.
-      expect(liveEntry).toBeDefined();
-      expect(liveEntry?.attributableBundleFingerprint).toBeUndefined();
-      // The pin's own stamp remains attributable and never arms acquisition.
-      expect(pinEntry).toBeDefined();
-      expect(pinEntry?.attributableBundleFingerprint).toBe("fp-library-pin");
-      expect(pinEntry?.acquireDeliveredFingerprint).toBeUndefined();
+      const entries = catalog.filter((entry) => entry.name === "pond");
+      expect(entries).toHaveLength(2);
+      // Each skills_read receipt carries its own entry's loaded-bundle
+      // identity: the live tree's stamp and the pin's stamp never
+      // cross-borrow under one shared name.
+      expect(
+        entries.find((entry) => entry.bundleFingerprint === live.bundleFingerprint),
+      ).toBeDefined();
+      expect(entries.find((entry) => entry.bundleFingerprint === "fp-library-pin")).toBeDefined();
     } finally {
       prepared.restoreSkillEnv();
     }
   });
 
-  it("never settles a delivery or marker for a read canceled during identity acquisition", async () => {
+  it("never settles a delivery or marker for a read canceled mid-delivery", async () => {
     setDiagnosticsEnabledForProcess(true);
     registerActiveTracingBridge();
     const workspace = await fs.realpath(temps.make("openclaw-local-fingerprint-abort-"));
@@ -529,31 +498,24 @@ describe("prepareEmbeddedSkills bundle fingerprints", () => {
         instructionDeliveryCache,
         instructionDeliveryMarkers,
       );
-      // The acquisition's tree walk never settles on its own: the invocation
-      // aborts while identity acquisition is in flight.
-      readSkillBundleTreeSpy.mockClear();
-      readSkillBundleTreeSpy.mockImplementationOnce(() => new Promise<never>(() => {}));
       const controller = new AbortController();
+      // The invocation aborts while its instruction I/O is in flight; the
+      // non-abort-aware fixture read still completes underneath.
       const pending = read.execute(
         "canceled-read",
         { path: locator },
         controller.signal,
         undefined,
       );
-      while (readSkillBundleTreeSpy.mock.calls.length === 0) {
-        await new Promise<void>((resolve) => setImmediate(resolve));
-      }
       controller.abort();
       const served = (await pending) as { details: { kind: string; content: string } };
       // The completed read still returns its served bytes...
       expect(served.details.kind).toBe("text");
       expect(served.details.content).toContain("complete instructions");
       // ...but the canceled delivery settles nothing: no delivery-cache entry
-      // survives for the path, so the next invocation serves fresh bytes
-      // instead of an already-served status for content the model never
-      // received, and no marker rides the canceled invocation. (A later
-      // delivery's identity may still omit: its acquisition coalesces with
-      // the canceled invocation's still-in-flight walk by design.)
+      // survives for the path — the next invocation serves fresh bytes
+      // instead of an already-served status for content the model may never
+      // have received — and no marker rides the canceled invocation.
       expect(instructionDeliveryCache.size).toBe(0);
       const canceledMatch = findSkillUsageMatch({
         toolName: "read",
@@ -566,112 +528,20 @@ describe("prepareEmbeddedSkills bundle fingerprints", () => {
       });
       expect(canceledMatch).toBeDefined();
       expect(canceledMatch?.skillFingerprint).toBeUndefined();
-    } finally {
-      prepared.restoreSkillEnv();
-    }
-  });
-
-  it("omits a fingerprint whose acquisition cannot be established promptly", async () => {
-    setDiagnosticsEnabledForProcess(true);
-    registerActiveTracingBridge();
-    const workspace = await fs.realpath(temps.make("openclaw-local-fingerprint-bound-"));
-    await writePondSkill(workspace);
-    const prepared = await prepareLocalRun(workspace);
-    try {
+      // A later qualifying delivery establishes its own marker and emits the
+      // entry's retained loaded-bundle identity.
       const entry = prepared.skillsSnapshotForRun!.resolvedSkills!.find(
         (skill) => skill.name === "pond",
       )!;
-      const acquirer = prepared.skillDeliveredIdentityAcquirers?.get(entry);
-      expect(acquirer).toBeDefined();
-      // The delivery-time acquisition is opportunistic: a tree walk that
-      // cannot establish the identity within the short delivery bound omits
-      // instead of holding the serving delivery's settlement by the full
-      // preparation budget.
-      readSkillBundleTreeSpy.mockClear();
-      readSkillBundleTreeSpy.mockImplementationOnce(() => new Promise<never>(() => {}));
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      try {
-        const acquired = acquirer!("# Pond\ncomplete instructions");
-        await vi.advanceTimersByTimeAsync(SKILL_DELIVERED_FINGERPRINT_ACQUISITION_TIMEOUT_MS + 1);
-        expect(await acquired).toBeUndefined();
-      } finally {
-        vi.useRealTimers();
-      }
-    } finally {
-      prepared.restoreSkillEnv();
-    }
-  });
-
-  it("scopes in-flight identity acquisition to the delivery epoch", async () => {
-    setDiagnosticsEnabledForProcess(true);
-    registerActiveTracingBridge();
-    const workspace = await fs.realpath(temps.make("openclaw-local-fingerprint-epoch-"));
-    const baseDir = await writePondSkill(workspace);
-    const prepared = await prepareLocalRun(workspace);
-    try {
-      const instructionDeliveryCache = createSkillInstructionDeliveryCache();
-      const instructionDeliveryMarkers = createSkillInstructionDeliveryMarkers();
-      const { locator, read } = wrapLocalReadTool(
-        prepared,
-        workspace,
-        instructionDeliveryCache,
-        instructionDeliveryMarkers,
-      );
-      const entry = prepared.skillsSnapshotForRun!.resolvedSkills!.find(
-        (skill) => skill.name === "pond",
-      )!;
-      // The first delivery's acquisition walk stays in flight.
-      readSkillBundleTreeSpy.mockClear();
-      readSkillBundleTreeSpy.mockImplementationOnce(() => new Promise<never>(() => {}));
-      const first = read.execute("epoch-first-read", { path: locator }, undefined, undefined);
-      while (readSkillBundleTreeSpy.mock.calls.length === 0) {
-        await new Promise<void>((resolve) => setImmediate(resolve));
-      }
-      // The compaction epoch clear empties both delivery stores while that
-      // walk is in flight, and the support file changes under the bundle.
-      instructionDeliveryCache.clear();
-      instructionDeliveryMarkers.clear();
-      await fs.writeFile(path.join(baseDir, "scripts", "check.sh"), "#!/bin/sh\nprintf pond-two\n");
-      // The post-clear delivery acquires a fresh identity for the edited
-      // tree: it never joins the cleared generation's in-flight walk.
-      const served = (await read.execute(
-        "epoch-second-read",
-        { path: locator },
-        undefined,
-        undefined,
-      )) as { details: { kind: string; content: string } };
-      expect(served.details.content).toContain("complete instructions");
-      expect(readSkillBundleTreeSpy).toHaveBeenCalledTimes(2);
-      const expectedAfterEdit = prepareSkillBundle(
-        (await readSkillResourceFiles(entry, { allowMissingRoot: false }))!,
-      ).revision;
-      const ctx = {
-        skillsSnapshot: prepared.skillsSnapshotForRun,
-        skillInstructionDeliveryMarkers: instructionDeliveryMarkers,
-      };
-      const secondMatch = findSkillUsageMatch({
-        toolName: "read",
-        toolParams: { path: locator },
-        ctx,
-        toolCallId: "epoch-second-read",
-      });
-      expect(secondMatch).toBeDefined();
-      expect(secondMatch?.skillFingerprint).toBe(expectedAfterEdit);
-      // The cleared generation's delivery settles no identity of its own.
-      const firstMatch = findSkillUsageMatch({
-        toolName: "read",
-        toolParams: { path: locator },
-        ctx,
-        toolCallId: "epoch-first-read",
-      });
-      expect(firstMatch).toBeDefined();
-      expect(firstMatch?.skillFingerprint).toBeUndefined();
-      // Its hung walk omits under the acquisition deadline on its own clock;
-      // leave it pending without a dangling rejection.
-      void first.then(
-        () => undefined,
-        () => undefined,
-      );
+      expect(
+        await readDeliveredIdentity({
+          read,
+          prepared,
+          markers: instructionDeliveryMarkers,
+          locator,
+          toolCallId: "post-abort-read",
+        }),
+      ).toBe(entry.bundleFingerprint);
     } finally {
       prepared.restoreSkillEnv();
     }

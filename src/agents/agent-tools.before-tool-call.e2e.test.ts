@@ -2390,13 +2390,12 @@ describe("before_tool_call loop detection behavior", () => {
     });
   });
 
-  it("rejects a read's acquisition when the epoch clears during its instruction I/O", async () => {
+  it("omits a read's settled marker when the epoch clears during its instruction I/O", async () => {
     // Tracing is active: the epoch clear during the delivery's instruction
-    // I/O must still reject the acquisition before it arms, so the emission
-    // omits through the epoch guard rather than the tracing gate.
+    // I/O treats this delivery's settlement as cleared, so the emission omits
+    // through the epoch guard rather than the tracing gate.
     registerActiveTracingBridge();
     const delivery = createSkillDeliveryState();
-    const acquirer = vi.fn(async () => "fp-should-not-arm");
     const execute = vi.fn(async () => {
       // The compaction epoch clears while this delivery's instruction I/O is in flight.
       delivery.cache.clear();
@@ -2406,18 +2405,13 @@ describe("before_tool_call loop detection behavior", () => {
     const tool = wrapToolWithBeforeToolCallHook(
       wrapReadToolWithSkillContent(
         asAgentTool({ name: "read", execute }),
-        [
-          {
-            filePath: pondLocator,
-            acquireDeliveredFingerprint: acquirer,
-          },
-        ],
+        [{ filePath: pondLocator, bundleFingerprint: "fp-generation-b" }],
         {
           instructionDeliveryCache: delivery.cache,
           instructionDeliveryMarkers: delivery.markers,
         },
       ),
-      createSkillFingerprintContext({ delivery }),
+      createSkillFingerprintContext({ delivery, entryBundleFingerprint: "fp-generation-b" }),
     );
 
     await withSkillUsageDiagnosticEvents(async (emitted, _private, flush) => {
@@ -2428,8 +2422,7 @@ describe("before_tool_call loop detection behavior", () => {
         undefined,
       );
       expect(extractSkillReadText(result)).toBe(pondInstructions);
-      // The cleared delivery never arms its acquisition: no walk, no marker.
-      expect(acquirer).not.toHaveBeenCalled();
+      // The cleared delivery settles no marker, so the emission omits.
       await flush();
       const used = emitted.filter((evt) => evt.type === "skill.used");
       expect(used).toHaveLength(1);
@@ -2437,13 +2430,12 @@ describe("before_tool_call loop detection behavior", () => {
     });
   });
 
-  it("rejects a skills_read receipt when the epoch clears during its serving read", async () => {
-    // Tracing is active: the serving read's epoch clear must reject the
-    // receipt capture on the installed skills_read route, so the emission
-    // omits through the epoch guard rather than the tracing gate.
+  it("omits a skills_read receipt when the epoch clears during its serving read", async () => {
+    // Tracing is active: the serving read's epoch clear leaves no receipt on
+    // the installed skills_read route, so the emission omits through the
+    // epoch guard rather than the tracing gate.
     registerActiveTracingBridge();
     const delivery = createSkillDeliveryState();
-    const acquirer = vi.fn(async () => "fp-should-not-arm");
     const skills = [
       {
         name: "pond",
@@ -2451,7 +2443,7 @@ describe("before_tool_call loop detection behavior", () => {
         location: pondLocator,
         source: { filePath: pondLocator },
         promptListed: true,
-        acquireDeliveredFingerprint: acquirer,
+        bundleFingerprint: "fp-generation-b",
         reader: async () => {
           // The epoch clears while the serving read is in flight.
           delivery.markers.clear();
@@ -2493,76 +2485,8 @@ describe("before_tool_call loop detection behavior", () => {
         undefined,
       );
       expect(extractSkillReadText(result)).toBe(pondInstructions);
-      // The cleared serving read never arms its acquisition: no walk, no receipt.
-      expect(acquirer).not.toHaveBeenCalled();
-      await flush();
-      const used = emitted.filter((evt) => evt.type === "skill.used");
-      expect(used).toHaveLength(1);
-      expect(used[0]).not.toHaveProperty("skillFingerprint");
-    });
-  });
-
-  it("drops a skills_read receipt whose acquisition crossed an epoch clear", async () => {
-    // Tracing is active: the acquisition resolves across a clear, and the
-    // pending receipt must not bridge the epoch, so the emission omits
-    // through the epoch guard rather than the tracing gate.
-    registerActiveTracingBridge();
-    const delivery = createSkillDeliveryState();
-    const acquirer = vi.fn(async () => {
-      // The epoch clears while the acquisition is pending: the invocation
-      // started in a cleared generation.
-      delivery.markers.clear();
-      return "fp-crossed-clear";
-    });
-    const skills = [
-      {
-        name: "pond",
-        description: "Pond skill",
-        location: pondLocator,
-        source: { filePath: pondLocator },
-        promptListed: true,
-        acquireDeliveredFingerprint: acquirer,
-        reader: async () => pondInstructions,
-      },
-    ];
-    const tools = createInstalledSkillTools(skills, {
-      skillInstructionDeliveryMarkers: delivery.markers,
-    });
-    const skillsReadTool = tools.find((tool) => tool.name === "skills_read")!;
-    const tool = wrapToolWithBeforeToolCallHook(
-      skillsReadTool,
-      createSkillFingerprintContext({
-        delivery,
-        skillsSnapshot: {
-          prompt: "",
-          skills: [{ name: "pond" }],
-          resolvedSkills: [
-            {
-              ...createCanonicalFixtureSkill({
-                name: "pond",
-                description: "Pond skill",
-                filePath: pondLocator,
-                baseDir: pondBaseDir,
-                source: "workspace",
-              }),
-            },
-          ],
-        },
-      }),
-    );
-
-    await withSkillUsageDiagnosticEvents(async (emitted, _private, flush) => {
-      const result = await tool.execute(
-        "crossed-clear-skills",
-        { name: "pond" },
-        undefined,
-        undefined,
-      );
-      expect(extractSkillReadText(result)).toBe(pondInstructions);
-      // The acquisition ran and resolved, but it crossed a clear: a pending
-      // acquisition never bridges the epoch, so no receipt is captured for
-      // the fresh generation to consume.
-      expect(acquirer).toHaveBeenCalledOnce();
+      // The cleared serving read captures no receipt for the fresh
+      // generation to consume.
       await flush();
       const used = emitted.filter((evt) => evt.type === "skill.used");
       expect(used).toHaveLength(1);
@@ -2632,12 +2556,11 @@ describe("before_tool_call loop detection behavior", () => {
   it("attributes the installed skills_read route from the receipt its serving read captures", async () => {
     registerActiveTracingBridge();
     const delivery = createSkillDeliveryState();
-    // Real receipt shapes: a live-tree entry acquires at delivery against the
-    // bytes the invocation serves, a retained entry provably serves its
-    // producer's stamp, and an unarmed entry leaves no receipt at all.
-    const acquirer = vi.fn(async (deliveredText?: string) =>
-      deliveredText === pondInstructions ? "fp-live-acquired" : undefined,
-    );
+    // Real receipt shapes: each serving read resolves its own entry's retained
+    // loaded-bundle identity into the receipt by lookup at the delivery
+    // boundary, and an unstamped entry (no preparation stamp, or a sandboxed
+    // route) leaves no receipt — the emission omits instead of borrowing
+    // another entry's stamp.
     const skills = [
       {
         name: "pond",
@@ -2645,7 +2568,7 @@ describe("before_tool_call loop detection behavior", () => {
         location: pondLocator,
         source: { filePath: pondLocator, readContent: pondInstructions },
         promptListed: true,
-        acquireDeliveredFingerprint: acquirer,
+        bundleFingerprint: "fp-loaded-bundle",
       },
       {
         name: "retained",
@@ -2653,7 +2576,7 @@ describe("before_tool_call loop detection behavior", () => {
         location: pondLocator,
         source: { filePath: pondLocator, readContent: "Retained instructions" },
         promptListed: true,
-        attributableBundleFingerprint: "fp-retained",
+        bundleFingerprint: "fp-retained-bundle",
       },
       {
         name: "unarmed",
@@ -2674,8 +2597,9 @@ describe("before_tool_call loop detection behavior", () => {
         skillsSnapshot: {
           prompt: "",
           skills: skills.map((skill) => ({ name: skill.name })),
-          // Preparation-time stamps on snapshot entries are never identity
-          // for a serving read: only the invocation's receipt is.
+          // Snapshot entries carry their own stamps; the receipt comes from
+          // the serving entry's lookup at the delivery boundary, so a
+          // deliberately divergent snapshot stamp never substitutes for it.
           resolvedSkills: skills.map((skill) => ({
             ...createCanonicalFixtureSkill({
               name: skill.name,
@@ -2713,25 +2637,22 @@ describe("before_tool_call loop detection behavior", () => {
       expect(extractSkillReadText(live)).toBe(pondInstructions);
       expect(extractSkillReadText(retained)).toBe("Retained instructions");
       expect(extractSkillReadText(unarmed)).toBe("Unarmed instructions");
-      // The acquisition receives the current delivery epoch as its coalescing
-      // cohort alongside the served text.
-      expect(acquirer).toHaveBeenCalledWith(pondInstructions, 0);
       const used = emitted.filter((evt) => evt.type === "skill.used");
       expect(used).toHaveLength(3);
       expectEventFields(used[0], {
         toolCallId: "installed-live-read",
         activation: "read",
         skillName: "pond",
-        skillFingerprint: "fp-live-acquired",
+        skillFingerprint: "fp-loaded-bundle",
       });
       expectEventFields(used[1], {
         toolCallId: "installed-retained-read",
         activation: "read",
         skillName: "retained",
-        skillFingerprint: "fp-retained",
+        skillFingerprint: "fp-retained-bundle",
       });
       // No receipt for this invocation: the serving boundary omits instead
-      // of borrowing the discovery entry's preparation-time stamp.
+      // of borrowing another entry's stamp.
       expectEventFields(used[2], {
         toolCallId: "installed-unarmed-read",
         activation: "read",
@@ -2794,7 +2715,7 @@ describe("before_tool_call loop detection behavior", () => {
         location: pondLocator,
         source: { filePath: pondLocator, readContent: pondInstructions },
         promptListed: true,
-        attributableBundleFingerprint: "fp-retained",
+        bundleFingerprint: "fp-retained",
       },
     ];
     const inactiveTools = createInstalledSkillTools(inactiveSkills, {
@@ -2857,7 +2778,7 @@ describe("before_tool_call loop detection behavior", () => {
         location: pondLocator,
         source: { filePath: pondLocator, readContent: pondInstructions },
         promptListed: true,
-        attributableBundleFingerprint: "fp-retained",
+        bundleFingerprint: "fp-retained",
       },
     ];
     const activeTools = createInstalledSkillTools(activeSkills, {
