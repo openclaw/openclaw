@@ -29,9 +29,13 @@ vi.mock("openclaw/plugin-sdk/conversation-binding-inspection-runtime", async (im
   };
 });
 
-vi.mock("./conversation-binding.js", () => ({
-  runBoundTurnWithMissingThreadRecovery: mocks.runBoundTurnWithMissingThreadRecovery,
-}));
+vi.mock("./conversation-binding.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./conversation-binding.js")>();
+  return {
+    ...actual,
+    runBoundTurnWithMissingThreadRecovery: mocks.runBoundTurnWithMissingThreadRecovery,
+  };
+});
 
 const pluginBinding: PluginConversationBinding = {
   bindingId: "binding-1",
