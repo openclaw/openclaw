@@ -47,6 +47,12 @@ Every refresh still re-admits the current database source and checks its authori
 Reader retirement stops change publications and joins the retained reader;
 the next Gateway generation rebinds retained observers before startup admission.
 
+Persisted auth-row observation belongs to the host. Catalog workers reload
+credentials through their native task owner instead of retaining background row
+readers for WAL notifications. Workers still observe physical file replacement
+to retire native SQLite handles; session-only WAL activity needs no worker auth
+reread.
+
 Synchronous boot admission, migrations, Doctor/CLI one-shots, and lock primitives
 are the limited exceptions. Runtime access still using them is migration debt.
 For engine stores, the synchronous `withEngineStoreAdmission` scope is lexical:
@@ -87,6 +93,14 @@ Replacement files also require new admission; migration and repair owners publis
 replacement facts after committed DDL. Doctor and explicit verification retain
 their checks. See [integrity admission](/reference/database-schemas/integrity-and-recovery).
 
+The SQLite worker broker also retains the canonical database and owner-lock paths
+captured at open. Ordinary operations reuse those paths while still checking live
+ownership; they do not resolve filesystem aliases again. Repointing an alias does
+not redirect an open worker handle. Closing and reopening captures the new path
+identity, and open admission still rejects replacements that collide with a live
+owner. Creation and schema-maintenance requests keep their target checks at the
+actual effect.
+
 Retained task workers request admission facts through their existing relay when
 needed. Task messages must not copy the global admission snapshot. Committed
 session deletion retires its exact receipt scopes, including windows removed by
@@ -107,6 +121,16 @@ read-after-write certification. An owner without complete receipt coverage must
 use its canonical reader until that coverage exists. Other processes route
 writes through the Gateway or hold exclusive ownership while it is stopped.
 
+Idle maintenance uses the same ownership rule. Secret and device-setup expiry,
+GitHub OAuth inventory, ingress health, placement inventory, and cron history
+rebuild their facts on startup and invalidate them from their own writes. Empty
+inventories park until a receipt arrives; retained rows schedule their next
+deadline. Refreshes consume the dirty flag before awaiting a worker so a receipt
+received during the read remains pending. These facts schedule maintenance;
+credential, lease, and external-effect authority stays with the execution owner.
+Cron retains a memory-only clock check for future jobs so forward clock changes
+can trigger overdue work without reloading SQL every minute.
+
 Scope receipts to the data actually changed. Memory-index DML, for example,
 declares no session-row or transcript changes and preserves unrelated session
 actor replicas. Transcript mutations still update or invalidate their session
@@ -120,6 +144,12 @@ committed inserts/deletes, and reloads after unscoped writes or schema changes.
 Pruning uses that count and one bounded oldest-row delete. Unbounded replacement
 writes may overestimate this disposable cache and evict entries early; bounded
 writes still reserve space before insertion.
+
+Memory managers receive schema, table-presence, and index facts from worker
+admission without opening a host reader. Bundled status callers await the same
+retrieval worker through `readMemorySearchManagerStatus`. The released synchronous
+`status()` method remains deprecated compatibility and opens its native reader
+only when explicitly called; it is not a fallback for worker failures.
 
 ## Final authority without SQL
 
@@ -231,6 +261,15 @@ callback comparison. Skill snapshot persistence uses the same fixed-field path.
 Generic callbacks retain their prepare-and-compare contract, and source and
 conversation authority still apply at the mutation boundary. These operations
 change no schemas, stored formats, retention, or update behavior.
+
+Fresh isolated same-agent subagents commit first-admission metadata with their
+creation entry. The host-bound launch carries that postimage into first admission,
+avoiding a second load, generic reuse preparation, and metadata patch. The receipt
+is consumed once and grants no authority: the work lease still loads the current
+entry and rejects replacement or reset before execution. Current policy and
+metadata writes therefore survive admission. Forks, resumed children, incognito
+storage, collectors, thread binding, and cross-agent admission keep their existing
+paths.
 
 Observer digests and activity recaps also use closed entry operations. Their writer
 checks the current lifecycle, digest revision, recap eligibility, and transcript
@@ -371,6 +410,17 @@ updates those records in its existing transaction and publishes them on commit;
 rollback retains the previous facts. Cold, evicted, or invalidated actors use the
 canonical participant read. Participant updates remain independent of metadata CAS.
 This changes no schema, retention, stored format, or update behavior.
+
+Reply-initialization cohorts reuse those entry facts only when the selected entry
+and its parent are both covered. Cold-archive absence requires a complete actor
+snapshot; entry-only facts do not prove it. Archive/restore receipts invalidate
+that snapshot. Lifecycle planning and commit reuse the current actor entry for
+single-entry changes, while retaining the lost-update comparison and uncovered
+count, archive, and maintenance reads. Pending-input history can skip its worker
+request only when the complete actor snapshot proves no unconsumed inputs for
+the requested current window. Staging, consumption, replacement, and unknown
+writes update or invalidate these facts through existing owner receipts; restart
+and eviction return to the canonical readers.
 
 ## Session and ancillary worker operations
 
@@ -802,6 +852,13 @@ blocks remain unproven because construction alone does not establish ownership
 of their effects. Shared async/sync factories and unsupported returned-object
 shapes also remain T1; this proof does not attempt whole-program points-to analysis.
 
+Mixed receivers can instead register individual deprecated members. Those members
+have their own compatibility boundary; constructing the receiver or calling its
+async methods does not make its deprecated members live. For explicitly typed
+service singletons, the check follows the public type member back to its reviewed
+implementation. Calling or escaping that member from ordinary bundled code still
+fails the check.
+
 The same check runs from the inventory generator and the worker ratchet, including
 staged-source checks. Adding a bundled caller fails even if another T1 call is
 removed in the same change. Shared kernels may have both worker and deprecated
@@ -821,9 +878,9 @@ initialization's `link` method remain compatibility paths; official harnesses us
 `linkAsync`. Current credential checks at external effects remain security
 boundaries even when their preparatory reads have moved to workers.
 
-Remove a T1-compat API and its remaining synchronous kernel in the next Plugin SDK
-major, together with obsolete SDK exports and registry entries. Publish release
-notes naming the removed API and its asynchronous replacement. Until that major,
+Remove a T1-compat API and its remaining synchronous kernel after a stable
+deprecation period, together with obsolete SDK exports and registry entries.
+Publish release notes naming the removed API and its asynchronous replacement. Until removal,
 keep the deprecated API's completion and transaction contract; migrate bundled
 callers to the owning worker operation instead of removing the compatibility
 implementation.
@@ -1610,8 +1667,13 @@ transcript receipts cannot certify complete pending-input and model-context
 facts. Native, SDK, recovery, and maintenance writers keep their existing
 publication and final-authority guards during this incremental cutover.
 
-Closed entry patches reuse an already resident actor when the session and
-lifecycle stay unchanged. The entry writer supplies its complete row and window
+Entry patch preparation and commit reuse the resident actor's current canonical
+row, window, membership, and board facts. Prepared replacements still compare
+against the current snapshot before writing, so an intervening patch cannot lose
+updates. Singleton canonical targets share this path; alias selections and missing
+residency retain their SQL readers.
+Patches reuse the actor after writing when the session and lifecycle stay
+unchanged. The entry writer supplies its complete row and window
 postimages; the actor keeps the untouched pending inputs and transcript facts,
 then publishes its full hot state through the same commit receipt. A rollback
 preserves the stored preimage; conservative receipt invalidation can require a

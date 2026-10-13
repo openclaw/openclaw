@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
+import { writeSkill } from "../skills/test-support/e2e-test-helpers.js";
 
 type ConfigState = { hash: string; path: string; config: Record<string, unknown> };
 type RpcResult = { ok: boolean; error?: { message?: string } };
@@ -20,6 +22,11 @@ export function registerAgentConfigMutationTests({
   reloadBarrier: { hold: (() => Promise<void>) | undefined };
 }) {
   it("uses fresh revisions after agent create, update, and delete before reload applies", async () => {
+    await writeSkill({
+      dir: path.join(workspacePath("revision-workspace"), "skills", "revision-guide"),
+      name: "revision-guide",
+      description: "Ready when the new agent is acknowledged",
+    });
     const operations = [
       {
         method: "agents.create",
@@ -52,6 +59,20 @@ export function registerAgentConfigMutationTests({
         gate.resolve();
         const result = await changed;
         expect(result.ok, `${operation.method}: ${result.error?.message}`).toBe(true);
+        if (operation.method === "agents.create") {
+          const status = await rpc("skills.status", { agentId: "revision-worker" });
+          expect(status).toMatchObject({
+            ok: true,
+            payload: {
+              skills: expect.arrayContaining([
+                expect.objectContaining({
+                  name: "revision-guide",
+                  description: "Ready when the new agent is acknowledged",
+                }),
+              ]),
+            },
+          });
+        }
 
         const patched = await rpc("config.patch", {
           baseHash: current.hash,

@@ -103,6 +103,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
       .request<TalkCatalogResult>(
         "talk.catalog",
         {
+          sessionKey: this.ctx.sessionKey,
           provider: this.session.provider,
           ...(this.session.model ? { model: this.session.model } : {}),
         },

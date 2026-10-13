@@ -49,18 +49,28 @@ const { databasePath, open } = useSqliteWorkerStoreFixture("sqlite-worker-broker
 const { explicitSqliteCloseReleasesNativeResources } = await initializeSqliteRuntimeCapabilities();
 const poolIt = explicitSqliteCloseReleasesNativeResources ? it : it.skip;
 
-function holdDatabaseAdmission(pathname: string) {
-  const pending = new StateDatabaseAdmissionPendingError(pathname, "Schema publication pending");
-  const assertAccessAllowed = stateOwner.assertStateDatabaseAccessAllowed;
-  let held = true;
-  vi.spyOn(stateOwner, "assertStateDatabaseAccessAllowed").mockImplementation(
-    (location, options) => {
-      if (held && location === pathname) {
-        throw pending;
-      }
-      assertAccessAllowed(location, options);
-    },
+async function openWithRetainedAccess(pathname: string) {
+  const capture = stateOwner.captureStateDatabaseAccess;
+  const access = capture(pathname);
+  vi.spyOn(stateOwner, "captureStateDatabaseAccess").mockImplementation((location) =>
+    location === pathname ? access : capture(location),
   );
+  return { store: await open(pathname), access };
+}
+
+function holdDatabaseAdmission(
+  pathname: string,
+  access: ReturnType<typeof stateOwner.captureStateDatabaseAccess>,
+) {
+  const pending = new StateDatabaseAdmissionPendingError(pathname, "Schema publication pending");
+  const assertAccessAllowed = access.assertAccessAllowed.bind(access);
+  let held = true;
+  vi.spyOn(access, "assertAccessAllowed").mockImplementation((options) => {
+    if (held) {
+      throw pending;
+    }
+    assertAccessAllowed(options);
+  });
   const sleeping = createDeferredCore();
   const sleepWithAbort = retry.sleepWithAbort;
   vi.spyOn(retry, "sleepWithAbort").mockImplementation((...args) => {
@@ -79,7 +89,7 @@ function holdDatabaseAdmission(pathname: string) {
 
 it("waits for schema publication after opening, then dispatches queued writes once in order", async () => {
   const file = databasePath();
-  const store = await open(file);
+  const { store, access } = await openWithRetainedAccess(file);
   await waitForDiagnosticEventsDrained();
   const completed: DiagnosticWorkerRequestFields[] = [];
   onTestFinished(
@@ -92,7 +102,7 @@ it("waits for schema publication after opening, then dispatches queued writes on
       { include: ["worker.request"] },
     ),
   );
-  const admission = holdDatabaseAdmission(file);
+  const admission = holdDatabaseAdmission(file, access);
   const requests = vi.spyOn(Worker.prototype, "postMessage");
   const first = append(store, "first");
   const second = append(store, "second");
@@ -146,8 +156,8 @@ it.each(["cancellation", "revocation", "deadline"] as const)(
   "settles an unsent schema waiter after %s without writing",
   async (ending) => {
     const file = databasePath();
-    const store = await open(file);
-    const admission = holdDatabaseAdmission(file);
+    const { store, access } = await openWithRetainedAccess(file);
+    const admission = holdDatabaseAdmission(file, access);
     const requests = vi.spyOn(Worker.prototype, "postMessage");
     let now = 0;
     vi.spyOn(performance, "now").mockImplementation(() => now);
@@ -207,22 +217,22 @@ it.each(["cancellation", "revocation", "deadline"] as const)(
 
 it("does not wait on permanent refusal or another database's admission", async () => {
   const file = databasePath();
-  const store = await open(file);
+  const { store, access } = await openWithRetainedAccess(file);
   const requests = vi.spyOn(Worker.prototype, "postMessage");
   const sleep = vi.spyOn(retry, "sleepWithAbort");
-  const access = vi.spyOn(stateOwner, "assertStateDatabaseAccessAllowed");
+  const assertion = vi.spyOn(access, "assertAccessAllowed");
   for (const error of [
     new Error("Maintenance authority required"),
     new StateDatabaseAdmissionPendingError(databasePath(), "Another database is unavailable"),
   ]) {
-    access.mockImplementation(() => {
+    assertion.mockImplementation(() => {
       throw error;
     });
     await expect(append(store, "refused")).rejects.toBe(error);
   }
   expect(sleep).not.toHaveBeenCalled();
   expect(requests).not.toHaveBeenCalled();
-  access.mockRestore();
+  assertion.mockRestore();
   expect(await read(store)).toEqual([]);
 });
 

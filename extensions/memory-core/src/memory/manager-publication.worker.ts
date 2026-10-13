@@ -3,6 +3,7 @@ import {
   ensureMemoryIndexSchema,
   loadSqliteVecExtensionFromPath,
   MEMORY_INDEX_VECTOR_TABLE,
+  stageMemoryIndexSchemaExtension,
 } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
 import {
   closeMemorySqliteWalMaintenance,
@@ -10,11 +11,13 @@ import {
   loadSqliteVecExtension,
   stopMemorySqliteWalMaintenance,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { readOpenClawAgentDatabaseIdentity } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   assertTransactionUsable,
   admitSqliteSchema,
   executeSqliteQuerySync,
   getNodeSqliteKysely,
+  getAdmittedSqliteSchemaFacts,
   openNodeSqliteDatabase,
   resolveExistingSqliteFileUri,
   requestSqliteWorkerOperationAdmission,
@@ -406,7 +409,22 @@ function createPublicationBackend(
           if (result.ok) {
             admitSqliteSchema(db);
           }
-          return withFacts(result);
+          const published = withFacts(result);
+          return published.ok && "kind" in input
+            ? {
+                ...published,
+                value: {
+                  ...published.value,
+                  admission: {
+                    hasIndex: true,
+                    ftsAvailable: published.value.ftsAvailable,
+                    schemaVersion: getAdmittedSqliteSchemaFacts(db)?.userVersion,
+                    identity: readOpenClawAgentDatabaseIdentity({ db }),
+                    facts: published.facts,
+                  },
+                },
+              }
+            : published;
         } finally {
           if (db.isOpen) {
             db.exec(`PRAGMA foreign_keys = ${input.pragmas.foreign_keys}`);
@@ -500,6 +518,7 @@ function createPublicationBackend(
         }
         return withFacts(
           write(() => {
+            stageMemoryIndexSchemaExtension(db);
             stageOpenClawAgentDatabaseSchemaExtension(db);
             db.exec("DROP TABLE IF EXISTS chunks_vec");
             return { extensionPath: loadedPath, retiredLegacy: true };
@@ -519,6 +538,7 @@ function createPublicationBackend(
         loadExtension(command.input.state.extensionPath);
         return withFacts(
           write(() => {
+            stageMemoryIndexSchemaExtension(db);
             stageOpenClawAgentDatabaseSchemaExtension(db);
             db.exec(`DROP TABLE IF EXISTS ${MEMORY_INDEX_VECTOR_TABLE}`);
             db.exec(

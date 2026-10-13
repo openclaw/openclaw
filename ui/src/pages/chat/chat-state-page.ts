@@ -21,6 +21,7 @@ import {
   canonicalUiSessionKeyForPersistence,
   isUiSelectedGlobalSessionKey,
 } from "../../lib/sessions/session-key.ts";
+import { resolveSpeechTextLimit } from "../../lib/speech-playback.ts";
 import { requestChatAbort } from "./chat-abort-request.ts";
 import { resolveAgentIdForSession } from "./chat-avatar.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
@@ -40,6 +41,7 @@ import {
   retryQueuedChatMessage,
   steerQueuedChatMessage,
 } from "./chat-send-actions.ts";
+import { requestChatSend, resolveDisplayedLeafEntryId } from "./chat-send-request.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
 import { retireChatModelSelectionOwnership } from "./chat-session.ts";
@@ -378,7 +380,23 @@ export function createPageState(
     });
     renderLifecycle.invalidate();
   };
-  attachChatRealtimeActions(state, () => !chatProviderReviewRow(state)?.providerReview);
+  attachChatRealtimeActions(
+    state,
+    () => !chatProviderReviewRow(state)?.providerReview,
+    (message, runId) =>
+      requestChatSend(state, {
+        message,
+        runId,
+        expectedLeafEntryId: resolveDisplayedLeafEntryId(state),
+      }),
+    async () => {
+      await context.runtimeConfig.ensureLoaded();
+      return resolveSpeechTextLimit(
+        context.runtimeConfig.state.configSnapshot?.runtimeConfig ??
+          context.runtimeConfig.state.configSnapshot?.config,
+      );
+    },
+  );
   state.loadAssistantIdentity = () => loadPageAssistantIdentity(state);
   state.handleSendChat = (messageOverride, options, submissionAction) => {
     const message = messageOverride ?? state.chatMessage;

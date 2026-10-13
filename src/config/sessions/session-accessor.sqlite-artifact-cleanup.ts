@@ -13,7 +13,7 @@ import type {
   SqliteSessionReclamationDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
 import { withSqliteSessionDeletions } from "./session-accessor.sqlite-deletion.js";
-import { prepareSessionLifecycleArtifactCleanup } from "./session-accessor.sqlite-lifecycle-artifacts.js";
+import { prepareSessionLifecycleArtifactCleanupForMaintenance } from "./session-accessor.sqlite-lifecycle-artifacts.js";
 import { refreshSqliteSessionPlannerStatisticsBestEffort } from "./session-accessor.sqlite-maintenance.js";
 import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
 import {
@@ -194,7 +194,7 @@ export async function cleanupSessionLifecycleArtifactsCore(
           diagnostics: artifactPreparation,
         };
         if (!source) {
-          return prepareSessionLifecycleArtifactCleanup(databaseOptions, input);
+          return prepareSessionLifecycleArtifactCleanupForMaintenance(databaseOptions, input);
         }
         const continuation = opened ? captureCanonicalSessionReaderContinuation(opened) : undefined;
         try {

@@ -128,7 +128,9 @@ describe("agent directory registry", () => {
   });
 
   it("invalidates a prepared alias after its parent is replaced", async () => {
-    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    vi.useFakeTimers({
+      toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+    });
     const root = tempDirs.make("openclaw-agent-dir-replaced-");
     const original = path.join(root, "original");
     const replacement = path.join(root, "replacement");

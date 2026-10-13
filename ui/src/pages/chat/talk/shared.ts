@@ -237,7 +237,7 @@ function getTerminalAgentWaitError(result: AgentWaitResult | undefined): Error |
     : undefined;
 }
 
-function waitForChatResult(params: {
+export function waitForChatResult(params: {
   client: GatewayBrowserClient;
   runId: string;
   timeoutMs: number;

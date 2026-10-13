@@ -1,5 +1,6 @@
 import {
   resolveMemoryIndexIdentityDiagnostic,
+  readMemorySearchManagerStatus,
   resolveMemoryIndexSearchDiagnostic,
   MEMORY_SEARCH_DEADLINE_CONTROL,
   type MemoryIndexIdentityDiagnostic,
@@ -91,11 +92,17 @@ export async function executeMemorySearchToolQuery(params: {
   };
 
   const searchOnce = async () => {
-    params.onRebuildNotice?.(captureMemoryRebuildNotice(active.manager.status()));
     const allowedSources = searchSources ? new Set(searchSources) : undefined;
     const searchesSessions = searchSources?.includes("sessions") === true;
+    const initialStatus =
+      params.onRebuildNotice || searchesSessions
+        ? await readMemorySearchManagerStatus(active.manager)
+        : undefined;
+    if (params.onRebuildNotice && initialStatus) {
+      params.onRebuildNotice(captureMemoryRebuildNotice(initialStatus));
+    }
     const indexedCandidateCount = searchesSessions
-      ? (active.manager.status().sourceCounts ?? [])
+      ? (initialStatus?.sourceCounts ?? [])
           .filter((entry) => allowedSources?.has(entry.source))
           .reduce((total, entry) => total + entry.chunks, 0)
       : query.resultLimit;
@@ -145,7 +152,10 @@ export async function executeMemorySearchToolQuery(params: {
         : undefined,
       ...(searchSources ? { sources: searchSources } : {}),
     });
-    return { searched: { candidates, searchWindow }, status: active.manager.status() };
+    return {
+      searched: { candidates, searchWindow },
+      status: await readMemorySearchManagerStatus(active.manager),
+    };
   };
 
   const searched = await searchOnce();
@@ -170,7 +180,7 @@ async function finalizeMemorySearchToolQuery(params: {
   effectiveMode?: string;
 }) {
   const { active, searched, query, visibility, searchSources, runtimeDebug, startedAt } = params;
-  const status = params.status ?? active.manager.status();
+  const status = params.status ?? (await readMemorySearchManagerStatus(active.manager));
   const pausedIndexIdentity = resolveMemoryIndexIdentityDiagnostic(status);
   // A pending format upgrade on an otherwise matching corpus degrades to
   // keyword-only results instead of pausing memory search; every other

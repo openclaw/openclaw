@@ -223,8 +223,8 @@ describe("web-fetch-utils", () => {
     expect(markdownToText(fenced)).toBe(`${"x\n".repeat(1_000)}after`);
   });
 
-  it.each([["```js\n# heading", "```js\nheading"]])(
-    "preserves fenced code literals and existing extraction boundaries: %s",
+  it.each([["```js\n# heading", "# heading"]])(
+    "preserves code literals through an unclosed fence: %s",
     (markdown, text) => {
       expect(markdownToText(markdown)).toBe(text);
     },
