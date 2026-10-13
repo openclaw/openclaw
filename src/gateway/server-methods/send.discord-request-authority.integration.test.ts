@@ -11,10 +11,8 @@ import { prepareDeferredDeliveryAdmission } from "../../infra/outbound/deferred-
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "../../infra/outbound/delivery-queue-media-staging.js";
 import { recoverPendingDeliveries } from "../../infra/outbound/delivery-queue-recovery.js";
-import {
-  hasActiveDeliveryOwner,
-  loadUnfinishedDelivery,
-} from "../../infra/outbound/delivery-queue-storage.js";
+import { loadUnfinishedDelivery } from "../../infra/outbound/delivery-queue-storage.js";
+import { hasActiveDeliveryOwner } from "../../infra/outbound/delivery-queue-types.js";
 import {
   createRecoveryLog,
   loadPendingDeliveries,
