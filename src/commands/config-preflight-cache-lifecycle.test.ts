@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -45,7 +46,7 @@ exports.legacyConfigRules = [{
             entries: {
               [pluginId]: {
                 enabled: true,
-                config: operation === "doctor" ? {} : { retired: true },
+                config: { retired: true },
               },
             },
           },
@@ -55,28 +56,30 @@ exports.legacyConfigRules = [{
         await seedInstalledPluginIndex({}, { config });
 
         const captures = async () => (await fs.readFile(marker, "utf8")).trim().split("\n");
-        if (operation === "rejected-startup") {
-          await expect(
-            runStartupConfigPreflight({
-              gateway: false,
-              observe: false,
-              beforeStatePreparation: async () => false,
-            }),
-          ).rejects.toThrow("selected config changed");
-        } else {
-          const result =
-            operation === "doctor"
-              ? await runDoctorConfigPreflight({
-                  migrateLegacyConfig: false,
-                  preparePluginMetadataSnapshot: true,
+        {
+          // Doctor also borrows the invocation cache for legacy config inspection.
+          await using invoking = createPluginCache();
+          await withPluginCache(invoking, async () => {
+            if (operation === "rejected-startup") {
+              await expect(
+                runStartupConfigPreflight({
+                  gateway: false,
                   observe: false,
-                })
-              : await runStartupConfigPreflight({ gateway: false, observe: false });
-          const directories = await captures();
-          const finalDirectory = directories.at(-1)!;
-          expect(finalDirectory).not.toBe(pluginDir);
-          expect((await fs.stat(finalDirectory)).isDirectory()).toBe(true);
-          await result.pluginCache?.[Symbol.asyncDispose]();
+                  beforeStatePreparation: async () => false,
+                }),
+              ).rejects.toThrow("selected config changed");
+            } else {
+              const result =
+                operation === "doctor"
+                  ? await runDoctorConfigPreflight({
+                      migrateLegacyConfig: false,
+                      preparePluginMetadataSnapshot: true,
+                      observe: false,
+                    })
+                  : await runStartupConfigPreflight({ gateway: false, observe: false });
+              await result.pluginCache?.[Symbol.asyncDispose]();
+            }
+          });
         }
         for (const directory of new Set(await captures())) {
           expect(directory).not.toBe(pluginDir);
