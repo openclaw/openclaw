@@ -9,6 +9,7 @@ import {
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { onAgentEvent } from "../infra/agent-events.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import type { RunExit } from "../process/supervisor/types.js";
 import {
   createTestAdmittedRunContext,
@@ -19,7 +20,8 @@ import { buildPreparedCliRunContext } from "./cli-runner.test-helpers.js";
 import { createManagedRun, supervisorSpawnMock } from "./cli-runner/execute.test-support.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
-import { isFailoverError } from "./failover-error.js";
+import { hasProviderRequestSizeCeiling, isFailoverError } from "./failover-error.js";
+import { isLikelyContextOverflowError } from "./failover/classify.js";
 import { runWithModelFallback } from "./model-fallback-runner.js";
 import {
   installEmbeddedRunnerBaseE2eMocks,
@@ -518,8 +520,21 @@ describe("CLI runner fault sequences", () => {
       await runOuter({
         fallbacks: [`claude-cli/${FALLBACK_MODEL}`],
         onError: (failure) => {
+          const formatted = formatErrorMessage(failure);
           fallbackErrors.push(
-            failure instanceof Error ? (failure.stack ?? failure.message) : String(failure),
+            JSON.stringify({
+              formatted,
+              formattedLikely: isLikelyContextOverflowError(formatted),
+              rawLikely: failure instanceof Error && isLikelyContextOverflowError(failure.message),
+              ceiling: hasProviderRequestSizeCeiling(failure),
+              ...(isFailoverError(failure)
+                ? {
+                    reason: failure.reason,
+                    code: failure.code,
+                    requestSizeCeiling: failure.requestSizeCeiling,
+                  }
+                : {}),
+            }),
           );
         },
       });
