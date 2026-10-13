@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -440,6 +441,7 @@ it(
       console.log(
         "[pr135296-real-agent-flow-proof]",
         JSON.stringify({
+          headSha: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
           entrypoint:
             "chat.send → shipped agent tool call → sessions_spawn → sessions.create → real child agent run → SQLite-backed sessions.list",
           gatewayRunStatuses: ["ok", "ok", "ok", "ok"],
