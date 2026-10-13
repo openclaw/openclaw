@@ -36,7 +36,6 @@ import { publishSessionEntryWorkerInvalidations } from "./session-accessor.sqlit
 import type {
   SessionDeletionPlanningOperation,
   SessionDeletionPlanningResult,
-  SessionEntryMaintenancePlan,
   SessionMaintenanceLiveProtection,
   SessionMaintenanceReadResult,
   SqliteArchiveReclamationPlan,
@@ -70,6 +69,7 @@ import { SessionEntryChangedDuringReadError } from "./session-entry-read-errors.
 import { captureSessionEntryNativeMutationWitness } from "./session-entry-read-ordered.js";
 import { publishSessionLifecycleWorkerEffects } from "./session-lifecycle-worker-publication.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
+import type { SessionMaintenancePreservationPlan } from "./store-maintenance-preserve-snapshot.types.js";
 
 function hasNativeReclamationOwner(options: OpenClawAgentDatabaseOptions): boolean {
   return (
@@ -132,7 +132,7 @@ export async function runSqliteSessionReclamation(params: {
   diagnostics?: SqliteSessionReclamationDiagnostics;
   assertCommitAllowed?: () => void;
   refreshMaintenanceProtection?: () => SessionMaintenanceLiveProtection;
-  assertMaintenanceCommitAllowed?: (plans?: readonly SessionEntryMaintenancePlan[]) => void;
+  assertMaintenanceCommitAllowed?: (plans?: readonly SessionMaintenancePreservationPlan[]) => void;
   consumeReadOnlyMaintenancePlan?: (
     result: Extract<SessionMaintenanceReadResult, { kind: "maintenance-plan" }>,
     assertCurrent: () => void,

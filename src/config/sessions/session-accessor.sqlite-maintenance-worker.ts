@@ -6,7 +6,6 @@ import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-a
 import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
 import type {
   ReclamationDatabaseOptions,
-  SessionEntryMaintenancePlan,
   SessionMaintenanceLiveProtection,
   SessionMaintenanceMetadataCommand,
   SessionMaintenanceMetadataResult,
@@ -14,12 +13,13 @@ import type {
 import { invalidateSessionEntryMaintenanceAgeFact } from "./session-accessor.sqlite-maintenance-age.js";
 import type { SqliteReclamationClaim } from "./session-accessor.sqlite-reclamation-worker.types.js";
 import { runSessionEntryWorkerMutation } from "./session-accessor.sqlite-replacement-worker.js";
+import type { SessionMaintenancePreservationPlan } from "./store-maintenance-preserve-snapshot.types.js";
 
 export function runSessionMaintenanceMetadataInWorker(params: {
   plan: SessionMaintenanceMetadataCommand & { databaseOptions: ReclamationDatabaseOptions };
   claim: SqliteReclamationClaim;
   assertCurrent: () => void;
-  assertMaintenanceCommitAllowed?: (plans?: readonly SessionEntryMaintenancePlan[]) => void;
+  assertMaintenanceCommitAllowed?: (plans?: readonly SessionMaintenancePreservationPlan[]) => void;
   refreshMaintenanceProtection?: () => SessionMaintenanceLiveProtection;
   signal: AbortSignal;
   diagnostics?: SqliteSessionReclamationDiagnostics;
