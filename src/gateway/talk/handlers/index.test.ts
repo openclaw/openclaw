@@ -551,7 +551,10 @@ describe("talk.catalog handler", () => {
       mocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({
         provider: { id: "google" },
         providerConfig: { apiKey: "live-key", project: "base", model: "talk-model" },
-        capabilities: mocks.listRealtimeVoiceProviders()[0].capabilities,
+        capabilities: expectDefined(
+          mocks.listRealtimeVoiceProviders()[0],
+          "configured realtime fixture",
+        ).capabilities,
       } as never);
 
       const respond = vi.fn();
