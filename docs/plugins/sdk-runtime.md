@@ -332,6 +332,13 @@ temporary changes. The connection owner retains the current timeout, skips
 unchanged assignments, and discards it on close; raw timeout PRAGMAs on an owned
 connection would bypass that policy.
 
+Worker kernels that write derived data without changing any session facts wrap
+their synchronous DML in `withSqliteDatabaseWriteScope(db, [], write)` from the
+same subpath. This preserves resident session caches while the database-wide
+write receipt still advances. Only certify the kernel's own writes; keep user
+callbacks and authority admission outside the scope. Schema changes continue to
+invalidate all scopes.
+
 Engine-aware stores keep host secret resolution and operation settlement in
 `openclaw/plugin-sdk/database-engine-runtime`, and physical opens and transaction
 recipes in the worker/admission-only

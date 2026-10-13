@@ -2847,11 +2847,8 @@ export const en: TranslationMap & {
     },
     waitingForApproval: "Waiting for approval…",
     waitingOnSubagents: "Waiting on subagents",
-    waitingOnSubagentCount: "Waiting on {count} subagent",
-    waitingOnSubagentsCount: "Waiting on {count} subagents",
+    turnElapsed: "Total time since your message, including subagent waits",
     waitingOnSubagent: "Waiting on {name}",
-    waitingOnSession: "Waiting on 1 session",
-    waitingOnSessionsCount: "Waiting on {count} sessions",
     subagentsRunning: "{count} subagents running",
     subagentsRunningOne: "1 subagent running",
     startupStatus: {
@@ -3750,7 +3747,6 @@ export const en: TranslationMap & {
     },
     composer: {
       running: "running",
-      viewSubagents: "View",
       composerInput: "Chat composer",
       emojiSuggestions: "Emoji suggestions",
       placeholder: "Message {name}",

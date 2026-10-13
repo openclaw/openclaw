@@ -2,6 +2,7 @@ import path from "node:path";
 import * as ts from "typescript/unstable/ast";
 import { SymbolFlags, type Symbol } from "typescript/unstable/sync";
 import { createNativeTypeScriptProject } from "./native-typescript.mts";
+import { inspectPersonalCredentialWriters } from "./personal-credential-writer-guard.mts";
 
 // Each entry is a reviewed, released compatibility boundary, not a whole-file exemption.
 // Kernels may join this list only after their bundled callers have moved to workers.
@@ -277,11 +278,7 @@ export function inspectDatabaseWorkerBoundaries(
   const nonRuntimeOperations = new Map<string, Map<string, NonRuntimeTier>>();
   const nonRuntimeCallLocations = new Map<string, Set<string>>();
   const violations: string[] = [];
-  if (
-    ![...reviewed.keys(), ...reviewedMembers.keys(), ...nonRuntimeCandidates.keys()].some((file) =>
-      sourceTexts.has(file),
-    )
-  ) {
+  if (sourceTexts.size === 0) {
     return { operations, callLocations, nonRuntimeOperations, nonRuntimeCallLocations, violations };
   }
   const config = ".openclaw-database-worker-compat.tsconfig.json";
@@ -441,6 +438,7 @@ export function inspectDatabaseWorkerBoundaries(
     }
     return { file, source };
   });
+  violations.push(...inspectPersonalCredentialWriters(sources, checker));
   // Follow named kernels from the reviewed boundaries. A symbol reference from
   // outside this closure (or an escaped callback) will make that kernel live.
   // A returned receiver exists only through its factory. Keep its methods in

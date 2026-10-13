@@ -5185,6 +5185,17 @@ Schemas, stored values, permissions, retention, and update behavior are unchange
 
 ## Migrate a caller
 
+Session node-artifact copies merge participant aggregates in their existing write
+transaction. Each upsert consumes the current destination row without a separate
+read: aliases in one store add their contributions, while retried cross-store
+repairs retain the largest count. Unknown first-input times remain unknown and
+the latest known input time survives. Ordinary durable entry creation,
+replacement, and reclamation use the existing entry or reclamation worker;
+shared kernels retain native receivers for incognito, exclusive maintenance,
+and released synchronous entry APIs. Opaque deletion callbacks are adapted to
+worker commit finalizers and do not force durable artifact SQL onto the host.
+This changes no schema, stored format, retention, or update behavior.
+
 Manual `sessions.compact` requests with `maxLines` retain their selected physical
 store and prepared caller and sharing authority through cold restoration. The
 existing entry worker reads the target, source predicates, and cold metadata in

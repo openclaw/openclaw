@@ -783,18 +783,17 @@ export function buildOpenAIImageGenerationProvider(
       }
       const [
         {
-          assertOkOrThrowHttpError,
+          createProviderOperationDeadline,
           postJsonRequest,
           postMultipartRequest,
-          readProviderJsonResponse,
           resolveProviderHttpRequestConfig,
           sanitizeConfiguredModelProviderRequest,
         },
-        { parseOpenAiCompatibleImageResponse, resolveInlineImageJsonResponseMaxBytes },
+        { readOpenAIImageGenerationResponse },
         { resolveClosestSize, resolveGeneratedMediaMaxBytes },
       ] = await Promise.all([
         import("openclaw/plugin-sdk/provider-http"),
-        import("openclaw/plugin-sdk/image-generation"),
+        import("./image-generation-response.js"),
         import("openclaw/plugin-sdk/media-generation-runtime"),
       ]);
       const isAzure = isAzureOpenAIBaseUrl(rawBaseUrl);
@@ -821,6 +820,8 @@ export function buildOpenAIImageGenerationProvider(
       });
       const count = resolveIntegerOption(req.count, 1, { min: 1, max: OPENAI_MAX_IMAGE_RESULTS });
       const timeoutMs = resolveOpenAIImageTimeoutMs(req.timeoutMs, { isAzure });
+      const operation = isEdit ? "OpenAI image edit" : "OpenAI image generation";
+      const deadline = createProviderOperationDeadline({ timeoutMs, label: operation });
       const sizeResolution = isValidFlexibleOpenAIImageSize(model, req.size)
         ? { size: req.size }
         : resolveOpenAIImageRequestSize(
@@ -876,27 +877,19 @@ export function buildOpenAIImageGenerationProvider(
         : await postJsonRequest({ ...requestOptions, body });
       const { response, release } = requestResult;
       try {
-        const operation = isEdit ? "OpenAI image edit" : "OpenAI image generation";
-        await assertOkOrThrowHttpError(response, `${operation} failed`);
-
-        const data = await readProviderJsonResponse(response, "openai.image-generation", {
-          maxBytes: resolveInlineImageJsonResponseMaxBytes(
-            count,
-            resolveGeneratedMediaMaxBytes(req.cfg, "image"),
-          ),
+        const images = await readOpenAIImageGenerationResponse(response, {
+          operation,
+          providerUrl: url,
+          deadline,
+          timeoutMs,
+          maxImages: count,
+          maxDownloads: OPENAI_MAX_IMAGE_RESULTS,
+          maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "image"),
+          defaultMimeType: resolveOutputMime(req.outputFormat).mimeType,
+          allowPrivateNetwork,
+          ssrfPolicy: req.ssrfPolicy,
+          dispatcherPolicy,
         });
-        const output = resolveOutputMime(req.outputFormat);
-        const images = parseOpenAiCompatibleImageResponse(data, {
-          defaultMimeType: output.mimeType,
-          malformedResponseError: `${operation} response malformed`,
-        }).map((image, index) =>
-          Object.assign(image, {
-            fileName: `image-${index + 1}.${output.extension}`,
-          }),
-        );
-        if (images.length === 0) {
-          throw new Error(`${operation} response missing image data`);
-        }
 
         return {
           images,
