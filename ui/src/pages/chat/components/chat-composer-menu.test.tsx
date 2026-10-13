@@ -1,5 +1,3 @@
-import type WaDropdownItem from "@awesome.me/webawesome/dist/components/dropdown-item/dropdown-item.js";
-import type WaDropdown from "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
 import { createSignal } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
@@ -89,9 +87,8 @@ it("retains the focused capability row through toggles and a reordered catalog r
     },
   });
   const view = mountSolid(() => <ChatComposerPlusMenu menu={menu()} />);
-  const dropdown = view.container.querySelector<WaDropdown>("wa-dropdown")!;
-  const row = view.container.querySelector<WaDropdownItem>('wa-dropdown-item[value="skill:0"]')!;
-  await Promise.all([dropdown.updateComplete, row.updateComplete]);
+  const row = view.container.querySelector<HTMLButtonElement>('[data-value="skill:focused"]')!;
+  await waitForSolid(() => expect(row.isConnected).toBe(true));
   row.focus();
   expect(document.activeElement).toBe(row);
 
@@ -104,9 +101,9 @@ it("retains the focused capability row through toggles and a reordered catalog r
     },
   }));
   flush();
-  expect(view.container.querySelector('wa-dropdown-item[value="skill:0"]')).toBe(row);
+  expect(view.container.querySelector('[data-value="skill:focused"]')).toBe(row);
   expect(document.activeElement).toBe(row);
-  await waitForSolid(() => expect(row.checked).toBe(false));
+  await waitForSolid(() => expect(row.getAttribute("aria-checked")).toBe("false"));
 
   setMenu((previous) => ({
     ...previous,
@@ -120,46 +117,45 @@ it("retains the focused capability row through toggles and a reordered catalog r
     },
   }));
   await waitForSolid(() => {
-    expect(view.container.querySelector('wa-dropdown-item[value="skill:1"]')).toBe(row);
+    expect(view.container.querySelector('[data-value="skill:focused"]')).toBe(row);
     expect(row.textContent).toContain("Refreshed skill");
   });
-  expect(row.checked).toBe(false);
+  expect(row.getAttribute("aria-checked")).toBe("false");
   expect(document.activeElement).toBe(row);
 });
 
-it("creates attachment choices on first open and retains them while closed", () => {
+it("retains attachment choices while the native menu closes and reopens", async () => {
+  const [open, setOpen] = createSignal(false);
+  const toggle = {
+    value: "test-toggle",
+    label: "Test toggle",
+    checked: false,
+    disabled: false,
+    onChange: vi.fn(),
+  };
   const view = mountSolid(() => (
     <ChatComposerPlusMenu
       menu={{
         attachments: {},
         disabled: false,
-        open: false,
+        open: open(),
         view: "root",
         toolOverrides: null,
-        rootToggles: [
-          {
-            value: "test-toggle",
-            label: "Test toggle",
-            checked: false,
-            disabled: false,
-            onChange: vi.fn(),
-          },
-        ],
-        onOpenChange: vi.fn(),
+        rootToggles: [toggle],
+        onOpenChange: setOpen,
         onViewChange: vi.fn(),
       }}
     />
   ));
-  const dropdown = view.container.querySelector("wa-dropdown")!;
-  expect(dropdown.querySelector("button[slot='trigger']")).not.toBeNull();
-  expect(dropdown.querySelector("wa-dropdown-item")).toBeNull();
-  dropdown.dispatchEvent(new Event("wa-show"));
+  const trigger = view.container.querySelector<HTMLButtonElement>(
+    ".agent-chat__input-btn--attach",
+  )!;
+  const choice = view.container.querySelector<HTMLElement>('[data-value="test-toggle"]')!;
+  trigger.click();
+  await waitForSolid(() => expect(open()).toBe(true));
+  setOpen(false);
   flush();
-  const choice = dropdown.querySelector("wa-dropdown-item");
-  expect(choice).not.toBeNull();
-  dropdown.dispatchEvent(new Event("wa-hide"));
+  setOpen(true);
   flush();
-  dropdown.dispatchEvent(new Event("wa-show"));
-  flush();
-  expect(dropdown.querySelector("wa-dropdown-item")).toBe(choice);
+  expect(view.container.querySelector('[data-value="test-toggle"]')).toBe(choice);
 });
