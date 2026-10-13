@@ -321,6 +321,8 @@ The bounded status includes checkpoint IDs, project keys, recorded runtime ident
 
 The Gateway groups uncertain captures into one warning with their count and selectors. It reports them again when that set changes or the plugin restarts. This reports retained ownership; it does not attempt another capture.
 
+Worker teardown skips a paused capture and reports its exact recovery command once per capture selector in the running plugin. Repeated source-lease cleanup attempts do not report new capture failures. Source cleanup still retries and reports provider errors; enrollment on the uncertain source remains blocked until recovery clears the capture reservation.
+
 Before recovery, stop the owning Gateway, any original capture processes, and the recovered worker. Use the source lease and capture time to reconcile the uncertain operation in Crabbox's checkpoint catalog, and resolve any untracked provider artifact. Only after those steps, copy the exact capture selector from status:
 
 ```bash

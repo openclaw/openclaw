@@ -73,6 +73,7 @@ export function createCrabboxWarmImageCapture(dependencies: {
   return async function capture(
     context: LeaseContext & {
       profile: CrabboxProfile;
+      teardown?: true;
       forkedCheckpointId?: string;
       projectCaptureRequired?: true;
       projectCaptureReplay?: true;
@@ -424,9 +425,12 @@ export function createCrabboxWarmImageCapture(dependencies: {
     };
     await attemptCapture();
     const operation =
-      key && owner?.projectKey ? (await openStore().lookup(key))?.operation : undefined;
+      !context.teardown && key && owner?.projectKey
+        ? (await openStore().lookup(key))?.operation
+        : undefined;
     // A native create may still be running after a lost response. Enrollment must
     // never introduce node credentials into that source until capture has settled.
+    // Teardown only stops the source; the retained claim already pauses capture retries.
     if (operation?.type === "capture" && operation.leaseId === context.id) {
       throw new Error(
         `${captureError ? `${captureError}. ` : ""}Crabbox project image capture is unresolved. ${crabboxWarmImageRecoveryHint(operation.id)}`,
