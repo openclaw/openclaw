@@ -513,10 +513,6 @@
   height: var(--settings-control-height);
 }
 
-.plugins-toolbar--fields > .settings-segmented {
-  --wa-form-control-height: calc(var(--settings-control-height) - 6px);
-}
-
 .plugins-toolbar__hint {
   color: var(--muted);
   font-size: var(--control-ui-text-sm);

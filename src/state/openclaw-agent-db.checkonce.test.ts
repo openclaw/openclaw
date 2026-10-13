@@ -174,6 +174,37 @@ it("reuses live agent admission and revalidates after writer idle retirement", a
   });
 });
 
+it("reuses closed-writer ownership for read-only admission until tracked schema changes", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const options = { agentId: "main", env };
+    const owner = openOpenClawAgentDatabase(options);
+    await closeOpenClawAgentDatabaseByPathAsync(owner.path);
+    const observation = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+    let reader: ReturnType<typeof openOpenClawAgentDatabaseReadOnly> | undefined;
+    try {
+      reader = openOpenClawAgentDatabaseReadOnly(options);
+      expect(reader.found).toBe(true);
+      expect(observation.queries.filter((sql) => /\bFROM\s+"?schema_meta\b/iu.test(sql))).toEqual(
+        [],
+      );
+    } finally {
+      observation.restore();
+      if (reader?.found) {
+        reader.database.close();
+      }
+    }
+    using writer = openNodeSqliteDatabase(owner.path);
+    writer.exec("DROP TABLE session_canonical_validation_pending");
+    expect(() => openOpenClawAgentDatabaseReadOnly(options)).toThrow(
+      expect.objectContaining({
+        name: "SessionMetadataUnavailableError",
+        reason: "table-missing",
+        missingTables: ["session_canonical_validation_pending"],
+      }),
+    );
+  });
+});
+
 it("keeps a tracked sibling's committed catalog when reopening an admitted agent", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const options = { agentId: "main", env };
