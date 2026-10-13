@@ -615,6 +615,9 @@ describe("doctor config flow", () => {
     expect(repair.shouldWriteConfig).toBe(true);
     expect(repair.cfg.hooks?.token).toMatch(/^[0-9a-f]{48}$/);
     expect(repair.cfg.hooks?.token).not.toBe("shared-gateway-token-1234567890");
+    const laterRuntimeConfig = readRuntimeConfig();
+    expect(laterRuntimeConfig.hooks?.token).toMatch(/^[0-9a-f]{48}$/);
+    expect(laterRuntimeConfig.hooks?.token).toBe(repair.cfg.hooks?.token);
   });
 
   it("reports invalid CLI media models without repairing them", async () => {
