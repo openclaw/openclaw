@@ -163,6 +163,7 @@ vi.mock("../../config/config.js", () => ({
     readConfigFileSnapshotWithPluginMetadata(options),
 }));
 
+// mock-isolation: CLI option cases use the synthetic config snapshot without filesystem recovery.
 vi.mock("../../config/io.factory.js", () => ({
   createConfigIO: () => ({
     readConfigFileSnapshot: async () => configState.snapshot,

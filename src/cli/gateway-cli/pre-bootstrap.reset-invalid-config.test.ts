@@ -21,6 +21,7 @@ const configReads = vi.hoisted(() => ({
   prepareRecovery: vi.fn(async () => null),
 }));
 
+// mock-isolation: Reset admission consumes authored invalid snapshots without filesystem recovery.
 vi.mock("../../config/io.factory.js", () => ({
   createConfigIO: () => ({
     readConfigFileSnapshot: configReads.readSnapshot,
