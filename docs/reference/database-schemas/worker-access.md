@@ -124,8 +124,14 @@ Optional session-preview backfill retains its completed transcript watermark
 across generic notifications. Canonical transcript writes advance or invalidate
 that watermark, so a notification alone does not repeat the bounded history read.
 Usage-cost refresh reads a stale rollup body and its monthly partitions in one
-worker snapshot; discovery still reads only metadata. Neither change alters
-stored formats, retention, or update behavior.
+worker snapshot; discovery still reads only metadata. Its transcript statistics
+batch carries the rewrite generation and hot/cold state alongside the bounds,
+so the subsequent scan reuses those facts without another watermark read. A
+rewrite during a background scan converges on the next receipt-driven refresh.
+Participant writers likewise reuse their committed projection-change decision:
+counter-only contributions persist without rereading or invalidating unchanged
+display facts. These changes do not alter stored formats, retention, or update
+behavior.
 
 Memory retrieval workers borrow the existing agent read-only owner across query
 awaits and release each borrow before replying. The owner retains the idle reader

@@ -196,15 +196,16 @@ export function bindSqliteWorkerBackend(
                 );
               }
               if (command.type === "participant") {
-                const value = recordSessionParticipantFromWorker(
+                const result = recordSessionParticipantFromWorker(
                   workerDatabase(scope),
                   scope,
                   command.input.params,
                 );
                 participantResult = {
-                  value,
-                  projectionChanged: false,
-                  participants: readSqliteSessionParticipantProjection(db, scope.sessionKey),
+                  ...result,
+                  participants: result.projectionChanged
+                    ? readSqliteSessionParticipantProjection(db, scope.sessionKey)
+                    : {},
                 };
                 return participantResult;
               }
@@ -242,8 +243,7 @@ export function bindSqliteWorkerBackend(
               } else if (ownerResult && facts.kind === "owner") {
                 ownerResult.facts = facts;
                 recordFact(change.sessionKey, facts);
-              } else if (participantResult && facts.kind === "participants") {
-                participantResult.projectionChanged = true;
+              } else if (participantResult?.projectionChanged && facts.kind === "participants") {
                 recordFact(change.sessionKey, {
                   ...facts,
                   projection: participantResult.participants,
