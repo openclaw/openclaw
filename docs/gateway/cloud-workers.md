@@ -120,6 +120,9 @@ class, an 8-hour lifetime, a 45-minute idle timeout and idle suspend, and warm
 images. Viewing the suggestion does not save config or allocate a machine.
 Saving requires administrator access. Existing profiles take precedence, and
 adopting an existing `cloud` profile leaves it unchanged.
+If config reload is disabled, saving schedules a Gateway restart. Until the
+saved profile becomes active, selection reports that the profile is saved and
+asks you to wait for the restart and retry; retrying does not save it again.
 
 ## Configuration
 
