@@ -9,7 +9,6 @@ import type {
 import {
   ensureProjectRegistrySchema,
   insertProjectRegistryInDatabase,
-  listProjectRegistryInDatabase,
   removeProjectCheckoutReferenceInDatabase,
   removeProjectRegistryInDatabase,
   resolveProjectCloneRefreshOwnerInDatabase,
@@ -25,8 +24,11 @@ function checkoutTransaction<Project extends { repoRoot: string }, Output>(
   return (
     { project, lease }: { project: Project; lease: OpenClawStateLeaseIdentity },
     { open, stateOptions }: WorkerOperationContext,
-  ): Output =>
-    runOpenClawStateWriteTransaction(
+  ): Output => {
+    const database = open();
+    const options = { database, ...stateOptions() };
+    ensureProjectRegistrySchema(options);
+    return runOpenClawStateWriteTransaction(
       ({ db }) => {
         if (lease.scope !== "projects.checkout" || lease.key !== project.repoRoot) {
           throw new Error("Project registry write requires its checkout lifecycle lease");
@@ -34,9 +36,10 @@ function checkoutTransaction<Project extends { repoRoot: string }, Output>(
         assertOpenClawStateLeaseWorkerOwnedInTransaction(db, lease);
         return operation(db, project);
       },
-      { database: open(), ...stateOptions() },
+      options,
       { operationLabel },
     );
+  };
 }
 
 function registryDatabase({ open, stateOptions }: WorkerOperationContext): DatabaseSync {
@@ -48,8 +51,6 @@ function registryDatabase({ open, stateOptions }: WorkerOperationContext): Datab
 export const projectRegistryOperations = {
   "projects.findRoot": (input: { repoRoot: string }, context) =>
     resolveRecordedProjectRootInDatabase(registryDatabase(context), input.repoRoot),
-  "projects.list": (_input: undefined, context) =>
-    listProjectRegistryInDatabase(registryDatabase(context)),
   "projects.resolve": (input: { id: string }, context) =>
     resolveProjectRegistryInDatabase(registryDatabase(context), input.id),
   "projects.insert": checkoutTransaction(
