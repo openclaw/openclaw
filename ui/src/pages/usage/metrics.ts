@@ -23,20 +23,22 @@ function charsToTokens(chars: number): number {
   return Math.round(chars / CHARS_PER_TOKEN);
 }
 
-function formatUsageTokens(n: number): string {
-  return formatCompactTokenCount(n, { thousandsSuffix: "K", trimTrailingZero: false });
+function formatUsageTokens(n: number, report?: UsageTotals["usageReport"]): string {
+  return report?.state === "unavailable"
+    ? t("usage.common.unknown")
+    : formatCompactTokenCount(n, { thousandsSuffix: "K", trimTrailingZero: false });
 }
 
 // Usage charts choose fixed precision from the surrounding scale; the shared
 // adaptive cost formatter would change labels as values cross its thresholds.
-function formatUsageCost(n: number, decimals = 2): string {
-  return `$${n.toFixed(decimals)}`;
+function formatUsageCost(n: number, decimals = 2, report?: UsageTotals["usageReport"]): string {
+  return report?.state === "unavailable" ? t("usage.common.unknown") : `$${n.toFixed(decimals)}`;
 }
 
-export function formatAnalysisCost(value: number): string {
+export function formatAnalysisCost(value: number, report?: UsageTotals["usageReport"]): string {
   const magnitude = Math.abs(value);
   const decimals = magnitude === 0 || magnitude >= 0.01 ? 2 : magnitude >= 0.0001 ? 4 : 6;
-  return formatUsageCost(value, decimals);
+  return formatUsageCost(value, decimals, report);
 }
 
 function formatHourLabel(hour: number): string {

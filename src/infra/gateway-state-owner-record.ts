@@ -51,7 +51,7 @@ export function assertPersistedStateDatabaseAccessAllowed(params: {
   assertMaintenance: () => void;
 }): void {
   const { databasePath, ownerPath, assertMaintenance } = params;
-  const unavailable = `OpenClaw state ownership at ${databasePath} could not be verified; retry after maintenance finishes.`;
+  const unavailable = `OpenClaw state ownership at ${databasePath} could not be verified from ${ownerPath}; restart the Gateway.`;
   let raw: string;
   try {
     raw = fs.readFileSync(ownerPath, "utf8");

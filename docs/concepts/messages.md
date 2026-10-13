@@ -188,10 +188,11 @@ begins. Steering updates the current prompt only after the new input is committe
 and consumed by the running agent; pending or rejected input does not retarget a
 reaction. Collected inputs use their committed combined prompt.
 
-Acknowledgment reactions do not replace the final answer. Omit `final` or set
-`final: false` when more work follows. Only an explicit `final: true` addition,
-requested as the complete response, can count as source-reply completion. Removals,
-no-ops, dry runs, and failed reactions never count. Normal message-tool permissions
+Omit `final` or set `final: false` when more work follows. An added reaction with
+explicit `final: true` can be the complete reply when the agent chooses it. Once
+delivery is confirmed on the current source message, OpenClaw ends the turn without
+requesting another text response. Removals, reactions to other messages, no-ops,
+dry runs, and failed reactions never count. Normal message-tool permissions
 still apply, and the current-prompt capability expires with its admitted turn.
 
 ## Silent replies

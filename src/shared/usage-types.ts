@@ -91,6 +91,7 @@ export type SessionsUsageAggregates = {
   modelDaily?: SessionDailyModelUsage[];
   daily: Array<{
     date: string;
+    usageReport?: CostUsageSummary["totals"]["usageReport"];
     tokens: number;
     cost: number;
     messages: number;
@@ -128,6 +129,8 @@ export type UsageOverviewOptions = {
 };
 
 export type SessionsUsageOverview = {
+  /** Completeness of full-session chart sources before selected-day totals. */
+  usageReport?: CostUsageSummary["totals"]["usageReport"];
   total: number;
   unfilteredSessionCount: number;
   /** Sessions with activity in the selected population; empty comparison rows do not count. */
@@ -138,7 +141,12 @@ export type SessionsUsageOverview = {
   selectedRows: SessionUsageEntry[];
   /** Comparison statistics before paging and the Recent roster selection. */
   tableSessionCount: number;
-  tableTotals: { tokens: number; cost: number; errors: number };
+  tableTotals: {
+    tokens: number;
+    cost: number;
+    errors: number;
+    usageReport?: CostUsageSummary["totals"]["usageReport"];
+  };
   offset: number;
   limit: number;
   queryWarnings: string[];

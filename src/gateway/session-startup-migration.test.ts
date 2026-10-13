@@ -354,19 +354,17 @@ describe("runStartupSessionMaintenanceForTest", () => {
           ),
         ).toBe(true);
         expect(loadExactSessionEntry(scope)?.entry.sessionId).toBe(scope.sessionId);
-        if (layout === "default") {
-          const history = await readSessionMessagesPageWithStatsAsync(scope, {
-            maxMessages: 10,
-            offset: 0,
-          });
-          expect(history.messages).toEqual([
-            expect.objectContaining({ role: "user", content: "retained history" }),
-          ]);
-        }
         await runGatewaySessionStartupMaintenance({ databases, log });
 
         const reopened = openOpenClawAgentDatabase(options);
         expect(sessionTranscriptIndexNeedsReconcile(reopened.db, scope.sessionId)).toBe(false);
+        const history = await readSessionMessagesPageWithStatsAsync(scope, {
+          maxMessages: 10,
+          offset: 0,
+        });
+        expect(history.messages).toEqual([
+          expect.objectContaining({ role: "user", content: "retained history" }),
+        ]);
         expect(loadExactSessionEntry(scope)?.entry.sessionId).toBe(scope.sessionId);
         expect(log.warn).not.toHaveBeenCalled();
         if (layout !== "default") {

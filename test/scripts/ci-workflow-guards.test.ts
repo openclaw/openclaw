@@ -2325,9 +2325,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       const expression = workflow.jobs[jobName]["runs-on"];
       for (const eventName of ["pull_request", "push"] as const) {
         expect(evaluateWorkflowExpression(expression, { ...context, eventName }), jobName).toBe(
-          jobName === "preflight"
-            ? "blacksmith-16vcpu-ubuntu-2404"
-            : "blacksmith-4vcpu-ubuntu-2404",
+          "blacksmith-4vcpu-ubuntu-2404",
         );
       }
       expect(
@@ -2360,7 +2358,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       }
     }
     for (const [jobName, task, expected] of [
-      ["preflight", undefined, "blacksmith-16vcpu-ubuntu-2404"],
+      ["preflight", undefined, "blacksmith-4vcpu-ubuntu-2404"],
       ["security-fast", undefined, "ubuntu-24.04"],
       ["checks-ui", undefined, "ubuntu-24.04"],
       ["checks-ui-e2e", "browser-extension", "ubuntu-24.04"],
@@ -2386,14 +2384,17 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     }
     for (const authorAssociation of ["OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR"]) {
       for (const headRepository of ["openclaw/openclaw", "contributor/openclaw"]) {
-        expect(
-          evaluateWorkflowExpression(workflow.jobs.preflight["runs-on"], {
-            ...context,
-            authorAssociation,
-            headRepository,
-          }),
-          `${authorAssociation}: ${headRepository}`,
-        ).toBe("blacksmith-16vcpu-ubuntu-2404");
+        for (const runnerBackend of ["hybrid", "runson"] as const) {
+          expect(
+            evaluateWorkflowExpression(workflow.jobs.preflight["runs-on"], {
+              ...context,
+              authorAssociation,
+              headRepository,
+              runnerBackend,
+            }),
+            `${runnerBackend}: ${authorAssociation}: ${headRepository}`,
+          ).toBe("blacksmith-4vcpu-ubuntu-2404");
+        }
       }
     }
   });

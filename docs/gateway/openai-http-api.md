@@ -232,7 +232,7 @@ When `stream: true`, tool calls arrive as incremental SSE chunks: an initial ass
 
 For required or function-pinned tool choices, prose is held until the matching call is confirmed. When the run returns finalized prose, the stream uses that text instead of provisional deltas.
 
-If `stream_options.include_usage=true`, a trailing usage chunk is emitted before `[DONE]`.
+If `stream_options.include_usage=true` and complete usage is available, a trailing usage chunk is emitted before `[DONE]`. Interrupted responses without final accounting omit that chunk; JSON responses omit `usage` too. Missing or provisional counts are not replaced with zeros.
 
 ### Tool follow-up loop
 

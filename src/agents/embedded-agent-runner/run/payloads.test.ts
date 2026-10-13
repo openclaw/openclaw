@@ -318,27 +318,62 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
-  it("keeps progress delivery from publishing the private terminal assistant text", () => {
+  it.each([true, false])(
+    "suppresses automatic final text only after confirmed source completion (delivered=%s)",
+    (delivered) => {
+      const payloads = buildPayloads({
+        assistantTexts: ["A second answer must not follow a final reaction or send."],
+        didDeliverSourceReplyViaMessageTool: delivered,
+        sourceReplyDeliveryMode: "automatic",
+      });
+
+      expect(payloads.map((payload) => payload.text)).toEqual(
+        delivered ? [] : ["A second answer must not follow a final reaction or send."],
+      );
+    },
+  );
+
+  it("does not append a presentation failure after confirmed automatic source completion", () => {
     const payloads = buildPayloads({
-      assistantTexts: ["ordinary final should stay private"],
-      didSendViaMessagingTool: true,
+      lastAssistant: makeAgentAssistantMessage({
+        stopReason: "error",
+        errorMessage: "presentation failed after delivery",
+        content: [],
+      }),
+      lastToolError: { toolName: "message", error: "presentation failed after delivery" },
       didDeliverSourceReplyViaMessageTool: true,
-      messagingToolSentTargets: [
-        {
-          tool: "message",
-          provider: "discord",
-          to: "channel:C1",
-          sourceReplyFinal: false,
-        },
-      ],
-      sourceReplyDeliveryMode: "message_tool_only",
-      sessionKey: "agent:main",
-      agentId: "main",
-      runId: "run-1",
+      sourceReplyDeliveryMode: "automatic",
     });
 
     expect(payloads).toEqual([]);
   });
+
+  it.each(["automatic", "message_tool_only"] as const)(
+    "preserves delivery-mode behavior after explicit source progress (%s)",
+    (sourceReplyDeliveryMode) => {
+      const payloads = buildPayloads({
+        assistantTexts: ["Completed answer after progress."],
+        didSendViaMessagingTool: true,
+        didDeliverSourceReplyViaMessageTool: true,
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "discord",
+            to: "channel:C1",
+            sourceReplyFinal: false,
+          },
+        ],
+        sourceReplyDeliveryMode,
+        sessionKey: "agent:main",
+        agentId: "main",
+        runId: "run-1",
+      });
+
+      expect(payloads.map((payload) => payload.text)).toEqual(
+        sourceReplyDeliveryMode === "automatic" ? ["Completed answer after progress."] : [],
+      );
+    },
+  );
 
   it("preserves rich-only internal message-tool source replies", () => {
     const presentation = {
