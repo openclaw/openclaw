@@ -122,12 +122,12 @@ function holdPreparedDocument() {
   const send = documentTransport.sendControlUiHtmlBody;
   const spy = vi
     .spyOn(documentTransport, "sendControlUiHtmlBody")
-    .mockImplementationOnce(async (req, res, body, sessionEntry) => {
+    .mockImplementationOnce(async (req, res, body, isCurrent, staleRedirectPath) => {
       // Real file-worker read and index/path/CSP preparation have finished.
       // The production encoder and final live-authority check still own delivery.
-      entered.resolve({ body, res, current: sessionEntry?.isCurrent() === true });
+      entered.resolve({ body, res, current: isCurrent?.() === true });
       await resume.promise;
-      await send(req, res, body, sessionEntry);
+      await send(req, res, body, isCurrent, staleRedirectPath);
     });
   return { entered: entered.promise, resume: resume.resolve, restore: () => spy.mockRestore() };
 }
