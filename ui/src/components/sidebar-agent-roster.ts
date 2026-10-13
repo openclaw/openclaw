@@ -356,7 +356,7 @@ class SidebarNewSessionMenu extends AgentRosterElement {
     attribute: false,
     hasChanged: (value: SessionMethodAccess, previous?: SessionMethodAccess) =>
       value.allowed !== previous?.allowed ||
-      (!value.allowed && (previous?.allowed !== false || value.reason !== previous.reason)),
+      (!value.allowed && (!previous || previous.allowed || value.reason !== previous.reason)),
   })
   access!: SessionMethodAccess;
   @state() private opened = false;

@@ -1,3 +1,4 @@
+import type { LitElement } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import {
   BUILTIN_THEMES,
@@ -323,7 +324,7 @@ describe("AppSidebar agent roster", () => {
     for (const menu of menus) {
       expect(menu.querySelectorAll("wa-dropdown-item")).toHaveLength(0);
       menu.dispatchEvent(new Event("wa-show"));
-      await sidebar.querySelector("openclaw-sidebar-new-session-menu")?.updateComplete;
+      await sidebar.querySelector<LitElement>("openclaw-sidebar-new-session-menu")?.updateComplete;
       const options = [...menu.querySelectorAll("wa-dropdown-item")];
       expect(options.map((item) => item.getAttribute("value"))).toEqual(agentIds(sidebar));
       expect(options.map((item) => item.querySelector("a")?.getAttribute("href"))).toEqual(
