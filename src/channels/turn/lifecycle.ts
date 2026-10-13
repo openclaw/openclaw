@@ -292,6 +292,10 @@ async function settleChannelDeliveryAttempt(
       finalized = { ...finalized, ...(await finalized.finalization), finalization: undefined };
     }
   } catch (error: unknown) {
+    if (error instanceof PendingFinalDeliveryNotOwnedError) {
+      // Deferred provider admission must also leave the earlier attempt untouched.
+      return;
+    }
     try {
       await onFinalizationError?.(error);
     } catch {

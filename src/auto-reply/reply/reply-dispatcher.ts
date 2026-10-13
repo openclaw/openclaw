@@ -168,7 +168,7 @@ export type ReplyDispatcherOptions = {
    * sends fall back to deliver(payload, info), retaining that adapter's raw contract.
    */
   deliverPrepared?: (plan: OutboundPayloadPlan, info: ReplyDispatchRuntimeInfo) => Promise<unknown>;
-  /** The delivery callback admits pending-final custody immediately before external I/O. */
+  /** The delivery callback admits custody before external I/O and owns failure settlement. */
   pendingFinalDeliveryAdmission?: "deliver";
   silentReplyContext?: {
     cfg?: OpenClawConfig;
@@ -398,7 +398,12 @@ export function createReplyDispatcher(
       if (retryableNoSend) {
         retryableNoSendError ??= toErrorObject(error, "reply delivery failed before dispatch");
       }
-      if (settleCustody && deliveryStarted && !queueHeld) {
+      if (
+        settleCustody &&
+        deliveryStarted &&
+        !queueHeld &&
+        options.pendingFinalDeliveryAdmission !== "deliver"
+      ) {
         // Proven no-send restores replayable custody, including after direct
         // admission marked it unknown. An external queue keeps its own marker.
         await settleCustody(
