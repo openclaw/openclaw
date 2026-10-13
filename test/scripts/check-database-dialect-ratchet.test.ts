@@ -259,3 +259,40 @@ it("compares base to working tree or index using only changed files, and permits
   expect(main(root, ["--prune"])).toBe(1);
   expect(errors).toHaveBeenCalledWith("SQLite dialect ratchet has no baseline to prune.");
 });
+
+it.each([
+  { file: "src/infra/sqlite-strict.ts", sql: "PRAGMA foreign_keys = OFF", result: 0, owner: true },
+  { file: "src/consumer.ts", sql: "PRAGMA foreign_keys = OFF", result: 1, owner: false },
+  {
+    file: "src/infra/sqlite-strict.ts",
+    sql: "INSERT OR IGNORE INTO t VALUES (1)",
+    result: 1,
+    owner: true,
+  },
+  {
+    file: "src/infra/sqlite-strict.ts",
+    sql: "SELECT json_extract(value, '$') FROM t",
+    result: 1,
+    owner: true,
+  },
+])(
+  "ratchets $sql in $file with only primitive maintenance excluded",
+  ({ file, sql, result, owner }) => {
+    const { root, write, git } = fixture();
+    write(file, "export {};\n");
+    git("add", ".");
+    git("commit", "-qm", "base");
+    const base = git("rev-parse", "HEAD");
+    write(file, `db.exec(${JSON.stringify(sql)});`);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const logs = vi.spyOn(console, "log").mockImplementation(() => {});
+    expect(main(root, ["--base", base])).toBe(result);
+    expect(inventory(root)).toMatchObject([{ file, matches: [{ owner }] }]);
+    if (result === 0) {
+      expect(logs).toHaveBeenCalledWith(
+        "SQLite primitive owners: 1 engine-maintenance matches in changed files (excluded from comparison).",
+      );
+      expect(logs).toHaveBeenCalledWith(expect.stringContaining("pragma (owner)"));
+    }
+  },
+);

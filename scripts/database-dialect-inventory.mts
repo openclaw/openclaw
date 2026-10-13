@@ -7,6 +7,7 @@ import { loadRatchetSources } from "./lib/shrink-ratchet.mts";
 import {
   CONFLICT_METHOD,
   matchDialect,
+  SQLITE_PRIMITIVE_OWNERS,
   type DialectMatch,
 } from "./lib/sqlite-dialect-constructs.mts";
 
@@ -60,7 +61,12 @@ function findSites(file: string, source: ts.SourceFile): DialectSite[] {
   const sites: DialectSite[] = [];
   const add = (match: DialectMatch, position: number) => {
     const { line, character } = source.getLineAndCharacterOfPosition(position);
-    sites.push({ ...match, line: line + 1, column: character + 1 });
+    sites.push({
+      ...match,
+      owner: match.owner || SQLITE_PRIMITIVE_OWNERS.includes(file),
+      line: line + 1,
+      column: character + 1,
+    });
   };
   const literal = (node: ts.StringLiteral | ts.TemplateLiteralToken, owner: boolean) => {
     for (const match of matchDialect(node.text, owner)) {

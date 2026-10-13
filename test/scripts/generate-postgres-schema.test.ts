@@ -8,6 +8,7 @@ import {
   generateWorkboardPostgresSchema,
   pendingPromotion,
 } from "../../scripts/generate-postgres-schema.mts";
+import { catalog as readCatalog, portTables } from "../../scripts/lib/postgres-schema-catalog.mts";
 import { listOpenClawStateFeatureSchemas } from "../../src/state/openclaw-state-feature-schema.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -35,7 +36,7 @@ function verifiedFixture(sql: string, verify: (db: DatabaseSync) => void) {
 
 describe("PostgreSQL schema generation", () => {
   it("keeps the complete workboard artifact current and uses the admitted search path", async () => {
-    const { sql, catalog } = await generateWorkboardPostgresSchema();
+    const { sql, catalog, portMetadata } = await generateWorkboardPostgresSchema();
     expect(sql).toBe(
       fs.readFileSync(
         path.join(root, "extensions/workboard/src/workboard-schema.postgres.sql"),
@@ -51,6 +52,41 @@ describe("PostgreSQL schema generation", () => {
     );
     expect(sql).not.toMatch(/\b(?:BEGIN|COMMIT|CREATE SCHEMA)\b/);
     expect(sql).toMatch(/[^\n]\n$/);
+    expect(portMetadata).toEqual(
+      JSON.parse(
+        fs.readFileSync(
+          path.join(root, "src/infra/database-engine/workboard-port.generated.json"),
+          "utf8",
+        ),
+      ),
+    );
+    const preData = sql.slice(portMetadata.preData[0], portMetadata.preData[1]);
+    const postData = sql.slice(portMetadata.postData[0], portMetadata.postData[1]);
+    expect(preData + postData).toBe(sql);
+    expect(preData).toContain('CREATE TABLE "workboard_cards"');
+    expect(preData).not.toMatch(/CREATE (?:UNIQUE )?INDEX|ALTER TABLE/);
+    expect(postData).not.toContain("CREATE TABLE");
+    expect(postData).toContain('CREATE INDEX "workboard_cards_board_status_idx"');
+    expect(postData).toContain('ALTER TABLE "workboard_card_labels" ADD FOREIGN KEY');
+  });
+
+  it("derives identity allocation semantics and composite keys from canonical SQLite", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      db.exec(`
+        CREATE TABLE allocated (id INTEGER PRIMARY KEY AUTOINCREMENT) STRICT;
+        CREATE TABLE reused (id INTEGER PRIMARY KEY, note TEXT DEFAULT 'AUTOINCREMENT') STRICT;
+        CREATE TABLE paired (left_id TEXT, right_id INTEGER, PRIMARY KEY(left_id, right_id)) STRICT;
+      `);
+      const tables = portTables(readCatalog(db, ""));
+      expect(tables.map(({ name, pk, identities }) => ({ name, pk, identities }))).toEqual([
+        { name: "allocated", pk: ["id"], identities: [{ column: "id", autoIncrement: true }] },
+        { name: "paired", pk: ["left_id", "right_id"], identities: [] },
+        { name: "reused", pk: ["id"], identities: [{ column: "id", autoIncrement: false }] },
+      ]);
+    } finally {
+      db.close();
+    }
   });
 
   it("renders eager and lazy state DDL inside the connection owner's namespace and transaction", async () => {

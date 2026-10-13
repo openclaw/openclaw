@@ -1,5 +1,9 @@
 export const DIALECT_GROUPS = ["mechanical", "design", "engine-maintenance"] as const;
 export type DialectGroup = (typeof DIALECT_GROUPS)[number];
+export const SQLITE_PRIMITIVE_OWNERS: readonly string[] = [
+  // Canonical owner of SQLite FK/sequence primitives that ports and migrations call instead of raw sites.
+  "src/infra/sqlite-strict.ts",
+];
 export type DialectMatch = {
   construct: string;
   group: DialectGroup;

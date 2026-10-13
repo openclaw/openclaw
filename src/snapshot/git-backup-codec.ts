@@ -42,6 +42,7 @@ import { hashSnapshotArtifact } from "./manifest.js";
 import { buildSnapshotValidator } from "./openclaw-snapshot-copy.js";
 import { assertFreshRestoreTarget, assertNoSqliteSidecarsSync } from "./restore-paths.js";
 import { SNAPSHOT_SQLITE_FILENAME } from "./snapshot-provider.js";
+import { encodeSqliteValue, escapedSqliteText } from "./sqlite-cell-codec.js";
 
 export const GIT_BACKUP_MANIFEST = "manifest.json";
 export const GIT_BACKUP_SCHEMA = "schema.sql";
@@ -152,27 +153,6 @@ function readTableColumns(database: DatabaseSync, table: string): TableColumn[] 
     });
 }
 
-function encodeSqliteValue(value: unknown): unknown {
-  if (value === null || typeof value === "string") {
-    return value;
-  }
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) {
-      throw new Error("Git backup cannot encode a non-finite SQLite REAL value.");
-    }
-    return value;
-  }
-  if (typeof value === "bigint") {
-    return value >= Number.MIN_SAFE_INTEGER && value <= Number.MAX_SAFE_INTEGER
-      ? Number(value)
-      : { $int: value.toString() };
-  }
-  if (value instanceof Uint8Array) {
-    return { $hex: Buffer.from(value).toString("hex") };
-  }
-  throw new Error(`Git backup cannot encode SQLite value type ${typeof value}.`);
-}
-
 async function serializeGitBackupTable(
   database: DatabaseSync,
   table: string,
@@ -193,7 +173,7 @@ async function serializeGitBackupTable(
   // on decoded values and sorting on source columns, not escaped result aliases.
   const projection = columns.map(({ name }) => {
     const column = quoteIdentifier(name);
-    return `CASE WHEN typeof(${column}) = 'text' THEN json_quote(${column}) ELSE ${column} END AS ${column}`;
+    return `${escapedSqliteText(column)} AS ${column}`;
   });
   const statement = database.prepare(
     `SELECT ${projection.join(", ")}
