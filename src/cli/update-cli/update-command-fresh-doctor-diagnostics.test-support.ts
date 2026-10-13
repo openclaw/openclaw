@@ -31,6 +31,45 @@ export function registerFreshDoctorDiagnosticTests({
   tempDirs: ReturnType<typeof useAutoCleanupTempDirTracker>;
   updateOptions: Parameters<typeof completePostCorePluginUpdate>[0];
 }): void {
+  it.each(["info", "warning", "error"] as const)(
+    "retains inline fallback %s findings without suppressing readiness errors",
+    async (severity) => {
+      vi.stubEnv("OPENCLAW_UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS", "reported-checks");
+      mocks.command.mockImplementationOnce(async (_command, _args, options: CommandOptions) => {
+        await fs.writeFile(
+          options.env![UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]!,
+          JSON.stringify({ status: "ok" }),
+        );
+        return { stdout: "", stderr: "" };
+      });
+      const finding = {
+        checkId: "core/doctor/command-owner",
+        severity,
+        message: "Fixture inspection finding",
+      };
+      mocks.runUtf8.mockResolvedValueOnce({
+        code: 1,
+        signal: null,
+        killed: false,
+        termination: "exit",
+        stdout: JSON.stringify({ ok: false, checksRun: 1, findings: [finding] }),
+        stderr: "",
+      });
+      const { pluginUpdate } = await completePostCorePluginUpdate(updateOptions);
+      expect(mocks.runUtf8).toHaveBeenCalledWith(
+        expect.arrayContaining(["--all", "--severity-min", "info"]),
+        expect.any(Object),
+      );
+      expect(pluginUpdate.status).toBe(
+        severity === "error" ? "error" : severity === "warning" ? "warning" : "ok",
+      );
+      expect(pluginUpdate.doctorLint?.doctorLintFindings).toEqual([finding]);
+      expect(pluginUpdate.doctorLint?.deferredInspectionCheckIds).toEqual(
+        severity === "error" ? undefined : [],
+      );
+    },
+  );
+
   it.each([
     { label: "missing receipt", selectors: undefined, deferred: true, changed: true, all: true },
     { label: "invalid receipt", selectors: [" "], deferred: true, changed: true, all: true },
