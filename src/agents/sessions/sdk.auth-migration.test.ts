@@ -69,7 +69,7 @@ afterEach(() => {
 
 it("keeps a legacy SDK store when Doctor's configured owner differs", async () => {
   await withOpenClawTestState(
-    { label: "sdk-legacy-owner", layout: "split", agentEnv: "clear" },
+    { label: "sdk-legacy-owner", layout: "home", agentEnv: "clear" },
     async (state) => {
       vi.spyOn(os, "homedir").mockReturnValue(state.home);
       const legacyDir = path.join(state.home, ".openclaw", "agent");
