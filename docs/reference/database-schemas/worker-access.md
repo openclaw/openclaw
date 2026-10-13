@@ -1710,6 +1710,13 @@ preserves the stored preimage; conservative receipt invalidation can require a
 reload. Missing residency, replacement lifecycles, and unknown writes still
 require hydration. Oversized optional actor postimages are
 shed with full-entry enrichment under the existing publication limit.
+Message rewrite preparation and commit also consume the current resident actor's
+hot, reconciled anchor and generation facts. Commit acquires those facts inside
+its writer transaction; prepare-time facts never authorize a later rewrite.
+Both stages still read the exact stored payload bytes, and the conditional update
+rejects concurrent edits. Missing residency uses the existing worker readers.
+Admission- and projection-preserving rewrites publish through the same actor owner;
+resets, cold archives, and incompatible writes invalidate its retained facts.
 Bounded context reads inside the actor transaction also derive logical parents
 from its active positions and identities and reuse its projection, reset, and
 prefix facts; standalone reads retain their SQL lookups. Hydration does not
