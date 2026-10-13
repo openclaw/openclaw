@@ -38,7 +38,7 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
         // no-op
     }
 
-    private func response(for url: URL) -> (mime: String, data: Data) {
+    func response(for url: URL) -> (mime: String, data: Data) {
         guard url.scheme == CanvasScheme.scheme else {
             return self.html("Invalid scheme.")
         }
@@ -148,7 +148,7 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
         return ("text/html", Data(html.utf8))
     }
 
-    private func textEncodingName(forMimeType mimeType: String) -> String? {
+    func textEncodingName(forMimeType mimeType: String) -> String? {
         if mimeType.hasPrefix("text/") { return "utf-8" }
         switch mimeType {
         case "application/javascript", "application/json", "image/svg+xml":
@@ -158,15 +158,3 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
         }
     }
 }
-
-#if DEBUG
-extension CanvasSchemeHandler {
-    func _testResponse(for url: URL) -> (mime: String, data: Data) {
-        self.response(for: url)
-    }
-
-    func _testTextEncodingName(for mimeType: String) -> String? {
-        self.textEncodingName(forMimeType: mimeType)
-    }
-}
-#endif

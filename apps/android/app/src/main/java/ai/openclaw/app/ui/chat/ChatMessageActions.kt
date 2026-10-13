@@ -5,11 +5,10 @@ import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.AppAlertDialog
 import ai.openclaw.app.ui.AppDropdownMenu
+import ai.openclaw.app.ui.copyTextWithConfirmation
 import ai.openclaw.app.ui.design.ClawIconButton
 import ai.openclaw.app.ui.design.ClawTheme
 import android.app.Activity
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.util.TypedValue
@@ -225,9 +224,7 @@ internal fun copyChatText(
   context: Context,
   text: String,
 ) {
-  val clipboard = context.getSystemService(ClipboardManager::class.java)
-  clipboard.setPrimaryClip(ClipData.newPlainText("OpenClaw text", text))
-  Toast.makeText(context, nativeString("Text copied"), Toast.LENGTH_SHORT).show()
+  context.copyTextWithConfirmation(label = "OpenClaw text", value = text, confirmation = nativeString("Text copied"))
 }
 
 private fun shareChatMessage(

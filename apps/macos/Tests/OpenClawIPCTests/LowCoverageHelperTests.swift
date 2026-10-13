@@ -226,7 +226,8 @@ struct LowCoverageHelperTests {
         #expect(PortGuardian.classifyTunnelRecord(
             record,
             process: .init(
-                parentPid: 1, startedAt: 99,
+                parentPid: 1,
+                startedAt: 99,
                 fullCommand: "/usr/bin/ssh -N -L 18789:127.0.0.1:19000 other-host"),
             expectedProcess: captured) == .drop)
         #expect(PortGuardian.classifyTunnelRecord(
@@ -322,7 +323,7 @@ struct LowCoverageHelperTests {
         let handler = CanvasSchemeHandler(root: root)
         for path in ["index.html", "/", ""] {
             let url = try #require(CanvasScheme.makeURL(session: "main", path: path))
-            let response = handler._testResponse(for: url)
+            let response = handler.response(for: url)
             #expect(response.mime == "text/html")
             #expect(String(data: response.data, encoding: .utf8)?.contains("Hello") == true)
         }
@@ -332,22 +333,22 @@ struct LowCoverageHelperTests {
             to: documents.appendingPathComponent("index.htm"), atomically: true, encoding: .utf8)
         for path in ["documents", "documents/"] {
             let url = try #require(CanvasScheme.makeURL(session: "main", path: path))
-            let response = handler._testResponse(for: url)
+            let response = handler.response(for: url)
             #expect(response.mime == "text/html")
             #expect(String(data: response.data, encoding: .utf8)?.contains("Nested") == true)
         }
 
         let invalid = try #require(URL(string: "https://example.com"))
-        let invalidResponse = handler._testResponse(for: invalid)
+        let invalidResponse = handler.response(for: invalid)
         #expect(invalidResponse.mime == "text/html")
 
         let missing = try #require(CanvasScheme.makeURL(session: "missing", path: "/"))
-        let missingResponse = handler._testResponse(for: missing)
+        let missingResponse = handler.response(for: missing)
         #expect(missingResponse.mime == "text/html")
         #expect(String(data: missingResponse.data, encoding: .utf8)?.contains("Not Found") == true)
 
-        #expect(handler._testTextEncodingName(for: "text/html") == "utf-8")
-        #expect(handler._testTextEncodingName(for: "application/octet-stream") == nil)
+        #expect(handler.textEncodingName(forMimeType: "text/html") == "utf-8")
+        #expect(handler.textEncodingName(forMimeType: "application/octet-stream") == nil)
     }
 
     @Test @MainActor func `canvas scheme handler blocks symlink escapes`() throws {
@@ -368,7 +369,7 @@ struct LowCoverageHelperTests {
 
         let handler = CanvasSchemeHandler(root: root)
         let url = try #require(CanvasScheme.makeURL(session: "main", path: "index.html"))
-        let response = handler._testResponse(for: url)
+        let response = handler.response(for: url)
         let body = String(data: response.data, encoding: .utf8) ?? ""
 
         #expect(response.mime == "text/html")
