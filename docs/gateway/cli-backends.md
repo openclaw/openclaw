@@ -397,7 +397,8 @@ session, such as a sub-agent completion whose restricted tool set gives it a
 different MCP configuration. When the next ordinary turn resumes the bound session,
 OpenClaw reads the completion replies saved in the session transcript since that
 session's last ordinary Claude reply (with each completion prompt when the
-transcript saved it) and prepends them, as a marked context block, to that turn
+transcript saved it) and prepends them to that turn as a marked context block
+that names each one as a delivered completion event with its source tool
 (newest 8, each capped at 2,000 characters). Nothing
 new is stored: the context comes from the canonical transcript, so restarts,
 upgrades, and rollbacks keep the same behavior. A completion that resumed the

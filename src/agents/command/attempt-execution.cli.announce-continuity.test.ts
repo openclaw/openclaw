@@ -4,6 +4,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
@@ -260,6 +264,7 @@ describe("Claude CLI completion announce continuity", () => {
       mcp: { servers: { userDocs: { command: process.execPath, args: [userServer] } } },
     } as OpenClawConfig;
     await state.writeConfig(config);
+    setRuntimeConfigSnapshot(config);
     await fs.mkdir(state.workspaceDir, { recursive: true });
     // The completion turn's cap is the requester policy captured on the child at spawn.
     await replaceSessionEntry(
@@ -278,6 +283,7 @@ describe("Claude CLI completion announce continuity", () => {
   });
 
   afterEach(async () => {
+    clearRuntimeConfigSnapshot();
     await closeMcpLoopbackServer();
     await disposeAllSessionMcpRuntimes();
     resetCliRunnerPrepareTestDeps();
@@ -436,7 +442,7 @@ describe("Claude CLI completion announce continuity", () => {
     const resumedContext = await readNativeTranscript(next.sessionId);
     expect(resumedContext).toContain(CHILD_RESULT);
     expect(resumedContext).toContain(ANNOUNCE_REPLY);
-    expect(next.prompt).toContain("may have run in a separate session");
+    expect(next.prompt).toContain("Completion events delivered to you in a separate session");
 
     // The carried exchange enters the native session once.
     const later = await runTurn({ runId: "run-requester-3", body: "Thanks." });

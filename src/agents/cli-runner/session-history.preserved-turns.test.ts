@@ -90,10 +90,11 @@ describe("preserved Claude turns", () => {
       const context = await loadCliSessionPromptContext(resumed);
       expect(context.unseenTurns).toEqual([
         {
+          source: "subagent_announce",
           prompt: annotateInterSessionPromptText("Child result: CHILD_RESULT_7f3a9c", completion),
           reply: "reply-1",
         },
-        { reply: "reply-3" },
+        { source: "subagent_announce", reply: "reply-3" },
       ]);
       expect(context.sessionGapContext).toBeUndefined();
       expect(
@@ -112,6 +113,15 @@ describe("preserved Claude turns", () => {
       // The next ordinary reply means the bound session has now seen them.
       await turn(4, "What did the review find?");
       expect((await loadCliSessionPromptContext(resumed)).unseenTurns).toBeUndefined();
+
+      // The newest eight are carried; older ones stay in saved history.
+      for (let index = 5; index < 14; index++) {
+        await reply(index, `announce:v1:agent:main:subagent:child:run-${index}`);
+      }
+      const newest = (await loadCliSessionPromptContext(resumed)).unseenTurns;
+      expect(newest?.map((unseen) => unseen.reply)).toEqual(
+        Array.from({ length: 8 }, (_, offset) => `reply-${offset + 6}`),
+      );
     } finally {
       admission.close();
     }

@@ -1,4 +1,5 @@
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   buildSessionContext,
@@ -18,7 +19,6 @@ import { resolveSessionTranscriptReadFence } from "../../config/sessions/session
 import { readSessionTranscriptWatermarkAsync } from "../../config/sessions/session-transcript-watermark.js";
 import {
   annotateInterSessionPromptText,
-  isPreservedConversationTurnInputProvenance,
   normalizeInputProvenance,
   shouldPreserveUserFacingSessionStateForInputProvenance,
 } from "../../sessions/input-provenance.js";
@@ -490,10 +490,8 @@ function renderCliDurableContext(messages: ReturnType<typeof buildSessionContext
 type ClaudeTurnKind = "ordinary" | "preserved" | "background";
 
 function readTranscriptRunId(message: object): string | undefined {
-  const meta = "__openclaw" in message ? message.__openclaw : undefined;
-  return meta && typeof meta === "object" && "runId" in meta && typeof meta.runId === "string"
-    ? meta.runId
-    : undefined;
+  const runId = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"])?.runId;
+  return typeof runId === "string" ? runId : undefined;
 }
 
 /**
@@ -502,9 +500,9 @@ function readTranscriptRunId(message: object): string | undefined {
  * keeps the requester's native binding but may have run in its own native session.
  */
 function classifyClaudeReplies(entries: SessionEntry[]) {
-  const replies: Array<{ index: number; kind: ClaudeTurnKind; prompt?: string; reply: string }> =
-    [];
+  const replies: Array<{ index: number; kind: ClaudeTurnKind } & CliSessionUnseenTurn> = [];
   let kind: ClaudeTurnKind = "ordinary";
+  let source: string | undefined;
   let prompt: string | undefined;
   entries.forEach((entry, index) => {
     if (entry.type !== "message") {
@@ -515,17 +513,22 @@ function classifyClaudeReplies(entries: SessionEntry[]) {
       const provenance = normalizeInputProvenance(
         "provenance" in message ? message.provenance : undefined,
       );
-      kind = isPreservedConversationTurnInputProvenance(provenance)
-        ? "preserved"
-        : shouldPreserveUserFacingSessionStateForInputProvenance(provenance)
-          ? "background"
-          : "ordinary";
+      // A preserved inter-session turn (a completion handoff) is part of the conversation.
+      kind = !shouldPreserveUserFacingSessionStateForInputProvenance(provenance)
+        ? "ordinary"
+        : provenance?.kind === "inter_session"
+          ? "preserved"
+          : "background";
+      source = kind === "preserved" ? provenance?.sourceTool : undefined;
       prompt = annotateInterSessionPromptText(coerceHistoryText(message.content), provenance);
     } else if (message.role === "assistant" && message.provider === "claude-cli") {
       const announced = isAnnounceIdempotencyKey(readTranscriptRunId(message));
+      const turnSource =
+        kind === "preserved" ? source : announced ? "subagent_announce" : undefined;
       replies.push({
         index,
         kind: announced ? "preserved" : kind,
+        ...(turnSource ? { source: turnSource } : {}),
         ...(kind === "preserved" && prompt ? { prompt } : {}),
         reply: coerceHistoryText(message.content),
       });
@@ -541,8 +544,8 @@ function collectClaudeUnseenTurns(entries: SessionEntry[]): CliSessionUnseenTurn
   const since = replies.findLastIndex((reply) => reply.kind === "ordinary");
   const turns = replies
     .slice(since + 1)
-    .flatMap(({ kind, prompt, reply }) =>
-      kind === "preserved" && reply ? [{ ...(prompt ? { prompt } : {}), reply }] : [],
+    .flatMap(({ index: _index, kind, ...turn }) =>
+      kind === "preserved" && turn.reply ? [turn] : [],
     );
   return turns.length > 0
     ? turns.slice(-MAX_CLI_SESSION_UNSEEN_TURNS).map(buildCliSessionUnseenTurn)
