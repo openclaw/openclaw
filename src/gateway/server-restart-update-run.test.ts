@@ -36,6 +36,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
   runtimeBuildId = null;
   directories.cleanup();
+  clearRuntimeConfigSnapshot();
 });
 
 describe("update restart verification ownership", () => {

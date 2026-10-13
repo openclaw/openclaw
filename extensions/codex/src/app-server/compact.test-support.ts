@@ -2,6 +2,10 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { runWithAsyncWorkResources } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { createAgentHarnessHostCapabilitiesForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { expect, vi } from "vitest";
 import {
   ensureCodexAppServerClientRuntime,
@@ -38,6 +42,7 @@ export function beginCompactionTestCleanup() {
   if (compactionTestCleanup) {
     throw new Error("Previous compaction test cleanup has not finished");
   }
+  setRuntimeConfigSnapshot({});
   const cleanup = {
     controller: new AbortController(),
     pending: new Set<Promise<unknown>>(),
@@ -63,6 +68,7 @@ export function beginCompactionTestCleanup() {
         client.close();
       }
       compactionTestCleanup = undefined;
+      clearRuntimeConfigSnapshot();
     }
     if (!failed && unfinished) {
       throw new Error("Test left compaction calls unsettled");

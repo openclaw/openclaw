@@ -87,6 +87,10 @@ describe("plugin SDK sandbox process ownership", () => {
       OPENCLAW_HOME: root,
       OPENCLAW_STATE_DIR: path.join(root, "state"),
       OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
+      OPENCLAW_TEST_LOG_FILE: path.join(
+        roots.make("openclaw-sdk-state-owner-logs-"),
+        "sdk-owner.log",
+      ),
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       NODE_DISABLE_COMPILE_CACHE: "1",
       BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0",

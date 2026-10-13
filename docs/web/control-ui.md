@@ -47,6 +47,10 @@ Saved pin labels remain visible while their details refresh, even when those ses
 
 Inline widgets and MCP Apps reserve their last rendered height when a cached conversation reloads, so loading their content does not move the surrounding messages. New widgets use their declared size until the content reports its height. Changed content or a different window width can still resize a widget.
 
+Transcript history loads in parallel with the browser cache. An unchanged history response keeps the cached message rows and widget sizes in place. The transcript restores its saved reading position, or opens at the end, before showing its initial measured rows.
+
+During connection recovery, Send shows its busy state and explains why sending is unavailable without inserting a temporary notice above the composer.
+
 Automatic read acknowledgements and identity refreshes pause while the Gateway reports a restart or suspension. Pending read acknowledgements are shared across repeated session updates. If an acknowledgement is rejected, later updates respect the server's retry delay and use randomized backoff instead of immediately sending another patch.
 
 Reconnect bootstrap reads also pause together: agent identity, session subscriptions, session groups, pending questions, and the session list. An announced restart or suspension holds these reads until readiness or a new connection resumes loading. If a restart rejection arrives without an announcement, one delayed probe at a time checks for recovery after at least a minute, in case the restart is canceled. Writes are never replayed by this mechanism.
@@ -155,9 +159,12 @@ with their keyboard shortcuts. Open **Subagents** there or from the side-panel
 starts with the panel closed. The first running batch adds it automatically,
 preserving another panel you selected; closing it keeps it closed for that batch.
 Finished results stay open until you close them. While the parent waits on
-subagents, a muted line above the composer shows the count, child name and elapsed
-time, with **View** to open the panel. The panel loads all child pages automatically
-and groups running and finished work, keeping children waiting on their own
+subagents, the conversation keeps each child’s claw, name, and current activity
+together in one clickable row. A single muted timer at the far right shows total
+time since your message, including subagent waits, when that request is known.
+There is no second status line above the composer.
+The panel loads all child pages automatically and groups running and finished
+work, keeping children waiting on their own
 descendants under **Running**. It shows elapsed time and available tool activity,
 and opens each child's existing view-only transcript beside the parent. Running
 rows show public tool progress when available, otherwise the current tool step's

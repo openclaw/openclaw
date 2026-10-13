@@ -788,6 +788,7 @@ export const en: TranslationMap & {
     copyLink: "Copy link",
     archiveSessionOnly: "Session only",
     communication: {
+      title: "Cross-session messaging",
       send: "Send messages",
       receive: "Receive messages",
       always: "Always",
@@ -2847,11 +2848,8 @@ export const en: TranslationMap & {
     },
     waitingForApproval: "Waiting for approval…",
     waitingOnSubagents: "Waiting on subagents",
-    waitingOnSubagentCount: "Waiting on {count} subagent",
-    waitingOnSubagentsCount: "Waiting on {count} subagents",
+    turnElapsed: "Total time since your message, including subagent waits",
     waitingOnSubagent: "Waiting on {name}",
-    waitingOnSession: "Waiting on 1 session",
-    waitingOnSessionsCount: "Waiting on {count} sessions",
     subagentsRunning: "{count} subagents running",
     subagentsRunningOne: "1 subagent running",
     startupStatus: {
@@ -3750,7 +3748,6 @@ export const en: TranslationMap & {
     },
     composer: {
       running: "running",
-      viewSubagents: "View",
       composerInput: "Chat composer",
       emojiSuggestions: "Emoji suggestions",
       placeholder: "Message {name}",
@@ -3767,6 +3764,8 @@ export const en: TranslationMap & {
       compactingContext: "Compacting context...",
       contextCompacted: "Context compacted",
       fallbackActive: "Fallback active: {model}",
+      modelFallbackEvent: "Model fallback: {from} → {to}",
+      modelRestoredEvent: "Returned to selected model: {from} → {to}",
       fallbackCleared: "Fallback cleared: {model}",
       fallbackSelected: "Selected: {model}",
       fallbackCurrent: "Active: {model}",

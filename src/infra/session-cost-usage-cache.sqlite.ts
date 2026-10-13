@@ -57,6 +57,29 @@ function captureCacheDatabaseOptions(
 type CacheWriteAuthority = () => void;
 type CacheWriteKey = Extract<keyof AgentDatabaseOperations, `usageCache.${string}`>;
 
+function createCacheWriteSource(
+  authority?: CacheWriteAuthority,
+  signal?: AbortSignal,
+): AgentDatabaseRequestExecutionSource {
+  return {
+    assertCurrent() {
+      signal?.throwIfAborted();
+      authority?.();
+    },
+    createAdmission(binding) {
+      return () => ({
+        nativeLocations: binding.nativeLocations,
+        admission: createSqliteWorkerOperationAdmission((request, grant) => {
+          binding.authorize(request);
+          if (!grant()) {
+            throw new Error("Usage cache write authority expired");
+          }
+        }, binding.attachment),
+      });
+    },
+  };
+}
+
 function createCacheWriter(options: ReturnType<typeof captureCacheDatabaseOptions>) {
   // Incognito and maintenance scopes retain their process-held native owner.
   const observed = supportsOpenClawAgentDatabaseExecution(options)
@@ -73,6 +96,24 @@ function createCacheWriter(options: ReturnType<typeof captureCacheDatabaseOption
   let releaseBorrow: (() => void) | undefined;
   let prepared = false;
   return {
+    async prepareExisting(authority: CacheWriteAuthority, signal?: AbortSignal) {
+      if (!execution || !observed?.key.startsWith("file:")) {
+        return;
+      }
+      const source = createCacheWriteSource(authority, signal);
+      await runOpenClawAgentWorkerWrite(
+        options,
+        async () => {
+          if (!prepared) {
+            await execution.prepare(source, signal);
+            prepared = true;
+          }
+        },
+        undefined,
+        signal,
+        "background",
+      );
+    },
     async write<Key extends CacheWriteKey>(
       type: Key,
       input: AgentDatabaseOperations[Key]["input"],
@@ -104,23 +145,7 @@ function createCacheWriter(options: ReturnType<typeof captureCacheDatabaseOption
         );
       }
       const captured = structuredClone(input);
-      const source: AgentDatabaseRequestExecutionSource = {
-        assertCurrent() {
-          signal?.throwIfAborted();
-          authority?.();
-        },
-        createAdmission(binding) {
-          return () => ({
-            nativeLocations: binding.nativeLocations,
-            admission: createSqliteWorkerOperationAdmission((request, grant) => {
-              binding.authorize(request);
-              if (!grant()) {
-                throw new Error("Usage cache write authority expired");
-              }
-            }, binding.attachment),
-          });
-        },
-      };
+      const source = createCacheWriteSource(authority, signal);
       return runOpenClawAgentWorkerWrite(
         options,
         async () => {
@@ -293,6 +318,9 @@ export function prepareSessionCostUsageRefreshLock(
       }
       activeRefreshes.add(refreshKey);
       acquired = true;
+      // Finish cold admission before a scan can hold its turn while requesting this writer.
+      // Missing stores remain absent until an actual rollup needs to create them.
+      await writer.prepareExisting(assertCurrent, getAsyncWorkSignal());
       return true;
     },
     release,

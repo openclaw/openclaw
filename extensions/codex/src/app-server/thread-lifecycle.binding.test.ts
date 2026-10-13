@@ -3,8 +3,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { patchSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resumeThread } from "../command-handler-bindings.js";
 import { resolveCodexCommandDeps } from "../command-handler-deps.js";
 import {
@@ -538,7 +542,9 @@ async function createManualResumeFixture(
   };
 }
 
+afterEach(() => clearRuntimeConfigSnapshot());
 setupRunAttemptTestHooks({ isolateNativeSkillHome: true });
+beforeEach(() => setRuntimeConfigSnapshot({}));
 
 async function createLeasedLifecycleWireClient(
   agentDir: string,

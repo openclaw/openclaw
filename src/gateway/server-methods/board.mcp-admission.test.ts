@@ -19,6 +19,8 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
+import { ensureUserProfilesSchema } from "../../state/user-profiles-schema.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { boardStore } from "../board-store.js";
 import {
@@ -49,6 +51,8 @@ describe("MCP App source authority at board write admission", () => {
     "retains only current source tool authority after queueing (revoke=$revoke, cancel=$cancel, retire=$retire, sharing=$sharing)",
     async ({ revoke, cancel, retire, sharing }, { signal: testSignal }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async ({ workspaceDir }) => {
+        ensureUserProfilesSchema({});
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         const target = { agentId: "main", sessionKey: "agent:main:mcp-admission" };
         const cfg: OpenClawConfig = {
           ...rolePolicyConfig(),
@@ -225,14 +229,7 @@ describe("MCP App source authority at board write admission", () => {
         const putEntered = createDeferredCore();
         const resumePut = createDeferredCore();
         const putQueued = createDeferredCore();
-        const removeQueued = createDeferredCore();
-        const applyOps = boardStore.applyOps.bind(boardStore);
         const putWidget = boardStore.putWidget.bind(boardStore);
-        const remove = vi.spyOn(boardStore, "applyOps").mockImplementation((...args) => {
-          const pending = applyOps(...args);
-          removeQueued.resolve();
-          return pending;
-        });
         const put = vi.spyOn(boardStore, "putWidget").mockImplementation(async (...args) => {
           putEntered.resolve();
           await resumePut.promise;
@@ -259,26 +256,20 @@ describe("MCP App source authority at board write admission", () => {
             testSignal,
           );
           expect(put).toHaveBeenCalledOnce();
+          if (revoke) {
+            // Revoke after source preflight, before the pending pin reaches its write.
+            // The registered request now prepares its reads before entering that queue.
+            revocation = invoke("board.update", {
+              ops: [{ kind: "widget_remove", name: "source" }],
+            });
+            expect((await revocation).mock.calls[0]?.[0]).toBe(true);
+          }
           // Source preflight reads share the writer queue; finish them before holding it.
           reservation = runOpenClawAgentWorkerWrite(database, async () => {
             entered.resolve();
             await release.promise;
           });
           await withinTest(entered.promise, testSignal);
-          if (revoke) {
-            revocation = invoke("board.update", {
-              ops: [{ kind: "widget_remove", name: "source" }],
-            });
-            await withinTest(
-              awaitGateBeforeSettlement(
-                removeQueued.promise,
-                revocation,
-                "source removal did not queue",
-              ),
-              testSignal,
-            );
-            expect(remove).toHaveBeenCalledOnce();
-          }
           destinationBefore = boardStore.readWidgetMcpApp(target, "destination");
           void destinationBefore.catch(() => {});
           resumePut.resolve();

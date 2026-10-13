@@ -21,28 +21,14 @@ import { withSqliteDatabaseWriteScope } from "../infra/sqlite-database-admission
 import { assertSqliteJsonlReadBudget } from "../infra/sqlite-jsonl-budget.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
-import {
-  runOpenClawAgentWriteTransaction,
-  type OpenClawAgentDatabase,
-} from "../state/openclaw-agent-db.js";
+import type { OpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES } from "./paths.js";
-import type { TrajectoryRuntimeRetentionPlan } from "./runtime-retention.contract.js";
-import {
-  beginTrajectoryRuntimeRetention,
-  captureTrajectoryRuntimeRetentionMutation,
-  selectTrajectoryRuntimeRetentionBatch,
-  deleteTrajectoryRuntimeRetention,
-  prepareTrajectoryRuntimeRetention,
-  trajectoryRuntimeRetentionDue,
-  trajectoryRuntimeRetentionState,
-} from "./runtime-retention.sqlite.js";
+import { captureTrajectoryRuntimeRetentionMutation } from "./runtime-retention.sqlite.js";
 import type {
   SqliteTrajectoryRuntimeAppend,
   SqliteTrajectoryRuntimeReadScope,
-  SqliteTrajectoryRuntimeScope,
 } from "./runtime-store.contract.js";
 import type { TrajectoryEvent } from "./types.js";
 
@@ -64,76 +50,20 @@ type SqliteTrajectoryRuntimeEventRow = {
   seq: number;
 };
 
-type TrajectoryRuntimeWriter = <T>(
+type TrajectoryRuntimeAppendResult = {
+  database: OpenClawAgentDatabase;
+  receipt: {
+    kind: "trajectory-runtime-append";
+    sessionId: string;
+    appendedRange: { firstSeq: number; lastSeq: number } | undefined;
+    removedThroughSeq: number | undefined;
+  };
+};
+
+type TrajectoryRuntimeWriter = (
   label: string,
-  write: (database: OpenClawAgentDatabase) => T,
-) => T;
-
-const log = createSubsystemLogger("trajectory");
-
-/** Appends runtime trajectory events to the per-agent SQLite session store. */
-export function appendSqliteTrajectoryRuntimeEvents(
-  scope: SqliteTrajectoryRuntimeScope & Pick<SqliteTrajectoryRuntimeAppend, "discardPrevious">,
-  events: SqliteTrajectoryRuntimeAppend["events"],
-): void {
-  if (events.length === 0) {
-    return;
-  }
-  const options = toDatabaseOptions(resolveSqliteReadScope(scope));
-  const write: TrajectoryRuntimeWriter = (label, operation) =>
-    runOpenClawAgentWriteTransaction(
-      (database) => {
-        scope.assertCommitAllowed?.();
-        const result = operation(database);
-        scope.assertCommitAllowed?.();
-        return result;
-      },
-      options,
-      { operationLabel: label },
-    );
-  const input = { ...scope, events };
-  const database = appendSqliteTrajectoryRuntimeEventsWithWriter(input, write);
-  const state = trajectoryRuntimeRetentionState(database);
-  const now = Date.now();
-  // A nested append cannot commit maintenance independently of its caller.
-  if (!database.db.isTransaction && trajectoryRuntimeRetentionDue(state, now)) {
-    const lease = new Int32Array(new SharedArrayBuffer(4));
-    Atomics.store(lease, 0, 1);
-    try {
-      let refreshes = 0;
-      let sweepId = beginTrajectoryRuntimeRetention(database.db, lease);
-      let snapshot: TrajectoryRuntimeRetentionPlan | undefined = prepareTrajectoryRuntimeRetention(
-        database.db,
-        input,
-        now,
-      );
-      for (;;) {
-        const batch = selectTrajectoryRuntimeRetentionBatch(database.db, { sweepId, snapshot });
-        snapshot = undefined;
-        const result = batch.refresh
-          ? deleteTrajectoryRuntimeRetention(database, batch)
-          : write("trajectory.runtime.retention.delete", (current) =>
-              deleteTrajectoryRuntimeRetention(current, batch),
-            );
-        if (result.complete) {
-          state.sweptAt = now;
-          break;
-        }
-        if (result.refresh) {
-          if (++refreshes > 1) {
-            break;
-          }
-          sweepId = beginTrajectoryRuntimeRetention(database.db, lease);
-          snapshot = prepareTrajectoryRuntimeRetention(database.db, input, now);
-        }
-      }
-    } catch (error) {
-      log.warn(`Trajectory retention deferred until the next append: ${String(error)}`);
-    } finally {
-      Atomics.store(lease, 0, 0);
-    }
-  }
-}
+  write: (database: OpenClawAgentDatabase) => TrajectoryRuntimeAppendResult,
+) => TrajectoryRuntimeAppendResult;
 
 export function appendSqliteTrajectoryRuntimeEventsWithWriter(
   input: SqliteTrajectoryRuntimeAppend,
@@ -193,7 +123,15 @@ export function appendSqliteTrajectoryRuntimeEventsWithWriter(
         );
       }
       publishRetention?.(sessionId);
-      return database;
+      return {
+        database,
+        receipt: {
+          kind: "trajectory-runtime-append" as const,
+          sessionId,
+          appendedRange: rows.length ? { firstSeq: window.nextSeq, lastSeq: seq - 1 } : undefined,
+          removedThroughSeq: window.removeThroughSeq,
+        },
+      };
     }),
   );
 }

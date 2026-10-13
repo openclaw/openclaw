@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { duringElementAnimation } from "../test-helpers/web-awesome-animation.ts";
 import "@awesome.me/webawesome/dist/styles/themes/default.css";
-import "./web-awesome-select.ts";
+import "@awesome.me/webawesome/dist/components/option/option.js";
+import "@awesome.me/webawesome/dist/components/select/select.js";
 
 type Select = HTMLElementTagNameMap["wa-select"];
 

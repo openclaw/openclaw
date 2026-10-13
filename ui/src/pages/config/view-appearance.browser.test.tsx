@@ -80,18 +80,19 @@ describe("config appearance preferences", () => {
     { systemLocale: "de", localeOverride: "fr", label: "Deutsch (German)" },
   ] as const)(
     "renders and changes language with system locale $systemLocale",
-    ({ systemLocale, localeOverride, label }) => {
+    async ({ systemLocale, localeOverride, label }) => {
       const { container, props } = renderAppearance({
         systemLocale,
         localeOverride,
         localeOverridden: Boolean(localeOverride),
       });
+      await updatePickers(container);
       const sections = [...container.querySelectorAll<HTMLElement>(".settings-section")];
       expect(sections[0]?.id).toBe("settings-language");
       expect(sections[0]?.textContent).toContain("Language");
       expect(sections[0]?.textContent).toContain("Synced across your devices through the gateway");
-      const select = container.querySelector<HTMLElement & { value: string }>(
-        "#settings-language wa-select",
+      const select = container.querySelector<SelectPicker>(
+        "#settings-language openclaw-select-picker",
       );
       expect(select).not.toBeNull();
       if (!select) {
@@ -99,18 +100,18 @@ describe("config appearance preferences", () => {
       }
       if (localeOverride) {
         expect(
-          select.querySelector<HTMLElement & { selected: boolean }>('wa-option[value="fr"]')
-            ?.selected,
-        ).toBe(true);
+          select.querySelector('[role="option"][data-value="fr"]')?.getAttribute("aria-selected"),
+        ).toBe("true");
       } else {
-        expect(select.value).toBe("system");
+        expect(
+          select.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-value"),
+        ).toBe("system");
       }
-      expect(select.querySelector('wa-option[value="system"]')?.textContent).toContain(
+      expect(select.querySelector('[role="option"][data-value="system"]')?.textContent).toContain(
         `System (${label})`,
       );
       for (const value of ["fr", "system"]) {
-        Object.defineProperty(select, "value", { configurable: true, value });
-        select.dispatchEvent(new Event("change", { bubbles: true }));
+        await choosePickerValue(select, value);
       }
       expect(props.onLocaleChange).toHaveBeenCalledWith("fr");
       expect(props.onLocaleChange).toHaveBeenCalledWith(undefined);
@@ -320,7 +321,7 @@ describe("config appearance preferences", () => {
     expect(props.setThemeMode).toHaveBeenCalledWith("system");
   });
 
-  it("renders rejected theme and locale edits as browser-only fallbacks", () => {
+  it("renders rejected theme and locale edits as browser-only fallbacks", async () => {
     const { container, props } = renderAppearance({
       localeOverride: "fr",
       localeOverridden: true,
@@ -331,6 +332,7 @@ describe("config appearance preferences", () => {
       themeProvenance: "device-local",
       themeResetValue: "claw",
     });
+    await updatePickers(container);
     const languageRow = required(container, "#settings-language .settings-row", HTMLElement);
     const themeSection = required(container, "#settings-appearance-theme", HTMLElement);
     const themeDescription = required(
@@ -343,12 +345,8 @@ describe("config appearance preferences", () => {
     expect(languageRow.textContent).toContain("Stored in this browser only");
     expect(languageRow.textContent).not.toContain("Synced across your devices");
     expect(
-      (
-        languageRow.querySelector('wa-option[value="fr"]') as HTMLElement & {
-          selected: boolean;
-        }
-      ).selected,
-    ).toBe(true);
+      languageRow.querySelector('[role="option"][data-value="fr"]')?.getAttribute("aria-selected"),
+    ).toBe("true");
     expect(themeDescription.textContent).toContain("Default: Claw");
     expect(themeDescription.textContent).toContain("Stored in this browser only");
     expect(themeDescription.textContent).not.toContain("Synced across your devices");

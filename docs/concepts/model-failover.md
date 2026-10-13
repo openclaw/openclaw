@@ -20,8 +20,8 @@ is instructed to inspect interrupted actions before deciding whether to repeat
 them. A retry status shows the wait and attempt count. Cancellation remains
 available. No additional configuration is required.
 
-ChatGPT Responses WebSocket connection expiry follows this recovery policy even
-after streaming starts. The failed socket is retired; recovery continues the
+ChatGPT Responses WebSocket connection expiry and a normal close before the
+terminal event follow this recovery policy even after streaming starts. The failed socket is retired; recovery continues the
 saved transcript instead of replaying the request inside the transport.
 
 Anthropic streaming errors retain their structured error type, so rate limits,
@@ -493,7 +493,9 @@ These notices are operational messages, not assistant content. They deliver once
 
 Persisted notice state prevents repeated notices when consecutive turns use the same selected/active pair, while model selection itself remains unchanged.
 
-When a fallback answers, the Control UI shows the successful answer once and removes empty failed-attempt placeholders from that same run. The raw transcript retains the failed attempts for troubleshooting. Failed turns and attempts that produced partial visible output remain visible.
+For admitted session runs, the Control UI records attempted fallback switches as transcript event dividers, using the same presentation as compaction events. It shows the previous model, the fallback being tried, and the reason for the switch while that candidate is still working. The event remains in history after reload and does not claim the fallback succeeded. When a later turn successfully returns to the selected model, a matching **Returned to selected model** divider records the fallback and selected model. Starting a new attempt or failing on the selected model does not record a successful return.
+
+When a fallback answers, the Control UI shows the successful answer once and removes diagnostic-only failed-attempt placeholders from that same run, including a recovered context-overflow notice. Hidden internal continuation prompts do not start a new user turn for this recovery matching. The raw transcript retains the failed attempts for troubleshooting. Failed turns and attempts that produced partial visible output or media remain visible.
 
 ## Observability and failure summaries
 

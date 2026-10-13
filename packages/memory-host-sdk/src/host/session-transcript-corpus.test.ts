@@ -4,6 +4,7 @@ import path from "node:path";
 import { StatementSync } from "node:sqlite";
 import {
   clearConfigCache,
+  clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { describe, expect, it, vi } from "vitest";
@@ -40,6 +41,31 @@ function pauseDirectoryDiscovery(sessionsDir: string) {
 }
 
 describe("listSessionTranscriptCorpusEntriesForAgent", () => {
+  it("discovers the caller's configured store without a global runtime snapshot", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const storePath = state.statePath("memory-session-corpus", "sessions.json");
+      await upsertSessionEntryCore(
+        { sessionKey: "agent:main:chat:owned", storePath },
+        { sessionId: "owned", updatedAt: 1 },
+      );
+      clearRuntimeConfigSnapshot();
+
+      const entries = await listSessionTranscriptCorpusEntriesForAgent("main", {
+        config: { session: { store: storePath } },
+        includeContentRevision: false,
+        readOnly: true,
+      });
+
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({
+        sessionId: "owned",
+        sessionKey: "agent:main:chat:owned",
+        storePath,
+        transcriptSource: "sqlite",
+      });
+    });
+  });
+
   it.each([
     { includeContentRevision: true, archiveTablePresent: true, readOnly: false },
     { includeContentRevision: false, archiveTablePresent: true, readOnly: false },

@@ -441,11 +441,12 @@ export function tryBeginGatewayPreparedRestartRootWorkAdmission(): GatewayRootWo
 /** Independent roots count separately even when launched by an admitted parent. */
 export function tryBeginGatewayIndependentRootWorkAdmission(
   origin = "independent",
+  options: { detachedWork?: boolean } = {},
 ): GatewayRootWorkAdmissionLease | null {
   if (isGatewayWorkAdmissionClosed()) {
     return null;
   }
-  return createGatewayRootWorkAdmission(origin);
+  return createGatewayRootWorkAdmission(origin, options.detachedWork === true);
 }
 
 async function waitForGatewayWorkAdmissionChange(signal?: AbortSignal): Promise<void> {

@@ -309,6 +309,7 @@ export function completeEmbeddedAttemptResult(
   });
   const result: EmbeddedRunAttemptWithReceiptEvidence = {
     ...state,
+    sandboxRuntime: input.setup.sandboxRuntime,
     ...(settledTurnFinalizationContext ? { settledTurnFinalizationContext } : {}),
     replayMetadata,
     currentAttemptReplayMetadata,

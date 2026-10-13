@@ -329,7 +329,7 @@ export class ComposedGatewayHarness {
     await this.placementLifecycle.settleRun(runId);
     for (const [claimId, source] of this.turnSources) {
       if (source.operationalRunInstance.runId === runId) {
-        source.dispose();
+        await source.dispose();
         this.turnSources.delete(claimId);
       }
     }
@@ -520,7 +520,7 @@ export class ComposedGatewayHarness {
     }
     this.liveEventsValue.clear();
     for (const source of this.turnSources.values()) {
-      source.dispose();
+      await source.dispose();
     }
     this.turnSources.clear();
     this.unsubscribeLive?.();

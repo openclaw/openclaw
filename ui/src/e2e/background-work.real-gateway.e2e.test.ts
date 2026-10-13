@@ -243,7 +243,7 @@ suite.define(() => {
         const history = payloadOf(
           await wire.waitFor(
             (rpc) =>
-              rpc.request.method === "chat.history" &&
+              ["chat.history", "chat.startup"].includes(rpc.request.method) &&
               paramsOf(rpc).sessionKey === childKey &&
               Boolean((rpc.response.payload as ChatHistoryResult | undefined)?.inFlightRun),
           ),
