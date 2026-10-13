@@ -676,6 +676,15 @@ These are intentionally guarded by the `ci-workflow-guards`,
   and QA; zero failures in 20 Docker and 80 QA main jobs is limited evidence,
   not a measured post-change saving. Keep backend settings, caps, budgets and
   timeouts unchanged, and verify actual emitted rows and timings.
+- Full hybrid check plans may share central formatting and scripts lint with
+  existing core lint stripe 1 when its full command inventory contains only those
+  commands. Retain both original core stripes, the exact central selection and
+  changed paths, sequential execution, one lint thread and the 15-minute budget.
+  UI, root-test and wrapper guards keep their separate central row. Require
+  another remaining check row for the existing gate; targeted and other runner
+  profiles retain their layout. Run shared central lint after a core failure so
+  its diagnostics and failure remain visible. This removes one registration and
+  setup, without enlarging runner capacity or relaxing a check.
 - Current GitHub/hybrid test types use five canonical core stripe jobs plus
   the central extensions/scripts/root tail. Eligible core-change PRs keep the
   same rows: each validates the complete graph boundary and intersects selected
