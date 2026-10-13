@@ -1,6 +1,7 @@
 // Memory Host SDK module owns additive memory chunk provenance schema.
 import type { DatabaseSync } from "node:sqlite";
 import {
+  createSqliteTableContractReader,
   createSqliteSchemaEnsurer,
   getAdmittedSqliteSchemaFacts,
   runSqliteImmediateTransactionSync,
@@ -41,10 +42,8 @@ export function ensureMemoryChunkProvenance(db: DatabaseSync): void {
     const facts = getAdmittedSqliteSchemaFacts(db);
     const hasRetiredTrigger = facts
       ? facts.triggers.has(retiredProvenanceTrigger)
-      : Boolean(
-          db
-            .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'trigger' AND name = ?")
-            .get(retiredProvenanceTrigger),
+      : createSqliteTableContractReader(db)("memory_index_chunks")?.triggers.some(
+          ({ name }) => name === retiredProvenanceTrigger,
         );
     if (hasRetiredTrigger) {
       db.exec(`DROP TRIGGER ${retiredProvenanceTrigger}`);
