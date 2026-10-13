@@ -23,8 +23,11 @@ stall. Those diagnostic observations justify transferring authority ownership
 contracts; they do not predict production latency.
 
 The first slice transfers profile revision/status checks through shared cells and
-adds a read-only admission service for profile role/identity preparation. Bound
+adds a read-only admission service factory with two typed profile checks. Bound
 and current-settled operations use the same canonical state as host assertions.
+The factory is exercised through real worker tests; production dispatch stays
+with the host until remaining dependencies can transfer. A measured intermediate
+host-to-service preparation detour added latency and was removed.
 Native publishers fence immediately before physical COMMIT; known rollback
 preserves the prior revision, while uncertain native outcomes stay fenced.
 Retired generations never revive through delayed descriptor delivery. First

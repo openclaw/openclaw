@@ -1,4 +1,3 @@
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import type {
   SqliteProfileAdmissionRequest,
@@ -19,29 +18,4 @@ export function createSqliteWriterAdmissionService() {
     },
     close: () => pool.close(),
   };
-}
-
-export function runSqliteProfileAdmission(
-  request: SqliteProfileAdmissionRequest,
-): Promise<SqliteProfileAdmissionResult> {
-  const owner = resolveGlobalSingleton<{
-    service?: ReturnType<typeof createSqliteWriterAdmissionService>;
-    closing?: Promise<void>;
-  }>(
-    Symbol.for("openclaw.sqliteWriterAdmission"),
-    () => ({}),
-    (state) => {
-      state.closing ??= (async () => {
-        await state.service?.close();
-        state.service = undefined;
-      })().finally(() => {
-        state.closing = undefined;
-      });
-      return state.closing;
-    },
-  );
-  if (owner.closing) {
-    return Promise.reject(new Error("SQLite admission service is closing"));
-  }
-  return (owner.service ??= createSqliteWriterAdmissionService()).read(request);
 }
